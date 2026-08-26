@@ -234,6 +234,40 @@ export function classifyJob(job) {
   return jobAlive(job) ? 'running' : 'protocol_violation';
 }
 
+// ---------- installed skill version ----------
+
+const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
+
+/** `metadata.version` out of a SKILL.md front matter block. null when absent or unparsable. */
+export function parseSkillVersion(text) {
+  const fm = FRONTMATTER_RE.exec(String(text || ''));
+  if (!fm) return null;
+  const lines = fm[1].split(/\r?\n/);
+  const start = lines.findIndex((l) => /^metadata:\s*$/.test(l));
+  if (start < 0) return null;
+  for (const line of lines.slice(start + 1)) {
+    if (!/^\s+\S/.test(line)) break; // a dedent ends the metadata mapping
+    const m = /^\s+version:\s*['"]?([^'"\s#]+)/.exec(line);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/** Compare dotted numeric versions. -1 / 0 / 1, or null when either side is not comparable. */
+export function compareVersions(a, b) {
+  const parse = (v) => {
+    const core = String(v ?? '').trim().replace(/^v/, '').split(/[-+]/)[0];
+    return /^\d+(\.\d+)*$/.test(core) ? core.split('.').map(Number) : null;
+  };
+  const x = parse(a), y = parse(b);
+  if (!x || !y) return null;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] || 0) - (y[i] || 0);
+    if (d) return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
 // ---------- worker permission policy (PreToolUse hook) ----------
 // A background worker has nobody to answer a prompt, so hkb decides itself:
 // explicit allow or deny-with-reason, never "ask". Pure and unit-tested.

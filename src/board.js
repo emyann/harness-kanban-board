@@ -32,6 +32,9 @@ export const DEFAULT_BOARD = {
   version: 1,
   repo: null,
   board: 'default',
+  // Version of the skill `hkb init` copied into .agents/skills/kanban; null when the skill is
+  // linked instead of copied (the hkb package repo itself) and so cannot go stale. See init.js.
+  skill_version: null,
   dispatch: {
     interval: 60,
     max_in_progress: 2,

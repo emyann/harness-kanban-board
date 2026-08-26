@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot } from './board.js';
 import { ensureLabels, fetchBoard, addLabels } from './tasks.js';
 import { rest } from './gh.js';
-import { L, STATUSES } from './model.js';
+import { L, STATUSES, parseSkillVersion } from './model.js';
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MARK_START = '<!-- hkb:start -->';
@@ -19,6 +19,65 @@ function copyDir(src, dst) {
     if (entry.isDirectory()) copyDir(s, d);
     else fs.copyFileSync(s, d);
   }
+}
+
+// ---------- skill install ----------
+// The skill has one source of truth: `skills/kanban` in the package. Other repos get a copy and
+// board.json remembers which version, so `hkb doctor` can say when it has fallen behind. The hkb
+// repo *is* the package, so a copy there would be a second source of truth — link it instead.
+
+export function agentsSkillDir(root) { return path.join(root, '.agents', 'skills', 'kanban'); }
+export function packageSkillDir() { return path.join(PKG_ROOT, 'skills', 'kanban'); }
+
+/** lstat-based existence: unlike fs.existsSync, a dangling symlink counts as present. */
+function lexists(p) { try { fs.lstatSync(p); return true; } catch { return false; } }
+function isSymlink(p) { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } }
+
+/** `metadata.version` of the skill rooted at `dir`, or null. */
+export function readSkillVersion(dir) {
+  try { return parseSkillVersion(fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8')); } catch { return null; }
+}
+
+/**
+ * True when the repo being initialised is the hkb package itself — a root package.json named "hkb"
+ * that actually carries the skill. Some other project may share the name; it must not get a link
+ * pointing at nothing.
+ */
+export function isPackageRepo(root) {
+  let name;
+  try { name = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).name; } catch { return false; }
+  return name === 'hkb' && fs.existsSync(path.join(root, 'skills', 'kanban', 'SKILL.md'));
+}
+
+/**
+ * Point `.agents/skills/kanban` at the in-repo `skills/kanban`, replacing a copy left by an earlier
+ * init. Returns 'linked' | 'already-linked', or null when the filesystem refuses symlinks — in which
+ * case whatever was installed is still there, so the caller can fall back to a copy.
+ */
+export function linkSkill(root) {
+  const link = agentsSkillDir(root);
+  const target = path.relative(path.dirname(link), path.join(root, 'skills', 'kanban'));
+  if (isSymlink(link) && fs.readlinkSync(link) === target) return 'already-linked';
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  const staged = link + '.hkb-new';
+  try {
+    if (lexists(staged)) fs.rmSync(staged, { recursive: true, force: true });
+    fs.symlinkSync(target, staged, 'dir');
+  } catch { return null; }
+  if (lexists(link)) fs.rmSync(link, { recursive: true, force: true });
+  fs.renameSync(staged, link);
+  return 'linked';
+}
+
+/**
+ * Copy the packaged skill into `.agents/skills/kanban`, replacing whatever is there — a link, or an
+ * older copy whose renamed/removed files would otherwise linger. Returns the installed version.
+ */
+export function copySkill(root) {
+  const dst = agentsSkillDir(root);
+  if (lexists(dst)) fs.rmSync(dst, { recursive: true, force: true });
+  copyDir(packageSkillDir(), dst);
+  return readSkillVersion(dst);
 }
 
 function upsertSection(file, section) {
@@ -83,11 +142,33 @@ export async function init(ctx, flags, log) {
   const repo = flags.repo ? { nameWithOwner: flags.repo, defaultBranch: 'main' } : detectRepo();
   log(`repo: ${repo.nameWithOwner}`);
 
-  // 2. board.json
+  // 2. skill: .agents/skills/kanban (canonical) + .claude/skills/kanban symlink.
+  //    In the hkb repo the package *is* the source, so a copy there would be a second source of
+  //    truth: link it. Everywhere else, copy and stamp the version so doctor can spot a stale copy.
+  const agentsSkill = agentsSkillDir(root);
+  const linked = isPackageRepo(root) ? linkSkill(root) : null;
+  const skillVersion = linked ? null : copySkill(root);
+  log(linked
+    ? `linked skill: .agents/skills/kanban → ${fs.readlinkSync(agentsSkill)} (${linked === 'linked' ? 'replaced the copy' : 'unchanged'})`
+    : `installed skill: .agents/skills/kanban${skillVersion ? ` v${skillVersion}` : ''}`);
+  const claudeSkill = path.join(root, '.claude', 'skills', 'kanban');
+  fs.mkdirSync(path.dirname(claudeSkill), { recursive: true });
+  if (!lexists(claudeSkill)) {
+    try {
+      fs.symlinkSync(path.relative(path.dirname(claudeSkill), agentsSkill), claudeSkill, 'dir');
+      log('linked .claude/skills/kanban → .agents/skills/kanban');
+    } catch {
+      copyDir(packageSkillDir(), claudeSkill);
+      log('copied .claude/skills/kanban (this filesystem refuses symlinks)');
+    }
+  }
+
+  // 3. board.json
   const cfg = existing || JSON.parse(JSON.stringify(DEFAULT_BOARD));
   cfg.repo = repo.nameWithOwner;
   cfg.default_branch = repo.defaultBranch;
   cfg.board = board;
+  cfg.skill_version = skillVersion; // null when linked — a link cannot go stale
   cfg.profiles = cfg.profiles || {};
   for (const p of profiles) {
     if (!cfg.profiles[p]) {
@@ -100,22 +181,10 @@ export async function init(ctx, flags, log) {
   log(`${existing ? 'updated' : 'wrote'} .kanban/board.json (board "${board}", profiles ${Object.keys(cfg.profiles).join(', ')})`);
   ctx.cfg = cfg; ctx.repo = { owner: repo.nameWithOwner.split('/')[0], repo: repo.nameWithOwner.split('/')[1], nameWithOwner: repo.nameWithOwner }; ctx.board = board;
 
-  // 3. labels
+  // 4. labels
   const labels = [...STATUSES.map(L.status), L.board(board), L.needsHuman, ...Object.keys(cfg.profiles).map(L.agent)];
   const created = await ensureLabels(ctx, labels);
   log(created.length ? `created labels: ${created.join(', ')}` : 'labels already present');
-
-  // 4. skill: .agents/skills/kanban (canonical) + .claude/skills/kanban symlink
-  const skillSrc = path.join(PKG_ROOT, 'skills', 'kanban');
-  const agentsSkill = path.join(root, '.agents', 'skills', 'kanban');
-  copyDir(skillSrc, agentsSkill);
-  const claudeSkill = path.join(root, '.claude', 'skills', 'kanban');
-  fs.mkdirSync(path.dirname(claudeSkill), { recursive: true });
-  if (!fs.existsSync(claudeSkill)) {
-    try { fs.symlinkSync(path.relative(path.dirname(claudeSkill), agentsSkill), claudeSkill, 'dir'); }
-    catch { copyDir(skillSrc, claudeSkill); }
-  }
-  log('installed skill: .agents/skills/kanban (+ .claude/skills/kanban)');
 
   // 5. Stop hook + gitignore + doc sections
   if (flags['no-hook']) log('skipped Stop hook (--no-hook)');
