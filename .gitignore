@@ -5,3 +5,4 @@ node_modules/
 .kanban/cache.json
 .kanban/nudges/
 *.log
+.claude/worktrees/

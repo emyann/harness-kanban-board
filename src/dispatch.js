@@ -174,20 +174,21 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   const claimedPaths = runningNow.map((t) => t.kb.paths || []);
 
   for (const t of ready) {
+    // active_pr guard first: it needs no extra call and must apply even when there is no slot
+    const openPrEarly = (t.prs || []).find((p) => p.state === 'OPEN');
+    if (openPrEarly) {
+      if (!dryRun) await setStatus(ctx, t, 'review');
+      summary.guarded.push({ number: t.number, guard: 'active_pr', pr: openPrEarly.number });
+      log(`#${t.number}: open PR #${openPrEarly.number} → review (active_pr guard)`);
+      continue;
+    }
     if (budget <= 0) { summary.skipped.push({ number: t.number, why: 'no slot' }); continue; }
     if ((state.spawned_today || 0) >= d.daily_spawn_cap) { summary.skipped.push({ number: t.number, why: `daily spawn cap ${d.daily_spawn_cap}` }); continue; }
     const profileName = t.agent || 'claude';
     const profile = ctx.cfg.profiles[profileName];
     if (!profile) { summary.skipped.push({ number: t.number, why: `unknown profile ${profileName}` }); continue; }
     if ((perProfile[profileName] || 0) >= (profile.max_in_progress ?? Infinity)) { summary.skipped.push({ number: t.number, why: `profile ${profileName} at cap` }); continue; }
-    // guards
-    const openPr = (t.prs || []).find((p) => p.state === 'OPEN');
-    if (openPr) {
-      if (!dryRun) await setStatus(ctx, t, 'review');
-      summary.guarded.push({ number: t.number, guard: 'active_pr', pr: openPr.number });
-      log(`#${t.number}: open PR #${openPr.number} → review (active_pr guard)`);
-      continue;
-    }
+    // remaining guards (these read the run comment, so only for tasks that could actually be claimed)
     const pausedUntil = state.profile_paused_until[profileName];
     if (pausedUntil && new Date(pausedUntil) > new Date()) { summary.guarded.push({ number: t.number, guard: 'blocker_auth', until: pausedUntil }); continue; }
     const runRec = await loadRun(ctx, t.number);
