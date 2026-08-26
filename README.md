@@ -50,6 +50,17 @@ Every terminal verb also takes `--summary-file` / `--metadata-file` / `--reason-
 
 Humans: `hkb promote`, `hkb unblock`, `hkb request-changes`, `hkb comment`, `hkb link/unlink`, `hkb archive`, `hkb log`.
 
+```bash
+hkb serve                      # the same board in a browser, on http://127.0.0.1:4666
+```
+
+`hkb serve` is a zero-dependency http server and one inline page — no build step, no second source of truth.
+It reads the live board with the same `fetchBoard` query (one GraphQL call per poll, shared by every tab, ETag
+so an unchanged board costs nothing), and drag-drop between columns runs the same verbs the CLI does: only the
+legal moves, and an illegal one is refused with the reason. Cards show agent, priority, blockers and the PR;
+the drawer shows the description, the `kb` block, every attempt, the latest result and the worker's log tail.
+There is no auth — it binds `127.0.0.1`, refuses cross-origin calls, and warns loudly if you pass `--host`.
+
 ## How it maps to GitHub
 
 | Hermes | hkb |
@@ -62,6 +73,7 @@ Humans: `hkb promote`, `hkb unblock`, `hkb request-changes`, `hkb comment`, `hkb
 | `kanban_complete(summary, metadata)` | `<!-- kb-result -->` comment; open PR → *review*, else issue closed |
 | worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link` |
 | stop nudge | Claude Code Stop hook (`hkb hook stop`, 2 nudges, inert unless `KB_TASK` is set) |
+| kanban dashboard | `hkb serve` — local page over the live board; drag-drop calls the same verbs |
 | crash / stale / timeout | pid check on the claiming host, `stale_after`, `max_runtime` → `ready` or `gave_up` |
 
 Full protocol: [skills/kanban/references/protocol.md](skills/kanban/references/protocol.md).
