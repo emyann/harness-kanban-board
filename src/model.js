@@ -206,8 +206,8 @@ const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
 /** `claude --bg` prints "backgrounded · <id> · <name>"; extract the id. */
 export function parseBackgroundedId(stdout) {
-  const m = /backgrounded\s*·\s*([0-9a-f]{6,})/i.exec(String(stdout || '').replace(ANSI_RE, ''));
-  return m ? m[1] : null;
+  const all = [...String(stdout || '').replace(ANSI_RE, '').matchAll(/backgrounded\s*·\s*([0-9a-f]{6,})/gi)];
+  return all.length ? all[all.length - 1][1] : null;
 }
 
 export const KB_JOB_NAME_RE = /^kb #(\d+) · /;

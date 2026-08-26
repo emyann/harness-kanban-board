@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, getTask } from './tasks.js';
 import { claim, release, listLocks } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs } from './board.js';
-import { computeReady, openAttempt, lastAttempt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, jobAlive } from './model.js';
+import { computeReady, openAttempt, lastAttempt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, jobAlive, parseBackgroundedId } from './model.js';
 import { workerContext } from './context.js';
 import { GhError } from './gh.js';
 import { listKbJobs, readJobState, stopJob, matchJobByWorktree } from './jobs.js';
@@ -212,6 +212,13 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   const today = nowIso().slice(0, 10);
   if (state.spawn_day !== today) { state.spawn_day = today; state.spawned_today = 0; }
   state.profile_paused_until = state.profile_paused_until || {};
+  // GitHub reads can lag writes by seconds. Remember what THIS host changed recently and refuse to
+  // contradict it: a task touched < 90 s ago is skipped, a lock claimed < 15 min ago is never swept.
+  state.touched = state.touched || {};
+  state.claims = state.claims || {};
+  for (const [k, v] of Object.entries(state.claims)) if (Date.now() - new Date(v).getTime() > 86_400_000) delete state.claims[k];
+  const touchedRecently = (n) => state.touched[n] && Date.now() - new Date(state.touched[n]).getTime() < 90_000;
+  const touch = (n) => { state.touched[n] = nowIso(); };
 
   if (!dryRun) replayOutbox(ctx, log);
 
@@ -241,6 +248,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
 
   // 1. reclaim stale / crashed / timed out / finished without a terminal verb
   for (const t of running) {
+    if (touchedRecently(t.number)) continue; // our own transition may not be visible yet
     const runRec = await loadRun(ctx, t.number);
     const a = openAttempt(runRec.run);
     if (!a) {
@@ -254,10 +262,13 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     let outcome = null;
     if (a.host === ctx.host && (a.job || a.bg)) {
       let job = a.job ? (jobsById.get(a.job) || readJobState(a.job)) : null;
-      if (!job && a.bg) {
-        job = matchJobByWorktree([...jobsById.values()], a.wt || `kb-${t.number}-${a.attempt}`);
-        if (job && !dryRun) { a.job = job.id; await saveRun(ctx, t.number, runRec); } // backfill once
+      if (!job && a.bg && a.log) {
+        // the launch log contains "backgrounded · <id>" — the reliable source for the job id
+        let id = null;
+        try { id = parseBackgroundedId(fs.readFileSync(path.join(ctx.root, a.log), 'utf8')); } catch { /* not yet written */ }
+        if (id) { job = jobsById.get(id) || readJobState(id); if (!dryRun) { a.job = id; await saveRun(ctx, t.number, runRec); } }
       }
+      if (!job && a.bg) job = matchJobByWorktree([...jobsById.values()], a.wt || `kb-${t.number}-${a.attempt}`);
       if (!job) {
         if (secondsSince(a.started_at) > 180) outcome = 'crashed'; // cold daemon start gets 3 min to register
       } else if (classifyJob(job) !== 'running' && secondsSince(a.started_at) > 30) outcome = 'protocol_violation';
@@ -268,6 +279,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     if (!outcome) continue;
     if (dryRun) { summary.reclaimed.push({ number: t.number, outcome, dry: true }); continue; }
     const result = await failAttempt(ctx, t, runRec, outcome, `${outcome} after ${Math.round(secondsSince(a.started_at))}s`);
+    touch(t.number);
     summary.reclaimed.push({ number: t.number, outcome: result });
     log(`#${t.number}: ${outcome}${result === 'gave_up' ? ' → gave_up (needs human)' : ' → ready'}`);
   }
@@ -278,14 +290,18 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     for (const j of jobsById.values()) {
       if (!j.pid || jobAlive(j)) continue;
       if (runningNumbers.has(j.task)) continue; // handled above (or a fresh attempt still starting)
-      if (stopJob(j.id)) { summary.reaped = summary.reaped || []; summary.reaped.push({ number: j.task, job: j.id }); log(`#${j.task}: stopped finished background agent ${j.id}`); }
+      if (stopJob(j.id)) { touch(j.task); summary.reaped = summary.reaped || []; summary.reaped.push({ number: j.task, job: j.id }); log(`#${j.task}: stopped finished background agent ${j.id}`); }
     }
   }
 
-  // orphan lock sweep: refs with no matching open attempt older than 10 min
+  // orphan lock sweep — NEVER a lock this host claimed < 15 min ago (a stale board read once made
+  // this sweep delete a 30-second-old lock, letting the next tick double-claim the task: #15/3).
   try {
     const locks = await listLocks(ctx);
     for (const l of locks) {
+      const claimedAt = state.claims[`${l.n}/${l.k}`];
+      if (claimedAt && Date.now() - new Date(claimedAt).getTime() < 900_000) continue;
+      if (touchedRecently(l.n)) continue;
       const t = tasks.find((x) => x.number === l.n);
       const runRec = t ? await loadRun(ctx, l.n) : null;
       const a = runRec ? runRec.run.attempts.find((x) => x.attempt === l.k) : null;
@@ -312,6 +328,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   const claimedPaths = runningNow.map((t) => t.kb.paths || []);
 
   for (const t of ready) {
+    if (touchedRecently(t.number)) { summary.skipped.push({ number: t.number, why: 'touched recently (stale-read guard)' }); continue; }
     // active_pr guard first: it needs no extra call and must apply even when there is no slot
     const openPrEarly = (t.prs || []).find((p) => p.state === 'OPEN');
     if (openPrEarly) {
@@ -338,6 +355,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     const k = runRec.run.attempts.length + 1;
     if (dryRun) { summary.claimed.push({ number: t.number, attempt: k, profile: profileName, dry: true }); budget--; continue; }
     const c = await claim(ctx, t.number, k);
+    if (c.result === 'claimed') { state.claims[`${t.number}/${k}`] = nowIso(); touch(t.number); }
     if (c.result === 'held') { summary.held.push(t.number); log(`#${t.number}: lock held elsewhere, skipping`); continue; }
     if (c.result === 'unknown') {
       log(`#${t.number}: claim result unknown (${c.error?.kind}: ${c.error?.message}); backing off this tick`);
