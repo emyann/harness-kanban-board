@@ -15,7 +15,7 @@ Everything that must survive a crash lives in GitHub. Nothing here needs a paid 
 | Attempts (Hermes `runs`) | one `<!-- kb-run -->` comment, fenced JSON | `attempts[] {attempt, profile, host, pid, started_at, heartbeat_at, ended_at, outcome, summary, reason, log}`, `failures`, `block_loops` |
 | Structured handoff | `<!-- kb-result -->` comment per completion / review request | `{summary, metadata{changed_files, verification, dependencies, residual_risk, retry_notes}, artifacts[]}` |
 | Events | issue timeline + attempt rows (`ghk log`) | |
-| Claim | git ref `refs/kb/locks/<n>/<attempt>` | create = atomic claim (201 claimed / 409 or "already exists" held / anything else unknown → back off) |
+| Claim | git ref `refs/kb/locks/<n>/<attempt>` | create = atomic claim (201 claimed / held on **422 "Reference already exists"** — the observed duplicate response, verified 2026-08-26 — or 409 / anything else unknown → back off) |
 | Output | branch + draft PR with `Closes #n` | PR merge closes the issue; an open PR moves the task to `review` |
 
 Precedence when they disagree: run comment > labels > body block.
