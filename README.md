@@ -73,7 +73,7 @@ There is no auth — it binds `127.0.0.1`, refuses cross-origin calls, and warns
 | runs table | one `<!-- kb-run -->` comment (attempts, failures, block loops) |
 | `kanban_complete(summary, metadata)` | `<!-- kb-result -->` comment; open PR → *review*, else issue closed |
 | worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link` |
-| stop nudge | Claude Code `Stop` / Copilot CLI `agentStop` hook (`hkb hook stop`, 2 nudges, inert unless `KB_TASK` is set) |
+| stop nudge | Claude Code / Codex `Stop`, Copilot CLI `agentStop` hook (`hkb hook stop`, 2 nudges, inert unless `KB_TASK` is set) |
 | kanban dashboard | `hkb serve` — local page over the live board; drag-drop calls the same verbs |
 | crash / stale / timeout | pid check on the claiming host, `stale_after` (against the lock ref's commit date, then the run comment), `max_runtime` → `ready` or `gave_up` |
 
@@ -103,8 +103,24 @@ Copilot CLI has no worktree flag, so the profile carries `workspace: "worktree"`
 `git worktree add .claude/worktrees/kb-<n>-<k> -b kb-<n>-<k>` itself before launching the worker there.
 Compared with the Claude profiles you lose structured JSON output — everything hkb records about an attempt comes
 from the `hkb` commands the worker runs — and `max_in_progress` defaults to 1, because Copilot Free's credit pool
-is small. Add `codex` or any other harness the same way: a `launch` array in `.kanban/board.json`; the protocol
-does not change.
+is small.
+
+`codex` is the third local harness, **OpenAI Codex CLI**:
+
+```bash
+hkb init --harness codex       # adds the profile, .codex/hooks.json and the setup notes
+hkb doctor                     # codex on PATH · the generated files · the schema the launch names
+```
+
+Each attempt runs `codex exec -C <worktree> --sandbox workspace-write --output-schema
+.agents/skills/kanban/schema/terminal.json "<prompt>"` in a worktree the dispatcher created, so the sandbox — not
+an allowlist — is the permission policy, and the final message mirrors the terminal verb into
+[`terminal.json`](skills/kanban/schema/terminal.json). Codex will not run project hooks until you trust the
+project once (`/hooks`, or `trust_level = "trusted"`), and its `workspace-write` sandbox needs network access
+before a worker can push: both steps are written into `.codex/README.md` with your paths filled in.
+
+Any other harness plugs in the same way — a `launch` array in `.kanban/board.json`; the protocol does not change.
+Details, flags and troubleshooting for all of them: [docs/harnesses.md](docs/harnesses.md).
 
 ## GitHub Projects mirror (opt-in, off by default)
 

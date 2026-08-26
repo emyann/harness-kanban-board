@@ -69,7 +69,13 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
   const profile = ctx.cfg.profiles[profileName];
   if (!profile?.launch) throw new Error(`profile "${profileName}" has no launch template in board.json`);
   const prompt = await workerContext(ctx, task, attempt);
-  const vars = { n: task.number, k: attempt, slug: slugify(task.title), title: task.title.replace(/[\r\n]+/g, ' ').slice(0, 80), model: task.kb.model || profile.model || '', prompt, board: ctx.board, repo: ctx.repo.nameWithOwner };
+  // Harnesses without a worktree flag (Copilot CLI, Codex) declare `workspace: "worktree"`; the
+  // dispatcher makes the checkout and runs them in it. Everything else runs at the board root and
+  // isolates itself. `{worktree}` is that directory as an absolute path, for a harness that wants it
+  // as an argument too (`codex exec -C <dir>`) — known before the checkout exists, so `--dry-run`
+  // prints the real command without creating anything.
+  const wt = profile.workspace === 'worktree' ? `kb-${task.number}-${attempt}` : null;
+  const vars = { n: task.number, k: attempt, slug: slugify(task.title), title: task.title.replace(/[\r\n]+/g, ' ').slice(0, 80), model: task.kb.model || profile.model || '', prompt, board: ctx.board, repo: ctx.repo.nameWithOwner, worktree: wt ? path.join(ctx.root, worktreePath(wt)) : ctx.root };
   const argv = expandLaunch(profile.launch, vars, profile);
   const env = {
     ...process.env,
@@ -78,9 +84,6 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
   };
   if (dryRun) return { argv, pid: null };
   ensureLocalDirs(ctx.root);
-  // Harnesses without a worktree flag (Copilot CLI) declare `workspace: "worktree"`; the dispatcher
-  // makes the checkout and runs them in it. Everything else runs at the board root and isolates itself.
-  const wt = profile.workspace === 'worktree' ? `kb-${task.number}-${attempt}` : null;
   const cwd = wt ? ensureWorktree(ctx.root, wt) : ctx.root;
   const logFile = path.join(logsDir(ctx.root), `${task.number}-${attempt}.log`);
   if (profile.mode === 'claude-bg') {

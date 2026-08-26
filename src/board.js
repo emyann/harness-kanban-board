@@ -48,6 +48,18 @@ export const DEFAULT_PROFILES = {
     allowed_tools: COPILOT_TOOLS,
     launch: ['copilot', '-p', '{prompt}', '--agent', 'kanban-worker', '--allow-tool={allowed_tools}', '--no-ask-user', '--deny-tool', 'shell(git push --force*)', '--deny-tool', 'shell(git push -f*)', '{model_args}'],
   },
+  codex: {
+    description: 'OpenAI Codex CLI on this machine (`codex exec`, draws on the ChatGPT or API plan). Run `hkb init --harness codex` first: it writes the `.codex/hooks.json` Stop nudge and the notes for the one-time trust Codex needs before it runs project hooks. Codex has no worktree flag, so `workspace: "worktree"` asks the dispatcher to create one and the launch hands it over as `-C`. The sandbox is the permission policy — `workspace-write` makes that worktree writable and everything else read-only — so there is no per-command allowlist. `--output-schema` makes the final message match the terminal-verb schema; the `hkb` verb the worker ran is still the source of truth. See docs/harnesses.md.',
+    mode: 'process',
+    workspace: 'worktree',
+    // `git *` runs inside the sandbox, so a Codex worker CASes the lock ref like a Claude one —
+    // but only once `network_access` is on for workspace-write (docs/harnesses.md).
+    heartbeat: 'auto',
+    max_in_progress: 1,
+    model: null,
+    allowed_tools: null, // Codex has no per-command allowlist: `--sandbox` is the whole policy
+    launch: ['codex', 'exec', '-C', '{worktree}', '--sandbox', 'workspace-write', '--output-schema', '.agents/skills/kanban/schema/terminal.json', '{model_args}', '{prompt}'],
+  },
 };
 
 export const DEFAULT_BOARD = {

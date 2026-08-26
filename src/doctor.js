@@ -7,7 +7,7 @@ import { boardFile, api } from './board.js';
 import { detectCaps } from './tasks.js';
 import { L, STATUSES, compareVersions } from './model.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
-import { agentsSkillDir, packageSkillDir, readSkillVersion } from './init.js';
+import { agentsSkillDir, packageSkillDir, readSkillVersion, harnessFiles, HARNESS_PROFILE } from './init.js';
 import { checkProject } from './projects.js';
 
 function has(cmd) { return spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).status === 0; }
@@ -33,6 +33,28 @@ export function checkSkill(ctx, { ok, warn }) {
   ok('skill', `.agents/skills/kanban${installed ? ` v${installed}` : ''}`);
 }
 
+/** What each harness's generated files buy you, for the one-liner doctor prints. */
+const HARNESS_NOTE = {
+  copilot: 'agentStop nudge',
+  codex: 'Stop nudge — needs the one-time trust in .codex/README.md',
+};
+
+/**
+ * A harness whose profile is configured but whose generated files are missing is a board that
+ * dispatches and then enforces nothing. The file list comes from the generator itself, so this can
+ * never drift from what `hkb init --harness <name>` writes.
+ */
+export function checkHarnesses(ctx, { ok, warn }) {
+  for (const [harness, profile] of Object.entries(HARNESS_PROFILE)) {
+    if (!ctx.cfg.profiles?.[profile]) continue;
+    const files = harnessFiles(harness).map((f) => f.rel);
+    const missing = files.filter((f) => !fs.existsSync(path.join(ctx.root, f)));
+    missing.length
+      ? warn(`${harness} harness`, `missing ${missing.join(', ')}`, `hkb init --harness ${harness}`)
+      : ok(`${harness} harness`, `${files.join(' · ')} (${HARNESS_NOTE[harness] || 'stop nudge'})`);
+  }
+}
+
 export async function doctor(ctx, flags, log) {
   const results = [];
   const ok = (name, detail) => results.push({ name, ok: true, detail });
@@ -54,17 +76,18 @@ export async function doctor(ctx, flags, log) {
   for (const [name, p] of Object.entries(ctx.cfg.profiles)) {
     if (!p.launch) warn(`profile ${name}`, 'no launch template — tasks assigned to it will never be dispatched from this host', 'add "launch" in board.json');
     else ok(`profile ${name}`, `${p.launch[0]} · max_in_progress ${p.max_in_progress ?? '∞'}`);
+    // a launch that hands the harness a schema by path (`codex exec --output-schema <file>`) fails
+    // on every attempt if that file is not in the checkout the worker gets
+    const i = (p.launch || []).indexOf('--output-schema');
+    const schema = i > 0 ? p.launch[i + 1] : null;
+    if (schema) {
+      fs.existsSync(path.join(ctx.root, schema))
+        ? ok(`profile ${name} output schema`, schema)
+        : bad(`profile ${name} output schema`, `${schema} is missing — every attempt would fail to start`, 'hkb init, and commit the file so worktrees have it');
+    }
   }
   checkSkill(ctx, { ok, warn });
-  if (ctx.cfg.profiles['copilot-cli']) {
-    // the profile launches `copilot --agent kanban-worker`; without these two generated files the
-    // agent does not exist and nothing enforces the terminal verb
-    const files = [path.join('.github', 'agents', 'kanban-worker.agent.md'), path.join('.github', 'hooks', 'kanban.json')];
-    const missing = files.filter((f) => !fs.existsSync(path.join(ctx.root, f)));
-    missing.length
-      ? warn('copilot harness', `missing ${missing.join(', ')}`, 'hkb init --harness copilot')
-      : ok('copilot harness', `${files.join(' · ')} (agentStop nudge)`);
-  }
+  checkHarnesses(ctx, { ok, warn });
   const claudeSkill = path.join(ctx.root, '.claude', 'skills', 'kanban');
   fs.existsSync(claudeSkill) ? ok('claude skill link', '.claude/skills/kanban') : warn('claude skill link', 'missing', 'hkb init');
   try {

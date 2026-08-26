@@ -146,7 +146,7 @@ export function terminalArgv(verb, number, p, { board, attempt } = {}) {
 
 const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issues
 
-  setup       init [--board slug] [--profiles claude] [--harness copilot] [--import] [--no-hook]
+  setup       init [--board slug] [--profiles claude] [--harness copilot|codex] [--import] [--no-hook]
                    [--project <number|new>]
               doctor [--api] [--json]
   tasks       create "title" [--body ..] [--blocked-by 12,13] [--agent claude] [--priority N] [--paths a/,b/]
