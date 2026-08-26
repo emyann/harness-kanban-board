@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "agentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{command}}",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

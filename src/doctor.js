@@ -56,6 +56,15 @@ export async function doctor(ctx, flags, log) {
     else ok(`profile ${name}`, `${p.launch[0]} · max_in_progress ${p.max_in_progress ?? '∞'}`);
   }
   checkSkill(ctx, { ok, warn });
+  if (ctx.cfg.profiles['copilot-cli']) {
+    // the profile launches `copilot --agent kanban-worker`; without these two generated files the
+    // agent does not exist and nothing enforces the terminal verb
+    const files = [path.join('.github', 'agents', 'kanban-worker.agent.md'), path.join('.github', 'hooks', 'kanban.json')];
+    const missing = files.filter((f) => !fs.existsSync(path.join(ctx.root, f)));
+    missing.length
+      ? warn('copilot harness', `missing ${missing.join(', ')}`, 'hkb init --harness copilot')
+      : ok('copilot harness', `${files.join(' · ')} (agentStop nudge)`);
+  }
   const claudeSkill = path.join(ctx.root, '.claude', 'skills', 'kanban');
   fs.existsSync(claudeSkill) ? ok('claude skill link', '.claude/skills/kanban') : warn('claude skill link', 'missing', 'hkb init');
   try {

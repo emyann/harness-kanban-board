@@ -4,6 +4,7 @@ import {
   parseBodyBlock, serializeBodyBlock, DEFAULT_KB, statusOf, agentOf, boardOf,
   parseRunComment, serializeRunComment, emptyRun, openAttempt, parseResultComment, serializeResultComment,
   blockerDone, computeReady, pathsOverlap, sortForDispatch, slugify, lockRef, lockRefPath, hashReason,
+  normalizeHookInput, stripFrontmatter, sessionUpdate,
 } from '../src/model.js';
 
 test('body block: round trip and defaults', () => {
@@ -82,6 +83,37 @@ test('dispatch order: priority desc, then oldest', () => {
     { number: 5, kb: { priority: 0 } }, { number: 3, kb: { priority: 2 } }, { number: 4, kb: { priority: 2 } }, { number: 9, kb: {} },
   ];
   assert.deepEqual(sortForDispatch(tasks).map((t) => t.number), [3, 4, 5, 9]);
+});
+
+test('stop-hook payload: Copilot camelCase folds onto Claude snake_case', () => {
+  const copilot = normalizeHookInput({ sessionId: 'abc', transcriptPath: '/t.jsonl', hookEventName: 'agentStop', stopHookActive: true });
+  assert.equal(copilot.session_id, 'abc');
+  assert.equal(copilot.transcript_path, '/t.jsonl');
+  assert.equal(copilot.hook_event_name, 'agentStop');
+  assert.equal(copilot.stop_hook_active, true);
+  // and the normalised payload feeds the same attempt-row writer
+  assert.deepEqual(sessionUpdate({}, copilot), { session_id: 'abc', transcript_path: '/t.jsonl' });
+});
+
+test('stop-hook payload: Claude snake_case passes through, and wins over an alias', () => {
+  const claude = { session_id: 'x', transcript_path: '/t', stop_hook_active: false, total_cost_usd: 0.4, extra: 1 };
+  assert.deepEqual(normalizeHookInput(claude), claude);
+  assert.equal(normalizeHookInput({ session_id: 'real', sessionId: 'alias' }).session_id, 'real');
+});
+
+test('stop-hook payload: junk is an empty object, never a throw', () => {
+  for (const v of [null, undefined, 'string', 42, []]) assert.deepEqual(normalizeHookInput(v), {});
+  assert.deepEqual(normalizeHookInput({}), {});
+});
+
+test('stripFrontmatter returns the document, front matter or not', () => {
+  assert.equal(stripFrontmatter('---\nname: k\n---\n\n# Title\n\nbody\n'), '# Title\n\nbody\n');
+  assert.equal(stripFrontmatter('# Title\n'), '# Title\n');
+  assert.equal(stripFrontmatter('---\r\nname: k\r\n---\r\n# Title\n'), '# Title\n');
+  assert.equal(stripFrontmatter(''), '');
+  assert.equal(stripFrontmatter(null), '');
+  // a --- rule inside the body is not a second front matter block
+  assert.equal(stripFrontmatter('---\na: 1\n---\nx\n\n---\n\ny\n'), 'x\n\n---\n\ny\n');
 });
 
 test('misc helpers', () => {

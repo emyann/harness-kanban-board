@@ -356,9 +356,44 @@ export function resumeCommand(a, number = null) {
   return wt ? `cd ${worktreePath(wt)} && ${resume}` : resume;
 }
 
+// ---------- harness hook payloads ----------
+// Claude Code and Copilot CLI both feed their stop hook one JSON object on stdin, but spell the
+// fields differently: Claude uses snake_case (`session_id`, `transcript_path`, `stop_hook_active`),
+// Copilot camelCase (`sessionId`, `transcriptPath`, `hookEventName`). Normalise to Claude's spelling
+// so `hkb hook stop` reads one shape; unknown keys pass through untouched. See src/hook.js.
+
+const HOOK_ALIASES = {
+  sessionId: 'session_id',
+  transcriptPath: 'transcript_path',
+  hookEventName: 'hook_event_name',
+  stopHookActive: 'stop_hook_active',
+  agentStopActive: 'stop_hook_active',
+  workingDirectory: 'cwd',
+  totalCostUsd: 'total_cost_usd',
+  numTurns: 'num_turns',
+  durationMs: 'duration_ms',
+};
+
+/** A stop-hook payload from any harness in hkb's (Claude's) spelling. Never throws. */
+export function normalizeHookInput(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = { ...raw };
+  for (const [from, to] of Object.entries(HOOK_ALIASES)) {
+    if (raw[from] !== undefined && out[to] === undefined) out[to] = raw[from];
+  }
+  return out;
+}
+
 // ---------- installed skill version ----------
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
+
+/** Everything after a SKILL.md-style front matter block (the document itself). */
+export function stripFrontmatter(text) {
+  const s = String(text || '');
+  const fm = FRONTMATTER_RE.exec(s);
+  return (fm ? s.slice(fm[0].length) : s).replace(/^\s*\n/, '');
+}
 
 /** `metadata.version` out of a SKILL.md front matter block. null when absent or unparsable. */
 export function parseSkillVersion(text) {

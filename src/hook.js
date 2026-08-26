@@ -1,10 +1,27 @@
-// `hkb hook stop` — Claude Code Stop hook. Nudges a worker (max 2×) that exits without a terminal verb.
-// Safe in any session: exits 0 immediately unless KB_TASK is set.
+// `hkb hook stop` — the stop hook for every local harness. Nudges a worker (max 2×) that tries to
+// end its turn without a terminal verb. Safe in any session: exits 0 immediately unless KB_TASK is set.
+//
+// Two harnesses, one hook. What differs, and what does not:
+//
+//   |            | Claude Code                       | Copilot CLI                              |
+//   | event      | `Stop`                            | `agentStop` (not `sessionEnd`, which is   |
+//   |            |                                   | too late to block)                        |
+//   | configured | `.claude/settings.json` `hooks.Stop` | `.github/hooks/kanban.json` `hooks.agentStop` |
+//   | installed  | `hkb init`                        | `hkb init --harness copilot`             |
+//   | stdin      | snake_case: `session_id`,         | camelCase: `sessionId`, `transcriptPath`, |
+//   |            | `transcript_path`, `stop_hook_active` | `hookEventName`                      |
+//   | stdout     | `{"decision":"block","reason":…}` | same — Copilot documents `decision: block`|
+//   |            | (re-prompts the model)            | on `agentStop`, with its own continuation |
+//   |            |                                   | guard on top of our 2 nudges              |
+//
+// `normalizeHookInput` (model.js) folds the camelCase spellings onto Claude's, so everything below
+// reads one shape. Copilot has no `--output-format json`, so its payload carries no cost/turn
+// fields: `recordSession` simply finds nothing to write and the attempt row stays as it is.
 import fs from 'node:fs';
 import path from 'node:path';
 import { kanbanDir } from './board.js';
 import { getTask, loadRun, saveRun } from './tasks.js';
-import { openAttempt, sessionUpdate } from './model.js';
+import { openAttempt, sessionUpdate, normalizeHookInput } from './model.js';
 
 /** PreToolUse hook: hkb's own permission policy — allow or deny, never a prompt. */
 export async function preToolHook(ctx) {
@@ -46,7 +63,7 @@ export async function stopHook(ctx) {
   const n = process.env.KB_TASK;
   if (!n) return 0;
   let input = {};
-  try { input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}'); } catch { /* no stdin */ }
+  try { input = normalizeHookInput(JSON.parse(fs.readFileSync(0, 'utf8') || '{}')); } catch { /* no stdin */ }
   const k = process.env.KB_ATTEMPT || '0';
   const dir = path.join(kanbanDir(ctx.root), 'nudges');
   fs.mkdirSync(dir, { recursive: true });
