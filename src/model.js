@@ -200,6 +200,33 @@ export function sortForDispatch(tasks) {
   return [...tasks].sort((a, b) => priorityOf(b) - priorityOf(a) || a.number - b.number);
 }
 
+// ---------- background-agent jobs (`claude --bg`) ----------
+
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+
+/** `claude --bg` prints "backgrounded · <id> · <name>"; extract the id. */
+export function parseBackgroundedId(stdout) {
+  const m = /backgrounded\s*·\s*([0-9a-f]{6,})/i.exec(String(stdout || '').replace(ANSI_RE, ''));
+  return m ? m[1] : null;
+}
+
+export const KB_JOB_NAME_RE = /^kb #(\d+) · /;
+
+/** Job name shown in `claude agents` for a task. */
+export function jobName(task) { return `kb #${task.number} · ${task.title}`; }
+
+/**
+ * Decide what a background job's state means for an open attempt.
+ *   working            → still running
+ *   done / idle / gone → the session finished its turn without a terminal verb → protocol_violation
+ *   missing entirely   → crashed
+ */
+export function classifyJob(job) {
+  if (!job) return 'crashed';
+  if (job.state === 'working' || job.status === 'busy') return 'running';
+  return 'protocol_violation';
+}
+
 export function hashReason(reason) {
   const s = String(reason || '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 80);
   let h = 0;

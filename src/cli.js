@@ -264,7 +264,7 @@ export async function main(argv) {
       if (t.prs.length) process.stdout.write(`PRs: ${t.prs.map((p) => `#${p.number} ${p.state}${p.merged ? ' merged' : p.isDraft ? ' draft' : ''}`).join(', ')}\n`);
       if (run.attempts.length) {
         process.stdout.write(`\nattempts (failures ${run.failures}):\n`);
-        for (const a of run.attempts) process.stdout.write(`  ${a.attempt}. ${a.profile}@${a.host || '-'} ${a.started_at} → ${a.ended_at || 'active'} ${a.outcome || ''}${a.summary ? ' — ' + a.summary : ''}${a.reason ? ' — ' + a.reason : ''}\n`);
+        for (const a of run.attempts) process.stdout.write(`  ${a.attempt}. ${a.profile}@${a.host || '-'} ${a.started_at} → ${a.ended_at || 'active'} ${a.outcome || ''}${a.summary ? ' — ' + a.summary : ''}${a.reason ? ' — ' + a.reason : ''}${a.job ? `\n     job ${a.job}${a.ended_at ? '' : ' · claude attach ' + a.job}` : ''}\n`);
       }
       if (result) process.stdout.write(`\nlatest result: ${result.summary}\n`);
       for (const p of parents) if (p.result) process.stdout.write(`\nparent #${p.number}: ${p.result.summary}\n`);

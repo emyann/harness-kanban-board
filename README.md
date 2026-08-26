@@ -68,8 +68,12 @@ Full protocol: [skills/kanban/references/protocol.md](skills/kanban/references/p
 
 ## Profiles
 
-`.kanban/board.json` declares profiles: a launch template plus caps. The built-in `claude` profile runs
-`claude -p --worktree kb-<n>-<k> --permission-mode acceptEdits --allowedTools ... --max-budget-usd 5`.
+`.kanban/board.json` declares profiles: a launch template plus caps. The built-in `claude` profile starts each
+worker as a Claude Code **background agent** — `claude --bg --name "kb #<n> · <title>" --worktree kb-<n>-<k>
+--permission-mode acceptEdits --allowedTools ... --max-budget-usd 5 "<prompt>"` — so workers show up in
+`claude agents` (and the agents view of any session in the repo), can be opened with `claude attach <job>`, and are
+stopped by the dispatcher once their attempt has ended. `ghk show <n>` prints the job id per attempt.
+`claude-p` is the headless variant (`claude -p`, exits when done) for CI and containers without the session daemon.
 Add `copilot-cli` or `codex` profiles with their own `launch` arrays; the protocol does not change.
 
 ## Local state (gitignored)

@@ -5,12 +5,23 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghCmd } from './gh.js';
 
+const CLAUDE_TOOLS = ['Bash(ghk *)', 'Bash(git *)', 'Bash(gh pr *)', 'Bash(gh issue view *)', 'Bash(npm *)', 'Bash(npx *)', 'Bash(node *)', 'Edit', 'Write', 'Read', 'Glob', 'Grep'];
+
 export const DEFAULT_PROFILES = {
   claude: {
-    description: 'Claude Code on this machine (free path). Runs in a git worktree, opens a draft PR, finishes with one ghk terminal verb.',
+    description: 'Claude Code on this machine as a background agent (free path): visible in `claude agents`, attachable with `claude attach <job>`, runs in a git worktree, opens a draft PR, finishes with one ghk terminal verb. The dispatcher stops the job once the attempt has ended.',
+    mode: 'claude-bg',
     max_in_progress: 2,
     model: null,
-    allowed_tools: ['Bash(ghk *)', 'Bash(git *)', 'Bash(gh pr *)', 'Bash(gh issue view *)', 'Bash(npm *)', 'Bash(npx *)', 'Bash(node *)', 'Edit', 'Write', 'Read', 'Glob', 'Grep'],
+    allowed_tools: CLAUDE_TOOLS,
+    launch: ['claude', '--bg', '--name', 'kb #{n} · {title}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'acceptEdits', '--allowedTools', '{allowed_tools}', '--disallowedTools', 'Bash(git push --force*)', 'Bash(git push -f*)', '--max-turns', '80', '--max-budget-usd', '5', '{model_args}', '{prompt}'],
+  },
+  'claude-p': {
+    description: 'Claude Code headless (`claude -p`): a plain process that exits when done. Not listed in `claude agents`; use it where no session daemon exists (CI, containers).',
+    mode: 'process',
+    max_in_progress: 2,
+    model: null,
+    allowed_tools: CLAUDE_TOOLS,
     launch: ['claude', '-p', '{prompt}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'acceptEdits', '--allowedTools', '{allowed_tools}', '--disallowedTools', 'Bash(git push --force*)', 'Bash(git push -f*)', '--output-format', 'json', '--max-turns', '80', '--max-budget-usd', '5', '{model_args}'],
   },
 };
