@@ -248,7 +248,10 @@ function fixture(tasks, calls = []) {
   const deps = {
     fetchBoard: async () => tasks,
     getTask: async (_c, n) => tasks.find((t) => t.number === n) || task({ number: n }),
-    loadRun: async () => ({ run: { attempts: [{ attempt: 1, profile: 'claude', started_at: '2026-08-26T06:52:38Z', log: '.kanban/logs/20-1.log' }], failures: 0 } }),
+    loadRun: async () => ({ run: { failures: 0, attempts: [{
+      attempt: 1, profile: 'claude', started_at: '2026-08-26T06:52:38Z', log: '.kanban/logs/20-1.log',
+      wt: 'kb-20-1', session_id: 'sess-abc', total_cost_usd: 1.5, num_turns: 12,
+    }] } }),
     latestResult: async () => null,
     parentResults: async () => [],
     addComment: async (_c, n, text) => { calls.push({ verb: 'comment', n, opts: { text } }); return { html_url: 'https://x/c' }; },
@@ -304,6 +307,9 @@ test('GET /api/tasks/:n is the drawer: body, kb block, attempts, logs', async ()
     assert.equal(t.bodyText, '## Why\nbecause');
     assert.equal(t.kb.priority, 1);
     assert.equal(t.run.attempts.length, 1);
+    // the attempt row says what `hkb show` says, including how to attach to the worker
+    assert.match(t.run.attempts[0].session, /sess-abc.*12 turns/);
+    assert.equal(t.run.attempts[0].resume, 'cd .claude/worktrees/kb-20-1 && claude --resume sess-abc');
     assert.deepEqual(t.logs, [{ attempt: 1, path: path.join('.kanban', 'logs', '20-1.log'), exists: true }]);
     const log = await (await get('/api/tasks/20/log?attempt=1')).json();
     assert.equal(log.text, 'hello worker\n');

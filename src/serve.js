@@ -15,7 +15,7 @@ import {
 import { promote as realPromote, unblock as realUnblock, block as realBlock, requestChanges as realRequestChanges, archive as realArchive } from './lifecycle.js';
 import { logsDir, kanbanDir } from './board.js';
 import { pidAlive } from './dispatch.js';
-import { computeReady, blockerDone } from './model.js';
+import { computeReady, blockerDone, formatSession, resumeCommand } from './model.js';
 
 /** The columns of the web board. `archived` is a verb, not a column — archived tasks leave the board. */
 export const COLUMNS = ['triage', 'todo', 'ready', 'running', 'blocked', 'review', 'done'];
@@ -298,7 +298,8 @@ export async function startServer(ctx, flags = {}, log = () => {}, deps = {}) {
       bodyText: task.bodyText,
       kb: task.kb,
       labels: task.labels,
-      run,
+      // Attempts carry what `hkb show` prints: the session line, and the command to attach to a live worker.
+      run: { ...run, attempts: (run.attempts || []).map((a) => ({ ...a, session: formatSession(a), resume: resumeCommand(a, number) })) },
       result,
       parents: parents.map((p) => ({ number: p.number, title: p.title, state: p.state, summary: p.result?.summary || null })),
       logs: (run.attempts || []).map((a) => {

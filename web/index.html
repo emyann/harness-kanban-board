@@ -581,10 +581,12 @@ function renderDrawer(t) {
       '<table class="attempts"><thead><tr><th>#</th><th>profile</th><th>started</th><th>ended</th><th>outcome</th></tr></thead><tbody>' +
       attempts.map((a) => {
         const note = a.summary || a.reason || '';
+        const sub = [note ? esc(note) : '', a.session ? '<span style="color:var(--fg-faint)">' + esc(a.session) + '</span>' : '',
+          a.resume ? '<code>' + esc(a.resume) + '</code>' : ''].filter(Boolean);
         return '<tr><td>' + a.attempt + '</td><td>' + esc(a.profile || '') + '</td><td>' + esc(ago(a.started_at)) + '</td>' +
           '<td>' + (a.ended_at ? esc(ago(a.ended_at)) : '—') + '</td>' +
           '<td><span class="outcome ' + esc(a.outcome || 'active') + '">' + esc(a.outcome || 'active') + '</span></td></tr>' +
-          (note ? '<tr><td></td><td colspan="4" class="note">' + esc(note) + '</td></tr>' : '');
+          (sub.length ? '<tr><td></td><td colspan="4" class="note">' + sub.join('<br>') + '</td></tr>' : '');
       }).join('') + '</tbody></table>');
   }
 
