@@ -1,0 +1,9 @@
+{
+  "name": "kanban",
+  "version": "0.1.0",
+  "description": "ghkanban — a portable, frugal kanban for coding agents on GitHub Issues. Adds the kanban skill and the Stop hook that enforces one terminal verb per task.",
+  "author": { "name": "emyann" },
+  "keywords": ["kanban", "github", "issues", "dispatcher", "hermes"],
+  "skills": "./skills",
+  "hooks": "./hooks/hooks.json"
+}

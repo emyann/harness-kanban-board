@@ -1,0 +1,7 @@
+node_modules/
+.kanban/logs/
+.kanban/outbox.jsonl
+.kanban/state.json
+.kanban/cache.json
+.kanban/nudges/
+*.log

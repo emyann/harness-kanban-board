@@ -1,0 +1,326 @@
+// Argument parsing + command routing. Every command has --json; output is stable for scripts and agents.
+import { makeContext } from './board.js';
+import { getTask, fetchBoard, assertOnBoard, createIssue, addBlockedBy, removeBlockedBy, loadRun, latestResult, parentResults, issueEvents, issueDatabaseId, addComment, addLabels, setStatus, updateBody, ensureLabels } from './tasks.js';
+import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, withOutbox } from './lifecycle.js';
+import { tick, loop, spawnWorker } from './dispatch.js';
+import { claim } from './lock.js';
+import { contextCommand } from './context.js';
+import { stopHook } from './hook.js';
+import { init } from './init.js';
+import { doctor } from './doctor.js';
+import { gc } from './gc.js';
+import { STATUSES, DEFAULT_KB, L, computeReady, blockerDone, serializeBodyBlock, parseBodyBlock, lastAttempt } from './model.js';
+
+export function parseArgs(argv) {
+  const flags = {};
+  const pos = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--') { pos.push(...argv.slice(i + 1)); break; }
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      if (eq > 0) { flags[a.slice(2, eq)] = a.slice(eq + 1); continue; }
+      const key = a.slice(2);
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith('--')) { flags[key] = next; i++; } else flags[key] = true;
+    } else pos.push(a);
+  }
+  return { flags, pos };
+}
+
+const HELP = `ghk — a portable, frugal kanban for coding agents on GitHub Issues
+
+  setup       init [--board slug] [--profiles claude] [--import] [--no-hook]     doctor [--api] [--json]
+  tasks       create "title" [--body ..] [--blocked-by 12,13] [--agent claude] [--priority N] [--paths a/,b/]
+                     [--model m] [--skills s1,s2] [--max-retries N] [--max-runtime S] [--scheduled-at ISO] [--triage] [--goal ".."]
+              list [--status s] [--agent p] [--all] [--json]      show <n> [--json]      context <n>
+              link <parent> <child>   unlink <parent> <child>      promote <n>...      archive <n>...
+              adopt <n>... [--agent p]     comment <n> "text"      log <n> [--json]    status <n>
+  worker      heartbeat <n> [--note ..]     complete <n> --summary ".." [--metadata JSON] [--artifacts a,b]
+              block <n> "reason" [--kind dependency|needs_input|capability|transient]     unblock <n>...
+              request-review <n> --summary ".." [--reviewer p]     request-changes <n> "reason"
+  dispatch    dispatch [--loop S] [--max N] [--dry-run]     claim <n> [--profile p] [--spawn]     gc [--yes]
+  plumbing    hook stop      version
+
+  Global: --board <slug> (or KB_BOARD), --json. Exit codes: 0 ok · 1 error · 2 usage/state · 3 LOCK_LOST.
+`;
+
+const out = (ctx, obj, text) => { process.stdout.write((ctx.json ? JSON.stringify(obj, null, 2) : text ?? JSON.stringify(obj, null, 2)) + '\n'); };
+const nums = (pos) => pos.map((p) => Number(String(p).replace(/^#/, ''))).filter((n) => Number.isInteger(n) && n > 0);
+const usage = (msg) => { const e = new Error(msg); e.exitCode = 2; return e; };
+const log = (s) => process.stderr.write(s + '\n');
+
+function taskLine(t) {
+  const deps = t.blockedBy?.length ? ` ⇐ ${t.blockedBy.map((b) => (blockerDone(b) ? `#${b.number}✓` : `#${b.number}`)).join(',')}` : '';
+  const pr = t.prs?.find((p) => p.state === 'OPEN') ? ` PR#${t.prs.find((p) => p.state === 'OPEN').number}` : '';
+  return `#${String(t.number).padEnd(5)} ${(t.status || '?').padEnd(8)} ${(t.agent || '-').padEnd(10)} p${t.kb.priority}  ${t.title}${deps}${pr}${t.needsHuman ? '  ⚠ needs-human' : ''}`;
+}
+
+export async function main(argv) {
+  const { flags, pos } = parseArgs(argv);
+  const [cmd, ...rest] = pos;
+  if (!cmd || cmd === 'help' || flags.help) { process.stdout.write(HELP); return 0; }
+  if (cmd === 'version') { process.stdout.write('ghk 0.1.0\n'); return 0; }
+  const ctx = makeContext(flags);
+  const argvForOutbox = process.env.KB_NO_OUTBOX ? null : argv;
+
+  switch (cmd) {
+    case 'init': return init(ctx, flags, log);
+    case 'doctor': return doctor(ctx, flags, (s) => process.stdout.write(s + '\n'));
+    case 'hook': {
+      if (rest[0] !== 'stop') throw usage('ghk hook stop');
+      return stopHook(ctx);
+    }
+  }
+  ctx.requireBoard();
+
+  switch (cmd) {
+    case 'create': {
+      const title = rest[0];
+      if (!title) throw usage('ghk create "title" [--body ..] [--blocked-by n,n] [--agent claude] ...');
+      const kb = { ...DEFAULT_KB };
+      if (flags.priority !== undefined) kb.priority = Number(flags.priority);
+      if (flags.workspace) kb.workspace = flags.workspace;
+      if (flags['max-runtime']) kb.max_runtime = Number(flags['max-runtime']);
+      if (flags['max-retries'] !== undefined) kb.max_retries = Number(flags['max-retries']);
+      if (flags.model) kb.model = flags.model;
+      if (flags.skills) kb.skills = String(flags.skills).split(',').map((s) => s.trim()).filter(Boolean);
+      if (flags.paths) kb.paths = String(flags.paths).split(',').map((s) => s.trim()).filter(Boolean);
+      if (flags['scheduled-at']) kb.scheduled_at = new Date(flags['scheduled-at']).toISOString();
+      if (flags['idempotency-key']) kb.idempotency_key = flags['idempotency-key'];
+      if (flags.goal) kb.goal = flags.goal;
+      const parents = flags['blocked-by'] ? String(flags['blocked-by']).split(',').map((s) => Number(s.replace('#', ''))).filter(Boolean) : [];
+      if (kb.idempotency_key) {
+        const dupe = (await fetchBoard(ctx, { includeClosed: true })).find((t) => t.kb.idempotency_key === kb.idempotency_key);
+        if (dupe) { out(ctx, { number: dupe.number, duplicate: true }, `#${dupe.number} already exists with idempotency_key ${kb.idempotency_key}`); return 0; }
+      }
+      const agent = flags.agent || (Object.keys(ctx.cfg.profiles)[0] || 'claude');
+      let status = 'triage';
+      if (!flags.triage) {
+        if (!parents.length) status = 'ready';
+        else {
+          const ps = await Promise.all(parents.map((n) => issueDatabaseId(ctx, n)));
+          for (const p of ps) if (!p.labels.includes(L.board(ctx.board))) throw usage(`#${p.number} is not on board "${ctx.board}" — cross-board links are refused`);
+          status = ps.every((p) => blockerDone({ state: p.state, stateReason: p.state_reason })) ? 'ready' : 'todo';
+        }
+      }
+      if (kb.scheduled_at && new Date(kb.scheduled_at) > new Date() && status === 'ready') status = 'todo';
+      const labels = [L.board(ctx.board), L.status(status), L.agent(agent)];
+      await ensureLabels(ctx, [L.agent(agent)]);
+      const issue = await createIssue(ctx, { title, body: serializeBodyBlock(kb, flags.body || ''), labels });
+      for (const p of parents) await addBlockedBy(ctx, issue.number, p);
+      out(ctx, { number: issue.number, status, agent, blocked_by: parents, url: issue.html_url }, `#${issue.number} ${status} (${agent}) ${issue.html_url}`);
+      return 0;
+    }
+    case 'list': {
+      const tasks = await fetchBoard(ctx, { includeClosed: !!flags.all });
+      let rows = tasks;
+      if (flags.status) rows = rows.filter((t) => t.status === flags.status);
+      if (flags.agent) rows = rows.filter((t) => t.agent === flags.agent);
+      if (ctx.json) { out(ctx, rows.map(({ body, ...t }) => t)); return 0; }
+      const order = STATUSES;
+      rows.sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || a.number - b.number);
+      if (!rows.length) { process.stdout.write(`(no tasks on board "${ctx.board}")\n`); return 0; }
+      let cur = null;
+      for (const t of rows) {
+        if (t.status !== cur) { cur = t.status; process.stdout.write(`\n${cur.toUpperCase()}\n`); }
+        process.stdout.write('  ' + taskLine(t) + '\n');
+      }
+      return 0;
+    }
+    case 'show': {
+      const [n] = nums(rest);
+      if (!n) throw usage('ghk show <n>');
+      const t = await getTask(ctx, n);
+      const { run } = await loadRun(ctx, n);
+      const result = await latestResult(ctx, n);
+      const parents = await parentResults(ctx, t);
+      if (ctx.json) { out(ctx, { ...t, run, result, parents }); return 0; }
+      process.stdout.write(`${taskLine(t)}\n${t.url}\n\n${t.bodyText.trim() || '(no description)'}\n\n`);
+      process.stdout.write(`kb: ${JSON.stringify(t.kb)}\n`);
+      if (t.blockedBy.length) process.stdout.write(`blocked by: ${t.blockedBy.map((b) => `#${b.number} ${b.title || ''} [${blockerDone(b) ? 'done' : String(b.state).toLowerCase()}]`).join('; ')}\n`);
+      if (t.prs.length) process.stdout.write(`PRs: ${t.prs.map((p) => `#${p.number} ${p.state}${p.merged ? ' merged' : p.isDraft ? ' draft' : ''}`).join(', ')}\n`);
+      if (run.attempts.length) {
+        process.stdout.write(`\nattempts (failures ${run.failures}):\n`);
+        for (const a of run.attempts) process.stdout.write(`  ${a.attempt}. ${a.profile}@${a.host || '-'} ${a.started_at} → ${a.ended_at || 'active'} ${a.outcome || ''}${a.summary ? ' — ' + a.summary : ''}${a.reason ? ' — ' + a.reason : ''}\n`);
+      }
+      if (result) process.stdout.write(`\nlatest result: ${result.summary}\n`);
+      for (const p of parents) if (p.result) process.stdout.write(`\nparent #${p.number}: ${p.result.summary}\n`);
+      return 0;
+    }
+    case 'context': {
+      const [n] = nums(rest);
+      if (!n) throw usage('ghk context <n>');
+      process.stdout.write((await contextCommand(ctx, n)) + '\n');
+      return 0;
+    }
+    case 'status': {
+      const [n] = nums(rest);
+      if (!n) throw usage('ghk status <n>');
+      const t = await getTask(ctx, n);
+      out(ctx, { number: n, status: t.status }, t.status || 'none');
+      return 0;
+    }
+    case 'link':
+    case 'unlink': {
+      const [parent, child] = nums(rest);
+      if (!parent || !child) throw usage(`ghk ${cmd} <parent> <child>`);
+      const [p, c] = await Promise.all([getTask(ctx, parent), getTask(ctx, child)]);
+      assertOnBoard(ctx, p); assertOnBoard(ctx, c);
+      if (cmd === 'link') await addBlockedBy(ctx, child, parent); else await removeBlockedBy(ctx, child, parent);
+      const fresh = await getTask(ctx, child);
+      if (cmd === 'link' && fresh.status === 'ready' && !computeReady(fresh)) await setStatus(ctx, fresh, 'todo');
+      if (cmd === 'unlink' && fresh.status === 'todo' && computeReady(fresh)) await setStatus(ctx, fresh, 'ready');
+      out(ctx, { parent, child, status: fresh.status }, `#${child} ${cmd === 'link' ? 'blocked by' : 'no longer blocked by'} #${parent} → ${fresh.status}`);
+      return 0;
+    }
+    case 'promote': {
+      const ns = nums(rest);
+      if (!ns.length) throw usage('ghk promote <n>...');
+      const res = [];
+      for (const n of ns) res.push(await promote(ctx, n));
+      out(ctx, res, res.map((r) => `#${r.number} → ${r.status}${r.forced ? ' (forced: blockers not done)' : ''}`).join('\n'));
+      return 0;
+    }
+    case 'archive': {
+      const ns = nums(rest);
+      if (!ns.length) throw usage('ghk archive <n>...');
+      const res = [];
+      for (const n of ns) res.push(await archive(ctx, n));
+      out(ctx, res, res.map((r) => `#${r.number} archived`).join('\n'));
+      return 0;
+    }
+    case 'adopt': {
+      const ns = nums(rest);
+      if (!ns.length) throw usage('ghk adopt <n>... [--agent p] [--status triage]');
+      const agent = flags.agent || Object.keys(ctx.cfg.profiles)[0];
+      const status = flags.status || 'triage';
+      const res = [];
+      for (const n of ns) {
+        const t = await getTask(ctx, n);
+        if (!t.kb || !t.body.includes('<!-- kb:')) await updateBody(ctx, t, { ...DEFAULT_KB }, t.body);
+        await addLabels(ctx, t, [L.board(ctx.board), L.agent(agent)]);
+        await setStatus(ctx, t, status);
+        res.push({ number: n, status, agent });
+      }
+      out(ctx, res, res.map((r) => `#${r.number} adopted → ${r.status} (${r.agent})`).join('\n'));
+      return 0;
+    }
+    case 'comment': {
+      const [n] = nums(rest);
+      if (!n || !rest[1]) throw usage('ghk comment <n> "text"');
+      const c = await addComment(ctx, n, rest.slice(1).join(' '));
+      out(ctx, { number: n, url: c.html_url }, c.html_url);
+      return 0;
+    }
+    case 'log': {
+      const [n] = nums(rest);
+      if (!n) throw usage('ghk log <n>');
+      const { run } = await loadRun(ctx, n);
+      const events = await issueEvents(ctx, n);
+      const rows = [
+        ...events.map((e) => ({ at: e.created_at, kind: e.event, detail: e.label?.name || e.assignee?.login || e.state_reason || '', actor: e.actor?.login })),
+        ...run.attempts.flatMap((a) => [
+          { at: a.started_at, kind: 'claimed', detail: `attempt ${a.attempt} ${a.profile}@${a.host || ''}` },
+          ...(a.heartbeat_at ? [{ at: a.heartbeat_at, kind: 'heartbeat', detail: `attempt ${a.attempt}` }] : []),
+          ...(a.ended_at ? [{ at: a.ended_at, kind: a.outcome, detail: a.summary || a.reason || '' }] : []),
+        ]),
+      ].sort((a, b) => String(a.at).localeCompare(String(b.at)));
+      if (ctx.json) { out(ctx, rows); return 0; }
+      for (const r of rows) process.stdout.write(`${r.at}  ${String(r.kind).padEnd(20)} ${r.detail || ''}${r.actor ? '  (' + r.actor + ')' : ''}\n`);
+      return 0;
+    }
+    case 'heartbeat': {
+      const [n] = nums(rest);
+      if (!n) throw usage('ghk heartbeat <n> [--note ..]');
+      const r = await withOutbox(ctx, argvForOutbox, () => heartbeat(ctx, n, { note: flags.note }));
+      out(ctx, r, r.skipped ? `ok (recent heartbeat; next in ${r.next_in_s}s)` : `heartbeat recorded for #${n} attempt ${r.attempt}`);
+      return 0;
+    }
+    case 'complete': {
+      const [n] = nums(rest);
+      if (!n) throw usage('ghk complete <n> --summary ".." [--metadata JSON] [--artifacts a,b]');
+      let metadata = {};
+      if (flags.metadata) { try { metadata = JSON.parse(flags.metadata); } catch (e) { throw usage(`--metadata must be JSON: ${e.message}`); } }
+      const artifacts = flags.artifacts ? String(flags.artifacts).split(',').map((s) => s.trim()).filter(Boolean) : [];
+      const r = await withOutbox(ctx, argvForOutbox, () => complete(ctx, n, { summary: flags.summary, metadata, artifacts, attempt: flags.attempt }));
+      out(ctx, r, `#${n} → ${r.status}${r.pr ? ` (waiting on PR #${r.pr})` : ''}`);
+      return 0;
+    }
+    case 'block': {
+      const [n] = nums(rest);
+      const reason = rest.slice(1).join(' ');
+      if (!n) throw usage('ghk block <n> "reason" [--kind ..]');
+      const r = await withOutbox(ctx, argvForOutbox, () => block(ctx, n, { reason, kind: flags.kind || 'generic', attempt: flags.attempt }));
+      out(ctx, r, `#${n} → ${r.status}${r.block_loop_detected ? ' (block loop detected — needs human)' : ''}`);
+      return 0;
+    }
+    case 'unblock': {
+      const ns = nums(rest);
+      if (!ns.length) throw usage('ghk unblock <n>...');
+      const res = [];
+      for (const n of ns) res.push(await unblock(ctx, n));
+      out(ctx, res, res.map((r) => `#${r.number} → ${r.status}`).join('\n'));
+      return 0;
+    }
+    case 'request-review': {
+      const [n] = nums(rest);
+      if (!n) throw usage('ghk request-review <n> --summary ".." [--metadata JSON] [--reviewer p]');
+      let metadata = {};
+      if (flags.metadata) { try { metadata = JSON.parse(flags.metadata); } catch (e) { throw usage(`--metadata must be JSON: ${e.message}`); } }
+      const r = await withOutbox(ctx, argvForOutbox, () => requestReview(ctx, n, { summary: flags.summary, metadata, reviewer: flags.reviewer, attempt: flags.attempt }));
+      out(ctx, r, `#${n} → review`);
+      return 0;
+    }
+    case 'request-changes': {
+      const [n] = nums(rest);
+      if (!n) throw usage('ghk request-changes <n> "reason"');
+      const r = await requestChanges(ctx, n, { reason: rest.slice(1).join(' ') });
+      out(ctx, r, `#${n} → ${r.status}`);
+      return 0;
+    }
+    case 'claim': {
+      const [n] = nums(rest);
+      if (!n) throw usage('ghk claim <n> [--profile p] [--spawn]');
+      const t = await getTask(ctx, n);
+      assertOnBoard(ctx, t);
+      const runRec = await loadRun(ctx, n);
+      const k = runRec.run.attempts.length + 1;
+      const c = await claim(ctx, n, k);
+      if (c.result !== 'claimed') { out(ctx, c, `#${n}: ${c.result}${c.error ? ' — ' + c.error.message : ''}`); return c.result === 'held' ? 2 : 1; }
+      const profile = flags.profile || t.agent || Object.keys(ctx.cfg.profiles)[0];
+      runRec.run.attempts.push({ attempt: k, profile, host: ctx.host, started_at: new Date().toISOString(), heartbeat_at: new Date().toISOString(), manual: !flags.spawn });
+      const { saveRun } = await import('./tasks.js');
+      await saveRun(ctx, n, runRec);
+      await setStatus(ctx, t, 'running', { add: [L.agent(profile)] });
+      let pid = null;
+      if (flags.spawn) { const s = await spawnWorker(ctx, t, profile, k); pid = s.pid; runRec.run.attempts[k - 1].pid = pid; await saveRun(ctx, n, runRec); }
+      out(ctx, { number: n, attempt: k, ref: c.ref, pid }, `#${n} claimed (attempt ${k}, ${c.ref})${pid ? ` pid ${pid}` : `\nexport KB_TASK=${n} KB_ATTEMPT=${k}   # then work, and finish with ghk complete|block|request-review`}`);
+      return 0;
+    }
+    case 'dispatch': {
+      const max = flags.max ? Number(flags.max) : Infinity;
+      if (flags.loop) {
+        const interval = flags.loop === true ? ctx.cfg.dispatch.interval : Number(flags.loop);
+        log(`ghk dispatch loop every ${interval}s on ${ctx.repo.nameWithOwner} board "${ctx.board}" (host ${ctx.host}). Ctrl-C to stop.`);
+        await loop(ctx, { interval, max, log: (s) => log(`${new Date().toISOString()} ${s}`) });
+        return 0;
+      }
+      const s = await tick(ctx, { max, dryRun: !!flags['dry-run'], log });
+      if (ctx.json) out(ctx, s);
+      else {
+        const n = (k) => s[k].length;
+        log(`${flags['dry-run'] ? '[dry-run] ' : ''}reclaimed ${n('reclaimed')} · promoted ${n('promoted')} · claimed ${n('claimed')} · guarded ${n('guarded')} · held ${n('held')} · skipped ${n('skipped')}`);
+        for (const c of s.claimed) log(`  claimed #${c.number} attempt ${c.attempt} → ${c.profile}${c.pid ? ' pid ' + c.pid : ''}`);
+        for (const g of s.guarded) log(`  guarded #${g.number}: ${g.guard}`);
+        for (const k of s.skipped) log(`  skipped #${k.number}: ${k.why}`);
+      }
+      return 0;
+    }
+    case 'gc': return gc(ctx, flags, log);
+    default:
+      throw usage(`unknown command "${cmd}". Run \`ghk help\`.`);
+  }
+}
+
+export { parseBodyBlock, lastAttempt };

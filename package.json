@@ -1,0 +1,35 @@
+{
+  "name": "ghkanban",
+  "version": "0.1.0",
+  "description": "A portable, frugal Hermes-style kanban for coding agents. GitHub Issues + dependencies + git refs are the database; any harness (Claude Code, Copilot CLI, Codex) consumes the same board.",
+  "type": "module",
+  "bin": {
+    "ghk": "bin/ghk.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "skills",
+    "hooks",
+    "templates",
+    ".claude-plugin",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "lint": "for f in bin/ghk.js src/*.js; do node --check \"$f\" || exit 1; done"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "kanban",
+    "github",
+    "agents",
+    "claude-code",
+    "copilot",
+    "codex",
+    "hermes"
+  ],
+  "license": "MIT"
+}
