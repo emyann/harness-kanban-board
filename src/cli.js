@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import { makeContext } from './board.js';
 import { getTask, fetchBoard, assertOnBoard, loadRun, latestResult, parentResults, issueEvents, addComment, addLabels, setStatus, updateBody } from './tasks.js';
-import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, createTask, linkTask, withOutbox } from './lifecycle.js';
+import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, createTask, linkTask, withOutbox, envAttempt } from './lifecycle.js';
 import { tick, loop, spawnWorker } from './dispatch.js';
 import { serve } from './serve.js';
 import { watch, tail } from './watch.js';
@@ -363,7 +363,7 @@ export async function main(argv) {
       const [n] = nums(rest);
       if (!n) throw usage('hkb complete <n> --summary ".." [--metadata JSON|path] [--artifacts a,b] | --summary-file p --metadata-file p | --from-stdin');
       const p = resolveTerminalInput(cmd, flags, rest);
-      const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || process.env.KB_ATTEMPT });
+      const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || envAttempt(n) });
       const r = await withOutbox(ctx, replay, () => complete(ctx, n, { summary: p.summary, metadata: p.metadata, artifacts: p.artifacts, attempt: flags.attempt }));
       out(ctx, r, `#${n} → ${r.status}${r.pr ? ` (waiting on PR #${r.pr})` : ''}`);
       return 0;
@@ -372,7 +372,7 @@ export async function main(argv) {
       const [n] = nums(rest);
       if (!n) throw usage('hkb block <n> "reason" [--kind ..] | --reason-file p | --from-stdin');
       const p = resolveTerminalInput(cmd, flags, rest);
-      const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || process.env.KB_ATTEMPT });
+      const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || envAttempt(n) });
       const r = await withOutbox(ctx, replay, () => block(ctx, n, { reason: p.reason, kind: p.kind || 'generic', attempt: flags.attempt }));
       out(ctx, r, `#${n} → ${r.status}${r.block_loop_detected ? ' (block loop detected — needs human)' : ''}`);
       return 0;
@@ -389,7 +389,7 @@ export async function main(argv) {
       const [n] = nums(rest);
       if (!n) throw usage('hkb request-review <n> --summary ".." [--metadata JSON|path] [--reviewer p] | --summary-file p --metadata-file p | --from-stdin');
       const p = resolveTerminalInput(cmd, flags, rest);
-      const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || process.env.KB_ATTEMPT });
+      const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || envAttempt(n) });
       const r = await withOutbox(ctx, replay, () => requestReview(ctx, n, { summary: p.summary, metadata: p.metadata, reviewer: p.reviewer, attempt: flags.attempt }));
       out(ctx, r, `#${n} → review`);
       return 0;
@@ -432,7 +432,8 @@ export async function main(argv) {
       if (ctx.json) out(ctx, s);
       else {
         const n = (k) => s[k].length;
-        log(`${flags['dry-run'] ? '[dry-run] ' : ''}reclaimed ${n('reclaimed')} · promoted ${n('promoted')} · claimed ${n('claimed')} · guarded ${n('guarded')} · held ${n('held')} · skipped ${n('skipped')}`);
+        log(`${flags['dry-run'] ? '[dry-run] ' : ''}reclaimed ${n('reclaimed')} · promoted ${n('promoted')} · claimed ${n('claimed')} · tracks ${s.tracks.filter((x) => x.ok).length}/${n('tracks')} · guarded ${n('guarded')} · held ${n('held')} · skipped ${n('skipped')}`);
+        for (const t of s.tracks) log(`  track #${t.root} (${t.nodes.length + 1} nodes): ${t.ok ? `claimed attempt ${t.attempt} → ${t.profile}` : t.why}`);
         for (const c of s.claimed) log(`  claimed #${c.number} attempt ${c.attempt} → ${c.profile}${c.pid ? ' pid ' + c.pid : ''}`);
         for (const g of s.guarded) log(`  guarded #${g.number}: ${g.guard}`);
         for (const k of s.skipped) log(`  skipped #${k.number}: ${k.why}`);

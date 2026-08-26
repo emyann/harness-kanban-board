@@ -35,9 +35,19 @@ export function withOutbox(ctx, argv, fn) {
   });
 }
 
+/**
+ * `KB_ATTEMPT` belongs to `KB_TASK` and to nothing else. A plain worker only ever acts on its own
+ * task, so this is the same value it always was — but a track runner claims and finishes several
+ * tasks from one session, and their attempt numbers are their own. Reading the root's attempt
+ * number onto a node would synthesize a phantom row and release a lock the node never held.
+ */
+export function envAttempt(number) {
+  return String(process.env.KB_TASK || '') === String(number) ? process.env.KB_ATTEMPT || null : null;
+}
+
 /** Resolve the attempt this call acts on: explicit --attempt, KB_ATTEMPT env, else the open attempt. */
-function pickAttempt(run, flags) {
-  const k = Number(flags.attempt || process.env.KB_ATTEMPT || 0);
+function pickAttempt(run, flags, number) {
+  const k = Number(flags.attempt || envAttempt(number) || 0);
   if (k) return run.attempts.find((a) => a.attempt === k) || null;
   return openAttempt(run);
 }
@@ -45,7 +55,7 @@ function pickAttempt(run, flags) {
 /** Close the current attempt (or synthesize a zero-duration one, like Hermes) and release its lock. */
 async function finishAttempt(ctx, task, rec, flags, outcome, extra = {}) {
   const { run } = rec;
-  let a = pickAttempt(run, flags);
+  let a = pickAttempt(run, flags, task.number);
   if (!a) {
     a = { attempt: run.attempts.length + 1, profile: task.agent || 'human', host: ctx.host, started_at: nowIso(), synthetic: true };
     run.attempts.push(a);
@@ -99,7 +109,7 @@ async function resolveRejectedLease(ctx, n, k, opts) {
  */
 export async function heartbeat(ctx, number, { note, attempt } = {}) {
   const opts = { remote: remoteName(ctx) };
-  const envK = Number(attempt || process.env.KB_ATTEMPT || 0);
+  const envK = Number(attempt || envAttempt(number) || 0);
 
   // Warm path: the lease *is* the check, so a worker that has beaten before costs GitHub nothing —
   // no task read, no run-record read, no write.
@@ -306,7 +316,7 @@ export async function requestChanges(ctx, number, { reason } = {}) {
   const task = await getTask(ctx, number);
   assertOnBoard(ctx, task);
   const runRec = await loadRun(ctx, number);
-  const a = pickAttempt(runRec.run, {}) || { attempt: runRec.run.attempts.length };
+  const a = pickAttempt(runRec.run, {}, number) || { attempt: runRec.run.attempts.length };
   // record as its own zero-duration attempt so history reads review_requested → changes_requested
   runRec.run.attempts.push({ attempt: runRec.run.attempts.length + 1, profile: 'reviewer', host: ctx.host, started_at: nowIso(), ended_at: nowIso(), outcome: 'changes_requested', reason: String(reason).slice(0, 400), synthetic: true });
   await saveRun(ctx, number, runRec);
