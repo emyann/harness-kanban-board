@@ -41,10 +41,17 @@ export async function workerContext(ctx, task, attempt) {
   lines.push(`2. Every ~10 minutes of long work run \`ghk heartbeat ${n}\`. If it prints LOCK_LOST, stop immediately: do not commit, do not call complete.`);
   lines.push('3. Commit with clear, plain messages (no Co-Authored-By trailers, no "Generated with" lines — in commits or PR bodies). Never `git push --force`. Before finishing: rebase on the default branch and run the project\'s lint/tests.');
   lines.push(`4. Push and open a draft PR whose body contains \`Closes #${n}\`: \`gh pr create --draft --fill --body "Closes #${n}"\` (add a real description).`);
-  lines.push('5. Finish with EXACTLY ONE terminal verb, then stop:');
-  lines.push(`   - \`ghk complete ${n} --summary "<what changed, for the next worker>" --metadata '{"changed_files":[...],"verification":["<commands you ran>"],"residual_risk":["..."]}'\``);
-  lines.push(`   - \`ghk block ${n} "<why>" --kind needs_input|dependency|capability|transient\` when you cannot proceed`);
-  lines.push(`   - \`ghk request-review ${n} --summary "..."\` when you want a reviewer before it counts as done`);
+  lines.push('5. Finish with EXACTLY ONE terminal verb, then stop. Send the payload as one JSON object on stdin — no JSON goes through shell quoting:');
+  lines.push('```bash');
+  lines.push(`ghk complete ${n} --from-stdin <<'EOF'`);
+  lines.push('{"summary": "<what changed, for the next worker>",');
+  lines.push(' "metadata": {"changed_files": ["..."], "verification": ["<commands you ran>"], "residual_risk": ["..."]}}');
+  lines.push('EOF');
+  lines.push('```');
+  lines.push(`   Or write the pieces to files: \`ghk complete ${n} --summary-file <path> --metadata-file <path.json>\`. Inline \`--summary ".." --metadata '{..}'\` still works.`);
+  lines.push(`   - \`ghk complete ${n} ...\` when done`);
+  lines.push(`   - \`ghk block ${n} "<why>" --kind needs_input|dependency|capability|transient\` when you cannot proceed (stdin form: {"reason": "..", "kind": ".."})`);
+  lines.push(`   - \`ghk request-review ${n} --summary "..."\` when you want a reviewer before it counts as done (stdin form: {"summary": "..", "reviewer": ".."})`);
   lines.push('Do not do work that belongs to other tasks. Do not create tasks unless asked; if you must, `ghk create "title" --blocked-by ' + n + '`.');
   return lines.join('\n');
 }

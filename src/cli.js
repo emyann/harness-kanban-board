@@ -12,6 +12,9 @@ import { doctor } from './doctor.js';
 import { gc } from './gc.js';
 import { STATUSES, DEFAULT_KB, L, computeReady, blockerDone, serializeBodyBlock, parseBodyBlock, lastAttempt } from './model.js';
 
+/** Flags that never take a value, so `ghk complete --from-stdin 13` keeps `13` as a positional. */
+const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'api', 'help']);
+
 export function parseArgs(argv) {
   const flags = {};
   const pos = [];
@@ -23,10 +26,121 @@ export function parseArgs(argv) {
       if (eq > 0) { flags[a.slice(2, eq)] = a.slice(eq + 1); continue; }
       const key = a.slice(2);
       const next = argv[i + 1];
-      if (next !== undefined && !next.startsWith('--')) { flags[key] = next; i++; } else flags[key] = true;
+      if (next !== undefined && !next.startsWith('--') && !BOOL_FLAGS.has(key)) { flags[key] = next; i++; } else flags[key] = true;
     } else pos.push(a);
   }
   return { flags, pos };
+}
+
+// ---------- terminal verb inputs (complete | block | request-review) ----------
+// The protocol must not depend on shell quoting of JSON: every field can come inline, from a file, or from one JSON
+// object on stdin. Per field the precedence is inline > --*-file > --from-stdin. No GitHub calls happen here.
+
+const STDIN_KEYS = ['summary', 'metadata', 'artifacts', 'reason', 'kind', 'reviewer'];
+const TERMINAL_VERBS = ['complete', 'block', 'request-review'];
+
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const str = (v) => (typeof v === 'string' ? v : null);
+const list = (v, label) => {
+  if (v === undefined || v === null) return [];
+  if (typeof v === 'string') return v.split(',').map((s) => s.trim()).filter(Boolean);
+  if (Array.isArray(v) && v.every((s) => typeof s === 'string')) return v;
+  throw usage(`${label} must be a list of strings (or a comma-separated string)`);
+};
+
+function parseObject(text, label) {
+  let v;
+  try { v = JSON.parse(text); } catch (e) { throw usage(`${label} must be a JSON object: ${e.message}`); }
+  if (!isPlainObject(v)) throw usage(`${label} must be a JSON object, got ${Array.isArray(v) ? 'an array' : typeof v}`);
+  return v;
+}
+
+function readStdinSync() {
+  if (process.stdin.isTTY) throw usage(`--from-stdin: stdin is a terminal — pipe a JSON object or use a heredoc: ghk complete <n> --from-stdin <<'EOF' ... EOF`);
+  try { return fs.readFileSync(0, 'utf8'); } catch (e) { throw usage(`--from-stdin: could not read stdin (${e.code || e.message}) — pipe a JSON object, or use --summary-file/--metadata-file`); }
+}
+
+/**
+ * Pure resolution of a terminal verb's payload from parsed args. `io.readFile(path)` and `io.readStdin()` are
+ * injectable so tests use a temp dir and a string instead of a real stdin.
+ * Returns { summary, metadata, artifacts, reason, kind, reviewer } — validation of *required* fields stays in lifecycle.js.
+ */
+export function resolveTerminalInput(verb, flags, rest, io = {}) {
+  if (!TERMINAL_VERBS.includes(verb)) throw usage(`resolveTerminalInput: not a terminal verb: ${verb}`);
+  const readFile = io.readFile || ((p) => fs.readFileSync(p, 'utf8'));
+  const readStdin = io.readStdin || readStdinSync;
+  const readOrExplain = (flag, p) => {
+    try { return readFile(p); } catch (e) {
+      throw usage(`--${flag}: cannot read ${p} (${e.code || e.message}) — write the file first, or pass the value inline / with --from-stdin`);
+    }
+  };
+
+  let stdin = {};
+  if (flags['from-stdin']) {
+    const text = readStdin();
+    if (!text || !text.trim()) throw usage(`--from-stdin: nothing on stdin — pipe a JSON object, e.g. printf '%s' '{"summary":"..."}' | ghk ${verb} <n> --from-stdin`);
+    stdin = parseObject(text, '--from-stdin');
+    const unknown = Object.keys(stdin).filter((k) => !STDIN_KEYS.includes(k));
+    if (unknown.length) throw usage(`--from-stdin: unknown key(s) ${unknown.join(', ')} — allowed: ${STDIN_KEYS.join(', ')}`);
+  }
+
+  // summary: --summary > --summary-file > stdin.summary
+  let summary = str(flags.summary);
+  if (summary === null && flags['summary-file']) summary = readOrExplain('summary-file', String(flags['summary-file'])).trim();
+  if (summary === null && stdin.summary !== undefined) {
+    if (typeof stdin.summary !== 'string') throw usage('--from-stdin: "summary" must be a string');
+    summary = stdin.summary;
+  }
+
+  // metadata: --metadata (inline JSON, or a path when it does not start with "{") > --metadata-file > stdin.metadata
+  let metadata = {};
+  const inline = str(flags.metadata);
+  if (inline !== null) {
+    metadata = /^[{[]/.test(inline.trimStart())
+      ? parseObject(inline, '--metadata')
+      : parseObject(readOrExplain('metadata', inline), `--metadata (file ${inline})`);
+  } else if (flags['metadata-file']) {
+    const p = String(flags['metadata-file']);
+    metadata = parseObject(readOrExplain('metadata-file', p), `--metadata-file (${p})`);
+  } else if (stdin.metadata !== undefined) {
+    if (!isPlainObject(stdin.metadata)) throw usage('--from-stdin: "metadata" must be a JSON object');
+    metadata = stdin.metadata;
+  }
+
+  // artifacts: --artifacts a,b > stdin.artifacts
+  const artifacts = flags.artifacts !== undefined ? list(str(flags.artifacts), '--artifacts') : list(stdin.artifacts, '--from-stdin "artifacts"');
+
+  // reason (block): positional > --reason-file > stdin.reason
+  let reason = rest.slice(1).join(' ') || null;
+  if (reason === null && flags['reason-file']) reason = readOrExplain('reason-file', String(flags['reason-file'])).trim();
+  if (reason === null && stdin.reason !== undefined) {
+    if (typeof stdin.reason !== 'string') throw usage('--from-stdin: "reason" must be a string');
+    reason = stdin.reason;
+  }
+
+  const kind = str(flags.kind) ?? str(stdin.kind) ?? null;
+  const reviewer = str(flags.reviewer) ?? str(stdin.reviewer) ?? null;
+  return { summary, metadata, artifacts, reason, kind, reviewer };
+}
+
+/**
+ * The inline-flag form of a resolved payload. Used for the offline outbox: replay re-spawns `ghk <argv>` without a
+ * stdin or the worker's temp files, so the queued command must be self-contained. No shell is involved, so no quoting.
+ */
+export function terminalArgv(verb, number, p, { board, attempt } = {}) {
+  const argv = [verb, String(number)];
+  if (verb === 'block') {
+    if (p.reason) argv.push(p.reason);
+    if (p.kind) argv.push('--kind', p.kind);
+  } else {
+    if (p.summary) argv.push('--summary', p.summary);
+    if (p.metadata && Object.keys(p.metadata).length) argv.push('--metadata', JSON.stringify(p.metadata));
+    if (p.artifacts?.length) argv.push('--artifacts', p.artifacts.join(','));
+    if (verb === 'request-review' && p.reviewer) argv.push('--reviewer', p.reviewer);
+  }
+  if (board) argv.push('--board', board);
+  if (attempt) argv.push('--attempt', String(attempt));
+  return argv;
 }
 
 const HELP = `ghk — a portable, frugal kanban for coding agents on GitHub Issues
@@ -37,9 +151,11 @@ const HELP = `ghk — a portable, frugal kanban for coding agents on GitHub Issu
               list [--status s] [--agent p] [--all] [--json]      show <n> [--json]      context <n>
               link <parent> <child>   unlink <parent> <child>      promote <n>...      archive <n>...
               adopt <n>... [--agent p]     comment <n> "text"      log <n> [--json]    status <n>
-  worker      heartbeat <n> [--note ..]     complete <n> --summary ".." [--metadata JSON] [--artifacts a,b]
+  worker      heartbeat <n> [--note ..]     complete <n> --summary ".." [--metadata JSON|path.json] [--artifacts a,b]
               block <n> "reason" [--kind dependency|needs_input|capability|transient]     unblock <n>...
-              request-review <n> --summary ".." [--reviewer p]     request-changes <n> "reason"
+              request-review <n> --summary ".." [--metadata ..] [--reviewer p]     request-changes <n> "reason"
+              complete|block|request-review also take --summary-file <p> --metadata-file <p> --reason-file <p>, or
+              --from-stdin with one JSON object {summary, metadata, artifacts, reason, kind, reviewer} (no shell quoting)
   dispatch    dispatch [--loop S] [--max N] [--dry-run]     claim <n> [--profile p] [--spawn]     gc [--yes]
   plumbing    hook stop      version
 
@@ -245,19 +361,19 @@ export async function main(argv) {
     }
     case 'complete': {
       const [n] = nums(rest);
-      if (!n) throw usage('ghk complete <n> --summary ".." [--metadata JSON] [--artifacts a,b]');
-      let metadata = {};
-      if (flags.metadata) { try { metadata = JSON.parse(flags.metadata); } catch (e) { throw usage(`--metadata must be JSON: ${e.message}`); } }
-      const artifacts = flags.artifacts ? String(flags.artifacts).split(',').map((s) => s.trim()).filter(Boolean) : [];
-      const r = await withOutbox(ctx, argvForOutbox, () => complete(ctx, n, { summary: flags.summary, metadata, artifacts, attempt: flags.attempt }));
+      if (!n) throw usage('ghk complete <n> --summary ".." [--metadata JSON|path] [--artifacts a,b] | --summary-file p --metadata-file p | --from-stdin');
+      const p = resolveTerminalInput(cmd, flags, rest);
+      const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || process.env.KB_ATTEMPT });
+      const r = await withOutbox(ctx, replay, () => complete(ctx, n, { summary: p.summary, metadata: p.metadata, artifacts: p.artifacts, attempt: flags.attempt }));
       out(ctx, r, `#${n} → ${r.status}${r.pr ? ` (waiting on PR #${r.pr})` : ''}`);
       return 0;
     }
     case 'block': {
       const [n] = nums(rest);
-      const reason = rest.slice(1).join(' ');
-      if (!n) throw usage('ghk block <n> "reason" [--kind ..]');
-      const r = await withOutbox(ctx, argvForOutbox, () => block(ctx, n, { reason, kind: flags.kind || 'generic', attempt: flags.attempt }));
+      if (!n) throw usage('ghk block <n> "reason" [--kind ..] | --reason-file p | --from-stdin');
+      const p = resolveTerminalInput(cmd, flags, rest);
+      const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || process.env.KB_ATTEMPT });
+      const r = await withOutbox(ctx, replay, () => block(ctx, n, { reason: p.reason, kind: p.kind || 'generic', attempt: flags.attempt }));
       out(ctx, r, `#${n} → ${r.status}${r.block_loop_detected ? ' (block loop detected — needs human)' : ''}`);
       return 0;
     }
@@ -271,10 +387,10 @@ export async function main(argv) {
     }
     case 'request-review': {
       const [n] = nums(rest);
-      if (!n) throw usage('ghk request-review <n> --summary ".." [--metadata JSON] [--reviewer p]');
-      let metadata = {};
-      if (flags.metadata) { try { metadata = JSON.parse(flags.metadata); } catch (e) { throw usage(`--metadata must be JSON: ${e.message}`); } }
-      const r = await withOutbox(ctx, argvForOutbox, () => requestReview(ctx, n, { summary: flags.summary, metadata, reviewer: flags.reviewer, attempt: flags.attempt }));
+      if (!n) throw usage('ghk request-review <n> --summary ".." [--metadata JSON|path] [--reviewer p] | --summary-file p --metadata-file p | --from-stdin');
+      const p = resolveTerminalInput(cmd, flags, rest);
+      const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || process.env.KB_ATTEMPT });
+      const r = await withOutbox(ctx, replay, () => requestReview(ctx, n, { summary: p.summary, metadata: p.metadata, reviewer: p.reviewer, attempt: flags.attempt }));
       out(ctx, r, `#${n} → review`);
       return 0;
     }

@@ -51,6 +51,27 @@ One GraphQL query per board per tick; everything else is per-task and only for t
 
 `KB_TASK` `KB_ATTEMPT` `KB_BOARD` `KB_REPO` `KB_LOCK_REF` `KB_ROOT` `KB_PROFILE`
 
+## Terminal verb inputs
+
+`complete`, `block` and `request-review` take their payload from any of three sources, so no harness has to push JSON
+through shell quoting. Per field, inline > file > stdin.
+
+| Source | Form |
+|---|---|
+| stdin (**recommended**) | `--from-stdin` + one JSON object `{summary, metadata, artifacts, reason, kind, reviewer}`; unknown keys are refused |
+| files | `--summary-file <path>` `--metadata-file <path.json>` `--reason-file <path>`; `--metadata <path>` reads a file when the value does not start with `{` |
+| inline | `--summary ".." --metadata '{..}' --artifacts a,b` · `block <n> "reason" --kind <kind>` · `--reviewer <profile>` |
+
+```bash
+ghk complete "$KB_TASK" --from-stdin <<'EOF'
+{"summary": "what changed, for the next worker", "metadata": {"changed_files": ["src/a.js"], "verification": ["npm test"]}}
+EOF
+```
+
+`metadata` must be a JSON object (`changed_files, verification, dependencies, residual_risk, retry_notes` by convention);
+`artifacts` a list of strings. Missing summary / reason → exit 2 with the fix in the message. A verb queued in the
+outbox while GitHub is unreachable is stored in its inline form, so replay needs neither stdin nor the worker's files.
+
 ## Outcomes
 
 `completed · blocked · crashed · timed_out · spawn_failed · reclaimed · protocol_violation · gave_up · review_requested · changes_requested`

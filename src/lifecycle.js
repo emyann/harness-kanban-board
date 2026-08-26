@@ -72,8 +72,16 @@ export async function heartbeat(ctx, number, { note } = {}) {
   return { number, attempt: a.attempt, heartbeat_at: a.heartbeat_at };
 }
 
+const SUMMARY_HINT = 'pass it with --summary ".." / --summary-file <path>, or as {"summary": ".."} on stdin with --from-stdin';
+
+function assertPayload({ summary, metadata, artifacts }, what) {
+  if (!summary || typeof summary !== 'string') { const e = new Error(`a summary is required (${what}) — ${SUMMARY_HINT}`); e.exitCode = 2; throw e; }
+  if (metadata !== null && (typeof metadata !== 'object' || Array.isArray(metadata))) { const e = new Error('metadata must be a JSON object'); e.exitCode = 2; throw e; }
+  if (artifacts !== undefined && !Array.isArray(artifacts)) { const e = new Error('artifacts must be a list of strings'); e.exitCode = 2; throw e; }
+}
+
 export async function complete(ctx, number, { summary, metadata = {}, artifacts = [], attempt } = {}) {
-  if (!summary) { const e = new Error('--summary is required (what changed, for the next worker)'); e.exitCode = 2; throw e; }
+  assertPayload({ summary, metadata, artifacts }, 'what changed, for the next worker');
   const task = await getTask(ctx, number);
   assertOnBoard(ctx, task);
   const runRec = await loadRun(ctx, number);
@@ -92,7 +100,7 @@ export async function complete(ctx, number, { summary, metadata = {}, artifacts 
 }
 
 export async function block(ctx, number, { reason, kind = 'generic', attempt } = {}) {
-  if (!reason) { const e = new Error('a reason is required: ghk block <n> "why" [--kind dependency|needs_input|capability|transient]'); e.exitCode = 2; throw e; }
+  if (!reason) { const e = new Error('a reason is required: ghk block <n> "why" [--kind dependency|needs_input|capability|transient], or --reason-file <path>, or {"reason": "..", "kind": ".."} on stdin with --from-stdin'); e.exitCode = 2; throw e; }
   if (!BLOCK_KINDS.includes(kind)) { const e = new Error(`--kind must be one of ${BLOCK_KINDS.join('|')}`); e.exitCode = 2; throw e; }
   const task = await getTask(ctx, number);
   assertOnBoard(ctx, task);
@@ -130,7 +138,7 @@ export async function unblock(ctx, number) {
 }
 
 export async function requestReview(ctx, number, { summary, metadata = {}, reviewer, attempt } = {}) {
-  if (!summary) { const e = new Error('--summary is required'); e.exitCode = 2; throw e; }
+  assertPayload({ summary, metadata }, 'what the reviewer should look at');
   const task = await getTask(ctx, number);
   assertOnBoard(ctx, task);
   const runRec = await loadRun(ctx, number);
