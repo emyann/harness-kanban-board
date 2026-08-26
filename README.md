@@ -52,7 +52,7 @@ Humans: `ghk promote`, `ghk unblock`, `ghk request-changes`, `ghk comment`, `ghk
 | SQLite row | Issue with `kb:status:*`, `kb:agent:*`, `kb:board:*` labels and a `<!-- kb: {...} -->` body block |
 | parent → child | child **blocked by** parent (native issue dependencies) |
 | `todo → ready` when all parents done | dispatcher tick, from `blockedBy { state stateReason }` |
-| atomic claim | `POST git/refs refs/kb/locks/<n>/<attempt>` — 201 claimed, 409 held, anything else back off |
+| atomic claim | `POST git/refs refs/kb/locks/<n>/<attempt>` — 201 claimed; 422 "Reference already exists" (observed) or 409 held; anything else back off |
 | runs table | one `<!-- kb-run -->` comment (attempts, failures, block loops) |
 | `kanban_complete(summary, metadata)` | `<!-- kb-result -->` comment; open PR → *review*, else issue closed |
 | worker tools | `ghk show/heartbeat/complete/block/request-review/comment/create/link` |
@@ -73,6 +73,11 @@ Add `copilot-cli` or `codex` profiles with their own `launch` arrays; the protoc
 
 ## Status
 
-MVP. Verified so far: unit tests for the model, lock classification and arg parsing; CLI wiring. Not yet exercised
-against a live repository — run `ghk doctor --api` on a scratch repo first; it probes the two things the design
-depends on (issue-dependency API, duplicate ref-create → 409).
+MVP. Verified so far: unit tests for the model, lock classification and arg parsing; CLI wiring; and `ghk doctor --api`
+against this repository (2026-08-26), which probes the things the design depends on:
+
+- duplicate ref create returns **422 "Reference already exists"** (not 409) — `src/lock.js` treats both as `held`;
+- GraphQL `Issue.blockedBy`, `blocking`, `subIssues` and `closedByPullRequestsReferences` all exist;
+- REST `GET /issues/{n}/dependencies/blocked_by` works with `X-GitHub-Api-Version: 2026-03-10`.
+
+Run `ghk doctor --api` on your own repo before the first dispatch; it re-checks all of the above.

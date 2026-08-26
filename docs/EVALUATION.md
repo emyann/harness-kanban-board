@@ -280,7 +280,7 @@ The board never costs money. Moving down the table buys laptop-off execution and
 ## 7. Risks and open questions
 
 - **Content-creation limit and PATCH** — UNVERIFIED whether comment edits count toward 80/min-500/h; the design assumes they do (heartbeat via ref CAS for Tier A, 20-min floor for Tier B, ~3 writes per attempt). Check `x-ratelimit` headers during MVP.
-- **`409` semantics on ref create** — docs list 409 Conflict without stating "ref exists"; verified as conflict on existing refs by the corpus, but confirm in MVP tests that a duplicate create returns 409 and not 422.
+- **`409` semantics on ref create** — VERIFIED 2026-08-26 (`ghk doctor --api` on emyann/ghkanban): a duplicate create returns **422 "Reference already exists"**, not 409. `src/lock.js` classifies 409 and that specific 422 as `held`; any other 422/403/429/5xx stays `unknown` (back off).
 - **Copilot cloud sandbox authenticating `gh`/`ghk` against the issue** — UNVERIFIED; until proven, Copilot is PR-ingest only.
 - **Codex cloud loading `.agents/skills`, hooks, MCP** — UNVERIFIED; Codex cloud stays best-effort.
 - **Agent HQ assignment of Claude/Codex on GitHub** — assignee login strings and API undocumented; out of scope.
@@ -288,7 +288,7 @@ The board never costs money. Moving down the table buys laptop-off execution and
 - **Actions latency** — cron delays of 15-20+ min and dropped schedules reported in 2026; event triggers mitigate; laptop loop is the real dispatcher.
 - **Stack async merge endpoint and `gh pr merge` behavior on stacks** — UNVERIFIED; irrelevant unless the v2 experiment happens.
 - **Issue attachments** — no public upload API; artifacts as PR files or Actions artifact links.
-- **API versioning churn** — dependencies need `2026-03-10`; a documented bug once created cross-repo links on a 404 response; pin the header, add `ghk doctor --api`.
+- **API versioning churn** — dependencies need `2026-03-10`; a documented bug once created cross-repo links on a 404 response; pin the header, add `ghk doctor --api`. GraphQL `blockedBy` VERIFIED 2026-08-26: `Issue.blockedBy`, `Issue.blocking`, `Issue.subIssues` and `Issue.closedByPullRequestsReferences` all exist, and REST `GET /issues/{n}/dependencies/blocked_by` works with `X-GitHub-Api-Version: 2026-03-10`.
 - **Security** — workers hold repo write via `gh`; issue bodies are prompt-injection surfaces. Keep `KB_TOKEN` fine-grained and repo-scoped, never expose it to workers in Actions (Claude App identity), deny `git push --force`, gate merges on human review for external contributors, and require `kb:needs-human` review before auto-merge is enabled on any board.
 - **Two persistence paths** (body block canonical, org fields mirror) can diverge; keep the mirror opt-in and one-way until someone asks for it.
 - **Cost runaway** — `--max-turns`, `--max-budget-usd`, per-board daily spawn cap, Copilot 59-min cap; dispatcher is deterministic code, not an LLM. `ghk stats` must show spend per board so a paid profile is never a surprise.
