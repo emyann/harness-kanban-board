@@ -78,6 +78,40 @@ reads the way you'd guess. `GHK_DEBUG=1` shows every poll with its status and th
 hkb watch: board: GET repos/o/r/issues?labels=kb%3Aboard%3Adefault&... → 304 Not Modified · rate 219 (+0) · etag 594b2e9a588b
 ```
 
+```bash
+hkb stats                       # the last 7 days: what ran, how it ended, what it cost
+hkb stats --since 24h --json    # the same object, for a script or a dashboard
+hkb stats --since all           # every attempt the board has ever recorded
+```
+
+`hkb stats` is the board's own ledger, so a paid profile is never a surprise:
+
+```
+board "default" · acme/board · window 7d (since 2026-08-19T23:20:45Z)
+
+tasks      21 (5 open) · 12 with news in the window
+           ready 3 · running 2 · done 16
+attempts   35 over 20 tasks · 33 ended · 2 active
+           completed 13 · crashed 2 · timed_out 3 · spawn_failed 2 · protocol_violation 10 · gave_up 3
+           delivered 13 (39%) · blocked 0 · failed 20
+duration   mean 1h18m · median 10m11s · p90 1h20m · max 15h07m  (29 ended)
+spawns     30 / 40 today · 10 left
+spend      $9.02 · recorded on 3 of 29 worker attempts
+           claude          $9.02 · 3 attempts · mean $3.01 · max $5.14 · 120 turns
+           26 worker attempts recorded no cost — the real total is higher
+
+read 1 board query + 21 run records; nothing was written.
+```
+
+It invents no new state: statuses come from the labels, attempts and outcomes from the `<!-- kb-run -->`
+comments, today's spawn count from the dispatcher's `.kanban/state.json`, and spend from the `total_cost_usd`
+an attempt row carries — what `claude -p --output-format json` signs off with. A row without one falls back to
+the worker's own log on disk, which is free; harnesses whose log has no final JSON simply report no cost, and
+the report says how many of them there were rather than quietly understating the total. `--since` takes a span
+(`90m`, `36h`, `7d`, `2w`), a date, or `all`. The read is one board query plus the run comment of each task the
+window actually touched — a comment write bumps the issue's `updatedAt`, so "updated since" is "has news" —
+plus every `running` task, whose ref-CAS heartbeat leaves no trace on the issue.
+
 ## How it maps to GitHub
 
 | Hermes | hkb |
@@ -93,6 +127,7 @@ hkb watch: board: GET repos/o/r/issues?labels=kb%3Aboard%3Adefault&... → 304 N
 | stop nudge | Claude Code / Codex `Stop`, Copilot CLI `agentStop` hook (`hkb hook stop`, 2 nudges, inert unless `KB_TASK` is set) |
 | kanban dashboard | `hkb serve` — local page over the live board; drag-drop calls the same verbs |
 | live event stream | `hkb watch` / `hkb tail <n>` — conditional `GET` with `If-None-Match`; an unchanged board answers 304 and is not charged |
+| runs/spend report | `hkb stats` — the same labels and run comments, rolled up: outcomes, duration, spawns vs the daily cap, `total_cost_usd` per profile |
 | crash / stale / timeout | pid check on the claiming host, `stale_after` (against the lock ref's commit date, then the run comment), `max_runtime` → `ready` or `gave_up` |
 
 Full protocol: [skills/kanban/references/protocol.md](skills/kanban/references/protocol.md).
