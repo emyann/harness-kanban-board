@@ -39,7 +39,7 @@ export async function workerContext(ctx, task, attempt) {
   lines.push('## Protocol (ghkanban)');
   lines.push(`1. Run \`ghk show ${n} --json\` if you need more detail. Work only in this worktree, on the current branch.`);
   lines.push(`2. Every ~10 minutes of long work run \`ghk heartbeat ${n}\`. If it prints LOCK_LOST, stop immediately: do not commit, do not call complete.`);
-  lines.push('3. Commit with clear messages. Never `git push --force`. Before finishing: rebase on the default branch and run the project\'s lint/tests.');
+  lines.push('3. Commit with clear, plain messages (no Co-Authored-By trailers, no "Generated with" lines — in commits or PR bodies). Never `git push --force`. Before finishing: rebase on the default branch and run the project\'s lint/tests.');
   lines.push(`4. Push and open a draft PR whose body contains \`Closes #${n}\`: \`gh pr create --draft --fill --body "Closes #${n}"\` (add a real description).`);
   lines.push('5. Finish with EXACTLY ONE terminal verb, then stop:');
   lines.push(`   - \`ghk complete ${n} --summary "<what changed, for the next worker>" --metadata '{"changed_files":[...],"verification":["<commands you ran>"],"residual_risk":["..."]}'\``);

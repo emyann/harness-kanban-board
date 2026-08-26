@@ -26,6 +26,11 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 - Errors: throw `Error` with `.exitCode` (2 = usage/state, 3 = LOCK_LOST) and a message that names the fix.
 - Run `npm run lint && npm test` before finishing. Do not add a build step.
 
+## Commits and PRs
+
+- Plain, human-style messages: a short imperative subject, an optional body explaining why.
+- Never add `Co-Authored-By: Claude ...` trailers and never add "🤖 Generated with Claude Code" to commit messages or PR bodies.
+
 <!-- ghkanban:start -->
 ## Kanban (ghkanban)
 
