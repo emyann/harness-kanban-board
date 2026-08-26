@@ -13,8 +13,14 @@ function worktrees(root) {
   for (const line of r.stdout.split('\n')) {
     if (line.startsWith('worktree ')) { cur = { path: line.slice(9) }; out.push(cur); }
     else if (line.startsWith('branch ') && cur) cur.branch = line.slice(7).replace('refs/heads/', '');
+    else if (line.startsWith('locked') && cur) cur.locked = line.slice(6).trim() || 'locked';
   }
   return out;
+}
+
+function pidAlive(pid) {
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
 
 export async function gc(ctx, flags, log) {
@@ -30,7 +36,14 @@ export async function gc(ctx, flags, log) {
     const finished = !t || ['done', 'archived'].includes(t.status) || t.state === 'CLOSED';
     if (!finished) continue;
     if (!flags.yes) { log(`would remove worktree ${w.path} (task #${m[1]} ${t?.status || 'not on board'}) — pass --yes`); continue; }
+    // Claude Code locks the worktrees it creates ("claude session kb-1-1 (pid N ...)"); unlock when that pid is gone.
+    if (w.locked) {
+      const pm = /pid (\d+)/.exec(w.locked);
+      if (pm && pidAlive(Number(pm[1]))) { log(`skip ${w.path}: still locked by a live session (pid ${pm[1]})`); continue; }
+      spawnSync('git', ['worktree', 'unlock', w.path], { cwd: ctx.root });
+    }
     const r = spawnSync('git', ['worktree', 'remove', '--force', w.path], { cwd: ctx.root, encoding: 'utf8' });
+    if (r.status === 0 && w.branch) spawnSync('git', ['branch', '-D', w.branch], { cwd: ctx.root });
     if (r.status === 0) { removed++; log(`removed worktree ${w.path}`); } else log(`failed to remove ${w.path}: ${r.stderr.trim()}`);
   }
   if (flags.yes) spawnSync('git', ['worktree', 'prune'], { cwd: ctx.root });
