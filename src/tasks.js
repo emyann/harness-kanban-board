@@ -31,7 +31,7 @@ const ISSUE_FIELDS = (caps) => `
   number id databaseId title body state stateReason updatedAt createdAt url
   labels(first: 40) { nodes { name } }
   ${caps.blockedByGql ? 'blockedBy(first: 50) { totalCount nodes { number state stateReason title } }' : ''}
-  ${caps.closedByPrs ? 'closedByPullRequestsReferences(first: 5, includeClosedPrs: true) { nodes { number state isDraft url headRefName merged } }' : ''}
+  ${caps.closedByPrs ? 'closedByPullRequestsReferences(first: 5, includeClosedPrs: true) { nodes { id number state isDraft url headRefName merged } }' : ''}
 `;
 
 function toTask(node) {
@@ -56,7 +56,7 @@ function toTask(node) {
     createdAt: node.createdAt,
     url: node.url,
     blockedBy: (node.blockedBy?.nodes || []).map((b) => ({ number: b.number, state: b.state, stateReason: b.stateReason, title: b.title })),
-    prs: (node.closedByPullRequestsReferences?.nodes || []).map((p) => ({ number: p.number, state: p.state, isDraft: p.isDraft, url: p.url, headRefName: p.headRefName, merged: p.merged })),
+    prs: (node.closedByPullRequestsReferences?.nodes || []).map((p) => ({ number: p.number, nodeId: p.id, state: p.state, isDraft: p.isDraft, url: p.url, headRefName: p.headRefName, merged: p.merged })),
   };
 }
 
