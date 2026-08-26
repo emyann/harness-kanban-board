@@ -4,10 +4,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghCmd } from './gh.js';
+import { worktreePath } from './model.js';
 
 // A background worker has nobody to answer a permission prompt, so the allowlist must cover
 // every command an agent plausibly reaches for; anything else is denied, never prompted (see #23).
-const CLAUDE_TOOLS = ['Bash(hkb *)', 'Bash(git *)', 'Bash(gh pr *)', 'Bash(gh issue view *)', 'Bash(npm *)', 'Bash(npx *)', 'Bash(node *)', 'Bash(cat *)', 'Bash(ls *)', 'Bash(mkdir *)', 'Bash(head *)', 'Bash(tail *)', 'Bash(wc *)', 'Bash(sed *)', 'Bash(awk *)', 'Bash(grep *)', 'Bash(find *)', 'Bash(diff *)', 'Bash(cp *)', 'Bash(mv *)', 'Bash(touch *)', 'Bash(chmod *)', 'Bash(printf *)', 'Bash(echo *)', 'Bash(jq *)', 'Bash(true)', 'Edit', 'Write', 'Read', 'Glob', 'Grep'];
+const SHELL_TOOLS = ['hkb *', 'git *', 'gh pr *', 'gh issue view *', 'npm *', 'npx *', 'node *', 'cat *', 'ls *', 'mkdir *', 'head *', 'tail *', 'wc *', 'sed *', 'awk *', 'grep *', 'find *', 'diff *', 'cp *', 'mv *', 'touch *', 'chmod *', 'printf *', 'echo *', 'jq *'];
+const CLAUDE_TOOLS = [...SHELL_TOOLS.map((c) => `Bash(${c})`), 'Bash(true)', 'Edit', 'Write', 'Read', 'Glob', 'Grep'];
+// Copilot CLI spells the same policy `--allow-tool 'shell(<cmd>)'`, one flag per pattern, plus the
+// built-in `write` tool for file edits. See the `--allow-tool={allowed_tools}` token in dispatch.js.
+// Copilot wildcards are `shell(cmd:*)` (verified against the CLI programmatic reference, 2026-08-26);
+// a multiword prefix like `gh pr *` has no wildcard form, so it widens to the command's `cmd:*`.
+const COPILOT_TOOLS = [...new Set(SHELL_TOOLS.map((c) => c.includes('*') ? `shell(${c.split(' ')[0]}:*)` : `shell(${c})`)), 'write'];
 
 export const DEFAULT_PROFILES = {
   claude: {
@@ -30,6 +37,16 @@ export const DEFAULT_PROFILES = {
     model: null,
     allowed_tools: CLAUDE_TOOLS,
     launch: ['claude', '-p', '{prompt}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', 'Bash(git push --force*)', 'Bash(git push -f*)', '--output-format', 'json', '--max-turns', '80', '--max-budget-usd', '5', '{model_args}'],
+  },
+  'copilot-cli': {
+    description: 'GitHub Copilot CLI on this machine (included in Copilot Free, draws on the plan\'s AI credits). Run `hkb init --harness copilot` first: it writes the `kanban-worker` custom agent and the agentStop hook that enforces the terminal verb. Copilot CLI has no worktree flag, so `workspace: "worktree"` asks the dispatcher to create one. No structured-output flag — the attempt is recorded by the `hkb` calls the worker makes. max_in_progress is 1 because the free credit pool is small.',
+    mode: 'process',
+    workspace: 'worktree',
+    heartbeat: 'auto', // `git *` is allow-listed, so the worker can CAS the lock ref like a Claude one
+    max_in_progress: 1,
+    model: null,
+    allowed_tools: COPILOT_TOOLS,
+    launch: ['copilot', '-p', '{prompt}', '--agent', 'kanban-worker', '--allow-tool={allowed_tools}', '--no-ask-user', '--deny-tool', 'shell(git push --force*)', '--deny-tool', 'shell(git push -f*)', '{model_args}'],
   },
 };
 
@@ -70,6 +87,30 @@ export function stateFile(root) { return path.join(kanbanDir(root), 'state.json'
 export function ensureLocalDirs(root) {
   fs.mkdirSync(logsDir(root), { recursive: true });
   fs.mkdirSync(path.join(kanbanDir(root), 'nudges'), { recursive: true });
+}
+
+/**
+ * The worktree for a profile that carries `workspace: "worktree"`, created if missing.
+ * Harnesses with their own flag (Claude Code `--worktree kb-<n>-<k>`) never come here; Copilot CLI
+ * has none, so the dispatcher makes the checkout itself — in the same `.claude/worktrees/` directory
+ * Claude Code uses, so one `hkb gc` sweeps both. A worktree that already exists is reused: names are
+ * unique per attempt, so that only happens when a previous spawn died between `add` and the launch.
+ * @returns the absolute path to the worktree
+ */
+export function ensureWorktree(root, name) {
+  const dir = path.join(root, worktreePath(name));
+  if (fs.existsSync(path.join(dir, '.git'))) return dir;
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  const add = (args) => spawnSync('git', ['worktree', 'add', ...args], { cwd: root, encoding: 'utf8' });
+  let r = add([dir, '-b', name]);
+  // a branch left behind by an earlier attempt (worktree removed, branch not) — check it out instead
+  if (r.status !== 0 && /already exists/i.test(r.stderr || '')) r = add([dir, name]);
+  if (r.status !== 0) {
+    const e = new Error(`git worktree add ${worktreePath(name)} failed: ${(r.stderr || '').trim().split('\n').pop() || `exit ${r.status}`}`);
+    e.exitCode = 2;
+    throw e;
+  }
+  return dir;
 }
 
 export function detectRepo() {

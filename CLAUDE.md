@@ -15,7 +15,8 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 - `bin/hkb.js` entry · `src/cli.js` arg parsing + routing · `src/gh.js` the only place that shells out to `gh`
 - `src/model.js` pure functions (unit-tested, no I/O) · `src/tasks.js` issue⇄task · `src/lock.js` ref claims
 - `src/lifecycle.js` worker verbs · `src/dispatch.js` the tick · `src/context.js` worker prompt · `src/hook.js` Stop hook
-- `src/init.js` `src/doctor.js` `src/gc.js` · `skills/kanban/` the shipped skill · `templates/` doc sections
+- `src/init.js` `src/doctor.js` `src/gc.js` · `skills/kanban/` the shipped skill
+- `templates/` what `hkb init` generates: `doc-section.md`, and `copilot/` for `--harness copilot`
 
 ## Rules
 

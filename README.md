@@ -73,7 +73,7 @@ There is no auth — it binds `127.0.0.1`, refuses cross-origin calls, and warns
 | runs table | one `<!-- kb-run -->` comment (attempts, failures, block loops) |
 | `kanban_complete(summary, metadata)` | `<!-- kb-result -->` comment; open PR → *review*, else issue closed |
 | worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link` |
-| stop nudge | Claude Code Stop hook (`hkb hook stop`, 2 nudges, inert unless `KB_TASK` is set) |
+| stop nudge | Claude Code `Stop` / Copilot CLI `agentStop` hook (`hkb hook stop`, 2 nudges, inert unless `KB_TASK` is set) |
 | kanban dashboard | `hkb serve` — local page over the live board; drag-drop calls the same verbs |
 | crash / stale / timeout | pid check on the claiming host, `stale_after` (against the lock ref's commit date, then the run comment), `max_runtime` → `ready` or `gave_up` |
 
@@ -87,7 +87,24 @@ worker as a Claude Code **background agent** — `claude --bg --name "kb #<n> ·
 `claude agents` (and the agents view of any session in the repo), can be opened with `claude attach <job>`, and are
 stopped by the dispatcher once their attempt has ended. `hkb show <n>` prints the job id per attempt.
 `claude-p` is the headless variant (`claude -p`, exits when done) for CI and containers without the session daemon.
-Add `copilot-cli` or `codex` profiles with their own `launch` arrays; the protocol does not change.
+
+`copilot-cli` is the same deal for **GitHub Copilot CLI**, which is included in Copilot Free:
+
+```bash
+hkb init --harness copilot     # adds the profile and generates the two files Copilot needs
+hkb doctor                     # checks `copilot` is on PATH and the generated files are there
+```
+
+`--harness copilot` writes `.github/agents/kanban-worker.agent.md` (the custom agent the profile selects with
+`copilot --agent kanban-worker`; its body is spliced out of `skills/kanban/SKILL.md`, so the protocol text lives in
+one place) and `.github/hooks/kanban.json` (an `agentStop` hook running `hkb hook stop` — the same two-nudge
+enforcement Claude Code gets from its `Stop` hook). Both are generated: re-running init overwrites them.
+Copilot CLI has no worktree flag, so the profile carries `workspace: "worktree"` and the dispatcher runs
+`git worktree add .claude/worktrees/kb-<n>-<k> -b kb-<n>-<k>` itself before launching the worker there.
+Compared with the Claude profiles you lose structured JSON output — everything hkb records about an attempt comes
+from the `hkb` commands the worker runs — and `max_in_progress` defaults to 1, because Copilot Free's credit pool
+is small. Add `codex` or any other harness the same way: a `launch` array in `.kanban/board.json`; the protocol
+does not change.
 
 ## GitHub Projects mirror (opt-in, off by default)
 

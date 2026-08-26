@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot } from './board.js';
 import { ensureLabels, fetchBoard, addLabels } from './tasks.js';
 import { rest } from './gh.js';
-import { L, STATUSES, parseSkillVersion } from './model.js';
+import { L, STATUSES, parseSkillVersion, stripFrontmatter } from './model.js';
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MARK_START = '<!-- hkb:start -->';
@@ -121,9 +121,82 @@ function installStopHook(root, log) {
   return changed;
 }
 
+// ---------- harness files (`hkb init --harness copilot`) ----------
+// Harnesses that cannot read the skill directly need their own agent + hook files. They are
+// *generated*, never hand-maintained: the protocol text is spliced out of the packaged SKILL.md so
+// it lives in exactly one place, and re-running init overwrites whatever is on disk.
+
+/** Profile a harness brings with it, so `--harness copilot` alone gives a dispatchable board. */
+export const HARNESS_PROFILE = { copilot: 'copilot-cli' };
+export const HARNESSES = Object.keys(HARNESS_PROFILE);
+
+function template(...parts) { return fs.readFileSync(path.join(PKG_ROOT, 'templates', ...parts), 'utf8'); }
+/** For a placeholder that sits inside a JSON string literal — the node fallback command has quotes in it. */
+function jsonInner(s) { return JSON.stringify(String(s)).slice(1, -1); }
+
+/**
+ * The files `hkb init --harness <name>` writes, as `[{ rel, contents }]` — nothing is written here,
+ * so tests and `--dry-run` callers can look before anything touches the repo.
+ * @param name one of HARNESSES
+ * @param command what the generated hook should run (`hkb hook stop`, or the node fallback)
+ */
+export function harnessFiles(name, { command = 'hkb hook stop' } = {}) {
+  if (name !== 'copilot') {
+    const e = new Error(`unknown harness "${name}". Known: ${HARNESSES.join(', ')}`);
+    e.exitCode = 2;
+    throw e;
+  }
+  // links in SKILL.md are relative to the skill directory; from .github/agents they are not
+  const protocol = stripFrontmatter(fs.readFileSync(path.join(packageSkillDir(), 'SKILL.md'), 'utf8'))
+    .replace(/`references\/protocol\.md`/g, '`.agents/skills/kanban/references/protocol.md`')
+    .trimEnd();
+  return [
+    { rel: path.join('.github', 'agents', 'kanban-worker.agent.md'), contents: template('copilot', 'kanban-worker.agent.md').replace('{{protocol}}', () => protocol) },
+    { rel: path.join('.github', 'hooks', 'kanban.json'), contents: template('copilot', 'hooks.json').replace('{{command}}', () => jsonInner(command)) },
+  ];
+}
+
+/**
+ * What `--profiles` and `--harness` add up to. `--harness copilot` on its own means "set me up for
+ * Copilot": it brings its profile with it and replaces the `claude` default rather than adding to
+ * it. Naming both keeps both. Pure, so the branching is testable without a repo.
+ * @returns {{ harnesses: string[], profiles: string[] }}
+ */
+export function resolveProfiles(flags = {}) {
+  const list = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const harnesses = list(flags.harness);
+  for (const h of harnesses) {
+    if (HARNESS_PROFILE[h]) continue;
+    const e = new Error(`unknown harness "${h}". Known: ${HARNESSES.join(', ')}`);
+    e.exitCode = 2;
+    throw e;
+  }
+  const implied = harnesses.map((h) => HARNESS_PROFILE[h]);
+  const profiles = flags.profiles ? list(flags.profiles) : (implied.length ? [...implied] : ['claude']);
+  for (const p of implied) if (!profiles.includes(p)) profiles.push(p);
+  return { harnesses, profiles };
+}
+
+/** Write a harness's files. Returns the relative paths that actually changed. */
+export function installHarness(root, name, { command } = {}) {
+  const written = [];
+  for (const f of harnessFiles(name, { command })) {
+    const abs = path.join(root, f.rel);
+    let current = null;
+    try { current = fs.readFileSync(abs, 'utf8'); } catch { /* not there yet */ }
+    if (current === f.contents) continue;
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, f.contents);
+    written.push(f.rel);
+  }
+  return written;
+}
+
 function ensureGitignore(root) {
   const file = path.join(root, '.gitignore');
-  const wanted = ['.kanban/logs/', '.kanban/outbox.jsonl', '.kanban/state.json', '.kanban/cache.json', '.kanban/nudges/'];
+  // .claude/worktrees/ holds worker checkouts — Claude Code's `--worktree`, and the ones the
+  // dispatcher makes itself for profiles with `workspace: "worktree"` (Copilot CLI).
+  const wanted = ['.kanban/logs/', '.kanban/outbox.jsonl', '.kanban/state.json', '.kanban/cache.json', '.kanban/nudges/', '.kanban/sessions/', '.claude/worktrees/'];
   let text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   const missing = wanted.filter((w) => !text.split('\n').includes(w));
   if (!missing.length) return false;
@@ -135,7 +208,7 @@ function ensureGitignore(root) {
 export async function init(ctx, flags, log) {
   const root = repoRoot();
   const board = flags.board || 'default';
-  const profiles = String(flags.profiles || 'claude').split(',').map((s) => s.trim()).filter(Boolean);
+  const { harnesses, profiles } = resolveProfiles(flags);
   const existing = loadBoard(root);
 
   // 1. repo
@@ -194,9 +267,13 @@ export async function init(ctx, flags, log) {
   const created = await ensureLabels(ctx, labels);
   log(created.length ? `created labels: ${created.join(', ')}` : 'labels already present');
 
-  // 5. Stop hook + gitignore + doc sections
+  // 5. Stop hook + harness files + gitignore + doc sections
   if (flags['no-hook']) log('skipped Stop hook (--no-hook)');
   else log(installStopHook(root, log) ? 'added Stop hook to .claude/settings.json (inert unless KB_TASK is set)' : 'Stop hook already present');
+  for (const h of harnesses) {
+    const written = installHarness(root, h, { command: hkbCommandForHook() });
+    log(written.length ? `harness ${h}: wrote ${written.join(', ')}` : `harness ${h}: files already up to date`);
+  }
   if (ensureGitignore(root)) log('updated .gitignore');
   const section = fs.readFileSync(path.join(PKG_ROOT, 'templates', 'doc-section.md'), 'utf8');
   for (const f of ['CLAUDE.md', 'AGENTS.md']) { upsertSection(path.join(root, f), section); }

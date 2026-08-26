@@ -6,8 +6,8 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, getTask } from './tasks.js';
 import { claim, release, listLocks, lockBeatAt } from './lock.js';
-import { logsDir, outboxFile, readState, writeState, ensureLocalDirs } from './board.js';
-import { computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, jobAlive, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession } from './model.js';
+import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree } from './board.js';
+import { computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, jobAlive, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath } from './model.js';
 import { workerContext } from './context.js';
 import { GhError } from './gh.js';
 import { listKbJobs, readJobState, stopJob, matchJobByWorktree } from './jobs.js';
@@ -51,10 +51,14 @@ export function replayOutbox(ctx, log) {
 
 // ---------- worker spawn ----------
 
-function expandLaunch(template, vars, profile) {
+export function expandLaunch(template, vars, profile) {
   const out = [];
   for (const el of template) {
     if (el === '{allowed_tools}') { out.push(...(profile.allowed_tools || [])); continue; }
+    // `--allow-tool={allowed_tools}` → one `--allow-tool <pattern>` pair per entry, for harnesses
+    // that repeat the flag instead of taking a list (Copilot CLI).
+    const perTool = /^(--[\w-]+)=\{allowed_tools\}$/.exec(el);
+    if (perTool) { for (const t of profile.allowed_tools || []) out.push(perTool[1], t); continue; }
     if (el === '{model_args}') { if (vars.model) out.push('--model', vars.model); continue; }
     out.push(el.replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? '')));
   }
@@ -74,6 +78,10 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
   };
   if (dryRun) return { argv, pid: null };
   ensureLocalDirs(ctx.root);
+  // Harnesses without a worktree flag (Copilot CLI) declare `workspace: "worktree"`; the dispatcher
+  // makes the checkout and runs them in it. Everything else runs at the board root and isolates itself.
+  const wt = profile.workspace === 'worktree' ? `kb-${task.number}-${attempt}` : null;
+  const cwd = wt ? ensureWorktree(ctx.root, wt) : ctx.root;
   const logFile = path.join(logsDir(ctx.root), `${task.number}-${attempt}.log`);
   if (profile.mode === 'claude-bg') {
     // Fire-and-forget: `claude --bg` prints "backgrounded · <id>" and exits, but a cold daemon
@@ -81,19 +89,19 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
     // the running job by its worktree on the next tick (cwd basename == kb-<n>-<k>).
     fs.appendFileSync(logFile, `# ${nowIso()} launch background agent for #${task.number} attempt ${attempt}\n`);
     const fd = fs.openSync(logFile, 'a');
-    const child = spawn(argv[0], argv.slice(1), { cwd: ctx.root, env, detached: true, stdio: ['ignore', fd, fd] });
+    const child = spawn(argv[0], argv.slice(1), { cwd, env, detached: true, stdio: ['ignore', fd, fd] });
     child.on('error', () => { /* surfaced next tick as crashed if the job never registers */ });
     fs.closeSync(fd);
     child.unref();
     return { argv, pid: null, bg: true, wt: `kb-${task.number}-${attempt}`, logFile };
   }
   const fd = fs.openSync(logFile, 'a');
-  fs.writeSync(fd, `# ${nowIso()} spawn ${argv[0]} for #${task.number} attempt ${attempt}\n`);
-  const child = spawn(argv[0], argv.slice(1), { cwd: ctx.root, env, detached: true, stdio: ['ignore', fd, fd] });
+  fs.writeSync(fd, `# ${nowIso()} spawn ${argv[0]} for #${task.number} attempt ${attempt}${wt ? ` in ${worktreePath(wt)}` : ''}\n`);
+  const child = spawn(argv[0], argv.slice(1), { cwd, env, detached: true, stdio: ['ignore', fd, fd] });
   child.on('error', () => { /* handled via exit code below */ });
   fs.closeSync(fd); // the child holds its own copy
   if (!keepRef) child.unref(); // one-shot dispatch must not wait for the worker
-  return { argv, pid: child.pid, child, logFile };
+  return { argv, pid: child.pid, child, wt, logFile };
 }
 
 // ---------- reconcile closed issues ----------
@@ -393,14 +401,17 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       continue;
     }
     attempt.pid = spawned.pid;
-    if (spawned.bg) { attempt.bg = true; attempt.wt = spawned.wt; }
+    if (spawned.bg) attempt.bg = true;
+    if (spawned.wt) attempt.wt = spawned.wt;
     attempt.log = path.relative(ctx.root, spawned.logFile);
     await saveRun(ctx, t.number, runRec);
     state.spawned_today = (state.spawned_today || 0) + 1;
     perProfile[profileName] = (perProfile[profileName] || 0) + 1;
     claimedPaths.push(t.kb.paths || []);
     budget--;
-    const handle = spawned.bg ? `background agent in ${spawned.wt} (job id on next tick; claude agents to watch)` : `pid ${spawned.pid}`;
+    const handle = spawned.bg
+      ? `background agent in ${spawned.wt} (job id on next tick; claude agents to watch)`
+      : `pid ${spawned.pid}${spawned.wt ? ` in ${worktreePath(spawned.wt)}` : ''}`;
     summary.claimed.push({ number: t.number, attempt: k, profile: profileName, pid: spawned.pid, wt: spawned.wt || null });
     log(`#${t.number}: claimed attempt ${k} → ${profileName} ${handle} (log ${attempt.log})`);
     if (children && spawned.child) watchChild(ctx, t.number, k, spawned.child, children, state, profileName, log);
