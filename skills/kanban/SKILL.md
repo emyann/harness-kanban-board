@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires the `gh` CLI (authenticated) and `hkb` (npm hkb) on PATH. Works with Claude Code, GitHub Copilot CLI and Codex CLI.
 metadata:
   author: hkb
-  version: 0.1.0
+  version: 0.2.0
 allowed-tools: Bash(hkb *) Bash(gh pr *) Bash(gh issue view *) Bash(git *)
 ---
 
@@ -21,8 +21,13 @@ comes from `hkb`; everything you report goes through `hkb`. See `references/prot
 1. `hkb show $KB_TASK --json` — title, body, `kb` settings, blockers, prior attempts, **parent task results**.
    Read the parent results before designing anything: they say what changed and what was not tested.
 2. Stay in this worktree and on the current branch. Only touch the scope in `kb.paths` if it is set.
-3. Long work: run `hkb heartbeat $KB_TASK` roughly every 10 minutes. If it prints `LOCK_LOST`, stop immediately —
-   do not commit, do not call `complete`. The dispatcher reclaimed the task.
+3. Long work: run `hkb heartbeat $KB_TASK` roughly every 10 minutes. It is a compare-and-swap on your lock ref —
+   `hkb` advances `refs/kb/locks/<n>/<k>` by an empty commit with `git push --force-with-lease`, so it is free and
+   writes nothing to the issue. Never push that ref yourself. If the lease is rejected the ref is no longer yours:
+   `hkb` prints `LOCK_LOST` and exits **3**. Stop immediately — do not commit, do not push, do not call `complete`.
+   The dispatcher reclaimed the task and a new attempt owns it. (Workers that cannot push refs — cloud tiers, with
+   `"heartbeat": "comment"` on their profile — heartbeat by writing the run record instead, floored at 10 minutes;
+   `hkb` falls back to that by itself when git cannot reach the remote, and says so.)
 4. Commit in small, clear steps. Never `git push --force`. Before finishing: `git fetch origin && git rebase origin/<default>`,
    then run the project's lint and tests (see CLAUDE.md / AGENTS.md).
 5. Push and open a **draft** PR whose body contains `Closes #$KB_TASK` and a real description:

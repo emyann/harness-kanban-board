@@ -6,7 +6,7 @@ import { ghAuthStatus, rest, graphql, GhError, API_VERSION } from './gh.js';
 import { boardFile, api } from './board.js';
 import { detectCaps } from './tasks.js';
 import { L, STATUSES, compareVersions } from './model.js';
-import { classifyClaimError } from './lock.js';
+import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
 import { agentsSkillDir, packageSkillDir, readSkillVersion } from './init.js';
 import { checkProject } from './projects.js';
 
@@ -101,15 +101,20 @@ export async function doctor(ctx, flags, log) {
         ok('REST issue dependencies', `GET .../dependencies/blocked_by works (API version ${API_VERSION})`);
       } else warn('REST issue dependencies', 'no issues to probe');
     } catch (e) { bad('REST issue dependencies', `${e.kind} ${e.message}`, 'dependencies may need a newer API version or are unavailable for this repo'); }
-    // lock ref probe: create, duplicate-create, delete
-    const probe = `refs/kb/locks/probe/${Date.now()}`;
+    // lock ref probe: create, duplicate-create, lease-push (the worker's heartbeat), delete
+    const k = Date.now();
+    const probe = `refs/kb/locks/probe/${k}`;
     try {
       const head = await rest('GET', api(ctx, `/git/ref/heads/${ctx.cfg.default_branch || 'main'}`));
       await rest('POST', api(ctx, '/git/refs'), { body: { ref: probe, sha: head.object.sha } });
       let dup = 'no error (!)';
       try { await rest('POST', api(ctx, '/git/refs'), { body: { ref: probe, sha: head.object.sha } }); } catch (e) { dup = `${e.status} → ${classifyClaimError(e)}`; }
+      const beat = casHeartbeat(ctx.root, 'probe', k, head.object.sha, { remote: remoteName(ctx) });
+      dropBeatChain(ctx.root, 'probe', k);
       await rest('DELETE', api(ctx, `/git/refs/${probe.replace(/^refs\//, '')}`));
       dup.endsWith('held') ? ok('lock ref CAS', `create 201 · duplicate ${dup} · delete ok`) : bad('lock ref CAS', `duplicate create returned ${dup}`, 'report this: claim classification must be adjusted');
+      if (beat.result === 'ok') ok('heartbeat lease', `git push --force-with-lease on ${probe} → ${beat.sha.slice(0, 7)}`);
+      else warn('heartbeat lease', `${beat.result}: ${beat.detail}`, `workers on this host will heartbeat by writing the run comment instead — set "heartbeat": "comment" on the profile to make that the plan, or give ${remoteName(ctx)} push access to refs/kb/*`);
     } catch (e) { bad('lock ref CAS', `${e.kind} ${e.message}`, 'token needs Contents: write'); }
   } else {
     warn('API probes', 'skipped', 'hkb doctor --api (creates and deletes one probe ref)');

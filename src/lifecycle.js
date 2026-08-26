@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import { GhError, isOffline, graphql, rest } from './gh.js';
 import { outboxFile, api } from './board.js';
 import { getTask, assertOnBoard, loadRun, saveRun, setStatus, addLabels, removeLabel, addComment, closeIssue, reopenIssue } from './tasks.js';
-import { release, lockExists } from './lock.js';
-import { openAttempt, computeReady, serializeResultComment, hashReason, BLOCK_KINDS, L } from './model.js';
+import { release, lockExists, lockSha, localBeatSha, casHeartbeat, resyncBeatChain, dropBeatChain, remoteName } from './lock.js';
+import { openAttempt, computeReady, serializeResultComment, hashReason, heartbeatMode, lockRef, BLOCK_KINDS, L } from './model.js';
 
 const nowIso = () => new Date().toISOString();
 
@@ -49,29 +49,97 @@ async function finishAttempt(ctx, task, rec, flags, outcome, extra = {}) {
   Object.assign(a, extra);
   await saveRun(ctx, task.number, rec); // rec.id is set on first create, so later saves update in place
   await release(ctx, task.number, a.attempt);
+  dropBeatChain(ctx.root, task.number, a.attempt); // worktrees share one ref store: leave nothing behind
   return a;
 }
 
-export async function heartbeat(ctx, number, { note } = {}) {
+// ---------- heartbeat ----------
+
+/** The one error a worker must obey: the dispatcher took the task back. */
+function lockLost(n, k, why = 'is gone — the dispatcher reclaimed this task') {
+  const e = new Error(`LOCK_LOST: ${lockRef(n, k)} ${why}. Stop now: do not commit, do not call complete.`);
+  e.exitCode = 3;
+  return e;
+}
+
+const refBeat = (n, k, cas, extra = {}) => ({ number: n, attempt: k, mode: 'ref', ref: lockRef(n, k), sha: cas.sha, expected: cas.expected, ...extra });
+
+/**
+ * A rejected lease is strong evidence but not proof: a push that lands while the local `update-ref`
+ * does not leaves this worktree's chain behind, and the next lease then fails against a ref we still
+ * hold. So ask GitHub who holds the ref — gone means LOCK_LOST, still ours means resync and beat once
+ * more. Returns the beat, throws LOCK_LOST, or returns null when it stayed ambiguous (caller falls back).
+ */
+async function resolveRejectedLease(ctx, n, k, opts) {
+  let sha;
+  try { sha = await lockSha(ctx, n, k); } catch { return null; } // GitHub unreachable: conclude nothing
+  if (!sha) throw lockLost(n, k);
+  resyncBeatChain(ctx.root, n, k, sha);
+  const retry = casHeartbeat(ctx.root, n, k, sha, opts);
+  if (retry.result === 'ok') return refBeat(n, k, retry, { resynced: true });
+  if (retry.result === 'unavailable') return null;
+  let after;
+  try { after = await lockSha(ctx, n, k); } catch { return null; }
+  if (!after) throw lockLost(n, k);
+  return null; // the ref is there and still refuses our lease — let the comment path have a say
+}
+
+/**
+ * Say "still alive". Two ways, chosen by the attempt's profile (`heartbeat` in board.json):
+ *   ref (default) — a compare-and-swap on the lock ref: no API call at all, and a reclaim is
+ *                   detected atomically by the rejected lease.
+ *   comment       — a floored write to the run record, for workers that cannot push refs.
+ * A `--note` is content, so it always takes the comment path.
+ */
+export async function heartbeat(ctx, number, { note, attempt } = {}) {
+  const opts = { remote: remoteName(ctx) };
+  const envK = Number(attempt || process.env.KB_ATTEMPT || 0);
+
+  // Warm path: the lease *is* the check, so a worker that has beaten before costs GitHub nothing —
+  // no task read, no run-record read, no write.
+  if (envK && !note && heartbeatMode(ctx.cfg, process.env.KB_PROFILE) !== 'comment') {
+    const chain = localBeatSha(ctx.root, number, envK);
+    const cas = chain ? casHeartbeat(ctx.root, number, envK, chain, opts) : null;
+    if (cas?.result === 'ok') return refBeat(number, envK, cas);
+    if (cas?.result === 'lost') {
+      const beat = await resolveRejectedLease(ctx, number, envK, opts);
+      if (beat) return beat;
+    }
+  }
+
   const task = await getTask(ctx, number);
   assertOnBoard(ctx, task);
   const rec = await loadRun(ctx, number);
   const { run } = rec;
   const a = openAttempt(run);
   if (!a) { const e = new Error(`#${number} has no active attempt (status: ${task.status})`); e.exitCode = 2; throw e; }
-  const held = await lockExists(ctx, number, a.attempt);
-  if (!held) {
-    const e = new Error(`LOCK_LOST: refs/kb/locks/${number}/${a.attempt} is gone — the dispatcher reclaimed this task. Stop now: do not commit, do not call complete.`);
-    e.exitCode = 3;
-    throw e;
+
+  let fallback = null;
+  const mode = heartbeatMode(ctx.cfg, a.profile || process.env.KB_PROFILE);
+  if (mode !== 'comment' && !note) {
+    // the chain starts at the sha the dispatcher created the ref with, recorded on the attempt
+    const expected = localBeatSha(ctx.root, number, a.attempt) || a.lock_sha || (await lockSha(ctx, number, a.attempt));
+    if (!expected) throw lockLost(number, a.attempt);
+    const cas = casHeartbeat(ctx.root, number, a.attempt, expected, opts);
+    if (cas.result === 'ok') return refBeat(number, a.attempt, cas);
+    if (cas.result === 'lost') {
+      const beat = await resolveRejectedLease(ctx, number, a.attempt, opts);
+      if (beat) return beat;
+      fallback = `the lease on ${lockRef(number, a.attempt)} was rejected but GitHub still shows the ref`;
+    } else fallback = cas.detail;
+    // a fallback is normal for `auto` and a misconfiguration for `ref`, but never silent either way
+    process.stderr.write(`hkb: no ref heartbeat (${fallback}) — recording it in the run comment instead\n`);
   }
+
+  const held = await lockExists(ctx, number, a.attempt);
+  if (!held) throw lockLost(number, a.attempt);
   const last = a.heartbeat_at ? new Date(a.heartbeat_at).getTime() : 0;
   const floorMs = 10 * 60_000; // frugal: comment edits count as content writes; 10-min floor
-  if (Date.now() - last < floorMs && !note) return { number, attempt: a.attempt, skipped: true, next_in_s: Math.ceil((floorMs - (Date.now() - last)) / 1000) };
+  if (Date.now() - last < floorMs && !note) return { number, attempt: a.attempt, mode: 'comment', skipped: true, fallback, next_in_s: Math.ceil((floorMs - (Date.now() - last)) / 1000) };
   a.heartbeat_at = nowIso();
   if (note) a.note = String(note).slice(0, 200);
   await saveRun(ctx, number, rec);
-  return { number, attempt: a.attempt, heartbeat_at: a.heartbeat_at };
+  return { number, attempt: a.attempt, mode: 'comment', heartbeat_at: a.heartbeat_at, fallback };
 }
 
 const SUMMARY_HINT = 'pass it with --summary ".." / --summary-file <path>, or as {"summary": ".."} on stdin with --from-stdin';

@@ -69,12 +69,13 @@ There is no auth — it binds `127.0.0.1`, refuses cross-origin calls, and warns
 | parent → child | child **blocked by** parent (native issue dependencies) |
 | `todo → ready` when all parents done | dispatcher tick, from `blockedBy { state stateReason }` |
 | atomic claim | `POST git/refs refs/kb/locks/<n>/<attempt>` — 201 claimed; 422 "Reference already exists" (observed) or 409 held; anything else back off |
+| heartbeat | CAS on the same ref: `git push <empty commit>:<ref> --force-with-lease=<ref>:<expected>` — free, and a rejected lease is `LOCK_LOST` (exit 3). Profiles that cannot push refs use `"heartbeat": "comment"` |
 | runs table | one `<!-- kb-run -->` comment (attempts, failures, block loops) |
 | `kanban_complete(summary, metadata)` | `<!-- kb-result -->` comment; open PR → *review*, else issue closed |
 | worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link` |
 | stop nudge | Claude Code Stop hook (`hkb hook stop`, 2 nudges, inert unless `KB_TASK` is set) |
 | kanban dashboard | `hkb serve` — local page over the live board; drag-drop calls the same verbs |
-| crash / stale / timeout | pid check on the claiming host, `stale_after`, `max_runtime` → `ready` or `gave_up` |
+| crash / stale / timeout | pid check on the claiming host, `stale_after` (against the lock ref's commit date, then the run comment), `max_runtime` → `ready` or `gave_up` |
 
 Full protocol: [skills/kanban/references/protocol.md](skills/kanban/references/protocol.md).
 
@@ -122,6 +123,8 @@ against this repository (2026-08-26), which probes the things the design depends
 
 - duplicate ref create returns **422 "Reference already exists"** (not 409) — `src/lock.js` treats both as `held`;
 - GraphQL `Issue.blockedBy`, `blocking`, `subIssues` and `closedByPullRequestsReferences` all exist;
-- REST `GET /issues/{n}/dependencies/blocked_by` works with `X-GitHub-Api-Version: 2026-03-10`.
+- REST `GET /issues/{n}/dependencies/blocked_by` works with `X-GitHub-Api-Version: 2026-03-10`;
+- `--force-with-lease` on a lock ref rejects both a moved ref and a deleted one with `(stale info)`, and
+  `GET git/commits/<sha>` gives the dispatcher the beat's committer date (round trip on this repo, 2026-08-26).
 
 Run `hkb doctor --api` on your own repo before the first dispatch; it re-checks all of the above.

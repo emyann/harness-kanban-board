@@ -38,7 +38,7 @@ export async function workerContext(ctx, task, attempt) {
   }
   lines.push('## Protocol (hkb)');
   lines.push(`1. Run \`hkb show ${n} --json\` if you need more detail. Work only in this worktree, on the current branch.`);
-  lines.push(`2. Every ~10 minutes of long work run \`hkb heartbeat ${n}\`. If it prints LOCK_LOST, stop immediately: do not commit, do not call complete.`);
+  lines.push(`2. Every ~10 minutes of long work run \`hkb heartbeat ${n}\` — it is a free compare-and-swap on your lock ref; never push that ref yourself. If it prints LOCK_LOST, stop immediately: do not commit, do not call complete.`);
   lines.push('3. Commit with clear, plain messages (no Co-Authored-By trailers, no "Generated with" lines — in commits or PR bodies). Never `git push --force`. Before finishing: rebase on the default branch and run the project\'s lint/tests.');
   lines.push(`4. Push and open a draft PR whose body contains \`Closes #${n}\`: \`gh pr create --draft --fill --body "Closes #${n}"\` (add a real description).`);
   lines.push('5. Finish with EXACTLY ONE terminal verb, then stop. Send the payload as one JSON object on stdin — no JSON goes through shell quoting:');

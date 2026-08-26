@@ -193,6 +193,45 @@ export function lockRef(n, k) { return `refs/kb/locks/${n}/${k}`; }
 /** Path form used by GET/PATCH/DELETE git/refs endpoints (no leading "refs/"). */
 export function lockRefPath(n, k) { return `kb/locks/${n}/${k}`; }
 
+// ---------- heartbeat ----------
+// A heartbeat says "the worker is alive". Two ways to say it:
+//   ref     — compare-and-swap on the lock ref (`git push --force-with-lease`). Free: the git
+//             transport is not the REST content budget, and a rejected lease *is* LOCK_LOST.
+//   comment — a write to the `<!-- kb-run -->` comment, floored at 10 min. For workers that
+//             cannot push to arbitrary refs (cloud tiers); the dispatcher owns their lock.
+
+export const HEARTBEAT_MODES = ['auto', 'ref', 'comment'];
+
+/** How a profile's workers heartbeat. Unknown or unset → `auto` (ref, falling back to comment). */
+export function heartbeatMode(cfg, profileName) {
+  const m = cfg?.profiles?.[profileName]?.heartbeat;
+  return HEARTBEAT_MODES.includes(m) ? m : 'auto';
+}
+
+/**
+ * What a `git push --force-with-lease` on the lock ref means.
+ *   ok          → the lease held: the ref was where we left it, and now carries a fresh commit
+ *   lost        → the lease was rejected: the ref moved or is gone (verify, then LOCK_LOST)
+ *   unavailable → git, network or auth trouble — says nothing about the lock
+ * Only a rejected lease is ever `lost`: an unrecognised failure must never fabricate a LOCK_LOST,
+ * because that kills a healthy worker. Ambiguity falls back to the authoritative ref read instead.
+ * `git push --delete`d and never-existed refs both come back as "[rejected] ... (stale info)".
+ */
+export function classifyLeasePush(status, output) {
+  if (status === 0) return 'ok';
+  return /stale info|\[rejected\]/i.test(String(output || '')) ? 'lost' : 'unavailable';
+}
+
+/**
+ * The freshest evidence that an attempt is alive: its run-comment beat, when it started, and
+ * (for a ref-CAS worker, which writes nothing to the comment) the lock ref's commit date.
+ * Returns the winning timestamp as given, or null when there is none.
+ */
+export function lastSignalAt(attempt, refBeatAt = null) {
+  const ms = (x) => { const t = x ? new Date(x).getTime() : NaN; return Number.isFinite(t) ? t : -Infinity; };
+  return [attempt?.heartbeat_at, attempt?.started_at, refBeatAt].reduce((best, x) => (ms(x) > ms(best) ? x : best), null) || null;
+}
+
 export function priorityOf(task) { return Number(task.kb?.priority ?? 0) || 0; }
 
 /** Sort ready tasks: higher priority first, then oldest issue first. */

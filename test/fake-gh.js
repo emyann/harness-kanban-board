@@ -25,6 +25,7 @@ export class FakeGh {
     this.calls = []; // every request, in order
     this.failures = []; // injected errors, see fail()
     this.nextCommentId = 1000;
+    this.commits = new Map(); // sha -> {date} — what a ref-CAS heartbeat leaves behind
     this.refs.set(`refs/heads/${defaultBranch}`, baseSha);
     this.transport = this.transport.bind(this);
   }
@@ -71,6 +72,18 @@ export class FakeGh {
     };
     issue.comments.push(c);
     return c;
+  }
+
+  /**
+   * A worker's CAS heartbeat: point the lock ref at a commit dated `at`. The dispatcher reads that
+   * date back through `GET git/commits/<sha>`; a ref whose commit was never added has no date,
+   * which is exactly how a lock created by `POST git/refs` at the branch head behaves.
+   */
+  beat(n, k, at, sha = null) {
+    const commit = sha || `beat${n}${k}${new Date(at).getTime().toString(16)}`.padEnd(40, '0').slice(0, 40);
+    this.refs.set(`refs/kb/locks/${n}/${k}`, commit);
+    this.commits.set(commit, { date: new Date(at).toISOString() });
+    return commit;
   }
 
   /**
@@ -222,6 +235,12 @@ export class FakeGh {
         if (this.refs.has(body.ref)) throw this.#error(422, `POST ${path} failed (422): Reference already exists`);
         this.refs.set(body.ref, body.sha);
         return { ref: body.ref, object: { sha: body.sha, type: 'commit' } };
+      }
+    } else if ((m = /^git\/commits\/([0-9a-z]+)$/.exec(p))) {
+      const commit = this.commits.get(m[1]);
+      if (method === 'GET') {
+        if (!commit) throw this.#error(404, `GET ${path} failed (404): No commit found for SHA: ${m[1]}`);
+        return { sha: m[1], author: { date: commit.date }, committer: { date: commit.date }, message: commit.message || 'hkb heartbeat' };
       }
     } else if ((m = /^git\/ref\/(.+)$/.exec(p))) {
       const ref = `refs/${m[1]}`;
