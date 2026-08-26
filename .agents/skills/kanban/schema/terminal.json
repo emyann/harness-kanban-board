@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ghkanban terminal outcome",
+  "description": "Optional structured output for harnesses that support --json-schema / --output-schema. The ghk verb the worker ran is the source of truth; this mirrors it.",
+  "type": "object",
+  "required": ["task", "verb", "summary"],
+  "properties": {
+    "task": { "type": "integer" },
+    "attempt": { "type": "integer" },
+    "verb": { "type": "string", "enum": ["complete", "block", "request-review"] },
+    "summary": { "type": "string", "maxLength": 2000 },
+    "kind": { "type": "string", "enum": ["dependency", "needs_input", "capability", "transient", "generic"] },
+    "pr": { "type": ["integer", "null"] },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "changed_files": { "type": "array", "items": { "type": "string" } },
+        "verification": { "type": "array", "items": { "type": "string" } },
+        "dependencies": { "type": "array", "items": { "type": "string" } },
+        "residual_risk": { "type": "array", "items": { "type": "string" } },
+        "retry_notes": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

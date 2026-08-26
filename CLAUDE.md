@@ -25,3 +25,12 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 - Every command returns a stable object under `--json`; human output is a one-liner per item.
 - Errors: throw `Error` with `.exitCode` (2 = usage/state, 3 = LOCK_LOST) and a message that names the fix.
 - Run `npm run lint && npm test` before finishing. Do not add a build step.
+
+<!-- ghkanban:start -->
+## Kanban (ghkanban)
+
+Tasks are GitHub issues on the `kb:*` board. If `KB_TASK` is set you are a worker: run `ghk show $KB_TASK --json` first,
+work only in this worktree, open a draft PR that says `Closes #$KB_TASK`, and finish with **exactly one** of
+`ghk complete <n> --summary "..."`, `ghk block <n> "why" --kind needs_input`, or `ghk request-review <n> --summary "..."`.
+Never `git push --force`. Full protocol: `.agents/skills/kanban/SKILL.md`.
+<!-- ghkanban:end -->

@@ -1,0 +1,52 @@
+---
+name: kanban
+description: Work a ghkanban task from the GitHub Issues board — read the task with `ghk show`, work in the worktree, open a PR that closes the issue, and finish with exactly one terminal verb (complete / block / request-review). Use whenever KB_TASK is set, when asked to "work task #N", "pick up the next kanban task", or to create/link tasks on the board.
+license: MIT
+compatibility: Requires the `gh` CLI (authenticated) and `ghk` (npm ghkanban) on PATH. Works with Claude Code, GitHub Copilot CLI and Codex CLI.
+metadata:
+  author: ghkanban
+  version: 0.1.0
+allowed-tools: Bash(ghk *) Bash(gh pr *) Bash(gh issue view *) Bash(git *)
+---
+
+# kanban — the worker protocol
+
+The board is GitHub Issues. A task is an issue with `kb:*` labels; its dependencies are GitHub issue dependencies
+(`blocked by`). The dispatcher (`ghk dispatch`) claims a task by creating the git ref `refs/kb/locks/<n>/<attempt>`
+and launches you with `KB_TASK`, `KB_ATTEMPT`, `KB_BOARD`, `KB_REPO` set. Everything you need to know about the task
+comes from `ghk`; everything you report goes through `ghk`. See `references/protocol.md` for the data model.
+
+## When you are the worker (KB_TASK is set)
+
+1. `ghk show $KB_TASK --json` — title, body, `kb` settings, blockers, prior attempts, **parent task results**.
+   Read the parent results before designing anything: they say what changed and what was not tested.
+2. Stay in this worktree and on the current branch. Only touch the scope in `kb.paths` if it is set.
+3. Long work: run `ghk heartbeat $KB_TASK` roughly every 10 minutes. If it prints `LOCK_LOST`, stop immediately —
+   do not commit, do not call `complete`. The dispatcher reclaimed the task.
+4. Commit in small, clear steps. Never `git push --force`. Before finishing: `git fetch origin && git rebase origin/<default>`,
+   then run the project's lint and tests (see CLAUDE.md / AGENTS.md).
+5. Push and open a **draft** PR whose body contains `Closes #$KB_TASK` and a real description:
+   `gh pr create --draft --title "..." --body "Closes #$KB_TASK\n\n<what/why/how verified>"`.
+6. Finish with **exactly one** terminal verb, then stop:
+   - `ghk complete $KB_TASK --summary "<what changed, written for the next worker>" --metadata '{"changed_files":["..."],"verification":["npm test"],"dependencies":[],"residual_risk":["..."],"retry_notes":null}'`
+   - `ghk block $KB_TASK "<why>" --kind needs_input|dependency|capability|transient` — when you cannot proceed.
+     `dependency` sends it back to *todo*; the others ask a human.
+   - `ghk request-review $KB_TASK --summary "..." [--reviewer <profile>]` — when a reviewer must look before it counts as done.
+
+Do not do work that belongs to other tasks. If you discover follow-up work, create it instead:
+`ghk create "title" --body "..." --blocked-by $KB_TASK` (it starts in *todo* and becomes *ready* when this task is done).
+
+## When a human asks you to manage the board
+
+- `ghk list` / `ghk show <n>` / `ghk log <n>` — read.
+- `ghk create "title" [--blocked-by 12,13] [--agent claude] [--priority N] [--paths apps/web/]` — add work.
+  Decide before you fan out: put design decisions in the body; children cannot see their siblings.
+- `ghk link <parent> <child>` / `ghk unlink` — dependencies (same board only).
+- `ghk promote <n>` (triage → todo, or force ready) · `ghk unblock <n>` · `ghk request-changes <n> "reason"` · `ghk archive <n>`.
+- `ghk dispatch --dry-run` shows what the next tick would do; `ghk dispatch --loop 60` runs it.
+
+## Rules
+
+- One terminal verb per attempt. No verb = protocol violation = the attempt is retried and eventually parked for a human.
+- Summaries are for the *next* worker: what changed, how it was verified, what is still risky.
+- Never edit the `<!-- kb-run -->` or `<!-- kb-result -->` comments by hand; `ghk` owns them.
