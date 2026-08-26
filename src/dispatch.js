@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { fetchBoard, loadRun, saveRun, setStatus, addLabels, getTask } from './tasks.js';
+import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, getTask } from './tasks.js';
 import { claim, release, listLocks } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs } from './board.js';
 import { computeReady, openAttempt, lastAttempt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, jobAlive } from './model.js';
@@ -95,6 +95,89 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
   return { argv, pid: child.pid, child, logFile };
 }
 
+// ---------- reconcile closed issues ----------
+// `Closes #n` in a merged PR closes the issue behind the dispatcher's back: it drops out of the
+// open-board query still wearing kb:status:review. The label has to follow the state.
+
+/** Live statuses — an issue closed while wearing one of these is out of sync with GitHub. */
+export const RECONCILE_STATUSES = ['triage', 'todo', 'ready', 'running', 'blocked', 'review'];
+
+/**
+ * What a closed issue should become. Pure: `null` means "nothing to do".
+ * Closed as completed → done; closed as not planned (or duplicate) → archived, same
+ * reading of stateReason as `blockerDone`.
+ */
+export function reconcileDecision(task) {
+  if (!task || String(task.state || '').toUpperCase() !== 'CLOSED') return null;
+  if (!RECONCILE_STATUSES.includes(task.status)) return null;
+  const reason = String(task.stateReason || task.state_reason || '').toUpperCase();
+  if (reason === 'NOT_PLANNED' || reason === 'DUPLICATE') {
+    return { status: 'archived', outcome: 'blocked', reason: `issue closed as ${reason.toLowerCase().replace('_', ' ')}` };
+  }
+  return { status: 'done', outcome: 'completed', reason: 'issue closed as completed' };
+}
+
+/**
+ * Close the open attempt of a reconciled issue. Pure: mutates `run` in place and returns the
+ * attempt it closed, or null when nothing was open — the normal case, where the worker already
+ * finished with `complete`/`request-review` and only the label lagged behind.
+ */
+export function closeAttemptForReconcile(run, decision, at) {
+  const a = openAttempt(run);
+  if (!a) return null;
+  a.ended_at = at;
+  a.outcome = decision.outcome;
+  a.reason = decision.reason;
+  return a;
+}
+
+/** Cheap fingerprint of the open board: anything that changes it means "look again". */
+export function boardSignature(tasks) {
+  const list = tasks || [];
+  let max = '';
+  for (const t of list) if (t.updatedAt && t.updatedAt > max) max = t.updatedAt;
+  return `${list.length}:${max}`;
+}
+
+/**
+ * Gate for the extra query, so a quiet board costs nothing. Pure.
+ * Look again when something could plausibly have closed: a task is in flight (review/running),
+ * the last look found work, the board moved since then, or we have never looked.
+ */
+export function shouldReconcile(tasks, cache) {
+  if ((tasks || []).some((t) => t.status === 'review' || t.status === 'running')) return { run: true, why: 'review/running tasks in flight' };
+  if (!cache || !cache.checked_at) return { run: true, why: 'no cached reconcile state' };
+  if (cache.found) return { run: true, why: 'the last check reconciled something' };
+  if (cache.signature !== boardSignature(tasks)) return { run: true, why: 'the board changed since the last check' };
+  return { run: false, why: 'nothing in flight and the board has not moved' };
+}
+
+async function reconcileClosed(ctx, tasks, state, { dryRun = false, log = () => {} } = {}) {
+  const gate = shouldReconcile(tasks, state.reconcile);
+  if (!gate.run) return { skipped: gate.why, reconciled: [] };
+  // Capped at one page: a backlog larger than that drains a page per tick, because a tick
+  // that found something always makes the next one look again.
+  const closed = await fetchClosedRecent(ctx);
+  const reconciled = [];
+  for (const t of closed) {
+    const d = reconcileDecision(t);
+    if (!d) continue;
+    if (dryRun) { reconciled.push({ number: t.number, from: t.status, status: d.status, dry: true }); log(`#${t.number}: [dry-run] ${t.status} → ${d.status} (${d.reason})`); continue; }
+    const from = t.status;
+    const runRec = await loadRun(ctx, t.number);
+    const a = closeAttemptForReconcile(runRec.run, d, nowIso());
+    if (a) {
+      await saveRun(ctx, t.number, runRec);
+      await release(ctx, t.number, a.attempt);
+    }
+    await setStatus(ctx, t, d.status, { remove: t.needsHuman ? [L.needsHuman] : [] });
+    reconciled.push({ number: t.number, from, status: d.status, outcome: d.outcome, attempt: a?.attempt ?? null });
+    log(`#${t.number}: ${from} → ${d.status} (${d.reason}${a ? `, attempt ${a.attempt} → ${d.outcome}` : ''})`);
+  }
+  if (!dryRun) state.reconcile = { checked_at: nowIso(), signature: boardSignature(tasks), found: reconciled.length };
+  return { skipped: null, reconciled };
+}
+
 // ---------- tick ----------
 
 async function failAttempt(ctx, task, runRec, outcome, note, { kill = true } = {}) {
@@ -124,7 +207,7 @@ async function failAttempt(ctx, task, runRec, outcome, note, { kill = true } = {
 export async function tick(ctx, { max = Infinity, dryRun = false, children = null, log = () => {} } = {}) {
   ctx.requireBoard();
   const d = ctx.cfg.dispatch;
-  const summary = { reclaimed: [], promoted: [], guarded: [], claimed: [], spawn_failed: [], held: [], skipped: [] };
+  const summary = { reconciled: [], reclaimed: [], promoted: [], guarded: [], claimed: [], spawn_failed: [], held: [], skipped: [] };
   const state = readState(ctx.root);
   const today = nowIso().slice(0, 10);
   if (state.spawn_day !== today) { state.spawn_day = today; state.spawned_today = 0; }
@@ -134,6 +217,18 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
 
   const tasks = await fetchBoard(ctx);
   const running = tasks.filter((t) => t.status === 'running');
+
+  // 0. reconcile issues GitHub closed behind our back (merged `Closes #n`). One extra query, gated.
+  try {
+    const r = await reconcileClosed(ctx, tasks, state, { dryRun, log });
+    summary.reconciled = r.reconciled;
+    if (r.skipped) summary.reconcile_skipped = r.skipped;
+  } catch (e) {
+    // never let a half-finished reconcile leave a clean cache behind: the next tick must look again
+    delete state.reconcile;
+    log(`reconcile failed (retrying next tick): ${e.message}`);
+    summary.reconcile_error = e.message;
+  }
 
   // background-agent jobs on this host (one local `claude agents --json` per tick, only if any profile uses them)
   const usesBg = Object.values(ctx.cfg.profiles).some((p) => p.mode === 'claude-bg');
@@ -316,7 +411,7 @@ export async function loop(ctx, { interval, max, log }) {
     try {
       const s = await tick(ctx, { max, children, log });
       const n = (k) => s[k].length;
-      log(`tick: reclaimed ${n('reclaimed')} promoted ${n('promoted')} claimed ${n('claimed')} guarded ${n('guarded')} held ${n('held')} skipped ${n('skipped')}`);
+      log(`tick: reconciled ${n('reconciled')} reclaimed ${n('reclaimed')} promoted ${n('promoted')} claimed ${n('claimed')} guarded ${n('guarded')} held ${n('held')} skipped ${n('skipped')}`);
     } catch (e) {
       if (e instanceof GhError && e.kind === 'network') log('GitHub unreachable — reclaim clock paused, retrying next tick');
       else log(`tick failed: ${e.message}`);
