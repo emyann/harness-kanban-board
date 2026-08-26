@@ -5,6 +5,7 @@ import { getTask, fetchBoard, assertOnBoard, createIssue, addBlockedBy, removeBl
 import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, withOutbox } from './lifecycle.js';
 import { tick, loop, spawnWorker } from './dispatch.js';
 import { serve } from './serve.js';
+import { watch, tail } from './watch.js';
 import { claim } from './lock.js';
 import { contextCommand } from './context.js';
 import { stopHook } from './hook.js';
@@ -161,6 +162,9 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
               --from-stdin with one JSON object {summary, metadata, artifacts, reason, kind, reviewer} (no shell quoting)
   dispatch    dispatch [--loop S] [--max N] [--dry-run]     claim <n> [--profile p] [--spawn]     gc [--yes]
   board       serve [--port 4666] [--host 127.0.0.1] [--poll 30]   local web board; drag-drop runs the same verbs
+  live        watch [--interval 30] [--kinds completed,blocked,..] [--polls N] [--json]   one line per transition
+              tail <n> [--interval 30] [--kinds ..] [--polls N] [--json]   follow one task's attempts and comments
+              both poll with If-None-Match: an unchanged board answers 304 and costs no rate limit
   plumbing    hook stop      version
 
   Global: --board <slug> (or KB_BOARD), --json. Exit codes: 0 ok · 1 error · 2 usage/state · 3 LOCK_LOST.
@@ -453,6 +457,12 @@ export async function main(argv) {
         for (const k of s.skipped) log(`  skipped #${k.number}: ${k.why}`);
       }
       return 0;
+    }
+    case 'watch': return watch(ctx, flags);
+    case 'tail': {
+      const [n] = nums(rest);
+      if (!n) throw usage('hkb tail <n> [--interval 30] [--kinds ..] [--polls N] [--json]');
+      return tail(ctx, n, flags);
     }
     case 'serve': return serve(ctx, flags, log);
     case 'gc': return gc(ctx, flags, log);

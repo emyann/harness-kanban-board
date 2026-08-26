@@ -61,6 +61,23 @@ legal moves, and an illegal one is refused with the reason. Cards show agent, pr
 the drawer shows the description, the `kb` block, every attempt, the latest result and the worker's log tail.
 There is no auth — it binds `127.0.0.1`, refuses cross-origin calls, and warns loudly if you pass `--host`.
 
+```bash
+hkb watch                                  # one line per board transition, until Ctrl-C
+hkb watch --kinds completed,blocked --json  # only those, as JSONL, for a script to consume
+hkb tail 42                                # follow one task's status, attempts and comments
+```
+
+`hkb watch` and `hkb tail` are the board as a stream. Each poll is a conditional `GET`: hkb sends back the
+`ETag` of the last representation as `If-None-Match`, and GitHub answers `304 Not Modified` with an empty body
+— which costs nothing against the rate limit, so watching a quiet board all day is free. Only a `200` is
+diffed against the previous snapshot, and only a difference prints. `--kinds` takes event kinds (`status`,
+`attempt`, `outcome`, `result`, `comment`, …) or the status/outcome an event landed on, so `--kinds completed`
+reads the way you'd guess. `GHK_DEBUG=1` shows every poll with its status and the rate-limit counter:
+
+```
+hkb watch: board: GET repos/o/r/issues?labels=kb%3Aboard%3Adefault&... → 304 Not Modified · rate 219 (+0) · etag 594b2e9a588b
+```
+
 ## How it maps to GitHub
 
 | Hermes | hkb |
@@ -75,6 +92,7 @@ There is no auth — it binds `127.0.0.1`, refuses cross-origin calls, and warns
 | worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link` |
 | stop nudge | Claude Code / Codex `Stop`, Copilot CLI `agentStop` hook (`hkb hook stop`, 2 nudges, inert unless `KB_TASK` is set) |
 | kanban dashboard | `hkb serve` — local page over the live board; drag-drop calls the same verbs |
+| live event stream | `hkb watch` / `hkb tail <n>` — conditional `GET` with `If-None-Match`; an unchanged board answers 304 and is not charged |
 | crash / stale / timeout | pid check on the claiming host, `stale_after` (against the lock ref's commit date, then the run comment), `max_runtime` → `ready` or `gave_up` |
 
 Full protocol: [skills/kanban/references/protocol.md](skills/kanban/references/protocol.md).
