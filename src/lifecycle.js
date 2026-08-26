@@ -1,8 +1,8 @@
 // Worker-facing verbs: heartbeat, complete, block, unblock, request-review, request-changes.
 // Every verb closes the open attempt in the run comment and releases the lock ref.
 import fs from 'node:fs';
-import { GhError, isOffline } from './gh.js';
-import { outboxFile } from './board.js';
+import { GhError, isOffline, graphql, rest } from './gh.js';
+import { outboxFile, api } from './board.js';
 import { getTask, assertOnBoard, loadRun, saveRun, setStatus, addLabels, removeLabel, addComment, closeIssue, reopenIssue } from './tasks.js';
 import { release, lockExists } from './lock.js';
 import { openAttempt, computeReady, serializeResultComment, hashReason, BLOCK_KINDS, L } from './model.js';
@@ -82,19 +82,94 @@ function assertPayload({ summary, metadata, artifacts }, what) {
   if (artifacts !== undefined && !Array.isArray(artifacts)) { const e = new Error('artifacts must be a list of strings'); e.exitCode = 2; throw e; }
 }
 
+// ---------- the task's PR ----------
+
+/**
+ * What a terminal verb owes the task's pull request. Pure — no I/O.
+ * Workers open drafts, and a draft cannot be merged, so the open PR must come out of draft
+ * when the task leaves the worker's hands. Already ready → leave it; no open PR → nothing to do.
+ * Closed and merged PRs are never touched.
+ */
+export function prReadyDecision(prs) {
+  const pr = (prs || []).find((p) => p && p.state === 'OPEN') || null;
+  if (!pr) return { pr: null, markReady: false, reason: 'no open PR' };
+  if (!pr.isDraft) return { pr, markReady: false, reason: `PR #${pr.number} is already ready for review` };
+  return { pr, markReady: true, reason: `PR #${pr.number} is a draft and cannot merge` };
+}
+
+/** The PR's node id: from the board read when the GraphQL field is there, else one REST lookup. */
+async function prNodeId(ctx, pr) {
+  if (pr.nodeId) return pr.nodeId;
+  const p = await rest('GET', api(ctx, `/pulls/${pr.number}`));
+  return p?.node_id || null;
+}
+
+/** True when the profile name is also a GitHub user login — profiles like `claude` are not. */
+async function isGithubUser(ctx, login) {
+  try {
+    const u = await rest('GET', `users/${encodeURIComponent(login)}`);
+    return u?.type === 'User';
+  } catch (e) {
+    if (e instanceof GhError && e.kind === 'notfound') return false;
+    throw e;
+  }
+}
+
+/**
+ * Leave the PR mergeable: take it out of draft, and (request-review) put the reviewer on it.
+ * Never throws — the attempt is already closed by the time this runs, so trouble here is
+ * reported on the result object and on stderr, not raised.
+ */
+async function finishPr(ctx, decision, { reviewer } = {}) {
+  const pr = decision.pr;
+  const out = { pr: pr?.number ?? null, pr_head: pr?.headRefName ?? null, pr_ready: pr ? !pr.isDraft : null };
+  if (!pr) return out;
+  if (decision.markReady) {
+    try {
+      const id = await prNodeId(ctx, pr);
+      if (!id) throw new Error('could not resolve its node id');
+      await graphql('mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { number isDraft } } }', { id });
+      pr.isDraft = false;
+      out.pr_ready = true;
+    } catch (e) {
+      out.pr_ready = false;
+      out.pr_error = `PR #${pr.number} is still a draft: ${e.message}. Run \`gh pr ready ${pr.number}\` before merging.`;
+      process.stderr.write(`hkb: ${out.pr_error}\n`);
+    }
+  }
+  if (reviewer) {
+    try {
+      if (await isGithubUser(ctx, reviewer)) {
+        await rest('POST', api(ctx, `/pulls/${pr.number}/requested_reviewers`), { body: { reviewers: [String(reviewer)] } });
+        out.reviewer_requested = String(reviewer);
+      } else {
+        out.reviewer_note = `"${reviewer}" is not a GitHub user — no reviewer requested on PR #${pr.number}`;
+      }
+    } catch (e) {
+      out.reviewer_note = `could not request ${reviewer} on PR #${pr.number}: ${e.message}`;
+      process.stderr.write(`hkb: ${out.reviewer_note}\n`);
+    }
+  }
+  return out;
+}
+
+/** `pr` / `pr_head` for the attempt row, so the run record says which PR the attempt produced. */
+export const prAttemptFields = (decision) => (decision.pr ? { pr: decision.pr.number, pr_head: decision.pr.headRefName || null } : {});
+
 export async function complete(ctx, number, { summary, metadata = {}, artifacts = [], attempt } = {}) {
   assertPayload({ summary, metadata, artifacts }, 'what changed, for the next worker');
   const task = await getTask(ctx, number);
   assertOnBoard(ctx, task);
   const runRec = await loadRun(ctx, number);
-  const a = await finishAttempt(ctx, task, runRec, { attempt }, 'completed', { summary: String(summary).slice(0, 400) });
+  const decision = prReadyDecision(task.prs);
+  const a = await finishAttempt(ctx, task, runRec, { attempt }, 'completed', { summary: String(summary).slice(0, 400), ...prAttemptFields(decision) });
   runRec.run.failures = 0;
   await saveRun(ctx, number, runRec);
   await addComment(ctx, number, serializeResultComment({ kind: 'result', attempt: a.attempt, summary, metadata, artifacts, at: nowIso() }));
-  const openPr = (task.prs || []).find((p) => p.state === 'OPEN');
-  if (openPr) {
+  if (decision.pr) {
+    const pr = await finishPr(ctx, decision);
     await setStatus(ctx, task, 'review', { remove: [L.needsHuman] });
-    return { number, attempt: a.attempt, status: 'review', pr: openPr.number, note: 'open PR found — task waits in review until the PR merges' };
+    return { number, attempt: a.attempt, status: 'review', ...pr, note: 'open PR found — task waits in review until the PR merges' };
   }
   await setStatus(ctx, task, 'done', { remove: [L.needsHuman] });
   await closeIssue(ctx, number, 'completed');
@@ -144,10 +219,12 @@ export async function requestReview(ctx, number, { summary, metadata = {}, revie
   const task = await getTask(ctx, number);
   assertOnBoard(ctx, task);
   const runRec = await loadRun(ctx, number);
-  const a = await finishAttempt(ctx, task, runRec, { attempt }, 'review_requested', { summary: String(summary).slice(0, 400) });
+  const decision = prReadyDecision(task.prs);
+  const a = await finishAttempt(ctx, task, runRec, { attempt }, 'review_requested', { summary: String(summary).slice(0, 400), ...prAttemptFields(decision) });
   await addComment(ctx, number, serializeResultComment({ kind: 'review', attempt: a.attempt, summary, metadata, reviewer: reviewer || null, at: nowIso() }));
+  const pr = await finishPr(ctx, decision, { reviewer });
   await setStatus(ctx, task, 'review', { remove: [L.needsHuman] });
-  return { number, attempt: a.attempt, status: 'review', reviewer: reviewer || null };
+  return { number, attempt: a.attempt, status: 'review', reviewer: reviewer || null, ...pr };
 }
 
 export async function requestChanges(ctx, number, { reason } = {}) {
