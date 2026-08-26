@@ -5,7 +5,7 @@ import { rest, graphql, GhError } from './gh.js';
 import { api, kanbanDir } from './board.js';
 import {
   L, LABEL_COLORS, STATUSES, parseBodyBlock, serializeBodyBlock, statusOf, agentOf, boardOf,
-  parseRunComment, serializeRunComment, parseResultComment, RUN_MARKER, RESULT_MARKER, emptyRun,
+  parseRunComment, serializeRunComment, parseResultComment, RESULT_MARKER, emptyRun, pickRunComment,
 } from './model.js';
 
 // ---------- capability detection (cached per repo in .kanban/cache.json) ----------
@@ -133,21 +133,32 @@ export async function listComments(ctx, number) {
 
 export async function findRunComment(ctx, number) {
   const comments = await listComments(ctx, number);
-  const c = comments.find((x) => x.body && x.body.startsWith(RUN_MARKER));
-  return c ? { id: c.id, run: parseRunComment(c.body) || emptyRun() } : null;
+  const picked = pickRunComment(comments);
+  if (!picked.chosen) return null;
+  return { id: picked.chosen.id, run: parseRunComment(picked.chosen.body) || emptyRun(), duplicates: picked.duplicates.map((c) => c.id) };
 }
 
+/** The run record: `{ id, run, duplicates }`. Mutated in place by saveRun so a create is followed by updates, never a second create. */
 export async function loadRun(ctx, number) {
   const found = await findRunComment(ctx, number);
-  return found ? { id: found.id, run: found.run } : { id: null, run: emptyRun() };
+  return found ? found : { id: null, run: emptyRun(), duplicates: [] };
 }
 
-export async function saveRun(ctx, number, { id, run }) {
-  const body = serializeRunComment(run);
+export async function saveRun(ctx, number, rec) {
+  const body = serializeRunComment(rec.run);
   delete ctx._cache[`comments:${number}`];
-  if (id) return rest('PATCH', api(ctx, `/issues/comments/${id}`), { body: { body } });
+  if (rec.id) return rest('PATCH', api(ctx, `/issues/comments/${rec.id}`), { body: { body } });
   const created = await rest('POST', api(ctx, `/issues/${number}/comments`), { body: { body } });
+  rec.id = created.id;
   return created;
+}
+
+export async function deleteComment(ctx, number, commentId) {
+  delete ctx._cache[`comments:${number}`];
+  try { await rest('DELETE', api(ctx, `/issues/comments/${commentId}`)); return true; } catch (e) {
+    if (e instanceof GhError && e.kind === 'notfound') return false;
+    throw e;
+  }
 }
 
 export async function latestResult(ctx, number) {

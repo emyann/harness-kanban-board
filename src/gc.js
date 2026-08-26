@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fetchBoard } from './tasks.js';
+import { fetchBoard, loadRun, deleteComment } from './tasks.js';
 import { logsDir, kanbanDir } from './board.js';
 
 function worktrees(root) {
@@ -34,6 +34,15 @@ export async function gc(ctx, flags, log) {
     if (r.status === 0) { removed++; log(`removed worktree ${w.path}`); } else log(`failed to remove ${w.path}: ${r.stderr.trim()}`);
   }
   if (flags.yes) spawnSync('git', ['worktree', 'prune'], { cwd: ctx.root });
+  // duplicate run comments (older copies) → delete, keep the newest
+  let dupes = 0;
+  for (const t of tasks) {
+    const rec = await loadRun(ctx, t.number);
+    for (const id of rec.duplicates || []) {
+      if (!flags.yes) { log(`would delete duplicate run comment ${id} on #${t.number} — pass --yes`); continue; }
+      if (await deleteComment(ctx, t.number, id)) { dupes++; log(`deleted duplicate run comment ${id} on #${t.number}`); }
+    }
+  }
   let pruned = 0;
   const cutoff = Date.now() - days * 86400_000;
   for (const dir of [logsDir(ctx.root), path.join(kanbanDir(ctx.root), 'nudges')]) {
@@ -43,6 +52,6 @@ export async function gc(ctx, flags, log) {
       if (fs.statSync(p).mtimeMs < cutoff) { fs.rmSync(p); pruned++; }
     }
   }
-  log(`gc: ${removed} worktree(s) removed, ${pruned} old file(s) pruned (retention ${days}d)`);
+  log(`gc: ${removed} worktree(s) removed, ${dupes} duplicate run comment(s) deleted, ${pruned} old file(s) pruned (retention ${days}d)`);
   return 0;
 }

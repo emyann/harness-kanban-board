@@ -37,7 +37,8 @@ function pickAttempt(run, flags) {
 }
 
 /** Close the current attempt (or synthesize a zero-duration one, like Hermes) and release its lock. */
-async function finishAttempt(ctx, task, { id, run }, flags, outcome, extra = {}) {
+async function finishAttempt(ctx, task, rec, flags, outcome, extra = {}) {
+  const { run } = rec;
   let a = pickAttempt(run, flags);
   if (!a) {
     a = { attempt: run.attempts.length + 1, profile: task.agent || 'human', host: ctx.host, started_at: nowIso(), synthetic: true };
@@ -46,7 +47,7 @@ async function finishAttempt(ctx, task, { id, run }, flags, outcome, extra = {})
   a.ended_at = nowIso();
   a.outcome = outcome;
   Object.assign(a, extra);
-  await saveRun(ctx, task.number, { id, run });
+  await saveRun(ctx, task.number, rec); // rec.id is set on first create, so later saves update in place
   await release(ctx, task.number, a.attempt);
   return a;
 }
@@ -54,7 +55,8 @@ async function finishAttempt(ctx, task, { id, run }, flags, outcome, extra = {})
 export async function heartbeat(ctx, number, { note } = {}) {
   const task = await getTask(ctx, number);
   assertOnBoard(ctx, task);
-  const { id, run } = await loadRun(ctx, number);
+  const rec = await loadRun(ctx, number);
+  const { run } = rec;
   const a = openAttempt(run);
   if (!a) { const e = new Error(`#${number} has no active attempt (status: ${task.status})`); e.exitCode = 2; throw e; }
   const held = await lockExists(ctx, number, a.attempt);
@@ -68,7 +70,7 @@ export async function heartbeat(ctx, number, { note } = {}) {
   if (Date.now() - last < floorMs && !note) return { number, attempt: a.attempt, skipped: true, next_in_s: Math.ceil((floorMs - (Date.now() - last)) / 1000) };
   a.heartbeat_at = nowIso();
   if (note) a.note = String(note).slice(0, 200);
-  await saveRun(ctx, number, { id, run });
+  await saveRun(ctx, number, rec);
   return { number, attempt: a.attempt, heartbeat_at: a.heartbeat_at };
 }
 

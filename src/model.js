@@ -99,6 +99,17 @@ export function parseRunComment(body) {
   return { ...emptyRun(), ...parsed, attempts: Array.isArray(parsed.attempts) ? parsed.attempts : [] };
 }
 
+/**
+ * Choose the authoritative run comment when an issue has several (a create that was
+ * followed by another create instead of an update). Newest wins — it is the one written
+ * last by the dispatcher; older ones are duplicates for `ghk gc` to delete.
+ */
+export function pickRunComment(comments) {
+  const runs = (comments || []).filter((c) => c && typeof c.body === 'string' && c.body.startsWith(RUN_MARKER));
+  if (!runs.length) return { chosen: null, duplicates: [] };
+  return { chosen: runs[runs.length - 1], duplicates: runs.slice(0, -1) };
+}
+
 export function openAttempt(run) {
   if (!run) return null;
   return [...run.attempts].reverse().find((a) => !a.ended_at) || null;
