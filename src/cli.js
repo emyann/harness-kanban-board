@@ -1,4 +1,5 @@
 // Argument parsing + command routing. Every command has --json; output is stable for scripts and agents.
+import fs from 'node:fs';
 import { makeContext } from './board.js';
 import { getTask, fetchBoard, assertOnBoard, createIssue, addBlockedBy, removeBlockedBy, loadRun, latestResult, parentResults, issueEvents, issueDatabaseId, addComment, addLabels, setStatus, updateBody, ensureLabels } from './tasks.js';
 import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, withOutbox } from './lifecycle.js';
@@ -45,6 +46,11 @@ const HELP = `ghk — a portable, frugal kanban for coding agents on GitHub Issu
   Global: --board <slug> (or KB_BOARD), --json. Exit codes: 0 ok · 1 error · 2 usage/state · 3 LOCK_LOST.
 `;
 
+// Single source of truth for the version: package.json, resolved relative to this file (works from any cwd, no build step).
+export function readVersion() {
+  return JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+}
+
 const out = (ctx, obj, text) => { process.stdout.write((ctx.json ? JSON.stringify(obj, null, 2) : text ?? JSON.stringify(obj, null, 2)) + '\n'); };
 const nums = (pos) => pos.map((p) => Number(String(p).replace(/^#/, ''))).filter((n) => Number.isInteger(n) && n > 0);
 const usage = (msg) => { const e = new Error(msg); e.exitCode = 2; return e; };
@@ -60,7 +66,7 @@ export async function main(argv) {
   const { flags, pos } = parseArgs(argv);
   const [cmd, ...rest] = pos;
   if (!cmd || cmd === 'help' || flags.help) { process.stdout.write(HELP); return 0; }
-  if (cmd === 'version') { process.stdout.write('ghk 0.1.0\n'); return 0; }
+  if (cmd === 'version') { const version = readVersion(); out({ json: !!flags.json }, { version, node: process.version }, `ghk ${version}`); return 0; }
   const ctx = makeContext(flags);
   const argvForOutbox = process.env.KB_NO_OUTBOX ? null : argv;
 
