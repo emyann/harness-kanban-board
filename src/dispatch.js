@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, getTask } from './tasks.js';
 import { claim, release, listLocks } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs } from './board.js';
-import { computeReady, openAttempt, lastAttempt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, jobAlive, parseBackgroundedId } from './model.js';
+import { computeReady, openAttempt, lastAttempt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, jobAlive, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession } from './model.js';
 import { workerContext } from './context.js';
 import { GhError } from './gh.js';
 import { listKbJobs, readJobState, stopJob, matchJobByWorktree } from './jobs.js';
@@ -399,24 +399,34 @@ function watchChild(ctx, number, k, child, children, state, profileName, log) {
   child.on('exit', async (code) => {
     children.delete(`${number}/${k}`);
     try {
-      const t = await getTask(ctx, number);
       const runRec = await loadRun(ctx, number);
       const a = runRec.run.attempts.find((x) => x.attempt === k);
-      if (!a || a.ended_at) return; // worker finished properly
+      if (!a) return;
+      // `claude -p --output-format json` signs off with the session id and what the run cost.
+      // A malformed log must never cost us the reclaim below, so this is its own try.
+      const logText = tailLog(ctx, a.log, 200_000);
+      let session = null;
+      try { session = sessionUpdate(a, parseSessionLog(logText)); } catch { /* unreadable log */ }
+      if (session) Object.assign(a, session);
+      if (a.ended_at) { // the worker finished properly — only the session numbers are new
+        if (session) { await saveRun(ctx, number, runRec); log(`#${number}: attempt ${k} ${formatSession(a)}`); }
+        return;
+      }
       a.exit_code = code;
-      const logTail = tailLog(ctx, a.log);
+      const logTail = logText.slice(-4000);
       if (/429|rate limit|quota|401|unauthorized|not logged in/i.test(logTail)) {
         state.profile_paused_until[profileName] = new Date(Date.now() + ctx.cfg.dispatch.auth_pause * 1000).toISOString();
         writeState(ctx.root, state);
       }
+      const t = await getTask(ctx, number);
       const r = await failAttempt(ctx, t, runRec, 'protocol_violation', `worker exited (${code}) without a terminal verb`, { kill: false });
-      log(`#${number}: attempt ${k} exited ${code} without complete/block → ${r}`);
+      log(`#${number}: attempt ${k} exited ${code} without complete/block → ${r}${session ? ` (${formatSession(a)})` : ''}`);
     } catch (e) { log(`#${number}: post-exit handling failed: ${e.message}`); }
   });
 }
 
-function tailLog(ctx, rel) {
-  try { const s = fs.readFileSync(path.join(ctx.root, rel), 'utf8'); return s.slice(-4000); } catch { return ''; }
+function tailLog(ctx, rel, bytes = 4000) {
+  try { const s = fs.readFileSync(path.join(ctx.root, rel), 'utf8'); return s.slice(-bytes); } catch { return ''; }
 }
 
 /** Exactly one dispatcher loop per board root. Two concurrent loops fight: one sweeps the other's

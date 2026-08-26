@@ -234,6 +234,89 @@ export function classifyJob(job) {
   return jobAlive(job) ? 'running' : 'protocol_violation';
 }
 
+// ---------- worker session: id, transcript, cost ----------
+// A worker is a real agent session. The attempt row carries its id so a human can reopen it
+// (`claude --resume <id>` inside the worker's worktree) and see what the attempt cost.
+
+/** Attempt-row fields that describe the underlying agent session. */
+export const SESSION_FIELDS = ['session_id', 'transcript_path', 'total_cost_usd', 'num_turns', 'duration_ms'];
+
+function tryJson(s) { try { return JSON.parse(s); } catch { return null; } }
+
+/** The session fields of an arbitrary object (a hook payload, a result line), or null when it has none. */
+function sessionFieldsOf(obj) {
+  if (!obj || typeof obj !== 'object') return null;
+  const out = {};
+  for (const k of SESSION_FIELDS) {
+    const v = obj[k];
+    if (typeof v === 'string' && v) out[k] = v;
+    else if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * Session id and cost out of a worker log. `claude -p --output-format json` ends with one JSON
+ * object holding `session_id`, `total_cost_usd`, `num_turns`, `duration_ms`; with `stream-json`
+ * that object is the last line. Total: a truncated or non-JSON log yields null, never a throw —
+ * the dispatcher must never lose a reclaim to a malformed log.
+ */
+export function parseSessionLog(text, { maxLines = 200 } = {}) {
+  const s = String(text || '');
+  const lines = s.split('\n');
+  for (let i = lines.length - 1, seen = 0; i >= 0 && seen < maxLines; i--, seen++) {
+    const line = lines[i].trim();
+    if (!line.startsWith('{')) continue;
+    const found = sessionFieldsOf(tryJson(line));
+    if (found) return found;
+  }
+  // pretty-printed JSON spans several lines: nesting is indented, so "\n{" is the outermost object
+  const start = s.lastIndexOf('\n{');
+  return sessionFieldsOf(tryJson(start < 0 ? s : s.slice(start + 1)));
+}
+
+/**
+ * What still has to be written onto an attempt row — the "record once" decision. The Stop hook
+ * fires up to three times per attempt and the dispatcher looks again on exit, so `null` means
+ * "already recorded, skip the PATCH". Unknown keys are ignored; a changed value wins.
+ */
+export function sessionUpdate(attempt, fields) {
+  const found = sessionFieldsOf(fields);
+  if (!found) return null;
+  const a = attempt || {};
+  const out = {};
+  for (const [k, v] of Object.entries(found)) if (a[k] !== v) out[k] = v;
+  return Object.keys(out).length ? out : null;
+}
+
+function fmtCost(usd) { return `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}`; }
+function fmtDuration(ms) {
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
+}
+
+/** `session <id> · $0.42 · 37 turns · 6m12s` — '' for an attempt with nothing recorded. */
+export function formatSession(a) {
+  if (!a) return '';
+  const bits = [];
+  if (a.session_id) bits.push(`session ${a.session_id}`);
+  if (Number.isFinite(a.total_cost_usd)) bits.push(fmtCost(a.total_cost_usd));
+  if (Number.isFinite(a.num_turns)) bits.push(`${a.num_turns} turns`);
+  if (Number.isFinite(a.duration_ms)) bits.push(fmtDuration(a.duration_ms));
+  return bits.join(' · ');
+}
+
+/** Where `claude --worktree kb-<n>-<k>` puts a worker's checkout, relative to the board root. */
+export function worktreePath(wt) { return `.claude/worktrees/${wt}`; }
+
+/** The command that reopens a worker session for a post-mortem. null when no session id is known. */
+export function resumeCommand(a, number = null) {
+  if (!a?.session_id) return null;
+  const wt = a.wt || (number ? `kb-${number}-${a.attempt}` : null);
+  const resume = `claude --resume ${a.session_id}`;
+  return wt ? `cd ${worktreePath(wt)} && ${resume}` : resume;
+}
+
 // ---------- installed skill version ----------
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
