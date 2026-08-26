@@ -123,7 +123,9 @@ test('the copilot-cli profile runs in a dispatcher-made worktree and allow-lists
   // one --allow-tool per pattern, and the shell(...) spelling Copilot uses
   const allowed = argv.filter((_, i) => argv[i - 1] === '--allow-tool');
   assert.deepEqual(allowed, p.allowed_tools);
-  assert.ok(allowed.includes('shell(hkb *)') && allowed.includes('shell(git *)') && allowed.includes('shell(gh pr *)'));
+  assert.ok(allowed.includes('shell(hkb:*)') && allowed.includes('shell(git:*)') && allowed.includes('shell(gh:*)'));
+  assert.ok(!allowed.some((a) => /shell\([^)]* \*\)/.test(a))); // no space-star spellings
+  assert.ok(allowed.includes('--no-ask-user') === false); // flag lives in launch, not the tool list
   assert.ok(allowed.includes('write'));
   const denied = argv.filter((_, i) => argv[i - 1] === '--deny-tool');
   assert.ok(denied.some((d) => /git push --force/.test(d)), 'force-push must be denied at launch');

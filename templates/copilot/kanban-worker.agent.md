@@ -14,7 +14,7 @@ description: Work one hkb task from the GitHub Issues board — read it with `hk
 - The dispatcher launches you as `copilot -p "<task context>" --agent kanban-worker` inside a git worktree it
   created for this attempt (`.claude/worktrees/kb-<n>-<k>`, branch `kb-<n>-<k>`). Copilot CLI has no worktree
   flag, so the worktree is already your working directory — stay in it and do not `cd` out.
-- Shell access is allow-listed per command (`--allow-tool 'shell(hkb *)'` and friends); `git push --force` is
+- Shell access is allow-listed per command (`--allow-tool 'shell(hkb:*)'` and friends); `git push --force` is
   denied. If a command you need is refused, do the work another way rather than trying to widen the allowlist.
 - `.github/hooks/kanban.json` installs an `agentStop` hook that runs `hkb hook stop`. If you stop while the task
   is still `running` on the board, the hook blocks the stop and tells you to finish with a terminal verb; after

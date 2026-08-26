@@ -12,7 +12,9 @@ const SHELL_TOOLS = ['hkb *', 'git *', 'gh pr *', 'gh issue view *', 'npm *', 'n
 const CLAUDE_TOOLS = [...SHELL_TOOLS.map((c) => `Bash(${c})`), 'Bash(true)', 'Edit', 'Write', 'Read', 'Glob', 'Grep'];
 // Copilot CLI spells the same policy `--allow-tool 'shell(<cmd>)'`, one flag per pattern, plus the
 // built-in `write` tool for file edits. See the `--allow-tool={allowed_tools}` token in dispatch.js.
-const COPILOT_TOOLS = [...SHELL_TOOLS.map((c) => `shell(${c})`), 'write'];
+// Copilot wildcards are `shell(cmd:*)` (verified against the CLI programmatic reference, 2026-08-26);
+// a multiword prefix like `gh pr *` has no wildcard form, so it widens to the command's `cmd:*`.
+const COPILOT_TOOLS = [...new Set(SHELL_TOOLS.map((c) => c.includes('*') ? `shell(${c.split(' ')[0]}:*)` : `shell(${c})`)), 'write'];
 
 export const DEFAULT_PROFILES = {
   claude: {
@@ -44,7 +46,7 @@ export const DEFAULT_PROFILES = {
     max_in_progress: 1,
     model: null,
     allowed_tools: COPILOT_TOOLS,
-    launch: ['copilot', '-p', '{prompt}', '--agent', 'kanban-worker', '--allow-tool={allowed_tools}', '--deny-tool', 'shell(git push --force*)', '--deny-tool', 'shell(git push -f*)', '{model_args}'],
+    launch: ['copilot', '-p', '{prompt}', '--agent', 'kanban-worker', '--allow-tool={allowed_tools}', '--no-ask-user', '--deny-tool', 'shell(git push --force*)', '--deny-tool', 'shell(git push -f*)', '{model_args}'],
   },
 };
 
