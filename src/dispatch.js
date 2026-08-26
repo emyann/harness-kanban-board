@@ -419,7 +419,28 @@ function tailLog(ctx, rel) {
   try { const s = fs.readFileSync(path.join(ctx.root, rel), 'utf8'); return s.slice(-4000); } catch { return ''; }
 }
 
+/** Exactly one dispatcher loop per board root. Two concurrent loops fight: one sweeps the other's
+ * fresh locks and kills its workers (observed 2026-08-26 when wrapper-pid kills left node alive). */
+function acquireLoopLock(ctx) {
+  const file = path.join(ctx.root, '.kanban', 'dispatch.pid');
+  try {
+    const existing = Number(fs.readFileSync(file, 'utf8').trim());
+    if (existing && existing !== process.pid && pidAlive(existing)) {
+      const e = new Error(`another dispatcher loop is already running (pid ${existing}). Kill it first: kill ${existing}`);
+      e.exitCode = 2;
+      throw e;
+    }
+  } catch (e) { if (e.exitCode) throw e; /* no or stale pidfile */ }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, String(process.pid) + '\n');
+  const drop = () => { try { if (Number(fs.readFileSync(file, 'utf8').trim()) === process.pid) fs.rmSync(file); } catch { /* gone */ } };
+  process.on('exit', drop);
+  return drop;
+}
+
 export async function loop(ctx, { interval, max, log }) {
+  const dropLock = acquireLoopLock(ctx);
+  log(`dispatcher pid ${process.pid} (singleton lock .kanban/dispatch.pid)`);
   const children = new Map();
   let stopping = false;
   const stop = () => { stopping = true; log('stopping after this tick (workers keep running; next dispatcher reclaims or adopts them)'); };
@@ -438,6 +459,7 @@ export async function loop(ctx, { interval, max, log }) {
     const wait = Math.max(5_000, interval * 1000 - (Date.now() - started));
     await new Promise((r) => setTimeout(r, wait));
   }
+  dropLock();
 }
 
 export { addLabels };
