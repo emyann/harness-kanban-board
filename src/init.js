@@ -52,7 +52,7 @@ function installStopHook(root, log) {
   const ensure = (event, cmd) => {
     settings.hooks[event] = settings.hooks[event] || [];
     if (settings.hooks[event].some((h) => JSON.stringify(h).includes(cmd.split(' ').pop()) && JSON.stringify(h).includes('hkb'))) return;
-    settings.hooks[event].push({ matcher: '', hooks: [{ type: 'command', command: cmd, timeout: 30 }] });
+    settings.hooks[event].push({ matcher: '*', hooks: [{ type: 'command', command: cmd, timeout: 30 }] });
     changed = true;
   };
   const base = hkbCommandForHook().replace(/ stop$/, '');
