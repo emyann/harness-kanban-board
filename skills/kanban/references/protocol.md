@@ -79,6 +79,58 @@ the dispatcher owns their lock. `hkb heartbeat <n> --note "..."` always takes th
 
 One GraphQL query per board per tick; everything else is per-task and only for tasks that changed state.
 
+## Decomposition, worked
+
+A goal issue is split by `/kanban:decompose` (a section of `SKILL.md`, run in a human's session — the dispatcher never
+decomposes anything). The shape is Hermes': children carry the work, and the **root is blocked by its leaves**, so it
+becomes ready again for a final verify pass once the tree is done.
+
+Goal `#12 Rate-limit the public API`, in *triage*, split into three children:
+
+```
+        #41 token bucket ──▶ #42 wire it into the server ──┐
+                                                           ├──▶ #12 (root: verify + synthesize)
+        #43 document the limits and the 429 contract ──────┘
+```
+
+The shared decision — `takeToken(key, now)` returns `{ok, retryAfterMs}`, and a refusal is `429` with `Retry-After` in
+seconds — is written out in **all three** child bodies: #41 implements it, #42 consumes it, #43 documents it, and none
+of them can see the others.
+
+```bash
+hkb create "Token bucket + tests" --priority 2 --paths src/limit.js,test/limit.test.js --body "$(cat a.md)"     # → #41 ready
+hkb create "Wire the limiter into the server" --blocked-by 41 --priority 2 --paths src/server.js --body "$(cat b.md)"  # → #42 todo
+hkb create "Document the limits and the 429 contract" --priority 3 --paths docs/,README.md --body "$(cat c.md)" # → #43 ready
+hkb link 42 12 && hkb link 43 12    # the leaves; #12 is now blocked by both
+hkb promote 12                      # triage → todo (link first: promote on a todo task forces ready)
+hkb comment 12 "$(cat graph.md)"
+```
+
+```
+TODO
+  #12    todo     claude     p2  Rate-limit the public API ⇐ #42,#43
+  #42    todo     claude     p2  Wire the limiter into the server ⇐ #41
+
+READY
+  #41    ready    claude     p2  Token bucket + tests
+  #43    ready    claude     p3  Document the limits and the 429 contract
+```
+
+Tick 1 claims **#41 and #43** together — their `paths` are disjoint, so `path_overlap` lets both run (default
+`max_in_progress` is 2). When #41's PR merges the issue closes as completed and the next tick promotes #42. When #42
+and #43 have both closed, #12 becomes ready and its worker gets the two leaf summaries under *Parent task results* —
+only its own blockers, so #41's result is one `hkb show 41` away.
+
+A materialized graph is valid when:
+
+1. every `blocked by` number exists and carries the same `kb:board:*` label — cross-board links are refused;
+2. the edges are acyclic, and **no child is blocked by the root** (that cycle starves the whole tree);
+3. the root is blocked by exactly the leaves — the children nothing else depends on;
+4. children were created parents-first, so each `--blocked-by` number already existed;
+5. siblings meant to run at once have non-overlapping `paths` — prefixes count (`src/` overlaps `src/limit.js`), and an
+   empty `paths` is neither guarded nor guards anyone, so two path-less children can edit the same file at once;
+6. every decision two children share is written into both bodies.
+
 ## Projects v2 mirror (optional)
 
 `.kanban/board.json` may carry a `"project"` block (`hkb init --project <number|new>`; needs `gh auth refresh -s project`):
