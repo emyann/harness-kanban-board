@@ -4,6 +4,7 @@ import { makeContext } from './board.js';
 import { getTask, fetchBoard, assertOnBoard, createIssue, addBlockedBy, removeBlockedBy, loadRun, latestResult, parentResults, issueEvents, issueDatabaseId, addComment, addLabels, setStatus, updateBody, ensureLabels } from './tasks.js';
 import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, withOutbox } from './lifecycle.js';
 import { tick, loop, spawnWorker } from './dispatch.js';
+import { serve } from './serve.js';
 import { claim } from './lock.js';
 import { contextCommand } from './context.js';
 import { stopHook } from './hook.js';
@@ -157,6 +158,7 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
               complete|block|request-review also take --summary-file <p> --metadata-file <p> --reason-file <p>, or
               --from-stdin with one JSON object {summary, metadata, artifacts, reason, kind, reviewer} (no shell quoting)
   dispatch    dispatch [--loop S] [--max N] [--dry-run]     claim <n> [--profile p] [--spawn]     gc [--yes]
+  board       serve [--port 4666] [--host 127.0.0.1] [--poll 30]   local web board; drag-drop runs the same verbs
   plumbing    hook stop      version
 
   Global: --board <slug> (or KB_BOARD), --json. Exit codes: 0 ok · 1 error · 2 usage/state · 3 LOCK_LOST.
@@ -447,6 +449,7 @@ export async function main(argv) {
       }
       return 0;
     }
+    case 'serve': return serve(ctx, flags, log);
     case 'gc': return gc(ctx, flags, log);
     default:
       throw usage(`unknown command "${cmd}". Run \`hkb help\`.`);
