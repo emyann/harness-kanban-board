@@ -1,9 +1,8 @@
 // `hkb init` — labels, board.json, skill, hook, doc sections. Idempotent; free path by default.
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_BOARD, DEFAULT_PROFILES, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot } from './board.js';
+import { DEFAULT_BOARD, DEFAULT_PROFILES, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot, hkbOnPath } from './board.js';
 import { ensureLabels, fetchBoard, addLabels } from './tasks.js';
 import { rest } from './gh.js';
 import { L, STATUSES, parseSkillVersion, stripFrontmatter } from './model.js';
@@ -92,8 +91,7 @@ function upsertSection(file, section) {
 }
 
 function hkbCommandForHook() {
-  const which = spawnSync('sh', ['-c', 'command -v hkb'], { encoding: 'utf8' });
-  if (which.status === 0 && which.stdout.trim()) return 'hkb hook stop';
+  if (hkbOnPath()) return 'hkb hook stop';
   const bin = path.join(PKG_ROOT, 'bin', 'hkb.js');
   return `node "${bin}" hook stop`;
 }
@@ -294,6 +292,18 @@ export async function init(ctx, flags, log) {
   for (const h of harnesses) {
     const written = installHarness(root, h, { command: hkbCommandForHook() });
     log(written.length ? `harness ${h}: wrote ${written.join(', ')}` : `harness ${h}: files already up to date`);
+  }
+  // 5b. optional MCP server config. Only .mcp.json is ours to write — Claude Code and Copilot CLI
+  //     read it verbatim; Codex's is user-level and VS Code's belongs to the editor, so those are printed.
+  if (flags.mcp) {
+    const { installMcp } = await import('./mcp.js');
+    const m = installMcp(root);
+    log(m.changed ? `wrote .mcp.json (servers: ${m.servers.join(', ')})` : '.mcp.json already has the kanban server');
+    for (const s of m.snippets) {
+      log('');
+      log(`${s.file} — not written for you (${s.note}); paste:`);
+      for (const line of s.text.split('\n')) log(`    ${line}`);
+    }
   }
   if (ensureGitignore(root)) log('updated .gitignore');
   const section = fs.readFileSync(path.join(PKG_ROOT, 'templates', 'doc-section.md'), 'utf8');

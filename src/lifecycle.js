@@ -3,9 +3,15 @@
 import fs from 'node:fs';
 import { GhError, isOffline, graphql, rest } from './gh.js';
 import { outboxFile, api } from './board.js';
-import { getTask, assertOnBoard, loadRun, saveRun, setStatus, addLabels, removeLabel, addComment, closeIssue, reopenIssue } from './tasks.js';
+import {
+  getTask, assertOnBoard, loadRun, saveRun, setStatus, addLabels, removeLabel, addComment, closeIssue, reopenIssue,
+  fetchBoard, createIssue, ensureLabels, issueDatabaseId, addBlockedBy, removeBlockedBy,
+} from './tasks.js';
 import { release, lockExists, lockSha, localBeatSha, casHeartbeat, resyncBeatChain, dropBeatChain, remoteName } from './lock.js';
-import { openAttempt, computeReady, serializeResultComment, hashReason, heartbeatMode, lockRef, BLOCK_KINDS, L } from './model.js';
+import {
+  openAttempt, computeReady, blockerDone, serializeResultComment, serializeBodyBlock, hashReason,
+  heartbeatMode, lockRef, BLOCK_KINDS, DEFAULT_KB, L,
+} from './model.js';
 
 const nowIso = () => new Date().toISOString();
 
@@ -309,6 +315,64 @@ export async function requestChanges(ctx, number, { reason } = {}) {
   const target = computeReady(task) ? 'ready' : 'todo';
   await setStatus(ctx, task, target);
   return { number, status: target };
+}
+
+// ---------- board verbs (create, link) ----------
+
+/**
+ * Add a task to the board. The caller hands over an already-typed spec — the CLI parses its flags
+ * into this shape, `hkb mcp` gets it as JSON — so this is the single place that decides the status a
+ * new task starts in and refuses a cross-board blocker.
+ * @param spec.kb overrides for the issue's kb block (priority, paths, scheduled_at, ...)
+ * @param spec.parents task numbers this one is blocked by
+ * @returns {{number, status, agent, blocked_by, url, duplicate?}}
+ */
+export async function createTask(ctx, { title, body = '', kb = {}, agent = null, parents = [], triage = false } = {}) {
+  if (!title || typeof title !== 'string' || !title.trim()) { const e = new Error('a title is required: hkb create "title" [--body ..] [--blocked-by n,n]'); e.exitCode = 2; throw e; }
+  const spec = { ...DEFAULT_KB, ...kb };
+  if (spec.scheduled_at) {
+    const at = new Date(spec.scheduled_at);
+    if (Number.isNaN(at.getTime())) { const e = new Error(`scheduled_at "${spec.scheduled_at}" is not a date — use an ISO timestamp`); e.exitCode = 2; throw e; }
+    spec.scheduled_at = at.toISOString();
+  }
+  const blockers = (parents || []).map((p) => Number(String(p).replace('#', ''))).filter(Boolean);
+
+  if (spec.idempotency_key) {
+    const dupe = (await fetchBoard(ctx, { includeClosed: true })).find((t) => t.kb.idempotency_key === spec.idempotency_key);
+    if (dupe) return { number: dupe.number, status: dupe.status, agent: dupe.agent, blocked_by: blockers, url: dupe.url, duplicate: true };
+  }
+
+  const profile = agent || Object.keys(ctx.cfg.profiles)[0] || 'claude';
+  let status = 'triage';
+  if (!triage) {
+    if (!blockers.length) status = 'ready';
+    else {
+      const ps = await Promise.all(blockers.map((n) => issueDatabaseId(ctx, n)));
+      for (const p of ps) if (!p.labels.includes(L.board(ctx.board))) { const e = new Error(`#${p.number} is not on board "${ctx.board}" — cross-board links are refused`); e.exitCode = 2; throw e; }
+      status = ps.every((p) => blockerDone({ state: p.state, stateReason: p.state_reason })) ? 'ready' : 'todo';
+    }
+  }
+  if (spec.scheduled_at && new Date(spec.scheduled_at) > new Date() && status === 'ready') status = 'todo';
+
+  await ensureLabels(ctx, [L.agent(profile)]);
+  const issue = await createIssue(ctx, { title, body: serializeBodyBlock(spec, body || ''), labels: [L.board(ctx.board), L.status(status), L.agent(profile)] });
+  for (const p of blockers) await addBlockedBy(ctx, issue.number, p);
+  return { number: issue.number, status, agent: profile, blocked_by: blockers, url: issue.html_url };
+}
+
+/**
+ * `child` is blocked by `parent` (or, with `unlink`, no longer is). The child's status follows: a
+ * ready task that gains an open blocker drops to todo, and one that loses its last blocker is ready.
+ */
+export async function linkTask(ctx, parent, child, { unlink = false } = {}) {
+  const [p, c] = await Promise.all([getTask(ctx, parent), getTask(ctx, child)]);
+  assertOnBoard(ctx, p); assertOnBoard(ctx, c);
+  if (unlink) await removeBlockedBy(ctx, child, parent);
+  else await addBlockedBy(ctx, child, parent);
+  const fresh = await getTask(ctx, child);
+  if (!unlink && fresh.status === 'ready' && !computeReady(fresh)) await setStatus(ctx, fresh, 'todo');
+  if (unlink && fresh.status === 'todo' && computeReady(fresh)) await setStatus(ctx, fresh, 'ready');
+  return { parent, child, status: fresh.status, linked: !unlink };
 }
 
 export async function promote(ctx, number) {

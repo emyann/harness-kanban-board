@@ -1,8 +1,8 @@
 // Argument parsing + command routing. Every command has --json; output is stable for scripts and agents.
 import fs from 'node:fs';
 import { makeContext } from './board.js';
-import { getTask, fetchBoard, assertOnBoard, createIssue, addBlockedBy, removeBlockedBy, loadRun, latestResult, parentResults, issueEvents, issueDatabaseId, addComment, addLabels, setStatus, updateBody, ensureLabels } from './tasks.js';
-import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, withOutbox } from './lifecycle.js';
+import { getTask, fetchBoard, assertOnBoard, loadRun, latestResult, parentResults, issueEvents, addComment, addLabels, setStatus, updateBody } from './tasks.js';
+import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, createTask, linkTask, withOutbox } from './lifecycle.js';
 import { tick, loop, spawnWorker } from './dispatch.js';
 import { serve } from './serve.js';
 import { watch, tail } from './watch.js';
@@ -12,10 +12,10 @@ import { stopHook } from './hook.js';
 import { init } from './init.js';
 import { doctor } from './doctor.js';
 import { gc } from './gc.js';
-import { STATUSES, DEFAULT_KB, L, computeReady, blockerDone, serializeBodyBlock, parseBodyBlock, lastAttempt, formatSession, resumeCommand } from './model.js';
+import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, resumeCommand } from './model.js';
 
 /** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
-const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'api', 'help']);
+const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'api', 'mcp', 'help']);
 
 export function parseArgs(argv) {
   const flags = {};
@@ -147,7 +147,7 @@ export function terminalArgv(verb, number, p, { board, attempt } = {}) {
 
 const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issues
 
-  setup       init [--board slug] [--profiles claude] [--harness copilot|codex] [--import] [--no-hook]
+  setup       init [--board slug] [--profiles claude] [--harness copilot|codex] [--mcp] [--import] [--no-hook]
                    [--project <number|new>]
               doctor [--api] [--json]
   tasks       create "title" [--body ..] [--blocked-by 12,13] [--agent claude] [--priority N] [--paths a/,b/]
@@ -165,6 +165,8 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
   live        watch [--interval 30] [--kinds completed,blocked,..] [--polls N] [--json]   one line per transition
               tail <n> [--interval 30] [--kinds ..] [--polls N] [--json]   follow one task's attempts and comments
               both poll with If-None-Match: an unchanged board answers 304 and costs no rate limit
+  mcp         mcp   the same verbs as MCP tools (kanban_show, kanban_complete, ...) on stdio;
+                    hkb init --mcp writes .mcp.json and prints the Codex and VS Code equivalents
   plumbing    hook stop      version
 
   Global: --board <slug> (or KB_BOARD), --json. Exit codes: 0 ok · 1 error · 2 usage/state · 3 LOCK_LOST.
@@ -209,38 +211,22 @@ export async function main(argv) {
     case 'create': {
       const title = rest[0];
       if (!title) throw usage('hkb create "title" [--body ..] [--blocked-by n,n] [--agent claude] ...');
-      const kb = { ...DEFAULT_KB };
+      const kb = {};
       if (flags.priority !== undefined) kb.priority = Number(flags.priority);
       if (flags.workspace) kb.workspace = flags.workspace;
       if (flags['max-runtime']) kb.max_runtime = Number(flags['max-runtime']);
       if (flags['max-retries'] !== undefined) kb.max_retries = Number(flags['max-retries']);
       if (flags.model) kb.model = flags.model;
-      if (flags.skills) kb.skills = String(flags.skills).split(',').map((s) => s.trim()).filter(Boolean);
-      if (flags.paths) kb.paths = String(flags.paths).split(',').map((s) => s.trim()).filter(Boolean);
-      if (flags['scheduled-at']) kb.scheduled_at = new Date(flags['scheduled-at']).toISOString();
+      if (flags.skills) kb.skills = list(str(flags.skills), '--skills');
+      if (flags.paths) kb.paths = list(str(flags.paths), '--paths');
+      if (flags['scheduled-at']) kb.scheduled_at = String(flags['scheduled-at']);
       if (flags['idempotency-key']) kb.idempotency_key = flags['idempotency-key'];
       if (flags.goal) kb.goal = flags.goal;
       const parents = flags['blocked-by'] ? String(flags['blocked-by']).split(',').map((s) => Number(s.replace('#', ''))).filter(Boolean) : [];
-      if (kb.idempotency_key) {
-        const dupe = (await fetchBoard(ctx, { includeClosed: true })).find((t) => t.kb.idempotency_key === kb.idempotency_key);
-        if (dupe) { out(ctx, { number: dupe.number, duplicate: true }, `#${dupe.number} already exists with idempotency_key ${kb.idempotency_key}`); return 0; }
-      }
-      const agent = flags.agent || (Object.keys(ctx.cfg.profiles)[0] || 'claude');
-      let status = 'triage';
-      if (!flags.triage) {
-        if (!parents.length) status = 'ready';
-        else {
-          const ps = await Promise.all(parents.map((n) => issueDatabaseId(ctx, n)));
-          for (const p of ps) if (!p.labels.includes(L.board(ctx.board))) throw usage(`#${p.number} is not on board "${ctx.board}" — cross-board links are refused`);
-          status = ps.every((p) => blockerDone({ state: p.state, stateReason: p.state_reason })) ? 'ready' : 'todo';
-        }
-      }
-      if (kb.scheduled_at && new Date(kb.scheduled_at) > new Date() && status === 'ready') status = 'todo';
-      const labels = [L.board(ctx.board), L.status(status), L.agent(agent)];
-      await ensureLabels(ctx, [L.agent(agent)]);
-      const issue = await createIssue(ctx, { title, body: serializeBodyBlock(kb, flags.body || ''), labels });
-      for (const p of parents) await addBlockedBy(ctx, issue.number, p);
-      out(ctx, { number: issue.number, status, agent, blocked_by: parents, url: issue.html_url }, `#${issue.number} ${status} (${agent}) ${issue.html_url}`);
+      const r = await createTask(ctx, { title, body: flags.body || '', kb, agent: flags.agent, parents, triage: !!flags.triage });
+      out(ctx, r, r.duplicate
+        ? `#${r.number} already exists with idempotency_key ${kb.idempotency_key}`
+        : `#${r.number} ${r.status} (${r.agent}) ${r.url}`);
       return 0;
     }
     case 'list': {
@@ -303,13 +289,8 @@ export async function main(argv) {
     case 'unlink': {
       const [parent, child] = nums(rest);
       if (!parent || !child) throw usage(`hkb ${cmd} <parent> <child>`);
-      const [p, c] = await Promise.all([getTask(ctx, parent), getTask(ctx, child)]);
-      assertOnBoard(ctx, p); assertOnBoard(ctx, c);
-      if (cmd === 'link') await addBlockedBy(ctx, child, parent); else await removeBlockedBy(ctx, child, parent);
-      const fresh = await getTask(ctx, child);
-      if (cmd === 'link' && fresh.status === 'ready' && !computeReady(fresh)) await setStatus(ctx, fresh, 'todo');
-      if (cmd === 'unlink' && fresh.status === 'todo' && computeReady(fresh)) await setStatus(ctx, fresh, 'ready');
-      out(ctx, { parent, child, status: fresh.status }, `#${child} ${cmd === 'link' ? 'blocked by' : 'no longer blocked by'} #${parent} → ${fresh.status}`);
+      const r = await linkTask(ctx, parent, child, { unlink: cmd === 'unlink' });
+      out(ctx, r, `#${child} ${r.linked ? 'blocked by' : 'no longer blocked by'} #${parent} → ${r.status}`);
       return 0;
     }
     case 'promote': {
@@ -465,6 +446,8 @@ export async function main(argv) {
       return tail(ctx, n, flags);
     }
     case 'serve': return serve(ctx, flags, log);
+    // imported here, not at the top: mcp.js imports this module back for the version and the outbox argv
+    case 'mcp': { const { mcp } = await import('./mcp.js'); return mcp(ctx, flags); }
     case 'gc': return gc(ctx, flags, log);
     default:
       throw usage(`unknown command "${cmd}". Run \`hkb help\`.`);
