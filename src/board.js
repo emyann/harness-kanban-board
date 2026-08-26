@@ -5,7 +5,9 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghCmd } from './gh.js';
 
-const CLAUDE_TOOLS = ['Bash(hkb *)', 'Bash(git *)', 'Bash(gh pr *)', 'Bash(gh issue view *)', 'Bash(npm *)', 'Bash(npx *)', 'Bash(node *)', 'Edit', 'Write', 'Read', 'Glob', 'Grep'];
+// A background worker has nobody to answer a permission prompt, so the allowlist must cover
+// every command an agent plausibly reaches for; anything else is denied, never prompted (see #23).
+const CLAUDE_TOOLS = ['Bash(hkb *)', 'Bash(git *)', 'Bash(gh pr *)', 'Bash(gh issue view *)', 'Bash(npm *)', 'Bash(npx *)', 'Bash(node *)', 'Bash(cat *)', 'Bash(ls *)', 'Bash(mkdir *)', 'Bash(head *)', 'Bash(tail *)', 'Bash(wc *)', 'Bash(sed *)', 'Bash(awk *)', 'Bash(grep *)', 'Bash(find *)', 'Bash(diff *)', 'Bash(cp *)', 'Bash(mv *)', 'Bash(touch *)', 'Bash(chmod *)', 'Bash(printf *)', 'Bash(echo *)', 'Bash(jq *)', 'Bash(true)', 'Edit', 'Write', 'Read', 'Glob', 'Grep'];
 
 export const DEFAULT_PROFILES = {
   claude: {

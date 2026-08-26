@@ -9,11 +9,13 @@ test('parseBackgroundedId reads the id from claude --bg output, ANSI included', 
   assert.equal(parseBackgroundedId(''), null);
 });
 
-test('classifyJob: working → running; done/idle/gone → protocol_violation; missing → crashed', () => {
+test('classifyJob: working/busy/blocked/waiting → running; done/stopped → protocol_violation; missing → crashed', () => {
   assert.equal(classifyJob({ state: 'working' }), 'running');
   assert.equal(classifyJob({ status: 'busy' }), 'running');
+  assert.equal(classifyJob({ state: 'blocked', status: 'waiting', pid: 1 }), 'running'); // permission prompt — alive
+  assert.equal(classifyJob({ status: 'waiting' }), 'running');
   assert.equal(classifyJob({ state: 'done', status: 'idle', pid: 123 }), 'protocol_violation');
-  assert.equal(classifyJob({ state: 'done' }), 'protocol_violation');
+  assert.equal(classifyJob({ state: 'stopped' }), 'protocol_violation');
   assert.equal(classifyJob(null), 'crashed');
 });
 

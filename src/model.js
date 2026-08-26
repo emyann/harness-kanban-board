@@ -217,14 +217,21 @@ export function jobName(task) { return `kb #${task.number} · ${task.title}`; }
 
 /**
  * Decide what a background job's state means for an open attempt.
- *   working            → still running
- *   done / idle / gone → the session finished its turn without a terminal verb → protocol_violation
- *   missing entirely   → crashed
+ *   working / busy               → still running
+ *   blocked / waiting            → alive, waiting on a permission prompt or input — NOT finished
+ *   done / stopped / idle / gone → finished the turn without a terminal verb → protocol_violation
+ *   missing entirely             → crashed
+ * Verified 2026-08-26: an agent on a permission prompt lists as status "waiting", state "blocked";
+ * treating that as finished killed two working attempts (#14/2, #3/2).
  */
+export function jobAlive(job) {
+  if (!job) return false;
+  return job.state === 'working' || job.status === 'busy' || job.state === 'blocked' || job.status === 'waiting';
+}
+
 export function classifyJob(job) {
   if (!job) return 'crashed';
-  if (job.state === 'working' || job.status === 'busy') return 'running';
-  return 'protocol_violation';
+  return jobAlive(job) ? 'running' : 'protocol_violation';
 }
 
 export function hashReason(reason) {

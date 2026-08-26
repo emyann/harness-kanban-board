@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { fetchBoard, loadRun, saveRun, setStatus, addLabels, getTask } from './tasks.js';
 import { claim, release, listLocks } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs } from './board.js';
-import { computeReady, openAttempt, lastAttempt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob } from './model.js';
+import { computeReady, openAttempt, lastAttempt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, jobAlive } from './model.js';
 import { workerContext } from './context.js';
 import { GhError } from './gh.js';
 import { listKbJobs, readJobState, stopJob, matchJobByWorktree } from './jobs.js';
@@ -181,7 +181,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   if (usesBg && !dryRun) {
     const runningNumbers = new Set(tasks.filter((t) => t.status === 'running').map((t) => t.number));
     for (const j of jobsById.values()) {
-      if (!j.pid || j.state === 'working' || j.status === 'busy') continue;
+      if (!j.pid || jobAlive(j)) continue;
       if (runningNumbers.has(j.task)) continue; // handled above (or a fresh attempt still starting)
       if (stopJob(j.id)) { summary.reaped = summary.reaped || []; summary.reaped.push({ number: j.task, job: j.id }); log(`#${j.task}: stopped finished background agent ${j.id}`); }
     }
