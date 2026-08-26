@@ -88,6 +88,29 @@ stopped by the dispatcher once their attempt has ended. `hkb show <n>` prints th
 `claude-p` is the headless variant (`claude -p`, exits when done) for CI and containers without the session daemon.
 Add `copilot-cli` or `codex` profiles with their own `launch` arrays; the protocol does not change.
 
+## GitHub Projects mirror (opt-in, off by default)
+
+If you live in GitHub's own Projects UI, link a Projects v2 board and the dispatcher will mirror the board onto it:
+
+```bash
+gh auth refresh -s project      # Projects v2 needs its own scope
+hkb init --project new          # or: --project 7 / --project https://github.com/users/me/projects/7
+```
+
+`init` links (or creates) the project, makes sure its single-select **Status** field has an option per kb status —
+appending only, so columns you already made are kept, and `Todo` / `In Progress` / `Done` are reused as
+`todo` / `running` / `done` — and stores the ids in `.kanban/board.json` under `"project"`. Delete that key to turn the
+mirror off; `hkb doctor` reports the scope and whether the project is still there.
+
+**Strictly one-way.** Labels are canonical and the Project is a read surface: dragging a card changes nothing on the
+board, and the next tick puts it back where the label says. Only the dispatcher writes, so a transition a worker makes
+(`hkb complete` → *review*) appears on the next tick, not instantly.
+
+**What it costs**, on top of the free path, and only while it is on: one GraphQL read of the project's items per tick,
+one mutation per status transition, and two the first time an issue is added to the project (`hkb dispatch --dry-run`
+prints the moves it would make). Deleting the Project, or losing the scope, costs the mirror and nothing else — the
+tick logs the fix once an hour and carries on.
+
 ## Local state (gitignored)
 
 `.kanban/logs/` worker logs · `.kanban/state.json` spawn counters and auth pauses · `.kanban/outbox.jsonl` writes queued while GitHub was unreachable (replayed on the next tick) · `.kanban/cache.json` GraphQL capability cache.

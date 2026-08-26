@@ -8,6 +8,7 @@ import { detectCaps } from './tasks.js';
 import { L, STATUSES, compareVersions } from './model.js';
 import { classifyClaimError } from './lock.js';
 import { agentsSkillDir, packageSkillDir, readSkillVersion } from './init.js';
+import { checkProject } from './projects.js';
 
 function has(cmd) { return spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).status === 0; }
 function version(cmd, args = ['--version']) { const r = spawnSync(cmd, args, { encoding: 'utf8' }); return r.status === 0 ? (r.stdout || r.stderr).trim().split('\n')[0] : null; }
@@ -87,6 +88,9 @@ export async function doctor(ctx, flags, log) {
     caps.blockedByGql ? ok('GraphQL Issue.blockedBy', 'available (one query per tick)') : warn('GraphQL Issue.blockedBy', 'not in schema — falling back to REST dependencies per task', 'check docs; run doctor again later');
     caps.closedByPrs ? ok('GraphQL closedByPullRequestsReferences', 'available (active_pr guard)') : warn('GraphQL closedByPullRequestsReferences', 'not in schema — active_pr guard disabled');
   } catch (e) { bad('GraphQL', e.message); }
+
+  // Projects v2 mirror — silent unless board.json links a project (the feature is off by default)
+  await checkProject(ctx, { ok, bad, warn });
 
   if (flags.api) {
     // dependencies REST endpoint

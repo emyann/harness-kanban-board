@@ -181,6 +181,14 @@ export async function init(ctx, flags, log) {
   log(`${existing ? 'updated' : 'wrote'} .kanban/board.json (board "${board}", profiles ${Object.keys(cfg.profiles).join(', ')})`);
   ctx.cfg = cfg; ctx.repo = { owner: repo.nameWithOwner.split('/')[0], repo: repo.nameWithOwner.split('/')[1], nameWithOwner: repo.nameWithOwner }; ctx.board = board;
 
+  // 3b. optional Projects v2 mirror (opt-in, one-way). Everything above is already saved, so a
+  //     failure here — usually a token without the `project` scope — costs only the mirror.
+  if (flags.project) {
+    const { linkProject } = await import('./projects.js');
+    cfg.project = await linkProject(ctx, flags.project, log);
+    saveBoard(root, cfg);
+  }
+
   // 4. labels
   const labels = [...STATUSES.map(L.status), L.board(board), L.needsHuman, ...Object.keys(cfg.profiles).map(L.agent)];
   const created = await ensureLabels(ctx, labels);

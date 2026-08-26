@@ -44,8 +44,27 @@ done    --archive--→ archived
 3. Sweep orphan lock refs (no matching open attempt).
 4. Promote `todo` → `ready`.
 5. For `ready` tasks by priority: caps (`max_in_progress`, per-profile, daily spawn cap) → guards (`active_pr` → review, `blocker_auth` pause, `recent_success`, `path_overlap`) → claim ref → append attempt → label `running` → spawn the profile's launch command with `KB_*` env.
+6. Mirror the labels onto the linked Projects v2 board, when there is one (see below).
 
 One GraphQL query per board per tick; everything else is per-task and only for tasks that changed state.
+
+## Projects v2 mirror (optional)
+
+`.kanban/board.json` may carry a `"project"` block (`hkb init --project <number|new>`; needs `gh auth refresh -s project`):
+
+```json
+"project": { "number": 7, "id": "PVT_…", "url": "…", "owner": "me",
+             "status_field_id": "PVTSSF_…", "status_field_name": "Status",
+             "options": { "triage": "…", "todo": "…", "…": "…" } }
+```
+
+The mirror is **one-way**: a `kb:status:*` label is the truth and the Project item's Status field is a copy of it. The
+dispatcher writes it at the end of the tick, from the labels it has just set — so a card dragged in the Project UI
+changes nothing on the board and is moved back on the next tick. An item whose issue is not on this board is never
+touched. Cost while it is on: one read of the project's items per tick, one mutation per transition (two on an issue's
+first touch, which adds it to the project), capped at 25 new items per tick. A deleted project, or a token without the
+`project` scope, is reported (once an hour in the loop, always in `hkb doctor` and in `dispatch --json`) and skipped;
+nothing else about the board changes.
 
 ## Worker environment
 
