@@ -20,7 +20,7 @@ export function withOutbox(ctx, argv, fn) {
   return fn().catch((e) => {
     if (isOffline(e) && argv) {
       queueOutbox(ctx, argv);
-      const err = new Error(`GitHub unreachable — queued for replay in .kanban/outbox.jsonl: ghk ${argv.join(' ')}`);
+      const err = new Error(`GitHub unreachable — queued for replay in .kanban/outbox.jsonl: hkb ${argv.join(' ')}`);
       err.exitCode = 0;
       err.queued = true;
       throw err;
@@ -102,7 +102,7 @@ export async function complete(ctx, number, { summary, metadata = {}, artifacts 
 }
 
 export async function block(ctx, number, { reason, kind = 'generic', attempt } = {}) {
-  if (!reason) { const e = new Error('a reason is required: ghk block <n> "why" [--kind dependency|needs_input|capability|transient], or --reason-file <path>, or {"reason": "..", "kind": ".."} on stdin with --from-stdin'); e.exitCode = 2; throw e; }
+  if (!reason) { const e = new Error('a reason is required: hkb block <n> "why" [--kind dependency|needs_input|capability|transient], or --reason-file <path>, or {"reason": "..", "kind": ".."} on stdin with --from-stdin'); e.exitCode = 2; throw e; }
   if (!BLOCK_KINDS.includes(kind)) { const e = new Error(`--kind must be one of ${BLOCK_KINDS.join('|')}`); e.exitCode = 2; throw e; }
   const task = await getTask(ctx, number);
   assertOnBoard(ctx, task);
@@ -151,7 +151,7 @@ export async function requestReview(ctx, number, { summary, metadata = {}, revie
 }
 
 export async function requestChanges(ctx, number, { reason } = {}) {
-  if (!reason) { const e = new Error('a reason is required: ghk request-changes <n> "what must change"'); e.exitCode = 2; throw e; }
+  if (!reason) { const e = new Error('a reason is required: hkb request-changes <n> "what must change"'); e.exitCode = 2; throw e; }
   const task = await getTask(ctx, number);
   assertOnBoard(ctx, task);
   const runRec = await loadRun(ctx, number);

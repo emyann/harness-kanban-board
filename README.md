@@ -1,4 +1,4 @@
-# ghkanban (`ghk`)
+# hkb — harness kanban board
 
 A portable, frugal alternative to [Hermes kanban](https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban) for coding agents.
 **GitHub Issues are the board**, issue dependencies are the graph, git refs are the locks, and any harness —
@@ -14,45 +14,45 @@ Design rationale, judged alternatives and the roadmap: [docs/EVALUATION.md](docs
 ## Install (free path, ~2 commands)
 
 ```bash
-npm i -g ghkanban            # or: npx ghkanban ...
+npm i -g hkb            # or: npx hkb ...
 cd your-repo
-ghk init                     # labels, .kanban/board.json, skill, Stop hook, CLAUDE.md/AGENTS.md section
-ghk doctor --api             # verifies gh auth, labels, GraphQL fields, issue-dependency API, lock-ref CAS
-ghk dispatch --loop 60       # the Hermes 60-second dispatcher, on your machine
+hkb init                     # labels, .kanban/board.json, skill, Stop hook, CLAUDE.md/AGENTS.md section
+hkb doctor --api             # verifies gh auth, labels, GraphQL fields, issue-dependency API, lock-ref CAS
+hkb dispatch --loop 60       # the Hermes 60-second dispatcher, on your machine
 ```
 
-`ghk init --import` also puts your existing open issues into *triage* on the board.
+`hkb init --import` also puts your existing open issues into *triage* on the board.
 
 ## Use
 
 ```bash
-ghk create "Design auth schema" --agent claude --priority 2 --paths packages/db/
-ghk create "Implement auth API" --blocked-by 41            # todo until #41 is done, then ready automatically
-ghk create "Write auth tests"   --blocked-by 42
-ghk list                       # columns: triage todo ready running blocked review done
-ghk show 42                    # task, blockers, attempts, parent results
-ghk dispatch --dry-run         # what the next tick would do
+hkb create "Design auth schema" --agent claude --priority 2 --paths packages/db/
+hkb create "Implement auth API" --blocked-by 41            # todo until #41 is done, then ready automatically
+hkb create "Write auth tests"   --blocked-by 42
+hkb list                       # columns: triage todo ready running blocked review done
+hkb show 42                    # task, blockers, attempts, parent results
+hkb dispatch --dry-run         # what the next tick would do
 ```
 
-A worker (spawned by the dispatcher, or you with `ghk claim 42` + `export KB_TASK=42 KB_ATTEMPT=1`) reads
-`ghk show`, works in a worktree, opens a draft PR that `Closes #42`, and finishes with exactly one of:
+A worker (spawned by the dispatcher, or you with `hkb claim 42` + `export KB_TASK=42 KB_ATTEMPT=1`) reads
+`hkb show`, works in a worktree, opens a draft PR that `Closes #42`, and finishes with exactly one of:
 
 ```bash
-ghk complete 42 --from-stdin <<'EOF'
+hkb complete 42 --from-stdin <<'EOF'
 {"summary": "...", "metadata": {"changed_files": ["src/auth.js"], "verification": ["npm test"]}}
 EOF
-ghk block 42 "needs the Stripe key" --kind needs_input
-ghk request-review 42 --summary "..."
+hkb block 42 "needs the Stripe key" --kind needs_input
+hkb request-review 42 --summary "..."
 ```
 
 Every terminal verb also takes `--summary-file` / `--metadata-file` / `--reason-file`, or the inline
 `--summary ".." --metadata '{..}'` flags — no harness has to push JSON through shell quoting.
 
-Humans: `ghk promote`, `ghk unblock`, `ghk request-changes`, `ghk comment`, `ghk link/unlink`, `ghk archive`, `ghk log`.
+Humans: `hkb promote`, `hkb unblock`, `hkb request-changes`, `hkb comment`, `hkb link/unlink`, `hkb archive`, `hkb log`.
 
 ## How it maps to GitHub
 
-| Hermes | ghkanban |
+| Hermes | hkb |
 |---|---|
 | SQLite row | Issue with `kb:status:*`, `kb:agent:*`, `kb:board:*` labels and a `<!-- kb: {...} -->` body block |
 | parent → child | child **blocked by** parent (native issue dependencies) |
@@ -60,8 +60,8 @@ Humans: `ghk promote`, `ghk unblock`, `ghk request-changes`, `ghk comment`, `ghk
 | atomic claim | `POST git/refs refs/kb/locks/<n>/<attempt>` — 201 claimed; 422 "Reference already exists" (observed) or 409 held; anything else back off |
 | runs table | one `<!-- kb-run -->` comment (attempts, failures, block loops) |
 | `kanban_complete(summary, metadata)` | `<!-- kb-result -->` comment; open PR → *review*, else issue closed |
-| worker tools | `ghk show/heartbeat/complete/block/request-review/comment/create/link` |
-| stop nudge | Claude Code Stop hook (`ghk hook stop`, 2 nudges, inert unless `KB_TASK` is set) |
+| worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link` |
+| stop nudge | Claude Code Stop hook (`hkb hook stop`, 2 nudges, inert unless `KB_TASK` is set) |
 | crash / stale / timeout | pid check on the claiming host, `stale_after`, `max_runtime` → `ready` or `gave_up` |
 
 Full protocol: [skills/kanban/references/protocol.md](skills/kanban/references/protocol.md).
@@ -72,7 +72,7 @@ Full protocol: [skills/kanban/references/protocol.md](skills/kanban/references/p
 worker as a Claude Code **background agent** — `claude --bg --name "kb #<n> · <title>" --worktree kb-<n>-<k>
 --permission-mode acceptEdits --allowedTools ... --max-budget-usd 5 "<prompt>"` — so workers show up in
 `claude agents` (and the agents view of any session in the repo), can be opened with `claude attach <job>`, and are
-stopped by the dispatcher once their attempt has ended. `ghk show <n>` prints the job id per attempt.
+stopped by the dispatcher once their attempt has ended. `hkb show <n>` prints the job id per attempt.
 `claude-p` is the headless variant (`claude -p`, exits when done) for CI and containers without the session daemon.
 Add `copilot-cli` or `codex` profiles with their own `launch` arrays; the protocol does not change.
 
@@ -82,11 +82,11 @@ Add `copilot-cli` or `codex` profiles with their own `launch` arrays; the protoc
 
 ## Status
 
-MVP. Verified so far: unit tests for the model, lock classification and arg parsing; CLI wiring; and `ghk doctor --api`
+MVP. Verified so far: unit tests for the model, lock classification and arg parsing; CLI wiring; and `hkb doctor --api`
 against this repository (2026-08-26), which probes the things the design depends on:
 
 - duplicate ref create returns **422 "Reference already exists"** (not 409) — `src/lock.js` treats both as `held`;
 - GraphQL `Issue.blockedBy`, `blocking`, `subIssues` and `closedByPullRequestsReferences` all exist;
 - REST `GET /issues/{n}/dependencies/blocked_by` works with `X-GitHub-Api-Version: 2026-03-10`.
 
-Run `ghk doctor --api` on your own repo before the first dispatch; it re-checks all of the above.
+Run `hkb doctor --api` on your own repo before the first dispatch; it re-checks all of the above.

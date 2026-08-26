@@ -12,7 +12,7 @@ import { doctor } from './doctor.js';
 import { gc } from './gc.js';
 import { STATUSES, DEFAULT_KB, L, computeReady, blockerDone, serializeBodyBlock, parseBodyBlock, lastAttempt } from './model.js';
 
-/** Flags that never take a value, so `ghk complete --from-stdin 13` keeps `13` as a positional. */
+/** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
 const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'api', 'help']);
 
 export function parseArgs(argv) {
@@ -56,7 +56,7 @@ function parseObject(text, label) {
 }
 
 function readStdinSync() {
-  if (process.stdin.isTTY) throw usage(`--from-stdin: stdin is a terminal — pipe a JSON object or use a heredoc: ghk complete <n> --from-stdin <<'EOF' ... EOF`);
+  if (process.stdin.isTTY) throw usage(`--from-stdin: stdin is a terminal — pipe a JSON object or use a heredoc: hkb complete <n> --from-stdin <<'EOF' ... EOF`);
   try { return fs.readFileSync(0, 'utf8'); } catch (e) { throw usage(`--from-stdin: could not read stdin (${e.code || e.message}) — pipe a JSON object, or use --summary-file/--metadata-file`); }
 }
 
@@ -78,7 +78,7 @@ export function resolveTerminalInput(verb, flags, rest, io = {}) {
   let stdin = {};
   if (flags['from-stdin']) {
     const text = readStdin();
-    if (!text || !text.trim()) throw usage(`--from-stdin: nothing on stdin — pipe a JSON object, e.g. printf '%s' '{"summary":"..."}' | ghk ${verb} <n> --from-stdin`);
+    if (!text || !text.trim()) throw usage(`--from-stdin: nothing on stdin — pipe a JSON object, e.g. printf '%s' '{"summary":"..."}' | hkb ${verb} <n> --from-stdin`);
     stdin = parseObject(text, '--from-stdin');
     const unknown = Object.keys(stdin).filter((k) => !STDIN_KEYS.includes(k));
     if (unknown.length) throw usage(`--from-stdin: unknown key(s) ${unknown.join(', ')} — allowed: ${STDIN_KEYS.join(', ')}`);
@@ -124,7 +124,7 @@ export function resolveTerminalInput(verb, flags, rest, io = {}) {
 }
 
 /**
- * The inline-flag form of a resolved payload. Used for the offline outbox: replay re-spawns `ghk <argv>` without a
+ * The inline-flag form of a resolved payload. Used for the offline outbox: replay re-spawns `hkb <argv>` without a
  * stdin or the worker's temp files, so the queued command must be self-contained. No shell is involved, so no quoting.
  */
 export function terminalArgv(verb, number, p, { board, attempt } = {}) {
@@ -143,7 +143,7 @@ export function terminalArgv(verb, number, p, { board, attempt } = {}) {
   return argv;
 }
 
-const HELP = `ghk — a portable, frugal kanban for coding agents on GitHub Issues
+const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issues
 
   setup       init [--board slug] [--profiles claude] [--import] [--no-hook]     doctor [--api] [--json]
   tasks       create "title" [--body ..] [--blocked-by 12,13] [--agent claude] [--priority N] [--paths a/,b/]
@@ -182,7 +182,7 @@ export async function main(argv) {
   const { flags, pos } = parseArgs(argv);
   const [cmd, ...rest] = pos;
   if (!cmd || cmd === 'help' || flags.help) { process.stdout.write(HELP); return 0; }
-  if (cmd === 'version') { const version = readVersion(); out({ json: !!flags.json }, { version, node: process.version }, `ghk ${version}`); return 0; }
+  if (cmd === 'version') { const version = readVersion(); out({ json: !!flags.json }, { version, node: process.version }, `hkb ${version}`); return 0; }
   const ctx = makeContext(flags);
   const argvForOutbox = process.env.KB_NO_OUTBOX ? null : argv;
 
@@ -190,7 +190,7 @@ export async function main(argv) {
     case 'init': return init(ctx, flags, log);
     case 'doctor': return doctor(ctx, flags, (s) => process.stdout.write(s + '\n'));
     case 'hook': {
-      if (rest[0] !== 'stop') throw usage('ghk hook stop');
+      if (rest[0] !== 'stop') throw usage('hkb hook stop');
       return stopHook(ctx);
     }
   }
@@ -199,7 +199,7 @@ export async function main(argv) {
   switch (cmd) {
     case 'create': {
       const title = rest[0];
-      if (!title) throw usage('ghk create "title" [--body ..] [--blocked-by n,n] [--agent claude] ...');
+      if (!title) throw usage('hkb create "title" [--body ..] [--blocked-by n,n] [--agent claude] ...');
       const kb = { ...DEFAULT_KB };
       if (flags.priority !== undefined) kb.priority = Number(flags.priority);
       if (flags.workspace) kb.workspace = flags.workspace;
@@ -252,7 +252,7 @@ export async function main(argv) {
     }
     case 'show': {
       const [n] = nums(rest);
-      if (!n) throw usage('ghk show <n>');
+      if (!n) throw usage('hkb show <n>');
       const t = await getTask(ctx, n);
       const { run } = await loadRun(ctx, n);
       const result = await latestResult(ctx, n);
@@ -272,13 +272,13 @@ export async function main(argv) {
     }
     case 'context': {
       const [n] = nums(rest);
-      if (!n) throw usage('ghk context <n>');
+      if (!n) throw usage('hkb context <n>');
       process.stdout.write((await contextCommand(ctx, n)) + '\n');
       return 0;
     }
     case 'status': {
       const [n] = nums(rest);
-      if (!n) throw usage('ghk status <n>');
+      if (!n) throw usage('hkb status <n>');
       const t = await getTask(ctx, n);
       out(ctx, { number: n, status: t.status }, t.status || 'none');
       return 0;
@@ -286,7 +286,7 @@ export async function main(argv) {
     case 'link':
     case 'unlink': {
       const [parent, child] = nums(rest);
-      if (!parent || !child) throw usage(`ghk ${cmd} <parent> <child>`);
+      if (!parent || !child) throw usage(`hkb ${cmd} <parent> <child>`);
       const [p, c] = await Promise.all([getTask(ctx, parent), getTask(ctx, child)]);
       assertOnBoard(ctx, p); assertOnBoard(ctx, c);
       if (cmd === 'link') await addBlockedBy(ctx, child, parent); else await removeBlockedBy(ctx, child, parent);
@@ -298,7 +298,7 @@ export async function main(argv) {
     }
     case 'promote': {
       const ns = nums(rest);
-      if (!ns.length) throw usage('ghk promote <n>...');
+      if (!ns.length) throw usage('hkb promote <n>...');
       const res = [];
       for (const n of ns) res.push(await promote(ctx, n));
       out(ctx, res, res.map((r) => `#${r.number} → ${r.status}${r.forced ? ' (forced: blockers not done)' : ''}`).join('\n'));
@@ -306,7 +306,7 @@ export async function main(argv) {
     }
     case 'archive': {
       const ns = nums(rest);
-      if (!ns.length) throw usage('ghk archive <n>...');
+      if (!ns.length) throw usage('hkb archive <n>...');
       const res = [];
       for (const n of ns) res.push(await archive(ctx, n));
       out(ctx, res, res.map((r) => `#${r.number} archived`).join('\n'));
@@ -314,7 +314,7 @@ export async function main(argv) {
     }
     case 'adopt': {
       const ns = nums(rest);
-      if (!ns.length) throw usage('ghk adopt <n>... [--agent p] [--status triage]');
+      if (!ns.length) throw usage('hkb adopt <n>... [--agent p] [--status triage]');
       const agent = flags.agent || Object.keys(ctx.cfg.profiles)[0];
       const status = flags.status || 'triage';
       const res = [];
@@ -330,14 +330,14 @@ export async function main(argv) {
     }
     case 'comment': {
       const [n] = nums(rest);
-      if (!n || !rest[1]) throw usage('ghk comment <n> "text"');
+      if (!n || !rest[1]) throw usage('hkb comment <n> "text"');
       const c = await addComment(ctx, n, rest.slice(1).join(' '));
       out(ctx, { number: n, url: c.html_url }, c.html_url);
       return 0;
     }
     case 'log': {
       const [n] = nums(rest);
-      if (!n) throw usage('ghk log <n>');
+      if (!n) throw usage('hkb log <n>');
       const { run } = await loadRun(ctx, n);
       const events = await issueEvents(ctx, n);
       const rows = [
@@ -354,14 +354,14 @@ export async function main(argv) {
     }
     case 'heartbeat': {
       const [n] = nums(rest);
-      if (!n) throw usage('ghk heartbeat <n> [--note ..]');
+      if (!n) throw usage('hkb heartbeat <n> [--note ..]');
       const r = await withOutbox(ctx, argvForOutbox, () => heartbeat(ctx, n, { note: flags.note }));
       out(ctx, r, r.skipped ? `ok (recent heartbeat; next in ${r.next_in_s}s)` : `heartbeat recorded for #${n} attempt ${r.attempt}`);
       return 0;
     }
     case 'complete': {
       const [n] = nums(rest);
-      if (!n) throw usage('ghk complete <n> --summary ".." [--metadata JSON|path] [--artifacts a,b] | --summary-file p --metadata-file p | --from-stdin');
+      if (!n) throw usage('hkb complete <n> --summary ".." [--metadata JSON|path] [--artifacts a,b] | --summary-file p --metadata-file p | --from-stdin');
       const p = resolveTerminalInput(cmd, flags, rest);
       const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || process.env.KB_ATTEMPT });
       const r = await withOutbox(ctx, replay, () => complete(ctx, n, { summary: p.summary, metadata: p.metadata, artifacts: p.artifacts, attempt: flags.attempt }));
@@ -370,7 +370,7 @@ export async function main(argv) {
     }
     case 'block': {
       const [n] = nums(rest);
-      if (!n) throw usage('ghk block <n> "reason" [--kind ..] | --reason-file p | --from-stdin');
+      if (!n) throw usage('hkb block <n> "reason" [--kind ..] | --reason-file p | --from-stdin');
       const p = resolveTerminalInput(cmd, flags, rest);
       const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || process.env.KB_ATTEMPT });
       const r = await withOutbox(ctx, replay, () => block(ctx, n, { reason: p.reason, kind: p.kind || 'generic', attempt: flags.attempt }));
@@ -379,7 +379,7 @@ export async function main(argv) {
     }
     case 'unblock': {
       const ns = nums(rest);
-      if (!ns.length) throw usage('ghk unblock <n>...');
+      if (!ns.length) throw usage('hkb unblock <n>...');
       const res = [];
       for (const n of ns) res.push(await unblock(ctx, n));
       out(ctx, res, res.map((r) => `#${r.number} → ${r.status}`).join('\n'));
@@ -387,7 +387,7 @@ export async function main(argv) {
     }
     case 'request-review': {
       const [n] = nums(rest);
-      if (!n) throw usage('ghk request-review <n> --summary ".." [--metadata JSON|path] [--reviewer p] | --summary-file p --metadata-file p | --from-stdin');
+      if (!n) throw usage('hkb request-review <n> --summary ".." [--metadata JSON|path] [--reviewer p] | --summary-file p --metadata-file p | --from-stdin');
       const p = resolveTerminalInput(cmd, flags, rest);
       const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || process.env.KB_ATTEMPT });
       const r = await withOutbox(ctx, replay, () => requestReview(ctx, n, { summary: p.summary, metadata: p.metadata, reviewer: p.reviewer, attempt: flags.attempt }));
@@ -396,14 +396,14 @@ export async function main(argv) {
     }
     case 'request-changes': {
       const [n] = nums(rest);
-      if (!n) throw usage('ghk request-changes <n> "reason"');
+      if (!n) throw usage('hkb request-changes <n> "reason"');
       const r = await requestChanges(ctx, n, { reason: rest.slice(1).join(' ') });
       out(ctx, r, `#${n} → ${r.status}`);
       return 0;
     }
     case 'claim': {
       const [n] = nums(rest);
-      if (!n) throw usage('ghk claim <n> [--profile p] [--spawn]');
+      if (!n) throw usage('hkb claim <n> [--profile p] [--spawn]');
       const t = await getTask(ctx, n);
       assertOnBoard(ctx, t);
       const runRec = await loadRun(ctx, n);
@@ -417,14 +417,14 @@ export async function main(argv) {
       await setStatus(ctx, t, 'running', { add: [L.agent(profile)] });
       let pid = null;
       if (flags.spawn) { const s = await spawnWorker(ctx, t, profile, k); pid = s.pid; runRec.run.attempts[k - 1].pid = pid; await saveRun(ctx, n, runRec); }
-      out(ctx, { number: n, attempt: k, ref: c.ref, pid }, `#${n} claimed (attempt ${k}, ${c.ref})${pid ? ` pid ${pid}` : `\nexport KB_TASK=${n} KB_ATTEMPT=${k}   # then work, and finish with ghk complete|block|request-review`}`);
+      out(ctx, { number: n, attempt: k, ref: c.ref, pid }, `#${n} claimed (attempt ${k}, ${c.ref})${pid ? ` pid ${pid}` : `\nexport KB_TASK=${n} KB_ATTEMPT=${k}   # then work, and finish with hkb complete|block|request-review`}`);
       return 0;
     }
     case 'dispatch': {
       const max = flags.max ? Number(flags.max) : Infinity;
       if (flags.loop) {
         const interval = flags.loop === true ? ctx.cfg.dispatch.interval : Number(flags.loop);
-        log(`ghk dispatch loop every ${interval}s on ${ctx.repo.nameWithOwner} board "${ctx.board}" (host ${ctx.host}). Ctrl-C to stop.`);
+        log(`hkb dispatch loop every ${interval}s on ${ctx.repo.nameWithOwner} board "${ctx.board}" (host ${ctx.host}). Ctrl-C to stop.`);
         await loop(ctx, { interval, max, log: (s) => log(`${new Date().toISOString()} ${s}`) });
         return 0;
       }
@@ -441,7 +441,7 @@ export async function main(argv) {
     }
     case 'gc': return gc(ctx, flags, log);
     default:
-      throw usage(`unknown command "${cmd}". Run \`ghk help\`.`);
+      throw usage(`unknown command "${cmd}". Run \`hkb help\`.`);
   }
 }
 

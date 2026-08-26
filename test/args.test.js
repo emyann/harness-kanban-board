@@ -12,7 +12,7 @@ const write = (name, text) => { const p = path.join(dir, name); fs.writeFileSync
 const stdin = (obj) => ({ readStdin: () => (typeof obj === 'string' ? obj : JSON.stringify(obj)) });
 const usageError = (fn, re) => assert.throws(fn, (e) => { assert.equal(e.exitCode, 2, `exitCode: ${e.message}`); assert.match(e.message, re); return true; });
 
-before(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghk-args-')); });
+before(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-args-')); });
 after(() => { fs.rmSync(dir, { recursive: true, force: true }); });
 
 // ---------- parseArgs ----------

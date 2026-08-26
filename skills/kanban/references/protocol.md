@@ -1,4 +1,4 @@
-# ghkanban protocol v1
+# hkb protocol v1
 
 Everything that must survive a crash lives in GitHub. Nothing here needs a paid plan.
 
@@ -14,7 +14,7 @@ Everything that must survive a crash lives in GitHub. Nothing here needs a paid 
 | Dependencies | GitHub issue dependencies: child **blocked by** parent | Hermes parent→child. A blocker counts as done only when closed as *completed* |
 | Attempts (Hermes `runs`) | one `<!-- kb-run -->` comment, fenced JSON | `attempts[] {attempt, profile, host, pid, started_at, heartbeat_at, ended_at, outcome, summary, reason, log}`, `failures`, `block_loops` |
 | Structured handoff | `<!-- kb-result -->` comment per completion / review request | `{summary, metadata{changed_files, verification, dependencies, residual_risk, retry_notes}, artifacts[]}` |
-| Events | issue timeline + attempt rows (`ghk log`) | |
+| Events | issue timeline + attempt rows (`hkb log`) | |
 | Claim | git ref `refs/kb/locks/<n>/<attempt>` | create = atomic claim (201 claimed / held on **422 "Reference already exists"** — the observed duplicate response, verified 2026-08-26 — or 409 / anything else unknown → back off) |
 | Output | branch + draft PR with `Closes #n` | PR merge closes the issue; an open PR moves the task to `review` |
 
@@ -23,7 +23,7 @@ Precedence when they disagree: run comment > labels > body block.
 ## State machine
 
 ```
-triage  --(human / ghk promote)-------------------------------→ todo
+triage  --(human / hkb promote)-------------------------------→ todo
 todo    --(all blockers closed-as-completed AND scheduled_at <= now)--→ ready       [dispatcher, every tick]
 ready   --(claim ref created)----------------------------------→ running
 running --complete--→ done (issue closed)   | --block(kind)--→ blocked (or todo if kind=dependency)
@@ -37,7 +37,7 @@ done    --archive--→ archived
 
 `ready` derives **only** from blocker closure. PR state never gates readiness.
 
-## Dispatcher tick (`ghk dispatch`)
+## Dispatcher tick (`hkb dispatch`)
 
 1. Replay `.kanban/outbox.jsonl` (writes queued while GitHub was unreachable).
 2. For every `running` task: crashed (pid gone on this host) · timed_out (`max_runtime`) · reclaimed (no heartbeat for `stale_after`) → close the attempt, release the ref, `failures++`, back to `ready` or `gave_up`.
@@ -63,7 +63,7 @@ through shell quoting. Per field, inline > file > stdin.
 | inline | `--summary ".." --metadata '{..}' --artifacts a,b` · `block <n> "reason" --kind <kind>` · `--reviewer <profile>` |
 
 ```bash
-ghk complete "$KB_TASK" --from-stdin <<'EOF'
+hkb complete "$KB_TASK" --from-stdin <<'EOF'
 {"summary": "what changed, for the next worker", "metadata": {"changed_files": ["src/a.js"], "verification": ["npm test"]}}
 EOF
 ```

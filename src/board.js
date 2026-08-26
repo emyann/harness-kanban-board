@@ -5,11 +5,11 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghCmd } from './gh.js';
 
-const CLAUDE_TOOLS = ['Bash(ghk *)', 'Bash(git *)', 'Bash(gh pr *)', 'Bash(gh issue view *)', 'Bash(npm *)', 'Bash(npx *)', 'Bash(node *)', 'Edit', 'Write', 'Read', 'Glob', 'Grep'];
+const CLAUDE_TOOLS = ['Bash(hkb *)', 'Bash(git *)', 'Bash(gh pr *)', 'Bash(gh issue view *)', 'Bash(npm *)', 'Bash(npx *)', 'Bash(node *)', 'Edit', 'Write', 'Read', 'Glob', 'Grep'];
 
 export const DEFAULT_PROFILES = {
   claude: {
-    description: 'Claude Code on this machine as a background agent (free path): visible in `claude agents`, attachable with `claude attach <job>`, runs in a git worktree, opens a draft PR, finishes with one ghk terminal verb. The dispatcher stops the job once the attempt has ended.',
+    description: 'Claude Code on this machine as a background agent (free path): visible in `claude agents`, attachable with `claude attach <job>`, runs in a git worktree, opens a draft PR, finishes with one hkb terminal verb. The dispatcher stops the job once the attempt has ended.',
     mode: 'claude-bg',
     max_in_progress: 2,
     model: null,
@@ -127,12 +127,12 @@ export function makeContext(flags = {}) {
     _cache: {},
     requireBoard() {
       if (!cfg) {
-        const e = new Error(`no .kanban/board.json in ${root}. Run \`ghk init\` first.`);
+        const e = new Error(`no .kanban/board.json in ${root}. Run \`hkb init\` first.`);
         e.exitCode = 2;
         throw e;
       }
       if (!repo) {
-        const e = new Error('board.json has no "repo". Run `ghk init` again or set "repo": "owner/name".');
+        const e = new Error('board.json has no "repo". Run `hkb init` again or set "repo": "owner/name".');
         e.exitCode = 2;
         throw e;
       }

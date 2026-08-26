@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ghkanban terminal outcome",
-  "description": "Optional structured output for harnesses that support --json-schema / --output-schema. The ghk verb the worker ran is the source of truth; this mirrors it.",
+  "title": "hkb terminal outcome",
+  "description": "Optional structured output for harnesses that support --json-schema / --output-schema. The hkb verb the worker ran is the source of truth; this mirrors it.",
   "type": "object",
   "required": ["task", "verb", "summary"],
   "properties": {

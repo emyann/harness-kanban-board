@@ -110,7 +110,7 @@ export async function getTask(ctx, number) {
 
 export function assertOnBoard(ctx, task) {
   if (task.board !== ctx.board) {
-    const e = new Error(`issue #${task.number} is not on board "${ctx.board}" (labels: ${task.labels.join(', ') || 'none'}). Use --board or \`ghk adopt ${task.number}\`.`);
+    const e = new Error(`issue #${task.number} is not on board "${ctx.board}" (labels: ${task.labels.join(', ') || 'none'}). Use --board or \`hkb adopt ${task.number}\`.`);
     e.exitCode = 2;
     throw e;
   }
@@ -198,7 +198,7 @@ export async function ensureLabels(ctx, names) {
     if (existing.has(name)) continue;
     const color = LABEL_COLORS[name] || (name.startsWith('kb:agent:') ? '1d76db' : name.startsWith('kb:board:') ? 'ededed' : 'ededed');
     try {
-      await rest('POST', api(ctx, '/labels'), { body: { name, color, description: 'ghkanban' } });
+      await rest('POST', api(ctx, '/labels'), { body: { name, color, description: 'hkb' } });
       created.push(name);
     } catch (e) {
       if (!(e instanceof GhError && e.kind === 'validation')) throw e; // already exists → fine
@@ -269,7 +269,7 @@ export async function addBlockedBy(ctx, childNumber, parentNumber) {
   } catch (e) {
     if (e instanceof GhError && e.kind === 'validation' && /already/i.test(e.message)) return null;
     if (e instanceof GhError && e.kind === 'notfound') {
-      const err = new GhError(`issue dependencies API not available for ${ctx.repo.nameWithOwner} (404). Run \`ghk doctor --api\`.`, { kind: 'notfound', status: 404 });
+      const err = new GhError(`issue dependencies API not available for ${ctx.repo.nameWithOwner} (404). Run \`hkb doctor --api\`.`, { kind: 'notfound', status: 404 });
       throw err;
     }
     throw e;

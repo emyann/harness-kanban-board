@@ -1,6 +1,6 @@
-# ghkanban — contributor guide
+# hkb — contributor guide
 
-`ghk` is a zero-dependency Node (>= 20, ESM) CLI that turns GitHub Issues into a Hermes-style kanban for coding agents.
+`hkb` is a zero-dependency Node (>= 20, ESM) CLI that turns GitHub Issues into a Hermes-style kanban for coding agents.
 Read `README.md` for the model and `skills/kanban/references/protocol.md` for the exact protocol before changing behaviour.
 
 ## Values (in priority order)
@@ -12,7 +12,7 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 
 ## Layout
 
-- `bin/ghk.js` entry · `src/cli.js` arg parsing + routing · `src/gh.js` the only place that shells out to `gh`
+- `bin/hkb.js` entry · `src/cli.js` arg parsing + routing · `src/gh.js` the only place that shells out to `gh`
 - `src/model.js` pure functions (unit-tested, no I/O) · `src/tasks.js` issue⇄task · `src/lock.js` ref claims
 - `src/lifecycle.js` worker verbs · `src/dispatch.js` the tick · `src/context.js` worker prompt · `src/hook.js` Stop hook
 - `src/init.js` `src/doctor.js` `src/gc.js` · `skills/kanban/` the shipped skill · `templates/` doc sections
@@ -21,6 +21,7 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 
 - Keep it dependency-free. If you need YAML/TOML, don't.
 - Pure logic goes in `src/model.js` with a test in `test/`. I/O stays in `tasks.js`/`lock.js`/`gh.js`.
+- The protocol (statuses, claims, attempts, handoff) is backend-neutral; GitHub is an adapter. Keep every GitHub-ism behind `gh.js`/`tasks.js`/`lock.js` so a future `src/backends/{github,local,...}/` split is mechanical; the fake-gh harness (#3) doubles as the backend conformance suite.
 - Pin `X-GitHub-Api-Version` via `src/gh.js`; never call `gh issue`/`gh pr` sub-commands for board state — use `gh api`.
 - Every command returns a stable object under `--json`; human output is a one-liner per item.
 - Errors: throw `Error` with `.exitCode` (2 = usage/state, 3 = LOCK_LOST) and a message that names the fix.
@@ -31,11 +32,11 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 - Plain, human-style messages: a short imperative subject, an optional body explaining why.
 - Never add `Co-Authored-By: Claude ...` trailers and never add "🤖 Generated with Claude Code" to commit messages or PR bodies.
 
-<!-- ghkanban:start -->
-## Kanban (ghkanban)
+<!-- hkb:start -->
+## Kanban (hkb)
 
-Tasks are GitHub issues on the `kb:*` board. If `KB_TASK` is set you are a worker: run `ghk show $KB_TASK --json` first,
+Tasks are GitHub issues on the `kb:*` board. If `KB_TASK` is set you are a worker: run `hkb show $KB_TASK --json` first,
 work only in this worktree, open a draft PR that says `Closes #$KB_TASK`, and finish with **exactly one** of
-`ghk complete <n> --summary "..."`, `ghk block <n> "why" --kind needs_input`, or `ghk request-review <n> --summary "..."`.
+`hkb complete <n> --summary "..."`, `hkb block <n> "why" --kind needs_input`, or `hkb request-review <n> --summary "..."`.
 Never `git push --force`. Full protocol: `.agents/skills/kanban/SKILL.md`.
-<!-- ghkanban:end -->
+<!-- hkb:end -->

@@ -1,10 +1,10 @@
 {
-  "name": "ghkanban",
+  "name": "hkb",
   "version": "0.1.0",
-  "description": "A portable, frugal Hermes-style kanban for coding agents. GitHub Issues + dependencies + git refs are the database; any harness (Claude Code, Copilot CLI, Codex) consumes the same board.",
+  "description": "hkb — harness kanban board. A portable, frugal Hermes-style kanban for coding agents; GitHub Issues is the default backend, any harness (Claude Code, Copilot CLI, Codex) is a worker.",
   "type": "module",
   "bin": {
-    "ghk": "bin/ghk.js"
+    "hkb": "bin/hkb.js"
   },
   "files": [
     "bin",
@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "test": "node --test",
-    "lint": "for f in bin/ghk.js src/*.js; do node --check \"$f\" || exit 1; done"
+    "lint": "for f in bin/hkb.js src/*.js; do node --check \"$f\" || exit 1; done"
   },
   "engines": {
     "node": ">=20"
@@ -31,5 +31,9 @@
     "codex",
     "hermes"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/emyann/harness-kanban-board.git"
+  }
 }

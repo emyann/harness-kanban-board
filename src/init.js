@@ -1,4 +1,4 @@
-// `ghk init` — labels, board.json, skill, hook, doc sections. Idempotent; free path by default.
+// `hkb init` — labels, board.json, skill, hook, doc sections. Idempotent; free path by default.
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -9,8 +9,8 @@ import { rest } from './gh.js';
 import { L, STATUSES } from './model.js';
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
-const MARK_START = '<!-- ghkanban:start -->';
-const MARK_END = '<!-- ghkanban:end -->';
+const MARK_START = '<!-- hkb:start -->';
+const MARK_END = '<!-- hkb:end -->';
 
 function copyDir(src, dst) {
   fs.mkdirSync(dst, { recursive: true });
@@ -32,10 +32,10 @@ function upsertSection(file, section) {
   fs.writeFileSync(file, text);
 }
 
-function ghkCommandForHook() {
-  const which = spawnSync('sh', ['-c', 'command -v ghk'], { encoding: 'utf8' });
-  if (which.status === 0 && which.stdout.trim()) return 'ghk hook stop';
-  const bin = path.join(PKG_ROOT, 'bin', 'ghk.js');
+function hkbCommandForHook() {
+  const which = spawnSync('sh', ['-c', 'command -v hkb'], { encoding: 'utf8' });
+  if (which.status === 0 && which.stdout.trim()) return 'hkb hook stop';
+  const bin = path.join(PKG_ROOT, 'bin', 'hkb.js');
   return `node "${bin}" hook stop`;
 }
 
@@ -49,9 +49,9 @@ function installStopHook(root, log) {
   }
   settings.hooks = settings.hooks || {};
   settings.hooks.Stop = settings.hooks.Stop || [];
-  const already = settings.hooks.Stop.some((h) => JSON.stringify(h).includes('hook stop') && JSON.stringify(h).includes('ghk'));
+  const already = settings.hooks.Stop.some((h) => JSON.stringify(h).includes('hook stop') && JSON.stringify(h).includes('hkb'));
   if (already) return false;
-  settings.hooks.Stop.push({ matcher: '', hooks: [{ type: 'command', command: ghkCommandForHook(), timeout: 30 }] });
+  settings.hooks.Stop.push({ matcher: '', hooks: [{ type: 'command', command: hkbCommandForHook(), timeout: 30 }] });
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
   return true;
 }
@@ -62,7 +62,7 @@ function ensureGitignore(root) {
   let text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   const missing = wanted.filter((w) => !text.split('\n').includes(w));
   if (!missing.length) return false;
-  text = text.trimEnd() + (text ? '\n' : '') + '# ghkanban local state\n' + missing.join('\n') + '\n';
+  text = text.trimEnd() + (text ? '\n' : '') + '# hkb local state\n' + missing.join('\n') + '\n';
   fs.writeFileSync(file, text);
   return true;
 }
@@ -117,7 +117,7 @@ export async function init(ctx, flags, log) {
   if (ensureGitignore(root)) log('updated .gitignore');
   const section = fs.readFileSync(path.join(PKG_ROOT, 'templates', 'doc-section.md'), 'utf8');
   for (const f of ['CLAUDE.md', 'AGENTS.md']) { upsertSection(path.join(root, f), section); }
-  log('upserted ghkanban section in CLAUDE.md and AGENTS.md');
+  log('upserted hkb section in CLAUDE.md and AGENTS.md');
 
   // 6. optional import of existing open issues into triage
   if (flags.import) {
@@ -132,6 +132,6 @@ export async function init(ctx, flags, log) {
     log(`imported ${n} open issue(s) into triage on board "${board}"`);
   }
   log('');
-  log('next: `ghk doctor` then `ghk dispatch --loop 60` (or `ghk create "title" --agent claude` to add a task)');
+  log('next: `hkb doctor` then `hkb dispatch --loop 60` (or `hkb create "title" --agent claude` to add a task)');
   return 0;
 }

@@ -74,7 +74,7 @@ export async function rest(method, path, { body, headers = {}, retries = 2 } = {
     const kind = classify(status, res.stderr + res.stdout);
     if (kind === 'ratelimit' && attempt < retries) {
       const wait = 30_000 * (attempt + 1);
-      process.stderr.write(`ghk: rate limited on ${method} ${path}; pausing ${wait / 1000}s\n`);
+      process.stderr.write(`hkb: rate limited on ${method} ${path}; pausing ${wait / 1000}s\n`);
       await sleep(wait);
       continue;
     }
@@ -98,7 +98,7 @@ export async function graphql(query, variables = {}, { retries = 2 } = {}) {
     if (/RATE_LIMITED/.test(text)) kind = 'ratelimit';
     if (kind === 'ratelimit' && attempt < retries) {
       const wait = 30_000 * (attempt + 1);
-      process.stderr.write(`ghk: GraphQL rate limited; pausing ${wait / 1000}s\n`);
+      process.stderr.write(`hkb: GraphQL rate limited; pausing ${wait / 1000}s\n`);
       await sleep(wait);
       continue;
     }

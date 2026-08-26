@@ -1,60 +1,9 @@
 {
   "version": 1,
-  "repo": "emyann/ghkanban",
+  "repo": "emyann/harness-kanban-board",
+  "default_branch": "main",
   "board": "default",
-  "dispatch": {
-    "interval": 60,
-    "max_in_progress": 2,
-    "stale_after": 3600,
-    "max_runtime_default": 3600,
-    "failure_limit": 2,
-    "block_recurrence_limit": 3,
-    "auth_pause": 1800,
-    "recent_success_window": 600,
-    "path_guard": true,
-    "daily_spawn_cap": 40
-  },
   "profiles": {
-    "claude": {
-      "description": "Claude Code on this machine (free path). Runs in a git worktree, opens a draft PR, finishes with one ghk terminal verb.",
-      "max_in_progress": 2,
-      "model": null,
-      "allowed_tools": [
-        "Bash(ghk *)",
-        "Bash(git *)",
-        "Bash(gh pr *)",
-        "Bash(gh issue view *)",
-        "Bash(npm *)",
-        "Bash(npx *)",
-        "Bash(node *)",
-        "Edit",
-        "Write",
-        "Read",
-        "Glob",
-        "Grep"
-      ],
-      "launch": [
-        "claude",
-        "-p",
-        "{prompt}",
-        "--worktree",
-        "kb-{n}-{k}",
-        "--permission-mode",
-        "acceptEdits",
-        "--allowedTools",
-        "{allowed_tools}",
-        "--disallowedTools",
-        "Bash(git push --force*)",
-        "Bash(git push -f*)",
-        "--output-format",
-        "json",
-        "--max-turns",
-        "80",
-        "--max-budget-usd",
-        "5",
-        "{model_args}"
-      ]
-    }
-  },
-  "default_branch": "main"
+    "claude": {}
+  }
 }

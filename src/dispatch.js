@@ -34,15 +34,15 @@ export function replayOutbox(ctx, log) {
   if (!fs.existsSync(file)) return 0;
   const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
   if (!lines.length) return 0;
-  const bin = fileURLToPath(new URL('../bin/ghk.js', import.meta.url));
+  const bin = fileURLToPath(new URL('../bin/hkb.js', import.meta.url));
   const remaining = [];
   let replayed = 0;
   for (const line of lines) {
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
     const res = spawnSync(process.execPath, [bin, ...entry.argv], { encoding: 'utf8', env: { ...process.env, KB_NO_OUTBOX: '1' } });
-    if (res.status === 0) { replayed++; log(`outbox: replayed ghk ${entry.argv.join(' ')}`); }
-    else { remaining.push(line); log(`outbox: still failing: ghk ${entry.argv.join(' ')} — ${(res.stderr || '').trim().split('\n').pop()}`); }
+    if (res.status === 0) { replayed++; log(`outbox: replayed hkb ${entry.argv.join(' ')}`); }
+    else { remaining.push(line); log(`outbox: still failing: hkb ${entry.argv.join(' ')} — ${(res.stderr || '').trim().split('\n').pop()}`); }
   }
   fs.writeFileSync(file, remaining.length ? remaining.join('\n') + '\n' : '');
   return replayed;

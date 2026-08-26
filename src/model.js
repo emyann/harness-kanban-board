@@ -102,7 +102,7 @@ export function parseRunComment(body) {
 /**
  * Choose the authoritative run comment when an issue has several (a create that was
  * followed by another create instead of an update). Newest wins — it is the one written
- * last by the dispatcher; older ones are duplicates for `ghk gc` to delete.
+ * last by the dispatcher; older ones are duplicates for `hkb gc` to delete.
  */
 export function pickRunComment(comments) {
   const runs = (comments || []).filter((c) => c && typeof c.body === 'string' && c.body.startsWith(RUN_MARKER));
@@ -127,7 +127,7 @@ export function serializeRunComment(run) {
     `| ${a.attempt} | ${a.profile || ''} | ${a.host || ''} | ${fmt(a.started_at)} | ${fmt(a.ended_at) || '—'} | ${a.outcome || 'active'} | ${(a.summary || a.reason || '').split('\n')[0].slice(0, 120)} |`);
   return [
     RUN_MARKER,
-    '**ghkanban run record** — maintained by `ghk`; do not edit by hand.',
+    '**hkb run record** — maintained by `hkb`; do not edit by hand.',
     '',
     `failures: ${run.failures} · attempts: ${run.attempts.length}${run.last_error ? ` · last error: ${String(run.last_error).slice(0, 200)}` : ''}`,
     '',
