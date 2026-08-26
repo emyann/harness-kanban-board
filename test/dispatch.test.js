@@ -1,0 +1,295 @@
+// The dispatcher tick against an in-memory GitHub (test/fake-gh.js): promotion, claims,
+// reclaim, the failure limit and the guards. No `gh`, no network, no worker — the profile's
+// launch template is `["true"]`, a process that exits immediately.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { tick } from '../src/dispatch.js';
+import { DEFAULT_BOARD } from '../src/board.js';
+import { claim, release, listLocks } from '../src/lock.js';
+import { L } from '../src/model.js';
+import { FakeGh, kbIssue, runWith } from './fake-gh.js';
+
+const ago = (seconds) => new Date(Date.now() - seconds * 1000).toISOString();
+
+function harness({ dispatch = {}, board = 'default', host = 'test-host' } = {}) {
+  const gh = new FakeGh();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-dispatch-'));
+  const cfg = {
+    ...DEFAULT_BOARD,
+    repo: gh.nameWithOwner,
+    board,
+    dispatch: { ...DEFAULT_BOARD.dispatch, ...dispatch },
+    // the spawn stub: `true` exits immediately, so no worker ever runs
+    profiles: { claude: { mode: 'process', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] } },
+  };
+  const ctx = {
+    root,
+    cfg,
+    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    board,
+    host,
+    json: false,
+    caps: {},
+    _cache: {},
+    requireBoard() { return this; },
+  };
+  const restore = gh.install();
+  const logs = [];
+  return {
+    gh,
+    ctx,
+    root,
+    logs,
+    log: () => logs.join('\n'),
+    tick: (opts = {}) => tick(ctx, { log: (m) => logs.push(m), ...opts }),
+    cleanup: () => { restore(); fs.rmSync(root, { recursive: true, force: true }); },
+  };
+}
+
+test('todo → ready only when every blocker closed as completed', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 1, title: 'shipped', status: 'done', state: 'CLOSED', stateReason: 'COMPLETED' }));
+  h.gh.addIssue(kbIssue({ number: 2, title: 'dropped', status: 'archived', state: 'CLOSED', stateReason: 'NOT_PLANNED' }));
+  h.gh.addIssue(kbIssue({ number: 3, status: 'todo', blockedBy: [1] }));
+  h.gh.addIssue(kbIssue({ number: 4, status: 'todo', blockedBy: [1, 2] }));
+  h.gh.addIssue(kbIssue({ number: 5, status: 'todo', blockedBy: [{ number: 99, state: 'OPEN' }] }));
+
+  const s = await h.tick({ max: 0 }); // no slot: promotion must not depend on capacity
+
+  assert.deepEqual(s.promoted, [3]);
+  assert.equal(h.gh.statusOf(3), 'ready');
+  assert.equal(h.gh.statusOf(4), 'todo'); // NOT_PLANNED is not "done"
+  assert.equal(h.gh.statusOf(5), 'todo');
+  assert.match(h.log(), /#3: todo → ready/);
+});
+
+test('a scheduled task is not promoted before its time', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 1, status: 'todo', kb: { scheduled_at: ago(-3600) } }));
+  h.gh.addIssue(kbIssue({ number: 2, status: 'todo', kb: { scheduled_at: ago(3600) } }));
+
+  const s = await h.tick({ max: 0 });
+
+  assert.deepEqual(s.promoted, [2]);
+  assert.equal(h.gh.statusOf(1), 'todo');
+});
+
+test('a ready task is claimed once: ref, run comment, running label, worker spawned', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+
+  const s = await h.tick();
+
+  assert.equal(s.claimed.length, 1);
+  assert.equal(s.claimed[0].number, 7);
+  assert.equal(s.claimed[0].attempt, 1);
+  assert.ok(s.claimed[0].pid > 0, 'the stub worker got a pid');
+  assert.equal(h.gh.statusOf(7), 'running');
+  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/7/1']);
+  const run = h.gh.runOf(7);
+  assert.equal(run.attempts.length, 1);
+  assert.equal(run.attempts[0].host, 'test-host');
+  assert.equal(run.attempts[0].profile, 'claude');
+  assert.equal(run.attempts[0].ended_at, undefined);
+  assert.equal(run.attempts[0].log, '.kanban/logs/7-1.log');
+  assert.ok(fs.existsSync(path.join(h.root, '.kanban', 'logs', '7-1.log')));
+  // one run comment, created then updated — never a second create
+  assert.equal(h.gh.callsMatching('POST', /issues\/7\/comments$/).length, 1);
+});
+
+test('claim held elsewhere: skipped, and nothing on the issue is touched', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+  // another dispatcher won the ref between our board read and our POST
+  h.gh.fail({ method: 'POST', path: 'git/refs' }, { status: 422, message: 'Reference already exists' });
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.held, [7]);
+  assert.equal(s.claimed.length, 0);
+  assert.equal(h.gh.statusOf(7), 'ready');
+  assert.equal(h.gh.callsMatching('POST', /issues\/7\/labels/).length, 0);
+  assert.equal(h.gh.issues.get(7).comments.length, 0);
+  assert.match(h.log(), /#7: lock held elsewhere/);
+});
+
+test('claim result unknown (503): back off for this tick, no label change', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude' }));
+  h.gh.fail({ method: 'POST', path: 'git/refs' }, { status: 503, message: 'Server Error' });
+
+  const s = await h.tick();
+
+  // #7 backs off; a 5xx is not fatal for the tick, so #8 is still claimed
+  assert.equal(s.held.length, 0);
+  assert.deepEqual(s.claimed.map((c) => c.number), [8]);
+  assert.equal(h.gh.statusOf(7), 'ready');
+  assert.equal(h.gh.callsMatching('POST', /issues\/7\/labels/).length, 0);
+  assert.equal(h.gh.issues.get(7).comments.length, 0);
+  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/8/1']);
+  assert.match(h.log(), /#7: claim result unknown \(server:/);
+});
+
+test('an auth failure on claim stops the tick instead of burning the rest of the board', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude' }));
+  h.gh.fail({ method: 'POST', path: 'git/refs' }, { status: 401, message: 'Bad credentials', times: 2 });
+
+  const s = await h.tick();
+
+  assert.equal(s.claimed.length, 0);
+  assert.deepEqual(h.gh.lockRefs(), []);
+  assert.equal(h.gh.statusOf(8), 'ready');
+});
+
+test('a stale heartbeat is reclaimed: lock released, attempt closed, back to ready', async (t) => {
+  const h = harness({ dispatch: { stale_after: 60 } });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'other-host', started_at: ago(600), heartbeat_at: ago(600), pid: 4_000_000 }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+
+  const s = await h.tick({ max: 0 }); // no slot, so the freed task is not immediately re-claimed
+
+  assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'reclaimed' }]);
+  assert.equal(h.gh.statusOf(7), 'ready');
+  assert.deepEqual(h.gh.lockRefs(), []);
+  const saved = h.gh.runOf(7);
+  assert.equal(saved.failures, 1);
+  assert.equal(saved.attempts[0].outcome, 'reclaimed');
+  assert.match(saved.attempts[0].reason, /^reclaimed after \d+s$/);
+  assert.ok(saved.attempts[0].ended_at);
+  assert.match(h.log(), /#7: reclaimed → ready/);
+});
+
+test('a task past max_runtime is timed_out, not merely reclaimed', async (t) => {
+  const h = harness({ dispatch: { stale_after: 60 } });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'other-host', started_at: ago(600), heartbeat_at: ago(1) }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 120 }, run }));
+
+  const s = await h.tick({ max: 0 });
+
+  assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'timed_out' }]);
+  assert.equal(h.gh.runOf(7).attempts[0].outcome, 'timed_out');
+});
+
+test('failures past max_retries give up: blocked + kb:needs-human, no retry', async (t) => {
+  const h = harness({ dispatch: { stale_after: 60 } });
+  t.after(h.cleanup);
+  const run = runWith(
+    [
+      { attempt: 1, host: 'other-host', started_at: ago(9000), ended_at: ago(8000), outcome: 'crashed' },
+      { attempt: 2, host: 'other-host', started_at: ago(7000), ended_at: ago(6000), outcome: 'protocol_violation' },
+      { attempt: 3, host: 'other-host', started_at: ago(600), heartbeat_at: ago(600) },
+    ],
+    { failures: 2 },
+  );
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_retries: 2, max_runtime: 86_400 }, run }));
+  h.gh.refs.set('refs/kb/locks/7/3', 'f'.repeat(40));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'gave_up' }]);
+  assert.equal(h.gh.statusOf(7), 'blocked');
+  assert.ok(h.gh.labelsOf(7).includes(L.needsHuman));
+  assert.deepEqual(h.gh.lockRefs(), []);
+  const saved = h.gh.runOf(7);
+  assert.equal(saved.failures, 3);
+  assert.equal(saved.attempts[2].outcome, 'reclaimed');
+  const last = saved.attempts[3];
+  assert.equal(last.outcome, 'gave_up');
+  assert.equal(last.synthetic, true);
+  assert.equal(last.profile, 'dispatcher');
+  assert.match(last.reason, /3 consecutive failures \(limit 2\)/);
+  assert.equal(s.claimed.length, 0); // and it is not picked up again
+});
+
+test('active_pr guard: an open PR sends a ready task to review, even with no slot', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', prs: [{ number: 42, state: 'OPEN', isDraft: true }] }));
+  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', prs: [{ number: 41, state: 'MERGED', merged: true }] }));
+
+  const s = await h.tick({ max: 0 });
+
+  assert.deepEqual(s.guarded, [{ number: 7, guard: 'active_pr', pr: 42 }]);
+  assert.equal(h.gh.statusOf(7), 'review');
+  assert.equal(h.gh.statusOf(8), 'ready'); // a merged PR is not a reason to wait
+  assert.deepEqual(h.gh.lockRefs(), []);
+  assert.match(h.log(), /#7: open PR #42 → review \(active_pr guard\)/);
+});
+
+test('path_overlap guard: a ready task waits for the running task that owns its files', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(30), heartbeat_at: ago(5), pid: process.pid }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
+  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+  h.gh.addIssue(kbIssue({ number: 9, status: 'ready', agent: 'claude', kb: { paths: ['docs/readme.md'] } }));
+  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.reclaimed, []); // the live worker is left alone
+  assert.deepEqual(s.guarded, [{ number: 8, guard: 'path_overlap' }]);
+  assert.equal(h.gh.statusOf(8), 'ready');
+  assert.deepEqual(s.claimed.map((c) => c.number), [9]); // a disjoint path still goes
+  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/7/1', 'refs/kb/locks/9/1']);
+});
+
+test('recent_success guard: a task that just completed is not immediately re-run', async (t) => {
+  const h = harness({ dispatch: { recent_success_window: 600 } });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(400), ended_at: ago(60), outcome: 'completed' }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.guarded, [{ number: 7, guard: 'recent_success' }]);
+  assert.deepEqual(h.gh.lockRefs(), []);
+});
+
+test('claims are create-if-absent, and releasing twice is not an error', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+
+  assert.equal((await claim(h.ctx, 4, 1)).result, 'claimed');
+  const second = await claim(h.ctx, 4, 1);
+  assert.equal(second.result, 'held');
+  assert.equal(second.error, null);
+  assert.deepEqual((await listLocks(h.ctx)).map((l) => `${l.n}/${l.k}`), ['4/1']);
+  assert.equal(await release(h.ctx, 4, 1), true);
+  assert.equal(await release(h.ctx, 4, 1), false);
+  assert.deepEqual(await listLocks(h.ctx), []);
+});
+
+test('a dry run reports what it would do and writes nothing', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 1, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED' }));
+  h.gh.addIssue(kbIssue({ number: 2, status: 'todo', blockedBy: [1] }));
+  h.gh.addIssue(kbIssue({ number: 3, status: 'ready', agent: 'claude' }));
+
+  const s = await h.tick({ dryRun: true });
+
+  assert.deepEqual(s.promoted, [2]);
+  assert.deepEqual(s.claimed, [{ number: 3, attempt: 1, profile: 'claude', dry: true }]);
+  assert.equal(h.gh.statusOf(2), 'todo');
+  assert.equal(h.gh.statusOf(3), 'ready');
+  assert.deepEqual(h.gh.lockRefs(), []);
+  assert.equal(h.gh.callsMatching('POST').length, 0);
+  assert.equal(h.gh.callsMatching('PATCH').length, 0);
+  assert.equal(h.gh.callsMatching('DELETE').length, 0);
+});
