@@ -173,6 +173,60 @@ test('a stale heartbeat is reclaimed: lock released, attempt closed, back to rea
   assert.match(h.log(), /#7: reclaimed → ready/);
 });
 
+test('a ref-CAS beat keeps a worker alive: the run comment is stale, the lock ref is not', async (t) => {
+  const h = harness({ dispatch: { stale_after: 60 } });
+  t.after(h.cleanup);
+  // a CAS heartbeat writes nothing to the run comment, so heartbeat_at is as old as the claim
+  const run = runWith([{ attempt: 1, host: 'other-host', started_at: ago(3600), heartbeat_at: ago(3600), lock_sha: 'a'.repeat(40) }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.gh.beat(7, 1, ago(20));
+
+  const s = await h.tick({ max: 0 });
+
+  assert.deepEqual(s.reclaimed, []);
+  assert.equal(h.gh.statusOf(7), 'running');
+  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/7/1'], 'the lock is left alone');
+  assert.equal(h.gh.callsMatching('PATCH', /issues\/comments/).length, 0, 'and the run record is not rewritten');
+  assert.match(h.log(), /#7: attempt 1 beat on refs\/kb\/locks\/7\/1 \d+s ago — alive/);
+});
+
+test('a ref-CAS worker whose last beat is old is reclaimed like any other', async (t) => {
+  const h = harness({ dispatch: { stale_after: 60 } });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'other-host', started_at: ago(3600), heartbeat_at: ago(3600), lock_sha: 'a'.repeat(40) }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.gh.beat(7, 1, ago(900));
+
+  const s = await h.tick({ max: 0 });
+
+  assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'reclaimed' }]);
+  assert.equal(h.gh.statusOf(7), 'ready');
+  assert.deepEqual(h.gh.lockRefs(), []);
+});
+
+test('a fresh lock ref does not save a worker whose process is gone', async (t) => {
+  const h = harness({ dispatch: { stale_after: 60 } });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(600), heartbeat_at: ago(5), pid: 4_000_000 }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.gh.beat(7, 1, ago(1));
+
+  const s = await h.tick({ max: 0 });
+
+  assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'crashed' }]);
+});
+
+test('a claim records the sha that starts the worker\'s beat chain', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+
+  await h.tick();
+
+  assert.equal(h.gh.runOf(7).attempts[0].lock_sha, h.gh.refs.get('refs/heads/main'));
+  assert.equal(h.gh.refs.get('refs/kb/locks/7/1'), h.gh.runOf(7).attempts[0].lock_sha);
+});
+
 test('a task past max_runtime is timed_out, not merely reclaimed', async (t) => {
   const h = harness({ dispatch: { stale_after: 60 } });
   t.after(h.cleanup);

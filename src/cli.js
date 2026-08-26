@@ -366,8 +366,11 @@ export async function main(argv) {
     case 'heartbeat': {
       const [n] = nums(rest);
       if (!n) throw usage('hkb heartbeat <n> [--note ..]');
-      const r = await withOutbox(ctx, argvForOutbox, () => heartbeat(ctx, n, { note: flags.note }));
-      out(ctx, r, r.skipped ? `ok (recent heartbeat; next in ${r.next_in_s}s)` : `heartbeat recorded for #${n} attempt ${r.attempt}`);
+      const r = await withOutbox(ctx, argvForOutbox, () => heartbeat(ctx, n, { note: flags.note, attempt: flags.attempt }));
+      const how = r.skipped ? `ok (recent heartbeat; next in ${r.next_in_s}s)`
+        : r.mode === 'ref' ? `#${n} attempt ${r.attempt}: lease held on ${r.ref} → ${String(r.sha).slice(0, 7)}${r.resynced ? ' (chain resynced)' : ''}`
+          : `heartbeat recorded for #${n} attempt ${r.attempt}`;
+      out(ctx, r, how);
       return 0;
     }
     case 'complete': {
@@ -422,7 +425,7 @@ export async function main(argv) {
       const c = await claim(ctx, n, k);
       if (c.result !== 'claimed') { out(ctx, c, `#${n}: ${c.result}${c.error ? ' — ' + c.error.message : ''}`); return c.result === 'held' ? 2 : 1; }
       const profile = flags.profile || t.agent || Object.keys(ctx.cfg.profiles)[0];
-      runRec.run.attempts.push({ attempt: k, profile, host: ctx.host, started_at: new Date().toISOString(), heartbeat_at: new Date().toISOString(), manual: !flags.spawn });
+      runRec.run.attempts.push({ attempt: k, profile, host: ctx.host, started_at: new Date().toISOString(), heartbeat_at: new Date().toISOString(), lock_sha: c.sha, manual: !flags.spawn });
       const { saveRun } = await import('./tasks.js');
       await saveRun(ctx, n, runRec);
       await setStatus(ctx, t, 'running', { add: [L.agent(profile)] });

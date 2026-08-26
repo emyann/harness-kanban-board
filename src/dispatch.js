@@ -5,9 +5,9 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, getTask } from './tasks.js';
-import { claim, release, listLocks } from './lock.js';
+import { claim, release, listLocks, lockBeatAt } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs } from './board.js';
-import { computeReady, openAttempt, lastAttempt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, jobAlive, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession } from './model.js';
+import { computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, jobAlive, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession } from './model.js';
 import { workerContext } from './context.js';
 import { GhError } from './gh.js';
 import { listKbJobs, readJobState, stopJob, matchJobByWorktree } from './jobs.js';
@@ -247,6 +247,13 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     for (const j of listing.jobs) jobsById.set(j.id, j);
   }
 
+  // The lock refs, read once for the whole tick: the reclaim check below reads the commit date of
+  // the ref a stale-looking attempt holds (a ref-CAS heartbeat leaves no trace in the run comment),
+  // and the orphan sweep walks the same list.
+  let locks = null;
+  try { locks = await listLocks(ctx); } catch (e) { log(`lock listing failed (reclaim falls back to the run comment): ${e.message}`); }
+  const lockShaOf = (n, k) => (locks || []).find((l) => l.n === n && l.k === k)?.sha || null;
+
   // 1. reclaim stale / crashed / timed out / finished without a terminal verb
   for (const t of running) {
     if (touchedRecently(t.number)) continue; // our own transition may not be visible yet
@@ -259,7 +266,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       continue;
     }
     const maxRuntime = t.kb.max_runtime || d.max_runtime_default;
-    const lastSignal = a.heartbeat_at || a.started_at;
+    let lastSignal = a.heartbeat_at || a.started_at;
     let outcome = null;
     if (a.host === ctx.host && (a.job || a.bg)) {
       let job = a.job ? (jobsById.get(a.job) || readJobState(a.job)) : null;
@@ -276,7 +283,15 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     } else if (a.host === ctx.host && a.pid && !pidAlive(a.pid)) outcome = 'crashed';
     else if (a.host === ctx.host && !a.pid && !a.job && secondsSince(a.started_at) > 180) outcome = 'crashed'; // spawn never recorded a handle
     if (!outcome && secondsSince(a.started_at) > maxRuntime) outcome = 'timed_out';
-    else if (!outcome && secondsSince(lastSignal) > d.stale_after) outcome = 'reclaimed';
+    else if (!outcome && secondsSince(lastSignal) > d.stale_after) {
+      // A ref-CAS worker writes nothing to the run comment, so its real last signal is the commit
+      // its lock ref points at. One commit read, and only for an attempt that already looks stale.
+      let beat = null;
+      try { beat = await lockBeatAt(ctx, lockShaOf(t.number, a.attempt)); } catch (e) { log(`#${t.number}: lock ref beat unreadable (${e.message}); using the run comment`); }
+      lastSignal = lastSignalAt(a, beat);
+      if (secondsSince(lastSignal) > d.stale_after) outcome = 'reclaimed';
+      else log(`#${t.number}: attempt ${a.attempt} beat on ${lockRef(t.number, a.attempt)} ${Math.round(secondsSince(lastSignal))}s ago — alive`);
+    }
     if (!outcome) continue;
     if (dryRun) { summary.reclaimed.push({ number: t.number, outcome, dry: true }); continue; }
     const result = await failAttempt(ctx, t, runRec, outcome, `${outcome} after ${Math.round(secondsSince(a.started_at))}s`);
@@ -298,8 +313,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   // orphan lock sweep — NEVER a lock this host claimed < 15 min ago (a stale board read once made
   // this sweep delete a 30-second-old lock, letting the next tick double-claim the task: #15/3).
   try {
-    const locks = await listLocks(ctx);
-    for (const l of locks) {
+    for (const l of locks || []) {
       const claimedAt = state.claims[`${l.n}/${l.k}`];
       if (claimedAt && Date.now() - new Date(claimedAt).getTime() < 900_000) continue;
       if (touchedRecently(l.n)) continue;
@@ -363,7 +377,8 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       if (c.error?.kind === 'ratelimit' || c.error?.kind === 'auth') break;
       continue;
     }
-    const attempt = { attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), pid: null };
+    // lock_sha starts the worker's heartbeat chain: the first `hkb heartbeat` leases on it
+    const attempt = { attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.sha, pid: null };
     runRec.run.attempts.push(attempt);
     await saveRun(ctx, t.number, runRec);
     await setStatus(ctx, t, 'running', { add: t.agent ? [] : [L.agent(profileName)], remove: [L.needsHuman] });

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fetchBoard, loadRun, deleteComment } from './tasks.js';
+import { listLocks, listBeatChains, dropBeatChain } from './lock.js';
 import { logsDir, kanbanDir } from './board.js';
 
 function worktrees(root) {
@@ -56,6 +57,18 @@ export async function gc(ctx, flags, log) {
       if (await deleteComment(ctx, t.number, id)) { dupes++; log(`deleted duplicate run comment ${id} on #${t.number}`); }
     }
   }
+  // local beat-chain mirrors of locks GitHub no longer has: an attempt that ended without its
+  // worker (reclaimed, crashed) leaves one behind, and every worktree shares this ref store
+  let chains = 0;
+  try {
+    const live = new Set((await listLocks(ctx)).map((l) => `${l.n}/${l.k}`));
+    for (const c of listBeatChains(ctx.root)) {
+      if (live.has(`${c.n}/${c.k}`)) continue;
+      if (!flags.yes) { log(`would drop the local beat chain ${c.ref} (attempt #${c.n}/${c.k} is over) — pass --yes`); continue; }
+      if (dropBeatChain(ctx.root, c.n, c.k)) { chains++; log(`dropped local ref ${c.ref}`); }
+    }
+  } catch (e) { log(`beat chains skipped: ${e.message}`); }
+
   let pruned = 0;
   const cutoff = Date.now() - days * 86400_000;
   for (const dir of [logsDir(ctx.root), path.join(kanbanDir(ctx.root), 'nudges')]) {
@@ -65,6 +78,6 @@ export async function gc(ctx, flags, log) {
       if (fs.statSync(p).mtimeMs < cutoff) { fs.rmSync(p); pruned++; }
     }
   }
-  log(`gc: ${removed} worktree(s) removed, ${dupes} duplicate run comment(s) deleted, ${pruned} old file(s) pruned (retention ${days}d)`);
+  log(`gc: ${removed} worktree(s) removed, ${dupes} duplicate run comment(s) deleted, ${chains} local beat chain(s) dropped, ${pruned} old file(s) pruned (retention ${days}d)`);
   return 0;
 }

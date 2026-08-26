@@ -12,10 +12,11 @@ Everything that must survive a crash lives in GitHub. Nothing here needs a paid 
 | Needs a human | label `kb:needs-human` | orthogonal flag; set on gave_up, block loops, most block kinds |
 | Machine fields | `<!-- kb: {...} -->` block at the top of the body | `priority, workspace, max_runtime, max_retries, model, skills[], paths[], scheduled_at, idempotency_key, goal`. Malformed → defaults, never a crash |
 | Dependencies | GitHub issue dependencies: child **blocked by** parent | Hermes parent→child. A blocker counts as done only when closed as *completed* |
-| Attempts (Hermes `runs`) | one `<!-- kb-run -->` comment, fenced JSON | `attempts[] {attempt, profile, host, pid, started_at, heartbeat_at, ended_at, outcome, summary, reason, log, session_id, transcript_path, total_cost_usd, num_turns, duration_ms}`, `failures`, `block_loops`. The session fields are recorded once, by the Stop hook and the dispatcher: `hkb show <n>` prints them with a `claude --resume <id>` line |
+| Attempts (Hermes `runs`) | one `<!-- kb-run -->` comment, fenced JSON | `attempts[] {attempt, profile, host, pid, started_at, heartbeat_at, lock_sha, ended_at, outcome, summary, reason, log, session_id, transcript_path, total_cost_usd, num_turns, duration_ms}`, `failures`, `block_loops`. `lock_sha` is where the lock ref started, so the worker's first CAS heartbeat knows what to lease on. The session fields are recorded once, by the Stop hook and the dispatcher: `hkb show <n>` prints them with a `claude --resume <id>` line |
 | Structured handoff | `<!-- kb-result -->` comment per completion / review request | `{summary, metadata{changed_files, verification, dependencies, residual_risk, retry_notes}, artifacts[]}` |
 | Events | issue timeline + attempt rows (`hkb log`) | |
 | Claim | git ref `refs/kb/locks/<n>/<attempt>` | create = atomic claim (201 claimed / held on **422 "Reference already exists"** — the observed duplicate response, verified 2026-08-26 — or 409 / anything else unknown → back off) |
+| Heartbeat | the same ref, advanced by CAS | `git push origin <new>:<ref> --force-with-lease=<ref>:<expected>`; rejected lease = `LOCK_LOST` (exit 3). See below |
 | Output | branch + draft PR with `Closes #n` | PR merge closes the issue; an open PR moves the task to `review` |
 
 Precedence when they disagree: run comment > labels > body block.
@@ -37,10 +38,40 @@ done    --archive--→ archived
 
 `ready` derives **only** from blocker closure. PR state never gates readiness.
 
+## Heartbeat
+
+A heartbeat says "this attempt is still alive". Two ways to say it, chosen by the profile's `heartbeat` field
+in `.kanban/board.json` — `auto` (the default: ref, falling back to comment), `ref`, or `comment`.
+
+**ref (compare-and-swap, the default).** `hkb heartbeat <n>` advances the attempt's own lock ref from the worker's
+worktree:
+
+```bash
+new=$(git commit-tree <tree of expected> -p <expected> -m "hkb heartbeat #<n> attempt <k>")   # an empty commit
+git push origin $new:refs/kb/locks/<n>/<k> --force-with-lease=refs/kb/locks/<n>/<k>:<expected>
+```
+
+- `<expected>` is **this worker's own record** of where it left the ref — the local mirror of the ref, falling back
+  to the attempt's `lock_sha`. Never a fresh read of the ref: leasing on whatever it says right now would stomp
+  whoever holds it.
+- The lease *is* the check. It holds only while the ref is exactly where this attempt left it, so a reclaim (which
+  deletes the ref) rejects the push atomically. A deleted ref and a moved one both come back as
+  `! [rejected] … (stale info)` — verified against git 2026-08-26.
+- A rejected lease is verified once against `GET git/ref/kb/locks/<n>/<k>`: **gone → `LOCK_LOST`, exit 3**; still
+  ours → the local chain drifted (a push landed, its `update-ref` did not), so resync and beat again.
+- Cost: zero API calls on the warm path — no task read, no run-record read, no write. The git transport is not the
+  REST content budget. Only a rejected lease or a fallback costs a request.
+- Any other git failure (no remote, no credentials, offline) is *not* a LOCK_LOST: `hkb` says so on stderr and
+  records the beat in the run comment instead. Only a rejected lease may stop a worker.
+
+**comment (fallback).** A write to the `<!-- kb-run -->` record, floored at 10 minutes, preceded by an
+authoritative `GET` of the lock ref (404 → `LOCK_LOST`). For workers that cannot push arbitrary refs (cloud tiers);
+the dispatcher owns their lock. `hkb heartbeat <n> --note "..."` always takes this path — a note is content.
+
 ## Dispatcher tick (`hkb dispatch`)
 
 1. Replay `.kanban/outbox.jsonl` (writes queued while GitHub was unreachable).
-2. For every `running` task: crashed (pid gone on this host) · timed_out (`max_runtime`) · reclaimed (no heartbeat for `stale_after`) → close the attempt, release the ref, `failures++`, back to `ready` or `gave_up`.
+2. For every `running` task: crashed (pid gone on this host) · timed_out (`max_runtime`) · reclaimed (no signal for `stale_after`) → close the attempt, release the ref, `failures++`, back to `ready` or `gave_up`. The last signal is the freshest of `started_at`, `heartbeat_at` and **the committer date of the commit the lock ref points at** — the only trace a CAS heartbeat leaves. That commit is read only for an attempt that already looks stale, so a live board costs one extra request per reclaim decision and a quiet one costs none.
 3. Sweep orphan lock refs (no matching open attempt).
 4. Promote `todo` → `ready`.
 5. For `ready` tasks by priority: caps (`max_in_progress`, per-profile, daily spawn cap) → guards (`active_pr` → review, `blocker_auth` pause, `recent_success`, `path_overlap`) → claim ref → append attempt → label `running` → spawn the profile's launch command with `KB_*` env.

@@ -13,6 +13,10 @@ export const DEFAULT_PROFILES = {
   claude: {
     description: 'Claude Code on this machine as a background agent (free path): visible in `claude agents`, attachable with `claude attach <job>`, runs in a git worktree, opens a draft PR, finishes with one hkb terminal verb. The dispatcher stops the job once the attempt has ended.',
     mode: 'claude-bg',
+    // how its workers say "still alive": ref (CAS on the lock ref, free) · comment (a run-record
+    // write, floored at 10 min) · auto = ref, falling back to comment where git push cannot reach
+    // the repo. Cloud tiers that cannot push arbitrary refs set "comment".
+    heartbeat: 'auto',
     max_in_progress: 2,
     model: null,
     allowed_tools: CLAUDE_TOOLS,
@@ -21,6 +25,7 @@ export const DEFAULT_PROFILES = {
   'claude-p': {
     description: 'Claude Code headless (`claude -p`): a plain process that exits when done. Not listed in `claude agents`; use it where no session daemon exists (CI, containers).',
     mode: 'process',
+    heartbeat: 'auto',
     max_in_progress: 2,
     model: null,
     allowed_tools: CLAUDE_TOOLS,
