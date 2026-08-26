@@ -234,6 +234,56 @@ export function classifyJob(job) {
   return jobAlive(job) ? 'running' : 'protocol_violation';
 }
 
+// ---------- worker permission policy (PreToolUse hook) ----------
+// A background worker has nobody to answer a prompt, so hkb decides itself:
+// explicit allow or deny-with-reason, never "ask". Pure and unit-tested.
+
+export const SAFE_BUILTINS = ['cd', 'pwd', 'true', 'false', 'echo', 'printf', 'test', '[', 'env', 'which', 'command', 'type', 'sleep', 'time', 'set', 'export'];
+export const DENY_PATTERNS = [
+  { re: /git\s+push[^|;&]*(\s--force\b|\s-f\b|\s--force-with-lease)/, why: 'force-push is forbidden by the kanban protocol' },
+  { re: /\bsudo\b/, why: 'no privilege escalation in a worker' },
+  { re: /\brm\s+(-\w*r\w*f|-\w*f\w*r)\b[^|;&]*\s\//, why: 'recursive force-delete of an absolute path' },
+];
+
+export function allowedCommandsFrom(allowedTools = []) {
+  const out = new Set(SAFE_BUILTINS);
+  for (const t of allowedTools) {
+    const m = /^Bash\((\S+?)(?:\s|\))/.exec(t);
+    if (m) out.add(m[1]);
+  }
+  return out;
+}
+
+function firstWords(command) {
+  // top-level segments split on && || ; | — good enough for policy, not a full shell parser
+  return String(command).split(/&&|\|\||;|\|/).map((seg) => {
+    const words = seg.trim().split(/\s+/).filter(Boolean);
+    for (const w of words) { if (!w.includes('=') && !w.startsWith('-')) return w.replace(/^.*\//, ''); }
+    return null;
+  }).filter(Boolean);
+}
+
+/** @returns {decision: 'allow'|'deny', reason} */
+export function decidePermission(toolName, input, { allowedCmds, root }) {
+  const FILE_TOOLS = ['Edit', 'Write', 'Read', 'NotebookEdit'];
+  if (FILE_TOOLS.includes(toolName)) {
+    const p = input?.file_path || input?.path || '';
+    if (!p.startsWith('/') || (root && (p === root || p.startsWith(root.endsWith('/') ? root : root + '/'))))
+      return { decision: 'allow', reason: 'file inside the repository' };
+    return { decision: 'deny', reason: `path ${p} is outside the repository ${root}; keep all changes inside the worktree` };
+  }
+  if (toolName !== 'Bash') return { decision: 'allow', reason: 'non-shell tool' };
+  const command = String(input?.command || '');
+  for (const d of DENY_PATTERNS) if (d.re.test(command)) return { decision: 'deny', reason: d.why };
+  const words = firstWords(command);
+  const offending = words.filter((w) => !allowedCmds.has(w));
+  if (!offending.length) return { decision: 'allow', reason: 'all commands allowlisted' };
+  return {
+    decision: 'deny',
+    reason: `command(s) not allowlisted for workers: ${offending.join(', ')}. Use one of: ${[...allowedCmds].sort().join(', ')} — or do the work with the Edit/Write/Read tools.`,
+  };
+}
+
 export function hashReason(reason) {
   const s = String(reason || '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 80);
   let h = 0;

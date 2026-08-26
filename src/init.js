@@ -48,12 +48,18 @@ function installStopHook(root, log) {
     try { settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { log(`skip hook: ${file} is not valid JSON (${e.message})`); return false; }
   }
   settings.hooks = settings.hooks || {};
-  settings.hooks.Stop = settings.hooks.Stop || [];
-  const already = settings.hooks.Stop.some((h) => JSON.stringify(h).includes('hook stop') && JSON.stringify(h).includes('hkb'));
-  if (already) return false;
-  settings.hooks.Stop.push({ matcher: '', hooks: [{ type: 'command', command: hkbCommandForHook(), timeout: 30 }] });
-  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
-  return true;
+  let changed = false;
+  const ensure = (event, cmd) => {
+    settings.hooks[event] = settings.hooks[event] || [];
+    if (settings.hooks[event].some((h) => JSON.stringify(h).includes(cmd.split(' ').pop()) && JSON.stringify(h).includes('hkb'))) return;
+    settings.hooks[event].push({ matcher: '', hooks: [{ type: 'command', command: cmd, timeout: 30 }] });
+    changed = true;
+  };
+  const base = hkbCommandForHook().replace(/ stop$/, '');
+  ensure('Stop', `${base} stop`);
+  ensure('PreToolUse', `${base} pretool`);
+  if (changed) fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
+  return changed;
 }
 
 function ensureGitignore(root) {

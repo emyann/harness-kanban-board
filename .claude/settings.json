@@ -11,6 +11,18 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "hkb hook pretool",
+            "timeout": 30
+          }
+        ]
+      }
     ]
   }
 }

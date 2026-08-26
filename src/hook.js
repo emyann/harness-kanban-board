@@ -5,6 +5,23 @@ import path from 'node:path';
 import { kanbanDir } from './board.js';
 import { getTask } from './tasks.js';
 
+/** PreToolUse hook: hkb's own permission policy — allow or deny, never a prompt. */
+export async function preToolHook(ctx) {
+  if (!process.env.KB_TASK) return 0;
+  let input = {};
+  try { input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}'); } catch { return 0; }
+  const { decidePermission, allowedCommandsFrom } = await import('./model.js');
+  const profile = ctx.cfg?.profiles?.[process.env.KB_PROFILE] || {};
+  const allowedCmds = allowedCommandsFrom(profile.allowed_tools || []);
+  allowedCmds.add('hkb'); allowedCmds.add('git'); allowedCmds.add('gh');
+  const root = process.env.KB_ROOT || ctx.root;
+  const { decision, reason } = decidePermission(input.tool_name, input.tool_input, { allowedCmds, root });
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision, permissionDecisionReason: `hkb: ${reason}` },
+  }) + '\n');
+  return 0;
+}
+
 export async function stopHook(ctx) {
   const n = process.env.KB_TASK;
   if (!n) return 0;

@@ -190,8 +190,9 @@ export async function main(argv) {
     case 'init': return init(ctx, flags, log);
     case 'doctor': return doctor(ctx, flags, (s) => process.stdout.write(s + '\n'));
     case 'hook': {
-      if (rest[0] !== 'stop') throw usage('hkb hook stop');
-      return stopHook(ctx);
+      if (rest[0] === 'stop') return stopHook(ctx);
+      if (rest[0] === 'pretool') { const { preToolHook } = await import('./hook.js'); return preToolHook(ctx); }
+      throw usage('hkb hook stop|pretool');
     }
   }
   ctx.requireBoard();
