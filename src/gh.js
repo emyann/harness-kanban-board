@@ -1,5 +1,13 @@
 // Thin wrapper over the `gh` CLI. One code path for REST and GraphQL, with
 // error classification so callers can tell "held" from "unknown" from "offline".
+//
+// Every API call goes through a transport. The default one shells out to `gh`;
+// `setTransport(fn)` swaps in another — that is how `test/fake-gh.js` stands in an
+// in-memory GitHub without spawning anything. A transport is called with
+//   { kind: 'rest',    method, path, body, headers } → the parsed REST payload
+//   { kind: 'graphql', query, variables }            → the GraphQL `data`
+// and returns that value (or a promise of it), or throws a GhError.
+// `ghCmd`/`ghAuthStatus` stay on `gh` itself: repo detection and `hkb doctor`, never board state.
 import { spawnSync } from 'node:child_process';
 
 export const API_VERSION = '2026-03-10';
@@ -51,11 +59,10 @@ function parseStatus(stderr, stdout) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/**
- * REST call via `gh api`. Returns parsed JSON (or null on empty body).
- * Throws GhError with .kind on failure. Rate limits are retried twice with backoff.
- */
-export async function rest(method, path, { body, headers = {}, retries = 2 } = {}) {
+// ---------- transport ----------
+
+/** One REST call through `gh api`. Returns parsed JSON (or null on an empty body). */
+function restViaGh({ method, path, body, headers = {} }) {
   const args = ['api', '-X', method, path, '-H', `X-GitHub-Api-Version: ${API_VERSION}`, '-H', 'Accept: application/vnd.github+json'];
   for (const [k, v] of Object.entries(headers)) args.push('-H', `${k}: ${v}`);
   let input;
@@ -63,49 +70,79 @@ export async function rest(method, path, { body, headers = {}, retries = 2 } = {
     args.push('--input', '-');
     input = JSON.stringify(body);
   }
+  const res = runGh(args, { input });
+  if (res.status === 0) {
+    const out = res.stdout.trim();
+    if (!out) return null;
+    try { return JSON.parse(out); } catch { return out; }
+  }
+  const status = parseStatus(res.stderr, res.stdout);
+  const kind = classify(status, res.stderr + res.stdout);
+  const msg = (res.stderr || res.stdout).trim().split('\n').slice(-3).join(' ');
+  throw new GhError(`${method} ${path} failed (${status || kind}): ${msg}`, { status, kind, body: res.stdout, path });
+}
+
+/** One GraphQL call through `gh api graphql --input`. Returns `data`. */
+function graphqlViaGh({ query, variables = {} }) {
+  const res = runGh(['api', 'graphql', '-H', `X-GitHub-Api-Version: ${API_VERSION}`, '--input', '-'], { input: JSON.stringify({ query, variables }) });
+  let parsed = null;
+  try { parsed = JSON.parse(res.stdout); } catch { /* not json */ }
+  if (res.status === 0 && parsed && !parsed.errors) return parsed.data;
+  const status = parseStatus(res.stderr, res.stdout);
+  const text = res.stderr + (parsed?.errors ? JSON.stringify(parsed.errors) : res.stdout);
+  let kind = classify(status, text);
+  if (/RATE_LIMITED/.test(text)) kind = 'ratelimit';
+  const msg = parsed?.errors ? parsed.errors.map((e) => e.message).join('; ') : res.stderr.trim().split('\n').slice(-2).join(' ');
+  const err = new GhError(`GraphQL failed (${status || kind}): ${msg}`, { status, kind, body: res.stdout, path: 'graphql' });
+  err.graphqlErrors = parsed?.errors || [];
+  throw err;
+}
+
+/** The default transport: today's `spawnSync('gh', ...)`. */
+export function defaultTransport(req) {
+  return req.kind === 'graphql' ? graphqlViaGh(req) : restViaGh(req);
+}
+
+let transport = defaultTransport;
+
+/**
+ * Swap the transport. `setTransport()` / `setTransport(null)` restores the default.
+ * @returns {() => void} restores whatever was installed before this call.
+ */
+export function setTransport(fn) {
+  const previous = transport;
+  transport = fn || defaultTransport;
+  return () => { transport = previous; };
+}
+
+/**
+ * REST call. Returns the parsed payload (or null on an empty body).
+ * Throws GhError with .kind on failure. Rate limits are retried twice with backoff.
+ */
+export async function rest(method, path, { body, headers = {}, retries = 2 } = {}) {
   for (let attempt = 0; ; attempt++) {
-    const res = runGh(args, { input });
-    if (res.status === 0) {
-      const out = res.stdout.trim();
-      if (!out) return null;
-      try { return JSON.parse(out); } catch { return out; }
-    }
-    const status = parseStatus(res.stderr, res.stdout);
-    const kind = classify(status, res.stderr + res.stdout);
-    if (kind === 'ratelimit' && attempt < retries) {
+    try {
+      return await transport({ kind: 'rest', method, path, body, headers });
+    } catch (e) {
+      if (!(e instanceof GhError) || e.kind !== 'ratelimit' || attempt >= retries) throw e;
       const wait = 30_000 * (attempt + 1);
       process.stderr.write(`hkb: rate limited on ${method} ${path}; pausing ${wait / 1000}s\n`);
       await sleep(wait);
-      continue;
     }
-    const msg = (res.stderr || res.stdout).trim().split('\n').slice(-3).join(' ');
-    throw new GhError(`${method} ${path} failed (${status || kind}): ${msg}`, { status, kind, body: res.stdout, path });
   }
 }
 
-/** GraphQL call via `gh api graphql --input`. Returns `data`. */
+/** GraphQL call. Returns `data`. */
 export async function graphql(query, variables = {}, { retries = 2 } = {}) {
-  const args = ['api', 'graphql', '-H', `X-GitHub-Api-Version: ${API_VERSION}`, '--input', '-'];
-  const input = JSON.stringify({ query, variables });
   for (let attempt = 0; ; attempt++) {
-    const res = runGh(args, { input });
-    let parsed = null;
-    try { parsed = JSON.parse(res.stdout); } catch { /* not json */ }
-    if (res.status === 0 && parsed && !parsed.errors) return parsed.data;
-    const status = parseStatus(res.stderr, res.stdout);
-    const text = res.stderr + (parsed?.errors ? JSON.stringify(parsed.errors) : res.stdout);
-    let kind = classify(status, text);
-    if (/RATE_LIMITED/.test(text)) kind = 'ratelimit';
-    if (kind === 'ratelimit' && attempt < retries) {
+    try {
+      return await transport({ kind: 'graphql', query, variables });
+    } catch (e) {
+      if (!(e instanceof GhError) || e.kind !== 'ratelimit' || attempt >= retries) throw e;
       const wait = 30_000 * (attempt + 1);
       process.stderr.write(`hkb: GraphQL rate limited; pausing ${wait / 1000}s\n`);
       await sleep(wait);
-      continue;
     }
-    const msg = parsed?.errors ? parsed.errors.map((e) => e.message).join('; ') : res.stderr.trim().split('\n').slice(-2).join(' ');
-    const err = new GhError(`GraphQL failed (${status || kind}): ${msg}`, { status, kind, body: res.stdout, path: 'graphql' });
-    err.graphqlErrors = parsed?.errors || [];
-    throw err;
   }
 }
 
