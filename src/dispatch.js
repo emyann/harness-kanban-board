@@ -11,6 +11,7 @@ import { computeReady, openAttempt, lastAttempt, sortForDispatch, pathsOverlap, 
 import { workerContext } from './context.js';
 import { GhError } from './gh.js';
 import { listKbJobs, readJobState, stopJob, matchJobByWorktree } from './jobs.js';
+import { isMirrorConfigured, syncProject, projectError } from './projects.js';
 
 const nowIso = () => new Date().toISOString();
 const secondsSince = (iso) => (iso ? (Date.now() - new Date(iso).getTime()) / 1000 : Infinity);
@@ -389,6 +390,21 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     log(`#${t.number}: claimed attempt ${k} → ${profileName} ${handle} (log ${attempt.log})`);
     if (children && spawned.child) watchChild(ctx, t.number, k, spawned.child, children, state, profileName, log);
   }
+
+  // 4. mirror the labels onto the linked Projects v2 board (opt-in, one-way, never fatal).
+  //    Last, so it sees every transition this tick: setStatus mutates the task objects in place.
+  if (isMirrorConfigured(ctx.cfg)) {
+    try {
+      const extra = {};
+      for (const r of summary.reconciled) if (r.status) extra[r.number] = r.status; // closed issues left `tasks`
+      summary.project = await syncProject(ctx, tasks, { dryRun, extra, state, log });
+    } catch (e) {
+      const x = projectError(e);
+      summary.project = { error: x.message, fix: x.fix };
+      log(`project mirror failed (the board is unaffected): ${x.message}${x.fix ? ` → ${x.fix}` : ''}`);
+    }
+  }
+
   writeState(ctx.root, state);
   return summary;
 }
