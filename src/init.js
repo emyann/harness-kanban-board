@@ -121,39 +121,60 @@ function installStopHook(root, log) {
   return changed;
 }
 
-// ---------- harness files (`hkb init --harness copilot`) ----------
+// ---------- harness files (`hkb init --harness copilot|codex`) ----------
 // Harnesses that cannot read the skill directly need their own agent + hook files. They are
 // *generated*, never hand-maintained: the protocol text is spliced out of the packaged SKILL.md so
 // it lives in exactly one place, and re-running init overwrites whatever is on disk.
 
 /** Profile a harness brings with it, so `--harness copilot` alone gives a dispatchable board. */
-export const HARNESS_PROFILE = { copilot: 'copilot-cli' };
+export const HARNESS_PROFILE = { copilot: 'copilot-cli', codex: 'codex' };
 export const HARNESSES = Object.keys(HARNESS_PROFILE);
 
 function template(...parts) { return fs.readFileSync(path.join(PKG_ROOT, 'templates', ...parts), 'utf8'); }
 /** For a placeholder that sits inside a JSON string literal — the node fallback command has quotes in it. */
 function jsonInner(s) { return JSON.stringify(String(s)).slice(1, -1); }
+/** For a placeholder inside a TOML basic string — a Windows path is full of backslashes. */
+function tomlInner(s) { return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"'); }
+const fill = (text, vars) => text.replace(/\{\{(\w+)\}\}/g, (m, k) => (k in vars ? vars[k] : m));
+
+/** The body of the packaged SKILL.md, with its skill-relative links rewritten to repo-relative ones. */
+function protocolText() {
+  return stripFrontmatter(fs.readFileSync(path.join(packageSkillDir(), 'SKILL.md'), 'utf8'))
+    .replace(/`references\/protocol\.md`/g, '`.agents/skills/kanban/references/protocol.md`')
+    .trimEnd();
+}
+
+// One entry per harness: what it needs on disk, built from `templates/<harness>/`.
+const HARNESS_FILES = {
+  // Copilot CLI: a custom agent (`copilot --agent kanban-worker`) and an agentStop hook.
+  copilot: ({ command }) => [
+    { rel: path.join('.github', 'agents', 'kanban-worker.agent.md'), contents: fill(template('copilot', 'kanban-worker.agent.md'), { protocol: protocolText() }) },
+    { rel: path.join('.github', 'hooks', 'kanban.json'), contents: fill(template('copilot', 'hooks.json'), { command: jsonInner(command) }) },
+  ],
+  // Codex CLI: a Stop hook, plus the notes for what only the user can do — the one-time trust and
+  // the `~/.codex/config.toml` settings a sandboxed worker needs. No agent file: Codex reads
+  // AGENTS.md, which `hkb init` already keeps up to date.
+  codex: ({ command, root }) => [
+    { rel: path.join('.codex', 'hooks.json'), contents: fill(template('codex', 'hooks.json'), { command: jsonInner(command) }) },
+    { rel: path.join('.codex', 'README.md'), contents: fill(template('codex', 'notes.md'), { command, root: tomlInner(root), gitdir: tomlInner(path.join(root, '.git')) }) },
+  ],
+};
 
 /**
  * The files `hkb init --harness <name>` writes, as `[{ rel, contents }]` — nothing is written here,
  * so tests and `--dry-run` callers can look before anything touches the repo.
  * @param name one of HARNESSES
  * @param command what the generated hook should run (`hkb hook stop`, or the node fallback)
+ * @param root absolute path of the repo, for files that must name it (Codex trusts by path)
  */
-export function harnessFiles(name, { command = 'hkb hook stop' } = {}) {
-  if (name !== 'copilot') {
+export function harnessFiles(name, { command = 'hkb hook stop', root = '/path/to/your/repo' } = {}) {
+  const build = HARNESS_FILES[name];
+  if (!build) {
     const e = new Error(`unknown harness "${name}". Known: ${HARNESSES.join(', ')}`);
     e.exitCode = 2;
     throw e;
   }
-  // links in SKILL.md are relative to the skill directory; from .github/agents they are not
-  const protocol = stripFrontmatter(fs.readFileSync(path.join(packageSkillDir(), 'SKILL.md'), 'utf8'))
-    .replace(/`references\/protocol\.md`/g, '`.agents/skills/kanban/references/protocol.md`')
-    .trimEnd();
-  return [
-    { rel: path.join('.github', 'agents', 'kanban-worker.agent.md'), contents: template('copilot', 'kanban-worker.agent.md').replace('{{protocol}}', () => protocol) },
-    { rel: path.join('.github', 'hooks', 'kanban.json'), contents: template('copilot', 'hooks.json').replace('{{command}}', () => jsonInner(command)) },
-  ];
+  return build({ command, root });
 }
 
 /**
@@ -180,7 +201,7 @@ export function resolveProfiles(flags = {}) {
 /** Write a harness's files. Returns the relative paths that actually changed. */
 export function installHarness(root, name, { command } = {}) {
   const written = [];
-  for (const f of harnessFiles(name, { command })) {
+  for (const f of harnessFiles(name, { command, root })) {
     const abs = path.join(root, f.rel);
     let current = null;
     try { current = fs.readFileSync(abs, 'utf8'); } catch { /* not there yet */ }

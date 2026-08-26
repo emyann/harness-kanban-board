@@ -17,6 +17,11 @@
 // `normalizeHookInput` (model.js) folds the camelCase spellings onto Claude's, so everything below
 // reads one shape. Copilot has no `--output-format json`, so its payload carries no cost/turn
 // fields: `recordSession` simply finds nothing to write and the attempt row stays as it is.
+//
+// Codex CLI is the third: event `Stop`, configured in `.codex/hooks.json` (`hkb init --harness codex`),
+// same `{"decision":"block"}` answer — but it runs no project hook at all until the project has been
+// trusted once, so its nudge is only as good as that setup step (docs/harnesses.md). `--output-schema`
+// shapes its final message; the terminal verb the worker ran is still what moved the card.
 import fs from 'node:fs';
 import path from 'node:path';
 import { kanbanDir } from './board.js';

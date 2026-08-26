@@ -1,5 +1,5 @@
-// `hkb init --harness copilot`: the generated Copilot files, the launch template that uses them,
-// and the stop-hook payload both harnesses feed to `hkb hook stop`.
+// `hkb init --harness copilot|codex`: the files each harness gets generated, the launch templates
+// that use them, and the stop-hook payload every harness feeds to `hkb hook stop`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -10,13 +10,16 @@ import { spawnSync } from 'node:child_process';
 import { harnessFiles, installHarness, resolveProfiles, HARNESSES, HARNESS_PROFILE, packageSkillDir } from '../src/init.js';
 import { parseArgs } from '../src/cli.js';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, ensureWorktree } from '../src/board.js';
-import { expandLaunch, tick } from '../src/dispatch.js';
+import { expandLaunch, spawnWorker, tick } from '../src/dispatch.js';
+import { checkHarnesses } from '../src/doctor.js';
 import { stripFrontmatter, worktreePath } from '../src/model.js';
 import { FakeGh, kbIssue } from './fake-gh.js';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 const AGENT = path.join('.github', 'agents', 'kanban-worker.agent.md');
 const HOOKS = path.join('.github', 'hooks', 'kanban.json');
+const CODEX_HOOKS = path.join('.codex', 'hooks.json');
+const CODEX_NOTES = path.join('.codex', 'README.md');
 
 const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-harness-'));
 const fileMap = (name, opts) => Object.fromEntries(harnessFiles(name, opts).map((f) => [f.rel, f.contents]));
@@ -220,4 +223,130 @@ test('this repo ships the copilot templates the generator reads', () => {
   }
   const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'));
   assert.ok(pkg.files.includes('templates'), 'templates/ must be published or --harness breaks on npm installs');
+});
+
+// ---------- codex ----------
+
+test('harnessFiles(codex) produces the Stop hook and the notes, and no agent file', () => {
+  assert.deepEqual(harnessFiles('codex').map((f) => f.rel), [CODEX_HOOKS, CODEX_NOTES]);
+});
+
+test('the generated codex hook config fires hkb on Stop', () => {
+  const hooks = JSON.parse(fileMap('codex')[CODEX_HOOKS]);
+  assert.deepEqual(Object.keys(hooks.hooks), ['Stop'], 'no other event should be claimed');
+  const [entry] = hooks.hooks.Stop[0].hooks;
+  assert.deepEqual(entry, { type: 'command', command: 'hkb hook stop', timeout: 30 });
+});
+
+test('every harness substitutes the hook command, so a repo without hkb on PATH still works', () => {
+  const command = 'node "/opt/hkb/bin/hkb.js" hook stop';
+  for (const h of HARNESSES) {
+    const json = harnessFiles(h, { command }).find((f) => f.rel.endsWith('.json'));
+    const commands = Object.values(JSON.parse(json.contents).hooks).flatMap((groups) => groups.flatMap((g) => g.hooks.map((e) => e.command)));
+    assert.deepEqual(commands, [command], `${h}: one hook, running exactly the command init was given, quotes intact`);
+  }
+});
+
+test('the codex notes name this repo by absolute path, TOML-escaped', () => {
+  const notes = fileMap('codex', { root: 'C:\\Users\\me\\repo' })[CODEX_NOTES];
+  assert.match(notes, /^\[projects\."C:\\\\Users\\\\me\\\\repo"\]$/m, 'a Windows path must not smuggle escapes into the TOML');
+  assert.match(notes, /^trust_level = "trusted"$/m);
+  assert.ok(!notes.includes('{{'), 'placeholder left unsubstituted');
+});
+
+test('the codex notes carry the one-time trust steps and no MCP server', () => {
+  const notes = fileMap('codex')[CODEX_NOTES];
+  assert.match(notes, /`\/hooks`/, 'the TUI route to trusting the project hooks');
+  assert.match(notes, /trust_level = "trusted"/, 'the config route');
+  assert.match(notes, /network_access = true/, 'without it a worker cannot push, open a PR or heartbeat');
+  assert.match(notes, /writable_roots = \[/, 'a worktree commits into the main repo, outside the sandbox');
+  assert.ok(!/^\[mcp_servers/m.test(notes), 'hkb workers call the CLI directly — there is no MCP table to generate');
+});
+
+test('installHarness(codex) writes both files, then reports nothing to do', () => {
+  const root = scratch();
+  assert.deepEqual(installHarness(root, 'codex'), [CODEX_HOOKS, CODEX_NOTES]);
+  assert.deepEqual(installHarness(root, 'codex'), [], 'idempotent: a second init rewrites nothing');
+  const notes = fs.readFileSync(path.join(root, CODEX_NOTES), 'utf8');
+  assert.ok(notes.includes(`[projects."${root}"]`), 'installHarness passes the real repo root, not the placeholder');
+});
+
+test('`hkb init --harness codex` sets up for Codex instead of the claude default', () => {
+  const { flags } = parseArgs(['init', '--harness', 'codex']);
+  assert.deepEqual(resolveProfiles(flags), { harnesses: ['codex'], profiles: ['codex'] });
+  assert.deepEqual(resolveProfiles({ harness: 'copilot,codex' }).profiles, ['copilot-cli', 'codex']);
+});
+
+test('the codex profile runs `codex exec` in a dispatcher-made worktree, sandboxed to it', () => {
+  const p = DEFAULT_PROFILES.codex;
+  assert.equal(p.workspace, 'worktree', 'Codex has no worktree flag; the dispatcher makes one');
+  assert.equal(p.mode, 'process');
+  const argv = expandLaunch(p.launch, { worktree: '/w/kb-4-2', prompt: 'do the thing', model: 'gpt-5-codex' }, p);
+  assert.deepEqual(argv, [
+    'codex', 'exec', '-C', '/w/kb-4-2',
+    '--sandbox', 'workspace-write',
+    '--output-schema', '.agents/skills/kanban/schema/terminal.json',
+    '--model', 'gpt-5-codex', 'do the thing',
+  ]);
+  assert.deepEqual(expandLaunch(p.launch, { worktree: '/w', prompt: 'p' }, p).slice(-1), ['p'], 'no model: the prompt stays last');
+});
+
+test('the schema the codex launch names is committed, where a worktree will find it', () => {
+  const i = DEFAULT_PROFILES.codex.launch.indexOf('--output-schema');
+  const schema = DEFAULT_PROFILES.codex.launch[i + 1];
+  assert.ok(fs.existsSync(path.join(REPO, schema)), `${schema} must exist — codex exec refuses to start without it`);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(REPO, schema), 'utf8')).required, ['task', 'verb', 'summary']);
+  // in this repo .agents/skills/kanban is a committed symlink to skills/kanban; elsewhere init
+  // copies the skill in. Either way the path has to come with the checkout the worker gets.
+  const tracked = spawnSync('git', ['ls-files', '.agents/skills/kanban'], { cwd: REPO, encoding: 'utf8' });
+  assert.ok(tracked.stdout.trim(), 'the skill has to be committed, or the worker\'s worktree will not have it');
+});
+
+test('doctor reports a configured harness only, and names the init that fixes it', () => {
+  const root = scratch();
+  const rows = [];
+  const sink = { ok: (name, detail) => rows.push({ name, ok: true, detail }), warn: (name, detail, fix) => rows.push({ name, ok: null, detail, fix }) };
+  const ctx = { root, cfg: { profiles: { claude: {} } } };
+  checkHarnesses(ctx, sink);
+  assert.deepEqual(rows, [], 'no harness profile, nothing to say');
+
+  ctx.cfg.profiles.codex = DEFAULT_PROFILES.codex;
+  checkHarnesses(ctx, sink);
+  assert.equal(rows[0].ok, null);
+  assert.match(rows[0].detail, /missing \.codex[/\\]hooks\.json, \.codex[/\\]README\.md/);
+  assert.equal(rows[0].fix, 'hkb init --harness codex');
+
+  installHarness(root, 'codex');
+  rows.length = 0;
+  checkHarnesses(ctx, sink);
+  assert.equal(rows[0].ok, true, 'generated → clean');
+  assert.match(rows[0].detail, /one-time trust/);
+});
+
+test('the dispatcher hands codex the worktree it is about to create, as an absolute path', async (t) => {
+  const gh = new FakeGh();
+  const root = fs.realpathSync(scratch());
+  const ctx = {
+    root,
+    cfg: { ...DEFAULT_BOARD, repo: gh.nameWithOwner, profiles: { codex: DEFAULT_PROFILES.codex } },
+    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
+  };
+  const restore = gh.install();
+  t.after(() => { restore(); fs.rmSync(root, { recursive: true, force: true }); });
+  gh.addIssue(kbIssue({ number: 12, status: 'ready', agent: 'codex' }));
+  const { fetchBoard } = await import('../src/tasks.js');
+  const [task] = await fetchBoard(ctx);
+
+  const { argv } = await spawnWorker(ctx, task, 'codex', 3, { dryRun: true });
+
+  assert.equal(argv[argv.indexOf('-C') + 1], path.join(root, worktreePath('kb-12-3')));
+  assert.ok(argv[argv.length - 1].includes('#12'), 'the last argument is the task context');
+  assert.ok(!fs.existsSync(path.join(root, '.claude', 'worktrees')), 'a dry run creates nothing');
+});
+
+test('this repo ships the codex templates the generator reads', () => {
+  for (const f of ['hooks.json', 'notes.md']) {
+    assert.ok(fs.existsSync(path.join(REPO, 'templates', 'codex', f)), `templates/codex/${f}`);
+  }
 });
