@@ -78,6 +78,30 @@ reads the way you'd guess. `GHK_DEBUG=1` shows every poll with its status and th
 hkb watch: board: GET repos/o/r/issues?labels=kb%3Aboard%3Adefault&... → 304 Not Modified · rate 219 (+0) · etag 594b2e9a588b
 ```
 
+## MCP (optional — the CLI is the protocol)
+
+Harnesses that prefer tools to a shell get the same verbs over MCP:
+
+```bash
+hkb init --mcp   # writes .mcp.json, prints the Codex and VS Code equivalents
+hkb mcp          # the server itself: JSON-RPC 2.0 on stdio, no dependency
+```
+
+`.mcp.json` is read verbatim by Claude Code and Copilot CLI:
+
+```json
+{"mcpServers": {"kanban": {"type": "stdio", "command": "hkb", "args": ["mcp"]}}}
+```
+
+Codex reads MCP servers from `~/.codex/config.toml` and VS Code from `.vscode/mcp.json` — neither is hkb's file
+to write, so `--mcp` prints those two snippets instead of generating them.
+
+The nine tools are the nine verbs — `kanban_show`, `kanban_heartbeat`, `kanban_complete`, `kanban_block`,
+`kanban_request_review`, `kanban_comment`, `kanban_create`, `kanban_link`, `kanban_unblock` — and each one calls
+the function the CLI calls and returns the object its `--json` prints. There is no second code path: a
+`tools/call` of `kanban_show` is byte-for-byte `hkb show <n> --json`. `task` defaults to `$KB_TASK`, so a worker
+just calls `kanban_show`. Nothing about the board requires MCP; it is a second doorway to one protocol.
+
 ## How it maps to GitHub
 
 | Hermes | hkb |
@@ -89,7 +113,7 @@ hkb watch: board: GET repos/o/r/issues?labels=kb%3Aboard%3Adefault&... → 304 N
 | heartbeat | CAS on the same ref: `git push <empty commit>:<ref> --force-with-lease=<ref>:<expected>` — free, and a rejected lease is `LOCK_LOST` (exit 3). Profiles that cannot push refs use `"heartbeat": "comment"` |
 | runs table | one `<!-- kb-run -->` comment (attempts, failures, block loops) |
 | `kanban_complete(summary, metadata)` | `<!-- kb-result -->` comment; open PR → *review*, else issue closed |
-| worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link` |
+| worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link`, or the same nine as MCP tools (`hkb mcp`) |
 | stop nudge | Claude Code / Codex `Stop`, Copilot CLI `agentStop` hook (`hkb hook stop`, 2 nudges, inert unless `KB_TASK` is set) |
 | kanban dashboard | `hkb serve` — local page over the live board; drag-drop calls the same verbs |
 | live event stream | `hkb watch` / `hkb tail <n>` — conditional `GET` with `If-None-Match`; an unchanged board answers 304 and is not charged |

@@ -125,6 +125,16 @@ export function ensureWorktree(root, name) {
   return dir;
 }
 
+/**
+ * Is `hkb` on PATH? Generated files (the Stop hook, `.mcp.json`) name the binary when it is and fall
+ * back to this checkout's `bin/hkb.js` when it is not — a hook or an MCP client started by a GUI
+ * inherits a PATH that may have neither.
+ */
+export function hkbOnPath() {
+  const which = spawnSync('sh', ['-c', 'command -v hkb'], { encoding: 'utf8' });
+  return which.status === 0 && !!which.stdout.trim();
+}
+
 export function detectRepo() {
   const out = ghCmd(['repo', 'view', '--json', 'nameWithOwner,defaultBranchRef']);
   const j = JSON.parse(out);

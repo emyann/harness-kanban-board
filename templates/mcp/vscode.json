@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "kanban": {
+      "type": "stdio",
+      "command": "{{jsonCommand}}",
+      "args": {{args}}
+    }
+  }
+}
