@@ -1,6 +1,0 @@
-#!/usr/bin/env sh
-# Shim: use a globally installed hkb if present, else run the published package with npx.
-if command -v hkb >/dev/null 2>&1; then
-  exec hkb "$@"
-fi
-exec npx -y hkb "$@"

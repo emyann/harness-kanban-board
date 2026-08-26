@@ -5,11 +5,32 @@ import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, graphql, GhError, API_VERSION } from './gh.js';
 import { boardFile, api } from './board.js';
 import { detectCaps } from './tasks.js';
-import { L, STATUSES } from './model.js';
+import { L, STATUSES, compareVersions } from './model.js';
 import { classifyClaimError } from './lock.js';
+import { agentsSkillDir, packageSkillDir, readSkillVersion } from './init.js';
 
 function has(cmd) { return spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).status === 0; }
 function version(cmd, args = ['--version']) { const r = spawnSync(cmd, args, { encoding: 'utf8' }); return r.status === 0 ? (r.stdout || r.stderr).trim().split('\n')[0] : null; }
+
+/**
+ * `.agents/skills/kanban` is either a link to the in-repo source (hkb's own repo — cannot go stale)
+ * or a copy of the packaged skill, which can. board.json remembers what init installed; the copy's
+ * own SKILL.md wins when it has a version, because that is what an agent will actually read.
+ */
+export function checkSkill(ctx, { ok, warn }) {
+  const dir = agentsSkillDir(ctx.root);
+  if (!fs.existsSync(path.join(dir, 'SKILL.md'))) return warn('skill', 'not installed', 'hkb init');
+  let link = null;
+  try { if (fs.lstatSync(dir).isSymbolicLink()) link = fs.readlinkSync(dir); } catch { /* treat as a copy */ }
+  if (link) return ok('skill', `.agents/skills/kanban → ${link} (linked, always current)`);
+
+  const installed = readSkillVersion(dir) || ctx.cfg?.skill_version || null;
+  const packaged = readSkillVersion(packageSkillDir());
+  const cmp = compareVersions(installed, packaged);
+  if (cmp !== null && cmp < 0) return warn('skill', `.agents/skills/kanban is v${installed}, hkb ships v${packaged}`, 'hkb init');
+  if (installed && packaged && cmp === null) return warn('skill', `.agents/skills/kanban v${installed} vs packaged v${packaged} — not comparable`, 'hkb init');
+  ok('skill', `.agents/skills/kanban${installed ? ` v${installed}` : ''}`);
+}
 
 export async function doctor(ctx, flags, log) {
   const results = [];
@@ -33,8 +54,7 @@ export async function doctor(ctx, flags, log) {
     if (!p.launch) warn(`profile ${name}`, 'no launch template — tasks assigned to it will never be dispatched from this host', 'add "launch" in board.json');
     else ok(`profile ${name}`, `${p.launch[0]} · max_in_progress ${p.max_in_progress ?? '∞'}`);
   }
-  const skill = path.join(ctx.root, '.agents', 'skills', 'kanban', 'SKILL.md');
-  fs.existsSync(skill) ? ok('skill', '.agents/skills/kanban') : warn('skill', 'not installed', 'hkb init');
+  checkSkill(ctx, { ok, warn });
   const claudeSkill = path.join(ctx.root, '.claude', 'skills', 'kanban');
   fs.existsSync(claudeSkill) ? ok('claude skill link', '.claude/skills/kanban') : warn('claude skill link', 'missing', 'hkb init');
   try {
