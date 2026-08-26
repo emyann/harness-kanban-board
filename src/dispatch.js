@@ -7,10 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { fetchBoard, loadRun, saveRun, setStatus, addLabels, getTask } from './tasks.js';
 import { claim, release, listLocks } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs } from './board.js';
-import { computeReady, openAttempt, lastAttempt, sortForDispatch, pathsOverlap, slugify, L, lockRef, parseBackgroundedId, classifyJob } from './model.js';
+import { computeReady, openAttempt, lastAttempt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob } from './model.js';
 import { workerContext } from './context.js';
 import { GhError } from './gh.js';
-import { listKbJobs, readJobState, stopJob, launchBg } from './jobs.js';
+import { listKbJobs, readJobState, stopJob, matchJobByWorktree } from './jobs.js';
 
 const nowIso = () => new Date().toISOString();
 const secondsSince = (iso) => (iso ? (Date.now() - new Date(iso).getTime()) / 1000 : Infinity);
@@ -75,11 +75,16 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
   ensureLocalDirs(ctx.root);
   const logFile = path.join(logsDir(ctx.root), `${task.number}-${attempt}.log`);
   if (profile.mode === 'claude-bg') {
+    // Fire-and-forget: `claude --bg` prints "backgrounded · <id>" and exits, but a cold daemon
+    // start can take a minute — never block the tick on it. Detach, log its output, and identify
+    // the running job by its worktree on the next tick (cwd basename == kb-<n>-<k>).
     fs.appendFileSync(logFile, `# ${nowIso()} launch background agent for #${task.number} attempt ${attempt}\n`);
-    const r = launchBg(argv, { cwd: ctx.root, env, logFile });
-    const job = parseBackgroundedId(r.text);
-    if (r.status !== 0 || !job) throw new Error(`claude --bg failed (${r.status}): ${r.text.trim().split('\n').pop() || 'no job id printed'}`);
-    return { argv, pid: null, job, logFile };
+    const fd = fs.openSync(logFile, 'a');
+    const child = spawn(argv[0], argv.slice(1), { cwd: ctx.root, env, detached: true, stdio: ['ignore', fd, fd] });
+    child.on('error', () => { /* surfaced next tick as crashed if the job never registers */ });
+    fs.closeSync(fd);
+    child.unref();
+    return { argv, pid: null, bg: true, wt: `kb-${task.number}-${attempt}`, logFile };
   }
   const fd = fs.openSync(logFile, 'a');
   fs.writeSync(fd, `# ${nowIso()} spawn ${argv[0]} for #${task.number} attempt ${attempt}\n`);
@@ -152,11 +157,17 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     const maxRuntime = t.kb.max_runtime || d.max_runtime_default;
     const lastSignal = a.heartbeat_at || a.started_at;
     let outcome = null;
-    if (a.host === ctx.host && a.job) {
-      const job = jobsById.get(a.job) || readJobState(a.job);
-      const verdict = classifyJob(job);
-      if (verdict !== 'running' && secondsSince(a.started_at) > 30) outcome = verdict; // grace: the id can precede state.json
+    if (a.host === ctx.host && (a.job || a.bg)) {
+      let job = a.job ? (jobsById.get(a.job) || readJobState(a.job)) : null;
+      if (!job && a.bg) {
+        job = matchJobByWorktree([...jobsById.values()], a.wt || `kb-${t.number}-${a.attempt}`);
+        if (job && !dryRun) { a.job = job.id; await saveRun(ctx, t.number, runRec); } // backfill once
+      }
+      if (!job) {
+        if (secondsSince(a.started_at) > 180) outcome = 'crashed'; // cold daemon start gets 3 min to register
+      } else if (classifyJob(job) !== 'running' && secondsSince(a.started_at) > 30) outcome = 'protocol_violation';
     } else if (a.host === ctx.host && a.pid && !pidAlive(a.pid)) outcome = 'crashed';
+    else if (a.host === ctx.host && !a.pid && !a.job && secondsSince(a.started_at) > 180) outcome = 'crashed'; // spawn never recorded a handle
     if (!outcome && secondsSince(a.started_at) > maxRuntime) outcome = 'timed_out';
     else if (!outcome && secondsSince(lastSignal) > d.stale_after) outcome = 'reclaimed';
     if (!outcome) continue;
@@ -245,7 +256,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     let spawned;
     try {
       spawned = await spawnWorker(ctx, t, profileName, k, { keepRef: !!children });
-      if (!spawned.pid && !spawned.job) throw new Error('spawn returned neither a pid nor a job id');
+      if (!spawned.pid && !spawned.bg) throw new Error('spawn returned neither a pid nor a background launch');
     } catch (e) {
       log(`#${t.number}: spawn failed: ${e.message}`);
       await failAttempt(ctx, t, runRec, 'spawn_failed', e.message, { kill: false });
@@ -253,15 +264,15 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       continue;
     }
     attempt.pid = spawned.pid;
-    if (spawned.job) attempt.job = spawned.job;
+    if (spawned.bg) { attempt.bg = true; attempt.wt = spawned.wt; }
     attempt.log = path.relative(ctx.root, spawned.logFile);
     await saveRun(ctx, t.number, runRec);
     state.spawned_today = (state.spawned_today || 0) + 1;
     perProfile[profileName] = (perProfile[profileName] || 0) + 1;
     claimedPaths.push(t.kb.paths || []);
     budget--;
-    const handle = spawned.job ? `job ${spawned.job} (claude attach ${spawned.job})` : `pid ${spawned.pid}`;
-    summary.claimed.push({ number: t.number, attempt: k, profile: profileName, pid: spawned.pid, job: spawned.job || null });
+    const handle = spawned.bg ? `background agent in ${spawned.wt} (job id on next tick; claude agents to watch)` : `pid ${spawned.pid}`;
+    summary.claimed.push({ number: t.number, attempt: k, profile: profileName, pid: spawned.pid, wt: spawned.wt || null });
     log(`#${t.number}: claimed attempt ${k} → ${profileName} ${handle} (log ${attempt.log})`);
     if (children && spawned.child) watchChild(ctx, t.number, k, spawned.child, children, state, profileName, log);
   }

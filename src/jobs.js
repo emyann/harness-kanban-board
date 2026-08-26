@@ -40,10 +40,7 @@ export function stopJob(id) {
   return r.status === 0;
 }
 
-/** Launch `claude --bg ...` and return the job id (or throw with the CLI's message). */
-export function launchBg(argv, { cwd, env, logFile }) {
-  const r = spawnSync(argv[0], argv.slice(1), { cwd, env, encoding: 'utf8', timeout: 60_000 });
-  const text = (r.stdout || '') + (r.stderr || '');
-  if (logFile) fs.appendFileSync(logFile, text.replace(ANSI_RE, ''));
-  return { status: r.status, text: text.replace(ANSI_RE, '') };
+/** A launched job is identified by its worktree: cwd basename == kb-<n>-<k>. */
+export function matchJobByWorktree(jobs, wtName) {
+  return (jobs || []).find((j) => j.cwd && path.basename(j.cwd) === wtName) || null;
 }

@@ -17,6 +17,17 @@ test('classifyJob: working → running; done/idle/gone → protocol_violation; m
   assert.equal(classifyJob(null), 'crashed');
 });
 
+test('matchJobByWorktree matches on cwd basename', async () => {
+  const { matchJobByWorktree } = await import('../src/jobs.js');
+  const jobs = [
+    { id: 'a1', cwd: '/repo/.claude/worktrees/kb-15-1' },
+    { id: 'b2', cwd: '/repo' },
+  ];
+  assert.equal(matchJobByWorktree(jobs, 'kb-15-1').id, 'a1');
+  assert.equal(matchJobByWorktree(jobs, 'kb-15-2'), null);
+  assert.equal(matchJobByWorktree([], 'kb-1-1'), null);
+});
+
 test('job names round-trip through the listing regex', () => {
   const name = jobName({ number: 13, title: 'Terminal verbs must be easy · really' });
   const m = KB_JOB_NAME_RE.exec(name);
