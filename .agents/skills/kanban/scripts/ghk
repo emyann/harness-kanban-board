@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+# Shim: use a globally installed ghk if present, else run the published package with npx.
+if command -v ghk >/dev/null 2>&1; then
+  exec ghk "$@"
+fi
+exec npx -y ghkanban "$@"
