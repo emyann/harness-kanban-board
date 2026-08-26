@@ -3,7 +3,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { kanbanDir } from './board.js';
-import { getTask } from './tasks.js';
+import { getTask, loadRun, saveRun } from './tasks.js';
+import { openAttempt, sessionUpdate } from './model.js';
 
 /** PreToolUse hook: hkb's own permission policy — allow or deny, never a prompt. */
 export async function preToolHook(ctx) {
@@ -20,6 +21,25 @@ export async function preToolHook(ctx) {
     hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision, permissionDecisionReason: `hkb: ${reason}` },
   }) + '\n');
   return 0;
+}
+
+/**
+ * Write the Claude session behind this attempt onto its run row: id + transcript, once.
+ * The Stop hook can fire three times per attempt, so a local marker keeps it to a single
+ * read + PATCH — after that the hook costs nothing extra.
+ * @returns true when it wrote, false when there was nothing to record.
+ */
+async function recordSession(ctx, n, k, input) {
+  if (!input?.session_id && !input?.transcript_path) return false;
+  const mark = path.join(kanbanDir(ctx.root), 'sessions', `${n}-${k}`);
+  if (fs.existsSync(mark)) return false;
+  const rec = await loadRun(ctx, n);
+  const a = rec.run.attempts.find((x) => String(x.attempt) === String(k)) || openAttempt(rec.run);
+  const update = a && sessionUpdate(a, input);
+  if (update) { Object.assign(a, update); await saveRun(ctx, n, rec); }
+  fs.mkdirSync(path.dirname(mark), { recursive: true });
+  fs.writeFileSync(mark, `${input.session_id || ''}\n`);
+  return !!update;
 }
 
 export async function stopHook(ctx) {
@@ -40,6 +60,11 @@ export async function stopHook(ctx) {
   } catch (e) {
     process.stderr.write(`hkb hook: could not read #${n} (${e.message}); allowing stop\n`);
     return 0;
+  }
+  // the session id is worth recording whatever the status — a finished attempt is exactly the
+  // one a human reopens for a post-mortem. Never let it cost the nudge.
+  try { await recordSession(ctx, n, k, input); } catch (e) {
+    process.stderr.write(`hkb hook: could not record the session on #${n} (${e.message})\n`);
   }
   if (status !== 'running') return 0; // terminal verb already recorded
   if (count >= 2) {
