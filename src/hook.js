@@ -31,7 +31,7 @@ export async function stopHook(ctx) {
   }
   fs.writeFileSync(file, String(count + 1));
   const reason = `Task #${n} is still "running" on the kanban board. Finish with exactly one terminal verb before stopping: ` +
-    `\`ghk complete ${n} --summary "..." --metadata '{...}'\`, or \`ghk block ${n} "why" --kind needs_input\`, or \`ghk request-review ${n} --summary "..."\`. ` +
+    `\`ghk complete ${n} --from-stdin\` (JSON {summary, metadata} on stdin; or --summary/--summary-file --metadata-file), or \`ghk block ${n} "why" --kind needs_input\`, or \`ghk request-review ${n} --summary "..."\`. ` +
     `(nudge ${count + 1}/2${input.stop_hook_active ? ', stop_hook_active' : ''})`;
   process.stdout.write(JSON.stringify({ decision: 'block', reason }) + '\n');
   return 0;

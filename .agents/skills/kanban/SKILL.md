@@ -27,11 +27,34 @@ comes from `ghk`; everything you report goes through `ghk`. See `references/prot
    then run the project's lint and tests (see CLAUDE.md / AGENTS.md).
 5. Push and open a **draft** PR whose body contains `Closes #$KB_TASK` and a real description:
    `gh pr create --draft --title "..." --body "Closes #$KB_TASK\n\n<what/why/how verified>"`.
-6. Finish with **exactly one** terminal verb, then stop:
-   - `ghk complete $KB_TASK --summary "<what changed, written for the next worker>" --metadata '{"changed_files":["..."],"verification":["npm test"],"dependencies":[],"residual_risk":["..."],"retry_notes":null}'`
+6. Finish with **exactly one** terminal verb, then stop. Send the payload as one JSON object on stdin so no JSON
+   has to survive your shell's quoting (recommended — a heredoc with no nested quotes):
+
+   ```bash
+   ghk complete $KB_TASK --from-stdin <<'EOF'
+   {
+     "summary": "What changed, written for the next worker. How it was verified. What is still risky.",
+     "metadata": {
+       "changed_files": ["src/a.js", "test/a.test.js"],
+       "verification": ["npm run lint", "npm test"],
+       "dependencies": [],
+       "residual_risk": ["..."],
+       "retry_notes": null
+     },
+     "artifacts": []
+   }
+   EOF
+   ```
+
+   If your harness has a file-write tool, write the pieces to files and point at them — no quoting at all:
+   `ghk complete $KB_TASK --summary-file /tmp/kb-summary.md --metadata-file /tmp/kb-metadata.json`
+   (`--metadata <path>` also reads a file when the value does not start with `{`). The inline
+   `--summary ".." --metadata '{..}'` flags still work; per field, inline beats file beats stdin.
+   - `ghk complete $KB_TASK ...` — done (or *review* while a PR is open). Stdin keys: `summary`, `metadata`, `artifacts`.
    - `ghk block $KB_TASK "<why>" --kind needs_input|dependency|capability|transient` — when you cannot proceed.
-     `dependency` sends it back to *todo*; the others ask a human.
-   - `ghk request-review $KB_TASK --summary "..." [--reviewer <profile>]` — when a reviewer must look before it counts as done.
+     `dependency` sends it back to *todo*; the others ask a human. Also `--reason-file <path>`, or stdin keys `reason`, `kind`.
+   - `ghk request-review $KB_TASK --summary "..." [--reviewer <profile>]` — when a reviewer must look before it counts
+     as done. Stdin keys: `summary`, `metadata`, `reviewer`.
 
 Do not do work that belongs to other tasks. If you discover follow-up work, create it instead:
 `ghk create "title" --body "..." --blocked-by $KB_TASK` (it starts in *todo* and becomes *ready* when this task is done).

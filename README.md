@@ -38,10 +38,15 @@ A worker (spawned by the dispatcher, or you with `ghk claim 42` + `export KB_TAS
 `ghk show`, works in a worktree, opens a draft PR that `Closes #42`, and finishes with exactly one of:
 
 ```bash
-ghk complete 42 --summary "..." --metadata '{"changed_files":[...],"verification":["npm test"]}'
+ghk complete 42 --from-stdin <<'EOF'
+{"summary": "...", "metadata": {"changed_files": ["src/auth.js"], "verification": ["npm test"]}}
+EOF
 ghk block 42 "needs the Stripe key" --kind needs_input
 ghk request-review 42 --summary "..."
 ```
+
+Every terminal verb also takes `--summary-file` / `--metadata-file` / `--reason-file`, or the inline
+`--summary ".." --metadata '{..}'` flags — no harness has to push JSON through shell quoting.
 
 Humans: `ghk promote`, `ghk unblock`, `ghk request-changes`, `ghk comment`, `ghk link/unlink`, `ghk archive`, `ghk log`.
 
