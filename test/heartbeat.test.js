@@ -46,7 +46,9 @@ function harness({ mode = 'auto', attempt = { }, env = {} } = {}) {
   const ctx = { root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner }, board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; } };
   const restore = gh.install();
   const saved = { ...process.env };
-  Object.assign(process.env, { KB_ATTEMPT: '', KB_PROFILE: 'claude', ...env });
+  // KB_ATTEMPT only means anything alongside the KB_TASK it belongs to — a track runner acts on
+  // several tasks from one session, so a bare KB_ATTEMPT is never read (see `envAttempt`).
+  Object.assign(process.env, { KB_TASK: '7', KB_ATTEMPT: '', KB_PROFILE: 'claude', ...env });
 
   const remoteSha = () => (git(root, 'ls-remote', 'origin', LOCK).split('\t')[0] || null) || null;
   return {

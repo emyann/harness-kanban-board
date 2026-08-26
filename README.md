@@ -130,6 +130,18 @@ worker as a Claude Code **background agent** — `claude --bg --name "kb #<n> ·
 stopped by the dispatcher once their attempt has ended. `hkb show <n>` prints the job id per attempt.
 `claude-p` is the headless variant (`claude -p`, exits when done) for CI and containers without the session daemon.
 
+`claude-track` is the same launcher pointed at a whole **track** — a root task plus everything still blocking it,
+usually what `/kanban:decompose` just materialized. One session executes the subgraph in dependency order instead of
+one cold session per node, so a dependent pair costs no tick of latency and no re-derived context; the board is
+unchanged, because the runner still claims each node, works it, and finishes it with its own terminal verb. Every
+node stays a durable checkpoint, so a runner that dies leaves a board the ordinary dispatcher finishes node by node —
+and a root that has had one track attempt is never handed to a second runner. Put it on the **root only**
+(`hkb adopt <root> --agent claude-track --status todo`) and give it a `max_runtime` for the whole track. A track
+costs one `max_in_progress` slot however many nodes it holds; per-node `kb.paths` still guard against everything else
+running. Cross-harness tracks are out of scope: a node on a profile outside the runner's `track_agents` simply makes
+the track un-claimable and the board falls back to node dispatch. See
+[Tracks](skills/kanban/references/protocol.md#tracks--the-second-execution-engine).
+
 `copilot-cli` is the same deal for **GitHub Copilot CLI**, which is included in Copilot Free:
 
 ```bash

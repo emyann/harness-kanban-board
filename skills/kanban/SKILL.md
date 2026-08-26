@@ -1,11 +1,11 @@
 ---
 name: kanban
-description: Work a hkb task from the GitHub Issues board — read the task with `hkb show`, work in the worktree, open a PR that closes the issue, and finish with exactly one terminal verb (complete / block / request-review). Use whenever KB_TASK is set, when asked to "work task <n>", "pick up the next kanban task", or to create/link tasks on the board. Also plans the board — `/kanban:specify <n>` rewrites a one-liner into a spec and promotes it, `/kanban:decompose <n>` proposes a dependency graph for a goal and materializes it once a human approves.
+description: Work a hkb task from the GitHub Issues board — read the task with `hkb show`, work in the worktree, open a PR that closes the issue, and finish with exactly one terminal verb (complete / block / request-review). Use whenever KB_TASK is set, when asked to "work task <n>", "pick up the next kanban task", or to create/link tasks on the board. Also runs a whole track (a root plus everything blocking it) in one session, and plans the board — `/kanban:specify <n>` rewrites a one-liner into a spec and promotes it, `/kanban:decompose <n>` proposes a dependency graph for a goal and materializes it once a human approves.
 license: MIT
 compatibility: Requires the `gh` CLI (authenticated) and `hkb` (npm hkb) on PATH. Works with Claude Code, GitHub Copilot CLI and Codex CLI.
 metadata:
   author: hkb
-  version: 0.3.0
+  version: 0.4.0
 allowed-tools: Bash(hkb *) Bash(gh api *) Bash(gh pr *) Bash(gh issue view *) Bash(git *)
 ---
 
@@ -63,6 +63,64 @@ comes from `hkb`; everything you report goes through `hkb`. See `references/prot
 
 Do not do work that belongs to other tasks. If you discover follow-up work, create it instead:
 `hkb create "title" --body "..." --blocked-by $KB_TASK` (it starts in *todo* and becomes *ready* when this task is done).
+
+## When you run a track (your prompt opens with TRACK RUNNER)
+
+A **track** is a connected subgraph of the board: a root task plus everything it is still blocked by — normally what
+`/kanban:decompose` just materialized. The dispatcher's ordinary engine runs one node per cold session; a track runner
+runs the whole subgraph in **one** session, in dependency order, with the context flowing in memory instead of being
+re-derived per node. You get one when the root carries `kb:agent:claude-track` — any profile with `"track": true` in
+`.kanban/board.json`.
+
+Nothing about the protocol changes. You run it once per node, in the order your prompt lists:
+
+| per node | |
+|---|---|
+| 1 | `hkb context <n>` — the exact brief that node's own cold worker would get. Read it before you touch anything |
+| 2 | `hkb claim <n>` — creates `refs/kb/locks/<n>/<k>` and moves the node to *running*. `held` means another worker owns it: skip it and everything behind it |
+| 3 | work, on a branch of its own cut from the branch of the node it is blocked by (or the default branch when it has none) |
+| 4 | push, and open one **draft** PR per node — `--base` that same branch, exactly one `Closes #<n>` in the body |
+| 5 | exactly one terminal verb for that node: `hkb complete <n>` / `hkb block <n>` / `hkb request-review <n>` |
+
+Step 5 is what makes a track safe to run at all: every node is a durable checkpoint, so a runner that dies leaves a
+board the ordinary dispatcher can finish node by node — and it does. A root whose track attempt has ended is never
+handed to a second runner; the durable engine takes the rest.
+
+Four things really are different:
+
+- **Heartbeat the root, not the nodes.** `hkb heartbeat <root>` every ~10 minutes. That one lease covers the whole
+  track: the dispatcher will not reclaim a node while the root's attempt is alive. `LOCK_LOST` means stop
+  *everything* — do not commit, do not push, do not finish any node.
+- **`KB_TASK` is the root, and stays the root.** `hkb claim <n>` prints an `export KB_TASK=…` line for a human
+  claiming by hand; ignore it. `hkb` scopes `KB_ATTEMPT` to `KB_TASK`, so each verb you run on a node acts on that
+  node's own open attempt without you passing anything.
+- **Claim as you go, never up front.** A lock you hold and are not working is a node nobody else can run. Claim a
+  node when you are about to start it; end it before you claim the next.
+- **One PR per node, never one PR for several nodes.** A body with two `Closes #` drags the unfinished node into
+  *review* behind the finished one, and then neither you nor the dispatcher can close it properly.
+
+**A node that blocks parks only its branch.** `hkb block <n> "why" --kind …`, then skip everything blocked by it,
+transitively, and carry on with the rest of the graph. Do not abandon a track for one bad node: finish what you can,
+and say in the root's summary which branch you left and why.
+
+**Independent branches.** Nodes in the same wave — nothing in the graph between them — may be fanned out to subagents
+if your harness has them, one git worktree each, because two agents cannot share a checkout. Sequence is always a
+correct answer; the board reads the same either way.
+
+**Finishing.** The root is the last node. Check that the pieces actually fit, run the project's lint and tests over
+the whole result, write the docs or changelog no child could — then one terminal verb for the root, whose summary is
+the track's: what each node landed, what is open, what you parked.
+
+### Setting a track up
+
+- `/kanban:decompose <n>` builds the graph. Then put the track profile on the **root only**:
+  `hkb adopt <root> --agent claude-track --status todo`, and give it room — `max_runtime` for the whole track, not
+  for one node.
+- Every node must be on a profile the runner can execute (`track_agents` on the track profile). A node on another
+  harness makes the track un-claimable and the board simply falls back to node dispatch: the slower engine, not an
+  error. So do a node another worker already owns, a node with an open PR, and a node wearing `kb:needs-human`.
+- A track costs **one** `max_in_progress` slot however many nodes it holds — it is one session. Per-node `kb.paths`
+  still guard it against everything else running, so the paths still have to be right.
 
 ## When a human asks you to manage the board
 
@@ -189,6 +247,12 @@ fit, then write the docs or changelog no child could, and complete.
 Its worker gets every *leaf's* result under "Parent task results" (`hkb show <root> --json` lists them under
 `parents`) — only its own blockers, so name the children in between and tell it to `hkb show` them. All of that is the
 brief step 3a puts in the root's body; without it the root's worker will cheerfully redo a child's work.
+
+The root is also the handle for running the graph as a **track** — one session for the whole subgraph instead of one
+cold session per node. That is a per-goal choice, made after the graph exists: `hkb adopt <root> --agent claude-track
+--status todo`. Prefer it when the children are tightly coupled (each one's output is the next one's input) and they
+all run on the same harness; leave it off when they are genuinely independent, because node dispatch runs those in
+parallel and a track does not. Either way the board is identical — see *When you run a track* above.
 
 A full worked example — the graph above, the resulting board, and the invariants it satisfies — is in
 `references/protocol.md`.

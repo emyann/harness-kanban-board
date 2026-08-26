@@ -9,6 +9,7 @@ import { claim, release, listLocks, lockBeatAt } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree } from './board.js';
 import { computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, jobAlive, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath } from './model.js';
 import { workerContext } from './context.js';
+import { planTracks, trackContext, trackPaths, trackAlreadyAttempted } from './track.js';
 import { GhError } from './gh.js';
 import { listKbJobs, readJobState, stopJob, matchJobByWorktree } from './jobs.js';
 import { isMirrorConfigured, syncProject, projectError } from './projects.js';
@@ -65,10 +66,15 @@ export function expandLaunch(template, vars, profile) {
   return out;
 }
 
-export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = false, keepRef = false } = {}) {
+/**
+ * Launch one session for one attempt. `prompt` overrides the per-task worker context — a track
+ * runner gets the whole subgraph's brief instead (see src/track.js); everything else about the
+ * launch, the environment and the log is identical, because from here down a track *is* a worker.
+ */
+export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = false, keepRef = false, prompt: given = null } = {}) {
   const profile = ctx.cfg.profiles[profileName];
   if (!profile?.launch) throw new Error(`profile "${profileName}" has no launch template in board.json`);
-  const prompt = await workerContext(ctx, task, attempt);
+  const prompt = given ?? (await workerContext(ctx, task, attempt));
   // Harnesses without a worktree flag (Copilot CLI, Codex) declare `workspace: "worktree"`; the
   // dispatcher makes the checkout and runs them in it. Everything else runs at the board root and
   // isolates itself. `{worktree}` is that directory as an absolute path, for a harness that wants it
@@ -212,14 +218,16 @@ async function failAttempt(ctx, task, runRec, outcome, note, { kill = true } = {
     return 'gave_up';
   }
   await saveRun(ctx, task.number, runRec);
-  await setStatus(ctx, task, 'ready');
+  // back where readiness says it belongs, not blindly to `ready`: a track root is claimed while its
+  // nodes are still open, and a failed track attempt must leave it in *todo* behind them.
+  await setStatus(ctx, task, computeReady(task) ? 'ready' : 'todo');
   return outcome;
 }
 
 export async function tick(ctx, { max = Infinity, dryRun = false, children = null, log = () => {} } = {}) {
   ctx.requireBoard();
   const d = ctx.cfg.dispatch;
-  const summary = { reconciled: [], reclaimed: [], promoted: [], guarded: [], claimed: [], spawn_failed: [], held: [], skipped: [] };
+  const summary = { reconciled: [], reclaimed: [], promoted: [], guarded: [], claimed: [], spawn_failed: [], held: [], skipped: [], tracks: [] };
   const state = readState(ctx.root);
   const today = nowIso().slice(0, 10);
   if (state.spawn_day !== today) { state.spawn_day = today; state.spawned_today = 0; }
@@ -236,6 +244,11 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
 
   const tasks = await fetchBoard(ctx);
   const running = tasks.filter((t) => t.status === 'running');
+  // Tracks, from the board read we already have. `covered` is every node a live runner owns: the
+  // reclaim below leaves them alone (the root's own heartbeat is their liveness), they cost no
+  // slot (a track is one session), and the selection at the end does not try to claim them.
+  const plan = planTracks(tasks, ctx.cfg, { board: ctx.board });
+  const coveredBy = plan.covered;
 
   // 0. reconcile issues GitHub closed behind our back (merged `Closes #n`). One extra query, gated.
   try {
@@ -268,6 +281,9 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   // 1. reclaim stale / crashed / timed out / finished without a terminal verb
   for (const t of running) {
     if (touchedRecently(t.number)) continue; // our own transition may not be visible yet
+    // a node inside a live track: its session is the root's, and the root's lock is what says
+    // "alive". It has no pid and no job of its own, so every check below would call it crashed.
+    if (coveredBy.has(t.number)) { log(`#${t.number}: node of running track #${coveredBy.get(t.number)} — the root's heartbeat covers it`); continue; }
     const runRec = await loadRun(ctx, t.number);
     const a = openAttempt(runRec.run);
     if (!a) {
@@ -345,15 +361,109 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   }
 
   // 3. select & claim
+  // A track occupies one slot however many nodes it is holding — it is one session. Its nodes are
+  // still real running tasks (that is what makes them checkpoints), so they are counted out here
+  // rather than hidden: their paths still guard, they just do not spend capacity twice.
   const runningNow = tasks.filter((t) => t.status === 'running');
+  const sessions = runningNow.filter((t) => !coveredBy.has(t.number));
   const perProfile = {};
-  for (const t of runningNow) perProfile[t.agent] = (perProfile[t.agent] || 0) + 1;
-  let slots = Math.max(0, d.max_in_progress - runningNow.length);
+  for (const t of sessions) perProfile[t.agent] = (perProfile[t.agent] || 0) + 1;
+  let slots = Math.max(0, d.max_in_progress - sessions.length);
   let budget = Math.min(max, slots);
   const ready = sortForDispatch(tasks.filter((t) => t.status === 'ready'));
   const claimedPaths = runningNow.map((t) => t.kb.paths || []);
 
+  // 3a. track roots: one session for a whole subgraph, claimed on the ROOT lock. The nodes are
+  //     claimed by the runner as it reaches each one, so a runner that dies never wedges the track.
+  //     Before the ready loop on purpose — a track and its own frontier would otherwise race for the
+  //     same slot, and the node would win, leaving the track un-runnable for as long as it ran.
+  //     Same caps and the same guards, with the union of the nodes' paths standing in for the root's.
+  const claimedTracks = new Set(); // a root taken here is not also dispatched as a node below
+  for (const cand of plan.candidates) {
+    const t = cand.root;
+    const note = (why, extra = {}) => { summary.tracks.push({ root: t.number, nodes: cand.track.nodes.map((x) => x.number), ok: false, why, ...extra }); };
+    if (!cand.ok) { note(cand.why); continue; }
+    if (touchedRecently(t.number)) { note('touched recently (stale-read guard)'); continue; }
+    if (budget <= 0) { note('no slot'); continue; }
+    if ((state.spawned_today || 0) >= d.daily_spawn_cap) { note(`daily spawn cap ${d.daily_spawn_cap}`); continue; }
+    const profileName = t.agent;
+    const profile = ctx.cfg.profiles[profileName];
+    if (!profile) { note(`unknown profile ${profileName}`); continue; }
+    if ((perProfile[profileName] || 0) >= (profile.max_in_progress ?? Infinity)) { note(`profile ${profileName} at cap`); continue; }
+    const pausedUntil = state.profile_paused_until[profileName];
+    if (pausedUntil && new Date(pausedUntil) > new Date()) { note('blocker_auth pause', { until: pausedUntil }); continue; }
+    const runRec = await loadRun(ctx, t.number);
+    // one go per root: a track attempt that ended without finishing the track hands the remaining
+    // nodes back to the durable engine, which is the whole point of checkpointing every node.
+    if (trackAlreadyAttempted(runRec.run)) { note('a track attempt already ran — node dispatch takes it from here'); continue; }
+    const last = lastAttempt(runRec.run);
+    if (last?.outcome === 'completed' && secondsSince(last.ended_at) < d.recent_success_window) { note('recent_success'); continue; }
+    const paths = trackPaths(cand.track);
+    if (d.path_guard && paths.length && claimedPaths.some((p) => p.length && pathsOverlap(p, paths))) { note('path_overlap'); continue; }
+
+    const nodes = cand.track.nodes.map((x) => x.number);
+    const k = runRec.run.attempts.length + 1;
+    if (dryRun) {
+      summary.tracks.push({ root: t.number, nodes, ok: true, attempt: k, profile: profileName, dry: true });
+      claimedTracks.add(t.number);
+      for (const nn of nodes) coveredBy.set(nn, t.number); // a dry run must report the same board as a real one
+      log(`#${t.number}: [dry-run] would run track ${[...nodes, t.number].map((x) => `#${x}`).join(' → ')} as one ${profileName} session`);
+      budget--;
+      continue;
+    }
+    const c = await claim(ctx, t.number, k);
+    if (c.result === 'claimed') { state.claims[`${t.number}/${k}`] = nowIso(); touch(t.number); }
+    if (c.result === 'held') { summary.held.push(t.number); note('lock held elsewhere'); log(`#${t.number}: track lock held elsewhere, skipping`); continue; }
+    if (c.result === 'unknown') {
+      log(`#${t.number}: track claim result unknown (${c.error?.kind}: ${c.error?.message}); backing off this tick`);
+      note(`claim unknown: ${c.error?.kind}`);
+      if (c.error?.kind === 'ratelimit' || c.error?.kind === 'auth') break;
+      continue;
+    }
+    const attempt = { attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.sha, pid: null, track: true, track_nodes: nodes };
+    runRec.run.attempts.push(attempt);
+    await saveRun(ctx, t.number, runRec);
+    await setStatus(ctx, t, 'running', { remove: [L.needsHuman] });
+    let spawned;
+    try {
+      spawned = await spawnWorker(ctx, t, profileName, k, {
+        keepRef: !!children,
+        prompt: trackContext({ repo: ctx.repo.nameWithOwner, board: ctx.board, track: cand.track, attempt: k, waves: cand.waves }),
+      });
+      if (!spawned.pid && !spawned.bg) throw new Error('spawn returned neither a pid nor a background launch');
+    } catch (e) {
+      log(`#${t.number}: track spawn failed: ${e.message}`);
+      // the runner never started, so the fast engine has not had its go: drop the marker that
+      // would otherwise hand the whole subgraph to node dispatch over a missing binary.
+      delete attempt.track;
+      attempt.track_spawn_failed = true;
+      await failAttempt(ctx, t, runRec, 'spawn_failed', e.message, { kill: false });
+      summary.spawn_failed.push({ number: t.number, error: e.message, track: true });
+      // hold the nodes for one tick so the retry still has a track to run. A launch this host
+      // cannot start eventually exhausts max_retries, parks the root for a human, and *then* the
+      // nodes are free — falling back to node dispatch through the ordinary escalation.
+      for (const nn of nodes) coveredBy.set(nn, t.number);
+      continue;
+    }
+    attempt.pid = spawned.pid;
+    if (spawned.bg) attempt.bg = true;
+    if (spawned.wt) attempt.wt = spawned.wt;
+    attempt.log = path.relative(ctx.root, spawned.logFile);
+    await saveRun(ctx, t.number, runRec);
+    state.spawned_today = (state.spawned_today || 0) + 1;
+    perProfile[profileName] = (perProfile[profileName] || 0) + 1;
+    claimedPaths.push(paths);
+    for (const nn of nodes) coveredBy.set(nn, t.number); // the loop below must leave them to the runner
+    claimedTracks.add(t.number);
+    budget--;
+    summary.tracks.push({ root: t.number, nodes, ok: true, attempt: k, profile: profileName, pid: spawned.pid, wt: spawned.wt || null });
+    log(`#${t.number}: claimed track attempt ${k} → ${profileName}, ${nodes.length + 1} nodes ${[...nodes, t.number].map((x) => `#${x}`).join(' → ')} (log ${attempt.log})`);
+    if (children && spawned.child) watchChild(ctx, t.number, k, spawned.child, children, state, profileName, log);
+  }
+
   for (const t of ready) {
+    if (t.status !== 'ready' || claimedTracks.has(t.number)) continue; // 3a took it: it is running its own track now
+    if (coveredBy.has(t.number)) { summary.skipped.push({ number: t.number, why: `held for track #${coveredBy.get(t.number)}` }); continue; }
     if (touchedRecently(t.number)) { summary.skipped.push({ number: t.number, why: 'touched recently (stale-read guard)' }); continue; }
     // active_pr guard first: it needs no extra call and must apply even when there is no slot
     const openPrEarly = (t.prs || []).find((p) => p.state === 'OPEN');
@@ -505,7 +615,7 @@ export async function loop(ctx, { interval, max, log }) {
     try {
       const s = await tick(ctx, { max, children, log });
       const n = (k) => s[k].length;
-      log(`tick: reconciled ${n('reconciled')} reclaimed ${n('reclaimed')} promoted ${n('promoted')} claimed ${n('claimed')} guarded ${n('guarded')} held ${n('held')} skipped ${n('skipped')}`);
+      log(`tick: reconciled ${n('reconciled')} reclaimed ${n('reclaimed')} promoted ${n('promoted')} claimed ${n('claimed')} tracks ${s.tracks.filter((x) => x.ok).length} guarded ${n('guarded')} held ${n('held')} skipped ${n('skipped')}`);
     } catch (e) {
       if (e instanceof GhError && e.kind === 'network') log('GitHub unreachable — reclaim clock paused, retrying next tick');
       else log(`tick failed: ${e.message}`);
