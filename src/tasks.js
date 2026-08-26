@@ -95,6 +95,24 @@ export async function fetchBoard(ctx, { includeClosed = false } = {}) {
   return tasks;
 }
 
+/**
+ * The most recently updated *closed* issues on the board — the reconcile input.
+ * One query, no paging: an issue closed by a merged PR is by definition freshly updated,
+ * so it sits at the top of UPDATED_AT desc. Blockers are not filled in (reconcile never reads them).
+ */
+export async function fetchClosedRecent(ctx, { first = 50 } = {}) {
+  await detectCaps(ctx);
+  const q = `query($owner: String!, $repo: String!, $labels: [String!], $first: Int!) {
+    repository(owner: $owner, name: $repo) {
+      issues(first: $first, states: [CLOSED], labels: $labels, orderBy: {field: UPDATED_AT, direction: DESC}) {
+        nodes { ${ISSUE_FIELDS(ctx.caps)} }
+      }
+    }
+  }`;
+  const data = await graphql(q, { owner: ctx.repo.owner, repo: ctx.repo.repo, labels: [L.board(ctx.board)], first });
+  return (data.repository.issues.nodes || []).map(toTask);
+}
+
 export async function getTask(ctx, number) {
   await detectCaps(ctx);
   const q = `query($owner: String!, $repo: String!, $n: Int!) {
