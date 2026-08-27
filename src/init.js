@@ -325,13 +325,29 @@ export function installHarness(root, name, { command } = {}) {
   return writeAll(root, harnessFiles(name, { command, root }));
 }
 
-function ensureGitignore(root) {
+// Everything hkb writes under `.kanban/` except `board.json`, which is the one tracked file, plus
+// .claude/worktrees/ — worker checkouts, both Claude Code's `--worktree` and the ones the dispatcher
+// makes itself for profiles with `workspace: "worktree"` (Copilot CLI).
+// This repo's own `.gitignore` must be a superset of this list; `test/init.test.js` holds that line,
+// so a lesson learned here cannot stay here (`.kanban/dispatch.pid` did, for a while).
+export const GITIGNORE_LINES = [
+  '.kanban/logs/',
+  '.kanban/outbox.jsonl',
+  '.kanban/state.json',
+  '.kanban/dispatch.pid',
+  '.kanban/cache.json',
+  '.kanban/nudges/',
+  '.kanban/sessions/',
+  '.claude/worktrees/',
+];
+
+/** Append whatever `.gitignore` lines are missing. Per-line, so it is idempotent and additive. */
+export function ensureGitignore(root) {
   const file = path.join(root, '.gitignore');
-  // .claude/worktrees/ holds worker checkouts — Claude Code's `--worktree`, and the ones the
-  // dispatcher makes itself for profiles with `workspace: "worktree"` (Copilot CLI).
-  const wanted = ['.kanban/logs/', '.kanban/outbox.jsonl', '.kanban/state.json', '.kanban/cache.json', '.kanban/nudges/', '.kanban/sessions/', '.claude/worktrees/'];
+  const wanted = GITIGNORE_LINES;
   let text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-  const missing = wanted.filter((w) => !text.split('\n').includes(w));
+  const have = new Set(text.split('\n').map((l) => l.trim())); // trim: a CRLF file is still idempotent
+  const missing = wanted.filter((w) => !have.has(w));
   if (!missing.length) return false;
   text = text.trimEnd() + (text ? '\n' : '') + '# hkb local state\n' + missing.join('\n') + '\n';
   fs.writeFileSync(file, text);
