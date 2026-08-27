@@ -16,7 +16,7 @@ import { gc } from './gc.js';
 import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, resumeCommand } from './model.js';
 
 /** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
-const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'api', 'mcp', 'help']);
+const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'api', 'mcp', 'with-actions', 'help']);
 
 export function parseArgs(argv) {
   const flags = {};
@@ -148,8 +148,8 @@ export function terminalArgv(verb, number, p, { board, attempt } = {}) {
 
 const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issues
 
-  setup       init [--board slug] [--profiles claude] [--harness copilot|codex] [--mcp] [--import] [--no-hook]
-                   [--project <number|new>]
+  setup       init [--board slug] [--profiles claude] [--harness copilot|codex] [--with-actions] [--mcp] [--import]
+                   [--no-hook] [--project <number|new>]
               doctor [--api] [--json]
   tasks       create "title" [--body ..] [--blocked-by 12,13] [--agent claude] [--priority N] [--paths a/,b/]
                      [--model m] [--skills s1,s2] [--max-retries N] [--max-runtime S] [--scheduled-at ISO] [--triage] [--goal ".."]
@@ -161,7 +161,8 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
               request-review <n> --summary ".." [--metadata ..] [--reviewer p]     request-changes <n> "reason"
               complete|block|request-review also take --summary-file <p> --metadata-file <p> --reason-file <p>, or
               --from-stdin with one JSON object {summary, metadata, artifacts, reason, kind, reviewer} (no shell quoting)
-  dispatch    dispatch [--loop S] [--max N] [--dry-run]     claim <n> [--profile p] [--spawn]     gc [--yes]
+  dispatch    dispatch [--loop S] [--max N] [--profiles a,b] [--dry-run]     claim <n> [--profile p] [--spawn]
+              gc [--yes]
   board       serve [--port 4666] [--host 127.0.0.1] [--poll 30]   local web board; drag-drop runs the same verbs
               stats [--since 7d|all] [--json]   attempts per outcome, duration, spawns vs the daily cap, spend per profile
   live        watch [--interval 30] [--kinds completed,blocked,..] [--polls N] [--json]   one line per transition
@@ -262,7 +263,9 @@ export async function main(argv) {
       if (run.attempts.length) {
         process.stdout.write(`\nattempts (failures ${run.failures}):\n`);
         for (const a of run.attempts) {
-          process.stdout.write(`  ${a.attempt}. ${a.profile}@${a.host || '-'} ${a.started_at} → ${a.ended_at || 'active'} ${a.outcome || ''}${a.summary ? ' — ' + a.summary : ''}${a.reason ? ' — ' + a.reason : ''}\n`);
+          // `@host` is who *claimed* it; a `remote` attempt then ran somewhere else entirely (Actions),
+          // which is why it has no pid and why only its heartbeat says it is alive.
+          process.stdout.write(`  ${a.attempt}. ${a.profile}@${a.host || '-'}${a.remote ? ' → off-host' : ''} ${a.started_at} → ${a.ended_at || 'active'} ${a.outcome || ''}${a.summary ? ' — ' + a.summary : ''}${a.reason ? ' — ' + a.reason : ''}\n`);
           if (a.job) process.stdout.write(`     job ${a.job}${a.ended_at ? '' : ' · claude attach ' + a.job}\n`);
           const session = formatSession(a);
           if (session) process.stdout.write(`     ${session}\n`);
@@ -424,13 +427,17 @@ export async function main(argv) {
     }
     case 'dispatch': {
       const max = flags.max ? Number(flags.max) : Infinity;
+      // `--profiles a,b`: claim only tasks on these profiles. The Actions dispatcher passes
+      // `--profiles claude-action` so a runner never tries to launch a laptop-only harness.
+      const profiles = flags.profiles ? list(str(flags.profiles), '--profiles') : null;
+      for (const p of profiles || []) if (!ctx.cfg.profiles[p]) throw usage(`--profiles: no profile "${p}" in board.json. Known: ${Object.keys(ctx.cfg.profiles).join(', ')}`);
       if (flags.loop) {
         const interval = flags.loop === true ? ctx.cfg.dispatch.interval : Number(flags.loop);
-        log(`hkb dispatch loop every ${interval}s on ${ctx.repo.nameWithOwner} board "${ctx.board}" (host ${ctx.host}). Ctrl-C to stop.`);
-        await loop(ctx, { interval, max, log: (s) => log(`${new Date().toISOString()} ${s}`) });
+        log(`hkb dispatch loop every ${interval}s on ${ctx.repo.nameWithOwner} board "${ctx.board}" (host ${ctx.host})${profiles ? `, profiles ${profiles.join(', ')}` : ''}. Ctrl-C to stop.`);
+        await loop(ctx, { interval, max, profiles, log: (s) => log(`${new Date().toISOString()} ${s}`) });
         return 0;
       }
-      const s = await tick(ctx, { max, dryRun: !!flags['dry-run'], log });
+      const s = await tick(ctx, { max, dryRun: !!flags['dry-run'], profiles, log });
       if (ctx.json) out(ctx, s);
       else {
         const n = (k) => s[k].length;

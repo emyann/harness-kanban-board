@@ -92,6 +92,17 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
   ensureLocalDirs(ctx.root);
   const cwd = wt ? ensureWorktree(ctx.root, wt) : ctx.root;
   const logFile = path.join(logsDir(ctx.root), `${task.number}-${attempt}.log`);
+  if (profile.mode === 'trigger') {
+    // The launch does not run the worker — it asks something else to (an Actions run, a cloud agent)
+    // and exits. Run it to completion so a refusal is a spawn failure the caller can report, then
+    // record the attempt as `remote`: there is no local pid or job, so the heartbeat and max_runtime
+    // are its whole liveness check.
+    const r = spawnSync(argv[0], argv.slice(1), { cwd, env, encoding: 'utf8', timeout: 120_000 });
+    const out = `${r.stdout || ''}${r.stderr || ''}`.trim();
+    fs.appendFileSync(logFile, `# ${nowIso()} trigger ${argv.join(' ')}\n${out}\n`);
+    if (r.error || r.status !== 0) throw new Error(`${argv[0]}: ${(r.error?.message || out || `exit ${r.status}`).split('\n').filter(Boolean).pop()}`);
+    return { argv, pid: null, remote: true, logFile };
+  }
   if (profile.mode === 'claude-bg') {
     // Fire-and-forget: `claude --bg` prints "backgrounded · <id>" and exits, but a cold daemon
     // start can take a minute — never block the tick on it. Detach, log its output, and identify
@@ -224,10 +235,14 @@ async function failAttempt(ctx, task, runRec, outcome, note, { kill = true } = {
   return outcome;
 }
 
-export async function tick(ctx, { max = Infinity, dryRun = false, children = null, log = () => {} } = {}) {
+export async function tick(ctx, { max = Infinity, dryRun = false, children = null, profiles = null, log = () => {} } = {}) {
   ctx.requireBoard();
   const d = ctx.cfg.dispatch;
   const summary = { reconciled: [], reclaimed: [], promoted: [], guarded: [], claimed: [], spawn_failed: [], held: [], skipped: [], tracks: [] };
+  // A host claims only what it can launch. `--profiles` is how the Actions dispatcher takes the
+  // `claude-action` tasks and leaves the laptop's `claude` ones alone; everything else in the tick —
+  // reclaim, promote, reconcile, the orphan sweep — still covers the whole board.
+  const dispatchable = (name) => !profiles || profiles.includes(name);
   const state = readState(ctx.root);
   const today = nowIso().slice(0, 10);
   if (state.spawn_day !== today) { state.spawn_day = today; state.spawned_today = 0; }
@@ -295,7 +310,11 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     const maxRuntime = t.kb.max_runtime || d.max_runtime_default;
     let lastSignal = a.heartbeat_at || a.started_at;
     let outcome = null;
-    if (a.host === ctx.host && (a.job || a.bg)) {
+    // a `trigger` profile handed this attempt to something that is not a process on any host we can
+    // see (an Actions run): there is nothing local to inspect, so max_runtime and the heartbeat below
+    // are the whole check.
+    if (a.remote) { /* liveness is the heartbeat */ }
+    else if (a.host === ctx.host && (a.job || a.bg)) {
       let job = a.job ? (jobsById.get(a.job) || readJobState(a.job)) : null;
       if (!job && a.bg && a.log) {
         // the launch log contains "backgrounded · <id>" — the reliable source for the job id
@@ -389,6 +408,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     const profileName = t.agent;
     const profile = ctx.cfg.profiles[profileName];
     if (!profile) { note(`unknown profile ${profileName}`); continue; }
+    if (!dispatchable(profileName)) { note(`profile ${profileName} is not dispatched from this host`); continue; }
     if ((perProfile[profileName] || 0) >= (profile.max_in_progress ?? Infinity)) { note(`profile ${profileName} at cap`); continue; }
     const pausedUntil = state.profile_paused_until[profileName];
     if (pausedUntil && new Date(pausedUntil) > new Date()) { note('blocker_auth pause', { until: pausedUntil }); continue; }
@@ -430,7 +450,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
         keepRef: !!children,
         prompt: trackContext({ repo: ctx.repo.nameWithOwner, board: ctx.board, track: cand.track, attempt: k, waves: cand.waves }),
       });
-      if (!spawned.pid && !spawned.bg) throw new Error('spawn returned neither a pid nor a background launch');
+      if (!spawned.pid && !spawned.bg && !spawned.remote) throw new Error('spawn returned neither a pid nor a background launch');
     } catch (e) {
       log(`#${t.number}: track spawn failed: ${e.message}`);
       // the runner never started, so the fast engine has not had its go: drop the marker that
@@ -447,6 +467,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     }
     attempt.pid = spawned.pid;
     if (spawned.bg) attempt.bg = true;
+    if (spawned.remote) attempt.remote = true;
     if (spawned.wt) attempt.wt = spawned.wt;
     attempt.log = path.relative(ctx.root, spawned.logFile);
     await saveRun(ctx, t.number, runRec);
@@ -478,6 +499,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     const profileName = t.agent || 'claude';
     const profile = ctx.cfg.profiles[profileName];
     if (!profile) { summary.skipped.push({ number: t.number, why: `unknown profile ${profileName}` }); continue; }
+    if (!dispatchable(profileName)) { summary.skipped.push({ number: t.number, why: `profile ${profileName} is not dispatched from this host` }); continue; }
     if ((perProfile[profileName] || 0) >= (profile.max_in_progress ?? Infinity)) { summary.skipped.push({ number: t.number, why: `profile ${profileName} at cap` }); continue; }
     // remaining guards (these read the run comment, so only for tasks that could actually be claimed)
     const pausedUntil = state.profile_paused_until[profileName];
@@ -506,7 +528,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     let spawned;
     try {
       spawned = await spawnWorker(ctx, t, profileName, k, { keepRef: !!children });
-      if (!spawned.pid && !spawned.bg) throw new Error('spawn returned neither a pid nor a background launch');
+      if (!spawned.pid && !spawned.bg && !spawned.remote) throw new Error('spawn returned neither a pid nor a background launch');
     } catch (e) {
       log(`#${t.number}: spawn failed: ${e.message}`);
       await failAttempt(ctx, t, runRec, 'spawn_failed', e.message, { kill: false });
@@ -515,6 +537,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     }
     attempt.pid = spawned.pid;
     if (spawned.bg) attempt.bg = true;
+    if (spawned.remote) attempt.remote = true;
     if (spawned.wt) attempt.wt = spawned.wt;
     attempt.log = path.relative(ctx.root, spawned.logFile);
     await saveRun(ctx, t.number, runRec);
@@ -522,9 +545,11 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     perProfile[profileName] = (perProfile[profileName] || 0) + 1;
     claimedPaths.push(t.kb.paths || []);
     budget--;
-    const handle = spawned.bg
-      ? `background agent in ${spawned.wt} (job id on next tick; claude agents to watch)`
-      : `pid ${spawned.pid}${spawned.wt ? ` in ${worktreePath(spawned.wt)}` : ''}`;
+    const handle = spawned.remote
+      ? `started elsewhere by \`${spawned.argv.slice(0, 4).join(' ')}\` — its heartbeat is the only liveness`
+      : spawned.bg
+        ? `background agent in ${spawned.wt} (job id on next tick; claude agents to watch)`
+        : `pid ${spawned.pid}${spawned.wt ? ` in ${worktreePath(spawned.wt)}` : ''}`;
     summary.claimed.push({ number: t.number, attempt: k, profile: profileName, pid: spawned.pid, wt: spawned.wt || null });
     log(`#${t.number}: claimed attempt ${k} → ${profileName} ${handle} (log ${attempt.log})`);
     if (children && spawned.child) watchChild(ctx, t.number, k, spawned.child, children, state, profileName, log);
@@ -603,7 +628,7 @@ function acquireLoopLock(ctx) {
   return drop;
 }
 
-export async function loop(ctx, { interval, max, log }) {
+export async function loop(ctx, { interval, max, profiles = null, log }) {
   const dropLock = acquireLoopLock(ctx);
   log(`dispatcher pid ${process.pid} (singleton lock .kanban/dispatch.pid)`);
   const children = new Map();
@@ -613,7 +638,7 @@ export async function loop(ctx, { interval, max, log }) {
   for (;;) {
     const started = Date.now();
     try {
-      const s = await tick(ctx, { max, children, log });
+      const s = await tick(ctx, { max, children, profiles, log });
       const n = (k) => s[k].length;
       log(`tick: reconciled ${n('reconciled')} reclaimed ${n('reclaimed')} promoted ${n('promoted')} claimed ${n('claimed')} tracks ${s.tracks.filter((x) => x.ok).length} guarded ${n('guarded')} held ${n('held')} skipped ${n('skipped')}`);
     } catch (e) {
