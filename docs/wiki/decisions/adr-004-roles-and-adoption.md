@@ -5,24 +5,24 @@ category: decisions
 kind: decision
 audience: [dev]
 read_when: "naming roles in docs or worker prompts, changing dispatch/reclaim behaviour, or designing the manual-mode adoption path"
-status: proposed
+status: accepted
 date: 2026-08-27
 supersedes: ~
 superseded_by: ~
 covers:
   - path: src/dispatch.js
-    sha: b50d4bc34cd5bc68e3969bc0e300739c0eaafa73
+    sha: c3f9d2fbfb5e7561984d31f75ad78394539bc503
   - path: src/context.js
-    sha: 77ada2083b7d355f8de6ea824ca40bdaab1e712a
+    sha: 0de994e57a7d7540c632757864e1af8027cffa03
   - path: src/cli.js
-    sha: 06800a9f1f5892805e1948676f9a9ebb49eb9169
+    sha: 4c9d2573deffdac089d2d7f0093526996d73a0b7
   - path: src/lifecycle.js
     sha: 67b6fb458425948ce61d6a7a324649cb79e1c648
   - path: skills/kanban/SKILL.md
-    sha: 1781bf889025d8a9d6db369233e219321836c549
+    sha: cd0fdfe8a6ff483707ea6b406cf139a28f7f14f6
   - path: skills/kanban/references/protocol.md
-    sha: abe009ca27bf6cbb73db5ec7eac0c032b8ee7da5
-generated_at_commit: 6c0e81f
+    sha: 85314014a25ebe70e720cc8ac635c2e2f45bed46
+generated_at_commit: 833b82c
 last_refreshed: 2026-08-27
 related: [concepts/roles-and-seats, architecture/overview, concepts/board-protocol]
 ---
@@ -34,19 +34,19 @@ related: [concepts/roles-and-seats, architecture/overview, concepts/board-protoc
 hkb's docs and code grew one real coordination seat that no word owns: the
 person who files cards, steers workers, reviews and merges PRs, answers
 `kb:needs-human`, and restarts a dead loop is fragmented across **human /
-operator / supervisor / reviewer / "you"** — `src/context.js:10` calls the
-same author "a human" that `src/context.js:107` calls "the operator", and
-"supervisor" in `src/dispatch.js` (exit code 4) means a *process restarter*
-(cron/systemd sense), not a judgment seat. Meanwhile the first real adopter
-question arrived: someone whose workflow is a roadmap.md and a human picking
+operator / supervisor / reviewer / "you"** — at `6c0e81f`, `src/context.js:10`
+called the same author "a human" that `src/context.js:107` called "the
+operator", and "supervisor" in `src/dispatch.js` (exit code 4) means a
+*process restarter* (cron/systemd sense), not a judgment seat. Meanwhile the
+first real adopter question arrived: someone whose workflow is a roadmap.md and a human picking
 stories by hand — no DAG, no dispatch — asked what adopting hkb even means.
 
 A 7-agent evaluation (independent inventory, precedent research, persona
 study, two designers, an adversarial reviewer, synthesis — every file:line
 claim spot-checked against commit `6c0e81f`) produced this decision. It also
-surfaced a live bug: `hkb claim` without `--spawn` writes `manual: true`
-(`src/cli.js:419`) that nothing reads, so the reclaim chain
-(`src/dispatch.js:438`) kills a live hand-claimed attempt after 180s — the
+surfaced a live bug: at `6c0e81f`, `hkb claim` without `--spawn` wrote
+`manual: true` (`src/cli.js:419`) that nothing read, so the reclaim chain
+(`src/dispatch.js:438`) killed a live hand-claimed attempt after 180s — the
 exact path manual-mode adoption depends on.
 
 ## Decision
@@ -105,6 +105,24 @@ is a flag, not a migration.
   this taxonomy the operator *is* the human, so it was already correct.
 - Docs gain a "Who runs a board: the seats" section (final wording in the
   evaluation report, carried on the implementation cards).
+
+## As shipped
+
+All three consequences landed on 2026-08-27, before this record was accepted:
+
+- **The bug** — `src/dispatch.js:427` now treats `manual` the way it treats
+  `remote`: `if (a.remote || a.manual) { /* liveness is the heartbeat */ }`, so
+  neither the no-pid rule nor any other no-handle rule can reclaim a card a
+  human is working in their own terminal (#68).
+- **The vocabulary** — the seat/reviewer/track-runner/profile/host/supervisor
+  glossary is `skills/kanban/references/protocol.md:13`, exit code 4 is in both
+  `protocol.md:252` and `src/cli.js:176`, and the reserved synthetic profiles
+  `dispatcher` / `reviewer` / `human` are documented on the attempts row (#69).
+- **The docs** — `docs/manual-mode.md` ships the ladder and the agent-assisted
+  roadmap recipe; the README gained "Who runs a board: the seats" and kept the
+  autonomous quickstart first, with "Or drive it by hand" as a subsection (#70).
+
+No `hkb import` parser was built, as decided.
 
 <!-- Dual mutability: once status: accepted, NEVER rewrite this record.
 When the decision changes, write a new ADR, set its `supersedes`, and set
