@@ -13,6 +13,7 @@ import { planTracks, trackContext, trackPaths, trackAlreadyAttempted } from './t
 import { GhError } from './gh.js';
 import { listKbJobs, readJobState, stopJob, matchJobByWorktree } from './jobs.js';
 import { isMirrorConfigured, syncProject, projectError } from './projects.js';
+import { tokenExpiryNotice, versionNotice } from './doctor.js';
 import { sweep, sweepTask } from './gc.js';
 
 const nowIso = () => new Date().toISOString();
@@ -878,6 +879,12 @@ export async function loop(ctx, { interval, max, profiles = null, log, sleeper =
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
   for (;;) {
     const started = Date.now();
+    // Once a day, before the tick: the two things nobody tells the operator of a loop that has been
+    // up for weeks — a KB_TOKEN about to lapse, and an hkb that npm has moved on from. Both
+    // read-modify-write `.kanban/state.json`, which is why they are here and not inside `tick()`;
+    // both are silent on a failed probe, so an offline loop runs exactly as it did without them.
+    await tokenExpiryNotice(ctx, log);
+    await versionNotice(ctx, log);
     try {
       const s = await tick(ctx, { max, children, profiles, log });
       const n = (k) => s[k].length;

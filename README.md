@@ -410,6 +410,32 @@ one mutation per status transition, and two the first time an issue is added to 
 prints the moves it would make). Deleting the Project, or losing the scope, costs the mirror and nothing else — the
 tick logs the fix once an hour and carries on.
 
+## Staying current
+
+hkb has no push channel and does not want one — it is a CLI over `gh`, with no service and nothing that phones
+home — so updates are pull-only, and something has to say there is something to pull. Two places do, from one
+`GET https://registry.npmjs.org/hkb-cli` a day:
+
+```
+✓ hkb version                          0.1.4 (latest)
+! hkb version                          0.1.4 installed, npm has 0.2.0  → npm i -g hkb-cli@latest && hkb init
+```
+
+`hkb doctor` prints the line every run. The dispatcher loop logs it on the first tick of a day it is behind, and
+on no other tick — a loop that has been up for weeks is the install most likely to be stale, and its operator is
+not running doctor. Nothing else asks: `hkb list` waits on npm for nothing.
+
+Both commands matter. A stale CLI ships a stale *packaged* skill, so doctor compares two copies that agree and
+reports `✓ skill` on a board months behind: `npm i -g hkb-cli@latest` replaces the CLI, and `hkb init` re-copies
+the skill it brought. There is deliberately no `hkb update` — hkb cannot know whether it was installed globally,
+through `npx`, or from a checkout, and a package manager rewriting the directory the running process lives in is
+not something to guess at.
+
+An unreachable registry is not a failure: no notice, no error, nothing stamped, and the next run asks again — an
+air-gapped machine behaves exactly as it did before the check existed. Running an old version on purpose is a
+choice rather than a mistake, so `"version_check": false` in `.kanban/board.json` turns the daily ask off, and
+doctor then names the installed version once with nothing to do about it.
+
 ## How it maps to GitHub
 
 | Hermes | hkb |
@@ -431,7 +457,8 @@ tick logs the fix once an hour and carries on.
 
 ## Local state (gitignored)
 
-`.kanban/logs/` worker logs · `.kanban/state.json` spawn counters and auth pauses · `.kanban/outbox.jsonl` writes queued while GitHub was unreachable (replayed on the next tick) · `.kanban/cache.json` GraphQL capability cache · `.kanban/dispatch.pid` the loop's singleton lock · `.kanban/nudges/` and `.kanban/sessions/` stop-hook bookkeeping · `.claude/settings.local.json` the two hooks, whose command names this machine's `hkb`.
+`.kanban/logs/` worker logs · `.kanban/state.json` spawn counters, auth pauses and the day stamps that keep the
+token-expiry and version checks to one probe a day · `.kanban/outbox.jsonl` writes queued while GitHub was unreachable (replayed on the next tick) · `.kanban/cache.json` GraphQL capability cache · `.kanban/dispatch.pid` the loop's singleton lock · `.kanban/nudges/` and `.kanban/sessions/` stop-hook bookkeeping · `.claude/settings.local.json` the two hooks, whose command names this machine's `hkb`.
 
 `hkb init` adds all of them to `.gitignore`, one line at a time — your own entries are left alone. `.kanban/board.json` is the exception: it is the board's configuration and belongs in the repo.
 
