@@ -26,7 +26,8 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 - The protocol (statuses, claims, attempts, handoff) is backend-neutral; GitHub is an adapter. Keep every GitHub-ism behind `gh.js`/`tasks.js`/`lock.js` so a future `src/backends/{github,local,...}/` split is mechanical; the fake-gh harness (#3) doubles as the backend conformance suite.
 - Pin `X-GitHub-Api-Version` via `src/gh.js`; never call `gh issue`/`gh pr` sub-commands for board state — use `gh api`.
 - Every command returns a stable object under `--json`; human output is a one-liner per item.
-- Errors: throw `Error` with `.exitCode` (2 = usage/state, 3 = LOCK_LOST) and a message that names the fix.
+- Errors: throw `Error` with `.exitCode` (2 = usage/state, 3 = LOCK_LOST, 4 = the dispatcher loop
+  giving itself up for a supervisor to restart) and a message that names the fix.
 - Run `npm run lint && npm test` before finishing. Do not add a build step.
 - Touching `files` in `package.json`, or anything the CLI reads from the package at runtime? Run `npm run smoke`
   too — it packs, installs and runs the tarball. Releasing: `docs/releasing.md`.

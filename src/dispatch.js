@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, getTask } from './tasks.js';
-import { claim, release, listLocks, lockBeatAt } from './lock.js';
+import { claim, release, listLocks, lockBeatAt, staleBaseSha } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree } from './board.js';
 import { computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath } from './model.js';
 import { workerContext } from './context.js';
@@ -245,6 +245,51 @@ export function reapDecision(job, task) {
   return `its task is ${task.status || 'off the board'} and the agent is not working`;
 }
 
+// ---------- self-heal ----------
+// `unknown` says nothing about the lock, so the tick backs off and retries. That is right for one
+// tick and an outage when it never ends: on 2026-08-27 a 90-minute-old loop got 404 on every claim
+// POST while a process started beside it claimed the same task at once — something in *that*
+// process had rotted (a base sha the API no longer knew, a captured credential; it died before it
+// could be autopsied). Hence the ladder: back off, then forget everything this process memoized,
+// then remove the process loudly so a supervisor starts a clean one. A live loop doing nothing is
+// the only failure nobody notices.
+
+/** Consecutive unknown claims for one task: drop every cache at 3, give the process up at 6. */
+export const SELF_HEAL = { dropAfter: 3, giveUpAfter: 6 };
+
+/** Upstream conditions where waiting is the fix and a restart makes it worse: never escalated. */
+const EXCUSED_KINDS = new Set(['ratelimit', 'network']);
+
+/**
+ * Record one claim outcome in the per-process health map (a Map keyed by issue number) and say what
+ * the tick owes the operator. Pure apart from `health`; the map is per process on purpose — the
+ * whole hypothesis is that a *fresh* process is fine, so this must never be persisted to the board.
+ * @returns {{action:'none'|'drop_caches'|'exit', streak:number, error:string|null}}
+ */
+export function noteClaimResult(health, number, c, { dropAfter = SELF_HEAL.dropAfter, giveUpAfter = SELF_HEAL.giveUpAfter } = {}) {
+  const none = (streak = 0, error = null) => ({ action: 'none', streak, error });
+  if (!health) return none();
+  if (c?.result !== 'unknown') { health.delete(number); return none(); } // claimed or held: healthy
+  const prev = health.get(number);
+  const kind = c.error?.kind || 'unknown';
+  if (EXCUSED_KINDS.has(kind)) return none(prev?.streak || 0, prev?.error || null); // hold the streak
+  const error = `${kind}: ${c.error?.message || 'no detail'}`.slice(0, 300);
+  const entry = { streak: (prev?.streak || 0) + 1, dropped: !!prev?.dropped, error };
+  health.set(number, entry);
+  if (entry.streak >= giveUpAfter) return { action: 'exit', streak: entry.streak, error };
+  if (entry.streak >= dropAfter && !entry.dropped) { entry.dropped = true; return { action: 'drop_caches', streak: entry.streak, error }; }
+  return none(entry.streak, error);
+}
+
+/**
+ * Forget everything this process memoized: the base sha and its etag, the capability probe, the
+ * per-issue comment memos. None of it is state — the board is — so the next tick simply reads again.
+ */
+export function dropCaches(ctx) {
+  ctx._cache = {};
+  ctx.caps = {};
+}
+
 // ---------- tick ----------
 
 async function failAttempt(ctx, task, runRec, outcome, note, { kill = true } = {}) {
@@ -276,7 +321,10 @@ async function failAttempt(ctx, task, runRec, outcome, note, { kill = true } = {
 export async function tick(ctx, { max = Infinity, dryRun = false, children = null, profiles = null, log = () => {} } = {}) {
   ctx.requireBoard();
   const d = ctx.cfg.dispatch;
-  const summary = { reconciled: [], reclaimed: [], promoted: [], guarded: [], claimed: [], spawn_failed: [], held: [], skipped: [], tracks: [], reaped: [] };
+  const summary = { reconciled: [], reclaimed: [], promoted: [], guarded: [], claimed: [], spawn_failed: [], held: [], skipped: [], tracks: [], reaped: [], self_heal: [], fatal: null };
+  // The tick is the lifetime of every read the tick memoizes: the base sha is revalidated (304 when
+  // the branch has not moved) the first time a claim needs it, never inherited from an older tick.
+  staleBaseSha(ctx);
   // A host claims only what it can launch. `--profiles` is how the Actions dispatcher takes the
   // `claude-action` tasks and leaves the laptop's `claude` ones alone; everything else in the tick —
   // reclaim, promote, reconcile, the orphan sweep — still covers the whole board.
@@ -461,6 +509,26 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   const ready = sortForDispatch(tasks.filter((t) => t.status === 'ready'));
   const claimedPaths = runningNow.map((t) => t.kb.paths || []);
 
+  // Claim health, per process and per task — see noteClaimResult. One verdict per task per tick, so
+  // a root that is both a track candidate and its own frontier cannot count twice.
+  const health = (ctx._health ||= new Map());
+  const judged = new Set();
+  const selfHeal = (number, c) => {
+    if (judged.has(number)) return false;
+    judged.add(number);
+    const v = noteClaimResult(health, number, c);
+    if (v.action === 'none') return false;
+    summary.self_heal.push({ number, action: v.action, streak: v.streak, error: v.error });
+    if (v.action === 'drop_caches') {
+      dropCaches(ctx);
+      log(`#${number}: self-heal: caches dropped after ${v.streak} unknown claim results in a row (${v.error}) — the next tick re-resolves everything from GitHub`);
+      return false;
+    }
+    summary.fatal = { number, streak: v.streak, error: v.error };
+    log(`#${number}: claim still unknown ${v.streak} ticks in, ${v.streak - SELF_HEAL.dropAfter} of them after the cache drop — this process cannot fix itself`);
+    return true;
+  };
+
   // 3a. track roots: one session for a whole subgraph, claimed on the ROOT lock. The nodes are
   //     claimed by the runner as it reaches each one, so a runner that dies never wedges the track.
   //     Before the ready loop on purpose — a track and its own frontier would otherwise race for the
@@ -501,6 +569,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       continue;
     }
     const c = await claim(ctx, t.number, k);
+    if (selfHeal(t.number, c)) { note(`claim unknown: ${c.error?.kind}`); break; }
     if (c.result === 'claimed') { state.claims[`${t.number}/${k}`] = nowIso(); touch(t.number); }
     if (c.result === 'held') { summary.held.push(t.number); note('lock held elsewhere'); log(`#${t.number}: track lock held elsewhere, skipping`); continue; }
     if (c.result === 'unknown') {
@@ -552,6 +621,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   }
 
   for (const t of ready) {
+    if (summary.fatal) break; // the process is on its way out; claiming more would only orphan it
     if (t.status !== 'ready' || claimedTracks.has(t.number)) continue; // 3a took it: it is running its own track now
     if (coveredBy.has(t.number)) { summary.skipped.push({ number: t.number, why: `held for track #${coveredBy.get(t.number)}` }); continue; }
     if (touchedRecently(t.number)) { summary.skipped.push({ number: t.number, why: 'touched recently (stale-read guard)' }); continue; }
@@ -582,6 +652,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     const k = runRec.run.attempts.length + 1;
     if (dryRun) { summary.claimed.push({ number: t.number, attempt: k, profile: profileName, dry: true }); budget--; continue; }
     const c = await claim(ctx, t.number, k);
+    if (selfHeal(t.number, c)) break;
     if (c.result === 'claimed') { state.claims[`${t.number}/${k}`] = nowIso(); touch(t.number); }
     if (c.result === 'held') { summary.held.push(t.number); log(`#${t.number}: lock held elsewhere, skipping`); continue; }
     if (c.result === 'unknown') {
@@ -623,6 +694,9 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     log(`#${t.number}: claimed attempt ${k} → ${profileName} ${handle} (log ${attempt.log})`);
     if (children && spawned.child) watchChild(ctx, t.number, k, spawned.child, children, state, profileName, log);
   }
+
+  // a task that left the open board takes its claim-health entry with it
+  for (const n of health.keys()) if (!tasks.some((t) => t.number === n)) health.delete(n);
 
   // 4. mirror the labels onto the linked Projects v2 board (opt-in, one-way, never fatal).
   //    Last, so it sees every transition this tick: setStatus mutates the task objects in place.
@@ -718,11 +792,17 @@ function acquireLoopLock(ctx) {
   return drop;
 }
 
-export async function loop(ctx, { interval, max, profiles = null, log }) {
+/**
+ * The long-lived dispatcher. `sleeper` is the wait between ticks, injected so a test can run six
+ * ticks in a millisecond. Throws (exit code 4) when a tick reports `fatal`: the self-heal ladder ran
+ * out and the honest thing left is to die with a reason a supervisor and a human can both read.
+ */
+export async function loop(ctx, { interval, max, profiles = null, log, sleeper = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   const dropLock = acquireLoopLock(ctx);
   log(`dispatcher pid ${process.pid} (singleton lock .kanban/dispatch.pid)`);
   const children = new Map();
   let stopping = false;
+  let fatal = null;
   const stop = () => { stopping = true; log('stopping after this tick (workers keep running; next dispatcher reclaims or adopts them)'); };
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
   for (;;) {
@@ -731,15 +811,22 @@ export async function loop(ctx, { interval, max, profiles = null, log }) {
       const s = await tick(ctx, { max, children, profiles, log });
       const n = (k) => s[k].length;
       log(`tick: reconciled ${n('reconciled')} reclaimed ${n('reclaimed')} reaped ${n('reaped')} promoted ${n('promoted')} claimed ${n('claimed')} tracks ${s.tracks.filter((x) => x.ok).length} guarded ${n('guarded')} held ${n('held')} skipped ${n('skipped')}`);
+      if (s.fatal) { fatal = s.fatal; break; }
     } catch (e) {
       if (e instanceof GhError && e.kind === 'network') log('GitHub unreachable — reclaim clock paused, retrying next tick');
       else log(`tick failed: ${e.message}`);
     }
     if (stopping) break;
     const wait = Math.max(5_000, interval * 1000 - (Date.now() - started));
-    await new Promise((r) => setTimeout(r, wait));
+    await sleeper(wait);
   }
   dropLock();
+  if (fatal) {
+    const e = new Error(`dispatcher exiting: #${fatal.number} claim came back unknown ${fatal.streak} ticks in a row, ${fatal.streak - SELF_HEAL.dropAfter} of them after this process dropped every cache it had. Last error: ${fatal.error}. Start a new dispatcher — fresh state is what fixes this; if it fails the same way the fault is upstream, so check \`gh auth status\` and \`hkb doctor\`. Running workers are untouched: the next dispatcher adopts or reclaims them.`);
+    e.exitCode = 4;
+    log(`FATAL ${e.message}`);
+    throw e;
+  }
 }
 
 export { addLabels };
