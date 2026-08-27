@@ -547,7 +547,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     if ((state.spawned_today || 0) >= d.daily_spawn_cap) { note(`daily spawn cap ${d.daily_spawn_cap}`); continue; }
     const profileName = t.agent;
     const profile = ctx.cfg.profiles[profileName];
-    if (!profile) { note(`unknown profile ${profileName}`); continue; }
+    if (!profile) { note(`unknown profile ${profileName} — \`hkb init --profiles ${profileName}\` adds it to board.json`); continue; }
     if (!dispatchable(profileName)) { note(`profile ${profileName} is not dispatched from this host`); continue; }
     if ((perProfile[profileName] || 0) >= (profile.max_in_progress ?? Infinity)) { note(`profile ${profileName} at cap`); continue; }
     const pausedUntil = state.profile_paused_until[profileName];
@@ -640,7 +640,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     if ((state.spawned_today || 0) >= d.daily_spawn_cap) { summary.skipped.push({ number: t.number, why: `daily spawn cap ${d.daily_spawn_cap}` }); continue; }
     const profileName = t.agent || 'claude';
     const profile = ctx.cfg.profiles[profileName];
-    if (!profile) { summary.skipped.push({ number: t.number, why: `unknown profile ${profileName}` }); continue; }
+    if (!profile) { summary.skipped.push({ number: t.number, why: `unknown profile ${profileName} — \`hkb init --profiles ${profileName}\` adds it to board.json` }); continue; }
     if (!dispatchable(profileName)) { summary.skipped.push({ number: t.number, why: `profile ${profileName} is not dispatched from this host` }); continue; }
     if ((perProfile[profileName] || 0) >= (profile.max_in_progress ?? Infinity)) { summary.skipped.push({ number: t.number, why: `profile ${profileName} at cap` }); continue; }
     // remaining guards (these read the run comment, so only for tasks that could actually be claimed)

@@ -191,6 +191,12 @@ worker as a Claude Code **background agent** — `claude --bg --name "kb #<n> ·
 stopped by the dispatcher once their attempt has ended. `hkb show <n>` prints the job id per attempt.
 `claude-p` is the headless variant (`claude -p`, exits when done) for CI and containers without the session daemon.
 
+A board carries **only the profiles you asked for**: a bare `hkb init` writes `claude` and its one `kb:agent:claude`
+label, and nothing else. `--profiles a,b` (or `--harness copilot|codex`, which brings its own) is the whole list —
+so a Claude-only repo never grows labels for harnesses it will not install, and `hkb doctor` has nothing to warn
+about. Re-running init only *adds*: `hkb init --profiles claude-track` puts that profile on an existing board and
+leaves everything already there — including profiles you wrote by hand — untouched.
+
 `claude-track` is the same launcher pointed at a whole **track** — a root task plus everything still blocking it,
 usually what `/kanban:decompose` just materialized. One session executes the subgraph in dependency order instead of
 one cold session per node, so a dependent pair costs no tick of latency and no re-derived context; the board is
