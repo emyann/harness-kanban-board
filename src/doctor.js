@@ -88,7 +88,14 @@ export const TOKEN_WARN_DAYS = 7;
 const DAY = 86_400_000;
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+/**
+ * Both of these slice an ISO string on purpose — never `toLocale*`. An expiry is one instant for
+ * everyone who shares the token, so the same PAT has to warn about the same day whether the reader
+ * is a runner in UTC, a laptop in EDT or the loop's log; and the once-a-day probe below has to be
+ * the same day for all of them, or a board dispatching from two hosts probes twice.
+ */
 const formatUtc = (iso) => `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+const utcDay = (now) => new Date(now).toISOString().slice(0, 10);
 
 function headerValue(headers, name) {
   if (!headers || typeof headers !== 'object') return null;
@@ -183,8 +190,8 @@ export function emitAnnotations(results, { json = false, inActions = !!process.e
  * call every tick; call it *outside* `tick()` — it read-modify-writes `.kanban/state.json`.
  * A failed probe stamps nothing, so the next tick tries again.
  */
-export async function tokenExpiryNotice(ctx, log, { now = Date.now() } = {}) {
-  const day = new Date(now).toISOString().slice(0, 10);
+export async function tokenExpiryNotice(ctx, log, { now = Date.now(), inActions = !!process.env.GITHUB_ACTIONS, out = process.stdout } = {}) {
+  const day = utcDay(now);
   const state = readState(ctx.root);
   if (state.token_expiry_day === day) return null;
   let expiry;
@@ -196,9 +203,11 @@ export async function tokenExpiryNotice(ctx, log, { now = Date.now() } = {}) {
   if (!expiry || expiry.level === 'ok') return expiry;
   const f = expiryFinding(expiry);
   // The annotation bypasses `log`: the runner only reads a workflow command that starts the line,
-  // and the loop's log prefixes every line with a timestamp.
-  const line = actionsAnnotation(f);
-  if (line) process.stdout.write(`${line}\n`);
+  // and the loop's log prefixes every line with a timestamp. Which branch runs is an *argument*,
+  // not something read off the ambient environment — otherwise this function behaves one way in the
+  // test suite and another way when that suite runs on Actions, which is exactly how #48 escaped.
+  const line = actionsAnnotation(f, { inActions });
+  if (line) out.write(`${line}\n`);
   else log(`${f.name}: ${f.detail} → ${f.fix}`);
   return expiry;
 }
