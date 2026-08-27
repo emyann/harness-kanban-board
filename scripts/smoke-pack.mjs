@@ -20,6 +20,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+const pkgName = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).name;
+
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 
 // Every one of these is read at runtime from the installed package, so a `files` entry that goes
@@ -87,7 +89,7 @@ function install(tgz, dir) {
   fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'hkb-smoke', version: '0.0.0', private: true }) + '\n');
   const r = run('npm', ['install', '--no-save', '--no-audit', '--no-fund', '--loglevel', 'error', tgz], { cwd: dir });
   if (r.status !== 0) die(`npm install of the tarball failed:\n${r.out}`);
-  const root = path.join(dir, 'node_modules', 'hkb');
+  const root = path.join(dir, 'node_modules', pkgName);
   if (!fs.existsSync(root)) die(`npm install reported success but ${root} does not exist`);
   return { root, bin: path.join(dir, 'node_modules', '.bin', 'hkb') };
 }
