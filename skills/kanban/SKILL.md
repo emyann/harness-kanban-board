@@ -61,7 +61,7 @@ comes from `hkb`; everything you report goes through `hkb`. See `references/prot
    - `hkb request-review $KB_TASK --summary "..." [--reviewer <profile>]` — when a reviewer must look before it counts
      as done. Stdin keys: `summary`, `metadata`, `reviewer`.
 
-Do not do work that belongs to other tasks. If you discover follow-up work, create it instead:
+Never run `hkb dispatch` — you are the dispatched, and a second dispatcher against the live board double-claims tasks; dispatcher changes are tested with the fake-gh harness (`node --test test/dispatch.test.js`). Do not do work that belongs to other tasks. If you discover follow-up work, create it instead:
 `hkb create "title" --body "..." --blocked-by $KB_TASK` (it starts in *todo* and becomes *ready* when this task is done).
 
 ## When you run a track (your prompt opens with TRACK RUNNER)

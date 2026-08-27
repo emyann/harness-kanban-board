@@ -33,3 +33,11 @@ test('non-shell tools and builtins', () => {
   assert.equal(decidePermission('Grep', { pattern: 'x' }, ctx).decision, 'allow');
   for (const b of SAFE_BUILTINS.slice(0, 4)) assert.equal(decidePermission('Bash', { command: `${b} whatever` }, ctx).decision, 'allow', b);
 });
+
+test('workers cannot dispatch or signal processes', () => {
+  assert.equal(decidePermission('Bash', { command: 'hkb dispatch --loop 60' }, ctx).decision, 'deny');
+  assert.equal(decidePermission('Bash', { command: 'hkb dispatch --dry-run' }, ctx).decision, 'deny');
+  assert.equal(decidePermission('Bash', { command: 'kill 31726' }, ctx).decision, 'deny');
+  assert.equal(decidePermission('Bash', { command: 'pkill -f hkb' }, ctx).decision, 'deny');
+  assert.equal(decidePermission('Bash', { command: 'hkb show 5 --json' }, ctx).decision, 'allow');
+});

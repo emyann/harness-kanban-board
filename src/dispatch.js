@@ -675,7 +675,7 @@ function acquireLoopLock(ctx) {
   try {
     const existing = Number(fs.readFileSync(file, 'utf8').trim());
     if (existing && existing !== process.pid && pidAlive(existing)) {
-      const e = new Error(`another dispatcher loop is already running (pid ${existing}). Kill it first: kill ${existing}`);
+      const e = new Error(`another dispatcher loop is already running (pid ${existing}). If you are a worker session: never run the dispatcher. If you own this host and want to replace it, stop it yourself first.`);
       e.exitCode = 2;
       throw e;
     }

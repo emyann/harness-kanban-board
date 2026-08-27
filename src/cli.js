@@ -426,6 +426,7 @@ export async function main(argv) {
       return 0;
     }
     case 'dispatch': {
+      if (process.env.KB_TASK) throw usage(`you are worker for task #${process.env.KB_TASK} — workers never run the dispatcher (it is what dispatched you, and a second one against the live board causes double-claims). Test dispatch logic with the fake-gh harness: node --test test/dispatch.test.js`);
       const max = flags.max ? Number(flags.max) : Infinity;
       // `--profiles a,b`: claim only tasks on these profiles. The Actions dispatcher passes
       // `--profiles claude-action` so a runner never tries to launch a laptop-only harness.
