@@ -25,6 +25,21 @@ npx hkb-cli create "Implement auth API" --blocked-by 41    # todo until #41 is d
 npx hkb-cli list                                           # triage todo ready running blocked review done
 ```
 
+### Or drive it by hand
+
+No loop, no automation: take a card yourself and be the worker.
+
+```bash
+npx hkb-cli claim 41             # creates the lock ref, moves the card to running, prints the export line
+npx hkb-cli context 41           # the brief — the same prompt the dispatcher would launch a worker with
+npx hkb-cli complete 41 --summary "..."     # or block / request-review: exactly one, and the card moves
+```
+
+Hand mode and autonomous mode are the same protocol with a different dispatcher — you, or the tick. Every agent
+run leaves a summary the next run reads — even when you launch the agent yourself — so a board you drove by hand
+for a week is a board `hkb dispatch --loop 60` can take over mid-stream, with nothing to undo. The whole day-one
+loop, and what a tick would otherwise have done for you: [Driving a board by hand](docs/manual-mode.md).
+
 [![npm](https://img.shields.io/npm/v/hkb-cli.svg)](https://www.npmjs.com/package/hkb-cli)
 [![test](https://github.com/emyann/harness-kanban-board/actions/workflows/test.yml/badge.svg)](https://github.com/emyann/harness-kanban-board/actions/workflows/test.yml)
 [![node](https://img.shields.io/node/v/hkb.svg)](https://nodejs.org)
@@ -38,14 +53,32 @@ npx hkb-cli list                                           # triage todo ready r
   GitHub's UI and a task turns *ready* the moment its last blocker closes.
 - **A lock is a git ref.** Claiming task #42 creates `refs/kb/locks/42/1`. Creating a ref that exists fails, so
   the claim is atomic; the heartbeat is a `--force-with-lease` push on the same ref, which costs nothing.
-- **A worker is any harness.** Claude Code, Copilot CLI and Codex CLI ship as profiles; a worker reads its brief
-  with `hkb context <n>`, works in a worktree, opens a draft PR that says `Closes #42`, and ends with exactly one
-  of `hkb complete` / `hkb block` / `hkb request-review`.
-- **The dispatcher is a tick, not an agent.** `hkb dispatch` promotes what became ready, reclaims what died,
-  launches what it can, and exits. It is deterministic code and one GraphQL query per board per tick.
+- **A handoff is a comment.** Each attempt ends with a structured result on the card, and the next worker —
+  on that card or on one blocked by it — is handed it as part of its brief.
 
 Because all of that is labels, dependencies, refs and comments, any harness — or a shell script — can drive the
 same board. Full protocol: [skills/kanban/references/protocol.md](skills/kanban/references/protocol.md).
+
+## Who runs a board: the seats
+
+hkb has exactly three seats. Everything else — reviewer, profile, host, track runner, supervisor — is vocabulary,
+not a role.
+
+- **The operator is the human.** You own the repo, the token and the scope: you file and sharpen cards, steer with
+  comments, review and merge, answer `kb:needs-human`, and restart a dispatcher that gave itself up. An agent
+  session may drive those verbs for you — the approvals and the credentials stay with you.
+- **The dispatcher is a tick, not an agent — and not an orchestrator.** `hkb dispatch` promotes what became ready,
+  reclaims what died, launches what it can, and exits. It holds no workflow and has no LLM in it: the graph lives
+  on the cards as issue dependencies, and the loop only reconciles labels, locks and attempts against it. That
+  dumbness is the point — deterministic code, one GraphQL query per board per tick.
+- **A worker is any harness.** Claude Code, Copilot CLI and Codex CLI ship as profiles; an Actions job, a shell
+  script or you in your own terminal are workers too. A worker reads its brief with `hkb context <n>`, works in a
+  worktree, opens a draft PR that says `Closes #42`, and ends with exactly one of `hkb complete` / `hkb block` /
+  `hkb request-review`.
+
+Which of them a machine fills is a setting, not a fork of the protocol, so adoption is a ladder rather than a
+migration: cards only → the protocol by hand → explicit order → the tick → tracks and a board that runs with the
+laptop closed. [Driving a board by hand](docs/manual-mode.md) is a rung, not a fallback.
 
 ## What it costs
 
@@ -322,6 +355,8 @@ tick logs the fix once an hour and carries on.
 ## Docs
 
 - [The protocol](skills/kanban/references/protocol.md) — statuses, claims, attempts, handoff; what a worker must do.
+- [Driving a board by hand](docs/manual-mode.md) — the day-one loop with no dispatcher: claim, context, one
+  terminal verb, the heartbeat contract, and moving an existing roadmap onto the board.
 - [Harnesses](docs/harnesses.md) — per-harness setup, profiles, generated files, Codex's one-time trust, Actions.
 - [Releasing](docs/releasing.md) — how a version gets to npm: one tag, provenance, and a clean-room `npx` check.
 - [Project status and verified behaviour](docs/status.md) — how far along this is, and the GitHub API facts the

@@ -2,9 +2,18 @@
 
 Everything that must survive a crash lives in GitHub. Nothing here needs a paid plan.
 
+**Three seats**, and nothing else is a role:
+
+- **operator** — the human. Owns the repo, the token and the scope; files and sharpens cards, steers by comment, reviews and merges, answers `kb:needs-human`.
+- **dispatcher** — a tick, not an agent and not an orchestrator. Holds no workflow: it reconciles labels, locks and attempts against the graph already on the cards.
+- **worker** — any harness holding one attempt on one task: Claude Code, Copilot CLI, Codex, an Actions job, or the operator running the verbs by hand.
+
+Hand mode and autonomous mode are the same protocol with a different dispatcher — you, or the tick.
+
 ## Glossary
 
-hkb has exactly **three seats** — operator, dispatcher, worker. Everything else in this table is vocabulary, not a role.
+The three seats in full, and the words that get mistaken for seats — with what each one is *not*, which is where
+the mistakes actually happen.
 
 | Word | Is | Is not |
 |---|---|---|
