@@ -12,4 +12,13 @@ jobs:
         with:
           node-version: 22
       - run: npm run lint
+      # Two runs in one job rather than a matrix: same signal, half the runners. UTC is what Actions
+      # gives us and what most CI everywhere gives us; America/New_York is a contributor's laptop,
+      # west of UTC and on DST. A date test that only holds in one of them is a flake waiting for a
+      # bad day (#48).
       - run: npm test
+        env:
+          TZ: UTC
+      - run: npm test
+        env:
+          TZ: America/New_York
