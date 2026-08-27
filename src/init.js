@@ -282,6 +282,29 @@ export function resolveProfiles(flags = {}) {
   return { harnesses, profiles };
 }
 
+/**
+ * The `profiles` block a board carries after an init.
+ * A FRESH board (`existing` null) gets exactly the resolved list — `--profiles claude` has to be
+ * able to *narrow*, not only widen (#72): seeding from all of DEFAULT_PROFILES gave every adopter
+ * six profiles, six `kb:agent:*` labels and a doctor that warns forever about harnesses they will
+ * never install. Mirrors loadBoard's "keep only what the user declared, each merged over the default
+ * of the same name" (board.js).
+ * An EXISTING board is only ever added to: a profile the operator wrote by hand, or one an earlier
+ * init brought in, stays — re-running init must never silently delete work.
+ * @param existing the board's current profiles, or null/undefined on a fresh board
+ * @param profiles resolved profile names (`resolveProfiles`)
+ * @param onUnknown called with the name of a profile that has no built-in launch template
+ */
+export function boardProfiles(existing, profiles, onUnknown = () => {}) {
+  const out = existing ? { ...existing } : {};
+  for (const p of profiles) {
+    if (out[p]) continue;
+    if (!DEFAULT_PROFILES[p]) onUnknown(p);
+    out[p] = DEFAULT_PROFILES[p] ? JSON.parse(JSON.stringify(DEFAULT_PROFILES[p])) : { max_in_progress: 1, launch: null };
+  }
+  return out;
+}
+
 /** Write generated `[{rel, contents}]` under `root`. Returns the relative paths that actually changed. */
 function writeAll(root, files) {
   const written = [];
@@ -352,13 +375,7 @@ export async function init(ctx, flags, log) {
   cfg.default_branch = repo.defaultBranch;
   cfg.board = board;
   cfg.skill_version = skillVersion; // null when linked — a link cannot go stale
-  cfg.profiles = cfg.profiles || {};
-  for (const p of profiles) {
-    if (!cfg.profiles[p]) {
-      if (!DEFAULT_PROFILES[p]) log(`profile "${p}" has no built-in launch template — add one to ${path.relative(root, boardFile(root))}`);
-      cfg.profiles[p] = DEFAULT_PROFILES[p] ? JSON.parse(JSON.stringify(DEFAULT_PROFILES[p])) : { max_in_progress: 1, launch: null };
-    }
-  }
+  cfg.profiles = boardProfiles(existing?.profiles, profiles, (p) => log(`profile "${p}" has no built-in launch template — add one to ${path.relative(root, boardFile(root))}`));
   saveBoard(root, cfg);
   ensureLocalDirs(root);
   log(`${existing ? 'updated' : 'wrote'} .kanban/board.json (board "${board}", profiles ${Object.keys(cfg.profiles).join(', ')})`);
