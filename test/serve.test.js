@@ -8,7 +8,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import {
   COLUMNS, moveDecision, cardOf, boardEtag, parseRoute, checkOrigin, isLoopback,
-  logPathFor, tailFile, missingFields, startServer,
+  logPathFor, tailFile, missingFields, startServer, keyBoards, serveContexts,
 } from '../src/serve.js';
 
 const task = (over = {}) => ({
@@ -102,10 +102,79 @@ test('the ETag follows the tasks and nothing else', () => {
 test('parseRoute covers the whole surface and nothing else', () => {
   assert.deepEqual(parseRoute('/'), { kind: 'page' });
   assert.deepEqual(parseRoute('/api/board'), { kind: 'board' });
-  assert.deepEqual(parseRoute('/api/tasks/20'), { kind: 'task', number: 20 });
-  assert.deepEqual(parseRoute('/api/tasks/20/log'), { kind: 'log', number: 20 });
-  assert.deepEqual(parseRoute('/api/tasks/20/request-changes'), { kind: 'verb', number: 20, verb: 'request-changes' });
+  assert.deepEqual(parseRoute('/api/tasks/20'), { kind: 'task', number: 20, key: null });
+  assert.deepEqual(parseRoute('/api/tasks/20/log'), { kind: 'log', number: 20, key: null });
+  assert.deepEqual(parseRoute('/api/tasks/20/request-changes'), { kind: 'verb', number: 20, verb: 'request-changes', key: null });
   for (const p of ['/api', '/api/tasks', '/api/tasks/x', '/../etc/passwd', '/api/tasks/20/log/2']) assert.equal(parseRoute(p), null, p);
+});
+
+test('parseRoute carries the board a request names', () => {
+  assert.deepEqual(parseRoute('/api/boards/o~r~default/tasks/20'), { kind: 'task', number: 20, key: 'o~r~default' });
+  assert.deepEqual(parseRoute('/api/boards/o~r~default/tasks/20/log'), { kind: 'log', number: 20, key: 'o~r~default' });
+  assert.deepEqual(parseRoute('/api/boards/o~r~x/tasks/20/move'), { kind: 'verb', number: 20, verb: 'move', key: 'o~r~x' });
+  for (const p of ['/api/boards', '/api/boards/k', '/api/boards/k/tasks', '/api/boards/../tasks/20', '/api/boards/a/b/tasks/20']) {
+    assert.equal(parseRoute(p), null, p);
+  }
+});
+
+// ---------- which boards a server holds ----------
+
+test('keyBoards gives every board a URL-safe key and folds duplicate checkouts into one', () => {
+  const c = (nameWithOwner, board, root) => ({ repo: { nameWithOwner }, board, root });
+  const boards = keyBoards([
+    c('o/a', 'default', '/one'),
+    c('o/b', 'default', '/two'),
+    c('o/a', 'release', '/one'),
+    c('o/a', 'default', '/a-second-checkout'), // same repo, same board: one board, one query
+  ]);
+  assert.deepEqual(boards.map((b) => b.key), ['o~a~default', 'o~b~default', 'o~a~release']);
+  assert.deepEqual(boards.map((b) => b.root), ['/one', '/two', '/one']);
+});
+
+/** A checkout `hkb init` would have produced: enough of `.kanban/board.json` for a context. */
+function fakeCheckout(nameWithOwner, board = 'default') {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-repo-'));
+  fs.mkdirSync(path.join(root, '.kanban', 'logs'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ version: 1, repo: nameWithOwner, board }));
+  return root;
+}
+
+test('--repos adds checkouts to the one you ran in, and refuses a path that is not a board', () => {
+  const here = { root: '/here', repo: { nameWithOwner: 'o/here' }, board: 'default' };
+  const other = fakeCheckout('o/other');
+  const ctxs = serveContexts(here, { repos: other });
+  assert.deepEqual(ctxs.map((c) => c.repo.nameWithOwner), ['o/here', 'o/other']);
+  assert.equal(ctxs[1].board, 'default');
+  // `#slug` picks a board inside that checkout
+  assert.equal(serveContexts(here, { repos: `${other}#release` })[1].board, 'release');
+
+  const gone = path.join(other, 'nope');
+  assert.throws(() => serveContexts(here, { repos: gone }), /does not exist/);
+  const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-bare-'));
+  assert.throws(() => serveContexts(here, { repos: bare }), /hkb init/);
+  assert.throws(() => serveContexts(here, { repos: true }), /--repos needs a value/);
+});
+
+test('the user-level list is read when no flag is given, and a stale entry is skipped, not fatal', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-cfg-'));
+  const kept = process.env.KB_CONFIG_HOME;
+  process.env.KB_CONFIG_HOME = home;
+  try {
+    const here = { root: '/here', repo: { nameWithOwner: 'o/here' }, board: 'default' };
+    assert.deepEqual(serveContexts(here, {}).map((c) => c.repo.nameWithOwner), ['o/here']); // no file: opt-in
+    const other = fakeCheckout('o/other');
+    fs.mkdirSync(path.join(home, 'hkb'), { recursive: true });
+    fs.writeFileSync(path.join(home, 'hkb', 'boards.json'), JSON.stringify({ version: 1, boards: [other, '/gone/for/good'] }));
+    const notes = [];
+    const ctxs = serveContexts(here, {}, (s) => notes.push(s));
+    assert.deepEqual(ctxs.map((c) => c.repo.nameWithOwner), ['o/here', 'o/other']);
+    assert.match(notes.join('\n'), /skipping "\/gone\/for\/good".*does not exist/);
+    // an explicit --repos wins over the list
+    const third = fakeCheckout('o/third');
+    assert.deepEqual(serveContexts(here, { repos: third }).map((c) => c.repo.nameWithOwner), ['o/here', 'o/third']);
+  } finally {
+    if (kept === undefined) delete process.env.KB_CONFIG_HOME; else process.env.KB_CONFIG_HOME = kept;
+  }
 });
 
 test('isLoopback knows what is safe to bind without auth', () => {
@@ -176,19 +245,25 @@ test('the page draws the columns the server serves', () => {
   assert.deepEqual(cols, COLUMNS);
 });
 
-/** Just enough DOM to run the page: every node memoizes its children by selector, nothing renders. */
+/**
+ * Just enough DOM to run the page: every node memoizes its children by selector, nothing renders.
+ * Listeners are kept and `fire()` calls them, so a drag can be replayed the way a browser would.
+ */
 function fakeDom() {
   const make = () => {
     const q = {};
+    const on = {};
     const n = {
-      children: [], dataset: {}, attrs: {}, style: { setProperty() {} },
-      textContent: '', className: '', scrollTop: 0, scrollHeight: 0, href: '',
+      children: [], dataset: {}, attrs: {}, style: { setProperty() {} }, listeners: on,
+      textContent: '', className: '', scrollTop: 0, scrollHeight: 0, href: '', title: '', hidden: false,
       classList: {
         s: new Set(), add(...c) { c.forEach((x) => this.s.add(x)); }, remove(...c) { c.forEach((x) => this.s.delete(x)); },
-        toggle(c, on) { if (on) this.s.add(c); else this.s.delete(c); }, contains(c) { return this.s.has(c); },
+        toggle(c, o) { if (o) this.s.add(c); else this.s.delete(c); }, contains(c) { return this.s.has(c); },
       },
       append(...c) { n.children.push(...c); }, prepend(...c) { n.children.unshift(...c); },
-      addEventListener() {}, setAttribute(k, v) { n.attrs[k] = v; }, remove() {}, focus() {}, closest() { return null; },
+      addEventListener(type, fn) { (on[type] = on[type] || []).push(fn); },
+      fire(type, ev = {}) { for (const fn of on[type] || []) fn({ preventDefault() {}, stopPropagation() {}, target: n, ...ev }); },
+      setAttribute(k, v) { n.attrs[k] = v; }, remove() {}, focus() {}, closest() { return null; },
       contains() { return false; }, querySelectorAll() { return []; },
       querySelector(s) { return (q[s] ||= make()); },
     };
@@ -204,24 +279,111 @@ function fakeDom() {
   };
 }
 
+const boardPayload = (boards) => ({ columns: COLUMNS, poll: 30, host: 'testhost', fetched_at: new Date().toISOString(), boards });
+const oneBoard = (tasks, over = {}) => ({
+  key: 'o~r~default', repo: 'o/r', board: 'default', root: '/repo',
+  dispatcher: { running: true, pid: 42 }, error: null, stale: false, tasks, ...over,
+});
+
+/** Load the page into a vm, with `fetch` answered from `routes`, keyed by exact path. */
+function loadPage(document, routes, calls = []) {
+  const fetch = async (p, opts) => {
+    const pathname = String(p).split('?')[0];
+    calls.push({ path: pathname, method: opts?.method || 'GET', body: opts?.body ? JSON.parse(opts.body) : null });
+    const body = routes[pathname] || { error: `no fake route for ${pathname}` };
+    return { ok: !!routes[pathname], status: routes[pathname] ? 200 : 404, headers: { get: () => '"e1"' }, text: async () => JSON.stringify(body) };
+  };
+  const ctx = vm.createContext({ document, console, fetch, setTimeout: () => 0, setInterval: () => 0 });
+  vm.runInContext(PAGE_SCRIPT, ctx, { filename: 'web/index.html' });
+  return { ctx, calls };
+}
+
+const colBody = (document, col) => document.querySelector('.col[data-col="' + col + '"]').querySelector('[data-body]').children;
+
 test('the page renders a board payload without touching the DOM it does not have', async () => {
   const document = fakeDom();
-  const payload = {
-    repo: 'o/r', board: 'default', columns: COLUMNS, poll: 30, dispatcher: { running: true, pid: 42 },
-    fetched_at: new Date().toISOString(), tasks: [cardOf(task()), cardOf(task({ number: 21, status: 'running' }))],
-  };
-  const res = { ok: true, status: 200, headers: { get: () => '"e1"' }, text: async () => JSON.stringify(payload) };
-  const ctx = vm.createContext({ document, console, fetch: async () => res, setTimeout: () => 0, setInterval: () => 0 });
-  vm.runInContext(PAGE_SCRIPT, ctx, { filename: 'web/index.html' });
+  const payload = boardPayload([oneBoard([cardOf(task()), cardOf(task({ number: 21, status: 'running' }))])]);
+  const { ctx } = loadPage(document, { '/api/board': payload });
   await ctx.refresh(true);
 
-  const cards = (col) => document.querySelector('.col[data-col="' + col + '"]').querySelector('[data-body]').children;
-  assert.equal(cards('ready').length, 1);
-  assert.equal(cards('running').length, 1);
-  assert.equal(cards('done').length, 1); // the "—" placeholder
-  assert.match(cards('ready')[0].innerHTML, /#20/);
-  assert.match(cards('ready')[0].innerHTML, /hkb serve/);
+  assert.equal(colBody(document, 'ready').length, 1);
+  assert.equal(colBody(document, 'running').length, 1);
+  assert.equal(colBody(document, 'done').length, 1); // the "—" placeholder
+  assert.match(colBody(document, 'ready')[0].innerHTML, /#20/);
+  assert.match(colBody(document, 'ready')[0].innerHTML, /hkb serve/);
+  // one board looks exactly like it always did: no board bar, the repo and its dispatcher in the header
   assert.equal(document.querySelector('#repo').textContent, 'o/r · board "default"');
+  assert.equal(document.querySelector('#boards').hidden, true);
+  assert.equal(document.querySelector('#board-errors').hidden, true);
+  assert.match(document.querySelector('#dispatcher').querySelector('span').textContent, /dispatcher up \(pid 42\)/);
+});
+
+test('two boards share the seven columns, and every card says which repo it is from', async () => {
+  const document = fakeDom();
+  const payload = boardPayload([
+    oneBoard([cardOf(task())]),
+    oneBoard([cardOf(task({ number: 20, status: 'ready', title: 'other repo, same number' }))],
+      { key: 'o~other~default', repo: 'o/other', root: '/other', dispatcher: { running: false, pid: null } }),
+  ]);
+  const { ctx } = loadPage(document, { '/api/board': payload });
+  await ctx.refresh(true);
+
+  const ready = colBody(document, 'ready');
+  assert.equal(ready.length, 2); // #20 on two boards is two cards
+  assert.deepEqual(ready.map((c) => c.dataset.card), ['o~r~default#20', 'o~other~default#20']);
+  assert.match(ready[0].innerHTML, /chip repo[^>]*>r</);
+  assert.match(ready[1].innerHTML, /chip repo[^>]*>other</);
+  // the header stops naming one repo, and the board bar appears with a chip per board (plus "All")
+  assert.equal(document.querySelector('#repo').textContent, '2 boards');
+  assert.equal(document.querySelector('#boards').hidden, false);
+  assert.equal(document.querySelector('#boards').children.length, 3);
+  // one dispatcher up, one not — visible per board
+  assert.equal(document.querySelector('#dispatcher').querySelector('span').textContent, 'dispatchers 1/2');
+  assert.match(document.querySelector('#boards').children[1].innerHTML, /class="dot on"/);
+  assert.match(document.querySelector('#boards').children[2].innerHTML, /class="dot"/);
+});
+
+test('a board that failed to read says so and never blanks the others', async () => {
+  const document = fakeDom();
+  const payload = boardPayload([
+    oneBoard([cardOf(task())]),
+    oneBoard([], { key: 'o~other~default', repo: 'o/other', error: 'gh: HTTP 401 (auth)', stale: false }),
+  ]);
+  const { ctx } = loadPage(document, { '/api/board': payload });
+  await ctx.refresh(true);
+  assert.equal(colBody(document, 'ready').length, 1); // the healthy board still renders
+  assert.equal(document.querySelector('#board-errors').hidden, false);
+  assert.match(document.querySelector('#board-errors').innerHTML, /o\/other — gh: HTTP 401/);
+});
+
+test('a card dragged in one board runs its verb against that board, never the other', async () => {
+  const document = fakeDom();
+  const payload = boardPayload([
+    oneBoard([cardOf(task({ status: 'todo' }))]),
+    oneBoard([cardOf(task({ number: 20, status: 'todo' }))], { key: 'o~other~default', repo: 'o/other', root: '/other' }),
+  ]);
+  const calls = [];
+  const { ctx } = loadPage(document, {
+    '/api/board': payload,
+    '/api/boards/o~other~default/tasks/20/move': { ok: true, number: 20, status: 'ready', key: 'o~other~default' },
+  }, calls);
+  await ctx.refresh(true);
+
+  // the second card in Todo is the second board's #20 — drag it, exactly as a browser would
+  const card = colBody(document, 'todo')[1];
+  assert.equal(card.dataset.card, 'o~other~default#20');
+  const dt = { data: {}, setData(k, v) { this.data[k] = v; }, getData(k) { return this.data[k]; } };
+  card.fire('dragstart', { dataTransfer: dt });
+  assert.equal(dt.data['text/plain'], 'o~other~default#20');
+  // the drop lands on the column element the page built, which is the one carrying the drop listener
+  const cols = document.querySelector('#board').children;
+  cols[COLUMNS.indexOf('ready')].fire('drop', { dataTransfer: dt });
+  await new Promise((r) => setImmediate(r));
+
+  const posts = calls.filter((c) => c.method === 'POST');
+  assert.deepEqual(posts.map((c) => c.path), ['/api/boards/o~other~default/tasks/20/move']);
+  assert.deepEqual(posts[0].body, { to: 'ready' });
+  assert.equal(calls.some((c) => c.path.includes('o~r~default')), false); // the other repo was never touched
 });
 
 test('issue bodies are escaped, linked and never able to inject markup', () => {
@@ -240,35 +402,54 @@ test('issue bodies are escaped, linked and never able to inject markup', () => {
 
 // ---------- the HTTP surface ----------
 
-function fixture(tasks, calls = []) {
+/**
+ * One board's worth of context and injected deps. Every recorded call carries the repo it ran
+ * against — that is what makes "the verb landed on the right board" assertable, not eyeballable.
+ */
+function fixture(tasks, { owner = 'o', repo = 'r', board = 'default', calls = [] } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-serve-'));
   fs.mkdirSync(path.join(root, '.kanban', 'logs'), { recursive: true });
-  const ctx = { root, repo: { owner: 'o', repo: 'r', nameWithOwner: 'o/r' }, board: 'default', host: 'testhost', _cache: {}, cfg: {} };
-  const record = (verb) => (_ctx, n, opts) => { calls.push({ verb, n, opts }); return { number: n, status: verb === 'promote' ? 'ready' : 'blocked' }; };
+  const nameWithOwner = `${owner}/${repo}`;
+  const ctx = { root, repo: { owner, repo, nameWithOwner }, board, host: 'testhost', _cache: {}, cfg: {} };
+  const record = (verb) => (c, n, opts) => {
+    calls.push({ verb, n, opts, repo: c.repo.nameWithOwner, root: c.root });
+    return { number: n, status: verb === 'promote' ? 'ready' : 'blocked' };
+  };
   const deps = {
-    fetchBoard: async () => tasks,
-    getTask: async (_c, n) => tasks.find((t) => t.number === n) || task({ number: n }),
+    fetchBoard: async (c) => (c.root === root ? tasks : []),
+    getTask: async (c, n) => (c.root === root ? tasks.find((t) => t.number === n) || task({ number: n }) : task({ number: n })),
     loadRun: async () => ({ run: { failures: 0, attempts: [{
       attempt: 1, profile: 'claude', started_at: '2026-08-26T06:52:38Z', log: '.kanban/logs/20-1.log',
       wt: 'kb-20-1', session_id: 'sess-abc', total_cost_usd: 1.5, num_turns: 12,
     }] } }),
     latestResult: async () => null,
     parentResults: async () => [],
-    addComment: async (_c, n, text) => { calls.push({ verb: 'comment', n, opts: { text } }); return { html_url: 'https://x/c' }; },
+    addComment: async (c, n, text) => { calls.push({ verb: 'comment', n, opts: { text }, repo: c.repo.nameWithOwner, root: c.root }); return { html_url: 'https://x/c' }; },
     promote: record('promote'), unblock: record('unblock'), block: record('block'),
     requestChanges: record('request-changes'), archive: record('archive'),
   };
   return { ctx, deps, root, calls };
 }
 
-async function withServer(tasks, fn) {
-  const f = fixture(tasks);
-  const s = await startServer(f.ctx, { port: 0, poll: 30 }, () => {}, f.deps);
+/** A server over N fixtures, sharing one call log; deps come from the first, dispatch is per ctx. */
+async function withServers(fixtures, fn) {
+  const calls = [];
+  const fs_ = fixtures.map((f) => f(calls));
+  const merged = { ...fs_[0].deps, contexts: fs_.map((x) => x.ctx) };
+  // every board answers from its own fixture, chosen by the ctx the server hands the dep
+  const byRoot = new Map(fs_.map((x) => [x.ctx.root, x]));
+  merged.fetchBoard = (c) => byRoot.get(c.root).deps.fetchBoard(c);
+  merged.getTask = (c, n) => byRoot.get(c.root).deps.getTask(c, n);
+  const s = await startServer(fs_[0].ctx, { port: 0, poll: 30 }, () => {}, merged);
   const get = (p, opts) => fetch(s.url + p, opts);
   const post = (p, body, opts = {}) => fetch(s.url + p, {
     method: 'POST', headers: { 'content-type': 'application/json', ...opts.headers }, body: JSON.stringify(body),
   });
-  try { await fn({ ...f, ...s, get, post }); } finally { await new Promise((r) => s.server.close(r)); }
+  try { await fn({ boards: fs_, calls, ...s, get, post }); } finally { await new Promise((r) => s.server.close(r)); }
+}
+
+async function withServer(tasks, fn) {
+  await withServers([(calls) => fixture(tasks, { calls })], (s) => fn({ ...s, ...s.boards[0], root: s.boards[0].root }));
 }
 
 test('GET / serves the board page', async () => {
@@ -287,11 +468,16 @@ test('GET /api/board returns the columns and 304s when nothing changed', async (
     const res = await get('/api/board');
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.equal(body.repo, 'o/r');
     assert.deepEqual(body.columns, COLUMNS);
     assert.equal(body.poll, 30);
-    assert.deepEqual(body.tasks.map((t) => t.number), [20, 21]); // priority 1 before priority 0
-    assert.equal(body.dispatcher.running, false);
+    assert.equal(body.boards.length, 1);
+    const b = body.boards[0];
+    assert.equal(b.repo, 'o/r');
+    assert.equal(b.board, 'default');
+    assert.equal(b.key, 'o~r~default');
+    assert.deepEqual(b.tasks.map((t) => t.number), [20, 21]); // priority 1 before priority 0
+    assert.equal(b.dispatcher.running, false);
+    assert.equal(b.error, null);
     const etag = res.headers.get('etag');
     assert.ok(etag);
     const again = await get('/api/board', { headers: { 'if-none-match': etag } });
@@ -339,7 +525,8 @@ test('a move that needs a reason asks for it instead of guessing one', async () 
     assert.equal(calls.length, 0);
     const done = await post('/api/tasks/20/move', { to: 'blocked', reason: 'needs the key' });
     assert.equal(done.status, 200);
-    assert.deepEqual(calls, [{ verb: 'block', n: 20, opts: { reason: 'needs the key', kind: 'needs_input' } }]);
+    assert.deepEqual(calls.map(({ verb, n, opts }) => ({ verb, n, opts })),
+      [{ verb: 'block', n: 20, opts: { reason: 'needs the key', kind: 'needs_input' } }]);
   });
 });
 
@@ -360,6 +547,102 @@ test('the drawer verbs route to the same functions as the CLI', async () => {
     assert.equal(bad.status, 400);
     assert.deepEqual((await bad.json()).needs, ['text']);
     assert.equal((await post('/api/tasks/20/frobnicate', {})).status, 400);
+  });
+});
+
+// ---------- two repos, one server ----------
+// #12 on two boards is two different tasks. Every assertion below is against the fake, not the eye.
+
+const twoRepos = (a = [task({ status: 'todo' })], b = [task({ status: 'todo' })]) => [
+  (calls) => fixture(a, { repo: 'a', calls }),
+  (calls) => fixture(b, { repo: 'b', calls }),
+];
+
+test('GET /api/board carries every board, its own tasks and its own dispatcher', async () => {
+  await withServers(twoRepos([task()], [task({ number: 7, status: 'running' })]), async ({ get, boards }) => {
+    // a dispatcher loop on the first repo only
+    fs.writeFileSync(path.join(boards[0].root, '.kanban', 'dispatch.pid'), String(process.pid));
+    const body = await (await get('/api/board')).json();
+    assert.deepEqual(body.boards.map((b) => b.key), ['o~a~default', 'o~b~default']);
+    assert.deepEqual(body.boards.map((b) => b.repo), ['o/a', 'o/b']);
+    assert.deepEqual(body.boards.map((b) => b.root), boards.map((x) => x.root));
+    assert.deepEqual(body.boards.map((b) => b.tasks.map((t) => t.number)), [[20], [7]]);
+    assert.deepEqual(body.boards.map((b) => b.dispatcher.running), [true, false]);
+    assert.equal(body.boards[0].dispatcher.pid, process.pid);
+  });
+});
+
+test('a verb runs against the board the card came from, and only that board', async () => {
+  await withServers(twoRepos(), async ({ post, calls, boards }) => {
+    const res = await post('/api/boards/o~b~default/tasks/20/move', { to: 'ready' });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).key, 'o~b~default');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].verb, 'promote');
+    assert.equal(calls[0].n, 20);
+    assert.equal(calls[0].repo, 'o/b'); // never o/a, whose #20 is a different task
+    assert.equal(calls[0].root, boards[1].root); // and the local state it touched is o/b's checkout
+
+    await post('/api/boards/o~a~default/tasks/20/block', { reason: 'needs the key' });
+    assert.deepEqual(calls.map((c) => [c.verb, c.repo]), [['promote', 'o/b'], ['block', 'o/a']]);
+    // the drawer verbs route the same way
+    await post('/api/boards/o~a~default/tasks/20/comment', { text: 'hi' });
+    assert.equal(calls[2].repo, 'o/a');
+  });
+});
+
+test('an unknown board key is a 404 that names the boards there are', async () => {
+  await withServers(twoRepos(), async ({ post, get, calls }) => {
+    const res = await post('/api/boards/o~c~default/tasks/20/promote', {});
+    assert.equal(res.status, 404);
+    assert.match((await res.json()).error, /no board "o~c~default".*o~a~default, o~b~default/);
+    assert.equal((await get('/api/boards/o~c~default/tasks/20')).status, 404);
+    assert.equal(calls.length, 0); // nothing was written anywhere
+  });
+});
+
+test('with several boards an unqualified task call is refused, not guessed', async () => {
+  await withServers(twoRepos(), async ({ post, get, calls }) => {
+    const res = await post('/api/tasks/20/promote', {});
+    assert.equal(res.status, 400);
+    const err = (await res.json()).error;
+    assert.match(err, /ambiguous/);
+    assert.match(err, /\/api\/boards\/<key>\/tasks\/20\/promote/);
+    assert.match(err, /o~a~default, o~b~default/);
+    assert.equal((await get('/api/tasks/20')).status, 400);
+    assert.equal((await get('/api/tasks/20/log?attempt=1')).status, 400);
+    assert.equal(calls.length, 0);
+  });
+});
+
+test('the log tail reaches the file in the board the request names', async () => {
+  await withServers(twoRepos(), async ({ get, boards }) => {
+    for (const [i, b] of boards.entries()) fs.writeFileSync(path.join(b.root, '.kanban', 'logs', '20-1.log'), `log from repo ${i}\n`);
+    const a = await (await get('/api/boards/o~a~default/tasks/20/log?attempt=1')).json();
+    const b = await (await get('/api/boards/o~b~default/tasks/20/log?attempt=1')).json();
+    assert.equal(a.text, 'log from repo 0\n');
+    assert.equal(b.text, 'log from repo 1\n');
+    assert.deepEqual([a.repo, b.repo], ['o/a', 'o/b']);
+    // and the drawer names its own board, so a follow-up call cannot drift to the other one
+    const detail = await (await get('/api/boards/o~b~default/tasks/20')).json();
+    assert.equal(detail.key, 'o~b~default');
+    assert.equal(detail.repo, 'o/b');
+    assert.deepEqual(detail.logs, [{ attempt: 1, path: path.join('.kanban', 'logs', '20-1.log'), exists: true }]);
+  });
+});
+
+test('a board that cannot be read keeps the others on the page', async () => {
+  const boom = () => { throw Object.assign(new Error('gh: HTTP 401'), { kind: 'auth' }); };
+  await withServers([
+    (calls) => fixture([task()], { repo: 'a', calls }),
+    (calls) => { const f = fixture([], { repo: 'b', calls }); f.deps.fetchBoard = boom; return f; },
+  ], async ({ get }) => {
+    const res = await get('/api/board');
+    assert.equal(res.status, 200); // one broken repo is not a broken page
+    const body = await res.json();
+    assert.deepEqual(body.boards.map((b) => b.tasks.length), [1, 0]);
+    assert.equal(body.boards[0].error, null);
+    assert.match(body.boards[1].error, /HTTP 401/);
   });
 });
 

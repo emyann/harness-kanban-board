@@ -13,6 +13,9 @@ deserves a `concepts/` page (link it).
   comment, never overwritten (`src/model.js`). The claim ref carries its number.
 - **Board** — the set of issues wearing this board's `kb:board:*` label plus
   the local `.kanban/` config that names it (`src/board.js`).
+- **Board key** — the URL-safe `owner~repo~slug` id `hkb serve` gives each board
+  it holds, and the path segment every request names it by
+  (`boardKey`/`uniqueKeys` in `src/model.js`; see *features/web-board*).
 - **Card / task** — a GitHub issue on the board; "card" in kanban prose,
   "task" in code and JSON (`src/tasks.js`).
 - **Claim** — an atomic take on a card: creating `refs/kb/locks/<n>/<k>`, the

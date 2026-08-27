@@ -4,7 +4,7 @@ import {
   parseBodyBlock, serializeBodyBlock, DEFAULT_KB, statusOf, agentOf, boardOf,
   parseRunComment, serializeRunComment, emptyRun, openAttempt, parseResultComment, serializeResultComment,
   blockerDone, computeReady, pathsOverlap, sortForDispatch, slugify, lockRef, lockRefPath, hashReason,
-  normalizeHookInput, stripFrontmatter, sessionUpdate,
+  normalizeHookInput, stripFrontmatter, sessionUpdate, parseRepoSpecs, boardKey, uniqueKeys,
 } from '../src/model.js';
 
 test('body block: round trip and defaults', () => {
@@ -114,6 +114,31 @@ test('stripFrontmatter returns the document, front matter or not', () => {
   assert.equal(stripFrontmatter(null), '');
   // a --- rule inside the body is not a second front matter block
   assert.equal(stripFrontmatter('---\na: 1\n---\nx\n\n---\n\ny\n'), 'x\n\n---\n\ny\n');
+});
+
+test('--repos parses paths, and #slug picks a board inside a checkout', () => {
+  assert.deepEqual(parseRepoSpecs('../a, ../b#release ,'), [
+    { path: '../a', board: null },
+    { path: '../b', board: 'release' },
+  ]);
+  assert.deepEqual(parseRepoSpecs(''), []);
+  assert.deepEqual(parseRepoSpecs(undefined), []);
+  // a trailing "#" is not a board, and a leading one is part of the path, not a separator
+  assert.deepEqual(parseRepoSpecs('/tmp/a#'), [{ path: '/tmp/a', board: null }]);
+  assert.deepEqual(parseRepoSpecs('#weird'), [{ path: '#weird', board: null }]);
+  // the user-level list may spell an entry out as an object
+  assert.deepEqual(parseRepoSpecs([{ path: '~/code/a', board: 'release' }, '~/code/b']), [
+    { path: '~/code/a', board: 'release' },
+    { path: '~/code/b', board: null },
+  ]);
+});
+
+test('board keys are URL-safe, legible and never shared by two boards', () => {
+  assert.equal(boardKey('emyann/harness-kanban-board', 'default'), 'emyann~harness-kanban-board~default');
+  assert.equal(boardKey('o/r', 'a b/c'), 'o~r~a~b~c');
+  assert.match(boardKey('o/r', 'default'), /^[A-Za-z0-9._~-]+$/);
+  assert.deepEqual(uniqueKeys(['a', 'b', 'a', 'a']), ['a', 'b', 'a~2', 'a~3']);
+  assert.deepEqual(uniqueKeys(['a', 'a~2', 'a']), ['a', 'a~2', 'a~3']);
 });
 
 test('misc helpers', () => {

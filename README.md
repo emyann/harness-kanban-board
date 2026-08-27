@@ -122,15 +122,36 @@ Humans get `hkb promote`, `hkb unblock`, `hkb request-changes`, `hkb comment`, `
 ## The board in a browser
 
 ```bash
-hkb serve                      # http://127.0.0.1:4666
+hkb serve                                  # http://127.0.0.1:4666
+hkb serve --repos ../api,../infra#release  # several checkouts, one server, one port, one tab
 ```
 
 `hkb serve` is a zero-dependency http server and one inline page — no build step, no second source of truth.
-It reads the live board with the same `fetchBoard` query (one GraphQL call per poll, shared by every tab, ETag
-so an unchanged board costs nothing), and drag-drop between columns runs the same verbs the CLI does: only the
-legal moves, and an illegal one is refused with the reason. Cards show agent, priority, blockers and the PR;
-the drawer shows the description, the `kb` block, every attempt, the latest result and the worker's log tail.
-There is no auth — it binds `127.0.0.1`, refuses cross-origin calls, and warns loudly if you pass `--host`.
+It reads the live board with the same `fetchBoard` query (one GraphQL call per board per poll, shared by every
+tab, ETag so an unchanged board costs nothing), and drag-drop between columns runs the same verbs the CLI does:
+only the legal moves, and an illegal one is refused with the reason. Cards show agent, priority, blockers and
+the PR; the drawer shows the description, the `kb` block, every attempt, the latest result and the worker's log
+tail. There is no auth — it binds `127.0.0.1`, refuses cross-origin calls, and warns loudly if you pass `--host`.
+
+**More than one repo.** A second repository does not cost a second server, a second port and a second tab.
+`--repos <path,path>` adds those checkouts to the one you ran in; `#slug` after a path picks a board inside it.
+The seven columns stay, boards become chips in a bar under the header — each with its own dispatcher dot and
+count, click one to narrow the page to it — and every card carries the repo it belongs to, because `#12` on two
+boards is two different tasks. Each board keeps its own everything: its own poll query, its own dispatcher
+state, its own worker logs, and its own verbs — a card can only ever act on the repo it came from. One board
+that fails to read (expired auth, no network) says so in a strip and keeps its last good cards; the others
+carry on. `gh` auth is already global, so one token reads them all.
+
+A set of repos you always want together goes in a user-level list instead of a flag — it spans repos, so it
+cannot live in any one `.kanban/`. `hkb serve` with no flag reads `~/.config/hkb/boards.json`
+(`$XDG_CONFIG_HOME`/`$KB_CONFIG_HOME` if set) and shows those boards alongside the current one:
+
+```json
+{ "version": 1, "boards": ["~/code/web", "~/code/api", { "path": "~/code/infra", "board": "release" }] }
+```
+
+An entry that no longer exists is a warning and a skip, never a broken `hkb serve`. Nothing is scanned for:
+hkb only ever shows the checkouts you named.
 
 ## The board as a stream
 
