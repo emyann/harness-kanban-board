@@ -31,7 +31,7 @@ const ISSUE_FIELDS = (caps) => `
   number id databaseId title body state stateReason updatedAt createdAt url
   labels(first: 40) { nodes { name } }
   ${caps.blockedByGql ? 'blockedBy(first: 50) { totalCount nodes { number state stateReason title } }' : ''}
-  ${caps.closedByPrs ? 'closedByPullRequestsReferences(first: 5, includeClosedPrs: true) { nodes { id number state isDraft url headRefName merged } }' : ''}
+  ${caps.closedByPrs ? 'closedByPullRequestsReferences(first: 5, includeClosedPrs: true) { nodes { id number state isDraft url headRefName baseRefName merged autoMergeRequest { enabledAt mergeMethod } } }' : ''}
 `;
 
 function toTask(node) {
@@ -56,7 +56,7 @@ function toTask(node) {
     createdAt: node.createdAt,
     url: node.url,
     blockedBy: (node.blockedBy?.nodes || []).map((b) => ({ number: b.number, state: b.state, stateReason: b.stateReason, title: b.title })),
-    prs: (node.closedByPullRequestsReferences?.nodes || []).map((p) => ({ number: p.number, nodeId: p.id, state: p.state, isDraft: p.isDraft, url: p.url, headRefName: p.headRefName, merged: p.merged })),
+    prs: (node.closedByPullRequestsReferences?.nodes || []).map((p) => ({ number: p.number, nodeId: p.id, state: p.state, isDraft: p.isDraft, url: p.url, headRefName: p.headRefName, baseRefName: p.baseRefName || null, merged: p.merged, autoMergeEnabled: !!p.autoMergeRequest })),
   };
 }
 
@@ -306,4 +306,68 @@ export async function removeBlockedBy(ctx, childNumber, parentNumber) {
 
 export async function issueEvents(ctx, number) {
   return (await rest('GET', api(ctx, `/issues/${number}/events?per_page=100`))) || [];
+}
+
+// ---------- pull requests: the last step ----------
+
+/**
+ * Ask GitHub to merge this PR itself once its own gates are green. hkb never merges: this hands the
+ * last step to GitHub's auto-merge and walks away — there is no timer, no retry and nothing to
+ * reconcile, because a PR whose checks fail simply never merges. The PR's node id is the one the
+ * board query already returned. Enabling twice is not an error, but the caller does not need to:
+ * `autoMergeEnabled` on the next board read says it is already on.
+ */
+export async function enableAutoMerge(ctx, pr, mergeMethod) {
+  const q = `mutation($id: ID!, $method: PullRequestMergeMethod!) {
+    enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) {
+      pullRequest { number autoMergeRequest { enabledAt mergeMethod } }
+    }
+  }`;
+  const data = await graphql(q, { id: pr.nodeId, method: mergeMethod });
+  const out = data?.enablePullRequestAutoMerge?.pullRequest || null;
+  if (out) pr.autoMergeEnabled = true;
+  return out;
+}
+
+/** One ruleset rule's contribution to the gate; unknown types add nothing. */
+function fromRule(rule, out) {
+  const p = rule?.parameters || {};
+  if (rule?.type === 'required_status_checks') for (const c of p.required_status_checks || []) { if (c?.context) out.requiredChecks.push(c.context); }
+  if (rule?.type === 'pull_request') out.requiredReviews = Math.max(out.requiredReviews, Number(p.required_approving_review_count ?? 0) || 0);
+}
+
+/**
+ * What has to go green before a PR can land on `branch` — the input to `mergeGate()`.
+ * Two mechanisms answer that question and a repo may use either, so both are asked, cheapest
+ * first: classic branch protection (`/branches/<b>/protection`, admin-only, 404 when there is
+ * none) and rulesets (`/rules/branches/<b>`, readable by anyone, and the only one that survives a
+ * token without admin). `known: false` means neither could be read — never "unprotected".
+ */
+export async function branchProtection(ctx, branch) {
+  const out = { branch, known: false, protected: false, requiredChecks: [], requiredReviews: 0, why: null };
+  try {
+    const p = await rest('GET', api(ctx, `/branches/${encodeURIComponent(branch)}/protection`));
+    const rsc = p?.required_status_checks;
+    out.known = true;
+    out.protected = true;
+    out.requiredChecks = rsc ? (rsc.checks?.map((c) => c.context).filter(Boolean) ?? rsc.contexts ?? []) : [];
+    out.requiredReviews = Number(p?.required_pull_request_reviews?.required_approving_review_count ?? 0) || 0;
+    return out;
+  } catch (e) {
+    if (!(e instanceof GhError) || !['notfound', 'auth'].includes(e.kind)) throw e;
+    // 404: no *classic* protection — a ruleset may still cover the branch. 403: this token cannot
+    // read classic protection at all, so a silent ruleset is the only evidence left.
+    out.protected = e.kind === 'notfound' ? false : out.protected;
+    out.known = e.kind === 'notfound';
+    if (e.kind === 'auth') out.why = 'the token cannot read branch protection — it needs repo admin';
+  }
+  try {
+    const rules = await rest('GET', api(ctx, `/rules/branches/${encodeURIComponent(branch)}`));
+    for (const r of rules || []) fromRule(r, out);
+    if (out.requiredChecks.length || out.requiredReviews || (rules || []).length) { out.known = true; out.protected = true; out.why = null; }
+  } catch (e) {
+    if (!(e instanceof GhError) || !['notfound', 'auth'].includes(e.kind)) throw e;
+    if (!out.known) out.why = out.why || `the rules for ${branch} could not be read (${e.kind})`;
+  }
+  return out;
 }

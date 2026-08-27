@@ -119,6 +119,39 @@ Every terminal verb also takes `--summary-file` / `--metadata-file` / `--reason-
 Humans get `hkb promote`, `hkb unblock`, `hkb request-changes`, `hkb comment`, `hkb link/unlink`, `hkb archive`,
 `hkb log`. `hkb --help` lists everything.
 
+## The last step: who merges
+
+**hkb never merges.** A finished card waits in *review* with an open PR until that PR lands, and by default the
+human lands it. On a repo where you merge every agent PR a minute after it opens, that click is a rote step; on a
+repo with a careful review culture it is the one gate you would never give up. That is a difference between repos,
+so it is board policy — `dispatch.merge` in `.kanban/board.json`:
+
+```jsonc
+"dispatch": { "merge": { "mode": "manual" } }                  // the default — nothing changes
+"dispatch": { "merge": { "mode": "auto", "method": "squash" } } // squash | merge | rebase
+```
+
+On `auto` the dispatcher does not merge either: it enables **GitHub's own auto-merge** on the card's PR, once, when
+the card reaches review — one `enablePullRequestAutoMerge` per PR, no new query, no polling. GitHub takes it from
+there and enforces its own gates: required checks, required reviews, up-to-date branches. hkb never has to answer
+"is this safe to merge", which is not a question it should be in the business of answering, and the failure mode is
+the quiet one — a red check or an unanswered review request just means the PR never merges. Nothing to retry,
+nothing to reconcile. The **dispatcher** enables it, never the worker: merge authority is an operator concern.
+
+That only holds if something has to go green first. **Auto-merge on an unprotected branch merges immediately** — it
+would land agent-authored code the moment the PR opened, unreviewed and untested — so `hkb doctor` treats `auto`
+on a base branch that requires no status check and no approving review as a **hard failure** with the fix on it,
+and the tick refuses the same combination card by card rather than enabling it. Classic branch protection and
+rulesets both count; a branch whose protection the token cannot read counts as no gate, because a gate that cannot
+be verified is not one. The gate is checked on the branch each PR actually targets, so a track's **stacked** node
+PR — based on the previous node's branch, not on the default one — is left to you unless that branch is protected
+too.
+
+One thing worth knowing before you turn it on: auto-merge waits for what the branch *requires*. `hkb request-review
+<n> --reviewer alice` **requests** a review, it does not require one — if the branch only requires status checks,
+the PR lands when they pass, whether or not Alice looked. Require approving reviews on the branch and the reviewer
+becomes the gate that holds the merge; `hkb doctor` prints which of the two you have.
+
 ## The board in a browser
 
 ```bash

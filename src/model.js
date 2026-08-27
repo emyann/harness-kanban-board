@@ -282,6 +282,71 @@ export function sortForDispatch(tasks) {
   return [...tasks].sort((a, b) => priorityOf(b) - priorityOf(a) || a.number - b.number);
 }
 
+// ---------- the last step: merging ----------
+// hkb never merges. `dispatch.merge.mode: "auto"` asks *GitHub's* auto-merge to land a card's PR
+// once the branch's own gates are green; `"manual"` — the default, and what every board that
+// predates this says — leaves the last step to the operator. Whether that step is a rote chore or
+// the one gate worth keeping is a property of the repo, so it is board policy, not a product
+// decision. The dispatcher enables it, never the worker: merge authority is an operator concern.
+
+export const MERGE_MODES = ['manual', 'auto'];
+/** board.json spelling → the `PullRequestMergeMethod` enum `enablePullRequestAutoMerge` wants. */
+export const MERGE_METHODS = { squash: 'SQUASH', merge: 'MERGE', rebase: 'REBASE' };
+
+/**
+ * The board's merge policy, normalised. Never throws: a policy hkb cannot read must not take out
+ * every command that loads board.json, and `auto` stays false, so an unreadable policy behaves
+ * exactly like today's `manual`. `error` is what doctor fails on and the tick prints.
+ */
+export function mergePolicy(cfg) {
+  const raw = cfg?.dispatch?.merge || {};
+  const mode = raw.mode ?? 'manual';
+  const method = raw.method ?? 'squash';
+  const errors = [];
+  if (!MERGE_MODES.includes(mode)) errors.push(`dispatch.merge.mode must be ${MERGE_MODES.map((m) => `"${m}"`).join(' or ')}, not ${JSON.stringify(mode)}`);
+  if (!MERGE_METHODS[method]) errors.push(`dispatch.merge.method must be one of ${Object.keys(MERGE_METHODS).join(', ')}, not ${JSON.stringify(method)}`);
+  return { mode, method, mergeMethod: MERGE_METHODS[method] || null, auto: !errors.length && mode === 'auto', error: errors.join('; ') || null };
+}
+
+/**
+ * The PR of a card the dispatcher would hand to GitHub's auto-merge — and why not, when it would
+ * not. Pure. `pr.autoMergeEnabled` comes from the board query, so a PR that already carries an
+ * auto-merge request costs no second mutation: enabling is once per PR, not once per tick.
+ */
+export function autoMergeDecision(task, policy) {
+  if (!policy?.auto) return { enable: false, pr: null, why: 'dispatch.merge.mode is manual' };
+  if (task.status !== 'review') return { enable: false, pr: null, why: `#${task.number} is ${task.status}, not review` };
+  const pr = (task.prs || []).find((p) => p && p.state === 'OPEN') || null;
+  if (!pr) return { enable: false, pr: null, why: 'no open PR' };
+  if (pr.isDraft) return { enable: false, pr, why: `PR #${pr.number} is still a draft` };
+  if (pr.autoMergeEnabled) return { enable: false, pr, why: `PR #${pr.number} already has auto-merge enabled` };
+  if (!pr.nodeId) return { enable: false, pr, why: `PR #${pr.number} came back from the board query without a node id` };
+  return { enable: true, pr, method: policy.method, why: `PR #${pr.number} → auto-merge (${policy.method})` };
+}
+
+/** The one fix for every way the gate can fail: put a gate on the branch, or keep the last step. */
+export function mergeGateFix(branch) {
+  return `require a status check on ${branch} (Settings → Branches, or a ruleset), or set "dispatch": {"merge": {"mode": "manual"}} in .kanban/board.json`;
+}
+
+/**
+ * Is it honest to hand this branch to auto-merge? Auto-merge on an **unprotected** branch merges the
+ * moment it is enabled — "hand the last step to GitHub" would mean landing agent-authored code
+ * unreviewed and untested — so the answer is yes only when something has to go green first: a
+ * required status check, or a required approving review. Anything else, including a branch whose
+ * protection this token cannot read, is a refusal: the gate is what makes the feature safe, and a
+ * gate that cannot be verified is not a gate. `protection` is what `branchProtection()` returns.
+ */
+export function mergeGate(protection, branch) {
+  const p = protection || {};
+  const no = (detail) => ({ ok: false, detail, fix: mergeGateFix(branch) });
+  if (!p.known) return no(`${branch}'s protection could not be read${p.why ? ` (${p.why})` : ''}, so auto-merge cannot be shown to be safe`);
+  if (p.requiredChecks?.length) return { ok: true, detail: `${branch} requires ${p.requiredChecks.join(', ')}${p.requiredReviews ? ` and ${p.requiredReviews} approving review(s)` : ''}` };
+  if (p.requiredReviews > 0) return { ok: true, detail: `${branch} requires ${p.requiredReviews} approving review(s)` };
+  if (p.protected) return no(`${branch} is protected but requires no status check and no approving review, so auto-merge would land a PR the moment it opens`);
+  return no(`${branch} has no branch protection, so auto-merge would land agent-authored code the moment the PR opens`);
+}
+
 // ---------- background-agent jobs (`claude --bg`) ----------
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;

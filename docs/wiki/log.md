@@ -27,3 +27,9 @@ history.
 ## 2026-08-27 — added features/web-board (#87 made one `hkb serve` hold several checkouts; serve.js and web/index.html were covered by no page at all, so the whole feature was a freshness blind spot)
 
 ## 2026-08-27 — refreshed architecture/overview + decisions/adr-004-roles-and-adoption (no-op re-stamp for #87: cli.js gained two `--repos` help lines, model.js three pure board-key helpers, board.js the `makeContextAt` split plus the user-level board list; no claim on either page changed. One anchor fixed on ADR-004 — `src/cli.js:176` → `:181` for the exit-code help line, which the `--repos` lines and #88 shifted; the `6c0e81f`-pinned `cli.js:419` citation is historical and stays)
+
+## 2026-08-27 — added features/auto-merge (#89 made merging board policy: `dispatch.merge.mode` `manual`|`auto`, the tick enabling GitHub's own auto-merge once per PR, and the branch-protection gate doctor hard-fails on — no page covered who lands an agent's PR)
+
+## 2026-08-27 — refreshed architecture/overview for #89 (one claim tightened: "judgment — whether a PR merges — lives outside the loop" now says what `merge.mode: auto` does and does not change, and points at the new page)
+
+## 2026-08-27 — refreshed decisions/adr-004-roles-and-adoption (no-op re-stamp for #89: dispatch.js and protocol.md moved, but the seat decision is untouched — merge authority stays the operator's, and the dispatcher only enables a GitHub mechanism the operator opted into, never a merge of its own)
