@@ -40,7 +40,7 @@ test('actionsFiles produces exactly the dispatcher and the worker workflow', () 
 });
 
 test('both workflows are valid YAML, with nothing left unsubstituted', () => {
-  for (const [rel, text] of Object.entries(fileMap({ board: 'ops', install: 'npm i -g hkb', profiles: ['claude-action'] }))) {
+  for (const [rel, text] of Object.entries(fileMap({ board: 'ops', install: 'npm i -g hkb-cli', profiles: ['claude-action'] }))) {
     assert.doesNotThrow(() => parseYaml(text), `${rel} does not parse`);
     assert.ok(!/\{\{\w+\}\}/.test(text), `${rel} has an unsubstituted placeholder`);
   }
@@ -195,7 +195,7 @@ test('triggerProfiles is what a runner may claim: launches that start work elsew
 
 test('hkb reaches the runner as an install command, and its own repo installs the checkout', () => {
   assert.equal(hkbInstallForActions(REPO), 'npm link');
-  assert.equal(hkbInstallForActions(scratch()), 'npm i -g hkb');
+  assert.equal(hkbInstallForActions(scratch()), 'npm i -g hkb-cli');
 });
 
 // ---------- the dispatcher ----------

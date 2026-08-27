@@ -1,5 +1,5 @@
 {
-  "name": "hkb",
+  "name": "hkb-cli",
   "version": "0.1.0",
   "description": "hkb — harness kanban board. A portable, frugal Hermes-style kanban for coding agents; GitHub Issues is the default backend, any harness (Claude Code, Copilot CLI, Codex) is a worker.",
   "type": "module",

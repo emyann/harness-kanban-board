@@ -25,7 +25,7 @@ jobs:
 
   # `npm test` proves the source is right; this proves the tarball is. It packs hkb, installs the
   # tarball into an empty directory and runs the CLI from there, so a `files` entry that stops
-  # shipping `skills/` or `templates/` fails here rather than on a stranger's first `npx hkb init`.
+  # shipping `skills/` or `templates/` fails here rather than on a stranger's first `npx hkb-cli init`.
   # It runs beside `test` rather than after it: two independent signals, and neither waits.
   #
   # On Node 20 on purpose — the floor `engines` claims, which nothing else checks. The `test` job

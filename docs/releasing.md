@@ -1,7 +1,7 @@
 # Releasing hkb
 
 Publishing is a tag. [`.github/workflows/release.yml`](../.github/workflows/release.yml) does the rest —
-tests, the tag/version check, `npm publish --provenance`, and a clean-room `npx hkb@<version>` that proves the
+tests, the tag/version check, `npm publish --provenance`, and a clean-room `npx hkb-cli-cli@<version>` that proves the
 published tarball actually runs.
 
 Two things stay with a human, because they are credentials and a decision.
@@ -41,7 +41,7 @@ If you tag by hand, the two must match: tag `v1.4.0` ⇄ `"version": "1.4.0"`.
 | tag vs `package.json` | a mismatch is a lie about what is being published; the run fails and names both numbers |
 | `NPM_TOKEN` preflight | a missing secret is a notice with the fix, not a red build |
 | `npm publish --provenance --access public` | `id-token: write` lets npm exchange an OIDC token for a signed attestation, so the package page shows where it was built from |
-| `npx -y hkb@<version> version` and `... help`, in a job with **no checkout** | the only step here that proves distribution works. Nothing from this repo is on that runner: if it passes, `npx hkb` works for a stranger |
+| `npx -y hkb-cli-cli@<version> version` and `... help`, in a job with **no checkout** | the only step here that proves distribution works. Nothing from this repo is on that runner: if it passes, `npx hkb-cli` works for a stranger |
 
 The verify job retries for up to five minutes — a publish is not instantly readable from every registry edge —
 and then fails loudly. Longer than five minutes is not propagation; it is a broken package.

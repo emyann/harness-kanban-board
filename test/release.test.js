@@ -1,4 +1,4 @@
-// `.github/workflows/release.yml`: the tag → npm publish path, and the clean-room `npx hkb@<version>`
+// `.github/workflows/release.yml`: the tag → npm publish path, and the clean-room `npx hkb-cli-cli@<version>`
 // job that is the only proof the published artifact actually runs.
 //
 // Unlike the kanban workflows this one is not generated from `templates/actions/`, so there is no
@@ -167,7 +167,7 @@ test('the verify job installs from the registry: no checkout, nothing from this 
   assert.ok(!uses.some((u) => u.startsWith('actions/checkout')), 'a checkout would let the repo, not the tarball, satisfy the test');
   assert.equal(DOC.jobs.verify.needs, 'publish');
   assert.match(DOC.jobs.verify.if, /needs\.publish\.outputs\.published == 'true'/, 'nothing to verify when nothing was published');
-  assert.equal(step('verify', 'npx hkb@version').env.VERSION, '${{ needs.publish.outputs.version }}');
+  assert.equal(step('verify', 'npx hkb-cli-cli@version').env.VERSION, '${{ needs.publish.outputs.version }}');
 });
 
 /** An `npx` that 404s `FAIL_TIMES` times, then prints `NPX_OUTPUT`. Counts its calls in $COUNTER. */
@@ -180,7 +180,7 @@ const noSleep = '#!/usr/bin/env bash\nexit 0\n';
 
 function runVerify({ failTimes = 0, output = 'hkb 1.4.0', version = '1.4.0' } = {}) {
   const counter = path.join(scratch(), 'n');
-  const r = runStep(step('verify', 'npx hkb@version').run, {
+  const r = runStep(step('verify', 'npx hkb-cli-cli@version').run, {
     env: { VERSION: version, FAIL_TIMES: String(failTimes), NPX_OUTPUT: output, COUNTER: counter },
     bin: { npx: npxStub, sleep: noSleep },
   });
@@ -209,7 +209,7 @@ test('verify gives up loudly, and inside five minutes', () => {
   assert.equal(r.calls, 10, 'ten tries, 30s apart — bounded, not a hung job');
   assert.match(r.out, /::error::/);
   assert.match(r.out, /never succeeded in 5 minutes/);
-  assert.match(step('verify', 'npx hkb@version').run, /sleep 30/);
+  assert.match(step('verify', 'npx hkb-cli-cli@version').run, /sleep 30/);
   assert.equal(DOC.jobs.verify['timeout-minutes'], 10, 'the job outlives the retry budget, so the give-up is what fails it');
 });
 

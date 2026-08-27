@@ -17,7 +17,7 @@ Verified so far:
 - **CLI wiring** — every verb reaches the function it claims to.
 - **The published tarball** — the same workflow packs hkb, installs the tarball into an empty directory and
   runs the CLI from there, so a `files` list that stops shipping `skills/` or `templates/` fails CI instead of
-  failing a stranger's first `npx hkb init`. After a release, [`release.yml`](../.github/workflows/release.yml)
+  failing a stranger's first `npx hkb-cli init`. After a release, [`release.yml`](../.github/workflows/release.yml)
   repeats the check against the copy npm actually served. See [Releasing](releasing.md).
 - **`hkb doctor --api` against this repository** (2026-08-26), which probes the GitHub behaviour the design
   depends on rather than trusting the docs. Those probes are below.

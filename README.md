@@ -9,23 +9,23 @@ no server, no database and no npm dependencies.
 Three commands, in a repo you can push to, with [`gh`](https://cli.github.com) already logged in:
 
 ```bash
-npx hkb init                 # labels, .kanban/board.json, the worker skill, the Stop hook, a CLAUDE.md/AGENTS.md section
-npx hkb doctor --api         # verifies gh auth, labels, GraphQL fields, the issue-dependency API and lock-ref CAS
-npx hkb dispatch --loop 60   # the 60-second dispatcher, on your machine
+npx hkb-cli init                 # labels, .kanban/board.json, the worker skill, the Stop hook, a CLAUDE.md/AGENTS.md section
+npx hkb-cli doctor --api         # verifies gh auth, labels, GraphQL fields, the issue-dependency API and lock-ref CAS
+npx hkb-cli dispatch --loop 60   # the 60-second dispatcher, on your machine
 ```
 
-That is the whole free path. `npx hkb init --import` also pulls your existing open issues onto the board as
-*triage*. Prefer it on your PATH? `npm i -g hkb`, then drop the `npx`.
+That is the whole free path. `npx hkb-cli init --import` also pulls your existing open issues onto the board as
+*triage*. Prefer it on your PATH? `npm i -g hkb-cli`, then drop the `npx`.
 
 Now file some work and watch it get picked up:
 
 ```bash
-npx hkb create "Design auth schema" --agent claude --priority 2 --paths packages/db/
-npx hkb create "Implement auth API" --blocked-by 41    # todo until #41 is done, then ready automatically
-npx hkb list                                           # triage todo ready running blocked review done
+npx hkb-cli create "Design auth schema" --agent claude --priority 2 --paths packages/db/
+npx hkb-cli create "Implement auth API" --blocked-by 41    # todo until #41 is done, then ready automatically
+npx hkb-cli list                                           # triage todo ready running blocked review done
 ```
 
-[![npm](https://img.shields.io/npm/v/hkb.svg)](https://www.npmjs.com/package/hkb)
+[![npm](https://img.shields.io/npm/v/hkb-cli.svg)](https://www.npmjs.com/package/hkb-cli)
 [![test](https://github.com/emyann/harness-kanban-board/actions/workflows/test.yml/badge.svg)](https://github.com/emyann/harness-kanban-board/actions/workflows/test.yml)
 [![node](https://img.shields.io/node/v/hkb.svg)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/hkb.svg)](LICENSE)

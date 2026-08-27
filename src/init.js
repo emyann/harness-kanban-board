@@ -191,7 +191,7 @@ const NODE_VERSION = '22';
  * the checkout it is running, so a change to the CLI is exercised by the workflow that ships it.
  */
 export function hkbInstallForActions(root) {
-  return isPackageRepo(root) ? 'npm link' : 'npm i -g hkb';
+  return isPackageRepo(root) ? 'npm link' : 'npm i -g hkb-cli';
 }
 
 /**
@@ -201,7 +201,7 @@ export function hkbInstallForActions(root) {
  * @param profiles profile names the Actions dispatcher may claim — never the laptop-only ones
  * @param timeoutMinutes the worker job's `timeout-minutes`; keep it <= the board's max_runtime
  */
-export function actionsFiles({ board = 'default', install = 'npm i -g hkb', profiles = [ACTIONS_PROFILE], timeoutMinutes = 60, maxTurns = 80 } = {}) {
+export function actionsFiles({ board = 'default', install = 'npm i -g hkb-cli', profiles = [ACTIONS_PROFILE], timeoutMinutes = 60, maxTurns = 80 } = {}) {
   const vars = {
     board,
     install,

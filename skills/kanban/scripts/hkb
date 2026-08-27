@@ -3,4 +3,4 @@
 if command -v hkb >/dev/null 2>&1; then
   exec hkb "$@"
 fi
-exec npx -y hkb "$@"
+exec npx -y hkb-cli "$@"

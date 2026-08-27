@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Pack hkb the way npm will, install that tarball into an empty directory, and run the CLI from where
 // it landed. `npm test` proves the source is correct; this proves the *tarball* is — that `files` in
-// package.json still ships everything the CLI reads at runtime, and that `npx hkb` works for someone
+// package.json still ships everything the CLI reads at runtime, and that `npx hkb-cli` works for someone
 // who has none of this repository.
 //
 // It is the pre-publish half of the pair. The post-publish half lives in .github/workflows/release.yml,
@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 
 // Every one of these is read at runtime from the installed package, so a `files` entry that goes
-// missing must fail here rather than on a stranger's first `npx hkb init`. The comment on each is the
+// missing must fail here rather than on a stranger's first `npx hkb-cli init`. The comment on each is the
 // code that reads it.
 const MUST_SHIP = [
   ['bin/hkb.js', 'the bin npm links as `hkb`'],
