@@ -96,27 +96,51 @@ function hkbCommandForHook() {
   return `node "${bin}" hook stop`;
 }
 
-function installStopHook(root, log) {
+/**
+ * The hooks `hkb init` writes into `.claude/settings.json`, as `event → hkb hook <verb>`. Both are
+ * inert outside a worker (`src/hook.js` returns before it reads stdin unless KB_TASK is set), but
+ * they go into a `matcher: "*"` entry in a file the operator shares with every other session in the
+ * repo — so init names both, and `hookSummary` says what the second one is for.
+ */
+export const CLAUDE_HOOKS = { Stop: 'stop', PreToolUse: 'pretool' };
+const HOOK_NOTE = 'both inert unless KB_TASK is set; PreToolUse is the worker permission policy';
+
+/** One line naming every hook init wrote and every one it found, given the events it added. */
+export function hookSummary(added) {
+  const all = Object.keys(CLAUDE_HOOKS);
+  const names = (xs) => `${xs.join(' and ')} hook${xs.length > 1 ? 's' : ''}`;
+  const kept = all.filter((e) => !added.includes(e));
+  const what = added.length
+    ? `added ${names(added)} to .claude/settings.json${kept.length ? `; ${names(kept)} already there` : ''}`
+    : `${names(all)} already present in .claude/settings.json`;
+  return `${what} (${HOOK_NOTE})`;
+}
+
+/**
+ * Write the hooks in `CLAUDE_HOOKS` into `.claude/settings.json`, leaving anything else in the file
+ * alone. Returns the events it added (`[]` when both were already there), or null when the settings
+ * file could not be parsed — in which case it has already said so through `log`.
+ */
+export function installClaudeHooks(root, log) {
   const dir = path.join(root, '.claude');
   const file = path.join(dir, 'settings.json');
   fs.mkdirSync(dir, { recursive: true });
   let settings = {};
   if (fs.existsSync(file)) {
-    try { settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { log(`skip hook: ${file} is not valid JSON (${e.message})`); return false; }
+    try { settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { log(`skip hooks: ${file} is not valid JSON (${e.message})`); return null; }
   }
   settings.hooks = settings.hooks || {};
-  let changed = false;
+  const added = [];
   const ensure = (event, cmd) => {
     settings.hooks[event] = settings.hooks[event] || [];
     if (settings.hooks[event].some((h) => JSON.stringify(h).includes(cmd.split(' ').pop()) && JSON.stringify(h).includes('hkb'))) return;
     settings.hooks[event].push({ matcher: '*', hooks: [{ type: 'command', command: cmd, timeout: 30 }] });
-    changed = true;
+    added.push(event);
   };
   const base = hkbCommandForHook().replace(/ stop$/, '');
-  ensure('Stop', `${base} stop`);
-  ensure('PreToolUse', `${base} pretool`);
-  if (changed) fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
-  return changed;
+  for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) ensure(event, `${base} ${verb}`);
+  if (added.length) fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
+  return added;
 }
 
 // ---------- harness files (`hkb init --harness copilot|codex`) ----------
@@ -370,9 +394,12 @@ export async function init(ctx, flags, log) {
   const created = await ensureLabels(ctx, labels);
   log(created.length ? `created labels: ${created.join(', ')}` : 'labels already present');
 
-  // 5. Stop hook + harness files + gitignore + doc sections
-  if (flags['no-hook']) log('skipped Stop hook (--no-hook)');
-  else log(installStopHook(root, log) ? 'added Stop hook to .claude/settings.json (inert unless KB_TASK is set)' : 'Stop hook already present');
+  // 5. Claude hooks + harness files + gitignore + doc sections
+  if (flags['no-hook']) log(`skipped the ${Object.keys(CLAUDE_HOOKS).join(' and ')} hooks (--no-hook)`);
+  else {
+    const added = installClaudeHooks(root, log);
+    if (added) log(hookSummary(added));
+  }
   for (const h of harnesses) {
     const written = installHarness(root, h, { command: hkbCommandForHook() });
     log(written.length ? `harness ${h}: wrote ${written.join(', ')}` : `harness ${h}: files already up to date`);
