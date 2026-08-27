@@ -13,9 +13,13 @@ import { planTracks, trackContext, trackPaths, trackAlreadyAttempted } from './t
 import { GhError } from './gh.js';
 import { listKbJobs, readJobState, stopJob, matchJobByWorktree } from './jobs.js';
 import { isMirrorConfigured, syncProject, projectError } from './projects.js';
+import { sweep, sweepTask } from './gc.js';
 
 const nowIso = () => new Date().toISOString();
 const secondsSince = (iso) => (iso ? (Date.now() - new Date(iso).getTime()) / 1000 : Infinity);
+
+/** Ticks between full `hkb gc --yes` sweeps when board.json says nothing. 0 turns them off. */
+export const GC_EVERY_TICKS = 30;
 
 export function pidAlive(pid) {
   if (!pid) return false;
@@ -189,7 +193,10 @@ async function reconcileClosed(ctx, tasks, state, { dryRun = false, log = () => 
       await release(ctx, t.number, a.attempt);
     }
     await setStatus(ctx, t, d.status, { remove: t.needsHuman ? [L.needsHuman] : [] });
-    reconciled.push({ number: t.number, from, status: d.status, outcome: d.outcome, attempt: a?.attempt ?? null });
+    const entry = { number: t.number, from, status: d.status, outcome: d.outcome, attempt: a?.attempt ?? null };
+    // The task is over, so its worktrees go — except one whose worker is somehow still alive here.
+    if (a && a.host === ctx.host && a.pid && pidAlive(a.pid)) entry.keep = [a.attempt];
+    reconciled.push(entry);
     log(`#${t.number}: ${from} → ${d.status} (${d.reason}${a ? `, attempt ${a.attempt} → ${d.outcome}` : ''})`);
   }
   if (!dryRun) state.reconcile = { checked_at: nowIso(), signature: boardSignature(tasks), found: reconciled.length };
@@ -260,6 +267,28 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     delete state.reconcile;
     log(`reconcile failed (retrying next tick): ${e.message}`);
     summary.reconcile_error = e.message;
+  }
+
+  // Cleanup is part of the loop, not a chore. A task that leaves the open board takes its worktrees,
+  // branches and beat chains with it right here — local git only, no API call — and the full sweep
+  // runs every `gc_every_ticks` at the end of the tick. Whatever fails is retried by the next pass.
+  const swept = new Set();
+  const gcPending = new Set(state.gc_pending || []);
+  const sweepFinished = (n, keep = []) => {
+    if (dryRun || swept.has(n)) return;
+    swept.add(n);
+    try {
+      const r = sweepTask(ctx, n, { keep, log });
+      if (r.worktrees || r.branches) (summary.cleaned = summary.cleaned || []).push({ number: n, ...r });
+      if (r.pending) gcPending.add(n); else gcPending.delete(n);
+    } catch (e) { gcPending.add(n); log(`#${n}: cleanup skipped (${e.message}); the next tick retries it`); }
+  };
+  for (const r of summary.reconciled) if (!r.dry) sweepFinished(r.number, r.keep || []);
+  for (const n of [...gcPending]) {
+    // held by a live session last tick — try again, unless the task is back in flight: a retry that
+    // caught a fresh attempt would delete the worktree a new worker is sitting in
+    const t = tasks.find((x) => x.number === n);
+    if (!t || ['done', 'archived'].includes(t.status)) sweepFinished(n);
   }
 
   // background-agent jobs on this host (one local `claude agents --json` per tick, only if any profile uses them)
@@ -333,7 +362,16 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     for (const j of jobsById.values()) {
       if (!j.pid || jobAlive(j)) continue;
       if (runningNumbers.has(j.task)) continue; // handled above (or a fresh attempt still starting)
-      if (stopJob(j.id)) { touch(j.task); summary.reaped = summary.reaped || []; summary.reaped.push({ number: j.task, job: j.id }); log(`#${j.task}: stopped finished background agent ${j.id}`); }
+      if (stopJob(j.id)) {
+        touch(j.task);
+        summary.reaped = summary.reaped || [];
+        summary.reaped.push({ number: j.task, job: j.id });
+        log(`#${j.task}: stopped finished background agent ${j.id}`);
+        // Its checkout goes with it, unless the task is still waiting for another attempt — the
+        // worktree of a crashed one is the post-mortem (`hkb show <n>` prints the resume command).
+        const t = tasks.find((x) => x.number === j.task);
+        if (!t || ['done', 'archived', 'review'].includes(t.status)) sweepFinished(j.task);
+      }
     }
   }
 
@@ -541,6 +579,27 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       const x = projectError(e);
       summary.project = { error: x.message, fix: x.fix };
       log(`project mirror failed (the board is unaffected): ${x.message}${x.fix ? ` → ${x.fix}` : ''}`);
+    }
+  }
+
+  // 5. every `gc_every_ticks`, the full sweep — the same `sweep()` `hkb gc --yes` runs, so what the
+  //    dispatcher cleans and what a human cleans can never diverge. One board read, then local git.
+  if (!dryRun) state.gc_pending = [...gcPending].slice(-50);
+  const every = d.gc_every_ticks ?? GC_EVERY_TICKS;
+  if (!dryRun && every > 0) {
+    state.ticks_since_gc = (state.ticks_since_gc || 0) + 1;
+    if (state.ticks_since_gc >= every) {
+      state.ticks_since_gc = 0;
+      state.gc_scanned = state.gc_scanned || {};
+      try {
+        // the memo (issue → updatedAt already scanned for duplicate run comments) rides in the
+        // state file the tick already writes, so a sweep of a quiet board reads no issue at all
+        summary.gc = await sweep(ctx, { yes: true, memo: state.gc_scanned, log });
+        log(`gc: ${summary.gc.worktrees} worktree(s), ${summary.gc.branches} branch(es), ${summary.gc.comments} duplicate comment(s), ${summary.gc.chains} beat chain(s), ${summary.gc.files} old file(s)`);
+      } catch (e) {
+        summary.gc = { error: e.message };
+        log(`gc sweep skipped (retried in ${every} ticks): ${e.message}`);
+      }
     }
   }
 
