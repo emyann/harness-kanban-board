@@ -27,7 +27,7 @@ If you tag by hand, the two must match: tag `v1.4.0` ⇄ `"version": "1.4.0"`.
 | step | why it is there |
 | --- | --- |
 | `npm run lint`, `npm test` ×2 (UTC and `America/New_York`) | a tag can point at a commit that never went through a pull request |
-| `npm run smoke` | packs the tarball, installs it into an empty directory and runs the CLI from there. `npm test` proves the source is right; this proves the artifact is. `test.yml` runs it on every push too, but this workflow re-runs the suite itself rather than depending on that one, so it has to re-run the smoke as well |
+| `npm run smoke` | packs the tarball, installs it into an empty directory and runs the CLI from there — including `hkb init --no-labels` in a scratch repo, which proves the installed package can still copy the skill and the doc section out of itself. `npm test` proves the source is right; this proves the artifact is. `test.yml` runs it on every push too, but this workflow re-runs the suite itself rather than depending on that one, so it has to re-run the smoke as well |
 | tag vs `package.json` | a mismatch is a lie about what is being published; the run fails and names both numbers |
 | node ≥ 22.14, npm ≥ 11.5.1 | the floor npm documents for trusted publishing. Node 22 still bundles npm 10, so the step upgrades npm and then checks, rather than discovering it later as a bare "need auth" |
 | repository vs `package.json` | only the repository npm trusts can publish. A fork gets a notice with the fix, not a red build |
