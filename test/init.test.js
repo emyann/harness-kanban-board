@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { init, ensureGitignore, GITIGNORE_LINES, CLAUDE_HOOKS, HOOK_SETTINGS, agentsSkillDir, packageSkillDir, readSkillVersion } from '../src/init.js';
+import { init, ensureGitignore, GITIGNORE_LINES, CLAUDE_HOOKS, HOOK_SETTINGS, agentsSkillDir, packageSkillDir, readSkillVersion, commandFiles, commandNames } from '../src/init.js';
 import { parseArgs } from '../src/cli.js';
 import { makeContext, DEFAULT_PROFILES } from '../src/board.js';
 import { L, STATUSES } from '../src/model.js';
@@ -81,7 +81,8 @@ const NWO = 'acme/board'; // what FakeGh answers for; init takes it from --repo,
 const BOARD_FILE = path.join('.kanban', 'board.json');
 const SETTINGS = HOOK_SETTINGS.local; // where the hooks go unless `--shared-hooks` says otherwise (#85)
 // what a re-run must leave byte-identical
-const FOOTPRINT = [BOARD_FILE, SETTINGS, '.gitignore', 'CLAUDE.md', 'AGENTS.md', path.join('.agents', 'skills', 'kanban', 'SKILL.md')];
+const FOOTPRINT = [BOARD_FILE, SETTINGS, '.gitignore', 'CLAUDE.md', 'AGENTS.md', path.join('.agents', 'skills', 'kanban', 'SKILL.md'),
+  ...commandFiles().map((f) => f.rel)];
 
 function gitRepo() {
   const root = fs.realpathSync(scratch()); // macOS /var → /private/var; git reports the real path
@@ -247,6 +248,53 @@ test('the skill is copied out of the package, whole, and the harness link points
   if (fs.lstatSync(claudeSkill).isSymbolicLink()) {
     assert.equal(fs.readlinkSync(claudeSkill), path.join('..', '..', '.agents', 'skills', 'kanban'));
   }
+});
+
+// ---------- the slash commands SKILL.md names (#92) ----------
+// The skill's frontmatter and two of its section titles advertise `/kanban:specify` and
+// `/kanban:decompose`. For a year nothing registered them, so an adopter who typed one got
+// "Unknown command". Two tests hold the line: init has to write them, and every `/kanban:*` the
+// skill mentions has to be one of the files that ship.
+
+test('`hkb init` registers the slash commands the skill documents (#92)', async () => {
+  const { root, printed } = await runInit();
+  const packaged = commandFiles();
+
+  assert.ok(packaged.length, 'the package must carry commands/, or there is nothing to register');
+  assert.deepEqual(tree(path.join(root, '.claude', 'commands', 'kanban')), ['decompose.md', 'specify.md'],
+    'the directory name is the namespace: .claude/commands/kanban/decompose.md is /kanban:decompose');
+  for (const f of packaged) assert.equal(read(root, f.rel), f.contents, `${f.rel} must be the packaged command, verbatim`);
+  assert.ok(printed.some((l) => l.includes('.claude/commands/kanban')), 'init has to say it installed them');
+});
+
+test('every /kanban:* the skill advertises is a command that exists (#92)', async () => {
+  const { root } = await runInit();
+  const names = commandNames();
+  assert.deepEqual(names, ['/kanban:decompose', '/kanban:specify']);
+
+  const skill = read(root, path.join('.agents', 'skills', 'kanban', 'SKILL.md'));
+  const advertised = [...new Set([...skill.matchAll(/\/kanban:[a-z][a-z-]*/g)].map((m) => m[0]))].sort();
+  assert.deepEqual(advertised, names,
+    'the skill must name exactly the commands that ship — a name with no file is an "Unknown command" in someone else\'s session');
+
+  // and each command sends the reader to the section of the same name, so the procedure has one home
+  for (const f of commandFiles()) {
+    const name = `/kanban:${path.basename(f.rel, '.md')}`;
+    assert.ok(f.contents.includes(name), `${f.rel} must point at the ${name} section of SKILL.md`);
+    assert.ok(skill.includes(`## ${name} `), `SKILL.md must still have a "## ${name}" section for ${f.rel} to delegate to`);
+  }
+});
+
+test('the plugin registers the same commands, and they ship (#92)', () => {
+  const plugin = JSON.parse(fs.readFileSync(path.join(REPO, '.claude-plugin', 'plugin.json'), 'utf8'));
+  assert.equal(plugin.name, 'kanban', 'the plugin name is the command namespace: /<plugin>:<command>');
+  assert.equal(plugin.commands, './commands', 'without this key the plugin registers no commands at all');
+  const flat = fs.readdirSync(path.join(REPO, 'commands'), { withFileTypes: true });
+  assert.ok(flat.every((e) => e.isFile()), 'the plugin dir must be flat — a subdirectory would make it /kanban:<dir>:<name>');
+  assert.deepEqual(flat.map((e) => e.name).sort(), ['decompose.md', 'specify.md']);
+
+  const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'));
+  assert.ok(pkg.files.includes('commands'), 'commands/ must be in "files", or `hkb init` copies from a directory npm did not ship');
 });
 
 test('the CLAUDE.md / AGENTS.md section is the packaged one, spliced between markers', async () => {

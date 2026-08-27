@@ -119,6 +119,21 @@ Every terminal verb also takes `--summary-file` / `--metadata-file` / `--reason-
 Humans get `hkb promote`, `hkb unblock`, `hkb request-changes`, `hkb comment`, `hkb link/unlink`, `hkb archive`,
 `hkb log`. `hkb --help` lists everything.
 
+### Planning the board: two slash commands
+
+Two things a board needs are not CLI verbs, because they need a model and the dispatcher deliberately has none:
+
+| | |
+|---|---|
+| `/kanban:specify <n>` | rewrites one triage one-liner into a spec a cold worker can execute — Why / What / Done when, plus `paths`, `priority` and `goal` — and promotes it |
+| `/kanban:decompose <n>` | proposes the whole dependency graph for a goal (children, blockers, disjoint `paths`), and materializes it on the board once you say yes |
+
+Both stop and show you what they propose before writing anything. `hkb init` installs them into
+`.claude/commands/kanban/`, so they work in Claude Code with nothing else installed; the plugin registers the same
+two names. Their bodies delegate to the sections of the same name in
+[`skills/kanban/SKILL.md`](skills/kanban/SKILL.md), so a harness without slash commands — Copilot CLI, Codex —
+gets the identical procedure by asking the skill for it.
+
 ## The last step: who merges
 
 **hkb never merges.** A finished card waits in *review* with an open PR until that PR lands, and by default the

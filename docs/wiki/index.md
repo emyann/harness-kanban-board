@@ -11,6 +11,7 @@
 ## Features
 
 - [The last step — `dispatch.merge` and GitHub's auto-merge](./features/auto-merge.md): Why hkb never merges, how a board hands the last step to GitHub instead, and the branch-protection gate that is the only thing making that safe.
+- [The planning commands — `/kanban:specify` and `/kanban:decompose`](./features/planning-commands.md): The two board operations that need a model and so cannot be `hkb` verbs — one command source, registered twice, delegating to one procedure in SKILL.md.
 - [The web board (`hkb serve`)](./features/web-board.md): One local server, one inline page, N repos — how the board is read, how a drag becomes a verb, and how every request is routed to the board it names.
 
 ## Decisions

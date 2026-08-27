@@ -7,7 +7,7 @@ import { boardFile, api, readState, writeState } from './board.js';
 import { detectCaps, branchProtection } from './tasks.js';
 import { L, STATUSES, compareVersions, mergePolicy, mergeGate, mergeGateFix } from './model.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
-import { agentsSkillDir, packageSkillDir, readSkillVersion, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, isEphemeralPath, HOOK_SETTINGS } from './init.js';
+import { agentsSkillDir, packageSkillDir, readSkillVersion, commandFiles, commandNames, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, isEphemeralPath, HOOK_SETTINGS } from './init.js';
 import { checkProject } from './projects.js';
 
 function has(cmd) { return spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).status === 0; }
@@ -31,6 +31,20 @@ export function checkSkill(ctx, { ok, warn }) {
   if (cmp !== null && cmp < 0) return warn('skill', `.agents/skills/kanban is v${installed}, hkb ships v${packaged}`, 'hkb init');
   if (installed && packaged && cmp === null) return warn('skill', `.agents/skills/kanban v${installed} vs packaged v${packaged} — not comparable`, 'hkb init');
   ok('skill', `.agents/skills/kanban${installed ? ` v${installed}` : ''}`);
+}
+
+/**
+ * SKILL.md documents `/kanban:specify` and `/kanban:decompose` by name, so a repo where they are not
+ * registered has a skill that instructs an invocation the harness will reject (#92). They come from
+ * the plugin, or from `.claude/commands/kanban/` — which is init's job and the only one doctor can
+ * check from here, so a miss is a warning naming the command that writes them.
+ */
+export function checkCommands(ctx, { ok, warn }) {
+  const files = commandFiles();
+  if (!files.length) return warn('claude commands', 'this hkb has no commands/ directory to install from', 'npm i -g hkb-cli@latest');
+  const missing = files.filter((f) => !fs.existsSync(path.join(ctx.root, f.rel)));
+  if (missing.length) return warn('claude commands', `${missing.map((f) => `/kanban:${path.basename(f.rel, '.md')}`).join(', ')} not registered — the skill documents them`, 'hkb init');
+  ok('claude commands', `.claude/commands/kanban (${commandNames().join(', ')})`);
 }
 
 /** What each harness's generated files buy you, for the one-liner doctor prints. */
@@ -327,6 +341,7 @@ export async function doctor(ctx, flags, log) {
   checkActions(ctx, { ok, warn });
   const claudeSkill = path.join(ctx.root, '.claude', 'skills', 'kanban');
   fs.existsSync(claudeSkill) ? ok('claude skill link', '.claude/skills/kanban') : warn('claude skill link', 'missing', 'hkb init');
+  checkCommands(ctx, { ok, warn });
   checkHooks(ctx, { ok, warn, bad });
 
   if (!ctx.repo) return report(results, ctx, log);

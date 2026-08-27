@@ -107,8 +107,9 @@ One GraphQL query per board per tick; everything else is per-task and only for t
 
 ## Decomposition, worked
 
-A goal issue is split by `/kanban:decompose` (a section of `SKILL.md`, run in a human's session — the dispatcher never
-decomposes anything). The shape is Hermes': children carry the work, and the **root is blocked by its leaves**, so it
+A goal issue is split by `/kanban:decompose` (a slash command that `hkb init` and the `kanban` plugin both register;
+its body sends you to the section of `SKILL.md` with the same name). It runs in a human's session — the dispatcher
+never decomposes anything, and there is no `hkb decompose`. The shape is Hermes': children carry the work, and the **root is blocked by its leaves**, so it
 becomes ready again for a final verify pass once the tree is done.
 
 Goal `#12 Rate-limit the public API`, in *triage*, split into three children:

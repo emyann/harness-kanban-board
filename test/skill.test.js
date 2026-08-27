@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseSkillVersion, compareVersions } from '../src/model.js';
-import { agentsSkillDir, isPackageRepo, linkSkill, copySkill, readSkillVersion, packageSkillDir } from '../src/init.js';
-import { checkSkill } from '../src/doctor.js';
+import { agentsSkillDir, isPackageRepo, linkSkill, copySkill, readSkillVersion, packageSkillDir, claudeCommandsDir, commandNames, installCommands } from '../src/init.js';
+import { checkSkill, checkCommands } from '../src/doctor.js';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 
@@ -150,6 +150,48 @@ test('doctor reports a linked skill as always current, whatever board.json says'
   const r = skillCheck(root, { skill_version: '0.0.1' });
   assert.equal(r.ok, true);
   assert.match(r.detail, /linked, always current/);
+});
+
+// ---------- the planning commands the skill documents (#92) ----------
+// Same install rule as the skill, one level down: hkb's own repo links, everybody else gets a copy —
+// and doctor is what tells a repo that the slash commands SKILL.md names are not registered there.
+
+/** doctor's command check against a root, as the single {name, ok, detail, fix} it reports. */
+function commandCheck(root) {
+  const out = [];
+  checkCommands({ root }, {
+    ok: (name, detail) => out.push({ name, ok: true, detail }),
+    warn: (name, detail, fix) => out.push({ name, ok: null, detail, fix }),
+  });
+  assert.equal(out.length, 1);
+  return out[0];
+}
+
+test('installCommands copies into .claude/commands/kanban, and is idempotent', () => {
+  const root = tmpRepo('some-app');
+  const first = installCommands(root);
+  assert.equal(first.how, 'copied');
+  assert.deepEqual(first.names, commandNames());
+  assert.equal(fs.lstatSync(claudeCommandsDir(root)).isSymbolicLink(), false, 'an adopter gets a copy: a link would point into a package they may uninstall');
+  assert.equal(installCommands(root).how, 'unchanged', 'a re-run must not rewrite files that already match');
+});
+
+test('doctor warns when the commands the skill documents are not registered (#92)', () => {
+  const root = tmpRepo('some-app');
+  const missing = commandCheck(root);
+  assert.equal(missing.ok, null);
+  assert.equal(missing.detail, '/kanban:decompose, /kanban:specify not registered — the skill documents them');
+  assert.equal(missing.fix, 'hkb init');
+
+  installCommands(root);
+  assert.equal(commandCheck(root).ok, true);
+});
+
+test('this repo self-hosts its commands too: .claude/commands/kanban links to commands/ (#92)', () => {
+  const dir = claudeCommandsDir(REPO);
+  assert.equal(fs.lstatSync(dir).isSymbolicLink(), true, 'a copy in the package repo would be a second source of truth');
+  assert.equal(fs.readlinkSync(dir), path.join('..', '..', 'commands'));
+  assert.equal(commandCheck(REPO).ok, true, 'the commands have to be registered in the repo that documents them');
 });
 
 test('this repo self-hosts: .agents/skills/kanban is a link to skills/kanban', () => {
