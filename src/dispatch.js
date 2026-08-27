@@ -418,10 +418,13 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     const maxRuntime = t.kb.max_runtime || d.max_runtime_default;
     let lastSignal = a.heartbeat_at || a.started_at;
     let outcome = null;
-    // a `trigger` profile handed this attempt to something that is not a process on any host we can
-    // see (an Actions run): there is nothing local to inspect, so max_runtime and the heartbeat below
-    // are the whole check.
-    if (a.remote) { /* liveness is the heartbeat */ }
+    // Nothing local to inspect, for two reasons that answer the same way. `remote`: a `trigger`
+    // profile handed this attempt to something that is not a process on any host we can see (an
+    // Actions run). `manual`: a human claimed it by hand (`hkb claim <n>` with no `--spawn`) and is
+    // working it in their own terminal — there is no pid the dispatcher ever knew. Either way
+    // max_runtime and the heartbeat below are the whole check; the no-handle rules further down
+    // would call a perfectly live attempt crashed three minutes in.
+    if (a.remote || a.manual) { /* liveness is the heartbeat */ }
     else if (a.host === ctx.host && (a.job || a.bg)) {
       let job = a.job ? (jobsById.get(a.job) || readJobState(a.job)) : null;
       if (!job && a.bg && a.log) {

@@ -131,6 +131,11 @@ the track's: what each node landed, what is open, what you parked.
   Decide before you fan out: put design decisions in the body; children cannot see their siblings.
 - `hkb link <parent> <child>` / `hkb unlink` — dependencies (same board only).
 - `hkb promote <n>` (triage → todo, or force ready) · `hkb unblock <n>` · `hkb request-changes <n> "reason"` · `hkb archive <n>`.
+- `hkb claim <n>` — take a task by hand, with no dispatcher: it creates the lock ref, moves the card to *running* and
+  prints the `export KB_TASK=… KB_ATTEMPT=…` line to work under. The protocol is then exactly the worker's, above.
+  A hand-claimed attempt has no process for anyone to watch, so **the heartbeat is the only thing holding it**:
+  `hkb heartbeat <n>` every ~10 minutes, or the tick reclaims the task once you have been quiet for `stale_after`
+  (1h by default) and your next heartbeat exits `LOCK_LOST`. `--spawn` hands it to the profile's launch command instead.
 - `hkb dispatch --dry-run` shows what the next tick would do; `hkb dispatch --loop 60` runs it.
 - Planning, not managing: `/kanban:specify <n>` sharpens one triage one-liner into a spec, `/kanban:decompose <n>`
   splits a goal into a dependency graph. Both are below, and both stop for approval before they write anything.
