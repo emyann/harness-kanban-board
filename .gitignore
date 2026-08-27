@@ -8,3 +8,4 @@ node_modules/
 .kanban/sessions/
 *.log
 .claude/worktrees/
+.claude/settings.local.json

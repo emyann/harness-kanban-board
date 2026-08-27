@@ -54,6 +54,12 @@ const MUST_NOT_SHIP = ['test', 'docs', '.kanban', '.github', '.agents', 'CLAUDE.
 // The list above proves those files are *in* the tarball; this one proves the installed CLI actually
 // reads them from there and puts them in a stranger's repo — a `files` entry can also go missing in a
 // way that leaves the file present but unreadable from where the code looks for it.
+// Where `hkb init` puts the Claude Code hooks: the per-developer file by default, never the tracked
+// one (src/init.js HOOK_SETTINGS). Spelled out rather than imported — this script runs against the
+// *installed* package, and must not read the source it is checking.
+const LOCAL_SETTINGS = '.claude/settings.local.json';
+const SHARED_SETTINGS = '.claude/settings.json';
+
 const FROM_PACKAGE = [
   ['.agents/skills/kanban/SKILL.md', 'skills/kanban/SKILL.md', 'whole'],
   ['.agents/skills/kanban/references/protocol.md', 'skills/kanban/references/protocol.md', 'whole'],
@@ -194,12 +200,23 @@ function checkInitOffline(bin, root) {
     if (parsed && parsed.repo === 'acme/smoke' && Object.keys(parsed.profiles || {}).length) ok(`.kanban/board.json (profiles ${Object.keys(parsed.profiles).join(', ')})`);
     else if (parsed) bad(`.kanban/board.json is not what init should have written: ${cfg.slice(0, 120)}`, 'see src/init.js step 3');
     const ignored = text('.gitignore', 'see ensureGitignore in src/init.js');
-    if (ignored && ignored.split('\n').map((l) => l.trim()).includes('.kanban/dispatch.pid')) ok('.gitignore carries the local-state block');
+    const ignoredLines = (ignored || '').split('\n').map((l) => l.trim());
+    if (ignored && ignoredLines.includes('.kanban/dispatch.pid')) ok('.gitignore carries the local-state block');
     else if (ignored) bad('the generated .gitignore is missing .kanban/dispatch.pid', 'see GITIGNORE_LINES in src/init.js');
-    const raw = text('.claude/settings.json', 'see installClaudeHooks in src/init.js');
+    // The hooks go in the per-developer file, and whatever command they carry has to be one that
+    // outlives this install: an `_npx` path is wrong for a teammate and gone once npm cleans the
+    // cache (#85). This is where a tarball run can prove it — the source tests cannot see PKG_ROOT
+    // land anywhere but this checkout.
+    const raw = text(LOCAL_SETTINGS, 'see installClaudeHooks in src/init.js');
     const events = raw ? Object.keys(JSON.parse(raw).hooks || {}).sort().join(', ') : null;
-    if (events === 'PreToolUse, Stop') ok(`.claude/settings.json (${events})`);
-    else if (raw !== null) bad(`.claude/settings.json got hooks "${events}", expected "PreToolUse, Stop"`, 'see CLAUDE_HOOKS in src/init.js');
+    if (events === 'PreToolUse, Stop') ok(`${LOCAL_SETTINGS} (${events})`);
+    else if (raw !== null) bad(`${LOCAL_SETTINGS} got hooks "${events}", expected "PreToolUse, Stop"`, 'see CLAUDE_HOOKS in src/init.js');
+    if (raw !== null && !ignoredLines.includes(LOCAL_SETTINGS)) bad(`${LOCAL_SETTINGS} names this machine and is not in the generated .gitignore`, 'see GITIGNORE_LINES in src/init.js');
+    if (fs.existsSync(path.join(repo, SHARED_SETTINGS))) bad(`\`hkb init\` wrote the tracked ${SHARED_SETTINGS}`, 'only --shared-hooks may — see hookPlacement in src/init.js');
+    else ok(`${SHARED_SETTINGS} was left for --shared-hooks`);
+    const npx = [LOCAL_SETTINGS, SHARED_SETTINGS].filter((rel) => (fs.existsSync(path.join(repo, rel)) ? fs.readFileSync(path.join(repo, rel), 'utf8').includes('_npx') : false));
+    if (npx.length) bad(`${npx.join(', ')} names the npx cache, which is not a durable path`, 'see hkbCommandForHook in src/init.js');
+    else ok('no settings file names the npx cache');
   } finally {
     if (keep) log(`  kept: ${repo}`);
     else fs.rmSync(repo, { recursive: true, force: true });

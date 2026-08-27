@@ -7,7 +7,7 @@ disk) whatever `hkb init --harness <name>` generates. This page is the per-harne
 
 | profile | harness | worktree | stop nudge | structured output | `hkb init --harness` |
 | --- | --- | --- | --- | --- | --- |
-| `claude` | Claude Code background agent | `claude --worktree` | `Stop` hook in `.claude/settings.json` | attempt cost + session id from the job | — (plain `hkb init`) |
+| `claude` | Claude Code background agent | `claude --worktree` | `Stop` hook in `.claude/settings.local.json` | attempt cost + session id from the job | — (plain `hkb init`) |
 | `claude-p` | Claude Code headless | `claude --worktree` | same | `--output-format json` | — |
 | `copilot-cli` | GitHub Copilot CLI | dispatcher (`git worktree add`) | `agentStop` hook in `.github/hooks/kanban.json` | none | `copilot` |
 | `codex` | OpenAI Codex CLI | dispatcher (`git worktree add`) | `Stop` hook in `.codex/hooks.json` | `--output-schema` | `codex` |
@@ -62,9 +62,33 @@ profile the board does not have is skipped by the tick with `unknown profile <na
 ## Claude Code — `claude`, `claude-p`
 
 `hkb init` is all it takes: the skill lands in `.agents/skills/kanban` (linked from `.claude/skills/kanban`) and
-the `Stop` + `PreToolUse` hooks go into `.claude/settings.json`. `claude` runs each worker as a background agent
+the `Stop` + `PreToolUse` hooks go into `.claude/settings.local.json`. `claude` runs each worker as a background agent
 (`claude --bg`, visible in `claude agents`, attachable with `claude attach <job>`); `claude-p` is the headless
 variant for CI and containers. Both isolate themselves with `--worktree kb-<n>-<k>`.
+
+### Which settings file the hooks go in
+
+`.claude/settings.local.json`, by default — the per-developer file, which `hkb init` adds to `.gitignore`. The
+reason is that the command in there names *this* machine: a plain `hkb` when it is on PATH, and otherwise an
+absolute path into wherever this package was installed. Neither is true in a teammate's checkout, and both hooks
+use `matcher: "*"`, so a command that does not resolve fails on **every tool call in every session** in that repo
+— noise nobody there wrote or can explain. (Both hooks are still inert unless `KB_TASK` is set; nothing
+misbehaves, it just fails loudly.)
+
+`hkb init --shared-hooks` puts them in the tracked `.claude/settings.json` instead — for a team where everyone
+runs `npm i -g hkb-cli`. That file only ever gets the portable form, `hkb hook stop` / `hkb hook pretool`; an
+absolute path is never written into a file other people read. `hkb doctor` checks whatever is configured, in
+either file, and fails when the command cannot be resolved here:
+
+```
+✗ hook command    hkb hook stop — `hkb` is not on PATH here; the hook fails on every tool call in this repo
+                    → npm i -g hkb-cli (or: hkb init, which writes a command that resolves here)
+```
+
+The hooks live in exactly one of the two files: init moves them rather than leaving a second copy, since two
+would fire every nudge twice. A re-run leaves a shared, portable setup where it is — but hooks in the tracked
+file naming a path get moved to the local one, and an `npx` cache path (never durable: it is gone the next time
+npm cleans that cache) is rewritten wherever it is found.
 
 ## GitHub Copilot CLI — `copilot-cli`
 
