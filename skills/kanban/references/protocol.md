@@ -12,7 +12,7 @@ Everything that must survive a crash lives in GitHub. Nothing here needs a paid 
 | Needs a human | label `kb:needs-human` | orthogonal flag; set on gave_up, block loops, most block kinds |
 | Machine fields | `<!-- kb: {...} -->` block at the top of the body | `priority, workspace, max_runtime, max_retries, model, skills[], paths[], scheduled_at, idempotency_key, goal`. Malformed → defaults, never a crash |
 | Dependencies | GitHub issue dependencies: child **blocked by** parent | Hermes parent→child. A blocker counts as done only when closed as *completed* |
-| Attempts (Hermes `runs`) | one `<!-- kb-run -->` comment, fenced JSON | `attempts[] {attempt, profile, host, pid, started_at, heartbeat_at, lock_sha, ended_at, outcome, summary, reason, log, session_id, transcript_path, total_cost_usd, num_turns, duration_ms}`, `failures`, `block_loops`. `lock_sha` is where the lock ref started, so the worker's first CAS heartbeat knows what to lease on. The session fields are recorded once, by the Stop hook and the dispatcher: `hkb show <n>` prints them with a `claude --resume <id>` line |
+| Attempts (Hermes `runs`) | one `<!-- kb-run -->` comment, fenced JSON | `attempts[] {attempt, profile, host, pid, started_at, heartbeat_at, lock_sha, ended_at, outcome, summary, reason, log, session_id, transcript_path, total_cost_usd, num_turns, duration_ms}`, `failures`, `block_loops`. `lock_sha` is where the lock ref started, so the worker's first CAS heartbeat knows what to lease on. The session fields are recorded once, by the Stop hook and the dispatcher: `hkb show <n>` prints them with a `claude --resume <id>` line. A track attempt also carries `track: true` and `track_nodes[]` — the subgraph it was handed, and the marker that says this root has had its one go at the fast engine |
 | Structured handoff | `<!-- kb-result -->` comment per completion / review request | `{summary, metadata{changed_files, verification, dependencies, residual_risk, retry_notes}, artifacts[]}` |
 | Events | issue timeline + attempt rows (`hkb log`) | |
 | Claim | git ref `refs/kb/locks/<n>/<attempt>` | create = atomic claim (201 claimed / held on **422 "Reference already exists"** — the observed duplicate response, verified 2026-08-26 — or 409 / anything else unknown → back off) |
@@ -74,7 +74,7 @@ the dispatcher owns their lock. `hkb heartbeat <n> --note "..."` always takes th
 2. For every `running` task: crashed (pid gone on this host) · timed_out (`max_runtime`) · reclaimed (no signal for `stale_after`) → close the attempt, release the ref, `failures++`, back to `ready` or `gave_up`. The last signal is the freshest of `started_at`, `heartbeat_at` and **the committer date of the commit the lock ref points at** — the only trace a CAS heartbeat leaves. That commit is read only for an attempt that already looks stale, so a live board costs one extra request per reclaim decision and a quiet one costs none.
 3. Sweep orphan lock refs (no matching open attempt).
 4. Promote `todo` → `ready`.
-5. For `ready` tasks by priority: caps (`max_in_progress`, per-profile, daily spawn cap) → guards (`active_pr` → review, `blocker_auth` pause, `recent_success`, `path_overlap`) → claim ref → append attempt → label `running` → spawn the profile's launch command with `KB_*` env.
+5. Track roots first (see *Tracks* below): a root on a profile with `"track": true` whose whole subgraph is claimable takes the same caps and guards — with the union of its nodes' `kb.paths` — and spawns **one** session for all of it. Then `ready` tasks by priority: caps (`max_in_progress`, per-profile, daily spawn cap) → guards (`active_pr` → review, `blocker_auth` pause, `recent_success`, `path_overlap`) → claim ref → append attempt → label `running` → spawn the profile's launch command with `KB_*` env. A node a live track owns is skipped here and costs no slot.
 6. Mirror the labels onto the linked Projects v2 board, when there is one (see below).
 
 One GraphQL query per board per tick; everything else is per-task and only for tasks that changed state.
@@ -131,6 +131,49 @@ A materialized graph is valid when:
    empty `paths` is neither guarded nor guards anyone, so two path-less children can edit the same file at once;
 6. every decision two children share is written into both bodies.
 
+## Tracks — the second execution engine
+
+A **track** is a view, not a new object: a root task plus every task that is still blocking it, transitively. The same
+issues, the same labels, the same verbs. What changes is who runs them.
+
+| | node dispatch (default) | track runner |
+|---|---|---|
+| Granularity | one cold session per node | one session for the whole subgraph |
+| Selected by | any `ready` task | a root whose profile has `"track": true` (`claude-track`) |
+| Lock claimed by the dispatcher | the task's | the **root's** only |
+| Node locks | — | claimed by the runner, one at a time, as it reaches each node |
+| Heartbeat | the task's own lock ref | the **root's** lock ref covers every node under it |
+| `max_in_progress` | one slot per task | one slot per track, however many nodes it holds |
+| `path_overlap` | the task's `kb.paths` | the union of every node's `kb.paths` |
+| Between two dependent nodes | a tick of latency, and the context re-derived | in the same session, in memory |
+
+Everything else is deliberately identical, and that is the whole safety argument: **every node still goes through its
+own terminal verb**, so every node is a durable checkpoint. A runner that dies mid-track leaves a board with per-node
+truth on it, and the ordinary tick finishes the rest node by node — no new crash semantics, no new recovery path.
+
+The dispatcher recognises a track root in step 5 of the tick, before it selects ready tasks:
+
+1. resolve the subgraph — the root plus its unfinished blockers, transitively. A blocker closed as *completed* is
+   finished work, not a node, so a track shrinks as it runs and a resumed track is exactly what is left.
+2. refuse, and fall back to node dispatch, on anything unusual — a cycle · a blocker not on this board · a node that
+   is `running`, `blocked`, `review` or `triage` · a node wearing `kb:needs-human` · a node with an open PR · a node
+   on a profile outside the runner's `track_agents` (**cross-harness tracks are out of scope**: one session is one
+   harness) · a root that has already had one track attempt. Every refusal is reported, none is an error.
+3. claim the root's lock, append an attempt carrying `track: true` and `track_nodes: [...]`, label the root
+   `kb:status:running`, and spawn one session with the track prompt.
+4. while that attempt is open, the nodes are *covered*: the tick will not reclaim them (they have no pid of their
+   own — the root's lease is their liveness), will not claim them, and does not count their slots.
+
+The runner's contract is in `SKILL.md` under *When you run a track*: `hkb context <n>` → `hkb claim <n>` → work on a
+branch of its own → one draft PR with exactly one `Closes #<n>` → one terminal verb, per node, then the root last.
+One PR per node is what keeps a node a checkpoint: its issue closes when *its* PR merges. A single PR closing several
+nodes would park the unfinished ones in *review* behind it, where nothing could finish them.
+
+```bash
+hkb adopt 12 --agent claude-track --status todo   # the decomposed root from the example above
+hkb dispatch --dry-run                            # → #12: [dry-run] would run track #41 → #42 → #43 → #12
+```
+
 ## Projects v2 mirror (optional)
 
 `.kanban/board.json` may carry a `"project"` block (`hkb init --project <number|new>`; needs `gh auth refresh -s project`):
@@ -152,6 +195,10 @@ nothing else about the board changes.
 ## Worker environment
 
 `KB_TASK` `KB_ATTEMPT` `KB_BOARD` `KB_REPO` `KB_LOCK_REF` `KB_ROOT` `KB_PROFILE`
+
+`KB_ATTEMPT` belongs to `KB_TASK` and is read only for it. A plain worker only ever acts on its own task, so this is
+invisible — but a track runner claims and finishes several tasks from one session, and each has its own attempt
+numbering. Any verb it runs on another task resolves that task's own open attempt.
 
 ## Terminal verb inputs
 

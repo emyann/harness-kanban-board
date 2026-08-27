@@ -78,6 +78,30 @@ reads the way you'd guess. `GHK_DEBUG=1` shows every poll with its status and th
 hkb watch: board: GET repos/o/r/issues?labels=kb%3Aboard%3Adefault&... → 304 Not Modified · rate 219 (+0) · etag 594b2e9a588b
 ```
 
+## MCP (optional — the CLI is the protocol)
+
+Harnesses that prefer tools to a shell get the same verbs over MCP:
+
+```bash
+hkb init --mcp   # writes .mcp.json, prints the Codex and VS Code equivalents
+hkb mcp          # the server itself: JSON-RPC 2.0 on stdio, no dependency
+```
+
+`.mcp.json` is read verbatim by Claude Code and Copilot CLI:
+
+```json
+{"mcpServers": {"kanban": {"type": "stdio", "command": "hkb", "args": ["mcp"]}}}
+```
+
+Codex reads MCP servers from `~/.codex/config.toml` and VS Code from `.vscode/mcp.json` — neither is hkb's file
+to write, so `--mcp` prints those two snippets instead of generating them.
+
+The nine tools are the nine verbs — `kanban_show`, `kanban_heartbeat`, `kanban_complete`, `kanban_block`,
+`kanban_request_review`, `kanban_comment`, `kanban_create`, `kanban_link`, `kanban_unblock` — and each one calls
+the function the CLI calls and returns the object its `--json` prints. There is no second code path: a
+`tools/call` of `kanban_show` is byte-for-byte `hkb show <n> --json`. `task` defaults to `$KB_TASK`, so a worker
+just calls `kanban_show`. Nothing about the board requires MCP; it is a second doorway to one protocol.
+
 ```bash
 hkb stats                       # the last 7 days: what ran, how it ended, what it cost
 hkb stats --since 24h --json    # the same object, for a script or a dashboard
@@ -123,7 +147,7 @@ plus every `running` task, whose ref-CAS heartbeat leaves no trace on the issue.
 | heartbeat | CAS on the same ref: `git push <empty commit>:<ref> --force-with-lease=<ref>:<expected>` — free, and a rejected lease is `LOCK_LOST` (exit 3). Profiles that cannot push refs use `"heartbeat": "comment"` |
 | runs table | one `<!-- kb-run -->` comment (attempts, failures, block loops) |
 | `kanban_complete(summary, metadata)` | `<!-- kb-result -->` comment; open PR → *review*, else issue closed |
-| worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link` |
+| worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link`, or the same nine as MCP tools (`hkb mcp`) |
 | stop nudge | Claude Code / Codex `Stop`, Copilot CLI `agentStop` hook (`hkb hook stop`, 2 nudges, inert unless `KB_TASK` is set) |
 | kanban dashboard | `hkb serve` — local page over the live board; drag-drop calls the same verbs |
 | live event stream | `hkb watch` / `hkb tail <n>` — conditional `GET` with `If-None-Match`; an unchanged board answers 304 and is not charged |
@@ -140,6 +164,18 @@ worker as a Claude Code **background agent** — `claude --bg --name "kb #<n> ·
 `claude agents` (and the agents view of any session in the repo), can be opened with `claude attach <job>`, and are
 stopped by the dispatcher once their attempt has ended. `hkb show <n>` prints the job id per attempt.
 `claude-p` is the headless variant (`claude -p`, exits when done) for CI and containers without the session daemon.
+
+`claude-track` is the same launcher pointed at a whole **track** — a root task plus everything still blocking it,
+usually what `/kanban:decompose` just materialized. One session executes the subgraph in dependency order instead of
+one cold session per node, so a dependent pair costs no tick of latency and no re-derived context; the board is
+unchanged, because the runner still claims each node, works it, and finishes it with its own terminal verb. Every
+node stays a durable checkpoint, so a runner that dies leaves a board the ordinary dispatcher finishes node by node —
+and a root that has had one track attempt is never handed to a second runner. Put it on the **root only**
+(`hkb adopt <root> --agent claude-track --status todo`) and give it a `max_runtime` for the whole track. A track
+costs one `max_in_progress` slot however many nodes it holds; per-node `kb.paths` still guard against everything else
+running. Cross-harness tracks are out of scope: a node on a profile outside the runner's `track_agents` simply makes
+the track un-claimable and the board falls back to node dispatch. See
+[Tracks](skills/kanban/references/protocol.md#tracks--the-second-execution-engine).
 
 `copilot-cli` is the same deal for **GitHub Copilot CLI**, which is included in Copilot Free:
 

@@ -29,6 +29,17 @@ export const DEFAULT_PROFILES = {
     allowed_tools: CLAUDE_TOOLS,
     launch: ['claude', '--bg', '--name', 'kb #{n} · {title}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', 'Bash(git push --force*)', 'Bash(git push -f*)', '--max-turns', '80', '--max-budget-usd', '5', '{model_args}', '{prompt}'],
   },
+  'claude-track': {
+    description: 'Claude Code as a TRACK runner: one background session executes a whole subgraph — a root plus everything it is still blocked by — claiming, working and finishing each node through the ordinary verbs, so every node stays a durable checkpoint. Put `kb:agent:claude-track` on the root of a decomposed goal (`/kanban:decompose`) and give it a generous `max_runtime`: the dispatcher claims the root, counts the whole track as ONE running slot, and leaves the nodes alone while the runner holds them. `track_agents` is which node profiles this runner can execute in-session — a track with a node outside that list needs a second harness, so it is not claimable as a track and falls back to node-by-node dispatch. So does a track whose runner has already had one go: the durable engine always finishes.',
+    mode: 'claude-bg',
+    track: true,
+    track_agents: ['claude', 'claude-p', 'claude-track'],
+    heartbeat: 'auto',
+    max_in_progress: 1,
+    model: null,
+    allowed_tools: CLAUDE_TOOLS,
+    launch: ['claude', '--bg', '--name', 'kb track #{n} · {title}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', 'Bash(git push --force*)', 'Bash(git push -f*)', '--max-turns', '400', '--max-budget-usd', '25', '{model_args}', '{prompt}'],
+  },
   'claude-p': {
     description: 'Claude Code headless (`claude -p`): a plain process that exits when done. Not listed in `claude agents`; use it where no session daemon exists (CI, containers).',
     mode: 'process',
@@ -123,6 +134,16 @@ export function ensureWorktree(root, name) {
     throw e;
   }
   return dir;
+}
+
+/**
+ * Is `hkb` on PATH? Generated files (the Stop hook, `.mcp.json`) name the binary when it is and fall
+ * back to this checkout's `bin/hkb.js` when it is not — a hook or an MCP client started by a GUI
+ * inherits a PATH that may have neither.
+ */
+export function hkbOnPath() {
+  const which = spawnSync('sh', ['-c', 'command -v hkb'], { encoding: 'utf8' });
+  return which.status === 0 && !!which.stdout.trim();
 }
 
 export function detectRepo() {

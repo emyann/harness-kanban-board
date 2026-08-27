@@ -1,0 +1,5 @@
+# hkb board, as an MCP server. Codex reads MCP servers from the user config only,
+# so this belongs in ~/.codex/config.toml — not in the repo.
+[mcp_servers.kanban]
+command = "{{tomlCommand}}"
+args = {{args}}

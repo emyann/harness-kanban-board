@@ -51,7 +51,8 @@ dispatcher will reclaim the attempt as stale. Without the `.git` writable root, 
 worktree can be denied by the sandbox — add it if commits fail with a sandbox error.
 
 No `[mcp_servers]` entry is generated: hkb workers call the `hkb` CLI directly, so there is nothing to
-connect. If you add an MCP server of your own, put it in `~/.codex/config.toml`; it does not belong here.
+connect. To drive the board through tools instead, run `hkb init --mcp` — it prints an `mcp_servers.kanban`
+snippet for `~/.codex/config.toml`. Either way that table belongs in the user config, never here.
 
 ## The protocol
 
