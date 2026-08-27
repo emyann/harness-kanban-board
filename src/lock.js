@@ -4,23 +4,50 @@
 //   beat    = git push <new>:<ref> --force-with-lease=<ref>:<expected>  → rejected means LOCK_LOST
 //   release = DELETE git/refs/kb/locks/<n>/<k>
 import { spawnSync } from 'node:child_process';
-import { rest, GhError } from './gh.js';
+import { rest, restRaw, GhError } from './gh.js';
 import { api } from './board.js';
 import { lockRef, lockRefPath, classifyLeasePush } from './model.js';
 
+/** One conditional read of a branch head. A 304 means "still `known`" and costs no rate limit. */
+async function readHead(ctx, branch, known) {
+  const etag = known && known.branch === branch ? known.etag : null;
+  const r = await restRaw('GET', api(ctx, `/git/ref/heads/${branch}`), { headers: etag ? { 'If-None-Match': etag } : {} });
+  if (r.status === 304) {
+    if (known?.sha) return { branch, sha: known.sha, etag: known.etag };
+    throw new GhError(`GET git/ref/heads/${branch} answered 304 with nothing cached`, { status: 304, kind: 'unknown' });
+  }
+  // a prefix match returns an array (the branch itself does not exist) — same fix as a 404
+  const sha = Array.isArray(r.data) ? null : r.data?.object?.sha;
+  if (!sha) throw new GhError(`GET git/ref/heads/${branch} returned no sha`, { status: r.status || 404, kind: 'notfound' });
+  return { branch, sha, etag: r.headers?.etag || null };
+}
+
+/**
+ * The default branch head every claim is created at — **not** a process-lifetime cache.
+ * `staleBaseSha(ctx)` marks the cached value for revalidation (the dispatcher does it once per
+ * tick), and the next call re-reads the ref with `If-None-Match`: a quiet repo answers 304, which
+ * is free, and a moved branch is picked up within the tick. A sha can never outlive one tick, so a
+ * process cannot go on POSTing claims at a sha GitHub has forgotten (the #61 outage).
+ */
 export async function baseSha(ctx) {
-  if (ctx._cache.baseSha) return ctx._cache.baseSha;
+  const known = ctx._cache.base || null;
+  if (known?.sha && known.fresh) return known.sha;
   const branch = ctx.cfg?.default_branch || 'main';
+  let head;
   try {
-    const r = await rest('GET', api(ctx, `/git/ref/heads/${branch}`));
-    ctx._cache.baseSha = r.object.sha;
+    head = await readHead(ctx, branch, known);
   } catch (e) {
     if (!(e instanceof GhError && e.kind === 'notfound')) throw e;
     const repo = await rest('GET', api(ctx));
-    const r = await rest('GET', api(ctx, `/git/ref/heads/${repo.default_branch}`));
-    ctx._cache.baseSha = r.object.sha;
+    head = await readHead(ctx, repo.default_branch, known);
   }
-  return ctx._cache.baseSha;
+  ctx._cache.base = { ...head, fresh: true };
+  return head.sha;
+}
+
+/** Mark the cached base sha for revalidation. The etag survives, so the re-read is usually a 304. */
+export function staleBaseSha(ctx) {
+  if (ctx?._cache?.base) ctx._cache.base.fresh = false;
 }
 
 /** Classify a failed ref-create. Exported for tests. */
@@ -33,7 +60,15 @@ export function classifyClaimError(err) {
 
 /** @returns {'claimed'|'held'|'unknown'} plus the error for 'unknown'. `sha` starts the beat chain. */
 export async function claim(ctx, n, k) {
-  const sha = await baseSha(ctx);
+  let sha;
+  try {
+    sha = await baseSha(ctx);
+  } catch (e) {
+    // A base sha we cannot resolve is the same news as a POST we cannot classify: nothing is known
+    // about the lock. Returning it as `unknown` rather than throwing keeps the caller's back-off —
+    // and the dispatcher's self-heal ladder — in charge of a claim that will not resolve.
+    return { result: 'unknown', ref: lockRef(n, k), sha: null, error: e };
+  }
   try {
     await rest('POST', api(ctx, '/git/refs'), { body: { ref: lockRef(n, k), sha } });
     return { result: 'claimed', ref: lockRef(n, k), sha };
