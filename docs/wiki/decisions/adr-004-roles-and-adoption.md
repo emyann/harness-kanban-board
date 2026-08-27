@@ -11,18 +11,18 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/dispatch.js
-    sha: 159ba13573ea1d691b03d195363403c60b7c15ea
+    sha: 0cdcd4fea6cdc34ea29807ca292f5de26bd03019
   - path: src/context.js
     sha: 0de994e57a7d7540c632757864e1af8027cffa03
   - path: src/cli.js
-    sha: 9fab753b4e7463f08f8570f87bdd3eb78b558a41
+    sha: f209161ae68388b422537dd0d07e6b443b0a23e3
   - path: src/lifecycle.js
     sha: 67b6fb458425948ce61d6a7a324649cb79e1c648
   - path: skills/kanban/SKILL.md
     sha: e397953d4181d3ed62c9c2fa50cd5518bb74e4d0
   - path: skills/kanban/references/protocol.md
     sha: b85575461f90ae0790e278bcdab91f7de1e725c6
-generated_at_commit: 1a26d7e
+generated_at_commit: 21cb452
 last_refreshed: 2026-08-27
 related: [concepts/roles-and-seats, architecture/overview, concepts/board-protocol]
 ---
@@ -110,7 +110,7 @@ is a flag, not a migration.
 
 All three consequences landed on 2026-08-27, before this record was accepted:
 
-- **The bug** — `src/dispatch.js:427` now treats `manual` the way it treats
+- **The bug** — `src/dispatch.js:486` now treats `manual` the way it treats
   `remote`: `if (a.remote || a.manual) { /* liveness is the heartbeat */ }`, so
   neither the no-pid rule nor any other no-handle rule can reclaim a card a
   human is working in their own terminal (#68).

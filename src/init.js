@@ -7,9 +7,16 @@ import { ensureLabels, fetchBoard, addLabels } from './tasks.js';
 import { rest } from './gh.js';
 import { L, STATUSES, parseSkillVersion, stripFrontmatter } from './model.js';
 
-const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
+export const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MARK_START = '<!-- hkb:start -->';
 const MARK_END = '<!-- hkb:end -->';
+
+/**
+ * Single source of truth for the version: the package's own package.json, resolved relative to this
+ * file — so it is the same answer from any cwd, with no build step. `hkb version` prints it and the
+ * daily registry check compares it (src/doctor.js).
+ */
+export function packageVersion() { return JSON.parse(fs.readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8')).version; }
 
 function copyDir(src, dst) {
   fs.mkdirSync(dst, { recursive: true });

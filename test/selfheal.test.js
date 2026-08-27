@@ -20,6 +20,9 @@ function harness({ dispatch = {}, board = 'default', host = 'test-host' } = {}) 
     ...DEFAULT_BOARD,
     repo: gh.nameWithOwner,
     board,
+    // The loop's once-a-day version notice asks npm. Nothing in this suite reaches the network:
+    // that path has its own tests, with the registry stubbed (test/update.test.js).
+    version_check: false,
     dispatch: { ...DEFAULT_BOARD.dispatch, ...dispatch },
     profiles: { claude: { mode: 'process', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] } },
   };

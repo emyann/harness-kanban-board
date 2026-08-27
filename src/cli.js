@@ -10,7 +10,7 @@ import { stats } from './stats.js';
 import { claim } from './lock.js';
 import { contextCommand } from './context.js';
 import { stopHook } from './hook.js';
-import { init } from './init.js';
+import { init, packageVersion } from './init.js';
 import { doctor } from './doctor.js';
 import { gc } from './gc.js';
 import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, resumeCommand } from './model.js';
@@ -182,10 +182,9 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
               (a supervisor — cron, systemd, Actions — or you starts a fresh one).
 `;
 
-// Single source of truth for the version: package.json, resolved relative to this file (works from any cwd, no build step).
-export function readVersion() {
-  return JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
-}
+// Single source of truth for the version: package.json, resolved relative to the package, not the
+// cwd. It lives in init.js, next to the package root every other package read goes through.
+export { packageVersion as readVersion };
 
 const out = (ctx, obj, text) => { process.stdout.write((ctx.json ? JSON.stringify(obj, null, 2) : text ?? JSON.stringify(obj, null, 2)) + '\n'); };
 const nums = (pos) => pos.map((p) => Number(String(p).replace(/^#/, ''))).filter((n) => Number.isInteger(n) && n > 0);
@@ -202,7 +201,7 @@ export async function main(argv) {
   const { flags, pos } = parseArgs(argv);
   const [cmd, ...rest] = pos;
   if (!cmd || cmd === 'help' || flags.help) { process.stdout.write(HELP); return 0; }
-  if (cmd === 'version') { const version = readVersion(); out({ json: !!flags.json }, { version, node: process.version }, `hkb ${version}`); return 0; }
+  if (cmd === 'version') { const version = packageVersion(); out({ json: !!flags.json }, { version, node: process.version }, `hkb ${version}`); return 0; }
   const ctx = makeContext(flags);
   const argvForOutbox = process.env.KB_NO_OUTBOX ? null : argv;
 

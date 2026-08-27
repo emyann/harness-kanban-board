@@ -9,15 +9,15 @@ covers:
   - path: src/model.js
     sha: 1ee3e8e45a93fe97ad198cda8c74e3b0cc2ba13f
   - path: src/dispatch.js
-    sha: 159ba13573ea1d691b03d195363403c60b7c15ea
+    sha: 0cdcd4fea6cdc34ea29807ca292f5de26bd03019
   - path: src/doctor.js
-    sha: f1f87fd6127316d2eeb1b3164a175dcd5ff69537
+    sha: 1bf85debb35d283881c5aa72ac1179445e5913c2
   - path: src/tasks.js
     sha: 373dd83d0ba4c554ebf5c70c01ba27676db61b8a
   - path: src/board.js
-    sha: d231efaf79725e04b101d334c738924ec932506b
+    sha: acb800f045bbe90838eea44ed8cbf553dd06f07d
 related: [architecture/overview, decisions/adr-004-roles-and-adoption, architecture/dispatcher-tick]
-generated_at_commit: 1a26d7e
+generated_at_commit: 21cb452
 last_refreshed: 2026-08-27
 ---
 

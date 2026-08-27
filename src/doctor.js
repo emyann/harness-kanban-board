@@ -7,7 +7,8 @@ import { boardFile, api, readState, writeState } from './board.js';
 import { detectCaps, branchProtection } from './tasks.js';
 import { L, STATUSES, compareVersions, mergePolicy, mergeGate, mergeGateFix } from './model.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
-import { agentsSkillDir, packageSkillDir, readSkillVersion, commandFiles, commandNames, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, isEphemeralPath, HOOK_SETTINGS } from './init.js';
+import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, isEphemeralPath, HOOK_SETTINGS, PKG_ROOT } from './init.js';
+import { latestVersion } from './registry.js';
 import { checkProject } from './projects.js';
 
 function has(cmd) { return spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).status === 0; }
@@ -305,6 +306,103 @@ export async function tokenExpiryNotice(ctx, log, { now = Date.now(), inActions 
   return expiry;
 }
 
+// ---------- is the hkb running this old? ----------
+
+/**
+ * hkb has no push channel and should not have one: it is a CLI over `gh`, with no service and
+ * nothing that phones home, so updates are pull-only. Pull-only works only if something tells you
+ * there is something to pull — this is that something, and it is deliberately small: one registry
+ * GET a day, in the two places with an audience for it (`hkb doctor` and the dispatcher loop),
+ * never on the hot path of an ordinary command.
+ *
+ * It also re-arms `checkSkill`. That check compares the *installed* skill against the *packaged*
+ * one, so an hkb from six months ago ships a six-month-old skill, the two match, and doctor reports
+ * `✓ skill` on a board that is months behind. Without a word about the CLI itself, the one check
+ * that exists is silently disarmed by the one that did not.
+ */
+export const VERSION_CHECK = 'hkb version';
+
+/**
+ * The upgrade, and deliberately *not* an `hkb update`. hkb cannot know how it was installed — a
+ * global npm, an npx cache, a pnpm or volta shim, a git checkout — so a self-install would guess,
+ * and guessing wrong breaks the tool doing the guessing (wrong prefix, sudo, a package directory
+ * replaced under the process running out of it). The second command is not overhead either: a new
+ * CLI ships a new skill, and `hkb init` is what copies it into this checkout. Two honest commands
+ * beat one that gambles.
+ */
+export function upgradeCommand(pkgRoot = PKG_ROOT) {
+  return isEphemeralPath(pkgRoot) ? 'npx -y hkb-cli@latest init' : 'npm i -g hkb-cli@latest && hkb init';
+}
+
+/** Is this board allowed to ask npm? False on a deliberately pinned install (board.json). */
+export function versionCheckEnabled(cfg) { return cfg?.version_check !== false; }
+
+/**
+ * The finding for one version pair. No `latest` — offline, rate-limited, or the check turned off —
+ * is not a warning and never a failure: it says the version and stops, exactly as an install with
+ * no check at all would. Being *ahead* of the registry (a git checkout, a release in flight) is
+ * reported as the fact it is, not as a problem.
+ */
+export function versionFinding(installed, latest, { fix = upgradeCommand(), off = false } = {}) {
+  if (!latest) return { name: VERSION_CHECK, ok: true, detail: `${installed}${off ? ' — daily update check off ("version_check": false)' : ''}` };
+  const cmp = compareVersions(installed, latest);
+  if (cmp !== null && cmp < 0) return { name: VERSION_CHECK, ok: null, detail: `${installed} installed, npm has ${latest}`, fix };
+  return { name: VERSION_CHECK, ok: true, detail: `${installed}${cmp === 0 ? ' (latest)' : ` (npm has ${latest})`}` };
+}
+
+/**
+ * At most one registry GET a day per checkout, stamped in `.kanban/state.json` beside the token
+ * probe's stamp — same shape (read state, compare a `*_day`, stamp only on success so a failure
+ * retries next time), separate key. The *answer* is stamped too, not just the day, so the second
+ * doctor of the day still names the latest version without a second call.
+ *
+ * A checkout with no board.json is probed but never stamped: this must not be what creates
+ * `.kanban/` in a repo that has not been `hkb init`ed.
+ * @returns {Promise<{latest: string|null, checked: boolean, off: boolean}>} `checked` is "the probe
+ *   ran just now", which is what makes the loop's line once-a-day rather than once-a-tick.
+ */
+export async function dailyLatest(ctx, { now = Date.now() } = {}) {
+  if (!versionCheckEnabled(ctx.cfg)) return { latest: null, checked: false, off: true };
+  const day = utcDay(now);
+  const state = readState(ctx.root);
+  if (state.version_check_day === day) return { latest: state.version_latest ?? null, checked: false, off: false };
+  let latest;
+  try { latest = await latestVersion(); } catch { return { latest: null, checked: false, off: false }; }
+  if (ctx.cfg) {
+    state.version_check_day = day;
+    state.version_latest = latest;
+    try { writeState(ctx.root, state); } catch { /* read-only checkout: it just checks again next run */ }
+  }
+  return { latest, checked: true, off: false };
+}
+
+/**
+ * doctor's line: the installed version every run, and what npm has whenever the day's one probe
+ * had an answer — from the stamp, so a second `hkb doctor` the same day costs nothing.
+ */
+export async function checkVersion(ctx, { ok, warn }, opts = {}) {
+  const { latest, off } = await dailyLatest(ctx, opts);
+  const f = versionFinding(packageVersion(), latest, { off });
+  (f.ok === true ? ok : warn)(f.name, f.detail, f.fix);
+  return f;
+}
+
+/**
+ * The dispatcher's copy: one line a day, and only when there is something to say. A loop that has
+ * been up for weeks is exactly the install most likely to be stale, and its operator is not running
+ * doctor. Safe to call every tick; call it *outside* `tick()` — it read-modify-writes
+ * `.kanban/state.json` — and it never throws, so a tick can never be lost to it.
+ */
+export async function versionNotice(ctx, log, opts = {}) {
+  let latest, checked;
+  try { ({ latest, checked } = await dailyLatest(ctx, opts)); } catch { return null; }
+  if (!checked || !latest) return null; // already probed today, no registry, or the check is off
+  const f = versionFinding(packageVersion(), latest);
+  if (f.ok !== null) return null; // current, or ahead of the registry
+  log(`${f.name}: ${f.detail} → ${f.fix}`);
+  return f;
+}
+
 export async function doctor(ctx, flags, log) {
   const results = [];
   const ok = (name, detail) => results.push({ name, ok: true, detail });
@@ -316,6 +414,8 @@ export async function doctor(ctx, flags, log) {
   const auth = ghAuthStatus();
   auth.ok ? ok('gh auth', auth.text.split('\n').find((l) => /Logged in/.test(l))?.trim() || 'logged in') : bad('gh auth', auth.text.split('\n')[0], 'gh auth login');
   ok('node', process.version);
+  // The tool checking the tools: at most one registry GET a day, and silent about it when offline.
+  await checkVersion(ctx, { ok, warn });
   if (ctx.cfg?.profiles?.claude) (has('claude') ? ok('claude', version('claude')) : bad('claude', 'not on PATH', 'install Claude Code or remove the claude profile'));
   if (ctx.cfg?.profiles?.['copilot-cli']) (has('copilot') ? ok('copilot', 'found') : warn('copilot', 'not on PATH', 'gh extension / Copilot CLI install'));
   if (ctx.cfg?.profiles?.codex) (has('codex') ? ok('codex', version('codex')) : warn('codex', 'not on PATH', 'npm i -g @openai/codex'));

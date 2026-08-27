@@ -20,6 +20,11 @@ deserves a `concepts/` page (link it).
   "task" in code and JSON (`src/tasks.js`).
 - **Claim** — an atomic take on a card: creating `refs/kb/locks/<n>/<k>`, the
   only CAS GitHub offers (`src/lock.js`).
+- **Day stamp** — a `*_day` key in `.kanban/state.json` holding a UTC day, so a
+  check that costs a network call runs at most once a day per checkout however
+  often it is invoked; `token_expiry_day` and `version_check_day` are the two,
+  and neither stamps a failed probe (`src/doctor.js`; see
+  *features/update-notice*).
 - **Dispatcher** — the seat that ticks: `hkb dispatch` reconciles labels, locks
   and attempts against the graph on the cards. Not an orchestrator — it holds no
   workflow and has no LLM in it (`src/dispatch.js`; see *Tick*).

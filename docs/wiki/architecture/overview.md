@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: 9fab753b4e7463f08f8570f87bdd3eb78b558a41
+    sha: f209161ae68388b422537dd0d07e6b443b0a23e3
   - path: src/gh.js
     sha: b728c07d7f5e7bfd29e3dc4c2e0e2786d29522ee
   - path: src/model.js
@@ -19,16 +19,18 @@ covers:
   - path: src/lifecycle.js
     sha: 67b6fb458425948ce61d6a7a324649cb79e1c648
   - path: src/dispatch.js
-    sha: 159ba13573ea1d691b03d195363403c60b7c15ea
+    sha: 0cdcd4fea6cdc34ea29807ca292f5de26bd03019
   - path: src/context.js
     sha: 0de994e57a7d7540c632757864e1af8027cffa03
   - path: src/hook.js
     sha: 6aa6036b1bcbea36a2a5e9d079881cd36bb89adf
   - path: src/board.js
-    sha: d231efaf79725e04b101d334c738924ec932506b
-generated_at_commit: 876b9ee
+    sha: acb800f045bbe90838eea44ed8cbf553dd06f07d
+  - path: src/doctor.js
+    sha: 1bf85debb35d283881c5aa72ac1179445e5913c2
+generated_at_commit: 21cb452
 last_refreshed: 2026-08-27
-related: [concepts/board-protocol, concepts/claims-and-leases, architecture/dispatcher-tick, concepts/roles-and-seats]
+related: [concepts/board-protocol, concepts/claims-and-leases, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice]
 ---
 
 # hkb at a glance
@@ -73,6 +75,13 @@ whether a PR merges) lives outside the loop, in the seats described in
 reviewed card's PR and walk away, which delegates the mechanical last step
 without moving the judgment inside the loop — see `features/auto-merge`.
 
+The loop does two things a tick does not, both at most once a day and both
+outside `tick()` because they write `.kanban/state.json`: warn before KB_TOKEN
+expires, and say when npm has moved past the hkb running it
+(`tokenExpiryNotice`/`versionNotice`, `src/doctor.js`; see
+`features/update-notice`). Neither is a decision and neither can fail a tick —
+an unreachable probe is silent and simply retried.
+
 ## Workers are any harness
 
 A worker is whatever a profile in `src/board.js` can launch — Claude Code,
@@ -98,3 +107,4 @@ claims, and attempts — backend-neutral by construction, so a future
 - [claims-and-leases](../concepts/claims-and-leases.md)
 - [dispatcher-tick](../architecture/dispatcher-tick.md)
 - [roles-and-seats](../concepts/roles-and-seats.md)
+- [Telling an adopter their hkb is old](../features/update-notice.md)

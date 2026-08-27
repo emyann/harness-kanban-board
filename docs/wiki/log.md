@@ -39,3 +39,11 @@ history.
 ## 2026-08-27 — refreshed features/auto-merge (no-op re-stamp for #92: `src/doctor.js` gained an unrelated `checkCommands`; every merge-policy claim on the page — `checkMergePolicy` as a hard failure, the branch-protection gate, the ops view — is untouched)
 
 ## 2026-08-27 — refreshed decisions/adr-004-roles-and-adoption (#92 moved SKILL.md and protocol.md but not the seat decision, so no superseding record: the planning commands are operator-seat tooling and the dispatcher still holds no LLM. One citation corrected — exit code 4 is `protocol.md:257`, one line lower after the decompose paragraph was reworded)
+
+## 2026-08-27 — added features/update-notice (#93 gave the CLI half of "is this install old": one npm dist-tag GET a day, in doctor and in the dispatcher loop, with the compound false green — a stale CLI whose packaged skill matches the installed one — as the case it exists for. src/registry.js was covered by no page at all)
+
+## 2026-08-27 — refreshed architecture/overview for #93 (one claim added rather than changed: the loop does two things a tick does not — the token and version notices, at most once a day and outside `tick()` because they write state.json. src/doctor.js added to covers, since the page now cites it)
+
+## 2026-08-27 — refreshed features/planning-commands (#93 shifted two anchors and nothing else: `installCommands` `src/init.js:124-132` → `:131-139` (a `packageVersion` helper went in above it) and `checkCommands` `src/doctor.js:42-48` → `:43-49` (one import line). Every claim about the commands is untouched)
+
+## 2026-08-27 — refreshed features/auto-merge + decisions/adr-004-roles-and-adoption (no-op re-stamp for #93: doctor.js gained the version check, dispatch.js two calls in `loop`, board.js one default key; no merge-policy or seat claim changed. One anchor corrected on ADR-004 — the `a.remote || a.manual` line is `src/dispatch.js:486`, not `:427`, which had drifted before #93 touched the file; the `6c0e81f`-pinned Context citations stay as they are)
