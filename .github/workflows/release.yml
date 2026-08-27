@@ -113,13 +113,13 @@ jobs:
         run: |
           set -u
           for i in $(seq 1 10); do
-            if out="$(npx -y "hkb@${VERSION}" version 2>&1)"; then
+            if out="$(npx -y "hkb-cli@${VERSION}" version 2>&1)"; then
               echo "$out"
               # `hkb version` prints "hkb <version>" and nothing after it, so match the tail — a
-              # substring match would let hkb@1.4.10 pass for a 1.4.1 release.
+              # substring match would let hkb-cli@1.4.10 pass for a 1.4.1 release.
               case "$out" in
                 *" ${VERSION}")
-                  npx -y "hkb@${VERSION}" help
+                  npx -y "hkb-cli@${VERSION}" help
                   echo "npx hkb-cli@${VERSION} runs, and reports ${VERSION}."
                   exit 0
                   ;;
@@ -129,8 +129,9 @@ jobs:
                   ;;
               esac
             fi
-            echo "attempt ${i}/10: hkb@${VERSION} not installable yet, waiting 30s"
+            echo "attempt ${i}/10: npx failed, waiting 30s. Output was:"
+            echo "$out" | tail -3
             sleep 30
           done
-          echo "::error::hkb@${VERSION} was published but 'npx -y hkb-cli@${VERSION} version' never succeeded in 5 minutes. Check https://www.npmjs.com/package/hkb-cli and the publish job's log."
+          echo "::error::hkb-cli@${VERSION} was published but 'npx -y hkb-cli@${VERSION} version' never succeeded in 5 minutes. Check https://www.npmjs.com/package/hkb-cli and the publish job's log."
           exit 1
