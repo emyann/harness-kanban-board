@@ -38,6 +38,27 @@ root for profiles without `workspace: "worktree"`). `{model_args}` expands to `-
 `{allowed_tools}` splices the list in, and `--flag={allowed_tools}` repeats `--flag <entry>` per entry.
 Nothing else is interpolated, so a launch array is safe to read and safe to edit.
 
+## Which profiles a board gets
+
+`hkb init` writes exactly the profiles you named, and one `kb:agent:<profile>` label for each:
+
+```bash
+hkb init                                  # profiles: claude          (11 kb:* labels)
+hkb init --profiles claude,claude-track   # profiles: claude, claude-track
+hkb init --harness codex                  # profiles: codex           — the harness brings its own
+hkb init --profiles claude --harness codex --with-actions   # claude, codex, claude-action
+```
+
+The six built-ins (`claude`, `claude-track`, `claude-p`, `claude-action`, `copilot-cli`, `codex`) are *templates*,
+not a starter pack: a Claude-only repo has no reason to carry a `kb:agent:codex` label or a `hkb doctor` that warns
+forever about a CLI it will never install.
+
+Re-running init on an existing board only **adds**. It never removes a profile, and never overwrites one — a
+`max_in_progress` you tuned or a `launch` you wrote by hand survives every re-run, and so does a profile of your own
+that has no built-in at all. To add one later: `hkb init --profiles claude-track`. To drop one: delete it from
+`.kanban/board.json` (and the `kb:agent:<name>` label from the repo, if nothing wears it). A task labelled for a
+profile the board does not have is skipped by the tick with `unknown profile <name>` and the command that fixes it.
+
 ## Claude Code — `claude`, `claude-p`
 
 `hkb init` is all it takes: the skill lands in `.agents/skills/kanban` (linked from `.claude/skills/kanban`) and

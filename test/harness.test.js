@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { harnessFiles, installHarness, resolveProfiles, HARNESSES, HARNESS_PROFILE, packageSkillDir } from '../src/init.js';
+import { harnessFiles, installHarness, resolveProfiles, boardProfiles, HARNESSES, HARNESS_PROFILE, packageSkillDir } from '../src/init.js';
 import { parseArgs } from '../src/cli.js';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, ensureWorktree } from '../src/board.js';
 import { expandLaunch, spawnWorker, tick } from '../src/dispatch.js';
@@ -101,6 +101,33 @@ test('naming --profiles keeps them, and the harness still brings its own', () =>
   assert.deepEqual(resolveProfiles({ profiles: 'copilot-cli', harness: 'copilot' }).profiles, ['copilot-cli'], 'no duplicate');
   assert.deepEqual(resolveProfiles({}), { harnesses: [], profiles: ['claude'] }, 'no --harness: nothing changes');
   assert.deepEqual(resolveProfiles({ profiles: 'codex' }).profiles, ['codex'], 'a profile with no built-in is still the user\'s call');
+});
+
+test('a fresh board gets only the profiles that were resolved, not all six defaults', () => {
+  assert.deepEqual(Object.keys(boardProfiles(null, ['claude'])), ['claude'], 'a bare init is Claude-only');
+  assert.deepEqual(Object.keys(boardProfiles(null, resolveProfiles({ profiles: 'claude,codex' }).profiles)), ['claude', 'codex']);
+  assert.deepEqual(Object.keys(boardProfiles(null, resolveProfiles({ harness: 'copilot' }).profiles)), ['copilot-cli']);
+  // and each one is the built-in of that name, deep-copied so board.json can be edited freely
+  const p = boardProfiles(null, ['claude']).claude;
+  assert.deepEqual(p, DEFAULT_PROFILES.claude);
+  p.allowed_tools.push('Bash(rm *)');
+  assert.ok(!DEFAULT_PROFILES.claude.allowed_tools.includes('Bash(rm *)'), 'the default was not mutated');
+});
+
+test('a second init only adds: a hand-added profile and hand-edited settings survive', () => {
+  const existing = { claude: { max_in_progress: 7 }, homegrown: { launch: ['my-agent'] } };
+  const after = boardProfiles(existing, ['claude', 'codex']);
+  assert.deepEqual(Object.keys(after), ['claude', 'homegrown', 'codex']);
+  assert.equal(after.claude.max_in_progress, 7, 'an existing profile is left exactly as it was');
+  assert.deepEqual(after.homegrown.launch, ['my-agent'], 'never delete a profile the operator added');
+  assert.deepEqual(existing, { claude: { max_in_progress: 7 }, homegrown: { launch: ['my-agent'] } }, 'pure');
+});
+
+test('a profile with no built-in gets a stub, and says so once', () => {
+  const unknown = [];
+  const out = boardProfiles(null, ['claude', 'aider'], (p) => unknown.push(p));
+  assert.deepEqual(unknown, ['aider']);
+  assert.deepEqual(out.aider, { max_in_progress: 1, launch: null });
 });
 
 test('init refuses a harness it cannot generate for, before touching the repo', () => {
