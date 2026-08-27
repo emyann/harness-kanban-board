@@ -14,7 +14,8 @@
     "hooks",
     "templates",
     ".claude-plugin",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "test": "node --test",
@@ -26,15 +27,26 @@
   "keywords": [
     "kanban",
     "github",
+    "github-issues",
     "agents",
+    "cli",
     "claude-code",
     "copilot",
     "codex",
     "hermes"
   ],
   "license": "MIT",
+  "author": "emyann",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/emyann/harness-kanban-board.git"
+  },
+  "homepage": "https://github.com/emyann/harness-kanban-board#readme",
+  "bugs": {
+    "url": "https://github.com/emyann/harness-kanban-board/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }
