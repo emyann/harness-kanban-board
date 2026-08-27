@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, getTask } from './tasks.js';
 import { claim, release, listLocks, lockBeatAt } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree } from './board.js';
-import { computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, jobAlive, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath } from './model.js';
+import { computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted } from './track.js';
 import { GhError } from './gh.js';
@@ -214,6 +214,37 @@ async function reconcileClosed(ctx, tasks, state, { dryRun = false, log = () => 
   return { skipped: null, reconciled };
 }
 
+// ---------- reaping background agents ----------
+
+/** An agent that is really taking its turn — not parked on a permission prompt. */
+const jobWorking = (job) => job?.state === 'working' || job?.status === 'busy';
+
+/** Statuses that mean the board is finished with the card, so nothing can be waiting for it. */
+const FINISHED_STATUSES = ['done', 'archived'];
+
+/**
+ * Should the tick `claude stop` this background job? Pure. `task` is the job's card as the open
+ * board read returned it, or null when its number is not on the board at all — a closed issue.
+ * Returns why, or null to leave the job running.
+ *
+ * `jobAlive()` counts blocked/waiting as alive, because an agent sitting on a permission prompt is
+ * a live worker (treating it as finished killed #14/2 and #3/2) — but that only holds while its
+ * card is RUNNING. Once the card is closed, done or archived, nobody is ever going to answer that
+ * prompt: kb #17 and #21 sat blocked for 15 hours after their PRs merged. So a finished card's
+ * agent is stopped whatever it claims to be doing, a running card's agent belongs to the reclaim
+ * step (which knows blocked means alive), and on any other live status the agent is spared only
+ * while it is genuinely working — a worker that has just filed its terminal verb is still writing
+ * its last turn, and must not be cut off mid-push.
+ */
+export function reapDecision(job, task) {
+  if (!job || !job.pid) return null; // already gone: nothing to stop
+  if (!task) return 'its task is closed';
+  if (FINISHED_STATUSES.includes(task.status)) return `its task is ${task.status}`;
+  if (task.status === 'running') return null; // the reclaim above owns a running card's agent
+  if (jobWorking(job)) return null;
+  return `its task is ${task.status || 'off the board'} and the agent is not working`;
+}
+
 // ---------- tick ----------
 
 async function failAttempt(ctx, task, runRec, outcome, note, { kill = true } = {}) {
@@ -245,7 +276,7 @@ async function failAttempt(ctx, task, runRec, outcome, note, { kill = true } = {
 export async function tick(ctx, { max = Infinity, dryRun = false, children = null, profiles = null, log = () => {} } = {}) {
   ctx.requireBoard();
   const d = ctx.cfg.dispatch;
-  const summary = { reconciled: [], reclaimed: [], promoted: [], guarded: [], claimed: [], spawn_failed: [], held: [], skipped: [], tracks: [] };
+  const summary = { reconciled: [], reclaimed: [], promoted: [], guarded: [], claimed: [], spawn_failed: [], held: [], skipped: [], tracks: [], reaped: [] };
   // A host claims only what it can launch. `--profiles` is how the Actions dispatcher takes the
   // `claude-action` tasks and leaves the laptop's `claude` ones alone; everything else in the tick —
   // reclaim, promote, reconcile, the orphan sweep — still covers the whole board.
@@ -375,22 +406,22 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     log(`#${t.number}: ${outcome}${result === 'gave_up' ? ' → gave_up (needs human)' : ' → ready'}`);
   }
 
-  // reap finished background agents: a kb job that is done and whose task is no longer running → claude stop
+  // reap the background agents the board is finished with — see reapDecision. `tasks` is the open
+  // board with this tick's transitions already applied (setStatus mutates in place), so a card
+  // reclaimed a few lines up is seen as ready here, not as still running.
   if (usesBg && !dryRun) {
-    const runningNumbers = new Set(tasks.filter((t) => t.status === 'running').map((t) => t.number));
+    const byNumber = new Map(tasks.map((t) => [t.number, t]));
     for (const j of jobsById.values()) {
-      if (!j.pid || jobAlive(j)) continue;
-      if (runningNumbers.has(j.task)) continue; // handled above (or a fresh attempt still starting)
-      if (stopJob(j.id)) {
-        touch(j.task);
-        summary.reaped = summary.reaped || [];
-        summary.reaped.push({ number: j.task, job: j.id });
-        log(`#${j.task}: stopped finished background agent ${j.id}`);
-        // Its checkout goes with it, unless the task is still waiting for another attempt — the
-        // worktree of a crashed one is the post-mortem (`hkb show <n>` prints the resume command).
-        const t = tasks.find((x) => x.number === j.task);
-        if (!t || ['done', 'archived', 'review'].includes(t.status)) sweepFinished(j.task);
-      }
+      const t = byNumber.get(j.task) || null;
+      const why = reapDecision(j, t);
+      if (!why) continue;
+      if (!stopJob(j.id)) { log(`#${j.task}: could not stop background agent ${j.id} (${why}) — retrying next tick`); continue; }
+      touch(j.task);
+      summary.reaped.push({ number: j.task, job: j.id, why });
+      log(`#${j.task}: stopped background agent ${j.id} — ${why}`);
+      // Its checkout goes with it, unless the task is still waiting for another attempt — the
+      // worktree of a crashed one is the post-mortem (`hkb show <n>` prints the resume command).
+      if (!t || ['done', 'archived', 'review'].includes(t.status)) sweepFinished(j.task);
     }
   }
 
@@ -699,7 +730,7 @@ export async function loop(ctx, { interval, max, profiles = null, log }) {
     try {
       const s = await tick(ctx, { max, children, profiles, log });
       const n = (k) => s[k].length;
-      log(`tick: reconciled ${n('reconciled')} reclaimed ${n('reclaimed')} promoted ${n('promoted')} claimed ${n('claimed')} tracks ${s.tracks.filter((x) => x.ok).length} guarded ${n('guarded')} held ${n('held')} skipped ${n('skipped')}`);
+      log(`tick: reconciled ${n('reconciled')} reclaimed ${n('reclaimed')} reaped ${n('reaped')} promoted ${n('promoted')} claimed ${n('claimed')} tracks ${s.tracks.filter((x) => x.ok).length} guarded ${n('guarded')} held ${n('held')} skipped ${n('skipped')}`);
     } catch (e) {
       if (e instanceof GhError && e.kind === 'network') log('GitHub unreachable — reclaim clock paused, retrying next tick');
       else log(`tick failed: ${e.message}`);
