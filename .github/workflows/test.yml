@@ -22,3 +22,21 @@ jobs:
       - run: npm test
         env:
           TZ: America/New_York
+
+  # `npm test` proves the source is right; this proves the tarball is. It packs hkb, installs the
+  # tarball into an empty directory and runs the CLI from there, so a `files` entry that stops
+  # shipping `skills/` or `templates/` fails here rather than on a stranger's first `npx hkb init`.
+  # It runs beside `test` rather than after it: two independent signals, and neither waits.
+  #
+  # On Node 20 on purpose — the floor `engines` claims, which nothing else checks. The `test` job
+  # above covers the current release.
+  smoke:
+    name: packed artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node scripts/smoke-pack.mjs
