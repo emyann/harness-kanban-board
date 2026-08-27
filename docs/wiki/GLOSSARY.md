@@ -31,6 +31,10 @@ deserves a `concepts/` page (link it).
   cards, steers by comment, reviews and merges, answers `kb:needs-human`,
   restarts a dispatcher that exited 4. "you", in a worker prompt
   (`decisions/adr-004-roles-and-adoption`).
+- **Planning command** — `/kanban:specify` or `/kanban:decompose`: a harness slash
+  command rather than an `hkb` verb, because both need a model and the dispatcher
+  has none. One source in `commands/`, registered by the plugin and by `hkb init`
+  (`src/init.js`; see *features/planning-commands*).
 - **Profile** — a harness adapter in `.kanban/board.json`: launch template, caps
   and heartbeat mode; `kb:agent:<profile>` says which one a task runs on. Not
   the model, the machine, or a person (`src/board.js`).

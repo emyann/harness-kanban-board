@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires the `gh` CLI (authenticated) and `hkb` (npm hkb-cli) on PATH. Works with Claude Code, GitHub Copilot CLI and Codex CLI.
 metadata:
   author: hkb
-  version: 0.4.0
+  version: 0.5.0
 allowed-tools: Bash(hkb *) Bash(gh api *) Bash(gh pr *) Bash(gh issue view *) Bash(git *)
 ---
 
@@ -139,6 +139,10 @@ the track's: what each node landed, what is open, what you parked.
 - `hkb dispatch --dry-run` shows what the next tick would do; `hkb dispatch --loop 60` runs it.
 - Planning, not managing: `/kanban:specify <n>` sharpens one triage one-liner into a spec, `/kanban:decompose <n>`
   splits a goal into a dependency graph. Both are below, and both stop for approval before they write anything.
+  Those two are **real slash commands**, registered by `hkb init` (which writes `.claude/commands/kanban/`) or by
+  the `kanban` plugin; their bodies do nothing but send you to the section of this file with the same name. In a
+  harness with no slash commands — Copilot CLI, Codex — ask for the section by name instead; the procedure is
+  identical, and `hkb` is the only thing either one calls.
 
 ## /kanban:specify \<n\> — rewrite a one-liner into a spec
 

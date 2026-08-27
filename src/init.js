@@ -49,13 +49,13 @@ export function isPackageRepo(root) {
 }
 
 /**
- * Point `.agents/skills/kanban` at the in-repo `skills/kanban`, replacing a copy left by an earlier
- * init. Returns 'linked' | 'already-linked', or null when the filesystem refuses symlinks — in which
- * case whatever was installed is still there, so the caller can fall back to a copy.
+ * Point `link` at `targetAbs`, relatively, replacing whatever is there — a copy an earlier init left,
+ * or a link to somewhere else. Returns 'linked' | 'already-linked', or null when the filesystem
+ * refuses symlinks, in which case whatever was installed is still there and the caller falls back to
+ * a copy. Staged-then-renamed so an interrupted run never leaves the path missing.
  */
-export function linkSkill(root) {
-  const link = agentsSkillDir(root);
-  const target = path.relative(path.dirname(link), path.join(root, 'skills', 'kanban'));
+function linkDir(link, targetAbs) {
+  const target = path.relative(path.dirname(link), targetAbs);
   if (isSymlink(link) && fs.readlinkSync(link) === target) return 'already-linked';
   fs.mkdirSync(path.dirname(link), { recursive: true });
   const staged = link + '.hkb-new';
@@ -69,6 +69,15 @@ export function linkSkill(root) {
 }
 
 /**
+ * Point `.agents/skills/kanban` at the in-repo `skills/kanban`, replacing a copy left by an earlier
+ * init. Returns 'linked' | 'already-linked', or null when the filesystem refuses symlinks — in which
+ * case whatever was installed is still there, so the caller can fall back to a copy.
+ */
+export function linkSkill(root) {
+  return linkDir(agentsSkillDir(root), path.join(root, 'skills', 'kanban'));
+}
+
+/**
  * Copy the packaged skill into `.agents/skills/kanban`, replacing whatever is there — a link, or an
  * older copy whose renamed/removed files would otherwise linger. Returns the installed version.
  */
@@ -77,6 +86,49 @@ export function copySkill(root) {
   if (lexists(dst)) fs.rmSync(dst, { recursive: true, force: true });
   copyDir(packageSkillDir(), dst);
   return readSkillVersion(dst);
+}
+
+// ---------- the planning commands ----------
+// `/kanban:specify` and `/kanban:decompose` are what SKILL.md documents by name, so something has to
+// register them. The package's `commands/` is the one source: `.claude-plugin/plugin.json` points at
+// it, and init copies it into `.claude/commands/kanban/` for the majority who install hkb from npm
+// and never add the plugin. Both spellings produce the *same* name — a plugin namespaces its commands
+// by plugin name, a project namespaces them by directory — so the skill can document one invocation
+// that is true either way. The bodies delegate back to the SKILL.md section, so the procedure itself
+// is still written down exactly once (#92).
+
+export function packageCommandsDir() { return path.join(PKG_ROOT, 'commands'); }
+export function claudeCommandsDir(root) { return path.join(root, '.claude', 'commands', 'kanban'); }
+
+/** The command files as `[{ rel, contents }]`, rel to a repo root. Reads the package; writes nothing. */
+export function commandFiles() {
+  const dir = packageCommandsDir();
+  let names = [];
+  try { names = fs.readdirSync(dir).filter((f) => f.endsWith('.md')).sort(); } catch { /* not shipped */ }
+  return names.map((name) => ({
+    rel: path.join('.claude', 'commands', 'kanban', name),
+    contents: fs.readFileSync(path.join(dir, name), 'utf8'),
+  }));
+}
+
+/** `/kanban:specify, /kanban:decompose` — what the commands are actually called, for the log line. */
+export function commandNames() {
+  return commandFiles().map((f) => `/kanban:${path.basename(f.rel, '.md')}`);
+}
+
+/**
+ * Install the commands into `.claude/commands/kanban/`. hkb's own repo links instead of copying, for
+ * the same reason the skill does: the package *is* the source there, and a copy would be a second one.
+ * @returns {{ how: 'linked'|'already-linked'|'copied'|'unchanged', names: string[] }}
+ */
+export function installCommands(root) {
+  const names = commandNames();
+  if (isPackageRepo(root)) {
+    const how = linkDir(claudeCommandsDir(root), path.join(root, 'commands'));
+    if (how) return { how, names };
+  }
+  const written = writeAll(root, commandFiles());
+  return { how: written.length ? 'copied' : 'unchanged', names };
 }
 
 function upsertSection(file, section) {
@@ -557,6 +609,14 @@ export async function init(ctx, flags, log) {
       log('copied .claude/skills/kanban (this filesystem refuses symlinks)');
     }
   }
+
+  // 2b. the two planning commands the skill documents by name. Without these, `/kanban:decompose` is
+  //     an unknown command for everyone who installed hkb from npm rather than as a plugin (#92).
+  const commands = installCommands(root);
+  const named = commands.names.join(', ');
+  log(commands.how === 'linked' || commands.how === 'already-linked'
+    ? `linked .claude/commands/kanban → ${fs.readlinkSync(claudeCommandsDir(root))} (${named})`
+    : `${commands.how === 'copied' ? 'installed' : 'up to date:'} .claude/commands/kanban (${named})`);
 
   // 3. board.json
   const cfg = existing || JSON.parse(JSON.stringify(DEFAULT_BOARD));

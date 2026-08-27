@@ -33,3 +33,9 @@ history.
 ## 2026-08-27 — refreshed architecture/overview for #89 (one claim tightened: "judgment — whether a PR merges — lives outside the loop" now says what `merge.mode: auto` does and does not change, and points at the new page)
 
 ## 2026-08-27 — refreshed decisions/adr-004-roles-and-adoption (no-op re-stamp for #89: dispatch.js and protocol.md moved, but the seat decision is untouched — merge authority stays the operator's, and the dispatcher only enables a GitHub mechanism the operator opted into, never a merge of its own)
+
+## 2026-08-27 — added features/planning-commands (#92: SKILL.md advertised `/kanban:specify` and `/kanban:decompose` while nothing registered them — the page records why they are commands and not `hkb` verbs, how one `commands/` source is registered by both the plugin and `hkb init`, and the three checks that now fail before an adopter does)
+
+## 2026-08-27 — refreshed features/auto-merge (no-op re-stamp for #92: `src/doctor.js` gained an unrelated `checkCommands`; every merge-policy claim on the page — `checkMergePolicy` as a hard failure, the branch-protection gate, the ops view — is untouched)
+
+## 2026-08-27 — refreshed decisions/adr-004-roles-and-adoption (#92 moved SKILL.md and protocol.md but not the seat decision, so no superseding record: the planning commands are operator-seat tooling and the dispatcher still holds no LLM. One citation corrected — exit code 4 is `protocol.md:257`, one line lower after the decompose paragraph was reworded)

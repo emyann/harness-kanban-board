@@ -34,6 +34,8 @@ const MUST_SHIP = [
   ['skills/kanban/SKILL.md', '`hkb init` copies the skill from here (src/init.js packageSkillDir)'],
   ['skills/kanban/references/protocol.md', 'the skill links to it; a half-copied skill is worse than none'],
   ['skills/kanban/schema/terminal.json', 'the Codex profile names it in --output-schema'],
+  ['commands/specify.md', '`/kanban:specify`, which SKILL.md documents by name: the plugin registers commands/, `hkb init` copies it'],
+  ['commands/decompose.md', '`/kanban:decompose`, likewise — an unshipped command file is an unknown command in someone else\'s session (#92)'],
   ['templates/doc-section.md', 'the CLAUDE.md/AGENTS.md section `hkb init` splices in'],
   ['templates/actions/kanban-dispatch.yml', '`hkb init --with-actions`'],
   ['templates/copilot/kanban-worker.agent.md', '`hkb init --harness copilot`'],
@@ -63,6 +65,8 @@ const SHARED_SETTINGS = '.claude/settings.json';
 const FROM_PACKAGE = [
   ['.agents/skills/kanban/SKILL.md', 'skills/kanban/SKILL.md', 'whole'],
   ['.agents/skills/kanban/references/protocol.md', 'skills/kanban/references/protocol.md', 'whole'],
+  ['.claude/commands/kanban/specify.md', 'commands/specify.md', 'whole'],
+  ['.claude/commands/kanban/decompose.md', 'commands/decompose.md', 'whole'],
   ['CLAUDE.md', 'templates/doc-section.md', 'section'],
   ['AGENTS.md', 'templates/doc-section.md', 'section'],
 ];

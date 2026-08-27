@@ -11,13 +11,13 @@ covers:
   - path: src/dispatch.js
     sha: 159ba13573ea1d691b03d195363403c60b7c15ea
   - path: src/doctor.js
-    sha: 2b963d7d84437279c9561acb8746d3d9f2cb34bd
+    sha: f1f87fd6127316d2eeb1b3164a175dcd5ff69537
   - path: src/tasks.js
     sha: 373dd83d0ba4c554ebf5c70c01ba27676db61b8a
   - path: src/board.js
     sha: d231efaf79725e04b101d334c738924ec932506b
 related: [architecture/overview, decisions/adr-004-roles-and-adoption, architecture/dispatcher-tick]
-generated_at_commit: 876b9ee
+generated_at_commit: 1a26d7e
 last_refreshed: 2026-08-27
 ---
 
