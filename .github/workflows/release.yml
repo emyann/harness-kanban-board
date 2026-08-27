@@ -38,13 +38,18 @@ jobs:
       version: ${{ steps.gate.outputs.version }}
       published: ${{ steps.publish.outputs.published }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # No `registry-url`: that option exists only to write an `.npmrc` that reads `NODE_AUTH_TOKEN`,
       # and there is no token any more. registry.npmjs.org is npm's default, and the OIDC exchange
       # wants an unauthenticated npm to start from.
-      - uses: actions/setup-node@v4
+      #
+      # `package-manager-cache: false` for the same reason it is off in test.yml — hkb has no lock
+      # file to restore — and for one more that only applies here: this job holds `id-token: write`,
+      # and setup-node's own docs say to turn automatic caching off in jobs with elevated privileges.
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
+          package-manager-cache: false
 
       # The same three runs test.yml does on every push: same signal, and a tag can point at a commit
       # that never went through a pull request.
@@ -129,7 +134,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/setup-node@v4
+      # No cache flag here on purpose: with no checkout there is no package.json in the workspace,
+      # so setup-node's automatic caching has nothing to detect and never engages.
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
 

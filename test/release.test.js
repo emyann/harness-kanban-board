@@ -209,7 +209,7 @@ test('the workflow reads no npm secret at all — there is none to read', () => 
   assert.ok(!/secrets\./.test(code), 'a release that needs a secret is a release a fork cannot reason about');
   // `registry-url` exists only to write an .npmrc that reads NODE_AUTH_TOKEN. With no token it would
   // hand npm a half-configured auth line to start the OIDC exchange from.
-  assert.equal(step('publish', 'actions/setup-node@v4').with['registry-url'], undefined);
+  assert.equal(step('publish', 'actions/setup-node@v7').with['registry-url'], undefined);
 });
 
 // ---------- the clean-room verify ----------
