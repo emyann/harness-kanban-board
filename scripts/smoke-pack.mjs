@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Pack hkb the way npm will, install that tarball into an empty directory, and run the CLI from where
-// it landed. `npm test` proves the source is correct; this proves the *tarball* is — that `files` in
-// package.json still ships everything the CLI reads at runtime, and that `npx hkb-cli` works for someone
-// who has none of this repository.
+// it landed — including `hkb init` in a scratch repo, offline. `npm test` proves the source is correct;
+// this proves the *tarball* is — that `files` in package.json still ships everything the CLI reads at
+// runtime, and that `npx hkb-cli` works for someone who has none of this repository.
 //
 // It is the pre-publish half of the pair. The post-publish half lives in .github/workflows/release.yml,
 // which does the same thing against the copy npm actually served. This one runs on every push, so a
@@ -49,6 +49,17 @@ const MUST_SHIP = [
 // The other half of an allowlist working: if `files` were deleted altogether, npm would ship the whole
 // repository and every check above would still pass.
 const MUST_NOT_SHIP = ['test', 'docs', '.kanban', '.github', '.agents', 'CLAUDE.md', 'AGENTS.md'];
+
+// What `hkb init` copies out of the package, as `[written path, packaged source, whole|section]`.
+// The list above proves those files are *in* the tarball; this one proves the installed CLI actually
+// reads them from there and puts them in a stranger's repo — a `files` entry can also go missing in a
+// way that leaves the file present but unreadable from where the code looks for it.
+const FROM_PACKAGE = [
+  ['.agents/skills/kanban/SKILL.md', 'skills/kanban/SKILL.md', 'whole'],
+  ['.agents/skills/kanban/references/protocol.md', 'skills/kanban/references/protocol.md', 'whole'],
+  ['CLAUDE.md', 'templates/doc-section.md', 'section'],
+  ['AGENTS.md', 'templates/doc-section.md', 'section'],
+];
 
 const argv = process.argv.slice(2);
 const keep = argv.includes('--keep');
@@ -107,12 +118,17 @@ function checkContents(root) {
   }
 }
 
+/** KB_TASK in particular would make `hook stop` do real work against a real board. */
+function cleanEnv() {
+  const env = { ...process.env };
+  for (const k of ['KB_TASK', 'KB_ATTEMPT', 'KB_BOARD', 'KB_PROFILE', 'KB_ROOT']) delete env[k];
+  return env;
+}
+
 /** The CLI, run from where npm put it — not from this checkout. */
 function checkRuns(bin, root, cwd) {
   log(`running ${bin}`);
-  // A clean env: KB_TASK in particular would make `hook stop` do real work against a real board.
-  const env = { ...process.env };
-  for (const k of ['KB_TASK', 'KB_ATTEMPT', 'KB_BOARD', 'KB_PROFILE', 'KB_ROOT']) delete env[k];
+  const env = cleanEnv();
   const expected = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 
   const version = run(bin, ['version'], { cwd, env });
@@ -130,6 +146,64 @@ function checkRuns(bin, root, cwd) {
   const hook = run(bin, ['hook', 'stop'], { cwd, env, input: '' });
   if (hook.status !== 0) bad(`\`hkb hook stop\` with no KB_TASK exited ${hook.status}: ${hook.out}`, 'the Stop hook must be inert outside a worker — see src/hook.js');
   else ok('hkb hook stop (no KB_TASK) → exit 0');
+}
+
+/**
+ * A stranger's first command, run from the installed package in a repo that is not this one.
+ *
+ * `npm test` drives `init()` against a temp repo and the fake gh (test/init.test.js) — that is the
+ * behaviour net. What only the *tarball* can get wrong is where init copies from: a missing `skills/`
+ * or `templates/` entry in `files` leaves the CLI reading a path that is not there, and the first
+ * person to find out is the adopter. So run the real command here and compare what it wrote against
+ * the packaged originals.
+ *
+ * `--no-labels` is init's documented offline path (`src/init.js`, step 4): with `--repo owner/name`
+ * every remaining step is local, so this needs no network, no `gh`, and no repo that exists — and it
+ * asserts on a clean exit rather than on where a failure happened to stop.
+ */
+function checkInitOffline(bin, root) {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-smoke-init-'));
+  log(`running hkb init --no-labels in ${repo}`);
+  try {
+    run('git', ['init', '-q', '-b', 'main'], { cwd: repo }); // repoRoot() falls back to cwd if git is absent
+    const r = run(bin, ['init', '--repo', 'acme/smoke', '--no-labels'], { cwd: repo, env: cleanEnv() });
+    if (r.status !== 0) {
+      bad(`\`hkb init --repo acme/smoke --no-labels\` exited ${r.status}: ${r.out}`, 'the installed package cannot do the local half of init — run `node scripts/smoke-pack.mjs --keep` and try it by hand');
+      return;
+    }
+    if (!r.out.includes('--no-labels')) bad('`hkb init --no-labels` did not say it skipped the labels', 'the offline path must name what it did not do — see src/init.js step 4');
+
+    for (const [rel, source, how] of FROM_PACKAGE) {
+      const written = path.join(repo, rel);
+      const packaged = path.join(root, source);
+      if (!fs.existsSync(packaged)) continue; // checkContents already reported the missing file
+      if (!fs.existsSync(written)) { bad(`\`hkb init\` did not write ${rel}`, `it is copied from ${source}; check that file shipped and is readable`); continue; }
+      const a = fs.readFileSync(written, 'utf8');
+      const b = fs.readFileSync(packaged, 'utf8');
+      if (how === 'whole' ? a === b : a.includes(b.trim())) ok(`${rel} came from the packaged ${source}`);
+      else bad(`${rel} does not match the packaged ${source}`, 'init copied from somewhere else — check packageSkillDir()/PKG_ROOT in src/init.js');
+    }
+
+    // and the rest of the local footprint, so a run that exited 0 having written half of it cannot
+    // pass the checks above. Every read is guarded: a missing file is a finding, not a stack trace.
+    const text = (rel, why) => {
+      try { return fs.readFileSync(path.join(repo, rel), 'utf8'); } catch { bad(`\`hkb init\` did not write ${rel}`, why); return null; }
+    };
+    const cfg = text('.kanban/board.json', 'see src/init.js step 3');
+    const parsed = cfg && JSON.parse(cfg);
+    if (parsed && parsed.repo === 'acme/smoke' && Object.keys(parsed.profiles || {}).length) ok(`.kanban/board.json (profiles ${Object.keys(parsed.profiles).join(', ')})`);
+    else if (parsed) bad(`.kanban/board.json is not what init should have written: ${cfg.slice(0, 120)}`, 'see src/init.js step 3');
+    const ignored = text('.gitignore', 'see ensureGitignore in src/init.js');
+    if (ignored && ignored.split('\n').map((l) => l.trim()).includes('.kanban/dispatch.pid')) ok('.gitignore carries the local-state block');
+    else if (ignored) bad('the generated .gitignore is missing .kanban/dispatch.pid', 'see GITIGNORE_LINES in src/init.js');
+    const raw = text('.claude/settings.json', 'see installClaudeHooks in src/init.js');
+    const events = raw ? Object.keys(JSON.parse(raw).hooks || {}).sort().join(', ') : null;
+    if (events === 'PreToolUse, Stop') ok(`.claude/settings.json (${events})`);
+    else if (raw !== null) bad(`.claude/settings.json got hooks "${events}", expected "PreToolUse, Stop"`, 'see CLAUDE_HOOKS in src/init.js');
+  } finally {
+    if (keep) log(`  kept: ${repo}`);
+    else fs.rmSync(repo, { recursive: true, force: true });
+  }
 }
 
 // ---------- main ----------
@@ -159,13 +233,15 @@ try {
   log('');
   checkRuns(bin, root, cwd);
   log('');
+  checkInitOffline(bin, root);
+  log('');
 
   if (failures.length) {
     process.stderr.write(`smoke-pack: ${failures.length} check${failures.length === 1 ? '' : 's'} failed\n`);
     for (const f of failures) process.stderr.write(`  - ${f.msg}\n    fix: ${f.fix}\n`);
     process.exit(1);
   }
-  log(`smoke-pack: the packed artifact installs and runs. ${MUST_SHIP.length + MUST_NOT_SHIP.length} content checks, 3 command checks.`);
+  log(`smoke-pack: the packed artifact installs, runs, and initialises a repo. ${MUST_SHIP.length + MUST_NOT_SHIP.length} content checks, 3 command checks, ${FROM_PACKAGE.length + 3} init checks.`);
 } finally {
   if (dir && !keep) fs.rmSync(dir, { recursive: true, force: true });
   else if (dir) log(`kept: ${dir}`);

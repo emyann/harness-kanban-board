@@ -21,3 +21,5 @@ history.
 ## 2026-08-27 — refreshed architecture/overview + decisions/adr-004-roles-and-adoption (no-op re-stamp: #72 narrowed what `hkb init` seeds into board.json; the cli.js/dispatch.js churn is one help string and one skip message, and no claim on either page changed)
 
 ## 2026-08-27 — refreshed architecture/overview + decisions/adr-004-roles-and-adoption (no-op re-stamp: #73 changed one help string in cli.js — `hook stop` → `hook stop|pretool`; no claim on either page changed)
+
+## 2026-08-27 — refreshed architecture/overview + decisions/adr-004-roles-and-adoption (no-op re-stamp: #78 added `init --no-labels` (its offline path, for the tarball smoke) — cli.js churn is one BOOL_FLAGS entry and two help lines, and neither page makes a claim about init's flags)

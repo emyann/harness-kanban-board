@@ -17,6 +17,11 @@ npx hkb-cli dispatch --loop 60   # the 60-second dispatcher, on your machine
 That is the whole free path. `npx hkb-cli init --import` also pulls your existing open issues onto the board as
 *triage*. Prefer it on your PATH? `npm i -g hkb-cli`, then drop the `npx`.
 
+The labels are the only part of `init` that needs the network, so there is a way to do the rest without it:
+`npx hkb-cli init --repo owner/name --no-labels` writes every local file — the skill, the two hooks, the board,
+the `.gitignore` block, the `CLAUDE.md`/`AGENTS.md` section — and sends nothing at all, for a machine where `gh`
+is not logged in yet. Run `init` again without the flag when it is; everything else is idempotent.
+
 Now file some work and watch it get picked up:
 
 ```bash

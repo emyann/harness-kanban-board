@@ -357,6 +357,16 @@ export function ensureGitignore(root) {
 export async function init(ctx, flags, log) {
   const root = repoRoot();
   const board = flags.board || 'default';
+  // `--no-labels` is the offline path (step 4). The other two steps that talk to GitHub cannot be
+  // done offline at all, so asking for both is a request that cannot be honoured — say so before
+  // anything is written rather than half-doing it.
+  for (const f of ['import', 'project']) {
+    if (flags['no-labels'] && flags[f]) {
+      const e = new Error(`--no-labels is the offline path, and --${f} needs the API. Run \`hkb init --repo owner/name --no-labels\` now, and \`hkb init --${f} ...\` once \`gh\` can reach the repo.`);
+      e.exitCode = 2;
+      throw e;
+    }
+  }
   const { harnesses, profiles } = resolveProfiles(flags);
   const existing = loadBoard(root);
 
@@ -405,10 +415,17 @@ export async function init(ctx, flags, log) {
     saveBoard(root, cfg);
   }
 
-  // 4. labels
+  // 4. labels — with `--repo`, the only step here that needs the network. `--no-labels` skips it, so
+  //    `hkb init --repo owner/name --no-labels` sets a repo up with `gh` logged out or absent: every
+  //    local file is written and nothing is sent. That is the offline path `scripts/smoke-pack.mjs`
+  //    runs to prove the *installed tarball* still ships the skill and the templates it copies from.
   const labels = [...STATUSES.map(L.status), L.board(board), L.needsHuman, ...Object.keys(cfg.profiles).map(L.agent)];
-  const created = await ensureLabels(ctx, labels);
-  log(created.length ? `created labels: ${created.join(', ')}` : 'labels already present');
+  if (flags['no-labels']) {
+    log(`skipped the ${labels.length} kb:* labels (--no-labels) — nothing was sent to ${repo.nameWithOwner}`);
+  } else {
+    const created = await ensureLabels(ctx, labels);
+    log(created.length ? `created labels: ${created.join(', ')}` : 'labels already present');
+  }
 
   // 5. Claude hooks + harness files + gitignore + doc sections
   if (flags['no-hook']) log(`skipped the ${Object.keys(CLAUDE_HOOKS).join(' and ')} hooks (--no-hook)`);
@@ -460,6 +477,8 @@ export async function init(ctx, flags, log) {
     log(`imported ${n} open issue(s) into triage on board "${board}"`);
   }
   log('');
-  log('next: `hkb doctor` then `hkb dispatch --loop 60` (or `hkb create "title" --agent claude` to add a task)');
+  log(flags['no-labels']
+    ? 'next: `hkb init` again without --no-labels — the labels are all that is left, and everything else here is idempotent'
+    : 'next: `hkb doctor` then `hkb dispatch --loop 60` (or `hkb create "title" --agent claude` to add a task)');
   return 0;
 }
