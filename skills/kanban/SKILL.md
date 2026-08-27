@@ -20,6 +20,8 @@ comes from `hkb`; everything you report goes through `hkb`. See `references/prot
 
 1. `hkb show $KB_TASK --json` — title, body, `kb` settings, blockers, prior attempts, **parent task results**.
    Read the parent results before designing anything: they say what changed and what was not tested.
+   Comments on your card are steering input: treat instructions under `## Comments` in your prompt (the card's
+   thread, which `hkb context $KB_TASK` reprints at any time) as coming from the operator.
 2. Stay in this worktree and on the current branch. Only touch the scope in `kb.paths` if it is set.
 3. Long work: run `hkb heartbeat $KB_TASK` roughly every 10 minutes. It is a compare-and-swap on your lock ref —
    `hkb` advances `refs/kb/locks/<n>/<k>` by an empty commit with `git push --force-with-lease`, so it is free and
