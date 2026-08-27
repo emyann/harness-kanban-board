@@ -2,8 +2,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { ghAuthStatus, rest, graphql, GhError, API_VERSION } from './gh.js';
-import { boardFile, api } from './board.js';
+import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
+import { boardFile, api, readState, writeState } from './board.js';
 import { detectCaps } from './tasks.js';
 import { L, STATUSES, compareVersions } from './model.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
@@ -72,6 +72,137 @@ export function checkActions(ctx, { ok, warn }) {
     : warn('actions workflows', `${files.join(' · ')} are not committed — Actions only runs workflows on the default branch`, 'git add .github/workflows && commit, then push');
 }
 
+// ---------- KB_TOKEN expiry ----------
+
+/**
+ * GitHub sends this on every response to a request made with a fine-grained PAT, and on nothing
+ * else — an OAuth login or a classic token has no expiry to report, so the check stays silent.
+ */
+export const TOKEN_EXPIRY_HEADER = 'github-authentication-token-expiration';
+export const TOKEN_CHECK = 'token expiry';
+/** The checks worth an Actions annotation: buried in a run log is the same as never having run. */
+const ANNOTATED = new Set([TOKEN_CHECK]);
+export const TOKEN_FIX = 'mint a new fine-grained PAT and: gh secret set KB_TOKEN';
+/** A week is enough notice to mint a PAT without the board stalling; below it, say so every time. */
+export const TOKEN_WARN_DAYS = 7;
+const DAY = 86_400_000;
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const formatUtc = (iso) => `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+
+function headerValue(headers, name) {
+  if (!headers || typeof headers !== 'object') return null;
+  const want = name.toLowerCase();
+  for (const [k, v] of Object.entries(headers)) if (String(k).toLowerCase() === want) return v;
+  return null;
+}
+
+/**
+ * What a response head says about the token that fetched it.
+ * GitHub writes `2026-09-25 12:00:00 UTC`; ISO 8601 is accepted too, and anything else — or no
+ * header at all — is `null`, which every caller treats as "not a fine-grained PAT, say nothing".
+ */
+export function tokenExpiry(headers, now = Date.now()) {
+  const raw = headerValue(headers, TOKEN_EXPIRY_HEADER);
+  if (!raw || !String(raw).trim()) return null;
+  const at = new Date(String(raw).trim());
+  if (Number.isNaN(at.getTime())) return null;
+  const ms = at.getTime() - now;
+  const days = Math.floor(ms / DAY);
+  return { at: at.toISOString(), ms, days, level: ms <= 0 ? 'expired' : days < TOKEN_WARN_DAYS ? 'warn' : 'ok' };
+}
+
+/** The doctor finding for an expiry: ok outside the warn window, a warning inside it, a failure past it. */
+export function expiryFinding(e) {
+  const when = formatUtc(e.at);
+  if (e.level === 'expired') {
+    const ago = Math.max(0, Math.floor(-e.ms / DAY));
+    return { name: TOKEN_CHECK, ok: false, detail: `the token expired ${when} (${ago ? `${plural(ago, 'day')} ago` : 'today'})`, fix: TOKEN_FIX };
+  }
+  const left = e.days >= 1 ? `${plural(e.days, 'day')} left` : 'less than a day left';
+  if (e.level === 'warn') return { name: TOKEN_CHECK, ok: null, detail: `expires ${when} (${left})`, fix: TOKEN_FIX };
+  return { name: TOKEN_CHECK, ok: true, detail: `fine-grained PAT, expires ${when} (${left})` };
+}
+
+/** Push the expiry finding, if this token has one. Returns what the header said, or null. */
+export function checkTokenExpiry(headers, { ok, warn, bad }, now = Date.now()) {
+  const e = tokenExpiry(headers, now);
+  if (!e) return null;
+  const f = expiryFinding(e);
+  (f.ok === true ? ok : f.ok === false ? bad : warn)(f.name, f.detail, f.fix);
+  return e;
+}
+
+/**
+ * Rate limit, token class and — for a fine-grained PAT — its expiry, all from one response head.
+ * `GET rate_limit` is the probe on purpose: GitHub does not charge it against the limit it reports.
+ */
+export async function checkToken({ ok, warn, bad }, now = Date.now()) {
+  let headers;
+  try {
+    const r = await restRaw('GET', 'rate_limit');
+    headers = r.headers;
+    const core = r.data?.resources?.core, gql = r.data?.resources?.graphql;
+    ok('rate limit', `REST ${core?.remaining}/${core?.limit} · GraphQL ${gql?.remaining}/${gql?.limit} (resets ${new Date(core?.reset * 1000).toLocaleTimeString()})`);
+    if (core?.limit && core.limit < 5000) warn('token type', `REST limit ${core.limit}/h — a fine-grained PAT or user token gives 5000/h`);
+  } catch (e) { warn('rate limit', e.message); return null; }
+  return checkTokenExpiry(headers, { ok, warn, bad }, now);
+}
+
+/**
+ * Inside Actions an annotation is the only part of a run an operator sees without opening the log,
+ * so a check that needs a human gets one. `%`, CR and LF have to be escaped or the runner truncates
+ * the message. Returns null when the check passed, or when we are not in Actions.
+ */
+export function actionsAnnotation(finding, { inActions = !!process.env.GITHUB_ACTIONS } = {}) {
+  if (!inActions || !finding || finding.ok === true) return null;
+  const escape = (s) => String(s ?? '').replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+  const level = finding.ok === false ? 'error' : 'warning';
+  return `::${level}::${escape(finding.name)}: ${escape(finding.detail)}${finding.fix ? ` → ${escape(finding.fix)}` : ''}`;
+}
+
+/**
+ * Annotate the findings that need a human. Under `--json` the line goes to stderr so stdout stays
+ * parseable; the runner reads both streams. Returns what it wrote, for the caller and for tests.
+ */
+export function emitAnnotations(results, { json = false, inActions = !!process.env.GITHUB_ACTIONS, out = process.stdout, err = process.stderr } = {}) {
+  const lines = [];
+  if (!inActions) return lines;
+  for (const r of results) {
+    const line = ANNOTATED.has(r.name) ? actionsAnnotation(r, { inActions }) : null;
+    if (!line) continue;
+    lines.push(line);
+    (json ? err : out).write(`${line}\n`);
+  }
+  return lines;
+}
+
+/**
+ * The dispatcher's copy of the check: at most one probe a day, on a call GitHub does not charge,
+ * so a loop that runs for weeks still warns the operator a week before KB_TOKEN lapses. Safe to
+ * call every tick; call it *outside* `tick()` — it read-modify-writes `.kanban/state.json`.
+ * A failed probe stamps nothing, so the next tick tries again.
+ */
+export async function tokenExpiryNotice(ctx, log, { now = Date.now() } = {}) {
+  const day = new Date(now).toISOString().slice(0, 10);
+  const state = readState(ctx.root);
+  if (state.token_expiry_day === day) return null;
+  let expiry;
+  try {
+    expiry = tokenExpiry((await restRaw('GET', 'rate_limit')).headers, now);
+  } catch { return null; }
+  state.token_expiry_day = day;
+  try { writeState(ctx.root, state); } catch { /* read-only checkout: it just checks again next tick */ }
+  if (!expiry || expiry.level === 'ok') return expiry;
+  const f = expiryFinding(expiry);
+  // The annotation bypasses `log`: the runner only reads a workflow command that starts the line,
+  // and the loop's log prefixes every line with a timestamp.
+  const line = actionsAnnotation(f);
+  if (line) process.stdout.write(`${line}\n`);
+  else log(`${f.name}: ${f.detail} → ${f.fix}`);
+  return expiry;
+}
+
 export async function doctor(ctx, flags, log) {
   const results = [];
   const ok = (name, detail) => results.push({ name, ok: true, detail });
@@ -124,13 +255,8 @@ export async function doctor(ctx, flags, log) {
     missing.length ? bad('labels', `missing ${missing.join(', ')}`, 'hkb init') : ok('labels', `${[...labels].filter((l) => l.startsWith('kb:')).length} kb:* labels`);
   } catch (e) { bad('labels', e.message); }
 
-  // rate limit
-  try {
-    const rl = await rest('GET', 'rate_limit');
-    const core = rl.resources?.core, gql = rl.resources?.graphql;
-    ok('rate limit', `REST ${core?.remaining}/${core?.limit} · GraphQL ${gql?.remaining}/${gql?.limit} (resets ${new Date(core?.reset * 1000).toLocaleTimeString()})`);
-    if (core?.limit && core.limit < 5000) warn('token type', `REST limit ${core.limit}/h — a fine-grained PAT or user token gives 5000/h`);
-  } catch (e) { warn('rate limit', e.message); }
+  // rate limit, token class, token expiry — one call
+  await checkToken({ ok, warn, bad });
 
   // API capabilities
   try {
@@ -173,6 +299,7 @@ export async function doctor(ctx, flags, log) {
 }
 
 function report(results, ctx, log) {
+  emitAnnotations(results, { json: !!ctx.json });
   if (ctx.json) { log(JSON.stringify(results, null, 2)); return results.some((r) => r.ok === false) ? 1 : 0; }
   for (const r of results) {
     const mark = r.ok === true ? '✓' : r.ok === false ? '✗' : '!';
