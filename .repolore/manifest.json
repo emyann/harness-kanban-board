@@ -1,0 +1,66 @@
+{
+  "tool": "repolore",
+  "schemaVersion": 1,
+  "pluginVersion": "0.4.7",
+  "wikiRoot": "docs/wiki",
+  "scriptsDir": ".repolore/scripts",
+  "initializedAt": "2026-08-27",
+  "generatedFiles": [
+    {
+      "path": ".repolore/scripts/lib.mjs",
+      "sha": "053e964cde406ab6b7b3d25c9f01cdc2da7ed6f6"
+    },
+    {
+      "path": ".repolore/scripts/wiki-check.mjs",
+      "sha": "b2cf4eea1c245f35f1ec4003e2b7b217e890ec00"
+    },
+    {
+      "path": ".repolore/scripts/wiki-coverage.mjs",
+      "sha": "defc70c4060d7a2282cde9f4c209c19cae438070"
+    },
+    {
+      "path": ".repolore/scripts/wiki-stamp.mjs",
+      "sha": "51cdb749812f88969357d126eea3c63b01d3a2cc"
+    },
+    {
+      "path": ".repolore/scripts/wiki-index.mjs",
+      "sha": "149fbbc9e882578f488f8f8e05e76f65b724f06f"
+    },
+    {
+      "path": ".repolore/scripts/wiki-hook.mjs",
+      "sha": "b8ea5b5dfff094a42bdae269558fa6f8b51c575a"
+    },
+    {
+      "path": ".repolore/scripts/wiki-install-hook.mjs",
+      "sha": "ec6892d6c8900675421ad1e39beddcdc88c9e135"
+    },
+    {
+      "path": ".repolore/scripts/wiki-flow-render.mjs",
+      "sha": "96509d1e9704e938cc1a2790daef68fc599f82a2"
+    },
+    {
+      "path": ".repolore/scripts/wiki-flow-check.mjs",
+      "sha": "ee1144be14eb6e8200a1d176e22ebeea5597c5fd"
+    },
+    {
+      "path": ".repolore/scripts/wiki-flow-refresh.mjs",
+      "sha": "6cd5928a44fe430bdc32197706034f8b940efbfe"
+    },
+    {
+      "path": "docs/wiki/AGENTS.md",
+      "sha": "d62b136325565fdcc0f7d77cb71c8f51e438cdaa"
+    },
+    {
+      "path": "docs/wiki/_templates/page.md",
+      "sha": "2c4fcdc2f32b511f800fe1c50c473216428304d5"
+    },
+    {
+      "path": "docs/wiki/_templates/decision.md",
+      "sha": "a7e643d81f0e9a0a8b74fa14e21ce37295455d2e"
+    },
+    {
+      "path": "docs/wiki/_templates/flow.md",
+      "sha": "845c2d1f6884c9a92f7353955f0abe5be8c98a19"
+    }
+  ]
+}

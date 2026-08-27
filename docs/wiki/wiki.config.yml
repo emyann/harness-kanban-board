@@ -1,0 +1,88 @@
+# wiki.config.yml — machine-authoritative config for the repolore tooling.
+#
+# This file controls what the wiki covers and which pages should exist. It is
+# read by the check scripts (scope + coverage tunables + page budget) AND by
+# humans/LLMs during refresh (repo_notes + page plan). Keep it accurate —
+# it is the planning surface for the wiki.
+
+wiki:
+  title: "hkb"
+  page_budget: 50          # soft cap — wiki-check warns above this, never blocks
+
+# Category order for the generated index. Uncomment to override the default:
+# categories: [architecture, concepts, features, flows, decisions, gotchas, howto]
+
+repo_notes: |
+  hkb (npm: hkb-cli) is a zero-dependency Node >= 20 ESM CLI that turns GitHub Issues into a Hermes-style kanban for coding agents. The protocol is backend-neutral (labels, issue dependencies, git-ref locks, structured comments); GitHub is the default adapter behind src/gh.js. A no-LLM dispatcher loop claims ready cards and spawns harness workers (Claude Code, Copilot CLI, Codex); pure decision logic lives in src/model.js, I/O at the edges. Values in priority order: portable, frugal, performance, flawless experience.
+
+# Files the wiki may be distilled from. Drives wiki-coverage.mjs.
+scope:
+  include:
+    - "bin/**"
+    - "src/**"
+    - "skills/**"
+    - "hooks/**"
+    - "templates/**"
+    - "scripts/**"
+    - "web/**"
+  exclude:
+    - "test/**"
+    - "docs/**"
+
+# Coverage tunables — uncomment to override the defaults baked into
+# wiki-coverage.mjs (shown there in full).
+coverage:
+  # source_extensions: [.ts, .tsx, .cs, .py]
+  # page_worthy_dirs: [functions, routes, services, controllers]
+  # prune_dirs: [.git, node_modules, dist]
+  # noise_patterns: ['\.(test|spec)\.[jt]s$']
+
+# Audit tunables — read by the audit workflow's LLM session only (no script
+# parses this block). Uncomment to override the defaults.
+# audit:
+#   horizon_days: 90         # a page audited longer ago than this is due
+#   pages_per_session: 5     # the session cap (K)
+
+# Page plan — the pages the wiki *should* eventually have.
+# status: seeded = written | planned = not yet written.
+# The LLM may add pages not listed here; when it does, it adds them back.
+pages:
+  - slug: architecture/overview
+    summary: "The moving parts: CLI, board protocol, dispatcher loop, workers, and where state lives (the board, never the process)."
+    status: seeded
+  - slug: architecture/dispatcher-tick
+    summary: "The tick pipeline (outbox, reclaim, reap, orphan sweep, reconcile, promote, tracks, guards, claim+spawn) and the live incident behind each stage."
+    status: planned
+  - slug: concepts/board-protocol
+    summary: "Statuses, kb:* labels, the body block, run/result comments, terminal verbs — the backend-neutral contract every harness drives through gh."
+    status: planned
+  - slug: concepts/claims-and-leases
+    summary: "Git refs as the only atomic CAS on GitHub: claim classification (created/held/unknown), heartbeats, LOCK_LOST, and the self-heal ladder."
+    status: planned
+  - slug: concepts/roles-and-seats
+    summary: "Operator, supervisor, dispatcher, workers: who decides, who judges, who loops, who codes — and which seats are optional."
+    status: planned
+  - slug: features/tracks
+    summary: "One session executes a whole DAG subgraph: per-node claims as checkpoints, stacked node PRs, fallback to node-by-node."
+    status: planned
+  - slug: features/harness-profiles
+    summary: "The shipped profiles (claude, claude-p, claude-track, claude-action, copilot-cli, codex): modes, permissions, models, and what each harness can and cannot do."
+    status: planned
+  - slug: decisions/adr-001-github-native-backend
+    summary: "GitHub Issues + native dependencies + ref locks won over MCP-first and repo-native designs; stacked PRs rejected for board sequencing."
+    status: planned
+  - slug: decisions/adr-002-zero-npm-dependencies
+    summary: "The CLI ships with zero npm dependencies; presentation may use Node built-ins only. What would justify revisiting."
+    status: planned
+  - slug: decisions/adr-003-npm-trusted-publishing
+    summary: "Releases publish via npm trusted publishing (OIDC) from release.yml only; no npm token exists anywhere."
+    status: planned
+  - slug: decisions/adr-004-roles-and-adoption
+    summary: "The canonical seat taxonomy (operator/supervisor/dispatcher/worker) and the adoption ladder for workflows simpler than the full DAG."
+    status: planned
+  - slug: gotchas/long-lived-process-rot
+    summary: "The #61 outage: a 90-minute-old loop 404ing on every claim while a fresh process succeeded — why caches are per-tick and the loop exits 4."
+    status: planned
+  - slug: gotchas/github-api-quirks
+    summary: "422 'already exists' means held, ref GETs prefix-match into arrays, 304s are free, GITHUB_ACTIONS env reroutes gh — the traps the code already survived."
+    status: planned

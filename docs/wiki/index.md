@@ -1,0 +1,26 @@
+# hkb — wiki index
+
+> GENERATED FILE — do not edit by hand. Regenerate with `node .repolore/scripts/wiki-index.mjs`.
+> One line per page, taken verbatim from each page's frontmatter `title`/`summary`.
+> Schema and authoring rules: [AGENTS.md](./AGENTS.md).
+
+## Architecture
+
+- [hkb at a glance](./architecture/overview.md): The moving parts: CLI, board protocol, dispatcher loop, workers — and the one rule that shapes them all: the board is the only state.
+
+## Planned (not yet written)
+
+- architecture/dispatcher-tick: The tick pipeline (outbox, reclaim, reap, orphan sweep, reconcile, promote, tracks, guards, claim+spawn) and the live incident behind each stage.
+- concepts/board-protocol: Statuses, kb:* labels, the body block, run/result comments, terminal verbs — the backend-neutral contract every harness drives through gh.
+- concepts/claims-and-leases: Git refs as the only atomic CAS on GitHub: claim classification (created/held/unknown), heartbeats, LOCK_LOST, and the self-heal ladder.
+- concepts/roles-and-seats: Operator, supervisor, dispatcher, workers: who decides, who judges, who loops, who codes — and which seats are optional.
+- decisions/adr-001-github-native-backend: GitHub Issues + native dependencies + ref locks won over MCP-first and repo-native designs; stacked PRs rejected for board sequencing.
+- decisions/adr-002-zero-npm-dependencies: The CLI ships with zero npm dependencies; presentation may use Node built-ins only. What would justify revisiting.
+- decisions/adr-003-npm-trusted-publishing: Releases publish via npm trusted publishing (OIDC) from release.yml only; no npm token exists anywhere.
+- decisions/adr-004-roles-and-adoption: The canonical seat taxonomy (operator/supervisor/dispatcher/worker) and the adoption ladder for workflows simpler than the full DAG.
+- features/harness-profiles: The shipped profiles (claude, claude-p, claude-track, claude-action, copilot-cli, codex): modes, permissions, models, and what each harness can and cannot do.
+- features/tracks: One session executes a whole DAG subgraph: per-node claims as checkpoints, stacked node PRs, fallback to node-by-node.
+- gotchas/github-api-quirks: 422 'already exists' means held, ref GETs prefix-match into arrays, 304s are free, GITHUB_ACTIONS env reroutes gh — the traps the code already survived.
+- gotchas/long-lived-process-rot: The #61 outage: a 90-minute-old loop 404ing on every claim while a fresh process succeeded — why caches are per-tick and the loop exits 4.
+
+> Backlog from the page plan (`pages:` in `wiki.config.yml`) — draft on demand: "draft `<slug>` from the wiki plan".

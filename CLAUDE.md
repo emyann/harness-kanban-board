@@ -45,3 +45,5 @@ work only in this worktree, open a draft PR that says `Closes #$KB_TASK`, and fi
 `hkb complete <n> --summary "..."`, `hkb block <n> "why" --kind needs_input`, or `hkb request-review <n> --summary "..."`.
 Never `git push --force`. Full protocol: `.agents/skills/kanban/SKILL.md`.
 <!-- hkb:end -->
+
+@AGENTS.md
