@@ -45,7 +45,7 @@ export function readSkillVersion(dir) {
 export function isPackageRepo(root) {
   let name;
   try { name = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).name; } catch { return false; }
-  return name === 'hkb' && fs.existsSync(path.join(root, 'skills', 'kanban', 'SKILL.md'));
+  return name === 'hkb-cli' && fs.existsSync(path.join(root, 'skills', 'kanban', 'SKILL.md'));
 }
 
 /**
