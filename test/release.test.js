@@ -93,6 +93,7 @@ test('every gate stands before the publish step, never after it', () => {
   const ids = DOC.jobs.publish.steps.map((s) => s.id || s.run || s.uses);
   assert.ok(ids.indexOf('gate') < ids.indexOf('publish'));
   assert.ok(ids.indexOf('npm test') < ids.indexOf('publish'));
+  assert.ok(ids.indexOf('runner') < ids.indexOf('publish'));
   assert.ok(ids.indexOf('preflight') < ids.indexOf('publish'));
 });
 
@@ -124,19 +125,67 @@ test('the version output is the package version, not the tag text', () => {
   assert.match(DOC.jobs.publish.outputs.version, /steps\.gate\.outputs\.version/);
 });
 
-test('a repo with no NPM_TOKEN yet is told how to make one, and publishes nothing', () => {
+// ---------- trusted publishing ----------
+
+/** `npm --version` answers $NPM_VERSION; `npm install -g` is a no-op. `node -p` answers $NODE_VERSION. */
+const npmStub = `#!/usr/bin/env bash
+if [ "$1" = "--version" ]; then echo "\${NPM_VERSION}"; fi
+exit 0
+`;
+const nodeStub = '#!/usr/bin/env bash\necho "${NODE_VERSION}"\n';
+
+const runRunner = (node, npm) =>
+  runStep(step('publish', 'runner').run, {
+    env: { NODE_VERSION: node, NPM_VERSION: npm },
+    bin: { npm: npmStub, node: nodeStub },
+  });
+
+test('the runner is held to the versions trusted publishing needs, not the ones it happens to have', () => {
+  // Node 22 bundles npm 10, so the step upgrades npm first — and then checks, because an npm that
+  // stayed on 10 fails at publish time as "need auth", pointing at a token that no longer exists.
+  assert.match(step('publish', 'runner').run, /npm install -g npm@latest/);
+
+  const ok = runRunner('22.20.0', '11.6.0');
+  assert.equal(ok.status, 0, ok.out);
+  assert.match(ok.out, /node 22\.20\.0, npm 11\.6\.0/);
+});
+
+test('an old node or an old npm fails the release, and the error names the floor', () => {
+  const oldNode = runRunner('22.13.0', '11.6.0');
+  assert.equal(oldNode.status, 1);
+  assert.match(oldNode.out, /::error::/);
+  assert.match(oldNode.out, /22\.14\.0/);
+
+  const oldNpm = runRunner('22.20.0', '10.9.3');
+  assert.equal(oldNpm.status, 1);
+  assert.match(oldNpm.out, /::error::/);
+  assert.match(oldNpm.out, /11\.5\.1/);
+
+  // 11.5.10 > 11.5.1 and 11.10.0 > 11.9.0: the comparison is by version, not by string.
+  assert.equal(runRunner('22.20.0', '11.5.10').status, 0);
+});
+
+test('only the repository npm trusts publishes; a fork is told why, and stays green', () => {
   const pre = step('publish', 'preflight');
-  assert.equal(pre.env.NPM_TOKEN, '${{ secrets.NPM_TOKEN }}');
+  const pkg = { 'package.json': JSON.stringify({ repository: { url: 'git+https://github.com/emyann/harness-kanban-board.git' } }) };
 
-  const missing = runStep(pre.run, { env: { NPM_TOKEN: '' } });
-  assert.equal(missing.status, 0, 'a missing secret is a notice, not a red build');
-  assert.match(missing.out, /::notice::/);
-  assert.match(missing.out, /gh secret set NPM_TOKEN/);
-  assert.deepEqual(missing.outputs, { ready: 'false' });
+  const home = runStep(pre.run, { env: { GITHUB_REPOSITORY: 'emyann/harness-kanban-board' }, files: pkg });
+  assert.equal(home.status, 0, home.out);
+  assert.deepEqual(home.outputs, { ready: 'true' });
 
-  const present = runStep(pre.run, { env: { NPM_TOKEN: 'npm_xxx' } });
-  assert.deepEqual(present.outputs, { ready: 'true' });
-  assert.ok(!present.out.includes('npm_xxx'), 'the token must never be echoed');
+  const fork = runStep(pre.run, { env: { GITHUB_REPOSITORY: 'stranger/harness-kanban-board' }, files: pkg });
+  assert.equal(fork.status, 0, 'a fork is a notice, not a red build — its tag and tests are still a signal');
+  assert.match(fork.out, /::notice::/);
+  assert.match(fork.out, /trusted publisher/);
+  assert.match(fork.out, /stranger\/harness-kanban-board/, 'the notice must name the repository that ran, not just the one that may publish');
+  assert.deepEqual(fork.outputs, { ready: 'false' });
+});
+
+test("the preflight reads the repository off package.json, so it is named once", () => {
+  // If `repository.url` ever stops being a GitHub URL, the preflight silently stops matching and
+  // every release turns into a notice. Check it against this repo's real package.json.
+  const url = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')).repository.url;
+  assert.match(url.replace(/^.*github\.com[:/]/, '').replace(/\.git$/, ''), /^[\w.-]+\/[\w.-]+$/);
 });
 
 test('the publish step is gated on the preflight, so a fork or a fresh repo cannot publish', () => {
@@ -145,19 +194,22 @@ test('the publish step is gated on the preflight, so a fork or a fresh repo cann
 
 // ---------- the publish ----------
 
-test('the publish is provenance-signed, public, and authenticated from a secret', () => {
+test('the publish is provenance-signed, public, and authenticated by OIDC rather than a secret', () => {
   const pub = step('publish', 'publish');
   assert.match(pub.run, /npm publish --provenance --access public/);
-  assert.equal(pub.env.NODE_AUTH_TOKEN, '${{ secrets.NPM_TOKEN }}');
-  assert.equal(DOC.jobs.publish.permissions['id-token'], 'write', 'provenance is an OIDC exchange: without id-token the publish fails');
+  assert.equal(pub.env, undefined, 'the publish reads no environment: the credential comes from the OIDC exchange');
+  assert.equal(DOC.jobs.publish.permissions['id-token'], 'write', 'trusted publishing is an OIDC exchange: without id-token there is no credential and no attestation');
   assert.equal(DOC.jobs.publish.permissions.contents, 'read', 'a release needs to read the repo and nothing more');
-  assert.equal(step('publish', 'actions/setup-node@v4').with['registry-url'], 'https://registry.npmjs.org');
 });
 
-test('the workflow carries secret *references* and never a secret', () => {
-  const named = [...TEXT.matchAll(/^\s*(NPM_TOKEN|NODE_AUTH_TOKEN)[ \t]*:[ \t]*(.*)$/gm)];
-  assert.ok(named.length >= 2);
-  for (const m of named) assert.match(m[2], /^\$\{\{ secrets\.[A-Z_]+ \}\}$/, `${m[1]} must come from a secret expression, got ${m[2]}`);
+test('the workflow reads no npm secret at all — there is none to read', () => {
+  // Comments may still say the words: the file explains what it stopped doing, and why.
+  const code = TEXT.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  assert.ok(!/NPM_TOKEN|NODE_AUTH_TOKEN/.test(code), 'trusted publishing replaced the token; a live reference to one is a leftover');
+  assert.ok(!/secrets\./.test(code), 'a release that needs a secret is a release a fork cannot reason about');
+  // `registry-url` exists only to write an .npmrc that reads NODE_AUTH_TOKEN. With no token it would
+  // hand npm a half-configured auth line to start the OIDC exchange from.
+  assert.equal(step('publish', 'actions/setup-node@v4').with['registry-url'], undefined);
 });
 
 // ---------- the clean-room verify ----------
@@ -229,9 +281,19 @@ test('a longer version that merely contains the released one does not pass for i
 
 // ---------- the operator's page ----------
 
-test('docs/releasing.md exists and covers the two steps that stay with a human', () => {
+test('docs/releasing.md exists, and the one step left to a human is the tag', () => {
   const doc = fs.readFileSync(path.join(REPO, 'docs', 'releasing.md'), 'utf8');
-  assert.match(doc, /gh secret set NPM_TOKEN/);
   assert.match(doc, /npm version/);
   assert.match(doc, /--follow-tags/);
+  assert.ok(!/NPM_TOKEN/.test(doc), 'the token is gone; a doc that still asks for one sends the operator to make a secret nothing reads');
+});
+
+test('docs/releasing.md writes down the trusted publisher, which is invisible from the repo', () => {
+  // It lives in npmjs.com's settings, so a failing publish has nothing in-tree to read unless this
+  // page records what the four fields are set to — and that the filename is part of the identity.
+  const doc = fs.readFileSync(path.join(REPO, 'docs', 'releasing.md'), 'utf8');
+  assert.match(doc, /[Tt]rusted [Pp]ublisher/);
+  assert.match(doc, /release\.yml/);
+  assert.match(doc, /harness-kanban-board/);
+  assert.match(doc, /11\.5\.1/, 'the npm floor is the thing to check when a publish fails on auth');
 });
