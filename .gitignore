@@ -2,6 +2,7 @@ node_modules/
 .kanban/logs/
 .kanban/outbox.jsonl
 .kanban/state.json
+.kanban/dispatch.pid
 .kanban/cache.json
 .kanban/nudges/
 .kanban/sessions/
