@@ -175,6 +175,65 @@ export function harnessFiles(name, { command = 'hkb hook stop', root = '/path/to
   return build({ command, root });
 }
 
+// ---------- GitHub Actions (`hkb init --with-actions`) ----------
+// Two workflows, generated the same way harness files are: the dispatcher (events, with a 15-minute
+// cron as a sweeper) and one worker per attempt (claude-code-action, started by `gh workflow run`).
+// Neither contains a secret — only `${{ secrets.* }}` references — and re-running init overwrites
+// both, so the templates stay the single source.
+
+export const ACTIONS_PROFILE = 'claude-action';
+export const WORKER_WORKFLOW = 'kanban worker (claude)';
+const ACTIONS_DIR = path.join('.github', 'workflows');
+const NODE_VERSION = '22';
+
+/**
+ * How Actions gets `hkb` on PATH. Every repo installs the published package; hkb's own repo installs
+ * the checkout it is running, so a change to the CLI is exercised by the workflow that ships it.
+ */
+export function hkbInstallForActions(root) {
+  return isPackageRepo(root) ? 'npm link' : 'npm i -g hkb';
+}
+
+/**
+ * The two workflow files, as `[{ rel, contents }]`. Pure, like `harnessFiles`.
+ * @param board board slug the dispatcher ticks and the worker defaults to
+ * @param install shell command that puts `hkb` on PATH in the runner
+ * @param profiles profile names the Actions dispatcher may claim — never the laptop-only ones
+ * @param timeoutMinutes the worker job's `timeout-minutes`; keep it <= the board's max_runtime
+ */
+export function actionsFiles({ board = 'default', install = 'npm i -g hkb', profiles = [ACTIONS_PROFILE], timeoutMinutes = 60, maxTurns = 80 } = {}) {
+  const vars = {
+    board,
+    install,
+    profiles: profiles.join(','),
+    profile: ACTIONS_PROFILE,
+    worker_workflow: WORKER_WORKFLOW,
+    node_version: NODE_VERSION,
+    timeout_minutes: String(timeoutMinutes),
+    max_turns: String(maxTurns),
+    allowed_tools: (DEFAULT_PROFILES[ACTIONS_PROFILE].allowed_tools || []).join(','),
+  };
+  return ['kanban-dispatch.yml', 'kanban-worker-claude.yml'].map((name) => ({
+    rel: path.join(ACTIONS_DIR, name),
+    contents: fill(template('actions', name), vars),
+  }));
+}
+
+/** Write the workflows. Returns the relative paths that actually changed. */
+export function installActions(root, opts = {}) {
+  return writeAll(root, actionsFiles({ install: hkbInstallForActions(root), ...opts }));
+}
+
+/**
+ * The profiles the Actions dispatcher is allowed to claim — the ones whose launch only *triggers*
+ * work somewhere else. Anything a runner cannot start (a local `claude`, `copilot`, `codex`) has to
+ * stay off that list, or the tick claims a task and then fails to spawn it.
+ */
+export function triggerProfiles(cfg) {
+  const names = Object.entries(cfg?.profiles || {}).filter(([, p]) => p?.mode === 'trigger').map(([n]) => n);
+  return names.length ? names : [ACTIONS_PROFILE];
+}
+
 /**
  * What `--profiles` and `--harness` add up to. `--harness copilot` on its own means "set me up for
  * Copilot": it brings its profile with it and replaces the `claude` default rather than adding to
@@ -193,13 +252,16 @@ export function resolveProfiles(flags = {}) {
   const implied = harnesses.map((h) => HARNESS_PROFILE[h]);
   const profiles = flags.profiles ? list(flags.profiles) : (implied.length ? [...implied] : ['claude']);
   for (const p of implied) if (!profiles.includes(p)) profiles.push(p);
+  // `--with-actions` *adds*: the point is a board that runs on this machine and keeps going when it
+  // closes, so the local profile stays whatever it was.
+  if (flags['with-actions'] && !profiles.includes(ACTIONS_PROFILE)) profiles.push(ACTIONS_PROFILE);
   return { harnesses, profiles };
 }
 
-/** Write a harness's files. Returns the relative paths that actually changed. */
-export function installHarness(root, name, { command } = {}) {
+/** Write generated `[{rel, contents}]` under `root`. Returns the relative paths that actually changed. */
+function writeAll(root, files) {
   const written = [];
-  for (const f of harnessFiles(name, { command, root })) {
+  for (const f of files) {
     const abs = path.join(root, f.rel);
     let current = null;
     try { current = fs.readFileSync(abs, 'utf8'); } catch { /* not there yet */ }
@@ -209,6 +271,11 @@ export function installHarness(root, name, { command } = {}) {
     written.push(f.rel);
   }
   return written;
+}
+
+/** Write a harness's files. Returns the relative paths that actually changed. */
+export function installHarness(root, name, { command } = {}) {
+  return writeAll(root, harnessFiles(name, { command, root }));
 }
 
 function ensureGitignore(root) {
@@ -292,6 +359,16 @@ export async function init(ctx, flags, log) {
   for (const h of harnesses) {
     const written = installHarness(root, h, { command: hkbCommandForHook() });
     log(written.length ? `harness ${h}: wrote ${written.join(', ')}` : `harness ${h}: files already up to date`);
+  }
+  // 5a. optional GitHub Actions dispatcher + worker. The files are all init writes; the two secrets
+  //     and the push to the default branch are the user's, and Actions runs nothing until both.
+  if (flags['with-actions']) {
+    const written = installActions(root, { board, profiles: triggerProfiles(cfg), timeoutMinutes: Math.round((cfg.dispatch?.max_runtime_default || 3600) / 60) });
+    log(written.length ? `actions: wrote ${written.join(', ')}` : 'actions: workflows already up to date');
+    log('  then, once — no secret of yours is ever written into a template:');
+    log('    gh secret set KB_TOKEN                   # fine-grained PAT, this repo: Issues, Contents, Pull requests, Actions RW');
+    log('    claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN    # or: gh secret set ANTHROPIC_API_KEY');
+    log('  and commit both workflows to the default branch — Actions only ever runs the copy that is there.');
   }
   // 5b. optional MCP server config. Only .mcp.json is ours to write — Claude Code and Copilot CLI
   //     read it verbatim; Codex's is user-level and VS Code's belongs to the editor, so those are printed.

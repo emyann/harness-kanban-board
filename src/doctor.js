@@ -7,7 +7,7 @@ import { boardFile, api } from './board.js';
 import { detectCaps } from './tasks.js';
 import { L, STATUSES, compareVersions } from './model.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
-import { agentsSkillDir, packageSkillDir, readSkillVersion, harnessFiles, HARNESS_PROFILE } from './init.js';
+import { agentsSkillDir, packageSkillDir, readSkillVersion, harnessFiles, actionsFiles, HARNESS_PROFILE } from './init.js';
 import { checkProject } from './projects.js';
 
 function has(cmd) { return spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).status === 0; }
@@ -55,6 +55,23 @@ export function checkHarnesses(ctx, { ok, warn }) {
   }
 }
 
+/**
+ * A `trigger` profile is a launch that only asks Actions to do the work — so the workflow it names
+ * has to exist, and it only ever runs from the default branch. Nothing here can check the secrets:
+ * `gh secret list` needs admin, and their absence is reported by the workflow itself.
+ */
+export function checkActions(ctx, { ok, warn }) {
+  const triggers = Object.entries(ctx.cfg?.profiles || {}).filter(([, p]) => p?.mode === 'trigger');
+  if (!triggers.length) return;
+  const files = actionsFiles().map((f) => f.rel);
+  const missing = files.filter((f) => !fs.existsSync(path.join(ctx.root, f)));
+  if (missing.length) return warn('actions workflows', `missing ${missing.join(', ')}`, 'hkb init --with-actions');
+  const tracked = spawnSync('git', ['ls-files', '--error-unmatch', ...files], { cwd: ctx.root, encoding: 'utf8' }).status === 0;
+  tracked
+    ? ok('actions workflows', `${files.join(' · ')} (profiles ${triggers.map(([n]) => n).join(', ')})`)
+    : warn('actions workflows', `${files.join(' · ')} are not committed — Actions only runs workflows on the default branch`, 'git add .github/workflows && commit, then push');
+}
+
 export async function doctor(ctx, flags, log) {
   const results = [];
   const ok = (name, detail) => results.push({ name, ok: true, detail });
@@ -88,6 +105,7 @@ export async function doctor(ctx, flags, log) {
   }
   checkSkill(ctx, { ok, warn });
   checkHarnesses(ctx, { ok, warn });
+  checkActions(ctx, { ok, warn });
   const claudeSkill = path.join(ctx.root, '.claude', 'skills', 'kanban');
   fs.existsSync(claudeSkill) ? ok('claude skill link', '.claude/skills/kanban') : warn('claude skill link', 'missing', 'hkb init');
   try {

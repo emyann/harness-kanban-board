@@ -4,6 +4,7 @@
   "default_branch": "main",
   "board": "default",
   "profiles": {
-    "claude": {}
+    "claude": {},
+    "claude-action": {}
   }
 }

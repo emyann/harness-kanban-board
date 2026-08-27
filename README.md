@@ -211,6 +211,52 @@ before a worker can push: both steps are written into `.codex/README.md` with yo
 Any other harness plugs in the same way — a `launch` array in `.kanban/board.json`; the protocol does not change.
 Details, flags and troubleshooting for all of them: [docs/harnesses.md](docs/harnesses.md).
 
+## Runs when the laptop is closed
+
+The dispatcher is one command, so it also runs in GitHub Actions. `hkb init --with-actions` generates the two
+workflows that do it — nothing else about the board changes:
+
+```bash
+hkb init --with-actions        # .github/workflows/kanban-dispatch.yml + kanban-worker-claude.yml
+gh secret set KB_TOKEN         # fine-grained PAT, this repo: Issues, Contents, Pull requests, Actions RW
+claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN     # or: gh secret set ANTHROPIC_API_KEY
+git add .github/workflows && git commit -m "kanban: dispatch from Actions" && git push
+```
+
+That last line is not a formality: Actions only ever runs the copy of a workflow that is on the **default
+branch**. No secret is ever written into a template — both files reference `${{ secrets.* }}` and nothing else,
+and until `KB_TOKEN` exists the dispatcher prints a `::notice::` saying so and dispatches nothing.
+
+**`kanban-dispatch.yml`** is `hkb dispatch --max 1`, triggered by what actually changes the board —
+`issues: [closed, reopened, labeled, unlabeled]`, `pull_request: [closed]`, `pull_request_review`,
+`workflow_run` (a worker finishing), `workflow_dispatch` — with `schedule: */15` as a **sweeper only**, for the
+things no event announces: a worker that died, a `scheduled_at` that came due. `concurrency: kb-dispatch-<board>`
+with `cancel-in-progress: false` keeps it to one tick at a time, because a cancelled tick can leave a claimed
+lock ref with no worker behind it. It passes `--profiles claude-action`, so a runner claims only the profile it
+can actually launch and leaves your laptop's `claude` tasks alone; reclaim, promote and reconcile still cover the
+whole board on every tick.
+
+**`kanban-worker-claude.yml`** is one attempt on one task. The `claude-action` profile's launch does not start a
+worker locally — it is `gh workflow run kanban-worker-claude.yml -f task=<n> -f attempt=<k>` and exits, so the
+attempt is recorded as `remote`: no pid, no background job, and its heartbeat (the same CAS on
+`refs/kb/locks/<n>/<k>`) plus `max_runtime` are the whole liveness check. On the runner, a step turns
+`hkb context <n>` into the prompt for [`anthropics/claude-code-action@v1`](https://github.com/anthropics/claude-code-action)
+— the same brief a local worker is launched with, the same allowlist, the same `Closes #<n>` draft PR, the same
+terminal verb. There is no `Stop` hook on a runner, so a final `if: always()` step ends an attempt that finished
+without one (`hkb block … --kind transient`) instead of leaving it `running` until the stale reclaim.
+
+**The honest latency.** The 60-second Hermes cadence exists only while your laptop loop runs. Actions' cron floor
+is 5 minutes, top-of-hour schedules are routinely 15-20+ minutes late, and scheduled workflows are dropped
+entirely on a public repo with no activity for 60 days — which is exactly why the cron here is a sweeper and the
+events are the real trigger. **Laptop-off latency is 15-75 minutes**, end to end. If you want 60 seconds, run
+`hkb dispatch --loop 60` on a machine that stays on; the two dispatchers are safe to run together, because the
+lock ref is the arbiter.
+
+What you give up, plainly: Actions minutes (free on public repos; a platform fee per minute on private ones —
+the board itself stays free), no enforced `Stop` nudge, a per-task `model` override that is not plumbed through
+workflow inputs yet, and a worker whose run is cancelled or killed is only noticed at `stale_after`, not at
+`workflow_run`. Details and the whole table: [docs/harnesses.md](docs/harnesses.md#github-actions--claude-action).
+
 ## GitHub Projects mirror (opt-in, off by default)
 
 If you live in GitHub's own Projects UI, link a Projects v2 board and the dispatcher will mirror the board onto it:

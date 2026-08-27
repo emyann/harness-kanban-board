@@ -11,6 +11,7 @@ disk) whatever `hkb init --harness <name>` generates. This page is the per-harne
 | `claude-p` | Claude Code headless | `claude --worktree` | same | `--output-format json` | — |
 | `copilot-cli` | GitHub Copilot CLI | dispatcher (`git worktree add`) | `agentStop` hook in `.github/hooks/kanban.json` | none | `copilot` |
 | `codex` | OpenAI Codex CLI | dispatcher (`git worktree add`) | `Stop` hook in `.codex/hooks.json` | `--output-schema` | `codex` |
+| `claude-action` | Claude Code in GitHub Actions | the runner's own checkout | a final `if: always()` step | none | `hkb init --with-actions` |
 
 Whatever the harness, the protocol is the same: claim the lock ref, work in the worktree, open a draft PR that
 says `Closes #<n>`, finish with exactly one terminal verb. The `hkb` verb the worker runs is always the source of
@@ -20,7 +21,8 @@ truth — structured output and stop nudges are safety nets, not the record.
 
 ```jsonc
 "codex": {
-  "mode": "process",              // "process" (exits when done) or "claude-bg" (background agent daemon)
+  "mode": "process",              // "process" (exits when done) · "claude-bg" (background agent daemon)
+                                  // · "trigger" (the launch only *starts* work elsewhere and exits)
   "workspace": "worktree",        // the dispatcher makes .claude/worktrees/kb-<n>-<k>; omit if the CLI does it
   "heartbeat": "auto",            // "ref" (CAS on the lock ref) · "comment" · "auto"
   "max_in_progress": 1,
@@ -151,10 +153,82 @@ Codex ships fast. If a flag or a key has moved, the blast radius is deliberately
 `templates/codex/notes.md`. Nothing in `src/` parses any of it. Run `codex exec --help` and `/hooks` once on
 your machine before trusting this page over your own CLI.
 
+## GitHub Actions — `claude-action`
+
+```bash
+hkb init --with-actions        # the profile + .github/workflows/kanban-dispatch.yml + kanban-worker-claude.yml
+gh secret set KB_TOKEN         # fine-grained PAT, this repo: Issues, Contents, Pull requests, Actions RW
+claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN     # or: gh secret set ANTHROPIC_API_KEY
+git add .github/workflows && git commit && git push             # Actions runs the default branch's copy, only
+hkb doctor                     # the workflows exist, and are committed
+```
+
+This is the one profile whose launch does not run a worker. `mode: "trigger"` means the launch *starts work
+somewhere else* and exits:
+
+```bash
+gh workflow run kanban-worker-claude.yml -R <owner/repo> -f task=<n> -f attempt=<k> -f board=<slug>
+```
+
+The dispatcher runs it to completion (a non-zero exit is a `spawn_failed`, and the task goes straight back to
+*ready*), then records the attempt with `remote: true` and no pid. That flag is the whole contract: the reclaim
+pass skips every local check — pid, background job, worktree — and the attempt lives or dies by its heartbeat
+and `max_runtime`. Anything that dispatches work off-box (a cloud agent, a queue) is the same shape.
+
+### The two workflows
+
+`kanban-dispatch.yml` is the dispatcher. Its triggers are events —
+`issues: [closed, reopened, labeled, unlabeled]`, `pull_request: [closed]`, `pull_request_review`,
+`workflow_run` (a worker finished), `workflow_dispatch` — and `schedule: */15` is a **sweeper only**: Actions'
+cron floor is 5 minutes, top-of-hour runs are routinely 15-20+ minutes late, and a public repo idle for 60 days
+has its schedules disabled. `concurrency: {group: kb-dispatch-<board>, cancel-in-progress: false}` keeps ticks
+serial and never cancels one mid-claim.
+
+The tick is `hkb dispatch --max 1 --board <slug> --profiles claude-action`. That last flag is what makes it safe
+to run beside a laptop loop: **a host claims only the profiles it can launch.** Without it a runner would happily
+claim a `kb:agent:claude` task, fail to find `claude` on the runner, and burn a retry on a task your machine was
+about to pick up. Everything else in the tick — reclaim, promote, reconcile, the orphan-lock sweep — is
+unfiltered and covers the whole board, which is exactly what you want a second dispatcher for.
+
+`kanban-worker-claude.yml` is one attempt. It checks out with `fetch-depth: 0` (the heartbeat is a CAS on a real
+ref), turns `hkb context <task>` into `anthropics/claude-code-action@v1`'s `prompt`, and passes the same
+`--allowedTools` list and the same force-push denial a local Claude worker gets. The brief travels through
+`$GITHUB_OUTPUT` behind a delimiter drawn from `/dev/urandom` and is never interpolated into a `run:` block —
+issue bodies are untrusted text. A last `if: always()` step is the stand-in for the `Stop` hook: if the task is
+still `running` when the job ends, it is recorded as `hkb block … --kind transient` with a link to the run, so it
+shows up on the board immediately instead of at the next stale reclaim. `hkb unblock <n>` puts it back.
+
+### Secrets, and what init will not do for you
+
+| secret | what it is for | scope |
+| --- | --- | --- |
+| `KB_TOKEN` | every `hkb`/`gh` call in both workflows | fine-grained PAT, this repo: Issues, Contents, Pull requests, Actions — read and write |
+| `CLAUDE_CODE_OAUTH_TOKEN` | the worker's Claude session (`claude setup-token`, uses your subscription) | one of these two |
+| `ANTHROPIC_API_KEY` | the worker's Claude session, billed per token | one of these two |
+
+`hkb init --with-actions` writes files and nothing else: it never reads, writes or prints a secret, and the
+templates contain only `${{ secrets.* }}` references. `KB_TOKEN` is a PAT rather than `GITHUB_TOKEN` on purpose —
+writes made with `GITHUB_TOKEN` do not trigger further workflows, so the dispatcher would never see its own
+transitions, and the PAT's limit is 5,000 requests an hour instead of 1,000.
+
+### Known edges
+
+| symptom | cause | fix |
+| --- | --- | --- |
+| every event logs a `::notice::` and dispatches nothing | `KB_TOKEN` is not set (or the event is a fork PR, which gets no secrets) | `gh secret set KB_TOKEN`; fork PRs are covered by the 15-minute sweeper |
+| nothing runs at all | the workflows are not on the default branch | commit and push them; `hkb doctor` says so |
+| a task sits `running` for an hour after the run was cancelled | a cancelled or killed job is only noticed at `stale_after` — there is no `workflow_run` crash detection for remote attempts yet | lower `stale_after`, or `hkb dispatch` from a laptop too |
+| a task's `model` is ignored | the per-task override is not plumbed through workflow inputs | set the model in `claude_args` in the worker workflow |
+| `--profiles: no profile "claude-action" in board.json` | the workflow was committed without the profile | `hkb init --with-actions` |
+
+Honest latency, laptop off: **15-75 minutes**. The 60-second cadence is the local loop, and the two are safe to
+run together — the lock ref is the arbiter, and `--profiles` keeps them out of each other's work.
+
 ## Adding a harness that has no built-in profile
 
 Add a `launch` array under `profiles` in `.kanban/board.json` and give tasks `kb:agent:<profile>`; that is the
-entire integration. Set `workspace: "worktree"` if the CLI cannot make its own checkout, and
-`"heartbeat": "comment"` if it cannot push refs. If the harness also needs files in the repo (an agent
+entire integration. Set `workspace: "worktree"` if the CLI cannot make its own checkout,
+`"heartbeat": "comment"` if it cannot push refs, and `"mode": "trigger"` if the launch only asks something else
+to do the work (then the attempt is `remote`: its heartbeat is the only liveness the dispatcher has). If the harness also needs files in the repo (an agent
 definition, a hook config), add a `templates/<harness>/` directory and an entry in `HARNESS_FILES` in
 `src/init.js` — `hkb init --harness <name>`, `hkb doctor` and the tests pick it up from there.

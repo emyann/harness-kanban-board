@@ -49,6 +49,17 @@ export const DEFAULT_PROFILES = {
     allowed_tools: CLAUDE_TOOLS,
     launch: ['claude', '-p', '{prompt}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', 'Bash(git push --force*)', 'Bash(git push -f*)', '--output-format', 'json', '--max-turns', '80', '--max-budget-usd', '5', '{model_args}'],
   },
+  'claude-action': {
+    description: 'Claude Code in GitHub Actions (`anthropics/claude-code-action@v1`), for a board that has to keep moving with the laptop closed. The launch does not run a worker here: it fires `kanban-worker-claude.yml` with `gh workflow run` and exits, so the attempt is `remote` — no pid, no job, and the heartbeat plus `max_runtime` are the whole liveness check. `hkb init --with-actions` writes that workflow and the event-driven `kanban-dispatch.yml` beside it. Needs a KB_TOKEN secret, and one of CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY. Honest latency with nothing but Actions: 15-75 minutes (see the README).',
+    mode: 'trigger',
+    // the runner has a full checkout and a token that can push, so the lease works like anywhere
+    // else; `auto` still falls back to the run comment if a repo refuses the ref push
+    heartbeat: 'auto',
+    max_in_progress: 2,
+    model: null, // per-task `model` is not plumbed through workflow inputs yet — set it in claude_args
+    allowed_tools: CLAUDE_TOOLS,
+    launch: ['gh', 'workflow', 'run', 'kanban-worker-claude.yml', '-R', '{repo}', '-f', 'task={n}', '-f', 'attempt={k}', '-f', 'board={board}'],
+  },
   'copilot-cli': {
     description: 'GitHub Copilot CLI on this machine (included in Copilot Free, draws on the plan\'s AI credits). Run `hkb init --harness copilot` first: it writes the `kanban-worker` custom agent and the agentStop hook that enforces the terminal verb. Copilot CLI has no worktree flag, so `workspace: "worktree"` asks the dispatcher to create one. No structured-output flag — the attempt is recorded by the `hkb` calls the worker makes. max_in_progress is 1 because the free credit pool is small.',
     mode: 'process',
