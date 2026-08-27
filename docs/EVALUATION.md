@@ -2,10 +2,10 @@
 
 ## 1. TL;DR
 
-- **Yes, GitHub as the backend is the right call** — for this user, this repo, and the multi-surface goal. The backlog already lives in 38 issues; Issues + labels + native `blocked_by` dependencies work on every plan; humans get the UI and audit trail for free; and a laptop loop, an Actions job, a claude.ai/code session, a Copilot task and a person on github.com can all write to the same state. Every local-first alternative (SQLite like Hermes, Dolt like Beads, an orphan git branch like the "Tackboard" design) either cuts cloud workers out of the protocol or needs a mirror that lies between ticks.
+- **Yes, GitHub as the backend is the right call** — for this user, this repo, and the multi-surface goal. The backlog already lives in GitHub issues; Issues + labels + native `blocked_by` dependencies work on every plan; humans get the UI and audit trail for free; and a laptop loop, an Actions job, a claude.ai/code session, a Copilot task and a person on github.com can all write to the same state. Every local-first alternative (SQLite like Hermes, Dolt like Beads, an orphan git branch like the "Tackboard" design) either cuts cloud workers out of the protocol or needs a mirror that lies between ticks.
 - **GitHub gives you exactly one atomic primitive: git ref create/CAS.** Labels, assignees, comments and Project fields are last-writer-wins. So the claim lives in a ref, status lives in labels, and the dispatcher is stateless and idempotent. Two refuter-verified fixes: treat `409` as "held" but `422/403/5xx` as "back off, unknown" (never "all tasks claimed"), and keep the lock ref **separate** from the code branch.
 - **There is no better backend, but the leading design needed surgery.** The recommended architecture below is `github-native` (winner, 23/30) with grafts: Tackboard's `--force-with-lease` CAS heartbeats and `LOCK_LOST` signal, the hybrid's MCP-as-CLI-wrapper and zero-install skills-dir plugin, and all held refuter changes (event-driven Actions, heartbeat budget, honest per-profile tiering, plugin packaging split, `promote_on: pr_open` removed).
-- **Stacked PRs are not relevant to the board.** They are a linear, same-repo review/merge primitive; the board's graph is a DAG on issues. Cascading server-side rebases rewrite branches, multiply CI cost on pipao-v2's PR workflows, and cannot be driven from Copilot cloud, Codex cloud or Claude cloud. The single case where they help is a serial, single-worker, human-reviewed layer chain; implement it (if ever) as a dispatcher-side post-hoc registration, not as a board mode.
+- **Stacked PRs are not relevant to the board.** They are a linear, same-repo review/merge primitive; the board's graph is a DAG on issues. Cascading server-side rebases rewrite branches, multiply CI cost on the target repo's PR workflows, and cannot be driven from Copilot cloud, Codex cloud or Claude cloud. The single case where they help is a serial, single-worker, human-reviewed layer chain; implement it (if ever) as a dispatcher-side post-hoc registration, not as a board mode.
 - **It costs nothing beyond the harness you already run.** The board (Issues, labels, `blocked_by`, refs, comments) and the dispatcher (a laptop loop, or Actions' included minutes) are free on every GitHub plan, personal or org. Paying is a per-profile choice made for a reason — laptop-off execution (Actions minutes, Managed Agents) or a vendor's cloud agent — never a prerequisite.
 - **Portability is real, and the free path is the strong path.** Tier A (full Hermes parity: enforced terminal verb, worktree, structured output, kill-on-reclaim) is the *local* harness on all three vendors — Claude Code, Copilot CLI (included in Copilot Free), Codex CLI — plus claude-code-action. Tier B (claim/ready/handoff via issues, terminal state ingested from PR/comments, no enforced nudge) is the vendor clouds: Copilot cloud agent, Claude cloud/routines, Codex cloud. Tier C (schema only): anything else with `gh`.
 - **The 60-second Hermes cadence exists only while your WSL2 loop runs.** Actions is a sweeper (5-min cron floor, top-of-hour delays of 15-20+ min reported, $0.002/min platform fee); its primary triggers must be events (`issues.closed`, `pull_request.closed`, `workflow_run`), not cron. Honest laptop-off latency: 15-75 min.
@@ -49,7 +49,7 @@ flowchart LR
 ### Data model (issue = task)
 
 - **Machine fields**: an HTML comment block at the top of the body, edited only by `ghk`:
-  `<!-- kb: {"v":1,"board":"default","priority":2,"workspace":"worktree","max_runtime":3600,"max_retries":3,"model":null,"skills":["md3-spec"],"goal":"...","scheduled_at":null,"idempotency_key":"...","paths":["packages/md3/**"]} -->`
+  `<!-- kb: {"v":1,"board":"default","priority":2,"workspace":"worktree","max_runtime":3600,"max_retries":3,"model":null,"skills":["design-system"],"goal":"...","scheduled_at":null,"idempotency_key":"...","paths":["packages/ui/**"]} -->`
   Malformed block degrades to defaults; never crashes the dispatcher. On the org (Team plan, issue fields GA 2026-07-02) the same keys may be mirrored to org issue fields for filtering; the body block stays canonical so personal repos behave identically.
 - **Counters that drive safety** (`failures`, `block_loops`, `attempts`) live in the **run comment**, not the body block, because humans edit bodies.
 - **Status**: exactly one `kb:status:<triage|todo|ready|running|blocked|review|done|archived>` label; `done` = closed as completed; `archived` = closed + label. `kb:needs-human` is an orthogonal flag.
@@ -188,13 +188,13 @@ What is lost, plainly: vendor-cloud (Tier B) workers do not get enforced termina
 
 **Not relevant to the board; optional and off by default for delivery; likely never needed.** Verified facts: stacks are strictly linear, same-repo chains (docs.github.com/en/pull-requests/get-started/about-stacked-prs); the REST resource is an ordered `pull_requests[]` (github.github.com/gh-stack/reference/rest-api/); merging a lower layer server-side rebases every upper branch with unsigned commits and re-triggers CI on all of them; closing a mid-stack PR blocks everything above it; merge-queue ejection cascades; stack merges require an asynchronous merge API whose path is UNVERIFIED; the only agent path documented is Copilot CLI + the `gh-stack` skill building one layer at a time. Claude cloud pushes only `claude/*`, Copilot cloud has no stack API, Codex cloud is undocumented.
 
-Consequences for this design: a Hermes decomposition is a DAG (fan-out/fan-in), which a stack cannot hold; cascading rebase would rewrite any branch used as a lock (hence lock ref != code branch); pipao-v2's preview/playwright/design-system/release-pr workflows would re-run on every layer at each parent merge. The design therefore **removes `promote_on: pr_open`** — `ready` derives only from blocker closure, and with auto-merge the parent wait is minutes.
+Consequences for this design: a Hermes decomposition is a DAG (fan-out/fan-in), which a stack cannot hold; cascading rebase would rewrite any branch used as a lock (hence lock ref != code branch); the target repo's preview, e2e and release workflows would re-run on every layer at each parent merge. The design therefore **removes `promote_on: pr_open`** — `ready` derives only from blocker closure, and with auto-merge the parent wait is minutes.
 
-**The narrow case where stacks help**: a strictly linear chain (each task exactly one open parent, at most one child) in one repo, executed serially by one worker at a time, where the bottleneck is slow human review of layered diffs (e.g. Prisma schema -> API route -> md3 UI). If you ever want that: dispatch children serially, have the **dispatcher** (not the worker) call `POST /repos/{o}/{r}/stacks` on already-open PRs, forbid worker force-push, never delete a parent branch that is a base of an open child PR, and gate your PR workflows to run on the top layer only (gh-aw's `max-stack` shows the pattern). Treat it as a v2+ experiment, not a feature.
+**The narrow case where stacks help**: a strictly linear chain (each task exactly one open parent, at most one child) in one repo, executed serially by one worker at a time, where the bottleneck is slow human review of layered diffs (e.g. schema -> API route -> UI). If you ever want that: dispatch children serially, have the **dispatcher** (not the worker) call `POST /repos/{o}/{r}/stacks` on already-open PRs, forbid worker force-push, never delete a parent branch that is a base of an open child PR, and gate your PR workflows to run on the top layer only (gh-aw's `max-stack` shows the pattern). Treat it as a v2+ experiment, not a feature.
 
 ## 5. Distribution plan
 
-### Files added to pipao-v2
+### Files added to the target repo
 
 ```
 .agents/skills/kanban/SKILL.md            # spec-only frontmatter (name, description, license, compatibility, metadata, allowed-tools)
@@ -213,14 +213,14 @@ Taskfile.yml (targets)                    # kanban:dispatch, kanban:gc, kanban:b
 Generated only when a harness is enabled (`ghk init --harness copilot|codex`), from one template so the protocol text lives once:
 `.github/agents/kanban-worker.agent.md`, `.github/hooks/kanban.json` (`agentStop` block for CLI; inert on cloud), `.github/workflows/copilot-setup-steps.yml`, `.codex/agents/kanban-worker.toml`, `.codex/hooks.json`, `.codex/config.toml` `[mcp_servers.kanban]`.
 
-The CLI + skill live in a **standalone repo** (`emyann/ghkanban`, npm `ghkanban`), not in `packages/` of pipao-v2, so other orgs can adopt it. The Claude plugin is an entry in the existing `repolore` marketplace. Because Claude and Copilot both read `.claude-plugin/plugin.json` but disagree on `hooks/hooks.json` schema and `agents/*.md` vs `agents/*.agent.md`, ship **separate plugin directories** (`plugins/kanban-claude`, `plugins/kanban-copilot`, `plugins/kanban-codex` with `.codex-plugin/plugin.json`) built from one source.
+The CLI + skill live in a **standalone repo** (`emyann/ghkanban`, npm `ghkanban`), not inside the adopting repo, so other orgs can adopt it. The Claude plugin is an entry in the existing `repolore` marketplace. Because Claude and Copilot both read `.claude-plugin/plugin.json` but disagree on `hooks/hooks.json` schema and `agents/*.md` vs `agents/*.agent.md`, ship **separate plugin directories** (`plugins/kanban-claude`, `plugins/kanban-copilot`, `plugins/kanban-codex` with `.codex-plugin/plugin.json`) built from one source.
 
-### Install (pipao-v2, Claude user)
+### Install (the target repo, Claude user)
 
 ```bash
 # Free path — the whole thing
 npx skills add emyann/ghkanban --skill kanban -a claude-code -a codex   # .agents/skills + symlink + skills-lock.json
-npx ghk init --board default --profiles claude     # labels, board.yml, doc sections, import 38 issues as kb:status:triage; no secrets, uses `gh auth`
+npx ghk init --board default --profiles claude     # labels, board.yml, doc sections, import the open issues as kb:status:triage; no secrets, uses `gh auth`
 task kanban:dispatch                               # 60-s laptop loop
 
 # Only if you want work to continue with the laptop closed (Actions minutes)
@@ -256,7 +256,7 @@ The board never costs money. Moving down the table buys laptop-off execution and
 - **Agent Skills**: SKILL.md uses only the six spec fields; validated with `skills-ref validate`; `.agents/skills` is the canonical location (Codex reads only that; Copilot reads it; Claude reads the symlink). `$ARGUMENTS`, `context: fork`, `hooks` frontmatter are not used in the shared skill; Claude sugar lives in the plugin.
 - **MCP**: `ghk mcp` exposes `kanban_show|heartbeat|complete|block|request_review|request_changes|comment|create|link|unblock` as a stdio server that is a pure wrapper of the CLI (one code path); `.mcp.json` is read verbatim by Claude Code and Copilot CLI; `.codex/config.toml` and `.vscode/mcp.json` are generated.
 - **AGENTS.md / CLAUDE.md**: both carry the same three-line instruction; nearest-file precedence works in the monorepo.
-- Hooks in `.claude/settings.json` are gated on `KB_TASK` being set so unrelated sessions in pipao-v2 are untouched.
+- Hooks in `.claude/settings.json` are gated on `KB_TASK` being set so unrelated sessions in that repo are untouched.
 
 ## 6. Roadmap
 
@@ -264,7 +264,7 @@ The board never costs money. Moving down the table buys laptop-off execution and
 - `ghk init|create|list|show|link|unlink|promote|claim|heartbeat|complete|block|unblock|comment|log|dispatch|gc|doctor` as a single-file Node CLI over `gh api` with `X-GitHub-Api-Version: 2026-03-10`, `--json` everywhere, error text that never suggests destructive commands.
 - `kb:*` labels, body block, `blocked_by` sequencing, `recompute_ready` from `blockedBy{state}`, lock ref `refs/kb/locks/<n>/<k>` with 201/409/other handling, CAS heartbeat + LOCK_LOST, run comment, 1h reclaim with local kill, `max_retries` + `gave_up`.
 - `ghk dispatch --loop 60s` spawning `claude -p --worktree ... --json-schema`; Stop hook (2 nudges) via the skills-dir plugin; outbox for outages.
-- SKILL.md + symlink + CLAUDE.md/AGENTS.md sections; import 5 of the 38 issues; PR with `Closes #N`; `active_pr` guard.
+- SKILL.md + symlink + CLAUDE.md/AGENTS.md sections; import a handful of the open issues; PR with `Closes #N`; `active_pr` guard.
 
 **v1 (weeks 2-4, "runs when the laptop is closed"):**
 - `kanban-dispatch.yml` (events + 15-min sweeper) and `kanban-worker-claude.yml` (claude-code-action, plugin, post-step protocol_violation, `workflow_run` crash detection, run cancel on reclaim).
