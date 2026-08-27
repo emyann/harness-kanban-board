@@ -7,7 +7,11 @@
 # straight from the registry and runs it. That last job is the only thing here that proves `npx hkb-cli`
 # works for a stranger; everything before it only proves the repository is healthy.
 #
-# Needs one repository secret: NPM_TOKEN, an npm automation token. See docs/releasing.md.
+# No secrets. npm publishes this package through a *trusted publisher* — an identity on npmjs.com bound
+# to this repository and to this file by name — so the npm CLI trades the job's OIDC token for a
+# short-lived publish credential and a provenance attestation, and nothing here reads a token. Renaming
+# this workflow, or moving the publish into another one, breaks releases until the trusted publisher on
+# npmjs.com is updated to match. See docs/releasing.md.
 name: release
 
 on:
@@ -29,16 +33,18 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      id-token: write # provenance: npm exchanges this OIDC token for a signed attestation
+      id-token: write # the whole authentication story: npm exchanges this OIDC token for a credential
     outputs:
       version: ${{ steps.gate.outputs.version }}
       published: ${{ steps.publish.outputs.published }}
     steps:
       - uses: actions/checkout@v4
+      # No `registry-url`: that option exists only to write an `.npmrc` that reads `NODE_AUTH_TOKEN`,
+      # and there is no token any more. registry.npmjs.org is npm's default, and the OIDC exchange
+      # wants an unauthenticated npm to start from.
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          registry-url: "https://registry.npmjs.org"
 
       # The same three runs test.yml does on every push: same signal, and a tag can point at a commit
       # that never went through a pull request.
@@ -68,26 +74,49 @@ jobs:
           fi
           echo "version=${pkg}" >> "$GITHUB_OUTPUT"
 
-      # A fork gets no secrets, and a repo whose token has not been created yet should say what to do
-      # once rather than fail red on a tag that is otherwise fine.
-      - id: preflight
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Trusted publishing is an exchange the npm CLI performs itself, and it only exists in npm
+      # >= 11.5.1 on Node >= 22.14. Node 22 still bundles npm 10, so the runner's npm is upgraded here
+      # rather than hoped for — and then both are checked, because an npm that quietly stayed on 10
+      # fails later as "need auth", which points at a token that no longer exists.
+      - id: runner
+        name: node >= 22.14, npm >= 11.5.1
         run: |
-          if [ -n "$NPM_TOKEN" ]; then
+          npm install -g npm@latest
+          atleast() { [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" = "$1" ]; }
+          node="$(node -p 'process.versions.node')"
+          npm="$(npm --version)"
+          echo "node ${node}, npm ${npm}"
+          if ! atleast 22.14.0 "$node"; then
+            echo "::error::node ${node} is below 22.14.0, the floor npm trusted publishing documents. Raise node-version in .github/workflows/release.yml."
+            exit 1
+          fi
+          if ! atleast 11.5.1 "$npm"; then
+            echo "::error::npm ${npm} is below 11.5.1, so it cannot exchange this job's OIDC token for a publish credential — and there is no npm token to fall back on. 'npm install -g npm@latest' did not take; check the step above."
+            exit 1
+          fi
+
+      # A fork has no trusted publisher on npmjs.com, and no token to fall back on: its exchange would
+      # fail with a 404 that explains nothing. Say it once, publish nothing, and stay green — the tag
+      # is fine, it is just not the repository npm trusts. Which repository that is, is the one
+      # package.json already names, so it is not spelled out a second time here.
+      - id: preflight
+        name: this is the repository npm trusts
+        run: |
+          home="$(node -p "require('./package.json').repository.url.replace(/^.*github\.com[:/]/, '').replace(/\.git$/, '')")"
+          if [ "$GITHUB_REPOSITORY" = "$home" ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::NPM_TOKEN is not set, so nothing was published. Create an npm automation token (npm token create --read-only=false) and run: gh secret set NPM_TOKEN"
+            echo "::notice::${GITHUB_REPOSITORY} is not ${home}, so nothing was published — the tag and the tests are fine, this simply is not the repository npm publishes from. Publishing needs a trusted publisher on npmjs.com bound to ${home} and to release.yml; a fork has no such identity, and this workflow reads no npm token to fall back on. To release a fork, point package.json's repository at it and configure a trusted publisher for your own package name."
           fi
 
-      # --provenance needs id-token: write above; package.json also sets publishConfig.provenance, so
-      # a publish that cannot attest fails instead of quietly shipping unsigned.
+      # No `env:` and no secret: the credential comes from the OIDC exchange `id-token: write` above
+      # makes possible, and so does the attestation. `--provenance` is belt and braces — package.json
+      # sets publishConfig.provenance, so a publish that cannot attest fails rather than quietly
+      # shipping unsigned, whether or not the flag is here.
       - id: publish
         if: steps.preflight.outputs.ready == 'true'
         name: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           npm publish --provenance --access public
           echo "published=true" >> "$GITHUB_OUTPUT"
