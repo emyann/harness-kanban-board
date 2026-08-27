@@ -161,12 +161,12 @@ stopped by the dispatcher once their attempt has ended. `hkb show <n>` prints th
 `claude-track` is the same launcher pointed at a whole **track** — a root task plus everything still blocking it,
 usually what `/kanban:decompose` just materialized. One session executes the subgraph in dependency order instead of
 one cold session per node, so a dependent pair costs no tick of latency and no re-derived context; the board is
-unchanged, because the runner still claims each node, works it, and finishes it with its own terminal verb. Every
-node stays a durable checkpoint, so a runner that dies leaves a board the ordinary dispatcher finishes node by node —
-and a root that has had one track attempt is never handed to a second runner. Put it on the **root only**
+unchanged, because the track runner still claims each node, works it, and finishes it with its own terminal verb. Every
+node stays a durable checkpoint, so a track runner that dies leaves a board the ordinary dispatcher finishes node by node —
+and a root that has had one track attempt is never handed to a second track runner. Put it on the **root only**
 (`hkb adopt <root> --agent claude-track --status todo`) and give it a `max_runtime` for the whole track. A track
 costs one `max_in_progress` slot however many nodes it holds; per-node `kb.paths` still guard against everything else
-running. Cross-harness tracks are out of scope: a node on a profile outside the runner's `track_agents` simply makes
+running. Cross-harness tracks are out of scope: a node on a profile outside the track runner's `track_agents` simply makes
 the track un-claimable and the board falls back to node dispatch. See
 [Tracks](skills/kanban/references/protocol.md#tracks--the-second-execution-engine).
 
@@ -225,17 +225,17 @@ and until `KB_TOKEN` exists the dispatcher prints a `::notice::` saying so and d
 `workflow_run` (a worker finishing), `workflow_dispatch` — with `schedule: */15` as a **sweeper only**, for the
 things no event announces: a worker that died, a `scheduled_at` that came due. `concurrency: kb-dispatch-<board>`
 with `cancel-in-progress: false` keeps it to one tick at a time, because a cancelled tick can leave a claimed
-lock ref with no worker behind it. It passes `--profiles claude-action`, so a runner claims only the profile it
-can actually launch and leaves your laptop's `claude` tasks alone; reclaim, promote and reconcile still cover the
+lock ref with no worker behind it. It passes `--profiles claude-action`, so an Actions runner claims only the profile
+it can actually launch and leaves your laptop's `claude` tasks alone; reclaim, promote and reconcile still cover the
 whole board on every tick.
 
 **`kanban-worker-claude.yml`** is one attempt on one task. The `claude-action` profile's launch does not start a
 worker locally — it is `gh workflow run kanban-worker-claude.yml -f task=<n> -f attempt=<k>` and exits, so the
 attempt is recorded as `remote`: no pid, no background job, and its heartbeat (the same CAS on
-`refs/kb/locks/<n>/<k>`) plus `max_runtime` are the whole liveness check. On the runner, a step turns
+`refs/kb/locks/<n>/<k>`) plus `max_runtime` are the whole liveness check. On the Actions runner, a step turns
 `hkb context <n>` into the prompt for [`anthropics/claude-code-action@v1`](https://github.com/anthropics/claude-code-action)
 — the same brief a local worker is launched with, the same allowlist, the same `Closes #<n>` draft PR, the same
-terminal verb. There is no `Stop` hook on a runner, so a final `if: always()` step ends an attempt that finished
+terminal verb. There is no `Stop` hook on an Actions runner, so a final `if: always()` step ends an attempt that finished
 without one (`hkb block … --kind transient`) instead of leaving it `running` until the stale reclaim.
 
 **The honest latency.** The 60-second cadence exists only while your laptop loop runs. Actions' cron floor

@@ -431,7 +431,7 @@ export function compareVersions(a, b) {
 
 export const SAFE_BUILTINS = ['cd', 'pwd', 'true', 'false', 'echo', 'printf', 'test', '[', 'env', 'which', 'command', 'type', 'sleep', 'time', 'set', 'export'];
 export const DENY_PATTERNS = [
-  { re: /\bhkb\s+dispatch\b/, why: 'workers never run the dispatcher — it is what dispatched you; a second dispatcher against the live board double-claims tasks. Test dispatch logic with the fake-gh harness (node --test test/dispatch.test.js)' },
+  { re: /\bhkb\s+dispatch\b/, why: 'workers never run the dispatcher — it is what dispatched you; a second dispatcher against the live board double-claims tasks. Test dispatch logic with the fake-gh test double (node --test test/dispatch.test.js)' },
   { re: /\b(pkill|killall)\b|\bkill\s+(-\w+\s+)?[0-9]/, why: 'workers do not signal other processes' },
   { re: /git\s+push[^|;&]*(\s--force\b|\s-f\b|\s--force-with-lease)/, why: 'force-push is forbidden by the kanban protocol' },
   { re: /\bsudo\b/, why: 'no privilege escalation in a worker' },

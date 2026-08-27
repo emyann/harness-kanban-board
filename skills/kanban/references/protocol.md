@@ -2,6 +2,21 @@
 
 Everything that must survive a crash lives in GitHub. Nothing here needs a paid plan.
 
+## Glossary
+
+hkb has exactly **three seats** — operator, dispatcher, worker. Everything else in this table is vocabulary, not a role.
+
+| Word | Is | Is not |
+|---|---|---|
+| **operator** | the human who owns the repo, the token and the scope: files and sharpens cards, steers by comment, reviews and merges, answers `kb:needs-human`, restarts a dispatcher that exited 4. "you", in a worker prompt | a seat an agent owns. An agent session may drive these verbs; the approvals and the credentials stay with the human |
+| **dispatcher** | the tick (`hkb dispatch`): reconciles labels, locks and attempts against the graph already on the cards | an orchestrator. It holds no workflow and has no LLM in it; the graph lives on the cards as issue dependencies |
+| **worker** | one session holding one attempt on one task — Claude Code, Copilot CLI, Codex, an Actions job, or the operator running the verbs by hand | a person, and not a profile — the profile only says *how* to launch one |
+| *reviewer* | a **per-card gate**: `--reviewer` is **always a GitHub user**, requested on the PR — never a profile name | a seat. Nothing dispatches to a reviewer; the card sits in *review* until the PR merges |
+| *track runner* | a **worker mode**: one session executing a root and everything still blocking it, node by node (see *Tracks*). Distinct from an **Actions runner**, which is a GitHub-hosted machine a worker may run on | a fourth seat, or a second protocol |
+| *profile* | a **harness adapter** in `.kanban/board.json`: launch template + caps + heartbeat mode. `kb:agent:<profile>` says which one a task runs on | the model, the machine, or a person |
+| *host* | **machine identity** (recorded per attempt), so the tick only checks a pid on the machine that owns it | a profile — one host runs many, one profile runs on many |
+| *supervisor* | whatever restarts a dispatcher that exited 4: cron, systemd, Actions, or the operator | a judgment seat. It restarts a process; it decides nothing |
+
 ## Task = issue
 
 | Concern | Where | Notes |
@@ -12,7 +27,7 @@ Everything that must survive a crash lives in GitHub. Nothing here needs a paid 
 | Needs a human | label `kb:needs-human` | orthogonal flag; set on gave_up, block loops, most block kinds |
 | Machine fields | `<!-- kb: {...} -->` block at the top of the body | `priority, workspace, max_runtime, max_retries, model, skills[], paths[], scheduled_at, idempotency_key, goal`. Malformed → defaults, never a crash |
 | Dependencies | GitHub issue dependencies: child **blocked by** parent | Hermes parent→child. A blocker counts as done only when closed as *completed* |
-| Attempts (Hermes `runs`) | one `<!-- kb-run -->` comment, fenced JSON | `attempts[] {attempt, profile, host, pid, started_at, heartbeat_at, lock_sha, ended_at, outcome, summary, reason, log, session_id, transcript_path, total_cost_usd, num_turns, duration_ms}`, `failures`, `block_loops`. `lock_sha` is where the lock ref started, so the worker's first CAS heartbeat knows what to lease on. The session fields are recorded once, by the Stop hook and the dispatcher: `hkb show <n>` prints them with a `claude --resume <id>` line. A track attempt also carries `track: true` and `track_nodes[]` — the subgraph it was handed, and the marker that says this root has had its one go at the fast engine. An attempt from a `"mode": "trigger"` profile (`claude-action`) carries `remote: true`: the launch only *started* work elsewhere, so there is no pid or job anywhere to look at. An attempt from `hkb claim <n>` with no `--spawn` carries `manual: true` — a human claimed it and is working it in their own terminal, so there is no pid either; both are judged by the heartbeat alone |
+| Attempts (Hermes `runs`) | one `<!-- kb-run -->` comment, fenced JSON | `attempts[] {attempt, profile, host, pid, started_at, heartbeat_at, lock_sha, ended_at, outcome, summary, reason, log, session_id, transcript_path, total_cost_usd, num_turns, duration_ms}`, `failures`, `block_loops`. `lock_sha` is where the lock ref started, so the worker's first CAS heartbeat knows what to lease on. The session fields are recorded once, by the Stop hook and the dispatcher: `hkb show <n>` prints them with a `claude --resume <id>` line. A track attempt also carries `track: true` and `track_nodes[]` — the subgraph it was handed, and the marker that says this root has had its one go at the fast engine. An attempt from a `"mode": "trigger"` profile (`claude-action`) carries `remote: true`: the launch only *started* work elsewhere, so there is no pid or job anywhere to look at. An attempt from `hkb claim <n>` with no `--spawn` carries `manual: true` — the operator claimed it and is working it in their own terminal, so there is no pid either; both are judged by the heartbeat alone. `profile` is normally a board profile, but three values are **reserved and synthetic** (the row also carries `synthetic: true`, and opens and closes in the same instant): `dispatcher` — the tick wrote the row itself, out of retries (`gave_up`); `reviewer` — `hkb request-changes` sent the card back (`changes_requested`); `human` — the operator ran a terminal verb by hand on a task with no open attempt and no `kb:agent:*` label. Do not name a board profile after one of them |
 | Structured handoff | `<!-- kb-result -->` comment per completion / review request | `{summary, metadata{changed_files, verification, dependencies, residual_risk, retry_notes}, artifacts[]}` |
 | Events | issue timeline + attempt rows (`hkb log`) | |
 | Claim | git ref `refs/kb/locks/<n>/<attempt>` | create = atomic claim (201 claimed / held on **422 "Reference already exists"** — the observed duplicate response, verified 2026-08-26 — or 409 / anything else unknown → back off) |
@@ -209,7 +224,7 @@ through shell quoting. Per field, inline > file > stdin.
 |---|---|
 | stdin (**recommended**) | `--from-stdin` + one JSON object `{summary, metadata, artifacts, reason, kind, reviewer}`; unknown keys are refused |
 | files | `--summary-file <path>` `--metadata-file <path.json>` `--reason-file <path>`; `--metadata <path>` reads a file when the value does not start with `{` |
-| inline | `--summary ".." --metadata '{..}' --artifacts a,b` · `block <n> "reason" --kind <kind>` · `--reviewer <profile>` |
+| inline | `--summary ".." --metadata '{..}' --artifacts a,b` · `block <n> "reason" --kind <kind>` · `--reviewer <github-user>` |
 
 ```bash
 hkb complete "$KB_TASK" --from-stdin <<'EOF'
@@ -227,4 +242,6 @@ outbox while GitHub is unreachable is stored in its inline form, so replay needs
 
 ## Exit codes
 
-`0` ok · `1` error · `2` usage / wrong state · `3` LOCK_LOST (stop immediately)
+`0` ok · `1` error · `2` usage / wrong state · `3` LOCK_LOST (stop immediately) · `4` the dispatcher loop gave itself
+up — its self-heal ladder ran out, so it died with a reason instead of ticking on. Only `hkb dispatch --loop` ever
+exits 4, and only a **supervisor** (cron, systemd, Actions) or the operator starts a fresh one. A worker never sees it.

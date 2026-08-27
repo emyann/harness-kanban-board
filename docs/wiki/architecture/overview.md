@@ -7,11 +7,11 @@ audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: 06800a9f1f5892805e1948676f9a9ebb49eb9169
+    sha: 4c9d2573deffdac089d2d7f0093526996d73a0b7
   - path: src/gh.js
     sha: b728c07d7f5e7bfd29e3dc4c2e0e2786d29522ee
   - path: src/model.js
-    sha: 69cb571dff7e7afe74f661db7ddac98f27941715
+    sha: 9c5d337e415d19c02cf4881c8c94bf0ec926a5c2
   - path: src/tasks.js
     sha: 11668a9b08e59288eb5ebf982f7a35a1480aa84a
   - path: src/lock.js
@@ -21,7 +21,7 @@ covers:
   - path: src/dispatch.js
     sha: c3f9d2fbfb5e7561984d31f75ad78394539bc503
   - path: src/context.js
-    sha: 77ada2083b7d355f8de6ea824ca40bdaab1e712a
+    sha: 0de994e57a7d7540c632757864e1af8027cffa03
   - path: src/hook.js
     sha: 8129f18ad4e36f140388af7abb66d95d064d337a
   - path: src/board.js

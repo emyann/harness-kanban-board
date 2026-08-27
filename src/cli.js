@@ -158,7 +158,7 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
               adopt <n>... [--agent p]     comment <n> "text"      log <n> [--json]    status <n>
   worker      heartbeat <n> [--note ..]     complete <n> --summary ".." [--metadata JSON|path.json] [--artifacts a,b]
               block <n> "reason" [--kind dependency|needs_input|capability|transient]     unblock <n>...
-              request-review <n> --summary ".." [--metadata ..] [--reviewer p]     request-changes <n> "reason"
+              request-review <n> --summary ".." [--metadata ..] [--reviewer <github-user>]   request-changes <n> "reason"
               complete|block|request-review also take --summary-file <p> --metadata-file <p> --reason-file <p>, or
               --from-stdin with one JSON object {summary, metadata, artifacts, reason, kind, reviewer} (no shell quoting)
   dispatch    dispatch [--loop S] [--max N] [--profiles a,b] [--dry-run]     claim <n> [--profile p] [--spawn]
@@ -172,7 +172,9 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
                     hkb init --mcp writes .mcp.json and prints the Codex and VS Code equivalents
   plumbing    hook stop      version
 
-  Global: --board <slug> (or KB_BOARD), --json. Exit codes: 0 ok · 1 error · 2 usage/state · 3 LOCK_LOST.
+  Global: --board <slug> (or KB_BOARD), --json.
+  Exit codes: 0 ok · 1 error · 2 usage/state · 3 LOCK_LOST (stop now) · 4 the dispatcher loop gave itself up
+              (a supervisor — cron, systemd, Actions — or you starts a fresh one).
 `;
 
 // Single source of truth for the version: package.json, resolved relative to this file (works from any cwd, no build step).
@@ -392,7 +394,7 @@ export async function main(argv) {
     }
     case 'request-review': {
       const [n] = nums(rest);
-      if (!n) throw usage('hkb request-review <n> --summary ".." [--metadata JSON|path] [--reviewer p] | --summary-file p --metadata-file p | --from-stdin');
+      if (!n) throw usage('hkb request-review <n> --summary ".." [--metadata JSON|path] [--reviewer <github-user>] | --summary-file p --metadata-file p | --from-stdin');
       const p = resolveTerminalInput(cmd, flags, rest);
       const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || envAttempt(n) });
       const r = await withOutbox(ctx, replay, () => requestReview(ctx, n, { summary: p.summary, metadata: p.metadata, reviewer: p.reviewer, attempt: flags.attempt }));
@@ -426,10 +428,10 @@ export async function main(argv) {
       return 0;
     }
     case 'dispatch': {
-      if (process.env.KB_TASK) throw usage(`you are worker for task #${process.env.KB_TASK} — workers never run the dispatcher (it is what dispatched you, and a second one against the live board causes double-claims). Test dispatch logic with the fake-gh harness: node --test test/dispatch.test.js`);
+      if (process.env.KB_TASK) throw usage(`you are worker for task #${process.env.KB_TASK} — workers never run the dispatcher (it is what dispatched you, and a second one against the live board causes double-claims). Test dispatch logic with the fake-gh test double: node --test test/dispatch.test.js`);
       const max = flags.max ? Number(flags.max) : Infinity;
       // `--profiles a,b`: claim only tasks on these profiles. The Actions dispatcher passes
-      // `--profiles claude-action` so a runner never tries to launch a laptop-only harness.
+      // `--profiles claude-action` so an Actions runner never tries to launch a laptop-only harness.
       const profiles = flags.profiles ? list(str(flags.profiles), '--profiles') : null;
       for (const p of profiles || []) if (!ctx.cfg.profiles[p]) throw usage(`--profiles: no profile "${p}" in board.json. Known: ${Object.keys(ctx.cfg.profiles).join(', ')}`);
       if (flags.loop) {
