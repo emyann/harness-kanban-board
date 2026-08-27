@@ -11,7 +11,7 @@ undone: turning the tick on later is one command against a board that already ha
 ## Day one
 
 ```bash
-npx hkb-cli init                 # labels, .kanban/board.json, the worker skill, the Stop hook, the CLAUDE.md/AGENTS.md section
+npx hkb-cli init                 # labels, .kanban/board.json, the worker skill, the Stop + PreToolUse hooks, the CLAUDE.md/AGENTS.md section
 npx hkb-cli doctor --api         # gh auth, labels, GraphQL fields, the issue-dependency API and lock-ref CAS
 ```
 

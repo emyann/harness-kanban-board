@@ -1,5 +1,6 @@
 // `hkb init --harness copilot|codex`: the files each harness gets generated, the launch templates
-// that use them, and the stop-hook payload every harness feeds to `hkb hook stop`.
+// that use them, and the stop-hook payload every harness feeds to `hkb hook stop`. Plus the two
+// hooks the default harness gets in `.claude/settings.json`, and what init says it wrote.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -7,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { harnessFiles, installHarness, resolveProfiles, HARNESSES, HARNESS_PROFILE, packageSkillDir } from '../src/init.js';
+import { harnessFiles, installHarness, installClaudeHooks, hookSummary, CLAUDE_HOOKS, resolveProfiles, HARNESSES, HARNESS_PROFILE, packageSkillDir } from '../src/init.js';
 import { parseArgs } from '../src/cli.js';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, ensureWorktree } from '../src/board.js';
 import { expandLaunch, spawnWorker, tick } from '../src/dispatch.js';
@@ -349,4 +350,74 @@ test('this repo ships the codex templates the generator reads', () => {
   for (const f of ['hooks.json', 'notes.md']) {
     assert.ok(fs.existsSync(path.join(REPO, 'templates', 'codex', f)), `templates/codex/${f}`);
   }
+});
+
+// ---------- claude, the default harness: the hooks init writes into .claude/settings.json ----------
+// Unlike the generated harness files, these go into a file the operator shares with every other
+// session in the repo. So: touch nothing else, and name everything written.
+
+const SETTINGS = path.join('.claude', 'settings.json');
+const readSettings = (root) => JSON.parse(fs.readFileSync(path.join(root, SETTINGS), 'utf8'));
+const commandsOf = (groups) => groups.flatMap((g) => g.hooks.map((h) => h.command));
+
+test('installClaudeHooks writes both hooks, and reports both as added', () => {
+  const root = scratch();
+  assert.deepEqual(installClaudeHooks(root, () => {}), ['Stop', 'PreToolUse']);
+  const s = readSettings(root);
+  assert.deepEqual(Object.keys(s.hooks), ['Stop', 'PreToolUse'], 'no other event should be claimed');
+  for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
+    assert.equal(s.hooks[event].length, 1);
+    const [group] = s.hooks[event];
+    assert.equal(group.matcher, '*');
+    assert.deepEqual(group.hooks.map((h) => h.type), ['command']);
+    assert.equal(group.hooks[0].timeout, 30);
+    assert.match(group.hooks[0].command, new RegExp(`hkb.* hook ${verb}$`), `${event} must run \`hkb hook ${verb}\``);
+  }
+  assert.deepEqual(installClaudeHooks(root, () => {}), [], 'idempotent: a second init adds nothing');
+});
+
+test('installClaudeHooks leaves the rest of settings.json alone', () => {
+  const root = scratch();
+  fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(root, SETTINGS), JSON.stringify({
+    model: 'opus',
+    hooks: { Stop: [{ matcher: '*', hooks: [{ type: 'command', command: 'make lint' }] }] },
+  }, null, 2));
+
+  assert.deepEqual(installClaudeHooks(root, () => {}), ['Stop', 'PreToolUse']);
+
+  const s = readSettings(root);
+  assert.equal(s.model, 'opus', 'settings that are not ours must survive');
+  assert.deepEqual(commandsOf(s.hooks.Stop).filter((c) => c === 'make lint'), ['make lint'], 'so must the operator\'s own hook');
+  assert.equal(commandsOf(s.hooks.Stop).length, 2);
+});
+
+test('installClaudeHooks reports a settings.json it cannot parse rather than overwriting it', () => {
+  const root = scratch();
+  fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(root, SETTINGS), '{ not json');
+  const said = [];
+
+  assert.equal(installClaudeHooks(root, (s) => said.push(s)), null);
+
+  assert.equal(fs.readFileSync(path.join(root, SETTINGS), 'utf8'), '{ not json', 'the file is the operator\'s, not ours to rewrite');
+  assert.match(said.join('\n'), /not valid JSON/);
+});
+
+test('init names both hooks it wrote, and says what the second one is for', () => {
+  const fresh = hookSummary(['Stop', 'PreToolUse']);
+  assert.match(fresh, /^added Stop and PreToolUse hooks to \.claude\/settings\.json/);
+  assert.match(hookSummary([]), /^Stop and PreToolUse hooks already present in \.claude\/settings\.json/);
+  assert.match(hookSummary(['PreToolUse']), /^added PreToolUse hook to \.claude\/settings\.json; Stop hook already there/);
+  for (const line of [fresh, hookSummary([]), hookSummary(['PreToolUse'])]) {
+    for (const event of Object.keys(CLAUDE_HOOKS)) assert.ok(line.includes(event), `${event} goes unnamed in: ${line}`);
+    assert.match(line, /inert unless KB_TASK is set/, 'an operator reading this has to know both are no-ops in their own sessions');
+    assert.match(line, /PreToolUse is the worker permission policy/, 'and what the second one is');
+  }
+});
+
+test('`hkb help` lists every hook verb the CLI routes', () => {
+  const help = spawnSync(process.execPath, [path.join(REPO, 'bin', 'hkb.js'), 'help'], { encoding: 'utf8' });
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /hook stop\|pretool/);
 });

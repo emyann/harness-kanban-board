@@ -9,7 +9,7 @@ no server, no database and no npm dependencies.
 Three commands, in a repo you can push to, with [`gh`](https://cli.github.com) already logged in:
 
 ```bash
-npx hkb-cli init                 # labels, .kanban/board.json, the worker skill, the Stop hook, a CLAUDE.md/AGENTS.md section
+npx hkb-cli init                 # labels, .kanban/board.json, the worker skill, the Stop + PreToolUse hooks, a CLAUDE.md/AGENTS.md section
 npx hkb-cli doctor --api         # verifies gh auth, labels, GraphQL fields, the issue-dependency API and lock-ref CAS
 npx hkb-cli dispatch --loop 60   # the 60-second dispatcher, on your machine
 ```
@@ -343,6 +343,7 @@ tick logs the fix once an hour and carries on.
 | `kanban_complete(summary, metadata)` | `<!-- kb-result -->` comment; open PR → *review*, else issue closed |
 | worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link`, or the same nine as MCP tools (`hkb mcp`) |
 | stop nudge | Claude Code / Codex `Stop`, Copilot CLI `agentStop` hook (`hkb hook stop`, 2 nudges, inert unless `KB_TASK` is set) |
+| worker permissions | Claude Code `PreToolUse` hook (`hkb hook pretool`, also inert unless `KB_TASK` is set) — file tools confined to the worktree, `hkb dispatch`/`kill`/force-push/`sudo`/`rm -rf <abs>` denied outright, everything else checked against the profile's allowlist: allow or deny, never a prompt. `hkb init` writes it beside the Stop hook |
 | kanban dashboard | `hkb serve` — local page over the live board; drag-drop calls the same verbs |
 | live event stream | `hkb watch` / `hkb tail <n>` — conditional `GET` with `If-None-Match`; an unchanged board answers 304 and is not charged |
 | runs/spend report | `hkb stats` — the same labels and run comments, rolled up: outcomes, duration, spawns vs the daily cap, `total_cost_usd` per profile |

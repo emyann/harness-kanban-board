@@ -170,7 +170,7 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
               both poll with If-None-Match: an unchanged board answers 304 and costs no rate limit
   mcp         mcp   the same verbs as MCP tools (kanban_show, kanban_complete, ...) on stdio;
                     hkb init --mcp writes .mcp.json and prints the Codex and VS Code equivalents
-  plumbing    hook stop      version
+  plumbing    hook stop|pretool      version
 
   Global: --board <slug> (or KB_BOARD), --json.
   Exit codes: 0 ok · 1 error · 2 usage/state · 3 LOCK_LOST (stop now) · 4 the dispatcher loop gave itself up

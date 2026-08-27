@@ -15,14 +15,14 @@ covers:
   - path: src/context.js
     sha: 0de994e57a7d7540c632757864e1af8027cffa03
   - path: src/cli.js
-    sha: 4c9d2573deffdac089d2d7f0093526996d73a0b7
+    sha: 3e66491fa28c4549c09723ae57caf94f1d1c6322
   - path: src/lifecycle.js
     sha: 67b6fb458425948ce61d6a7a324649cb79e1c648
   - path: skills/kanban/SKILL.md
     sha: cd0fdfe8a6ff483707ea6b406cf139a28f7f14f6
   - path: skills/kanban/references/protocol.md
     sha: 85314014a25ebe70e720cc8ac635c2e2f45bed46
-generated_at_commit: 833b82c
+generated_at_commit: abf0c05
 last_refreshed: 2026-08-27
 related: [concepts/roles-and-seats, architecture/overview, concepts/board-protocol]
 ---
