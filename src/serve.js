@@ -1,8 +1,8 @@
-// `hkb serve` — a local web board over the live GitHub backend.
+// `hkb serve` — a local web board over the live GitHub backend, for one checkout or several.
 //
-// Frugal by construction: every read is `fetchBoard` (one GraphQL query) cached for the poll interval and
-// shared by every open tab; every write goes through the same lifecycle verb the CLI calls. So the page is
-// authoritative, not a mirror — there is no second source of truth and no extra token scope.
+// Frugal by construction: every read is `fetchBoard` (one GraphQL query per board) cached for the poll
+// interval and shared by every open tab; every write goes through the same lifecycle verb the CLI calls.
+// So the page is authoritative, not a mirror — there is no second source of truth and no extra token scope.
 // No auth: the server binds 127.0.0.1 and refuses cross-origin requests (see checkOrigin).
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,9 +13,9 @@ import {
   latestResult as realLatestResult, parentResults as realParentResults, addComment as realAddComment,
 } from './tasks.js';
 import { promote as realPromote, unblock as realUnblock, block as realBlock, requestChanges as realRequestChanges, archive as realArchive } from './lifecycle.js';
-import { logsDir, kanbanDir } from './board.js';
+import { logsDir, kanbanDir, loadUserBoards, userBoardsFile, contextForPath } from './board.js';
 import { pidAlive } from './dispatch.js';
-import { computeReady, blockerDone, formatSession, resumeCommand } from './model.js';
+import { computeReady, blockerDone, formatSession, resumeCommand, parseRepoSpecs, boardKey, uniqueKeys } from './model.js';
 
 /** The columns of the web board. `archived` is a verb, not a column — archived tasks leave the board. */
 export const COLUMNS = ['triage', 'todo', 'ready', 'running', 'blocked', 'review', 'done'];
@@ -103,12 +103,52 @@ export function boardEtag(cards) {
   return '"' + crypto.createHash('sha1').update(JSON.stringify(cards)).digest('hex').slice(0, 32) + '"';
 }
 
-/** Is a dispatcher loop up on this repo? Local file + pid check, no network. */
+/** Is a dispatcher loop up on this repo? Local file + pid check, no network — so it is per board. */
 export function dispatcherState(root) {
   try {
     const pid = Number(fs.readFileSync(path.join(kanbanDir(root), 'dispatch.pid'), 'utf8').trim());
     return { running: pidAlive(pid), pid: pid || null };
   } catch { return { running: false, pid: null }; }
+}
+
+// ---------- which boards this server holds ----------
+
+/**
+ * The contexts one `hkb serve` shows. The cwd board is always first — it is where the command was run
+ * and `requireBoard()` has already vouched for it — then either `--repos` (explicit wins) or the
+ * user-level list (`hkb serve` with no flags, so a set of repos survives a `cd`).
+ *
+ * A `--repos` path that is not an hkb checkout is fatal: you just typed it. A stale entry in the user
+ * list is a warning and a skip, so a repo you deleted never breaks `hkb serve` everywhere.
+ */
+export function serveContexts(ctx, flags = {}, log = () => {}) {
+  const explicit = flags.repos !== undefined;
+  if (flags.repos === true) { const e = new Error('--repos needs a value, e.g. --repos ../other-repo,../third'); e.exitCode = 2; throw e; }
+  const file = userBoardsFile();
+  const specs = explicit ? parseRepoSpecs(flags.repos) : (loadUserBoards(file) || []);
+  const out = [ctx];
+  for (const spec of specs) {
+    try { out.push(contextForPath(spec.path, spec.board)); } catch (e) {
+      if (explicit) throw e;
+      log(`skipping "${spec.path}" from ${file}: ${e.message}`);
+    }
+  }
+  return out;
+}
+
+/**
+ * Give every board a stable, URL-safe key, and drop the duplicates: two checkouts of the same repo on
+ * the same board are one board, and querying it twice per poll would buy nothing.
+ */
+export function keyBoards(contexts) {
+  const byId = new Map();
+  for (const c of contexts) {
+    const id = `${c.repo.nameWithOwner}#${c.board}`;
+    if (!byId.has(id)) byId.set(id, { id, ctx: c, repo: c.repo.nameWithOwner, board: c.board, root: c.root });
+  }
+  const entries = [...byId.values()];
+  const keys = uniqueKeys(entries.map((e) => boardKey(e.repo, e.board)));
+  return entries.map((e, i) => ({ key: keys[i], ...e }));
 }
 
 // ---------- worker logs ----------
@@ -143,16 +183,25 @@ export function tailFile(file, bytes = 20_000) {
 
 // ---------- request plumbing ----------
 
-/** `/api/tasks/12/log` → { kind: 'log', number: 12 }. Unknown paths → null. */
+/**
+ * `/api/boards/o~r~default/tasks/12/log` → { kind: 'log', number: 12, key: 'o~r~default' }.
+ * The unscoped `/api/tasks/12/...` form is kept (`key: null`) — it is what a single-board server and
+ * anything scripting against it use, and the handler refuses it when several boards make it ambiguous.
+ * Unknown paths → null.
+ */
 export function parseRoute(pathname) {
   if (pathname === '/' || pathname === '/index.html') return { kind: 'page' };
   if (pathname === '/api/board') return { kind: 'board' };
-  const m = /^\/api\/tasks\/(\d+)(?:\/([a-z-]+))?$/.exec(pathname);
-  if (!m) return null;
-  const number = Number(m[1]);
-  if (!m[2]) return { kind: 'task', number };
-  if (m[2] === 'log') return { kind: 'log', number };
-  return { kind: 'verb', number, verb: m[2] };
+  const scoped = /^\/api\/boards\/([A-Za-z0-9._~-]+)\/tasks\/(\d+)(?:\/([a-z-]+))?$/.exec(pathname);
+  const plain = scoped ? null : /^\/api\/tasks\/(\d+)(?:\/([a-z-]+))?$/.exec(pathname);
+  if (!scoped && !plain) return null;
+  if (scoped && scoped[1].includes('..')) return null; // a key is a name, never a path segment to walk
+  const key = scoped ? scoped[1] : null;
+  const number = Number(scoped ? scoped[2] : plain[1]);
+  const tail = scoped ? scoped[3] : plain[2];
+  if (!tail) return { kind: 'task', number, key };
+  if (tail === 'log') return { kind: 'log', number, key };
+  return { kind: 'verb', number, verb: tail, key };
 }
 
 /** Hostname out of a `Host:` header or an origin, brackets and port removed. null when unparsable. */
@@ -259,80 +308,137 @@ export async function startServer(ctx, flags = {}, log = () => {}, deps = {}) {
   const loopback = isLoopback(host);
   const ttlMs = Math.max(2000, (poll - 2) * 1000);
 
-  // One board read per poll interval, shared by every tab: N open pages still cost one GraphQL query.
-  let cache = null; // { at, cards, etag, dispatcher }
-  let inflight = null;
-  let generation = 0; // bumped by every write, so a read that straddled one is never cached
-  const details = new Map(); // number -> { at, payload }
+  /**
+   * Every read below resolves against the board the request names, never against a single ambient
+   * `ctx` — that is the whole point: two repos on one page must not be able to read, tail or write
+   * each other. `deps.contexts` is the test seam; resolution touches git and the filesystem, the
+   * server below does not.
+   */
+  const boards = keyBoards(deps.contexts || serveContexts(ctx, flags, log)).map(boardState);
+  const byKey = new Map(boards.map((b) => [b.key, b]));
+  const keyList = () => boards.map((b) => b.key).join(', ');
 
-  async function boardSnapshot(force = false) {
-    if (!force && cache && Date.now() - cache.at < ttlMs) return cache;
-    if (inflight) return inflight;
-    const g = generation;
-    inflight = (async () => {
-      const tasks = await d.fetchBoard(ctx);
-      const cards = tasks.map(cardOf).sort((a, b) => b.priority - a.priority || a.number - b.number);
-      const snap = { at: Date.now(), cards, etag: boardEtag(cards), dispatcher: dispatcherState(ctx.root) };
-      if (g === generation) cache = snap;
-      return snap;
-    })().finally(() => { inflight = null; });
-    return inflight;
+  // One board read per poll interval per board, shared by every open tab.
+  function boardState(b) {
+    let cache = null; // { at, cards, error, stale, dispatcher }
+    let inflight = null;
+    let generation = 0; // bumped by every write, so a read that straddled one is never cached
+    const details = new Map(); // number -> { at, payload }
+
+    async function snapshot(force = false) {
+      if (!force && cache && Date.now() - cache.at < ttlMs) return cache;
+      if (inflight) return inflight;
+      const g = generation;
+      inflight = (async () => {
+        const prev = cache;
+        let cards = [];
+        let error = null;
+        try {
+          cards = (await d.fetchBoard(b.ctx)).map(cardOf).sort((x, y) => y.priority - x.priority || x.number - y.number);
+        } catch (e) {
+          // One unreachable repo must not blank the others: keep the last good cards and say why.
+          // The failure is cached like a success, so a broken board is not retried on every request.
+          error = e.message;
+          cards = prev?.cards || [];
+          log(`board ${b.key}: ${e.message}`);
+        }
+        const snap = { at: Date.now(), cards, error, stale: !!error && !!prev?.cards.length, dispatcher: dispatcherState(b.ctx.root) };
+        if (g === generation) cache = snap;
+        return snap;
+      })().finally(() => { inflight = null; });
+      return inflight;
+    }
+
+    function invalidate(number) {
+      generation++;
+      cache = null;
+      if (number) { details.delete(number); delete b.ctx._cache[`comments:${number}`]; }
+      else details.clear();
+    }
+
+    async function detail(number, force = false) {
+      const hit = details.get(number);
+      if (!force && hit && Date.now() - hit.at < ttlMs) return hit.payload;
+      delete b.ctx._cache[`comments:${number}`];
+      const task = await d.getTask(b.ctx, number);
+      const { run } = await d.loadRun(b.ctx, number);
+      const [result, parents] = await Promise.all([d.latestResult(b.ctx, number), d.parentResults(b.ctx, task)]);
+      const payload = {
+        ...cardOf(task),
+        // #12 on two boards is two different tasks, so the drawer says which one it is showing.
+        key: b.key,
+        repo: b.repo,
+        board: b.board,
+        bodyText: task.bodyText,
+        kb: task.kb,
+        labels: task.labels,
+        // Attempts carry what `hkb show` prints: the session line, and the command to attach to a live worker.
+        run: { ...run, attempts: (run.attempts || []).map((a) => ({ ...a, session: formatSession(a), resume: resumeCommand(a, number) })) },
+        result,
+        parents: parents.map((p) => ({ number: p.number, title: p.title, state: p.state, summary: p.result?.summary || null })),
+        logs: (run.attempts || []).map((a) => {
+          const file = logPathFor(b.ctx.root, run, number, a.attempt);
+          return { attempt: a.attempt, path: file ? path.relative(b.ctx.root, file) : null, exists: !!file && fs.existsSync(file) };
+        }).filter((l) => l.exists),
+      };
+      details.set(number, { at: Date.now(), payload });
+      return payload;
+    }
+
+    return { ...b, snapshot, invalidate, detail };
   }
 
-  function invalidate(number) {
-    generation++;
-    cache = null;
-    if (number) { details.delete(number); delete ctx._cache[`comments:${number}`]; }
-    else details.clear();
+  /** The board a request names, or the only one there is. Ambiguity is refused, never guessed. */
+  function boardFor(route) {
+    if (route.key) {
+      const b = byKey.get(route.key);
+      if (b) return b;
+      const e = new Error(`no board "${route.key}" on this server — one of ${keyList()}`);
+      e.kind = 'notfound';
+      throw e;
+    }
+    if (boards.length === 1) return boards[0];
+    const tail = route.kind === 'verb' ? `/${route.verb}` : route.kind === 'log' ? '/log' : '';
+    const e = new Error(`#${route.number} is ambiguous: this server holds ${boards.length} boards — call /api/boards/<key>/tasks/${route.number}${tail} instead (keys: ${keyList()})`);
+    e.exitCode = 2;
+    throw e;
   }
 
-  async function detail(number, force = false) {
-    const hit = details.get(number);
-    if (!force && hit && Date.now() - hit.at < ttlMs) return hit.payload;
-    delete ctx._cache[`comments:${number}`];
-    const task = await d.getTask(ctx, number);
-    const { run } = await d.loadRun(ctx, number);
-    const [result, parents] = await Promise.all([d.latestResult(ctx, number), d.parentResults(ctx, task)]);
-    const payload = {
-      ...cardOf(task),
-      bodyText: task.bodyText,
-      kb: task.kb,
-      labels: task.labels,
-      // Attempts carry what `hkb show` prints: the session line, and the command to attach to a live worker.
-      run: { ...run, attempts: (run.attempts || []).map((a) => ({ ...a, session: formatSession(a), resume: resumeCommand(a, number) })) },
-      result,
-      parents: parents.map((p) => ({ number: p.number, title: p.title, state: p.state, summary: p.result?.summary || null })),
-      logs: (run.attempts || []).map((a) => {
-        const file = logPathFor(ctx.root, run, number, a.attempt);
-        return { attempt: a.attempt, path: file ? path.relative(ctx.root, file) : null, exists: !!file && fs.existsSync(file) };
-      }).filter((l) => l.exists),
+  /** Every board, one GraphQL query each, read in parallel. `at` is the oldest read: the honest one. */
+  async function boardsPayload(force = false) {
+    const snaps = await Promise.all(boards.map((b) => b.snapshot(force)));
+    return {
+      at: Math.min(...snaps.map((s) => s.at)),
+      // `fetched_at` is deliberately not in here: it changes every tick and must not bust the ETag.
+      list: boards.map((b, i) => ({
+        key: b.key, repo: b.repo, board: b.board, root: b.root,
+        dispatcher: snaps[i].dispatcher, error: snaps[i].error, stale: snaps[i].stale, tasks: snaps[i].cards,
+      })),
     };
-    details.set(number, { at: Date.now(), payload });
-    return payload;
   }
 
-  async function runVerb(number, verb, body) {
+  async function runVerb(b, number, verb, body) {
     const spec = VERBS[verb];
     if (!spec) { const e = new Error(`unknown verb "${verb}" — one of ${VERB_NAMES.join(', ')}, or move`); e.exitCode = 2; throw e; }
     const missing = missingFields(spec.needs, body);
     if (missing.length) { const e = new Error(`${verb} needs ${missing.join(', ')}`); e.exitCode = 2; e.needs = missing; throw e; }
-    const r = await spec.run(d, ctx, number, body);
-    invalidate(number);
+    const r = await spec.run(d, b.ctx, number, body);
+    b.invalidate(number);
     return r;
   }
 
-  async function move(number, body) {
+  async function move(b, number, body) {
     const to = String(body?.to || '');
-    // A drag is a write, so the decision is made against a fresh read (one GraphQL query), never
-    // against the cached snapshot the page happens to be showing.
-    const card = cardOf(await d.getTask(ctx, number));
+    // A drag is a write, so the decision is made against a fresh read (one GraphQL query) of the
+    // board the card came from, never against the cached snapshot the page happens to be showing.
+    const card = cardOf(await d.getTask(b.ctx, number));
     const decision = moveDecision(card, to);
     if (!decision.ok) { const e = new Error(decision.reason); e.exitCode = 2; e.refused = true; throw e; }
     if (!decision.steps.length) return { number, status: card.status, unchanged: true, note: decision.note };
     const missing = missingFields(decision.needs, body);
     if (missing.length) { const e = new Error(`moving #${number} from ${card.status} to ${to} needs ${missing.join(', ')}`); e.exitCode = 2; e.needs = missing; throw e; }
     let last = null;
-    for (const verb of decision.steps) last = await runVerb(number, verb, body);
+    for (const verb of decision.steps) last = await runVerb(b, number, verb, body);
     return { ...last, requested: to, note: decision.note, landed: last?.status === to ? null : `#${number} landed in ${last?.status}, not ${to}` };
   }
 
@@ -356,26 +462,30 @@ export async function startServer(ctx, flags = {}, log = () => {}, deps = {}) {
 
     if (req.method === 'GET' || req.method === 'HEAD') {
       if (route.kind === 'board') {
-        const snap = await boardSnapshot(url.searchParams.get('refresh') === '1');
-        if (req.headers['if-none-match'] === snap.etag) { res.writeHead(304, { etag: snap.etag, 'cache-control': 'no-store' }); res.end(); return; }
+        const snap = await boardsPayload(url.searchParams.get('refresh') === '1');
+        const etag = boardEtag(snap.list);
+        if (req.headers['if-none-match'] === etag) { res.writeHead(304, { etag, 'cache-control': 'no-store' }); res.end(); return; }
         return sendJson(res, 200, {
-          repo: ctx.repo.nameWithOwner, board: ctx.board, host: ctx.host, columns: COLUMNS, poll,
-          dispatcher: snap.dispatcher, fetched_at: new Date(snap.at).toISOString(), tasks: snap.cards,
-        }, { etag: snap.etag });
+          host: ctx.host, columns: COLUMNS, poll,
+          fetched_at: new Date(snap.at).toISOString(), boards: snap.list,
+        }, { etag });
       }
-      if (route.kind === 'task') return sendJson(res, 200, await detail(route.number, url.searchParams.get('refresh') === '1'));
-      if (route.kind === 'log') {
+      // "which board" only matters once the method is right, so the 405 comes first.
+      if (route.kind !== 'task' && route.kind !== 'log') return sendJson(res, 405, { error: 'POST only' });
+      const b = boardFor(route);
+      if (route.kind === 'task') return sendJson(res, 200, await b.detail(route.number, url.searchParams.get('refresh') === '1'));
+      { // route.kind === 'log'
         const attempt = Number(url.searchParams.get('attempt') || 0);
         if (!Number.isInteger(attempt) || attempt < 1) return sendJson(res, 400, { error: '?attempt=<k> is required' });
-        const { run } = await d.loadRun(ctx, route.number);
-        const file = logPathFor(ctx.root, run, route.number, attempt);
-        if (!file) return sendJson(res, 400, { error: `attempt ${attempt} of #${route.number} logs outside .kanban/logs — refusing to read it` });
+        const { run } = await d.loadRun(b.ctx, route.number);
+        const file = logPathFor(b.ctx.root, run, route.number, attempt);
+        if (!file) return sendJson(res, 400, { error: `attempt ${attempt} of #${route.number} logs outside ${b.repo}'s .kanban/logs — refusing to read it` });
+        const rel = path.relative(b.ctx.root, file);
         const bytes = Math.min(200_000, Math.max(1000, Number(url.searchParams.get('bytes') || 20_000)));
         const t = tailFile(file, bytes);
-        if (!t) return sendJson(res, 404, { error: `no log yet at ${path.relative(ctx.root, file)}`, path: path.relative(ctx.root, file) });
-        return sendJson(res, 200, { number: route.number, attempt, path: path.relative(ctx.root, file), ...t });
+        if (!t) return sendJson(res, 404, { error: `no log yet at ${rel} (${b.repo})`, path: rel, key: b.key });
+        return sendJson(res, 200, { number: route.number, attempt, key: b.key, repo: b.repo, path: rel, ...t });
       }
-      return sendJson(res, 405, { error: 'POST only' });
     }
 
     if (req.method !== 'POST') return sendJson(res, 405, { error: `${req.method} not allowed` });
@@ -388,9 +498,10 @@ export async function startServer(ctx, flags = {}, log = () => {}, deps = {}) {
       try { body = JSON.parse(raw); } catch (e) { return sendJson(res, 400, { error: `body is not JSON: ${e.message}` }); }
     }
     if (body === null || typeof body !== 'object' || Array.isArray(body)) return sendJson(res, 400, { error: 'body must be a JSON object' });
-    const r = route.verb === 'move' ? await move(route.number, body) : await runVerb(route.number, route.verb, body);
-    log(`${route.verb} #${route.number} → ${r.status ?? 'ok'}`);
-    return sendJson(res, 200, { ok: true, ...r });
+    const b = boardFor(route);
+    const r = route.verb === 'move' ? await move(b, route.number, body) : await runVerb(b, route.number, route.verb, body);
+    log(`${route.verb} #${route.number} → ${r.status ?? 'ok'}${boards.length > 1 ? ` (${b.repo})` : ''}`);
+    return sendJson(res, 200, { ok: true, key: b.key, ...r });
   }
 
   const server = http.createServer((req, res) => {
@@ -412,8 +523,14 @@ export async function startServer(ctx, flags = {}, log = () => {}, deps = {}) {
   });
   const bound = server.address();
   const shown = bound.address === '::' || bound.address === '0.0.0.0' ? 'localhost' : bound.address.includes(':') ? `[${bound.address}]` : bound.address;
-  return { server, port: bound.port, host, poll, url: `http://${shown}:${bound.port}` };
+  return {
+    server, port: bound.port, host, poll, url: `http://${shown}:${bound.port}`,
+    boards: boards.map((b) => ({ key: b.key, repo: b.repo, board: b.board, root: b.root })),
+  };
 }
+
+/** One board on the startup line: `owner/repo` alone reads best, the slug only when it says something. */
+const boardLine = (b) => `${b.repo}${b.board === 'default' ? '' : ` board "${b.board}"`}`;
 
 /** `hkb serve` — runs until the process is interrupted. */
 export async function serve(ctx, flags = {}, log = () => {}, deps = {}) {
@@ -422,7 +539,12 @@ export async function serve(ctx, flags = {}, log = () => {}, deps = {}) {
     log(`WARNING: --host ${s.host} exposes this board beyond 127.0.0.1. hkb serve has NO auth: anyone who can`);
     log('         reach this port can promote, block and archive tasks with your GitHub credentials.');
   }
-  log(`hkb serve on ${s.url} — ${ctx.repo.nameWithOwner} board "${ctx.board}", polling every ${s.poll}s. Ctrl-C to stop.`);
+  if (s.boards.length === 1) {
+    log(`hkb serve on ${s.url} — ${ctx.repo.nameWithOwner} board "${ctx.board}", polling every ${s.poll}s. Ctrl-C to stop.`);
+  } else {
+    log(`hkb serve on ${s.url} — ${s.boards.length} boards, polling every ${s.poll}s. Ctrl-C to stop.`);
+    for (const b of s.boards) log(`  ${b.key}  ${boardLine(b)}  ${b.root}`);
+  }
   await new Promise((resolve) => {
     const stop = () => { s.server.close(() => resolve()); s.server.closeAllConnections?.(); };
     process.once('SIGINT', stop);

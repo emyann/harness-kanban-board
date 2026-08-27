@@ -189,6 +189,49 @@ export function slugify(title) {
   return String(title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'task';
 }
 
+// ---------- boards on one server (`hkb serve --repos`) ----------
+
+/**
+ * `--repos ../a,../b#release` → [{ path, board }]. A trailing `#slug` picks a board *within* that
+ * checkout; without one the checkout's own board.json decides. Pure: nothing is resolved or read.
+ */
+export function parseRepoSpecs(value) {
+  const items = Array.isArray(value) ? value : String(value ?? '').split(',');
+  const out = [];
+  for (const item of items) {
+    const spec = typeof item === 'string' ? item.trim() : item;
+    if (!spec) continue;
+    if (typeof spec === 'object') {
+      const p = String(spec.path || spec.root || '').trim();
+      if (p) out.push({ path: p, board: spec.board ? String(spec.board).trim() : null });
+      continue;
+    }
+    const hash = spec.lastIndexOf('#');
+    if (hash > 0) out.push({ path: spec.slice(0, hash).trim(), board: spec.slice(hash + 1).trim() || null });
+    else out.push({ path: spec, board: null });
+  }
+  return out.filter((s) => s.path);
+}
+
+/**
+ * URL-safe, human-legible id for one board on the web server: `owner~repo~slug`. It goes in a path
+ * segment (`/api/boards/<key>/tasks/12/move`), so anything outside [A-Za-z0-9._-] collapses to `~`.
+ */
+export function boardKey(nameWithOwner, board) {
+  return `${nameWithOwner}/${board}`.replace(/[^A-Za-z0-9._-]+/g, '~').replace(/^~+|~+$/g, '') || 'board';
+}
+
+/** Two boards must never share a URL: disambiguate a repeated key with ~2, ~3 … in list order. */
+export function uniqueKeys(keys) {
+  const seen = new Set();
+  return keys.map((k) => {
+    let out = k;
+    for (let n = 2; seen.has(out); n++) out = `${k}~${n}`;
+    seen.add(out);
+    return out;
+  });
+}
+
 export function lockRef(n, k) { return `refs/kb/locks/${n}/${k}`; }
 /** Path form used by GET/PATCH/DELETE git/refs endpoints (no leading "refs/"). */
 export function lockRefPath(n, k) { return `kb/locks/${n}/${k}`; }

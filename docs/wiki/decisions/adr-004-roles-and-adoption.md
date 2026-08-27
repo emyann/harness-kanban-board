@@ -15,14 +15,14 @@ covers:
   - path: src/context.js
     sha: 0de994e57a7d7540c632757864e1af8027cffa03
   - path: src/cli.js
-    sha: 385f02b225b3adf89a3a302e06ea2a9b742147a5
+    sha: 9fab753b4e7463f08f8570f87bdd3eb78b558a41
   - path: src/lifecycle.js
     sha: 67b6fb458425948ce61d6a7a324649cb79e1c648
   - path: skills/kanban/SKILL.md
     sha: cd0fdfe8a6ff483707ea6b406cf139a28f7f14f6
   - path: skills/kanban/references/protocol.md
     sha: 85314014a25ebe70e720cc8ac635c2e2f45bed46
-generated_at_commit: a38c184
+generated_at_commit: 64019fe
 last_refreshed: 2026-08-27
 related: [concepts/roles-and-seats, architecture/overview, concepts/board-protocol]
 ---
@@ -116,7 +116,7 @@ All three consequences landed on 2026-08-27, before this record was accepted:
   human is working in their own terminal (#68).
 - **The vocabulary** — the seat/reviewer/track-runner/profile/host/supervisor
   glossary is `skills/kanban/references/protocol.md:13`, exit code 4 is in both
-  `protocol.md:252` and `src/cli.js:176`, and the reserved synthetic profiles
+  `protocol.md:252` and `src/cli.js:181`, and the reserved synthetic profiles
   `dispatcher` / `reviewer` / `human` are documented on the attempts row (#69).
 - **The docs** — `docs/manual-mode.md` ships the ladder and the agent-assisted
   roadmap recipe; the README gained "Who runs a board: the seats" and kept the

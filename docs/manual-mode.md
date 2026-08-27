@@ -45,6 +45,8 @@ hkb serve                        # http://127.0.0.1:4666
 `hkb serve` is the human view of the same labels: a zero-dependency server and one inline page, no build step and
 no second source of truth. Drag-drop between columns runs the same verbs the CLI does — only the legal moves, and
 an illegal one is refused with the reason — so a board you drive by hand is fully drivable from the browser.
+Driving several repos by hand does not mean several servers: `hkb serve --repos ../api,../infra` puts their
+boards on the same page (or list them once in `~/.config/hkb/boards.json` and just run `hkb serve`).
 
 ## Work a card
 

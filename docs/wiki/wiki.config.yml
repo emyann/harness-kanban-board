@@ -68,6 +68,9 @@ pages:
   - slug: features/harness-profiles
     summary: "The shipped profiles (claude, claude-p, claude-track, claude-action, copilot-cli, codex): modes, permissions, models, and what each harness can and cannot do."
     status: planned
+  - slug: features/web-board
+    summary: "One local server, one inline page, N repos: how the board is read, how a drag becomes a verb, and how every request is routed to the board it names."
+    status: seeded
   - slug: decisions/adr-001-github-native-backend
     summary: "GitHub Issues + native dependencies + ref locks won over MCP-first and repo-native designs; stacked PRs rejected for board sequencing."
     status: planned

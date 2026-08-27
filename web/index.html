@@ -64,6 +64,24 @@ header {
 .btn:disabled { opacity: .45; cursor: default; }
 .btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
 .btn.danger { color: var(--danger); }
+[hidden] { display: none !important; }
+
+/* ---------- board bar (only when this server holds more than one board) ---------- */
+.boards {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: 0 0 auto;
+  padding: 7px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+}
+.bchip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--fg-dim); font-size: 11.5px; white-space: nowrap;
+}
+.bchip:hover { border-color: var(--fg-faint); }
+.bchip.on { border-color: var(--accent); color: var(--fg); }
+.bchip .n { font-family: var(--mono); color: var(--fg-faint); }
+.errors {
+  flex: 0 0 auto; padding: 7px 16px; font-size: 12px; overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--danger) 14%, var(--panel));
+}
 
 /* ---------- board ---------- */
 main { flex: 1 1 auto; display: flex; gap: 10px; padding: 12px; overflow-x: auto; overflow-y: hidden; }
@@ -104,6 +122,7 @@ main { flex: 1 1 auto; display: flex; gap: 10px; padding: 12px; overflow-x: auto
 .chip.dep.open { color: var(--blocked); border-color: color-mix(in srgb, var(--blocked) 45%, var(--line)); }
 .chip.dep.done { color: var(--fg-faint); text-decoration: line-through; }
 .chip.pr { color: var(--review); border-color: color-mix(in srgb, var(--review) 45%, var(--line)); }
+.chip.repo { color: var(--fg-dim); background: var(--panel); }
 .chip.human { color: #fff; background: var(--danger); border-color: transparent; }
 .chip.sched { color: var(--fg-dim); }
 .card.running-now .num::after {
@@ -182,6 +201,9 @@ pre.log {
   <button class="btn" id="refresh" title="Refresh now (r)">Refresh</button>
 </header>
 
+<nav class="boards" id="boards" hidden aria-label="Boards"></nav>
+<div class="errors" id="board-errors" hidden role="status"></div>
+
 <main id="board"></main>
 
 <aside class="drawer" id="drawer" aria-hidden="true">
@@ -202,18 +224,32 @@ const COLS = ['triage','todo','ready','running','blocked','review','done'];
 const COL_LABEL = { triage:'Triage', todo:'Todo', ready:'Ready', running:'Running', blocked:'Blocked', review:'Review', done:'Done' };
 
 const state = {
-  board: null,        // last /api/board payload
+  boards: [],         // one entry per board on this server, from the last /api/board payload
   etag: null,
   poll: 30,
   fetchedAt: 0,
-  selected: null,     // drawer task number
-  detail: null,       // last /api/tasks/:n payload
+  filter: null,       // board key the page is narrowed to, or null for all of them
+  selected: null,     // { key, n } — the task the drawer shows; #12 on two boards is two tasks
+  detail: null,       // last task-detail payload
   logAttempt: null,   // attempt whose log the drawer shows
-  dragging: null,     // number being dragged
-  pending: new Set(), // numbers with an in-flight verb
+  dragging: null,     // { key, n } being dragged
+  pending: new Set(), // "key#n" with an in-flight verb
   modalOpen: false,
   online: true,
 };
+
+// ---------- boards ----------
+// Every read and every verb is addressed by board key: a card dragged in one board's column must
+// never run a verb against another repo, so the key travels with the card, not with the page.
+const cardId = (key, n) => key + '#' + n;
+const parseCardId = (s) => { const m = /^(.+)#(\d+)$/.exec(String(s || '')); return m ? { key: m[1], n: Number(m[2]) } : null; };
+const boardOf = (key) => state.boards.find((b) => b.key === key) || null;
+const taskIn = (key, n) => (boardOf(key)?.tasks || []).find((t) => t.number === n) || null;
+const visibleBoards = () => (state.filter ? state.boards.filter((b) => b.key === state.filter) : state.boards);
+const multi = () => state.boards.length > 1;
+const boardLabel = (b) => (b ? b.repo + (b.board === 'default' ? '' : ' · board "' + b.board + '"') : '');
+const shortLabel = (b) => (b ? b.repo.split('/').pop() + (b.board === 'default' ? '' : ' · ' + b.board) : '');
+const taskPath = (key, n, suffix) => '/api/boards/' + encodeURIComponent(key) + '/tasks/' + n + (suffix || '');
 
 // ---------- tiny helpers ----------
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -249,7 +285,7 @@ async function api(path, opts) {
   return { json, etag: res.headers.get('etag') };
 }
 
-const post = (n, verb, body) => api('/api/tasks/' + n + '/' + verb, {
+const post = (key, n, verb, body) => api(taskPath(key, n, '/' + verb), {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}),
 });
 
@@ -305,15 +341,17 @@ function buildColumns() {
     col.addEventListener('drop', (e) => {
       e.preventDefault();
       col.classList.remove('over');
-      const n = Number(e.dataTransfer.getData('text/plain') || state.dragging);
-      if (n) moveTask(n, c);
+      // The card says which board it came from; the page never assumes "the" board.
+      const from = parseCardId(e.dataTransfer.getData('text/plain')) || state.dragging;
+      if (from) moveTask(from.key, from.n, c);
     });
     board.append(col);
   }
 }
 
-function cardHtml(t) {
+function cardHtml(t, board) {
   const chips = [];
+  if (board) chips.push('<span class="chip repo" title="' + esc(boardLabel(board)) + '">' + esc(shortLabel(board)) + '</span>');
   if (t.agent) chips.push('<span class="chip agent">' + esc(t.agent) + '</span>');
   if (t.priority) chips.push('<span class="chip prio">p' + t.priority + '</span>');
   for (const b of t.blockedBy) chips.push('<span class="chip dep ' + (b.done ? 'done' : 'open') + '" title="' + esc(b.title || '') + '">#' + b.number + (b.done ? '✓' : '') + '</span>');
@@ -329,17 +367,84 @@ function cardHtml(t) {
     (chips.length ? '<div class="chips">' + chips.join('') + '</div>' : '');
 }
 
-function renderBoard() {
-  const b = state.board;
-  if (!b) return;
-  $('#repo').textContent = b.repo + ' · board "' + b.board + '"';
-  document.title = 'hkb · ' + b.repo;
-  const disp = $('#dispatcher');
-  disp.querySelector('.dot').className = 'dot' + (b.dispatcher.running ? ' on' : '');
-  disp.querySelector('span').textContent = b.dispatcher.running ? 'dispatcher up (pid ' + b.dispatcher.pid + ')' : 'no dispatcher loop';
+function makeCard(b, t, c) {
+  const card = el('<article class="card" tabindex="0"></article>');
+  card.style.setProperty('--col', 'var(--' + c + ')');
+  card.dataset.card = cardId(b.key, t.number);
+  card.dataset.board = b.key;
+  card.dataset.n = t.number;
+  card.draggable = true;
+  card.innerHTML = cardHtml(t, multi() ? b : null);
+  if (c === 'running') card.classList.add('running-now');
+  if (state.pending.has(cardId(b.key, t.number))) card.classList.add('pending');
+  if (state.selected && state.selected.key === b.key && state.selected.n === t.number) card.classList.add('selected');
+  card.addEventListener('dragstart', (e) => {
+    state.dragging = { key: b.key, n: t.number };
+    e.dataTransfer.setData('text/plain', cardId(b.key, t.number));
+    e.dataTransfer.effectAllowed = 'move';
+    card.classList.add('dragging');
+    markDropTargets(t);
+  });
+  card.addEventListener('dragend', () => {
+    state.dragging = null;
+    card.classList.remove('dragging');
+    document.querySelectorAll('.col').forEach((x) => x.classList.remove('over', 'no-drop'));
+  });
+  card.addEventListener('click', (e) => { if (!e.target.closest('[data-stop]')) openDrawer(b.key, t.number); });
+  card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDrawer(b.key, t.number); } });
+  return card;
+}
 
+/** The header, the board bar and the error strip — everything that is about boards, not tasks. */
+function renderHeader() {
+  const bs = state.boards;
+  const one = bs.length === 1 ? bs[0] : null;
+  $('#repo').textContent = one ? one.repo + ' · board "' + one.board + '"' : bs.length + ' boards';
+  $('#repo').title = bs.map((b) => boardLabel(b) + '  ' + b.root).join('\n');
+  document.title = 'hkb · ' + (one ? one.repo : bs.length + ' boards');
+
+  const up = bs.filter((b) => b.dispatcher && b.dispatcher.running);
+  const disp = $('#dispatcher');
+  disp.querySelector('.dot').className = 'dot' + (!up.length ? '' : up.length === bs.length ? ' on' : ' warn');
+  disp.querySelector('span').textContent = one
+    ? (one.dispatcher.running ? 'dispatcher up (pid ' + one.dispatcher.pid + ')' : 'no dispatcher loop')
+    : 'dispatchers ' + up.length + '/' + bs.length;
+  disp.title = bs.map((b) => boardLabel(b) + ': ' + (b.dispatcher && b.dispatcher.running ? 'dispatcher pid ' + b.dispatcher.pid : 'no dispatcher loop')).join('\n');
+
+  // One chip per board — its own dispatcher dot, its own count — and a click to narrow the page to it.
+  const bar = $('#boards');
+  bar.hidden = !multi();
+  if (multi()) {
+    const chips = [{ key: null, label: 'All', count: bs.reduce((n, b) => n + b.tasks.length, 0), dot: '', title: 'Every board' }]
+      .concat(bs.map((b) => ({
+        key: b.key,
+        label: shortLabel(b),
+        count: b.tasks.length,
+        dot: b.error ? ' err' : b.dispatcher && b.dispatcher.running ? ' on' : '',
+        title: boardLabel(b) + ' · ' + b.root + (b.error ? '\n' + b.error : ''),
+      })));
+    bar.innerHTML = '';
+    for (const c of chips) {
+      const chip = el('<button class="bchip' + (state.filter === c.key ? ' on' : '') + '" title="' + esc(c.title) + '">' +
+        '<i class="dot' + c.dot + '"></i><span>' + esc(c.label) + '</span><span class="n">' + c.count + '</span></button>');
+      chip.addEventListener('click', () => { state.filter = c.key; renderBoard(); });
+      bar.append(chip);
+    }
+  }
+
+  // A board that failed to read says so and keeps its last good cards — it never blanks the others.
+  const bad = bs.filter((b) => b.error);
+  const strip = $('#board-errors');
+  strip.hidden = !bad.length;
+  strip.innerHTML = bad.map((b) => '<div>' + esc(boardLabel(b)) + ' — ' + esc(b.error) +
+    (b.stale ? ' <span style="color:var(--fg-dim)">(showing the last good read)</span>' : '') + '</div>').join('');
+}
+
+function renderBoard() {
+  if (!state.boards.length) return;
+  renderHeader();
   const byCol = Object.fromEntries(COLS.map((c) => [c, []]));
-  for (const t of b.tasks) if (byCol[t.status]) byCol[t.status].push(t);
+  for (const b of visibleBoards()) for (const t of b.tasks) if (byCol[t.status]) byCol[t.status].push({ b, t });
 
   for (const c of COLS) {
     const col = $('.col[data-col="' + c + '"]');
@@ -348,31 +453,7 @@ function renderBoard() {
     $('[data-count]', col).textContent = byCol[c].length;
     body.innerHTML = '';
     if (!byCol[c].length) body.append(el('<div class="empty">—</div>'));
-    for (const t of byCol[c]) {
-      const card = el('<article class="card" tabindex="0"></article>');
-      card.style.setProperty('--col', 'var(--' + c + ')');
-      card.dataset.n = t.number;
-      card.draggable = true;
-      card.innerHTML = cardHtml(t);
-      if (c === 'running') card.classList.add('running-now');
-      if (state.pending.has(t.number)) card.classList.add('pending');
-      if (state.selected === t.number) card.classList.add('selected');
-      card.addEventListener('dragstart', (e) => {
-        state.dragging = t.number;
-        e.dataTransfer.setData('text/plain', String(t.number));
-        e.dataTransfer.effectAllowed = 'move';
-        card.classList.add('dragging');
-        markDropTargets(t);
-      });
-      card.addEventListener('dragend', () => {
-        state.dragging = null;
-        card.classList.remove('dragging');
-        document.querySelectorAll('.col').forEach((x) => x.classList.remove('over', 'no-drop'));
-      });
-      card.addEventListener('click', (e) => { if (!e.target.closest('[data-stop]')) openDrawer(t.number); });
-      card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDrawer(t.number); } });
-      body.append(card);
-    }
+    for (const { b, t } of byCol[c]) body.append(makeCard(b, t, c));
     body.scrollTop = scroll;
   }
   tickFreshness();
@@ -410,14 +491,15 @@ async function doRefresh(force) {
     const r = await api('/api/board' + (force ? '?refresh=1' : ''), { headers: state.etag && !force ? { 'if-none-match': state.etag } : {} });
     state.online = true;
     if (!r.notModified) {
-      state.board = r.json;
+      state.boards = r.json.boards || [];
       state.etag = r.etag;
       state.poll = r.json.poll || 30;
+      if (state.filter && !boardOf(state.filter)) state.filter = null; // a board left the server
       renderBoard();
     }
     state.fetchedAt = Date.now();
     tickFreshness();
-    if (state.selected != null) loadDetail(state.selected, force);
+    if (state.selected) loadDetail(state.selected.key, state.selected.n, force);
   } catch (e) {
     state.online = false;
     tickFreshness();
@@ -426,40 +508,43 @@ async function doRefresh(force) {
 }
 
 // ---------- verbs ----------
-async function run(n, verb, body, label) {
-  state.pending.add(n);
-  document.querySelectorAll('.card[data-n="' + n + '"]').forEach((c) => c.classList.add('pending'));
+/** Every verb is addressed by (board key, number): the repo it lands on is the card's, always. */
+async function run(key, n, verb, body, label) {
+  const id = cardId(key, n);
+  const where = multi() ? ' · ' + shortLabel(boardOf(key)) : '';
+  state.pending.add(id);
+  document.querySelectorAll('.card[data-card="' + id + '"]').forEach((c) => c.classList.add('pending'));
   let incomplete = false;
   try {
-    const { json } = await post(n, verb, body);
+    const { json } = await post(key, n, verb, body);
     const note = json.landed || json.note;
-    toast('#' + n + ' → ' + (json.status || 'ok'), note || (label || verb), 'ok');
+    toast('#' + n + ' → ' + (json.status || 'ok') + where, note || (label || verb), 'ok');
     return json;
   } catch (e) {
     if (e.needs && e.needs.length) { incomplete = true; throw e; } // the caller collects the fields and retries
-    toast(e.refused ? 'Move refused' : 'hkb ' + verb + ' failed', e.message, 'err');
+    toast((e.refused ? 'Move refused' : 'hkb ' + verb + ' failed') + where, e.message, 'err');
     return null;
   } finally {
-    state.pending.delete(n);
+    state.pending.delete(id);
     // Nothing was written when the verb was incomplete, so do not spend a board read on it.
     if (!incomplete) { state.etag = null; await refresh(true); }
   }
 }
 
-async function moveTask(n, to) {
-  const t = (state.board?.tasks || []).find((x) => x.number === n);
+async function moveTask(key, n, to) {
+  const t = taskIn(key, n);
   if (!t || t.status === to) return;
   // optimistic: put the card in the target column while the verb runs
-  const card = document.querySelector('.card[data-n="' + n + '"]');
+  const card = document.querySelector('.card[data-card="' + cardId(key, n) + '"]');
   const target = $('.col[data-col="' + to + '"] [data-body]');
   if (card && target) { card.classList.add('pending'); target.prepend(card); }
   try {
-    await run(n, 'move', { to }, 'moved to ' + to);
+    await run(key, n, 'move', { to }, 'moved to ' + to);
   } catch (e) {
     const need = e.needs || [];
     const extra = await askFor(need, n, t.status, to);
     if (!extra) { renderBoard(); return; }
-    try { await run(n, 'move', { to, ...extra }, 'moved to ' + to); }
+    try { await run(key, n, 'move', { to, ...extra }, 'moved to ' + to); }
     catch (e2) { toast('Move refused', e2.message, 'err'); renderBoard(); }
   }
 }
@@ -513,16 +598,16 @@ function askFor(needs, n, from, to) {
 }
 
 // ---------- drawer ----------
-async function openDrawer(n) {
-  state.selected = n;
+async function openDrawer(key, n) {
+  state.selected = { key, n };
   state.logAttempt = null;
   $('#drawer').classList.add('open');
   $('#drawer').setAttribute('aria-hidden', 'false');
-  $('#d-num').textContent = '#' + n;
+  $('#d-num').textContent = '#' + n + (multi() ? ' · ' + shortLabel(boardOf(key)) : '');
   $('#d-body').innerHTML = '<p class="prose" style="margin-top:20px">loading…</p>';
   document.querySelectorAll('.card.selected').forEach((c) => c.classList.remove('selected'));
-  document.querySelector('.card[data-n="' + n + '"]')?.classList.add('selected');
-  await loadDetail(n, true);
+  document.querySelector('.card[data-card="' + cardId(key, n) + '"]')?.classList.add('selected');
+  await loadDetail(key, n, true);
 }
 
 function closeDrawer() {
@@ -532,14 +617,16 @@ function closeDrawer() {
   document.querySelectorAll('.card.selected').forEach((c) => c.classList.remove('selected'));
 }
 
-async function loadDetail(n, force) {
+const showing = (key, n) => !!state.selected && state.selected.key === key && state.selected.n === n;
+
+async function loadDetail(key, n, force) {
   try {
-    const { json } = await api('/api/tasks/' + n + (force ? '?refresh=1' : ''));
-    if (state.selected !== n) return;
+    const { json } = await api(taskPath(key, n, force ? '?refresh=1' : ''));
+    if (!showing(key, n)) return;
     state.detail = json;
     renderDrawer(json);
   } catch (e) {
-    if (state.selected === n) $('#d-body').innerHTML = '<p class="prose" style="margin-top:20px">' + esc(e.message) + '</p>';
+    if (showing(key, n)) $('#d-body').innerHTML = '<p class="prose" style="margin-top:20px">' + esc(e.message) + '</p>';
   }
 }
 
@@ -551,6 +638,7 @@ function renderDrawer(t) {
   parts.push('<div class="title">' + esc(t.title) + '</div>');
 
   const chips = ['<span class="chip" style="color:var(--' + t.status + ')">' + esc(t.status) + '</span>'];
+  if (multi()) chips.push('<span class="chip repo">' + esc(boardLabel(boardOf(t.key)) || t.repo) + '</span>');
   if (t.agent) chips.push('<span class="chip agent">' + esc(t.agent) + '</span>');
   chips.push('<span class="chip prio">p' + t.priority + '</span>');
   if (t.needsHuman) chips.push('<span class="chip human">needs human</span>');
@@ -606,9 +694,10 @@ function renderDrawer(t) {
 
   $('#d-body').innerHTML = parts.join('');
   $('#d-body').querySelectorAll('[data-verb]').forEach((b) => b.addEventListener('click', () => drawerVerb(t, b.dataset.verb)));
-  $('#d-body').querySelectorAll('[data-log]').forEach((b) => b.addEventListener('click', () => showLog(t.number, Number(b.dataset.log))));
-  $('#d-body').querySelectorAll('[data-open]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); openDrawer(Number(a.dataset.open)); }));
-  if (state.logAttempt) showLog(t.number, state.logAttempt);
+  $('#d-body').querySelectorAll('[data-log]').forEach((b) => b.addEventListener('click', () => showLog(t.key, t.number, Number(b.dataset.log))));
+  // An issue reference in a body or a blocker is a task on the same board — never on another repo's.
+  $('#d-body').querySelectorAll('[data-open]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); openDrawer(t.key, Number(a.dataset.open)); }));
+  if (state.logAttempt) showLog(t.key, t.number, state.logAttempt);
 }
 
 async function drawerVerb(t, verb) {
@@ -634,16 +723,16 @@ async function drawerVerb(t, verb) {
     body = {};
   }
   if (!body) return;
-  await run(t.number, verb, body);
+  await run(t.key, t.number, verb, body);
 }
 
-async function showLog(n, attempt) {
+async function showLog(key, n, attempt) {
   state.logAttempt = attempt;
   const host = $('#d-log');
   if (!host) return;
   $('#d-body').querySelectorAll('[data-log]').forEach((b) => b.classList.toggle('primary', Number(b.dataset.log) === attempt));
   try {
-    const { json } = await api('/api/tasks/' + n + '/log?attempt=' + attempt);
+    const { json } = await api(taskPath(key, n, '/log?attempt=' + attempt));
     host.innerHTML = '<div class="prose" style="margin-bottom:6px"><code>' + esc(json.path) + '</code> · ' +
       (json.size / 1024).toFixed(1) + ' KB' + (json.truncated ? ' · showing the tail' : '') + '</div>' +
       '<pre class="log">' + esc(json.text || '(empty)') + '</pre>';
@@ -660,7 +749,7 @@ $('#refresh').addEventListener('click', () => refresh(true));
 $('#d-close').addEventListener('click', closeDrawer);
 document.addEventListener('keydown', (e) => {
   if (state.modalOpen) return;
-  if (e.key === 'Escape' && state.selected != null) closeDrawer();
+  if (e.key === 'Escape' && state.selected) closeDrawer();
   if (e.key === 'r' && !e.metaKey && !e.ctrlKey && e.target === document.body) refresh(true);
 });
 // The poll cadence comes from the server (`--poll`), so one interval is the whole liveness story:

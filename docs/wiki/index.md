@@ -8,6 +8,10 @@
 
 - [hkb at a glance](./architecture/overview.md): The moving parts: CLI, board protocol, dispatcher loop, workers — and the one rule that shapes them all: the board is the only state.
 
+## Features
+
+- [The web board (`hkb serve`)](./features/web-board.md): One local server, one inline page, N repos — how the board is read, how a drag becomes a verb, and how every request is routed to the board it names.
+
 ## Decisions
 
 - [ADR-004: Three seats — operator, dispatcher, worker](./decisions/adr-004-roles-and-adoption.md): hkb has exactly three seats (operator = the human, dispatcher = a tick, worker = any harness); the dispatcher is not an orchestrator, and adoption is a ladder of the same protocol driven by hand or by the tick.

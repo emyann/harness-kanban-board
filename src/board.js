@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghCmd } from './gh.js';
-import { worktreePath } from './model.js';
+import { worktreePath, parseRepoSpecs } from './model.js';
 
 // A background worker has nobody to answer a permission prompt, so the allowlist must cover
 // every command an agent plausibly reaches for; anything else is denied, never prompted (see #23).
@@ -203,21 +203,19 @@ export function writeState(root, state) {
 export function hostId() { return os.hostname(); }
 
 /**
- * Build the context object every command uses.
- * `board` flag > KB_BOARD env > board.json > 'default'.
+ * Build the context object every command uses, rooted at `root`.
+ * `board` argument > board.json > 'default'.
  */
-export function makeContext(flags = {}) {
-  const root = repoRoot();
+export function makeContextAt(root, { board = null, json = false } = {}) {
   const cfg = loadBoard(root);
   const repo = cfg?.repo ? parseRepo(cfg.repo) : null;
-  const board = flags.board || process.env.KB_BOARD || cfg?.board || 'default';
   return {
     root,
     cfg,
     repo,
-    board,
+    board: board || cfg?.board || 'default',
     host: hostId(),
-    json: !!flags.json,
+    json,
     caps: {},
     _cache: {},
     requireBoard() {
@@ -227,13 +225,76 @@ export function makeContext(flags = {}) {
         throw e;
       }
       if (!repo) {
-        const e = new Error('board.json has no "repo". Run `hkb init` again or set "repo": "owner/name".');
+        const e = new Error(`${boardFile(root)} has no "repo". Run \`hkb init\` again or set "repo": "owner/name".`);
         e.exitCode = 2;
         throw e;
       }
       return this;
     },
   };
+}
+
+/**
+ * The context for the checkout the command was run in.
+ * `board` flag > KB_BOARD env > board.json > 'default'.
+ */
+export function makeContext(flags = {}) {
+  return makeContextAt(repoRoot(), { board: flags.board || process.env.KB_BOARD || null, json: !!flags.json });
+}
+
+// ---------- the cross-repo board list ----------
+// `hkb serve` can show several checkouts on one page. That list spans repos, so it cannot live in
+// any one `.kanban/` — it is a user-level file, JSON because hkb has no YAML parser and wants none.
+
+/** `$KB_CONFIG_HOME`/`$XDG_CONFIG_HOME`/`~/.config` + `hkb/boards.json`. */
+export function userBoardsFile() {
+  const base = process.env.KB_CONFIG_HOME || process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+  return path.join(base, 'hkb', 'boards.json');
+}
+
+/** `~/code/a` → an absolute path. No shell runs here, so `~` is expanded by hand or not at all. */
+export function expandHome(p) {
+  const s = String(p);
+  if (s === '~') return os.homedir();
+  if (s.startsWith('~/') || s.startsWith('~\\')) return path.join(os.homedir(), s.slice(2));
+  return s;
+}
+
+/**
+ * The user-level list of checkouts `hkb serve` shows together:
+ *   { "version": 1, "boards": ["~/code/a", { "path": "~/code/b", "board": "release" }] }
+ * A bare JSON array of paths works too. Missing file → null: the list is opt-in, never required.
+ * @returns {null | {path: string, board: string|null}[]}
+ */
+export function loadUserBoards(file = userBoardsFile()) {
+  if (!fs.existsSync(file)) return null;
+  let raw;
+  try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) {
+    const err = new Error(`${file} is not valid JSON: ${e.message}`);
+    err.exitCode = 2;
+    throw err;
+  }
+  const list = Array.isArray(raw) ? raw : raw?.boards ?? raw?.repos;
+  if (!Array.isArray(list)) {
+    const err = new Error(`${file} must be {"boards": ["/path/to/checkout", ...]} or a JSON array of paths`);
+    err.exitCode = 2;
+    throw err;
+  }
+  return parseRepoSpecs(list).map((s) => ({ ...s, path: expandHome(s.path) }));
+}
+
+/**
+ * A context for another checkout, named by path. The path may point anywhere inside the repo — the
+ * toplevel is what a board is keyed on — and must be an `hkb init`ed checkout, or this says so.
+ */
+export function contextForPath(p, board = null) {
+  const abs = path.resolve(expandHome(p));
+  if (!fs.existsSync(abs)) {
+    const e = new Error(`${p} does not exist — name a checkout that has been \`hkb init\`ed`);
+    e.exitCode = 2;
+    throw e;
+  }
+  return makeContextAt(repoRoot(abs), { board }).requireBoard();
 }
 
 export function parseRepo(s) {

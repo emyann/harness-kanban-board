@@ -7,11 +7,11 @@ audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: 385f02b225b3adf89a3a302e06ea2a9b742147a5
+    sha: 9fab753b4e7463f08f8570f87bdd3eb78b558a41
   - path: src/gh.js
     sha: b728c07d7f5e7bfd29e3dc4c2e0e2786d29522ee
   - path: src/model.js
-    sha: 9c5d337e415d19c02cf4881c8c94bf0ec926a5c2
+    sha: b2aa39b71abaa6e6d3cb1463da783c5746cf986a
   - path: src/tasks.js
     sha: 11668a9b08e59288eb5ebf982f7a35a1480aa84a
   - path: src/lock.js
@@ -25,8 +25,8 @@ covers:
   - path: src/hook.js
     sha: 6aa6036b1bcbea36a2a5e9d079881cd36bb89adf
   - path: src/board.js
-    sha: afac0241819aee331d5b7ccde0e374e782f83619
-generated_at_commit: a38c184
+    sha: 97e9c9ba1410e467605551172eaeccb443302e4b
+generated_at_commit: 64019fe
 last_refreshed: 2026-08-27
 related: [concepts/board-protocol, concepts/claims-and-leases, architecture/dispatcher-tick, concepts/roles-and-seats]
 ---

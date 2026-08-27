@@ -23,3 +23,7 @@ history.
 ## 2026-08-27 — refreshed architecture/overview + decisions/adr-004-roles-and-adoption (no-op re-stamp: #73 changed one help string in cli.js — `hook stop` → `hook stop|pretool`; no claim on either page changed)
 
 ## 2026-08-27 — refreshed architecture/overview + decisions/adr-004-roles-and-adoption (no-op re-stamp: #78 added `init --no-labels` (its offline path, for the tarball smoke) — cli.js churn is one BOOL_FLAGS entry and two help lines, and neither page makes a claim about init's flags)
+
+## 2026-08-27 — added features/web-board (#87 made one `hkb serve` hold several checkouts; serve.js and web/index.html were covered by no page at all, so the whole feature was a freshness blind spot)
+
+## 2026-08-27 — refreshed architecture/overview + decisions/adr-004-roles-and-adoption (no-op re-stamp for #87: cli.js gained two `--repos` help lines, model.js three pure board-key helpers, board.js the `makeContextAt` split plus the user-level board list; no claim on either page changed. One anchor fixed on ADR-004 — `src/cli.js:176` → `:181` for the exit-code help line, which the `--repos` lines and #88 shifted; the `6c0e81f`-pinned `cli.js:419` citation is historical and stays)
