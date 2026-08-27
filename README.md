@@ -1,41 +1,71 @@
 # hkb — harness kanban board
 
-A portable, frugal alternative to [Hermes kanban](https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban) for coding agents.
-**GitHub Issues are the board**, issue dependencies are the graph, git refs are the locks, and any harness —
-Claude Code, GitHub Copilot CLI, Codex CLI — works the same tasks through one small CLI.
+Turn a GitHub repo's issues into a kanban board that coding agents can work on their own — a portable, frugal
+alternative to [Hermes kanban](https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban) that needs
+no server, no database and no npm dependencies.
+
+## Quickstart
+
+Three commands, in a repo you can push to, with [`gh`](https://cli.github.com) already logged in:
+
+```bash
+npx hkb init                 # labels, .kanban/board.json, the worker skill, the Stop hook, a CLAUDE.md/AGENTS.md section
+npx hkb doctor --api         # verifies gh auth, labels, GraphQL fields, the issue-dependency API and lock-ref CAS
+npx hkb dispatch --loop 60   # the 60-second dispatcher, on your machine
+```
+
+That is the whole free path. `npx hkb init --import` also pulls your existing open issues onto the board as
+*triage*. Prefer it on your PATH? `npm i -g hkb`, then drop the `npx`.
+
+Now file some work and watch it get picked up:
+
+```bash
+npx hkb create "Design auth schema" --agent claude --priority 2 --paths packages/db/
+npx hkb create "Implement auth API" --blocked-by 41    # todo until #41 is done, then ready automatically
+npx hkb list                                           # triage todo ready running blocked review done
+```
+
+[![npm](https://img.shields.io/npm/v/hkb.svg)](https://www.npmjs.com/package/hkb)
+[![test](https://github.com/emyann/harness-kanban-board/actions/workflows/test.yml/badge.svg)](https://github.com/emyann/harness-kanban-board/actions/workflows/test.yml)
+[![node](https://img.shields.io/node/v/hkb.svg)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/hkb.svg)](LICENSE)
+
+## How it works
+
+- **A card is an issue.** Status, agent and board live in `kb:*` labels; the task's settings live in a
+  `<!-- kb: {...} -->` block in the body. Nothing is stored outside the repo.
+- **An edge is a dependency.** "Blocked by" is GitHub's own issue-dependency link, so the graph is visible in
+  GitHub's UI and a task turns *ready* the moment its last blocker closes.
+- **A lock is a git ref.** Claiming task #42 creates `refs/kb/locks/42/1`. Creating a ref that exists fails, so
+  the claim is atomic; the heartbeat is a `--force-with-lease` push on the same ref, which costs nothing.
+- **A worker is any harness.** Claude Code, Copilot CLI and Codex CLI ship as profiles; a worker reads its brief
+  with `hkb context <n>`, works in a worktree, opens a draft PR that says `Closes #42`, and ends with exactly one
+  of `hkb complete` / `hkb block` / `hkb request-review`.
+- **The dispatcher is a tick, not an agent.** `hkb dispatch` promotes what became ready, reclaims what died,
+  launches what it can, and exits. It is deterministic code and one GraphQL query per board per tick.
+
+Because all of that is labels, dependencies, refs and comments, any harness — or a shell script — can drive the
+same board. Full protocol: [skills/kanban/references/protocol.md](skills/kanban/references/protocol.md).
+
+## What it costs
 
 - The board and the dispatcher cost nothing on any GitHub plan (personal or org, public or private).
-- Workers bill only against the harness plan you already have. Paid profiles (Actions, Managed Agents, vendor cloud agents) are opt-in per board, never the default.
+- Workers bill only against the harness plan you already have. Paid profiles (Actions, Managed Agents, vendor
+  cloud agents) are opt-in per board, never the default.
 - The dispatcher is deterministic code, never an LLM. One GraphQL query per board per tick.
 - Zero npm dependencies. Everything goes through `gh api`.
 
-Design rationale, judged alternatives and the roadmap: [docs/EVALUATION.md](docs/EVALUATION.md).
-
-## Install (free path, ~2 commands)
+## Working the board
 
 ```bash
-npm i -g hkb            # or: npx hkb ...
-cd your-repo
-hkb init                     # labels, .kanban/board.json, skill, Stop hook, CLAUDE.md/AGENTS.md section
-hkb doctor --api             # verifies gh auth, labels, GraphQL fields, issue-dependency API, lock-ref CAS
-hkb dispatch --loop 60       # the Hermes 60-second dispatcher, on your machine
-```
-
-`hkb init --import` also puts your existing open issues into *triage* on the board.
-
-## Use
-
-```bash
-hkb create "Design auth schema" --agent claude --priority 2 --paths packages/db/
-hkb create "Implement auth API" --blocked-by 41            # todo until #41 is done, then ready automatically
-hkb create "Write auth tests"   --blocked-by 42
-hkb list                       # columns: triage todo ready running blocked review done
+hkb create "Write auth tests" --blocked-by 42
 hkb show 42                    # task, blockers, attempts, parent results
+hkb list --status ready --json
 hkb dispatch --dry-run         # what the next tick would do
 ```
 
-A worker (spawned by the dispatcher, or you with `hkb claim 42` + `export KB_TASK=42 KB_ATTEMPT=1`) reads
-`hkb show`, works in a worktree, opens a draft PR that `Closes #42`, and finishes with exactly one of:
+A worker — spawned by the dispatcher, or you by hand with `hkb claim 42` and `export KB_TASK=42 KB_ATTEMPT=1` —
+reads `hkb context 42`, works in a worktree, opens a draft PR that `Closes #42`, and finishes with exactly one of:
 
 ```bash
 hkb complete 42 --from-stdin <<'EOF'
@@ -48,10 +78,13 @@ hkb request-review 42 --summary "..."
 Every terminal verb also takes `--summary-file` / `--metadata-file` / `--reason-file`, or the inline
 `--summary ".." --metadata '{..}'` flags — no harness has to push JSON through shell quoting.
 
-Humans: `hkb promote`, `hkb unblock`, `hkb request-changes`, `hkb comment`, `hkb link/unlink`, `hkb archive`, `hkb log`.
+Humans get `hkb promote`, `hkb unblock`, `hkb request-changes`, `hkb comment`, `hkb link/unlink`, `hkb archive`,
+`hkb log`. `hkb --help` lists everything.
+
+## The board in a browser
 
 ```bash
-hkb serve                      # the same board in a browser, on http://127.0.0.1:4666
+hkb serve                      # http://127.0.0.1:4666
 ```
 
 `hkb serve` is a zero-dependency http server and one inline page — no build step, no second source of truth.
@@ -61,46 +94,26 @@ legal moves, and an illegal one is refused with the reason. Cards show agent, pr
 the drawer shows the description, the `kb` block, every attempt, the latest result and the worker's log tail.
 There is no auth — it binds `127.0.0.1`, refuses cross-origin calls, and warns loudly if you pass `--host`.
 
+## The board as a stream
+
 ```bash
-hkb watch                                  # one line per board transition, until Ctrl-C
+hkb watch                                   # one line per board transition, until Ctrl-C
 hkb watch --kinds completed,blocked --json  # only those, as JSONL, for a script to consume
-hkb tail 42                                # follow one task's status, attempts and comments
+hkb tail 42                                 # follow one task's status, attempts and comments
 ```
 
-`hkb watch` and `hkb tail` are the board as a stream. Each poll is a conditional `GET`: hkb sends back the
-`ETag` of the last representation as `If-None-Match`, and GitHub answers `304 Not Modified` with an empty body
-— which costs nothing against the rate limit, so watching a quiet board all day is free. Only a `200` is
-diffed against the previous snapshot, and only a difference prints. `--kinds` takes event kinds (`status`,
-`attempt`, `outcome`, `result`, `comment`, …) or the status/outcome an event landed on, so `--kinds completed`
-reads the way you'd guess. `GHK_DEBUG=1` shows every poll with its status and the rate-limit counter:
+Each poll is a conditional `GET`: hkb sends back the `ETag` of the last representation as `If-None-Match`, and
+GitHub answers `304 Not Modified` with an empty body — which costs nothing against the rate limit, so watching a
+quiet board all day is free. Only a `200` is diffed against the previous snapshot, and only a difference prints.
+`--kinds` takes event kinds (`status`, `attempt`, `outcome`, `result`, `comment`, …) or the status/outcome an
+event landed on, so `--kinds completed` reads the way you'd guess. `GHK_DEBUG=1` shows every poll with its status
+and the rate-limit counter:
 
 ```
 hkb watch: board: GET repos/o/r/issues?labels=kb%3Aboard%3Adefault&... → 304 Not Modified · rate 219 (+0) · etag 594b2e9a588b
 ```
 
-## MCP (optional — the CLI is the protocol)
-
-Harnesses that prefer tools to a shell get the same verbs over MCP:
-
-```bash
-hkb init --mcp   # writes .mcp.json, prints the Codex and VS Code equivalents
-hkb mcp          # the server itself: JSON-RPC 2.0 on stdio, no dependency
-```
-
-`.mcp.json` is read verbatim by Claude Code and Copilot CLI:
-
-```json
-{"mcpServers": {"kanban": {"type": "stdio", "command": "hkb", "args": ["mcp"]}}}
-```
-
-Codex reads MCP servers from `~/.codex/config.toml` and VS Code from `.vscode/mcp.json` — neither is hkb's file
-to write, so `--mcp` prints those two snippets instead of generating them.
-
-The nine tools are the nine verbs — `kanban_show`, `kanban_heartbeat`, `kanban_complete`, `kanban_block`,
-`kanban_request_review`, `kanban_comment`, `kanban_create`, `kanban_link`, `kanban_unblock` — and each one calls
-the function the CLI calls and returns the object its `--json` prints. There is no second code path: a
-`tools/call` of `kanban_show` is byte-for-byte `hkb show <n> --json`. `task` defaults to `$KB_TASK`, so a worker
-just calls `kanban_show`. Nothing about the board requires MCP; it is a second doorway to one protocol.
+## What it ran, and what it spent
 
 ```bash
 hkb stats                       # the last 7 days: what ran, how it ended, what it cost
@@ -136,27 +149,7 @@ the report says how many of them there were rather than quietly understating the
 window actually touched — a comment write bumps the issue's `updatedAt`, so "updated since" is "has news" —
 plus every `running` task, whose ref-CAS heartbeat leaves no trace on the issue.
 
-## How it maps to GitHub
-
-| Hermes | hkb |
-|---|---|
-| SQLite row | Issue with `kb:status:*`, `kb:agent:*`, `kb:board:*` labels and a `<!-- kb: {...} -->` body block |
-| parent → child | child **blocked by** parent (native issue dependencies) |
-| `todo → ready` when all parents done | dispatcher tick, from `blockedBy { state stateReason }` |
-| atomic claim | `POST git/refs refs/kb/locks/<n>/<attempt>` — 201 claimed; 422 "Reference already exists" (observed) or 409 held; anything else back off |
-| heartbeat | CAS on the same ref: `git push <empty commit>:<ref> --force-with-lease=<ref>:<expected>` — free, and a rejected lease is `LOCK_LOST` (exit 3). Profiles that cannot push refs use `"heartbeat": "comment"` |
-| runs table | one `<!-- kb-run -->` comment (attempts, failures, block loops) |
-| `kanban_complete(summary, metadata)` | `<!-- kb-result -->` comment; open PR → *review*, else issue closed |
-| worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link`, or the same nine as MCP tools (`hkb mcp`) |
-| stop nudge | Claude Code / Codex `Stop`, Copilot CLI `agentStop` hook (`hkb hook stop`, 2 nudges, inert unless `KB_TASK` is set) |
-| kanban dashboard | `hkb serve` — local page over the live board; drag-drop calls the same verbs |
-| live event stream | `hkb watch` / `hkb tail <n>` — conditional `GET` with `If-None-Match`; an unchanged board answers 304 and is not charged |
-| runs/spend report | `hkb stats` — the same labels and run comments, rolled up: outcomes, duration, spawns vs the daily cap, `total_cost_usd` per profile |
-| crash / stale / timeout | pid check on the claiming host, `stale_after` (against the lock ref's commit date, then the run comment), `max_runtime` → `ready` or `gave_up` |
-
-Full protocol: [skills/kanban/references/protocol.md](skills/kanban/references/protocol.md).
-
-## Profiles
+## Harnesses
 
 `.kanban/board.json` declares profiles: a launch template plus caps. The built-in `claude` profile starts each
 worker as a Claude Code **background agent** — `claude --bg --name "kb #<n> · <title>" --worktree kb-<n>-<k>
@@ -245,7 +238,7 @@ attempt is recorded as `remote`: no pid, no background job, and its heartbeat (t
 terminal verb. There is no `Stop` hook on a runner, so a final `if: always()` step ends an attempt that finished
 without one (`hkb block … --kind transient`) instead of leaving it `running` until the stale reclaim.
 
-**The honest latency.** The 60-second Hermes cadence exists only while your laptop loop runs. Actions' cron floor
+**The honest latency.** The 60-second cadence exists only while your laptop loop runs. Actions' cron floor
 is 5 minutes, top-of-hour schedules are routinely 15-20+ minutes late, and scheduled workflows are dropped
 entirely on a public repo with no activity for 60 days — which is exactly why the cron here is a sweeper and the
 events are the real trigger. **Laptop-off latency is 15-75 minutes**, end to end. If you want 60 seconds, run
@@ -256,6 +249,30 @@ What you give up, plainly: Actions minutes (free on public repos; a platform fee
 the board itself stays free), no enforced `Stop` nudge, a per-task `model` override that is not plumbed through
 workflow inputs yet, and a worker whose run is cancelled or killed is only noticed at `stale_after`, not at
 `workflow_run`. Details and the whole table: [docs/harnesses.md](docs/harnesses.md#github-actions--claude-action).
+
+## MCP (optional — the CLI is the protocol)
+
+Harnesses that prefer tools to a shell get the same verbs over MCP:
+
+```bash
+hkb init --mcp   # writes .mcp.json, prints the Codex and VS Code equivalents
+hkb mcp          # the server itself: JSON-RPC 2.0 on stdio, no dependency
+```
+
+`.mcp.json` is read verbatim by Claude Code and Copilot CLI:
+
+```json
+{"mcpServers": {"kanban": {"type": "stdio", "command": "hkb", "args": ["mcp"]}}}
+```
+
+Codex reads MCP servers from `~/.codex/config.toml` and VS Code from `.vscode/mcp.json` — neither is hkb's file
+to write, so `--mcp` prints those two snippets instead of generating them.
+
+The nine tools are the nine verbs — `kanban_show`, `kanban_heartbeat`, `kanban_complete`, `kanban_block`,
+`kanban_request_review`, `kanban_comment`, `kanban_create`, `kanban_link`, `kanban_unblock` — and each one calls
+the function the CLI calls and returns the object its `--json` prints. There is no second code path: a
+`tools/call` of `kanban_show` is byte-for-byte `hkb show <n> --json`. `task` defaults to `$KB_TASK`, so a worker
+just calls `kanban_show`. Nothing about the board requires MCP; it is a second doorway to one protocol.
 
 ## GitHub Projects mirror (opt-in, off by default)
 
@@ -280,19 +297,34 @@ one mutation per status transition, and two the first time an issue is added to 
 prints the moves it would make). Deleting the Project, or losing the scope, costs the mirror and nothing else — the
 tick logs the fix once an hour and carries on.
 
+## How it maps to GitHub
+
+| Hermes | hkb |
+|---|---|
+| SQLite row | Issue with `kb:status:*`, `kb:agent:*`, `kb:board:*` labels and a `<!-- kb: {...} -->` body block |
+| parent → child | child **blocked by** parent (native issue dependencies) |
+| `todo → ready` when all parents done | dispatcher tick, from `blockedBy { state stateReason }` |
+| atomic claim | `POST git/refs refs/kb/locks/<n>/<attempt>` — 201 claimed; 422 "Reference already exists" (observed) or 409 held; anything else back off |
+| heartbeat | CAS on the same ref: `git push <empty commit>:<ref> --force-with-lease=<ref>:<expected>` — free, and a rejected lease is `LOCK_LOST` (exit 3). Profiles that cannot push refs use `"heartbeat": "comment"` |
+| runs table | one `<!-- kb-run -->` comment (attempts, failures, block loops) |
+| `kanban_complete(summary, metadata)` | `<!-- kb-result -->` comment; open PR → *review*, else issue closed |
+| worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link`, or the same nine as MCP tools (`hkb mcp`) |
+| stop nudge | Claude Code / Codex `Stop`, Copilot CLI `agentStop` hook (`hkb hook stop`, 2 nudges, inert unless `KB_TASK` is set) |
+| kanban dashboard | `hkb serve` — local page over the live board; drag-drop calls the same verbs |
+| live event stream | `hkb watch` / `hkb tail <n>` — conditional `GET` with `If-None-Match`; an unchanged board answers 304 and is not charged |
+| runs/spend report | `hkb stats` — the same labels and run comments, rolled up: outcomes, duration, spawns vs the daily cap, `total_cost_usd` per profile |
+| crash / stale / timeout | pid check on the claiming host, `stale_after` (against the lock ref's commit date, then the run comment), `max_runtime` → `ready` or `gave_up` |
+
 ## Local state (gitignored)
 
 `.kanban/logs/` worker logs · `.kanban/state.json` spawn counters and auth pauses · `.kanban/outbox.jsonl` writes queued while GitHub was unreachable (replayed on the next tick) · `.kanban/cache.json` GraphQL capability cache.
 
-## Status
+## Docs
 
-MVP. Verified so far: unit tests for the model, lock classification and arg parsing; CLI wiring; and `hkb doctor --api`
-against this repository (2026-08-26), which probes the things the design depends on:
+- [The protocol](skills/kanban/references/protocol.md) — statuses, claims, attempts, handoff; what a worker must do.
+- [Harnesses](docs/harnesses.md) — per-harness setup, profiles, generated files, Codex's one-time trust, Actions.
+- [Project status and verified behaviour](docs/status.md) — how far along this is, and the GitHub API facts the
+  design leans on, each with the probe that confirmed it.
+- [Design rationale](docs/EVALUATION.md) — judged alternatives and the roadmap.
 
-- duplicate ref create returns **422 "Reference already exists"** (not 409) — `src/lock.js` treats both as `held`;
-- GraphQL `Issue.blockedBy`, `blocking`, `subIssues` and `closedByPullRequestsReferences` all exist;
-- REST `GET /issues/{n}/dependencies/blocked_by` works with `X-GitHub-Api-Version: 2026-03-10`;
-- `--force-with-lease` on a lock ref rejects both a moved ref and a deleted one with `(stale info)`, and
-  `GET git/commits/<sha>` gives the dispatcher the beat's committer date (round trip on this repo, 2026-08-26).
-
-Run `hkb doctor --api` on your own repo before the first dispatch; it re-checks all of the above.
+Requires Node >= 20 and the [GitHub CLI](https://cli.github.com), authenticated. MIT licensed.
