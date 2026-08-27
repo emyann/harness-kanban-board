@@ -37,6 +37,7 @@ If you tag by hand, the two must match: tag `v1.4.0` ⇄ `"version": "1.4.0"`.
 | step | why it is there |
 | --- | --- |
 | `npm run lint`, `npm test` ×2 (UTC and `America/New_York`) | a tag can point at a commit that never went through a pull request |
+| `npm run smoke` | packs the tarball, installs it into an empty directory and runs the CLI from there. `npm test` proves the source is right; this proves the artifact is. `test.yml` runs it on every push too, but this workflow re-runs the suite itself rather than depending on that one, so it has to re-run the smoke as well |
 | tag vs `package.json` | a mismatch is a lie about what is being published; the run fails and names both numbers |
 | `NPM_TOKEN` preflight | a missing secret is a notice with the fix, not a red build |
 | `npm publish --provenance --access public` | `id-token: write` lets npm exchange an OIDC token for a signed attestation, so the package page shows where it was built from |

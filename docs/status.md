@@ -11,10 +11,14 @@ GitHub as the only backend. Treat the CLI's flags as stable and the internals as
 Verified so far:
 
 - **Unit tests** over the pure model — status transitions, lock classification, dependency promotion, arg
-  parsing, date and duration handling. 391 tests, run on every push and pull request
+  parsing, date and duration handling. Over four hundred of them, run on every push and pull request
   ([`.github/workflows/test.yml`](../.github/workflows/test.yml)) under two timezones, `UTC` and
   `America/New_York`, because a date test that only holds in one of them is a flake waiting for a bad day.
 - **CLI wiring** — every verb reaches the function it claims to.
+- **The published tarball** — the same workflow packs hkb, installs the tarball into an empty directory and
+  runs the CLI from there, so a `files` list that stops shipping `skills/` or `templates/` fails CI instead of
+  failing a stranger's first `npx hkb init`. After a release, [`release.yml`](../.github/workflows/release.yml)
+  repeats the check against the copy npm actually served. See [Releasing](releasing.md).
 - **`hkb doctor --api` against this repository** (2026-08-26), which probes the GitHub behaviour the design
   depends on rather than trusting the docs. Those probes are below.
 

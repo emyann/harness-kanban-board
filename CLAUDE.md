@@ -28,6 +28,8 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 - Every command returns a stable object under `--json`; human output is a one-liner per item.
 - Errors: throw `Error` with `.exitCode` (2 = usage/state, 3 = LOCK_LOST) and a message that names the fix.
 - Run `npm run lint && npm test` before finishing. Do not add a build step.
+- Touching `files` in `package.json`, or anything the CLI reads from the package at runtime? Run `npm run smoke`
+  too — it packs, installs and runs the tarball. Releasing: `docs/releasing.md`.
 
 ## Commits and PRs
 
