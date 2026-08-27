@@ -8,6 +8,10 @@
 
 - [hkb at a glance](./architecture/overview.md): The moving parts: CLI, board protocol, dispatcher loop, workers — and the one rule that shapes them all: the board is the only state.
 
+## Decisions
+
+- [ADR-004: Three seats — operator, dispatcher, worker](./decisions/adr-004-roles-and-adoption.md): hkb has exactly three seats (operator = the human, dispatcher = a tick, worker = any harness); the dispatcher is not an orchestrator, and adoption is a ladder of the same protocol driven by hand or by the tick.
+
 ## Planned (not yet written)
 
 - architecture/dispatcher-tick: The tick pipeline (outbox, reclaim, reap, orphan sweep, reconcile, promote, tracks, guards, claim+spawn) and the live incident behind each stage.
@@ -17,7 +21,6 @@
 - decisions/adr-001-github-native-backend: GitHub Issues + native dependencies + ref locks won over MCP-first and repo-native designs; stacked PRs rejected for board sequencing.
 - decisions/adr-002-zero-npm-dependencies: The CLI ships with zero npm dependencies; presentation may use Node built-ins only. What would justify revisiting.
 - decisions/adr-003-npm-trusted-publishing: Releases publish via npm trusted publishing (OIDC) from release.yml only; no npm token exists anywhere.
-- decisions/adr-004-roles-and-adoption: The canonical seat taxonomy (operator/supervisor/dispatcher/worker) and the adoption ladder for workflows simpler than the full DAG.
 - features/harness-profiles: The shipped profiles (claude, claude-p, claude-track, claude-action, copilot-cli, codex): modes, permissions, models, and what each harness can and cannot do.
 - features/tracks: One session executes a whole DAG subgraph: per-node claims as checkpoints, stacked node PRs, fallback to node-by-node.
 - gotchas/github-api-quirks: 422 'already exists' means held, ref GETs prefix-match into arrays, 304s are free, GITHUB_ACTIONS env reroutes gh — the traps the code already survived.

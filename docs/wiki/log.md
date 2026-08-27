@@ -9,3 +9,5 @@ history.
 -->
 
 ## 2026-08-27 — added architecture/overview (seeded at init)
+
+## 2026-08-27 — added decisions/adr-004-roles-and-adoption (from the 7-agent roles evaluation; status proposed)

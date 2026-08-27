@@ -79,7 +79,7 @@ pages:
     status: planned
   - slug: decisions/adr-004-roles-and-adoption
     summary: "The canonical seat taxonomy (operator/supervisor/dispatcher/worker) and the adoption ladder for workflows simpler than the full DAG."
-    status: planned
+    status: seeded
   - slug: gotchas/long-lived-process-rot
     summary: "The #61 outage: a 90-minute-old loop 404ing on every claim while a fresh process succeeded — why caches are per-tick and the loop exits 4."
     status: planned
