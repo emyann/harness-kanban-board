@@ -19,14 +19,14 @@ covers:
   - path: src/lifecycle.js
     sha: 67b6fb458425948ce61d6a7a324649cb79e1c648
   - path: src/dispatch.js
-    sha: b50d4bc34cd5bc68e3969bc0e300739c0eaafa73
+    sha: c3f9d2fbfb5e7561984d31f75ad78394539bc503
   - path: src/context.js
     sha: 77ada2083b7d355f8de6ea824ca40bdaab1e712a
   - path: src/hook.js
     sha: 8129f18ad4e36f140388af7abb66d95d064d337a
   - path: src/board.js
     sha: afac0241819aee331d5b7ccde0e374e782f83619
-generated_at_commit: 65a0f32
+generated_at_commit: 3d6fcf0
 last_refreshed: 2026-08-27
 related: [concepts/board-protocol, concepts/claims-and-leases, architecture/dispatcher-tick, concepts/roles-and-seats]
 ---

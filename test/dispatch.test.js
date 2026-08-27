@@ -216,6 +216,40 @@ test('a fresh lock ref does not save a worker whose process is gone', async (t) 
   assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'crashed' }]);
 });
 
+test('a hand-claimed attempt is not a crashed spawn: it has no pid and never will', async (t) => {
+  const h = harness({ dispatch: { stale_after: 3600 } });
+  t.after(h.cleanup);
+  // `hkb claim 7` with no --spawn: this host, no pid, no job — a human (or an agent they started)
+  // is working it in their own terminal, and the CAS heartbeat leaves the run comment untouched
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(7200), heartbeat_at: ago(7200), lock_sha: 'a'.repeat(40), manual: true }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.gh.beat(7, 1, ago(120));
+
+  const first = await h.tick({ max: 0 });
+  const second = await h.tick({ max: 0 }); // the 180s rule used to fire on every tick, forever
+
+  assert.deepEqual(first.reclaimed, []);
+  assert.deepEqual(second.reclaimed, []);
+  assert.equal(h.gh.statusOf(7), 'running');
+  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/7/1'], 'the lock the worker beats on survives');
+  assert.equal(h.gh.callsMatching('PATCH', /issues\/comments/).length, 0, 'and its run record is not rewritten');
+  assert.match(h.log(), /#7: attempt 1 beat on refs\/kb\/locks\/7\/1 \d+s ago — alive/);
+});
+
+test('a hand-claimed attempt that stops beating is reclaimed after stale_after', async (t) => {
+  const h = harness({ dispatch: { stale_after: 3600 } });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(9000), heartbeat_at: ago(9000), lock_sha: 'a'.repeat(40), manual: true }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.gh.beat(7, 1, ago(5400)); // last beat 90 minutes ago: past stale_after, whoever it was is gone
+
+  const s = await h.tick({ max: 0 });
+
+  assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'reclaimed' }], 'stale_after, not the no-handle rule');
+  assert.equal(h.gh.statusOf(7), 'ready');
+  assert.deepEqual(h.gh.lockRefs(), []);
+});
+
 test('a claim records the sha that starts the worker\'s beat chain', async (t) => {
   const h = harness();
   t.after(h.cleanup);
