@@ -90,57 +90,218 @@ function upsertSection(file, section) {
   fs.writeFileSync(file, text);
 }
 
-function hkbCommandForHook() {
-  if (hkbOnPath()) return 'hkb hook stop';
-  const bin = path.join(PKG_ROOT, 'bin', 'hkb.js');
-  return `node "${bin}" hook stop`;
+// ---------- the Claude Code hooks ----------
+// Two hooks, and the question of which settings file they go in (#85). `.claude/settings.json` is
+// tracked and shared, and no command hkb can write means the same thing in everyone's checkout:
+// a bare `hkb` is only on PATH for whoever ran `npm i -g hkb-cli`, and an absolute path into this
+// package is wrong for every teammate — under `npx` it is inside the cache, so it stops existing for
+// the installer too, the moment that cache is cleaned. A `matcher: "*"` PreToolUse hook that cannot
+// resolve fails on *every tool call in every session* in that repo.
+// So the default is `.claude/settings.local.json`: per-developer, gitignored, honest about serving
+// whoever runs the board rather than the repo. `--shared-hooks` opts into the tracked file, where
+// only the portable `hkb hook <verb>` form is ever written and `hkb doctor` is what tells a teammate
+// it does not resolve for them.
+
+/** The two files Claude Code reads hooks from, relative to the repo root. */
+export const HOOK_SETTINGS = {
+  local: path.join('.claude', 'settings.local.json'),
+  shared: path.join('.claude', 'settings.json'),
+};
+
+/** How a machine with no `hkb` on PATH and no durable checkout still gets a working hook. */
+export const NPX_COMMAND = 'npx -y hkb-cli';
+
+/**
+ * Is this path inside an npx cache? Such a path is not durable — it is wrong for every teammate and
+ * gone from this machine as soon as the cache is cleaned — so nothing generated may ever name it.
+ */
+export function isEphemeralPath(p) { return /(^|[\\/])_npx([\\/]|$)/.test(String(p || '')); }
+
+/**
+ * The command a hook should run.
+ * @param verb one of the values in CLAUDE_HOOKS
+ * @param shared true when the command goes in a tracked file — then it is always the plain binary,
+ *   because an absolute path is a lie on any machine but this one
+ */
+export function hkbCommandForHook(verb = 'stop', { shared = false, onPath, pkgRoot = PKG_ROOT } = {}) {
+  const suffix = ` hook ${verb}`;
+  if (shared) return `hkb${suffix}`;
+  if (onPath ?? hkbOnPath()) return `hkb${suffix}`;
+  const bin = path.join(pkgRoot, 'bin', 'hkb.js');
+  return isEphemeralPath(bin) ? `${NPX_COMMAND}${suffix}` : `node "${bin}"${suffix}`;
 }
 
 /**
- * The hooks `hkb init` writes into `.claude/settings.json`, as `event → hkb hook <verb>`. Both are
- * inert outside a worker (`src/hook.js` returns before it reads stdin unless KB_TASK is set), but
- * they go into a `matcher: "*"` entry in a file the operator shares with every other session in the
- * repo — so init names both, and `hookSummary` says what the second one is for.
+ * The hooks `hkb init` writes, as `event → hkb hook <verb>`. Both are inert outside a worker
+ * (`src/hook.js` returns before it reads stdin unless KB_TASK is set), but they go into a
+ * `matcher: "*"` entry in a file every other session in the repo reads — so init names both, and
+ * `hookSummary` says what the second one is for.
  */
 export const CLAUDE_HOOKS = { Stop: 'stop', PreToolUse: 'pretool' };
 const HOOK_NOTE = 'both inert unless KB_TASK is set; PreToolUse is the worker permission policy';
 
-/** One line naming every hook init wrote and every one it found, given the events it added. */
-export function hookSummary(added) {
+/** Split a command into its arguments, honouring the double quotes hkb writes around a path. */
+function tokens(command) { return (String(command || '').match(/"[^"]*"|\S+/g) || []).map((t) => t.replace(/^"|"$/g, '')); }
+
+/**
+ * What a configured hook command needs before it can run: the file a `node "<path>"` form names, or
+ * the binary the command starts with. Pure — `hkb doctor` does the looking.
+ * @returns {{ kind: 'file'|'bin', target: string }}
+ */
+export function hookCommandNeeds(command) {
+  const [first = '', second] = tokens(command);
+  if (path.basename(first).replace(/\.exe$/i, '') === 'node' && second) return { kind: 'file', target: second };
+  return { kind: 'bin', target: first };
+}
+
+/** Does `command` run one of hkb's own hook verbs? Matches every form hkb has ever written. */
+export function isHkbHookCommand(command, verb) {
+  const c = String(command || '').trim();
+  return /(^|[\s"'/\\])hkb(-cli)?(@\S+?)?(\.js)?["']?(\s|$)/.test(c) && new RegExp(`\\bhook\\s+${verb}\\s*$`).test(c);
+}
+
+/** A command that means the same thing on every machine: a plain binary, never a path into a checkout. */
+export function isPortableHookCommand(command) {
+  const need = hookCommandNeeds(command);
+  return need.kind === 'bin' && !!need.target && !path.isAbsolute(need.target) && !isEphemeralPath(need.target);
+}
+
+/** Every hkb hook in a parsed settings object, as `{ event, verb, command, portable }`. */
+export function hkbHooks(settings) {
+  const out = [];
+  for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
+    for (const group of settings?.hooks?.[event] || []) {
+      for (const h of group?.hooks || []) {
+        if (!isHkbHookCommand(h?.command, verb)) continue;
+        out.push({ event, verb, command: h.command, portable: isPortableHookCommand(h.command) });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Which settings file hkb's hooks belong in, given what each one already holds. Pure: both parsed
+ * files come in, so the policy is testable without a repo.
+ *
+ * A fresh repo gets the local file. Hooks already in the tracked file with a *portable* command mean
+ * the same thing on every machine — somebody chose that, so init leaves them there. Hooks in the
+ * tracked file naming a path are the bug this exists to fix, and get moved. `--shared-hooks` says
+ * "shared" outright. Either way they end up in exactly one file: two copies fire every nudge twice.
+ * @returns {{ file: 'local'|'shared', movedFrom: 'local'|'shared'|null }}
+ */
+export function hookPlacement({ local, shared, wantShared = false } = {}) {
+  const inLocal = hkbHooks(local), inShared = hkbHooks(shared);
+  if (wantShared) return { file: 'shared', movedFrom: inLocal.length ? 'local' : null };
+  if (!inLocal.length && inShared.length && inShared.every((h) => h.portable)) return { file: 'shared', movedFrom: null };
+  return { file: 'local', movedFrom: inShared.length ? 'shared' : null };
+}
+
+/**
+ * Remove hkb's own hook entries from a parsed settings object, leaving every other hook — including
+ * one the operator added to the same group — exactly as it was. Returns true when it changed.
+ */
+export function stripHkbHooks(settings) {
+  let changed = false;
+  for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
+    const groups = settings?.hooks?.[event];
+    if (!Array.isArray(groups) || !groups.length) continue;
+    const kept = [];
+    let touched = false;
+    for (const g of groups) {
+      const hooks = (g?.hooks || []).filter((h) => !isHkbHookCommand(h?.command, verb));
+      if (hooks.length === (g?.hooks || []).length) { kept.push(g); continue; }
+      touched = true;
+      if (hooks.length) kept.push({ ...g, hooks });
+    }
+    if (!touched) continue;
+    changed = true;
+    if (kept.length) settings.hooks[event] = kept;
+    else delete settings.hooks[event];
+  }
+  if (changed && settings.hooks && !Object.keys(settings.hooks).length) delete settings.hooks;
+  return changed;
+}
+
+/** One line naming every hook init wrote and every one it found, and where they live. */
+export function hookSummary(added, { file = HOOK_SETTINGS.local, movedFrom = null, repaired = [] } = {}) {
   const all = Object.keys(CLAUDE_HOOKS);
   const names = (xs) => `${xs.join(' and ')} hook${xs.length > 1 ? 's' : ''}`;
   const kept = all.filter((e) => !added.includes(e));
   const what = added.length
-    ? `added ${names(added)} to .claude/settings.json${kept.length ? `; ${names(kept)} already there` : ''}`
-    : `${names(all)} already present in .claude/settings.json`;
-  return `${what} (${HOOK_NOTE})`;
+    ? `added ${names(added)} to ${file}${kept.length ? `; ${names(kept)} already there` : ''}`
+    : `${names(all)} already present in ${file}`;
+  const moved = movedFrom ? `; moved out of ${movedFrom}, which is shared and cannot name this machine` : '';
+  const fixed = repaired.length ? `; rewrote the ${names(repaired)} command, which named a path that is not there for everyone` : '';
+  return `${what}${moved}${fixed} (${HOOK_NOTE})`;
 }
 
 /**
- * Write the hooks in `CLAUDE_HOOKS` into `.claude/settings.json`, leaving anything else in the file
- * alone. Returns the events it added (`[]` when both were already there), or null when the settings
- * file could not be parsed — in which case it has already said so through `log`.
+ * Write the hooks in `CLAUDE_HOOKS` into whichever settings file `hookPlacement` picks, leaving
+ * everything else in that file alone and removing hkb's hooks from the other one so no nudge fires
+ * twice. Returns what it did, or null when the target file could not be parsed — in which case it
+ * has already said so through `log`.
+ * @returns {{ file, added, repaired, movedFrom, command }|null} paths relative to `root`
  */
-export function installClaudeHooks(root, log) {
-  const dir = path.join(root, '.claude');
-  const file = path.join(dir, 'settings.json');
-  fs.mkdirSync(dir, { recursive: true });
-  let settings = {};
-  if (fs.existsSync(file)) {
-    try { settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { log(`skip hooks: ${file} is not valid JSON (${e.message})`); return null; }
-  }
-  settings.hooks = settings.hooks || {};
-  const added = [];
-  const ensure = (event, cmd) => {
-    settings.hooks[event] = settings.hooks[event] || [];
-    if (settings.hooks[event].some((h) => JSON.stringify(h).includes(cmd.split(' ').pop()) && JSON.stringify(h).includes('hkb'))) return;
-    settings.hooks[event].push({ matcher: '*', hooks: [{ type: 'command', command: cmd, timeout: 30 }] });
-    added.push(event);
+export function installClaudeHooks(root, log, { shared: wantShared = false } = {}) {
+  const parse = (rel) => {
+    const abs = path.join(root, rel);
+    if (!fs.existsSync(abs)) return { ok: true, settings: {} };
+    try { return { ok: true, settings: JSON.parse(fs.readFileSync(abs, 'utf8')) }; }
+    catch (e) { return { ok: false, error: e.message, settings: null }; }
   };
-  const base = hkbCommandForHook().replace(/ stop$/, '');
-  for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) ensure(event, `${base} ${verb}`);
-  if (added.length) fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
-  return added;
+  const read = { local: parse(HOOK_SETTINGS.local), shared: parse(HOOK_SETTINGS.shared) };
+  const { file, movedFrom } = hookPlacement({ local: read.local.settings, shared: read.shared.settings, wantShared });
+  const target = read[file];
+  if (!target.ok) { log(`skip hooks: ${HOOK_SETTINGS[file]} is not valid JSON (${target.error})`); return null; }
+  const other = read[file === 'local' ? 'shared' : 'local'];
+  if (!other.ok) log(`note: ${HOOK_SETTINGS[file === 'local' ? 'shared' : 'local']} is not valid JSON (${other.error}) — if it configures hkb hooks too, every nudge fires twice`);
+
+  const settings = target.settings;
+  settings.hooks = settings.hooks || {};
+  const added = [], repaired = [];
+  let stopCommand = null;
+  for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
+    const cmd = hkbCommandForHook(verb, { shared: file === 'shared' });
+    const groups = settings.hooks[event] = settings.hooks[event] || [];
+    const mine = groups.flatMap((g) => (g?.hooks || []).filter((h) => isHkbHookCommand(h?.command, verb)));
+    if (!mine.length) {
+      groups.push({ matcher: '*', hooks: [{ type: 'command', command: cmd, timeout: 30 }] });
+      added.push(event);
+    } else {
+      // A tracked file may hold nothing but a portable command; a local one keeps whatever the
+      // operator typed, except an npx-cache path, which stopped being a path when the cache went.
+      for (const h of mine) {
+        if (file === 'shared' ? isPortableHookCommand(h.command) : !isEphemeralPath(h.command)) continue;
+        h.command = cmd;
+        if (!repaired.includes(event)) repaired.push(event);
+      }
+    }
+    if (event === 'Stop') stopCommand = mine.length ? mine[0].command : cmd;
+  }
+  const write = (rel, value) => {
+    fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    fs.writeFileSync(path.join(root, rel), JSON.stringify(value, null, 2) + '\n');
+  };
+  if (added.length || repaired.length) write(HOOK_SETTINGS[file], settings);
+  if (movedFrom && stripHkbHooks(read[movedFrom].settings)) write(HOOK_SETTINGS[movedFrom], read[movedFrom].settings);
+  return { file: HOOK_SETTINGS[file], added, repaired, movedFrom: movedFrom ? HOOK_SETTINGS[movedFrom] : null, command: stopCommand };
+}
+
+/**
+ * hkb's hooks as they are actually configured, from both settings files — what `hkb doctor` checks.
+ * @returns {{ hooks: [{ file, event, verb, command, portable }], unreadable: [{ file, error }] }}
+ */
+export function findClaudeHooks(root) {
+  const hooks = [], unreadable = [];
+  for (const rel of [HOOK_SETTINGS.local, HOOK_SETTINGS.shared]) {
+    const abs = path.join(root, rel);
+    if (!fs.existsSync(abs)) continue;
+    let settings;
+    try { settings = JSON.parse(fs.readFileSync(abs, 'utf8')); } catch (e) { unreadable.push({ file: rel, error: e.message }); continue; }
+    for (const h of hkbHooks(settings)) hooks.push({ file: rel, ...h });
+  }
+  return { hooks, unreadable };
 }
 
 // ---------- harness files (`hkb init --harness copilot|codex`) ----------
@@ -327,7 +488,8 @@ export function installHarness(root, name, { command } = {}) {
 
 // Everything hkb writes under `.kanban/` except `board.json`, which is the one tracked file, plus
 // .claude/worktrees/ — worker checkouts, both Claude Code's `--worktree` and the ones the dispatcher
-// makes itself for profiles with `workspace: "worktree"` (Copilot CLI).
+// makes itself for profiles with `workspace: "worktree"` (Copilot CLI) — and .claude/settings.local.json,
+// where the hooks go by default: it names this machine's `hkb`, so it must never be committable (#85).
 // This repo's own `.gitignore` must be a superset of this list; `test/init.test.js` holds that line,
 // so a lesson learned here cannot stay here (`.kanban/dispatch.pid` did, for a while).
 export const GITIGNORE_LINES = [
@@ -339,6 +501,7 @@ export const GITIGNORE_LINES = [
   '.kanban/nudges/',
   '.kanban/sessions/',
   '.claude/worktrees/',
+  '.claude/settings.local.json',
 ];
 
 /** Append whatever `.gitignore` lines are missing. Per-line, so it is idempotent and additive. */
@@ -430,8 +593,16 @@ export async function init(ctx, flags, log) {
   // 5. Claude hooks + harness files + gitignore + doc sections
   if (flags['no-hook']) log(`skipped the ${Object.keys(CLAUDE_HOOKS).join(' and ')} hooks (--no-hook)`);
   else {
-    const added = installClaudeHooks(root, log);
-    if (added) log(hookSummary(added));
+    const hooks = installClaudeHooks(root, log, { shared: !!flags['shared-hooks'] });
+    if (hooks) {
+      log(hookSummary(hooks.added, hooks));
+      if (hooks.added.length && hooks.file === HOOK_SETTINGS.local) {
+        log(`  that file is per-developer and gitignored; \`hkb init --shared-hooks\` writes ${HOOK_SETTINGS.shared} instead — tracked, so the command there is a plain \`hkb\` every teammate has to have on PATH`);
+      }
+      if (hooks.command?.startsWith(NPX_COMMAND)) {
+        log(`  the hook runs \`${NPX_COMMAND}\`: hkb is not on PATH and this package is in the npx cache, which is not a durable path. \`npm i -g hkb-cli\` and re-run init for a faster one`);
+      }
+    }
   }
   for (const h of harnesses) {
     const written = installHarness(root, h, { command: hkbCommandForHook() });

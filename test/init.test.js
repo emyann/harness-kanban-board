@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { init, ensureGitignore, GITIGNORE_LINES, CLAUDE_HOOKS, agentsSkillDir, packageSkillDir, readSkillVersion } from '../src/init.js';
+import { init, ensureGitignore, GITIGNORE_LINES, CLAUDE_HOOKS, HOOK_SETTINGS, agentsSkillDir, packageSkillDir, readSkillVersion } from '../src/init.js';
 import { parseArgs } from '../src/cli.js';
 import { makeContext, DEFAULT_PROFILES } from '../src/board.js';
 import { L, STATUSES } from '../src/model.js';
@@ -37,7 +37,9 @@ test('every path hkb writes locally is ignored — the pidfile included', () => 
   const written = lines(root);
   for (const w of GITIGNORE_LINES) assert.ok(written.includes(w), `${w} missing from the generated .gitignore`);
   assert.ok(written.includes('.kanban/dispatch.pid'), 'the dispatcher pidfile must be ignored');
+  assert.ok(written.includes(HOOK_SETTINGS.local), 'the hooks name this machine, so their file must never be committable (#85)');
   assert.ok(!written.includes('.kanban/board.json'), 'board.json is tracked on purpose');
+  assert.ok(!written.includes(HOOK_SETTINGS.shared), '--shared-hooks writes a tracked file on purpose');
 });
 
 test('a repo that already has the lines is left untouched', () => {
@@ -77,7 +79,7 @@ test("this repo's .gitignore is a superset — a lesson learned here ships to ad
 
 const NWO = 'acme/board'; // what FakeGh answers for; init takes it from --repo, so detectRepo never runs
 const BOARD_FILE = path.join('.kanban', 'board.json');
-const SETTINGS = path.join('.claude', 'settings.json');
+const SETTINGS = HOOK_SETTINGS.local; // where the hooks go unless `--shared-hooks` says otherwise (#85)
 // what a re-run must leave byte-identical
 const FOOTPRINT = [BOARD_FILE, SETTINGS, '.gitignore', 'CLAUDE.md', 'AGENTS.md', path.join('.agents', 'skills', 'kanban', 'SKILL.md')];
 
@@ -152,20 +154,72 @@ test('the label set that reaches GitHub is the board\'s, and nothing else is wri
   assert.equal(board(root).default_branch, 'main');
 });
 
-test('both hooks land in .claude/settings.json, and init names both (#73)', async () => {
+test('both hooks land in the local settings file, and init names both (#73, #85)', async () => {
   const { root, printed } = await runInit();
   const hooks = settings(root).hooks;
 
+  assert.equal(fs.existsSync(path.join(root, HOOK_SETTINGS.shared)), false, 'a command that names this machine may not go in a tracked file');
   assert.deepEqual(Object.keys(hooks).sort(), Object.keys(CLAUDE_HOOKS).sort(), 'the file gets exactly the hooks init claims to write');
   for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
     const entry = hooks[event][0];
     assert.equal(entry.matcher, '*');
-    assert.match(entry.hooks[0].command, new RegExp(`hkb(\\.js")? hook ${verb}$`), `${event} must run \`hkb hook ${verb}\``);
+    assert.match(entry.hooks[0].command, new RegExp(`hkb(-cli|\\.js")? hook ${verb}$`), `${event} must run \`hkb hook ${verb}\``);
     assert.equal(entry.hooks[0].timeout, 30);
   }
-  const said = printed.find((l) => l.includes('.claude/settings.json'));
-  assert.ok(said, 'init must say what it did to a settings file the operator shares with every session in the repo');
+  const said = printed.find((l) => l.includes(SETTINGS));
+  assert.ok(said, 'init must say what it did to a settings file every other session in the repo reads');
   for (const event of Object.keys(CLAUDE_HOOKS)) assert.ok(said.includes(event), `wrote the ${event} hook but did not name it: "${said}"`);
+  assert.ok(printed.some((l) => l.includes('--shared-hooks')), 'and name the flag that puts them in the tracked file instead');
+});
+
+test('--shared-hooks writes the tracked file, with a command that is true on every machine (#85)', async () => {
+  const { root, printed } = await runInit(['--shared-hooks']);
+
+  assert.equal(fs.existsSync(path.join(root, HOOK_SETTINGS.local)), false, 'one file, or every nudge fires twice');
+  const hooks = JSON.parse(read(root, HOOK_SETTINGS.shared)).hooks;
+  for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
+    assert.equal(hooks[event][0].hooks[0].command, `hkb hook ${verb}`, 'a tracked file gets the portable form, never a path');
+  }
+  assert.ok(printed.some((l) => l.includes(HOOK_SETTINGS.shared)));
+});
+
+/** A PATH with the handful of binaries init shells out to, and definitely no `hkb` — the machine the bug needs. */
+function pathWithoutHkb() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-nopath-'));
+  for (const bin of ['sh', 'git', 'node']) {
+    const found = spawnSync('sh', ['-c', `command -v ${bin}`], { encoding: 'utf8' });
+    if (found.status !== 0) return null;
+    fs.symlinkSync(found.stdout.trim(), path.join(dir, bin));
+  }
+  return dir;
+}
+
+test('run from the npx cache, init writes a command that outlives it — and never the cache path (#85)', async () => {
+  // The trap this closes: `npx hkb-cli init` on a machine with no global install used to write
+  // PKG_ROOT — inside the cache — into a *tracked* settings file. Wrong for every teammate, and gone
+  // for the installer too the next time npm cleans that cache. So run the real CLI from a package
+  // root that looks exactly like one, on a PATH with no `hkb` on it.
+  const cache = path.join(fs.realpathSync(scratch()), '_npx', '9f3c1a', 'node_modules', 'hkb-cli');
+  fs.mkdirSync(cache, { recursive: true });
+  // a copy, not a link: node resolves a symlinked module to its real path, and PKG_ROOT with it
+  for (const entry of ['bin', 'src', 'skills', 'templates', 'package.json']) fs.cpSync(path.join(REPO, entry), path.join(cache, entry), { recursive: true });
+  let bin;
+  try { bin = pathWithoutHkb(); } catch { return; } // a filesystem that refuses symlinks
+  if (!bin) return;
+  const root = gitRepo();
+  const env = { ...process.env, PATH: bin, KB_TASK: '' };
+  const r = spawnSync(process.execPath, [path.join(cache, 'bin', 'hkb.js'), 'init', '--repo', NWO, '--no-labels'], { cwd: root, encoding: 'utf8', env });
+  assert.equal(r.status, 0, `${r.stdout}${r.stderr}`);
+
+  for (const rel of Object.values(HOOK_SETTINGS)) {
+    if (!fs.existsSync(path.join(root, rel))) continue;
+    assert.ok(!read(root, rel).includes('_npx'), `${rel} names the npx cache, which stops existing the moment it is cleaned`);
+  }
+  assert.equal(fs.existsSync(path.join(root, HOOK_SETTINGS.shared)), false, 'and nothing at all goes into the tracked file');
+  const stop = settings(root).hooks.Stop[0].hooks[0].command;
+  assert.equal(stop, 'npx -y hkb-cli hook stop', 'with no hkb on PATH and no durable checkout, npx is the only command that still runs tomorrow');
+  assert.ok(`${r.stdout}${r.stderr}`.includes('npm i -g hkb-cli'), `and init says how to get a faster one:\n${r.stdout}${r.stderr}`);
+  assert.ok(lines(root).map((l) => l.trim()).includes(HOOK_SETTINGS.local), 'the file the hooks went into is ignored, not committable');
 });
 
 test('the shipped ignore list reaches the adopter, pidfile included (#74)', async () => {

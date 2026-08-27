@@ -16,7 +16,7 @@ import { gc } from './gc.js';
 import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, resumeCommand } from './model.js';
 
 /** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
-const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'no-labels', 'api', 'mcp', 'with-actions', 'help']);
+const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'with-actions', 'help']);
 
 export function parseArgs(argv) {
   const flags = {};
@@ -149,8 +149,10 @@ export function terminalArgv(verb, number, p, { board, attempt } = {}) {
 const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issues
 
   setup       init [--board slug] [--profiles a,b] [--harness copilot|codex] [--with-actions] [--mcp] [--import]
-                   [--no-hook] [--no-labels] [--project <number|new>]
+                   [--no-hook] [--shared-hooks] [--no-labels] [--project <number|new>]
                    --no-labels + --repo owner/name writes every local file and sends nothing (no gh, no network)
+                   hooks go in .claude/settings.local.json (per-developer); --shared-hooks writes the tracked
+                   .claude/settings.json instead, where the command is a plain hkb everyone must have on PATH
               doctor [--api] [--json]
   tasks       create "title" [--body ..] [--blocked-by 12,13] [--agent claude] [--priority N] [--paths a/,b/]
                      [--model m] [--skills s1,s2] [--max-retries N] [--max-runtime S] [--scheduled-at ISO] [--triage] [--goal ".."]

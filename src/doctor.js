@@ -7,7 +7,7 @@ import { boardFile, api, readState, writeState } from './board.js';
 import { detectCaps } from './tasks.js';
 import { L, STATUSES, compareVersions } from './model.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
-import { agentsSkillDir, packageSkillDir, readSkillVersion, harnessFiles, actionsFiles, HARNESS_PROFILE } from './init.js';
+import { agentsSkillDir, packageSkillDir, readSkillVersion, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, isEphemeralPath, HOOK_SETTINGS } from './init.js';
 import { checkProject } from './projects.js';
 
 function has(cmd) { return spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).status === 0; }
@@ -70,6 +70,45 @@ export function checkActions(ctx, { ok, warn }) {
   tracked
     ? ok('actions workflows', `${files.join(' · ')} (profiles ${triggers.map(([n]) => n).join(', ')})`)
     : warn('actions workflows', `${files.join(' · ')} are not committed — Actions only runs workflows on the default branch`, 'git add .github/workflows && commit, then push');
+}
+
+/**
+ * The Stop/PreToolUse hooks: which settings file holds them, and whether what they run can actually
+ * run *here*. A hook command that does not resolve fails on every tool call in every session in the
+ * repo — noise the reader did not write and cannot explain — and a hook that only half-exists is
+ * worse than none, so this is a failure with the install in the fix, not a warning (#85). The lookups
+ * are arguments so the check is testable without touching PATH.
+ */
+export function checkHooks(ctx, { ok, warn, bad }, { onPath = has, exists = (p) => fs.existsSync(p) } = {}) {
+  const { hooks, unreadable } = findClaudeHooks(ctx.root);
+  for (const u of unreadable) warn('hooks settings', `${u.file} is not valid JSON (${u.error})`, 'fix the JSON, then hkb init');
+  if (!hooks.some((h) => h.event === 'Stop')) {
+    return warn('stop hook', `not configured in ${HOOK_SETTINGS.local} or ${HOOK_SETTINGS.shared} — workers that exit without a terminal verb are only caught by the dispatcher`, 'hkb init');
+  }
+  const files = [...new Set(hooks.map((h) => h.file))];
+  files.length > 1
+    ? warn('stop hook', `configured in both ${files.join(' and ')} — every nudge fires twice`, "delete hkb's hooks from one of them, then hkb init")
+    : ok('stop hook', files[0]);
+  // one finding per thing that has to exist, not per hook: both commands normally need the same binary
+  const byTarget = new Map();
+  for (const command of [...new Set(hooks.map((h) => h.command))]) {
+    const need = hookCommandNeeds(command);
+    const key = `${need.kind}:${need.target}`;
+    if (!byTarget.has(key)) byTarget.set(key, { need, commands: [] });
+    byTarget.get(key).commands.push(command);
+  }
+  for (const { need, commands } of byTarget.values()) {
+    const what = commands.join(' · ');
+    if (isEphemeralPath(need.target)) {
+      bad('hook command', `${what} — the npx cache is not a durable path, so this stops working the moment it is cleaned`, 'npm i -g hkb-cli, then hkb init');
+    } else if (need.kind === 'file' ? exists(need.target) : onPath(need.target)) {
+      ok('hook command', what);
+    } else {
+      bad('hook command',
+        `${what} — ${need.kind === 'file' ? `${need.target} is not there` : `\`${need.target}\` is not on PATH here`}; the hook fails on every tool call in this repo`,
+        need.target === 'hkb' ? 'npm i -g hkb-cli (or: hkb init, which writes a command that resolves here)' : 'hkb init');
+    }
+  }
 }
 
 // ---------- KB_TOKEN expiry ----------
@@ -248,11 +287,7 @@ export async function doctor(ctx, flags, log) {
   checkActions(ctx, { ok, warn });
   const claudeSkill = path.join(ctx.root, '.claude', 'skills', 'kanban');
   fs.existsSync(claudeSkill) ? ok('claude skill link', '.claude/skills/kanban') : warn('claude skill link', 'missing', 'hkb init');
-  try {
-    const s = JSON.parse(fs.readFileSync(path.join(ctx.root, '.claude', 'settings.json'), 'utf8'));
-    const hook = (s.hooks?.Stop || []).some((h) => JSON.stringify(h).includes('hook stop'));
-    hook ? ok('stop hook', '.claude/settings.json') : warn('stop hook', 'not configured — workers that exit without a terminal verb are only caught by the dispatcher', 'hkb init');
-  } catch { warn('stop hook', '.claude/settings.json missing/unreadable', 'hkb init'); }
+  checkHooks(ctx, { ok, warn, bad });
 
   if (!ctx.repo) return report(results, ctx, log);
 

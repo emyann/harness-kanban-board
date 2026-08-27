@@ -1,6 +1,6 @@
 // `hkb init --harness copilot|codex`: the files each harness gets generated, the launch templates
 // that use them, and the stop-hook payload every harness feeds to `hkb hook stop`. Plus the two
-// hooks the default harness gets in `.claude/settings.json`, and what init says it wrote.
+// hooks the default harness gets, which settings file they land in, and what init says it wrote.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -8,11 +8,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { harnessFiles, installHarness, installClaudeHooks, hookSummary, CLAUDE_HOOKS, resolveProfiles, boardProfiles, HARNESSES, HARNESS_PROFILE, packageSkillDir } from '../src/init.js';
+import {
+  harnessFiles, installHarness, installClaudeHooks, hookSummary, CLAUDE_HOOKS, resolveProfiles, boardProfiles,
+  HARNESSES, HARNESS_PROFILE, packageSkillDir, HOOK_SETTINGS, NPX_COMMAND, hkbCommandForHook, hookPlacement,
+  hookCommandNeeds, isHkbHookCommand, isPortableHookCommand, isEphemeralPath, findClaudeHooks,
+} from '../src/init.js';
 import { parseArgs } from '../src/cli.js';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, ensureWorktree } from '../src/board.js';
 import { expandLaunch, spawnWorker, tick } from '../src/dispatch.js';
-import { checkHarnesses } from '../src/doctor.js';
+import { checkHarnesses, checkHooks } from '../src/doctor.js';
 import { stripFrontmatter, worktreePath } from '../src/model.js';
 import { FakeGh, kbIssue } from './fake-gh.js';
 
@@ -379,17 +383,31 @@ test('this repo ships the codex templates the generator reads', () => {
   }
 });
 
-// ---------- claude, the default harness: the hooks init writes into .claude/settings.json ----------
-// Unlike the generated harness files, these go into a file the operator shares with every other
-// session in the repo. So: touch nothing else, and name everything written.
+// ---------- claude, the default harness: the hooks init writes into a settings file ----------
+// Unlike the generated harness files, these go into a file every other session in that repo reads.
+// The tracked `.claude/settings.json` is read on machines that are not this one, and no command hkb
+// can write means the same thing there (#85) — so the default is the gitignored
+// `.claude/settings.local.json`, `--shared-hooks` opts into the tracked file with the one portable
+// form, and either way: touch nothing else, land in exactly one file, and name everything written.
 
-const SETTINGS = path.join('.claude', 'settings.json');
-const readSettings = (root) => JSON.parse(fs.readFileSync(path.join(root, SETTINGS), 'utf8'));
+const LOCAL = HOOK_SETTINGS.local, SHARED = HOOK_SETTINGS.shared;
+const readSettings = (root, rel = LOCAL) => JSON.parse(fs.readFileSync(path.join(root, rel), 'utf8'));
+const writeSettings = (root, rel, value) => {
+  fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(root, rel), typeof value === 'string' ? value : JSON.stringify(value, null, 2));
+};
 const commandsOf = (groups) => groups.flatMap((g) => g.hooks.map((h) => h.command));
+const hookGroups = (verb, command) => [{ matcher: '*', hooks: [{ type: 'command', command: `${command} hook ${verb}`, timeout: 30 }] }];
+/** A settings object with hkb's two hooks running `command hook <verb>`. */
+const withHkbHooks = (command) => ({ hooks: Object.fromEntries(Object.entries(CLAUDE_HOOKS).map(([e, v]) => [e, hookGroups(v, command)])) });
 
-test('installClaudeHooks writes both hooks, and reports both as added', () => {
+test('installClaudeHooks writes both hooks into the local, gitignored settings file', () => {
   const root = scratch();
-  assert.deepEqual(installClaudeHooks(root, () => {}), ['Stop', 'PreToolUse']);
+  const r = installClaudeHooks(root, () => {});
+  assert.equal(r.file, LOCAL, 'a machine-specific command must not land in the tracked file');
+  assert.deepEqual(r.added, ['Stop', 'PreToolUse']);
+  assert.equal(fs.existsSync(path.join(root, SHARED)), false, 'nothing is written to the shared file by default');
+
   const s = readSettings(root);
   assert.deepEqual(Object.keys(s.hooks), ['Stop', 'PreToolUse'], 'no other event should be claimed');
   for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
@@ -400,18 +418,87 @@ test('installClaudeHooks writes both hooks, and reports both as added', () => {
     assert.equal(group.hooks[0].timeout, 30);
     assert.match(group.hooks[0].command, new RegExp(`hkb.* hook ${verb}$`), `${event} must run \`hkb hook ${verb}\``);
   }
-  assert.deepEqual(installClaudeHooks(root, () => {}), [], 'idempotent: a second init adds nothing');
+  assert.deepEqual(installClaudeHooks(root, () => {}).added, [], 'idempotent: a second init adds nothing');
 });
 
-test('installClaudeHooks leaves the rest of settings.json alone', () => {
+test('--shared-hooks writes the tracked file, and only ever a plain `hkb`', () => {
   const root = scratch();
-  fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(root, SETTINGS), JSON.stringify({
+  const r = installClaudeHooks(root, () => {}, { shared: true });
+  assert.equal(r.file, SHARED);
+  assert.deepEqual(r.added, ['Stop', 'PreToolUse']);
+  assert.equal(fs.existsSync(path.join(root, LOCAL)), false);
+  for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
+    assert.equal(commandsOf(readSettings(root, SHARED).hooks[event])[0], `hkb hook ${verb}`, 'a tracked file cannot name this machine');
+  }
+});
+
+test('the hooks live in exactly one file — a second copy fires every nudge twice', () => {
+  const root = scratch();
+  installClaudeHooks(root, () => {});
+  const moved = installClaudeHooks(root, () => {}, { shared: true });
+  assert.equal(moved.file, SHARED);
+  assert.equal(moved.movedFrom, LOCAL);
+  assert.deepEqual(readSettings(root, LOCAL).hooks, undefined, "hkb's hooks are gone from the file it left");
+  assert.deepEqual(Object.keys(readSettings(root, SHARED).hooks), ['Stop', 'PreToolUse']);
+});
+
+test('hooks already in the tracked file with a portable command are left where they are', () => {
+  const root = scratch();
+  writeSettings(root, SHARED, withHkbHooks('hkb'));
+
+  const r = installClaudeHooks(root, () => {});
+
+  assert.equal(r.file, SHARED, 'a portable command in the shared file is a choice, not the bug');
+  assert.deepEqual(r.added, []);
+  assert.deepEqual(r.repaired, []);
+  assert.equal(fs.existsSync(path.join(root, LOCAL)), false);
+});
+
+test('hooks in the tracked file that name a path are moved into the local one (#85)', () => {
+  const root = scratch();
+  writeSettings(root, SHARED, { model: 'opus', ...withHkbHooks('node "/home/someone/.npm/_npx/9f/node_modules/hkb-cli/bin/hkb.js"') });
+
+  const r = installClaudeHooks(root, () => {});
+
+  assert.equal(r.file, LOCAL);
+  assert.equal(r.movedFrom, SHARED);
+  assert.deepEqual(r.added, ['Stop', 'PreToolUse']);
+  const shared = readSettings(root, SHARED);
+  assert.equal(shared.model, 'opus', 'the rest of the tracked file is untouched');
+  assert.equal(shared.hooks, undefined, 'and the path that was only ever right on one machine is gone');
+  assert.ok(!JSON.stringify(readSettings(root, LOCAL)).includes('_npx'), 'the npx cache is never named again');
+});
+
+test('an npx-cache path in the local file is repaired in place', () => {
+  const root = scratch();
+  writeSettings(root, LOCAL, withHkbHooks('node "/home/someone/.npm/_npx/9f/node_modules/hkb-cli/bin/hkb.js"'));
+
+  const r = installClaudeHooks(root, () => {});
+
+  assert.equal(r.file, LOCAL);
+  assert.deepEqual(r.added, []);
+  assert.deepEqual(r.repaired, ['Stop', 'PreToolUse'], 'a cache path stopped being a path when the cache went');
+  assert.ok(!JSON.stringify(readSettings(root, LOCAL)).includes('_npx'));
+});
+
+test('a hand-written local command survives a re-run', () => {
+  const root = scratch();
+  writeSettings(root, LOCAL, withHkbHooks('/opt/tools/hkb'));
+
+  const r = installClaudeHooks(root, () => {});
+
+  assert.deepEqual([r.added, r.repaired], [[], []], 'the local file is the operator\'s machine, and their command runs on it');
+  assert.equal(commandsOf(readSettings(root, LOCAL).hooks.Stop)[0], '/opt/tools/hkb hook stop');
+});
+
+test('installClaudeHooks leaves the rest of the settings file alone', () => {
+  const root = scratch();
+  writeSettings(root, LOCAL, {
     model: 'opus',
     hooks: { Stop: [{ matcher: '*', hooks: [{ type: 'command', command: 'make lint' }] }] },
-  }, null, 2));
+  });
 
-  assert.deepEqual(installClaudeHooks(root, () => {}), ['Stop', 'PreToolUse']);
+  assert.deepEqual(installClaudeHooks(root, () => {}).added, ['Stop', 'PreToolUse']);
 
   const s = readSettings(root);
   assert.equal(s.model, 'opus', 'settings that are not ours must survive');
@@ -419,28 +506,171 @@ test('installClaudeHooks leaves the rest of settings.json alone', () => {
   assert.equal(commandsOf(s.hooks.Stop).length, 2);
 });
 
-test('installClaudeHooks reports a settings.json it cannot parse rather than overwriting it', () => {
+test("a group carrying the operator's hook beside ours keeps theirs when ours moves out", () => {
   const root = scratch();
-  fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(root, SETTINGS), '{ not json');
+  writeSettings(root, SHARED, {
+    hooks: { Stop: [{ matcher: '*', hooks: [{ type: 'command', command: 'make lint' }, { type: 'command', command: 'node "/tmp/hkb/bin/hkb.js" hook stop' }] }] },
+  });
+
+  installClaudeHooks(root, () => {});
+
+  assert.deepEqual(commandsOf(readSettings(root, SHARED).hooks.Stop), ['make lint'], 'we only ever remove our own');
+});
+
+test('installClaudeHooks reports a settings file it cannot parse rather than overwriting it', () => {
+  const root = scratch();
+  writeSettings(root, LOCAL, '{ not json');
   const said = [];
 
   assert.equal(installClaudeHooks(root, (s) => said.push(s)), null);
 
-  assert.equal(fs.readFileSync(path.join(root, SETTINGS), 'utf8'), '{ not json', 'the file is the operator\'s, not ours to rewrite');
+  assert.equal(fs.readFileSync(path.join(root, LOCAL), 'utf8'), '{ not json', 'the file is the operator\'s, not ours to rewrite');
   assert.match(said.join('\n'), /not valid JSON/);
 });
 
-test('init names both hooks it wrote, and says what the second one is for', () => {
+test('an unparseable *other* file is called out, because it may hold a second copy of the hooks', () => {
+  const root = scratch();
+  writeSettings(root, SHARED, '{ not json');
+  const said = [];
+
+  const r = installClaudeHooks(root, (s) => said.push(s), {});
+
+  assert.equal(r.file, LOCAL, 'the file we can read still gets the hooks');
+  assert.match(said.join('\n'), /settings\.json is not valid JSON.*fires twice/s);
+});
+
+test('init names both hooks it wrote, where they went, and what the second one is for', () => {
   const fresh = hookSummary(['Stop', 'PreToolUse']);
-  assert.match(fresh, /^added Stop and PreToolUse hooks to \.claude\/settings\.json/);
-  assert.match(hookSummary([]), /^Stop and PreToolUse hooks already present in \.claude\/settings\.json/);
-  assert.match(hookSummary(['PreToolUse']), /^added PreToolUse hook to \.claude\/settings\.json; Stop hook already there/);
+  assert.match(fresh, /^added Stop and PreToolUse hooks to \.claude\/settings\.local\.json/);
+  assert.match(hookSummary([]), /^Stop and PreToolUse hooks already present in \.claude\/settings\.local\.json/);
+  assert.match(hookSummary(['PreToolUse']), /^added PreToolUse hook to \.claude\/settings\.local\.json; Stop hook already there/);
+  assert.match(hookSummary(['Stop', 'PreToolUse'], { file: SHARED }), /to \.claude\/settings\.json/);
+  assert.match(hookSummary([], { movedFrom: SHARED }), /moved out of \.claude\/settings\.json, which is shared/);
+  assert.match(hookSummary([], { repaired: ['Stop'] }), /rewrote the Stop hook command/);
   for (const line of [fresh, hookSummary([]), hookSummary(['PreToolUse'])]) {
     for (const event of Object.keys(CLAUDE_HOOKS)) assert.ok(line.includes(event), `${event} goes unnamed in: ${line}`);
     assert.match(line, /inert unless KB_TASK is set/, 'an operator reading this has to know both are no-ops in their own sessions');
     assert.match(line, /PreToolUse is the worker permission policy/, 'and what the second one is');
   }
+});
+
+// ---------- the command itself: what may be written, and where ----------
+
+test('hkbCommandForHook never names an npx cache, whatever the local PATH says (#85)', () => {
+  const npxRoot = path.join(os.homedir(), '.npm', '_npx', '9f3c', 'node_modules', 'hkb-cli');
+  assert.equal(hkbCommandForHook('stop', { onPath: false, pkgRoot: npxRoot }), `${NPX_COMMAND} hook stop`);
+  assert.equal(hkbCommandForHook('pretool', { onPath: true, pkgRoot: npxRoot }), 'hkb hook pretool');
+  assert.equal(hkbCommandForHook('stop', { shared: true, onPath: false, pkgRoot: npxRoot }), 'hkb hook stop');
+  assert.ok(!hkbCommandForHook('stop', { onPath: false, pkgRoot: npxRoot }).includes('_npx'));
+});
+
+test('a durable install is still named absolutely, and a tracked file never is', () => {
+  const durable = path.join(path.sep, 'usr', 'lib', 'node_modules', 'hkb-cli');
+  assert.equal(hkbCommandForHook('stop', { onPath: false, pkgRoot: durable }), `node "${path.join(durable, 'bin', 'hkb.js')}" hook stop`);
+  assert.equal(hkbCommandForHook('stop', { shared: true, onPath: false, pkgRoot: durable }), 'hkb hook stop', 'a shared file gets the portable form or nothing');
+});
+
+test('isEphemeralPath catches an npx cache on either separator', () => {
+  assert.ok(isEphemeralPath('/home/x/.npm/_npx/9f/node_modules/hkb-cli'));
+  assert.ok(isEphemeralPath('C:\\Users\\x\\AppData\\Local\\npm-cache\\_npx\\9f\\node_modules\\hkb-cli'));
+  assert.ok(!isEphemeralPath('/usr/lib/node_modules/hkb-cli'));
+  assert.ok(!isEphemeralPath('/home/x/_npxtools/hkb'));
+});
+
+test('hookCommandNeeds says what has to exist before a hook can run', () => {
+  assert.deepEqual(hookCommandNeeds('hkb hook stop'), { kind: 'bin', target: 'hkb' });
+  assert.deepEqual(hookCommandNeeds(`${NPX_COMMAND} hook stop`), { kind: 'bin', target: 'npx' });
+  assert.deepEqual(hookCommandNeeds('node "/opt/hkb cli/bin/hkb.js" hook stop'), { kind: 'file', target: '/opt/hkb cli/bin/hkb.js' });
+  assert.deepEqual(hookCommandNeeds('/usr/bin/node /opt/hkb/bin/hkb.js hook stop'), { kind: 'file', target: '/opt/hkb/bin/hkb.js' });
+});
+
+test('every form hkb has ever written is recognised as ours, and nobody else\'s is', () => {
+  for (const c of ['hkb hook stop', 'node "/opt/hkb-cli/bin/hkb.js" hook stop', `${NPX_COMMAND} hook stop`, 'node "C:\\p\\hkb-cli\\bin\\hkb.js" hook stop']) {
+    assert.ok(isHkbHookCommand(c, 'stop'), c);
+    assert.ok(!isHkbHookCommand(c, 'pretool'), `${c} is the stop hook, not the pretool one`);
+  }
+  assert.ok(!isHkbHookCommand('make lint', 'stop'));
+  assert.ok(!isHkbHookCommand('hkb heartbeat 12', 'stop'), 'only the hook verbs are ours to move');
+  assert.ok(isPortableHookCommand('hkb hook stop'));
+  assert.ok(!isPortableHookCommand('node "/opt/hkb-cli/bin/hkb.js" hook stop'));
+  assert.ok(!isPortableHookCommand('/opt/hkb-cli/bin/hkb hook stop'));
+});
+
+test('hookPlacement: fresh goes local, portable-shared stays, a path in the tracked file moves', () => {
+  const withPath = withHkbHooks('node "/opt/hkb-cli/bin/hkb.js"');
+  const portable = withHkbHooks('hkb');
+  assert.deepEqual(hookPlacement({}), { file: 'local', movedFrom: null });
+  assert.deepEqual(hookPlacement({ shared: portable }), { file: 'shared', movedFrom: null });
+  assert.deepEqual(hookPlacement({ shared: withPath }), { file: 'local', movedFrom: 'shared' });
+  assert.deepEqual(hookPlacement({ local: withPath, shared: portable }), { file: 'local', movedFrom: 'shared' }, 'never both');
+  assert.deepEqual(hookPlacement({ wantShared: true }), { file: 'shared', movedFrom: null });
+  assert.deepEqual(hookPlacement({ local: withPath, wantShared: true }), { file: 'shared', movedFrom: 'local' });
+});
+
+// ---------- doctor: a hook that cannot resolve here ----------
+
+const findings = () => {
+  const results = [];
+  return { results, sink: { ok: (name, detail) => results.push({ name, ok: true, detail }), warn: (name, detail, fix) => results.push({ name, ok: null, detail, fix }), bad: (name, detail, fix) => results.push({ name, ok: false, detail, fix }) } };
+};
+const finding = (results, name) => results.find((r) => r.name === name);
+
+test('doctor fails when the configured hook command cannot be resolved here (#85)', () => {
+  const root = scratch();
+  writeSettings(root, SHARED, withHkbHooks('hkb'));
+  const { results, sink } = findings();
+
+  checkHooks({ root }, sink, { onPath: () => false, exists: () => false });
+
+  assert.equal(finding(results, 'stop hook').detail, SHARED, 'it says which file it read');
+  const cmd = finding(results, 'hook command');
+  assert.equal(cmd.ok, false, 'a hook that fails on every tool call in the repo is a failure, not a warning');
+  assert.match(cmd.detail, /`hkb` is not on PATH here/);
+  assert.match(cmd.fix, /npm i -g hkb-cli/);
+  assert.equal(results.filter((r) => r.name === 'hook command').length, 1, 'both hooks need the same binary: say it once');
+});
+
+test('doctor passes when it resolves, and names the npx cache as its own failure', () => {
+  const root = scratch();
+  writeSettings(root, LOCAL, withHkbHooks('hkb'));
+  const good = findings();
+  checkHooks({ root }, good.sink, { onPath: (bin) => bin === 'hkb', exists: () => false });
+  assert.equal(finding(good.results, 'hook command').ok, true);
+  assert.equal(finding(good.results, 'stop hook').detail, LOCAL);
+
+  writeSettings(root, LOCAL, withHkbHooks('node "/home/x/.npm/_npx/9f/node_modules/hkb-cli/bin/hkb.js"'));
+  const stale = findings();
+  checkHooks({ root }, stale.sink, { onPath: () => true, exists: () => true });
+  const cmd = finding(stale.results, 'hook command');
+  assert.equal(cmd.ok, false, 'a path that exists today and not tomorrow is still broken');
+  assert.match(cmd.detail, /npx cache is not a durable path/);
+});
+
+test('doctor names both copies when the hooks are configured twice, and the absence of any', () => {
+  const root = scratch();
+  writeSettings(root, LOCAL, withHkbHooks('hkb'));
+  writeSettings(root, SHARED, withHkbHooks('hkb'));
+  const both = findings();
+  checkHooks({ root }, both.sink, { onPath: () => true, exists: () => true });
+  assert.match(finding(both.results, 'stop hook').detail, /configured in both .* — every nudge fires twice/);
+
+  const none = findings();
+  checkHooks({ root: scratch() }, none.sink, { onPath: () => true, exists: () => true });
+  const missing = finding(none.results, 'stop hook');
+  assert.equal(missing.ok, null);
+  assert.match(missing.detail, /not configured in .*settings\.local\.json or .*settings\.json/);
+  assert.equal(finding(none.results, 'hook command'), undefined, 'nothing to resolve when nothing is configured');
+});
+
+test('findClaudeHooks reads both files and reports the one it cannot parse', () => {
+  const root = scratch();
+  writeSettings(root, LOCAL, '{ not json');
+  writeSettings(root, SHARED, withHkbHooks('hkb'));
+
+  const { hooks, unreadable } = findClaudeHooks(root);
+
+  assert.deepEqual(unreadable.map((u) => u.file), [LOCAL]);
+  assert.deepEqual(hooks.map((h) => `${h.file} ${h.event}`), [`${SHARED} Stop`, `${SHARED} PreToolUse`]);
 });
 
 test('`hkb help` lists every hook verb the CLI routes', () => {
