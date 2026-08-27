@@ -8,7 +8,10 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 1. **Portable** — the protocol is labels, issue dependencies, refs and comments; any harness drives it through `gh`.
 2. **Frugal** — no npm dependencies; no LLM in the dispatcher; one GraphQL query per board per tick; every write is justified.
 3. **Performance** — conditional reads, no polling loops inside commands, no per-task calls when a board-wide one exists.
-4. **Flawless experience** — every error says what to do next; `--json` everywhere; never a silent failure.
+4. **Frictionless** — the default path asks nothing of the human that the tool could work out itself: one command over two, a
+   sensible default over a flag, an inferred answer over a prompt. A rung that is *possible* but tedious is a gap to close, not a
+   workflow to document — if the answer to "can hkb do X" is "yes, by hand", that is a bug report.
+5. **Flawless experience** — every error says what to do next; `--json` everywhere; never a silent failure.
 
 ## Layout
 
