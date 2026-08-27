@@ -263,7 +263,9 @@ export async function main(argv) {
       if (run.attempts.length) {
         process.stdout.write(`\nattempts (failures ${run.failures}):\n`);
         for (const a of run.attempts) {
-          process.stdout.write(`  ${a.attempt}. ${a.profile}@${a.host || '-'} ${a.started_at} → ${a.ended_at || 'active'} ${a.outcome || ''}${a.summary ? ' — ' + a.summary : ''}${a.reason ? ' — ' + a.reason : ''}\n`);
+          // `@host` is who *claimed* it; a `remote` attempt then ran somewhere else entirely (Actions),
+          // which is why it has no pid and why only its heartbeat says it is alive.
+          process.stdout.write(`  ${a.attempt}. ${a.profile}@${a.host || '-'}${a.remote ? ' → off-host' : ''} ${a.started_at} → ${a.ended_at || 'active'} ${a.outcome || ''}${a.summary ? ' — ' + a.summary : ''}${a.reason ? ' — ' + a.reason : ''}\n`);
           if (a.job) process.stdout.write(`     job ${a.job}${a.ended_at ? '' : ' · claude attach ' + a.job}\n`);
           const session = formatSession(a);
           if (session) process.stdout.write(`     ${session}\n`);
