@@ -1,0 +1,131 @@
+# Publish hkb to npm. The trigger is a `v*` tag, so a release is one push and nothing else:
+#
+#   npm version patch && git push --follow-tags
+#
+# Two gates stand before the publish — the test suite, and the tag agreeing with package.json — and
+# one job stands after it: a clean runner with no checkout that installs the version we just published
+# straight from the registry and runs it. That last job is the only thing here that proves `npx hkb`
+# works for a stranger; everything before it only proves the repository is healthy.
+#
+# Needs one repository secret: NPM_TOKEN, an npm automation token. See docs/releasing.md.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+# Never two publishes of the same tag at once, and never cancel one in flight: a cancelled run can
+# leave a version on the registry with no verify behind it.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write # provenance: npm exchanges this OIDC token for a signed attestation
+    outputs:
+      version: ${{ steps.gate.outputs.version }}
+      published: ${{ steps.publish.outputs.published }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # The same two runs test.yml does on every push: same signal, and a tag can point at a commit
+      # that never went through a pull request.
+      - run: npm run lint
+      - run: npm test
+        env:
+          TZ: UTC
+      - run: npm test
+        env:
+          TZ: America/New_York
+
+      # The tag is the version. If they disagree, the tag is a lie about what is being published, and
+      # the publish would put the package.json version on the registry under a tag nobody can find.
+      - id: gate
+        name: tag matches package.json
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} says ${tag} but package.json says ${pkg}. Set them to the same version, delete the tag (git push --delete origin ${GITHUB_REF_NAME}), and tag again."
+            exit 1
+          fi
+          echo "version=${pkg}" >> "$GITHUB_OUTPUT"
+
+      # A fork gets no secrets, and a repo whose token has not been created yet should say what to do
+      # once rather than fail red on a tag that is otherwise fine.
+      - id: preflight
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::NPM_TOKEN is not set, so nothing was published. Create an npm automation token (npm token create --read-only=false) and run: gh secret set NPM_TOKEN"
+          fi
+
+      # --provenance needs id-token: write above; package.json also sets publishConfig.provenance, so
+      # a publish that cannot attest fails instead of quietly shipping unsigned.
+      - id: publish
+        if: steps.preflight.outputs.ready == 'true'
+        name: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm publish --provenance --access public
+          echo "published=true" >> "$GITHUB_OUTPUT"
+
+  # No checkout, no npm link, no node_modules from this repo: this job knows nothing but the version
+  # string. If it passes, `npx hkb` works for someone who has never seen the repository.
+  verify:
+    needs: publish
+    if: needs.publish.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # A publish is not instantly readable from every registry edge, so retry — but loudly, and with
+      # a bound: ten tries, 30s apart, is five minutes. Longer than that is not propagation, it is a
+      # broken package, and the release should go red so the operator sees it.
+      - name: npx hkb@version
+        env:
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          set -u
+          for i in $(seq 1 10); do
+            if out="$(npx -y "hkb@${VERSION}" version 2>&1)"; then
+              echo "$out"
+              # `hkb version` prints "hkb <version>" and nothing after it, so match the tail — a
+              # substring match would let hkb@1.4.10 pass for a 1.4.1 release.
+              case "$out" in
+                *" ${VERSION}")
+                  npx -y "hkb@${VERSION}" help
+                  echo "npx hkb@${VERSION} runs, and reports ${VERSION}."
+                  exit 0
+                  ;;
+                *)
+                  echo "::error::npx hkb@${VERSION} ran but reported: ${out}"
+                  exit 1
+                  ;;
+              esac
+            fi
+            echo "attempt ${i}/10: hkb@${VERSION} not installable yet, waiting 30s"
+            sleep 30
+          done
+          echo "::error::hkb@${VERSION} was published but 'npx -y hkb@${VERSION} version' never succeeded in 5 minutes. Check https://www.npmjs.com/package/hkb and the publish job's log."
+          exit 1
