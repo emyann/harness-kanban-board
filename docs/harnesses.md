@@ -11,7 +11,7 @@ disk) whatever `hkb init --harness <name>` generates. This page is the per-harne
 | `claude-p` | Claude Code headless | `claude --worktree` | same | `--output-format json` | — |
 | `copilot-cli` | GitHub Copilot CLI | dispatcher (`git worktree add`) | `agentStop` hook in `.github/hooks/kanban.json` | none | `copilot` |
 | `codex` | OpenAI Codex CLI | dispatcher (`git worktree add`) | `Stop` hook in `.codex/hooks.json` | `--output-schema` | `codex` |
-| `claude-action` | Claude Code in GitHub Actions | the runner's own checkout | a final `if: always()` step | none | `hkb init --with-actions` |
+| `claude-action` | Claude Code in GitHub Actions | the Actions runner's own checkout | a final `if: always()` step | none | `hkb init --with-actions` |
 
 Whatever the harness, the protocol is the same: claim the lock ref, work in the worktree, open a draft PR that
 says `Closes #<n>`, finish with exactly one terminal verb. The `hkb` verb the worker runs is always the source of
@@ -185,8 +185,8 @@ has its schedules disabled. `concurrency: {group: kb-dispatch-<board>, cancel-in
 serial and never cancels one mid-claim.
 
 The tick is `hkb dispatch --max 1 --board <slug> --profiles claude-action`. That last flag is what makes it safe
-to run beside a laptop loop: **a host claims only the profiles it can launch.** Without it a runner would happily
-claim a `kb:agent:claude` task, fail to find `claude` on the runner, and burn a retry on a task your machine was
+to run beside a laptop loop: **a host claims only the profiles it can launch.** Without it an Actions runner would
+happily claim a `kb:agent:claude` task, fail to find `claude` on the runner, and burn a retry on a task your machine was
 about to pick up. Everything else in the tick — reclaim, promote, reconcile, the orphan-lock sweep — is
 unfiltered and covers the whole board, which is exactly what you want a second dispatcher for.
 

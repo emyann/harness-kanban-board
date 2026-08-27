@@ -7,7 +7,7 @@ import { openAttempt, RUN_MARKER, RESULT_MARKER } from './model.js';
 /** The dispatcher's own notes on the thread. They already surface as attempts, so a worker sees them twice otherwise. */
 const MACHINE_LINE = /^\*\*(Blocked|Changes requested)\*\* \(/;
 
-/** A comment a human meant for whoever picks the card up — not a record hkb wrote itself. */
+/** A comment the operator meant for whoever picks the card up — not a record hkb wrote itself. */
 export function isHumanComment(c) {
   const body = typeof c?.body === 'string' ? c.body.trim() : '';
   if (!body) return false;

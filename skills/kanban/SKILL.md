@@ -9,7 +9,7 @@ metadata:
 allowed-tools: Bash(hkb *) Bash(gh api *) Bash(gh pr *) Bash(gh issue view *) Bash(git *)
 ---
 
-# kanban — the worker protocol
+# kanban — the board protocol
 
 The board is GitHub Issues. A task is an issue with `kb:*` labels; its dependencies are GitHub issue dependencies
 (`blocked by`). The dispatcher (`hkb dispatch`) claims a task by creating the git ref `refs/kb/locks/<n>/<attempt>`
@@ -60,10 +60,10 @@ comes from `hkb`; everything you report goes through `hkb`. See `references/prot
    - `hkb complete $KB_TASK ...` — done (or *review* while a PR is open). Stdin keys: `summary`, `metadata`, `artifacts`.
    - `hkb block $KB_TASK "<why>" --kind needs_input|dependency|capability|transient` — when you cannot proceed.
      `dependency` sends it back to *todo*; the others ask a human. Also `--reason-file <path>`, or stdin keys `reason`, `kind`.
-   - `hkb request-review $KB_TASK --summary "..." [--reviewer <profile>]` — when a reviewer must look before it counts
+   - `hkb request-review $KB_TASK --summary "..." [--reviewer <github-user>]` — when a reviewer must look before it counts
      as done. Stdin keys: `summary`, `metadata`, `reviewer`.
 
-Never run `hkb dispatch` — you are the dispatched, and a second dispatcher against the live board double-claims tasks; dispatcher changes are tested with the fake-gh harness (`node --test test/dispatch.test.js`). Do not do work that belongs to other tasks. If you discover follow-up work, create it instead:
+Never run `hkb dispatch` — you are the dispatched, and a second dispatcher against the live board double-claims tasks; dispatcher changes are tested with the fake-gh test double (`node --test test/dispatch.test.js`). Do not do work that belongs to other tasks. If you discover follow-up work, create it instead:
 `hkb create "title" --body "..." --blocked-by $KB_TASK` (it starts in *todo* and becomes *ready* when this task is done).
 
 ## When you run a track (your prompt opens with TRACK RUNNER)

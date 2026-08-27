@@ -23,7 +23,7 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 
 - Keep it dependency-free. If you need YAML/TOML, don't.
 - Pure logic goes in `src/model.js` with a test in `test/`. I/O stays in `tasks.js`/`lock.js`/`gh.js`.
-- The protocol (statuses, claims, attempts, handoff) is backend-neutral; GitHub is an adapter. Keep every GitHub-ism behind `gh.js`/`tasks.js`/`lock.js` so a future `src/backends/{github,local,...}/` split is mechanical; the fake-gh harness (#3) doubles as the backend conformance suite.
+- The protocol (statuses, claims, attempts, handoff) is backend-neutral; GitHub is an adapter. Keep every GitHub-ism behind `gh.js`/`tasks.js`/`lock.js` so a future `src/backends/{github,local,...}/` split is mechanical; the fake-gh test double (#3) doubles as the backend conformance suite.
 - Pin `X-GitHub-Api-Version` via `src/gh.js`; never call `gh issue`/`gh pr` sub-commands for board state — use `gh api`.
 - Every command returns a stable object under `--json`; human output is a one-liner per item.
 - Errors: throw `Error` with `.exitCode` (2 = usage/state, 3 = LOCK_LOST, 4 = the dispatcher loop
