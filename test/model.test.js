@@ -73,7 +73,7 @@ test('readiness: all blockers must be closed as completed', () => {
 test('path overlap guard', () => {
   assert.equal(pathsOverlap(['apps/web/'], ['apps/web/src/']), true);
   assert.equal(pathsOverlap(['apps/web/**'], ['apps/web']), true);
-  assert.equal(pathsOverlap(['packages/md3/'], ['packages/db/']), false);
+  assert.equal(pathsOverlap(['packages/ui/'], ['packages/db/']), false);
   assert.equal(pathsOverlap([], ['x']), false);
   assert.equal(pathsOverlap([''], ['x']), true);
 });
