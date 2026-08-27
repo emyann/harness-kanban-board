@@ -6,6 +6,7 @@ import { heartbeat, complete, block, unblock, requestReview, requestChanges, pro
 import { tick, loop, spawnWorker } from './dispatch.js';
 import { serve } from './serve.js';
 import { watch, tail } from './watch.js';
+import { stats } from './stats.js';
 import { claim } from './lock.js';
 import { contextCommand } from './context.js';
 import { stopHook } from './hook.js';
@@ -162,6 +163,7 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
               --from-stdin with one JSON object {summary, metadata, artifacts, reason, kind, reviewer} (no shell quoting)
   dispatch    dispatch [--loop S] [--max N] [--dry-run]     claim <n> [--profile p] [--spawn]     gc [--yes]
   board       serve [--port 4666] [--host 127.0.0.1] [--poll 30]   local web board; drag-drop runs the same verbs
+              stats [--since 7d|all] [--json]   attempts per outcome, duration, spawns vs the daily cap, spend per profile
   live        watch [--interval 30] [--kinds completed,blocked,..] [--polls N] [--json]   one line per transition
               tail <n> [--interval 30] [--kinds ..] [--polls N] [--json]   follow one task's attempts and comments
               both poll with If-None-Match: an unchanged board answers 304 and costs no rate limit
@@ -446,6 +448,7 @@ export async function main(argv) {
       if (!n) throw usage('hkb tail <n> [--interval 30] [--kinds ..] [--polls N] [--json]');
       return tail(ctx, n, flags);
     }
+    case 'stats': return stats(ctx, flags);
     case 'serve': return serve(ctx, flags, log);
     // imported here, not at the top: mcp.js imports this module back for the version and the outbox argv
     case 'mcp': { const { mcp } = await import('./mcp.js'); return mcp(ctx, flags); }
