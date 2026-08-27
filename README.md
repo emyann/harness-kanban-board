@@ -323,6 +323,7 @@ tick logs the fix once an hour and carries on.
 
 - [The protocol](skills/kanban/references/protocol.md) — statuses, claims, attempts, handoff; what a worker must do.
 - [Harnesses](docs/harnesses.md) — per-harness setup, profiles, generated files, Codex's one-time trust, Actions.
+- [Releasing](docs/releasing.md) — how a version gets to npm: one tag, provenance, and a clean-room `npx` check.
 - [Project status and verified behaviour](docs/status.md) — how far along this is, and the GitHub API facts the
   design leans on, each with the probe that confirmed it.
 - [Design rationale](docs/EVALUATION.md) — judged alternatives and the roadmap.

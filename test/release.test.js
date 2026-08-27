@@ -19,6 +19,7 @@ const REPO = fileURLToPath(new URL('..', import.meta.url));
 const REL = path.join('.github', 'workflows', 'release.yml');
 const TEXT = fs.readFileSync(path.join(REPO, REL), 'utf8');
 const DOC = parseYaml(TEXT);
+const TEST_YML = parseYaml(fs.readFileSync(path.join(REPO, '.github', 'workflows', 'test.yml'), 'utf8'));
 
 const step = (job, name) => DOC.jobs[job].steps.find((s) => s.id === name || s.name === name || s.uses === name);
 const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-release-'));
@@ -74,8 +75,18 @@ test('`hkb init --with-actions` does not own this file — regenerating never to
 
 test('the publish job runs the same suite test.yml does, under both timezones', () => {
   const runs = DOC.jobs.publish.steps.filter((s) => s.run && !s.id);
-  assert.deepEqual(runs.map((s) => s.run), ['npm run lint', 'npm test', 'npm test']);
-  assert.deepEqual(runs.slice(1).map((s) => s.env.TZ), ['UTC', 'America/New_York']);
+  assert.deepEqual(runs.map((s) => s.run), ['npm run lint', 'npm test', 'npm test', 'npm run smoke']);
+  assert.deepEqual(runs.slice(1, 3).map((s) => s.env.TZ), ['UTC', 'America/New_York']);
+});
+
+test('the tarball is packed and run before it is published, not after', () => {
+  // This workflow re-runs the suite itself rather than depending on test.yml, so it has to re-run
+  // the smoke too — otherwise the smoke gates pushes and pull requests but never a release.
+  const smoke = TEST_YML.jobs.smoke;
+  assert.ok(smoke, 'test.yml must still carry the smoke job this one mirrors');
+  assert.ok(smoke.steps.some((s) => s.run === 'node scripts/smoke-pack.mjs'));
+  const ids = DOC.jobs.publish.steps.map((s) => s.id || s.run || s.uses);
+  assert.ok(ids.indexOf('npm run smoke') < ids.indexOf('publish'));
 });
 
 test('every gate stands before the publish step, never after it', () => {

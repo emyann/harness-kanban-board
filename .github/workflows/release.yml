@@ -40,7 +40,7 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      # The same two runs test.yml does on every push: same signal, and a tag can point at a commit
+      # The same three runs test.yml does on every push: same signal, and a tag can point at a commit
       # that never went through a pull request.
       - run: npm run lint
       - run: npm test
@@ -49,6 +49,11 @@ jobs:
       - run: npm test
         env:
           TZ: America/New_York
+
+      # test.yml runs this too, but this workflow does not depend on that one — it re-runs the suite
+      # itself, so it has to re-run the smoke as well. Publishing a tarball that was never packed and
+      # installed is exactly the failure this whole path exists to prevent.
+      - run: npm run smoke
 
       # The tag is the version. If they disagree, the tag is a lie about what is being published, and
       # the publish would put the package.json version on the registry under a tag nobody can find.
