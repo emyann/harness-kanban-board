@@ -145,7 +145,7 @@ test('the worker ends the attempt itself — there is no Stop hook on a runner',
 
 test('the worker checks out full history — the heartbeat is a CAS on a real ref', () => {
   const doc = docs()[WORKER];
-  const checkout = step(doc, 'work', 'actions/checkout@v4');
+  const checkout = step(doc, 'work', 'actions/checkout@v7');
   assert.equal(checkout.with['fetch-depth'], 0);
   assert.equal(doc.permissions.contents, 'write');
 });

@@ -7,10 +7,17 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      # `package-manager-cache: false` on every setup-node with a checkout behind it. v5 turned
+      # caching on by default and v6 narrowed it to "package.json names npm in
+      # packageManager/devEngines"; hkb has no dependencies and ships no lock file, so a cache would
+      # have nothing to restore — and the restore *fails* the step when it finds no lock file. A
+      # package.json edit is not supposed to be able to break CI, so this is pinned off rather than
+      # left to depend on a field nothing else here cares about.
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
+          package-manager-cache: false
       - run: npm run lint
       # Two runs in one job rather than a matrix: same signal, half the runners. UTC is what Actions
       # gives us and what most CI everywhere gives us; America/New_York is a contributor's laptop,
@@ -29,14 +36,16 @@ jobs:
   # It runs beside `test` rather than after it: two independent signals, and neither waits.
   #
   # On Node 20 on purpose — the floor `engines` claims, which nothing else checks. The `test` job
-  # above covers the current release.
+  # above covers the current release. That floor is about the node that runs `hkb`, and is unrelated
+  # to the node24 the actions themselves run on; setup-node still installs any version it is asked for.
   smoke:
     name: packed artifact
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
+          package-manager-cache: false
       - run: node scripts/smoke-pack.mjs

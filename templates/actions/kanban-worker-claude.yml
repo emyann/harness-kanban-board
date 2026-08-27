@@ -52,12 +52,16 @@ jobs:
       GH_TOKEN: ${{ secrets.KB_TOKEN }}
     steps:
       # fetch-depth 0: the heartbeat is a compare-and-swap on the lock ref, which needs real history
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      # `package-manager-cache: false`: as in kanban-dispatch.yml — this job puts `hkb` on PATH, not
+      # your project's dependencies. setup-node's docs also recommend turning automatic caching off
+      # in jobs with elevated privileges, and this one holds KB_TOKEN and `contents: write`.
+      - uses: actions/setup-node@v7
         with:
           node-version: "{{node_version}}"
+          package-manager-cache: false
       - name: install hkb
         run: {{install}}
 

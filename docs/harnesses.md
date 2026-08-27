@@ -219,6 +219,12 @@ issue bodies are untrusted text. A last `if: always()` step is the stand-in for 
 still `running` when the job ends, it is recorded as `hkb block … --kind transient` with a link to the run, so it
 shows up on the board immediately instead of at the next stale reclaim. `hkb unblock <n>` puts it back.
 
+Both pin `actions/checkout@v7` and `actions/setup-node@v7`, which run on Node 24. GitHub-hosted runners
+are already there; a **self-hosted** runner has to be on v2.327.1 or newer, or both jobs fail before they
+reach `hkb`. Both also set `package-manager-cache: false`: setup-node caches npm on its own from v5 on, and
+these jobs install `hkb` globally rather than your project's dependencies — a cache would be written and read
+back on every 15-minute tick for nothing, and in a repo with no lock file it fails the step outright.
+
 ### Secrets, and what init will not do for you
 
 | secret | what it is for | scope |
