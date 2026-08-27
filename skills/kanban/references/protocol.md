@@ -42,6 +42,7 @@ the mistakes actually happen.
 | Claim | git ref `refs/kb/locks/<n>/<attempt>` | create = atomic claim (201 claimed / held on **422 "Reference already exists"** — the observed duplicate response, verified 2026-08-26 — or 409 / anything else unknown → back off) |
 | Heartbeat | the same ref, advanced by CAS | `git push origin <new>:<ref> --force-with-lease=<ref>:<expected>`; rejected lease = `LOCK_LOST` (exit 3). See below |
 | Output | branch + draft PR with `Closes #n` | PR merge closes the issue; an open PR moves the task to `review` |
+| Merging | the operator, or GitHub's auto-merge — never hkb, never a worker | `dispatch.merge.mode` in `.kanban/board.json`: `manual` (default) leaves the last step to the human; `auto` has the **dispatcher** enable GitHub's auto-merge on the card's PR once, at review time. Board policy, because a rote click on one repo is the one gate worth keeping on another. `hkb doctor` refuses `auto` on a base branch that requires no status check and no approving review — auto-merge there lands the PR the moment it opens |
 
 Precedence when they disagree: run comment > labels > body block.
 
@@ -99,7 +100,8 @@ the dispatcher owns their lock. `hkb heartbeat <n> --note "..."` always takes th
 3. Sweep orphan lock refs (no matching open attempt).
 4. Promote `todo` → `ready`.
 5. Track roots first (see *Tracks* below): a root on a profile with `"track": true` whose whole subgraph is claimable takes the same caps and guards — with the union of its nodes' `kb.paths` — and spawns **one** session for all of it. Then `ready` tasks by priority: caps (`max_in_progress`, per-profile, daily spawn cap) → guards (`active_pr` → review, `blocker_auth` pause, `recent_success`, `path_overlap`) → claim ref → append attempt → label `running` → spawn the profile's launch command with `KB_*` env. A node a live track owns is skipped here and costs no slot. `hkb dispatch --profiles a,b` restricts *this step only* to profiles the host can launch — how the Actions dispatcher takes the `claude-action` tasks and leaves a laptop's `claude` ones alone; every other step still covers the whole board.
-6. Mirror the labels onto the linked Projects v2 board, when there is one (see below).
+6. On a board with `"merge": {"mode": "auto"}`: for every card now in `review` with an open, non-draft PR that has no auto-merge request yet, one `enablePullRequestAutoMerge` — GitHub merges it when *its* gates go green. Nothing to poll and nothing to retry: a PR whose checks fail simply never merges. Refused, with the fix, on a base branch that requires nothing.
+7. Mirror the labels onto the linked Projects v2 board, when there is one (see below).
 
 One GraphQL query per board per tick; everything else is per-task and only for tasks that changed state.
 

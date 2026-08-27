@@ -1,0 +1,403 @@
+// The last step: `dispatch.merge.mode` — keep it, or hand it to GitHub's own auto-merge.
+//
+// Three things are pinned here, in order of how much they would cost to get wrong:
+//   1. `manual` — the default, and every board.json that predates the feature — sends nothing.
+//   2. `auto` enables auto-merge ONCE per PR, and never asks GitHub for something it would refuse.
+//   3. `auto` on a branch with no gate is refused, by the tick and by doctor, with the fix named.
+// The mutation is only ever asserted against the fake (test/fake-gh.js); nothing here can reach a
+// live pull request.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { tick, autoMergePass } from '../src/dispatch.js';
+import { DEFAULT_BOARD } from '../src/board.js';
+import { checkMergePolicy, MERGE_CHECK } from '../src/doctor.js';
+import { mergePolicy, autoMergeDecision, mergeGate } from '../src/model.js';
+import { FakeGh, kbIssue } from './fake-gh.js';
+
+function harness({ merge = null, board = 'default', allowAutoMerge = true } = {}) {
+  const gh = new FakeGh({ allowAutoMerge });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-merge-'));
+  const cfg = {
+    ...DEFAULT_BOARD,
+    repo: gh.nameWithOwner,
+    board,
+    default_branch: gh.defaultBranch,
+    dispatch: { ...DEFAULT_BOARD.dispatch, ...(merge ? { merge } : {}) },
+    profiles: { claude: { mode: 'process', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] } },
+  };
+  const ctx = {
+    root,
+    cfg,
+    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    board,
+    host: 'test-host',
+    json: false,
+    caps: {},
+    _cache: {},
+    requireBoard() { return this; },
+  };
+  const restore = gh.install();
+  const logs = [];
+  return {
+    gh,
+    ctx,
+    root,
+    log: () => logs.join('\n'),
+    tick: (opts = {}) => tick(ctx, { log: (m) => logs.push(m), ...opts }),
+    cleanup: () => { restore(); fs.rmSync(root, { recursive: true, force: true }); },
+  };
+}
+
+/** Every `enablePullRequestAutoMerge` the transport was asked to send, in order. */
+const enables = (gh) => gh.calls.filter((c) => c.kind === 'graphql' && /enablePullRequestAutoMerge/.test(c.query || ''));
+/** Every branch-protection or ruleset read — the gate's cost. */
+const gateReads = (gh) => gh.calls.filter((c) => /\/protection$|\/rules\/branches\//.test(c.path || ''));
+
+const openPr = (over = {}) => ({ number: 100, state: 'OPEN', isDraft: false, headRefName: 'kb/1', ...over });
+
+// ---------- the policy, pure ----------
+
+test('a board.json that predates the feature reads as today: manual, and nothing to send', () => {
+  for (const cfg of [{}, { dispatch: {} }, { dispatch: { merge: {} } }, null]) {
+    const p = mergePolicy(cfg);
+    assert.equal(p.mode, 'manual');
+    assert.equal(p.auto, false);
+    assert.equal(p.error, null);
+  }
+  // and the shipped default says it out loud rather than leaving it to the fallback
+  assert.deepEqual(DEFAULT_BOARD.dispatch.merge, { mode: 'manual', method: 'squash' });
+});
+
+test('mode auto takes squash unless the board asks for another method', () => {
+  assert.deepEqual(mergePolicy({ dispatch: { merge: { mode: 'auto' } } }), { mode: 'auto', method: 'squash', mergeMethod: 'SQUASH', auto: true, error: null });
+  assert.equal(mergePolicy({ dispatch: { merge: { mode: 'auto', method: 'rebase' } } }).mergeMethod, 'REBASE');
+  assert.equal(mergePolicy({ dispatch: { merge: { mode: 'auto', method: 'merge' } } }).mergeMethod, 'MERGE');
+});
+
+test('a policy hkb cannot read never merges: it names the mistake and stays manual', () => {
+  const bad = mergePolicy({ dispatch: { merge: { mode: 'yes' } } });
+  assert.equal(bad.auto, false);
+  assert.match(bad.error, /dispatch\.merge\.mode must be "manual" or "auto", not "yes"/);
+  const method = mergePolicy({ dispatch: { merge: { mode: 'auto', method: 'fast-forward' } } });
+  assert.equal(method.auto, false);
+  assert.match(method.error, /dispatch\.merge\.method must be one of squash, merge, rebase/);
+});
+
+// ---------- which PR, pure ----------
+
+const auto = mergePolicy({ dispatch: { merge: { mode: 'auto' } } });
+const card = (over = {}) => ({ number: 7, status: 'review', prs: [{ ...openPr(), nodeId: 'PR_kw7' }], ...over });
+
+test('the card the dispatcher hands over: in review, one open non-draft PR, no auto-merge yet', () => {
+  const d = autoMergeDecision(card(), auto);
+  assert.equal(d.enable, true);
+  assert.equal(d.pr.number, 100);
+  assert.equal(d.method, 'squash');
+});
+
+test('everything else is left alone, and says why', () => {
+  const cases = [
+    [card(), mergePolicy({}), /manual/],
+    [card({ status: 'running' }), auto, /is running, not review/],
+    [card({ prs: [] }), auto, /no open PR/],
+    [card({ prs: [{ ...openPr(), state: 'CLOSED', nodeId: 'PR_kw7' }] }), auto, /no open PR/],
+    [card({ prs: [{ ...openPr(), isDraft: true, nodeId: 'PR_kw7' }] }), auto, /still a draft/],
+    [card({ prs: [{ ...openPr(), autoMergeEnabled: true, nodeId: 'PR_kw7' }] }), auto, /already has auto-merge enabled/],
+    [card({ prs: [openPr()] }), auto, /without a node id/],
+  ];
+  for (const [task, policy, why] of cases) {
+    const d = autoMergeDecision(task, policy);
+    assert.equal(d.enable, false, `${why} should not enable`);
+    assert.match(d.why, why);
+  }
+});
+
+// ---------- the gate, pure ----------
+
+test('a required check or a required review is a gate; anything else is a refusal with the fix', () => {
+  const ok = (p) => mergeGate(p, 'main');
+  assert.equal(ok({ known: true, protected: true, requiredChecks: ['test'], requiredReviews: 0 }).ok, true);
+  assert.match(ok({ known: true, protected: true, requiredChecks: ['test'], requiredReviews: 0 }).detail, /main requires test/);
+  assert.equal(ok({ known: true, protected: true, requiredChecks: [], requiredReviews: 1 }).ok, true);
+
+  for (const [protection, detail] of [
+    [{ known: true, protected: false, requiredChecks: [], requiredReviews: 0 }, /no branch protection/],
+    [{ known: true, protected: true, requiredChecks: [], requiredReviews: 0 }, /protected but requires no status check/],
+    [{ known: false, why: 'the token cannot read branch protection — it needs repo admin' }, /could not be read \(the token cannot read/],
+  ]) {
+    const g = ok(protection);
+    assert.equal(g.ok, false);
+    assert.match(g.detail, detail);
+    assert.match(g.fix, /require a status check on main .* or set "dispatch": \{"merge": \{"mode": "manual"\}\}/);
+  }
+});
+
+// ---------- the tick ----------
+
+test('manual — the default — sends nothing at all: not a mutation, not even a protection read', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.protect('main', { checks: ['test'] });
+  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.auto_merge, []);
+  assert.deepEqual(enables(h.gh), []);
+  assert.deepEqual(gateReads(h.gh), []);
+  assert.equal(h.gh.statusOf(1), 'review');
+  assert.equal(h.gh.autoMergeOf(100), null);
+});
+
+test('auto on a protected branch enables auto-merge once, and the next tick sends nothing', async (t) => {
+  const h = harness({ merge: { mode: 'auto' } });
+  t.after(h.cleanup);
+  h.gh.protect('main', { checks: ['test', 'packed artifact'] });
+  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] }));
+
+  const first = await h.tick();
+  assert.deepEqual(first.auto_merge, [{ number: 1, pr: 100, base: 'main', method: 'squash', ok: true }]);
+  assert.equal(enables(h.gh).length, 1);
+  assert.equal(enables(h.gh)[0].variables.method, 'SQUASH');
+  assert.deepEqual(h.gh.autoMergeOf(100), { enabledAt: '2026-08-26T02:00:00Z', mergeMethod: 'SQUASH' });
+  assert.match(h.log(), /#1: auto-merge \(squash\) enabled on PR #100 — main requires test, packed artifact/);
+
+  // idempotent: the board read now carries the auto-merge request, so there is nothing to send
+  const second = await h.tick();
+  assert.deepEqual(second.auto_merge, []);
+  assert.equal(enables(h.gh).length, 1);
+  // and the gate is not re-read for a card there is nothing to do about
+  assert.equal(gateReads(h.gh).length, 1);
+});
+
+test('auto on an unprotected branch refuses, every tick, with the fix — and merges nothing', async (t) => {
+  const h = harness({ merge: { mode: 'auto' } });
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(enables(h.gh), []);
+  assert.equal(h.gh.autoMergeOf(100), null);
+  assert.equal(s.auto_merge.length, 1);
+  assert.equal(s.auto_merge[0].ok, false);
+  assert.match(s.auto_merge[0].why, /main has no branch protection/);
+  assert.match(s.auto_merge[0].fix, /require a status check on main/);
+  assert.match(h.log(), /#1: auto-merge refused on PR #100: main has no branch protection.* → require a status check/);
+});
+
+test('a ruleset is a gate too — and the only one a token without repo admin can read', async (t) => {
+  const h = harness({ merge: { mode: 'auto' } });
+  t.after(h.cleanup);
+  h.gh.protect('main', { admin: false }); // the classic endpoint answers 403
+  h.gh.ruleset('main', { checks: ['test'] });
+  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] }));
+
+  const s = await h.tick();
+
+  assert.equal(s.auto_merge[0].ok, true);
+  assert.equal(enables(h.gh).length, 1);
+});
+
+test('protection it cannot read is a refusal, not an assumption', async (t) => {
+  const h = harness({ merge: { mode: 'auto' } });
+  t.after(h.cleanup);
+  h.gh.protect('main', { admin: false }); // 403, and no ruleset to fall back on
+  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(enables(h.gh), []);
+  assert.equal(s.auto_merge[0].ok, false);
+  assert.match(s.auto_merge[0].why, /could not be read \(the token cannot read branch protection/);
+});
+
+test('a draft PR is never handed over — GitHub would refuse it, so hkb does not ask', async (t) => {
+  const h = harness({ merge: { mode: 'auto' } });
+  t.after(h.cleanup);
+  h.gh.protect('main', { checks: ['test'] });
+  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr({ isDraft: true })] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.auto_merge, []);
+  assert.deepEqual(enables(h.gh), []);
+  assert.deepEqual(gateReads(h.gh), []); // no candidate, so not even the gate is read
+});
+
+test('a card the active_pr guard moves to review is handed over on the same tick', async (t) => {
+  const h = harness({ merge: { mode: 'auto' } });
+  t.after(h.cleanup);
+  h.gh.protect('main', { checks: ['test'] });
+  h.gh.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude', prs: [openPr()] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.guarded, [{ number: 1, guard: 'active_pr', pr: 100 }]);
+  assert.equal(h.gh.statusOf(1), 'review');
+  assert.equal(enables(h.gh).length, 1);
+  assert.equal(s.auto_merge[0].number, 1);
+});
+
+test('the gate is read once a tick however many cards are waiting on the same branch', async (t) => {
+  const h = harness({ merge: { mode: 'auto' } });
+  t.after(h.cleanup);
+  h.gh.protect('main', { checks: ['test'] });
+  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr({ number: 100 })] }));
+  h.gh.addIssue(kbIssue({ number: 2, status: 'review', agent: 'claude', prs: [openPr({ number: 101 })] }));
+
+  const s = await h.tick();
+
+  assert.equal(s.auto_merge.length, 2);
+  assert.equal(enables(h.gh).length, 2);
+  assert.equal(gateReads(h.gh).length, 1);
+});
+
+test('a PR based on a branch of its own is gated on THAT branch, not on the default one', async (t) => {
+  const h = harness({ merge: { mode: 'auto' } });
+  t.after(h.cleanup);
+  h.gh.protect('main', { checks: ['test'] }); // main is fine; the PR does not target it
+  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr({ baseRefName: 'stack/base' })] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(enables(h.gh), []);
+  assert.match(s.auto_merge[0].why, /stack\/base has no branch protection/);
+  assert.equal(s.auto_merge[0].base, 'stack/base');
+});
+
+test('--dry-run enables nothing and says what it would have done', async (t) => {
+  const h = harness({ merge: { mode: 'auto' } });
+  t.after(h.cleanup);
+  h.gh.protect('main', { checks: ['test'] });
+  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] }));
+
+  const s = await h.tick({ dryRun: true });
+
+  assert.deepEqual(enables(h.gh), []);
+  assert.equal(s.auto_merge[0].dry, true);
+  assert.match(h.log(), /\[dry-run\] would enable auto-merge \(squash\) on PR #100/);
+});
+
+test('a policy hkb cannot read is reported and changes nothing', async (t) => {
+  const h = harness({ merge: { mode: 'always' } });
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.auto_merge, []);
+  assert.deepEqual(enables(h.gh), []);
+  assert.match(h.log(), /dispatch\.merge ignored — the last step stays manual: dispatch\.merge\.mode must be/);
+});
+
+test('a mutation GitHub rejects is reported on the card, and the tick carries on', async (t) => {
+  const h = harness({ merge: { mode: 'auto' } });
+  t.after(h.cleanup);
+  h.gh.protect('main', { checks: ['test'] });
+  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] }));
+  h.gh.fail({ kind: 'graphql' }, { status: 422, message: 'Protected branch rules not configured for this branch' });
+
+  const s = await autoMergePass(h.ctx, [{ number: 1, status: 'review', prs: [{ ...openPr(), nodeId: 'PR_kwFake100' }] }], { log: () => {} });
+
+  assert.equal(s[0].ok, false);
+  assert.match(s[0].error, /Protected branch rules not configured/);
+});
+
+// ---------- doctor ----------
+
+function sink() {
+  const results = [];
+  return {
+    results,
+    ok: (name, detail) => results.push({ name, ok: true, detail }),
+    bad: (name, detail, fix) => results.push({ name, ok: false, detail, fix }),
+    warn: (name, detail, fix) => results.push({ name, ok: null, detail, fix }),
+  };
+}
+
+test('doctor says nothing about a manual board — the default reports nothing to fix', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  const s = sink();
+
+  await checkMergePolicy(h.ctx, s);
+
+  assert.deepEqual(s.results, []);
+  assert.deepEqual(gateReads(h.gh), []);
+});
+
+test('doctor FAILS on auto without a gate, and names the fix', async (t) => {
+  const h = harness({ merge: { mode: 'auto' } });
+  t.after(h.cleanup);
+  const s = sink();
+
+  await checkMergePolicy(h.ctx, s);
+
+  assert.equal(s.results.length, 1);
+  assert.equal(s.results[0].name, MERGE_CHECK);
+  assert.equal(s.results[0].ok, false); // hard failure: `hkb doctor` exits non-zero on it
+  assert.match(s.results[0].detail, /merge\.mode is "auto" but main has no branch protection/);
+  assert.match(s.results[0].fix, /require a status check on main/);
+});
+
+test('doctor passes on auto once the branch has something to wait for', async (t) => {
+  const h = harness({ merge: { mode: 'auto', method: 'rebase' } });
+  t.after(h.cleanup);
+  h.gh.protect('main', { checks: ['test'], reviews: 1 });
+  const s = sink();
+
+  await checkMergePolicy(h.ctx, s);
+
+  assert.equal(s.results[0].ok, true);
+  assert.match(s.results[0].detail, /auto \(rebase\) — main requires test and 1 approving review\(s\)/);
+});
+
+test('doctor says which gate is in force, because only a REQUIRED review holds the merge', async (t) => {
+  // Confirming the interaction with `request-review --reviewer <user>` rather than assuming it:
+  // GitHub's auto-merge waits for what the branch *requires*, and a review request is not that.
+  const checksOnly = harness({ merge: { mode: 'auto' } });
+  t.after(checksOnly.cleanup);
+  checksOnly.gh.protect('main', { checks: ['test'] });
+  const a = sink();
+  await checkMergePolicy(checksOnly.ctx, a);
+  assert.equal(a.results[0].ok, true);
+  assert.match(a.results[0].detail, /nothing waits for a human: `request-review --reviewer <user>` requests a review, it does not require one/);
+
+  const withReviews = harness({ merge: { mode: 'auto' } });
+  t.after(withReviews.cleanup);
+  withReviews.gh.protect('main', { checks: ['test'], reviews: 1 });
+  const b = sink();
+  await checkMergePolicy(withReviews.ctx, b);
+  assert.match(b.results[0].detail, /a `request-review --reviewer <user>` is held until they approve/);
+});
+
+test('doctor fails auto on a repository where auto-merge is switched off', async (t) => {
+  const h = harness({ merge: { mode: 'auto' }, allowAutoMerge: false });
+  t.after(h.cleanup);
+  h.gh.protect('main', { checks: ['test'] }); // the gate is fine; the repository setting is not
+  const s = sink();
+
+  await checkMergePolicy(h.ctx, s);
+
+  assert.equal(s.results[0].ok, false);
+  assert.match(s.results[0].detail, /does not allow auto-merge, so every enable would fail/);
+  assert.match(s.results[0].fix, /Settings → General → Pull Requests → Allow auto-merge/);
+});
+
+test('doctor fails a policy it cannot read, whatever the branch looks like', async (t) => {
+  const h = harness({ merge: { mode: 'auto', method: 'ff' } });
+  t.after(h.cleanup);
+  h.gh.protect('main', { checks: ['test'] });
+  const s = sink();
+
+  await checkMergePolicy(h.ctx, s);
+
+  assert.equal(s.results[0].ok, false);
+  assert.match(s.results[0].detail, /dispatch\.merge\.method must be one of/);
+  assert.match(s.results[0].fix, /board\.json/);
+  assert.deepEqual(gateReads(h.gh), []); // it never got as far as asking GitHub
+});

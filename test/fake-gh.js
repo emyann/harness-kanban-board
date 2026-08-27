@@ -13,11 +13,12 @@ import { GhError, classify, setTransport } from '../src/gh.js';
 import { DEFAULT_KB, L, emptyRun, parseRunComment, pickRunComment, serializeBodyBlock, serializeRunComment, statusOf } from '../src/model.js';
 
 export class FakeGh {
-  constructor({ owner = 'acme', repo = 'board', defaultBranch = 'main', baseSha = 'f'.repeat(40), caps = {} } = {}) {
+  constructor({ owner = 'acme', repo = 'board', defaultBranch = 'main', baseSha = 'f'.repeat(40), caps = {}, allowAutoMerge = true } = {}) {
     this.owner = owner;
     this.repo = repo;
     this.nameWithOwner = `${owner}/${repo}`;
     this.defaultBranch = defaultBranch;
+    this.allowAutoMerge = allowAutoMerge; // the repo setting `enablePullRequestAutoMerge` needs
     this.caps = { blockedByGql: true, closedByPrs: true, ...caps };
     this.issues = new Map(); // number -> issue record
     this.refs = new Map(); // full ref name -> sha
@@ -26,6 +27,8 @@ export class FakeGh {
     this.failures = []; // injected errors, see fail()
     this.nextCommentId = 1000;
     this.commits = new Map(); // sha -> {date} — what a ref-CAS heartbeat leaves behind
+    this.protection = new Map(); // branch -> classic protection payload, or the string 'forbidden'
+    this.rules = new Map(); // branch -> the ruleset rules `GET /rules/branches/<b>` returns
     this.refs.set(`refs/heads/${defaultBranch}`, baseSha);
     this.transport = this.transport.bind(this);
   }
@@ -84,6 +87,36 @@ export class FakeGh {
     this.refs.set(`refs/kb/locks/${n}/${k}`, commit);
     this.commits.set(commit, { date: new Date(at).toISOString() });
     return commit;
+  }
+
+  /**
+   * Classic branch protection on `branch`. `checks` are required status-check contexts and
+   * `reviews` the required approving-review count; `admin: false` makes the protection endpoint
+   * answer 403, which is how it behaves for a token without repo admin.
+   */
+  protect(branch, { checks = [], reviews = 0, admin = true } = {}) {
+    this.protection.set(branch, admin
+      ? {
+        required_status_checks: checks.length ? { strict: false, contexts: checks, checks: checks.map((context) => ({ context, app_id: null })) } : null,
+        required_pull_request_reviews: reviews ? { required_approving_review_count: reviews } : null,
+      }
+      : 'forbidden');
+    return this;
+  }
+
+  /** The newer mechanism: a ruleset covering `branch`, as `GET /rules/branches/<b>` returns it. */
+  ruleset(branch, { checks = [], reviews = 0 } = {}) {
+    const rules = [];
+    if (checks.length) rules.push({ type: 'required_status_checks', parameters: { required_status_checks: checks.map((context) => ({ context })), strict_required_status_checks_policy: false } });
+    if (reviews) rules.push({ type: 'pull_request', parameters: { required_approving_review_count: reviews } });
+    this.rules.set(branch, rules);
+    return this;
+  }
+
+  /** The auto-merge request on a PR, as the board query would report it: null until enabled. */
+  autoMergeOf(prNumber) {
+    for (const issue of this.issues.values()) for (const pr of issue.prs) if (pr.number === prNumber) return pr.autoMerge || null;
+    return null;
   }
 
   /**
@@ -158,7 +191,7 @@ export class FakeGh {
     let m;
 
     if (p === '') {
-      if (method === 'GET') return { name: this.repo, full_name: this.nameWithOwner, default_branch: this.defaultBranch };
+      if (method === 'GET') return { name: this.repo, full_name: this.nameWithOwner, default_branch: this.defaultBranch, allow_auto_merge: this.allowAutoMerge };
     } else if (p === 'labels') {
       if (method === 'GET') return this.#page([...this.repoLabels].map((name) => ({ name })), q);
       if (method === 'POST') {
@@ -254,6 +287,18 @@ export class FakeGh {
         if (!this.refs.delete(ref)) throw this.#error(422, `DELETE ${path} failed (422): Reference does not exist`);
         return null;
       }
+    } else if ((m = /^branches\/([^/]+)\/protection$/.exec(p))) {
+      // classic branch protection: 404 when there is none, 403 without repo admin
+      const branch = decodeURIComponent(m[1]);
+      if (method === 'GET') {
+        const prot = this.protection.get(branch);
+        if (!prot) throw this.#error(404, `GET ${path} failed (404): Branch not protected`);
+        if (prot === 'forbidden') throw this.#error(403, `GET ${path} failed (403): Must have admin rights to Repository.`);
+        return prot;
+      }
+    } else if ((m = /^rules\/branches\/(.+)$/.exec(p))) {
+      // rulesets: readable without admin, and empty rather than 404 when nothing covers the branch
+      if (method === 'GET') return this.rules.get(decodeURIComponent(m[1])) || [];
     } else if ((m = /^git\/matching-refs\/(.*)$/.exec(p))) {
       const prefix = `refs/${m[1]}`;
       if (method === 'GET') return [...this.refs.entries()].filter(([ref]) => ref.startsWith(prefix)).map(([ref, sha]) => ({ ref, object: { sha, type: 'commit' } }));
@@ -311,11 +356,40 @@ export class FakeGh {
       const nodes = this.#blockers(issue);
       node.blockedBy = { totalCount: nodes.length, nodes };
     }
-    if (this.caps.closedByPrs) node.closedByPullRequestsReferences = { nodes: issue.prs.map((pr) => ({ number: pr.number, state: pr.state, isDraft: !!pr.isDraft, url: pr.url || `https://github.com/${this.nameWithOwner}/pull/${pr.number}`, headRefName: pr.headRefName || `kb/${issue.number}`, merged: !!pr.merged })) };
+    if (this.caps.closedByPrs) {
+      node.closedByPullRequestsReferences = {
+        nodes: issue.prs.map((pr) => ({
+          id: pr.nodeId || `PR_kwFake${pr.number}`,
+          number: pr.number,
+          state: pr.state,
+          isDraft: !!pr.isDraft,
+          url: pr.url || `https://github.com/${this.nameWithOwner}/pull/${pr.number}`,
+          headRefName: pr.headRefName || `kb/${issue.number}`,
+          baseRefName: pr.baseRefName || this.defaultBranch,
+          merged: !!pr.merged,
+          autoMergeRequest: pr.autoMerge ? { enabledAt: pr.autoMerge.enabledAt || '2026-08-26T02:00:00Z', mergeMethod: pr.autoMerge.mergeMethod } : null,
+        })),
+      };
+    }
     return node;
   }
 
   #graphql({ query, variables = {} }) {
+    if (/enablePullRequestAutoMerge/.test(query)) {
+      for (const issue of this.issues.values()) {
+        for (const pr of issue.prs) {
+          if ((pr.nodeId || `PR_kwFake${pr.number}`) !== variables.id) continue;
+          // GitHub refuses both of these, and hkb must never ask: a draft cannot auto-merge, and a
+          // merged PR has nothing left to enable.
+          if (!this.allowAutoMerge) throw this.#error(422, 'GraphQL failed (422): Auto merge is not allowed for this repository');
+          if (pr.isDraft) throw this.#error(422, 'GraphQL failed (422): Pull request is in draft state');
+          if (pr.state !== 'OPEN') throw this.#error(422, `GraphQL failed (422): Pull request is ${pr.state.toLowerCase()}`);
+          pr.autoMerge = { enabledAt: '2026-08-26T02:00:00Z', mergeMethod: variables.method };
+          return { enablePullRequestAutoMerge: { pullRequest: { number: pr.number, autoMergeRequest: pr.autoMerge } } };
+        }
+      }
+      throw this.#error(404, `GraphQL failed (404): Could not resolve to a node with the id ${variables.id}`);
+    }
     if (/__type\(name:\s*"Issue"\)/.test(query)) {
       const fields = [{ name: 'number' }, { name: 'title' }, { name: 'labels' }];
       if (this.caps.blockedByGql) fields.push({ name: 'blockedBy' });

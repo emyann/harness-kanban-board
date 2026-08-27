@@ -11,22 +11,22 @@ covers:
   - path: src/gh.js
     sha: b728c07d7f5e7bfd29e3dc4c2e0e2786d29522ee
   - path: src/model.js
-    sha: b2aa39b71abaa6e6d3cb1463da783c5746cf986a
+    sha: 1ee3e8e45a93fe97ad198cda8c74e3b0cc2ba13f
   - path: src/tasks.js
-    sha: 11668a9b08e59288eb5ebf982f7a35a1480aa84a
+    sha: 373dd83d0ba4c554ebf5c70c01ba27676db61b8a
   - path: src/lock.js
     sha: 680eae74c9955003c948a6df9750c25548ccaf86
   - path: src/lifecycle.js
     sha: 67b6fb458425948ce61d6a7a324649cb79e1c648
   - path: src/dispatch.js
-    sha: 299245815c7b067e929464c7d8c650034bd4dbc1
+    sha: 159ba13573ea1d691b03d195363403c60b7c15ea
   - path: src/context.js
     sha: 0de994e57a7d7540c632757864e1af8027cffa03
   - path: src/hook.js
     sha: 6aa6036b1bcbea36a2a5e9d079881cd36bb89adf
   - path: src/board.js
-    sha: 97e9c9ba1410e467605551172eaeccb443302e4b
-generated_at_commit: 64019fe
+    sha: d231efaf79725e04b101d334c738924ec932506b
+generated_at_commit: 876b9ee
 last_refreshed: 2026-08-27
 related: [concepts/board-protocol, concepts/claims-and-leases, architecture/dispatcher-tick, concepts/roles-and-seats]
 ---
@@ -68,7 +68,10 @@ is only an optimization — since the 2026-08-27 outage it drops its own caches
 and ultimately exits (code 4) when claims stop resolving, because a fresh
 process rebuilt from the board is always correct. Judgment (what to build,
 whether a PR merges) lives outside the loop, in the seats described in
-`concepts/roles-and-seats`.
+`concepts/roles-and-seats`. The tick still never merges anything: a board on
+`dispatch.merge.mode: "auto"` has it enable *GitHub's* auto-merge on a
+reviewed card's PR and walk away, which delegates the mechanical last step
+without moving the judgment inside the loop — see `features/auto-merge`.
 
 ## Workers are any harness
 

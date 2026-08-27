@@ -10,6 +10,7 @@
 
 ## Features
 
+- [The last step — `dispatch.merge` and GitHub's auto-merge](./features/auto-merge.md): Why hkb never merges, how a board hands the last step to GitHub instead, and the branch-protection gate that is the only thing making that safe.
 - [The web board (`hkb serve`)](./features/web-board.md): One local server, one inline page, N repos — how the board is read, how a drag becomes a verb, and how every request is routed to the board it names.
 
 ## Decisions

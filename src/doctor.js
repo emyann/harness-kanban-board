@@ -4,8 +4,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
 import { boardFile, api, readState, writeState } from './board.js';
-import { detectCaps } from './tasks.js';
-import { L, STATUSES, compareVersions } from './model.js';
+import { detectCaps, branchProtection } from './tasks.js';
+import { L, STATUSES, compareVersions, mergePolicy, mergeGate, mergeGateFix } from './model.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
 import { agentsSkillDir, packageSkillDir, readSkillVersion, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, isEphemeralPath, HOOK_SETTINGS } from './init.js';
 import { checkProject } from './projects.js';
@@ -109,6 +109,46 @@ export function checkHooks(ctx, { ok, warn, bad }, { onPath = has, exists = (p) 
         need.target === 'hkb' ? 'npm i -g hkb-cli (or: hkb init, which writes a command that resolves here)' : 'hkb init');
     }
   }
+}
+
+export const MERGE_CHECK = 'merge policy';
+
+/**
+ * `dispatch.merge.mode: "auto"` hands the last step to GitHub's auto-merge — which, on a branch
+ * with nothing to wait for, merges the PR the moment it opens. That is not a warning: it is the
+ * whole difference between "the operator's rote click, automated" and "agent-authored code on the
+ * default branch, unreviewed and untested". So the combination is a hard failure with a named fix,
+ * and this check is what makes the feature safe to ship. Silent on a `manual` board — the default
+ * changes nothing, so it has nothing to report.
+ */
+export async function checkMergePolicy(ctx, { ok, bad }) {
+  const policy = mergePolicy(ctx.cfg);
+  if (policy.error) return bad(MERGE_CHECK, policy.error, `fix "dispatch": {"merge": {...}} in ${path.relative(ctx.root, boardFile(ctx.root))}`);
+  if (policy.mode !== 'auto') return null;
+  const branch = ctx.cfg.default_branch || 'main';
+  let protection, gate;
+  try {
+    protection = await branchProtection(ctx, branch);
+    gate = mergeGate(protection, branch);
+  } catch (e) {
+    gate = { ok: false, detail: `${branch}'s protection could not be read: ${e.message}`, fix: mergeGateFix(branch) };
+  }
+  if (!gate.ok) return bad(MERGE_CHECK, `merge.mode is "auto" but ${gate.detail}`, gate.fix);
+  // The mode is only worth having if the repository allows auto-merge at all; without it every
+  // enable fails, once per card, with GitHub's own wording and nothing to do about it here.
+  try {
+    const repo = await rest('GET', api(ctx));
+    if (repo && repo.allow_auto_merge === false) {
+      return bad(MERGE_CHECK, `merge.mode is "auto" but ${ctx.cfg.repo} does not allow auto-merge, so every enable would fail`, 'Settings → General → Pull Requests → Allow auto-merge');
+    }
+  } catch { /* the gate above is the check that matters; this one is a courtesy */ }
+  // Confirmed, not assumed: auto-merge waits for whatever the branch *requires*. A reviewer that
+  // `hkb request-review --reviewer <user>` puts on the PR is a request, not a requirement — only
+  // required approving reviews hold the merge, so say which of the two this branch has.
+  const reviewNote = protection?.requiredReviews > 0
+    ? ' — a `request-review --reviewer <user>` is held until they approve'
+    : ' — nothing waits for a human: `request-review --reviewer <user>` requests a review, it does not require one';
+  return ok(MERGE_CHECK, `auto (${policy.method}) — ${gate.detail}, and GitHub holds the merge until they pass${reviewNote}`);
 }
 
 // ---------- KB_TOKEN expiry ----------
@@ -308,6 +348,9 @@ export async function doctor(ctx, flags, log) {
     caps.blockedByGql ? ok('GraphQL Issue.blockedBy', 'available (one query per tick)') : warn('GraphQL Issue.blockedBy', 'not in schema — falling back to REST dependencies per task', 'check docs; run doctor again later');
     caps.closedByPrs ? ok('GraphQL closedByPullRequestsReferences', 'available (active_pr guard)') : warn('GraphQL closedByPullRequestsReferences', 'not in schema — active_pr guard disabled');
   } catch (e) { bad('GraphQL', e.message); }
+
+  // the last step — silent unless the board asked GitHub to take it (`merge.mode: "auto"`)
+  await checkMergePolicy(ctx, { ok, bad });
 
   // Projects v2 mirror — silent unless board.json links a project (the feature is off by default)
   await checkProject(ctx, { ok, bad, warn });

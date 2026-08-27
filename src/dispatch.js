@@ -4,10 +4,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, getTask } from './tasks.js';
+import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, getTask, enableAutoMerge, branchProtection } from './tasks.js';
 import { claim, release, listLocks, lockBeatAt, staleBaseSha } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree } from './board.js';
-import { computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath } from './model.js';
+import { computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted } from './track.js';
 import { GhError } from './gh.js';
@@ -214,6 +214,64 @@ async function reconcileClosed(ctx, tasks, state, { dryRun = false, log = () => 
   return { skipped: null, reconciled };
 }
 
+// ---------- the last step: GitHub's auto-merge ----------
+
+/**
+ * The merge gate for one base branch, read at most once per tick and only when there is actually a
+ * PR to enable. A board on the default `manual` never gets here, so it costs nothing.
+ */
+async function gateFor(ctx, branch) {
+  const cache = (ctx._cache.mergeGate ||= new Map());
+  if (!cache.has(branch)) {
+    try {
+      cache.set(branch, mergeGate(await branchProtection(ctx, branch), branch));
+    } catch (e) {
+      cache.set(branch, { ok: false, detail: `${branch}'s protection could not be read: ${e.message}`, fix: mergeGateFix(branch) });
+    }
+  }
+  return cache.get(branch);
+}
+
+/**
+ * Hand the last step to GitHub, when the board says so (`dispatch.merge.mode: "auto"`).
+ * One `enablePullRequestAutoMerge` per PR, at review time — GitHub does the rest: required checks,
+ * required reviews and up-to-date branches are its gates to enforce, and hkb never has to answer
+ * "is this safe to merge". A PR whose checks fail simply never merges, so there is nothing here to
+ * poll, retry or reconcile. Runs after the claim loop so it sees the cards the `active_pr` guard
+ * moved to review this same tick (`setStatus` mutates the task objects in place).
+ *
+ * The refusal is the point of the feature: auto-merge on an unprotected branch merges *immediately*,
+ * which would mean landing agent-authored code unreviewed and untested. So a branch without a gate
+ * is never enabled — it is reported, every tick, with the fix.
+ */
+export async function autoMergePass(ctx, tasks, { dryRun = false, log = () => {} } = {}) {
+  const policy = mergePolicy(ctx.cfg);
+  const out = [];
+  if (policy.error) { log(`dispatch.merge ignored — the last step stays manual: ${policy.error}`); return out; }
+  if (!policy.auto) return out;
+  for (const t of tasks) {
+    const d = autoMergeDecision(t, policy);
+    if (!d.enable) continue;
+    const branch = d.pr.baseRefName || ctx.cfg.default_branch || 'main';
+    const gate = await gateFor(ctx, branch);
+    if (!gate.ok) {
+      out.push({ number: t.number, pr: d.pr.number, base: branch, ok: false, why: gate.detail, fix: gate.fix });
+      log(`#${t.number}: auto-merge refused on PR #${d.pr.number}: ${gate.detail} → ${gate.fix}`);
+      continue;
+    }
+    if (dryRun) { out.push({ number: t.number, pr: d.pr.number, base: branch, method: policy.method, ok: true, dry: true }); log(`#${t.number}: [dry-run] would enable auto-merge (${policy.method}) on PR #${d.pr.number}`); continue; }
+    try {
+      await enableAutoMerge(ctx, d.pr, policy.mergeMethod);
+      out.push({ number: t.number, pr: d.pr.number, base: branch, method: policy.method, ok: true });
+      log(`#${t.number}: auto-merge (${policy.method}) enabled on PR #${d.pr.number} — ${gate.detail}`);
+    } catch (e) {
+      out.push({ number: t.number, pr: d.pr.number, base: branch, ok: false, error: e.message });
+      log(`#${t.number}: could not enable auto-merge on PR #${d.pr.number}: ${e.message}`);
+    }
+  }
+  return out;
+}
+
 // ---------- reaping background agents ----------
 
 /** An agent that is really taking its turn — not parked on a permission prompt. */
@@ -321,7 +379,7 @@ async function failAttempt(ctx, task, runRec, outcome, note, { kill = true } = {
 export async function tick(ctx, { max = Infinity, dryRun = false, children = null, profiles = null, log = () => {} } = {}) {
   ctx.requireBoard();
   const d = ctx.cfg.dispatch;
-  const summary = { reconciled: [], reclaimed: [], promoted: [], guarded: [], claimed: [], spawn_failed: [], held: [], skipped: [], tracks: [], reaped: [], self_heal: [], fatal: null };
+  const summary = { reconciled: [], reclaimed: [], promoted: [], guarded: [], claimed: [], spawn_failed: [], held: [], skipped: [], tracks: [], reaped: [], self_heal: [], auto_merge: [], fatal: null };
   // The tick is the lifetime of every read the tick memoizes: the base sha is revalidated (304 when
   // the branch has not moved) the first time a claim needs it, never inherited from an older tick.
   staleBaseSha(ctx);
@@ -700,6 +758,16 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
 
   // a task that left the open board takes its claim-health entry with it
   for (const n of health.keys()) if (!tasks.some((t) => t.number === n)) health.delete(n);
+
+  // 3c. the last step, when the board asked GitHub to take it (`dispatch.merge.mode: "auto"`).
+  //     After the claim loop, so a card the `active_pr` guard moved to review a few lines up is
+  //     handed over on the same tick rather than the next one.
+  try {
+    summary.auto_merge = await autoMergePass(ctx, tasks, { dryRun, log });
+  } catch (e) {
+    summary.auto_merge_error = e.message;
+    log(`auto-merge pass failed (the board is unaffected, and the next tick tries again): ${e.message}`);
+  }
 
   // 4. mirror the labels onto the linked Projects v2 board (opt-in, one-way, never fatal).
   //    Last, so it sees every transition this tick: setStatus mutates the task objects in place.

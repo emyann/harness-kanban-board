@@ -102,6 +102,11 @@ export const DEFAULT_BOARD = {
     recent_success_window: 600,
     path_guard: true,
     daily_spawn_cap: 40,
+    // The last step. "manual" is today's behaviour: hkb never merges, the operator does. Set
+    // { "mode": "auto", "method": "squash" } and the dispatcher asks GitHub's own auto-merge to
+    // land a reviewed card's PR once the branch's required checks go green — one mutation per PR,
+    // and `hkb doctor` refuses the mode outright on a branch with nothing to wait for.
+    merge: { mode: 'manual', method: 'squash' },
   },
   profiles: DEFAULT_PROFILES,
 };
