@@ -199,3 +199,17 @@ test('workerContext has no Comments section when nobody has said anything', asyn
   assert.ok(!out.includes('## Comments'));
   assert.match(out, /## Protocol \(hkb\)/);
 });
+
+test('the protocol asks for a finishing command a shell-vetting harness will run (#125)', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+  const out = await workerContext(h.ctx, await getTask(h.ctx, 7));
+  // `complete` is a bash builtin and a heredoc is refused outright in a worktree-isolated Claude Code
+  // session, so neither may appear in the one command the worker is told to end with.
+  assert.match(out, /hkb finish 7 --from-stdin < \/tmp\/kb-7\.json/);
+  assert.doesNotMatch(out, /hkb complete 7/);
+  assert.doesNotMatch(out, /--from-stdin <<'EOF'/, 'no command in the prompt may be a heredoc');
+  // and it says why, so a worker that reads only this prompt knows which spelling to type
+  assert.match(out, /`finish` is `complete`/);
+});

@@ -78,7 +78,7 @@ not a role.
   dumbness is the point — deterministic code, one GraphQL query per board per tick.
 - **A worker is any harness.** Claude Code, Copilot CLI and Codex CLI ship as profiles; an Actions job, a shell
   script or you in your own terminal are workers too. A worker reads its brief with `hkb context <n>`, works in a
-  worktree, opens a draft PR that says `Closes #42`, and ends with exactly one of `hkb complete` / `hkb block` /
+  worktree, opens a draft PR that says `Closes #42`, and ends with exactly one of `hkb finish` / `hkb block` /
   `hkb request-review`.
 
 Which of them a machine fills is a setting, not a fork of the protocol, so adoption is a ladder rather than a
@@ -106,12 +106,15 @@ A worker — spawned by the dispatcher, or you by hand with `hkb claim 42` and `
 reads `hkb context 42`, works in a worktree, opens a draft PR that `Closes #42`, and finishes with exactly one of:
 
 ```bash
-hkb complete 42 --from-stdin <<'EOF'
-{"summary": "...", "metadata": {"changed_files": ["src/auth.js"], "verification": ["npm test"]}}
-EOF
+hkb finish 42 --from-stdin < /tmp/kb-42.json    # {"summary": "...", "metadata": {"changed_files": [...]}}
 hkb block 42 "needs the Stripe key" --kind needs_input
 hkb request-review 42 --summary "..."
 ```
+
+`finish` is `complete` under a name no shell claims, and it is the name a worker should be told to type.
+`complete` is a bash builtin, so a harness that vets a worker's command line word by word sees the builtin
+rather than hkb's verb and refuses to run it — Claude Code does exactly that in a worktree-isolated session,
+which is every `claude --bg` worker, and refuses a `<<'EOF'` heredoc there too. Redirecting a file clears both.
 
 Every terminal verb also takes `--summary-file` / `--metadata-file` / `--reason-file`, or the inline
 `--summary ".." --metadata '{..}'` flags — no harness has to push JSON through shell quoting.

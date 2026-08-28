@@ -43,6 +43,22 @@ export function parseArgs(argv) {
 const STDIN_KEYS = ['summary', 'metadata', 'artifacts', 'reason', 'kind', 'reviewer'];
 const TERMINAL_VERBS = ['complete', 'block', 'request-review'];
 
+/**
+ * `finish` is `complete` under a name no shell claims — the same verb, spelled so a worker can run it.
+ *
+ * `complete` is a bash builtin (`complete -C <cmd>` runs a string through a shell), so a harness that
+ * vets a worker's command line word by word sees the builtin, not hkb's verb. Claude Code does: in a
+ * worktree-isolated session — which is every `claude --bg` worker, the default profile — `hkb complete
+ * <n>` is refused with "this command runs a string through complete, which can't be verified to stay
+ * inside the worktree", whatever the arguments and however the word is quoted. `block` and
+ * `request-review` are not builtins and run fine, so the one verb a *successful* worker needs was the
+ * only one it could not type, and the attempt died as a protocol_violation instead (#125).
+ *
+ * Resolved before routing, so nothing downstream learns a second name: the run record, the outbox
+ * replay (`terminalArgv`) and the board all still say `complete`.
+ */
+export const VERB_ALIASES = { finish: 'complete' };
+
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const str = (v) => (typeof v === 'string' ? v : null);
 const list = (v, label) => {
@@ -60,7 +76,9 @@ function parseObject(text, label) {
 }
 
 function readStdinSync() {
-  if (process.stdin.isTTY) throw usage(`--from-stdin: stdin is a terminal — pipe a JSON object or use a heredoc: hkb complete <n> --from-stdin <<'EOF' ... EOF`);
+  // A heredoc is the nicest form and the first thing to suggest, but not every harness will run one —
+  // Claude Code refuses `<<'EOF'` outright in a worktree-isolated session — so name the redirect too.
+  if (process.stdin.isTTY) throw usage(`--from-stdin: stdin is a terminal — redirect a JSON file (hkb finish <n> --from-stdin < payload.json), pipe one, or use a heredoc: hkb finish <n> --from-stdin <<'EOF' ... EOF`);
   try { return fs.readFileSync(0, 'utf8'); } catch (e) { throw usage(`--from-stdin: could not read stdin (${e.code || e.message}) — pipe a JSON object, or use --summary-file/--metadata-file`); }
 }
 
@@ -163,11 +181,13 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
                     hkb comment 12 "$(hkb graph 12)"      --json adds { nodes, edges, mermaid }
               link <parent> <child>   unlink <parent> <child>      promote <n>...      archive <n>...
               adopt <n>... [--agent p]     comment <n> "text"      log <n> [--json]    status <n>
-  worker      heartbeat <n> [--note ..]     complete <n> --summary ".." [--metadata JSON|path.json] [--artifacts a,b]
+  worker      heartbeat <n> [--note ..]     finish <n> --summary ".." [--metadata JSON|path.json] [--artifacts a,b]
               block <n> "reason" [--kind dependency|needs_input|capability|transient]     unblock <n>...
               request-review <n> --summary ".." [--metadata ..] [--reviewer <github-user>]   request-changes <n> "reason"
-              complete|block|request-review also take --summary-file <p> --metadata-file <p> --reason-file <p>, or
+              finish|block|request-review also take --summary-file <p> --metadata-file <p> --reason-file <p>, or
               --from-stdin with one JSON object {summary, metadata, artifacts, reason, kind, reviewer} (no shell quoting)
+              finish is complete — the same verb under a name no shell claims: complete is a bash builtin,
+              so a harness that vets a command word by word (Claude Code in a worktree) refuses to run it
   dispatch    dispatch [--loop S] [--max N] [--profiles a,b] [--dry-run]     claim <n> [--profile p] [--spawn]
               gc [--yes]
   board       serve [--port 4666] [--host 127.0.0.1] [--poll 30]   local web board; drag-drop runs the same verbs
@@ -204,7 +224,8 @@ function taskLine(t) {
 
 export async function main(argv) {
   const { flags, pos } = parseArgs(argv);
-  const [cmd, ...rest] = pos;
+  const [typed, ...rest] = pos;
+  const cmd = VERB_ALIASES[typed] || typed;
   if (!cmd || cmd === 'help' || flags.help) { process.stdout.write(HELP); return 0; }
   if (cmd === 'version') { const version = packageVersion(); out({ json: !!flags.json }, { version, node: process.version }, `hkb ${version}`); return 0; }
   const ctx = makeContext(flags);
@@ -390,7 +411,7 @@ export async function main(argv) {
     }
     case 'complete': {
       const [n] = nums(rest);
-      if (!n) throw usage('hkb complete <n> --summary ".." [--metadata JSON|path] [--artifacts a,b] | --summary-file p --metadata-file p | --from-stdin');
+      if (!n) throw usage('hkb finish <n> --summary ".." [--metadata JSON|path] [--artifacts a,b] | --summary-file p --metadata-file p | --from-stdin   (finish = complete)');
       const p = resolveTerminalInput(cmd, flags, rest);
       const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || envAttempt(n) });
       const r = await withOutbox(ctx, replay, () => complete(ctx, n, { summary: p.summary, metadata: p.metadata, artifacts: p.artifacts, attempt: flags.attempt }));

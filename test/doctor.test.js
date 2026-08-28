@@ -535,6 +535,31 @@ test('a profile with only written-off rows still reads like English', () => {
   assert.equal(sessionFinding('claude', sessionTally(runs, 'claude'), 1).detail, 'session recorded on 1/1 written off without one');
 });
 
+// Recording a session and pricing it are two halves. A `claude --bg` attempt reports no cost of its
+// own, so a board with sessions but no `stats.rates` is recording faithfully and can still never say
+// what it spent — the ok line has to carry that, or it reads as "spend visibility works".
+test('sessions recorded but no stats.rates: the ok line says the transcripts buy no cost', () => {
+  const runs = [runWith([attempt(1, 'completed', { session: true })])];
+  const f = sessionFinding('claude', sessionTally(runs, 'claude'), 1, false);
+  assert.equal(f.ok, true, 'an unconfigured rates table is a fact to state, not a board that is broken');
+  assert.match(f.detail, /session recorded on 1\/1 that filed a terminal verb/);
+  assert.match(f.detail, /no `stats\.rates` in \.kanban\/board\.json/);
+  assert.match(f.detail, /turns and tokens but never a cost/);
+});
+
+test('with rates configured the clause is absent, and the default stays silent', () => {
+  const runs = [runWith([attempt(1, 'completed', { session: true })])];
+  assert.doesNotMatch(sessionFinding('claude', sessionTally(runs, 'claude'), 1, true).detail, /stats\.rates/);
+  assert.doesNotMatch(sessionFinding('claude', sessionTally(runs, 'claude'), 1).detail, /stats\.rates/);
+});
+
+test('a board recording nothing at all is unchanged: one problem at a time', () => {
+  const runs = [runWith([attempt(1, 'completed'), attempt(2, 'timed_out')])];
+  const f = sessionFinding('claude', sessionTally(runs, 'claude'), 1, false);
+  assert.equal(f.ok, null, 'still the warning');
+  assert.doesNotMatch(f.detail, /stats\.rates/, 'rates cannot matter while there is nothing to price');
+});
+
 // ---------- end to end, on a board ----------
 
 test('doctor warns on a board whose claude-bg attempts carry no session fields', async (t) => {

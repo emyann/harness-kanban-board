@@ -21,4 +21,6 @@ description: Work one hkb task from the GitHub Issues board — read it with `hk
   two nudges it lets you go and the dispatcher records a `protocol_violation`. Call the verb yourself — do not
   rely on the nudge.
 - There is no structured-output flag: everything hkb records about this attempt comes from the `hkb` commands
-  you run. Put the handoff in `hkb complete --from-stdin`, not in your final message.
+  you run. Put the handoff in `hkb finish --from-stdin`, not in your final message (`finish` is `complete` under
+  a name no shell builtin claims — either spelling works here, and `finish` also works on harnesses that vet the
+  command line word by word).

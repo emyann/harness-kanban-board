@@ -336,11 +336,13 @@ export function trackContext({ repo, board, track, attempt, waves = null }) {
   L.push('   into *review* behind it, and the dispatcher could never finish them for you.');
   L.push('5. Finish the node with EXACTLY ONE terminal verb — the same three any worker has:');
   L.push('```bash');
-  L.push(`hkb complete <n> --from-stdin <<'EOF'`);
-  L.push('{"summary": "<what changed, for the next node and the next worker>",');
-  L.push(' "metadata": {"changed_files": ["..."], "verification": ["<commands you ran>"], "residual_risk": ["..."]}}');
-  L.push('EOF');
+  L.push('# write /tmp/kb-<n>.json with your editor tool:');
+  L.push('# {"summary": "<what changed, for the next node and the next worker>",');
+  L.push('#  "metadata": {"changed_files": ["..."], "verification": ["<commands you ran>"], "residual_risk": ["..."]}}');
+  L.push('hkb finish <n> --from-stdin < /tmp/kb-<n>.json');
   L.push('```');
+  L.push('   `finish` is `complete` under a name no shell claims — say `finish`, and redirect a file rather than');
+  L.push('   using a heredoc, so a harness that vets your command line word by word still runs it.');
   L.push('   - `hkb block <n> "why" --kind needs_input|dependency|capability|transient` when that node cannot proceed');
   L.push('   - `hkb request-review <n> --summary "..."` when a reviewer must look before it counts as done');
   L.push('6. Only then start the next node. Its `hkb context` will show the result you just wrote.');

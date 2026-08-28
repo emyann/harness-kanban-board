@@ -246,7 +246,8 @@ export async function stopHook(ctx, io = {}) {
   }
   fs.writeFileSync(file, String(count + 1));
   const reason = `Task #${n} is still "running" on the kanban board. Finish with exactly one terminal verb before stopping: ` +
-    `\`hkb complete ${n} --from-stdin\` (JSON {summary, metadata} on stdin; or --summary/--summary-file --metadata-file), or \`hkb block ${n} "why" --kind needs_input\`, or \`hkb request-review ${n} --summary "..."\`. ` +
+    `\`hkb finish ${n} --from-stdin < /tmp/kb-${n}.json\` (write that file first: {summary, metadata}; or --summary/--summary-file --metadata-file), or \`hkb block ${n} "why" --kind needs_input\`, or \`hkb request-review ${n} --summary "..."\`. ` +
+    `(\`finish\` is \`complete\` under a name no shell claims — say \`finish\`, and redirect a file rather than a heredoc, so a harness that vets your command line runs it.) ` +
     `(nudge ${count + 1}/2${input.stop_hook_active ? ', stop_hook_active' : ''})`;
   process.stdout.write(JSON.stringify({ decision: 'block', reason }) + '\n');
   return 0;
