@@ -295,30 +295,49 @@ attempts   35 over 20 tasks · 33 ended · 2 active
            delivered 13 (39%) · blocked 0 · failed 20
 duration   mean 1h18m · median 10m11s · p90 1h20m · max 15h07m  (29 ended)
 spawns     30 / 40 today · 10 left
-spend      $9.02 · recorded on 3 of 29 worker attempts
-           claude          $9.02 · 3 attempts · mean $3.01 · max $5.14 · 120 turns
-           26 worker attempts recorded no cost — the real total is higher
+spend      $9.02 reported · on 3 of 29 worker attempts
+           claude-p        $9.02 · 3 attempts · mean $3.01 · max $5.14 · 120 turns
+           ~$34.59 estimated on top, for 20 worker attempts priced from their transcripts — an estimate, not a reported cost
+           6 worker attempts priced nothing at all — the real total is higher
+usage      1840 turns · in 42k · out 310k · cache 1.2M written / 38M read  (20 transcripts)
 
 read 1 board query + 21 run records; nothing was written.
 ```
 
 It invents no new state: statuses come from the labels, attempts and outcomes from the `<!-- kb-run -->`
-comments, today's spawn count from the dispatcher's `.kanban/state.json`, and spend from the `total_cost_usd`
-an attempt row carries — what `claude -p --output-format json` signs off with. A row without one falls back to
-the worker's own log on disk, which is free; harnesses whose log has no final JSON simply report no cost, and
-the report says how many of them there were rather than quietly understating the total. `--since` takes a span
-(`90m`, `36h`, `7d`, `2w`), a date, or `all`. The read is one board query plus the run comment of each task the
-window actually touched — a comment write bumps the issue's `updatedAt`, so "updated since" is "has news" —
-plus every `running` task, whose ref-CAS heartbeat leaves no trace on the issue.
+comments, today's spawn count from the dispatcher's `.kanban/state.json`, and spend from whatever the attempt
+actually left behind — `total_cost_usd` on the row or at the end of the worker's log (what
+`claude -p --output-format json` signs off with), and failing that the tokens in the session transcript, read
+from disk on the host that ran it. The three are never mixed. A reported cost is money; the transcript priced
+at the board's rates is written `~$…` and called an estimate; tokens with no rates are printed as turns and
+tokens, which beat nothing. Rates are yours to state, because hkb ships no price table it would have to keep
+current:
+
+```jsonc
+"stats": { "rates": { "claude-opus-5": { "input": 5, "output": 25 } } }   // .kanban/board.json, USD per Mtok
+```
+
+Which of the three you get is decided by the profile, not by hkb —
+[the per-profile table](docs/harnesses.md#what-a-profile-can-tell-you-it-spent) is worth reading before you pick
+one. `--since` takes a span (`90m`, `36h`, `7d`, `2w`), a date, or `all`. The read is one board query plus the
+run comment of each task the window actually touched — a comment write bumps the issue's `updatedAt`, so
+"updated since" is "has news" — plus every `running` task, whose ref-CAS heartbeat leaves no trace on the issue.
 
 ## Harnesses
 
 `.kanban/board.json` declares profiles: a launch template plus caps. The built-in `claude` profile starts each
 worker as a Claude Code **background agent** — `claude --bg --name "kb #<n> · <title>" --worktree kb-<n>-<k>
---permission-mode acceptEdits --allowedTools ... --max-budget-usd 5 "<prompt>"` — so workers show up in
+--permission-mode dontAsk --allowedTools ... --max-budget-usd 5 "<prompt>"` — so workers show up in
 `claude agents` (and the agents view of any session in the repo), can be opened with `claude attach <job>`, and are
 stopped by the dispatcher once their attempt has ended. `hkb show <n>` prints the job id per attempt.
 `claude-p` is the headless variant (`claude -p`, exits when done) for CI and containers without the session daemon.
+
+They do not all tell you what they spent, and that is worth knowing at the point of choice: `claude-p` ends in
+Claude's own JSON, so `hkb stats` shows a **reported cost**; `claude` and `claude-track` are background agents
+that report none, so the most they leave is the session transcript — **tokens**, and a dollar figure only if you
+give the board `stats.rates` (and only if the `Stop` hook recorded the session — [#125](https://github.com/emyann/harness-kanban-board/issues/125));
+`copilot-cli`, `codex` and `claude-action` leave neither, so an attempt there is an outcome and a duration.
+Profile by profile: [docs/harnesses.md](docs/harnesses.md#what-a-profile-can-tell-you-it-spent).
 
 A board carries **only the profiles you asked for**: a bare `hkb init` writes `claude` and its one `kb:agent:claude`
 label, and nothing else. `--profiles a,b` (or `--harness copilot|codex`, which brings its own) is the whole list —
@@ -414,7 +433,8 @@ events are the real trigger. **Laptop-off latency is 15-75 minutes**, end to end
 lock ref is the arbiter.
 
 What you give up, plainly: Actions minutes (free on public repos; a platform fee per minute on private ones —
-the board itself stays free), no enforced `Stop` nudge, a per-task `model` override that is not plumbed through
+the board itself stays free), no enforced `Stop` nudge, no spend on the board for those attempts (the log and the
+transcript stay on the runner, so `hkb stats` counts them and prices none of them), a per-task `model` override that is not plumbed through
 workflow inputs yet, and a worker whose run is cancelled or killed is only noticed at `stale_after`, not at
 `workflow_run`. Details and the whole table: [docs/harnesses.md](docs/harnesses.md#github-actions--claude-action).
 
@@ -507,7 +527,7 @@ doctor then names the installed version once with nothing to do about it.
 | worker permissions | Claude Code `PreToolUse` hook (`hkb hook pretool`, also inert unless `KB_TASK` is set) — file tools confined to the worktree, `hkb dispatch`/`kill`/force-push/`sudo`/`rm -rf <abs>` denied outright, everything else checked against the profile's allowlist: allow or deny, never a prompt. `hkb init` writes it beside the Stop hook |
 | kanban dashboard | `hkb serve` — local page over the live board; drag-drop calls the same verbs |
 | live event stream | `hkb watch` / `hkb tail <n>` — conditional `GET` with `If-None-Match`; an unchanged board answers 304 and is not charged |
-| runs/spend report | `hkb stats` — the same labels and run comments, rolled up: outcomes, duration, spawns vs the daily cap, `total_cost_usd` per profile |
+| runs/spend report | `hkb stats` — the same labels and run comments, rolled up: outcomes, duration, spawns vs the daily cap, and spend per profile — `total_cost_usd` where the harness reported one, else the session transcript's tokens, priced at the board's `stats.rates` and labelled an estimate ([what each profile gives you](docs/harnesses.md#what-a-profile-can-tell-you-it-spent)) |
 | crash / stale / timeout | pid check on the claiming host, `stale_after` (against the lock ref's commit date, then the run comment), `max_runtime` → `ready` or `gave_up` |
 
 ## Local state (gitignored)
