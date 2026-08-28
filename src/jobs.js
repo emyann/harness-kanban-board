@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { KB_JOB_NAME_RE, sessionFromJobState } from './model.js';
+import { KB_JOB_NAME_RE, sessionFromJobState, sessionUpdate } from './model.js';
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
@@ -20,6 +20,8 @@ export function jobsDir() { return path.join(os.homedir(), '.claude', 'jobs'); }
  * run anyway records what the Stop hook could not (see src/hook.js).
  *
  * A bonus, never the source of truth: null whenever there is nothing here to read, and never throws.
+ * `env` is what makes it reusable: `jobSession` below hands it the directory of a job this process is
+ * NOT inside, which is the dispatcher's only way to read the same record.
  * @returns {{session_id?: string, transcript_path?: string}|null}
  */
 export function currentSession(env = process.env) {
@@ -43,6 +45,42 @@ export function readJobState(id) {
     const sessionId = s.linkScanPath ? path.basename(s.linkScanPath, '.jsonl') : null;
     return { id, state: s.state, detail: s.detail, tokens: s.tokens, result: s.output?.result, sessionId };
   } catch { return null; }
+}
+
+/**
+ * The session behind a background job seen from OUTSIDE it — the dispatcher's side of the question
+ * `currentSession` answers for the worker itself. All the dispatcher ever holds is the job, so it
+ * reads the record Claude Code keeps at `~/.claude/jobs/<id>/state.json`; the listing's own
+ * `sessionId` is the fallback while that record has nothing to say yet.
+ *
+ * One local file read, no subprocess, never a throw. `root` is for tests.
+ * @returns {{session_id?: string, transcript_path?: string}|null}
+ */
+function jobSession(job, root = jobsDir()) {
+  const record = job?.id ? currentSession({ CLAUDE_JOB_DIR: path.join(root, job.id) }) : null;
+  const listed = typeof job?.sessionId === 'string' && job.sessionId ? { session_id: job.sessionId } : null;
+  // one source or the other, never a blend: an id from the listing paired with a transcript from the
+  // record can describe two different sessions of a resumed job.
+  return record || listed;
+}
+
+/**
+ * What the dispatcher should write onto the attempt row a background job is running, the first tick
+ * it matches that job. #135 records these fields from the terminal verb; this is the same discipline
+ * for the attempts no verb ever reaches — crashed, timed out, protocol_violation — which are exactly
+ * the ones a human reopens with `claude --resume` and the ones `hkb stats` could not price.
+ *
+ * Blanks only. A row a verb has already stamped is left byte-identical, and a record naming a
+ * different session (a resumed job is one record over two) is not half-merged into the row.
+ * @returns {{session_id?: string, transcript_path?: string}|null} null when there is nothing to write
+ */
+export function jobSessionUpdate(attempt, job, root = jobsDir()) {
+  if (!job) return null;
+  const found = jobSession(job, root);
+  if (!found || (attempt?.session_id && attempt.session_id !== found.session_id)) return null;
+  const blanks = {};
+  for (const [k, v] of Object.entries(found)) if (attempt?.[k] === undefined) blanks[k] = v;
+  return sessionUpdate(attempt, blanks);
 }
 
 /** `claude agents --json --all --cwd <root>` → kb jobs only: [{id, pid, name, status, state, cwd, task}]. */
