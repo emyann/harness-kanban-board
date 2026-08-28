@@ -32,7 +32,7 @@ covers:
     sha: 9a5a658d95cd1b463cb3d6c78f0625e66f7b8bb6
 generated_at_commit: c46b183
 last_refreshed: 2026-08-28
-related: [concepts/board-protocol, concepts/claims-and-leases, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice]
+related: [concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice]
 ---
 
 # hkb at a glance
@@ -101,7 +101,12 @@ daemon and exits, so that environment stops at the CLI and never reaches the
 session doing the work. The default profile is one of those. `whichAttempt`
 (`src/hook.js`) therefore falls back to the `kb-<n>-<k>` checkout the launch
 names, which is already the identity the tick matches a running job by
-(`matchJobByWorktree`, `src/jobs.js`).
+(`matchJobByWorktree`, `src/jobs.js`). And when the two *disagree* the checkout
+wins: an environment can be inherited — a session daemon a `claude --bg` launch
+cold-started keeps that launch's `KB_TASK` for life and hands it to every
+session it hosts — where a directory cannot, so hkb no longer passes any `KB_*`
+on that launch and a hook that finds a contradicted one stands aside
+(`attemptIdentity`, `src/model.js`; see *concepts/worker-identity*).
 
 Session identity travels the same asymmetry. What session a worker *is*
 (`CLAUDE_CODE_SESSION_ID`, plus the job record `currentSession` reads in

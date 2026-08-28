@@ -524,6 +524,98 @@ export function parseWorktreeName(name) {
   return m ? { n: m[1], k: m[2] } : null;
 }
 
+// ---------- the launch environment, and where it must not end up ----------
+
+/**
+ * What the dispatcher puts in a worker launch's environment: which task, which attempt, which
+ * board. For a harness it runs as a child process (`claude -p`, Copilot, Codex) this is the
+ * worker's whole identity and the hook's gate. Named here because two places have to agree on the
+ * list — `spawnWorker` sets them, and a `claude --bg` launch scrubs them (src/dispatch.js).
+ */
+export const KB_ENV_VARS = ['KB_TASK', 'KB_ATTEMPT', 'KB_BOARD', 'KB_REPO', 'KB_LOCK_REF', 'KB_ROOT', 'KB_PROFILE'];
+
+/**
+ * A copy of `env` with every `KB_*` key removed — the environment a `claude --bg` launch gets.
+ *
+ * `claude --bg` does not run the worker: it hands the request to Claude Code's session daemon and
+ * exits. When no daemon is up yet that launch *starts* one, and the daemon keeps the environment it
+ * was started with for its whole life — so `KB_TASK` ends up in every session that daemon will ever
+ * host, the operator's own conversations included. Measured on this board (#150): an operator
+ * session was stamped onto #146's attempt row as the session that did the work, and hkb's worker
+ * permission policy was enforced on that operator's shell.
+ *
+ * Nothing is lost by removing it. The daemon does not forward the launch environment to the session
+ * it hosts (#125) — which is why the `kb-<n>-<k>` checkout is that profile's identity — so on this
+ * path the variables reach no worker at all; they only ever poison the shared process. Every `KB_*`
+ * key goes, not just the identity: none of them means anything to a session daemon.
+ *
+ * Checked before choosing this over passing the environment to the session instead: Claude Code
+ * 2.1.x has no flag that hands env to a `--bg` session (`claude --help`, 2026-08-28).
+ */
+export function scrubKbEnv(env) {
+  const out = {};
+  for (const [k, v] of Object.entries(env || {})) if (!k.startsWith('KB_')) out[k] = v;
+  return out;
+}
+
+/** The `KB_*` names in a NUL-separated `/proc/<pid>/environ` dump. Pure; never throws. */
+export function kbVarsIn(environ) {
+  const out = [];
+  for (const entry of String(environ || '').split('\0')) {
+    const m = /^(KB_[A-Z0-9_]+)=/.exec(entry);
+    if (m && !out.includes(m[1])) out.push(m[1]);
+  }
+  return out;
+}
+
+/**
+ * Does this profile's worker sit in a `kb-<n>-<k>` checkout hkb can name?
+ *
+ * Two modes qualify, and only these two, because in both hkb *knows* where the worker is: a
+ * `claude --bg` job is identified by its worktree basename (`matchJobByWorktree`, src/jobs.js), and
+ * a `workspace: "worktree"` launch is handed that directory as its cwd (`spawnWorker`). A
+ * `mode: "process"` Claude profile also passes `--worktree`, but where its *hooks* run is the
+ * harness's business, not ours — and its environment dies with the process, so it can never be the
+ * source of a leak. A `trigger` profile's worker runs in an Actions checkout that is nobody's
+ * worktree. Both are left exactly as they were.
+ */
+export function worksInWorktree(profile) {
+  return profile?.mode === 'claude-bg' || profile?.workspace === 'worktree';
+}
+
+/**
+ * Which attempt a session is: the launch environment and the checkout, read together.
+ *
+ * `KB_TASK` is the first answer and the `kb-<n>-<k>` checkout the second (#125). This is the case
+ * where they *disagree*: a session whose environment says #146 while it sits at the board root, or
+ * in another attempt's checkout, is not that worker — it inherited the variables from a session
+ * daemon a `claude --bg` launch started (see `scrubKbEnv`). The environment is then a leak, not an
+ * identity: it is dropped, the checkout answers if it can, and `leak` carries the one line the
+ * caller owes whoever is reading stderr.
+ *
+ * Only judged for a profile whose worker really does sit in a worktree (`worksInWorktree`), and
+ * only on evidence: the cwd is the board root, or a checkout naming a different attempt. Anywhere
+ * else — no `KB_ROOT` to compare against, a directory that is nobody's worktree — the environment
+ * is trusted exactly as it always has been.
+ *
+ * @param {{env?: object, here?: string, atRoot?: boolean, profile?: object|null}} where
+ *   `here` is the cwd's basename and `atRoot` says the cwd is `KB_ROOT` itself.
+ * @returns {{n: string, k: string, source: 'env'|'worktree', leak?: string}|{leak: string}|null}
+ */
+export function attemptIdentity({ env = {}, here = '', atRoot = false, profile = null } = {}) {
+  const wt = parseWorktreeName(here);
+  const n = env.KB_TASK ? String(env.KB_TASK) : null;
+  if (!n) return wt ? { ...wt, source: 'worktree' } : null;
+  const k = env.KB_ATTEMPT ? String(env.KB_ATTEMPT) : '0';
+  // the checkout agrees (or there is no attempt number to disagree about): the environment stands
+  if (wt && wt.n === n && (wt.k === k || k === '0')) return { n, k: wt.k, source: 'env' };
+  if (!worksInWorktree(profile)) return { n, k, source: 'env' };
+  if (!wt && !atRoot) return { n, k, source: 'env' }; // nothing here contradicts it
+  const where = wt ? `${here} is #${wt.n} attempt ${wt.k}` : 'this is the board root';
+  const leak = `KB_TASK=${n} in the environment but this is not its worktree (${where}); ignoring`;
+  return wt ? { ...wt, source: 'worktree', leak } : { leak };
+}
+
 /** The command that reopens a worker session for a post-mortem. null when no session id is known. */
 export function resumeCommand(a, number = null) {
   if (!a?.session_id) return null;

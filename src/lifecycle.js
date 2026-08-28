@@ -69,7 +69,9 @@ async function finishAttempt(ctx, task, rec, flags, outcome, extra = {}) {
   // a `claude --bg` worker never sees `KB_TASK`, so its Stop hook cannot record anything, and the
   // terminal verb is the one thing every worker runs. A track runner finishes each node from inside
   // its own session, so this is how a node ends up carrying the transcript that paid for it.
-  try { Object.assign(a, sessionForAttempt(ctx.root, task.number, a.attempt, a) || {}); } catch { /* a session id is a bonus, never a reason a verb fails */ }
+  // the profiles ride along so a `KB_TASK` this checkout contradicts is recognised as the leak it is
+  // and stamps nothing (src/hook.js `whichAttempt`, #150)
+  try { Object.assign(a, sessionForAttempt(ctx.root, task.number, a.attempt, a, { profiles: ctx.cfg?.profiles }) || {}); } catch { /* a session id is a bonus, never a reason a verb fails */ }
   await saveRun(ctx, task.number, rec); // rec.id is set on first create, so later saves update in place
   await release(ctx, task.number, a.attempt);
   dropBeatChain(ctx.root, task.number, a.attempt); // worktrees share one ref store: leave nothing behind
