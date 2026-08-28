@@ -86,7 +86,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: >-
             --allowedTools "Bash(hkb *),Bash(git *),Bash(gh pr *),Bash(gh issue view *),Bash(npm *),Bash(npx *),Bash(node *),Bash(cat *),Bash(ls *),Bash(mkdir *),Bash(head *),Bash(tail *),Bash(wc *),Bash(sed *),Bash(awk *),Bash(grep *),Bash(find *),Bash(diff *),Bash(cp *),Bash(mv *),Bash(touch *),Bash(chmod *),Bash(printf *),Bash(echo *),Bash(jq *),Bash(cd *),Bash(pwd *),Bash(true *),Bash(false *),Bash(test *),Bash([ *),Bash(env *),Bash(which *),Bash(command *),Bash(type *),Bash(sleep *),Bash(time *),Bash(set *),Bash(export *),Edit,Write,Read,Glob,Grep"
-            --disallowedTools "Bash(git push --force*),Bash(git push -f*)"
+            --disallowedTools "Bash(hkb dispatch*),Bash(git push --force*),Bash(git push -f*)"
             --max-turns 80
         env:
           GH_TOKEN: ${{ secrets.KB_TOKEN }}

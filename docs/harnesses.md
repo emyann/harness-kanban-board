@@ -216,28 +216,56 @@ loudly if the command is wrong.)
 
 ### Which layer is actually enforcing
 
-The two hooks are gated differently, and on the default profile only one of them is live:
+**The launch line is the policy.** `--permission-mode dontAsk` plus `--allowedTools` / `--disallowedTools` is
+the one layer that is live on every profile, so that is where hkb says what a worker may and may not run: the
+allow-list covers the builtins hkb's own guard calls safe (`SAFE_BUILTINS` — #138), and the deny list is
+`Bash(hkb dispatch*)` beside the two force-push patterns. The dispatcher is denied at the launch because
+`Bash(hkb *)` allows every other verb and a second dispatcher against the live board claims a task somebody is
+already working. Copilot has no equivalent deny: a space-star pattern in its `--deny-tool` language is
+unverified, and a deny that silently matches nothing is worse than none, so its workers are told in the prompt.
+
+The two hooks sit on top of that, gated differently, and on the default profile only one of them is live:
 
 | | `Stop` — the terminal-verb nudge | `PreToolUse` — hkb's permission policy |
 | --- | --- | --- |
 | what identifies the session | `KB_TASK`, else the `kb-<n>-<k>` checkout name | `KB_TASK` only |
+| what it may answer | `{"decision":"block"}`, at most twice | **`deny`, or nothing** — never `allow` |
 | `claude` / `claude-track` (`claude --bg`) | **live** — the checkout names the attempt | **inert** — the launch's `--allowedTools` and `--disallowedTools` are the whole policy |
-| `claude-p` (`mode: "process"`) | live | live, on top of the same launch flags |
+| `claude-p` (`mode: "process"`) | live | live, and can only subtract from those launch flags |
 | `claude-action` (`mode: "trigger"`) | the workflow's `if: always()` step stands in | the workflow's own `--allowedTools` |
 | `copilot-cli`, `codex` | their own `agentStop` / `Stop` hook file | their own `--allow-tool` / `--sandbox` — they never read `.claude/settings*.json` |
 
 A checkout name says which *task* a session is, never which *profile* launched it, and hkb's policy applied with
 no profile would allow `hkb`, `git` and `gh` and deny a worker `npm test` — so `PreToolUse` stands aside rather
-than guess. That is a deliberate choice, not an oversight
-([#133](https://github.com/emyann/harness-kanban-board/issues/133) is where it gets revisited), and the
-allowlist the dispatcher puts on the launch is a real policy, not a gap. `hkb doctor` prints the row that
-applies to your board, so a denial never has to be traced back by hand:
+than guess, with one line on stderr. That is a deliberate choice, not an oversight
+([#133](https://github.com/emyann/harness-kanban-board/issues/133) settled it), and it is why the hook never
+answers `allow`: a hook `allow` **overrides Claude Code's own checks** — including the command-substitution one
+— so an allow would let a `claude-p` worker run what the identical `claude --bg` worker beside it is refused.
+Deny-or-silence keeps the layer purely additive. A denial also names the way out, because the expensive wrong
+turn is a worker rewriting the command until something gets through: *if the task cannot be done without this,
+run `hkb block <n> "needs …" --kind capability` and stop.*
+
+`hkb doctor` prints the row that applies to your board, so a denial never has to be traced back by hand:
 
 ```
 ✓ permission policy   hkb's PreToolUse policy enforces on claude-p — the launch's own flags are the whole policy
                       on claude, claude-track (a `claude --bg` session never receives KB_TASK) · claude-action
                       (the triggered run brings its own settings) · codex (not Claude Code)
+✓ worker permissions  4 allow-lists cover the 16 shell builtins hkb calls safe
 ```
+
+Two checks guard the layer that is doing the enforcing, and both read local files only:
+
+- **`worker permissions`** catches a **frozen copy** of an allow-list, which no default change can reach: a
+  profile that pins `allowed_tools` in `board.json`, and the `--allowedTools` line `hkb init --with-actions`
+  bakes into the generated worker workflow. Both keep denying `cd`, `export`, `command`, `env` until someone
+  regenerates them. The fix it prints depends on the profile: one of hkb's own takes its list back when you
+  *drop* `allowed_tools` (`loadBoard` deep-merges over the default), while a custom-named profile has nothing
+  behind it — dropping the key there expands `{allowed_tools}` to nothing and leaves `--allowedTools` swallowing
+  the next flag, so it is told to add the missing patterns instead.
+- **`permission mode`** warns when a `claude` launch has lost `--permission-mode dontAsk`. Without it a call
+  outside the allow-list *prompts* instead of being denied, and a background worker has nobody to answer: the
+  attempt does not fail, it hangs until `max_runtime` reclaims it. Silent when every launch says `dontAsk`.
 
 ### The command a worker cannot type: `complete`, and heredocs
 
