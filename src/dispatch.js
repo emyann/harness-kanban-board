@@ -6,7 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, getTask, enableAutoMerge, branchProtection } from './tasks.js';
 import { claim, release, listLocks, lockBeatAt, staleBaseSha } from './lock.js';
-import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree } from './board.js';
+import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, pidFile, pidAlive, recordExit, clearExit } from './board.js';
 import { computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted } from './track.js';
@@ -22,10 +22,9 @@ const secondsSince = (iso) => (iso ? (Date.now() - new Date(iso).getTime()) / 10
 /** Ticks between full `hkb gc --yes` sweeps when board.json says nothing. 0 turns them off. */
 export const GC_EVERY_TICKS = 30;
 
-export function pidAlive(pid) {
-  if (!pid) return false;
-  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
-}
+// `pidAlive` lives in board.js now, next to the pid files it answers about; re-exported here because
+// this is where every caller has always imported it from.
+export { pidAlive };
 
 function killPid(pid) {
   if (!pidAlive(pid)) return false;
@@ -862,17 +861,20 @@ function tailLog(ctx, rel, bytes = 4000) {
 /** Exactly one dispatcher loop per board root. Two concurrent loops fight: one sweeps the other's
  * fresh locks and kills its workers (observed 2026-08-26 when wrapper-pid kills left node alive). */
 function acquireLoopLock(ctx) {
-  const file = path.join(ctx.root, '.kanban', 'dispatch.pid');
+  const file = pidFile(ctx.root, 'dispatch');
   try {
     const existing = Number(fs.readFileSync(file, 'utf8').trim());
+    // `hkb up` writes the pid of the child it just spawned into this file, so a loop finding its own
+    // pid here is finding its own claim, not a rival's.
     if (existing && existing !== process.pid && pidAlive(existing)) {
-      const e = new Error(`another dispatcher loop is already running (pid ${existing}). If you are a worker session: never run the dispatcher. If you own this host and want to replace it, stop it yourself first.`);
+      const e = new Error(`another dispatcher loop is already running (pid ${existing}). If you are a worker session: never run the dispatcher. If you own this host and want to replace it, stop it yourself first (\`hkb down\`).`);
       e.exitCode = 2;
       throw e;
     }
   } catch (e) { if (e.exitCode) throw e; /* no or stale pidfile */ }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, String(process.pid) + '\n');
+  clearExit(ctx.root, 'dispatch'); // a loop is running again: the last one's exit is no longer the news
   const drop = () => { try { if (Number(fs.readFileSync(file, 'utf8').trim()) === process.pid) fs.rmSync(file); } catch { /* gone */ } };
   process.on('exit', drop);
   return drop;
@@ -917,6 +919,9 @@ export async function loop(ctx, { interval, max, profiles = null, log, sleeper =
     const e = new Error(`dispatcher exiting: #${fatal.number} claim came back unknown ${fatal.streak} ticks in a row, ${fatal.streak - SELF_HEAL.dropAfter} of them after this process dropped every cache it had. Last error: ${fatal.error}. Start a new dispatcher — fresh state is what fixes this; if it fails the same way the fault is upstream, so check \`gh auth status\` and \`hkb doctor\`. Running workers are untouched: the next dispatcher adopts or reclaims them.`);
     e.exitCode = 4;
     log(`FATAL ${e.message}`);
+    // The pid file is gone (that is what `dropLock` means), so without this the next `hkb up --status`
+    // could only say "stopped" — which is true and useless. Nothing reads this to restart anything.
+    recordExit(ctx.root, 'dispatch', { code: 4, at: nowIso(), reason: e.message });
     throw e;
   }
 }

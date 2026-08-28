@@ -557,6 +557,7 @@ export const GITIGNORE_LINES = [
   '.kanban/outbox.jsonl',
   '.kanban/state.json',
   '.kanban/dispatch.pid',
+  '.kanban/serve.pid',
   '.kanban/cache.json',
   '.kanban/nudges/',
   '.kanban/sessions/',

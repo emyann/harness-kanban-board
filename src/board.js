@@ -127,6 +127,72 @@ export function logsDir(root) { return path.join(kanbanDir(root), 'logs'); }
 export function outboxFile(root) { return path.join(kanbanDir(root), 'outbox.jsonl'); }
 export function stateFile(root) { return path.join(kanbanDir(root), 'state.json'); }
 
+// ---------- the long-running processes: dispatcher and web board ----------
+// `.kanban/<name>.pid` is written by the process itself (the dispatcher's singleton lock, the
+// server's claim) and by `hkb up` for the child it just spawned, so a second `up` a millisecond
+// later sees a live pid rather than starting a rival. One pid per line, nothing else: `hkb serve`
+// and `hkb doctor` both read these files, and a format is a contract.
+
+export function pidFile(root, name) { return path.join(kanbanDir(root), `${name}.pid`); }
+export function processLogFile(root, name) { return path.join(logsDir(root), `${name}.log`); }
+
+/** Is that pid a live process? EPERM means alive and not ours, which is still alive. */
+export function pidAlive(pid) {
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+
+/** The pid a pid file names, and when it was written (mtime — the process wrote it as it started). */
+export function readPidFile(root, name) {
+  try {
+    const file = pidFile(root, name);
+    const pid = Number(fs.readFileSync(file, 'utf8').trim()) || null;
+    return { pid, at: fs.statSync(file).mtime.toISOString() };
+  } catch { return { pid: null, at: null }; }
+}
+
+/**
+ * Why a process that is not running stopped, when it stopped on its own terms. Exit code 4 is the
+ * dispatcher loop giving itself up for a supervisor; nothing here restarts it, but `hkb up --status`
+ * has to be able to say that is what happened rather than reporting a plain "stopped".
+ *
+ * It lives in `state.json` — already local, already gitignored — so the feature costs no new file.
+ */
+export function recordExit(root, name, entry) {
+  const state = readState(root);
+  writeState(root, { ...state, exits: { ...(state.exits || {}), [name]: entry } });
+}
+
+export function readExit(root, name) { return readState(root).exits?.[name] || null; }
+
+/** Forget a recorded exit — the process is starting again, so its last death is no longer the news. */
+export function clearExit(root, name) {
+  const state = readState(root);
+  if (!state.exits?.[name]) return;
+  const exits = { ...state.exits };
+  delete exits[name];
+  writeState(root, { ...state, exits });
+}
+
+/**
+ * One process's state for `hkb up`, `hkb up --status`, `hkb down` and `hkb doctor`: the pid file, a
+ * liveness check and the exit record. No board read, no network — this is the filesystem answering.
+ */
+export function processState(root, name) {
+  const { pid, at } = readPidFile(root, name);
+  const running = pidAlive(pid);
+  const exit = running ? null : readExit(root, name);
+  return {
+    name,
+    running,
+    pid: running ? pid : null,
+    since: running ? at : null,
+    log: path.relative(root, processLogFile(root, name)),
+    exit: exit?.code ?? null,
+    exited_at: exit?.at ?? null,
+  };
+}
+
 export function ensureLocalDirs(root) {
   fs.mkdirSync(logsDir(root), { recursive: true });
   fs.mkdirSync(path.join(kanbanDir(root), 'nudges'), { recursive: true });

@@ -69,6 +69,9 @@ pages:
   - slug: features/harness-profiles
     summary: "The shipped profiles (claude, claude-p, claude-track, claude-action, copilot-cli, codex): modes, permissions, models, and what each harness can and cannot do."
     status: planned
+  - slug: features/up-and-down
+    summary: "The two long-running processes as one idempotent verb: pid files as the whole protocol, why the child gets no KB_*, and the line between reporting exit 4 and supervising it."
+    status: seeded
   - slug: features/web-board
     summary: "One local server, one inline page, N repos: how the board is read, how a drag becomes a verb, and how every request is routed to the board it names."
     status: seeded

@@ -32,6 +32,10 @@ deserves a `concepts/` page (link it).
 - **Dispatcher** — the seat that ticks: `hkb dispatch` reconciles labels, locks
   and attempts against the graph on the cards. Not an orchestrator — it holds no
   workflow and has no LLM in it (`src/dispatch.js`; see *Tick*).
+- **Exit record** — `{code, at, reason}` under `exits` in `.kanban/state.json`,
+  written by a dispatcher loop that gave itself up (exit 4) and cleared when one
+  runs again, so `hkb up --status` can say why nothing is running instead of just
+  "stopped" (`src/board.js`; see *features/up-and-down*).
 - **Handoff** — the structured result comment a finishing worker leaves so its
   dependents (and humans) start informed (`src/model.js`).
 - **Host** — machine identity, recorded per attempt, so the tick only checks a
@@ -40,6 +44,10 @@ deserves a `concepts/` page (link it).
   cards, steers by comment, reviews and merges, answers `kb:needs-human`,
   restarts a dispatcher that exited 4. "you", in a worker prompt
   (`decisions/adr-004-roles-and-adoption`).
+- **Pid file** — `.kanban/dispatch.pid` and `.kanban/serve.pid`: one pid per line,
+  written by the process itself and pre-written by `hkb up` for the child it
+  spawned. Being named by one and answering `kill(pid, 0)` is the whole
+  definition of "running" here (`src/board.js`; see *features/up-and-down*).
 - **Planning command** — `/kanban:specify` or `/kanban:decompose`: a harness slash
   command rather than an `hkb` verb, because both need a model and the dispatcher
   has none. One source in `commands/`, registered by the plugin and by `hkb init`
@@ -57,7 +65,8 @@ deserves a `concepts/` page (link it).
   (`skills/kanban/references/protocol.md`; `decisions/adr-004-roles-and-adoption`).
 - **Supervisor** — whatever restarts a dispatcher that exited 4: cron, systemd,
   Actions, or the operator. It restarts a process; it decides nothing
-  (`src/dispatch.js`).
+  (`src/dispatch.js`). `hkb up` *starts* a dispatcher and reports an exit 4, but
+  is not a supervisor: it never restarts anything (`src/up.js`).
 - **Tick** — one pass of the dispatcher loop: re-read the board, derive every
   action from it, hold nothing durable in the process (`src/dispatch.js`).
 - **Track** — a DAG subgraph executed by one session, claimed at its root;

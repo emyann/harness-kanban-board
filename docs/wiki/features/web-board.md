@@ -7,16 +7,16 @@ audience: [dev]
 read_when: "touching hkb serve, the board page, the user-level board list, or anything that has to work across more than one checkout"
 covers:
   - path: src/serve.js
-    sha: 2008378241ae5a4bed69c2343ef1fbced525cc93
+    sha: 2d846a589a4ea4fc7f86b814bcb1646ad8f12cc7
   - path: web/index.html
     sha: 322aa96236ef37657a9a2326b83dc7b480672134
   - path: src/board.js
-    sha: 7e895ff3e7e8380a61fd275e609d93dfce2140e1
+    sha: 80cc7f328c1c7081d1f32a418af16675bef9b223
   - path: src/init.js
-    sha: c4aeb61643f9b6457e3307e9663ade2543f75dba
-generated_at_commit: c6ee6f1
+    sha: cf874a5189bb91ad837242abec6675f35c91c91f
+generated_at_commit: 616f0b7
 last_refreshed: 2026-08-28
-related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick]
+related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
 
 # The web board (`hkb serve`)
@@ -47,6 +47,15 @@ There is no auth. The server binds `127.0.0.1` and `checkOrigin`
 (`src/serve.js:226-240`) refuses a non-loopback `Host` (the DNS-rebinding
 defence) and any cross-origin `Origin`; POST bodies must be
 `application/json`, which is what stops a plain HTML form from driving it.
+
+**Who starts and stops it.** Since #148 the server claims `.kanban/serve.pid`
+once the port is bound and drops it on the way out (`claimServePid`,
+`src/serve.js:122-134`), which is what makes it a process `hkb up --serve` can
+start detached and `hkb down --serve` can stop. That same file is why a taken
+port can be reported as *already up on that port* rather than the generic
+advice — but only when it names a live process that is not this one
+(`portInUse`, `src/serve.js:621-627`). The pid protocol is
+[features/up-and-down](up-and-down.md).
 
 ## One server, many boards
 

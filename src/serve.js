@@ -13,8 +13,7 @@ import {
   latestResult as realLatestResult, parentResults as realParentResults, addComment as realAddComment,
 } from './tasks.js';
 import { promote as realPromote, unblock as realUnblock, block as realBlock, requestChanges as realRequestChanges, archive as realArchive } from './lifecycle.js';
-import { logsDir, kanbanDir, loadUserBoards, userBoardsFile, contextForPath } from './board.js';
-import { pidAlive } from './dispatch.js';
+import { logsDir, loadUserBoards, userBoardsFile, contextForPath, pidFile, readPidFile, pidAlive, processState } from './board.js';
 import { computeReady, blockerDone, formatSession, resumeCommand, parseRepoSpecs, boardKey, uniqueKeys } from './model.js';
 
 /** The columns of the web board. `archived` is a verb, not a column — archived tasks leave the board. */
@@ -105,10 +104,33 @@ export function boardEtag(cards) {
 
 /** Is a dispatcher loop up on this repo? Local file + pid check, no network — so it is per board. */
 export function dispatcherState(root) {
-  try {
-    const pid = Number(fs.readFileSync(path.join(kanbanDir(root), 'dispatch.pid'), 'utf8').trim());
-    return { running: pidAlive(pid), pid: pid || null };
-  } catch { return { running: false, pid: null }; }
+  const st = processState(root, 'dispatch');
+  return { running: st.running, pid: st.pid };
+}
+
+/**
+ * Claim `.kanban/serve.pid` for this server, so `hkb up --status` can see it and `hkb down --serve`
+ * can stop it — including a `hkb serve` a human started by hand in a terminal.
+ *
+ * Unlike the dispatcher's singleton lock this refuses nothing: two servers on two ports out of one
+ * checkout is a legitimate thing to want, and the port is the real singleton (see EADDRINUSE below).
+ * It only declines to *overwrite* a live claim, and says whose it is, so `hkb down --serve` can never
+ * be pointed at the wrong one in silence. `hkb up` pre-writes the pid of the child it spawned, so a
+ * server finding its own pid here is finding its own claim.
+ * @returns a function that drops the claim
+ */
+export function claimServePid(root, log = () => {}) {
+  const file = pidFile(root, 'serve');
+  const { pid: current } = readPidFile(root, 'serve');
+  if (current && current !== process.pid && pidAlive(current)) {
+    log(`another hkb serve holds ${path.relative(root, file)} (pid ${current}) — \`hkb down --serve\` stops that one, not this`);
+    return () => {};
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, String(process.pid) + '\n');
+  const drop = () => { try { if (Number(fs.readFileSync(file, 'utf8').trim()) === process.pid) fs.rmSync(file); } catch { /* gone */ } };
+  process.on('exit', drop);
+  return drop;
 }
 
 // ---------- which boards this server holds ----------
@@ -574,7 +596,7 @@ export async function startServer(ctx, flags = {}, log = () => {}, deps = {}) {
 
   await new Promise((resolve, reject) => {
     const onError = (e) => reject(e.code === 'EADDRINUSE'
-      ? Object.assign(new Error(`port ${port} is already in use — pass --port <n>, or stop the other hkb serve`), { exitCode: 2 })
+      ? Object.assign(new Error(portInUse(ctx.root, port)), { exitCode: 2 })
       : e);
     server.once('error', onError);
     server.listen(port, host, () => { server.removeListener('error', onError); resolve(); });
@@ -590,6 +612,20 @@ export async function startServer(ctx, flags = {}, log = () => {}, deps = {}) {
 /** One board on the startup line: `owner/repo` alone reads best, the slug only when it says something. */
 const boardLine = (b) => `${b.repo}${b.board === 'default' ? '' : ` board "${b.board}"`}`;
 
+/**
+ * A taken port is usually the operator's own server, and saying so is the difference between "fix
+ * this" and "nothing to fix". Only the pid file can tell the two apart, so the confident message is
+ * only used when it names a live process that is not us — anything else stays the generic advice.
+ * Pure enough to test: it reads two local files and never touches the network.
+ */
+export function portInUse(root, port) {
+  const { pid } = readPidFile(root, 'serve');
+  if (pid && pid !== process.pid && pidAlive(pid)) {
+    return `hkb serve is already up on port ${port} (pid ${pid}) — \`hkb up --status\` says so, \`hkb down --serve\` stops it, or pass --port <n> for a second one`;
+  }
+  return `port ${port} is already in use — pass --port <n>, or stop the other hkb serve`;
+}
+
 /** `hkb serve` — runs until the process is interrupted. */
 export async function serve(ctx, flags = {}, log = () => {}, deps = {}) {
   const s = await startServer(ctx, flags, log, deps);
@@ -603,11 +639,15 @@ export async function serve(ctx, flags = {}, log = () => {}, deps = {}) {
     log(`hkb serve on ${s.url} — ${s.boards.length} boards, polling every ${s.poll}s. Ctrl-C to stop.`);
     for (const b of s.boards) log(`  ${b.key}  ${boardLine(b)}  ${b.root}`);
   }
+  // Claimed after the port is bound, never before: a pid file written by a server that then failed to
+  // listen would tell `hkb up --status` that a board is up when none is.
+  const dropPid = claimServePid(ctx.root, log);
   await new Promise((resolve) => {
     const stop = () => { s.server.close(() => resolve()); s.server.closeAllConnections?.(); };
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
     s.server.once('close', resolve);
   });
+  dropPid();
   return 0;
 }
