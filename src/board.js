@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghCmd } from './gh.js';
-import { worktreePath, parseRepoSpecs } from './model.js';
+import { worktreePath, parseRepoSpecs, mergeBoardEntry } from './model.js';
 
 // A background worker has nobody to answer a permission prompt, so the allowlist must cover
 // every command an agent plausibly reaches for; anything else is denied, never prompted (see #23).
@@ -276,6 +276,17 @@ export function expandHome(p) {
  * @returns {null | {path: string, board: string|null}[]}
  */
 export function loadUserBoards(file = userBoardsFile()) {
+  const list = rawUserBoards(file);
+  if (list === null) return null;
+  return parseRepoSpecs(list).map((s) => ({ ...s, path: expandHome(s.path) }));
+}
+
+/**
+ * The entries of the user list exactly as they are written — a writer has to keep the spellings a
+ * human chose, which `loadUserBoards` deliberately resolves away. Missing file → null; malformed
+ * file → the same exitCode 2 refusal, thrown before anything is written.
+ */
+function rawUserBoards(file) {
   if (!fs.existsSync(file)) return null;
   let raw;
   try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) {
@@ -289,7 +300,62 @@ export function loadUserBoards(file = userBoardsFile()) {
     err.exitCode = 2;
     throw err;
   }
-  return parseRepoSpecs(list).map((s) => ({ ...s, path: expandHome(s.path) }));
+  return list;
+}
+
+/**
+ * Write the user list as `{ "version": 1, "boards": [...] }` — a bare array on input comes back in
+ * the object shape, which is the one the README documents.
+ *
+ * Atomic on purpose: `hkb serve` reads this file while other commands add to it, so the write goes
+ * to a temp file in the same directory and is `rename`d over the target. A reader sees the old list
+ * or the new one, never half of one, and a crash mid-write cannot truncate a file a human maintains.
+ * @returns the file it wrote
+ */
+export function saveUserBoards(list, file = userBoardsFile()) {
+  const dir = path.dirname(file);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, boards: list }, null, 2) + '\n');
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    fs.rmSync(tmp, { force: true });
+    throw e;
+  }
+  return file;
+}
+
+/**
+ * The main checkout `root` belongs to. Inside a linked worktree — a worker's `.claude/worktrees/
+ * kb-99-1`, say — `git rev-parse --show-toplevel` answers with the worktree, which is a throwaway
+ * directory nobody wants on a board list; the common git dir points back at the real checkout.
+ * Anything unexpected (no git, a bare repo, a path that is gone) keeps `root`.
+ */
+export function mainWorktree(root) {
+  const r = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: root, encoding: 'utf8' });
+  if (r.status !== 0 || !r.stdout.trim()) return root;
+  const common = path.resolve(root, r.stdout.trim());
+  if (path.basename(common) !== '.git') return root;
+  const main = path.dirname(common);
+  return fs.existsSync(main) ? main : root;
+}
+
+/**
+ * Put a checkout on the user-level list, once. Idempotent by resolved path plus board slug, so
+ * registering `/home/you/code/web` when `~/code/web` is already listed changes nothing, and a
+ * worker's worktree registers its main checkout instead of itself.
+ *
+ * The file is only rewritten when the list actually grew; a missing one is created, a malformed one
+ * is refused (exitCode 2) rather than clobbered.
+ * @returns {{added: boolean, file: string, entries: number}}
+ */
+export function registerUserBoard(root, board = null, file = userBoardsFile()) {
+  const current = rawUserBoards(file) || [];
+  const abs = mainWorktree(path.resolve(expandHome(root)));
+  const { entries, added } = mergeBoardEntry(current, { path: abs, board }, (p) => path.resolve(expandHome(p)));
+  if (added) saveUserBoards(entries, file);
+  return { added, file, entries: entries.length };
 }
 
 /**

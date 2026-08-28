@@ -13,11 +13,11 @@ covers:
   - path: src/dispatch.js
     sha: 0cdcd4fea6cdc34ea29807ca292f5de26bd03019
   - path: src/board.js
-    sha: acb800f045bbe90838eea44ed8cbf553dd06f07d
+    sha: 7e895ff3e7e8380a61fd275e609d93dfce2140e1
   - path: src/init.js
     sha: 710aaadac933165fa996da76a24c60baafadd0b1
 related: [architecture/overview, features/auto-merge, gotchas/long-lived-process-rot]
-generated_at_commit: 21cb452
+generated_at_commit: 73feb37
 last_refreshed: 2026-08-27
 ---
 
