@@ -25,6 +25,10 @@ deserves a `concepts/` page (link it).
   often it is invoked; `token_expiry_day` and `version_check_day` are the two,
   and neither stamps a failed probe (`src/doctor.js`; see
   *features/update-notice*).
+- **Dependency subgraph** — the drawer's picture of one card's neighbourhood in
+  the board's `blockedBy` graph: the card, everything it transitively waits on and
+  everything transitively waiting on it, laid out from the `/api/board` payload
+  alone (`depGraph` in `web/index.html`; see *features/web-board*).
 - **Dispatcher** — the seat that ticks: `hkb dispatch` reconciles labels, locks
   and attempts against the graph on the cards. Not an orchestrator — it holds no
   workflow and has no LLM in it (`src/dispatch.js`; see *Tick*).
