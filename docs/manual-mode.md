@@ -46,7 +46,8 @@ hkb serve                        # http://127.0.0.1:4666
 no second source of truth. Drag-drop between columns runs the same verbs the CLI does — only the legal moves, and
 an illegal one is refused with the reason — so a board you drive by hand is fully drivable from the browser.
 Driving several repos by hand does not mean several servers: `hkb serve --repos ../api,../infra` puts their
-boards on the same page (or list them once in `~/.config/hkb/boards.json` and just run `hkb serve`).
+boards on the same page — and plain `hkb serve` already does, because `hkb init` puts every checkout it sets up
+on the user-level list at `~/.config/hkb/boards.json`, which the server re-reads while it runs.
 
 ## Work a card
 
