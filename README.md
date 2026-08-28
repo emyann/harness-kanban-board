@@ -198,8 +198,9 @@ cannot live in any one `.kanban/`. `hkb serve` with no flag reads `~/.config/hkb
 { "version": 1, "boards": ["~/code/web", "~/code/api", { "path": "~/code/infra", "board": "release" }] }
 ```
 
-An entry that no longer exists is a warning and a skip, never a broken `hkb serve`. Nothing is scanned for:
-hkb only ever shows the checkouts you named.
+The list is read once, while `hkb serve` starts, so a board you add to it — or a checkout you just
+`hkb init`ed — shows up only after you restart the server. An entry that no longer exists is a warning and a
+skip, never a broken `hkb serve`. Nothing is scanned for: hkb only ever shows the checkouts you named.
 
 ## The board as a stream
 
