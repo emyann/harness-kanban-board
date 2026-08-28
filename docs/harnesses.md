@@ -78,8 +78,8 @@ Per profile:
 
 | profile | what an attempt leaves behind | so `hkb stats` shows |
 | --- | --- | --- |
-| `claude` | a launch banner and nothing else — a background agent signs off with no JSON. What it can leave is the session the `Stop` hook records: an id and a transcript path. | **usage**, or an **estimate** once the board has rates |
-| `claude-track` | the same — and because the runner claims each node from inside its own session, every node's row carries the *runner's* session id and transcript | as `claude`, but one transcript covers the whole track, and is counted once for it |
+| `claude` | a launch banner and nothing else — a background agent signs off with no JSON. What it leaves is the session its terminal verb records: an id and a transcript path ([how](#how-a-background-worker-records-a-session-nobody-told-it-about)) | **usage**, or an **estimate** once the board has rates |
+| `claude-track` | the same — and because the runner finishes each node from inside its own session, every node's row carries the *runner's* session id and transcript | as `claude`, but one transcript covers the whole track, and is counted once for it |
 | `claude-p` | `--output-format json`, so the log ends in Claude's own `{"session_id": …, "total_cost_usd": …, "num_turns": …}` | **reported**, per attempt, with turns |
 | `copilot-cli` | no structured output, and no cost in the `agentStop` payload | **nothing** |
 | `codex` | `--output-schema` shapes the terminal verb, not a bill | **nothing** |
@@ -137,19 +137,37 @@ four. In `--json` the nodes counted elsewhere are `spend.attempts_shared_session
 as attempts, but are neither a cost of their own nor a hole in the coverage (`attempts_missing_cost` leaves them
 out). A cold node, whose transcript nobody else names, is priced on its own as it always was.
 
-### When a profile that should report tokens reports none
+### How a background worker records a session nobody told it about
 
-There is no transcript to price unless the `Stop` hook recorded one, and `hkb hook stop` is deliberately inert
-unless `KB_TASK` is in its environment. Verified here on 2026-08-28 with Claude Code 2.1.250: a `claude --bg`
-worker is started by Claude Code's session daemon, and the session it runs does not inherit the env the
-dispatcher set on the launch — so on `claude` and `claude-track` the hook records nothing, and the report falls
-all the way through to `not recorded on any of the N worker attempts`. The two-nudge enforcement is inert for
-the same reason. Tracked in [#125](https://github.com/emyann/harness-kanban-board/issues/125); `claude-p`,
-whose worker is an ordinary child of the dispatcher, is unaffected either way — and it reports a real cost.
+There is no transcript to price unless something recorded one, and on the default profile the obvious candidate
+cannot. The dispatcher exports `KB_TASK`/`KB_ATTEMPT` on the launch, but `claude --bg` only asks Claude Code's
+session daemon to start an agent and exits: the daemon was started long before, with an environment of its own,
+so the worker session never sees them (verified here 2026-08-28, Claude Code 2.1.250 — inside a live worker
+`process.env.KB_TASK` is undefined). For a while that made the whole chain inert on `claude` and `claude-track`,
+which is what [#125](https://github.com/emyann/harness-kanban-board/issues/125) was filed for: no nudge, no
+session id, and a report that fell through to `not recorded on any of the N worker attempts`.
+
+Two things a background session *does* have close it, and neither is an API call:
+
+- **which attempt it is** — its checkout. The launch names it `kb-<n>-<k>`, which is already how the dispatcher
+  identifies a running job, so `hkb` reads the attempt back out of the directory name when the environment is
+  silent. The `Stop` nudge works again for the same reason.
+- **which session it is** — `CLAUDE_CODE_SESSION_ID` in every command the session runs, and, for a background
+  agent, the job record under `~/.claude/jobs/<id>/` that also names the transcript on disk.
+
+The recording itself is done by the **terminal verb**, not the hook: `hkb complete` / `block` / `request-review`
+is the one thing every worker runs, it is already writing that attempt's row, and it works whether or not the
+harness fires hooks at all. It stamps only an attempt this session actually ran — its own, or a node it claimed
+in-session — so an operator finishing a card from their own terminal, and the dispatcher writing off a dead
+attempt, record nothing. That last rule is also what gives a track its per-node identity: the runner finishes
+each node from inside its own session, so each node's row ends up carrying the runner's transcript.
+
+What still records nothing: an attempt that never reaches a terminal verb (`crashed`, `timed_out`,
+`protocol_violation`) on a profile whose log has no final JSON. `hkb stats` counts those and prices none of
+them, and says so — `N worker attempts priced nothing at all — the real total is higher`.
 
 Check your own setup in one command: `hkb show <n>` prints a `session …` line, and a `claude --resume`, for an
-attempt whose session was recorded. If nothing on your board has one, that is what you are looking at, and no
-`stats.rates` will change it.
+attempt whose session was recorded.
 
 ## Claude Code — `claude`, `claude-p`
 

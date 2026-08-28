@@ -1,5 +1,7 @@
 // `hkb hook stop` — the stop hook for every local harness. Nudges a worker (max 2×) that tries to
-// end its turn without a terminal verb. Safe in any session: exits 0 immediately unless KB_TASK is set.
+// end its turn without a terminal verb. Safe in any session: it exits 0 before it reads stdin unless
+// this one is a worker's — `KB_TASK`, or failing that the `kb-<n>-<k>` checkout it is sitting in,
+// which is the only thing a `claude --bg` session can be identified by (`whichAttempt`, below).
 //
 // Two harnesses, one hook. What differs, and what does not:
 //
@@ -26,10 +28,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { kanbanDir } from './board.js';
+import { currentSession } from './jobs.js';
 import { getTask, loadRun, saveRun } from './tasks.js';
-import { openAttempt, sessionUpdate, normalizeHookInput } from './model.js';
+import { openAttempt, sessionUpdate, normalizeHookInput, parseWorktreeName } from './model.js';
 
-/** PreToolUse hook: hkb's own permission policy — allow or deny, never a prompt. */
+/**
+ * PreToolUse hook: hkb's own permission policy — allow or deny, never a prompt.
+ *
+ * Gated on `KB_TASK` alone, deliberately, where `stopHook` also accepts the worktree: this policy is
+ * the profile's `allowed_tools`, and a checkout name says which task a session is, never which
+ * profile launched it. Applied with no profile, `decidePermission` would allow `hkb`, `git` and `gh`
+ * and deny everything else — so a background worker, which is exactly the session the worktree
+ * fallback would newly reach, would be denied `npm test`. Inert is the safe answer here; the launch
+ * flags (`--allowedTools`, `--permission-mode`) are that session's real policy.
+ */
 export async function preToolHook(ctx) {
   if (!process.env.KB_TASK) return 0;
   let input = {};
@@ -63,6 +75,50 @@ const MARKER_RE = /^\d+-\d+$/;
 const sessionsDir = (root) => path.join(kanbanDir(root), 'sessions');
 const markerFile = (root, n, k) => path.join(sessionsDir(root), `${n}-${k}`);
 
+/**
+ * Which attempt this session is working — the question every line below depends on.
+ *
+ * The dispatcher exports `KB_TASK`/`KB_ATTEMPT` on the launch, and for a harness it runs as a child
+ * process (`claude -p`, Copilot, Codex) that is the whole answer. `claude --bg` is not one: the CLI
+ * hands the request to Claude Code's session daemon and exits, and that daemon was started long
+ * before, with an environment of its own. So the DEFAULT profile — the free path the README
+ * recommends — never sees them, and every behaviour keyed on `KB_TASK` was silently inert there:
+ * no nudge, no session id, and so nothing for `hkb stats` to price (#125).
+ *
+ * What such a session does have is its checkout. The launch names it `kb-<n>-<k>` and the dispatcher
+ * already identifies a running job by exactly that name, so fall back to it: one basename, no file
+ * read, no board read. `source` says which answer this was, for a caller that wants to log it.
+ */
+export function whichAttempt(root = process.cwd()) {
+  const n = process.env.KB_TASK;
+  if (n) return { n: String(n), k: process.env.KB_ATTEMPT || '0', source: 'env' };
+  const wt = parseWorktreeName(path.basename(path.resolve(root)));
+  return wt ? { ...wt, source: 'worktree' } : null;
+}
+
+/**
+ * What to write onto an attempt row this process is CLOSING, when this process is the session that
+ * ran it — the path that needs no hook at all, and the reason a `claude-bg` board has spend data.
+ *
+ * Two things make an attempt this session's own: it is this session's own attempt, or this session
+ * claimed it as a track node and left the `claimed-by` marker saying so. Anything else answers null,
+ * on purpose: an operator finishing a card from their own terminal and the dispatcher writing off a
+ * dead attempt are both running inside *some* session, and neither did this work.
+ *
+ * `wt` rides along for a claimed node, exactly as the hook does it: a node has no checkout of its
+ * own, so a resume line must point at the runner's or name one that never existed.
+ */
+export function sessionForAttempt(root, n, k, a, env = process.env) {
+  const me = whichAttempt(root);
+  if (!me) return null;
+  const own = me.n === String(n) && me.k === String(k);
+  const claim = own ? null : readClaim(markerFile(root, n, k));
+  if (!own && claim?.owner !== `${me.n}-${me.k}`) return null;
+  const fields = sessionUpdate(a, currentSession(env));
+  if (!fields) return null;
+  return claim?.wt && !a?.wt ? { ...fields, wt: claim.wt } : fields;
+}
+
 /** A marker as `{owner, wt}` while it is still a pending claim; null once it holds a session id. */
 function readClaim(file) {
   let first;
@@ -78,17 +134,17 @@ function readClaim(file) {
  * @returns true when a marker was written.
  */
 export function markSessionClaim(root, n, k) {
-  const owner = process.env.KB_TASK;
-  if (!owner || String(owner) === String(n)) return false;
+  const me = whichAttempt(root);
+  if (!me || me.n === String(n)) return false;
   try {
     const file = markerFile(root, n, k);
     if (fs.existsSync(file)) return false; // a stamped marker outranks a claim: never overwrite one
     // where the session lives, for `hkb show`'s resume line: a node claimed by hand has no worktree
     // of its own, and pointing a post-mortem at `kb-<node>-<k>` would name one that never existed.
     const here = path.basename(path.resolve(root));
-    const wt = /^kb-\d+-\d+$/.test(here) ? ` ${here}` : '';
+    const wt = parseWorktreeName(here) ? ` ${here}` : '';
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, `${CLAIMED} ${owner}-${process.env.KB_ATTEMPT || '0'}${wt}\n`);
+    fs.writeFileSync(file, `${CLAIMED} ${me.n}-${me.k}${wt}\n`);
     return true;
   } catch { return false; }
 }
@@ -155,12 +211,15 @@ async function recordSessions(ctx, n, k, input) {
 }
 
 export async function stopHook(ctx, io = {}) {
-  const n = process.env.KB_TASK;
-  if (!n) return 0;
+  // Not a worker session: return before stdin is even read, as this hook always has. The checkout
+  // is the second answer, not a second question — one basename, and only when the launch env is
+  // missing (`whichAttempt`), so an ordinary session in an ordinary directory still costs nothing.
+  const me = whichAttempt(ctx.root);
+  if (!me) return 0;
+  const { n, k } = me;
   const readStdin = io.readStdin || (() => fs.readFileSync(0, 'utf8'));
   let input = {};
   try { input = normalizeHookInput(JSON.parse(readStdin() || '{}')); } catch { /* no stdin */ }
-  const k = process.env.KB_ATTEMPT || '0';
   const dir = path.join(kanbanDir(ctx.root), 'nudges');
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${n}-${k}`);

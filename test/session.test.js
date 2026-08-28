@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseSessionLog, sessionUpdate, formatSession, resumeCommand, worktreePath } from '../src/model.js';
-import { stopHook, markSessionClaim } from '../src/hook.js';
+import { parseSessionLog, sessionUpdate, formatSession, resumeCommand, worktreePath, parseWorktreeName, sessionFromJobState } from '../src/model.js';
+import { stopHook, markSessionClaim, whichAttempt, sessionForAttempt } from '../src/hook.js';
+import { currentSession } from '../src/jobs.js';
+import { complete } from '../src/lifecycle.js';
 import { loadRun } from '../src/tasks.js';
 import { DEFAULT_BOARD } from '../src/board.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
@@ -226,10 +228,215 @@ test('markSessionClaim: only ever marks another task, from inside a session', ()
   try {
     assert.equal(markSessionClaim(h.root, 7, 1), false, "the session's own task is the hook's business");
     delete process.env.KB_TASK;
-    assert.equal(markSessionClaim(h.root, 8, 1), false, 'no session, no marker');
+    // no KB_TASK, and still a session: `kb-7-1` is the checkout a background runner works in, and
+    // the launch environment never reaches one, so the name is all there is to go on
+    assert.equal(markSessionClaim(h.root, 8, 1), true, 'the checkout names the session');
+    assert.equal(h.marker(8, 1), 'claimed-by 7-1 kb-7-1\n');
+    assert.equal(markSessionClaim(path.dirname(h.root), 9, 2), false, 'not a worker checkout: no session, no marker');
     process.env.KB_TASK = '7';
-    assert.equal(markSessionClaim(h.root, 8, 1), true);
     assert.equal(markSessionClaim(h.root, 8, 1), false, 'idempotent: never overwrite what is there');
+    assert.equal(markSessionClaim(h.root, 9, 2), true);
+  } finally { h.cleanup(); }
+});
+
+// ---------- a background worker: no KB_TASK anywhere, and spend data all the same ----------
+// `claude --bg` hands the launch to Claude Code's session daemon and exits, so the environment the
+// dispatcher set on the spawn never reaches the session that does the work. On the DEFAULT profile
+// that left every KB_TASK-gated behaviour inert (#125): no nudge, no session id, and so nothing for
+// `hkb stats` to price. Two things answer it — the checkout says which attempt this is, and the job
+// record Claude Code keeps says which session, which transcript.
+
+test('whichAttempt: the launch environment first, the checkout when there is none', () => {
+  const saved = { ...process.env };
+  try {
+    Object.assign(process.env, { KB_TASK: '7', KB_ATTEMPT: '2' });
+    assert.deepEqual(whichAttempt('/anywhere'), { n: '7', k: '2', source: 'env' });
+    delete process.env.KB_ATTEMPT;
+    assert.deepEqual(whichAttempt('/anywhere'), { n: '7', k: '0', source: 'env' });
+    delete process.env.KB_TASK;
+    assert.deepEqual(whichAttempt('/repo/.claude/worktrees/kb-18-3'), { n: '18', k: '3', source: 'worktree' });
+    assert.equal(whichAttempt('/repo'), null, 'an ordinary session in an ordinary checkout is not a worker');
+    assert.equal(whichAttempt('/repo/.claude/worktrees/kb-nope'), null);
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+    Object.assign(process.env, saved);
+  }
+});
+
+test('parseWorktreeName: the inverse of the name the launch asks for', () => {
+  assert.deepEqual(parseWorktreeName('kb-115-1'), { n: '115', k: '1' });
+  assert.deepEqual(parseWorktreeName(worktreePath('kb-9-12').split('/').pop()), { n: '9', k: '12' });
+  for (const bad of ['kb-115', 'kb-115-1-2', 'kb--1', 'harness-kanban-board', '', null, undefined]) {
+    assert.equal(parseWorktreeName(bad), null, `${bad}`);
+  }
+});
+
+const JOB_STATE = {
+  state: 'working',
+  name: 'kb #30 · a card with a session behind it',
+  sessionId: '901aaf18-1d94-4050-8268-933985d902b8',
+  linkScanPath: '/home/u/.claude/projects/-repo--claude-worktrees-kb-30-1/901aaf18.jsonl',
+  worktreePath: '/repo/.claude/worktrees/kb-30-1',
+  tokens: 22314,
+};
+const SID = JOB_STATE.sessionId;
+const TRANSCRIPT = JOB_STATE.linkScanPath;
+
+test('sessionFromJobState: the id and the transcript, and nothing else off the record', () => {
+  assert.deepEqual(sessionFromJobState(JOB_STATE), { session_id: SID, transcript_path: TRANSCRIPT });
+  assert.deepEqual(sessionFromJobState({ sessionId: SID }), { session_id: SID });
+  assert.equal(sessionFromJobState({ state: 'working', tokens: 12 }), null);
+  assert.equal(sessionFromJobState(null), null);
+});
+
+/** A job record on disk, the way `claude --bg` keeps one under ~/.claude/jobs/<id>/. */
+function jobDirWith(state) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-job-'));
+  if (state !== null) fs.writeFileSync(path.join(dir, 'state.json'), typeof state === 'string' ? state : JSON.stringify(state));
+  return dir;
+}
+
+test('currentSession: a background worker can name its own session and transcript', () => {
+  const dir = jobDirWith(JOB_STATE);
+  try {
+    assert.deepEqual(currentSession({ CLAUDE_JOB_DIR: dir, CLAUDE_CODE_SESSION_ID: SID }), { session_id: SID, transcript_path: TRANSCRIPT });
+    // no job record: the id alone still gives `hkb show` a resume line
+    assert.deepEqual(currentSession({ CLAUDE_CODE_SESSION_ID: SID }), { session_id: SID });
+    // a record naming a session we are not in — a job resumed into a new one — describes somebody
+    // else's transcript, so only the id we are sure of is taken
+    assert.deepEqual(currentSession({ CLAUDE_JOB_DIR: dir, CLAUDE_CODE_SESSION_ID: 'other-sid' }), { session_id: 'other-sid' });
+    assert.equal(currentSession({}), null, 'not a session this host can name');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('currentSession: an unreadable or missing job record is never an error', () => {
+  const missing = jobDirWith(null);
+  const broken = jobDirWith('{ not json');
+  try {
+    assert.equal(currentSession({ CLAUDE_JOB_DIR: missing }), null);
+    assert.equal(currentSession({ CLAUDE_JOB_DIR: path.join(missing, 'nope') }), null);
+    assert.deepEqual(currentSession({ CLAUDE_JOB_DIR: broken, CLAUDE_CODE_SESSION_ID: SID }), { session_id: SID });
+  } finally { for (const d of [missing, broken]) fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+/**
+ * A `claude --bg` worker as the dispatcher leaves it: launched into `kb-30-1` with no KB_* in its
+ * environment at all, and a job record that names its session. #31 is a node it claims in-session,
+ * the way a track runner does.
+ */
+function bgHarness({ job = true } = {}) {
+  const gh = new FakeGh();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-bg-'));
+  const root = path.join(dir, 'kb-30-1');
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  const jobDir = jobDirWith({ ...JOB_STATE, worktreePath: root });
+  const open = (attempt, extra = {}) => ({ attempt, host: 'h', started_at: '2026-08-27T09:00:00Z', ...extra });
+  gh.addIssue(kbIssue({ number: 30, status: 'running', agent: 'claude', run: runWith([open(1, { bg: true, wt: 'kb-30-1' })]) }));
+  gh.addIssue(kbIssue({ number: 31, status: 'running', agent: 'claude', run: runWith([open(1, { ...ended('failed') }), open(2, { manual: true })]) }));
+
+  const cfg = { ...DEFAULT_BOARD, repo: gh.nameWithOwner };
+  const ctx = { root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner }, board: 'default', host: 'h', json: false, caps: {}, _cache: {}, requireBoard() { return this; } };
+  const restore = gh.install();
+  const saved = { ...process.env };
+  for (const k of ['KB_TASK', 'KB_ATTEMPT', 'KB_PROFILE', 'CLAUDE_JOB_DIR', 'CLAUDE_CODE_SESSION_ID']) delete process.env[k];
+  process.env.CLAUDE_CODE_SESSION_ID = SID;
+  if (job) process.env.CLAUDE_JOB_DIR = jobDir;
+  return {
+    gh, ctx, root, outside: dir,
+    attempt: async (n, k) => (await loadRun(ctx, n)).run.attempts.find((a) => a.attempt === k),
+    cleanup: () => {
+      restore();
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(jobDir, { recursive: true, force: true });
+    },
+  };
+}
+
+test('a terminal verb records the session that ran the attempt — the path that needs no hook', async () => {
+  const h = bgHarness();
+  try {
+    await complete(h.ctx, 30, { summary: 'done' });
+
+    const a = await h.attempt(30, 1);
+    assert.equal(a.session_id, SID, 'the id `hkb show` reopens the worker with');
+    assert.equal(a.transcript_path, TRANSCRIPT, 'and the transcript `hkb stats` prices from');
+    assert.equal(resumeCommand(a, 30), `cd .claude/worktrees/kb-30-1 && claude --resume ${SID}`);
+  } finally { h.cleanup(); }
+});
+
+test('a node claimed in-session is finished with the runner session, and points at its checkout', async () => {
+  const h = bgHarness();
+  try {
+    assert.equal(markSessionClaim(h.root, 31, 2), true, 'no KB_TASK: the claim is marked from the checkout');
+
+    await complete(h.ctx, 31, { summary: 'the node is done' });
+
+    const a = await h.attempt(31, 2);
+    assert.equal(a.session_id, SID);
+    assert.equal(a.transcript_path, TRANSCRIPT, 'one session, one transcript — hkb stats counts it once');
+    assert.equal(a.wt, 'kb-30-1', "a node has no checkout of its own: the resume line names the runner's");
+    assert.equal((await h.attempt(31, 1)).session_id, undefined, 'an earlier attempt this session never ran');
+  } finally { h.cleanup(); }
+});
+
+test('sessionForAttempt: only ever the attempt this session actually ran', () => {
+  const h = bgHarness();
+  try {
+    const row = { attempt: 1 };
+    assert.deepEqual(sessionForAttempt(h.root, 30, 1, row), { session_id: SID, transcript_path: TRANSCRIPT });
+    // somebody else's card, from inside this worker: never stamped with this session
+    assert.equal(sessionForAttempt(h.root, 31, 2, row), null, 'not claimed here');
+    assert.equal(sessionForAttempt(h.root, 30, 2, row), null, 'another attempt of the same task');
+    // an operator finishing a card by hand, and the dispatcher writing off a dead attempt: both run
+    // inside some session, neither did the work
+    assert.equal(sessionForAttempt(h.outside, 30, 1, row), null, 'not a worker checkout');
+    // recorded once: a row that already has them asks for no write
+    assert.equal(sessionForAttempt(h.root, 30, 1, { attempt: 1, session_id: SID, transcript_path: TRANSCRIPT }), null);
+  } finally { h.cleanup(); }
+});
+
+test('a worker whose harness names no session is left exactly as it was', async () => {
+  const h = bgHarness({ job: false });
+  try {
+    delete process.env.CLAUDE_CODE_SESSION_ID; // Copilot, Codex, a plain shell
+    await complete(h.ctx, 30, { summary: 'done' });
+    const a = await h.attempt(30, 1);
+    assert.equal(a.session_id, undefined);
+    assert.equal(a.transcript_path, undefined);
+    assert.equal(a.outcome, 'completed', 'the verb itself is untouched by any of this');
+  } finally { h.cleanup(); }
+});
+
+test('stop hook: a background worker with no KB_TASK is still identified by its checkout', async () => {
+  const h = trackHarness({ rootStatus: 'running' });
+  const out = [];
+  const write = process.stdout.write;
+  try {
+    delete process.env.KB_TASK;
+    delete process.env.KB_ATTEMPT;
+    assert.equal(markSessionClaim(h.root, 8, 1), true);
+    process.stdout.write = (s) => { out.push(String(s)); return true; };
+    await h.stop();
+    process.stdout.write = write;
+
+    assert.equal((await h.attempt(7, 1)).session_id, 'sid-1', 'the root, from the kb-7-1 checkout');
+    assert.equal((await h.attempt(8, 1)).session_id, 'sid-1', 'and the node it claimed');
+    assert.equal(JSON.parse(out.join('')).decision, 'block', 'the nudge works again too');
+  } finally { process.stdout.write = write; h.cleanup(); }
+});
+
+test('stop hook: a session that is not a worker returns before it reads stdin', async () => {
+  const h = trackHarness();
+  try {
+    delete process.env.KB_TASK;
+    const outside = { ...h.ctx, root: path.dirname(h.root) };
+    const before = writes(h.gh);
+    let read = 0;
+    assert.equal(await stopHook(outside, { readStdin: () => { read++; return JSON.stringify(PAYLOAD); } }), 0);
+    assert.equal(read, 0, 'no stdin, no board read, no marker directory');
+    assert.equal(writes(h.gh), before);
   } finally { h.cleanup(); }
 });
 
