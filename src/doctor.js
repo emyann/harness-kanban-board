@@ -82,6 +82,7 @@ export function checkHarnesses(ctx, { ok, warn }) {
 export function checkDispatcher(ctx, { ok, warn }) {
   const st = processState(ctx.root, 'dispatch');
   if (st.running) return ok('dispatcher', `running pid ${st.pid} · log ${st.log}`);
+  if (st.stale) return warn('dispatcher', 'no dispatcher running — .kanban/dispatch.pid predates this boot and names nothing of ours', 'hkb up');
   if (st.exit !== null) return warn('dispatcher', `no dispatcher running — the last one exited (${st.exit}) at ${st.exited_at}`, 'hkb up');
   warn('dispatcher', 'no dispatcher running', 'hkb up');
 }
@@ -847,7 +848,12 @@ function report(results, ctx, log) {
     log(`${mark} ${r.name.padEnd(36)} ${r.detail || ''}${r.fix && r.ok !== true ? `  → ${r.fix}` : ''}`);
   }
   const bad = results.filter((r) => r.ok === false).length;
-  log(bad ? `\n${bad} problem(s). Fix them before \`hkb dispatch\`.` : '\nAll good. `hkb up` when ready (`hkb up --serve` for the board too).');
+  // "`hkb up` when ready" three lines under "dispatcher running pid 3843" reads as advice from a tool
+  // that did not read its own output. A board that is already up gets told what is already true.
+  const up = results.find((r) => r.name === 'dispatcher')?.ok === true;
+  log(bad ? `\n${bad} problem(s). Fix them before \`hkb dispatch\`.`
+    : up ? '\nAll good, and the dispatcher is up. `hkb up --status` says what is running.'
+      : '\nAll good. `hkb up` when ready (`hkb up --serve` for the board too).');
   return bad ? 1 : 0;
 }
 

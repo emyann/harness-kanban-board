@@ -791,6 +791,43 @@ export function detachedEnv(env = {}) {
   return out;
 }
 
+/**
+ * How much the boot comparison forgives. mtime is wall time and `os.uptime()` is monotonic, so the
+ * two disagree by a little; the slack errs towards *believing* a pid file, because calling a live
+ * dispatcher stale would start a second loop — the very bug the pid file exists to prevent.
+ */
+export const PID_BOOT_SLACK_MS = 5_000;
+
+/**
+ * Is this pid file a claim a reboot invalidated? A pid file is a claim, and after a reboot it is a
+ * claim on a pid the kernel has since handed to somebody else. `.kanban/*.pid` is a plain file: it
+ * survives the reboot, `pidAlive` says "yes, something answers to 3843", and `hkb down` would
+ * SIGTERM a stranger's process.
+ *
+ * The zero-dependency guard is arithmetic: a pid file written *before this machine booted* cannot
+ * name a process of ours that is still running, whatever `kill(pid, 0)` says. `uptime` is the
+ * machine's, in seconds (`os.uptime()`); `at` is the file's mtime. No uptime to compare against
+ * means no verdict, so the file is believed.
+ */
+export function pidFileStale(at, { now = Date.now(), uptime = 0 } = {}) {
+  if (!at || !uptime) return false;
+  const t = new Date(at).getTime();
+  if (Number.isNaN(t)) return false;
+  return t < now - uptime * 1000 - PID_BOOT_SLACK_MS;
+}
+
+/**
+ * How long `hkb down` waits for a process to be gone before it gives up and says so. A SIGTERM'd
+ * dispatcher wakes out of its sleep at once but still finishes a tick already in flight, and a tick
+ * is bounded by nothing shorter than the interval it runs on — so two of them, floored so a fast
+ * board still gets a fair wait and capped so `hkb down` never becomes the thing that hangs.
+ */
+export function stopWaitMs(interval, { min = 5_000, max = 120_000 } = {}) {
+  const n = Number(interval);
+  if (!Number.isFinite(n) || n <= 0) return min;
+  return Math.min(max, Math.max(min, Math.round(n * 2 * 1000)));
+}
+
 const pad2 = (n) => String(n).padStart(2, '0');
 
 /**
@@ -819,6 +856,9 @@ export function processLine(st, { now = new Date(), already = false } = {}) {
     const since = formatSince(st.since, now);
     return `${st.name} ${already ? 'already ' : ''}running pid ${st.pid}${since ? ` since ${since}` : ''}${log}`;
   }
+  // A pid file older than the boot names a pid this kernel has since reissued: say that, rather than
+  // a bare "stopped" that leaves an operator wondering why the file is there.
+  if (st.stale) return `${st.name} stopped (pid file predates this boot — hkb up replaces it)`;
   if (st.exit !== null && st.exit !== undefined) {
     const at = formatSince(st.exited_at, now);
     return `${st.name} exited (${st.exit})${at ? ` at ${at}` : ''} — hkb up restarts it${log}`;

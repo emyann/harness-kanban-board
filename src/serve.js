@@ -121,8 +121,9 @@ export function dispatcherState(root) {
  */
 export function claimServePid(root, log = () => {}) {
   const file = pidFile(root, 'serve');
-  const { pid: current } = readPidFile(root, 'serve');
-  if (current && current !== process.pid && pidAlive(current)) {
+  // A claim written before this boot is no claim: that pid now belongs to a stranger (`readPidFile`).
+  const { pid: current, stale } = readPidFile(root, 'serve');
+  if (!stale && current && current !== process.pid && pidAlive(current)) {
     log(`another hkb serve holds ${path.relative(root, file)} (pid ${current}) — \`hkb down --serve\` stops that one, not this`);
     return () => {};
   }
@@ -619,8 +620,8 @@ const boardLine = (b) => `${b.repo}${b.board === 'default' ? '' : ` board "${b.b
  * Pure enough to test: it reads two local files and never touches the network.
  */
 export function portInUse(root, port) {
-  const { pid } = readPidFile(root, 'serve');
-  if (pid && pid !== process.pid && pidAlive(pid)) {
+  const { pid, stale } = readPidFile(root, 'serve');
+  if (!stale && pid && pid !== process.pid && pidAlive(pid)) {
     return `hkb serve is already up on port ${port} (pid ${pid}) — \`hkb up --status\` says so, \`hkb down --serve\` stops it, or pass --port <n> for a second one`;
   }
   return `port ${port} is already in use — pass --port <n>, or stop the other hkb serve`;

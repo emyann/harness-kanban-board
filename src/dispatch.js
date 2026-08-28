@@ -6,7 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, getTask, enableAutoMerge, branchProtection } from './tasks.js';
 import { claim, release, listLocks, lockBeatAt, staleBaseSha, remoteName } from './lock.js';
-import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, pidFile, pidAlive, recordExit, clearExit } from './board.js';
+import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, pidFile, readPidFile, pidAlive, recordExit, clearExit } from './board.js';
 import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted } from './track.js';
@@ -918,10 +918,11 @@ function tailLog(ctx, rel, bytes = 4000) {
 function acquireLoopLock(ctx) {
   const file = pidFile(ctx.root, 'dispatch');
   try {
-    const existing = Number(fs.readFileSync(file, 'utf8').trim());
     // `hkb up` writes the pid of the child it just spawned into this file, so a loop finding its own
-    // pid here is finding its own claim, not a rival's.
-    if (existing && existing !== process.pid && pidAlive(existing)) {
+    // pid here is finding its own claim, not a rival's. A file that predates the boot is no claim at
+    // all — after a reboot that pid belongs to a stranger (`readPidFile`).
+    const { pid: existing, stale } = readPidFile(ctx.root, 'dispatch');
+    if (!stale && existing && existing !== process.pid && pidAlive(existing)) {
       const e = new Error(`another dispatcher loop is already running (pid ${existing}). If you are a worker session: never run the dispatcher. If you own this host and want to replace it, stop it yourself first (\`hkb down\`).`);
       e.exitCode = 2;
       throw e;
@@ -937,16 +938,32 @@ function acquireLoopLock(ctx) {
 
 /**
  * The long-lived dispatcher. `sleeper` is the wait between ticks, injected so a test can run six
- * ticks in a millisecond. Throws (exit code 4) when a tick reports `fatal`: the self-heal ladder ran
- * out and the honest thing left is to die with a reason a supervisor and a human can both read.
+ * ticks in a millisecond; the default one is interruptible, so SIGTERM ends the loop between ticks
+ * rather than after another. Throws (exit code 4) when a tick reports `fatal`: the self-heal ladder
+ * ran out and the honest thing left is to die with a reason a supervisor and a human can both read.
  */
-export async function loop(ctx, { interval, max, profiles = null, log, sleeper = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
+export async function loop(ctx, { interval, max, profiles = null, log, sleeper = null }) {
   const dropLock = acquireLoopLock(ctx);
   log(`dispatcher pid ${process.pid} (singleton lock .kanban/dispatch.pid)`);
   const children = new Map();
   let stopping = false;
   let fatal = null;
-  const stop = () => { stopping = true; log('stopping after this tick (workers keep running; next dispatcher reclaims or adopts them)'); };
+  // The wait between ticks has to be interruptible, or a SIGTERM landing one second into a 60-second
+  // sleep buys a *whole further tick*: the loop would wake, run it, and only then notice it was asked
+  // to stop — while `hkb down` had already reported it stopped and `hkb up` had started its
+  // replacement. Two loops, one board, and the singleton lock never saw it coming. So `stop` resolves
+  // the sleep it is racing, and the loop leaves between ticks instead of through one. The default
+  // sleep is owned here rather than closed over, so the pending timer can be cleared with it.
+  let timer = null;
+  let wake = null;
+  const nap = sleeper || ((ms) => new Promise((resolve) => { timer = setTimeout(resolve, ms); }));
+  const stop = () => {
+    stopping = true;
+    log(wake ? 'stopping now (workers keep running; next dispatcher reclaims or adopts them)'
+      : 'stopping after this tick (workers keep running; next dispatcher reclaims or adopts them)');
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (wake) wake();
+  };
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
   for (;;) {
     const started = Date.now();
@@ -967,7 +984,9 @@ export async function loop(ctx, { interval, max, profiles = null, log, sleeper =
     }
     if (stopping) break;
     const wait = Math.max(5_000, interval * 1000 - (Date.now() - started));
-    await sleeper(wait);
+    await Promise.race([nap(wait), new Promise((resolve) => { wake = resolve; })]);
+    wake = null; timer = null; // the race is over: a signal from here on waits for the next tick
+    if (stopping) break;
   }
   dropLock();
   if (fatal) {

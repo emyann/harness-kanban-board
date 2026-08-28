@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghCmd } from './gh.js';
-import { worktreePath, parseRepoSpecs, mergeBoardEntry, SAFE_BUILTINS } from './model.js';
+import { worktreePath, parseRepoSpecs, mergeBoardEntry, pidFileStale, SAFE_BUILTINS } from './model.js';
 
 // A background worker has nobody to answer a permission prompt, so the allowlist must cover
 // every command an agent plausibly reaches for; anything else is denied, never prompted (see #23).
@@ -166,13 +166,20 @@ export function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
 
-/** The pid a pid file names, and when it was written (mtime — the process wrote it as it started). */
+/**
+ * The pid a pid file names, when it was written (mtime — the process wrote it as it started), and
+ * whether that claim survived a reboot: a file older than this boot names a pid the kernel has since
+ * handed to somebody else, so `stale` is the difference between stopping the dispatcher and stopping
+ * a stranger (`pidFileStale`). Every caller that acts on a pid — `processState`, the dispatcher's
+ * singleton lock, the server's claim — must read `stale` as "there is no claim here".
+ */
 export function readPidFile(root, name) {
   try {
     const file = pidFile(root, name);
     const pid = Number(fs.readFileSync(file, 'utf8').trim()) || null;
-    return { pid, at: fs.statSync(file).mtime.toISOString() };
-  } catch { return { pid: null, at: null }; }
+    const at = fs.statSync(file).mtime.toISOString();
+    return { pid, at, stale: pidFileStale(at, { uptime: os.uptime() }) };
+  } catch { return { pid: null, at: null, stale: false }; }
 }
 
 /**
@@ -203,14 +210,15 @@ export function clearExit(root, name) {
  * liveness check and the exit record. No board read, no network — this is the filesystem answering.
  */
 export function processState(root, name) {
-  const { pid, at } = readPidFile(root, name);
-  const running = pidAlive(pid);
+  const { pid, at, stale } = readPidFile(root, name);
+  const running = !stale && pidAlive(pid);
   const exit = running ? null : readExit(root, name);
   return {
     name,
     running,
     pid: running ? pid : null,
     since: running ? at : null,
+    stale: !!stale,
     log: path.relative(root, processLogFile(root, name)),
     exit: exit?.code ?? null,
     exited_at: exit?.at ?? null,

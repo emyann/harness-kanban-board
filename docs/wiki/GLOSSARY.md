@@ -56,8 +56,9 @@ deserves a `concepts/` page (link it).
   (`decisions/adr-004-roles-and-adoption`).
 - **Pid file** — `.kanban/dispatch.pid` and `.kanban/serve.pid`: one pid per line,
   written by the process itself and pre-written by `hkb up` for the child it
-  spawned. Being named by one and answering `kill(pid, 0)` is the whole
-  definition of "running" here (`src/board.js`; see *features/up-and-down*).
+  spawned, and deleted only by the process that wrote it. Being named by one,
+  answering `kill(pid, 0)`, and not being *stale* is the whole definition of
+  "running" here (`src/board.js`; see *features/up-and-down*).
 - **Planning command** — `/kanban:specify` or `/kanban:decompose`: a harness slash
   command rather than an `hkb` verb, because both need a model and the dispatcher
   has none. One source in `commands/`, registered by the plugin and by `hkb init`
@@ -73,6 +74,11 @@ deserves a `concepts/` page (link it).
   worker. Every other word (reviewer, profile, host, supervisor, track runner)
   is vocabulary, not a seat
   (`skills/kanban/references/protocol.md`; `decisions/adr-004-roles-and-adoption`).
+- **Stale pid file** — one whose mtime predates the machine's last boot
+  (`Date.now() - os.uptime()*1000`): the pid it names has been reissued to a
+  stranger, so it counts as no claim at all rather than as a running process —
+  which is what keeps `hkb down` from signalling one after a reboot
+  (`pidFileStale` in `src/model.js`; see *features/up-and-down*).
 - **Supervisor** — whatever restarts a dispatcher that exited 4: cron, systemd,
   Actions, or the operator. It restarts a process; it decides nothing
   (`src/dispatch.js`). `hkb up` *starts* a dispatcher and reports an exit 4, but

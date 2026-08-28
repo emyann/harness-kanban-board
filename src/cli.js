@@ -194,7 +194,9 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
                     Already running is reported, never started twice; up is not a supervisor and
                     never restarts (exit 4 is the loop asking one to)
               up --status [--json]     one line per process: running pid, since when, which log
-              down [--serve]           SIGTERM what the pid files name; workers are left alone
+              down [--serve]           SIGTERM what the pid files name, then wait for them to be gone
+                    before saying stopped; workers are left alone. --json adds failed[] and the exit
+                    code is non-zero for a signal that failed or a process that outlived the wait
               dispatch [--loop S] [--max N] [--profiles a,b] [--dry-run]     claim <n> [--profile p] [--spawn]
               gc [--yes]
   board       serve [--port 4666] [--host 127.0.0.1] [--poll 30]   local web board; drag-drop runs the same verbs
@@ -494,11 +496,11 @@ export async function main(argv) {
     }
     case 'up': {
       refuseIfWorker(cmd);
-      return up(ctx, flags, (s) => process.stdout.write(s + '\n'));
+      return await up(ctx, flags, (s) => process.stdout.write(s + '\n'));
     }
     case 'down': {
       refuseIfWorker(cmd);
-      return down(ctx, flags, (s) => process.stdout.write(s + '\n'));
+      return await down(ctx, flags, (s) => process.stdout.write(s + '\n'));
     }
     case 'dispatch': {
       refuseIfWorker(cmd);

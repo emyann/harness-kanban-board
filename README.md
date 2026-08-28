@@ -252,8 +252,19 @@ session must not inherit its belief that it is working on task #148. Output is a
 `.kanban/logs/dispatch.log` and `.kanban/logs/serve.log`, one `# <ISO> started pid N` header per start.
 
 `hkb down` stops the dispatcher; `hkb down --serve` stops the board server too. Neither touches workers — a
-running attempt belongs to the board, and the next dispatcher reclaims or adopts it. The loop finishes its
-current tick before it exits.
+running attempt belongs to the board, and the next dispatcher reclaims or adopts it.
+
+`down` **waits** for what it signalled to actually be gone before it says `stopped`, and it never deletes the pid
+file — each process drops its own on the way out. That file *is* the singleton lock, so removing it the instant
+the signal was sent would tell the next `hkb up` that nothing is running while the old loop was still finishing a
+tick: two dispatchers, one board, which is the thing the lock exists to prevent. A SIGTERM'd loop wakes out of its
+wait at once, so this is usually a fraction of a second; a tick already in flight finishes first, and if the wait
+runs out (two of the loop's own intervals) `down` says so, leaves the claim standing, and exits non-zero rather
+than reporting a stop that did not happen.
+
+A pid file older than the machine's last boot names a pid the kernel has since handed to somebody else. `hkb` treats
+it as no claim at all — `--status` says `stopped (pid file predates this boot)`, `hkb up` replaces it, and `hkb down`
+never signals it.
 
 **`hkb up` is not a supervisor,** and will not pretend to be one: it never restarts anything. Exit code 4 is the
 dispatcher loop deliberately giving itself up for a supervisor to restart (cron, systemd, Actions, or you), and

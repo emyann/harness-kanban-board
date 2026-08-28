@@ -13,9 +13,12 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { up, down, statusReport, childArgv, hkbBin } from '../src/up.js';
 import { claimServePid, portInUse } from '../src/serve.js';
-import { pidFile, processState, recordExit, readExit } from '../src/board.js';
+import { loop } from '../src/dispatch.js';
+import { pidFile, processState, readPidFile, recordExit, readExit, DEFAULT_BOARD } from '../src/board.js';
+import { FakeGh, kbIssue } from './fake-gh.js';
 import {
-  PROCESSES, detachedEnv, startDecision, processLine, startLogLine, formatSince, decidePermission, allowedCommandsFrom,
+  PROCESSES, detachedEnv, startDecision, processLine, startLogLine, formatSince, decidePermission,
+  allowedCommandsFrom, pidFileStale, stopWaitMs, PID_BOOT_SLACK_MS,
 } from '../src/model.js';
 
 const roots = [];
@@ -40,6 +43,9 @@ function fakeSpawn(pid = process.pid) {
   fn.calls = calls;
   return fn;
 }
+
+/** `up`'s post-spawn liveness recheck, with the 300ms wait taken out of the suite's way. */
+const upDeps = (spawn) => ({ spawn, spawnCheckMs: 0 });
 
 const sink = () => { const lines = []; const out = (s) => lines.push(s); out.lines = lines; return out; };
 const logText = (root, name) => fs.readFileSync(path.join(root, '.kanban', 'logs', `${name}.log`), 'utf8');
@@ -133,7 +139,7 @@ test('a board nothing has started reports both processes stopped, with the logs 
   const ctx = ctxOf(tmpRoot());
   const s = statusReport(ctx);
   assert.deepEqual(Object.keys(s), PROCESSES);
-  assert.deepEqual(s.dispatch, { name: 'dispatch', running: false, pid: null, since: null, log: path.join('.kanban', 'logs', 'dispatch.log'), exit: null, exited_at: null });
+  assert.deepEqual(s.dispatch, { name: 'dispatch', running: false, pid: null, since: null, stale: false, log: path.join('.kanban', 'logs', 'dispatch.log'), exit: null, exited_at: null });
   assert.equal(s.serve.running, false);
 });
 
@@ -150,6 +156,51 @@ test('a pid file is only believed while the process behind it is alive', () => {
   assert.deepEqual(processState(root, 'dispatch').running, false);
 });
 
+/**
+ * `.kanban/*.pid` is a plain file: it survives a reboot, and after one the pid it names belongs to
+ * whatever the kernel handed it to next. `pidAlive` would say "running" and `hkb down` would SIGTERM
+ * a stranger. The guard is arithmetic — written before the boot means written by a dead machine.
+ */
+test('a pid file that predates the boot names a stranger, not a dispatcher', () => {
+  const now = Date.parse('2026-08-28T19:30:00Z');
+  const uptime = 3600; // up for an hour: booted at 18:30
+  assert.equal(pidFileStale('2026-08-28T19:02:00Z', { now, uptime }), false, 'written after the boot: a real claim');
+  assert.equal(pidFileStale('2026-08-28T17:55:00Z', { now, uptime }), true, 'written before it: a claim on a reissued pid');
+  // the two clocks disagree (mtime is wall time, uptime is monotonic), and the slack errs towards
+  // believing a pid file — calling a live dispatcher stale is how you get two loops
+  assert.equal(pidFileStale(new Date(now - uptime * 1000 - PID_BOOT_SLACK_MS + 1).toISOString(), { now, uptime }), false);
+  assert.equal(pidFileStale(null, { now, uptime }), false);
+  assert.equal(pidFileStale('2026-08-20T00:00:00Z', { now, uptime: 0 }), false, 'no uptime to compare against: believe the file');
+});
+
+test('a stale pid file reports stopped, and says why the file is there', () => {
+  const root = tmpRoot();
+  fs.writeFileSync(pidFile(root, 'dispatch'), `${process.pid}\n`);
+  fs.utimesSync(pidFile(root, 'dispatch'), new Date(0), new Date(0)); // 1970: before every boot there has been
+  const st = processState(root, 'dispatch');
+  assert.equal(st.stale, true);
+  assert.equal(st.running, false, 'this pid is alive, and that is exactly the trap');
+  assert.equal(st.pid, null);
+  assert.equal(processLine(st), 'dispatch stopped (pid file predates this boot — hkb up replaces it)');
+});
+
+test('hkb down leaves a stale pid file alone rather than signalling whoever holds that pid now', async () => {
+  const root = tmpRoot();
+  fs.writeFileSync(pidFile(root, 'dispatch'), `${process.pid}\n`);
+  fs.utimesSync(pidFile(root, 'dispatch'), new Date(0), new Date(0));
+  const out = sink();
+  const kill = () => assert.fail('down must not signal a pid a reboot invalidated');
+  assert.equal(await down(ctxOf(root), {}, out, { kill }), 0);
+  assert.match(out.lines[0], /^dispatch stopped \(pid file predates this boot/);
+});
+
+test('how long down waits: two of the loop\'s own intervals, floored and capped', () => {
+  assert.equal(stopWaitMs(60), 120_000);
+  assert.equal(stopWaitMs(1), 5_000, 'a fast board still gets a fair wait');
+  assert.equal(stopWaitMs(600), 120_000, 'and down never becomes the thing that hangs');
+  assert.equal(stopWaitMs(undefined), 5_000);
+});
+
 test('the loop that gave itself up says so instead of reporting a plain "stopped"', () => {
   const root = tmpRoot();
   recordExit(root, 'dispatch', { code: 4, at: '2026-08-28T19:02:00Z', reason: 'claim came back unknown 5 ticks in a row' });
@@ -159,11 +210,11 @@ test('the loop that gave itself up says so instead of reporting a plain "stopped
   assert.match(processLine(st), /exited \(4\).*hkb up restarts it/);
 });
 
-test('up --status --json is the same shape, for a script', () => {
+test('up --status --json is the same shape, for a script', async () => {
   const root = tmpRoot();
   fs.writeFileSync(pidFile(root, 'serve'), `${process.pid}\n`);
   const out = sink();
-  assert.equal(up(ctxOf(root, { json: true }), { status: true }, out), 0);
+  assert.equal(await up(ctxOf(root, { json: true }), { status: true }, out), 0);
   const j = JSON.parse(out.lines.join('\n'));
   assert.deepEqual(Object.keys(j), PROCESSES);
   assert.equal(j.serve.running, true);
@@ -174,19 +225,20 @@ test('up --status --json is the same shape, for a script', () => {
 
 // ---------- up ----------
 
-test('up starts the dispatcher detached, claims the pid file, and logs one header', () => {
+test('up starts the dispatcher detached, claims the pid file, and logs one header', async () => {
   const root = tmpRoot();
   const ctx = ctxOf(root);
   const spawnFn = fakeSpawn();
   const out = sink();
 
-  assert.equal(up(ctx, {}, out, { spawn: spawnFn }), 0);
+  assert.equal(await up(ctx, {}, out, upDeps(spawnFn)), 0);
   assert.equal(spawnFn.calls.length, 1, 'one child, the dispatcher — --serve is what asks for the second');
   const call = spawnFn.calls[0];
   assert.equal(call.cmd, process.execPath, 'the child runs under this node, not whatever is on PATH');
   assert.deepEqual(call.args, [hkbBin(), 'dispatch', '--loop', '60', '--board', 'default']);
   assert.equal(call.opts.cwd, root);
   assert.equal(call.opts.detached, true);
+  assert.equal(call.opts.windowsHide, true, 'no console window flashes up on Windows');
   assert.deepEqual(call.opts.stdio.length, 3);
   assert.equal(call.opts.stdio[0], 'ignore');
   assert.equal(call.opts.stdio[1], call.opts.stdio[2], 'stdout and stderr go to the one log');
@@ -198,14 +250,14 @@ test('up starts the dispatcher detached, claims the pid file, and logs one heade
   assert.equal(fs.existsSync(pidFile(root, 'serve')), false, 'nothing started the board server');
 });
 
-test('the child is handed no KB_* but the config home', () => {
+test('the child is handed no KB_* but the config home', async () => {
   const root = tmpRoot();
   const spawnFn = fakeSpawn();
   const before = { KB_TASK: process.env.KB_TASK, KB_ATTEMPT: process.env.KB_ATTEMPT };
   process.env.KB_TASK = '148';
   process.env.KB_ATTEMPT = '1';
   try {
-    up(ctxOf(root), {}, sink(), { spawn: spawnFn });
+    await up(ctxOf(root), {}, sink(), upDeps(spawnFn));
   } finally {
     for (const [k, v] of Object.entries(before)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
@@ -215,18 +267,18 @@ test('the child is handed no KB_* but the config home', () => {
   assert.equal(env.PATH, process.env.PATH);
 });
 
-test('up --serve twice: the second reports both already running and starts nothing', () => {
+test('up --serve twice: the second reports both already running and starts nothing', async () => {
   const root = tmpRoot();
   const ctx = ctxOf(root);
   const spawnFn = fakeSpawn();
 
   const first = sink();
-  up(ctx, { serve: true }, first, { spawn: spawnFn });
+  await up(ctx, { serve: true }, first, upDeps(spawnFn));
   assert.equal(spawnFn.calls.length, 2);
   assert.deepEqual(spawnFn.calls.map((c) => c.args[1]), ['dispatch', 'serve']);
 
   const second = sink();
-  up(ctx, { serve: true }, second, { spawn: spawnFn });
+  await up(ctx, { serve: true }, second, upDeps(spawnFn));
   assert.equal(spawnFn.calls.length, 2, 'idempotent: a live pid file is not a reason to start a rival');
   assert.equal(second.lines.length, 2);
   for (const line of second.lines) assert.match(line, /already running pid \d+ since \d\d:\d\d/);
@@ -235,13 +287,13 @@ test('up --serve twice: the second reports both already running and starts nothi
   }
 });
 
-test('--port implies --serve, and up --json names what it started and what was already up', () => {
+test('--port implies --serve, and up --json names what it started and what was already up', async () => {
   const root = tmpRoot();
   const spawnFn = fakeSpawn();
   fs.writeFileSync(pidFile(root, 'dispatch'), `${process.pid}\n`); // a dispatcher is already up
   const out = sink();
 
-  up(ctxOf(root, { json: true }), { port: '4700' }, out, { spawn: spawnFn });
+  await up(ctxOf(root, { json: true }), { port: '4700' }, out, upDeps(spawnFn));
   assert.deepEqual(spawnFn.calls.map((c) => c.args.slice(1)), [['serve', '--board', 'default', '--port', '4700']]);
   const j = JSON.parse(out.lines.join('\n'));
   assert.deepEqual(j.started, ['serve']);
@@ -250,17 +302,46 @@ test('--port implies --serve, and up --json names what it started and what was a
   assert.equal(j.dispatch.running, true);
 });
 
-test('starting again clears the exit that was reported while nothing was running', () => {
+test('starting again clears the exit that was reported while nothing was running', async () => {
   const root = tmpRoot();
   recordExit(root, 'dispatch', { code: 4, at: '2026-08-28T19:02:00Z', reason: 'gave itself up' });
-  up(ctxOf(root), {}, sink(), { spawn: fakeSpawn() });
+  await up(ctxOf(root), {}, sink(), upDeps(fakeSpawn()));
   assert.equal(readExit(root, 'dispatch'), null, 'a running loop is the news, not the last one\'s death');
   assert.equal(processState(root, 'dispatch').exit, null);
 });
 
+/**
+ * "started pid 3843" about a process that died in the same millisecond is worse than an error: the
+ * operator walks away believing the board is up. One recheck, a beat later, turns it into a line that
+ * names the log holding the reason.
+ */
+test('up looks again a beat later, and does not claim to have started a corpse', async () => {
+  const root = tmpRoot();
+  const dead = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+  await new Promise((r) => dead.on('exit', r));
+  const out = sink();
+  await up(ctxOf(root), {}, out, upDeps(fakeSpawn(dead.pid)));
+  assert.match(out.lines[0], /^dispatch exited immediately \(pid \d+\) — see \.kanban[/\\]logs[/\\]dispatch\.log$/);
+});
+
+test('a rival up that got there first keeps the pid file, and the loser says so', async () => {
+  const root = tmpRoot();
+  const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  after(() => other.kill('SIGKILL'));
+  // the spawn "wins" the race for the file a millisecond before this one claims it
+  const spawnFn = () => {
+    fs.writeFileSync(pidFile(root, 'dispatch'), `${other.pid}\n`);
+    return { pid: process.pid, on() {}, unref() {} };
+  };
+  const out = sink();
+  await up(ctxOf(root), {}, out, { spawn: spawnFn, spawnCheckMs: 0 });
+  assert.match(out.lines[0], /^dispatch started pid \d+, but .*dispatch\.pid names pid \d+ — one of the two will be refused/);
+  assert.equal(readPidFile(root, 'dispatch').pid, other.pid, 'the winner keeps the claim; the loser is what the singleton lock refuses');
+});
+
 // ---------- down ----------
 
-test('down signals what the pid file names and removes it', async () => {
+test('down signals what the pid file names, waits for it to be gone, and only then tidies the file', async () => {
   const root = tmpRoot();
   const ctx = ctxOf(root);
   const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
@@ -268,29 +349,116 @@ test('down signals what the pid file names and removes it', async () => {
   fs.writeFileSync(pidFile(root, 'dispatch'), `${child.pid}\n`);
 
   const out = sink();
-  assert.equal(down(ctx, {}, out), 0);
+  assert.equal(await down(ctx, {}, out), 0);
   assert.equal(await exited, 'SIGTERM');
-  assert.equal(fs.existsSync(pidFile(root, 'dispatch')), false);
-  assert.match(out.lines[0], /^dispatch stopping \(SIGTERM to pid \d+\) — the loop exits after its current tick; workers keep running$/);
+  assert.equal(fs.existsSync(pidFile(root, 'dispatch')), false, 'a file naming a dead pid helps nobody');
+  assert.match(out.lines[0], /^dispatch stopped \(SIGTERM to pid \d+\); workers keep running$/);
   assert.equal(statusReport(ctx).dispatch.running, false, 'and a third --status says stopped');
 });
 
-test('down says so when there is nothing to stop, and points at the server it left alone', () => {
+/**
+ * The bug this whole pass exists for. `down` used to SIGTERM and `rmSync` the pid file in the same
+ * breath, so `hkb down && hkb up` started a second loop next to a first that was still finishing a
+ * tick — the singleton lock never saw it, because the lock is that file. `down` must not report
+ * "stopped", and must not drop the claim, while the process it signalled is alive.
+ */
+test('down never reports stopped while the process is still up, and leaves the claim standing', async () => {
+  const root = tmpRoot();
+  // a child that ignores SIGTERM: the dispatcher asleep mid-tick, in the small
+  const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: 'ignore' });
+  after(() => child.kill('SIGKILL'));
+  await new Promise((r) => setTimeout(r, 200)); // let the handler be installed
+  fs.writeFileSync(pidFile(root, 'dispatch'), `${child.pid}\n`);
+
+  const out = sink();
+  const ctx = ctxOf(root);
+  // the real budget is two of the loop's intervals (`stopWaitMs`, asserted above); one second here is
+  // the same code path with the waiting taken out of the suite's way
+  assert.equal(await down(ctx, {}, out, { waitMs: 1000, pollMs: 20 }), 1, 'a give-up is not a success');
+  assert.match(out.lines[0], /^dispatch: pid \d+ still running 1s after SIGTERM — a tick in flight finishes first/);
+  assert.equal(readPidFile(root, 'dispatch').pid, child.pid, 'the claim is true, so it stands: the next hkb up must find it');
+  assert.equal(statusReport(ctx).dispatch.running, true, 'and --status agrees rather than lying about it');
+});
+
+test('down says so when there is nothing to stop, and points at the server it left alone', async () => {
   const root = tmpRoot();
   fs.writeFileSync(pidFile(root, 'serve'), `${process.pid}\n`);
   const out = sink();
-  down(ctxOf(root), {}, out);
+  await down(ctxOf(root), {}, out);
   assert.deepEqual(out.lines, ['dispatch not running', `serve still running pid ${process.pid} — hkb down --serve stops it too`]);
   assert.equal(fs.existsSync(pidFile(root, 'serve')), true, 'down without --serve never touches the server');
 });
 
-test('down --json names what it stopped', () => {
+test('down --json names what it stopped and what it could not', async () => {
   const root = tmpRoot();
   const out = sink();
-  down(ctxOf(root, { json: true }), { serve: true }, out);
+  assert.equal(await down(ctxOf(root, { json: true }), { serve: true }, out), 0);
   const j = JSON.parse(out.lines.join('\n'));
   assert.deepEqual(j.stopped, []);
-  assert.deepEqual(Object.keys(j), ['stopped', ...PROCESSES]);
+  assert.deepEqual(j.failed, []);
+  assert.deepEqual(Object.keys(j), ['stopped', 'failed', ...PROCESSES]);
+});
+
+/**
+ * A signal that throws used to leave `--json` saying `{stopped: [], ...}` and exit 0 — the human line
+ * said "stop it yourself" and the script that read the JSON saw a clean run. Whatever `down` could
+ * not do belongs in the payload and in the exit code.
+ */
+test('down --json reports a signal it could not send, and exits non-zero', async () => {
+  const root = tmpRoot();
+  fs.writeFileSync(pidFile(root, 'dispatch'), `${process.pid}\n`); // alive, so down gets as far as the signal
+  const out = sink();
+  // the kill is injected rather than aimed at a real process nobody owns: EPERM is what a pid the
+  // operator may not signal answers, and the point of the test is what `down` does about it
+  const kill = () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }); };
+  assert.equal(await down(ctxOf(root, { json: true }), {}, out, { kill }), 1);
+  const j = JSON.parse(out.lines.join('\n'));
+  assert.deepEqual(j.stopped, []);
+  assert.deepEqual(j.failed, [{ name: 'dispatch', pid: process.pid, error: 'EPERM' }]);
+  assert.equal(readPidFile(root, 'dispatch').pid, process.pid, 'a claim down could not act on is not a claim it may delete');
+
+  const human = sink();
+  await down(ctxOf(root), {}, human, { kill });
+  assert.match(human.lines[0], /^dispatch: could not signal pid \d+ \(EPERM\) — stop it yourself; .*dispatch\.pid still names it$/);
+});
+
+// ---------- the other half of down: the loop has to be able to hear it ----------
+
+/**
+ * The measured bug (#151 review): a loop asleep in `sleeper(interval)` used to notice a SIGTERM only
+ * after its *next* tick — up to a whole interval later. `down` reported it stopped, `up` started its
+ * replacement, and two dispatchers ran the same board side by side while the singleton lock (which is
+ * that pid file) watched. Waiting in `down` is half the fix; hearing the signal is the other half.
+ */
+test('SIGTERM lands in the sleep, and the loop leaves from there — not through another tick', async (t) => {
+  const gh = new FakeGh();
+  gh.addIssue(kbIssue({ number: 1, title: 'a card nobody claims', status: 'todo' }));
+  t.after(gh.install());
+  const root = tmpRoot();
+  const mine = new Set(process.listeners('SIGTERM'));
+  t.after(() => { for (const l of process.listeners('SIGTERM')) if (!mine.has(l)) process.removeListener('SIGTERM', l); });
+
+  const ctx = {
+    root,
+    cfg: { ...DEFAULT_BOARD, repo: gh.nameWithOwner, version_check: false, profiles: {} },
+    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
+  };
+
+  const lines = [];
+  let sleeps = 0;
+  const sleeper = () => new Promise(() => { sleeps++; }); // a wait nothing but the signal can end
+  const running = loop(ctx, { interval: 60, max: Infinity, log: (s) => lines.push(s), sleeper });
+
+  const deadline = Date.now() + 20_000;
+  while (!sleeps && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sleeps, 1, 'the loop ran its tick and is now in the wait');
+  process.emit('SIGTERM');
+  await running;
+
+  assert.equal(lines.filter((l) => l.startsWith('tick:')).length, 1, 'one tick — the signal did not buy a second');
+  assert.ok(lines.some((l) => l.startsWith('stopping now')), `the log says it left the sleep: ${lines.join(' | ')}`);
+  assert.equal(fs.existsSync(pidFile(root, 'dispatch')), false, 'and it dropped its own claim on the way out, which is what down waits for');
 });
 
 // ---------- the one real spawn ----------
@@ -308,7 +476,7 @@ test('the child really is this binary, really detached, and really not a worker'
   fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ version: 1, board: 'default' }) + '\n');
   const before = process.env.KB_TASK;
   process.env.KB_TASK = '148';
-  try { up(ctxOf(root), {}, sink()); } finally { if (before === undefined) delete process.env.KB_TASK; else process.env.KB_TASK = before; }
+  try { await up(ctxOf(root), {}, sink()); } finally { if (before === undefined) delete process.env.KB_TASK; else process.env.KB_TASK = before; }
 
   const deadline = Date.now() + 20_000;
   let text = '';
