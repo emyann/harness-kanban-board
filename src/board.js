@@ -180,6 +180,75 @@ export function ensureWorktree(root, name) {
   return dir;
 }
 
+const lastLine = (s) => String(s || '').trim().split('\n').pop() || '';
+
+/**
+ * Which worktree of this checkout has `branch` checked out, if any — `{path, branch, locked}`.
+ * git refuses to check one branch out twice, so this is the question that has to be answered before
+ * a PR's branch can be reused. (`src/gc.js` owns the general listing and the sweeps; it imports this
+ * file, so the one question the dispatcher asks is answered here rather than borrowed from there.)
+ */
+function worktreeHolding(root, branch) {
+  const r = spawnSync('git', ['worktree', 'list', '--porcelain'], { cwd: root, encoding: 'utf8' });
+  if (r.status !== 0) return null;
+  const list = [];
+  let cur = null;
+  for (const line of r.stdout.split('\n')) {
+    if (line.startsWith('worktree ')) { cur = { path: line.slice(9) }; list.push(cur); }
+    else if (line.startsWith('branch ') && cur) cur.branch = line.slice(7).replace('refs/heads/', '');
+    else if (line.startsWith('locked') && cur) cur.locked = line.slice(6).trim() || 'locked';
+  }
+  return list.find((w) => w.branch === branch) || null;
+}
+
+/**
+ * The worktree for an attempt that **continues an open PR**: the same `.claude/worktrees/kb-<n>-<k>`
+ * every other attempt gets, but checked out on the PR's own head branch instead of a fresh one, so
+ * the attempt pushes to the PR the reviewer sent back rather than opening a second one (#153).
+ *
+ * The branch is fetched first (the PR may have been pushed from another host), and when the previous
+ * attempt's worktree still holds it — the usual case, since a card sitting in `review` is swept by
+ * nothing — that checkout is removed so git will hand the branch over. Only a worktree of **this**
+ * task is ever freed, and never one a live session still holds: `alive` is asked about the pid in
+ * the lock Claude Code writes, exactly as `hkb gc` does, and its default answer is "yes, leave it".
+ * `git worktree remove` takes the checkout, not the commits — the branch itself survives.
+ *
+ * Never throws: a refusal is `{ok: false, why}` and the caller falls back to an ordinary fresh
+ * worktree plus a brief that names the PR to continue (`src/context.js`).
+ * @returns {{ok: true, path: string, branch: string, freed: string|null} | {ok: false, why: string}}
+ */
+export function worktreeOnBranch(root, name, branch, { number = null, remote = 'origin', alive = () => true } = {}) {
+  if (!branch) return { ok: false, why: 'the board query returned no head branch for the PR' };
+  const dir = path.join(root, worktreePath(name));
+  // capped: this runs inside a tick, and a hung fetch must not hold the loop past its interval
+  const git = (args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: 60_000 });
+  if (fs.existsSync(path.join(dir, '.git'))) {
+    // a spawn that died between the checkout and the launch: reuse it if it is already the right one
+    const head = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout?.trim();
+    return head === branch ? { ok: true, path: dir, branch, freed: null } : { ok: false, why: `${worktreePath(name)} already exists on ${head || 'a detached HEAD'}` };
+  }
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  // best effort: no remote, no network, or a branch only this host has must not stop the checkout
+  git(['fetch', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
+  let freed = null;
+  const holder = worktreeHolding(root, branch);
+  if (holder) {
+    if (number == null || !path.basename(holder.path).startsWith(`kb-${number}-`)) return { ok: false, why: `${branch} is checked out in ${holder.path}` };
+    const pid = Number(/pid (\d+)/.exec(holder.locked || '')?.[1] || 0);
+    if (holder.locked && (!pid || alive(pid))) return { ok: false, why: `${branch} is checked out in ${holder.path}, held by a live session${pid ? ` (pid ${pid})` : ''}` };
+    if (holder.locked) git(['worktree', 'unlock', holder.path]);
+    const rm = git(['worktree', 'remove', '--force', holder.path]);
+    if (rm.status !== 0) return { ok: false, why: `could not free ${branch} from ${holder.path}: ${lastLine(rm.stderr) || `exit ${rm.status}`}` };
+    freed = holder.path;
+  }
+  git(['worktree', 'prune']); // a directory deleted by hand still holds its branch until this runs
+  // `git worktree add <dir> <branch>` reuses the local branch, or DWIMs one tracking <remote>/<branch>
+  let r = git(['worktree', 'add', dir, branch]);
+  if (r.status !== 0) r = git(['worktree', 'add', '--track', '-b', branch, dir, `${remote}/${branch}`]);
+  if (r.status !== 0) return { ok: false, why: `git worktree add ${worktreePath(name)} ${branch} failed: ${lastLine(r.stderr) || `exit ${r.status}`}` };
+  return { ok: true, path: dir, branch, freed };
+}
+
 /**
  * Is `hkb` on PATH? Generated files (the Stop hook, `.mcp.json`) name the binary when it is and fall
  * back to this checkout's `bin/hkb.js` when it is not — a hook or an MCP client started by a GUI
