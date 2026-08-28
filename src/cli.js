@@ -10,7 +10,7 @@ import { stats } from './stats.js';
 import { claim } from './lock.js';
 import { contextCommand } from './context.js';
 import { resolveTrack, trackGraph, trackMermaid } from './track.js';
-import { stopHook } from './hook.js';
+import { stopHook, markSessionClaim } from './hook.js';
 import { init, packageVersion } from './init.js';
 import { doctor } from './doctor.js';
 import { gc } from './gc.js';
@@ -442,6 +442,9 @@ export async function main(argv) {
       runRec.run.attempts.push({ attempt: k, profile, host: ctx.host, started_at: new Date().toISOString(), heartbeat_at: new Date().toISOString(), lock_sha: c.sha, manual: !flags.spawn });
       const { saveRun } = await import('./tasks.js');
       await saveRun(ctx, n, runRec);
+      // Claimed by hand from inside another task's session — a track runner working a node. Leave
+      // the marker that tells this session's Stop hook to stamp that node with the session id too.
+      if (!flags.spawn) markSessionClaim(ctx.root, n, k);
       await setStatus(ctx, t, 'running', { add: [L.agent(profile)] });
       let pid = null;
       if (flags.spawn) { const s = await spawnWorker(ctx, t, profile, k); pid = s.pid; runRec.run.attempts[k - 1].pid = pid; await saveRun(ctx, n, runRec); }
