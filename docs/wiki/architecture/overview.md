@@ -107,7 +107,11 @@ Session identity travels the same asymmetry. What session a worker *is*
 (`CLAUDE_CODE_SESSION_ID`, plus the job record `currentSession` reads in
 `src/jobs.js`, which names the transcript on disk) is recorded onto the attempt
 row by the **terminal verb**, not by the Stop hook — the verb is the one thing
-every worker runs, and it is already writing that row. `sessionForAttempt`
+every worker runs, and it is already writing that row. Which is why the verb has
+to be a command the worker can actually type: `complete` is a bash builtin, and
+Claude Code's worktree-isolated sessions refuse it (and refuse heredocs) before
+hkb sees the line, so `VERB_ALIASES` (`src/cli.js`) resolves `finish` to
+`complete` ahead of routing and everything a worker reads names `finish`. `sessionForAttempt`
 (`src/hook.js`) stamps only an attempt this session actually ran: its own, or a
 node it claimed in-session, so a track's nodes carry the runner's transcript
 while an operator's own terminal records nothing. That is what leaves
