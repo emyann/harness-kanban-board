@@ -1,8 +1,9 @@
 // `hkb init` — labels, board.json, skill, hook, doc sections. Idempotent; free path by default.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_BOARD, DEFAULT_PROFILES, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot, hkbOnPath } from './board.js';
+import { DEFAULT_BOARD, DEFAULT_PROFILES, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot, hkbOnPath, registerUserBoard, userBoardsFile, mainWorktree } from './board.js';
 import { ensureLabels, fetchBoard, addLabels } from './tasks.js';
 import { rest } from './gh.js';
 import { L, STATUSES, parseSkillVersion, stripFrontmatter } from './model.js';
@@ -576,6 +577,46 @@ export function ensureGitignore(root) {
   return true;
 }
 
+// ---------- the user-level board list ----------
+// `hkb serve` can show several checkouts on one page, and the list of them lives outside every repo,
+// in `~/.config/hkb/boards.json`. Until now the only way onto that page was to hand-edit that file —
+// a step nobody can guess from inside a repo they have just set up (#98). `hkb init` is the one
+// command that knows the answer, so it registers the checkout itself. Two rules make that safe to do
+// without asking: it always says so, because the file is outside the repo; and it can never fail the
+// init, because the repo is already set up and the list is only a convenience beside it.
+
+/** `/home/you/.config/hkb/boards.json` → `~/.config/hkb/boards.json`: the path as a human writes it. */
+function tildePath(p) {
+  const home = os.homedir();
+  return home && String(p).startsWith(home + path.sep) ? `~${String(p).slice(home.length)}` : String(p);
+}
+
+/**
+ * Add this checkout to the user-level board list, and say what happened either way.
+ *
+ * The entry is a bare path, not `path#board`: init has just written the slug into `.kanban/board.json`,
+ * and `hkb serve` reads a bare entry's slug from there — so a bare path stays right if the board is
+ * renamed later, and, more to the point, it is the spelling the README tells people to write by hand,
+ * so registering a checkout somebody already listed adds nothing instead of a second card.
+ * @returns {{ file: string, added: boolean }} — the `registered` object of `hkb init --json`
+ */
+export function registerCheckout(root, log) {
+  try {
+    const { added, file } = registerUserBoard(root);
+    log(added
+      ? `registered this checkout in ${tildePath(file)} — \`hkb serve\` will show it`
+      : `already listed in ${tildePath(file)} — \`hkb serve\` will show it`);
+    return { file, added };
+  } catch (e) {
+    const file = userBoardsFile();
+    log(`could not add this checkout to ${tildePath(file)}: ${e.message}`);
+    // The path to type by hand is the one `registerUserBoard` would have written: the main checkout,
+    // never the linked worktree an init may have been run from.
+    log(`  everything else is set up; fix that file — or add "${mainWorktree(root)}" to its "boards" by hand — and \`hkb serve\` will show this board`);
+    return { file, added: false };
+  }
+}
+
 export async function init(ctx, flags, log) {
   const root = repoRoot();
   const board = flags.board || 'default';
@@ -714,9 +755,16 @@ export async function init(ctx, flags, log) {
     }
     log(`imported ${n} open issue(s) into triage on board "${board}"`);
   }
+
+  // 7. the cross-repo board list. A local write, so the offline path (`--no-labels`) does it too.
+  const registered = registerCheckout(root, log);
+
   log('');
   log(flags['no-labels']
     ? 'next: `hkb init` again without --no-labels — the labels are all that is left, and everything else here is idempotent'
     : 'next: `hkb doctor` then `hkb dispatch --loop 60` (or `hkb create "title" --agent claude` to add a task)');
+  // init's log is the human output and goes to stderr, so `--json` has stdout to itself: what was set
+  // up, and the one thing init wrote outside the repo.
+  if (ctx.json) process.stdout.write(JSON.stringify({ repo: repo.nameWithOwner, board, root, registered }, null, 2) + '\n');
   return 0;
 }

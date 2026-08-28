@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "adding or renaming a /kanban:* command, changing what hkb init writes into .claude/, or wondering why decomposition is not a CLI verb"
 covers:
   - path: src/init.js
-    sha: 710aaadac933165fa996da76a24c60baafadd0b1
+    sha: c4aeb61643f9b6457e3307e9663ade2543f75dba
   - path: src/doctor.js
     sha: 1bf85debb35d283881c5aa72ac1179445e5913c2
   - path: skills/kanban/SKILL.md
@@ -17,8 +17,8 @@ covers:
   - path: commands/decompose.md
     sha: bbf33b0d43e4f6d3f1269dbe3254d831a515d954
   - path: scripts/smoke-pack.mjs
-    sha: 355d100ecdedbacda68d1b0e467aff68b1c34f1b
-generated_at_commit: 21cb452
+    sha: d4a1566a431916ae7afa15e44f2dd0299c6a36a6
+generated_at_commit: 8005801
 last_refreshed: 2026-08-27
 related: [architecture/overview, decisions/adr-004-roles-and-adoption, features/tracks]
 ---
@@ -49,7 +49,7 @@ they are registered by two different mechanisms that happen to agree on the resu
 | install path | what registers it | resulting name |
 |---|---|---|
 | the Claude Code plugin | `"commands": "./commands"` in `.claude-plugin/plugin.json` | `/<plugin>:<file>` → `/kanban:specify` |
-| `hkb init` (no plugin) | copied to `.claude/commands/kanban/` (`src/init.js:131-139`) | `/<dir>:<file>` → `/kanban:specify` |
+| `hkb init` (no plugin) | copied to `.claude/commands/kanban/` (`src/init.js:132-140`) | `/<dir>:<file>` → `/kanban:specify` |
 
 A plugin namespaces its commands by **plugin name**; a project namespaces them by **directory**. The
 plugin is named `kanban` and the directory init writes is `kanban`, so both spellings produce the same
@@ -61,7 +61,7 @@ Two consequences worth knowing before editing:
   time (`/kanban:<dir>:<name>`), and the skill would be advertising a name nobody can type. A test
   holds that line (`test/init.test.js`, "the plugin registers the same commands, and they ship").
 - **hkb's own repo links rather than copies.** `installCommands()` calls `linkDir()` when
-  `isPackageRepo()` is true (`src/init.js:131-139`), so `.claude/commands/kanban` is a symlink to
+  `isPackageRepo()` is true (`src/init.js:132-140`), so `.claude/commands/kanban` is a symlink to
   `commands/` — the same reasoning as `.agents/skills/kanban`: in the repo that *is* the package, a
   copy would be a second source of truth that can be committed stale.
 

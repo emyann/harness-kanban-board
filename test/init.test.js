@@ -8,7 +8,7 @@
 //
 // The transport is `test/fake-gh.js`, installed inside `src/gh.js`, so nothing here spawns `gh` or
 // touches the network; `--repo owner/name` is what lets init skip `detectRepo`.
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -17,13 +17,27 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { init, ensureGitignore, GITIGNORE_LINES, CLAUDE_HOOKS, HOOK_SETTINGS, agentsSkillDir, packageSkillDir, readSkillVersion, commandFiles, commandNames } from '../src/init.js';
 import { parseArgs } from '../src/cli.js';
-import { makeContext, DEFAULT_PROFILES } from '../src/board.js';
+import { makeContext, DEFAULT_PROFILES, userBoardsFile } from '../src/board.js';
 import { L, STATUSES } from '../src/model.js';
 import { FakeGh } from './fake-gh.js';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-init-'));
 const lines = (root) => fs.readFileSync(path.join(root, '.gitignore'), 'utf8').split('\n');
+
+// Every init below registers the checkout it set up in the user-level board list (#100), so the whole
+// file runs under a temp `KB_CONFIG_HOME` — including the tests that spawn the real CLI. Nothing here
+// may touch the `~/.config/hkb/boards.json` of whoever is running the suite.
+const ORIGINAL_CONFIG_HOME = process.env.KB_CONFIG_HOME;
+const CONFIG_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-init-config-'));
+process.env.KB_CONFIG_HOME = CONFIG_ROOT;
+after(() => {
+  if (ORIGINAL_CONFIG_HOME === undefined) delete process.env.KB_CONFIG_HOME;
+  else process.env.KB_CONFIG_HOME = ORIGINAL_CONFIG_HOME;
+});
+
+/** A config home of its own, so one test's board list can never be another's. */
+const configHome = () => fs.mkdtempSync(path.join(CONFIG_ROOT, 'home-'));
 
 // ---------- the .gitignore block, on its own ----------
 // The list of ignored paths is the same lesson twice: once in this repo's own `.gitignore`, once in
@@ -105,19 +119,24 @@ const created = (gh) => gh.callsMatching('POST', '/labels').map((c) => c.body.na
 
 /**
  * Run the real `init()` the way the CLI does — real arg parsing, real context, fake transport — in a
- * temp git repo. Returns the repo, the fake (so a test can look at what was sent) and the log lines.
+ * temp git repo, with a config home of its own. Returns the repo, the fake (so a test can look at
+ * what was sent), the log lines, and the board list init registered into. Pass a previous result back
+ * to re-run in the same repo, against the same list.
  */
-async function runInit(extra = [], { root = gitRepo(), gh = new FakeGh() } = {}) {
+async function runInit(extra = [], { root = gitRepo(), gh = new FakeGh(), config = configHome() } = {}) {
   const cwd = process.cwd();
   const restore = gh.install();
   const printed = [];
   process.chdir(root);
+  process.env.KB_CONFIG_HOME = config;
+  const boards = userBoardsFile();
   try {
     const { flags } = parseArgs(['init', '--repo', NWO, ...extra]);
     const code = await init(makeContext(flags), flags, (s) => printed.push(s));
-    return { root, gh, printed, code };
+    return { root, gh, printed, code, config, boards };
   } finally {
     process.chdir(cwd);
+    process.env.KB_CONFIG_HOME = CONFIG_ROOT;
     restore();
   }
 }
@@ -208,7 +227,7 @@ test('run from the npx cache, init writes a command that outlives it — and nev
   try { bin = pathWithoutHkb(); } catch { return; } // a filesystem that refuses symlinks
   if (!bin) return;
   const root = gitRepo();
-  const env = { ...process.env, PATH: bin, KB_TASK: '' };
+  const env = { ...process.env, PATH: bin, KB_TASK: '', KB_CONFIG_HOME: configHome() };
   const r = spawnSync(process.execPath, [path.join(cache, 'bin', 'hkb.js'), 'init', '--repo', NWO, '--no-labels'], { cwd: root, encoding: 'utf8', env });
   assert.equal(r.status, 0, `${r.stdout}${r.stderr}`);
 
@@ -345,6 +364,117 @@ test('--no-labels writes every local file and sends nothing', async () => {
   for (const rel of FOOTPRINT) assert.ok(fs.existsSync(path.join(root, rel)), `${rel} is local — --no-labels must still write it`);
   assert.ok(printed.some((l) => l.includes('--no-labels') && l.includes(NWO)), 'and say which labels it did not create, and where');
   assert.ok(printed.some((l) => l.includes('hkb init') && l.includes('without --no-labels')), 'and what to run to finish the job');
+});
+
+// ---------- the user-level board list (#98/#100) ----------
+// `hkb serve` shows the checkouts named in `~/.config/hkb/boards.json`, and for a while the only way
+// onto that page was to hand-edit that file — the one step of adoption a repo could not tell you
+// about. init now does it, and the tests below hold the three properties that make doing it without
+// asking defensible: it is idempotent, it says so out loud, and it can never fail an otherwise good
+// init. Every one of them runs under a config home of its own (`runInit`).
+
+const boardList = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+
+test('a fresh init puts the checkout on the user board list, and says where (#98)', async () => {
+  const { root, boards, printed } = await runInit();
+
+  assert.deepEqual(boardList(boards), { version: 1, boards: [root] },
+    'exactly one entry, the checkout that was just set up, in the shape the README documents');
+  const said = printed.find((l) => l.startsWith('registered this checkout in '));
+  assert.ok(said, `init wrote a file outside the repo and must say so:\n${printed.join('\n')}`);
+  assert.ok(said.includes(boards), `and name it: "${said}"`);
+  assert.ok(said.includes('hkb serve'), `and say what it is for: "${said}"`);
+});
+
+test('a second init in the same checkout adds nothing and says it is already listed', async () => {
+  const first = await runInit();
+  const before = fs.readFileSync(first.boards, 'utf8');
+  const mtime = fs.statSync(first.boards).mtimeMs;
+
+  const { printed } = await runInit([], first);
+
+  assert.equal(fs.readFileSync(first.boards, 'utf8'), before, 'one entry per checkout, however often init runs');
+  assert.equal(fs.statSync(first.boards).mtimeMs, mtime, 'and a list that did not grow is not even rewritten');
+  const said = printed.find((l) => l.startsWith('already listed in '));
+  assert.ok(said, `the disclosure is not optional on the second run either:\n${printed.join('\n')}`);
+  assert.ok(said.includes(first.boards) && said.includes('hkb serve'), `"${said}"`);
+});
+
+test('a checkout somebody listed by hand is not listed a second time', async () => {
+  const root = gitRepo();
+  const config = configHome();
+  const file = path.join(config, 'hkb', 'boards.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ version: 1, boards: [root] }, null, 2) + '\n');
+
+  const { printed } = await runInit([], { root, config });
+
+  assert.deepEqual(boardList(file).boards, [root],
+    'init registers the plain path a human writes, so a checkout already on the list gains nothing — not a second card on the same page');
+  assert.ok(printed.some((l) => l.startsWith('already listed in ')));
+});
+
+test('the offline path registers too — the list is a local write (#98)', async () => {
+  const { root, gh, boards, printed } = await runInit(['--no-labels']);
+
+  assert.deepEqual(gh.calls, [], 'registering sends nothing: --no-labels is still the offline path');
+  assert.deepEqual(boardList(boards).boards, [root], 'the checkout is on the list with `gh` logged out');
+  assert.ok(printed.some((l) => l.startsWith('registered this checkout in ')));
+});
+
+test('a board list somebody broke is a warning, not a failed init', async () => {
+  const config = configHome();
+  const file = path.join(config, 'hkb', 'boards.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const broken = '{ "boards": ["~/code/web",   // half-typed\n';
+  fs.writeFileSync(file, broken);
+
+  const { root, printed, code } = await runInit([], { config });
+
+  assert.equal(code, 0, 'the repo is set up; a list outside it cannot take that away');
+  assert.equal(fs.readFileSync(file, 'utf8'), broken, 'and a file a human wrote is never clobbered');
+  const said = printed.find((l) => l.startsWith('could not add this checkout to '));
+  assert.ok(said, `a registration that did not happen must still be said out loud:\n${printed.join('\n')}`);
+  assert.ok(printed.some((l) => l.includes(root)), 'and the message names the path to add by hand');
+  for (const rel of FOOTPRINT) assert.ok(fs.existsSync(path.join(root, rel)), `${rel}: the rest of init still happened`);
+});
+
+test('a config home that cannot be written is a warning, not a failed init', async () => {
+  // A plain file where the config directory should be: `mkdir` fails with ENOTDIR, and unlike a
+  // chmod it fails that way for root too, so this test means the same thing in a container.
+  const config = path.join(CONFIG_ROOT, `blocked-${process.pid}-${Date.now()}`);
+  fs.writeFileSync(config, 'not a directory\n');
+
+  const { root, printed, code } = await runInit([], { config });
+
+  assert.equal(code, 0, 'an unwritable config dir must never fail an otherwise good init');
+  assert.ok(printed.some((l) => l.startsWith('could not add this checkout to ')), printed.join('\n'));
+  assert.ok(fs.existsSync(path.join(root, BOARD_FILE)), 'the board it just set up is on disk');
+});
+
+test('`hkb init --json` carries `registered`, and stdout is that object alone', () => {
+  // The real binary, not `init()`: `--json` is a promise about stdout, and the human log going to
+  // stderr is half of what makes it parseable.
+  const root = gitRepo();
+  const config = configHome();
+  const r = spawnSync(process.execPath, [path.join(REPO, 'bin', 'hkb.js'), 'init', '--repo', NWO, '--no-labels', '--json'],
+    { cwd: root, encoding: 'utf8', env: { ...process.env, KB_CONFIG_HOME: config, KB_TASK: '' } });
+  assert.equal(r.status, 0, `${r.stdout}${r.stderr}`);
+
+  const out = JSON.parse(r.stdout); // the whole of stdout, or this throws
+  assert.deepEqual(out.registered, { file: path.join(config, 'hkb', 'boards.json'), added: true },
+    'the field is exactly { file, added }');
+  assert.deepEqual(boardList(out.registered.file).boards, [root]);
+  assert.equal(out.repo, NWO);
+  assert.equal(out.board, 'default');
+  assert.equal(out.root, root);
+  assert.ok(r.stderr.includes('registered this checkout in '), 'and the human still gets the line, on stderr');
+
+  const again = spawnSync(process.execPath, [path.join(REPO, 'bin', 'hkb.js'), 'init', '--repo', NWO, '--no-labels', '--json'],
+    { cwd: root, encoding: 'utf8', env: { ...process.env, KB_CONFIG_HOME: config, KB_TASK: '' } });
+  assert.equal(again.status, 0, `${again.stdout}${again.stderr}`);
+  assert.deepEqual(JSON.parse(again.stdout).registered, { file: path.join(config, 'hkb', 'boards.json'), added: false },
+    'added says what this run did, not what the list holds');
 });
 
 test('--no-labels says no to the flags that cannot be done offline, before writing anything', async () => {
