@@ -192,17 +192,33 @@ carry on. `gh` auth is already global, so one token reads them all.
 
 A set of repos you always want together goes in a user-level list instead of a flag — it spans repos, so it
 cannot live in any one `.kanban/`. `hkb serve` with no flag reads `~/.config/hkb/boards.json`
-(`$XDG_CONFIG_HOME`/`$KB_CONFIG_HOME` if set) and shows those boards alongside the current one:
+(`$XDG_CONFIG_HOME`/`$KB_CONFIG_HOME` if set) and shows those boards alongside the current one. You do not
+have to write that file: `hkb init` puts the checkout it just set up on the list, so the repos you have
+`init`ed are the repos the page shows, and the common case needs no config at all. Init prints the file it
+wrote — `registered this checkout in ~/.config/hkb/boards.json — hkb serve will show it`, or
+`already listed in ~/.config/hkb/boards.json — hkb serve will show it` the second time — because that file is
+the one thing `init` writes outside your repo, and you should hear about it rather than find it.
+
+The list is still yours, and still a plain file to edit:
 
 ```json
 { "version": 1, "boards": ["~/code/web", "~/code/api", { "path": "~/code/infra", "board": "release" }] }
 ```
 
+A bare path is what `init` writes and what you write by hand; the checkout's own `.kanban/board.json` names
+the board, so a rename follows it. `{ "path": ..., "board": ... }` — or `"~/code/infra#release"` — pins a
+second board inside one repo, which is the thing `init` cannot work out for you. Delete an entry to stop
+serving it.
+
 The list is live: `hkb serve` re-reads it once per poll interval, so a board you add to it — or a checkout
-you just `hkb init`ed — appears on the open page without a restart, and one you drop stops being served. The
-re-read is a local file and costs no GitHub call, and a board that was already there keeps its cached cards.
-An entry that no longer exists is a warning and a skip, never a broken `hkb serve`. Nothing is scanned for:
-hkb only ever shows the checkouts you named. `--repos` is the set you typed for that run, and does not reload.
+you just `hkb init`ed in another terminal — appears on the open page without a restart, and one you drop
+stops being served. The re-read is a local file and costs no GitHub call, and a board that was already there
+keeps its cached cards. An entry that no longer exists is a warning and a skip, never a broken `hkb serve`.
+`--repos` is the set you typed for that run: it overrides the list, and does not reload.
+
+Nothing is scanned for: hkb never crawls your filesystem looking for repos, and a checkout that registers
+itself is not an exception — running `hkb init` in a directory *is* the act of naming it. The page shows the
+checkouts you set up and the ones you wrote down, and nothing else.
 
 ## The board as a stream
 
