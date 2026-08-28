@@ -587,9 +587,40 @@ export function allowedCommandsFrom(allowedTools = []) {
   return out;
 }
 
+/**
+ * Blank out the parts of a command line the shell never executes: quoted strings and heredoc
+ * bodies. Without this, `hkb complete 5 --summary "done; verified"` splits into two "commands"
+ * and a worker is denied its own terminal verb, with its own prose echoed back as command names.
+ * One left-to-right scan, so a `<<EOF` inside quotes is text and a quote inside a body is not a
+ * quote. Data out, operators (`&& || ; |`, newlines) kept — everything else stays where it was.
+ */
+function stripShellData(command) {
+  const src = String(command);
+  let out = '', i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === '\\') { out += ' '; i += 2; continue; }  // \<newline> joins two lines; \x is one literal char
+    if (c === "'" || c === '"') {                      // a quoted argument, to its close or to the end
+      let j = i + 1;
+      while (j < src.length && src[j] !== c) j += (c === '"' && src[j] === '\\') ? 2 : 1;
+      out += ' '; i = j + 1; continue;
+    }
+    const h = c === '<' && src[i + 1] === '<' && src[i + 2] !== '<'
+      && /^<<-?[ \t]*(['"]?)([A-Za-z_]\w*)\1/.exec(src.slice(i));
+    if (h) {                                           // a heredoc body, to its terminator line or to the end of the line
+      const rest = src.slice(i + h[0].length), nl = rest.indexOf('\n');
+      const end = new RegExp(`^[ \\t]*${h[2]}[ \\t]*$`, 'm').exec(rest);
+      out += ' '; i += h[0].length + (end ? end.index + end[0].length : nl < 0 ? rest.length : nl);
+      continue;
+    }
+    out += c; i++;
+  }
+  return out;
+}
+
 function firstWords(command) {
-  // top-level segments split on && || ; | — good enough for policy, not a full shell parser
-  return String(command).split(/&&|\|\||;|\|/).map((seg) => {
+  // top-level segments split on && || ; | and newlines — good enough for policy, not a full shell parser
+  return stripShellData(command).split(/&&|\|\||;|\||\n/).map((seg) => {
     const words = seg.trim().split(/\s+/).filter(Boolean);
     for (const w of words) { if (!w.includes('=') && !w.startsWith('-')) return w.replace(/^.*\//, ''); }
     return null;
@@ -607,13 +638,15 @@ export function decidePermission(toolName, input, { allowedCmds, root }) {
   }
   if (toolName !== 'Bash') return { decision: 'allow', reason: 'non-shell tool' };
   const command = String(input?.command || '');
+  // The deny patterns deliberately read the raw line, quotes and heredoc bodies included: they are a
+  // coarse "this smells dangerous" net, and `node -e "...--force..."` must not slip past by quoting.
+  // Their reasons name a policy rather than echoing the text, so a false positive is not misleading.
   for (const d of DENY_PATTERNS) if (d.re.test(command)) return { decision: 'deny', reason: d.why };
-  const words = firstWords(command);
-  const offending = words.filter((w) => !allowedCmds.has(w));
+  const offending = [...new Set(firstWords(command).filter((w) => !allowedCmds.has(w)))];
   if (!offending.length) return { decision: 'allow', reason: 'all commands allowlisted' };
   return {
     decision: 'deny',
-    reason: `command(s) not allowlisted for workers: ${offending.join(', ')}. Use one of: ${[...allowedCmds].sort().join(', ')} — or do the work with the Edit/Write/Read tools.`,
+    reason: `command(s) not allowlisted for workers: ${offending.join(', ')} — each is a program this line would run (quoted text and heredoc bodies are not scanned, so nothing here comes from your prose). Use one of: ${[...allowedCmds].sort().join(', ')} — or do the work with the Edit/Write/Read tools.`,
   };
 }
 
