@@ -1,17 +1,21 @@
 ---
 title: The web board (`hkb serve`)
-summary: One local server, one inline page, N repos — how the board is read, how a drag becomes a verb, and how every request is routed to the board it names.
+summary: One local server, one inline page, N repos — where the board list comes from and who maintains it, how the board is read, how a drag becomes a verb, and how every request is routed to the board it names.
 category: features
 kind: explanation
 audience: [dev]
-read_when: "touching hkb serve, the board page, or anything that has to work across more than one checkout"
+read_when: "touching hkb serve, the board page, the user-level board list, or anything that has to work across more than one checkout"
 covers:
   - path: src/serve.js
     sha: 2008378241ae5a4bed69c2343ef1fbced525cc93
   - path: web/index.html
     sha: ece8530c9344246187f1194e03b3fc23c88967fb
-generated_at_commit: 2f3f11d
-last_refreshed: 2026-08-27
+  - path: src/board.js
+    sha: 7e895ff3e7e8380a61fd275e609d93dfce2140e1
+  - path: src/init.js
+    sha: c4aeb61643f9b6457e3307e9663ade2543f75dba
+generated_at_commit: c7ee90c
+last_refreshed: 2026-08-28
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick]
 ---
 
@@ -57,8 +61,45 @@ explicit flag, so a path that is not an `hkb init`ed checkout is fatal — or, w
 no flag, the user-level list at `~/.config/hkb/boards.json` (`userBoardsFile` /
 `loadUserBoards`, `src/board.js`), where a stale entry is a warning and a skip
 so a deleted repo cannot break `hkb serve` everywhere. A `#slug` after a path
-picks a board *inside* that checkout. The filesystem is never scanned: hkb shows
-the checkouts you named and no others.
+picks a board *inside* that checkout.
+
+**How a checkout gets on the list** (`registerUserBoard`, `src/board.js:353-359`;
+called once, from `registerCheckout` at `src/init.js:603-618`). Until #98 that
+file had a reader and no writer, so the only way onto the page was to hand-edit
+it — the one step of adoption a repo cannot tell you about from inside itself.
+`hkb init` now writes it as its last step (`src/init.js:760`), which is only
+defensible because of three properties:
+
+- **Idempotent.** Equivalence is the *resolved* path plus the board slug, so
+  `~/code/web` already listed and `/home/you/code/web` registered are one entry.
+  The pure merge (`mergeBoardEntry`, `src/model.js`) only ever appends: an entry
+  it did not add keeps its position and its spelling, so a file you maintain by
+  hand survives an init verbatim. The write itself is a temp file and a `rename`
+  (`saveUserBoards`, `src/board.js:315-327`) — this server reads that file while
+  other commands add to it, so a half-written list must not be observable.
+- **Never silent.** One line either way, naming the file: `registered this
+  checkout in … — hkb serve will show it`, or `already listed in …`. That line
+  *is* the disclosure that init wrote outside the repo, which is why there is no
+  `--no-register` flag to suppress it.
+- **Never fatal.** An unwritable config dir or a `boards.json` somebody broke is
+  a warning naming the path to add by hand, and exit 0. The repo is already set
+  up; the list is a convenience beside it.
+
+A linked worktree registers its **main** checkout, never itself (`mainWorktree`,
+`src/board.js:335-342`, via `git rev-parse --git-common-dir`): a worker running
+in `.claude/worktrees/kb-99-1` is in a directory that will be deleted, and it has
+no business on anyone's board list.
+
+The entry init writes is a **bare path**, not `path#board`, even when init was
+given `--board`: `contextForPath` reads a bare entry's slug from the checkout's
+own `.kanban/board.json`, so the bare form resolves identically today and follows
+a later rename — and it is the spelling a human writes, so a checkout somebody
+already listed by hand registers as a no-op instead of a second card.
+
+The filesystem is still never scanned: hkb shows the checkouts you named and no
+others, and a checkout that registers itself is not an exception — running
+`hkb init` in a directory *is* the act of naming it. That is the distinction that
+makes automatic registration compatible with the promise.
 
 **The list is live** (`reloadBoards`, `src/serve.js:350-372`). `serveContexts`
 runs again at most once per poll interval, driven by the requests the page
