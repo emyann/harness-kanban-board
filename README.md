@@ -119,6 +119,40 @@ Every terminal verb also takes `--summary-file` / `--metadata-file` / `--reason-
 Humans get `hkb promote`, `hkb unblock`, `hkb request-changes`, `hkb comment`, `hkb link/unlink`, `hkb archive`,
 `hkb log`. `hkb --help` lists everything.
 
+### The dependency graph as a diagram: `hkb graph`
+
+`hkb graph <n>` prints the **track** rooted at `<n>` — the task plus everything still blocking it — as one
+fenced mermaid block. GitHub renders mermaid in issues, comments, PRs and files, so the picture goes where the
+tasks already live, with nothing to install and no page to host:
+
+```bash
+hkb graph 12                       # the fenced block, on stdout (--mermaid says the same thing louder)
+hkb comment 12 "$(hkb graph 12)"   # ...posted on the goal, where the next session will find it
+hkb graph 12 --json                # { root, nodes, edges, cycle, mermaid }
+```
+
+```mermaid
+flowchart TD
+  n41["#35;41 · ready<br>Token bucket + tests"]
+  n42["#35;42 · todo<br>Wire the limiter into the server"]
+  n43["#35;43 · ready<br>Document the limits and the 429 contract"]
+  n12(["#35;12 · todo<br>Rate-limit the public API"])
+  n41 --> n42
+  n42 --> n12
+  n43 --> n12
+  classDef todo stroke:#8b949e,stroke-width:1px
+  class n42,n12 todo
+  classDef ready stroke:#3fb950,stroke-width:2px
+  class n41,n43 ready
+```
+
+Arrows point the way work flows — blocker → what it unblocks — so the frontier is on top and the root is the
+stadium at the bottom. A blocker closed as *completed* is not drawn: a track is what is **left**, and so is its
+picture. One that is unfinished but not on this board is drawn dashed rather than dropped. The `classDef`s tint
+borders only, so the diagram reads in GitHub's dark theme and its light one alike. `/kanban:decompose` posts it
+on the goal issue as the last step of materializing a graph; the board's own drawer draws the same subgraph
+live at [`hkb serve`](#the-board-in-a-browser).
+
 ### Planning the board: two slash commands
 
 Two things a board needs are not CLI verbs, because they need a model and the dispatcher deliberately has none:

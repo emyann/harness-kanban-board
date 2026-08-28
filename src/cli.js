@@ -9,6 +9,7 @@ import { watch, tail } from './watch.js';
 import { stats } from './stats.js';
 import { claim } from './lock.js';
 import { contextCommand } from './context.js';
+import { resolveTrack, trackGraph, trackMermaid } from './track.js';
 import { stopHook } from './hook.js';
 import { init, packageVersion } from './init.js';
 import { doctor } from './doctor.js';
@@ -16,7 +17,7 @@ import { gc } from './gc.js';
 import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, resumeCommand } from './model.js';
 
 /** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
-const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'with-actions', 'help']);
+const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'with-actions', 'mermaid', 'help']);
 
 export function parseArgs(argv) {
   const flags = {};
@@ -157,6 +158,9 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
   tasks       create "title" [--body ..] [--blocked-by 12,13] [--agent claude] [--priority N] [--paths a/,b/]
                      [--model m] [--skills s1,s2] [--max-retries N] [--max-runtime S] [--scheduled-at ISO] [--triage] [--goal ".."]
               list [--status s] [--agent p] [--all] [--json]      show <n> [--json]      context <n>
+              graph <n> [--mermaid] [--json]   the track rooted at <n> — the root plus everything still
+                    blocking it — as a fenced mermaid block GitHub renders in issues, comments and files:
+                    hkb comment 12 "$(hkb graph 12)"      --json adds { nodes, edges, mermaid }
               link <parent> <child>   unlink <parent> <child>      promote <n>...      archive <n>...
               adopt <n>... [--agent p]     comment <n> "text"      log <n> [--json]    status <n>
   worker      heartbeat <n> [--note ..]     complete <n> --summary ".." [--metadata JSON|path.json] [--artifacts a,b]
@@ -288,6 +292,18 @@ export async function main(argv) {
       const [n] = nums(rest);
       if (!n) throw usage('hkb context <n>');
       process.stdout.write((await contextCommand(ctx, n)) + '\n');
+      return 0;
+    }
+    case 'graph': {
+      const [n] = nums(rest);
+      if (!n) throw usage('hkb graph <n> [--mermaid] [--json]');
+      // one board read, then the same walk the dispatcher does: the root plus what is still blocking it
+      const tasks = await fetchBoard(ctx);
+      const track = resolveTrack(n, new Map(tasks.map((t) => [t.number, t])));
+      if (!track.root) throw usage(`no open task #${n} on board "${ctx.board}" — \`hkb list\` shows what is there`);
+      const g = trackGraph(track);
+      const mermaid = trackMermaid(g);
+      out(ctx, { ...g, mermaid }, mermaid);
       return 0;
     }
     case 'status': {
