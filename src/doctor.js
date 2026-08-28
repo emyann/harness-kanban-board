@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
 import { boardFile, api, readState, writeState } from './board.js';
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun } from './tasks.js';
-import { L, STATUSES, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix } from './model.js';
+import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins } from './model.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, isEphemeralPath, HOOK_SETTINGS, PKG_ROOT } from './init.js';
 import { latestVersion } from './registry.js';
@@ -85,6 +85,55 @@ export function checkActions(ctx, { ok, warn }) {
   tracked
     ? ok('actions workflows', `${files.join(' · ')} (profiles ${triggers.map(([n]) => n).join(', ')})`)
     : warn('actions workflows', `${files.join(' · ')} are not committed — Actions only runs workflows on the default branch`, 'git add .github/workflows && commit, then push');
+}
+
+export const PERMS_CHECK = 'worker permissions';
+/** The one generated file that freezes an allow-list, named by the generator so it cannot drift. */
+const WORKER_WORKFLOW_FILE = actionsFiles().map((f) => f.rel).find((f) => /worker-claude/.test(f));
+
+/** The `--allowedTools "…"` list baked into the generated worker workflow; null when it has none. */
+export function workflowAllowedTools(contents) {
+  const m = /--allowedTools\s+"([^"]*)"/.exec(String(contents || ''));
+  return m ? m[1].split(',').map((s) => s.trim()).filter(Boolean) : null;
+}
+
+const nameSome = (list, n = 4) => list.slice(0, n).join(', ') + (list.length > n ? ` +${list.length - n} more` : '');
+
+/**
+ * Two layers decide what a worker may run — hkb's PreToolUse guard and the launch's own
+ * `--allowedTools` — and under `--permission-mode dontAsk` the launch DENIES rather than prompts, so
+ * the stricter one wins outright. hkb ships a list that covers `SAFE_BUILTINS`; what this catches is
+ * a *frozen copy* of an older one, which no default change can reach: a profile that pins
+ * `allowed_tools` in board.json, and the `--allowedTools` line `hkb init --with-actions` bakes into
+ * the generated worker workflow. Both keep denying `cd`, `export`, `command`, `env` — commands hkb's
+ * own policy calls safe — until someone regenerates them (#138).
+ *
+ * Local files only, so it runs before the first API call. Silent on a board with no allow-list at
+ * all (a Codex-only board: its sandbox is the whole policy, so there is nothing to fall behind).
+ */
+export function checkWorkerPermissions(ctx, { ok, warn }, { read = (p) => fs.readFileSync(p, 'utf8'), exists = (p) => fs.existsSync(p) } = {}) {
+  const lists = [];
+  for (const [name, p] of Object.entries(ctx.cfg?.profiles || {})) {
+    if (!p?.allowed_tools) continue;
+    lists.push({
+      check: `profile ${name} permissions`,
+      missing: uncoveredBuiltins(p.allowed_tools),
+      fix: `drop "allowed_tools" from the ${name} profile in ${path.relative(ctx.root, boardFile(ctx.root))} to take hkb's own list`,
+    });
+  }
+  const file = path.join(ctx.root, WORKER_WORKFLOW_FILE);
+  if (exists(file)) {
+    let baked = null;
+    try { baked = workflowAllowedTools(read(file)); } catch { /* unreadable: checkActions owns that */ }
+    if (baked) lists.push({ check: 'actions worker permissions', missing: uncoveredBuiltins(baked), fix: 'hkb init --with-actions' });
+  }
+  if (!lists.length) return null;
+  const stale = lists.filter((l) => l.missing.length);
+  for (const s of stale) {
+    warn(s.check, `allow-list omits ${nameSome(s.missing)} — hkb's own guard permits them, but a \`dontAsk\` launch denies rather than prompts, so a worker is refused what hkb calls safe`, s.fix);
+  }
+  if (!stale.length) ok(PERMS_CHECK, `${lists.length} allow-list${lists.length === 1 ? '' : 's'} cover the ${SAFE_BUILTINS.length} shell builtins hkb calls safe`);
+  return lists;
 }
 
 /**
@@ -657,8 +706,10 @@ export async function doctor(ctx, flags, log) {
   fs.existsSync(claudeSkill) ? ok('claude skill link', '.claude/skills/kanban') : warn('claude skill link', 'missing', 'hkb init');
   checkCommands(ctx, { ok, warn });
   checkHooks(ctx, { ok, warn, bad });
-  // which layer answers a denial: local files only, so it runs on a checkout with no repo behind it
+  // which layer answers a denial, and whether a frozen copy of that layer has fallen behind:
+  // local files only, so both run on a checkout with no repo behind it
   checkPolicyLayer(ctx, { ok });
+  checkWorkerPermissions(ctx, { ok, warn });
 
   if (!ctx.repo) return report(results, ctx, log);
 

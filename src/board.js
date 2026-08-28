@@ -4,17 +4,29 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghCmd } from './gh.js';
-import { worktreePath, parseRepoSpecs, mergeBoardEntry } from './model.js';
+import { worktreePath, parseRepoSpecs, mergeBoardEntry, SAFE_BUILTINS } from './model.js';
 
 // A background worker has nobody to answer a permission prompt, so the allowlist must cover
 // every command an agent plausibly reaches for; anything else is denied, never prompted (see #23).
 const SHELL_TOOLS = ['hkb *', 'git *', 'gh pr *', 'gh issue view *', 'npm *', 'npx *', 'node *', 'cat *', 'ls *', 'mkdir *', 'head *', 'tail *', 'wc *', 'sed *', 'awk *', 'grep *', 'find *', 'diff *', 'cp *', 'mv *', 'touch *', 'chmod *', 'printf *', 'echo *', 'jq *'];
-const CLAUDE_TOOLS = [...SHELL_TOOLS.map((c) => `Bash(${c})`), 'Bash(true)', 'Edit', 'Write', 'Read', 'Glob', 'Grep'];
+// The shell builtins hkb's own PreToolUse guard already calls safe (`SAFE_BUILTINS`), said again in
+// the launch's language. Leaving them out made the two layers disagree, and under `dontAsk` the
+// harness denies rather than prompts — so it refused `cd`, `export`, `command`, `env` while hkb's
+// policy declared them fine, and workers burned turns rewriting commands (#138).
+//
+// The ` *` suffix is load-bearing, not decoration. Measured against Claude Code 2.1.251: with
+// `Bash(export)` the command `export FOO=1; echo ok` is DENIED and with `Bash(export *)` it is
+// allowed — and the suffixed form still covers the bare word, so one entry per builtin does it.
+// That is why `Bash(true)` no longer has to be spliced in by hand.
+const BUILTIN_TOOLS = SAFE_BUILTINS.map((c) => `${c} *`);
+// deduped: `echo` and `printf` are on both lists, and a repeated pattern is noise in a flag a human reads
+const SHELL_PATTERNS = [...new Set([...SHELL_TOOLS, ...BUILTIN_TOOLS])];
+const CLAUDE_TOOLS = [...SHELL_PATTERNS.map((c) => `Bash(${c})`), 'Edit', 'Write', 'Read', 'Glob', 'Grep'];
 // Copilot CLI spells the same policy `--allow-tool 'shell(<cmd>)'`, one flag per pattern, plus the
 // built-in `write` tool for file edits. See the `--allow-tool={allowed_tools}` token in dispatch.js.
 // Copilot wildcards are `shell(cmd:*)` (verified against the CLI programmatic reference, 2026-08-26);
 // a multiword prefix like `gh pr *` has no wildcard form, so it widens to the command's `cmd:*`.
-const COPILOT_TOOLS = [...new Set(SHELL_TOOLS.map((c) => c.includes('*') ? `shell(${c.split(' ')[0]}:*)` : `shell(${c})`)), 'write'];
+const COPILOT_TOOLS = [...new Set(SHELL_PATTERNS.map((c) => c.includes('*') ? `shell(${c.split(' ')[0]}:*)` : `shell(${c})`)), 'write'];
 
 export const DEFAULT_PROFILES = {
   claude: {
