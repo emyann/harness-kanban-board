@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
 import { boardFile, api, readState, writeState } from './board.js';
-import { detectCaps, branchProtection, fetchBoard } from './tasks.js';
+import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun } from './tasks.js';
 import { L, STATUSES, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix } from './model.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, isEphemeralPath, HOOK_SETTINGS, PKG_ROOT } from './init.js';
@@ -180,14 +180,197 @@ export const AGENT_LABEL_CHECK = 'task agent labels';
  * Labels are all it reads, so it asks for the board without the blocker fill-in: one query, no
  * per-task REST even on a repo whose GraphQL has no `blockedBy`. `fetch` is an argument for tests.
  */
-export async function checkAgentLabels(ctx, { ok, warn }, { fetch = fetchBoard } = {}) {
-  let tasks;
-  try { tasks = await fetch(ctx, { blockers: false }); } catch (e) { return warn(AGENT_LABEL_CHECK, `could not read the board: ${e.message}`); }
+export async function checkAgentLabels(ctx, { ok, warn }, { fetch = fetchBoard, board = null } = {}) {
+  const b = board || await boardOnce(ctx, fetch);
+  if (b.error) return warn(AGENT_LABEL_CHECK, `could not read the board: ${b.error}`);
+  const tasks = b.tasks;
   const doubled = tasks.map((t) => ({ number: t.number, agents: agentsOf(t.labels) })).filter((t) => t.agents.length > 1);
   if (!doubled.length) return ok(AGENT_LABEL_CHECK, `${plural(tasks.length, 'open task')}, at most one kb:agent:* each`);
   const detail = doubled.map((t) => `#${t.number} (${t.agents.join(' + ')} → runs as ${t.agents[0]})`).join(' · ');
   const fix = `hkb adopt ${doubled.map((t) => t.number).join(' ')} --agent <the profile it should run on> — adopt sets that one and takes the others off`;
   warn(AGENT_LABEL_CHECK, `${plural(doubled.length, 'task')} on two profiles at once: ${detail}`, fix);
+}
+
+/**
+ * The one board read the card checks share. Returns `{tasks}` or `{error}` so each check reports
+ * the failure in its own words rather than one of them swallowing it for the others.
+ */
+export async function boardOnce(ctx, fetch = fetchBoard) {
+  try { return { tasks: await fetch(ctx, { blockers: false }) }; } catch (e) { return { error: e.message }; }
+}
+
+// ---------- can this board be priced? ----------
+//
+// The hole this check exists for was found weeks late, by a spend report that was empty. A
+// `claude --bg` worker never receives the launch environment, so for a long time nothing on the
+// default profile recorded *which session* had done the work: no `session_id` on the attempt row,
+// no price in `hkb stats`, no `claude --resume` in `hkb show`. Two mechanisms fill it in now — the
+// terminal verb reads the job record (#135), and the dispatcher reads it again one tick after the
+// launch for the attempts that never file a verb (#132) — and both are silent when they fail,
+// because a session id is a bonus that must never be the reason a verb or a tick fails. So the
+// board itself is the only honest witness, and this is the check that asks it.
+
+/** Outcomes a worker's own terminal verb writes — rows where the session is always knowable. */
+export const VERB_OUTCOMES = ['completed', 'blocked', 'review_requested'];
+/** Outcomes the dispatcher writes off with no verb from the worker at all. */
+export const NO_VERB_OUTCOMES = ['crashed', 'timed_out', 'protocol_violation'];
+/**
+ * How many run records the check reads before answering from what it has. Attempts live in one
+ * `<!-- kb-run -->` comment per card, so evidence costs one REST call each; the sample is
+ * newest-first and stops the moment every background profile has shown a session, so a board that
+ * is recording normally pays for one.
+ */
+export const SESSION_SAMPLE = 10;
+
+/** The name a board that would not read is reported under; every other finding names its profile. */
+export const SESSION_CHECK = 'worker sessions';
+/** One finding per background profile — the operator needs to know *which* one stopped recording. */
+export const sessionCheckName = (profile) => `profile ${profile} sessions`;
+export const SESSION_FIX = 'npm i -g hkb-cli@latest && hkb init (an hkb older than the recording only stamps what a verb reports) — if it is already current the harness is not stamping: a `claude --bg` worker reads its own identity from the job record $CLAUDE_JOB_DIR names, so check that variable is set inside a worker session';
+
+/**
+ * What a set of run records says about one profile's sessions. Pure, so the wording below can be
+ * tested without a board.
+ *
+ * Only the two outcome families above are evidence. `spawn_failed`, `reclaimed` and `gave_up` are
+ * excluded because no worker session ever ran, so nothing could have stamped them and a board of
+ * those would otherwise warn about a hole that is not one; so are `synthetic` rows, which the
+ * dispatcher and a reviewer write under their own names rather than a profile's.
+ */
+export function sessionTally(runs, profile) {
+  const rows = [];
+  for (const run of runs) {
+    for (const a of run?.attempts || []) {
+      if (a.profile !== profile || a.synthetic || !a.ended_at) continue;
+      if (VERB_OUTCOMES.includes(a.outcome)) rows.push({ verb: true, session: !!a.session_id });
+      else if (NO_VERB_OUTCOMES.includes(a.outcome)) rows.push({ verb: false, session: !!a.session_id });
+    }
+  }
+  const count = (f) => rows.filter(f).length;
+  return {
+    ended: rows.length,
+    withSession: count((r) => r.session),
+    verb: count((r) => r.verb),
+    verbWithSession: count((r) => r.verb && r.session),
+    off: count((r) => !r.verb),
+    offWithSession: count((r) => !r.verb && r.session),
+  };
+}
+
+/**
+ * The finding for one profile's tally. `null` when the profile has never ended an attempt here —
+ * a board that has not run it yet has nothing to be wrong about, and doctor stays quiet.
+ *
+ * Nothing recorded at all is the warning, because that is the state that hid for weeks: it means
+ * every attempt this profile has ever run is unpriceable and unreopenable, and it names both ways
+ * that happens. Anything recorded is an `ok` that still says how much of each kind carries one —
+ * verb-ended and written-off are two different mechanisms, and an operator reading a blank column
+ * should be told which one to look at rather than left to guess.
+ */
+export function sessionFinding(profile, t, read = 0) {
+  const name = sessionCheckName(profile);
+  if (!t.ended) return null;
+  if (!t.withSession) {
+    return {
+      name,
+      ok: null,
+      detail: `none of the ${plural(t.ended, 'ended attempt')} on this board carries a session id (${plural(read, 'run record')} read) — nothing this profile ran can be priced by \`hkb stats\` or reopened with \`claude --resume\``,
+      fix: SESSION_FIX,
+    };
+  }
+  const bits = [];
+  if (t.verb) bits.push(`${t.verbWithSession}/${t.verb} that filed a terminal verb`);
+  if (t.off) bits.push(`${t.offWithSession}/${t.off} written off without one`);
+  const note = t.off > t.offWithSession
+    ? ' — the dispatcher names those from the background job record one tick after the launch, so only rows older than that stay blank'
+    : '';
+  return { name, ok: true, detail: `session recorded on ${bits.join(' · ')}${note}` };
+}
+
+/**
+ * Per background profile: does anything this board recorded name the session that did the work?
+ *
+ * Only `claude-bg` profiles are asked. Every other mode runs the harness as a child of the launch,
+ * so `KB_TASK` arrives and the ordinary paths apply; the background daemon is the one place where
+ * the whole chain was inert, and the one worth a standing check.
+ *
+ * Reads the open board (shared with `checkAgentLabels` when doctor hands it over) plus one query
+ * for recently-closed cards — a completed attempt lives on a closed issue, so an open-only sample
+ * would look at a board's least representative rows — then at most `SESSION_SAMPLE` run comments,
+ * newest first. Every collaborator is an argument so the whole thing is testable from a fixture.
+ */
+export async function checkSessions(ctx, { ok, warn }, { board = null, fetch = fetchBoard, closed = fetchClosedRecent, load = loadRun, limit = SESSION_SAMPLE } = {}) {
+  const profiles = Object.entries(ctx.cfg?.profiles || {}).filter(([, p]) => p?.mode === 'claude-bg').map(([n]) => n);
+  if (!profiles.length) return [];
+  const b = board || await boardOnce(ctx, fetch);
+  if (b.error) { warn(SESSION_CHECK, `could not read the board: ${b.error}`); return []; }
+  let recent = [];
+  try { recent = await closed(ctx); } catch { /* the open board on its own still answers */ }
+  const seen = new Map();
+  for (const t of [...b.tasks, ...recent]) if (!seen.has(t.number)) seen.set(t.number, t);
+  const newest = [...seen.values()].sort((x, y) => String(y.updatedAt || '').localeCompare(String(x.updatedAt || '')) || y.number - x.number);
+
+  const runs = [];
+  let read = 0;
+  for (const t of newest) {
+    if (read >= limit) break;
+    if (profiles.every((p) => sessionTally(runs, p).withSession)) break; // answered; more reads cannot change it
+    try { runs.push((await load(ctx, t.number)).run); read++; } catch { /* one unreadable comment is not the end of the check */ }
+  }
+  const found = [];
+  for (const p of profiles) {
+    const f = sessionFinding(p, sessionTally(runs, p), read);
+    if (!f) continue;
+    (f.ok ? ok : warn)(f.name, f.detail, f.fix);
+    found.push(f);
+  }
+  return found;
+}
+
+// ---------- which layer is actually enforcing ----------
+
+export const POLICY_CHECK = 'permission policy';
+
+/**
+ * Which layer decides what a worker on each profile may run. Pure.
+ *
+ * hkb's `PreToolUse` policy is a Claude Code hook gated on `KB_TASK`, and there are three ways a
+ * profile never gets it: the launch is not Claude Code at all (Copilot, Codex — they read their own
+ * hook files and enforce with their own flags), the launch is `claude --bg` (the session daemon was
+ * started long before, with an environment of its own, so `KB_TASK` never arrives — the Stop hook
+ * recovers by reading the `kb-<n>-<k>` checkout name, but a checkout says which *task* a session is,
+ * never which profile, and hkb's policy with no profile would deny a worker `npm test`), or the
+ * launch only triggers a run elsewhere, which configures itself. In all three the launch's own
+ * `--allowedTools`/`--allow-tool`/`--sandbox` flags are the whole policy — which is a real answer,
+ * not a hole, and the point of saying it is that an operator debugging a denial knows where to look.
+ */
+export function policyLayers(cfg, { preTool = false } = {}) {
+  return Object.entries(cfg?.profiles || {}).map(([name, p]) => {
+    // order matters: a `trigger` launch is `gh workflow run`, but what it starts may well be Claude
+    // Code — the reason its policy is elsewhere is the run, not the binary this host would spawn.
+    if (p?.mode === 'trigger') return { profile: name, live: false, why: 'the triggered run brings its own settings' };
+    if (p?.mode === 'claude-bg') return { profile: name, live: false, why: 'a `claude --bg` session never receives KB_TASK' };
+    if ((p?.launch || [])[0] !== 'claude') return { profile: name, live: false, why: 'not Claude Code' };
+    if (!preTool) return { profile: name, live: false, why: 'no PreToolUse hook is configured here' };
+    return { profile: name, live: true, why: null };
+  });
+}
+
+/** One line, so the operator never has to work out which layer answered a denial. */
+export function checkPolicyLayer(ctx, { ok }, { find = findClaudeHooks } = {}) {
+  const layers = policyLayers(ctx.cfg, { preTool: find(ctx.root).hooks.some((h) => h.event === 'PreToolUse') });
+  if (!layers.length) return null;
+  const live = layers.filter((l) => l.live).map((l) => l.profile);
+  // group the inert ones by reason, so five profiles that are inert for one reason read as one clause
+  const byWhy = new Map();
+  for (const l of layers.filter((x) => !x.live)) byWhy.set(l.why, [...(byWhy.get(l.why) || []), l.profile]);
+  const inert = [...byWhy].map(([why, names]) => `${names.join(', ')} (${why})`);
+  const detail = [
+    live.length ? `hkb's PreToolUse policy enforces on ${live.join(', ')}` : "hkb's PreToolUse policy enforces on no profile here",
+    inert.length ? `the launch's own flags are the whole policy on ${inert.join(' · ')}` : null,
+  ].filter(Boolean).join(' — ');
+  ok(POLICY_CHECK, detail);
+  return layers;
 }
 
 // ---------- KB_TOKEN expiry ----------
@@ -467,6 +650,8 @@ export async function doctor(ctx, flags, log) {
   fs.existsSync(claudeSkill) ? ok('claude skill link', '.claude/skills/kanban') : warn('claude skill link', 'missing', 'hkb init');
   checkCommands(ctx, { ok, warn });
   checkHooks(ctx, { ok, warn, bad });
+  // which layer answers a denial: local files only, so it runs on a checkout with no repo behind it
+  checkPolicyLayer(ctx, { ok });
 
   if (!ctx.repo) return report(results, ctx, log);
 
@@ -478,8 +663,11 @@ export async function doctor(ctx, flags, log) {
     missing.length ? bad('labels', `missing ${missing.join(', ')}`, 'hkb init') : ok('labels', `${[...labels].filter((l) => l.startsWith('kb:')).length} kb:* labels`);
   } catch (e) { bad('labels', e.message); }
 
-  // the cards: a card on two profiles dispatches as neither the one you set nor the one you see
-  await checkAgentLabels(ctx, { ok, warn });
+  // the cards: a card on two profiles dispatches as neither the one you set nor the one you see,
+  // and a background profile that has stopped recording sessions is a board nothing can price
+  const board = await boardOnce(ctx);
+  await checkAgentLabels(ctx, { ok, warn }, { board });
+  await checkSessions(ctx, { ok, warn }, { board });
 
   // rate limit, token class, token expiry — one call
   await checkToken({ ok, warn, bad });

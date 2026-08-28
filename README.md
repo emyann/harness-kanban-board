@@ -309,8 +309,11 @@ comments, today's spawn count from the dispatcher's `.kanban/state.json`, and sp
 actually left behind — `total_cost_usd` on the row or at the end of the worker's log (what
 `claude -p --output-format json` signs off with), and failing that the tokens in the session transcript, read
 from disk on the host that ran it. That last one is why a background agent, which signs off with no JSON at all,
-still has a number: its terminal verb records the session it ran in
-([how](docs/harnesses.md#how-a-background-worker-records-a-session-nobody-told-it-about)). The three are never mixed. A reported cost is money; the transcript priced
+still has a number: its terminal verb records the session it ran in, and the dispatcher records it for the
+attempts that never file one
+([how](docs/harnesses.md#how-a-background-worker-records-a-session-nobody-told-it-about)) — `hkb doctor` warns
+when a background profile has recorded none at all, which is the one way this can be empty and stay quiet.
+The three are never mixed. A reported cost is money; the transcript priced
 at the board's rates is written `~$…` and called an estimate; tokens with no rates are printed as turns and
 tokens, which beat nothing. Rates are yours to state, because hkb ships no price table it would have to keep
 current:
@@ -526,7 +529,7 @@ doctor then names the installed version once with nothing to do about it.
 | `kanban_complete(summary, metadata)` | `<!-- kb-result -->` comment; open PR → *review*, else issue closed |
 | worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link`, or the same nine as MCP tools (`hkb mcp`) |
 | stop nudge | Claude Code / Codex `Stop`, Copilot CLI `agentStop` hook (`hkb hook stop`, 2 nudges, inert unless the session is a worker's — `KB_TASK`, or the `kb-<n>-<k>` checkout it runs in, which is all a background agent has). Claude Code's pair goes in `.claude/settings.local.json` — per-developer and gitignored, because the command names whichever `hkb` *this* machine has; `hkb init --shared-hooks` puts them in the tracked `.claude/settings.json` instead, where the command is always a plain `hkb` every teammate needs on PATH (`hkb doctor` says so when it is not there) |
-| worker permissions | Claude Code `PreToolUse` hook (`hkb hook pretool`, also inert unless `KB_TASK` is set) — file tools confined to the worktree, `hkb dispatch`/`kill`/force-push/`sudo`/`rm -rf <abs>` denied outright, everything else checked against the profile's allowlist: allow or deny, never a prompt. `hkb init` writes it beside the Stop hook |
+| worker permissions | Claude Code `PreToolUse` hook (`hkb hook pretool`, inert unless `KB_TASK` is set — so **not** on the `claude --bg` profiles, where the launch's own `--allowedTools`/`--disallowedTools` are the whole policy; `hkb doctor` prints which layer enforces on each profile, and [docs/harnesses.md](docs/harnesses.md#which-layer-is-actually-enforcing) has the table) — file tools confined to the worktree, `hkb dispatch`/`kill`/force-push/`sudo`/`rm -rf <abs>` denied outright, everything else checked against the profile's allowlist: allow or deny, never a prompt. `hkb init` writes it beside the Stop hook |
 | kanban dashboard | `hkb serve` — local page over the live board; drag-drop calls the same verbs |
 | live event stream | `hkb watch` / `hkb tail <n>` — conditional `GET` with `If-None-Match`; an unchanged board answers 304 and is not charged |
 | runs/spend report | `hkb stats` — the same labels and run comments, rolled up: outcomes, duration, spawns vs the daily cap, and spend per profile — `total_cost_usd` where the harness reported one, else the session transcript's tokens, priced at the board's `stats.rates` and labelled an estimate ([what each profile gives you](docs/harnesses.md#what-a-profile-can-tell-you-it-spent)) |

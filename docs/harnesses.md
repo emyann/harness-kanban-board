@@ -162,12 +162,29 @@ in-session — so an operator finishing a card from their own terminal, and the 
 attempt, record nothing. That last rule is also what gives a track its per-node identity: the runner finishes
 each node from inside its own session, so each node's row ends up carrying the runner's transcript.
 
-What still records nothing: an attempt that never reaches a terminal verb (`crashed`, `timed_out`,
-`protocol_violation`) on a profile whose log has no final JSON. `hkb stats` counts those and prices none of
-them, and says so — `N worker attempts priced nothing at all — the real total is higher`.
+The attempts that never reach a terminal verb (`crashed`, `timed_out`, `protocol_violation`) are exactly the
+ones a post-mortem wants, so they are covered by the **dispatcher** instead. The tick already resolves the
+background job behind a running attempt to decide whether it is still alive, and that job names the same record
+on disk — so one tick after the launch it writes the session onto the row, while the attempt is still live. No
+hook, no verb, no extra call. It fills blanks only: a row a verb has already stamped is left byte-identical,
+and a resumed job (one record over two sessions) is never half-merged into a row that names a different one.
 
-Check your own setup in one command: `hkb show <n>` prints a `session …` line, and a `claude --resume`, for an
-attempt whose session was recorded.
+What is still left blank: an attempt from before either mechanism shipped, and one whose job record was already
+gone by the time the tick looked. `hkb stats` counts those and prices none of them, and says so — `N worker
+attempts priced nothing at all — the real total is higher`.
+
+Check your own setup in one command: **`hkb doctor`** has a line per background profile —
+
+```
+✓ profile claude sessions   session recorded on 6/6 that filed a terminal verb · 3/3 written off without one
+! profile claude sessions   none of the 11 ended attempts on this board carries a session id (10 run records read)
+                              → npm i -g hkb-cli@latest && hkb init … — if it is already current the harness is
+                                not stamping: check $CLAUDE_JOB_DIR is set inside a worker session
+```
+
+It reads the newest run records on the board — at most ten, and it stops at the first one that answers — so
+"nothing recorded" is a statement about what the board actually holds, not a guess. Per card, `hkb show <n>`
+prints a `session …` line, and a `claude --resume`, for an attempt whose session was recorded.
 
 ## Claude Code — `claude`, `claude-p`
 
@@ -184,8 +201,33 @@ variant for CI and containers. Both isolate themselves with `--worktree kb-<n>-<
 reason is that the command in there names *this* machine: a plain `hkb` when it is on PATH, and otherwise an
 absolute path into wherever this package was installed. Neither is true in a teammate's checkout, and both hooks
 use `matcher: "*"`, so a command that does not resolve fails on **every tool call in every session** in that repo
-— noise nobody there wrote or can explain. (Both hooks are still inert unless `KB_TASK` is set; nothing
-misbehaves, it just fails loudly.)
+— noise nobody there wrote or can explain. (Neither hook does anything in an ordinary session; it just fails
+loudly if the command is wrong.)
+
+### Which layer is actually enforcing
+
+The two hooks are gated differently, and on the default profile only one of them is live:
+
+| | `Stop` — the terminal-verb nudge | `PreToolUse` — hkb's permission policy |
+| --- | --- | --- |
+| what identifies the session | `KB_TASK`, else the `kb-<n>-<k>` checkout name | `KB_TASK` only |
+| `claude` / `claude-track` (`claude --bg`) | **live** — the checkout names the attempt | **inert** — the launch's `--allowedTools` and `--disallowedTools` are the whole policy |
+| `claude-p` (`mode: "process"`) | live | live, on top of the same launch flags |
+| `claude-action` (`mode: "trigger"`) | the workflow's `if: always()` step stands in | the workflow's own `--allowedTools` |
+| `copilot-cli`, `codex` | their own `agentStop` / `Stop` hook file | their own `--allow-tool` / `--sandbox` — they never read `.claude/settings*.json` |
+
+A checkout name says which *task* a session is, never which *profile* launched it, and hkb's policy applied with
+no profile would allow `hkb`, `git` and `gh` and deny a worker `npm test` — so `PreToolUse` stands aside rather
+than guess. That is a deliberate choice, not an oversight
+([#133](https://github.com/emyann/harness-kanban-board/issues/133) is where it gets revisited), and the
+allowlist the dispatcher puts on the launch is a real policy, not a gap. `hkb doctor` prints the row that
+applies to your board, so a denial never has to be traced back by hand:
+
+```
+✓ permission policy   hkb's PreToolUse policy enforces on claude-p — the launch's own flags are the whole policy
+                      on claude, claude-track (a `claude --bg` session never receives KB_TASK) · claude-action
+                      (the triggered run brings its own settings) · codex (not Claude Code)
+```
 
 `hkb init --shared-hooks` puts them in the tracked `.claude/settings.json` instead — for a team where everyone
 runs `npm i -g hkb-cli`. That file only ever gets the portable form, `hkb hook stop` / `hkb hook pretool`; an

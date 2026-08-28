@@ -13,8 +13,11 @@ import path from 'node:path';
 import {
   TOKEN_EXPIRY_HEADER, TOKEN_CHECK, TOKEN_FIX, TOKEN_WARN_DAYS,
   tokenExpiry, expiryFinding, checkTokenExpiry, checkToken, actionsAnnotation, emitAnnotations, tokenExpiryNotice,
+  SESSION_CHECK, SESSION_FIX, SESSION_SAMPLE, POLICY_CHECK,
+  sessionTally, sessionFinding, checkSessions, boardOnce, checkAgentLabels, policyLayers, checkPolicyLayer,
 } from '../src/doctor.js';
 import { setTransport, GhError } from '../src/gh.js';
+import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
@@ -416,4 +419,274 @@ test('the day stamp is added to the state the dispatcher already keeps, not writ
     await notice(root, { now: NOW });
     assert.deepEqual(stateOf(root), { spawn_day: '2026-08-26', spawned_today: 3, token_expiry_day: '2026-08-26' });
   } finally { restore(); }
+});
+
+// ---------------------------------------------------------------------------
+// Worker sessions: is anything this board recorded priceable?
+//
+// The hole these cover was found weeks late, by a spend report that was empty — a `claude --bg`
+// worker never receives `KB_TASK`, so nothing on the default profile recorded which session had
+// done the work. The board is the only honest witness, so the fixture is a real one: FakeGh issues
+// carrying real run comments, read back through `fetchBoard`/`fetchClosedRecent`/`loadRun`.
+
+/**
+ * A board in a temp checkout on a fake GitHub: the `claude-bg` profile the default board ships,
+ * and a `process` one that must never be asked about. Nothing here spawns anything.
+ */
+function boardHarness(t, { profiles } = {}) {
+  const gh = new FakeGh({ caps: { blockedByGql: true, closedByPrs: true } });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-sessions-'));
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  const cfg = {
+    repo: gh.nameWithOwner,
+    default_branch: 'main',
+    profiles: profiles || {
+      claude: { mode: 'claude-bg', launch: ['claude', '--bg'] },
+      'claude-p': { mode: 'process', launch: ['claude', '-p'] },
+    },
+  };
+  const ctx = {
+    root, cfg, board: 'default', host: 'test-host', json: false, caps: {}, _cache: {},
+    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    requireBoard() { return this; },
+  };
+  const restore = gh.install();
+  t.after(() => { restore(); fs.rmSync(root, { recursive: true, force: true }); });
+  return { gh, ctx, root };
+}
+
+/** An ended attempt row, carrying a session only when asked for one. */
+const attempt = (k, outcome, { profile = 'claude', session = false, ...rest } = {}) => ({
+  attempt: k,
+  profile,
+  host: 'test-host',
+  started_at: `2026-08-27T0${k}:00:00Z`,
+  ended_at: `2026-08-27T0${k}:30:00Z`,
+  outcome,
+  ...(session ? { session_id: `sess-${k}`, transcript_path: `/t/sess-${k}.jsonl` } : {}),
+  ...rest,
+});
+
+/** Every run comment this board was asked for. */
+const runReads = (gh) => gh.callsMatching('GET', /issues\/\d+\/comments/).length;
+
+// ---------- the tally, without a board ----------
+
+test("the tally counts a background profile's own ended attempts and nothing else", () => {
+  const runs = [runWith([
+    attempt(1, 'completed', { session: true }),
+    attempt(2, 'crashed'),
+    attempt(3, 'completed', { profile: 'codex', session: true }),           // another profile
+    { attempt: 4, profile: 'claude', started_at: '2026-08-27T04:00:00Z' },  // still running
+    attempt(5, 'gave_up', { profile: 'dispatcher', synthetic: true }),      // not a worker at all
+  ])];
+
+  assert.deepEqual(sessionTally(runs, 'claude'), {
+    ended: 2, withSession: 1, verb: 1, verbWithSession: 1, off: 1, offWithSession: 0,
+  });
+});
+
+test('spawn_failed and reclaimed are not evidence: no worker ran, so nothing could have stamped them', () => {
+  const t = sessionTally([runWith([attempt(1, 'spawn_failed'), attempt(2, 'reclaimed')])], 'claude');
+  assert.equal(t.ended, 0, 'a board that only ever failed to spawn must not warn about a hole that is not one');
+  assert.equal(sessionFinding('claude', t), null, 'and doctor says nothing at all about it');
+});
+
+// ---------- the wording ----------
+
+test('nothing recorded at all is the warning, and it names both ways that happens', () => {
+  const runs = [runWith([attempt(1, 'completed'), attempt(2, 'timed_out')])];
+  const f = sessionFinding('claude', sessionTally(runs, 'claude'), 4);
+
+  assert.equal(f.name, 'profile claude sessions');
+  assert.equal(f.ok, null);
+  assert.match(f.detail, /none of the 2 ended attempts on this board carries a session id \(4 run records read\)/);
+  assert.match(f.detail, /hkb stats/);
+  assert.match(f.detail, /claude --resume/);
+  assert.equal(f.fix, SESSION_FIX);
+  assert.match(f.fix, /npm i -g hkb-cli@latest/, 'an hkb older than the recording is the first thing to rule out');
+  assert.match(f.fix, /\$CLAUDE_JOB_DIR/, 'a current hkb that still records nothing is a harness that is not stamping');
+});
+
+test('verb-ended rows carrying a session are ok, and the written-off column names the mechanism that fills it', () => {
+  const runs = [runWith([
+    attempt(1, 'completed', { session: true }),
+    attempt(2, 'review_requested', { session: true }),
+    attempt(3, 'protocol_violation'),
+  ])];
+  const f = sessionFinding('claude', sessionTally(runs, 'claude'), 1);
+
+  assert.equal(f.ok, true);
+  assert.equal(f.fix, undefined);
+  assert.match(f.detail, /2\/2 that filed a terminal verb/);
+  assert.match(f.detail, /0\/1 written off without one/);
+  assert.match(f.detail, /the dispatcher names those from the background job record one tick after the launch/);
+});
+
+test('once the written-off rows carry sessions too, the explanatory clause goes away', () => {
+  const runs = [runWith([attempt(1, 'completed', { session: true }), attempt(2, 'crashed', { session: true })])];
+  assert.equal(
+    sessionFinding('claude', sessionTally(runs, 'claude'), 1).detail,
+    'session recorded on 1/1 that filed a terminal verb · 1/1 written off without one');
+});
+
+test('a profile with only written-off rows still reads like English', () => {
+  const runs = [runWith([attempt(1, 'crashed', { session: true })])];
+  assert.equal(sessionFinding('claude', sessionTally(runs, 'claude'), 1).detail, 'session recorded on 1/1 written off without one');
+});
+
+// ---------- end to end, on a board ----------
+
+test('doctor warns on a board whose claude-bg attempts carry no session fields', async (t) => {
+  const h = boardHarness(t);
+  h.gh.addIssue(kbIssue({
+    number: 40, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude',
+    updatedAt: '2026-08-27T09:00:00Z', run: runWith([attempt(1, 'completed'), attempt(2, 'completed')]),
+  }));
+  h.gh.addIssue(kbIssue({
+    number: 41, status: 'ready', agent: 'claude',
+    updatedAt: '2026-08-27T08:00:00Z', run: runWith([attempt(1, 'timed_out')]),
+  }));
+  const s = sink();
+
+  const found = await checkSessions(h.ctx, s);
+
+  assert.equal(found.length, 1, 'one finding per background profile that has run — claude-p is a process, not a daemon');
+  assert.deepEqual(s.results.map((r) => [r.name, r.ok]), [['profile claude sessions', null]]);
+  assert.match(s.results[0].detail, /none of the 3 ended attempts on this board carries a session id/);
+  assert.equal(s.results[0].fix, SESSION_FIX);
+});
+
+test('the completed attempts are on closed cards, so a closed card is read too', async (t) => {
+  const h = boardHarness(t);
+  h.gh.addIssue(kbIssue({
+    number: 40, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude',
+    updatedAt: '2026-08-27T09:00:00Z', run: runWith([attempt(1, 'completed', { session: true })]),
+  }));
+  const s = sink();
+
+  await checkSessions(h.ctx, s);
+
+  assert.deepEqual(s.results.map((r) => [r.name, r.ok]), [['profile claude sessions', true]]);
+  assert.match(s.results[0].detail, /session recorded on 1\/1 that filed a terminal verb/);
+});
+
+test('the sample stops at the first card that answers', async (t) => {
+  const h = boardHarness(t);
+  for (let n = 1; n <= 20; n++) {
+    h.gh.addIssue(kbIssue({
+      number: n, status: 'ready', agent: 'claude',
+      updatedAt: `2026-08-27T${String(n).padStart(2, '0')}:00:00Z`,
+      run: runWith([attempt(1, 'completed', { session: true })]),
+    }));
+  }
+  const s = sink();
+
+  await checkSessions(h.ctx, s);
+
+  assert.equal(s.results[0].ok, true);
+  assert.equal(runReads(h.gh), 1, 'the newest card answered; every further read could only repeat it');
+});
+
+test('a board with nothing to answer with is bounded, not walked', async (t) => {
+  const h = boardHarness(t);
+  for (let n = 1; n <= 20; n++) {
+    h.gh.addIssue(kbIssue({
+      number: n, status: 'ready', agent: 'claude',
+      updatedAt: `2026-08-27T${String(n).padStart(2, '0')}:00:00Z`,
+      run: runWith([attempt(1, 'crashed')]),
+    }));
+  }
+  const s = sink();
+
+  await checkSessions(h.ctx, s);
+
+  assert.equal(s.results[0].ok, null);
+  assert.equal(runReads(h.gh), SESSION_SAMPLE);
+  assert.match(s.results[0].detail, new RegExp(`\\(${SESSION_SAMPLE} run records read\\)`), 'and says how much it looked at, so "none" can be weighed');
+});
+
+test('a board with no background profile is not asked at all — no read, no finding', async (t) => {
+  const h = boardHarness(t, { profiles: { codex: { mode: 'process', launch: ['codex', 'exec'] } } });
+  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'codex', run: runWith([attempt(1, 'completed', { profile: 'codex' })]) }));
+  const s = sink();
+
+  assert.deepEqual(await checkSessions(h.ctx, s), []);
+  assert.deepEqual(s.results, []);
+  assert.deepEqual(h.gh.calls, [], 'a check with nothing to check must cost nothing');
+});
+
+test('a profile that has never ended an attempt here has nothing to be wrong about', async (t) => {
+  const h = boardHarness(t, {
+    profiles: {
+      claude: { mode: 'claude-bg', launch: ['claude', '--bg'] },
+      'claude-track': { mode: 'claude-bg', launch: ['claude', '--bg'] },
+    },
+  });
+  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', run: runWith([attempt(1, 'completed', { session: true })]) }));
+  const s = sink();
+
+  await checkSessions(h.ctx, s);
+
+  assert.deepEqual(s.results.map((r) => r.name), ['profile claude sessions'], 'claude-track never ran here: doctor stays quiet about it');
+});
+
+test('a board that will not read is a warning, not a crash — doctor has other checks to run', async (t) => {
+  const h = boardHarness(t);
+  const s = sink();
+
+  await checkSessions(h.ctx, s, { fetch: async () => { throw new Error('502 Bad Gateway'); } });
+
+  assert.deepEqual(s.results.map((r) => [r.name, r.ok]), [[SESSION_CHECK, null]]);
+  assert.match(s.results[0].detail, /could not read the board: 502 Bad Gateway/);
+});
+
+test('the two card checks share one board query rather than paying for one each', async (t) => {
+  const h = boardHarness(t);
+  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', run: runWith([attempt(1, 'completed', { session: true })]) }));
+  const board = await boardOnce(h.ctx);
+  const before = h.gh.calls.length;
+
+  await checkAgentLabels(h.ctx, sink(), { board });
+  await checkSessions(h.ctx, sink(), { board });
+
+  const openBoard = h.gh.calls.slice(before).filter((c) => c.kind === 'graphql' && /states: \[OPEN\]/.test(c.query || ''));
+  assert.deepEqual(openBoard, [], 'neither check re-reads the board it was handed');
+});
+
+// ---------- which layer is actually enforcing ----------
+
+test("hkb's PreToolUse policy is inert on a claude-bg profile, and the line says so", () => {
+  const cfg = {
+    profiles: {
+      claude: { mode: 'claude-bg', launch: ['claude', '--bg'] },
+      'claude-track': { mode: 'claude-bg', launch: ['claude', '--bg'] },
+      'claude-p': { mode: 'process', launch: ['claude', '-p'] },
+      'claude-action': { mode: 'trigger', launch: ['gh', 'workflow', 'run'] },
+      codex: { mode: 'process', launch: ['codex', 'exec'] },
+    },
+  };
+  const layers = policyLayers(cfg, { preTool: true });
+
+  assert.deepEqual(layers.filter((l) => l.live).map((l) => l.profile), ['claude-p']);
+  assert.match(layers.find((l) => l.profile === 'claude').why, /never receives KB_TASK/);
+  assert.match(layers.find((l) => l.profile === 'claude-action').why, /triggered run/);
+  assert.match(layers.find((l) => l.profile === 'codex').why, /not Claude Code/);
+
+  const s = sink();
+  checkPolicyLayer({ root: '/nowhere', cfg }, s, { find: () => ({ hooks: [{ event: 'PreToolUse' }], unreadable: [] }) });
+
+  assert.deepEqual(s.results.map((r) => [r.name, r.ok]), [[POLICY_CHECK, true]], 'a statement of which layer answers, not a problem to fix');
+  assert.match(s.results[0].detail, /hkb's PreToolUse policy enforces on claude-p/);
+  assert.match(s.results[0].detail, /claude, claude-track \(a `claude --bg` session never receives KB_TASK\)/);
+  assert.match(s.results[0].detail, /the launch's own flags are the whole policy/);
+});
+
+test("with no PreToolUse hook configured, nothing of hkb's enforces anywhere", () => {
+  const cfg = { profiles: { 'claude-p': { mode: 'process', launch: ['claude', '-p'] } } };
+  assert.deepEqual(policyLayers(cfg, { preTool: false }), [{ profile: 'claude-p', live: false, why: 'no PreToolUse hook is configured here' }]);
+
+  const s = sink();
+  checkPolicyLayer({ root: '/nowhere', cfg }, s, { find: () => ({ hooks: [{ event: 'Stop' }], unreadable: [] }) });
+  assert.match(s.results[0].detail, /^hkb's PreToolUse policy enforces on no profile here/);
 });
