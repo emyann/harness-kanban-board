@@ -4,8 +4,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
 import { boardFile, api, readState, writeState } from './board.js';
-import { detectCaps, branchProtection } from './tasks.js';
-import { L, STATUSES, compareVersions, mergePolicy, mergeGate, mergeGateFix } from './model.js';
+import { detectCaps, branchProtection, fetchBoard } from './tasks.js';
+import { L, STATUSES, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix } from './model.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, isEphemeralPath, HOOK_SETTINGS, PKG_ROOT } from './init.js';
 import { latestVersion } from './registry.js';
@@ -164,6 +164,30 @@ export async function checkMergePolicy(ctx, { ok, bad }) {
     ? ' — a `request-review --reviewer <user>` is held until they approve'
     : ' — nothing waits for a human: `request-review --reviewer <user>` requests a review, it does not require one';
   return ok(MERGE_CHECK, `auto (${policy.method}) — ${gate.detail}, and GitHub holds the merge until they pass${reviewNote}`);
+}
+
+// ---------- the cards themselves ----------
+
+export const AGENT_LABEL_CHECK = 'task agent labels';
+
+/**
+ * A card wearing two `kb:agent:*` labels runs as whichever one GitHub lists first, whatever the
+ * last `hkb adopt` said it would run as (#113). `adopt` no longer leaves one behind, but the boards
+ * piloted before it did still carry them, and the only symptom is the card quietly dispatching on
+ * the old profile — a track root that reads `claude-track` on the issue page and is dispatched
+ * node-by-node as `claude`. So this names them, with the command that repairs each one.
+ *
+ * Labels are all it reads, so it asks for the board without the blocker fill-in: one query, no
+ * per-task REST even on a repo whose GraphQL has no `blockedBy`. `fetch` is an argument for tests.
+ */
+export async function checkAgentLabels(ctx, { ok, warn }, { fetch = fetchBoard } = {}) {
+  let tasks;
+  try { tasks = await fetch(ctx, { blockers: false }); } catch (e) { return warn(AGENT_LABEL_CHECK, `could not read the board: ${e.message}`); }
+  const doubled = tasks.map((t) => ({ number: t.number, agents: agentsOf(t.labels) })).filter((t) => t.agents.length > 1);
+  if (!doubled.length) return ok(AGENT_LABEL_CHECK, `${plural(tasks.length, 'open task')}, at most one kb:agent:* each`);
+  const detail = doubled.map((t) => `#${t.number} (${t.agents.join(' + ')} → runs as ${t.agents[0]})`).join(' · ');
+  const fix = `hkb adopt ${doubled.map((t) => t.number).join(' ')} --agent <the profile it should run on> — adopt sets that one and takes the others off`;
+  warn(AGENT_LABEL_CHECK, `${plural(doubled.length, 'task')} on two profiles at once: ${detail}`, fix);
 }
 
 // ---------- KB_TOKEN expiry ----------
@@ -453,6 +477,9 @@ export async function doctor(ctx, flags, log) {
     const missing = [...STATUSES.map(L.status), L.board(ctx.board), L.needsHuman].filter((l) => !labels.has(l));
     missing.length ? bad('labels', `missing ${missing.join(', ')}`, 'hkb init') : ok('labels', `${[...labels].filter((l) => l.startsWith('kb:')).length} kb:* labels`);
   } catch (e) { bad('labels', e.message); }
+
+  // the cards: a card on two profiles dispatches as neither the one you set nor the one you see
+  await checkAgentLabels(ctx, { ok, warn });
 
   // rate limit, token class, token expiry — one call
   await checkToken({ ok, warn, bad });

@@ -72,6 +72,16 @@ export function agentOf(labels) {
   const l = (labels || []).find((x) => x.startsWith('kb:agent:'));
   return l ? l.slice('kb:agent:'.length) : null;
 }
+/**
+ * Every profile the labels name. A card carries exactly one `kb:agent:*`; a second one is a silent
+ * misroute (#113) — `agentOf` takes the first, so `hkb adopt <n> --agent claude-track` over an
+ * existing `kb:agent:claude` left the card dispatching as `claude` while reporting the new profile.
+ * `setAgent` is what keeps it to one; this is how `hkb doctor` finds the cards that already have two.
+ * The read stays first-wins on purpose: the boards that need diagnosing must still list and show.
+ */
+export function agentsOf(labels) {
+  return (labels || []).filter((x) => x.startsWith('kb:agent:')).map((x) => x.slice('kb:agent:'.length));
+}
 export function boardOf(labels) {
   const l = (labels || []).find((x) => x.startsWith('kb:board:'));
   return l ? l.slice('kb:board:'.length) : null;

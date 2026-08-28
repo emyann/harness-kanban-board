@@ -71,7 +71,12 @@ async function fillBlockedByRest(ctx, task) {
   }
 }
 
-export async function fetchBoard(ctx, { includeClosed = false } = {}) {
+/**
+ * Every task on the board, one query per page. `blockers: false` is for a caller that only reads
+ * labels (doctor): on a repo without the GraphQL `blockedBy` field the fill-in below is one REST
+ * call per waiting task, and a check about labels must not cost a board's worth of them.
+ */
+export async function fetchBoard(ctx, { includeClosed = false, blockers = true } = {}) {
   await detectCaps(ctx);
   const states = includeClosed ? '[OPEN, CLOSED]' : '[OPEN]';
   const q = `query($owner: String!, $repo: String!, $labels: [String!], $cursor: String) {
@@ -91,7 +96,7 @@ export async function fetchBoard(ctx, { includeClosed = false } = {}) {
     if (!conn.pageInfo.hasNextPage) break;
     cursor = conn.pageInfo.endCursor;
   }
-  if (!ctx.caps.blockedByGql) for (const t of tasks) if (t.status === 'todo' || t.status === 'blocked') await fillBlockedByRest(ctx, t);
+  if (blockers && !ctx.caps.blockedByGql) for (const t of tasks) if (t.status === 'todo' || t.status === 'blocked') await fillBlockedByRest(ctx, t);
   return tasks;
 }
 
@@ -244,6 +249,24 @@ export async function addLabels(ctx, task, labels) {
   if (!missing.length) return task;
   await rest('POST', api(ctx, `/issues/${task.number}/labels`), { body: { labels: missing } });
   task.labels.push(...missing);
+  return task;
+}
+
+/**
+ * The task's profile, and only that one. Adding `kb:agent:X` without taking the old one off is a
+ * write that reports success and changes nothing (#113): the card ends up with two `kb:agent:*`
+ * labels, `agentOf` takes the first, and `hkb adopt <root> --agent claude-track` — the documented
+ * way to make a track — left the root dispatching node-by-node as `claude`.
+ *
+ * Add first, then remove: a half-applied set leaves the card on two profiles, which is what it
+ * already was, never on none — a card with no `kb:agent:*` is one the dispatcher has to guess for.
+ */
+export async function setAgent(ctx, task, profile) {
+  const want = L.agent(profile);
+  const stale = task.labels.filter((l) => l.startsWith('kb:agent:') && l !== want);
+  await addLabels(ctx, task, [want]);
+  for (const l of stale) await removeLabel(ctx, task, l);
+  task.agent = profile;
   return task;
 }
 

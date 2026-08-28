@@ -1,7 +1,7 @@
 // Argument parsing + command routing. Every command has --json; output is stable for scripts and agents.
 import fs from 'node:fs';
 import { makeContext } from './board.js';
-import { getTask, fetchBoard, assertOnBoard, loadRun, latestResult, parentResults, issueEvents, addComment, addLabels, setStatus, updateBody } from './tasks.js';
+import { getTask, fetchBoard, assertOnBoard, loadRun, latestResult, parentResults, issueEvents, addComment, addLabels, setAgent, setStatus, updateBody } from './tasks.js';
 import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, createTask, linkTask, withOutbox, envAttempt } from './lifecycle.js';
 import { tick, loop, spawnWorker } from './dispatch.js';
 import { serve } from './serve.js';
@@ -346,7 +346,8 @@ export async function main(argv) {
       for (const n of ns) {
         const t = await getTask(ctx, n);
         if (!t.kb || !t.body.includes('<!-- kb:')) await updateBody(ctx, t, { ...DEFAULT_KB }, t.body);
-        await addLabels(ctx, t, [L.board(ctx.board), L.agent(agent)]);
+        await addLabels(ctx, t, [L.board(ctx.board)]);
+        await setAgent(ctx, t, agent); // one kb:agent:* label, so re-adopting onto another profile takes
         await setStatus(ctx, t, status);
         res.push({ number: n, status, agent });
       }
@@ -445,7 +446,8 @@ export async function main(argv) {
       // Claimed by hand from inside another task's session — a track runner working a node. Leave
       // the marker that tells this session's Stop hook to stamp that node with the session id too.
       if (!flags.spawn) markSessionClaim(ctx.root, n, k);
-      await setStatus(ctx, t, 'running', { add: [L.agent(profile)] });
+      await setStatus(ctx, t, 'running');
+      await setAgent(ctx, t, profile); // `--profile` names who is running it, so it replaces the old label
       let pid = null;
       if (flags.spawn) { const s = await spawnWorker(ctx, t, profile, k); pid = s.pid; runRec.run.attempts[k - 1].pid = pid; await saveRun(ctx, n, runRec); }
       out(ctx, { number: n, attempt: k, ref: c.ref, pid }, `#${n} claimed (attempt ${k}, ${c.ref})${pid ? ` pid ${pid}` : `\nexport KB_TASK=${n} KB_ATTEMPT=${k}   # then work, and finish with hkb complete|block|request-review`}`);
