@@ -445,6 +445,18 @@ function sessionFieldsOf(obj) {
 }
 
 /**
+ * The session behind a background agent, out of the job record Claude Code keeps for it
+ * (`~/.claude/jobs/<id>/state.json`): `sessionId` is the session, `linkScanPath` the transcript it
+ * writes. Pure — `currentSession` (src/jobs.js) reads the file. null when it names neither.
+ *
+ * This is the only local source a `claude --bg` worker has for its own identity: the launch
+ * environment never reaches it, so nothing keyed on `KB_TASK` can answer for it. See src/hook.js.
+ */
+export function sessionFromJobState(state) {
+  return sessionFieldsOf({ session_id: state?.sessionId, transcript_path: state?.linkScanPath });
+}
+
+/**
  * Session id and cost out of a worker log. `claude -p --output-format json` ends with one JSON
  * object holding `session_id`, `total_cost_usd`, `num_turns`, `duration_ms`; with `stream-json`
  * that object is the last line. Total: a truncated or non-JSON log yields null, never a throw —
@@ -497,6 +509,20 @@ export function formatSession(a) {
 
 /** Where `claude --worktree kb-<n>-<k>` puts a worker's checkout, relative to the board root. */
 export function worktreePath(wt) { return `.claude/worktrees/${wt}`; }
+
+/**
+ * The task and attempt a worker checkout belongs to, read back out of its directory name — the
+ * inverse of the `kb-<n>-<k>` the launch template asks for. Both as strings; null when the
+ * directory is not a worker's.
+ *
+ * The dispatcher already identifies a running background job this way (`matchJobByWorktree`,
+ * src/jobs.js). It is also all a `claude --bg` session knows about which attempt it is, since the
+ * environment the launch sets never reaches it — see `whichAttempt` in src/hook.js.
+ */
+export function parseWorktreeName(name) {
+  const m = /^kb-(\d+)-(\d+)$/.exec(String(name ?? ''));
+  return m ? { n: m[1], k: m[2] } : null;
+}
 
 /** The command that reopens a worker session for a post-mortem. null when no session id is known. */
 export function resumeCommand(a, number = null) {

@@ -4,11 +4,37 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { KB_JOB_NAME_RE } from './model.js';
+import { KB_JOB_NAME_RE, sessionFromJobState } from './model.js';
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
 export function jobsDir() { return path.join(os.homedir(), '.claude', 'jobs'); }
+
+/**
+ * The agent session THIS process is running inside, when the harness says so locally.
+ *
+ * Claude Code exports `CLAUDE_CODE_SESSION_ID` into every command a session runs, and for a
+ * background agent `CLAUDE_JOB_DIR` names that job's record — the same `state.json` `readJobState`
+ * parses below, which also holds the transcript. So a `claude --bg` worker CAN name its own session
+ * and transcript, even though the launch environment never reaches it: the terminal verb it has to
+ * run anyway records what the Stop hook could not (see src/hook.js).
+ *
+ * A bonus, never the source of truth: null whenever there is nothing here to read, and never throws.
+ * @returns {{session_id?: string, transcript_path?: string}|null}
+ */
+export function currentSession(env = process.env) {
+  const id = typeof env.CLAUDE_CODE_SESSION_ID === 'string' && env.CLAUDE_CODE_SESSION_ID ? env.CLAUDE_CODE_SESSION_ID : null;
+  let state = null;
+  if (env.CLAUDE_JOB_DIR) {
+    try { state = JSON.parse(fs.readFileSync(path.join(env.CLAUDE_JOB_DIR, 'state.json'), 'utf8')); } catch { /* no job record here */ }
+  }
+  const job = sessionFromJobState(state);
+  // A job record describes the session running now — but a resumed job is one record over two
+  // sessions, so a record naming a session we are not in is somebody else's transcript. Then the
+  // only thing we are sure of is the id in the environment.
+  if (job && (!id || !job.session_id || job.session_id === id)) return id ? { ...job, session_id: id } : job;
+  return id ? { session_id: id } : null;
+}
 
 /** Read ~/.claude/jobs/<id>/state.json. Returns null when the job is unknown. */
 export function readJobState(id) {

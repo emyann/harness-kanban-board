@@ -559,6 +559,10 @@ export function formatStats(s) {
     lines.push(row('spend', `no cost reported on any of the ${worker} — ${noFinalJson}; the usage below is all there is`));
   } else if (m.worker_attempts) {
     lines.push(row('spend', `not recorded on any of the ${worker} — ${noFinalJson}`));
+  } else {
+    // nothing ended here, so there is nothing to price — but say so. A blank where the spend line
+    // belongs reads like a failure, and this report's whole job is to be believable about money.
+    lines.push(row('spend', `nothing to price — no worker attempt ended in ${s.window === 'all' ? 'this board\'s history' : `the last ${s.window}`}`));
   }
   if (m.attempts_with_usage) {
     const u = m.usage;

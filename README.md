@@ -308,7 +308,9 @@ It invents no new state: statuses come from the labels, attempts and outcomes fr
 comments, today's spawn count from the dispatcher's `.kanban/state.json`, and spend from whatever the attempt
 actually left behind — `total_cost_usd` on the row or at the end of the worker's log (what
 `claude -p --output-format json` signs off with), and failing that the tokens in the session transcript, read
-from disk on the host that ran it. The three are never mixed. A reported cost is money; the transcript priced
+from disk on the host that ran it. That last one is why a background agent, which signs off with no JSON at all,
+still has a number: its terminal verb records the session it ran in
+([how](docs/harnesses.md#how-a-background-worker-records-a-session-nobody-told-it-about)). The three are never mixed. A reported cost is money; the transcript priced
 at the board's rates is written `~$…` and called an estimate; tokens with no rates are printed as turns and
 tokens, which beat nothing. Rates are yours to state, because hkb ships no price table it would have to keep
 current:
@@ -335,8 +337,8 @@ stopped by the dispatcher once their attempt has ended. `hkb show <n>` prints th
 They do not all tell you what they spent, and that is worth knowing at the point of choice: `claude-p` ends in
 Claude's own JSON, so `hkb stats` shows a **reported cost**; `claude` and `claude-track` are background agents
 that report none, so the most they leave is the session transcript — **tokens**, and a dollar figure only if you
-give the board `stats.rates` (and only if the `Stop` hook recorded the session — [#125](https://github.com/emyann/harness-kanban-board/issues/125));
-`copilot-cli`, `codex` and `claude-action` leave neither, so an attempt there is an outcome and a duration.
+give the board `stats.rates`; `copilot-cli`, `codex` and `claude-action` leave neither, so an attempt there is an
+outcome and a duration.
 Profile by profile: [docs/harnesses.md](docs/harnesses.md#what-a-profile-can-tell-you-it-spent).
 
 A board carries **only the profiles you asked for**: a bare `hkb init` writes `claude` and its one `kb:agent:claude`
@@ -523,7 +525,7 @@ doctor then names the installed version once with nothing to do about it.
 | runs table | one `<!-- kb-run -->` comment (attempts, failures, block loops) |
 | `kanban_complete(summary, metadata)` | `<!-- kb-result -->` comment; open PR → *review*, else issue closed |
 | worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link`, or the same nine as MCP tools (`hkb mcp`) |
-| stop nudge | Claude Code / Codex `Stop`, Copilot CLI `agentStop` hook (`hkb hook stop`, 2 nudges, inert unless `KB_TASK` is set). Claude Code's pair goes in `.claude/settings.local.json` — per-developer and gitignored, because the command names whichever `hkb` *this* machine has; `hkb init --shared-hooks` puts them in the tracked `.claude/settings.json` instead, where the command is always a plain `hkb` every teammate needs on PATH (`hkb doctor` says so when it is not there) |
+| stop nudge | Claude Code / Codex `Stop`, Copilot CLI `agentStop` hook (`hkb hook stop`, 2 nudges, inert unless the session is a worker's — `KB_TASK`, or the `kb-<n>-<k>` checkout it runs in, which is all a background agent has). Claude Code's pair goes in `.claude/settings.local.json` — per-developer and gitignored, because the command names whichever `hkb` *this* machine has; `hkb init --shared-hooks` puts them in the tracked `.claude/settings.json` instead, where the command is always a plain `hkb` every teammate needs on PATH (`hkb doctor` says so when it is not there) |
 | worker permissions | Claude Code `PreToolUse` hook (`hkb hook pretool`, also inert unless `KB_TASK` is set) — file tools confined to the worktree, `hkb dispatch`/`kill`/force-push/`sudo`/`rm -rf <abs>` denied outright, everything else checked against the profile's allowlist: allow or deny, never a prompt. `hkb init` writes it beside the Stop hook |
 | kanban dashboard | `hkb serve` — local page over the live board; drag-drop calls the same verbs |
 | live event stream | `hkb watch` / `hkb tail <n>` — conditional `GET` with `If-None-Match`; an unchanged board answers 304 and is not charged |

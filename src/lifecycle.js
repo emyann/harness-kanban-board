@@ -8,6 +8,7 @@ import {
   fetchBoard, createIssue, ensureLabels, issueDatabaseId, addBlockedBy, removeBlockedBy,
 } from './tasks.js';
 import { release, lockExists, lockSha, localBeatSha, casHeartbeat, resyncBeatChain, dropBeatChain, remoteName } from './lock.js';
+import { sessionForAttempt } from './hook.js';
 import {
   openAttempt, computeReady, blockerDone, serializeResultComment, serializeBodyBlock, hashReason,
   heartbeatMode, lockRef, BLOCK_KINDS, DEFAULT_KB, L,
@@ -63,6 +64,12 @@ async function finishAttempt(ctx, task, rec, flags, outcome, extra = {}) {
   a.ended_at = nowIso();
   a.outcome = outcome;
   Object.assign(a, extra);
+  // The session that did the work, when this process IS that session — free here, because the row
+  // is being written on the next line anyway. It is also the whole answer for the default profile:
+  // a `claude --bg` worker never sees `KB_TASK`, so its Stop hook cannot record anything, and the
+  // terminal verb is the one thing every worker runs. A track runner finishes each node from inside
+  // its own session, so this is how a node ends up carrying the transcript that paid for it.
+  try { Object.assign(a, sessionForAttempt(ctx.root, task.number, a.attempt, a) || {}); } catch { /* a session id is a bonus, never a reason a verb fails */ }
   await saveRun(ctx, task.number, rec); // rec.id is set on first create, so later saves update in place
   await release(ctx, task.number, a.attempt);
   dropBeatChain(ctx.root, task.number, a.attempt); // worktrees share one ref store: leave nothing behind

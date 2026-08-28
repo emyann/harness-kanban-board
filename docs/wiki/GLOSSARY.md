@@ -62,6 +62,12 @@ deserves a `concepts/` page (link it).
   action from it, hold nothing durable in the process (`src/dispatch.js`).
 - **Track** — a DAG subgraph executed by one session, claimed at its root;
   nodes are claimed as the runner reaches them (`src/dispatch.js`).
+- **Transcript** — the JSONL an agent session writes as it runs, recorded on the
+  attempt row as `transcript_path` by the terminal verb (`sessionForAttempt` in
+  `src/hook.js`, off the job record `currentSession` reads in `src/jobs.js`).
+  A file on the host that ran the attempt, never board state — and hkb's last
+  answer to "what did this cost" when the harness reported none
+  (`usageFromTranscript` in `src/stats.js`).
 - **Worker** — the seat that codes: one session holding one attempt on one task
   — any harness, an Actions job, or the operator running the verbs by hand
   (`src/lifecycle.js`).
