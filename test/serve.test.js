@@ -529,9 +529,15 @@ test('a card dragged in one board runs its verb against that board, never the ot
   assert.equal(calls.some((c) => c.path.includes('o~r~default')), false); // the other repo was never touched
 });
 
-test('issue bodies are escaped, linked and never able to inject markup', () => {
+/** The page's top-level functions, with no network — for everything it renders purely. */
+function pageCtx() {
   const ctx = vm.createContext({ document: fakeDom(), console, fetch: async () => { throw new Error('offline'); }, setTimeout: () => 0, setInterval: () => 0 });
   vm.runInContext(PAGE_SCRIPT, ctx, { filename: 'web/index.html' });
+  return ctx;
+}
+
+test('issue bodies are escaped, linked and never able to inject markup', () => {
+  const ctx = pageCtx();
   const html = ctx.mdLite('<img src=x onerror=alert(1)> see https://ex.com/a?b=1&c=2, then #14 and `code`');
   assert.equal(html.includes('<img'), false);
   assert.match(html, /&lt;img/);
@@ -541,6 +547,117 @@ test('issue bodies are escaped, linked and never able to inject markup', () => {
   const card = ctx.cardHtml({ number: 20, title: '</div><script>x', agent: 'claude', priority: 1, blockedBy: [], prs: [], needsHuman: true });
   assert.equal(card.includes('<script>'), false);
   assert.match(card, /needs human/);
+});
+
+// ---------- the drawer's dependency subgraph ----------
+// The picture is a layout over the cards /api/board already carries, so it is assertable the way the
+// rest of the page is: in the vm, without a DOM, over cards that went through the real `cardOf`.
+
+/** A card exactly as the board serves it — the blockers go through `cardOf`, as /api/board does. */
+const boardCard = (number, status, blockedBy = [], over = {}) =>
+  cardOf(task({ number, status, title: 'task ' + number, blockedBy, ...over }));
+const openIssue = (n) => ({ number: n, title: 'task ' + n, state: 'OPEN', stateReason: null });
+const closedIssue = (n) => ({ number: n, title: 'groundwork', state: 'CLOSED', stateReason: null });
+
+/**
+ * A diamond: #1 waits on #2 and #3, which both wait on #4. #4 is closed, so it is not a card on the
+ * board at all — it exists only as the stub the two cards that name it carry.
+ */
+const diamond = () => [
+  boardCard(1, 'todo', [openIssue(2), openIssue(3)]),
+  boardCard(2, 'running', [closedIssue(4)]),
+  boardCard(3, 'review', [closedIssue(4)]),
+];
+
+test('a diamond on the board comes out of depGraph as four nodes, four edges and three layers', () => {
+  const g = pageCtx().depGraph(diamond(), 1);
+  // the page's arrays come out of the vm realm, so they are spread into this one to be compared
+  assert.deepEqual([...g.nodes].map((x) => x.n).sort((a, b) => a - b), [1, 2, 3, 4]);
+  assert.deepEqual([...g.edges].map((e) => e.from + '>' + e.to).sort(), ['1>2', '1>3', '2>4', '3>4']);
+  // longest-path layering: the root of the track on top, the shared blocker below both middles
+  assert.deepEqual(Object.fromEntries([...g.nodes].map((x) => [x.n, x.layer])), { 1: 0, 2: 1, 3: 1, 4: 2 });
+  assert.deepEqual([...g.rows].map((r) => r.length), [1, 2, 1]);
+  assert.notEqual(g.rows[1][0].x, g.rows[1][1].x); // the two middles share a row, not a column
+  assert.equal(g.rows[0][0].y < g.rows[2][0].y, true);
+  assert.equal(g.incomplete, false);
+  assert.equal(g.truncated, false);
+});
+
+test('the same picture is reached from either end, and a closed blocker is a node, not a hole', () => {
+  const g = pageCtx().depGraph(diamond(), 4); // opened on the blocker that is no card on this board
+  assert.deepEqual([...g.nodes].map((x) => x.n).sort((a, b) => a - b), [1, 2, 3, 4]);
+  assert.equal(g.edges.length, 4);
+  const four = [...g.nodes].find((x) => x.n === 4);
+  assert.deepEqual([four.onBoard, four.done, four.status, four.focus, four.layer], [false, true, 'done', true, 2]);
+});
+
+test('nothing is drawn for a card with no blockers and nothing waiting on it', () => {
+  const ctx = pageCtx();
+  assert.equal(ctx.depGraph([boardCard(9, 'ready')], 9), null);
+  assert.equal(ctx.depGraph(diamond(), 99), null); // a number no card on the board mentions
+  assert.equal(ctx.graphSvg(null), '');
+});
+
+test('every node in the SVG opens its card through the handler the drawer already has', () => {
+  const ctx = pageCtx();
+  const svg = ctx.graphSvg(ctx.depGraph(diamond(), 1));
+  assert.equal((svg.match(/data-open="/g) || []).length, 4); // one anchor per node, no second open path
+  assert.equal((svg.match(/<path class="e"/g) || []).length, 4);
+  assert.match(svg, /class="n focus"[^>]*data-open="1"/);
+  assert.match(svg, /class="n done"[^>]*data-open="4"/);
+  assert.match(svg, /#4 ✓/);
+  // the columns' own palette, no second one
+  for (const c of ['todo', 'running', 'review', 'done']) assert.match(svg, new RegExp('var\\(--' + c + '\\)'));
+  // a title is still a title: it goes through esc on its way into the tooltip
+  const evil = ctx.graphSvg(ctx.depGraph([
+    boardCard(1, 'todo', [openIssue(2)]), boardCard(2, 'ready', [], { title: '</title><img src=x onerror=alert(1)>' }),
+  ], 1));
+  assert.equal(/<img|<\/title>\s*<img/.test(evil), false);
+  assert.match(evil, /&lt;img/);
+});
+
+test('when the board can only have some of the edges, the graph says so instead of lying', () => {
+  const ctx = pageCtx();
+  // the REST-fallback fingerprint (src/tasks.js fills todo/blocked cards only): edges exist, and
+  // every card that carries one is todo or blocked — so the closed blockers of the rest are missing
+  const g = ctx.depGraph([boardCard(1, 'todo', [openIssue(2)]), boardCard(2, 'running'), boardCard(3, 'review')], 1);
+  assert.equal(g.incomplete, true);
+  assert.match(ctx.graphSvg(g), /REST fallback/);
+  assert.equal(ctx.depGraph(diamond(), 1).incomplete, false); // #2 is running and carries its blocker
+});
+
+test('a fan-out too wide to read is capped, and the note says the picture is not all of it', () => {
+  const ctx = pageCtx();
+  const kids = Array.from({ length: 60 }, (_, i) => openIssue(i + 2));
+  const g = ctx.depGraph([boardCard(1, 'todo', kids)].concat(kids.map((k) => boardCard(k.number, 'todo'))), 1);
+  assert.equal(g.nodes.length, 40);
+  assert.equal(g.truncated, true);
+  assert.match(ctx.graphSvg(g), /Showing the 40 tasks nearest #1/);
+});
+
+test('a dependency cycle is drawn, not hung on', () => {
+  const g = pageCtx().depGraph([boardCard(1, 'todo', [openIssue(2)]), boardCard(2, 'blocked', [openIssue(1)])], 1);
+  assert.deepEqual([...g.nodes].map((x) => x.n), [1, 2]);
+  assert.equal(g.edges.length, 2);
+  assert.deepEqual([...g.rows].map((r) => r.length), [1, 1]); // no blank band where a layer was skipped
+});
+
+test('the drawer draws the subgraph above Blocked by, from the board payload and nothing else', async () => {
+  const document = fakeDom();
+  const payload = boardPayload([oneBoard(diamond(), { key: 'o~r~default' })]);
+  const detail = { ...diamond()[0], key: 'o~r~default', repo: 'o/r', board: 'default', bodyText: '', kb: {}, labels: [], run: { attempts: [] }, result: null, parents: [], logs: [] };
+  const calls = [];
+  const { ctx } = loadPage(document, { '/api/board': payload, '/api/boards/o~r~default/tasks/1': detail }, calls);
+  await ctx.refresh(true);
+  await ctx.openDrawer('o~r~default', 1);
+
+  const html = document.querySelector('#d-body').innerHTML;
+  assert.match(html, /<h3>Dependencies<\/h3><svg class="graph"/);
+  assert.equal(html.indexOf('<svg class="graph"') < html.indexOf('Blocked by'), true);
+  assert.equal((html.match(/data-open="2"/g) || []).length, 2); // the graph node and the blocker link
+  assert.equal((html.match(/data-open="4"/g) || []).length, 1); // only the graph reaches the closed one
+  // the drawer read the board it already had: no extra route was called for the picture
+  assert.deepEqual([...new Set(calls.map((c) => c.path))], ['/api/board', '/api/boards/o~r~default/tasks/1']);
 });
 
 // ---------- the HTTP surface ----------

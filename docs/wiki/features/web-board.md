@@ -1,6 +1,6 @@
 ---
 title: The web board (`hkb serve`)
-summary: One local server, one inline page, N repos — where the board list comes from and who maintains it, how the board is read, how a drag becomes a verb, and how every request is routed to the board it names.
+summary: One local server, one inline page, N repos — where the board list comes from and who maintains it, how the board is read, how a drag becomes a verb, how every request is routed to the board it names, and how the drawer draws a card's dependency subgraph from the payload it already has.
 category: features
 kind: explanation
 audience: [dev]
@@ -9,12 +9,12 @@ covers:
   - path: src/serve.js
     sha: 2008378241ae5a4bed69c2343ef1fbced525cc93
   - path: web/index.html
-    sha: ece8530c9344246187f1194e03b3fc23c88967fb
+    sha: 322aa96236ef37657a9a2326b83dc7b480672134
   - path: src/board.js
     sha: 7e895ff3e7e8380a61fd275e609d93dfce2140e1
   - path: src/init.js
     sha: c4aeb61643f9b6457e3307e9663ade2543f75dba
-generated_at_commit: c7ee90c
+generated_at_commit: c6ee6f1
 last_refreshed: 2026-08-28
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick]
 ---
@@ -181,6 +181,51 @@ With one board the page looks exactly as it always did. With more, a board bar
 appears under the header: one chip per board with its own dispatcher dot and card
 count, click to narrow the page to it, and every card grows a chip naming its
 repo. The seven columns are shared; boards cluster within them in list order.
+
+## The drawer draws the subgraph (#108)
+
+Opening a card shows its dependency subgraph as inline SVG above *Blocked by*:
+the card, everything it is transitively blocked by, and everything transitively
+waiting on it. It is a **rendering, not a feature of the server** — `cardOf`
+already puts `blockedBy: [{number, title, done}]` on every card in `/api/board`,
+so the picture costs no route, no fetch, no server change and no dependency.
+`depGraph` and `graphSvg` are two pure top-level functions in the page's one
+classic `<script>`, which is what lets the suite assert layers, node count and
+edge count over a diamond in a vm, with no DOM.
+
+Four decisions worth knowing:
+
+- **Every edge between the collected nodes is drawn**, not only the ones on the
+  path from the focused card. That is what turns two chains back into the diamond
+  they actually are, and it is why the picture is the same opened from either end.
+- **A blocker that is no card on the board is still a node.** `fetchBoard` reads
+  open issues only, so a *finished* blocker is not on the board — but the cards
+  that name it carry its number, title and done state, so it becomes a node from
+  that stub rather than a hole where the shared dependency was.
+- **Nodes reuse the column colours** (`--col`, the same custom property a card
+  sets) and the existing `data-open` handler, so there is no second palette and
+  no second way to open a card in the drawer.
+- **Nothing is drawn** when a card has neither blockers nor anything waiting on
+  it — no empty box.
+
+Layout is longest-path layering (row 0 is what nothing in the picture waits on)
+plus two barycenter ordering passes. It is honest about its limits: readable at
+5–15 nodes, roughly 6.8 average crossings on random 12-node DAGs, and a cap of
+40 nodes with a note saying the picture is not all of it. If it ever needs to be
+prettier the answer is a vendored renderer on its own ETag'd route — never inline,
+never a CDN, because the self-containment assertions are the page's only build
+step. A module `<script>` is not an option either: a top-level `import` makes
+`new vm.Script` throw and takes every page test with it.
+
+**The one place the picture can be wrong, and says so.** Without GitHub's GraphQL
+`blockedBy` field, `fetchBoard` REST-fills `todo`/`blocked` cards only
+(`fillBlockedByRest`, `src/tasks.js:64-72`, applied at `src/tasks.js:94`) —
+widening that would be a per-task
+REST call on every read, which Values 2 and 3 forbid. That leaves a fingerprint
+the page can read off the payload it already has: edges exist, and *none* of them
+hang off a card that is neither todo nor blocked. `edgesMayBeMissing` looks for
+exactly that and the graph carries a one-line note, rather than drawing a
+confidently wrong picture of what a track depended on.
 
 ## Related
 
