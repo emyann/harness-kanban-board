@@ -76,6 +76,9 @@ const keep = argv.includes('--keep');
 const verifyOnly = argv.includes('--verify-only') ? argv[argv.indexOf('--verify-only') + 1] : null;
 if (argv.includes('--verify-only') && !verifyOnly) die('--verify-only needs the path of an installed package root');
 
+// The config home every command below runs against — see cleanEnv().
+const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-smoke-config-'));
+
 const failures = [];
 const log = (msg) => process.stdout.write(`${msg}\n`);
 const ok = (msg) => log(`  ok    ${msg}`);
@@ -128,10 +131,16 @@ function checkContents(root) {
   }
 }
 
-/** KB_TASK in particular would make `hook stop` do real work against a real board. */
+/**
+ * KB_TASK in particular would make `hook stop` do real work against a real board. KB_CONFIG_HOME is
+ * pointed at a throwaway rather than unset: `hkb init` registers the checkout it sets up in the
+ * user-level board list (src/init.js step 7), and the scratch repo below is deleted when this script
+ * ends — it has no business on the board list of whoever ran this.
+ */
 function cleanEnv() {
   const env = { ...process.env };
   for (const k of ['KB_TASK', 'KB_ATTEMPT', 'KB_BOARD', 'KB_PROFILE', 'KB_ROOT']) delete env[k];
+  env.KB_CONFIG_HOME = configHome;
   return env;
 }
 
@@ -264,6 +273,7 @@ try {
   }
   log(`smoke-pack: the packed artifact installs, runs, and initialises a repo. ${MUST_SHIP.length + MUST_NOT_SHIP.length} content checks, 3 command checks, ${FROM_PACKAGE.length + 3} init checks.`);
 } finally {
+  if (!keep) fs.rmSync(configHome, { recursive: true, force: true });
   if (dir && !keep) fs.rmSync(dir, { recursive: true, force: true });
   else if (dir) log(`kept: ${dir}`);
 }

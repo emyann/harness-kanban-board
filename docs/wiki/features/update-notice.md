@@ -15,9 +15,9 @@ covers:
   - path: src/board.js
     sha: 7e895ff3e7e8380a61fd275e609d93dfce2140e1
   - path: src/init.js
-    sha: 710aaadac933165fa996da76a24c60baafadd0b1
+    sha: c4aeb61643f9b6457e3307e9663ade2543f75dba
 related: [architecture/overview, features/auto-merge, gotchas/long-lived-process-rot]
-generated_at_commit: 73feb37
+generated_at_commit: 8005801
 last_refreshed: 2026-08-27
 ---
 
