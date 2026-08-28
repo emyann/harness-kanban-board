@@ -11,11 +11,11 @@ import { spawnSync } from 'node:child_process';
 import {
   harnessFiles, installHarness, installClaudeHooks, hookSummary, CLAUDE_HOOKS, resolveProfiles, boardProfiles,
   HARNESSES, HARNESS_PROFILE, packageSkillDir, HOOK_SETTINGS, NPX_COMMAND, hkbCommandForHook, hookPlacement,
-  hookCommandNeeds, isHkbHookCommand, isPortableHookCommand, isEphemeralPath, findClaudeHooks,
-  localInstallRel, guardedHookCommand, resolveHookPath, packageInfo, PROJECT_DIR,
+  hookCommandNeeds, isHkbHookCommand, isPortableHookCommand, isEphemeralPath, findClaudeHooks, actionsFiles,
+  projectBinRel, guardedHookCommand, resolveHookPath, PROJECT_DIR,
 } from '../src/init.js';
 import { parseArgs } from '../src/cli.js';
-import { DEFAULT_BOARD, DEFAULT_PROFILES, ensureWorktree } from '../src/board.js';
+import { DEFAULT_BOARD, DEFAULT_PROFILES, CLAUDE_DENY, ensureWorktree } from '../src/board.js';
 import { expandLaunch, spawnWorker, tick } from '../src/dispatch.js';
 import { checkHarnesses, checkHooks } from '../src/doctor.js';
 import { stripFrontmatter, worktreePath, isLocalInstall, stripNodeModulesBin } from '../src/model.js';
@@ -166,6 +166,42 @@ test('the copilot-cli profile runs in a dispatcher-made worktree and allow-lists
   const denied = argv.filter((_, i) => argv[i - 1] === '--deny-tool');
   assert.ok(denied.some((d) => /git push --force/.test(d)), 'force-push must be denied at launch');
   assert.deepEqual(argv.slice(-2), ['--model', 'gpt-5']);
+});
+
+// ---------- what the launch refuses, on every profile that spawns Claude Code ----------
+//
+// hkb's PreToolUse guard has denied `hkb dispatch` since #23, but it is KB_TASK-gated and so inert
+// on `claude --bg` — the default profile. The launch line is the layer that is live everywhere, so
+// what a worker must never run has to be said there (#143).
+
+test('every Claude launch denies the dispatcher, and says dontAsk so a denial is not a prompt', () => {
+  for (const name of ['claude', 'claude-track', 'claude-p']) {
+    const p = DEFAULT_PROFILES[name];
+    const argv = expandLaunch(p.launch, { n: 7, k: 1, title: 't', prompt: 'do the thing' }, p);
+    const after = argv.slice(argv.indexOf('--disallowedTools') + 1);
+    const denied = after.slice(0, after.findIndex((a) => a.startsWith('--')));
+    assert.ok(denied.includes('Bash(hkb dispatch*)'), `${name} does not deny the dispatcher: ${denied.join(' ')}`);
+    assert.ok(denied.some((d) => /git push --force/.test(d)), `${name} stopped denying force-push`);
+    assert.equal(argv[argv.indexOf('--permission-mode') + 1], 'dontAsk', `${name} would prompt, and nobody is there to answer`);
+    assert.deepEqual(denied, CLAUDE_DENY, `${name} carries its own deny list instead of the shared one`);
+  }
+});
+
+test('the generated Actions worker carries the same deny list as a local launch', () => {
+  const yml = actionsFiles().find((f) => /worker-claude/.test(f.rel)).contents;
+  const m = /--disallowedTools "([^"]*)"/.exec(yml);
+  assert.ok(m, '--disallowedTools went missing from the worker workflow');
+  assert.deepEqual(m[1].split(','), CLAUDE_DENY);
+  assert.ok(CLAUDE_DENY.includes('Bash(hkb dispatch*)'));
+});
+
+test('Copilot gets no dispatch deny — its pattern language is unverified for it (told in the prompt instead)', () => {
+  const p = DEFAULT_PROFILES['copilot-cli'];
+  const argv = expandLaunch(p.launch, { prompt: 'x' }, p);
+  const denied = argv.filter((_, i) => argv[i - 1] === '--deny-tool');
+  assert.ok(!denied.some((d) => /dispatch/.test(d)), 'a deny that matches nothing reads as protection there is none of');
+  const skill = fs.readFileSync(path.join(packageSkillDir(), 'SKILL.md'), 'utf8');
+  assert.match(skill, /Never run `hkb dispatch`/, 'then the prompt is the only place that says it');
 });
 
 test('expandLaunch leaves --model out when no model is set, in both flag styles', () => {
@@ -550,8 +586,10 @@ test('init names both hooks it wrote, where they went, and what the second one i
   assert.match(hookSummary([], { repaired: ['Stop'] }), /rewrote the Stop hook command/);
   for (const line of [fresh, hookSummary([]), hookSummary(['PreToolUse'])]) {
     for (const event of Object.keys(CLAUDE_HOOKS)) assert.ok(line.includes(event), `${event} goes unnamed in: ${line}`);
-    assert.match(line, /inert unless KB_TASK is set/, 'an operator reading this has to know both are no-ops in their own sessions');
-    assert.match(line, /PreToolUse is the worker permission policy/, 'and what the second one is');
+    assert.match(line, /inert outside a worker session/, 'an operator reading this has to know both are no-ops in their own sessions');
+    // the two gates differ, and a note that says otherwise is how #143 found the docs stale
+    assert.match(line, /PreToolUse denies \(never allows\) and takes KB_TASK only/, 'and what the second one is');
+    assert.match(line, /stands aside on claude --bg/, 'the profile it is NOT live on is the default one');
   }
 });
 

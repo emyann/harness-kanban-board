@@ -200,6 +200,82 @@ test('workerContext has no Comments section when nobody has said anything', asyn
   assert.match(out, /## Protocol \(hkb\)/);
 });
 
+// ---------- continuing a PR the reviewer sent back (#153) ----------
+
+/** A card in the shape `hkb request-changes` leaves behind: open PR, reviewer row on top. */
+function sentBack({ number = 42, pr = 147, branch = 'worktree-kb-42-1', base = 'main' } = {}) {
+  return kbIssue({
+    number,
+    title: 'wire the client',
+    status: 'ready',
+    agent: 'claude',
+    run: runWith([
+      { attempt: 1, started_at: at(300), ended_at: at(200), outcome: 'review_requested', summary: 'ready for review', pr },
+      { attempt: 2, profile: 'reviewer', started_at: at(20), ended_at: at(20), outcome: 'changes_requested', reason: 'rename the flag', synthetic: true },
+    ]),
+    prs: [{ number: pr, state: 'OPEN', isDraft: true, headRefName: branch, baseRefName: base }],
+  });
+}
+
+test('the brief tells a continuing worker which PR to push to, and not to open a second', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(sentBack());
+
+  const out = await workerContext(h.ctx, await getTask(h.ctx, 42), 3);
+
+  assert.match(out, /^## Continue PR #147 — do not open a second one$/m);
+  assert.match(out, /PR #147 \(branch `worktree-kb-42-1`\) is open with \*\*changes requested\*\*/);
+  assert.match(out, /git fetch origin main && git merge origin\/main/);
+  assert.match(out, /Do \*\*not\*\* run `gh pr create`/);
+  // and the standing "rebase before you finish" line, which would need the force-push it forbids
+  assert.match(out, /Before finishing: merge `origin\/main` in \(never rebase: this branch is already pushed\)/);
+  // and the two protocol lines that would otherwise send it to a fresh branch and a new PR
+  assert.match(out, /PR #147 already exists and already closes #42 — push to its branch \(`worktree-kb-42-1`\)/);
+  assert.doesNotMatch(out, /gh pr create --draft --fill/);
+  // the block is near the top: above the attempts it refers to, and above the protocol
+  assert.ok(out.indexOf('## Continue PR #147') < out.indexOf('## Prior attempts on this task'));
+  // the fresh-worktree recipe, because the dispatcher did not say it had checked the branch out
+  assert.match(out, /git fetch origin worktree-kb-42-1 && git reset --hard FETCH_HEAD/);
+  assert.match(out, /Work only in this worktree, on the branch of the PR you are continuing/);
+});
+
+test('a checkout the dispatcher already put on the PR branch is said so, once', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(sentBack());
+
+  const out = await workerContext(h.ctx, await getTask(h.ctx, 42), 3, {
+    continuePr: { number: 147, branch: 'worktree-kb-42-1', base: 'main', checkedOut: true },
+  });
+
+  assert.match(out, /already checked out on `worktree-kb-42-1`, so an ordinary `git push` updates PR #147/);
+  assert.match(out, /Work only in this worktree — it is already checked out on `worktree-kb-42-1`, PR #147's branch\./);
+  assert.doesNotMatch(out, /git reset --hard FETCH_HEAD/, 'the branch is already there: no recipe for taking it');
+});
+
+test('an ordinary card gets no continuation block, open PR or not', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  // an open PR with no reviewer row on top is the active_pr guard's business, not a continuation
+  h.gh.addIssue(kbIssue({
+    number: 43,
+    status: 'ready',
+    agent: 'claude',
+    run: runWith([{ attempt: 1, started_at: at(300), ended_at: at(200), outcome: 'review_requested' }]),
+    prs: [{ number: 148, state: 'OPEN', isDraft: true, headRefName: 'worktree-kb-43-1' }],
+  }));
+  h.gh.addIssue(kbIssue({ number: 44, status: 'ready', agent: 'claude' }));
+
+  for (const n of [43, 44]) {
+    const out = await workerContext(h.ctx, await getTask(h.ctx, n));
+    assert.ok(!out.includes('do not open a second one'), `#${n}`);
+    assert.match(out, /Work only in this worktree, on the current branch\./);
+    assert.match(out, /Before finishing: rebase on the default branch/);
+    assert.match(out, /gh pr create --draft --fill/);
+  }
+});
+
 test('the protocol asks for a finishing command a shell-vetting harness will run (#125)', async (t) => {
   const h = harness();
   t.after(h.cleanup);

@@ -213,6 +213,27 @@ One thing worth knowing before you turn it on: auto-merge waits for what the bra
 the PR lands when they pass, whether or not Alice looked. Require approving reviews on the branch and the reviewer
 becomes the gate that holds the merge; `hkb doctor` prints which of the two you have.
 
+### Sending a card back: `hkb request-changes`
+
+The other end of review. `hkb request-changes 42 "no down step in the migration"` records the note as a
+`changes_requested` row and puts the card back in *ready* — and leaves the PR open, because the PR is the thing
+the next attempt continues:
+
+```bash
+hkb request-changes 42 "no down step in the migration"
+#42 → ready (PR #147 stays open; the next attempt continues it)
+```
+
+The next tick claims that card even though its PR is open — the `active_pr` guard, which parks every other
+`ready` card with an open PR in *review*, steps aside for exactly the row `request-changes` writes. The attempt it
+starts gets its checkout on **the PR's own head branch** (the dispatcher makes it, so a harness with no flag for
+it works the same), and a block at the top of its brief that names the PR and says not to open a second one. It
+merges the base branch in, pushes, and `hkb finish` puts the card back in *review* on the same PR — the result
+comment says *continued*, not opened. One card, one PR, as many rounds of review as it takes.
+
+Only the latest attempt row exempts a card, so a continuation that crashes goes back to *review* rather than
+respawning: one `request-changes`, one relaunch, and the reviewer decides whether there is another.
+
 ## The board in a browser
 
 ```bash
@@ -541,7 +562,7 @@ doctor then names the installed version once with nothing to do about it.
 | `kanban_complete(summary, metadata)` | `<!-- kb-result -->` comment; open PR → *review*, else issue closed |
 | worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link`, or the same nine as MCP tools (`hkb mcp`) |
 | stop nudge | Claude Code / Codex `Stop`, Copilot CLI `agentStop` hook (`hkb hook stop`, 2 nudges, inert unless the session is a worker's — `KB_TASK`, or the `kb-<n>-<k>` checkout it runs in, which is all a background agent has). Claude Code's pair goes in `.claude/settings.local.json` — per-developer and gitignored, because the command names whichever `hkb` *this* machine has; `hkb init --shared-hooks` puts them in the tracked `.claude/settings.json` instead, where the command is always a plain `hkb` every teammate needs on PATH (`hkb doctor` says so when it is not there) |
-| worker permissions | Claude Code `PreToolUse` hook (`hkb hook pretool`, inert unless `KB_TASK` is set — so **not** on the `claude --bg` profiles, where the launch's own `--allowedTools`/`--disallowedTools` are the whole policy; `hkb doctor` prints which layer enforces on each profile, and [docs/harnesses.md](docs/harnesses.md#which-layer-is-actually-enforcing) has the table) — file tools confined to the worktree, `hkb dispatch`/`kill`/force-push/`sudo`/`rm -rf <abs>` denied outright, everything else checked against the profile's allowlist: allow or deny, never a prompt. `hkb init` writes it beside the Stop hook |
+| worker permissions | **the launch line**, on every profile: `--permission-mode dontAsk` (deny, never a prompt — nobody is there to answer one) with an `--allowedTools` list covering the shell builtins hkb's own guard calls safe, and `--disallowedTools "Bash(hkb dispatch*),Bash(git push --force*),Bash(git push -f*)"`. On top of it, where it runs, the Claude Code `PreToolUse` hook (`hkb hook pretool`, inert unless `KB_TASK` is set — so **not** on the `claude --bg` profiles): it may **deny or say nothing, never allow**, so it can only subtract from the launch's list — `kill`/`sudo`/`rm -rf <abs>` and file tools outside the worktree on top of the profile's allowlist. A denial tells the worker to `hkb block <n> "needs …" --kind capability` rather than work around it. `hkb doctor` prints which layer enforces on each profile, warns about a frozen allow-list or a launch that lost `dontAsk`, and [docs/harnesses.md](docs/harnesses.md#which-layer-is-actually-enforcing) has the table. `hkb init` writes the hook beside the Stop hook |
 | kanban dashboard | `hkb serve` — local page over the live board; drag-drop calls the same verbs |
 | live event stream | `hkb watch` / `hkb tail <n>` — conditional `GET` with `If-None-Match`; an unchanged board answers 304 and is not charged |
 | runs/spend report | `hkb stats` — the same labels and run comments, rolled up: outcomes, duration, spawns vs the daily cap, and spend per profile — `total_cost_usd` where the harness reported one, else the session transcript's tokens, priced at the board's `stats.rates` and labelled an estimate ([what each profile gives you](docs/harnesses.md#what-a-profile-can-tell-you-it-spent)) |

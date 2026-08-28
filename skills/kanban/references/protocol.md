@@ -36,7 +36,7 @@ the mistakes actually happen.
 | Needs a human | label `kb:needs-human` | orthogonal flag; set on gave_up, block loops, most block kinds |
 | Machine fields | `<!-- kb: {...} -->` block at the top of the body | `priority, workspace, max_runtime, max_retries, model, skills[], paths[], scheduled_at, idempotency_key, goal`. Malformed → defaults, never a crash |
 | Dependencies | GitHub issue dependencies: child **blocked by** parent | Hermes parent→child. A blocker counts as done only when closed as *completed* |
-| Attempts (Hermes `runs`) | one `<!-- kb-run -->` comment, fenced JSON | `attempts[] {attempt, profile, host, pid, started_at, heartbeat_at, lock_sha, ended_at, outcome, summary, reason, log, session_id, transcript_path, total_cost_usd, num_turns, duration_ms}`, `failures`, `block_loops`. `lock_sha` is where the lock ref started, so the worker's first CAS heartbeat knows what to lease on. The session fields are recorded once, by the Stop hook and the dispatcher: `hkb show <n>` prints them with a `claude --resume <id>` line. A track attempt also carries `track: true` and `track_nodes[]` — the subgraph it was handed, and the marker that says this root has had its one go at the fast engine. An attempt from a `"mode": "trigger"` profile (`claude-action`) carries `remote: true`: the launch only *started* work elsewhere, so there is no pid or job anywhere to look at. An attempt from `hkb claim <n>` with no `--spawn` carries `manual: true` — the operator claimed it and is working it in their own terminal, so there is no pid either; both are judged by the heartbeat alone. `profile` is normally a board profile, but three values are **reserved and synthetic** (the row also carries `synthetic: true`, and opens and closes in the same instant): `dispatcher` — the tick wrote the row itself, out of retries (`gave_up`); `reviewer` — `hkb request-changes` sent the card back (`changes_requested`); `human` — the operator ran a terminal verb by hand on a task with no open attempt and no `kb:agent:*` label. Do not name a board profile after one of them |
+| Attempts (Hermes `runs`) | one `<!-- kb-run -->` comment, fenced JSON | `attempts[] {attempt, profile, host, pid, started_at, heartbeat_at, lock_sha, ended_at, outcome, summary, reason, log, session_id, transcript_path, total_cost_usd, num_turns, duration_ms}`, `failures`, `block_loops`. `lock_sha` is where the lock ref started, so the worker's first CAS heartbeat knows what to lease on. The session fields are recorded once, by the Stop hook and the dispatcher: `hkb show <n>` prints them with a `claude --resume <id>` line. A track attempt also carries `track: true` and `track_nodes[]` — the subgraph it was handed, and the marker that says this root has had its one go at the fast engine. An attempt from a `"mode": "trigger"` profile (`claude-action`) carries `remote: true`: the launch only *started* work elsewhere, so there is no pid or job anywhere to look at. An attempt from `hkb claim <n>` with no `--spawn` carries `manual: true` — the operator claimed it and is working it in their own terminal, so there is no pid either; both are judged by the heartbeat alone. An attempt the dispatcher started to **continue** a PR the reviewer sent back carries `continues_pr: <number>`, and `continues_branch: <head branch>` when the dispatcher managed to put the checkout on that branch (without it, the brief is what tells the worker which PR to push to). `profile` is normally a board profile, but three values are **reserved and synthetic** (the row also carries `synthetic: true`, and opens and closes in the same instant): `dispatcher` — the tick wrote the row itself, out of retries (`gave_up`); `reviewer` — `hkb request-changes` sent the card back (`changes_requested`); `human` — the operator ran a terminal verb by hand on a task with no open attempt and no `kb:agent:*` label. Do not name a board profile after one of them |
 | Structured handoff | `<!-- kb-result -->` comment per completion / review request | `{summary, metadata{changed_files, verification, dependencies, residual_risk, retry_notes}, artifacts[]}` |
 | Events | issue timeline + attempt rows (`hkb log`) | |
 | Claim | git ref `refs/kb/locks/<n>/<attempt>` | create = atomic claim (201 claimed / held on **422 "Reference already exists"** — the observed duplicate response, verified 2026-08-26 — or 409 / anything else unknown → back off) |
@@ -55,13 +55,41 @@ ready   --(claim ref created)----------------------------------→ running
 running --complete--→ done (issue closed)   | --block(kind)--→ blocked (or todo if kind=dependency)
 running --request-review--→ review          | --crash/timeout/stale/protocol_violation--→ ready (failures++)
 failures > max_retries -----------------------------------------→ blocked + kb:needs-human (gave_up)
-review  --PR merged / reviewer complete--→ done | --request-changes--→ ready (same branch)
+review  --PR merged / reviewer complete--→ done | --request-changes--→ ready (same PR, same branch)
 blocked --unblock / promote--→ ready (or todo if blockers open)
 same block reason × block_recurrence_limit ---------------------→ triage + kb:needs-human
 done    --archive--→ archived
 ```
 
-`ready` derives **only** from blocker closure. PR state never gates readiness.
+`ready` derives **only** from blocker closure. PR state never gates readiness — it gates *claiming*:
+the `active_pr` guard parks a `ready` card whose PR is open in `review`, because a card waiting on a
+human must not be redone by a second worker. The one exemption is the card `hkb request-changes`
+produces. Its latest attempt is the reviewer's synthetic `changes_requested` row, which *means* "the
+PR is open and must be continued", so the card stays claimable and the next attempt continues that
+PR — on its head branch, with `continues_pr` on the attempt row — instead of opening a second one.
+Only the latest row exempts: a continuation that crashes leaves `crashed` on top and the guard parks
+the card again, so one `request-changes` buys exactly one relaunch.
+
+### The review loop, in full
+
+```
+worker --request-review--→ review  ──reviewer: hkb request-changes <n> "why"──→  ready
+   ▲                                                                              │
+   └── hkb finish (open PR → review, same PR) ←── attempt k+1, on the PR's branch ─┘
+```
+
+`hkb request-changes` leaves the PR exactly as it is — open, draft or not: it is the continuation
+target, and closing it would throw away the branch the next attempt needs. What the reviewer writes
+reaches that attempt twice: as the `changes_requested` row in *Prior attempts*, and as the block at
+the top of the brief that names the PR, its branch, and the one rule — **do not open a second PR**.
+
+Where the checkout comes from is the dispatcher's problem, not the worker's. It makes
+`.claude/worktrees/kb-<n>-<k>` on the PR's head branch itself (fetching it first, and freeing it from
+the ended attempt's checkout if that still holds it), and drops the harness's own worktree flag so
+there is one checkout, not two. When it cannot — the branch is held by a live session, there is no
+remote — the attempt still runs, on an ordinary fresh worktree, and the brief carries the recipe
+(`git fetch origin <branch> && git reset --hard FETCH_HEAD`, then `git push origin HEAD:<branch>`).
+Either way the worker merges the base branch in rather than rebasing: **never `git push --force`.**
 
 ## Heartbeat
 
@@ -99,7 +127,7 @@ the dispatcher owns their lock. `hkb heartbeat <n> --note "..."` always takes th
 2. For every `running` task: crashed (pid gone on this host) · timed_out (`max_runtime`) · reclaimed (no signal for `stale_after`) → close the attempt, release the ref, `failures++`, back to `ready` or `gave_up`. The last signal is the freshest of `started_at`, `heartbeat_at` and **the committer date of the commit the lock ref points at** — the only trace a CAS heartbeat leaves. That commit is read only for an attempt that already looks stale, so a live board costs one extra request per reclaim decision and a quiet one costs none. A `remote` or `manual` attempt skips every local check — `max_runtime` and the heartbeat are the whole of it. That is what makes claiming by hand safe: the dispatcher never mistakes a pidless attempt for a crashed spawn, but it does reclaim one that stops beating for `stale_after` (1h by default).
 3. Sweep orphan lock refs (no matching open attempt).
 4. Promote `todo` → `ready`.
-5. Track roots first (see *Tracks* below): a root on a profile with `"track": true` whose whole subgraph is claimable takes the same caps and guards — with the union of its nodes' `kb.paths` — and spawns **one** session for all of it. Then `ready` tasks by priority: caps (`max_in_progress`, per-profile, daily spawn cap) → guards (`active_pr` → review, `blocker_auth` pause, `recent_success`, `path_overlap`) → claim ref → append attempt → label `running` → spawn the profile's launch command with `KB_*` env. A node a live track owns is skipped here and costs no slot. `hkb dispatch --profiles a,b` restricts *this step only* to profiles the host can launch — how the Actions dispatcher takes the `claude-action` tasks and leaves a laptop's `claude` ones alone; every other step still covers the whole board.
+5. Track roots first (see *Tracks* below): a root on a profile with `"track": true` whose whole subgraph is claimable takes the same caps and guards — with the union of its nodes' `kb.paths` — and spawns **one** session for all of it. Then `ready` tasks by priority: caps (`max_in_progress`, per-profile, daily spawn cap) → guards (`active_pr` → review *unless the latest attempt is `changes_requested`*, in which case the card is claimed and the attempt **continues that PR**; `blocker_auth` pause; `recent_success`; `path_overlap`) → claim ref → append attempt → label `running` → spawn the profile's launch command with `KB_*` env. A node a live track owns is skipped here and costs no slot. `hkb dispatch --profiles a,b` restricts *this step only* to profiles the host can launch — how the Actions dispatcher takes the `claude-action` tasks and leaves a laptop's `claude` ones alone; every other step still covers the whole board.
 6. On a board with `"merge": {"mode": "auto"}`: for every card now in `review` with an open, non-draft PR that has no auto-merge request yet, one `enablePullRequestAutoMerge` — GitHub merges it when *its* gates go green. Nothing to poll and nothing to retry: a PR whose checks fail simply never merges. Refused, with the fix, on a base branch that requires nothing.
 7. Mirror the labels onto the linked Projects v2 board, when there is one (see below).
 

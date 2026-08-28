@@ -90,8 +90,20 @@ A worker is whatever a profile in `src/board.js` can launch — Claude Code,
 Copilot CLI, Codex, or a GitHub Actions run — pointed at one card. Its
 contract is small: the verbs in `src/lifecycle.js` (complete / block /
 request-review), a prompt assembled from the card by `src/context.js`, and
-guard rails enforced by the Stop/PreToolUse hooks in `src/hook.js`. The
-protocol is what a worker follows; the harness is interchangeable.
+guard rails on the launch line itself. The protocol is what a worker follows;
+the harness is interchangeable.
+
+**The launch line is the permission policy.** `--permission-mode dontAsk` with
+an `--allowedTools` / `--disallowedTools` pair (`CLAUDE_TOOLS` and
+`CLAUDE_DENY`, `src/board.js`) is the layer that is live on every profile,
+including the `claude --bg` default where the `KB_TASK`-gated PreToolUse hook
+never fires. So what a worker must never run is said there — `Bash(hkb
+dispatch*)` beside the force-push patterns — and hkb's own `preToolHook`
+(`src/hook.js`) is deliberately **deny-or-silent**: it can subtract from that
+list and never widen it, because a hook `allow` overrides Claude Code's own
+checks and would let one profile's worker run what the identical worker beside
+it is refused. A denial names the way out rather than inviting a workaround:
+`hkb block <n> "needs …" --kind capability`.
 
 *Which* card is the subtle part, and it is not always the environment. The
 dispatcher exports `KB_TASK`/`KB_ATTEMPT` on the launch (`src/dispatch.js`),

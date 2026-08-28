@@ -84,6 +84,9 @@ pages:
   - slug: features/auto-merge
     summary: "Why hkb never merges, how a board hands the last step to GitHub's auto-merge, and the branch-protection gate that is the only thing making that safe."
     status: seeded
+  - slug: features/review-loop
+    summary: "How a reviewed card goes back for another round on the same PR: the one exemption to the active_pr guard, the checkout on the PR's branch, and the block in the brief that stops a second PR."
+    status: seeded
   - slug: decisions/adr-001-github-native-backend
     summary: "GitHub Issues + native dependencies + ref locks won over MCP-first and repo-native designs; stacked PRs rejected for board sequencing."
     status: planned
