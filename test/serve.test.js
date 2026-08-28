@@ -177,6 +177,149 @@ test('the user-level list is read when no flag is given, and a stale entry is sk
   }
 });
 
+// ---------- the list is live ----------
+// A board added to `boards.json` while the server runs is served without a restart — and a board that
+// was already there keeps its cache, which is the whole difference between a reload and a restart.
+
+/**
+ * A server whose board list is the real user-level file, with a clock the test moves by hand.
+ * Nothing is injected but the reads: `serveContexts` resolves the temp checkouts for real.
+ */
+async function withLiveServer(fn, flags = {}) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-cfg-'));
+  const kept = process.env.KB_CONFIG_HOME;
+  process.env.KB_CONFIG_HOME = home;
+  fs.mkdirSync(path.join(home, 'hkb'), { recursive: true });
+  const file = path.join(home, 'hkb', 'boards.json');
+  const writeList = (boards) => fs.writeFileSync(file, JSON.stringify({ version: 1, boards }));
+  const raw = (text) => fs.writeFileSync(file, text);
+
+  const here = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-here-'));
+  fs.mkdirSync(path.join(here, '.kanban', 'logs'), { recursive: true });
+  const ctx = { root: here, repo: { owner: 'o', repo: 'here', nameWithOwner: 'o/here' }, board: 'default', host: 'testhost', _cache: {}, cfg: {} };
+
+  const fetched = []; // one entry per fetchBoard call, so "was this board refetched?" is assertable
+  const cards = new Map(); // root -> the tasks that board answers with
+  const notes = [];
+  let clock = Date.now();
+  const deps = {
+    // deliberately no `contexts` seam — the list is resolved from boards.json the way `hkb serve` does
+    now: () => clock,
+    fetchBoard: async (c) => { fetched.push(c.root); return cards.get(c.root) || []; },
+    getTask: async (c, n) => task({ number: n }),
+    loadRun: async () => ({ run: { failures: 0, attempts: [] } }),
+    latestResult: async () => null,
+    parentResults: async () => [],
+  };
+  const s = await startServer(ctx, { port: 0, poll: 30, ...flags }, (m) => notes.push(m), deps);
+  const get = (p, opts) => fetch(s.url + p, opts);
+  const keysOf = async () => (await (await get('/api/board')).json()).boards.map((b) => b.key);
+  try {
+    await fn({
+      ...s, get, keysOf, notes, fetched, cards, writeList, raw, here,
+      tick: () => { clock += 60_000; }, // past the poll interval: the next request re-reads the list
+    });
+  } finally {
+    await new Promise((r) => s.server.close(r));
+    if (kept === undefined) delete process.env.KB_CONFIG_HOME; else process.env.KB_CONFIG_HOME = kept;
+  }
+}
+
+test('a board added to boards.json is served without restarting hkb serve', async () => {
+  await withLiveServer(async ({ keysOf, cards, writeList, tick, notes }) => {
+    writeList([]);
+    assert.deepEqual(await keysOf(), ['o~here~default']);
+
+    const other = fakeCheckout('o/other');
+    cards.set(other, [task({ number: 7 })]);
+    writeList([other]);
+    assert.deepEqual(await keysOf(), ['o~here~default'], 'not before the poll interval is up');
+
+    tick();
+    assert.deepEqual(await keysOf(), ['o~here~default', 'o~other~default']);
+    assert.match(notes.join('\n'), /board list changed: \+o~other~default — now 2 boards/);
+  });
+});
+
+test('a new board is addressable at once, and a removed one stops being served', async () => {
+  await withLiveServer(async ({ keysOf, get, cards, writeList, tick, notes }) => {
+    const other = fakeCheckout('o/other');
+    cards.set(other, [task({ number: 7 })]);
+    writeList([other]);
+    tick();
+    assert.deepEqual(await keysOf(), ['o~here~default', 'o~other~default']);
+    assert.equal((await get('/api/boards/o~other~default/tasks/7')).status, 200);
+
+    writeList([]);
+    tick();
+    assert.deepEqual(await keysOf(), ['o~here~default']);
+    // the board is gone from the router too, and its cache went with it
+    const gone = await get('/api/boards/o~other~default/tasks/7');
+    assert.equal(gone.status, 404);
+    assert.match((await gone.json()).error, /no board "o~other~default"/);
+    assert.match(notes.join('\n'), /board list changed: -o~other~default — now 1 board \(/);
+  });
+});
+
+test('a board that survives a reload keeps its cache: no board is refetched to add another', async () => {
+  await withLiveServer(async ({ keysOf, get, cards, writeList, tick, fetched, here }) => {
+    const other = fakeCheckout('o/other');
+    cards.set(here, [task()]);
+    cards.set(other, [task({ number: 7 })]);
+    writeList([other]);
+    tick();
+    assert.deepEqual(await keysOf(), ['o~here~default', 'o~other~default']);
+    assert.deepEqual(fetched, [here, other]); // one read each
+
+    const third = fakeCheckout('o/third');
+    cards.set(third, [task({ number: 9 })]);
+    writeList([other, third]);
+    tick();
+    const body = await (await get('/api/board')).json();
+    assert.deepEqual(body.boards.map((b) => b.key), ['o~here~default', 'o~other~default', 'o~third~default']);
+    assert.deepEqual(fetched, [here, other, third], 'only the board that appeared was read');
+    // and the boards that were there still carry the cards they had
+    assert.deepEqual(body.boards.map((b) => b.tasks.map((t) => t.number)), [[20], [7], [9]]);
+  });
+});
+
+test('a stale entry is logged once, not once per reload', async () => {
+  await withLiveServer(async ({ keysOf, writeList, tick, notes }) => {
+    writeList(['/gone/for/good']);
+    tick();
+    for (let i = 0; i < 4; i++) { await keysOf(); tick(); }
+    const skips = notes.filter((m) => m.startsWith('skipping "/gone/for/good"'));
+    assert.equal(skips.length, 1, notes.join('\n'));
+    assert.match(skips[0], /does not exist/);
+  });
+});
+
+test('an unreadable boards.json says so once and keeps the boards the server holds', async () => {
+  await withLiveServer(async ({ keysOf, raw, tick, notes }) => {
+    const other = fakeCheckout('o/other');
+    raw(JSON.stringify({ version: 1, boards: [other] }));
+    tick();
+    assert.deepEqual(await keysOf(), ['o~here~default', 'o~other~default']);
+    raw('{"version": 1, "boards": [');
+    for (let i = 0; i < 3; i++) { tick(); assert.deepEqual(await keysOf(), ['o~here~default', 'o~other~default']); }
+    assert.equal(notes.filter((m) => m.startsWith('board list:')).length, 1);
+    assert.match(notes.join('\n'), /board list:.*not valid JSON.*keeping the 2 board/);
+  });
+});
+
+test('--repos is an explicit set for this run: it does not reload', async () => {
+  const named = fakeCheckout('o/named');
+  await withLiveServer(async ({ keysOf, cards, writeList, tick, notes }) => {
+    cards.set(named, [task({ number: 7 })]);
+    assert.deepEqual(await keysOf(), ['o~here~default', 'o~named~default']);
+    const other = fakeCheckout('o/other');
+    writeList([other]);
+    tick();
+    assert.deepEqual(await keysOf(), ['o~here~default', 'o~named~default']);
+    assert.equal(notes.some((m) => m.startsWith('board list changed')), false);
+  }, { repos: named });
+});
+
 test('isLoopback knows what is safe to bind without auth', () => {
   for (const h of ['127.0.0.1', 'localhost', '::1', '[::1]', '127.0.0.53']) assert.equal(isLoopback(h), true, h);
   for (const h of ['0.0.0.0', '192.168.1.4', 'example.com']) assert.equal(isLoopback(h), false, h);

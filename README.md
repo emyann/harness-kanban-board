@@ -198,9 +198,11 @@ cannot live in any one `.kanban/`. `hkb serve` with no flag reads `~/.config/hkb
 { "version": 1, "boards": ["~/code/web", "~/code/api", { "path": "~/code/infra", "board": "release" }] }
 ```
 
-The list is read once, while `hkb serve` starts, so a board you add to it — or a checkout you just
-`hkb init`ed — shows up only after you restart the server. An entry that no longer exists is a warning and a
-skip, never a broken `hkb serve`. Nothing is scanned for: hkb only ever shows the checkouts you named.
+The list is live: `hkb serve` re-reads it once per poll interval, so a board you add to it — or a checkout
+you just `hkb init`ed — appears on the open page without a restart, and one you drop stops being served. The
+re-read is a local file and costs no GitHub call, and a board that was already there keeps its cached cards.
+An entry that no longer exists is a warning and a skip, never a broken `hkb serve`. Nothing is scanned for:
+hkb only ever shows the checkouts you named. `--repos` is the set you typed for that run, and does not reload.
 
 ## The board as a stream
 
