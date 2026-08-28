@@ -111,18 +111,19 @@ export async function workerContext(ctx, task, attempt) {
   }
   lines.push('## Protocol (hkb)');
   lines.push(`1. Run \`hkb show ${n} --json\` if you need more detail. Work only in this worktree, on the current branch.`);
-  lines.push(`2. Every ~10 minutes of long work run \`hkb heartbeat ${n}\` — it is a free compare-and-swap on your lock ref; never push that ref yourself. If it prints LOCK_LOST, stop immediately: do not commit, do not call complete.`);
+  lines.push(`2. Every ~10 minutes of long work run \`hkb heartbeat ${n}\` — it is a free compare-and-swap on your lock ref; never push that ref yourself. If it prints LOCK_LOST, stop immediately: do not commit, do not file a terminal verb.`);
   lines.push('3. Commit with clear, plain messages (no Co-Authored-By trailers, no "Generated with" lines — in commits or PR bodies). Never `git push --force`. Before finishing: rebase on the default branch and run the project\'s lint/tests.');
   lines.push(`4. Push and open a draft PR whose body contains \`Closes #${n}\`: \`gh pr create --draft --fill --body "Closes #${n}"\` (add a real description).`);
-  lines.push('5. Finish with EXACTLY ONE terminal verb, then stop. Send the payload as one JSON object on stdin — no JSON goes through shell quoting:');
+  lines.push('5. Finish with EXACTLY ONE terminal verb, then stop. Send the payload as one JSON object on stdin — no JSON goes through shell quoting. Write the file, then redirect it:');
   lines.push('```bash');
-  lines.push(`hkb complete ${n} --from-stdin <<'EOF'`);
-  lines.push('{"summary": "<what changed, for the next worker>",');
-  lines.push(' "metadata": {"changed_files": ["..."], "verification": ["<commands you ran>"], "residual_risk": ["..."]}}');
-  lines.push('EOF');
+  lines.push(`# write /tmp/kb-${n}.json with your editor tool:`);
+  lines.push('# {"summary": "<what changed, for the next worker>",');
+  lines.push('#  "metadata": {"changed_files": ["..."], "verification": ["<commands you ran>"], "residual_risk": ["..."]}}');
+  lines.push(`hkb finish ${n} --from-stdin < /tmp/kb-${n}.json`);
   lines.push('```');
-  lines.push(`   Or write the pieces to files: \`hkb complete ${n} --summary-file <path> --metadata-file <path.json>\`. Inline \`--summary ".." --metadata '{..}'\` still works.`);
-  lines.push(`   - \`hkb complete ${n} ...\` when done`);
+  lines.push(`   \`finish\` is \`complete\` — the same verb under a name no shell claims. Say \`finish\`: \`complete\` is a bash builtin, so a harness that vets your command word by word may refuse to run it, and a heredoc (\`<<'EOF'\`) may be refused too. A redirect from a file is accepted everywhere.`);
+  lines.push(`   Or write the pieces to files: \`hkb finish ${n} --summary-file <path> --metadata-file <path.json>\`. Inline \`--summary ".." --metadata '{..}'\` still works.`);
+  lines.push(`   - \`hkb finish ${n} ...\` when done`);
   lines.push(`   - \`hkb block ${n} "<why>" --kind needs_input|dependency|capability|transient\` when you cannot proceed (stdin form: {"reason": "..", "kind": ".."})`);
   lines.push(`   - \`hkb request-review ${n} --summary "..."\` when you want a reviewer before it counts as done (stdin form: {"summary": "..", "reviewer": ".."})`);
   lines.push('Do not do work that belongs to other tasks. Do not create tasks unless asked; if you must, `hkb create "title" --blocked-by ' + n + '`.');

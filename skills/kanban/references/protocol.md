@@ -274,10 +274,21 @@ through shell quoting. Per field, inline > file > stdin.
 | inline | `--summary ".." --metadata '{..}' --artifacts a,b` · `block <n> "reason" --kind <kind>` · `--reviewer <github-user>` |
 
 ```bash
-hkb complete "$KB_TASK" --from-stdin <<'EOF'
-{"summary": "what changed, for the next worker", "metadata": {"changed_files": ["src/a.js"], "verification": ["npm test"]}}
-EOF
+hkb finish "$KB_TASK" --from-stdin < /tmp/kb-payload.json
 ```
+
+### `finish`, and a redirect rather than a heredoc
+
+`finish` is an alias for `complete`, and it is the spelling a worker should be given. `complete` is a **bash
+builtin** (`complete -C <cmd>` runs a string through a shell), so a harness that vets a worker's command line word
+by word sees the builtin, not hkb's verb. Claude Code does: inside a worktree-isolated session — every `claude
+--bg` worker — `hkb complete <n>` is refused with *"this command runs a string through complete, which can't be
+verified to stay inside the worktree"*, for any arguments and any quoting, and a `<<'EOF'` heredoc is refused
+there as well (*"Permission to use Bash has been denied because Claude Code is running in don't ask mode"*),
+whatever its body contains. `block` and `request-review` are not builtins and need no alias.
+
+So the portable form of a terminal verb is: **write the JSON to a file, redirect it, and say `finish`.** The alias
+is resolved before routing, so the run record, the outbox replay and the board still say `complete`.
 
 `metadata` must be a JSON object (`changed_files, verification, dependencies, residual_risk, retry_notes` by convention);
 `artifacts` a list of strings. Missing summary / reason → exit 2 with the fix in the message. A verb queued in the

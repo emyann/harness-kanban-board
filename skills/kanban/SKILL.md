@@ -35,29 +35,36 @@ comes from `hkb`; everything you report goes through `hkb`. See `references/prot
 5. Push and open a **draft** PR whose body contains `Closes #$KB_TASK` and a real description:
    `gh pr create --draft --title "..." --body "Closes #$KB_TASK\n\n<what/why/how verified>"`.
 6. Finish with **exactly one** terminal verb, then stop. Send the payload as one JSON object on stdin so no JSON
-   has to survive your shell's quoting (recommended — a heredoc with no nested quotes):
+   has to survive your shell's quoting. Write the file with your editor tool, then redirect it:
 
    ```bash
-   hkb complete $KB_TASK --from-stdin <<'EOF'
-   {
-     "summary": "What changed, written for the next worker. How it was verified. What is still risky.",
-     "metadata": {
-       "changed_files": ["src/a.js", "test/a.test.js"],
-       "verification": ["npm run lint", "npm test"],
-       "dependencies": [],
-       "residual_risk": ["..."],
-       "retry_notes": null
-     },
-     "artifacts": []
-   }
-   EOF
+   # /tmp/kb-$KB_TASK.json
+   # {
+   #   "summary": "What changed, written for the next worker. How it was verified. What is still risky.",
+   #   "metadata": {
+   #     "changed_files": ["src/a.js", "test/a.test.js"],
+   #     "verification": ["npm run lint", "npm test"],
+   #     "dependencies": [],
+   #     "residual_risk": ["..."],
+   #     "retry_notes": null
+   #   },
+   #   "artifacts": []
+   # }
+   hkb finish $KB_TASK --from-stdin < /tmp/kb-$KB_TASK.json
    ```
 
-   If your harness has a file-write tool, write the pieces to files and point at them — no quoting at all:
-   `hkb complete $KB_TASK --summary-file /tmp/kb-summary.md --metadata-file /tmp/kb-metadata.json`
+   **Say `finish`, and redirect a file rather than using a heredoc.** `finish` is `complete` — the same verb,
+   spelled so a shell-aware harness will run it. `complete` is a bash builtin, and a harness that vets your
+   command line word by word sees the builtin, not hkb's verb: Claude Code refuses `hkb complete <n>` in a
+   worktree-isolated session ("this command runs a string through complete"), whatever the arguments and
+   however you quote it, and refuses a `<<'EOF'` heredoc there too. A redirect from a file is accepted
+   everywhere, and `block` and `request-review` need no alias.
+
+   The pieces can go in separate files instead — no quoting at all either way:
+   `hkb finish $KB_TASK --summary-file /tmp/kb-summary.md --metadata-file /tmp/kb-metadata.json`
    (`--metadata <path>` also reads a file when the value does not start with `{`). The inline
    `--summary ".." --metadata '{..}'` flags still work; per field, inline beats file beats stdin.
-   - `hkb complete $KB_TASK ...` — done (or *review* while a PR is open). Stdin keys: `summary`, `metadata`, `artifacts`.
+   - `hkb finish $KB_TASK ...` — done (or *review* while a PR is open). Stdin keys: `summary`, `metadata`, `artifacts`.
    - `hkb block $KB_TASK "<why>" --kind needs_input|dependency|capability|transient` — when you cannot proceed.
      `dependency` sends it back to *todo*; the others ask a human. Also `--reason-file <path>`, or stdin keys `reason`, `kind`.
    - `hkb request-review $KB_TASK --summary "..." [--reviewer <github-user>]` — when a reviewer must look before it counts
@@ -82,7 +89,7 @@ Nothing about the protocol changes. You run it once per node, in the order your 
 | 2 | `hkb claim <n>` — creates `refs/kb/locks/<n>/<k>` and moves the node to *running*. `held` means another worker owns it: skip it and everything behind it |
 | 3 | work, on a branch of its own cut from the branch of the node it is blocked by (or the default branch when it has none) |
 | 4 | push, and open one **draft** PR per node — `--base` that same branch, exactly one `Closes #<n>` in the body |
-| 5 | exactly one terminal verb for that node: `hkb complete <n>` / `hkb block <n>` / `hkb request-review <n>` |
+| 5 | exactly one terminal verb for that node: `hkb finish <n>` / `hkb block <n>` / `hkb request-review <n>` |
 
 Step 5 is what makes a track safe to run at all: every node is a durable checkpoint, so a runner that dies leaves a
 board the ordinary dispatcher can finish node by node — and it does. A root whose track attempt has ended is never

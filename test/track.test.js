@@ -325,7 +325,11 @@ test('the runner prompt names the graph in waves, the per-node loop, and the roo
   // the loop
   assert.match(p, /`hkb context <n>`/);
   assert.match(p, /`hkb claim <n>`/);
-  assert.match(p, /hkb complete <n> --from-stdin/);
+  // the finishing command must be one a shell-vetting harness will actually run: `finish`, not the
+  // `complete` builtin, and a redirect rather than a heredoc (#125)
+  assert.match(p, /hkb finish <n> --from-stdin < \/tmp\/kb-<n>\.json/);
+  assert.doesNotMatch(p, /hkb complete <n>/);
+  assert.doesNotMatch(p, /<<'EOF'/);
   assert.match(p, /hkb block <n> "why" --kind/);
   assert.match(p, /hkb request-review <n> --summary/);
   assert.match(p, /One PR per node, and exactly one `Closes #` in it\./);

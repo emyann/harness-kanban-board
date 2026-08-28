@@ -41,7 +41,7 @@ test('the generated agent carries the SKILL.md protocol verbatim — one source 
   assert.ok(agent.includes(spliced), 'the whole SKILL.md body must be spliced in');
   assert.ok(!agent.includes('{{protocol}}'), 'placeholder left unsubstituted');
   assert.ok(!/`references\/protocol\.md`/.test(agent), 'skill-relative link left pointing nowhere');
-  assert.ok(agent.includes('hkb complete $KB_TASK'), 'the terminal verb must survive the splice');
+  assert.ok(agent.includes('hkb finish $KB_TASK'), 'the terminal verb must survive the splice');
 });
 
 test('the generated agent has the front matter Copilot selects it by', () => {

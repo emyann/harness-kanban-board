@@ -218,7 +218,13 @@ test('stop hook: the nudge still fires, and the session is recorded in the same 
     markSessionClaim(h.root, 8, 1);
     await h.stop();
     process.stdout.write = write;
-    assert.deepEqual(JSON.parse(out.join('')).decision, 'block');
+    const answer = JSON.parse(out.join(''));
+    assert.deepEqual(answer.decision, 'block');
+    // the nudge is the last thing a stalling worker reads, so it must name a command that harness can
+    // run: `finish`, not the `complete` builtin, and a redirect rather than a heredoc (#125)
+    assert.match(answer.reason, /hkb finish 7 --from-stdin < \/tmp\/kb-7\.json/);
+    assert.doesNotMatch(answer.reason, /hkb complete 7/);
+    assert.doesNotMatch(answer.reason, /<<'EOF'/);
     assert.equal((await h.attempt(8, 1)).session_id, 'sid-1');
   } finally { process.stdout.write = write; h.cleanup(); }
 });

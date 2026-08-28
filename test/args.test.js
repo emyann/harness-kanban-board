@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseArgs, resolveTerminalInput, terminalArgv } from '../src/cli.js';
+import { parseArgs, resolveTerminalInput, terminalArgv, VERB_ALIASES } from '../src/cli.js';
 
 let dir;
 const write = (name, text) => { const p = path.join(dir, name); fs.writeFileSync(p, text); return p; };
@@ -146,6 +146,36 @@ test('missing summary stays null here; lifecycle.js is the one that refuses it',
   assert.deepEqual(p.metadata, {});
   const q = resolveTerminalInput('complete', { summary: true }, ['13']); // bare --summary with no value
   assert.equal(q.summary, null);
+});
+
+// ---------- the `finish` alias ----------
+// `complete` is a bash builtin, so a harness that vets a worker's command line word by word refuses to
+// run it (Claude Code, in the worktree-isolated session every `claude --bg` worker gets). `finish` is the
+// same verb spelled so it survives that; nothing downstream may learn the second name.
+
+test('VERB_ALIASES: finish is complete, and it is the only alias', () => {
+  assert.equal(VERB_ALIASES.finish, 'complete');
+  assert.deepEqual(Object.keys(VERB_ALIASES), ['finish']);
+  // the two verbs that are not shell builtins keep one name each
+  assert.equal(VERB_ALIASES.block, undefined);
+  assert.equal(VERB_ALIASES['request-review'], undefined);
+});
+
+test('finish parses exactly like complete, and the alias never reaches the record', () => {
+  const argv = ['finish', '13', '--from-stdin'];
+  const { flags, pos } = parseArgs(argv);
+  const [typed, ...rest] = pos;
+  const cmd = VERB_ALIASES[typed] || typed; // what main() routes on
+  assert.equal(cmd, 'complete');
+  const p = resolveTerminalInput(cmd, flags, rest, stdin({ summary: 'S', metadata: { a: 1 } }));
+  assert.equal(p.summary, 'S');
+  // the outbox replay is canonical: a queued verb says `complete`, whichever spelling the worker typed
+  assert.deepEqual(terminalArgv(cmd, 13, p, { board: 'default' }),
+    ['complete', '13', '--summary', 'S', '--metadata', '{"a":1}', '--board', 'default']);
+});
+
+test('resolveTerminalInput still refuses the alias itself — routing resolves it first', () => {
+  usageError(() => resolveTerminalInput('finish', {}, ['13']), /not a terminal verb: finish/);
 });
 
 test('terminalArgv: the outbox replay form is inline and self-contained', () => {

@@ -229,6 +229,33 @@ applies to your board, so a denial never has to be traced back by hand:
                       (the triggered run brings its own settings) · codex (not Claude Code)
 ```
 
+### The command a worker cannot type: `complete`, and heredocs
+
+There is a third layer, below both hooks, and it is the one that decides whether an attempt can end at all.
+A `claude --bg` worker runs in a **worktree-isolated session**, and Claude Code vets that session's command
+lines word by word before hkb ever sees them. Two shapes the protocol used to prescribe do not survive it —
+measured on Claude Code 2.1.250/2.1.251, from inside a live worker on this board (#125):
+
+| the worker types | what happens |
+| --- | --- |
+| `hkb complete 125 --summary "…"` | refused: *"this command runs a string through complete, which can't be verified to stay inside the worktree"* |
+| any command with a `<<'EOF'` heredoc | refused: *"Permission to use Bash has been denied because Claude Code is running in don't ask mode"* |
+| `hkb finish 125 --from-stdin < /tmp/kb-125.json` | **runs** |
+
+Both refusals are about the *shape* of the command, not its contents. `complete` is a **bash builtin**
+(`complete -C <cmd>` runs a string through a shell), so the vetting sees the builtin rather than hkb's verb —
+for any arguments, and however the word is quoted. The heredoc is refused whatever its body holds: the same
+command with `--note "…"` instead of `<<'EOF' … EOF` is allowed, and a herestring (`<<<`) or a file redirect
+(`<`) is allowed too. That settles the open question from
+[#112](https://github.com/emyann/harness-kanban-board/issues/112): the pilot's failure was never about `|`,
+`;` or `&&` inside the payload — a payload containing all three goes through a redirect without complaint.
+
+So hkb ships **`finish`** — the same verb under a name no shell claims, resolved before routing, so the run
+record, the outbox replay and the board all still say `complete`. `block` and `request-review` are not
+builtins and need no alias. Everything a worker reads — `hkb context`, the Stop hook's nudge, `SKILL.md` —
+now names `finish` and a redirect, because the two commands a *successful* worker must run were exactly the
+two it could not.
+
 `hkb init --shared-hooks` puts them in the tracked `.claude/settings.json` instead — for a team where everyone
 runs `npm i -g hkb-cli`. That file only ever gets the portable form, `hkb hook stop` / `hkb hook pretool`; an
 absolute path is never written into a file other people read. `hkb doctor` checks whatever is configured, in
