@@ -267,7 +267,7 @@ export function sessionTally(runs, profile) {
  * verb-ended and written-off are two different mechanisms, and an operator reading a blank column
  * should be told which one to look at rather than left to guess.
  */
-export function sessionFinding(profile, t, read = 0) {
+export function sessionFinding(profile, t, read = 0, priced = true) {
   const name = sessionCheckName(profile);
   if (!t.ended) return null;
   if (!t.withSession) {
@@ -284,7 +284,14 @@ export function sessionFinding(profile, t, read = 0) {
   const note = t.off > t.offWithSession
     ? ' — the dispatcher names those from the background job record one tick after the launch, so only rows older than that stay blank'
     : '';
-  return { name, ok: true, detail: `session recorded on ${bits.join(' · ')}${note}` };
+  // Recording and pricing are two halves, and a board can have the first without the second: a
+  // `claude --bg` attempt reports no cost of its own, so its transcript is priced through
+  // `stats.rates` or not at all (`estimateCost`, src/stats.js). Without that table the sessions this
+  // check just confirmed buy turns and tokens and never a number — which reads as "spend visibility
+  // is working" right up until someone asks what the board cost. Say it here, where the operator is
+  // already looking at the recording, rather than only in the report that comes up empty.
+  const unpriced = priced ? '' : ' · no `stats.rates` in .kanban/board.json, so those transcripts give `hkb stats` turns and tokens but never a cost';
+  return { name, ok: true, detail: `session recorded on ${bits.join(' · ')}${note}${unpriced}` };
 }
 
 /**
@@ -319,7 +326,7 @@ export async function checkSessions(ctx, { ok, warn }, { board = null, fetch = f
   }
   const found = [];
   for (const p of profiles) {
-    const f = sessionFinding(p, sessionTally(runs, p), read);
+    const f = sessionFinding(p, sessionTally(runs, p), read, !!ctx.cfg?.stats?.rates);
     if (!f) continue;
     (f.ok ? ok : warn)(f.name, f.detail, f.fix);
     found.push(f);

@@ -114,6 +114,16 @@ TTLs, which are billed differently. With no rates at all the report prints turns
 that says what to add. Estimated money is kept in its own field (`estimated_usd`) and never added to
 `total_usd`, so nothing downstream can mistake one for the other.
 
+Recording a session and pricing it are two halves, and a board can have the first without the second — which
+reads as working until someone asks what the board cost. `hkb doctor` says so on the line where the operator is
+already looking at the recording, rather than leaving it to a report that comes up empty:
+
+```
+✓ profile claude sessions   session recorded on 3/8 that filed a terminal verb · no `stats.rates` in
+                            .kanban/board.json, so those transcripts give `hkb stats` turns and tokens
+                            but never a cost
+```
+
 ### A track is one session, however many nodes it holds
 
 A `claude-track` runner claims each node from inside the session already running, so every node's attempt row
