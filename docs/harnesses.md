@@ -5,17 +5,20 @@ The board is labels, issue dependencies, refs and comments — no harness owns i
 disk) whatever `hkb init --harness <name>` generates. This page is the per-harness detail: what runs, what
 `init` writes, and the one-time setup only you can do.
 
-| profile | harness | worktree | stop nudge | structured output | `hkb init --harness` |
-| --- | --- | --- | --- | --- | --- |
-| `claude` | Claude Code background agent | `claude --worktree` | `Stop` hook in `.claude/settings.local.json` | attempt cost + session id from the job | — (plain `hkb init`) |
-| `claude-p` | Claude Code headless | `claude --worktree` | same | `--output-format json` | — |
-| `copilot-cli` | GitHub Copilot CLI | dispatcher (`git worktree add`) | `agentStop` hook in `.github/hooks/kanban.json` | none | `copilot` |
-| `codex` | OpenAI Codex CLI | dispatcher (`git worktree add`) | `Stop` hook in `.codex/hooks.json` | `--output-schema` | `codex` |
-| `claude-action` | Claude Code in GitHub Actions | the Actions runner's own checkout | a final `if: always()` step | none | `hkb init --with-actions` |
+| profile | harness | worktree | stop nudge | structured output | spend | `hkb init --harness` |
+| --- | --- | --- | --- | --- | --- | --- |
+| `claude` | Claude Code background agent | `claude --worktree` | `Stop` hook in `.claude/settings.local.json` | none — the log is the launch banner | tokens, from the session transcript | — (plain `hkb init`) |
+| `claude-track` | the same, run as a whole track | `claude --worktree` | same | none | one transcript for the whole track | — |
+| `claude-p` | Claude Code headless | `claude --worktree` | same | `--output-format json` | **a reported cost** | — |
+| `copilot-cli` | GitHub Copilot CLI | dispatcher (`git worktree add`) | `agentStop` hook in `.github/hooks/kanban.json` | none | none | `copilot` |
+| `codex` | OpenAI Codex CLI | dispatcher (`git worktree add`) | `Stop` hook in `.codex/hooks.json` | `--output-schema` | none | `codex` |
+| `claude-action` | Claude Code in GitHub Actions | the Actions runner's own checkout | a final `if: always()` step | none | none — it runs off-host | `hkb init --with-actions` |
 
 Whatever the harness, the protocol is the same: claim the lock ref, work in the worktree, open a draft PR that
 says `Closes #<n>`, finish with exactly one terminal verb. The `hkb` verb the worker runs is always the source of
-truth — structured output and stop nudges are safety nets, not the record.
+truth — structured output and stop nudges are safety nets, not the record. What differs is what each one can
+tell you it *spent*, which is a real reason to pick one over another:
+[the spend column, expanded](#what-a-profile-can-tell-you-it-spent).
 
 ## What a profile looks like
 
@@ -58,6 +61,84 @@ Re-running init on an existing board only **adds**. It never removes a profile, 
 that has no built-in at all. To add one later: `hkb init --profiles claude-track`. To drop one: delete it from
 `.kanban/board.json` (and the `kb:agent:<name>` label from the repo, if nothing wears it). A task labelled for a
 profile the board does not have is skipped by the tick with `unknown profile <name>` and the command that fixes it.
+
+## What a profile can tell you it spent
+
+Worth knowing *before* you pick one, because it is the harness that decides, not hkb. `hkb stats` reports one
+of four things per attempt, and never dresses one as another:
+
+| basis | where it comes from | how it reads |
+| --- | --- | --- |
+| **reported** | `total_cost_usd` on the attempt row, or at the end of the worker's log — a number Claude signed off on | `spend $9.02 reported` |
+| **estimate** | the transcript's tokens, priced at rates the *board* states (`stats.rates`, below) | `~$34.59 estimated`, always with the tilde and the word |
+| **usage** | the same tokens, unpriced — turns in, tokens out, which beat nothing | a `usage` line and no dollars |
+| nothing | an outcome and a duration, and that is the whole record | `not recorded on any of the N worker attempts` |
+
+Per profile:
+
+| profile | what an attempt leaves behind | so `hkb stats` shows |
+| --- | --- | --- |
+| `claude` | a launch banner and nothing else — a background agent signs off with no JSON. What it can leave is the session the `Stop` hook records: an id and a transcript path. | **usage**, or an **estimate** once the board has rates |
+| `claude-track` | the same — and because the runner claims each node from inside its own session, every node's row carries the *runner's* session id and transcript | as `claude`, but one transcript covers the whole track |
+| `claude-p` | `--output-format json`, so the log ends in Claude's own `{"session_id": …, "total_cost_usd": …, "num_turns": …}` | **reported**, per attempt, with turns |
+| `copilot-cli` | no structured output, and no cost in the `agentStop` payload | **nothing** |
+| `codex` | `--output-schema` shapes the terminal verb, not a bill | **nothing** |
+| `claude-action` | the attempt runs on a GitHub runner: no local log, no transcript, and no `Stop` hook (a final `if: always()` step stands in) | **nothing here** — the cost is in the Actions run and on your Claude account |
+
+The order is the run record, then the worker's log, then the transcript, and each is read only because the one
+above it came back empty. The last two are files on the host that *ran* the attempt, so a board reported from a
+second machine sees whatever the run record carries and no more — never an error, just the next answer down.
+
+Two things decide whether a Claude profile's transcript answer actually arrives. Both are below.
+
+### Putting a price on tokens — `stats.rates`
+
+hkb ships no price table, on purpose: a price it invented would look, in the output, exactly like one Claude
+reported, and published prices move under a checkout that does not. An estimate therefore comes from rates the
+board states, in `.kanban/board.json`, in USD per **million** tokens:
+
+```jsonc
+"stats": {
+  "rates": {
+    "claude-opus-5": { "input": 5, "output": 25 },
+    "default":       { "input": 1, "output": 5 }
+  }
+}
+```
+
+A key matches a model exactly, then as its longest prefix, then `"default"`. `input` and `output` are required
+— a rate missing either is no rate, and a session whose models are not all rated stays usage rather than being
+half-priced. `cache_write` and `cache_read` are optional and fall back to the published 1.25× and 0.1×
+multipliers on `input`; set them where your plan differs, and note that one `cache_write` covers both cache
+TTLs, which are billed differently. With no rates at all the report prints turns and tokens plus the one line
+that says what to add. Estimated money is kept in its own field (`estimated_usd`) and never added to
+`total_usd`, so nothing downstream can mistake one for the other.
+
+### A track is one session, however many nodes it holds
+
+A `claude-track` runner claims each node from inside the session already running, so every node's attempt row
+carries the same `session_id` and `transcript_path` as the root. That is what lets `hkb show <node>` print a
+`claude --resume` line for a node nobody launched on its own, and it is the difference from a cold node — one
+the dispatcher started by itself, which has a session and a transcript of its own.
+
+The bill does not divide the same way. Those tokens were spent once, and no per-node share of them is recorded
+anywhere; `hkb stats` prices every attempt row that names a transcript, so a track of five nodes counts its one
+transcript five times. Until that is fixed ([#126](https://github.com/emyann/harness-kanban-board/issues/126)),
+read a track board's `usage` line and its estimate as roughly *nodes × session*, not as the session.
+
+### When a profile that should report tokens reports none
+
+There is no transcript to price unless the `Stop` hook recorded one, and `hkb hook stop` is deliberately inert
+unless `KB_TASK` is in its environment. Verified here on 2026-08-28 with Claude Code 2.1.250: a `claude --bg`
+worker is started by Claude Code's session daemon, and the session it runs does not inherit the env the
+dispatcher set on the launch — so on `claude` and `claude-track` the hook records nothing, and the report falls
+all the way through to `not recorded on any of the N worker attempts`. The two-nudge enforcement is inert for
+the same reason. Tracked in [#125](https://github.com/emyann/harness-kanban-board/issues/125); `claude-p`,
+whose worker is an ordinary child of the dispatcher, is unaffected either way — and it reports a real cost.
+
+Check your own setup in one command: `hkb show <n>` prints a `session …` line, and a `claude --resume`, for an
+attempt whose session was recorded. If nothing on your board has one, that is what you are looking at, and no
+`stats.rates` will change it.
 
 ## Claude Code — `claude`, `claude-p`
 
