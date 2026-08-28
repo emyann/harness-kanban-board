@@ -3,9 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
-import { boardFile, api, readState, writeState, processState } from './board.js';
+import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES } from './board.js';
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun } from './tasks.js';
-import { L, STATUSES, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix } from './model.js';
+import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins } from './model.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, isEphemeralPath, HOOK_SETTINGS, PKG_ROOT } from './init.js';
 import { latestVersion } from './registry.js';
@@ -101,6 +101,71 @@ export function checkActions(ctx, { ok, warn }) {
   tracked
     ? ok('actions workflows', `${files.join(' · ')} (profiles ${triggers.map(([n]) => n).join(', ')})`)
     : warn('actions workflows', `${files.join(' · ')} are not committed — Actions only runs workflows on the default branch`, 'git add .github/workflows && commit, then push');
+}
+
+export const PERMS_CHECK = 'worker permissions';
+/**
+ * The one generated file that freezes an allow-list, named by the generator so it cannot drift.
+ * Rendered on first use, not at import: `actionsFiles()` fills both workflow templates, and every
+ * `hkb` invocation — `list`, `show`, a hook firing on every tool call — paid for that.
+ */
+let workerWorkflowFile = null;
+const WORKER_WORKFLOW_FILE = () => (workerWorkflowFile ??= actionsFiles().map((f) => f.rel).find((f) => /worker-claude/.test(f)));
+
+/** The `--allowedTools "…"` list baked into the generated worker workflow; null when it has none. */
+export function workflowAllowedTools(contents) {
+  const m = /--allowedTools\s+"([^"]*)"/.exec(String(contents || ''));
+  return m ? m[1].split(',').map((s) => s.trim()).filter(Boolean) : null;
+}
+
+const nameSome = (list, n = 4) => list.slice(0, n).join(', ') + (list.length > n ? ` +${list.length - n} more` : '');
+
+/**
+ * Two layers decide what a worker may run — hkb's PreToolUse guard and the launch's own
+ * `--allowedTools` — and under `--permission-mode dontAsk` the launch DENIES rather than prompts, so
+ * the stricter one wins outright. hkb ships a list that covers `SAFE_BUILTINS`; what this catches is
+ * a *frozen copy* of an older one, which no default change can reach: a profile that pins
+ * `allowed_tools` in board.json, and the `--allowedTools` line `hkb init --with-actions` bakes into
+ * the generated worker workflow. Both keep denying `cd`, `export`, `command`, `env` — commands hkb's
+ * own policy calls safe — until someone regenerates them (#138).
+ *
+ * Local files only, so it runs before the first API call. Silent on a board with no allow-list at
+ * all (a Codex-only board: its sandbox is the whole policy, so there is nothing to fall behind).
+ */
+export function checkWorkerPermissions(ctx, { ok, warn }, { read = (p) => fs.readFileSync(p, 'utf8'), exists = (p) => fs.existsSync(p) } = {}) {
+  const lists = [];
+  const board = path.relative(ctx.root, boardFile(ctx.root));
+  for (const [name, p] of Object.entries(ctx.cfg?.profiles || {})) {
+    if (!p?.allowed_tools) continue;
+    const missing = uncoveredBuiltins(p.allowed_tools);
+    lists.push({
+      where: `the ${name} profile in ${board}`,
+      missing,
+      // Only a profile hkb also ships a default for can be fixed by deletion: `loadBoard` deep-merges
+      // a board.json profile over `DEFAULT_PROFILES[name]`, so dropping the key there falls back to
+      // hkb's list. A custom-named profile has nothing behind it — dropping the key makes
+      // `{allowed_tools}` expand to nothing and `--allowedTools` swallow the next flag, so the only
+      // fix is to write the missing patterns in.
+      fix: DEFAULT_PROFILES[name]
+        ? `drop "allowed_tools" from the ${name} profile in ${board} to take hkb's own list`
+        : `add ${nameSome(missing.map((c) => `Bash(${c} *)`), 3)} to "allowed_tools" on the ${name} profile in ${board} — it is not one of hkb's own profiles, so there is no default to fall back to`,
+    });
+  }
+  const file = path.join(ctx.root, WORKER_WORKFLOW_FILE());
+  if (exists(file)) {
+    let baked = null;
+    try { baked = workflowAllowedTools(read(file)); } catch { /* unreadable: checkActions owns that */ }
+    if (baked) lists.push({ where: `the generated ${WORKER_WORKFLOW_FILE()}`, missing: uncoveredBuiltins(baked), fix: 'hkb init --with-actions' });
+  }
+  if (!lists.length) return null;
+  const stale = lists.filter((l) => l.missing.length);
+  // one check name whatever the answer: a `--json` consumer keys on it, and a name that changed
+  // between ok and warn meant the warning could only be found by reading the prose
+  for (const s of stale) {
+    warn(PERMS_CHECK, `${s.where} omits ${nameSome(s.missing)} — hkb's own guard permits them, but a \`dontAsk\` launch denies rather than prompts, so a worker is refused what hkb calls safe`, s.fix);
+  }
+  if (!stale.length) ok(PERMS_CHECK, `${lists.length} allow-list${lists.length === 1 ? '' : 's'} cover the ${SAFE_BUILTINS.length} shell builtins hkb calls safe`);
+  return lists;
 }
 
 /**
@@ -377,6 +442,38 @@ export function policyLayers(cfg, { preTool = false } = {}) {
     if (!preTool) return { profile: name, live: false, why: 'no PreToolUse hook is configured here' };
     return { profile: name, live: true, why: null };
   });
+}
+
+export const MODE_CHECK = 'permission mode';
+
+/**
+ * A worker launch that can still *prompt*. Pure.
+ *
+ * `--permission-mode dontAsk` is what turns Claude Code's allow-list into a policy instead of a
+ * questionnaire: without it a tool call outside the list opens a prompt, and there is nobody in a
+ * background worker to answer one. The attempt does not fail — it hangs, silently, until
+ * `max_runtime` reclaims it, which reads as a slow harness rather than a missing flag.
+ *
+ * Only launches that spawn Claude Code itself are asked: `claude-action` runs `gh workflow run`, and
+ * the flags of the run it triggers live in the workflow file, not here.
+ */
+export function promptingProfiles(cfg) {
+  return Object.entries(cfg?.profiles || {})
+    .filter(([, p]) => (p?.launch || [])[0] === 'claude')
+    .filter(([, p]) => {
+      const i = p.launch.indexOf('--permission-mode');
+      return i < 0 || p.launch[i + 1] !== 'dontAsk';
+    })
+    .map(([name]) => name);
+}
+
+/** Silent when every Claude launch says `dontAsk` — there is nothing an operator has to act on. */
+export function checkPermissionMode(ctx, { warn }) {
+  const prompting = promptingProfiles(ctx.cfg);
+  if (!prompting.length) return null;
+  warn(MODE_CHECK, `${prompting.join(', ')} launch${prompting.length === 1 ? 'es' : ''} without \`--permission-mode dontAsk\` — a prompt in a background worker blocks the attempt: nobody answers it and it hangs until max_runtime reclaims the task`,
+    `add "--permission-mode", "dontAsk" to the launch in ${path.relative(ctx.root, boardFile(ctx.root))}`);
+  return prompting;
 }
 
 /** One line, so the operator never has to work out which layer answered a denial. */
@@ -674,8 +771,11 @@ export async function doctor(ctx, flags, log) {
   checkCommands(ctx, { ok, warn });
   checkHooks(ctx, { ok, warn, bad });
   checkDispatcher(ctx, { ok, warn });
-  // which layer answers a denial: local files only, so it runs on a checkout with no repo behind it
+  // which layer answers a denial, and whether a frozen copy of that layer has fallen behind:
+  // local files only, so both run on a checkout with no repo behind it
   checkPolicyLayer(ctx, { ok });
+  checkPermissionMode(ctx, { warn });
+  checkWorkerPermissions(ctx, { ok, warn });
 
   if (!ctx.repo) return report(results, ctx, log);
 

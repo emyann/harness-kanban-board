@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_BOARD, DEFAULT_PROFILES, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot, hkbOnPath, registerUserBoard, userBoardsFile, mainWorktree } from './board.js';
+import { DEFAULT_BOARD, DEFAULT_PROFILES, CLAUDE_DENY, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot, hkbOnPath, registerUserBoard, userBoardsFile, mainWorktree } from './board.js';
 import { ensureLabels, fetchBoard, addLabels } from './tasks.js';
 import { rest } from './gh.js';
 import { L, STATUSES, parseSkillVersion, stripFrontmatter } from './model.js';
@@ -193,12 +193,16 @@ export function hkbCommandForHook(verb = 'stop', { shared = false, onPath, pkgRo
 
 /**
  * The hooks `hkb init` writes, as `event → hkb hook <verb>`. Both are inert outside a worker
- * (`src/hook.js` returns before it reads stdin unless KB_TASK is set), but they go into a
- * `matcher: "*"` entry in a file every other session in the repo reads — so init names both, and
- * `hookSummary` says what the second one is for.
+ * session, and they are gated differently on purpose (`src/hook.js`, docs/harnesses.md): `Stop`
+ * stands aside unless KB_TASK is set *or* it is sitting in a `kb-<n>-<k>` checkout, which is the
+ * only thing a `claude --bg` session can be identified by; `PreToolUse` takes KB_TASK only, because
+ * a checkout name says which task a session is and never which profile's allow-list to apply — so
+ * it is live on the process-mode profiles (`claude-p`) and stands aside on `claude --bg`. Both go
+ * into a `matcher: "*"` entry in a file every other session in the repo reads, so init names both
+ * and `hookSummary` says what they do.
  */
 export const CLAUDE_HOOKS = { Stop: 'stop', PreToolUse: 'pretool' };
-const HOOK_NOTE = 'both inert unless KB_TASK is set; PreToolUse is the worker permission policy';
+const HOOK_NOTE = 'inert outside a worker session; Stop nudges for the terminal verb, PreToolUse denies (never allows) and takes KB_TASK only, so it is live on claude-p and stands aside on claude --bg';
 
 /** Split a command into its arguments, honouring the double quotes hkb writes around a path. */
 function tokens(command) { return (String(command || '').match(/"[^"]*"|\S+/g) || []).map((t) => t.replace(/^"|"$/g, '')); }
@@ -457,6 +461,8 @@ export function actionsFiles({ board = 'default', install = 'npm i -g hkb-cli', 
     timeout_minutes: String(timeoutMinutes),
     max_turns: String(maxTurns),
     allowed_tools: (DEFAULT_PROFILES[ACTIONS_PROFILE].allowed_tools || []).join(','),
+    // the same deny list the local Claude launches carry, so a runner refuses what a laptop refuses
+    disallowed_tools: CLAUDE_DENY.join(','),
   };
   return ['kanban-dispatch.yml', 'kanban-worker-claude.yml'].map((name) => ({
     rel: path.join(ACTIONS_DIR, name),

@@ -433,7 +433,7 @@ export async function main(argv) {
       const p = resolveTerminalInput(cmd, flags, rest);
       const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || envAttempt(n) });
       const r = await withOutbox(ctx, replay, () => complete(ctx, n, { summary: p.summary, metadata: p.metadata, artifacts: p.artifacts, attempt: flags.attempt }));
-      out(ctx, r, `#${n} → ${r.status}${r.pr ? ` (waiting on PR #${r.pr})` : ''}`);
+      out(ctx, r, `#${n} → ${r.status}${r.pr ? ` (waiting on ${r.pr_continued ? 'the PR it continued, ' : ''}PR #${r.pr})` : ''}`);
       return 0;
     }
     case 'block': {
@@ -466,7 +466,7 @@ export async function main(argv) {
       const [n] = nums(rest);
       if (!n) throw usage('hkb request-changes <n> "reason"');
       const r = await requestChanges(ctx, n, { reason: rest.slice(1).join(' ') });
-      out(ctx, r, `#${n} → ${r.status}`);
+      out(ctx, r, `#${n} → ${r.status}${r.pr ? ` (PR #${r.pr} stays open; the next attempt continues it)` : ''}`);
       return 0;
     }
     case 'claim': {

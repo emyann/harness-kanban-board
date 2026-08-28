@@ -163,6 +163,9 @@ export function serializeResultComment(res) {
   if (meta.changed_files?.length) lines.push('**Changed files:** ' + meta.changed_files.map((f) => '`' + f + '`').join(', '));
   if (meta.verification?.length) lines.push('**Verification:** ' + meta.verification.map((f) => '`' + f + '`').join(', '));
   if (meta.residual_risk?.length) lines.push('**Residual risk:** ' + meta.residual_risk.join('; '));
+  // Which PR carries this attempt — and, when the reviewer sent the card back, that the attempt
+  // *continued* that PR instead of opening a second one (#153).
+  if (res.pr) lines.push(`**PR:** #${res.pr}${res.pr_continued ? ' — continued after changes requested, not reopened' : ''}`);
   if (res.artifacts?.length) lines.push('**Artifacts:** ' + res.artifacts.join(', '));
   lines.push('', '```json', JSON.stringify(res, null, 2), '```');
   return lines.join('\n');
@@ -184,6 +187,36 @@ export function computeReady(task, now = new Date()) {
   const at = task.kb?.scheduled_at;
   if (at && new Date(at).getTime() > now.getTime()) return false;
   return true;
+}
+
+/**
+ * The `active_pr` guard, and its one exemption — a pure function of the attempt rows and the card's
+ * PRs, so the tick can decide without a second thought and the table lives in a test.
+ *
+ * A `ready` card with an open PR normally goes straight back to `review`: its work is done and
+ * waiting on a human, and claiming it again would have a second worker redo it. The exception is
+ * exactly the card `hkb request-changes` produces. The reviewer's synthetic `changes_requested` row
+ * (protocol.md) *means* "this PR is open and must be continued", so there the open PR is the
+ * continuation target, not a duplicate risk — without the exemption the verb is a no-op on any board
+ * with a dispatcher: the card bounces back to `review` on the next tick and nothing reads the review
+ * (#153). Keyed on that row and nothing else; every other open-PR case keeps the guard.
+ *
+ * One consequence worth knowing: only the *latest* row exempts. A continuation that crashes leaves
+ * `crashed` on top, so the guard parks the card in `review` again rather than respawning — one
+ * relaunch per `request-changes`, and the reviewer decides whether there is a second.
+ *
+ * @param attempts the run record's `attempts[]`, oldest first
+ * @param prs the card's PRs as the board query returns them (`{number, state, headRefName, ...}`)
+ * @returns {{guard: boolean, pr: object|null, continues: boolean, why: string}}
+ */
+export function activePrGuard(attempts, prs) {
+  const pr = (prs || []).find((p) => p && p.state === 'OPEN') || null;
+  if (!pr) return { guard: false, pr: null, continues: false, why: 'no open PR' };
+  const last = attempts?.length ? attempts[attempts.length - 1] : null;
+  if (last?.outcome === 'changes_requested') {
+    return { guard: false, pr, continues: true, why: `PR #${pr.number} has changes requested — the next attempt continues it` };
+  }
+  return { guard: true, pr, continues: false, why: `PR #${pr.number} is open` };
 }
 
 export function pathsOverlap(a = [], b = []) {
@@ -623,6 +656,40 @@ export function allowedCommandsFrom(allowedTools = []) {
     if (m) out.add(m[1]);
   }
   return out;
+}
+
+/**
+ * The command names a launch's own allow-list actually spells — `Bash(git *)` and Copilot's
+ * `shell(git:*)` both name `git`. The sibling of `allowedCommandsFrom`, and deliberately the
+ * unseeded one: that function answers "what may a worker run", so seeding it with SAFE_BUILTINS is
+ * right; this one answers "what did the *launch* say", which is the only way to see a list that has
+ * fallen behind (#138). Anything that is not a shell pattern (`Edit`, `Read`, `write`) is not a
+ * command and is skipped.
+ */
+export function harnessCommands(allowedTools = []) {
+  const out = new Set();
+  for (const t of allowedTools || []) {
+    const m = /^(?:Bash|shell)\(\s*(.+?)\s*\)$/.exec(String(t));
+    if (!m) continue;
+    const first = m[1].split(/\s+/)[0].replace(/:\*$/, '');
+    if (first) out.add(first);
+  }
+  return out;
+}
+
+/**
+ * The SAFE_BUILTINS a launch's allow-list leaves out. hkb's own PreToolUse guard permits every one
+ * of them, so a list that omits them makes the two layers disagree — and under `--permission-mode
+ * dontAsk` the harness denies rather than prompts, so the stricter, staler layer wins and a worker
+ * spends its turns rewriting commands hkb already called safe.
+ *
+ * `null` means the profile has no per-command allow-list at all (Codex, whose sandbox is the whole
+ * policy): nothing to fall behind, so nothing to report.
+ */
+export function uncoveredBuiltins(allowedTools) {
+  if (!allowedTools) return [];
+  const have = harnessCommands(allowedTools);
+  return SAFE_BUILTINS.filter((c) => !have.has(c));
 }
 
 /**
