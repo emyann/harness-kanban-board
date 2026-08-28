@@ -20,6 +20,11 @@ deserves a `concepts/` page (link it).
   "task" in code and JSON (`src/tasks.js`).
 - **Claim** — an atomic take on a card: creating `refs/kb/locks/<n>/<k>`, the
   only CAS GitHub offers (`src/lock.js`).
+- **Continuation** — an attempt that carries on an **open PR** the reviewer sent
+  back instead of starting a branch of its own; marked `continues_pr` on the
+  attempt row, and `continues_branch` when the dispatcher put the checkout on
+  the PR's head branch (`worktreeOnBranch` in `src/board.js`; see
+  *features/review-loop*).
 - **Day stamp** — a `*_day` key in `.kanban/state.json` holding a UTC day, so a
   check that costs a network call runs at most once a day per checkout however
   often it is invoked; `token_expiry_day` and `version_check_day` are the two,
@@ -32,6 +37,11 @@ deserves a `concepts/` page (link it).
 - **Dispatcher** — the seat that ticks: `hkb dispatch` reconciles labels, locks
   and attempts against the graph on the cards. Not an orchestrator — it holds no
   workflow and has no LLM in it (`src/dispatch.js`; see *Tick*).
+- **Guard** — a reason the tick declines to claim a card it could otherwise
+  claim: `active_pr`, `blocker_auth`, `recent_success`, `path_overlap`
+  (`src/dispatch.js`). `active_pr` is the one with an exemption — a card whose
+  latest attempt is the reviewer's `changes_requested` row stays claimable and
+  becomes a *continuation* (`activePrGuard` in `src/model.js`).
 - **Handoff** — the structured result comment a finishing worker leaves so its
   dependents (and humans) start informed (`src/model.js`).
 - **Host** — machine identity, recorded per attempt, so the tick only checks a

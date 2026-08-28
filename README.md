@@ -204,6 +204,27 @@ One thing worth knowing before you turn it on: auto-merge waits for what the bra
 the PR lands when they pass, whether or not Alice looked. Require approving reviews on the branch and the reviewer
 becomes the gate that holds the merge; `hkb doctor` prints which of the two you have.
 
+### Sending a card back: `hkb request-changes`
+
+The other end of review. `hkb request-changes 42 "no down step in the migration"` records the note as a
+`changes_requested` row and puts the card back in *ready* — and leaves the PR open, because the PR is the thing
+the next attempt continues:
+
+```bash
+hkb request-changes 42 "no down step in the migration"
+#42 → ready (PR #147 stays open; the next attempt continues it)
+```
+
+The next tick claims that card even though its PR is open — the `active_pr` guard, which parks every other
+`ready` card with an open PR in *review*, steps aside for exactly the row `request-changes` writes. The attempt it
+starts gets its checkout on **the PR's own head branch** (the dispatcher makes it, so a harness with no flag for
+it works the same), and a block at the top of its brief that names the PR and says not to open a second one. It
+merges the base branch in, pushes, and `hkb finish` puts the card back in *review* on the same PR — the result
+comment says *continued*, not opened. One card, one PR, as many rounds of review as it takes.
+
+Only the latest attempt row exempts a card, so a continuation that crashes goes back to *review* rather than
+respawning: one `request-changes`, one relaunch, and the reviewer decides whether there is another.
+
 ## The board in a browser
 
 ```bash
