@@ -7,10 +7,10 @@ audience: [dev]
 read_when: "touching hkb serve, the board page, or anything that has to work across more than one checkout"
 covers:
   - path: src/serve.js
-    sha: 258489867477ce3dd72fc882618f9ff9fa6824fc
+    sha: 2008378241ae5a4bed69c2343ef1fbced525cc93
   - path: web/index.html
     sha: ece8530c9344246187f1194e03b3fc23c88967fb
-generated_at_commit: 64019fe
+generated_at_commit: 2f3f11d
 last_refreshed: 2026-08-27
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick]
 ---
@@ -30,7 +30,7 @@ Seven columns, fixed: `COLUMNS` in `src/serve.js:21` and `COLS` in the page,
 which a test pins to each other (`test/serve.test.js`, "the page draws the
 columns the server serves"). `archived` is a verb, not a column.
 
-Four routes, and nothing else (`parseRoute`, `src/serve.js:192-205`):
+Four routes, and nothing else (`parseRoute`, `src/serve.js:196-209`):
 
 | route | what it is |
 | --- | --- |
@@ -40,7 +40,7 @@ Four routes, and nothing else (`parseRoute`, `src/serve.js:192-205`):
 | `GET \| POST /api/tasks/<n>[/<verb>]` | the same, unscoped — see *ambiguity* below |
 
 There is no auth. The server binds `127.0.0.1` and `checkOrigin`
-(`src/serve.js:222-236`) refuses a non-loopback `Host` (the DNS-rebinding
+(`src/serve.js:226-240`) refuses a non-loopback `Host` (the DNS-rebinding
 defence) and any cross-origin `Origin`; POST bodies must be
 `application/json`, which is what stops a plain HTML form from driving it.
 
@@ -51,7 +51,7 @@ checkout, `ctx.repo` an owner/name, `ctx.board` a `kb:board:*` slug. So holding
 several boards is exactly this: hold several contexts, and route every read
 and every write through the right one.
 
-**Where the list comes from** (`serveContexts`, `src/serve.js:124-137`). The
+**Where the list comes from** (`serveContexts`, `src/serve.js:128-141`). The
 checkout you ran in is always first. Then either `--repos <path,path>` — an
 explicit flag, so a path that is not an `hkb init`ed checkout is fatal — or, with
 no flag, the user-level list at `~/.config/hkb/boards.json` (`userBoardsFile` /
@@ -60,7 +60,20 @@ so a deleted repo cannot break `hkb serve` everywhere. A `#slug` after a path
 picks a board *inside* that checkout. The filesystem is never scanned: hkb shows
 the checkouts you named and no others.
 
-**How a board is addressed** (`keyBoards`, `src/serve.js:143-152`). Each board
+**The list is live** (`reloadBoards`, `src/serve.js:350-372`). `serveContexts`
+runs again at most once per poll interval, driven by the requests the page
+already makes — no timer, and nothing re-read while nobody is watching. It costs
+no GitHub call: `loadUserBoards` is a local file read. A board that appeared is
+added and addressable on that same request; one that left the list stops being
+served and its cache goes with it. A board still in the list keeps its *state
+object* — cached cards, `generation` counter, detail map — so a reload never
+blanks a working board and never refetches one; that is the whole difference
+between this and a restart. `--repos` is an explicit set typed for one run and
+never reloads. Both failure modes are reported once, not once per poll: a stale
+entry's `skipping …` line, and a `boards.json` that stops parsing (which keeps
+the boards the server already holds).
+
+**How a board is addressed** (`keyBoards`, `src/serve.js:147-156`). Each board
 gets a key of `owner~repo~slug` (`boardKey` in `src/model.js` collapses anything
 outside `[A-Za-z0-9._-]` to `~`, so a key is always one safe path segment), made
 unique by `uniqueKeys` if two ever collide. Two checkouts of the same repo on the
@@ -68,7 +81,7 @@ same board fold into one entry — one board, one query.
 
 **What is per board.** Each entry owns a closure with its own cache, its own
 in-flight read, its own `generation` counter and its own detail map
-(`boardState`, `src/serve.js:322`). That is where the isolation actually
+(`boardState`, `src/serve.js:375`). That is where the isolation actually
 lives: `dispatcherState(b.ctx.root)` reads *that* checkout's
 `.kanban/dispatch.pid`, `logPathFor(b.ctx.root, …)` resolves *that* checkout's
 `.kanban/logs`, and a verb runs `spec.run(d, b.ctx, n, body)` against *that*

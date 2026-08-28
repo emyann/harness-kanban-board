@@ -120,6 +120,10 @@ export function dispatcherState(root) {
  *
  * A `--repos` path that is not an hkb checkout is fatal: you just typed it. A stale entry in the user
  * list is a warning and a skip, so a repo you deleted never breaks `hkb serve` everywhere.
+ *
+ * Called again on a cadence while the server runs (`reloadBoards`), so the user-level list is live:
+ * a checkout added to it is served without a restart. It must stay pure enough to bear repeating —
+ * no writes, and every message through `log`.
  */
 export function serveContexts(ctx, flags = {}, log = () => {}) {
   const explicit = flags.repos !== undefined;
@@ -307,16 +311,65 @@ export async function startServer(ctx, flags = {}, log = () => {}, deps = {}) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) { const e = new Error(`--port must be a port number, got "${flags.port}"`); e.exitCode = 2; throw e; }
   const loopback = isLoopback(host);
   const ttlMs = Math.max(2000, (poll - 2) * 1000);
+  const now = deps.now || (() => Date.now()); // the reload clock, so a test can move it without waiting
 
   /**
    * Every read below resolves against the board the request names, never against a single ambient
    * `ctx` — that is the whole point: two repos on one page must not be able to read, tail or write
    * each other. `deps.contexts` is the test seam; resolution touches git and the filesystem, the
    * server below does not.
+   *
+   * `boards` and `byKey` are re-derived by `reloadBoards`, so everything below reads these bindings
+   * on every call and never captures the array or the map they point at.
    */
-  const boards = keyBoards(deps.contexts || serveContexts(ctx, flags, log)).map(boardState);
-  const byKey = new Map(boards.map((b) => [b.key, b]));
+  const staticBoards = flags.repos !== undefined || !!deps.contexts;
+  let skipped = new Set(); // stale entries already reported, so a dead path is a line when it appears, not every poll
+  let listError = null;
+
+  /** Resolve the list, reporting each stale entry once — a reload must not re-log what it said last time. */
+  function resolveBoards() {
+    const seen = new Set();
+    const entries = keyBoards(deps.contexts || serveContexts(ctx, flags, (m) => { seen.add(m); if (!skipped.has(m)) log(m); }));
+    skipped = seen;
+    return entries;
+  }
+
+  let boards = resolveBoards().map(boardState);
+  let byKey = new Map(boards.map((b) => [b.key, b]));
   const keyList = () => boards.map((b) => b.key).join(', ');
+  let listAt = now();
+
+  /**
+   * Re-read the user-level list, at most once per poll interval. It is a local file, so a board that
+   * appears while the server runs costs no GitHub call to notice — and a board still in the list keeps
+   * its state object: its cached cards, its `generation` counter and its detail cache all survive.
+   * That is the difference between this and a restart.
+   *
+   * `--repos` never reloads: it is an explicit set the human typed for this run.
+   */
+  function reloadBoards() {
+    if (staticBoards || now() - listAt < ttlMs) return;
+    listAt = now();
+    let entries;
+    try { entries = resolveBoards(); } catch (e) {
+      // A half-written boards.json must not take a running board down: say so once and keep what we have.
+      if (e.message !== listError) log(`board list: ${e.message} — keeping the ${boards.length} board(s) this server holds`);
+      listError = e.message;
+      return;
+    }
+    listError = null;
+    const next = entries.map((entry) => {
+      const held = byKey.get(entry.key);
+      return held && held.root === entry.root ? held : boardState(entry);
+    });
+    const added = next.filter((b) => !boards.includes(b));
+    const dropped = boards.filter((b) => !next.includes(b));
+    boards = next;
+    byKey = new Map(next.map((b) => [b.key, b]));
+    if (!added.length && !dropped.length) return; // a reorder is not a change worth a line
+    const what = [added.map((b) => `+${b.key}`).join(' '), dropped.map((b) => `-${b.key}`).join(' ')].filter(Boolean).join(' ');
+    log(`board list changed: ${what} — now ${boards.length} board${boards.length === 1 ? '' : 's'} (${userBoardsFile()})`);
+  }
 
   // One board read per poll interval per board, shared by every open tab.
   function boardState(b) {
@@ -406,11 +459,12 @@ export async function startServer(ctx, flags = {}, log = () => {}, deps = {}) {
 
   /** Every board, one GraphQL query each, read in parallel. `at` is the oldest read: the honest one. */
   async function boardsPayload(force = false) {
-    const snaps = await Promise.all(boards.map((b) => b.snapshot(force)));
+    const list = boards; // a concurrent request may reload the set mid-read; this payload is of one set
+    const snaps = await Promise.all(list.map((b) => b.snapshot(force)));
     return {
       at: Math.min(...snaps.map((s) => s.at)),
       // `fetched_at` is deliberately not in here: it changes every tick and must not bust the ETag.
-      list: boards.map((b, i) => ({
+      list: list.map((b, i) => ({
         key: b.key, repo: b.repo, board: b.board, root: b.root,
         dispatcher: snaps[i].dispatcher, error: snaps[i].error, stale: snaps[i].stale, tasks: snaps[i].cards,
       })),
@@ -459,6 +513,10 @@ export async function startServer(ctx, flags = {}, log = () => {}, deps = {}) {
       }
       return send(res, 200, html, { 'content-type': 'text/html; charset=utf-8' });
     }
+
+    // The page polls, so the list is re-read on the same cadence — no timer, and nothing to re-read
+    // while nobody is looking. Before routing, so a board that just appeared is addressable at once.
+    reloadBoards();
 
     if (req.method === 'GET' || req.method === 'HEAD') {
       if (route.kind === 'board') {
