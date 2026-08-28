@@ -11,6 +11,7 @@ import { STATUSES, OUTCOMES } from '../src/model.js';
 import {
   parseSince, tasksInWindow, collectAttempts, summarizeTasks, summarizeAttempts, summarizeSpend,
   spawnBudget, computeStats, formatStats, sessionFromLog, stats, DEFAULT_SINCE,
+  parseTranscriptUsage, ratesFor, estimateCost, usageFromTranscript,
 } from '../src/stats.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
@@ -84,6 +85,48 @@ test('collectAttempts takes the cost off the row, then off the worker log', () =
   assert.equal(rows[1].num_turns, 7);
 });
 
+test('collectAttempts falls through row → log → transcript, and reads each source only when it must', () => {
+  const seen = { log: [], transcript: [] };
+  const usage = (turns, input, output) => ({ turns, input_tokens: input, output_tokens: output, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, by_model: { 'claude-opus-5': { turns, input_tokens: input, output_tokens: output, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } } });
+  const rows = collectAttempts([task(7)], runs({
+    7: runWith([
+      { attempt: 1, started_at: ago(hours(2)), ended_at: ago(hours(1)), outcome: 'completed', total_cost_usd: 0.5, num_turns: 12, log: 'a.log', transcript_path: '/t/a.jsonl' },
+      { attempt: 2, started_at: ago(hours(2)), ended_at: ago(hours(1)), outcome: 'completed', log: 'b.log', transcript_path: '/t/b.jsonl' },
+      { attempt: 3, started_at: ago(hours(2)), ended_at: ago(hours(1)), outcome: 'completed', log: 'c.log', transcript_path: '/t/c.jsonl' },
+      { attempt: 4, started_at: ago(hours(2)), ended_at: ago(hours(1)), outcome: 'crashed', log: 'd.log' },
+      { attempt: 5, started_at: ago(minutes(5)), transcript_path: '/t/e.jsonl' },
+    ]),
+  }), null, {
+    cost: (a) => { seen.log.push(a.attempt); return a.attempt === 2 ? { total_cost_usd: 0.25, num_turns: 7 } : null; },
+    usage: (a) => { seen.transcript.push(a.attempt); return a.attempt === 4 ? null : usage(9, 1000, 2000); },
+    rates: { 'claude-opus-5': { input: 5, output: 25, cache_write: 0, cache_read: 0 } },
+  });
+
+  assert.deepEqual(rows.map((r) => r.cost_source), ['run_record', 'worker_log', 'estimate', null, null]);
+  assert.equal(rows[2].cost_usd, 0.055, 'the transcript priced at the board rates: (1000·$5 + 2000·$25) per Mtok');
+  assert.equal(rows[2].usage.turns, 9);
+  assert.equal(rows[0].usage, null, 'a row that already has a price does not open a transcript');
+  assert.equal(rows[3].usage, null, 'nothing anywhere: no cost, no tokens');
+  assert.deepEqual(seen.log, [2, 3, 4], 'the log is skipped for a row that already has a cost, and for one still running');
+  assert.deepEqual(seen.transcript, [3, 4], 'the transcript is the last resort, and never read for a running attempt');
+});
+
+test('with no rates the transcript still answers with turns and tokens, and no dollars', () => {
+  const rows = collectAttempts([task(7)], runs({
+    7: runWith([{ attempt: 1, started_at: ago(hours(2)), ended_at: ago(hours(1)), outcome: 'completed', transcript_path: '/t/a.jsonl' }]),
+  }), null, {
+    usage: () => ({ turns: 4, input_tokens: 10, output_tokens: 20, cache_creation_input_tokens: 30, cache_read_input_tokens: 40, by_model: { 'claude-opus-5': { turns: 4, input_tokens: 10, output_tokens: 20, cache_creation_input_tokens: 30, cache_read_input_tokens: 40 } } }),
+  });
+  assert.equal(rows[0].cost_usd, null);
+  assert.equal(rows[0].cost_source, null);
+  assert.equal(rows[0].usage.turns, 4);
+  const s = summarizeSpend(rows);
+  assert.equal(s.basis, 'usage');
+  assert.equal(s.attempts_with_usage, 1);
+  assert.equal(s.attempts_missing_cost, 0, 'tokens are not nothing — this attempt is not in the "recorded nothing" bucket');
+  assert.deepEqual(s.usage, { turns: 4, input_tokens: 10, output_tokens: 20, cache_creation_input_tokens: 30, cache_read_input_tokens: 40 });
+});
+
 test('summarizeAttempts splits delivered from blocked from failed, and averages only real work', () => {
   const rows = collectAttempts([task(1), task(2)], runs({
     1: runWith([
@@ -135,11 +178,13 @@ test('spend is per profile, and says how much of it is guesswork-free', () => {
   }), null);
   const s = summarizeSpend(rows);
   assert.equal(s.total_usd, 2);
+  assert.equal(s.basis, 'reported');
   assert.equal(s.attempts_with_cost, 2);
+  assert.equal(s.worker_attempts, 3, 'three attempts ended; the open one is not priceable yet');
   assert.equal(s.attempts_missing_cost, 1, 'the copilot attempt ended without a price; the open one is not counted');
-  assert.deepEqual(s.sources, { run_record: 2, worker_log: 0 });
-  assert.deepEqual(s.by_profile.claude, { attempts: 3, with_cost: 2, total_usd: 2, mean_usd: 1, max_usd: 1.5, turns: 24 });
-  assert.deepEqual(s.by_profile['copilot-cli'], { attempts: 1, with_cost: 0, total_usd: 0, mean_usd: null, max_usd: null, turns: 0 });
+  assert.deepEqual(s.sources, { run_record: 2, worker_log: 0, estimate: 0 });
+  assert.deepEqual(s.by_profile.claude, { attempts: 3, with_cost: 2, total_usd: 2, mean_usd: 1, max_usd: 1.5, turns: 24, estimated: 0, estimated_usd: 0, usage: null });
+  assert.deepEqual(s.by_profile['copilot-cli'], { attempts: 1, with_cost: 0, total_usd: 0, mean_usd: null, max_usd: null, turns: 0, estimated: 0, estimated_usd: 0, usage: null });
 });
 
 test('sessionFromLog reads the final JSON off a worker log, and shrugs at anything else', (t) => {
@@ -157,6 +202,109 @@ test('sessionFromLog reads the final JSON off a worker log, and shrugs at anythi
   assert.equal(sessionFromLog(root, { log: '.kanban/logs/7-2.log' }), null);
   assert.equal(sessionFromLog(root, { log: '.kanban/logs/nope.log' }), null);
   assert.equal(sessionFromLog(root, {}), null);
+});
+
+// ---------- the transcript, read locally ----------
+
+/** One assistant line of a Claude transcript. The same `id` twice is the same message, not two. */
+const asst = (id, model, usage) => JSON.stringify({
+  type: 'assistant', isSidechain: false, uuid: `${id}-${Math.random()}`,
+  message: { id, model, type: 'message', role: 'assistant', content: [{ type: 'text', text: 'hi' }], usage },
+});
+const tokensOf = (input, output, write = 0, read = 0) => ({
+  input_tokens: input, output_tokens: output, cache_creation_input_tokens: write, cache_read_input_tokens: read,
+});
+
+test('parseTranscriptUsage counts a message once, however many lines it spans, and keeps the models apart', () => {
+  const u = parseTranscriptUsage([
+    '{"type":"ai-title","aiTitle":"whatever"}',
+    'not json at all',
+    '',
+    // one Opus message written as three lines — thinking, text, tool_use — each repeating its usage
+    asst('msg_1', 'claude-opus-5', tokensOf(2, 500, 43_342, 0)),
+    asst('msg_1', 'claude-opus-5', tokensOf(2, 500, 43_342, 0)),
+    asst('msg_1', 'claude-opus-5', tokensOf(2, 500, 43_342, 0)),
+    '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"the word usage appears here"}]}}',
+    asst('msg_2', 'claude-opus-5', tokensOf(3, 300, 0, 43_342)),
+    asst('msg_3', 'claude-haiku-4-5-20251001', tokensOf(10, 90, 0, 0)),
+    '{"message":{"usage":null}}',
+  ]);
+  assert.equal(u.turns, 3, 'three messages, not the six lines that carried them');
+  assert.equal(u.input_tokens, 15);
+  assert.equal(u.output_tokens, 890);
+  assert.equal(u.cache_creation_input_tokens, 43_342, 'the repeated lines of msg_1 are one cache write, not three');
+  assert.equal(u.cache_read_input_tokens, 43_342);
+  assert.deepEqual(Object.keys(u.by_model), ['claude-opus-5', 'claude-haiku-4-5-20251001']);
+  assert.equal(u.by_model['claude-opus-5'].turns, 2);
+  assert.deepEqual(u.by_model['claude-haiku-4-5-20251001'], { turns: 1, input_tokens: 10, output_tokens: 90, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
+});
+
+test('parseTranscriptUsage shrugs at a file that holds no usage', () => {
+  assert.equal(parseTranscriptUsage([]), null);
+  assert.equal(parseTranscriptUsage(['# 2026-08-28T01:29:42.943Z launch background agent for #103 attempt 1', 'backgrounded · dd1e06c1']), null);
+  assert.equal(parseTranscriptUsage(['{"message":{"usage":{"input_tokens":1}}}, and then garbage']), null, 'a truncated line is skipped, not thrown on');
+});
+
+test('usageFromTranscript reads the attempt transcript off disk, and never fails loudly', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-stats-tx-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'sess.jsonl');
+  // a line wider than one read chunk, with a multi-byte character on the boundary, must survive
+  fs.writeFileSync(file, [
+    asst('msg_1', 'claude-opus-5', tokensOf(1, 2, 3, 4)),
+    JSON.stringify({ type: 'user', message: { role: 'user', content: '→'.repeat(200_000) } }),
+    asst('msg_2', 'claude-opus-5', tokensOf(10, 20, 30, 40)),
+  ].join('\n') + '\n');
+
+  assert.deepEqual(usageFromTranscript(root, { transcript_path: file }), {
+    turns: 2, input_tokens: 11, output_tokens: 22, cache_creation_input_tokens: 33, cache_read_input_tokens: 44,
+    by_model: { 'claude-opus-5': { turns: 2, input_tokens: 11, output_tokens: 22, cache_creation_input_tokens: 33, cache_read_input_tokens: 44 } },
+  });
+  assert.deepEqual(usageFromTranscript(root, { transcript_path: 'sess.jsonl' }).turns, 2, 'a relative path is resolved against the board root');
+  assert.equal(usageFromTranscript(root, { transcript_path: path.join(root, 'gone.jsonl') }), null, 'a transcript from another host is simply absent');
+  assert.equal(usageFromTranscript(root, { transcript_path: root }), null, 'a directory is not a transcript');
+  assert.equal(usageFromTranscript(root, {}), null);
+  assert.equal(usageFromTranscript(root, null), null);
+});
+
+// ---------- pricing those tokens, when the board says what they cost ----------
+
+test('ratesFor matches a model exactly, then by prefix, then "default" — and fills the cache rates in', () => {
+  const rates = {
+    'claude-opus-5': { input: 5, output: 25, cache_write: 10, cache_read: 1 },
+    'claude-haiku': { input: 1, output: 5 },
+    default: { input: 3, output: 15 },
+  };
+  assert.deepEqual(ratesFor(rates, 'claude-opus-5'), { input: 5, output: 25, cache_write: 10, cache_read: 1 });
+  assert.deepEqual(ratesFor(rates, 'claude-haiku-4-5-20251001'), { input: 1, output: 5, cache_write: 1.25, cache_read: 0.1 });
+  assert.equal(ratesFor(rates, 'gpt-5').input, 3, 'no key matched, so "default" priced it');
+  assert.equal(ratesFor({ 'claude-opus-5': { input: 5 } }, 'claude-opus-5'), null, 'a rate without an output price is no rate');
+  assert.equal(ratesFor(null, 'claude-opus-5'), null);
+});
+
+test('estimateCost prices every model in the session, or refuses to price any of it', () => {
+  const usage = {
+    by_model: {
+      'claude-opus-5': { turns: 1, input_tokens: 1000, output_tokens: 2000, cache_creation_input_tokens: 4000, cache_read_input_tokens: 8000 },
+    },
+  };
+  const rates = { 'claude-opus-5': { input: 5, output: 25, cache_write: 10, cache_read: 1 } };
+  assert.equal(estimateCost(usage, rates), 0.103); // (5 + 50 + 40 + 8) thousandths of a dollar
+  usage.by_model['claude-haiku-4-5'] = { turns: 1, input_tokens: 10, output_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+  assert.equal(estimateCost(usage, rates), null, 'half a session priced is a wrong number, not a low one');
+  assert.equal(estimateCost(usage, null), null);
+  assert.equal(estimateCost(null, rates), null);
+});
+
+test('estimateCost ignores a model that spent nothing — an interrupted turn must not cost the estimate', () => {
+  // Claude Code files an aborted turn under the model `<synthetic>`, every counter at zero
+  const usage = {
+    by_model: {
+      'claude-opus-5': { turns: 2, input_tokens: 1000, output_tokens: 2000, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      '<synthetic>': { turns: 1, input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+    },
+  };
+  assert.equal(estimateCost(usage, { 'claude-opus-5': { input: 5, output: 25 } }), 0.055);
 });
 
 // ---------- spawns ----------
@@ -220,7 +368,7 @@ test('the human report is one line per thing, and says what it does not know', (
   assert.match(text, /attempts {3}2 over 2 tasks · 1 ended · 1 active/);
   assert.match(text, /duration {3}mean 1h00m/);
   assert.match(text, /spawns {5}3 \/ 40 today · 37 left/);
-  assert.match(text, /spend {6}\$1\.25 · recorded on 1 of 1 worker attempt/);
+  assert.match(text, /spend {6}\$1\.25 reported · on 1 of 1 worker attempt/);
   assert.match(text, /claude {7}\s+\$1\.25 · 1 attempt · mean \$1\.25 · max \$1\.25 · 30 turns/);
   assert.match(text, /read 1 board query \+ 3 run records; nothing was written\./);
 });
@@ -233,7 +381,56 @@ test('a board with nothing recorded still reports, and points at why there is no
     spawns: spawnBudget({}, 40, NOW),
   }));
   assert.match(text, /spend {6}not recorded on any of the 1 worker attempt — only a harness whose log/);
+  assert.doesNotMatch(text, /^usage/m, 'no transcript, no usage line');
   assert.match(text, /spawns {5}0 \/ 40 today/);
+});
+
+// One board, three answers. The report must never let a reader mistake which one it is reading.
+
+const bgBoard = ({ rates = null, reported = false } = {}) => computeStats({
+  board: 'default', now: NOW, since: ago(days(7)), window: '7d',
+  tasks: [task(1, { status: 'done' }), task(2, { status: 'done' })],
+  runs: runs({
+    1: runWith([{ attempt: 1, started_at: ago(hours(4)), ended_at: ago(hours(3)), outcome: 'completed', transcript_path: '/t/1.jsonl' }]),
+    2: runWith([{ attempt: 1, started_at: ago(hours(2)), ended_at: ago(hours(1)), outcome: 'completed', ...(reported ? { total_cost_usd: 1.5, num_turns: 30 } : { transcript_path: '/t/2.jsonl' }) }]),
+  }),
+  spawns: spawnBudget({}, 40, NOW),
+  usage: () => ({ turns: 21, input_tokens: 900, output_tokens: 12_500, cache_creation_input_tokens: 240_000, cache_read_input_tokens: 4_100_000, by_model: { 'claude-opus-5': { turns: 21, input_tokens: 900, output_tokens: 12_500, cache_creation_input_tokens: 240_000, cache_read_input_tokens: 4_100_000 } } }),
+  rates,
+});
+
+test('raw usage: a claude-bg board reports turns and tokens where it used to report nothing', () => {
+  const s = bgBoard();
+  assert.equal(s.spend.basis, 'usage');
+  assert.equal(s.spend.total_usd, 0);
+  assert.equal(s.spend.attempts_with_usage, 2);
+  assert.equal(s.spend.usage.turns, 42);
+  const text = formatStats(s);
+  assert.match(text, /spend {6}no cost reported on any of the 2 worker attempts — only a harness whose log ends in Claude's final JSON reports one/);
+  assert.match(text, /usage {6}42 turns · in 1800 · out 25k · cache 480k written \/ 8\.2M read {2}\(2 transcripts\)/);
+  assert.match(text, /no price: put `"stats": \{"rates"/, 'and it says how to turn those tokens into an estimate');
+  assert.doesNotMatch(text, /\$\d/, 'not one dollar figure: nothing on this board is a price');
+});
+
+test('estimate: with rates the same board is priced, and the number wears the label', () => {
+  const s = bgBoard({ rates: { 'claude-opus-5': { input: 5, output: 25, cache_write: 6.25, cache_read: 0.5 } } });
+  assert.equal(s.spend.basis, 'estimate');
+  assert.equal(s.spend.total_usd, 0, 'reported spend stays zero — an estimate is never folded into it');
+  assert.equal(s.spend.estimated_usd, 7.734);
+  assert.deepEqual(s.spend.sources, { run_record: 0, worker_log: 0, estimate: 2 });
+  const text = formatStats(s);
+  assert.match(text, /spend {6}~\$7\.73 ESTIMATED on 2 of 2 worker attempts — the tokens below at your `stats\.rates`/);
+  assert.match(text, /usage {6}42 turns/);
+});
+
+test('reported and estimated appear on the same board without being added together', () => {
+  const s = bgBoard({ reported: true, rates: { 'claude-opus-5': { input: 5, output: 25, cache_write: 6.25, cache_read: 0.5 } } });
+  assert.equal(s.spend.basis, 'reported');
+  assert.equal(s.spend.total_usd, 1.5);
+  assert.equal(s.spend.estimated_usd, 3.867);
+  const text = formatStats(s);
+  assert.match(text, /spend {6}\$1\.50 reported · on 1 of 2 worker attempts/);
+  assert.match(text, /~\$3\.87 estimated on top, for 1 worker attempt priced from their transcripts — an estimate, not a reported cost/);
 });
 
 test('at the cap, the report says so where a human will see it', () => {
@@ -244,14 +441,14 @@ test('at the cap, the report says so where a human will see it', () => {
 
 // ---------- the command, end to end ----------
 
-function harness({ board = 'default', dispatch = {}, state = null } = {}) {
+function harness({ board = 'default', dispatch = {}, state = null, rates = null } = {}) {
   const gh = new FakeGh();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-stats-'));
   fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
   if (state) fs.writeFileSync(path.join(root, '.kanban', 'state.json'), JSON.stringify(state));
   const ctx = {
     root,
-    cfg: { ...DEFAULT_BOARD, repo: gh.nameWithOwner, board, dispatch: { ...DEFAULT_BOARD.dispatch, ...dispatch } },
+    cfg: { ...DEFAULT_BOARD, repo: gh.nameWithOwner, board, dispatch: { ...DEFAULT_BOARD.dispatch, ...dispatch }, ...(rates ? { stats: { rates } } : {}) },
     repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
     board,
     host: 'test-host',
@@ -316,9 +513,71 @@ test('hkb stats --json: the same object, and the local worker log fills a missin
   assert.equal(s.window, 'all');
   assert.equal(s.since, null);
   assert.equal(s.spend.total_usd, 0.37);
-  assert.deepEqual(s.spend.sources, { run_record: 0, worker_log: 1 });
+  assert.deepEqual(s.spend.sources, { run_record: 0, worker_log: 1, estimate: 0 });
+  assert.equal(s.spend.basis, 'reported');
   assert.equal(s.spend.by_profile.claude.turns, 11);
   assert.equal(s.attempts.delivered, 1);
   assert.equal(s.attempts.duration_ms.mean, minutes(30));
   assert.deepEqual(s.reads, { board: 1, run_comments: 1 });
+});
+
+// `claude-bg` — the default profile — logs a launch banner and never Claude's final JSON, so the
+// transcript the Stop hook recorded is the only thing on the host that knows what the attempt did.
+
+test('hkb stats: a claude-bg board reports turns and tokens off the transcript, not nothing', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  fs.mkdirSync(path.join(h.root, '.kanban/logs'), { recursive: true });
+  fs.writeFileSync(path.join(h.root, '.kanban/logs/9-1.log'), [
+    '# 2026-08-28T01:29:42.943Z launch background agent for #9 attempt 1',
+    'backgrounded · dd1e06c1 · kb #9 · nothing else, ever',
+  ].join('\n') + '\n');
+  const transcript = path.join(h.root, '.kanban/logs/9-1.jsonl');
+  fs.writeFileSync(transcript, [
+    asst('msg_1', 'claude-opus-5', tokensOf(2, 500, 40_000, 0)),
+    asst('msg_1', 'claude-opus-5', tokensOf(2, 500, 40_000, 0)), // the same message, second block
+    asst('msg_2', 'claude-opus-5', tokensOf(2, 1500, 0, 40_000)),
+  ].join('\n') + '\n');
+  h.gh.addIssue(kbIssue({
+    number: 9, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude', updatedAt: ago(minutes(5)),
+    run: runWith([{ attempt: 1, started_at: ago(hours(1)), ended_at: ago(minutes(30)), outcome: 'completed', bg: true, log: '.kanban/logs/9-1.log', transcript_path: transcript }]),
+  }));
+
+  assert.equal(await h.run(), 0);
+  assert.match(h.out(), /spend {6}no cost reported on any of the 1 worker attempt/);
+  assert.match(h.out(), /usage {6}2 turns · in 4 · out 2000 · cache 40k written \/ 40k read {2}\(1 transcript\)/);
+  for (const method of ['POST', 'PATCH', 'DELETE']) assert.deepEqual(h.gh.callsMatching(method), [], `stats must not ${method}`);
+});
+
+test('hkb stats: `stats.rates` in board.json turns those tokens into an estimate, marked as one', async (t) => {
+  const h = harness({ rates: { 'claude-opus': { input: 5, output: 25, cache_write: 6.25, cache_read: 0.5 } } });
+  t.after(h.cleanup);
+  const transcript = path.join(h.root, 'sess.jsonl');
+  fs.writeFileSync(transcript, asst('msg_1', 'claude-opus-5', tokensOf(1000, 2000, 4000, 8000)) + '\n');
+  h.gh.addIssue(kbIssue({
+    number: 9, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude', updatedAt: ago(minutes(5)),
+    run: runWith([{ attempt: 1, started_at: ago(hours(1)), ended_at: ago(minutes(30)), outcome: 'completed', transcript_path: transcript }]),
+  }));
+
+  h.ctx.json = true;
+  assert.equal(await h.run(), 0);
+  const s = JSON.parse(h.out());
+  assert.equal(s.spend.basis, 'estimate');
+  assert.equal(s.spend.total_usd, 0, 'nothing reported a cost, and an estimate is not one');
+  assert.equal(s.spend.estimated_usd, 0.084); // (1000·5 + 2000·25 + 4000·6.25 + 8000·0.5) / 1e6
+  assert.equal(s.spend.usage.turns, 1);
+  assert.equal(s.spend.attempts_missing_cost, 0);
+});
+
+test('hkb stats: a transcript from another host degrades to the old message, never an error', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({
+    number: 9, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude', updatedAt: ago(minutes(5)),
+    run: runWith([{ attempt: 1, started_at: ago(hours(1)), ended_at: ago(minutes(30)), outcome: 'completed', transcript_path: '/home/someone-else/.claude/projects/board/sess.jsonl' }]),
+  }));
+
+  assert.equal(await h.run(), 0);
+  assert.match(h.out(), /spend {6}not recorded on any of the 1 worker attempt — only a harness whose log ends in Claude's final JSON reports one/);
+  assert.doesNotMatch(h.out(), /^usage/m);
 });
