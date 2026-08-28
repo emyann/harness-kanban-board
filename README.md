@@ -197,7 +197,9 @@ have to write that file: `hkb init` puts the checkout it just set up on the list
 `init`ed are the repos the page shows, and the common case needs no config at all. Init prints the file it
 wrote — `registered this checkout in ~/.config/hkb/boards.json — hkb serve will show it`, or
 `already listed in ~/.config/hkb/boards.json — hkb serve will show it` the second time — because that file is
-the one thing `init` writes outside your repo, and you should hear about it rather than find it.
+the one thing `init` writes outside your repo, and you should hear about it rather than find it. A checkout you
+set up before any of this existed is one command away: `hkb init` only ever adds, so running it again in a repo
+that is already set up changes nothing but the list — and says so.
 
 The list is still yours, and still a plain file to edit:
 
@@ -480,6 +482,8 @@ doctor then names the installed version once with nothing to do about it.
 token-expiry and version checks to one probe a day · `.kanban/outbox.jsonl` writes queued while GitHub was unreachable (replayed on the next tick) · `.kanban/cache.json` GraphQL capability cache · `.kanban/dispatch.pid` the loop's singleton lock · `.kanban/nudges/` and `.kanban/sessions/` stop-hook bookkeeping · `.claude/settings.local.json` the two hooks, whose command names this machine's `hkb`.
 
 `hkb init` adds all of them to `.gitignore`, one line at a time — your own entries are left alone. `.kanban/board.json` is the exception: it is the board's configuration and belongs in the repo.
+
+One file lives outside it. `~/.config/hkb/boards.json` (`$XDG_CONFIG_HOME`/`$KB_CONFIG_HOME` if set) is the user-level list of checkouts [`hkb serve` shows together](#the-board-in-a-browser); `hkb init` adds this checkout to it and prints that it did, because it is the only thing hkb writes outside the repo you ran it in. Deleting it costs nothing but the multi-repo page.
 
 ## Docs
 

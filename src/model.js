@@ -237,7 +237,10 @@ export function mergeBoardEntry(entries, entry, resolve = (p) => p) {
     e.exitCode = 2;
     throw e;
   }
-  const key = (s) => `${resolve(s.path)} ${s.board || ''}`;
+  // NUL joins the two halves of the identity: no path or slug can contain it, so no spelling can
+  // forge a collision. Written as an escape, not a literal byte — a literal one makes grep and
+  // ripgrep treat this whole file as binary and skip it, and model.js is the file people search.
+  const key = (s) => `${resolve(s.path)}\u0000${s.board || ''}`;
   if (parseRepoSpecs(list).some((s) => key(s) === key(want))) return { entries: list, added: false };
   return { entries: [...list, want.board ? { path: want.path, board: want.board } : want.path], added: true };
 }

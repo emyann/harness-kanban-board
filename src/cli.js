@@ -168,7 +168,8 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
               gc [--yes]
   board       serve [--port 4666] [--host 127.0.0.1] [--poll 30]   local web board; drag-drop runs the same verbs
                     [--repos ../other,../third#release]   several checkouts on one page, one server, one port;
-                    without the flag, the boards listed in ~/.config/hkb/boards.json join this one
+                    without the flag, the boards in ~/.config/hkb/boards.json join this one — hkb init keeps that
+                    list, and a running server re-reads it, so a checkout you just set up needs no restart
               stats [--since 7d|all] [--json]   attempts per outcome, duration, spawns vs the daily cap, spend per profile
   live        watch [--interval 30] [--kinds completed,blocked,..] [--polls N] [--json]   one line per transition
               tail <n> [--interval 30] [--kinds ..] [--polls N] [--json]   follow one task's attempts and comments
