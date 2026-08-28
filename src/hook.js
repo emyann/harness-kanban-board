@@ -33,7 +33,8 @@ import { getTask, loadRun, saveRun } from './tasks.js';
 import { openAttempt, sessionUpdate, normalizeHookInput, parseWorktreeName } from './model.js';
 
 /**
- * PreToolUse hook: hkb's own permission policy — allow or deny, never a prompt.
+ * PreToolUse hook: hkb's own permission policy — **deny or say nothing**, never an allow, never a
+ * prompt.
  *
  * Gated on `KB_TASK` alone, deliberately, where `stopHook` also accepts the worktree: this policy is
  * the profile's `allowed_tools`, and a checkout name says which task a session is, never which
@@ -41,19 +42,43 @@ import { openAttempt, sessionUpdate, normalizeHookInput, parseWorktreeName } fro
  * and deny everything else — so a background worker, which is exactly the session the worktree
  * fallback would newly reach, would be denied `npm test`. Inert is the safe answer here; the launch
  * flags (`--allowedTools`, `--permission-mode`) are that session's real policy.
+ *
+ * Which is also why an `allow` is never emitted. Worker policy on the default profile IS the launch
+ * line, and on the profiles where this hook does run it must not *widen* it: a hook `allow`
+ * overrides Claude Code's own checks — including the command-substitution one, measured (#133) — so
+ * a hook that answered `allow` would let a `claude-p` worker run what the identical `claude --bg`
+ * worker beside it is refused. Silence leaves the native allow-list authoritative and makes this
+ * layer purely additive: it can only subtract from what the launch already permits.
+ *
+ * The same reasoning covers a profile hkb cannot see (`KB_PROFILE` unset, or naming a profile this
+ * board does not have — a worker launched from another checkout, a hand-exported `KB_TASK`). The
+ * `{}` fallback profile is not a conservative default, it is a *different, stricter* policy nobody
+ * chose; standing aside with one line on stderr is the honest answer.
  */
 export async function preToolHook(ctx) {
-  if (!process.env.KB_TASK) return 0;
+  const n = process.env.KB_TASK;
+  if (!n) return 0;
+  const name = process.env.KB_PROFILE;
+  const profile = name ? ctx.cfg?.profiles?.[name] : null;
+  if (!profile) {
+    process.stderr.write(`hkb hook: ${name ? `KB_PROFILE "${name}" is not a profile on this board` : 'KB_PROFILE is not set'}` +
+      " — standing aside; this session's launch flags are its whole permission policy\n");
+    return 0;
+  }
   let input = {};
   try { input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}'); } catch { return 0; }
   const { decidePermission, allowedCommandsFrom } = await import('./model.js');
-  const profile = ctx.cfg?.profiles?.[process.env.KB_PROFILE] || {};
   const allowedCmds = allowedCommandsFrom(profile.allowed_tools || []);
   allowedCmds.add('hkb'); allowedCmds.add('git'); allowedCmds.add('gh');
   const root = process.env.KB_ROOT || ctx.root;
   const { decision, reason } = decidePermission(input.tool_name, input.tool_input, { allowedCmds, root });
+  if (decision !== 'deny') return 0; // the launch's allow-list has the last word on what is allowed
+  // A refusal is a fork in the road for a worker, and the wrong branch — rewriting the command until
+  // something gets through — is the expensive one. Name the other branch in the denial itself.
+  const say = `hkb: ${reason}. If the task cannot be done without this, do not work around it — run ` +
+    `\`hkb block ${n} "needs <what>: <why>" --kind capability\` (describe it, do not paste the command) and stop.`;
   process.stdout.write(JSON.stringify({
-    hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision, permissionDecisionReason: `hkb: ${reason}` },
+    hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: say },
   }) + '\n');
   return 0;
 }

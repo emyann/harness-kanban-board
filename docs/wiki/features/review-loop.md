@@ -11,15 +11,15 @@ covers:
   - path: src/dispatch.js
     sha: e1e1c59b9f199be57bb7cd1e6de32eef42864e45
   - path: src/board.js
-    sha: 18b557141a0dd93f516cef0e8486bd185aca4946
+    sha: d075016fb95e37b07ef607b0112241a8622b68c7
   - path: src/context.js
-    sha: a38c09a39511d828d67c7dcbe4c5cb514e054bb6
+    sha: 6ba989c8c5bed05f5271c3cc7c91b27986f8d850
   - path: src/lifecycle.js
     sha: 2affd18fb3d2882db47ba164199b10160ba70ddb
   - path: src/gc.js
     sha: ae2cf14b7e83fa627fd9357545bd74294c001327
 related: [features/auto-merge, architecture/overview, architecture/dispatcher-tick]
-generated_at_commit: cb9e43d
+generated_at_commit: 8296f3f
 last_refreshed: 2026-08-28
 ---
 

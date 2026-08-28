@@ -11,7 +11,7 @@ import path from 'node:path';
 import { DEFAULT_PROFILES, DEFAULT_BOARD } from '../src/board.js';
 import { SAFE_BUILTINS, allowedCommandsFrom, harnessCommands, uncoveredBuiltins } from '../src/model.js';
 import { actionsFiles, ACTIONS_PROFILE } from '../src/init.js';
-import { checkWorkerPermissions, workflowAllowedTools, PERMS_CHECK } from '../src/doctor.js';
+import { checkWorkerPermissions, workflowAllowedTools, PERMS_CHECK, checkPermissionMode, promptingProfiles, MODE_CHECK } from '../src/doctor.js';
 
 const claude = () => DEFAULT_PROFILES.claude.allowed_tools;
 const copilot = () => DEFAULT_PROFILES['copilot-cli'].allowed_tools;
@@ -28,6 +28,12 @@ function collect() {
   };
 }
 const ctxFor = (root, profiles) => ({ root, cfg: { ...DEFAULT_BOARD, repo: 'o/r', profiles } });
+/** A scratch root the check can name in its fix text, removed when the test ends. */
+function scratch(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-perms-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  return root;
+}
 
 // ---------- the shipped lists ----------
 
@@ -111,48 +117,83 @@ test('workflowAllowedTools returns null when there is no such flag', () => {
 
 // ---------- doctor: the migration path for boards carrying a frozen list ----------
 
-test('doctor warns about a board.json profile pinning a pre-#138 allow-list', () => {
+test('doctor warns about a board.json profile pinning a pre-#138 allow-list', (t) => {
   const { results, sink } = collect();
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-perms-'));
   const stale = ['Bash(git *)', 'Bash(npm *)', 'Bash(true)', 'Edit'];
-  checkWorkerPermissions(ctxFor(root, { claude: { ...DEFAULT_PROFILES.claude, allowed_tools: stale } }), sink, { exists: () => false });
+  checkWorkerPermissions(ctxFor(scratch(t), { claude: { ...DEFAULT_PROFILES.claude, allowed_tools: stale } }), sink, { exists: () => false });
   assert.equal(results.length, 1);
   assert.equal(results[0].ok, null);
-  assert.equal(results[0].name, 'profile claude permissions');
+  // one name whatever the answer, so a --json consumer can key on it; the profile is in the detail
+  assert.equal(results[0].name, PERMS_CHECK);
+  assert.match(results[0].detail, /^the claude profile in \.kanban\/board\.json omits/);
   assert.match(results[0].detail, /omits cd, pwd, false, echo \+11 more/); // `true` is the one it did cover
   assert.match(results[0].fix, /drop "allowed_tools" from the claude profile/);
 });
 
-test('doctor warns about the generated workflow when its baked list is stale', () => {
+test('a profile hkb ships no default for is told to add the patterns, not to drop the key', (t) => {
   const { results, sink } = collect();
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-perms-'));
-  const old = '            --allowedTools "Bash(git *),Bash(true),Edit"\n';
-  checkWorkerPermissions(ctxFor(root, {}), sink, { exists: () => true, read: () => old });
+  const stale = ['Bash(git *)', 'Bash(npm *)'];
+  // loadBoard deep-merges over DEFAULT_PROFILES[name]; a custom name has nothing behind it, so
+  // dropping `allowed_tools` expands `{allowed_tools}` to nothing and --allowedTools eats --disallowedTools
+  checkWorkerPermissions(ctxFor(scratch(t), { 'claude-big': { ...DEFAULT_PROFILES.claude, allowed_tools: stale } }), sink, { exists: () => false });
   assert.equal(results.length, 1);
-  assert.equal(results[0].name, 'actions worker permissions');
+  assert.match(results[0].fix, /^add Bash\(cd \*\), Bash\(pwd \*\), Bash\(true \*\)/);
+  assert.match(results[0].fix, /to "allowed_tools" on the claude-big profile/);
+  assert.match(results[0].fix, /no default to fall back to/);
+  assert.ok(!/drop "allowed_tools"/.test(results[0].fix), 'the advice that empties the flag');
+});
+
+test('doctor warns about the generated workflow when its baked list is stale', (t) => {
+  const { results, sink } = collect();
+  const old = '            --allowedTools "Bash(git *),Bash(true),Edit"\n';
+  checkWorkerPermissions(ctxFor(scratch(t), {}), sink, { exists: () => true, read: () => old });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].name, PERMS_CHECK);
+  assert.match(results[0].detail, /^the generated \.github[\\/]workflows[\\/]kanban-worker-claude\.yml omits/);
   assert.equal(results[0].fix, 'hkb init --with-actions');
 });
 
-test('doctor is content with the lists hkb ships today', () => {
+test('doctor is content with the lists hkb ships today', (t) => {
   const { results, sink } = collect();
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-perms-'));
   const yml = actionsFiles().find((f) => f.rel === WORKER).contents;
-  checkWorkerPermissions(ctxFor(root, DEFAULT_PROFILES), sink, { exists: () => true, read: () => yml });
+  checkWorkerPermissions(ctxFor(scratch(t), DEFAULT_PROFILES), sink, { exists: () => true, read: () => yml });
   assert.deepEqual(results.map((r) => r.ok), [true]);
   assert.equal(results[0].name, PERMS_CHECK);
   assert.match(results[0].detail, new RegExp(`cover the ${SAFE_BUILTINS.length} shell builtins`));
 });
 
-test('doctor says nothing on a board whose only profile has no allow-list', () => {
+test('doctor says nothing on a board whose only profile has no allow-list', (t) => {
   const { results, sink } = collect();
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-perms-'));
-  assert.equal(checkWorkerPermissions(ctxFor(root, { codex: DEFAULT_PROFILES.codex }), sink, { exists: () => false }), null);
+  assert.equal(checkWorkerPermissions(ctxFor(scratch(t), { codex: DEFAULT_PROFILES.codex }), sink, { exists: () => false }), null);
   assert.deepEqual(results, []);
 });
 
-test('an unreadable workflow is checkActions\' problem, not this check\'s', () => {
+test('an unreadable workflow is checkActions\' problem, not this check\'s', (t) => {
   const { results, sink } = collect();
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-perms-'));
-  checkWorkerPermissions(ctxFor(root, {}), sink, { exists: () => true, read: () => { throw new Error('EACCES'); } });
+  checkWorkerPermissions(ctxFor(scratch(t), {}), sink, { exists: () => true, read: () => { throw new Error('EACCES'); } });
   assert.deepEqual(results, []);
+});
+
+// ---------- doctor: a launch that can still prompt ----------
+
+test('doctor warns about a Claude launch with no `--permission-mode dontAsk`', (t) => {
+  const { results, sink } = collect();
+  const asks = { ...DEFAULT_PROFILES.claude, launch: DEFAULT_PROFILES.claude.launch.filter((a) => a !== '--permission-mode' && a !== 'dontAsk') };
+  const acceptEdits = { ...DEFAULT_PROFILES['claude-p'], launch: DEFAULT_PROFILES['claude-p'].launch.map((a) => a === 'dontAsk' ? 'acceptEdits' : a) };
+  assert.deepEqual(promptingProfiles({ profiles: { claude: asks, 'claude-p': acceptEdits } }), ['claude', 'claude-p']);
+  checkPermissionMode(ctxFor(scratch(t), { claude: asks, 'claude-p': acceptEdits }), sink);
+  assert.equal(results.length, 1, 'one warning for the board, not one per profile');
+  assert.equal(results[0].name, MODE_CHECK);
+  assert.match(results[0].detail, /^claude, claude-p launch without/);
+  assert.match(results[0].detail, /a prompt in a background worker blocks the attempt/);
+  assert.match(results[0].fix, /add "--permission-mode", "dontAsk" to the launch/);
+});
+
+test('doctor is silent on the profiles hkb ships, and asks nothing of a non-Claude launch', (t) => {
+  const { results, sink } = collect();
+  assert.deepEqual(promptingProfiles({ profiles: DEFAULT_PROFILES }), []);
+  assert.equal(checkPermissionMode(ctxFor(scratch(t), DEFAULT_PROFILES), sink), null);
+  assert.deepEqual(results, [], 'nothing to act on is nothing to print');
+  // claude-action runs `gh workflow run`: the flags of the run it triggers live in the workflow file
+  assert.deepEqual(promptingProfiles({ profiles: { 'claude-action': DEFAULT_PROFILES['claude-action'], codex: DEFAULT_PROFILES.codex } }), []);
 });

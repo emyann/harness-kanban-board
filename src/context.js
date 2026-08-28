@@ -179,7 +179,8 @@ export async function workerContext(ctx, task, attempt, { continuePr = null } = 
   lines.push(`   - \`hkb finish ${n} ...\` when done`);
   lines.push(`   - \`hkb block ${n} "<why>" --kind needs_input|dependency|capability|transient\` when you cannot proceed (stdin form: {"reason": "..", "kind": ".."})`);
   lines.push(`   - \`hkb request-review ${n} --summary "..."\` when you want a reviewer before it counts as done (stdin form: {"summary": "..", "reviewer": ".."})`);
-  lines.push('Do not do work that belongs to other tasks. Do not create tasks unless asked; if you must, `hkb create "title" --blocked-by ' + n + '`.');
+  lines.push(`6. **If a tool or command is refused, disclose it — do not work around it.** Your launch decides what you may run and it denies rather than prompts, so a refusal is final: no rewording, no second route, no disabling the check. When there is no allow-listed way to do the work, run \`hkb block ${n} "needs <tool>: <why>" --kind capability\` (describe what you need, do not paste the refused command) and stop. A refusal of \`hkb complete\` itself is never a reason to block — that one has another name: \`hkb finish\`.`);
+  lines.push('Never run `hkb dispatch` — it is what dispatched you; a second dispatcher double-claims tasks. Do not do work that belongs to other tasks. Do not create tasks unless asked; if you must, `hkb create "title" --blocked-by ' + n + '`.');
   return lines.join('\n');
 }
 
