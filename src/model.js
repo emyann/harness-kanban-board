@@ -214,6 +214,35 @@ export function parseRepoSpecs(value) {
 }
 
 /**
+ * Add one checkout to a user-level board list, unless an equivalent entry is already there.
+ *
+ * The list is a file a human writes and re-reads, so this only ever *appends*: entries it did not
+ * add keep their order and their spelling — `~/code/web` typed by hand stays `~/code/web`, and the
+ * object form stays an object. Two entries are the same when they name the same board of the same
+ * resolved path, which is what `resolve` is for: pass `(p) => path.resolve(expandHome(p))` and
+ * `~/projects/x` and `/home/you/projects/x` become one entry (this module is pure, so the default
+ * compares the spellings verbatim). A null `board` means "the checkout's own default" and is
+ * written as a bare path string, never as `"default"`.
+ *
+ * @param {Array<string|object>} entries the list exactly as it appears on disk
+ * @param {string|{path: string, board?: string|null}} entry the checkout to add
+ * @param {(p: string) => string} [resolve] how a spelling becomes the path entries compare by
+ * @returns {{entries: Array<string|object>, added: boolean}}
+ */
+export function mergeBoardEntry(entries, entry, resolve = (p) => p) {
+  const list = Array.isArray(entries) ? entries : [];
+  const [want] = parseRepoSpecs([entry]);
+  if (!want) {
+    const e = new Error('a board list entry needs a path, e.g. "/path/to/checkout"');
+    e.exitCode = 2;
+    throw e;
+  }
+  const key = (s) => `${resolve(s.path)} ${s.board || ''}`;
+  if (parseRepoSpecs(list).some((s) => key(s) === key(want))) return { entries: list, added: false };
+  return { entries: [...list, want.board ? { path: want.path, board: want.board } : want.path], added: true };
+}
+
+/**
  * URL-safe, human-legible id for one board on the web server: `owner~repo~slug`. It goes in a path
  * segment (`/api/boards/<key>/tasks/12/move`), so anything outside [A-Za-z0-9._-] collapses to `~`.
  */
