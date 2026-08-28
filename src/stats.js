@@ -9,7 +9,18 @@
 //   spawns today vs cap   .kanban/state.json, which the dispatcher tick keeps — a local read
 //   spend per profile     `total_cost_usd` on the attempt row: what `claude -p --output-format json`
 //                         signs off with, folded in by the dispatcher (or the Stop hook). A row that
-//                         has none falls back to the worker's own log on disk, which is free.
+//                         has none falls back to the worker's own log on disk, then to the session
+//                         transcript — both free, both local, both read only when the cheaper
+//                         source above them came back empty.
+//
+// Three answers, and never one dressed as another. `claude-bg` — the default profile, the free path —
+// writes a launch banner and no final JSON, so out of the box the first two sources hold nothing and
+// the transcript is all there is. What a board's spend line is showing is therefore one of:
+//
+//   reported   `total_cost_usd`, off the run record or the worker log. A number Claude signed off on.
+//   estimate   the transcript's tokens priced at the `stats.rates` of `.kanban/board.json`. Derived,
+//              and always says so: written `~$…` and labelled an estimate.
+//   usage      the transcript's tokens, unpriced — turns in, tokens out, which beat nothing.
 //
 // The cost is one board query plus the run comment of the tasks the window actually touched: a
 // comment write bumps the issue's `updatedAt`, so "updated since" is exactly "has news". Tasks that
@@ -17,6 +28,7 @@
 // attempt can be silent for hours and still be the thing you asked about.
 import fs from 'node:fs';
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import { spawnSync } from 'node:child_process';
 import { fetchBoard, loadRun } from './tasks.js';
 import { readState, stateFile } from './board.js';
@@ -72,17 +84,135 @@ export function tasksInWindow(tasks, since = null) {
 
 const finite = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
+// ---------- pure: the tokens a session transcript holds ----------
+
+const tryJson = (s) => { try { return JSON.parse(s); } catch { return null; } };
+
+/** The counters a transcript can fill, all at zero. The shape is fixed so `--json` is stable. */
+const zeroUsage = () => ({ turns: 0, input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
+
+const tokens = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+
+/** Add one usage-shaped object into an accumulator, counting only what is really a number. */
+function addUsage(into, u) {
+  if (u) for (const k of Object.keys(into)) into[k] += tokens(u[k]);
+  return into;
+}
+
+/**
+ * Token usage summed out of a Claude session transcript — the JSONL at `transcript_path`, one JSON
+ * object per line. `lines` is any iterable, so the reader below streams a file through it without
+ * ever holding it.
+ *
+ * Two things stop this from being "add up every `usage` you see":
+ *  - one assistant message is written once per content block (the thinking, the text, each tool
+ *    call), and every copy repeats the SAME `usage`. The message id is the unit — count a message
+ *    once however many lines it spans, or a long turn is billed four and five times over.
+ *  - a session can span models (a Haiku subagent under an Opus session) and they are not priced
+ *    alike, so the total is kept per model as well as in aggregate.
+ * Sidechain lines (Task subagents) are counted: their tokens are on the same bill.
+ *
+ * @returns null when there is no usage in it at all — an empty file, a truncated one, or a log that
+ *   was never a transcript. Never throws: a spend report must not die on a malformed line.
+ */
+export function parseTranscriptUsage(lines) {
+  const total = zeroUsage();
+  const by_model = {};
+  const seen = new Set();
+  for (const raw of lines) {
+    const line = typeof raw === 'string' ? raw.trim() : '';
+    // the cheap gates first: most lines of a transcript are user turns and tool results
+    if (line[0] !== '{' || !line.includes('"usage"')) continue;
+    const msg = tryJson(line)?.message;
+    if (!msg?.usage || typeof msg.usage !== 'object') continue;
+    if (typeof msg.id === 'string' && msg.id) {
+      if (seen.has(msg.id)) continue;
+      seen.add(msg.id);
+    }
+    const model = typeof msg.model === 'string' && msg.model ? msg.model : 'unknown';
+    const per = (by_model[model] ||= zeroUsage());
+    total.turns++;
+    per.turns++;
+    addUsage(total, msg.usage);
+    addUsage(per, msg.usage);
+  }
+  return total.turns ? { ...total, by_model } : null;
+}
+
+// ---------- pure: an estimate, when the board has said what its tokens cost ----------
+
+/**
+ * The rate for a model out of `stats.rates` in `.kanban/board.json` — USD per MILLION tokens:
+ *
+ *   "stats": { "rates": { "claude-opus-5": { "input": 5, "output": 25 },
+ *                         "claude-haiku":  { "input": 1, "output": 5 } } }
+ *
+ * hkb ships no table of its own on purpose: a price it invented would be indistinguishable in the
+ * output from one Claude reported, and published prices move under a checkout that does not.
+ *
+ * A key matches a model exactly, else as its longest prefix, else `"default"`. `input` and `output`
+ * are required — a rate missing either is no rate. `cache_write` and `cache_read` are optional and
+ * fall back to Anthropic's published multipliers on `input` (write 1.25×, read 0.1×); set them
+ * where your plan differs.
+ */
+export function ratesFor(rates, model) {
+  if (!rates || typeof rates !== 'object') return null;
+  let pick = rates[model];
+  if (!pick) {
+    let key = null;
+    for (const k of Object.keys(rates)) {
+      if (k === 'default' || !String(model).startsWith(k)) continue;
+      if (key === null || k.length > key.length) key = k;
+    }
+    pick = key === null ? rates.default : rates[key];
+  }
+  if (!pick || typeof pick !== 'object') return null;
+  const n = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
+  const input = n(pick.input);
+  const output = n(pick.output);
+  if (input === null || output === null) return null;
+  return { input, output, cache_write: n(pick.cache_write) ?? input * 1.25, cache_read: n(pick.cache_read) ?? input * 0.1 };
+}
+
+/**
+ * What a session's tokens would have cost at those rates. null when ANY model that actually spent
+ * something has no rate: a figure that priced half a session would not be a low estimate, it would
+ * be a wrong number. A model with nothing on the clock cannot be mispriced, so it is skipped —
+ * Claude Code files an interrupted turn under the model `<synthetic>` with every counter at zero,
+ * and one of those must not cost a whole board its estimate.
+ */
+export function estimateCost(usage, rates) {
+  if (!usage?.by_model || !rates) return null;
+  let total = 0;
+  for (const [model, u] of Object.entries(usage.by_model)) {
+    if (!(u.input_tokens || u.output_tokens || u.cache_creation_input_tokens || u.cache_read_input_tokens)) continue;
+    const r = ratesFor(rates, model);
+    if (!r) return null;
+    total += (u.input_tokens * r.input + u.output_tokens * r.output
+      + u.cache_creation_input_tokens * r.cache_write + u.cache_read_input_tokens * r.cache_read) / 1_000_000;
+  }
+  return usdRound(total);
+}
+
 /**
  * What an attempt cost, and where the number came from. The run record first — it is the shared
- * truth every host can read — then the worker's log, which only the host that ran it has.
+ * truth every host can read — then the worker's log, then the session transcript, both of which
+ * only the host that ran the attempt has. Each source is consulted only because the one above it
+ * came back empty, so the transcript (the expensive read) is opened once, for the attempts that
+ * have nothing else, and never for one still running.
+ *
+ * `cost_usd` from the transcript is an ESTIMATE and says so in `cost_source`; when the board has no
+ * rate for the models it used there is no estimate at all, only `usage` — turns and tokens.
  */
-function priceOf(a, fromLog) {
+function priceOf(a, fromLog, fromTranscript, rates) {
   const row = finite(a.total_cost_usd);
-  if (row !== null) return { cost_usd: row, num_turns: finite(a.num_turns), cost_source: 'run_record' };
+  if (row !== null) return { cost_usd: row, num_turns: finite(a.num_turns), cost_source: 'run_record', usage: null };
   const session = a.ended_at ? fromLog(a) : null;
   const logged = finite(session?.total_cost_usd);
-  if (logged !== null) return { cost_usd: logged, num_turns: finite(session.num_turns) ?? finite(a.num_turns), cost_source: 'worker_log' };
-  return { cost_usd: null, num_turns: finite(a.num_turns), cost_source: null };
+  if (logged !== null) return { cost_usd: logged, num_turns: finite(session.num_turns) ?? finite(a.num_turns), cost_source: 'worker_log', usage: null };
+  const usage = (a.ended_at ? fromTranscript(a) : null) || null;
+  const estimate = usage ? estimateCost(usage, rates) : null;
+  return { cost_usd: estimate, num_turns: finite(a.num_turns), cost_source: estimate === null ? null : 'estimate', usage };
 }
 
 /**
@@ -90,9 +220,11 @@ function priceOf(a, fromLog) {
  * ended inside it; an open one always is — it is happening now, whenever it started. (Same reasoning
  * as `tasksInWindow`: a long attempt that has been quiet for hours is the one you asked about.)
  * @param {Map|object} runs   task number → run record
- * @param {(a) => object|null} cost  session fields from the worker's log, for a row that has none
+ * @param {(a) => object|null} cost   session fields from the worker's log, for a row that has none
+ * @param {(a) => object|null} usage  token totals from the session transcript, for a row with neither
+ * @param {object|null} rates         `stats.rates`, which turns those tokens into an estimate
  */
-export function collectAttempts(tasks, runs, since = null, { cost = () => null } = {}) {
+export function collectAttempts(tasks, runs, since = null, { cost = () => null, usage = () => null, rates = null } = {}) {
   const floor = since ? Date.parse(since) : null;
   const rows = [];
   for (const t of tasks) {
@@ -113,7 +245,7 @@ export function collectAttempts(tasks, runs, since = null, { cost = () => null }
         // rows the dispatcher or a reviewer writes for the record (gave_up, changes_requested):
         // real outcomes, but zero-duration bookkeeping — they must not drag the averages down
         synthetic: !!a.synthetic,
-        ...priceOf(a, cost),
+        ...priceOf(a, cost, usage, rates),
       });
     }
   }
@@ -196,22 +328,47 @@ export function summarizeAttempts(rows) {
 }
 
 /**
- * Spend per profile. Only harnesses whose log ends in Claude's final JSON report a cost, so
- * `attempts_missing_cost` is part of the answer: a total is only as honest as its coverage.
+ * Spend per profile — and, kept strictly apart from it, what was only estimated and what is only
+ * tokens. `total_usd` is reported money and nothing else; an estimate lives in `estimated_usd`, so
+ * no caller can add the two by accident. `basis` is the one-word answer to "which of the three am I
+ * looking at": `reported`, `estimate`, `usage`, or null for a board with none of them.
+ *
+ * Coverage is the rest of the answer: a total is only as honest as the share of attempts it covers,
+ * so `worker_attempts` (every attempt that ended, bookkeeping rows excluded) is the denominator and
+ * `attempts_missing_cost` counts the ones that yielded nothing at all — no cost, not even tokens.
  */
 export function summarizeSpend(rows) {
   const by_profile = {};
-  const sources = { run_record: 0, worker_log: 0 };
+  const sources = { run_record: 0, worker_log: 0, estimate: 0 };
+  const usage = zeroUsage();
   let total_usd = 0;
+  let estimated_usd = 0;
+  let worker_attempts = 0;
   let attempts_with_cost = 0;
+  let attempts_estimated = 0;
+  let attempts_with_usage = 0;
   let attempts_missing_cost = 0;
   for (const r of rows) {
     if (r.synthetic) continue;
-    const p = (by_profile[r.profile] ||= { attempts: 0, with_cost: 0, total_usd: 0, mean_usd: null, max_usd: null, turns: 0 });
+    const p = (by_profile[r.profile] ||= { attempts: 0, with_cost: 0, total_usd: 0, mean_usd: null, max_usd: null, turns: 0, estimated: 0, estimated_usd: 0, usage: null });
     p.attempts++;
+    if (r.outcome) worker_attempts++;
     if (r.num_turns !== null) p.turns += r.num_turns;
+    if (r.usage) {
+      attempts_with_usage++;
+      addUsage(usage, r.usage);
+      addUsage((p.usage ||= zeroUsage()), r.usage);
+    }
+    if (r.cost_source === 'estimate') {
+      attempts_estimated++;
+      sources.estimate++;
+      estimated_usd += r.cost_usd;
+      p.estimated++;
+      p.estimated_usd += r.cost_usd;
+      continue;
+    }
     if (r.cost_usd === null) {
-      if (r.outcome) attempts_missing_cost++;
+      if (r.outcome && !r.usage) attempts_missing_cost++;
       continue;
     }
     p.with_cost++;
@@ -224,9 +381,22 @@ export function summarizeSpend(rows) {
   for (const p of Object.values(by_profile)) {
     p.mean_usd = p.with_cost ? usdRound(p.total_usd / p.with_cost) : null;
     p.total_usd = usdRound(p.total_usd);
+    p.estimated_usd = usdRound(p.estimated_usd);
     if (p.max_usd !== null) p.max_usd = usdRound(p.max_usd);
   }
-  return { total_usd: usdRound(total_usd), attempts_with_cost, attempts_missing_cost, sources, by_profile };
+  return {
+    total_usd: usdRound(total_usd),
+    estimated_usd: usdRound(estimated_usd),
+    basis: attempts_with_cost ? 'reported' : attempts_estimated ? 'estimate' : attempts_with_usage ? 'usage' : null,
+    worker_attempts,
+    attempts_with_cost,
+    attempts_estimated,
+    attempts_with_usage,
+    attempts_missing_cost,
+    sources,
+    usage,
+    by_profile,
+  };
 }
 
 /**
@@ -250,8 +420,8 @@ export function spawnBudget(state, cap, now = new Date()) {
 }
 
 /** The whole report, from data alone. Pure: same inputs, same object. */
-export function computeStats({ board, repo, tasks = [], runs = new Map(), since = null, window = 'all', spawns = null, now = new Date(), cost = () => null }) {
-  const rows = collectAttempts(tasks, runs, since, { cost });
+export function computeStats({ board, repo, tasks = [], runs = new Map(), since = null, window = 'all', spawns = null, now = new Date(), cost = () => null, usage = () => null, rates = null }) {
+  const rows = collectAttempts(tasks, runs, since, { cost, usage, rates });
   const read = typeof runs?.size === 'number' ? runs.size : Object.keys(runs || {}).length;
   return {
     board,
@@ -270,6 +440,14 @@ export function computeStats({ board, repo, tasks = [], runs = new Map(), since 
 // ---------- human output ----------
 
 const usd = (v) => (v === null || v === undefined ? '—' : `$${v !== 0 && Math.abs(v) < 0.01 ? v.toFixed(4) : v.toFixed(2)}`);
+
+/** `842` · `37k` · `1.4M` — token counts at a glance; the exact figures are in `--json`. */
+function tok(n) {
+  if (!Number.isFinite(n)) return '—';
+  if (n < 10_000) return String(n);
+  if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
+  return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;
+}
 
 function dur(ms) {
   if (ms === null || ms === undefined) return '—';
@@ -316,17 +494,28 @@ export function formatStats(s) {
   const profiles = Object.entries(m.by_profile).sort((x, y) => y[1].total_usd - x[1].total_usd);
   // coverage is against the attempts a worker actually ran — the dispatcher's own bookkeeping rows
   // never had a cost to record, so counting them would make every board look under-reported
-  const priceable = m.attempts_with_cost + m.attempts_missing_cost;
-  const worker = `${priceable} worker attempt${priceable === 1 ? '' : 's'}`;
-  if (!m.attempts_with_cost) {
-    if (priceable) lines.push(row('spend', `not recorded on any of the ${worker} — only a harness whose log ends in Claude's final JSON reports one`));
-  } else {
-    lines.push(row('spend', `${usd(m.total_usd)} · recorded on ${m.attempts_with_cost} of ${worker}`));
+  const worker = `${m.worker_attempts} worker attempt${m.worker_attempts === 1 ? '' : 's'}`;
+  const some = (n) => `${n} worker attempt${n === 1 ? '' : 's'}`;
+  const noFinalJson = "only a harness whose log ends in Claude's final JSON reports one";
+  if (m.attempts_with_cost) {
+    lines.push(row('spend', `${usd(m.total_usd)} reported · on ${m.attempts_with_cost} of ${worker}`));
     for (const [name, p] of profiles) {
       if (!p.with_cost) continue;
       lines.push(row('', `${name.padEnd(12)} ${usd(p.total_usd).padStart(8)} · ${p.with_cost} attempt${p.with_cost === 1 ? '' : 's'} · mean ${usd(p.mean_usd)} · max ${usd(p.max_usd)}${p.turns ? ` · ${p.turns} turns` : ''}`));
     }
-    if (m.attempts_missing_cost) lines.push(row('', `${m.attempts_missing_cost} worker attempt${m.attempts_missing_cost === 1 ? '' : 's'} recorded no cost — the real total is higher`));
+    if (m.attempts_estimated) lines.push(row('', `~${usd(m.estimated_usd)} estimated on top, for ${some(m.attempts_estimated)} priced from their transcripts — an estimate, not a reported cost`));
+    if (m.attempts_missing_cost) lines.push(row('', `${some(m.attempts_missing_cost)} priced nothing at all — the real total is higher`));
+  } else if (m.attempts_estimated) {
+    lines.push(row('spend', `~${usd(m.estimated_usd)} ESTIMATED on ${m.attempts_estimated} of ${worker} — the tokens below at your \`stats.rates\`; nothing here reported a cost`));
+  } else if (m.attempts_with_usage) {
+    lines.push(row('spend', `no cost reported on any of the ${worker} — ${noFinalJson}; the usage below is all there is`));
+  } else if (m.worker_attempts) {
+    lines.push(row('spend', `not recorded on any of the ${worker} — ${noFinalJson}`));
+  }
+  if (m.attempts_with_usage) {
+    const u = m.usage;
+    lines.push(row('usage', `${u.turns} turns · in ${tok(u.input_tokens)} · out ${tok(u.output_tokens)} · cache ${tok(u.cache_creation_input_tokens)} written / ${tok(u.cache_read_input_tokens)} read  (${m.attempts_with_usage} transcript${m.attempts_with_usage === 1 ? '' : 's'})`));
+    if (!m.attempts_estimated) lines.push(row('', 'no price: put `"stats": {"rates": {"<model>": {"input": <$/Mtok>, "output": <$/Mtok>}}}` in .kanban/board.json for an estimate'));
   }
   lines.push('');
   lines.push(`read 1 board query + ${s.reads.run_comments} run record${s.reads.run_comments === 1 ? '' : 's'}; nothing was written.`);
@@ -367,6 +556,49 @@ export function sessionFromLog(root, attempt) {
   try { return parseSessionLog(text); } catch { return null; }
 }
 
+const TRANSCRIPT_CHUNK_BYTES = 262_144;
+
+/**
+ * The lines of a file, one at a time. A transcript is the largest thing hkb ever reads — a long
+ * session runs to tens of megabytes — and only its `usage` fields are wanted, so it is walked a
+ * chunk at a time and never held whole. A `StringDecoder` carries a multi-byte character across a
+ * chunk boundary instead of splitting it into two replacement characters and losing that line.
+ * Yields nothing at all when the file cannot be opened or read.
+ */
+function* readLines(file, chunkBytes = TRANSCRIPT_CHUNK_BYTES) {
+  let fd;
+  try { fd = fs.openSync(file, 'r'); } catch { return; }
+  try {
+    const buf = Buffer.alloc(chunkBytes);
+    const decoder = new StringDecoder('utf8');
+    let rest = '';
+    for (;;) {
+      let n;
+      try { n = fs.readSync(fd, buf, 0, chunkBytes, null); } catch { return; }
+      if (!n) break;
+      const parts = (rest + decoder.write(buf.subarray(0, n))).split('\n');
+      rest = parts.pop();
+      yield* parts;
+    }
+    rest += decoder.end();
+    if (rest) yield rest;
+  } finally {
+    try { fs.closeSync(fd); } catch { /* already gone */ }
+  }
+}
+
+/**
+ * The tokens an attempt's session spent, out of its transcript. `transcript_path` is recorded once
+ * by the Stop hook and is an absolute path on the host that ran the attempt — the same bonus-not-
+ * truth deal as `sessionFromLog`: read from disk or not at all, and null whenever there is nothing
+ * here to read, so a board reported from another machine simply falls back to today's message.
+ */
+export function usageFromTranscript(root, attempt) {
+  const p = attempt?.transcript_path;
+  if (!p || typeof p !== 'string') return null;
+  return parseTranscriptUsage(readLines(path.isAbsolute(p) ? p : path.join(root, p)));
+}
+
 // ---------- the command ----------
 
 /**
@@ -405,6 +637,8 @@ export async function stats(ctx, flags = {}, deps = {}) {
     now,
     spawns: spawnBudget(fs.existsSync(stateFile(local)) ? readState(local) : null, ctx.cfg?.dispatch?.daily_spawn_cap, now),
     cost: (a) => sessionFromLog(local, a),
+    usage: (a) => usageFromTranscript(local, a),
+    rates: ctx.cfg?.stats?.rates || null,
   });
   write(ctx.json ? JSON.stringify(report, null, 2) : formatStats(report));
   return 0;
