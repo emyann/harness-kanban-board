@@ -1,5 +1,9 @@
 #!/usr/bin/env sh
 # Shim: use a globally installed hkb if present, else run the published package with npx.
+# Right for a repo that installed hkb as a devDependency too, and needs no case for it: a session
+# started through npm/npx already has node_modules/.bin on PATH, and npx resolves node_modules/.bin
+# before the registry — so both branches land on the version the repo pinned. Only the Claude Code
+# hooks need to say where hkb is (they run in a plain /bin/sh); see hkbCommandForHook in src/init.js.
 if command -v hkb >/dev/null 2>&1; then
   exec hkb "$@"
 fi

@@ -12,12 +12,13 @@ import {
   harnessFiles, installHarness, installClaudeHooks, hookSummary, CLAUDE_HOOKS, resolveProfiles, boardProfiles,
   HARNESSES, HARNESS_PROFILE, packageSkillDir, HOOK_SETTINGS, NPX_COMMAND, hkbCommandForHook, hookPlacement,
   hookCommandNeeds, isHkbHookCommand, isPortableHookCommand, isEphemeralPath, findClaudeHooks,
+  localInstallRel, guardedHookCommand, resolveHookPath, packageInfo, PROJECT_DIR,
 } from '../src/init.js';
 import { parseArgs } from '../src/cli.js';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, ensureWorktree } from '../src/board.js';
 import { expandLaunch, spawnWorker, tick } from '../src/dispatch.js';
 import { checkHarnesses, checkHooks } from '../src/doctor.js';
-import { stripFrontmatter, worktreePath } from '../src/model.js';
+import { stripFrontmatter, worktreePath, isLocalInstall, stripNodeModulesBin } from '../src/model.js';
 import { FakeGh, kbIssue } from './fake-gh.js';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
@@ -570,6 +571,134 @@ test('a durable install is still named absolutely, and a tracked file never is',
   assert.equal(hkbCommandForHook('stop', { shared: true, onPath: false, pkgRoot: durable }), 'hkb hook stop', 'a shared file gets the portable form or nothing');
 });
 
+// ---------- the third install shape: `npm i -D hkb-cli` (#146) ----------
+// The one command that is exact *and* the same on every machine, so it is the one that may go in the
+// tracked file with nobody asking for it.
+
+const LOCAL_REL = `node_modules/${packageInfo().name}/${packageInfo().bin}`;
+
+test('a package installed under the repo is detected by path, never by PATH', () => {
+  assert.ok(isLocalInstall('/repo/node_modules/hkb-cli', '/repo'));
+  assert.ok(isLocalInstall('/repo/node_modules/.pnpm/hkb-cli@0.1.4/node_modules/hkb-cli', '/repo/'), 'pnpm resolves through its store, and that is still inside the repo');
+  assert.ok(isLocalInstall('C:\\repo\\node_modules\\hkb-cli', 'C:\\repo'), 'both separators');
+  assert.ok(!isLocalInstall('/usr/lib/node_modules/hkb-cli', '/repo'), 'a global install is not this repo\'s');
+  assert.ok(!isLocalInstall('/home/x/.npm/_npx/9f/node_modules/hkb-cli', '/repo'));
+  assert.ok(!isLocalInstall('/repo2/node_modules/hkb-cli', '/repo'), 'a prefix of the path is not the path');
+  assert.ok(!isLocalInstall('/repo', '/repo'), 'the checkout itself is not an install of itself');
+  assert.ok(!isLocalInstall('/repo/node_modules/hkb-cli', ''));
+});
+
+test('`hkb` found only in node_modules/.bin is not on PATH for a hook', () => {
+  const PATH = ['/repo/node_modules/.bin', '/usr/bin', '/repo/node_modules/.bin/', '/home/x/_npxtools/bin'].join(':');
+  assert.equal(stripNodeModulesBin(PATH), '/usr/bin:/home/x/_npxtools/bin', 'npx and npm run put one there; a hook\'s /bin/sh never does');
+  assert.equal(stripNodeModulesBin('C:\\repo\\node_modules\\.bin;C:\\bin', ';'), 'C:\\bin');
+  assert.equal(stripNodeModulesBin(''), '');
+  assert.equal(stripNodeModulesBin('/usr/bin:/usr/local/bin'), '/usr/bin:/usr/local/bin', 'everything else survives untouched');
+});
+
+test('localInstallRel names the package, never a literal, and only inside the repo', () => {
+  assert.equal(localInstallRel('/repo', { pkgRoot: '/repo/node_modules/hkb-cli' }), LOCAL_REL);
+  assert.equal(localInstallRel('/repo', { pkgRoot: '/elsewhere/node_modules/hkb-cli' }), null);
+  assert.equal(localInstallRel(null, { pkgRoot: '/repo/node_modules/hkb-cli' }), null, 'no repo, no $CLAUDE_PROJECT_DIR to be relative to');
+  const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'));
+  assert.equal(LOCAL_REL, `node_modules/${pkg.name}/${pkg.bin.hkb}`, 'rename the package or move the bin and this follows');
+});
+
+test('a local install gets the guarded $CLAUDE_PROJECT_DIR form, in either settings file', () => {
+  const opts = { root: '/repo', pkgRoot: '/repo/node_modules/hkb-cli' };
+  const stop = hkbCommandForHook('stop', opts);
+  assert.equal(stop, `f="${PROJECT_DIR}/${LOCAL_REL}"; [ -f "$f" ] || exit 0; exec node "$f" hook stop`);
+  assert.equal(hkbCommandForHook('pretool', opts), guardedHookCommand(LOCAL_REL, 'pretool'));
+  assert.equal(hkbCommandForHook('stop', { ...opts, shared: true }), stop, 'the tracked file gets it too — that is the point');
+  assert.equal(hkbCommandForHook('stop', { ...opts, onPath: true }), stop, 'the version the repo pinned wins over whatever is on PATH');
+  assert.ok(!stop.includes('/repo'), 'it must not name the machine it was written on');
+  assert.ok(isHkbHookCommand(stop, 'stop') && !isHkbHookCommand(stop, 'pretool'));
+  assert.ok(isPortableHookCommand(stop), 'it means the same thing in every checkout');
+});
+
+test('the guarded command runs the local install, and is silent before there is one', () => {
+  const root = scratch();
+  const bin = path.join(root, ...LOCAL_REL.split('/'));
+  const command = guardedHookCommand(LOCAL_REL, 'stop');
+  const sh = () => spawnSync('sh', ['-c', command], { encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: root } });
+
+  const before = sh();
+  assert.equal(before.status, 0, 'a worktree that has not run `npm ci` yet must not fail every tool call');
+  assert.equal(`${before.stdout}${before.stderr}`, '', 'and must say nothing at all');
+
+  fs.mkdirSync(path.dirname(bin), { recursive: true });
+  fs.writeFileSync(bin, 'process.stdout.write(`ran ${process.argv.slice(2).join(" ")}`);\n');
+  const after = sh();
+  assert.equal(after.status, 0, after.stderr);
+  assert.equal(after.stdout, 'ran hook stop', 'and the verb reaches the hkb the repo installed');
+});
+
+test('hookCommandNeeds reads the guarded form: the file it names, and that it checks for it', () => {
+  const need = hookCommandNeeds(guardedHookCommand(LOCAL_REL, 'stop'));
+  assert.deepEqual(need, { kind: 'file', target: `${PROJECT_DIR}/${LOCAL_REL}`, guarded: true }, 'the assignment is expanded, so doctor gets a path and not `$f`');
+  assert.equal(resolveHookPath(need.target, '/home/someone/repo'), `/home/someone/repo/${LOCAL_REL}`);
+  assert.equal(resolveHookPath(need.target, '/a$&b'), `/a$&b/${LOCAL_REL}`, 'a root is a string, never a replacement pattern');
+  assert.equal(resolveHookPath('hkb', '/repo'), 'hkb', 'nothing to resolve in a plain binary');
+  assert.equal(hookCommandNeeds(`f="${PROJECT_DIR}/${LOCAL_REL}"; [ -f "$f" ] || exit 0; exec node "\${f}" hook stop`).target, `${PROJECT_DIR}/${LOCAL_REL}`, '${f} is the same variable');
+});
+
+test('hookPlacement puts a portable command in the tracked file without being asked', () => {
+  const guarded = withHkbHooks(`f="${PROJECT_DIR}/${LOCAL_REL}"; [ -f "$f" ] || exit 0; exec node "$f"`);
+  assert.deepEqual(hookPlacement({ portable: true }), { file: 'shared', movedFrom: null }, 'no --shared-hooks needed: it resolves for everyone that file serves');
+  assert.deepEqual(hookPlacement({ local: withHkbHooks('hkb'), portable: true }), { file: 'shared', movedFrom: 'local' }, 'and the per-developer copy is stale by construction');
+  assert.deepEqual(hookPlacement({ shared: guarded, portable: true }), { file: 'shared', movedFrom: null });
+  assert.deepEqual(hookPlacement({ shared: guarded }), { file: 'shared', movedFrom: null }, 'read back on a machine with no local install, it is still portable and still stays put');
+});
+
+test('installClaudeHooks writes the local-install command into the tracked file', () => {
+  const root = scratch();
+  const r = installClaudeHooks(root, () => {}, { localRel: LOCAL_REL });
+
+  assert.equal(r.file, SHARED, 'a command that resolves in every checkout belongs where everyone reads it');
+  assert.equal(r.local, LOCAL_REL);
+  assert.deepEqual(r.added, ['Stop', 'PreToolUse']);
+  assert.equal(fs.existsSync(path.join(root, LOCAL)), false, 'nothing is left in the per-developer file');
+  for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
+    assert.equal(commandsOf(readSettings(root, SHARED).hooks[event])[0], guardedHookCommand(LOCAL_REL, verb));
+  }
+  assert.deepEqual(installClaudeHooks(root, () => {}, { localRel: LOCAL_REL }).added, [], 'idempotent');
+});
+
+test('a bare `hkb` in the tracked file is rewritten once the repo installs its own', () => {
+  const root = scratch();
+  writeSettings(root, SHARED, withHkbHooks('hkb'));
+
+  const r = installClaudeHooks(root, () => {}, { localRel: LOCAL_REL });
+
+  assert.deepEqual([r.added, r.repaired], [[], ['Stop', 'PreToolUse']], '`hkb` on PATH is a fact about a machine; the pinned copy is a fact about the repo');
+  assert.equal(commandsOf(readSettings(root, SHARED).hooks.Stop)[0], guardedHookCommand(LOCAL_REL, 'stop'));
+});
+
+test('a teammate running their own global hkb leaves the committed command alone', () => {
+  const root = scratch();
+  const committed = guardedHookCommand(LOCAL_REL, 'stop');
+  writeSettings(root, SHARED, withHkbHooks(`f="${PROJECT_DIR}/${LOCAL_REL}"; [ -f "$f" ] || exit 0; exec node "$f"`));
+
+  const r = installClaudeHooks(root, () => {}, { localRel: null }); // their hkb is on PATH, not in this repo
+
+  assert.deepEqual([r.file, r.added, r.repaired], [SHARED, [], []], 'the tracked command is portable, and they did not write it');
+  assert.equal(commandsOf(readSettings(root, SHARED).hooks.Stop)[0], committed);
+  assert.equal(fs.existsSync(path.join(root, LOCAL)), false, 'and no second copy to fire every nudge twice');
+});
+
+test('hooks an earlier init left in the per-developer file move to the tracked one', () => {
+  const root = scratch();
+  writeSettings(root, LOCAL, { model: 'opus', ...withHkbHooks('node "/home/someone/checkout/hkb-cli/bin/hkb.js"') });
+
+  const r = installClaudeHooks(root, (s) => s, { localRel: LOCAL_REL });
+
+  assert.equal(r.movedFrom, LOCAL);
+  assert.deepEqual(r.added, ['Stop', 'PreToolUse']);
+  assert.equal(readSettings(root, LOCAL).model, 'opus', 'the rest of that file is untouched');
+  assert.equal(readSettings(root, LOCAL).hooks, undefined);
+  assert.match(hookSummary(r.added, r), /moved out of \.claude\/settings\.local\.json, because this command resolves in every checkout/);
+});
+
 test('isEphemeralPath catches an npx cache on either separator', () => {
   assert.ok(isEphemeralPath('/home/x/.npm/_npx/9f/node_modules/hkb-cli'));
   assert.ok(isEphemeralPath('C:\\Users\\x\\AppData\\Local\\npm-cache\\_npx\\9f\\node_modules\\hkb-cli'));
@@ -578,10 +707,10 @@ test('isEphemeralPath catches an npx cache on either separator', () => {
 });
 
 test('hookCommandNeeds says what has to exist before a hook can run', () => {
-  assert.deepEqual(hookCommandNeeds('hkb hook stop'), { kind: 'bin', target: 'hkb' });
-  assert.deepEqual(hookCommandNeeds(`${NPX_COMMAND} hook stop`), { kind: 'bin', target: 'npx' });
-  assert.deepEqual(hookCommandNeeds('node "/opt/hkb cli/bin/hkb.js" hook stop'), { kind: 'file', target: '/opt/hkb cli/bin/hkb.js' });
-  assert.deepEqual(hookCommandNeeds('/usr/bin/node /opt/hkb/bin/hkb.js hook stop'), { kind: 'file', target: '/opt/hkb/bin/hkb.js' });
+  assert.deepEqual(hookCommandNeeds('hkb hook stop'), { kind: 'bin', target: 'hkb', guarded: false });
+  assert.deepEqual(hookCommandNeeds(`${NPX_COMMAND} hook stop`), { kind: 'bin', target: 'npx', guarded: false });
+  assert.deepEqual(hookCommandNeeds('node "/opt/hkb cli/bin/hkb.js" hook stop'), { kind: 'file', target: '/opt/hkb cli/bin/hkb.js', guarded: false });
+  assert.deepEqual(hookCommandNeeds('/usr/bin/node /opt/hkb/bin/hkb.js hook stop'), { kind: 'file', target: '/opt/hkb/bin/hkb.js', guarded: false });
 });
 
 test('every form hkb has ever written is recognised as ours, and nobody else\'s is', () => {
@@ -660,6 +789,48 @@ test('doctor names both copies when the hooks are configured twice, and the abse
   assert.equal(missing.ok, null);
   assert.match(missing.detail, /not configured in .*settings\.local\.json or .*settings\.json/);
   assert.equal(finding(none.results, 'hook command'), undefined, 'nothing to resolve when nothing is configured');
+});
+
+test('doctor resolves $CLAUDE_PROJECT_DIR before looking, and says what it found (#146)', () => {
+  const root = scratch();
+  writeSettings(root, SHARED, withHkbHooks(`f="${PROJECT_DIR}/${LOCAL_REL}"; [ -f "$f" ] || exit 0; exec node "$f"`));
+  const seen = [];
+  const { results, sink } = findings();
+
+  checkHooks({ root }, sink, { onPath: () => false, exists: (p) => (seen.push(p), true), localRel: LOCAL_REL });
+
+  assert.deepEqual(seen, [path.join(root, ...LOCAL_REL.split('/'))], 'the variable is this repo, and doctor is standing in it');
+  const cmd = finding(results, 'hook command');
+  assert.equal(cmd.ok, true);
+  assert.equal(cmd.detail, `${PROJECT_DIR}/${LOCAL_REL} → ${path.join(root, ...LOCAL_REL.split('/'))}`, 'a pass names the file it resolved, not two lines of shell');
+});
+
+test('doctor calls a not-yet-installed guarded hook what it is: waiting, not broken', () => {
+  const root = scratch();
+  writeSettings(root, SHARED, withHkbHooks(`f="${PROJECT_DIR}/${LOCAL_REL}"; [ -f "$f" ] || exit 0; exec node "$f"`));
+  const { results, sink } = findings();
+
+  checkHooks({ root }, sink, { onPath: () => false, exists: () => false, localRel: null });
+
+  const cmd = finding(results, 'hook command');
+  assert.equal(cmd.ok, null, 'a command that exits 0 in silence fails nothing — a worktree before `npm ci` is the normal case');
+  assert.match(cmd.detail, /is not installed here — the hook exits 0 in silence until it is/);
+  assert.match(cmd.fix, /npm install/);
+});
+
+test('doctor fails a stale bare `hkb` on a repo that installs its own', () => {
+  const root = scratch();
+  writeSettings(root, SHARED, withHkbHooks('hkb'));
+  const { results, sink } = findings();
+
+  checkHooks({ root }, sink, { onPath: () => true, exists: () => true, localRel: LOCAL_REL });
+
+  const cmd = finding(results, 'hook command');
+  assert.equal(cmd.ok, false, 'it resolves on this machine and on nobody else\'s — and this file is read by everybody');
+  assert.match(cmd.detail, new RegExp(`this repo installs hkb itself \\(${LOCAL_REL.replace(/[/.]/g, '\\$&')}\\)`));
+  assert.match(cmd.detail, /\.claude[/\\]settings\.json/, 'it names the file the stale command is in');
+  assert.match(cmd.fix, /^hkb init/);
+  assert.ok(cmd.fix.includes(`${PROJECT_DIR}/${LOCAL_REL}`), 'and what init will write instead');
 });
 
 test('findClaudeHooks reads both files and reports the one it cannot parse', () => {

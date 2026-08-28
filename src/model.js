@@ -601,6 +601,40 @@ export function compareVersions(a, b) {
   return 0;
 }
 
+// ---------- where the running hkb came from ----------
+// Three install shapes, and the generated hook command differs for each (src/init.js
+// hkbCommandForHook): a global `npm i -g`, an `npx` run out of a cache that is gone the next time
+// npm cleans it, and a `npm i -D hkb-cli` devDependency of the repo itself. Only the last one is
+// both exact and the same on every machine, so telling it apart is worth two pure functions.
+
+/**
+ * Is `pkgRoot` — where the running hkb lives — an install inside `<root>/node_modules/`? That is the
+ * `npm i -D hkb-cli` shape (#146): the version is pinned in the repo's package.json, so every machine
+ * that runs `npm install` gets the same one in the same place, and a hook can name it relative to the
+ * project instead of naming this machine.
+ *
+ * A path comparison, never PATH: `npx` puts `node_modules/.bin` on its child's PATH, so "is hkb on
+ * PATH" answers yes for a local install too — and then answers no in the plain `/bin/sh` a hook runs
+ * in. String work rather than `node:path` so this file stays I/O- and import-free; both arguments are
+ * already absolute where it is called.
+ */
+export function isLocalInstall(pkgRoot, root) {
+  const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  const [pkg, base] = [norm(pkgRoot), norm(root)];
+  return !!pkg && !!base && pkg.startsWith(`${base}/node_modules/`);
+}
+
+/**
+ * `PATH` without its `node_modules/.bin` entries — the PATH a *hook* will actually have. `npx` and
+ * `npm run` prepend one; the `/bin/sh` Claude Code starts a hook command in never has it. So a binary
+ * found only there is not on PATH for the thing being configured, and a command written on that
+ * evidence fails on every tool call in every session (#146).
+ * @param sep the platform's PATH delimiter (`path.delimiter`) — passed in, so this stays pure
+ */
+export function stripNodeModulesBin(PATH, sep = ':') {
+  return String(PATH || '').split(sep).filter((e) => !/node_modules[\\/]+\.bin[\\/]*$/.test(e.trim())).join(sep);
+}
+
 // ---------- worker permission policy (PreToolUse hook) ----------
 // A background worker has nobody to answer a prompt, so hkb decides itself:
 // explicit allow or deny-with-reason, never "ask". Pure and unit-tested.

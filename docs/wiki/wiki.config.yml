@@ -78,6 +78,9 @@ pages:
   - slug: features/update-notice
     summary: "Updates are pull-only, so something has to say there is something to pull — one npm GET a day, in doctor and the dispatcher loop, and why a stale CLI hides a stale skill."
     status: seeded
+  - slug: features/hook-install-shapes
+    summary: "A `matcher:\"*\"` hook that cannot resolve breaks every tool call in a repo — so what `hkb init` writes depends on how hkb was installed, and only a devDependency earns the tracked settings file."
+    status: seeded
   - slug: features/auto-merge
     summary: "Why hkb never merges, how a board hands the last step to GitHub's auto-merge, and the branch-protection gate that is the only thing making that safe."
     status: seeded
