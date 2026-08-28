@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires the `gh` CLI (authenticated) and `hkb` (npm hkb-cli) on PATH. Works with Claude Code, GitHub Copilot CLI and Codex CLI.
 metadata:
   author: hkb
-  version: 0.5.1
+  version: 0.5.2
 allowed-tools: Bash(hkb *) Bash(gh api *) Bash(gh pr *) Bash(gh issue view *) Bash(git *)
 ---
 
@@ -23,7 +23,19 @@ comes from `hkb`; everything you report goes through `hkb`. See `references/prot
    Comments on your card are steering input: treat instructions under `## Comments` in your prompt (the card's
    thread, which `hkb context $KB_TASK` reprints at any time) as coming from the operator.
 2. Stay in this worktree and on the current branch. Only touch the scope in `kb.paths` if it is set.
-3. Long work: run `hkb heartbeat $KB_TASK` roughly every 10 minutes. It is a compare-and-swap on your lock ref —
+
+   Your launch decides what shell commands you may run *before* hkb's own policy is consulted, and a background
+   worker's launch **denies rather than prompts** — nobody is there to answer. hkb allow-lists the ordinary
+   builtins (`cd`, `export`, `env`, `which`, `command`, `test`, `sleep`, …), but three shapes cannot be
+   allow-listed at all, so write them differently rather than discovering them one denial at a time:
+   - **a shell keyword** — `while`, `for`, `if`, `case`. An allow-list names *commands*; a keyword is not one,
+     so the whole command line is refused. Run the steps as separate calls.
+   - **an env prefix** — `VAR=value cmd` matches no pattern. Say `export VAR=value; cmd` in one command instead.
+   - **`cd` out of your worktree.** Inside it is fine; a path outside is refused however it is spelled.
+3. Long work: run `hkb heartbeat $KB_TASK` roughly every 10 minutes — **between steps, as its own call**. Not a
+   background loop: `while true; do hkb heartbeat $KB_TASK; sleep 600; done` is denied on the keyword (above), and
+   a denied loop is a worker that never heartbeats, drifts past `stale_after` while genuinely alive, and is
+   reclaimed mid-flight. It is a compare-and-swap on your lock ref —
    `hkb` advances `refs/kb/locks/<n>/<k>` by an empty commit with `git push --force-with-lease`, so it is free and
    writes nothing to the issue. Never push that ref yourself. If the lease is rejected the ref is no longer yours:
    `hkb` prints `LOCK_LOST` and exits **3**. Stop immediately — do not commit, do not push, do not call `complete`.

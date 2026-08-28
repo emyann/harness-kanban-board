@@ -624,6 +624,40 @@ export function allowedCommandsFrom(allowedTools = []) {
 }
 
 /**
+ * The command names a launch's own allow-list actually spells — `Bash(git *)` and Copilot's
+ * `shell(git:*)` both name `git`. The sibling of `allowedCommandsFrom`, and deliberately the
+ * unseeded one: that function answers "what may a worker run", so seeding it with SAFE_BUILTINS is
+ * right; this one answers "what did the *launch* say", which is the only way to see a list that has
+ * fallen behind (#138). Anything that is not a shell pattern (`Edit`, `Read`, `write`) is not a
+ * command and is skipped.
+ */
+export function harnessCommands(allowedTools = []) {
+  const out = new Set();
+  for (const t of allowedTools || []) {
+    const m = /^(?:Bash|shell)\(\s*(.+?)\s*\)$/.exec(String(t));
+    if (!m) continue;
+    const first = m[1].split(/\s+/)[0].replace(/:\*$/, '');
+    if (first) out.add(first);
+  }
+  return out;
+}
+
+/**
+ * The SAFE_BUILTINS a launch's allow-list leaves out. hkb's own PreToolUse guard permits every one
+ * of them, so a list that omits them makes the two layers disagree — and under `--permission-mode
+ * dontAsk` the harness denies rather than prompts, so the stricter, staler layer wins and a worker
+ * spends its turns rewriting commands hkb already called safe.
+ *
+ * `null` means the profile has no per-command allow-list at all (Codex, whose sandbox is the whole
+ * policy): nothing to fall behind, so nothing to report.
+ */
+export function uncoveredBuiltins(allowedTools) {
+  if (!allowedTools) return [];
+  const have = harnessCommands(allowedTools);
+  return SAFE_BUILTINS.filter((c) => !have.has(c));
+}
+
+/**
  * Blank out the parts of a command line the shell never executes: quoted strings and heredoc
  * bodies. Without this, `hkb complete 5 --summary "done; verified"` splits into two "commands"
  * and a worker is denied its own terminal verb, with its own prose echoed back as command names.
