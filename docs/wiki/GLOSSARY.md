@@ -46,7 +46,11 @@ deserves a `concepts/` page (link it).
   (`src/init.js`; see *features/planning-commands*).
 - **Profile** — a harness adapter in `.kanban/board.json`: launch template, caps
   and heartbeat mode; `kb:agent:<profile>` says which one a task runs on. Not
-  the model, the machine, or a person (`src/board.js`).
+  the model, the machine, or a person (`src/board.js`). Exactly one per card:
+  the read is first-wins (`agentOf` in `src/model.js`), so every write goes
+  through `setAgent` (`src/tasks.js`), which takes the old label off, and
+  `hkb doctor` names any card still wearing two (`checkAgentLabels` in
+  `src/doctor.js`).
 - **Seat** — one of the three roles the protocol has: operator, dispatcher,
   worker. Every other word (reviewer, profile, host, supervisor, track runner)
   is vocabulary, not a seat
