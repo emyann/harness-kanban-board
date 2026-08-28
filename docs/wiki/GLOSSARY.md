@@ -64,7 +64,9 @@ deserves a `concepts/` page (link it).
   nodes are claimed as the runner reaches them (`src/dispatch.js`).
 - **Transcript** — the JSONL an agent session writes as it runs, recorded on the
   attempt row as `transcript_path` by the terminal verb (`sessionForAttempt` in
-  `src/hook.js`, off the job record `currentSession` reads in `src/jobs.js`).
+  `src/hook.js`, off the job record `currentSession` reads in `src/jobs.js`) —
+  or, for an attempt that files no verb, by the dispatcher off the background
+  job it matched (`jobSessionUpdate` in `src/jobs.js`).
   A file on the host that ran the attempt, never board state — and hkb's last
   answer to "what did this cost" when the harness reported none
   (`usageFromTranscript` in `src/stats.js`).

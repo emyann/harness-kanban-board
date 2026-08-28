@@ -113,6 +113,14 @@ node it claimed in-session, so a track's nodes carry the runner's transcript
 while an operator's own terminal records nothing. That is what leaves
 `hkb stats` something to price when the harness itself reports no cost.
 
+The attempts that never reach a verb — crashed, timed out, written off as a
+protocol violation — are exactly the ones a human reopens, so the tick fills
+those from the other end. It has already matched the background job to decide
+whether the attempt is alive, and that job names a record on disk;
+`jobSessionUpdate` (`src/jobs.js`) turns it into the same fields, one tick after
+the launch (`src/dispatch.js`). Blanks only: a row a verb has stamped is left
+exactly as it is, and a resumed job's record is never half-merged into one.
+
 ## The seams that keep it portable
 
 `src/gh.js` is the only file that shells out to `gh`, and it pins

@@ -11,7 +11,7 @@ import { computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, 
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted } from './track.js';
 import { GhError } from './gh.js';
-import { listKbJobs, readJobState, stopJob, matchJobByWorktree } from './jobs.js';
+import { listKbJobs, readJobState, stopJob, matchJobByWorktree, jobSessionUpdate } from './jobs.js';
 import { isMirrorConfigured, syncProject, projectError } from './projects.js';
 import { tokenExpiryNotice, versionNotice } from './doctor.js';
 import { sweep, sweepTask } from './gc.js';
@@ -477,6 +477,9 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     const maxRuntime = t.kb.max_runtime || d.max_runtime_default;
     let lastSignal = a.heartbeat_at || a.started_at;
     let outcome = null;
+    // edits to the row that are not an outcome (the job id, the session behind it): saved once,
+    // below, and only when nothing else is about to save the record anyway.
+    let dirty = false;
     // Nothing local to inspect, for two reasons that answer the same way. `remote`: a `trigger`
     // profile handed this attempt to something that is not a process on any host we can see (an
     // Actions run). `manual`: a human claimed it by hand (`hkb claim <n>` with no `--spawn`) and is
@@ -490,9 +493,18 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
         // the launch log contains "backgrounded · <id>" — the reliable source for the job id
         let id = null;
         try { id = parseBackgroundedId(fs.readFileSync(path.join(ctx.root, a.log), 'utf8')); } catch { /* not yet written */ }
-        if (id) { job = jobsById.get(id) || readJobState(id); if (!dryRun) { a.job = id; await saveRun(ctx, t.number, runRec); } }
+        if (id) { job = jobsById.get(id) || readJobState(id); if (!dryRun) { a.job = id; dirty = true; } }
       }
       if (!job && a.bg) job = matchJobByWorktree([...jobsById.values()], a.wt || `kb-${t.number}-${a.attempt}`);
+      // The tick after the launch, name the session behind the job. A `claude --bg` worker records
+      // its own identity from the terminal verb it runs (#135) — but the attempts that need it most
+      // are the ones that never run one, and the job record already says everything they need.
+      const session = dryRun ? null : jobSessionUpdate(a, job);
+      if (session) {
+        Object.assign(a, session);
+        dirty = true;
+        log(`#${t.number}: attempt ${a.attempt} ${formatSession(a)}`);
+      }
       if (!job) {
         if (secondsSince(a.started_at) > 180) outcome = 'crashed'; // cold daemon start gets 3 min to register
       } else if (classifyJob(job) !== 'running' && secondsSince(a.started_at) > 30) outcome = 'protocol_violation';
@@ -508,8 +520,10 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       if (secondsSince(lastSignal) > d.stale_after) outcome = 'reclaimed';
       else log(`#${t.number}: attempt ${a.attempt} beat on ${lockRef(t.number, a.attempt)} ${Math.round(secondsSince(lastSignal))}s ago — alive`);
     }
-    if (!outcome) continue;
+    if (!outcome) { if (dirty) await saveRun(ctx, t.number, runRec); continue; }
     if (dryRun) { summary.reclaimed.push({ number: t.number, outcome, dry: true }); continue; }
+    // failAttempt saves the same record, so a row written off in the tick that named its session
+    // costs one write, not two — and goes to its post-mortem carrying the session.
     const result = await failAttempt(ctx, t, runRec, outcome, `${outcome} after ${Math.round(secondsSince(a.started_at))}s`);
     touch(t.number);
     summary.reclaimed.push({ number: t.number, outcome: result });
