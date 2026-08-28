@@ -11,7 +11,8 @@
 //                         signs off with, folded in by the dispatcher (or the Stop hook). A row that
 //                         has none falls back to the worker's own log on disk, then to the session
 //                         transcript — both free, both local, both read only when the cheaper
-//                         source above them came back empty.
+//                         source above them came back empty. A transcript is read once and counted
+//                         once however many attempts name it: a track is one session over N nodes.
 //
 // Three answers, and never one dressed as another. `claude-bg` — the default profile, the free path —
 // writes a launch banner and no final JSON, so out of the box the first two sources hold nothing and
@@ -194,6 +195,9 @@ export function estimateCost(usage, rates) {
   return usdRound(total);
 }
 
+/** An attempt with no session transcript behind it — the ordinary case, and the empty answer. */
+const NO_SESSION = Object.freeze({ usage: null, session: null });
+
 /**
  * What an attempt cost, and where the number came from. The run record first — it is the shared
  * truth every host can read — then the worker's log, then the session transcript, both of which
@@ -203,16 +207,49 @@ export function estimateCost(usage, rates) {
  *
  * `cost_usd` from the transcript is an ESTIMATE and says so in `cost_source`; when the board has no
  * rate for the models it used there is no estimate at all, only `usage` — turns and tokens.
+ *
+ * `session` is set only on a row whose tokens came out of a transcript, and says whether this row is
+ * the one carrying them: a session shared with other attempts is counted on exactly one of them.
  */
 function priceOf(a, fromLog, fromTranscript, rates) {
   const row = finite(a.total_cost_usd);
-  if (row !== null) return { cost_usd: row, num_turns: finite(a.num_turns), cost_source: 'run_record', usage: null };
-  const session = a.ended_at ? fromLog(a) : null;
-  const logged = finite(session?.total_cost_usd);
-  if (logged !== null) return { cost_usd: logged, num_turns: finite(session.num_turns) ?? finite(a.num_turns), cost_source: 'worker_log', usage: null };
-  const usage = (a.ended_at ? fromTranscript(a) : null) || null;
+  if (row !== null) return { cost_usd: row, num_turns: finite(a.num_turns), cost_source: 'run_record', usage: null, session: null };
+  const logged = a.ended_at ? fromLog(a) : null;
+  const cost = finite(logged?.total_cost_usd);
+  if (cost !== null) return { cost_usd: cost, num_turns: finite(logged.num_turns) ?? finite(a.num_turns), cost_source: 'worker_log', usage: null, session: null };
+  const { usage, session } = a.ended_at ? fromTranscript(a) : NO_SESSION;
+  // another attempt already carries this session: its tokens are counted there, and only there
+  if (session && !session.counted) return { cost_usd: null, num_turns: null, cost_source: null, usage: null, session };
   const estimate = usage ? estimateCost(usage, rates) : null;
-  return { cost_usd: estimate, num_turns: finite(a.num_turns), cost_source: estimate === null ? null : 'estimate', usage };
+  return { cost_usd: estimate, num_turns: finite(a.num_turns), cost_source: estimate === null ? null : 'estimate', usage, session };
+}
+
+/**
+ * The transcript reader, made to answer once per FILE instead of once per attempt row.
+ *
+ * A `claude-track` runner claims every node of its subgraph from inside the session already running,
+ * so the root's row and all of its nodes' rows carry the same `transcript_path`. Read per row, that
+ * one session's tokens land in the board's total once per node — a track of five reporting five
+ * times what it spent. So the file is opened once, the first row to ask carries its usage, and every
+ * other row of the same session is handed `counted: false`: the tokens are over there, not here.
+ *
+ * Reading once matters on its own account — a transcript is the largest thing hkb ever opens.
+ *
+ * `attempts` (how many rows share the session) is only knowable once every row is in; `collectAttempts`
+ * stamps it on these objects at the end, so a report can say "one session across N nodes".
+ */
+function transcriptOnce(read, sessions) {
+  return (a) => {
+    const file = typeof a?.transcript_path === 'string' && a.transcript_path ? a.transcript_path : null;
+    // no file names this row's session, so there is nothing to share it by: priced on its own
+    if (!file) return { usage: read(a) || null, session: null };
+    let s = sessions.get(file);
+    if (!s) sessions.set(file, (s = { usage: read(a) || null, rows: [] }));
+    if (!s.usage) return NO_SESSION; // an absent or empty transcript shares nothing out
+    const session = { id: typeof a.session_id === 'string' && a.session_id ? a.session_id : null, attempts: 1, counted: !s.rows.length };
+    s.rows.push(session);
+    return { usage: session.counted ? s.usage : null, session };
+  };
 }
 
 /**
@@ -222,11 +259,14 @@ function priceOf(a, fromLog, fromTranscript, rates) {
  * @param {Map|object} runs   task number → run record
  * @param {(a) => object|null} cost   session fields from the worker's log, for a row that has none
  * @param {(a) => object|null} usage  token totals from the session transcript, for a row with neither
+ *   — called at most once per distinct `transcript_path`, however many attempts name it
  * @param {object|null} rates         `stats.rates`, which turns those tokens into an estimate
  */
 export function collectAttempts(tasks, runs, since = null, { cost = () => null, usage = () => null, rates = null } = {}) {
   const floor = since ? Date.parse(since) : null;
   const rows = [];
+  const sessions = new Map(); // transcript path → the one reading of it, and the rows that share it
+  const transcript = transcriptOnce(usage, sessions);
   for (const t of tasks) {
     const run = (typeof runs?.get === 'function' ? runs.get(t.number) : runs?.[t.number]) || null;
     for (const a of run?.attempts || []) {
@@ -245,10 +285,12 @@ export function collectAttempts(tasks, runs, since = null, { cost = () => null, 
         // rows the dispatcher or a reviewer writes for the record (gave_up, changes_requested):
         // real outcomes, but zero-duration bookkeeping — they must not drag the averages down
         synthetic: !!a.synthetic,
-        ...priceOf(a, cost, usage, rates),
+        ...priceOf(a, cost, transcript, rates),
       });
     }
   }
+  // how wide a session spread is only known once every row is in — the objects on the rows are shared
+  for (const s of sessions.values()) for (const r of s.rows) r.attempts = s.rows.length;
   return rows;
 }
 
@@ -336,6 +378,8 @@ export function summarizeAttempts(rows) {
  * Coverage is the rest of the answer: a total is only as honest as the share of attempts it covers,
  * so `worker_attempts` (every attempt that ended, bookkeeping rows excluded) is the denominator and
  * `attempts_missing_cost` counts the ones that yielded nothing at all — no cost, not even tokens.
+ * `attempts_shared_session` is the third bucket: attempts that spent their tokens inside a session
+ * another attempt already carries (a track's nodes), counted once there and never again here.
  */
 export function summarizeSpend(rows) {
   const by_profile = {};
@@ -347,12 +391,15 @@ export function summarizeSpend(rows) {
   let attempts_with_cost = 0;
   let attempts_estimated = 0;
   let attempts_with_usage = 0;
+  let attempts_shared_session = 0;
   let attempts_missing_cost = 0;
   for (const r of rows) {
     if (r.synthetic) continue;
     const p = (by_profile[r.profile] ||= { attempts: 0, with_cost: 0, total_usd: 0, mean_usd: null, max_usd: null, turns: 0, estimated: 0, estimated_usd: 0, usage: null });
     p.attempts++;
     if (r.outcome) worker_attempts++;
+    // one session, one bill: this row's tokens are on the attempt that carries the transcript
+    if (r.session && !r.session.counted) { attempts_shared_session++; continue; }
     if (r.num_turns !== null) p.turns += r.num_turns;
     if (r.usage) {
       attempts_with_usage++;
@@ -392,6 +439,7 @@ export function summarizeSpend(rows) {
     attempts_with_cost,
     attempts_estimated,
     attempts_with_usage,
+    attempts_shared_session,
     attempts_missing_cost,
     sources,
     usage,
@@ -514,9 +562,12 @@ export function formatStats(s) {
   }
   if (m.attempts_with_usage) {
     const u = m.usage;
-    lines.push(row('usage', `${u.turns} turns · in ${tok(u.input_tokens)} · out ${tok(u.output_tokens)} · cache ${tok(u.cache_creation_input_tokens)} written / ${tok(u.cache_read_input_tokens)} read  (${m.attempts_with_usage} transcript${m.attempts_with_usage === 1 ? '' : 's'})`));
-    if (!m.attempts_estimated) lines.push(row('', 'no price: put `"stats": {"rates": {"<model>": {"input": <$/Mtok>, "output": <$/Mtok>}}}` in .kanban/board.json for an estimate'));
+    const files = `${m.attempts_with_usage} transcript${m.attempts_with_usage === 1 ? '' : 's'}`;
+    const over = m.attempts_shared_session ? ` over ${some(m.attempts_with_usage + m.attempts_shared_session)}` : '';
+    lines.push(row('usage', `${u.turns} turns · in ${tok(u.input_tokens)} · out ${tok(u.output_tokens)} · cache ${tok(u.cache_creation_input_tokens)} written / ${tok(u.cache_read_input_tokens)} read  (${files}${over})`));
   }
+  if (m.attempts_shared_session) lines.push(row('', `${some(m.attempts_shared_session)} ran inside a session another attempt carries — counted once, there, not once per node`));
+  if (m.attempts_with_usage && !m.attempts_estimated) lines.push(row('', 'no price: put `"stats": {"rates": {"<model>": {"input": <$/Mtok>, "output": <$/Mtok>}}}` in .kanban/board.json for an estimate'));
   lines.push('');
   lines.push(`read 1 board query + ${s.reads.run_comments} run record${s.reads.run_comments === 1 ? '' : 's'}; nothing was written.`);
   return lines.join('\n');

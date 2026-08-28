@@ -8,7 +8,7 @@ disk) whatever `hkb init --harness <name>` generates. This page is the per-harne
 | profile | harness | worktree | stop nudge | structured output | spend | `hkb init --harness` |
 | --- | --- | --- | --- | --- | --- | --- |
 | `claude` | Claude Code background agent | `claude --worktree` | `Stop` hook in `.claude/settings.local.json` | none — the log is the launch banner | tokens, from the session transcript | — (plain `hkb init`) |
-| `claude-track` | the same, run as a whole track | `claude --worktree` | same | none | one transcript for the whole track | — |
+| `claude-track` | the same, run as a whole track | `claude --worktree` | same | none | one transcript for the whole track, counted once | — |
 | `claude-p` | Claude Code headless | `claude --worktree` | same | `--output-format json` | **a reported cost** | — |
 | `copilot-cli` | GitHub Copilot CLI | dispatcher (`git worktree add`) | `agentStop` hook in `.github/hooks/kanban.json` | none | none | `copilot` |
 | `codex` | OpenAI Codex CLI | dispatcher (`git worktree add`) | `Stop` hook in `.codex/hooks.json` | `--output-schema` | none | `codex` |
@@ -79,7 +79,7 @@ Per profile:
 | profile | what an attempt leaves behind | so `hkb stats` shows |
 | --- | --- | --- |
 | `claude` | a launch banner and nothing else — a background agent signs off with no JSON. What it can leave is the session the `Stop` hook records: an id and a transcript path. | **usage**, or an **estimate** once the board has rates |
-| `claude-track` | the same — and because the runner claims each node from inside its own session, every node's row carries the *runner's* session id and transcript | as `claude`, but one transcript covers the whole track |
+| `claude-track` | the same — and because the runner claims each node from inside its own session, every node's row carries the *runner's* session id and transcript | as `claude`, but one transcript covers the whole track, and is counted once for it |
 | `claude-p` | `--output-format json`, so the log ends in Claude's own `{"session_id": …, "total_cost_usd": …, "num_turns": …}` | **reported**, per attempt, with turns |
 | `copilot-cli` | no structured output, and no cost in the `agentStop` payload | **nothing** |
 | `codex` | `--output-schema` shapes the terminal verb, not a bill | **nothing** |
@@ -122,9 +122,20 @@ carries the same `session_id` and `transcript_path` as the root. That is what le
 the dispatcher started by itself, which has a session and a transcript of its own.
 
 The bill does not divide the same way. Those tokens were spent once, and no per-node share of them is recorded
-anywhere; `hkb stats` prices every attempt row that names a transcript, so a track of five nodes counts its one
-transcript five times. Until that is fixed ([#126](https://github.com/emyann/harness-kanban-board/issues/126)),
-read a track board's `usage` line and its estimate as roughly *nodes × session*, not as the session.
+anywhere — so `hkb stats` counts them once: a transcript is read once however many attempt rows name it, its
+usage and its estimate land on one of them, and the others are reported as having run inside a session that is
+counted elsewhere:
+
+```
+spend      ~$0.17 ESTIMATED on 2 of 4 worker attempts — the tokens below at your `stats.rates`; nothing here reported a cost
+usage      200 turns · in 2000 · out 4000 · cache 8000 written / 16k read  (2 transcripts over 4 worker attempts)
+           2 worker attempts ran inside a session another attempt carries — counted once, there, not once per node
+```
+
+That is a track of three plus one cold node: four attempts, two sessions, and a total that is the two, not the
+four. In `--json` the nodes counted elsewhere are `spend.attempts_shared_session` — attempts that ran and count
+as attempts, but are neither a cost of their own nor a hole in the coverage (`attempts_missing_cost` leaves them
+out). A cold node, whose transcript nobody else names, is priced on its own as it always was.
 
 ### When a profile that should report tokens reports none
 

@@ -127,6 +127,71 @@ test('with no rates the transcript still answers with turns and tokens, and no d
   assert.deepEqual(s.usage, { turns: 4, input_tokens: 10, output_tokens: 20, cache_creation_input_tokens: 30, cache_read_input_tokens: 40 });
 });
 
+// A `claude-track` runner claims every node of its subgraph from inside the session already running,
+// so the root's attempt row and all of its nodes' rows name the SAME transcript. One session, one
+// bill — priced per row, a track of three would report three times what it spent.
+
+const oneSession = () => ({
+  turns: 100, input_tokens: 1000, output_tokens: 2000, cache_creation_input_tokens: 4000, cache_read_input_tokens: 8000,
+  by_model: { 'claude-opus-5': { turns: 100, input_tokens: 1000, output_tokens: 2000, cache_creation_input_tokens: 4000, cache_read_input_tokens: 8000 } },
+});
+const OPUS_RATES = { 'claude-opus-5': { input: 5, output: 25, cache_write: 6.25, cache_read: 0.5 } };
+// (1000·$5 + 2000·$25 + 4000·$6.25 + 8000·$0.50) per Mtok — what one of those sessions estimates at
+const ONE_SESSION_USD = 0.084;
+
+const node = (n, transcript, over = {}) => [n, runWith([{
+  attempt: 1, profile: 'claude-track', started_at: ago(hours(3)), ended_at: ago(hours(1)),
+  outcome: 'completed', session_id: 's-track', transcript_path: transcript, ...over,
+}])];
+
+const trackBoard = () => ({
+  tasks: [task(10), task(11), task(12), task(13)],
+  runs: runs(Object.fromEntries([
+    node(10, '/t/track.jsonl'), // the root, and the session everything below it ran in
+    node(11, '/t/track.jsonl'),
+    node(12, '/t/track.jsonl'),
+    node(13, '/t/cold.jsonl', { session_id: 's-cold' }), // a node the dispatcher started by itself
+  ])),
+});
+
+test("a track's one transcript is read once and counted once, however many nodes name it", () => {
+  const board = trackBoard();
+  const reads = [];
+  const rows = collectAttempts(board.tasks, board.runs, null, {
+    usage: (a) => { reads.push(a.transcript_path); return oneSession(); },
+    rates: OPUS_RATES,
+  });
+
+  assert.deepEqual(reads, ['/t/track.jsonl', '/t/cold.jsonl'], 'the largest file hkb opens is opened once, not once per node');
+  assert.deepEqual(rows.map((r) => r.cost_source), ['estimate', null, null, 'estimate']);
+  assert.equal(rows[0].usage.turns, 100);
+  assert.equal(rows[1].usage, null, "a node's tokens are on the row that carries the session, not on this one");
+  assert.equal(rows[1].num_turns, null, 'and neither are its turns, which would double the same way');
+  assert.deepEqual(rows.map((r) => r.session.counted), [true, false, false, true]);
+  assert.deepEqual(rows.map((r) => r.session.attempts), [3, 3, 3, 1], 'each row knows how wide the session it shares is');
+  assert.equal(rows[0].session.id, 's-track');
+
+  const s = summarizeSpend(rows);
+  assert.equal(s.usage.turns, 200, 'two sessions of 100 turns — not the 400 that four rows naming them would be');
+  assert.equal(s.estimated_usd, ONE_SESSION_USD * 2);
+  assert.equal(s.attempts_estimated, 2);
+  assert.equal(s.attempts_with_usage, 2);
+  assert.equal(s.attempts_shared_session, 2);
+  assert.equal(s.worker_attempts, 4, 'all four nodes ran, and all four still count as attempts');
+  assert.equal(s.attempts_missing_cost, 0, 'a node counted on another row is not a hole in the coverage');
+  assert.equal(s.by_profile['claude-track'].estimated_usd, ONE_SESSION_USD * 2);
+});
+
+test('the report says a shared session is counted once, so no one reads the total as nodes × session', () => {
+  const text = formatStats(computeStats({
+    board: 'default', now: NOW, ...trackBoard(), spawns: spawnBudget({}, null, NOW),
+    usage: () => oneSession(), rates: OPUS_RATES,
+  }));
+  assert.match(text, /spend {6}~\$0\.17 ESTIMATED on 2 of 4 worker attempts/);
+  assert.match(text, /usage {6}200 turns · in 2000 · out 4000 · cache 8000 written \/ 16k read {2}\(2 transcripts over 4 worker attempts\)/);
+  assert.match(text, /2 worker attempts ran inside a session another attempt carries — counted once, there, not once per node/);
+});
+
 test('summarizeAttempts splits delivered from blocked from failed, and averages only real work', () => {
   const rows = collectAttempts([task(1), task(2)], runs({
     1: runWith([
@@ -566,6 +631,31 @@ test('hkb stats: `stats.rates` in board.json turns those tokens into an estimate
   assert.equal(s.spend.total_usd, 0, 'nothing reported a cost, and an estimate is not one');
   assert.equal(s.spend.estimated_usd, 0.084); // (1000·5 + 2000·25 + 4000·6.25 + 8000·0.5) / 1e6
   assert.equal(s.spend.usage.turns, 1);
+  assert.equal(s.spend.attempts_missing_cost, 0);
+});
+
+test('hkb stats: a track of three nodes prices its one session once, off the file itself', async (t) => {
+  const h = harness({ rates: { 'claude-opus': { input: 5, output: 25, cache_write: 6.25, cache_read: 0.5 } } });
+  t.after(h.cleanup);
+  const transcript = path.join(h.root, '.kanban/track.jsonl');
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, asst('msg_1', 'claude-opus-5', tokensOf(1000, 2000, 4000, 8000)) + '\n');
+  // the runner's session, stamped by the Stop hook onto the root's row and every node it claimed
+  for (const number of [20, 21, 22]) {
+    h.gh.addIssue(kbIssue({
+      number, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude-track', updatedAt: ago(minutes(5)),
+      run: runWith([{ attempt: 1, profile: 'claude-track', started_at: ago(hours(1)), ended_at: ago(minutes(30)), outcome: 'completed', session_id: 's-track', transcript_path: transcript }]),
+    }));
+  }
+
+  h.ctx.json = true;
+  assert.equal(await h.run(), 0);
+  const s = JSON.parse(h.out());
+  assert.equal(s.attempts.total, 3);
+  assert.equal(s.spend.usage.turns, 1, 'one message in one transcript — three nodes naming it do not make three');
+  assert.equal(s.spend.estimated_usd, 0.084, 'and the estimate is that session, not three times it');
+  assert.deepEqual(s.spend.sources, { run_record: 0, worker_log: 0, estimate: 1 });
+  assert.equal(s.spend.attempts_shared_session, 2);
   assert.equal(s.spend.attempts_missing_cost, 0);
 });
 
