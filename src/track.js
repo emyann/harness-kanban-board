@@ -159,6 +159,102 @@ export function planTracks(tasks, cfg, { board = null } = {}) {
   return { candidates, covered };
 }
 
+// ---------- the track as a picture ----------
+
+/**
+ * Label text for a mermaid node. Mermaid reads entity codes (`#nnn;`, `#quot;`), so every character
+ * that would otherwise change the picture is spelled that way:
+ *   `#`  a title containing `#123` renders as one stray glyph — silently wrong, not a parse error
+ *   `"`  ends the label
+ *   `<>` GitHub renders labels as HTML, so `<n>` is swallowed as an unknown tag
+ * `#` is escaped FIRST because it is the escape character itself: doing it last would eat the codes
+ * the other three just wrote. Titles are clipped, because one long node makes the whole graph wide.
+ */
+export function mermaidLabel(text, { max = 56 } = {}) {
+  const s = String(text ?? '').replace(/\s+/g, ' ').trim();
+  const clipped = s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s;
+  return clipped.replace(/#/g, '#35;').replace(/"/g, '#quot;').replace(/</g, '#60;').replace(/>/g, '#62;');
+}
+
+/**
+ * The track as `{ nodes, edges }` — the same subgraph `resolveTrack` already walked, in dependency
+ * order, each node carrying the wave it sits in. A blocker that is not on this board is a node too,
+ * with `onBoard: false`: a hole in the graph is exactly the thing a picture is for.
+ */
+export function trackGraph(track) {
+  if (!track?.root) return { root: null, nodes: [], edges: [], cycle: track?.cycle || null };
+  const wave = new Map();
+  trackWaves(track).forEach((w, i) => w.forEach((t) => wave.set(t.number, i)));
+  const nodes = track.order.map((t) => ({
+    number: t.number,
+    title: t.title,
+    status: t.status || null,
+    agent: t.agent || null,
+    priority: t.kb?.priority ?? null,
+    wave: wave.get(t.number) ?? 0,
+    root: t.number === track.root.number,
+    onBoard: true,
+  }));
+  for (const n of track.missing) {
+    nodes.push({ number: n, title: null, status: null, agent: null, priority: null, wave: null, root: false, onBoard: false });
+  }
+  const edges = [];
+  const seen = new Set();
+  for (const t of track.order) {
+    for (const b of t.blockedBy || []) {
+      if (blockerDone(b)) continue; // done is finished work, not an edge of what is left
+      const key = `${Number(b.number)}→${t.number}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      edges.push({ from: Number(b.number), to: t.number });
+    }
+  }
+  return { root: track.root.number, nodes, edges, cycle: track.cycle };
+}
+
+/**
+ * Stroke only — never `fill`, never `color`. GitHub renders mermaid with a dark theme for dark-mode
+ * readers and a light one for everyone else; a classDef that pins a fill or a text colour is
+ * unreadable in one of the two, so the theme keeps both and we tint the border.
+ */
+const NODE_CLASS = {
+  triage: 'stroke:#8b949e,stroke-width:1px,stroke-dasharray:4',
+  todo: 'stroke:#8b949e,stroke-width:1px',
+  ready: 'stroke:#3fb950,stroke-width:2px',
+  running: 'stroke:#4493f8,stroke-width:2px',
+  blocked: 'stroke:#f85149,stroke-width:2px',
+  review: 'stroke:#a371f7,stroke-width:2px',
+  done: 'stroke:#3fb950,stroke-width:1px',
+  archived: 'stroke:#8b949e,stroke-width:1px',
+  offboard: 'stroke:#8b949e,stroke-width:1px,stroke-dasharray:4',
+};
+
+const nodeClass = (n) => (!n.onBoard ? 'offboard' : NODE_CLASS[n.status] ? n.status : 'todo');
+
+/**
+ * The graph as a mermaid `flowchart TD`, fenced and ready to paste into an issue, a comment or a
+ * markdown file — GitHub renders it there. Arrows point the way work flows: blocker → what it
+ * unblocks, so the frontier is at the top and the root is the last node at the bottom, drawn as a
+ * stadium so it is the one you can pick out.
+ */
+export function trackMermaid(graph, { fence = true } = {}) {
+  const L = ['flowchart TD'];
+  for (const n of graph.nodes) {
+    const head = mermaidLabel(n.onBoard ? `#${n.number} · ${n.status || '?'}` : `#${n.number} · not on this board`);
+    const label = `"${head}${n.onBoard ? `<br>${mermaidLabel(n.title)}` : ''}"`;
+    L.push(`  n${n.number}${n.root ? `([${label}])` : `[${label}]`}`);
+  }
+  for (const e of graph.edges) L.push(`  n${e.from} --> n${e.to}`);
+  for (const [cls, def] of Object.entries(NODE_CLASS)) {
+    const ids = graph.nodes.filter((n) => nodeClass(n) === cls).map((n) => `n${n.number}`);
+    if (!ids.length) continue;
+    L.push(`  classDef ${cls} ${def}`);
+    L.push(`  class ${ids.join(',')} ${cls}`);
+  }
+  const body = L.join('\n');
+  return fence ? `\`\`\`mermaid\n${body}\n\`\`\`` : body;
+}
+
 /**
  * Has this root already had a runner? A track attempt that ended without finishing the track means
  * the fast engine had its go; the durable one takes over, so the remaining nodes are dispatched

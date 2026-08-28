@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires the `gh` CLI (authenticated) and `hkb` (npm hkb-cli) on PATH. Works with Claude Code, GitHub Copilot CLI and Codex CLI.
 metadata:
   author: hkb
-  version: 0.5.0
+  version: 0.5.1
 allowed-tools: Bash(hkb *) Bash(gh api *) Bash(gh pr *) Bash(gh issue view *) Bash(git *)
 ---
 
@@ -234,7 +234,8 @@ hkb link 42 12 && hkb link 43 12     # link <parent> <child>: #12 is blocked by 
 # d. only now promote the root: triage → todo, where it waits for the leaves
 hkb promote 12
 
-# e. write the graph down where the humans and the next session will find it
+# e. write the graph down where the humans and the next session will find it: your notes, then the picture
+hkb graph 12 >> /tmp/kb-graph.md     # the track as a fenced mermaid block — GitHub renders it in the comment
 hkb comment 12 "$(cat /tmp/kb-graph.md)"
 ```
 
@@ -246,8 +247,9 @@ hkb comment 12 "$(cat /tmp/kb-graph.md)"
   makes the unblocked ones *ready*.
 - Cross-board links are refused: every child must be on the root's board.
 
-Then check your work: `hkb show 12` lists the blockers, `hkb list` shows which children are ready, and
-`hkb dispatch --dry-run` names the ones the next tick would claim.
+Then check your work: `hkb graph 12` draws what you just built — the fastest way to see a missing link, a cycle
+or a child that ended up blocked by the root — `hkb show 12` lists the blockers, `hkb list` shows which children
+are ready, and `hkb dispatch --dry-run` names the ones the next tick would claim.
 
 ### 4. What the root becomes
 

@@ -13,8 +13,9 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_KB, L, parseSkillVersion } from '../src/model.js';
 import {
   resolveTrack, trackWaves, trackPaths, trackReadiness, planTracks, trackContext,
-  trackAlreadyAttempted, isTrackProfile, trackAgents,
+  trackAlreadyAttempted, isTrackProfile, trackAgents, trackGraph, trackMermaid, mermaidLabel,
 } from '../src/track.js';
+import { main } from '../src/cli.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
 const ago = (seconds) => new Date(Date.now() - seconds * 1000).toISOString();
@@ -186,6 +187,118 @@ test('trackAlreadyAttempted is true only once a track attempt has ended', () => 
   assert.equal(trackAlreadyAttempted(runWith([{ attempt: 1, track: true, started_at: ago(60), ended_at: ago(1) }])), true);
   assert.equal(trackAlreadyAttempted(runWith([{ attempt: 1, started_at: ago(60), ended_at: ago(1) }])), false);
   assert.equal(trackAlreadyAttempted(null), false);
+});
+
+// ---------- the track as a picture ----------
+
+/** The worked example from protocol.md: two leaves, one middle node, the root. */
+const graphTasks = () => [
+  node(41, { title: 'Token bucket + tests' }),
+  node(43, { title: 'Document the limits', status: 'todo' }),
+  node(42, { title: 'Wire it into the server', status: 'todo', blocks: [41] }),
+  node(12, { title: 'Rate-limit the public API', status: 'todo', agent: 'claude-track', blocks: [42, 43] }),
+];
+
+test('the graph is the track: one node per task, one edge per unfinished blocker, the wave as depth', () => {
+  const g = trackGraph(resolveTrack(12, by(graphTasks())));
+
+  assert.equal(g.root, 12);
+  assert.deepEqual(g.nodes.map((n) => n.number), [41, 42, 43, 12], 'dependency order, the root last');
+  assert.deepEqual(g.nodes.map((n) => n.wave), [0, 1, 0, 2]);
+  assert.deepEqual(g.edges, [{ from: 41, to: 42 }, { from: 42, to: 12 }, { from: 43, to: 12 }]);
+  assert.deepEqual(g.nodes.filter((n) => n.root).map((n) => n.number), [12]);
+  assert.ok(g.nodes.every((n) => n.onBoard));
+  assert.equal(g.cycle, null);
+});
+
+test('the mermaid block is a fenced flowchart: blockers on top, arrows to what they unblock, the root a stadium', () => {
+  const m = trackMermaid(trackGraph(resolveTrack(12, by(graphTasks()))));
+
+  assert.match(m, /^```mermaid\nflowchart TD\n/);
+  assert.match(m, /\n```$/);
+  assert.ok(m.includes('  n41["#35;41 · ready<br>Token bucket + tests"]'), m);
+  assert.ok(m.includes('  n12(["#35;12 · todo<br>Rate-limit the public API"])'), 'the root is the one node you can pick out');
+  assert.ok(m.includes('  n41 --> n42'));
+  assert.ok(m.includes('  n43 --> n12'));
+  assert.ok(!m.includes('undefined'));
+});
+
+test('a title with #123, a quote or angle brackets is escaped — a bare # renders as a wrong glyph, not an error', () => {
+  const tasks = [
+    node(7, { title: 'Fix the #123 regression' }),
+    node(8, { title: 'The "hard" part' }),
+    node(9, { title: 'hkb graph <n> --mermaid', status: 'todo', agent: 'claude-track', blocks: [7, 8] }),
+  ];
+  const m = trackMermaid(trackGraph(resolveTrack(9, by(tasks))));
+
+  assert.ok(m.includes('Fix the #35;123 regression'), m);
+  assert.ok(!m.includes('#123'), 'an unescaped #123 is a silently wrong glyph');
+  assert.ok(m.includes('The #quot;hard#quot; part'), 'a raw quote would end the label');
+  assert.ok(m.includes('hkb graph #60;n#62; --mermaid'), 'GitHub renders labels as HTML: <n> would be swallowed');
+  assert.equal(mermaidLabel('#'), '#35;');
+  assert.equal(mermaidLabel('"'), '#quot;', 'the # of an entity code must not itself be escaped');
+  assert.equal(mermaidLabel('x'.repeat(80)), `${'x'.repeat(55)}…`, 'one long title must not make the whole graph wide');
+});
+
+test('classDefs tint the border only — a fill or a text colour is unreadable in one of GitHub\'s two themes', () => {
+  const m = trackMermaid(trackGraph(resolveTrack(12, by(graphTasks()))));
+
+  assert.match(m, /classDef ready stroke:/);
+  assert.ok(!/fill:/.test(m), 'no fill: the theme owns the background');
+  assert.ok(!/color:/.test(m), 'no text colour: the theme owns the text');
+  assert.match(m, /class n41 ready/);
+  assert.match(m, /class n42,n43,n12 todo/);
+});
+
+test('a blocker that is not on this board is drawn, not dropped — a hole is what a picture is for', () => {
+  const tasks = [node(42, { status: 'todo', blocks: [41] }), node(12, { status: 'todo', agent: 'claude-track', blocks: [42] })];
+  const g = trackGraph(resolveTrack(12, by(tasks))); // #41 was never added
+
+  assert.deepEqual(g.nodes.map((n) => [n.number, n.onBoard]), [[42, true], [12, true], [41, false]]);
+  const m = trackMermaid(g);
+  assert.ok(m.includes('  n41["#35;41 · not on this board"]'), m);
+  assert.ok(m.includes('  n41 --> n42'));
+  assert.match(m, /class n41 offboard/);
+});
+
+test('a blocker closed as completed is finished work, so it is not in the picture either', () => {
+  const tasks = [node(42, { blocks: [done(41)] }), node(12, { status: 'todo', agent: 'claude-track', blocks: [42] })];
+  const m = trackMermaid(trackGraph(resolveTrack(12, by(tasks))));
+
+  assert.ok(!m.includes('n41'), 'the track is what is left, and so is its diagram');
+  assert.ok(m.includes('  n42 --> n12'));
+});
+
+test('`hkb graph <n>` prints the block; --json carries nodes, edges and the very same mermaid', async (t) => {
+  const gh = new FakeGh();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-graph-'));
+  fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
+  gh.addIssue(kbIssue({ number: 41, title: 'Token bucket + tests', status: 'ready', agent: 'claude' }));
+  gh.addIssue(kbIssue({ number: 12, title: 'Rate-limit the public API', status: 'todo', agent: 'claude', blockedBy: [41] }));
+  const cwd = process.cwd();
+  const restore = gh.install();
+  const write = process.stdout.write.bind(process.stdout);
+  let printed = '';
+  process.stdout.write = (s) => { printed += s; return true; };
+  process.chdir(dir);
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+  await main(['graph', '12']);
+  const text = printed;
+  printed = '';
+  await main(['graph', '--mermaid', '12']); // the flag takes no value: 12 stays the positional
+  const flagged = printed;
+  printed = '';
+  await main(['graph', '12', '--json']);
+  const j = JSON.parse(printed);
+
+  assert.match(text, /^```mermaid\nflowchart TD\n/);
+  assert.ok(text.includes('  n41 --> n12'));
+  assert.equal(flagged, text, '--mermaid is what the command does anyway');
+  assert.deepEqual(j.nodes.map((n) => n.number), [41, 12]);
+  assert.deepEqual(j.edges, [{ from: 41, to: 12 }]);
+  assert.equal(j.mermaid + '\n', text, '--json carries exactly what the command prints');
 });
 
 // ---------- the runner's prompt ----------
@@ -448,7 +561,7 @@ test('the skill teaches the loop the runner is actually given, by the names the 
   assert.match(proto, /^## Tracks — the second execution engine/m);
   assert.ok(proto.includes('track_nodes'), 'the attempt fields a track adds must be in the data model');
   // the version has to move, or `hkb doctor` will call a stale installed copy current
-  assert.equal(parseSkillVersion(skill), '0.5.0');
+  assert.equal(parseSkillVersion(skill), '0.5.1');
 });
 
 test('with no track profile on the board nothing changes: the same claims, and no track work', async (t) => {

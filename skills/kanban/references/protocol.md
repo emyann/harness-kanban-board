@@ -130,6 +130,7 @@ hkb create "Wire the limiter into the server" --blocked-by 41 --priority 2 --pat
 hkb create "Document the limits and the 429 contract" --priority 3 --paths docs/,README.md --body "$(cat c.md)" # → #43 ready
 hkb link 42 12 && hkb link 43 12    # the leaves; #12 is now blocked by both
 hkb promote 12                      # triage → todo (link first: promote on a todo task forces ready)
+hkb graph 12 >> graph.md            # the picture of what you just built (below)
 hkb comment 12 "$(cat graph.md)"
 ```
 
@@ -157,6 +158,40 @@ A materialized graph is valid when:
 5. siblings meant to run at once have non-overlapping `paths` — prefixes count (`src/` overlaps `src/limit.js`), and an
    empty `paths` is neither guarded nor guards anyone, so two path-less children can edit the same file at once;
 6. every decision two children share is written into both bodies.
+
+### The graph as a diagram — `hkb graph <n>`
+
+`hkb graph <n> [--mermaid]` prints the **track** rooted at `<n>` — the root plus everything still blocking it,
+the same subgraph `resolveTrack` gives the dispatcher — as one fenced mermaid block. GitHub renders mermaid in
+issues, comments, PRs and markdown files, so the picture goes where the tasks already are; `--mermaid` is the
+explicit spelling of what the command does anyway. `--json` returns `{ root, nodes, edges, cycle, mermaid }`.
+
+For the board above, `hkb graph 12` emits (and this is that block, rendered):
+
+```mermaid
+flowchart TD
+  n41["#35;41 · ready<br>Token bucket + tests"]
+  n42["#35;42 · todo<br>Wire the limiter into the server"]
+  n43["#35;43 · ready<br>Document the limits and the 429 contract"]
+  n12(["#35;12 · todo<br>Rate-limit the public API"])
+  n41 --> n42
+  n42 --> n12
+  n43 --> n12
+  classDef todo stroke:#8b949e,stroke-width:1px
+  class n42,n12 todo
+  classDef ready stroke:#3fb950,stroke-width:2px
+  class n41,n43 ready
+```
+
+- Arrows point the way work flows — blocker → what it unblocks — so the frontier is at the top and the root is
+  the stadium at the bottom. A blocker closed as *completed* is finished work, so it is not drawn: the diagram
+  shrinks with the track. One that is unfinished but **not on this board** is drawn dashed as `not on this
+  board`, because a hole in a graph has to be visible.
+- Labels are entity-escaped: `#` → `#35;` (a raw `#123` renders as one wrong glyph, and it is not a parse
+  error, so it fails silently), `"` → `#quot;`, `<`/`>` → `#60;`/`#62;` (labels are HTML, so `<n>` would be
+  swallowed as a tag). Titles are clipped at 56 characters.
+- `classDef`s set a **stroke** and nothing else. GitHub renders mermaid with a dark theme for dark-mode readers
+  and a light one for everyone else; pinning `fill` or `color` makes the labels unreadable in one of the two.
 
 ## Tracks — the second execution engine
 
