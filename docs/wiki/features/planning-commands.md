@@ -20,7 +20,7 @@ covers:
     sha: d4a1566a431916ae7afa15e44f2dd0299c6a36a6
 generated_at_commit: 8005801
 last_refreshed: 2026-08-27
-related: [architecture/overview, decisions/adr-004-roles-and-adoption, features/tracks]
+related: [features/operator-seat, architecture/overview, decisions/adr-004-roles-and-adoption, features/tracks]
 ---
 
 # The planning commands — `/kanban:specify` and `/kanban:decompose`
@@ -43,8 +43,10 @@ that reads like a verb: one issue number in, a fixed procedure out.
 
 ## One source, registered twice
 
-`commands/` at the package root holds exactly two flat files — `specify.md` and `decompose.md` — and
-they are registered by two different mechanisms that happen to agree on the resulting name:
+`commands/` at the package root holds one flat file per command — `specify.md` and `decompose.md`, and
+since #149 `operate.md`, which is not a planning command and has its own page
+([features/operator-seat](./operator-seat.md)) — and they are registered by two different mechanisms
+that happen to agree on the resulting name:
 
 | install path | what registers it | resulting name |
 |---|---|---|
@@ -69,7 +71,7 @@ Two consequences worth knowing before editing:
 
 Each command file is a handful of lines that sends the reader to the section of `SKILL.md` with the
 same name (`commands/decompose.md`, `commands/specify.md`; the sections are at
-`skills/kanban/SKILL.md:147` and `:175`). Nothing about the procedure is restated there, because two
+`skills/kanban/SKILL.md:319` and `:347`). Nothing about the procedure is restated there, because two
 copies of a procedure are one copy plus a future divergence — and the same text has to serve harnesses
 with no slash commands at all. Copilot CLI and Codex read the skill and ask for the section by name;
 they get the identical procedure.
@@ -105,5 +107,6 @@ and the cheapest place to break it is a name nobody on the team has to type.
 
 ## Related
 
+- [features/operator-seat](./operator-seat.md)
 - [architecture/overview](../architecture/overview.md)
 - [decisions/adr-004-roles-and-adoption](../decisions/adr-004-roles-and-adoption.md)

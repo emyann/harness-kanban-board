@@ -1,7 +1,7 @@
 {
   "name": "kanban",
   "version": "0.1.0",
-  "description": "hkb — a portable, frugal kanban for coding agents on GitHub Issues. Adds the kanban skill, the /kanban:specify and /kanban:decompose planning commands, and the Stop hook that enforces one terminal verb per task.",
+  "description": "hkb — a portable, frugal kanban for coding agents on GitHub Issues. Adds the kanban skill, the /kanban:specify and /kanban:decompose planning commands, /kanban:operate for the operator's seat, and the Stop hook that enforces one terminal verb per task.",
   "author": { "name": "emyann" },
   "keywords": ["kanban", "github", "issues", "dispatcher", "hermes"],
   "skills": "./skills",

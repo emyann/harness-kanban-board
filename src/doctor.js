@@ -35,8 +35,9 @@ export function checkSkill(ctx, { ok, warn }) {
 }
 
 /**
- * SKILL.md documents `/kanban:specify` and `/kanban:decompose` by name, so a repo where they are not
- * registered has a skill that instructs an invocation the harness will reject (#92). They come from
+ * SKILL.md documents `/kanban:specify`, `/kanban:decompose` and `/kanban:operate` by name, so a repo
+ * where they are not registered has a skill that instructs an invocation the harness will reject (#92).
+ * The set is whatever `commands/` holds — nothing here enumerates it. They come from
  * the plugin, or from `.claude/commands/kanban/` — which is init's job and the only one doctor can
  * check from here, so a miss is a warning naming the command that writes them.
  */

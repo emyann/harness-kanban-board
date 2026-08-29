@@ -78,6 +78,9 @@ pages:
   - slug: features/planning-commands
     summary: "The two board operations that need a model and so cannot be `hkb` verbs — one command source, registered twice, delegating to one procedure in SKILL.md."
     status: seeded
+  - slug: features/operator-seat
+    summary: "The third slash command — why the one seat hkb cannot enforce got a written brief instead, where its reaction table's vocabulary comes from, and what keeps the two in sync."
+    status: seeded
   - slug: features/update-notice
     summary: "Updates are pull-only, so something has to say there is something to pull — one npm GET a day, in doctor and the dispatcher loop, and why a stale CLI hides a stale skill."
     status: seeded

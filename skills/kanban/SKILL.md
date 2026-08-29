@@ -1,11 +1,11 @@
 ---
 name: kanban
-description: Work a hkb task from the GitHub Issues board — read the task with `hkb show`, work in the worktree, open a PR that closes the issue, and finish with exactly one terminal verb (complete / block / request-review). Use whenever KB_TASK is set, when asked to "work task <n>", "pick up the next kanban task", or to create/link tasks on the board. Also runs a whole track (a root plus everything blocking it) in one session, and plans the board — `/kanban:specify <n>` rewrites a one-liner into a spec and promotes it, `/kanban:decompose <n>` proposes a dependency graph for a goal and materializes it once a human approves.
+description: Work a hkb task from the GitHub Issues board — read the task with `hkb show`, work in the worktree, open a PR that closes the issue, and finish with exactly one terminal verb (complete / block / request-review). Use whenever KB_TASK is set, when asked to "work task <n>", "pick up the next kanban task", or to create/link tasks on the board. Also runs a whole track (a root plus everything blocking it) in one session, plans the board — `/kanban:specify <n>` rewrites a one-liner into a spec and promotes it, `/kanban:decompose <n>` proposes a dependency graph for a goal and materializes it once a human approves — and operates it: `/kanban:operate` brings the board up, watches it, and reacts per event kind while the approvals stay with the human.
 license: MIT
 compatibility: Requires the `gh` CLI (authenticated) and `hkb` (npm hkb-cli) on PATH. Works with Claude Code, GitHub Copilot CLI and Codex CLI.
 metadata:
   author: hkb
-  version: 0.5.4
+  version: 0.6.0
 allowed-tools: Bash(hkb *) Bash(gh api *) Bash(gh pr *) Bash(gh issue view *) Bash(git *)
 ---
 
@@ -170,10 +170,154 @@ the track's: what each node landed, what is open, what you parked.
 - `hkb dispatch --dry-run` shows what the next tick would do; `hkb dispatch --loop 60` runs it.
 - Planning, not managing: `/kanban:specify <n>` sharpens one triage one-liner into a spec, `/kanban:decompose <n>`
   splits a goal into a dependency graph. Both are below, and both stop for approval before they write anything.
-  Those two are **real slash commands**, registered by `hkb init` (which writes `.claude/commands/kanban/`) or by
+- Running the board rather than reading it: `/kanban:operate` — bring it up, watch it, react per event kind, and
+  know what goes back to the human. Also below.
+- All three are **real slash commands**, registered by `hkb init` (which writes `.claude/commands/kanban/`) or by
   the `kanban` plugin; their bodies do nothing but send you to the section of this file with the same name. In a
   harness with no slash commands — Copilot CLI, Codex — ask for the section by name instead; the procedure is
-  identical, and `hkb` is the only thing either one calls.
+  identical, and `hkb` is the only thing any of them calls.
+
+## /kanban:operate — drive the board from the operator's seat
+
+The operator is the human. This is the procedure for a session driving that seat's verbs on their behalf: bring
+the board up, watch it, react per event kind, and hand back everything that is theirs to decide. You are not a
+worker — you never claim a card, never set `KB_TASK`, never work in a worktree the dispatcher made. One cycle is
+up, watch, react, report; you repeat it until the human stops you.
+
+### 1. Bring the board up
+
+```bash
+hkb up --serve      # the dispatcher loop, and the web board; detached, logs under .kanban/logs/
+hkb up --status     # pid, since when, which log — the source of truth for what is actually running
+hkb doctor          # once, at the top of the session
+```
+
+All of it is safe to type twice: a live pid file makes `hkb up` report the pid and spawn nothing. Act on every
+`✗` doctor prints before you watch anything — a hard failure is a board that cannot work (auth, missing labels,
+`merge.mode: "auto"` on a branch with no gate), and seeing it now is cheaper than seeing it in the first card it
+breaks. A `!` is a line for the digest, not a stop.
+
+Start the loop no other way. `hkb dispatch --loop` in the foreground dies when your session does, and it is a
+*second* dispatcher if `up` already started one — two loops against one board double-claim cards. (The
+foreground form is for a human under a real supervisor: cron, systemd, Actions.) `hkb up` is your verb, and
+`hkb dispatch` is nobody's from inside a session — every worker launch denies it outright, which is the same
+rule seen from the other side.
+
+### 2. Watch, don't poll
+
+```bash
+hkb watch --json --interval 60      # one JSON object per transition, until you stop it
+```
+
+Run it as the session's **monitor**: a long-running process whose output you read as it arrives (in Claude Code,
+the Monitor tool over exactly that command; in another harness, its background-process equivalent). Every poll is
+a conditional `GET` — an unchanged board answers `304`, which costs no rate limit — so a watcher left up all day
+is free, and an interval a little longer than the board's tick shows you the tick's own moves.
+
+Three habits to skip, each of which a session has invented instead:
+
+- **No `sleep`-and-`hkb list`.** A whole board query per pass, blind to everything that happened between two
+  passes, and the loop that spells it is a shell keyword many launches refuse outright.
+- **No tailing the dispatcher log for board state.** `.kanban/logs/dispatch.log` answers one question the board
+  cannot — a claim that never became an attempt (`spawn_failed`: a harness missing from `PATH`, a worktree git
+  refused) — and `hkb up --status` answers "is the loop alive". Everything else is already a transition.
+- **No grepping a worker's transcript for progress.** `hkb watch` has the transitions, `hkb tail <n>` follows one
+  card's attempts and comments, `hkb show <n>` prints the attempt row. A transcript is for reading an attempt
+  that already died (step 3).
+
+`--kinds` narrows the stream to what you will act on and takes statuses and outcomes as well as kinds
+(`--kinds review,blocked,needs-human,outcome`). Narrow only once you know the board's rhythm, and never narrow
+`needs-human` out of it.
+
+### 3. React, per event kind
+
+`hkb watch` emits ten kinds, and only some of them are a decision:
+
+| kind | prints as | what you do |
+|---|---|---|
+| `appeared` | `+ on the board (triage)` | nothing — unless you are the planner too, and then it is `/kanban:specify` work, not a card to start |
+| `status` | `ready → running` | per the status it landed on — the table below |
+| `agent` | `agent claude → claude-track` | nothing; name it in the digest if it was neither you nor the human |
+| `needs-human` | `⚠ needs-human` | the human — unless it arrived with a `blocked` card whose question you can genuinely answer (below). The label is never cleared on its own: `hkb unblock` is the only thing that clears it, and only ever as the last step of an answer you have just written onto the card |
+| `closed` | `closed (completed)` | nothing. `closed (not_planned)` is a decision somebody made — name it in the digest |
+| `reopened` | `reopened` | read the card. The tick reconciles *closed* issues, not reopened ones, so a card that came back sits where its label puts it until a human moves it |
+| `attempt` | `attempt 2 started (claude@host)` | nothing on attempt 1. On attempt 2 or later, go and read why the last one ended — before this one burns the same way |
+| `outcome` | `attempt 1 blocked — needs the key` | per the outcome — the table below |
+| `result` | `result (attempt 1) — …` | read it: it is the brief the next worker inherits, and your review input when the card is in *review* |
+| `comment` | `comment by alice — …` | a human steering that card. If it answers the card's open question the card can move; if it asks you something, answer it |
+
+**The status a `status` event landed on:**
+
+| status | what you do |
+|---|---|
+| `review` | the row that is really yours. Read the PR against the card's *Done when*, run the repo's own checks, then follow the board's merge policy — `dispatch.merge.mode` in `.kanban/board.json`, which `hkb doctor` also prints in a line. `"auto"` means the dispatcher already handed the merge to GitHub and its gates hold it; `"manual"` means **the human merges**, which is the entire meaning of the setting — a session that merges anyway has taken an approval nobody gave it. Falls short? `hkb request-changes <n> "<the one specific gap>"` puts it back on the same PR, and the reason you type *is* the next attempt's brief: name the gap, not the disappointment |
+| `blocked` | read the block kind off the attempt row (`hkb show <n>`), then the block table below |
+| `triage` | planning, not operating |
+| `todo`, `ready`, `running` | nothing — the tick owns these |
+| `done`, `archived` | nothing; archiving is the operator's own verb |
+
+**The outcome an `outcome` event landed on:**
+
+| outcome | what you do |
+|---|---|
+| `completed` | nothing: the card moves itself to *review* with its PR open, or to *done* |
+| `review_requested` | as `review`, plus the reviewer the worker named |
+| `changes_requested` | your own verb (or a human's) coming back around; the next tick relaunches the card on its PR |
+| `blocked` | the block table, below |
+| `crashed`, `timed_out`, `protocol_violation` | **open the attempt before the retry burns.** `hkb show <n>` prints the row and, when the session was recorded, the line that reopens it (`cd .claude/worktrees/kb-<n>-<k> && claude --resume <id>`, or `claude attach <job>` while it is still up). Read what it actually did, then leave **one** `hkb comment <n>` saying what happened — a card's comments are steering input its next worker reads, which is the whole point of looking. Do not raise `max_retries` |
+| `spawn_failed` | the launch, not the card, and the one thing `.kanban/logs/dispatch.log` is for: a harness not on `PATH`, a profile whose command does not exist, a worktree git refused. Report it — the fix is board config or the machine, and both are the human's |
+| `reclaimed` | a lease went stale: the worker died, or stopped heartbeating. Nothing, once. Twice on the same profile or host is a pattern, and a report |
+| `gave_up` | retries are exhausted; the card is *blocked* with `kb:needs-human`. The human, with the attempt history — never re-promote it to buy another round |
+
+**The `kind` on a `blocked` outcome** (`hkb show <n>`, on the attempt row):
+
+| kind | what you do |
+|---|---|
+| `needs_input` | answer **only if the answer is already on the board** — this card, the results of the cards it is blocked by, an earlier comment, or the repo itself. Then `hkb comment <n> "<the answer>"` and `hkb unblock <n>`, in that order: unblocking without writing the answer down relaunches a worker into the same wall. Anything else — a judgment, a preference, a decision nobody has made yet — goes to the human, and you stop there |
+| `capability` | the worker was denied a tool. Report **which** tool and what it wanted it for. Do not widen a profile's `allowed_tools` yourself: that is `.kanban/board.json`, and board policy is not yours |
+| `dependency` | the card put itself back in *todo*; nothing to do. If it names work that is not on the board, that is a card you may file |
+| `transient` | nothing; the retry is the answer. The same transient twice on one card is a report |
+| `generic` | read the reason, then treat it as `needs_input` |
+
+A card that blocks on the same reason three times stops going back to *blocked* and lands in *triage* wearing
+`kb:needs-human`. That is a loop, and a loop is the human's.
+
+**Two things that are not board events:**
+
+- **The dispatcher went away.** `hkb up --status` says `dispatch exited (4) …` — the loop deliberately giving
+  itself up for a supervisor to restart. Run `hkb up` **once**. If it happens twice in one session, stop
+  restarting and take it to the human with the tail of `dispatch.log`: `up` is not a supervisor, and neither
+  are you.
+- **What the board is spending.** Once a cycle, `hkb stats --json`: `attempts.by_outcome` for how the window is
+  going, `spend.by_profile` and `spend.usage.by_model` for what it cost. When one *shape* of card keeps failing
+  its first attempt — the same kind of work, the same rung of the model ladder — that is a **proposal** for the
+  human (start that shape higher with `kb.model`, or reorder the profile's ladder), never an edit you make.
+  Model choice is board policy like any other.
+
+### 4. What is yours, and what is the human's
+
+You drive the verbs. The credentials, the approvals and the money are theirs. The line is not about trust: a
+seat that can widen its own permissions is not a seat.
+
+**Yours:** every read — `list`, `show`, `log`, `graph`, `stats`, `watch`, `tail`, `doctor`; `hkb comment`;
+`hkb unblock`, when the answer was on the board and you have just written it there; `hkb request-changes`;
+`hkb up` after an exit 4; and `hkb create` for a card you can justify from evidence on the board — filed in
+*triage* and linked to the card that revealed it, not started.
+
+**Never yours:** merging on a `manual` board, and any release or publish; editing `.kanban/board.json` at all —
+profiles, `allowed_tools`, models, `max_in_progress`, `merge.mode`; re-prioritising, promoting or archiving
+someone else's plan; clearing `kb:needs-human` for any reason but an answer you have just written onto the card;
+spending on a paid profile the human has not agreed to;
+`git push --force`, anywhere; `hkb dispatch` in any form, and a second loop of any kind.
+
+When you hand something back, hand back the whole thing: the card, what you read, what you would do, and which
+of the three you need — a decision, a credential, or an approval. "#142 is blocked" is not a handback.
+
+### 5. Report every cycle
+
+The digest `hkb watch` already prints — one line per transition — is the report. Add two things under it: **what
+you did**, one line per verb and card, and **what you handed back**, with what you need from the human. A quiet
+cycle says so, and says what is in flight (`hkb list --status running`).
 
 ## /kanban:specify \<n\> — rewrite a one-liner into a spec
 

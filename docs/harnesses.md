@@ -199,8 +199,8 @@ prints a `session …` line, and a `claude --resume`, for an attempt whose sessi
 ## Claude Code — `claude`, `claude-p`
 
 `hkb init` is all it takes: the skill lands in `.agents/skills/kanban` (linked from `.claude/skills/kanban`), the
-two planning commands land in `.claude/commands/kanban/` (`/kanban:specify`, `/kanban:decompose` — the directory
-name is the namespace, so they are the same two names the plugin registers), and
+slash commands land in `.claude/commands/kanban/` (`/kanban:specify`, `/kanban:decompose`, `/kanban:operate` — the
+directory name is the namespace, so they are the same names the plugin registers), and
 the `Stop` + `PreToolUse` hooks go into a Claude settings file. `claude` runs each worker as a background agent
 (`claude --bg`, visible in `claude agents`, attachable with `claude attach <job>`); `claude-p` is the headless
 variant for CI and containers. Both isolate themselves with `--worktree kb-<n>-<k>`.

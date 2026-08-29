@@ -270,17 +270,17 @@ test('the skill is copied out of the package, whole, and the harness link points
 });
 
 // ---------- the slash commands SKILL.md names (#92) ----------
-// The skill's frontmatter and two of its section titles advertise `/kanban:specify` and
-// `/kanban:decompose`. For a year nothing registered them, so an adopter who typed one got
-// "Unknown command". Two tests hold the line: init has to write them, and every `/kanban:*` the
-// skill mentions has to be one of the files that ship.
+// The skill's frontmatter and three of its section titles advertise `/kanban:specify`,
+// `/kanban:decompose` and `/kanban:operate`. For a year nothing registered them, so an adopter who
+// typed one got "Unknown command". Two tests hold the line: init has to write them, and every
+// `/kanban:*` the skill mentions has to be one of the files that ship.
 
 test('`hkb init` registers the slash commands the skill documents (#92)', async () => {
   const { root, printed } = await runInit();
   const packaged = commandFiles();
 
   assert.ok(packaged.length, 'the package must carry commands/, or there is nothing to register');
-  assert.deepEqual(tree(path.join(root, '.claude', 'commands', 'kanban')), ['decompose.md', 'specify.md'],
+  assert.deepEqual(tree(path.join(root, '.claude', 'commands', 'kanban')), ['decompose.md', 'operate.md', 'specify.md'],
     'the directory name is the namespace: .claude/commands/kanban/decompose.md is /kanban:decompose');
   for (const f of packaged) assert.equal(read(root, f.rel), f.contents, `${f.rel} must be the packaged command, verbatim`);
   assert.ok(printed.some((l) => l.includes('.claude/commands/kanban')), 'init has to say it installed them');
@@ -289,7 +289,7 @@ test('`hkb init` registers the slash commands the skill documents (#92)', async 
 test('every /kanban:* the skill advertises is a command that exists (#92)', async () => {
   const { root } = await runInit();
   const names = commandNames();
-  assert.deepEqual(names, ['/kanban:decompose', '/kanban:specify']);
+  assert.deepEqual(names, ['/kanban:decompose', '/kanban:operate', '/kanban:specify']);
 
   const skill = read(root, path.join('.agents', 'skills', 'kanban', 'SKILL.md'));
   const advertised = [...new Set([...skill.matchAll(/\/kanban:[a-z][a-z-]*/g)].map((m) => m[0]))].sort();
@@ -310,7 +310,7 @@ test('the plugin registers the same commands, and they ship (#92)', () => {
   assert.equal(plugin.commands, './commands', 'without this key the plugin registers no commands at all');
   const flat = fs.readdirSync(path.join(REPO, 'commands'), { withFileTypes: true });
   assert.ok(flat.every((e) => e.isFile()), 'the plugin dir must be flat — a subdirectory would make it /kanban:<dir>:<name>');
-  assert.deepEqual(flat.map((e) => e.name).sort(), ['decompose.md', 'specify.md']);
+  assert.deepEqual(flat.map((e) => e.name).sort(), ['decompose.md', 'operate.md', 'specify.md']);
 
   const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'));
   assert.ok(pkg.files.includes('commands'), 'commands/ must be in "files", or `hkb init` copies from a directory npm did not ship');
