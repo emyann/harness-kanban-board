@@ -79,7 +79,7 @@ test('jobSessionUpdate: nothing matched → nothing; a blank row → the whole i
   assert.equal(jobSessionUpdate({ attempt: 1, session_id: SID, transcript_path: TRANSCRIPT }, job, root), null);
 });
 
-test('jobSessionUpdate: fills blanks only, and never blends two sessions', (t) => {
+test('jobSessionUpdate: fills blanks, and corrects a row that names another session', (t) => {
   const root = jobsRootWith({
     j7: { sessionId: SID, linkScanPath: TRANSCRIPT },
     j8: { state: 'working' }, // registered, but names nothing yet
@@ -87,9 +87,15 @@ test('jobSessionUpdate: fills blanks only, and never blends two sessions', (t) =
   });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
-  // a resumed job is one record over two sessions: rather than pair the row's id with somebody
-  // else's transcript, leave the row exactly as the verb left it
-  assert.equal(jobSessionUpdate({ attempt: 1, session_id: 'other-sid' }, { id: 'j7' }, root), null);
+  // The row says one session, the job running this attempt says another. The job wins (#150): a
+  // stamp on an OPEN attempt came from a Stop hook — which fires in whichever session had KB_TASK
+  // in its environment, and a daemon a `claude --bg` launch started hands that to every session it
+  // hosts. Both fields go together: a corrected id beside the old transcript is a row nobody can read.
+  assert.deepEqual(jobSessionUpdate({ attempt: 1, session_id: 'other-sid' }, { id: 'j7' }, root),
+    { session_id: SID, transcript_path: TRANSCRIPT });
+  // and when the job can only name the id, the transcript that described the replaced session goes
+  assert.deepEqual(jobSessionUpdate({ attempt: 1, session_id: 'other-sid', transcript_path: '/t/other.jsonl' }, { id: 'j8', sessionId: SID }, root),
+    { session_id: SID, transcript_path: undefined });
   // the record says nothing yet — the id off `claude agents` still gives `hkb show` a resume line
   assert.deepEqual(jobSessionUpdate({ attempt: 1 }, { id: 'j8', sessionId: SID }, root), { session_id: SID });
   assert.deepEqual(jobSessionUpdate({ attempt: 1 }, { id: 'j9', sessionId: SID }, root), { session_id: SID });
@@ -207,18 +213,26 @@ test('a live attempt is named one tick after the launch, and the row is written 
   assert.equal(writes(), after, 'the second tick finds nothing left to record');
 });
 
-test('a row a terminal verb has stamped is byte-identical after a tick', async (t) => {
+test("a row naming another session is corrected to the job's, and the tick says so", async (t) => {
+  // The tick only ever sees an OPEN attempt, and a terminal verb closes the row it stamps — so a
+  // session id here came from a Stop hook, which fires in whichever session had KB_TASK in its
+  // environment. On 2026-08-28 that was an operator's conversation, hosted by a daemon a
+  // `claude --bg` launch had started with #146's environment (#150). The job the tick matched to
+  // this attempt by its own checkout is the better witness, so it wins.
   const h = harness({
     jobs: [bgJob({ id: 'j7', task: 7, state: 'working', status: 'busy' })],
-    records: { j7: { state: 'working', sessionId: 'a-resumed-session', linkScanPath: '/t/other.jsonl' } },
+    records: { j7: { state: 'working', sessionId: SID, linkScanPath: TRANSCRIPT } },
   });
   t.after(h.cleanup);
-  h.gh.addIssue(running({ session_id: SID, transcript_path: TRANSCRIPT, total_cost_usd: 0.42 }));
-  const before = JSON.stringify(h.gh.runOf(7).attempts[0]);
+  h.gh.addIssue(running({ session_id: 'an-operator-session', transcript_path: '/t/operator.jsonl', total_cost_usd: 0.42 }));
 
   await h.tick();
 
-  assert.equal(JSON.stringify(h.gh.runOf(7).attempts[0]), before);
+  const a = h.gh.runOf(7).attempts[0];
+  assert.equal(a.session_id, SID);
+  assert.equal(a.transcript_path, TRANSCRIPT);
+  assert.equal(a.total_cost_usd, undefined, "the replaced session's cost went with it — it was never this attempt's");
+  assert.match(h.log(), /corrected: the row named session an-operator-session/);
 });
 
 test('a dry run reads no job record and writes nothing', async (t) => {
