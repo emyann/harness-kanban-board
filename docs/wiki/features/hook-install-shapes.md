@@ -7,13 +7,13 @@ audience: [dev, ops]
 read_when: "changing where hkb's Claude Code hooks are installed, what `hkb init` writes into a settings file, the Codex/Copilot hook files or .mcp.json, doctor's hook checks, or adopting hkb as a devDependency of a repo; also when a hook command in a repo does not resolve"
 covers:
   - path: src/init.js
-    sha: 970e86ff80e854ba300883b70f50339c3b69dc1d
+    sha: 28a9a921109337d3bd5c619859207995b579a06a
   - path: src/model.js
-    sha: 5e9c535ed93335f55ffc843c9936b05a5eb94010
+    sha: cf222b0724d3f53377dab94a262100dd985daf86
   - path: src/board.js
     sha: 9c317252b63f7882b19c1e0723abb6ab198bb37c
   - path: src/doctor.js
-    sha: 132c03d155c4acb6bb09eec71536ca9ba25d10ca
+    sha: 612c492fd4e9792a5d4d3039a336f43730e08d52
   - path: src/mcp.js
     sha: 83243b4f880a005c6c06be3f1de396642f0cb3f8
   - path: skills/kanban/scripts/hkb
@@ -21,7 +21,7 @@ covers:
   - path: scripts/smoke-pack.mjs
     sha: aea7c5459b0687a0401a52e6fafb20832c54b818
 related: [architecture/overview, features/update-notice, concepts/roles-and-seats]
-generated_at_commit: a30ac54
+generated_at_commit: 27c5925
 last_refreshed: 2026-08-28
 ---
 
