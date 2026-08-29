@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_BOARD, DEFAULT_PROFILES, CLAUDE_DENY, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot, hkbOnPath, registerUserBoard, userBoardsFile, mainWorktree } from './board.js';
+import { DEFAULT_BOARD, DEFAULT_PROFILES, CLAUDE_DENY, HOOK_SETTINGS_VAR, staleHookLaunches, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot, hkbOnPath, registerUserBoard, userBoardsFile, mainWorktree } from './board.js';
 import { ensureLabels, fetchBoard, addLabels } from './tasks.js';
 import { rest } from './gh.js';
 import { L, STATUSES, parseSkillVersion, stripFrontmatter, insideRepo, worktreePath, hookEntry, hookSettings } from './model.js';
@@ -166,14 +166,14 @@ function upsertSection(file, section) {
 }
 
 // ---------- the Claude Code hooks ----------
-// Both hooks serve exactly one kind of session — the worker hkb launched — so that is the only
+// All three hooks serve exactly one kind of session — the worker hkb launched — so that is the only
 // session that gets them: they ride the `claude` launch line as `--settings '{"hooks":…}'`, built by
 // `workerHookSettings` below and spent by `expandLaunch` (src/dispatch.js). `hkb init` writes them
 // into a settings file only when asked (`--shared-hooks`), and clears out anything an older init
 // left in the per-developer one.
 //
 // That is the whole of #144, and it is a retraction. A settings file is read by *every* session in
-// the repo, and both hooks are `matcher: "*"`, so an `hkb` that stops resolving there — an nvm
+// the repo, and all three hooks are `matcher: "*"`, so an `hkb` that stops resolving there — an nvm
 // switch, a cleaned npx cache, a teammate who never installed it — becomes a failed `PreToolUse` on
 // every tool call in sessions that have nothing to do with the board. Observed on a real board;
 // #85 moved the file and taught `doctor` to see it, but only a per-launch source removes the
@@ -730,6 +730,56 @@ export function boardProfiles(existing, profiles, onUnknown = () => {}) {
   return out;
 }
 
+/** Pull `--model <v>` / `--effort <v>` pairs out of a launch array; `rest` is everything else, in order. */
+function extractModelEffort(launch) {
+  const rest = [];
+  let model = null;
+  let effort = null;
+  for (let i = 0; i < launch.length; i++) {
+    if (launch[i] === '--model' && i + 1 < launch.length) { model = launch[++i]; continue; }
+    if (launch[i] === '--effort' && i + 1 < launch.length) { effort = launch[++i]; continue; }
+    rest.push(launch[i]);
+  }
+  return { rest, model, effort };
+}
+
+/**
+ * Repair a claude launch frozen before the hooks moved onto it (#144, `staleHookLaunches`) — what
+ * `hkb doctor`'s `launch hooks` fix text says to do, actually done, so an init over a stale board
+ * never re-writes the same broken pin in silence. Two shapes, matched to that fix text:
+ *  - the pin adds real flags beyond hkb's own default: insert `{hook_settings}` right after the
+ *    `--disallowedTools` group (the surgical repair).
+ *  - the pin's only difference from the current default is literal `--model`/`--effort` values (the
+ *    reason launches used to be pinned at all, #182): drop `launch` back to the default and move
+ *    those values into the profile's own `model`/`effort` fields instead.
+ * A custom-named profile (no `DEFAULT_PROFILES` entry) always takes the first shape — there is no
+ * default behind it to compare against or fall back to.
+ * Mutates `cfg.profiles` in place. Logs one line per profile it touches; silent when there is nothing
+ * stale (`staleHookLaunches` returns none).
+ */
+export function repairLaunchHooks(cfg, log) {
+  for (const name of staleHookLaunches(cfg)) {
+    const p = cfg.profiles[name];
+    const base = DEFAULT_PROFILES[name]?.launch;
+    const { rest, model, effort } = extractModelEffort(p.launch);
+    const baseRest = base?.filter((el) => el !== HOOK_SETTINGS_VAR && el !== '{model_args}');
+    if (baseRest && JSON.stringify(rest) === JSON.stringify(baseRest)) {
+      delete p.launch;
+      const moved = [];
+      if (model != null && p.model == null) { p.model = model; moved.push(`--model ${model}`); }
+      if (effort != null && p.effort == null) { p.effort = effort; moved.push(`--effort ${effort}`); }
+      log(`profile "${name}": the pinned claude launch added nothing but ${moved.join(' and ')} over the default — dropped "launch" and moved that into the profile's fields`);
+      continue;
+    }
+    const idx = p.launch.indexOf('--disallowedTools');
+    if (idx === -1) { log(`profile "${name}": its claude launch has no "--disallowedTools" to anchor on — add "${HOOK_SETTINGS_VAR}" to it by hand`); continue; }
+    let i = idx + 1;
+    while (i < p.launch.length && !String(p.launch[i]).startsWith('--') && !String(p.launch[i]).startsWith('{')) i++;
+    p.launch = [...p.launch.slice(0, i), HOOK_SETTINGS_VAR, ...p.launch.slice(i)];
+    log(`profile "${name}": inserted "${HOOK_SETTINGS_VAR}" after --disallowedTools in the claude launch`);
+  }
+}
+
 /** Write generated `[{rel, contents}]` under `root`. Returns the relative paths that actually changed. */
 function writeAll(root, files) {
   const written = [];
@@ -900,6 +950,7 @@ export async function init(ctx, flags, log) {
   cfg.board = board;
   cfg.skill_version = skillVersion; // null when linked — a link cannot go stale
   cfg.profiles = boardProfiles(existing?.profiles, profiles, (p) => log(`profile "${p}" has no built-in launch template — add one to ${path.relative(root, boardFile(root))}`));
+  repairLaunchHooks(cfg, log);
   saveBoard(root, cfg);
   ensureLocalDirs(root);
   log(`${existing ? 'updated' : 'wrote'} .kanban/board.json (board "${board}", profiles ${Object.keys(cfg.profiles).join(', ')})`);

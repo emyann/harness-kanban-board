@@ -183,7 +183,7 @@ function readAgentCounts(root, n, k) {
   try { text = fs.readFileSync(agentsFile(root, n, k), 'utf8'); } catch { return counts; }
   for (const line of text.split('\n')) {
     if (line === 'S') counts.started++;
-    else if (line === 'E') counts.ended++;
+    else if (line === 'E') { counts.ended++; counts.suppressed = 0; } // a wave finishing resets the streak (#187)
     else if (line === 'X') counts.suppressed++;
   }
   return counts;
@@ -410,13 +410,23 @@ export async function stopHook(ctx, io = {}) {
  * is therefore always null there, which used to mean this hook silently recorded nothing — `started`
  * stays forever ahead of `ended` and the root's Stop is suppressed for good. What the child *does*
  * carry is `CLAUDE_PROJECT_DIR`, set by Claude Code to the root session's own project directory (the
- * `kb-<n>-<k>` checkout) — so when the cwd itself answers nothing, fall back to asking that path.
+ * `kb-<n>-<k>` checkout).
+ *
+ * That env is tried *first*, whenever it is set and disagrees with the cwd — that disagreement is
+ * the definition of "I am in a child checkout" (#187). Trying the cwd first, as #163 originally
+ * shipped it, has two failure modes: every fire under a `claude -p` child (whose cwd IS the root, so
+ * `CLAUDE_PROJECT_DIR` is redundant but harmless) printed `whichAttempt`'s "…; ignoring" leak line
+ * once per SubagentStop because the cwd path alone looked like a leak; and worse, a child checkout
+ * with no `.kanban/board.json` of its own falls through `whichAttempt(ctx.root)` to the *inherited*
+ * `KB_*` env silently, recording `ended` into the child's own nonexistent `.kanban/` rather than the
+ * root's — `ended` never advances there either, the original #163 bug on that one edge.
  */
 export async function subagentStopHook(ctx) {
-  let root = ctx.root;
+  const projectDir = process.env.CLAUDE_PROJECT_DIR;
+  let root = projectDir && path.resolve(projectDir) !== path.resolve(ctx.root) ? projectDir : ctx.root;
   let me = whichAttempt(root, { profiles: ctx.cfg?.profiles, warn: 'hkb hook' });
-  if (!me && process.env.CLAUDE_PROJECT_DIR) {
-    root = process.env.CLAUDE_PROJECT_DIR;
+  if (!me && root !== ctx.root) {
+    root = ctx.root;
     me = whichAttempt(root, { profiles: ctx.cfg?.profiles, warn: 'hkb hook' });
   }
   if (!me) return 0;

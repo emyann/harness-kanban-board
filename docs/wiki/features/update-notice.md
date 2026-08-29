@@ -9,16 +9,16 @@ covers:
   - path: src/registry.js
     sha: a9bee54d56c6b9351bc4e6cab3d0a4d29d0c422f
   - path: src/doctor.js
-    sha: 1bf85debb35d283881c5aa72ac1179445e5913c2
+    sha: 726a4571cf94906b8f54183c2b3223e125ad6149
   - path: src/dispatch.js
-    sha: 0cdcd4fea6cdc34ea29807ca292f5de26bd03019
+    sha: fb85767e0b4b962930ee74c608c5bb0e1bd7ae4f
   - path: src/board.js
-    sha: 7e895ff3e7e8380a61fd275e609d93dfce2140e1
+    sha: 656fc1ff76b6cf1909ccacc5c69899ba24fb4010
   - path: src/init.js
-    sha: c4aeb61643f9b6457e3307e9663ade2543f75dba
+    sha: 97954d3aaabb24d3b64b45aa10c2bad5cac4a3e4
 related: [architecture/overview, features/auto-merge, gotchas/long-lived-process-rot]
-generated_at_commit: 8005801
-last_refreshed: 2026-08-27
+generated_at_commit: 39d9c05
+last_refreshed: 2026-08-29
 ---
 
 # Telling an adopter their hkb is old

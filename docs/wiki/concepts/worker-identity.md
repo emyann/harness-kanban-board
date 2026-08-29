@@ -1,24 +1,24 @@
 ---
 title: Worker identity — which attempt a session is, and who may say so
-summary: The three answers to "which attempt is this session?" (launch environment, checkout, job record), the order of trust between them, and why a `claude --bg` launch must hand over none of them.
+summary: The three answers to "which attempt is this session?" (launch environment, checkout, job record), the order of trust between them, why a `claude --bg` launch must hand over none of them, and — this is also the page for it — how `SubagentStop` resolves a fourth, child-checkout answer via `CLAUDE_PROJECT_DIR`.
 category: concepts
 kind: explanation
 audience: [dev, ops]
-read_when: "touching the launch environment, the Stop or PreToolUse hooks, session_id/transcript_path on an attempt row, or anything that reads KB_TASK"
+read_when: "touching the launch environment, the Stop, PreToolUse or SubagentStop hooks, session_id/transcript_path on an attempt row, or anything that reads KB_TASK"
 covers:
   - path: src/hook.js
-    sha: 18541f674ba7cd1cd7e0e6000d7ba8cc3191d765
+    sha: 59a7921c49c6f28f9778b43ae4fce6d3280d567c
   - path: src/model.js
-    sha: fce0b5057c4e40dceb41a3a43130800469d17156
+    sha: 23bb576d15068653b10c068ed3c9f014f0353664
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/dispatch.js
-    sha: e4a749081cba52049a31ad1fc7df59f5be1750e0
+    sha: fb85767e0b4b962930ee74c608c5bb0e1bd7ae4f
   - path: src/doctor.js
-    sha: 5eb3cab286168d0e9f4d04108c46cee3beb25b07
+    sha: 726a4571cf94906b8f54183c2b3223e125ad6149
   - path: src/lifecycle.js
     sha: 3938c82f3e181fb260fc54bb2f3150074459e224
-generated_at_commit: deb32a4
+generated_at_commit: 39d9c05
 last_refreshed: 2026-08-29
 related: [architecture/overview, features/harness-profiles, features/tracks, decisions/adr-004-roles-and-adoption]
 ---
@@ -155,12 +155,24 @@ one specific way: it fires from the **child's** worktree
 never the root's `kb-<n>-<k>` checkout — so `whichAttempt(ctx.root)` answers
 nothing there, silently, because a child worktree's basename parses as neither
 a `kb-<n>-<k>` checkout nor a leaked environment (it carries no `KB_*` at all).
-`subagentStopHook` (`src/hook.js`) falls back to `process.env.CLAUDE_PROJECT_DIR`
-— which Claude Code sets to the *root* session's project directory even inside
-a child's own turn — and re-asks `whichAttempt` there. Skipping that fallback
-was reviewed and rejected on PR #178: without it, `ended` never advances for a
-session that ever spawns a subagent, and the root goes unnudged for the rest
-of the attempt.
+`subagentStopHook` (`src/hook.js`) asks `process.env.CLAUDE_PROJECT_DIR` —
+which Claude Code sets to the *root* session's project directory even inside a
+child's own turn — **first**, whenever it is set and disagrees with the cwd,
+falling back to the cwd only when the env agrees or is absent. Skipping that
+env lookup entirely was reviewed and rejected on PR #178: without it, `ended`
+never advances for a session that ever spawns a subagent, and the root goes
+unnudged for the rest of the attempt. Trying the cwd *first*, as #178 shipped
+it, was itself wrong the other way (#187): a child checkout can have its own
+`.kanban/` — no `board.json`, but present — in which case `whichAttempt(cwd)`
+silently falls through to the *inherited* `KB_*` env instead of failing
+outright, and `ended` lands on the child's own (nonexistent, board-less)
+`.kanban/sessions/` rather than the root's, reproducing the original #163 bug
+on that one edge. The whole fix rests on one measured fact, not a documented
+contract: `CLAUDE_PROJECT_DIR` inside a child's `SubagentStop` is the root's
+own `kb-<n>-<k>` checkout (spike-measured, 2026-08-28, job `cadca6f1`).
+Nothing else identifies the root from inside a child's turn — without this
+variable, `ended` is never recorded (b-neg probe: the child's cwd carries no
+`KB_*` of its own to fall back to).
 
 That bookkeeping (`started`/`ended`/`suppressed` under
 `.kanban/sessions/<n>-<k>.subagents`) is append-only, not read-modify-write —
@@ -170,7 +182,14 @@ write `ended: 1`, which would lose one of them the same way the missing
 subagent that dies before firing `SubagentStop` can leave `started` ahead of
 `ended` forever, `shouldNudgeOnStop` (`src/model.js`) bounds how many
 consecutive Stops it will suppress before nudging anyway — see its doc comment
-for the exact count and the idle-tick cadence it is chosen against.
+for the exact count and the idle-tick cadence it is chosen against. Consecutive
+is literal: `readAgentCounts` (`src/hook.js`) resets the streak to 0 on every
+`E` line, so a track root that fans out several waves in a row gets a fresh
+budget of suppressed Stops each time a wave finishes — a wave-5 root is not
+penalised for the suppressed Stops waves 1–4 already spent (#187; before the
+fix, `suppressed` counted `X` lines over the whole attempt, so a root fanning
+out five or more waves could trip the bound on a wave that was, itself,
+correctly waiting).
 
 ## For ops
 

@@ -245,6 +245,28 @@ test('stop hook: suppression is bounded — a stuck attempt is nudged again once
   } finally { h.cleanup(); }
 });
 
+test('stop hook: a second wave stands aside too — suppression is consecutive, not lifetime (#187)', async () => {
+  const h = leakHarness({ cwd: 'kb-7-1', task: '7' });
+  try {
+    // wave 1: started, suppressed 4 times (hits MAX_SUPPRESSED_STOPS-worth of X, but ends before the bound fires)
+    await preToolHook(h.ctx, { readStdin: () => JSON.stringify({ tool_name: 'Agent' }) });
+    for (let i = 0; i < 4; i++) {
+      const answer = await stopHook(h.ctx, { readStdin: () => '' });
+      assert.equal(answer, 0);
+      assert.equal(h.out(), '');
+    }
+    await subagentStopHook(h.ctx); // wave 1 ends: S X X X X E so far
+
+    // wave 2: a fresh Agent call starts, and a Stop fires while it is still out
+    await preToolHook(h.ctx, { readStdin: () => JSON.stringify({ tool_name: 'Agent' }) });
+    const answer = await stopHook(h.ctx, { readStdin: () => '' }); // S X X X X E S
+
+    assert.equal(answer, 0);
+    assert.equal(h.out(), '', 'the four old X lines from wave 1 must not count against wave 2');
+    assert.match(h.err(), /#7 has 1 subagent\(s\) still running — standing aside, not nudging/);
+  } finally { h.cleanup(); }
+});
+
 test('stop hook: no Agent tool call ever seen — behaves exactly as before #163', async () => {
   const h = leakHarness({ cwd: 'kb-7-1', task: '7' });
   try {
@@ -298,6 +320,56 @@ test('subagentStopHook: fired from the child agent worktree resolves the root vi
       await stopHook(rootCtx, { readStdin: () => '' });
     } finally { process.stdout.write = writeOut; }
     assert.equal(JSON.parse(out.join('')).decision, 'block', 'the child\'s SubagentStop reached the root\'s own bookkeeping');
+  } finally {
+    process.stderr.write = write;
+    restore();
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+    Object.assign(process.env, saved);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The existing test above deletes KB_* before firing, so the child cwd never looks like a leak in the
+// first place — it only exercises the "cwd answers nothing" path. A live worker's child inherits the
+// root's KB_* env whether or not CLAUDE_PROJECT_DIR is set, so a child checkout with no `.kanban/`
+// board.json of its own must still resolve through the env, not fall through to the cwd first: trying
+// the cwd first would (a) misread the inherited env against the child's own basename as a leak, printing
+// "…; ignoring" on every single SubagentStop, and (b) had the child's basename happened to parse as some
+// OTHER kb-<n>-<k> (or the leak been silently dropped), `ended` would land on the wrong attempt (or
+// nowhere) instead of the root's — the original #163 edge this env-first order exists to close (#187).
+test('subagentStopHook: a child checkout with inherited KB_* and no board.json still resolves via the env, no leak line', async () => {
+  const gh = new FakeGh();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-child-env-'));
+  const root = path.join(dir, '.claude', 'worktrees', 'kb-9-1');
+  const child = path.join(dir, '.claude', 'worktrees', 'agent-aff2ce'); // no .kanban/ here at all
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.mkdirSync(child, { recursive: true });
+  gh.addIssue(kbIssue({ number: 9, status: 'running', agent: 'claude', run: runWith([{ attempt: 1, host: 'h', bg: true, wt: 'kb-9-1', started_at: '2026-08-28T23:00:00Z' }]) }));
+  const cfg = { ...DEFAULT_BOARD, repo: gh.nameWithOwner, profiles: PROFILES };
+  const rootCtx = { root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner }, board: 'default', host: 'h', json: false, caps: {}, _cache: {}, requireBoard() { return this; } };
+  const childCtx = { ...rootCtx, root: child };
+  const restore = gh.install();
+  const saved = { ...process.env };
+  // the root's KB_* env, inherited into the child's process as-is — the ordinary case, unlike the
+  // scrubbed-env test above
+  Object.assign(process.env, { KB_TASK: '9', KB_ATTEMPT: '1', KB_PROFILE: 'claude', KB_ROOT: dir });
+  process.env.CLAUDE_PROJECT_DIR = root;
+  const err = [];
+  const write = process.stderr.write;
+  process.stderr.write = (s) => { err.push(String(s)); return true; };
+  try {
+    await preToolHook(rootCtx, { readStdin: () => JSON.stringify({ tool_name: 'Agent' }) });
+    assert.equal(await subagentStopHook(childCtx), 0);
+    assert.equal(err.join(''), '', 'the env-first lookup finds the root cleanly — no "; ignoring" leak line');
+
+    const out = [];
+    const writeOut = process.stdout.write;
+    process.stdout.write = (s) => { out.push(String(s)); return true; };
+    try {
+      await stopHook(rootCtx, { readStdin: () => '' });
+    } finally { process.stdout.write = writeOut; }
+    assert.equal(JSON.parse(out.join('')).decision, 'block', 'ended landed on the root\'s own bookkeeping, not the child\'s');
+    assert.equal(fs.existsSync(path.join(child, '.kanban')), false, 'and nothing was ever recorded into the child checkout');
   } finally {
     process.stderr.write = write;
     restore();

@@ -7,11 +7,11 @@ audience: [dev]
 read_when: "touching the active_pr guard, the claim loop's worktree creation, hkb request-changes, or the worker brief"
 covers:
   - path: src/model.js
-    sha: cf222b0724d3f53377dab94a262100dd985daf86
+    sha: 23bb576d15068653b10c068ed3c9f014f0353664
   - path: src/dispatch.js
-    sha: e4a749081cba52049a31ad1fc7df59f5be1750e0
+    sha: fb85767e0b4b962930ee74c608c5bb0e1bd7ae4f
   - path: src/board.js
-    sha: f73b03ee9a45e03e763922ddf57c2e4028405bdd
+    sha: 656fc1ff76b6cf1909ccacc5c69899ba24fb4010
   - path: src/context.js
     sha: ab7afc4eb5158a879ea1700221892229329dce64
   - path: src/lifecycle.js
@@ -19,10 +19,10 @@ covers:
   - path: src/gc.js
     sha: ae2cf14b7e83fa627fd9357545bd74294c001327
   - path: src/cli.js
-    sha: 0adaae89a7236c2b3e647ce95994c75a34dc55f9
+    sha: 2369b0d3a0f5d1363efffa8cc37fd2e47e018155
 related: [features/auto-merge, architecture/overview, architecture/dispatcher-tick]
-generated_at_commit: 0e8e882
-last_refreshed: 2026-08-28
+generated_at_commit: 39d9c05
+last_refreshed: 2026-08-29
 ---
 
 # The review loop — `request-changes` and continuing one PR

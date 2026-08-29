@@ -42,13 +42,24 @@ root for profiles without `workspace: "worktree"`). `{model_args}` expands to `-
 both, or neither; `{allowed_tools}` splices the list in, and `--flag={allowed_tools}` repeats `--flag <entry>`
 per entry. Nothing else is interpolated, so a launch array is safe to read and safe to edit.
 
+If you pin `launch` on `claude`, `claude-track` or `claude-p` yourself rather than using the built-in, it must
+still carry `{hook_settings}` (or the worker gets no Stop nudge and records no session id — see `launch hooks`
+below, and note `hkb init` now repairs this on its own), `{allowed_tools}` (or `--allowedTools` swallows
+whatever comes next), `{model_args}` (or `model`/`effort` render nowhere) and `{prompt}`. `hkb doctor` only ever
+checks for `{hook_settings}`; the other three are your own launch failing in ways this project has not written a
+check for yet.
+
 `model` and `effort` are the two things people used to pin a whole `launch` array for (#182) — they render
 into `{model_args}` on the `claude`, `claude-track` and `claude-p` profiles, so the pin is never needed just to
 set them. `effort` is validated at load: an unknown value fails `hkb doctor`/every command with exit 2, naming
-`low`, `medium`, `high`, `xhigh`. Copilot CLI and Codex have no verified `--effort` equivalent, so leave it
-unset on `copilot-cli` and `codex` — setting it there would still render `--effort <v>` through the same
-`{model_args}` token, and neither CLI is known to accept that flag. A launch pinned before this field existed
-should drop the pin (see `launch hooks` below) rather than carry `--effort` by hand.
+`low`, `medium`, `high`, `xhigh`. Copilot CLI and Codex have no verified `--effort` equivalent — measured:
+`codex exec --effort high` and `copilot ... --effort high` both die on the CLI's own "unknown option" before a
+worker gets a turn — so `loadBoard` refuses `effort` outright on any profile whose `launch[0]` is not `claude`,
+naming the profile and the fix. `claude-action` is the one exception: its launch only *triggers* a Claude Code
+Action run (`launch[0]` is `gh`), so `effort` there is accepted and, for now, ignored — nothing plumbs it into
+`claude_args` in `templates/actions/kanban-worker-claude.yml` yet. A launch pinned before the `model`/`effort`
+fields existed should drop the pin (see `launch hooks` below) rather than carry `--effort` by hand — `hkb init`
+does this for you when the pin adds nothing else.
 
 ## Which profiles a board gets
 
@@ -144,7 +155,9 @@ It stays true now that the runner hands each node to its own **isolated subagent
 2.1.251 (#129), a subagent inherits the root's `CLAUDE_CODE_SESSION_ID` and `CLAUDE_JOB_DIR`, so a node finished
 from inside a child still stamps the runner's session. The child's *worktree* is its own — a repo-level
 `.claude/worktrees/agent-<id>`, a sibling of `kb-<n>-<k>` and not nested under it, removed with its branch when the
-subagent returns unchanged (which is why the node brief says commit and push before returning). The launch's hooks
+subagent returns unchanged. A subagent that committed keeps its worktree — with `kb/<n>` checked out — until
+`hkb gc` clears it, which it does once that branch's PR is merged or closed (which is why the node brief says
+commit and push before returning). The launch's hooks
 fire in there too, `PreToolUse` included, and `SubagentStop` is what tells the Stop nudge to stand aside while a
 wave is still running.
 
@@ -344,17 +357,17 @@ allow-list covers the builtins hkb's own guard calls safe (`SAFE_BUILTINS` — #
 already working. Copilot has no equivalent deny: a space-star pattern in its `--deny-tool` language is
 unverified, and a deny that silently matches nothing is worse than none, so its workers are told in the prompt.
 
-The two hooks sit on top of that, gated differently, and on the default profile only one of them is live:
+The three hooks sit on top of that, gated differently, and on the default profile only two of them are live:
 
-| | `Stop` — the terminal-verb nudge | `PreToolUse` — hkb's permission policy |
-| --- | --- | --- |
-| where it comes from | the launch's `--settings` (Claude), the harness's own hook file otherwise | same |
-| what identifies the session | `KB_TASK`, else the `kb-<n>-<k>` checkout name — and the checkout when the two disagree | `KB_TASK` only, and only where the checkout agrees |
-| what it may answer | `{"decision":"block"}`, at most twice | **`deny`, or nothing** — never `allow` |
-| `claude` / `claude-track` (`claude --bg`) | **live** — the checkout names the attempt | **inert** — the launch's `--allowedTools` and `--disallowedTools` are the whole policy |
-| `claude-p` (`mode: "process"`) | live | live, and can only subtract from those launch flags |
-| `claude-action` (`mode: "trigger"`) | live — the workflow sets `KB_TASK`; the `if: always()` step is the backstop | live — the workflow sets `KB_PROFILE` too |
-| `copilot-cli`, `codex` | their own `agentStop` / `Stop` hook file | their own `--allow-tool` / `--sandbox` — they never read `.claude/settings*.json` |
+| | `Stop` — the terminal-verb nudge | `PreToolUse` — hkb's permission policy | `SubagentStop` — subagent bookkeeping |
+| --- | --- | --- | --- |
+| where it comes from | the launch's `--settings` (Claude), the harness's own hook file otherwise | same | same (Claude Code only — Copilot and Codex have no subagent tool) |
+| what identifies the session | `KB_TASK`, else the `kb-<n>-<k>` checkout name — and the checkout when the two disagree | `KB_TASK` only, and only where the checkout agrees | `CLAUDE_PROJECT_DIR`, tried first whenever it disagrees with the cwd — the cwd otherwise |
+| what it may answer | `{"decision":"block"}`, at most twice | **`deny`, or nothing** — never `allow` | nothing — it only records that a subagent ended |
+| `claude` / `claude-track` (`claude --bg`) | **live** — the checkout names the attempt | **inert** — the launch's `--allowedTools` and `--disallowedTools` are the whole policy | **live** — needed to tell a track root waiting on its wave from one that forgot the verb (#163) |
+| `claude-p` (`mode: "process"`) | live | live, and can only subtract from those launch flags | live |
+| `claude-action` (`mode: "trigger"`) | live — the workflow sets `KB_TASK`; the `if: always()` step is the backstop | live — the workflow sets `KB_PROFILE` too | live |
+| `copilot-cli`, `codex` | their own `agentStop` / `Stop` hook file | their own `--allow-tool` / `--sandbox` — they never read `.claude/settings*.json` | n/a — neither harness has a subagent tool of its own |
 
 Installing the hooks on the launch does **not** change that `claude --bg` row: the session daemon was started
 long before, with an environment of its own, so `KB_TASK` never reaches it and `PreToolUse` still stands aside
@@ -384,11 +397,14 @@ Three checks guard the layer that is doing the enforcing, and all of them read l
 - **`launch hooks`** catches a launch frozen in `board.json` before the hooks moved onto it. `loadBoard`
   deep-merges the file over hkb's defaults and an array in the file wins whole, so a `launch` an older `init`
   wrote out keeps its shape forever — and since nothing is being written into a settings file to make up for it,
-  that profile's workers would quietly get no Stop nudge and record no session id. The fix names the surgical
-  repair rather than the blunt one: insert `"{hook_settings}"` into the launch, right after its
-  `"--disallowedTools"` group, on one of hkb's own profiles — or drop `"launch"` there entirely if the only
-  reason it was pinned was `--model`/`--effort`, which are profile fields now (see above) and need no pin at
-  all. A custom-named profile has no default behind it, so it is told to add `"{hook_settings}"` by hand.
+  that profile's workers would quietly get no Stop nudge and record no session id. `hkb init` now repairs this
+  itself, so re-running it is normally the fix: it applies the surgical repair rather than the blunt one — insert
+  `"{hook_settings}"` into the launch, right after its `"--disallowedTools"` group, on one of hkb's own profiles —
+  or drop `"launch"` there entirely if the only reason it was pinned was `--model`/`--effort`, which are profile
+  fields now (see above) and need no pin at all, moving those values into the profile's own fields. It prints one
+  line naming which repair it made, per profile, and says nothing on a re-run once there is nothing left stale.
+  A custom-named profile has no default behind it, so both init and doctor's fix text tell you to add
+  `"{hook_settings}"` by hand.
 - **`worker permissions`** catches a **frozen copy** of an allow-list, which no default change can reach: a
   profile that pins `allowed_tools` in `board.json`, and the `--allowedTools` line `hkb init --with-actions`
   bakes into the generated worker workflow. Both keep denying `cd`, `export`, `command`, `env` until someone
@@ -420,7 +436,7 @@ followed, and all three are what a worker's identity is *supposed* to do, done t
 - had the card still been `running`, the Stop hook would have nudged that conversation, twice, to finish
   somebody else's task.
 
-So the launch hands over nothing, and the two hooks refuse an environment their checkout contradicts: a session
+So the launch hands over nothing, and the three hooks refuse an environment their checkout contradicts: a session
 whose `KB_TASK` names a task it is plainly not sitting in the worktree of falls back to the checkout (usually to
 nothing at all) and says so once on stderr — not only at the board root: the same daemon that leaked into an
 operator's shell can go on to host a session for an unrelated review worktree or an entirely different repo, and

@@ -7,39 +7,39 @@ audience: [dev, ops]
 read_when: "changing where hkb's Claude Code hooks are installed, what `hkb init` writes into a settings file, the Codex/Copilot hook files or .mcp.json, doctor's hook checks, or adopting hkb as a devDependency of a repo; also when a hook command in a repo does not resolve"
 covers:
   - path: src/init.js
-    sha: 28a9a921109337d3bd5c619859207995b579a06a
+    sha: 97954d3aaabb24d3b64b45aa10c2bad5cac4a3e4
   - path: src/model.js
-    sha: bd036ba8ceb20bc5d08dfc2b2aadfa7dbfb16719
+    sha: 23bb576d15068653b10c068ed3c9f014f0353664
   - path: src/board.js
-    sha: 4309cd3c93e8ace0a8b0699440c331efeac44d65
+    sha: 656fc1ff76b6cf1909ccacc5c69899ba24fb4010
   - path: src/doctor.js
-    sha: dae1f0beaa7f849f096dd8ae049ce83f927c040b
+    sha: 726a4571cf94906b8f54183c2b3223e125ad6149
   - path: src/mcp.js
     sha: 83243b4f880a005c6c06be3f1de396642f0cb3f8
   - path: skills/kanban/scripts/hkb
     sha: 619505ca77807157084e456057e1857eb9a31419
   - path: scripts/smoke-pack.mjs
-    sha: aea7c5459b0687a0401a52e6fafb20832c54b818
+    sha: 32bb83973bf13894c4d5201e14021a70d9257080
 related: [architecture/overview, features/update-notice, concepts/roles-and-seats]
-generated_at_commit: 802ea81
+generated_at_commit: 39d9c05
 last_refreshed: 2026-08-29
 ---
 
 # Where a hook command may say hkb is
 
 > Everything else `hkb init` writes is data — labels, `board.json`, a copied
-> skill. The two Claude Code hooks are the one thing that is a **command line
+> skill. The three Claude Code hooks are the one thing that is a **command line
 > executed by somebody else's session**, in a plain `/bin/sh` with a PATH hkb
 > does not control, on machines hkb has never seen. That asymmetry is the whole
 > subject of this page.
 
 ## The constraint that makes this hard
 
-Both hooks are registered with `matcher: "*"` (`CLAUDE_HOOKS`, `src/init.js`),
+All three hooks are registered with `matcher: "*"` (`CLAUDE_HOOKS`, `src/init.js`),
 so the `PreToolUse` one runs before *every tool call* in every session that
 reads the file it is in — including sessions that have nothing to do with the
 board. A command that does not resolve therefore fails constantly, with an
-error nobody in that repo wrote or can explain. Meanwhile both hooks are inert
+error nobody in that repo wrote or can explain. Meanwhile all three hooks are inert
 without `KB_TASK` (`src/hook.js`), so all that noise buys exactly nothing in an
 ordinary session.
 
@@ -173,7 +173,7 @@ A worker runs in `.claude/worktrees/kb-<n>-<k>` (`worktreePath`,
 `src/model.js`), a fresh checkout with no `node_modules` until it runs
 `npm ci` — and `$CLAUDE_PROJECT_DIR` there is the worktree, not the main
 checkout. So `guardedHookCommand` tests for its own file and exits 0 silently
-when it is missing. Nothing is lost by waiting: both hooks are inert without
+when it is missing. Nothing is lost by waiting: all three hooks are inert without
 `KB_TASK` anyway, and by the time the `Stop` hook has a nudge to deliver the
 worker has installed.
 
@@ -202,21 +202,29 @@ variable. Two checks belong to the move itself:
   tracked one is the operator's to delete, since `--shared-hooks` writes it on
   purpose.
 - **`launch hooks`** — a warning per Claude launch frozen in `board.json`
-  without `{hook_settings}` (`staleHookLaunches`). `loadBoard` lets an array in
-  the file win whole, so a launch an older `init` wrote out never gains the
-  flag, and with no settings file to fall back on that profile's workers would
-  quietly get no Stop nudge and record no session id. This is the same
-  frozen-copy blind spot `worker permissions` watches on `allowed_tools`. Since
-  #182 the fix on one of hkb's own profiles names the surgical repair instead
-  of the blunt one — insert `"{hook_settings}"` right after the launch's
-  `"--disallowedTools"` group, or drop `"launch"` entirely if the pin added
-  nothing but `--model`/`--effort` (`src/doctor.js` `checkHooks`, the
-  `DEFAULT_PROFILES[name]` branch): both are profile fields now (`effort` is
-  validated in `loadBoard`, `src/board.js`, against `EFFORT_LEVELS` in
-  `src/model.js`, and rendered into `{model_args}` by `modelArgs`, also
-  `src/model.js`) — a pin is never needed just to set them. A custom-named
-  profile still has no default behind it, so it is told to add the token by
-  hand.
+  without `{hook_settings}` (`staleHookLaunches`, `src/board.js` — moved there
+  from `src/doctor.js` in #188 so `init` can call the same question doctor
+  only reports). `loadBoard` lets an array in the file win whole, so a launch
+  an older `init` wrote out never gains the flag, and with no settings file to
+  fall back on that profile's workers would quietly get no Stop nudge and
+  record no session id. This is the same frozen-copy blind spot `worker
+  permissions` watches on `allowed_tools`. Since #188 `hkb init` repairs this
+  itself rather than only naming the fix (`repairLaunchHooks`, `src/init.js`,
+  called from `init` right after `boardProfiles`): on one of hkb's own
+  profiles it inserts `"{hook_settings}"` right after the launch's
+  `"--disallowedTools"` group, or drops `"launch"` entirely and moves the
+  values across if the pin added nothing but literal `--model`/`--effort`
+  (both are profile fields now — `effort` is validated in `loadBoard`,
+  `src/board.js`, against `EFFORT_LEVELS` in `src/model.js`, and rendered into
+  `{model_args}` by `modelArgs`, also `src/model.js` — a pin is never needed
+  just to set them). It prints one line per profile it touches and is silent
+  once nothing is stale; a custom-named profile still has no default behind
+  it, so both `init` and doctor's fix text say to add the token by hand.
+  `loadBoard` also refuses `effort` outright on any profile whose `launch[0]`
+  is not `claude` (`claude-action` excepted — accepted and ignored, since its
+  launch only triggers a run elsewhere): Codex and Copilot CLI have no
+  verified `--effort` flag, so a worker used to only find that out from the
+  CLI's own error on first spawn.
 
 Three older verdicts are specific to the command shape:
 

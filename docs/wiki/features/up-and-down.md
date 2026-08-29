@@ -9,15 +9,15 @@ covers:
   - path: src/up.js
     sha: 6971cba6c83f88756b9dae1eea56ae20c0d28c09
   - path: src/model.js
-    sha: cf222b0724d3f53377dab94a262100dd985daf86
+    sha: 23bb576d15068653b10c068ed3c9f014f0353664
   - path: src/board.js
-    sha: f73b03ee9a45e03e763922ddf57c2e4028405bdd
+    sha: 656fc1ff76b6cf1909ccacc5c69899ba24fb4010
   - path: src/dispatch.js
-    sha: e4a749081cba52049a31ad1fc7df59f5be1750e0
+    sha: fb85767e0b4b962930ee74c608c5bb0e1bd7ae4f
   - path: src/serve.js
     sha: 5565e6d7d79d189d7e62000065340848c669ab38
-generated_at_commit: 0e8e882
-last_refreshed: 2026-08-28
+generated_at_commit: 39d9c05
+last_refreshed: 2026-08-29
 related: [architecture/overview, features/web-board, concepts/roles-and-seats, architecture/dispatcher-tick]
 ---
 

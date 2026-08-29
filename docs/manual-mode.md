@@ -11,15 +11,15 @@ undone: turning the tick on later is one command against a board that already ha
 ## Day one
 
 ```bash
-npx hkb-cli init --shared-hooks  # labels, .kanban/board.json, the worker skill, the Stop + PreToolUse hooks, the CLAUDE.md/AGENTS.md section
+npx hkb-cli init --shared-hooks  # labels, .kanban/board.json, the worker skill, the Stop + PreToolUse + SubagentStop hooks, the CLAUDE.md/AGENTS.md section
 npx hkb-cli doctor --api         # gh auth, labels, GraphQL fields, the issue-dependency API and lock-ref CAS
 ```
 
 Setup is the same one an autonomous board gets — you simply never start the loop. Skip `--with-actions`.
 
 `--shared-hooks` is the one flag manual mode really wants, and the reason is the whole shape of this page. hkb's
-`Stop` and `PreToolUse` hooks normally ride the launch line of a worker *hkb started* (`claude --settings`), so
-they reach no other session in the repo — which is right for a board whose workers hkb spawns, and exactly wrong
+`Stop`, `PreToolUse` and `SubagentStop` hooks normally ride the launch line of a worker *hkb started* (`claude
+--settings`), so they reach no other session in the repo — which is right for a board whose workers hkb spawns, and exactly wrong
 here, because in manual mode **you** are the launcher. `--shared-hooks` puts them in the tracked
 `.claude/settings.json` instead, where every session in the repo reads them, and they are what makes an agent you
 launch obey the protocol (see *Hand the card to an agent*). The command written there is a plain `hkb`, so it

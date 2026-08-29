@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { attemptOf, gc, isMerged, listBranches, listWorktrees, sweep, sweepBranches, sweepTask, sweepWorktrees, worktreeAttempt } from '../src/gc.js';
+import { agentWorktreeNode, attemptOf, gc, isMerged, listBranches, listWorktrees, sweep, sweepAgentWorktrees, sweepBranches, sweepTask, sweepWorktrees, worktreeAttempt } from '../src/gc.js';
 import { tick } from '../src/dispatch.js';
 import { DEFAULT_BOARD, readState, writeState } from '../src/board.js';
 import { GhError, setTransport } from '../src/gh.js';
@@ -99,6 +99,13 @@ test('an attempt is recognised by either spelling of its name', () => {
   assert.equal(worktreeAttempt({ path: '/repo', branch: 'main' }), null);
 });
 
+test('an agent-<id> worktree is recognised by its kb/<n> branch, not its name', () => {
+  assert.deepEqual(agentWorktreeNode({ path: '/repo/.claude/worktrees/agent-abc123', branch: 'kb/41' }), { n: 41, branch: 'kb/41' });
+  assert.equal(agentWorktreeNode({ path: '/repo/.claude/worktrees/agent-abc123', branch: 'agent-abc123' }), null, 'unchanged: still on its own throwaway branch');
+  assert.equal(agentWorktreeNode({ path: '/repo/.claude/worktrees/kb-41-1', branch: 'kb/41' }), null, 'not an agent-* checkout at all');
+  assert.equal(agentWorktreeNode({ path: '/repo/.claude/worktrees/agent-abc123', branch: 'kb-41-1' }), null, 'a dispatcher-style branch, not a track node branch');
+});
+
 // ---------- worktrees ----------
 
 test('sweepWorktrees removes finished attempts and leaves live ones alone', (t) => {
@@ -158,6 +165,38 @@ test('a live session is never swept quietly by the incremental pass either', (t)
   assert.deepEqual([stats.worktrees, stats.branches], [0, 0]);
   assert.equal(exists(dir), true);
   assert.equal(h.text(), ''); // silent: the next pass retries it
+});
+
+test('sweepAgentWorktrees removes an agent-<id> checkout only once its node\'s PR is merged or closed', (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  const merged = worktree(h.root, 'agent-abc', 'kb/41');
+  const closed = worktree(h.root, 'agent-def', 'kb/42');
+  const open = worktree(h.root, 'agent-ghi', 'kb/43');
+  const none = worktree(h.root, 'agent-jkl', 'kb/44'); // no PR recorded yet
+  const prByBranch = (n) => ({ 41: { state: 'MERGED' }, 42: { state: 'CLOSED' }, 43: { state: 'OPEN' } }[n] || null);
+
+  const stats = sweepAgentWorktrees(h.ctx, { prByBranch, yes: true, log: h.log });
+
+  assert.equal(stats.removed, 2);
+  assert.equal(exists(merged), false);
+  assert.equal(exists(closed), false);
+  assert.equal(exists(open), true);
+  assert.equal(exists(none), true);
+  assert.deepEqual(branches(h.root), ['kb/43', 'kb/44', 'main']); // the branch goes with its worktree
+  assert.match(h.text(), /removed worktree .*agent-abc \(#41's PR is merged\)/);
+});
+
+test('without --yes, sweepAgentWorktrees only reports what it would remove', (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  const dir = worktree(h.root, 'agent-abc', 'kb/41');
+
+  const stats = sweepAgentWorktrees(h.ctx, { prByBranch: () => ({ state: 'MERGED' }), yes: false, log: h.log });
+
+  assert.deepEqual([stats.removed, stats.pending], [0, 1]);
+  assert.equal(exists(dir), true);
+  assert.match(h.text(), /would remove worktree .*agent-abc \(#41's PR is merged\) — pass --yes/);
 });
 
 // ---------- branches ----------
@@ -248,6 +287,21 @@ test('the full sweep is what `hkb gc --yes` runs: worktrees, branches, duplicate
   assert.equal(exists(fresh), true);
   assert.equal(h.gh.runOf(1).attempts.length, 1);
   assert.equal(h.gh.issues.get(1).comments.length, 1);
+});
+
+test('the full sweep learns agent-<id> worktrees: gone once #41\'s PR merges, kept while it is still open', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 41, status: 'running', prs: [{ number: 900, state: 'MERGED', headRefName: 'kb/41' }] }));
+  h.gh.addIssue(kbIssue({ number: 42, status: 'running', prs: [{ number: 901, state: 'OPEN', headRefName: 'kb/42' }] }));
+  const merged = worktree(h.root, 'agent-abc', 'kb/41');
+  const open = worktree(h.root, 'agent-def', 'kb/42');
+
+  const stats = await sweep(h.ctx, { yes: true, log: h.log });
+
+  assert.equal(stats.worktrees, 1);
+  assert.equal(exists(merged), false);
+  assert.equal(exists(open), true);
 });
 
 test('a sweep given a memo does not read a task again while its issue has not moved', async (t) => {

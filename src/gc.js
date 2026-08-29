@@ -49,6 +49,19 @@ export function worktreeAttempt(w) {
 }
 
 /**
+ * The node a track's fanned-out subagent worktree belongs to. Its directory is `agent-<id>` — the
+ * harness's own name, not hkb's — so nothing about the checkout says which task it is; the branch
+ * does: a subagent that committed is on `kb/<n>` (`src/track.js`'s per-node brief). No attempt number
+ * comes with it, so this is a second, narrower recognizer alongside `attemptOf` rather than a case of it.
+ * @returns {{n:number, branch:string}|null}
+ */
+export function agentWorktreeNode(w) {
+  if (!/^agent-/.test(path.basename(w.path || ''))) return null;
+  const m = /^kb\/(\d+)$/.exec(String(w.branch || '').trim());
+  return m ? { n: Number(m[1]), branch: w.branch } : null;
+}
+
+/**
  * Remove one worktree and the branch it had checked out.
  * Claude Code locks the worktrees it creates ("claude session kb-1-1 (pid N ...)"); the lock is
  * lifted only once that pid is gone, so a live session is never swept out from under itself.
@@ -111,6 +124,31 @@ export function sweepWorktrees(ctx, { finished, only = null, yes = false, quiet 
     if (!yes) { stats.pending++; log(`would remove worktree ${w.path} (${label(at.n, at.k)}) — pass --yes`); continue; }
     const r = removeWorktree(ctx.root, w);
     if (r.result === 'removed') { stats.removed++; log(`removed worktree ${w.path}`); }
+    else if (r.result === 'locked') { stats.skipped++; if (!quiet) log(`skip ${w.path}: still locked by a live session (pid ${r.pid})`); }
+    else { stats.failed++; if (!quiet) log(`failed to remove ${w.path}: ${r.error}`); }
+  }
+  if (yes) git(ctx.root, ['worktree', 'prune']);
+  return stats;
+}
+
+/**
+ * `agent-<id>` worktrees a track's fanned-out subagent left behind — recognised by `agentWorktreeNode`,
+ * not `attemptOf`: a subagent that only read and returned is already gone (`docs/wiki/features/tracks.md`),
+ * but one that committed keeps its worktree on `kb/<n>` until something notices its PR is done. `prByBranch`
+ * answers that per node — a merged or closed PR means the branch's work is either landed or abandoned, so
+ * the checkout has nothing left to protect; an open PR, or none yet, is still someone's in-flight work.
+ */
+export function sweepAgentWorktrees(ctx, { prByBranch, only = null, yes = false, quiet = false, log = () => {} } = {}) {
+  const stats = { removed: 0, pending: 0, skipped: 0, failed: 0 };
+  for (const w of listWorktrees(ctx.root)) {
+    const at = agentWorktreeNode(w);
+    if (!at) continue;
+    if (only != null && at.n !== only) continue;
+    const pr = prByBranch(at.n, at.branch);
+    if (!pr || !['MERGED', 'CLOSED'].includes(pr.state)) continue;
+    if (!yes) { stats.pending++; log(`would remove worktree ${w.path} (#${at.n}'s PR is ${pr.state.toLowerCase()}) — pass --yes`); continue; }
+    const r = removeWorktree(ctx.root, w);
+    if (r.result === 'removed') { stats.removed++; log(`removed worktree ${w.path} (#${at.n}'s PR is ${pr.state.toLowerCase()})`); }
     else if (r.result === 'locked') { stats.skipped++; if (!quiet) log(`skip ${w.path}: still locked by a live session (pid ${r.pid})`); }
     else { stats.failed++; if (!quiet) log(`failed to remove ${w.path}: ${r.error}`); }
   }
@@ -212,10 +250,14 @@ export function sweepTask(ctx, n, { keep = [], log = () => {} } = {}) {
   const finished = (num, k) => num === n && !kept.has(k);
   const opts = { finished, keep, only: n, yes: true, quiet: true };
   const wt = sweepWorktrees(ctx, opts);
+  // #n itself has just left the open board — settled either way — so an `agent-<id>` worktree a
+  // subagent left on `kb/<n>` is scrap now regardless of what its PR says: no `keep` applies, since
+  // these carry no attempt number to keep.
+  const aw = sweepAgentWorktrees(ctx, { prByBranch: () => ({ state: 'MERGED' }), only: n, yes: true, quiet: true, log });
   const br = sweepBranches(ctx, opts);
   let chains = 0;
   for (const c of listBeatChains(ctx.root)) if (c.n === n && !kept.has(c.k) && dropBeatChain(ctx.root, c.n, c.k)) chains++;
-  const out = { worktrees: wt.removed, branches: br.removed, chains, pending: wt.skipped + wt.failed + br.skipped };
+  const out = { worktrees: wt.removed + aw.removed, branches: br.removed, chains, pending: wt.skipped + wt.failed + aw.skipped + aw.failed + br.skipped };
   if (out.worktrees || out.branches) log(`#${n}: cleaned up ${out.worktrees} worktree(s), ${out.branches} branch(es)`);
   return out;
 }
@@ -242,11 +284,13 @@ export async function sweep(ctx, { yes = false, days = 14, memo = null, log = ()
   const stats = { worktrees: 0, branches: 0, comments: 0, chains: 0, files: 0, pending: 0, skipped: 0, days, applied: !!yes };
 
   const wt = sweepWorktrees(ctx, { finished, yes, label, log });
+  const prByBranch = (n, branch) => (byNumber.get(n)?.prs || []).find((p) => p.headRefName === branch) || null;
+  const aw = sweepAgentWorktrees(ctx, { prByBranch, yes, log });
   const br = sweepBranches(ctx, { finished: finishedHere, yes, log });
-  stats.worktrees = wt.removed;
+  stats.worktrees = wt.removed + aw.removed;
   stats.branches = br.removed;
-  stats.pending = wt.pending + br.pending;
-  stats.skipped = wt.skipped + wt.failed + br.skipped;
+  stats.pending = wt.pending + aw.pending + br.pending;
+  stats.skipped = wt.skipped + wt.failed + aw.skipped + aw.failed + br.skipped;
 
   try { stats.comments = await sweepRunComments(ctx, tasks, { yes, memo: yes ? memo : null, log }); } catch (e) { log(`duplicate run comments skipped: ${e.message}`); }
   try { stats.chains = await sweepBeatChains(ctx, { yes, log }); } catch (e) { log(`beat chains skipped: ${e.message}`); }

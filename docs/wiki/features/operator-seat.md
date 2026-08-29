@@ -7,23 +7,23 @@ audience: [dev, ops]
 read_when: "changing what a session may do on someone's board, adding an event kind / status / outcome / block kind, or wondering why the operator's limits are prose rather than a guard"
 covers:
   - path: skills/kanban/SKILL.md
-    sha: 5dfc9a8c77c35bb99f4c849d23070a48b27423f5
+    sha: 6371b1ff24fa12109c2bf1563194daffdc7c7df0
   - path: commands/operate.md
     sha: 7c1cb7c0a592fc3ea8ca641ca37b860a975ded66
   - path: src/watch.js
     sha: 8aba4c441e35c9241124c1278b5f4824706f7e52
   - path: src/model.js
-    sha: cf222b0724d3f53377dab94a262100dd985daf86
+    sha: 23bb576d15068653b10c068ed3c9f014f0353664
   - path: src/cli.js
-    sha: 0adaae89a7236c2b3e647ce95994c75a34dc55f9
+    sha: 2369b0d3a0f5d1363efffa8cc37fd2e47e018155
   - path: src/lifecycle.js
     sha: 3938c82f3e181fb260fc54bb2f3150074459e224
   - path: src/init.js
-    sha: 28a9a921109337d3bd5c619859207995b579a06a
+    sha: 97954d3aaabb24d3b64b45aa10c2bad5cac4a3e4
   - path: src/stats.js
     sha: f81bc37dad19e253bf23a696ba899b4219dd5e53
-generated_at_commit: 0e8e882
-last_refreshed: 2026-08-28
+generated_at_commit: 39d9c05
+last_refreshed: 2026-08-29
 related: [features/planning-commands, decisions/adr-004-roles-and-adoption, features/up-and-down, features/review-loop, concepts/roles-and-seats]
 ---
 
