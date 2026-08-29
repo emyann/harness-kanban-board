@@ -213,17 +213,25 @@ call in every session** in that repo — noise nobody there wrote or can explain
 ordinary session; it just fails loudly if the command is wrong.) So the rule is: a machine-specific command goes
 in the per-developer file, and only a command that is true everywhere may go in the tracked one.
 
-| how hkb is installed | what `init` writes | where |
+| where the hkb you ran `init` with lives | what `init` writes | where |
 | --- | --- | --- |
-| `npm i -D hkb-cli` (the repo's own devDependency) | `f="$CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js"; [ -f "$f" ] \|\| exit 0; exec node "$f" hook stop` | **`.claude/settings.json`** — tracked, committed, no flag needed |
+| **inside the repo** — `npm i -D hkb-cli`, the repo's own devDependency | `f="$CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js"; [ -f "$f" ] \|\| exit 0; exec node "$f" hook stop` | **`.claude/settings.json`** — tracked, committed, no flag needed |
+| **inside the repo** — a checkout of hkb setting *itself* up | the same command, with `$CLAUDE_PROJECT_DIR/bin/hkb.js` | **`.claude/settings.json`** |
 | `npm i -g hkb-cli` | `hkb hook stop` | `.claude/settings.local.json` (gitignored), or `.claude/settings.json` with `--shared-hooks` |
-| a checkout, or `npx` with nothing installed | `node "/abs/path/bin/hkb.js" hook stop`, or `npx -y hkb-cli hook stop` from an npx cache | `.claude/settings.local.json` only |
+| somebody else's checkout, or `npx` with nothing installed | `node "/abs/path/bin/hkb.js" hook stop`, or `npx -y hkb-cli hook stop` from an npx cache | `.claude/settings.local.json` only |
 
-The first row is the one an adopter should want (#146). `npm install` puts the pinned version at a path that is a
-property of the *project*, and Claude Code sets `CLAUDE_PROJECT_DIR` for hook commands precisely so a project can
-name its own files — so the command is exact here and correct on every other machine at the same time. That is
-what makes the tracked file honest, and it is chosen without `--shared-hooks`: commit `.claude/settings.json`, and
-a teammate's `git pull && npm install` is the whole setup, on a machine that never runs `hkb init` at all.
+The first two rows are the ones to want (#146), and they are one rule, not two: when the hkb being run is *inside*
+the repo it is setting up, where it sits is a property of the **project** rather than of the machine, and Claude
+Code sets `CLAUDE_PROJECT_DIR` for hook commands precisely so a project can name its own files. So the command is
+exact here and correct on every other machine at the same time. That is what makes the tracked file honest, and it
+is chosen without `--shared-hooks`: commit `.claude/settings.json`, and a teammate's `git pull && npm install` is
+the whole setup, on a machine that never runs `hkb init` at all.
+
+The path in it is *measured* from the repo root, never composed from the package's name — so a pnpm store
+(`node_modules/.pnpm/hkb-cli@0.1.4/node_modules/hkb-cli`) or a nested install is named as it actually is, and a
+checkout of hkb, where the repo *is* the package, comes out as plain `bin/hkb.js`. Two paths under the root are
+still refused: an npx cache, which stops existing when npm cleans it, and a `.claude/worktrees/<attempt>`
+checkout, which is gitignored and gone with the attempt.
 
 The guard is the rest of it. A worker's `.claude/worktrees/kb-<n>-<k>` is a fresh checkout with no `node_modules`
 until it runs `npm ci`, and `$CLAUDE_PROJECT_DIR` there is the worktree — so the command tests for its own file
@@ -323,22 +331,27 @@ is configured, in either file, and fails when the command cannot be resolved her
                     → npm i -g hkb-cli (or: hkb init, which writes a command that resolves here)
 ```
 
-On a repo that installs hkb itself, a bare `hkb` is that same failure even when it happens to work on the machine
-running doctor: it is not the version the repo pinned, and in the tracked file it is not even a version everyone
-has — they have only what `npm install` gave them.
+On a repo that carries its own hkb, a bare `hkb` is that same failure even when it happens to work on the machine
+running doctor: it is not the copy the repo carries, and in the tracked file it is not even a copy everyone has —
+they have only what their checkout gave them.
 
 ```
-✗ hook command    hkb hook stop · hkb hook pretool in .claude/settings.json — this repo installs hkb itself
+✗ hook command    hkb hook stop · hkb hook pretool in .claude/settings.json — this repo carries hkb itself
                   (node_modules/hkb-cli/bin/hkb.js), and `hkb` is whatever each machine happens to have, or nothing
                     → hkb init — it rewrites the command as $CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js
 ✓ hook command    $CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js → /home/you/repo/node_modules/hkb-cli/bin/hkb.js
 ```
 
+A guarded command whose file is missing is normally just an install that has not happened yet, and doctor says so
+as a warning naming `npm install`. The exception is a command that names a path the repo's hkb has *left* — a
+version-stamped pnpm store after an upgrade, say. Nothing installs that path back, so the hook would exit 0 in
+silence forever, and doctor calls it a failure naming `hkb init` instead.
+
 The hooks live in exactly one of the two files: init moves them rather than leaving a second copy, since two
 would fire every nudge twice. A re-run leaves a shared, portable setup where it is — but hooks in the tracked
 file naming a path get moved to the local one, an `npx` cache path (never durable: it is gone the next time
-npm cleans that cache) is rewritten wherever it is found, and a local install moves them the other way, out of
-the per-developer file and into the tracked one, because there is nothing machine-specific left to hide.
+npm cleans that cache) is rewritten wherever it is found, and an hkb inside the repo moves them the other way, out
+of the per-developer file and into the tracked one, because there is nothing machine-specific left to hide.
 
 ## GitHub Copilot CLI — `copilot-cli`
 

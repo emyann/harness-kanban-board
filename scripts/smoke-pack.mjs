@@ -237,55 +237,87 @@ function checkInitOffline(bin, root) {
 }
 
 /**
- * The other install shape a real adopter has: `npm i -D hkb-cli`, where the package lives inside the
- * repo it serves (#146). Only a tarball run can prove this one — the source tests cannot put PKG_ROOT
- * anywhere but this checkout — and what it has to prove is the whole promise of that shape: the hook
- * command lands in the **tracked** settings file, names the repo rather than this machine, and is a
- * command `/bin/sh` really runs — silently when the install is not there yet, which is every worker's
- * worktree until it runs `npm ci`.
+ * The two install shapes where the hkb being run lives INSIDE the repo it is setting up (#146):
+ * `npm i -D hkb-cli`, which lands at `node_modules/hkb-cli`, and a checkout of hkb itself, where the
+ * repo *is* the package. Only a tarball run can prove these — the source tests cannot put PKG_ROOT
+ * anywhere but this checkout — and what they have to prove is the whole promise of that shape: the
+ * hook command lands in the **tracked** settings file, names the repo rather than this machine
+ * (measured, so a layout hkb did not invent still comes out right), and is a command `/bin/sh`
+ * really runs — silently when the file is not there yet, which is every worker's worktree until it
+ * runs `npm ci`.
+ * @param place puts the package into the scratch repo; returns the bin to run and the path the
+ *   written command must name, relative to the repo
  */
-function checkInitLocalInstall(root) {
-  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-smoke-dep-'));
+function checkInitInsideRepo(root, { what, slug, place }) {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), `hkb-smoke-${slug}-`));
   const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-smoke-fresh-'));
-  log(`running hkb init as a devDependency of ${repo}`);
+  log(`running hkb init ${what} ${repo}`);
   try {
     run('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    const installed = path.join(repo, 'node_modules', pkgName);
-    fs.mkdirSync(path.dirname(installed), { recursive: true });
-    fs.cpSync(root, installed, { recursive: true }); // what `npm i -D hkb-cli` leaves behind
-    fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ name: 'adopter', private: true, devDependencies: { [pkgName]: '*' } }, null, 2) + '\n');
+    const { bin, rel } = place(repo);
 
-    const bin = path.join(installed, 'bin', 'hkb.js');
-    const r = run(process.execPath, [bin, 'init', '--repo', 'acme/smoke-dep', '--no-labels'], { cwd: repo, env: cleanEnv() });
+    const r = run(process.execPath, [bin, 'init', '--repo', `acme/smoke-${slug}`, '--no-labels'], { cwd: repo, env: cleanEnv() });
     if (r.status !== 0) {
-      bad(`\`hkb init\` from a devDependency exited ${r.status}: ${r.out}`, 'run `node scripts/smoke-pack.mjs --keep` and try it by hand');
+      bad(`\`hkb init\` ${what} exited ${r.status}: ${r.out}`, 'run `node scripts/smoke-pack.mjs --keep` and try it by hand');
       return;
     }
-    if (fs.existsSync(path.join(repo, LOCAL_SETTINGS))) bad(`\`hkb init\` wrote ${LOCAL_SETTINGS} for a local install`, 'the command resolves in every checkout — see hookPlacement in src/init.js');
+    if (fs.existsSync(path.join(repo, LOCAL_SETTINGS))) bad(`\`hkb init\` wrote ${LOCAL_SETTINGS} ${what}`, 'the command resolves in every checkout — see hookPlacement in src/init.js');
     let settings = null;
     try { settings = JSON.parse(fs.readFileSync(path.join(repo, SHARED_SETTINGS), 'utf8')); }
-    catch { bad(`\`hkb init\` did not write the tracked ${SHARED_SETTINGS}`, 'a local install is the case that may — see hkbCommandForHook in src/init.js'); return; }
+    catch { bad(`\`hkb init\` did not write the tracked ${SHARED_SETTINGS} ${what}`, 'an hkb inside the repo is the case that may — see hkbCommandForHook in src/init.js'); return; }
 
     const commands = Object.values(settings.hooks || {}).flatMap((groups) => groups.flatMap((g) => g.hooks.map((h) => h.command)));
-    const wanted = `$CLAUDE_PROJECT_DIR/node_modules/${pkgName}/bin/hkb.js`;
+    const wanted = `$CLAUDE_PROJECT_DIR/${rel}`;
     if (commands.length !== 2) bad(`${SHARED_SETTINGS} got ${commands.length} hook command(s), expected 2`, 'see CLAUDE_HOOKS in src/init.js');
-    else if (!commands.every((c) => c.includes(wanted))) bad(`${SHARED_SETTINGS} does not name ${wanted}: ${commands.join(' · ')}`, 'see hkbCommandForHook in src/init.js');
+    else if (!commands.every((c) => c.includes(wanted))) bad(`${SHARED_SETTINGS} does not name ${wanted}: ${commands.join(' · ')}`, 'see projectBinRel in src/init.js');
     else if (commands.some((c) => c.includes(repo))) bad(`${SHARED_SETTINGS} names ${repo}, which is only a path on this machine`, 'a tracked file may only hold a $CLAUDE_PROJECT_DIR-relative command');
     else ok(`${SHARED_SETTINGS} (tracked) runs ${wanted}`);
 
     // and it has to be a command a shell actually runs, in both the states a checkout can be in
     const stop = commands.find((c) => /hook stop$/.test(c));
     if (!stop) return;
-    for (const [dir, what] of [[repo, 'with the install in place'], [empty, 'in a checkout that has not run npm install yet']]) {
+    for (const [dir, state] of [[repo, 'with the file in place'], [empty, 'in a checkout where it is not there yet']]) {
       const sh = run('sh', ['-c', stop], { cwd: dir, env: { ...cleanEnv(), CLAUDE_PROJECT_DIR: dir } });
-      if (sh.status !== 0) bad(`the Stop hook command exited ${sh.status} ${what}: ${sh.out}`, 'a `matcher: "*"` hook that fails breaks every tool call in that repo — see guardedHookCommand in src/init.js');
-      else if (sh.out !== '') bad(`the Stop hook command said "${sh.out}" ${what}`, 'a hook outside a worker must be silent — see src/hook.js');
-      else ok(`exit 0, no output, ${what}`);
+      if (sh.status !== 0) bad(`the Stop hook command exited ${sh.status} ${state}: ${sh.out}`, 'a `matcher: "*"` hook that fails breaks every tool call in that repo — see guardedHookCommand in src/init.js');
+      else if (sh.out !== '') bad(`the Stop hook command said "${sh.out}" ${state}`, 'a hook outside a worker must be silent — see src/hook.js');
+      else ok(`exit 0, no output, ${state}`);
     }
   } finally {
     if (keep) log(`  kept: ${repo}`);
     else for (const d of [repo, empty]) fs.rmSync(d, { recursive: true, force: true });
   }
+}
+
+/** `npm i -D hkb-cli`: the package under `node_modules/`, the repo's own package.json naming it. */
+function checkInitDevDependency(root) {
+  return checkInitInsideRepo(root, {
+    what: 'as a devDependency of',
+    slug: 'dep',
+    place: (repo) => {
+      const installed = path.join(repo, 'node_modules', pkgName);
+      fs.mkdirSync(path.dirname(installed), { recursive: true });
+      fs.cpSync(root, installed, { recursive: true }); // what `npm i -D hkb-cli` leaves behind
+      fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ name: 'adopter', private: true, devDependencies: { [pkgName]: '*' } }, null, 2) + '\n');
+      return { bin: path.join(installed, 'bin', 'hkb.js'), rel: `node_modules/${pkgName}/bin/hkb.js` };
+    },
+  });
+}
+
+/**
+ * A checkout of hkb itself — the shape hkb's own repo has, and the one whose hook noise filed #146.
+ * There is no `node_modules/<name>` here at all: the remainder measured from the root is empty, so
+ * the command is `$CLAUDE_PROJECT_DIR/bin/hkb.js` and a path built from the package name would be
+ * wrong. `isPackageRepo` also sees itself here, so this exercises init's link-instead-of-copy path.
+ */
+function checkInitSelfCheckout(root) {
+  return checkInitInsideRepo(root, {
+    what: 'on a checkout of hkb itself at',
+    slug: 'self',
+    place: (repo) => {
+      fs.cpSync(root, repo, { recursive: true }); // the repo IS the package
+      return { bin: path.join(repo, 'bin', 'hkb.js'), rel: 'bin/hkb.js' };
+    },
+  });
 }
 
 // ---------- main ----------
@@ -317,7 +349,9 @@ try {
   log('');
   checkInitOffline(bin, root);
   log('');
-  checkInitLocalInstall(root);
+  checkInitDevDependency(root);
+  log('');
+  checkInitSelfCheckout(root);
   log('');
 
   if (failures.length) {
@@ -325,7 +359,7 @@ try {
     for (const f of failures) process.stderr.write(`  - ${f.msg}\n    fix: ${f.fix}\n`);
     process.exit(1);
   }
-  log(`smoke-pack: the packed artifact installs, runs, and initialises a repo — globally, and as a devDependency of the repo it serves. ${MUST_SHIP.length + MUST_NOT_SHIP.length} content checks, 3 command checks, ${FROM_PACKAGE.length + 3} init checks, 3 local-install checks.`);
+  log(`smoke-pack: the packed artifact installs, runs, and initialises a repo — from outside it, as a devDependency of it, and as the checkout itself. ${MUST_SHIP.length + MUST_NOT_SHIP.length} content checks, 3 command checks, ${FROM_PACKAGE.length + 3} init checks, 6 inside-the-repo checks.`);
 } finally {
   if (!keep) fs.rmSync(configHome, { recursive: true, force: true });
   if (dir && !keep) fs.rmSync(dir, { recursive: true, force: true });

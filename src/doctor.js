@@ -7,7 +7,7 @@ import { boardFile, api, readState, writeState, DEFAULT_PROFILES } from './board
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun } from './tasks.js';
 import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins } from './model.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
-import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, isEphemeralPath, localInstallRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
+import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
 import { latestVersion } from './registry.js';
 import { checkProject } from './projects.js';
 
@@ -159,13 +159,15 @@ export function checkWorkerPermissions(ctx, { ok, warn }, { read = (p) => fs.rea
  * worse than none, so this is a failure with the install in the fix, not a warning (#85). The lookups
  * are arguments so the check is testable without touching PATH.
  *
- * Two things follow from a repo that installed hkb itself (#146). `$CLAUDE_PROJECT_DIR` is resolved
+ * Three things follow from a repo that carries its own hkb (#146). `$CLAUDE_PROJECT_DIR` is resolved
  * to the repo before the file is looked for, and reported, so the pass names what it found rather
- * than the variable. And a command naming a binary instead of that install is a failure however well
- * it happens to work on this machine: it is in the file everyone reads, and everyone else has only
- * what `npm install` gave them.
+ * than the variable. A command naming a binary instead of that copy is a failure however well it
+ * happens to work on this machine: it is in the file everyone reads, and everyone else has only what
+ * their checkout gave them. And a guarded command whose file is missing is normally just an install
+ * that has not happened yet — except when the repo's hkb is somewhere else entirely, which is a
+ * committed path that has moved (a version-stamped pnpm store, say) and a hook silent forever.
  */
-export function checkHooks(ctx, { ok, warn, bad }, { onPath = has, exists = (p) => fs.existsSync(p), localRel = localInstallRel(ctx.root) } = {}) {
+export function checkHooks(ctx, { ok, warn, bad }, { onPath = has, exists = (p) => fs.existsSync(p), binRel = projectBinRel(ctx.root) } = {}) {
   const { hooks, unreadable } = findClaudeHooks(ctx.root);
   for (const u of unreadable) warn('hooks settings', `${u.file} is not valid JSON (${u.error})`, 'fix the JSON, then hkb init');
   if (!hooks.some((h) => h.event === 'Stop')) {
@@ -192,14 +194,20 @@ export function checkHooks(ctx, { ok, warn, bad }, { onPath = has, exists = (p) 
     const found = target === need.target ? what : `${need.target} → ${target}`;
     if (isEphemeralPath(need.target)) {
       bad('hook command', `${what} — the npx cache is not a durable path, so this stops working the moment it is cleaned`, 'npm i -g hkb-cli, then hkb init');
-    } else if (localRel && need.kind === 'bin') {
+    } else if (binRel && need.kind === 'bin') {
       bad('hook command',
-        `${what} in ${[...where].join(' and ')} — this repo installs hkb itself (${localRel}), and \`${need.target}\` is whatever each machine happens to have, or nothing`,
-        `hkb init — it rewrites the command as ${PROJECT_DIR}/${localRel}, which every checkout resolves`);
+        `${what} in ${[...where].join(' and ')} — this repo carries hkb itself (${binRel}), and \`${need.target}\` is whatever each machine happens to have, or nothing`,
+        `hkb init — it rewrites the command as ${PROJECT_DIR}/${binRel}, which every checkout resolves`);
     } else if (need.kind === 'file' ? exists(target) : onPath(need.target)) {
       ok('hook command', found);
     } else if (need.kind === 'file' && need.guarded) {
-      warn('hook command', `${target} is not installed here — the hook exits 0 in silence until it is`, 'npm install');
+      // Silent-until-installed is the honest reading only while the command still names where hkb
+      // would land. If the repo's own hkb is at a different path, the committed one has gone stale
+      // and no amount of installing brings it back — init is what rewrites it.
+      const moved = binRel && need.target !== `${PROJECT_DIR}/${binRel}`;
+      moved
+        ? bad('hook command', `${what} — ${target} is not there, and this repo's hkb is ${binRel}; the hook has been exiting 0 in silence`, `hkb init — it rewrites the command as ${PROJECT_DIR}/${binRel}`)
+        : warn('hook command', `${target} is not installed here — the hook exits 0 in silence until it is`, 'npm install');
     } else {
       bad('hook command',
         `${what} — ${need.kind === 'file' ? `${target} is not there` : `\`${need.target}\` is not on PATH here`}; the hook fails on every tool call in this repo`,

@@ -635,26 +635,31 @@ export function compareVersions(a, b) {
 }
 
 // ---------- where the running hkb came from ----------
-// Three install shapes, and the generated hook command differs for each (src/init.js
-// hkbCommandForHook): a global `npm i -g`, an `npx` run out of a cache that is gone the next time
-// npm cleans it, and a `npm i -D hkb-cli` devDependency of the repo itself. Only the last one is
-// both exact and the same on every machine, so telling it apart is worth two pure functions.
+// The generated hook command differs by install shape (src/init.js hkbCommandForHook): a global
+// `npm i -g`, an `npx` run out of a cache that is gone the next time npm cleans it, and — the one
+// that is exact and the same on every machine at once — an hkb that lives INSIDE the repo it is
+// setting up. That last one is not one shape but two, and the difference does not matter: a
+// `npm i -D hkb-cli` devDependency sits at `node_modules/hkb-cli`, hkb's own checkout is the repo
+// root itself, and both are named the same way, relative to `$CLAUDE_PROJECT_DIR`.
 
 /**
- * Is `pkgRoot` — where the running hkb lives — an install inside `<root>/node_modules/`? That is the
- * `npm i -D hkb-cli` shape (#146): the version is pinned in the repo's package.json, so every machine
- * that runs `npm install` gets the same one in the same place, and a hook can name it relative to the
- * project instead of naming this machine.
+ * Where `target` sits inside `root`, as a `/`-separated relative path — `''` when it *is* `root`,
+ * null when it is somewhere else entirely (#146). The remainder is measured, never composed: a
+ * pnpm store resolves through `node_modules/.pnpm/<name>@<version>/node_modules/<name>`, and a path
+ * built out of the package's name instead would name a file that is not there.
  *
  * A path comparison, never PATH: `npx` puts `node_modules/.bin` on its child's PATH, so "is hkb on
- * PATH" answers yes for a local install too — and then answers no in the plain `/bin/sh` a hook runs
- * in. String work rather than `node:path` so this file stays I/O- and import-free; both arguments are
- * already absolute where it is called.
+ * PATH" answers yes for a repo-local install too — and then answers no in the plain `/bin/sh` a hook
+ * runs in. String work rather than `node:path` so this file stays I/O- and import-free; both
+ * arguments are already absolute where it is called, and the result is POSIX because it goes into a
+ * shell command line rather than back into `path.join`.
  */
-export function isLocalInstall(pkgRoot, root) {
+export function insideRepo(root, target) {
   const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
-  const [pkg, base] = [norm(pkgRoot), norm(root)];
-  return !!pkg && !!base && pkg.startsWith(`${base}/node_modules/`);
+  const [base, t] = [norm(root), norm(target)];
+  if (!base || !t) return null;
+  if (t === base) return '';
+  return t.startsWith(`${base}/`) ? t.slice(base.length + 1) : null;
 }
 
 /**

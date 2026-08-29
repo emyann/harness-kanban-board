@@ -19,7 +19,7 @@ That is the whole free path. `npx hkb-cli init --import` also pulls your existin
 
 For a repo you keep, install it there — `npm i -D hkb-cli`, then `npx hkb init`. The version is pinned in your
 `package.json` and lockfile, so every machine and every teammate gets the same one from `npm install`, and it is
-the one shape where `init` can put the Claude Code hooks in the **tracked** `.claude/settings.json`: it writes
+what lets `init` put the Claude Code hooks in the **tracked** `.claude/settings.json`: it writes
 `$CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js`, which is the same file in every checkout and a silent
 `exit 0` in one that has not run `npm install` yet. Commit that file and a teammate's `git pull && npm install`
 is the whole setup. `npm i -g hkb-cli` is the alternative — `hkb` on your PATH, and hooks in the per-developer
