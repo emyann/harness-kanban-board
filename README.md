@@ -11,7 +11,7 @@ Three commands, in a repo you can push to, with [`gh`](https://cli.github.com) a
 ```bash
 npx hkb-cli init                 # labels, .kanban/board.json, the worker skill, the Stop + PreToolUse hooks, a CLAUDE.md/AGENTS.md section
 npx hkb-cli doctor --api         # verifies gh auth, labels, GraphQL fields, the issue-dependency API and lock-ref CAS
-npx hkb-cli dispatch --loop 60   # the 60-second dispatcher, on your machine
+npx hkb-cli up --serve           # the dispatcher and the board, started detached — the terminal comes back
 ```
 
 That is the whole free path. `npx hkb-cli init --import` also pulls your existing open issues onto the board as
@@ -25,6 +25,11 @@ what lets `init` put the Claude Code hooks in the **tracked** `.claude/settings.
 is the whole setup. `npm i -g hkb-cli` is the alternative — `hkb` on your PATH, and hooks in the per-developer
 `.claude/settings.local.json`, because a global install is a fact about your machine and not about the repo
 ([which settings file, and why](docs/harnesses.md#which-settings-file-the-hooks-go-in)).
+
+`hkb up` is idempotent: run it twice and the second run reports what is already running and starts nothing.
+`hkb up --status` says what is up, `hkb down` stops it, and both processes log to `.kanban/logs/`. Want the loop
+in the foreground instead — under systemd, in a container, in a terminal you watch? `hkb dispatch --loop 60` is
+still exactly that. See [Keeping the board running](#keeping-the-board-running).
 
 The labels are the only part of `init` that needs the network, so there is a way to do the rest without it:
 `npx hkb-cli init --repo owner/name --no-labels` writes every local file — the skill, the two hooks, the board,
@@ -233,6 +238,51 @@ comment says *continued*, not opened. One card, one PR, as many rounds of review
 
 Only the latest attempt row exempts a card, so a continuation that crashes goes back to *review* rather than
 respawning: one `request-changes`, one relaunch, and the reviewer decides whether there is another.
+
+## Keeping the board running
+
+A board that is meant to keep moving has two long-running processes: the dispatcher loop, and — if you want it —
+the web board. One command starts them, detached, and hands the terminal back.
+
+```bash
+hkb up --serve            # dispatcher + board, detached; logs in .kanban/logs/
+hkb up --loop 30          # just the dispatcher, ticking every 30s (default: board.json dispatch.interval)
+hkb up --status           # dispatch running pid 3843 since 19:02 · log .kanban/logs/dispatch.log
+hkb down --serve          # SIGTERM to both; workers are never touched
+```
+
+Everything about it is meant to be safe to type twice. A live `.kanban/dispatch.pid` means *already running*, so a
+second `hkb up` reports the pid and the start time and spawns nothing — the dispatcher's singleton lock would have
+refused the rival anyway, and saying so beforehand is the difference between an idempotent command and a corpse in
+the log. The child is the same hkb that ran `up` (`process.execPath` plus this package's own `bin/hkb.js`, never a
+PATH lookup), so a checkout starts the checkout's dispatcher and a global install starts the global one. Its
+environment carries no `KB_*`: `hkb up` may be typed inside a worker session, and a daemon that outlives that
+session must not inherit its belief that it is working on task #148. Output is appended to
+`.kanban/logs/dispatch.log` and `.kanban/logs/serve.log`, one `# <ISO> started pid N` header per start.
+
+`hkb down` stops the dispatcher; `hkb down --serve` stops the board server too. Neither touches workers — a
+running attempt belongs to the board, and the next dispatcher reclaims or adopts it.
+
+`down` **waits** for what it signalled to actually be gone before it says `stopped`, and it never deletes the pid
+file — each process drops its own on the way out. That file *is* the singleton lock, so removing it the instant
+the signal was sent would tell the next `hkb up` that nothing is running while the old loop was still finishing a
+tick: two dispatchers, one board, which is the thing the lock exists to prevent. A SIGTERM'd loop wakes out of its
+wait at once, so this is usually a fraction of a second; a tick already in flight finishes first, and if the wait
+runs out (two of the loop's own intervals) `down` says so, leaves the claim standing, and exits non-zero rather
+than reporting a stop that did not happen.
+
+A pid file older than the machine's last boot names a pid the kernel has since handed to somebody else. `hkb` treats
+it as no claim at all — `--status` says `stopped (pid file predates this boot)`, `hkb up` replaces it, and `hkb down`
+never signals it.
+
+**`hkb up` is not a supervisor,** and will not pretend to be one: it never restarts anything. Exit code 4 is the
+dispatcher loop deliberately giving itself up for a supervisor to restart (cron, systemd, Actions, or you), and
+that is still what it means — `hkb up --status` reports `dispatch exited (4) at 19:02 — hkb up restarts it` so an
+operator, or an agent session, can see it in one call. `hkb doctor` says the same thing in one line. If you want
+the loop in the foreground under a real supervisor, `hkb dispatch --loop 60` is unchanged.
+
+On Windows, `detached` + `unref` is the whole detach story for this first cut and `down` is a plain
+`process.kill(pid)`; treat `hkb up --status` as the source of truth for what is actually running.
 
 ## The board in a browser
 
@@ -467,8 +517,8 @@ without one (`hkb block … --kind transient`) instead of leaving it `running` u
 is 5 minutes, top-of-hour schedules are routinely 15-20+ minutes late, and scheduled workflows are dropped
 entirely on a public repo with no activity for 60 days — which is exactly why the cron here is a sweeper and the
 events are the real trigger. **Laptop-off latency is 15-75 minutes**, end to end. If you want 60 seconds, run
-`hkb dispatch --loop 60` on a machine that stays on; the two dispatchers are safe to run together, because the
-lock ref is the arbiter.
+`hkb up` on a machine that stays on; the two dispatchers are safe to run together, because the lock ref is the
+arbiter.
 
 What you give up, plainly: Actions minutes (free on public repos; a platform fee per minute on private ones —
 the board itself stays free), no enforced `Stop` nudge, no spend on the board for those attempts (the log and the
@@ -571,7 +621,7 @@ doctor then names the installed version once with nothing to do about it.
 ## Local state (gitignored)
 
 `.kanban/logs/` worker logs · `.kanban/state.json` spawn counters, auth pauses and the day stamps that keep the
-token-expiry and version checks to one probe a day · `.kanban/outbox.jsonl` writes queued while GitHub was unreachable (replayed on the next tick) · `.kanban/cache.json` GraphQL capability cache · `.kanban/dispatch.pid` the loop's singleton lock · `.kanban/nudges/` and `.kanban/sessions/` stop-hook bookkeeping · `.claude/settings.local.json` the two hooks, whose command names this machine's `hkb`.
+token-expiry and version checks to one probe a day · `.kanban/outbox.jsonl` writes queued while GitHub was unreachable (replayed on the next tick) · `.kanban/cache.json` GraphQL capability cache · `.kanban/dispatch.pid` the loop's singleton lock and `.kanban/serve.pid` the board server's, both [what `hkb up`/`hkb down` read](#keeping-the-board-running) · `.kanban/nudges/` and `.kanban/sessions/` stop-hook bookkeeping · `.claude/settings.local.json` the two hooks, whose command names this machine's `hkb`.
 
 `hkb init` adds all of them to `.gitignore`, one line at a time — your own entries are left alone. `.kanban/board.json` is the exception: it is the board's configuration and belongs in the repo.
 

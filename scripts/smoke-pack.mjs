@@ -230,6 +230,18 @@ function checkInitOffline(bin, root) {
     const npx = [LOCAL_SETTINGS, SHARED_SETTINGS].filter((rel) => (fs.existsSync(path.join(repo, rel)) ? fs.readFileSync(path.join(repo, rel), 'utf8').includes('_npx') : false));
     if (npx.length) bad(`${npx.join(', ')} names the npx cache, which is not a durable path`, 'see hkbCommandForHook in src/init.js');
     else ok('no settings file names the npx cache');
+
+    // The next command an operator runs after init is `hkb up`, and `--status` is the half of it that
+    // is safe to run anywhere: pid files only, no board read, no network, nothing started.
+    const status = run(bin, ['up', '--status', '--json'], { cwd: repo, env: cleanEnv() });
+    let reported = null;
+    if (status.status !== 0) bad(`\`hkb up --status --json\` exited ${status.status}: ${status.out}`, 'see src/up.js — status must work on a board that has never been started');
+    else { try { reported = JSON.parse(status.out); } catch { bad(`\`hkb up --status --json\` printed something that is not JSON: ${status.out.slice(0, 120)}`, 'every command returns a stable object under --json'); } }
+    if (reported) {
+      const shape = Object.entries(reported).map(([k, v]) => `${k}:${v.running}`).join(' ');
+      if (shape === 'dispatch:false serve:false') ok(`hkb up --status --json → ${shape}`);
+      else bad(`\`hkb up --status --json\` reported "${shape}", expected both processes stopped in a fresh repo`, 'see statusReport in src/up.js');
+    }
   } finally {
     if (keep) log(`  kept: ${repo}`);
     else fs.rmSync(repo, { recursive: true, force: true });
@@ -359,7 +371,7 @@ try {
     for (const f of failures) process.stderr.write(`  - ${f.msg}\n    fix: ${f.fix}\n`);
     process.exit(1);
   }
-  log(`smoke-pack: the packed artifact installs, runs, and initialises a repo — from outside it, as a devDependency of it, and as the checkout itself. ${MUST_SHIP.length + MUST_NOT_SHIP.length} content checks, 3 command checks, ${FROM_PACKAGE.length + 3} init checks, 6 inside-the-repo checks.`);
+  log(`smoke-pack: the packed artifact installs, runs, and initialises a repo — from outside it, as a devDependency of it, and as the checkout itself. ${MUST_SHIP.length + MUST_NOT_SHIP.length} content checks, 3 command checks, ${FROM_PACKAGE.length + 4} init checks, 6 inside-the-repo checks.`);
 } finally {
   if (!keep) fs.rmSync(configHome, { recursive: true, force: true });
   if (dir && !keep) fs.rmSync(dir, { recursive: true, force: true });
