@@ -70,6 +70,15 @@ export function expandLaunch(template, vars, profile) {
     // (#144). A flag pair or nothing, like `{model_args}`: an empty value would still be a `--settings`
     // Claude Code has to parse, and a board with no hkb to run has nothing to declare.
     if (el === HOOK_SETTINGS_VAR) { if (vars.hook_settings) out.push('--settings', vars.hook_settings); continue; }
+    // Embedded rather than a bare element — `--settings={hook_settings}` — is refused rather than
+    // silently mishandled: the generic substitution below would render a bare `--settings=` on a
+    // board with no hkb to run, which is a flag Claude Code still has to parse.
+    if (el.includes(HOOK_SETTINGS_VAR)) {
+      const err = new Error(`launch template "${el}" embeds ${HOOK_SETTINGS_VAR} inside a larger token; ` +
+        `use it as its own element ("--settings", "${HOOK_SETTINGS_VAR}") so an empty value drops the flag instead of rendering "--settings="`);
+      err.exitCode = 2;
+      throw err;
+    }
     out.push(el.replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? '')));
   }
   return out;
@@ -104,18 +113,24 @@ export function withoutWorktreeFlag(argv) {
  * launch so there is one checkout, not two. When the branch cannot be had (still held by a live
  * session, no remote, gone) the attempt runs anyway, on an ordinary fresh worktree, and the brief
  * says which PR to continue and how: `continued` on the result records which of the two it was.
+ *
+ * A `trigger`-mode profile (`claude-action`) never makes this checkout: the launch only fires
+ * something else (a workflow run) that makes its own, unrelated checkout elsewhere, so a worktree
+ * made here would sit unused while the real worker runs on a fresh `actions/checkout`. Such an
+ * attempt records `continues_pr` only — never `continues_branch` — so the run record does not claim
+ * a checkout that was never made.
  */
 export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = false, keepRef = false, prompt: given = null, continuePr = null } = {}) {
   const profile = ctx.cfg.profiles[profileName];
   if (!profile?.launch) throw new Error(`profile "${profileName}" has no launch template in board.json`);
   const name = `kb-${task.number}-${attempt}`;
-  const cont = !continuePr
+  const cont = !continuePr || profile.mode === 'trigger'
     ? null
     : dryRun
       ? { ok: !!continuePr.headRefName, branch: continuePr.headRefName || null, dry: true, why: 'the board query returned no head branch for the PR' } // a dry run creates nothing, and prints the command it would run
       : worktreeOnBranch(ctx.root, name, continuePr.headRefName, { number: task.number, remote: remoteName(ctx), alive: pidAlive });
   const prompt = given ?? (await workerContext(ctx, task, attempt, {
-    continuePr: continuePr && { number: continuePr.number, branch: continuePr.headRefName || null, base: continuePr.baseRefName || null, checkedOut: !!cont?.ok },
+    continuePr: continuePr && { number: continuePr.number, branch: continuePr.headRefName || null, base: continuePr.baseRefName || null, checkedOut: !!cont?.ok && !cont.stale, stale: cont?.ok ? cont.stale : null },
   }));
   // Harnesses without a worktree flag (Copilot CLI, Codex) declare `workspace: "worktree"`; the
   // dispatcher makes the checkout and runs them in it. Everything else runs at the board root and
@@ -134,7 +149,7 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
     hook_settings: (profile.launch || []).includes(HOOK_SETTINGS_VAR) ? workerHookSettings() : '',
   };
   const argv = cont?.ok && !ownsWt ? withoutWorktreeFlag(expandLaunch(profile.launch, vars, profile)) : expandLaunch(profile.launch, vars, profile);
-  const continued = cont && { pr: continuePr.number, branch: cont.ok ? cont.branch : null, why: cont.ok ? null : cont.why };
+  const continued = continuePr && { pr: continuePr.number, branch: cont?.ok ? cont.branch : null, why: cont ? (cont.ok ? cont.stale : cont.why) : null };
   // The launch environment is the worker's identity for every harness we run as a child process:
   // it dies with that process. `claude --bg` is the exception — it hands the request to Claude
   // Code's session daemon and exits, and a launch that finds no daemon *starts* one, which then
@@ -827,6 +842,9 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     // which of the two continuation paths this attempt took: the branch, when the dispatcher put the
     // checkout on the PR's own; nothing, when the brief is all that tells the worker to continue it
     if (spawned.continued?.branch) attempt.continues_branch = spawned.continued.branch;
+    // the checkout landed on the branch but could not be fast-forwarded to its remote head — the
+    // brief falls back to the recipe block, and the row says why rather than claiming a clean continue
+    if (spawned.continued?.branch && spawned.continued.why) attempt.continues_branch_stale = spawned.continued.why;
     attempt.log = path.relative(ctx.root, spawned.logFile);
     await saveRun(ctx, t.number, runRec);
     state.spawned_today = (state.spawned_today || 0) + 1;
@@ -839,9 +857,13 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
         ? `background agent in ${spawned.wt} (job id on next tick; claude agents to watch)`
         : `pid ${spawned.pid}${spawned.wt ? ` in ${worktreePath(spawned.wt)}` : ''}`;
     const continuing = !spawned.continued ? ''
-      : spawned.continued.branch
-        ? `, continuing PR #${spawned.continued.pr} on ${spawned.continued.branch}`
-        : `, continuing PR #${spawned.continued.pr} from a fresh worktree (${spawned.continued.why}) — the brief says which PR to push to`;
+      : spawned.remote
+        ? `, continuing PR #${spawned.continued.pr} — the checkout happens in the trigger's own run, not here`
+        : spawned.continued.branch
+          ? spawned.continued.why
+            ? `, continuing PR #${spawned.continued.pr} on ${spawned.continued.branch} (${spawned.continued.why}) — the brief says how to catch it up`
+            : `, continuing PR #${spawned.continued.pr} on ${spawned.continued.branch}`
+          : `, continuing PR #${spawned.continued.pr} from a fresh worktree (${spawned.continued.why}) — the brief says which PR to push to`;
     summary.claimed.push({ number: t.number, attempt: k, profile: profileName, pid: spawned.pid, wt: spawned.wt || null, ...continues });
     log(`#${t.number}: claimed attempt ${k} → ${profileName} ${handle}${continuing} (log ${attempt.log})`);
     if (children && spawned.child) watchChild(ctx, t.number, k, spawned.child, children, state, profileName, log);

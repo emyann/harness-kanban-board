@@ -205,13 +205,19 @@ export function computeReady(task, now = new Date()) {
  * `crashed` on top, so the guard parks the card in `review` again rather than respawning — one
  * relaunch per `request-changes`, and the reviewer decides whether there is a second.
  *
+ * A card can carry two open PRs (a stray one opened by hand, say); which one this attempt continues
+ * is not a guess — the last `review_requested`/`completed` row named it (`prAttemptFields`), so that
+ * PR wins over an arbitrary "first OPEN" pick when both are still open.
+ *
  * @param attempts the run record's `attempts[]`, oldest first
  * @param prs the card's PRs as the board query returns them (`{number, state, headRefName, ...}`)
  * @returns {{guard: boolean, pr: object|null, continues: boolean, why: string}}
  */
 export function activePrGuard(attempts, prs) {
-  const pr = (prs || []).find((p) => p && p.state === 'OPEN') || null;
-  if (!pr) return { guard: false, pr: null, continues: false, why: 'no open PR' };
+  const open = (prs || []).filter((p) => p && p.state === 'OPEN');
+  if (!open.length) return { guard: false, pr: null, continues: false, why: 'no open PR' };
+  const named = [...(attempts || [])].reverse().find((a) => a?.pr != null)?.pr;
+  const pr = (named != null && open.find((p) => p.number === named)) || open[0];
   const last = attempts?.length ? attempts[attempts.length - 1] : null;
   if (last?.outcome === 'changes_requested') {
     return { guard: false, pr, continues: true, why: `PR #${pr.number} has changes requested — the next attempt continues it` };
@@ -664,8 +670,9 @@ export function worksInWorktree(profile) {
  * Only judged for a profile whose worker really does sit in a worktree (`worksInWorktree`) — for
  * every other profile the environment is that worker's whole identity and is trusted exactly as it
  * always has been. For one that does, the worker's root is deterministic: `KB_ROOT` joined with
- * `kb-<n>-<k>` (`ensureWorktree`, src/board.js), or `KB_ROOT` itself for a track root. Evidence for
- * agreement is therefore exactly one thing: `herePath` — the cwd's resolved absolute path — equal to
+ * `kb-<n>-<k>` (`ensureWorktree`, src/board.js) — a `claude-track` runner claims further nodes from
+ * inside that same checkout, never a `KB_ROOT`-rooted one of its own. Evidence for agreement is
+ * therefore exactly one thing: `herePath` — the cwd's resolved absolute path — equal to
  * `rootPath` joined with that same `kb-<n>-<k>`. A directory that merely happens to be *named*
  * `kb-<n>-<k>` — a same-numbered worktree under an unrelated `KB_ROOT`, a review worktree copied
  * elsewhere, a session hosted from a different repo whose daemon was poisoned by this board's
@@ -763,9 +770,11 @@ export function hookEntry(command) {
  * tested without launching anything.
  *
  * Claude Code parses this value as inline settings when it starts with `{` and as a path otherwise,
- * and — measured against 2.1.251 — forwards it into a `claude --bg` session with the rest of the
- * per-launch sources, inline JSON verbatim. So the command inside may name *this* machine: the
- * launch never leaves it, which is exactly what a tracked settings file could not say (#85).
+ * and — measured live against 2.1.251, a Stop hook firing seconds after a `claude --bg` launch,
+ * comment on #144 — `handleBgFlag → spawnBgSession`'s respawn-flag allowlist keeps `--settings
+ * <value>` as a pair and forwards a `{`-leading value into the session daemon untouched. So the
+ * command inside may name *this* machine: the launch never leaves it, which is exactly what a
+ * tracked settings file could not say (#85).
  * @param events `{ <Event>: <verb> }` — CLAUDE_HOOKS in src/init.js
  * @param command `(verb) => string`, the shell command that runs that hook verb here
  * @returns the JSON, or '' when there is nothing to declare — callers drop the flag on ''
@@ -860,8 +869,10 @@ export function stripNodeModulesBin(PATH, sep = ':') {
 }
 
 // ---------- worker permission policy (PreToolUse hook) ----------
-// A background worker has nobody to answer a prompt, so hkb decides itself:
-// explicit allow or deny-with-reason, never "ask". Pure and unit-tested.
+// A background worker has nobody to answer a prompt, so hkb decides itself. `decidePermission`
+// itself answers allow or deny, pure and unit-tested either way — but what the hook actually ships
+// (src/hook.js) is deny-with-reason or silence: an explicit allow would override Claude Code's own
+// checks, so only a deny is ever written to stdout, and "ask" never happens either way.
 
 export const SAFE_BUILTINS = ['cd', 'pwd', 'true', 'false', 'echo', 'printf', 'test', '[', 'env', 'which', 'command', 'type', 'sleep', 'time', 'set', 'export'];
 export const DENY_PATTERNS = [
@@ -957,26 +968,33 @@ function firstWords(command) {
   }).filter(Boolean);
 }
 
-/** @returns {decision: 'allow'|'deny', reason} */
+/**
+ * @returns {decision: 'allow'|'deny', reason, kind?: 'policy'|'capability'|'path'} `kind` is only
+ *   meaningful on a deny: `path` for a write outside the worktree, `policy` for one of DENY_PATTERNS
+ *   (forbidden outright, not a missing permission), `capability` for a command the launch's own
+ *   allow-list never granted — the one case where `hkb block --kind capability` is the right next step,
+ *   because it is the only kind a wider allow-list could actually fix.
+ */
 export function decidePermission(toolName, input, { allowedCmds, root }) {
   const FILE_TOOLS = ['Edit', 'Write', 'Read', 'NotebookEdit'];
   if (FILE_TOOLS.includes(toolName)) {
     const p = input?.file_path || input?.path || '';
     if (!p.startsWith('/') || (root && (p === root || p.startsWith(root.endsWith('/') ? root : root + '/'))))
       return { decision: 'allow', reason: 'file inside the repository' };
-    return { decision: 'deny', reason: `path ${p} is outside the repository ${root}; keep all changes inside the worktree` };
+    return { decision: 'deny', reason: `path ${p} is outside the repository ${root}; keep all changes inside the worktree`, kind: 'path' };
   }
   if (toolName !== 'Bash') return { decision: 'allow', reason: 'non-shell tool' };
   const command = String(input?.command || '');
   // The deny patterns deliberately read the raw line, quotes and heredoc bodies included: they are a
   // coarse "this smells dangerous" net, and `node -e "...--force..."` must not slip past by quoting.
   // Their reasons name a policy rather than echoing the text, so a false positive is not misleading.
-  for (const d of DENY_PATTERNS) if (d.re.test(command)) return { decision: 'deny', reason: d.why };
+  for (const d of DENY_PATTERNS) if (d.re.test(command)) return { decision: 'deny', reason: d.why, kind: 'policy' };
   const offending = [...new Set(firstWords(command).filter((w) => !allowedCmds.has(w)))];
   if (!offending.length) return { decision: 'allow', reason: 'all commands allowlisted' };
   return {
     decision: 'deny',
     reason: `command(s) not allowlisted for workers: ${offending.join(', ')} — each is a program this line would run (quoted text and heredoc bodies are not scanned, so nothing here comes from your prose). Use one of: ${[...allowedCmds].sort().join(', ')} — or do the work with the Edit/Write/Read tools.`,
+    kind: 'capability',
   };
 }
 
@@ -1112,7 +1130,8 @@ export function startLogLine(at, pid, argv = []) {
  * entry, not a `started` one — a script that only reads `started`/exit-code must see this as the
  * failure it is (#164). `log` is the log path relative to the board root, the same one the line
  * points at.
+ * @returns {{line: string, failed: {name: string, pid: number, log: string}}}
  */
 export function deadAtRecheck(name, pid, log) {
-  return { name, pid, log, line: `${name} exited immediately (pid ${pid}) — see ${log}` };
+  return { line: `${name} exited immediately (pid ${pid}) — see ${log}`, failed: { name, pid, log } };
 }

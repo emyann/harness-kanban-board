@@ -222,25 +222,36 @@ permission policy. So it carries the hooks too:
 
 ```
 claude --bg … --allowedTools … --disallowedTools … \
-  --settings '{"hooks":{"Stop":[{"matcher":"*","hooks":[{"type":"command","command":"hkb hook stop","timeout":30}]}], …}}'
+  --settings '{"hooks":{"Stop":[{"matcher":"*","hooks":[{"type":"command","command":"node \\"/home/you/hkb/bin/hkb.js\\" hook stop","timeout":30}]}], …}}'
 ```
 
-Two things follow. The command in there may name **this machine** — `node "/abs/path/bin/hkb.js" hook stop` when
-`hkb` is not on PATH — because a launch line is spent here and nowhere else; that is exactly the case a tracked
+Two things follow. The command in there names **this machine** — `node "/abs/path/bin/hkb.js" hook stop`, the hkb that
+runs the dispatcher, whenever it lives in a durable checkout or install (a bare `hkb` only when it sits in an
+npx cache) — because a launch line is spent here and nowhere else; that is exactly the case a tracked
 settings file had to rule out. And `.kanban/board.json`, which *is* tracked, holds only the placeholder
 `{hook_settings}`: the launch template stays true on every machine, and the JSON is built at spawn time.
 
-**`claude --bg` was measured, not assumed.** A background launch hands the request to Claude Code's session
-daemon, so a per-launch flag only reaches it if the CLI forwards it. Against Claude Code 2.1.251 it does:
-`--settings` is one of the six per-launch sources on the `--bg` forwarding path, beside `--add-dir`,
-`--mcp-config` and the two `--plugin-dir` flags, and a value starting with `{` is passed through as inline JSON
-rather than resolved as a path. That is why `claude` and `claude-track` get the hooks and not only `claude-p`.
-The standing empirical check is `hkb doctor`'s `profile claude sessions` line: a `--bg` attempt records its
-session id *from the Stop hook*, so a board whose recent attempts carry one is a board whose launch hooks fired.
+**`claude --bg` was measured live, not assumed.** A background launch hands the request to Claude Code's
+session daemon, so a per-launch flag only reaches it if the CLI forwards it. The check was a `claude --bg`
+launch carrying `--settings '{"hooks":{"Stop":…}}'`, watched for the hook to fire in that session — and it
+did, 4 s after the launch returned (2026-08-29, Claude Code 2.1.251, comment on
+[#144](https://github.com/emyann/harness-kanban-board/issues/144)). The path is `handleBgFlag →
+spawnBgSession`: its respawn-flag allowlist keeps `--settings <value>` as a pair when it re-execs into the
+daemon, and a value starting with `{` passes through untouched rather than being resolved as a path. That is
+why `claude` and `claude-track` get the hooks and not only `claude-p`.
+
+That measurement is not something `hkb doctor` can re-run on every board, so do not read its `profile claude
+sessions` line as proof the launch hooks fired: since
+[#137](https://github.com/emyann/harness-kanban-board/issues/137) the dispatcher's own tick also records the
+session id, straight off the job record, whether or not any hook ever ran. The Stop hook's actual trace is the
+`.kanban/sessions/<n>-<k>` marker file it writes on every fire — that file existing for an attempt is the
+empirical check for *that* attempt.
 
 Copilot CLI and Codex keep their own hook files (`.github/hooks/kanban.json`, `.codex/hooks.json`). Neither
 harness has a per-launch settings source to move them onto, and neither file is read by anything but that harness,
-so neither carries the cost this section is about.
+so neither carries the cost this section is about — but both files are tracked, so the command inside them is
+still bound by the same rule: only a command that means the same thing on every machine may go in them (#166,
+below).
 
 ### `--shared-hooks`: when you do want them in every session
 
@@ -249,20 +260,42 @@ the protocol enforced in every session in the repo, not only in the ones hkb lau
 that file again; they are a choice. A worker on such a board then runs each hook twice, once from the file and
 once from its launch, which costs a Stop nudge its second try and nothing else — `hkb doctor` says so.
 
+**Residual risk:** the nudge count in `.kanban/nudges/<n>-<k>` is shared by both copies of `Stop`, and both fire
+on the same turn — so one real stop attempt advances the count twice (0→1, then immediately 1→2) instead of
+once. A worker on a `--shared-hooks` board therefore gets one nudged turn to finish with a terminal verb, not
+the two a single-hook board gives it, before hkb stops blocking and leaves the attempt for the dispatcher to
+mark `protocol_violation`. `PreToolUse` has nothing equivalent to spend twice: it only ever denies or says
+nothing, and two passes through the same pure check agree with themselves.
+
 What may go in that file is unchanged, and it is the narrow question #85 and #146 settled: a tracked file is
 read on machines that are not this one, so only a command that means the same thing on all of them may go in it.
 
-| where the hkb you ran `init` with lives | what `--shared-hooks` writes |
-| --- | --- |
-| **inside the repo** — `npm i -D hkb-cli`, the repo's own devDependency | `f="$CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js"; [ -f "$f" ] \|\| exit 0; exec node "$f" hook stop` |
-| **inside the repo** — a checkout of hkb setting *itself* up | the same command, with `$CLAUDE_PROJECT_DIR/bin/hkb.js` |
-| anywhere else — a global, another checkout, an npx cache | `hkb hook stop`, which every teammate must have on PATH |
+| where the hkb you ran `init` with lives | `--shared-hooks` (`.claude/settings.json`) | `--harness codex` / `--harness copilot` | `--mcp` (`.mcp.json`) |
+| --- | --- | --- | --- |
+| **inside the repo** — `npm i -D hkb-cli`, the repo's own devDependency | `f="$CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js"; [ -f "$f" ] \|\| exit 0; exec node "$f" hook stop` | `node "node_modules/hkb-cli/bin/hkb.js" hook stop` | `{"command": "node", "args": ["node_modules/hkb-cli/bin/hkb.js", "mcp"]}` |
+| **inside the repo** — a checkout of hkb setting *itself* up | the same command, with `$CLAUDE_PROJECT_DIR/bin/hkb.js` | the same command, with `bin/hkb.js` | the same entry, with `bin/hkb.js` |
+| anywhere else — a global, another checkout, an npx cache | `hkb hook stop`, which every teammate must have on PATH | `hkb hook stop`, same | `{"command": "hkb", "args": ["mcp"]}`, same |
 
-The first two rows are the ones to want (#146), and they are one rule, not two: when the hkb being run is *inside*
-the repo it is setting up, where it sits is a property of the **project** rather than of the machine, and Claude
-Code sets `CLAUDE_PROJECT_DIR` for hook commands precisely so a project can name its own files. So the command is
-exact here and correct on every other machine at the same time: commit `.claude/settings.json`, and a teammate's
-`git pull && npm install` is the whole setup, on a machine that never runs `hkb init` at all.
+The first two rows in every column are the ones to want (#146, #166), and they are one rule, not three: when the
+hkb being run is *inside* the repo it is setting up, where it sits is a property of the **project** rather than of
+the machine, so the command is exact here and correct on every other machine at the same time — commit the file,
+and a teammate's `git pull && npm install` is the whole setup, on a machine that never runs `hkb init` at all.
+
+`--mcp` also prints — never writes — the `~/.codex/config.toml` and `.vscode/mcp.json` equivalents, since neither
+file is hkb's to commit. `.vscode/mcp.json` is a workspace file VS Code resolves relative paths in against the
+project directory, same as `.mcp.json`, so it gets the same entry verbatim. `~/.codex/config.toml` is user-level:
+Codex resolves its `args` against wherever `codex` happens to start, not this project, so a project-relative path
+there would be right only in this one directory. That snippet always names `hkb` on PATH or this checkout's own
+`bin/hkb.js` made absolute — never the relative form the other three columns want.
+
+Only the middle column is measured differently. Claude Code sets `$CLAUDE_PROJECT_DIR` for hook commands
+precisely so a project can name its own files by a variable instead of a cwd; Codex and Copilot set neither,
+but both already run their hook's command from the project root — Codex's `-C <worktree>` is also its cwd, and
+Copilot runs from the worktree the dispatcher creates for it — so a plain relative path resolves there without
+one. That form also carries no `[ -f … ] || exit 0` guard: whether either harness runs `command` through a shell
+is undocumented, and the guard's `f="…"; …` syntax is only valid there. Run unguarded instead, so it is correct
+whichever way a harness spawns it — the cost is a hard failure, rather than a silent no-op, in the narrow window
+before a fresh worktree has run `npm ci`.
 
 The path in it is *measured* from the repo root, never composed from the package's name — so a pnpm store
 (`node_modules/.pnpm/hkb-cli@0.1.4/node_modules/hkb-cli`) or a nested install is named as it actually is, and a
@@ -461,6 +494,16 @@ silence forever, and doctor calls it a failure naming `hkb init` instead.
 Re-running `hkb init` is idempotent on all of this: it takes hkb's own hooks out of `.claude/settings.local.json`
 (and only hkb's own — an operator's hook in the same group stays), leaves the tracked file alone unless
 `--shared-hooks` is given, and rewrites a command there that is not the one that repo should have.
+
+`hkb doctor` runs the same resolve check on `.codex/hooks.json`, `.github/hooks/kanban.json` and `.mcp.json`
+(#166) — a `<harness> hook command` / `.mcp.json` line, failing the same way a `node <path>` that is not there
+fails for Claude's settings above:
+
+```
+✗ codex hook command   node_modules/hkb-cli/bin/hkb.js is not there — this repo's hkb has moved, or this
+                        checkout has not run `npm install` yet
+                          → npm install
+```
 
 ## GitHub Copilot CLI — `copilot-cli`
 

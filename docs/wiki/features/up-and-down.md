@@ -7,16 +7,16 @@ audience: [dev, ops]
 read_when: "touching hkb up/down, the dispatcher's singleton lock, the serve pid file, or anything that has to know whether a board is running"
 covers:
   - path: src/up.js
-    sha: df963724568a57ea60489c75de6211133f4847f0
+    sha: 6971cba6c83f88756b9dae1eea56ae20c0d28c09
   - path: src/model.js
-    sha: cf33ac585ad7a7b54e9f2682649242632356f185
+    sha: cf222b0724d3f53377dab94a262100dd985daf86
   - path: src/board.js
-    sha: 2e9735c80d0fcc92c298efd10b96def73f4ea03b
+    sha: f73b03ee9a45e03e763922ddf57c2e4028405bdd
   - path: src/dispatch.js
-    sha: 54b6c916eee04b5a93b23ee3c8f2906a663f1207
+    sha: e4a749081cba52049a31ad1fc7df59f5be1750e0
   - path: src/serve.js
     sha: 5565e6d7d79d189d7e62000065340848c669ab38
-generated_at_commit: c2486c9
+generated_at_commit: 0e8e882
 last_refreshed: 2026-08-28
 related: [architecture/overview, features/web-board, concepts/roles-and-seats, architecture/dispatcher-tick]
 ---
@@ -48,18 +48,18 @@ exactly that.
 Two writers exist for each file, which is the one subtlety worth carrying:
 
 - **The process itself.** The dispatcher writes its pid inside `acquireLoopLock`
-  (`src/dispatch.js:930-949`) — that lock predates `up` and is what actually makes
+  (`src/dispatch.js:953-972`) — that lock predates `up` and is what actually makes
   two loops impossible. The server does the same through `claimServePid`
   (`src/serve.js:122-135`).
 - **`hkb up`, for the child it just spawned** (`claimPid`, `src/up.js:79-86`).
   Without this, two `hkb up`s a millisecond apart would both find nothing and both
   spawn, because a freshly spawned child has not booted far enough to claim
   anything. The pre-write closes that window, and the child finding *its own* pid
-  in the file is why neither claimant refuses (`src/dispatch.js:936`).
+  in the file is why neither claimant refuses (`src/dispatch.js:959`).
 
 A live pid that is **not** ours is never overwritten by either writer, so a race
 that one child loses cannot leave the file pointing at the loser — and the loser
-says so rather than reporting a start it did not win (`src/up.js:122-125`).
+says so rather than reporting a start it did not win (`src/up.js:144-147`).
 
 **Nothing else deletes these files.** Each process removes its own on exit, and
 that is the invariant every other rule here rests on; see *`down` waits* below for
@@ -84,7 +84,7 @@ otherwise keeps the old, generic advice.
 
 ## The child is this hkb, and is nobody's worker
 
-Two properties of the spawn (`startProcess`, `src/up.js:99-127`) are load-bearing:
+Two properties of the spawn (`startProcess`, `src/up.js:114-149`) are load-bearing:
 
 **Same code, no PATH lookup.** The child is `process.execPath` plus this
 package's own `bin/hkb.js`, resolved from the module itself (`hkbBin`,
@@ -94,15 +94,15 @@ board to whatever `hkb` a login shell happens to find. (`process.argv[1]` would
 usually agree, but not when hkb is driven as a library, through a loader, or under
 `node --test`.)
 
-**No `KB_*`.** `detachedEnv` (`src/model.js:870-874`) strips every `KB_*` except
+**No `KB_*`.** `detachedEnv` (`src/model.js:984-988`) strips every `KB_*` except
 `KB_CONFIG_HOME`, and the board is passed as `--board` on the command line
 instead of inherited through `KB_BOARD` (`childArgv`, `src/up.js:49-54`). The
 reason is the failure this guards against, not tidiness: `KB_TASK` et al. are what
-the dispatcher exports onto a *worker's* launch (`src/dispatch.js:140`), a
+the dispatcher exports onto a *worker's* launch (`src/dispatch.js:151`), a
 process carrying them believes it is that worker, and `hkb up` may well be typed
 inside such a session. A daemon that outlives the session and believes it is
 working on task #148 is a leak with teeth — the dispatcher would refuse to run at
-all (`refuseIfWorker`, `src/cli.js:232-235`), and any hook inside it would write
+all (`refuseIfWorker`, `src/cli.js:235-238`), and any hook inside it would write
 to a stranger's card. `KB_CONFIG_HOME` survives because it is a location, not an
 identity: dropping it would send a test's or a smoke run's server at the real
 `~/.config/hkb/boards.json`.
@@ -112,7 +112,7 @@ identity: dropping it would send a test's or a smoke run's server at the real
 Exit code 4 is the dispatcher loop deliberately giving itself up: the self-heal
 ladder ran out and a *fresh process* is what fixes it, so the loop dies with a
 reason for a supervisor — cron, systemd, Actions, or a human — to act on
-(`src/dispatch.js:1003-1012`). `hkb up` is not that supervisor and must not become
+(`src/dispatch.js:1027-1035`). `hkb up` is not that supervisor and must not become
 one: it never restarts, never polls, never forks a watchdog. Everything it does
 happens once, and then it exits.
 
@@ -120,11 +120,11 @@ But an operator (or an agent session) still needs to see that death in one call,
 and the pid file cannot tell them — the loop removed it on the way out, so the
 honest-but-useless answer would be "stopped". Hence the **exit record**:
 `recordExit` writes `{code, at, reason}` into `.kanban/state.json` under `exits`
-(`src/board.js:205-209`), the loop writes it as it throws
-(`src/dispatch.js:1010`), and `acquireLoopLock` clears it when a loop is running
-again (`src/dispatch.js:945`), as does a fresh `up` (`src/up.js:116`). `--status`
+(`src/board.js:205-208`), the loop writes it as it throws
+(`src/dispatch.js:1033`), and `acquireLoopLock` clears it when a loop is running
+again (`src/dispatch.js:968`), as does a fresh `up` (`src/up.js:131`). `--status`
 then reports `dispatch exited (4) at 19:02 — hkb up restarts it`
-(`processLine`, `src/model.js:935-949`) — a sentence that names the fix without
+(`processLine`, `src/model.js:1049-1063`) — a sentence that names the fix without
 performing it.
 
 It lives in `state.json` rather than a file of its own on purpose: `state.json` is
@@ -134,8 +134,8 @@ already local, already gitignored, and a new dot-file would have meant a new
 ## `down` waits, and the pid file is not `down`'s to delete
 
 `down` sends `SIGTERM` to what the pid files name and then **waits for the process
-to actually be gone** before it reports `stopped` (`down`, `src/up.js:198-234`;
-`waitGone`, `src/up.js:174-182`). It never touches workers: a running attempt belongs to the board,
+to actually be gone** before it reports `stopped` (`down`, `src/up.js:221-280`;
+`waitGone`, `src/up.js:197-205`). It never touches workers: a running attempt belongs to the board,
 and the next dispatcher reclaims or adopts it — which is exactly what the loop's
 own SIGTERM handler already says as it stops.
 
@@ -153,16 +153,16 @@ The fix is in both halves, and both were needed:
 
 - **The loop can hear the signal.** The wait between ticks is a
   `Promise.race` against a resolver the SIGTERM handler holds (`loop`,
-  `src/dispatch.js:957-1002`), so a signal landing one second into a sixty-second sleep
+  `src/dispatch.js:992-1025`), so a signal landing one second into a sixty-second sleep
   ends the loop *there* rather than buying it another full tick. A tick already in
   flight still finishes — that is deliberate, a half-written claim is worse than a
   slow stop — so the log distinguishes `stopping now` from `stopping after this
   tick`.
 - **`down` does not lie, and does not delete.** Each process drops its own pid
-  file on exit (`acquireLoopLock`, `src/dispatch.js:946-948`; `claimServePid`,
+  file on exit (`acquireLoopLock`, `src/dispatch.js:969-970`; `claimServePid`,
   `src/serve.js:132-134`); `down` waits, bounded by `stopWaitMs` (two of the
   loop's own intervals, floored at 5 s and capped at 120 s,
-  `src/model.js:907-911`), for `pidAlive` to go false. Only then does it tidy a
+  `src/model.js:1021-1025`), for `pidAlive` to go false. Only then does it tidy a
   file the dead process left behind, and only if it still names the same pid. If
   the wait runs out, the claim stands — because the claim is true — and `down`
   says so and exits non-zero.
@@ -176,11 +176,26 @@ exits 0 is a silent failure, which Value 5 forbids.
 Two edges of the same tidy-up (#164): a signal that throws `ESRCH` means the
 process died between `processState`'s liveness check and the `kill` call —
 `down` was asked for it to be gone, and it is, so that counts as `stopped`, not
-`failed` (`src/up.js:216-222`). And a pid file naming a process that is simply
+`failed` (`src/up.js:252-257`). And a pid file naming a process that is simply
 dead — crashed without dropping its own claim, never signalled at all — no
 longer sits there forever: `down` tidies it in the same branch that reports
-"not running" (`src/up.js:209-215`), the same way it tidies the file of a
-process it watched die.
+"not running" (`src/up.js:235-246`), the same way it tidies the file of a
+process it watched die. A stale pid file goes through the same branch, and the
+line names what actually happened — `removed`, not the generic `--status`
+phrasing `hkb up replaces it`, when `down` is the one that dropped it.
+
+That tidy-up still has to respect the one invariant (#177): the pid file
+`processState` read as dead a moment ago is not necessarily dead *now* — a
+concurrent `hkb up`, or the very process racing its own `claimServePid`/
+`acquireLoopLock`, can have rewritten it to a fresh live pid in between. So the
+removal is never keyed off the `processState` snapshot; `dropDeadPidFile`
+(`src/up.js:95-100`) takes a **fresh** read right before the `rmSync` and only
+deletes when that read still shows no live claim. `startProcess` uses the same
+helper for the symmetric case on the writer's side: a child dead at the
+`SPAWN_CHECK_MS` recheck is reported `failed`, and if `up` still owns that
+claim it tidies `serve.pid` there rather than leaving it naming the corpse it
+just reported (`src/up.js:136-143`) — the bug observed as a stale live-looking
+`serve.pid` after a refused port.
 
 `down` stops the dispatcher; `down --serve` stops both. A board server left
 running by the asymmetry is not silent about it — `down` names it and the flag
@@ -196,7 +211,7 @@ names belongs to whoever the kernel handed it to next — so `kill(pid, 0)` says
 The guard is arithmetic, which is what a zero-dependency CLI can afford: a pid
 file whose mtime predates `Date.now() - os.uptime() * 1000` was written by a
 machine that has since rebooted, so it cannot name a live process of ours
-(`pidFileStale`, `src/model.js:894-899`; read by `readPidFile`,
+(`pidFileStale`, `src/model.js:1008-1013`; read by `readPidFile`,
 `src/board.js:189-196`). Every caller that acts on a pid reads that flag as *no
 claim here* — `processState`, the dispatcher's singleton lock, the server's claim
 and `portInUse`. The slack
@@ -211,15 +226,15 @@ prevent.
 `started pid 3843` about a child that died in the same millisecond is worse than
 an error, because the operator walks away believing the board is up. So
 `startProcess` rechecks `pidAlive` after `SPAWN_CHECK_MS` (300 ms,
-`src/up.js:120-121`) and, if the child is gone, says `exited immediately (pid N) —
+`src/up.js:135`) and, if the child is gone, says `exited immediately (pid N) —
 see .kanban/logs/dispatch.log`, which is where the child's own refusal landed. The
 same recheck reports the losing side of a `claimPid` race rather than discarding
 it.
 
 A dead-at-recheck child goes into `--json`'s `failed: [{name, pid, log}]`, not
-`started` — the pure call is `deadAtRecheck` (`src/model.js`, beside
+`started` — the pure call is `deadAtRecheck` (`src/model.js:1088-1090`, beside
 `startDecision`) — and `up`'s exit code is 1 whenever `failed` is non-empty
-(`src/up.js:140-166`). The first cut (#151) reported this exact case as
+(`src/up.js:162-189`). The first cut (#151) reported this exact case as
 `started`, exit 0, no error field under `--json`: a script driving `hkb up
 --serve --port 80` against a refused port saw a clean run for a board that was
 not up (#164, second-pass review). The fix changes only what `up` reports —
@@ -242,6 +257,12 @@ it.
   discovered later.
 - `up` does not forward `--profiles`, so a host that dispatches only some profiles
   still wants `hkb dispatch --loop` under a supervisor.
+- The **`SPAWN_CHECK_MS` recheck window is 300 ms, not zero**: a child that dies
+  *after* the recheck (`src/up.js:135`) is reported `started`, exit 0 — `up` only
+  ever watches the one beat past the fork, not the process's whole startup. A
+  crash a few hundred milliseconds later still lands in the log under its
+  `# … started pid N` header, but `up`'s own report will have already said the
+  board is up.
 
 ## For ops
 
@@ -250,7 +271,7 @@ it.
   stop. All of it is local: pid files and `kill(0)`, no GitHub call, no cost.
 - Logs are `.kanban/logs/dispatch.log` and `.kanban/logs/serve.log`, appended
   across restarts with one `# <ISO> started pid N — hkb …` header per start
-  (`startLogLine`, `src/model.js:963-965`). A child that died on startup left its
+  (`startLogLine`, `src/model.js:1077-1079`). A child that died on startup left its
   reason in there, under that header — and `up` says `exited immediately` rather
   than letting you find it later.
 - `dispatch exited (4)` means the loop asked to be restarted, and nothing did:
@@ -264,7 +285,9 @@ it.
   it in `failed: [{name, pid, log}]`, with the log to read. Any process that did
   start is still in `started`, and `up` does not retry the one that did not.
 - `stopped (pid file predates this boot)` after a reboot is expected: the file
-  outlived the machine. `hkb up` replaces it; nothing needs deleting by hand.
+  outlived the machine. `--status` says `hkb up replaces it`; a `down` that ran
+  against it says `removed` instead, because that run is the one that dropped
+  it — nothing needs deleting by hand either way.
 
 ## Related
 

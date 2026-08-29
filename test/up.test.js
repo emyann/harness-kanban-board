@@ -194,6 +194,21 @@ test('hkb down leaves a stale pid file alone rather than signalling whoever hold
   assert.match(out.lines[0], /^dispatch stopped \(pid file predates this boot/);
 });
 
+/**
+ * `down` tidies a stale pid file in the same branch (it is never running, so never signalled) — the
+ * line right after that removal must say "removed", not the `hkb up replaces it` `processLine` uses
+ * for the read-only `--status` view, where nothing was actually touched.
+ */
+test('down says "removed" for a stale pid file it just removed', async () => {
+  const root = tmpRoot();
+  fs.writeFileSync(pidFile(root, 'dispatch'), `${process.pid}\n`);
+  fs.utimesSync(pidFile(root, 'dispatch'), new Date(0), new Date(0));
+  const out = sink();
+  assert.equal(await down(ctxOf(root), {}, out), 0);
+  assert.equal(out.lines[0], 'dispatch stopped (pid file predates this boot — removed)');
+  assert.equal(fs.existsSync(pidFile(root, 'dispatch')), false, 'down actually removed it, so the line says so');
+});
+
 test('how long down waits: two of the loop\'s own intervals, floored and capped', () => {
   assert.equal(stopWaitMs(60), 120_000);
   assert.equal(stopWaitMs(1), 5_000, 'a fast board still gets a fair wait');
@@ -353,6 +368,28 @@ test('a child dead at the recheck is `failed`, not `started`, under both outputs
   assert.equal(humanCode, 1);
 });
 
+/**
+ * `up` owns the claim it just wrote for the child it spawned, and has just verified that pid dead —
+ * leaving `serve.pid` naming the corpse it reported as `failed` is the same stray-claim bug as `down`
+ * not tidying one, just on the writer's side of it (#177).
+ */
+test('up --serve --port 80 leaves no serve.pid when the child dies at the recheck; --status says stopped', async () => {
+  const root = tmpRoot();
+  const dead = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+  await new Promise((r) => dead.on('exit', r));
+  const pids = [process.pid, dead.pid]; // dispatch starts fine; serve is the one that dies
+  const spawnFn = () => ({ pid: pids.shift(), on() {}, unref() {} });
+
+  const out = sink();
+  const code = await up(ctxOf(root), { serve: true, port: 80 }, out, upDeps(spawnFn));
+  assert.equal(code, 1);
+  assert.equal(fs.existsSync(pidFile(root, 'serve')), false, 'up must not leave serve.pid naming the corpse it just reported as failed');
+
+  const status = sink();
+  await up(ctxOf(root), { status: true }, status);
+  assert.equal(status.lines[1], 'serve stopped');
+});
+
 test('a rival up that got there first keeps the pid file, and the loser says so', async () => {
   const root = tmpRoot();
   const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
@@ -421,6 +458,26 @@ test('down tidies a pid file whose process is already dead, even though there wa
   assert.equal(await down(ctxOf(root), {}, out), 0);
   assert.equal(out.lines[0], 'dispatch not running');
   assert.equal(fs.existsSync(pidFile(root, 'dispatch')), false, 'a dead claim helps nobody');
+});
+
+/**
+ * The invariant the file header states: a pid file is never dropped while it names something alive.
+ * `down` takes its `processState` snapshot, sees the pid dead, and is about to tidy the file — but a
+ * concurrent `hkb up` (or the child's own `claimServePid`/`acquireLoopLock`) can have rewritten it to a
+ * fresh live pid in the meantime. The fresh, guarded read `down` does right before `rmSync` must see
+ * that write and leave the claim standing (#177).
+ */
+test('down never drops a pid file a rival rewrote to a live pid between the state read and the tidy', async () => {
+  const root = tmpRoot();
+  fs.writeFileSync(pidFile(root, 'dispatch'), '2147483646\n'); // dead at the processState read
+  const out = sink();
+  const readPidFileRacy = (r, name) => {
+    fs.writeFileSync(pidFile(r, name), `${process.pid}\n`); // a rival claims it right before the tidy's read
+    return readPidFile(r, name);
+  };
+  assert.equal(await down(ctxOf(root), {}, out, { readPidFile: readPidFileRacy }), 0);
+  assert.equal(out.lines[0], 'dispatch not running');
+  assert.equal(readPidFile(root, 'dispatch').pid, process.pid, 'the fresh claim survives the tidy it raced');
 });
 
 /**

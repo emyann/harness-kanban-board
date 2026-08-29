@@ -71,13 +71,15 @@ export function formatComments(comments, { now = new Date(), limit = 2000 } = {}
  * The PR this attempt must continue, or null. Derived from the card, so `hkb context <n>` shows the
  * same block the dispatcher put in the worker's brief: an open PR under a latest `changes_requested`
  * row is a continuation, and anything else is not (`activePrGuard`, src/model.js).
- * `checkedOut` is the one thing the card cannot answer — the dispatcher passes it in when it made
- * the worktree on that branch itself (`worktreeOnBranch`, src/board.js).
+ * `checkedOut` and `stale` are the two things the card cannot answer — the dispatcher passes them in
+ * when it made the worktree on that branch itself (`worktreeOnBranch`, src/board.js): `checkedOut`
+ * true means the checkout is at the PR's remote head; `stale` names why a checkout that exists on the
+ * branch could not be fast-forwarded to it.
  */
-export function continuation(task, run, { checkedOut = false } = {}) {
+export function continuation(task, run, { checkedOut = false, stale = null } = {}) {
   const g = activePrGuard(run?.attempts || [], task.prs);
   if (!g.continues) return null;
-  return { number: g.pr.number, branch: g.pr.headRefName || null, base: g.pr.baseRefName || null, checkedOut };
+  return { number: g.pr.number, branch: g.pr.headRefName || null, base: g.pr.baseRefName || null, checkedOut, stale };
 }
 
 /**
@@ -97,6 +99,8 @@ function continuationBlock(cont, { base }) {
   ];
   if (cont.checkedOut) {
     lines.push(`- This worktree is already checked out on \`${b}\`, so an ordinary \`git push\` updates PR #${cont.number}.`);
+  } else if (cont.stale && b) {
+    lines.push(`- This worktree is checked out on \`${b}\`, but it could not be fast-forwarded to the PR's remote head (${cont.stale}). Catch it up first: \`git fetch origin ${b} && git reset --hard origin/${b}\`, then push as usual.`);
   } else if (b) {
     lines.push(`- This worktree is on a fresh branch. Take the PR's head first: \`git fetch origin ${b} && git reset --hard FETCH_HEAD\`, and push with \`git push origin HEAD:${b}\`.`);
   }

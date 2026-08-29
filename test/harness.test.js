@@ -9,16 +9,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
-  harnessFiles, installHarness, installClaudeHooks, hookSummary, CLAUDE_HOOKS, resolveProfiles, boardProfiles,
+  harnessFiles, installHarness, harnessHookCommand, installClaudeHooks, hookSummary, CLAUDE_HOOKS, resolveProfiles, boardProfiles,
   HARNESSES, HARNESS_PROFILE, packageSkillDir, HOOK_SETTINGS, NPX_COMMAND, hkbCommandForHook, workerHookSettings,
   hookCommandNeeds, isHkbHookCommand, isPortableHookCommand, isEphemeralPath, findClaudeHooks, actionsFiles,
-  projectBinRel, guardedHookCommand, resolveHookPath, hkbHooks, PROJECT_DIR,
+  projectBinRel, guardedHookCommand, relativeHookCommand, resolveHookPath, hkbHooks, PROJECT_DIR,
 } from '../src/init.js';
 import { parseArgs } from '../src/cli.js';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, CLAUDE_DENY, HOOK_SETTINGS_VAR, ensureWorktree } from '../src/board.js';
 import { expandLaunch, spawnWorker, tick } from '../src/dispatch.js';
-import { checkHarnesses, checkHooks, staleHookLaunches, STALE_HOOK_CHECK, LAUNCH_HOOK_CHECK } from '../src/doctor.js';
+import { checkHarnesses, checkHooks, checkMcp, staleHookLaunches, STALE_HOOK_CHECK, LAUNCH_HOOK_CHECK } from '../src/doctor.js';
 import { stripFrontmatter, worktreePath, insideRepo, stripNodeModulesBin, hookSettings, hookEntry } from '../src/model.js';
+import { mcpLaunch, installMcp, MCP_FILE, MCP_KEY } from '../src/mcp.js';
 import { FakeGh, kbIssue } from './fake-gh.js';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
@@ -625,7 +626,11 @@ test('hkbCommandForHook never names an npx cache, whatever the local PATH says (
 test('a durable install is still named absolutely, and a tracked file never is', () => {
   const durable = path.join(path.sep, 'usr', 'lib', 'node_modules', 'hkb-cli');
   assert.equal(hkbCommandForHook('stop', { onPath: false, pkgRoot: durable }), `node "${path.join(durable, 'bin', 'hkb.js')}" hook stop`);
+  // A durable PKG_ROOT wins over a bare `hkb` even when one is on PATH (#171 — the hook runs under
+  // the session daemon's own PATH, not the dispatcher's, so PATH agreeing right now proves nothing).
+  assert.equal(hkbCommandForHook('stop', { onPath: true, pkgRoot: durable }), `node "${path.join(durable, 'bin', 'hkb.js')}" hook stop`);
   assert.equal(hkbCommandForHook('stop', { shared: true, onPath: false, pkgRoot: durable }), 'hkb hook stop', 'a shared file gets the portable form or nothing');
+  assert.equal(hkbCommandForHook('stop', { shared: true, onPath: true, pkgRoot: durable }), 'hkb hook stop', 'and neither does an onPath one');
 });
 
 // ---------- the third install shape: an hkb the repo itself carries (#146) ----------
@@ -838,8 +843,11 @@ test('hookSettings is the same shape a settings file gets, as one JSON string', 
 });
 
 test('workerHookSettings names the hkb that is running, never a project-relative one', () => {
+  // This checkout's PKG_ROOT is durable, so it is named absolutely even with a bare `hkb` on PATH
+  // (#171): the hook runs under the session daemon's own environment, which keeps its own PATH
+  // (#150), so a bare command re-resolves there rather than against the PATH this process observed.
   const onPath = JSON.parse(workerHookSettings({ onPath: true }));
-  assert.equal(onPath.hooks.Stop[0].hooks[0].command, 'hkb hook stop');
+  assert.match(onPath.hooks.Stop[0].hooks[0].command, /^node ".*bin[/\\]hkb\.js" hook stop$/);
 
   // The launch never leaves this machine, so an absolute path is CORRECT here — exactly the case a
   // tracked settings file had to rule out (#85).
@@ -871,6 +879,15 @@ test('expandLaunch spends the placeholder as a flag pair, or drops it', () => {
   const none = expandLaunch(p.launch, { prompt: 'x' }, p);
   assert.ok(!none.includes('--settings'), 'a flag with no value is a parse error waiting to happen, not a default');
   assert.ok(!none.includes(HOOK_SETTINGS_VAR), 'and the placeholder still goes');
+});
+
+test('expandLaunch refuses {hook_settings} embedded in a larger token', () => {
+  const p = DEFAULT_PROFILES['claude-p'];
+  // `--settings={hook_settings}` would render a bare `--settings=` when there is nothing to run —
+  // a flag Claude Code still has to parse, and silently wrong rather than caught at launch time.
+  const template = ['claude', `--settings=${HOOK_SETTINGS_VAR}`];
+  assert.throws(() => expandLaunch(template, { prompt: 'x' }, p), /embeds \{hook_settings\}/);
+  try { expandLaunch(template, { prompt: 'x' }, p); } catch (e) { assert.equal(e.exitCode, 2); }
 });
 
 // The whole reason `board.json` holds a token and not the JSON: that file is TRACKED, and the
@@ -1108,4 +1125,132 @@ test('`hkb help` lists every hook verb the CLI routes', () => {
   const help = spawnSync(process.execPath, [path.join(REPO, 'bin', 'hkb.js'), 'help'], { encoding: 'utf8' });
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /hook stop\|pretool/);
+});
+
+// ---------- #166: a repo-carried hkb in the harness files and .mcp.json, not just Claude's hooks ----------
+// Neither Codex nor Copilot sets a per-launch $CLAUDE_PROJECT_DIR, but both run their hook's command
+// from the project root — so the fix is the same remainder as #146 (projectBinRel), named relative to
+// cwd instead of through a variable, and with no `[ -f … ] || exit 0` guard: whether the command runs
+// through a shell is undocumented for either harness, and the guard's `f="…";…` is not valid argv.
+
+test('relativeHookCommand is the plain cwd-relative form — no guard, no $CLAUDE_PROJECT_DIR', () => {
+  assert.equal(relativeHookCommand(DEP_REL, 'stop'), `node "${DEP_REL}" hook stop`);
+  assert.ok(!relativeHookCommand(DEP_REL, 'stop').includes(PROJECT_DIR));
+  assert.ok(!relativeHookCommand(DEP_REL, 'stop').includes('[ -f'));
+});
+
+test('hkbCommandForHook({ cwd: true }) names a harness-carried hkb relative to its own cwd', () => {
+  const opts = { root: '/repo', pkgRoot: '/repo/node_modules/hkb-cli', cwd: true, shared: true };
+  assert.equal(hkbCommandForHook('stop', opts), relativeHookCommand(DEP_REL, 'stop'));
+  assert.equal(hkbCommandForHook('stop', { root: '/repo', pkgRoot: '/repo', cwd: true, shared: true }), relativeHookCommand(BIN, 'stop'), 'a checkout of hkb names its own bin the same way');
+  assert.ok(!hkbCommandForHook('stop', opts).includes('/repo'), 'it must not name the machine it was written on');
+  // no hkb inside the repo: the global-install contract holds — bare `hkb`, never an absolute path,
+  // because a harness file is always tracked
+  assert.equal(hkbCommandForHook('stop', { root: '/repo', pkgRoot: '/elsewhere/node_modules/hkb-cli', cwd: true, shared: true, onPath: false }), 'hkb hook stop');
+});
+
+test('installHarness writes no absolute path when the repo carries hkb itself, for both harnesses', () => {
+  for (const h of HARNESSES) {
+    const root = scratch();
+    const command = hkbCommandForHook('stop', { root, pkgRoot: path.join(root, 'node_modules', 'hkb-cli'), cwd: true, shared: true });
+    installHarness(root, h, { command });
+    const written = harnessHookCommand(root, h);
+    assert.equal(written, relativeHookCommand(DEP_REL, 'stop'));
+    assert.ok(!written.includes(root), `${h}: ${written} names the machine it was generated on`);
+    assert.ok(!/\/home|\/tmp|\\Users\\/.test(written), `${h}: ${written} looks like an absolute machine path`);
+
+    // and it runs, exit 0, from a plain sh in the project root, once the file is there
+    fs.mkdirSync(path.join(root, path.dirname(DEP_REL)), { recursive: true });
+    fs.writeFileSync(path.join(root, DEP_REL), 'process.exitCode = 0;\n');
+    const sh = spawnSync('sh', ['-c', written], { cwd: root, encoding: 'utf8' });
+    assert.equal(sh.status, 0, sh.stderr);
+  }
+});
+
+test('checkHarnesses fails a harness hook command that does not resolve, and passes one that does', () => {
+  const root = scratch();
+  const command = hkbCommandForHook('stop', { root, pkgRoot: path.join(root, 'node_modules', 'hkb-cli'), cwd: true, shared: true });
+  installHarness(root, 'codex', { command });
+  const ctx = { root, cfg: { profiles: { codex: DEFAULT_PROFILES.codex } } };
+  const { results, sink } = findings();
+
+  checkHarnesses(ctx, sink, { exists: () => false });
+  let cmd = finding(results, 'codex hook command');
+  assert.equal(cmd.ok, false);
+  assert.match(cmd.detail, /is not there/);
+
+  results.length = 0;
+  checkHarnesses(ctx, sink, { exists: () => true });
+  cmd = finding(results, 'codex hook command');
+  assert.equal(cmd.ok, true);
+  assert.ok(cmd.detail.includes(DEP_REL));
+});
+
+test('mcpLaunch names a repo-carried hkb relative to the project directory, unguarded, no shell', () => {
+  const root = '/repo';
+  const launch = mcpLaunch({ root, pkgRoot: path.join(root, 'node_modules', 'hkb-cli') });
+  assert.deepEqual(launch, { command: 'node', args: [DEP_REL, 'mcp'] });
+  assert.ok(!launch.args[0].includes(root), 'must not name the machine it was written on');
+
+  const selfCheckout = mcpLaunch({ root, pkgRoot: root });
+  assert.deepEqual(selfCheckout, { command: 'node', args: [BIN, 'mcp'] });
+
+  // no hkb inside the repo: falls back to the plain `hkb` every teammate has to have on PATH, same
+  // as the harness files' `shared` case — never an absolute, this-machine-only path (#166 review)
+  const elsewhere = mcpLaunch({ root, pkgRoot: '/elsewhere/node_modules/hkb-cli', onPath: false });
+  assert.deepEqual(elsewhere, { command: 'hkb', args: ['mcp'] });
+});
+
+test('mcpLaunch prefers a repo-carried hkb over PATH, same order as hkbCommandForHook', () => {
+  const root = '/repo';
+  const launch = mcpLaunch({ onPath: true, root, pkgRoot: path.join(root, 'node_modules', 'hkb-cli') });
+  assert.deepEqual(launch, { command: 'node', args: [DEP_REL, 'mcp'] }, 'a repo-carried hkb runs even when hkb is also on PATH');
+});
+
+test('mcpLaunch({ shared: false }) is the private, this-machine-only form for a config nothing commits', () => {
+  const onPath = mcpLaunch({ onPath: true, shared: false });
+  assert.deepEqual(onPath, { command: 'hkb', args: ['mcp'] });
+  const fallback = mcpLaunch({ onPath: false, shared: false });
+  assert.equal(fallback.command, process.execPath);
+  assert.ok(path.isAbsolute(fallback.args[0]));
+});
+
+test('installMcp writes no absolute path when the repo carries hkb itself, and the command resolves from the project root', () => {
+  const root = scratch();
+  const launch = mcpLaunch({ root, pkgRoot: path.join(root, 'node_modules', 'hkb-cli') });
+  installMcp(root, launch);
+
+  const doc = JSON.parse(fs.readFileSync(path.join(root, MCP_FILE), 'utf8'));
+  const entry = doc.mcpServers[MCP_KEY];
+  assert.deepEqual(entry, { type: 'stdio', command: 'node', args: [DEP_REL, 'mcp'] });
+  assert.ok(!JSON.stringify(entry).includes(root), '.mcp.json must not name the machine it was written on');
+
+  fs.mkdirSync(path.join(root, path.dirname(DEP_REL)), { recursive: true });
+  fs.writeFileSync(path.join(root, DEP_REL), 'process.exitCode = 0;\n');
+  const run = spawnSync(entry.command, entry.args, { cwd: root, encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+});
+
+test('checkMcp fails a .mcp.json entry that does not resolve, and passes one that does', async () => {
+  const root = scratch();
+  const launch = mcpLaunch({ root, pkgRoot: path.join(root, 'node_modules', 'hkb-cli') });
+  installMcp(root, launch);
+  const { results, sink } = findings();
+
+  await checkMcp({ root }, sink, { exists: () => false });
+  let cmd = finding(results, MCP_FILE);
+  assert.equal(cmd.ok, false);
+  assert.match(cmd.detail, /is not there/);
+
+  results.length = 0;
+  await checkMcp({ root }, sink, { exists: () => true });
+  cmd = finding(results, MCP_FILE);
+  assert.equal(cmd.ok, true);
+  assert.ok(cmd.detail.includes(DEP_REL));
+
+  // nothing configured — silent, not a warning: MCP is opt-in
+  const bare = scratch();
+  results.length = 0;
+  await checkMcp({ root: bare }, sink, {});
+  assert.deepEqual(results, []);
 });

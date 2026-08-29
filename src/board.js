@@ -46,11 +46,12 @@ export const CLAUDE_DENY = ['Bash(hkb dispatch*)', 'Bash(git push --force*)', 'B
 // the JSON itself: `.kanban/board.json` is TRACKED, and the command inside names whichever `hkb`
 // *this* machine has. The board keeps the token; only the launch ever holds the answer.
 //
-// Measured, not assumed (Claude Code 2.1.251): `--settings` is one of the six per-launch sources the
-// `--bg` path forwards into the session daemon, beside `--add-dir`, `--mcp-config` and the two
-// `--plugin-dir` flags, and a value starting with `{` is passed through as inline JSON rather than
-// resolved as a path. So the `claude` and `claude-track` profiles get the hooks too, not just the
-// process-mode ones.
+// Measured live, not read off the binary's argument tables (Claude Code 2.1.251, comment on #144): a
+// `claude --bg` launch carrying `--settings '{"hooks":…}'` fires the Stop hook 4 s later (measured 2026-08-29), in
+// the session the daemon actually started. The forwarding path is `handleBgFlag → spawnBgSession`: its
+// respawn-flag allowlist keeps `--settings <value>` as a pair when it re-execs into the daemon, and a
+// value starting with `{` passes through untouched rather than being resolved as a path. So the
+// `claude` and `claude-track` profiles get the hooks too, not just the process-mode ones.
 export const HOOK_SETTINGS_VAR = '{hook_settings}';
 
 export const DEFAULT_PROFILES = {
@@ -302,17 +303,36 @@ function worktreeHolding(root, branch) {
  *
  * Never throws: a refusal is `{ok: false, why}` and the caller falls back to an ordinary fresh
  * worktree plus a brief that names the PR to continue (`src/context.js`).
- * @returns {{ok: true, path: string, branch: string, freed: string|null} | {ok: false, why: string}}
+ *
+ * `git worktree add <dir> <branch>` checks out the *local* branch as it already is — the fetch above
+ * only updates `origin/<branch>`, so a human (or another host) pushing to the PR since the last
+ * attempt leaves this checkout one or more commits behind, and its own eventual `git push` would be
+ * rejected non-fast-forward. Local commits the checkout has and the remote does not are never
+ * `stale` on their own — only `git merge --ff-only origin/<branch>` failing is: a plain fast-forward
+ * catches it up silently, a real divergence names why in `stale`, and the caller falls back to the
+ * recipe block instead of claiming the checkout is already at the PR's head.
+ * @returns {{ok: true, path: string, branch: string, freed: string|null, stale: string|null} | {ok: false, why: string}}
  */
 export function worktreeOnBranch(root, name, branch, { number = null, remote = 'origin', alive = () => true } = {}) {
   if (!branch) return { ok: false, why: 'the board query returned no head branch for the PR' };
   const dir = path.join(root, worktreePath(name));
   // capped: this runs inside a tick, and a hung fetch must not hold the loop past its interval
   const git = (args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: 60_000 });
+  // a repo with no <remote>/<branch> ref (fetch never ran, or it failed and this is the first time
+  // this branch was ever fetched) has nothing to fast-forward to — distinct from a real divergence,
+  // and worth saying so rather than reporting the same generic "could not fast-forward"
+  const fastForwardToRemote = (cwd) => {
+    const hasRef = spawnSync('git', ['rev-parse', '--verify', '--quiet', `${remote}/${branch}`], { cwd, encoding: 'utf8' }).status === 0;
+    if (!hasRef) return `no ${remote}/${branch} ref to catch up to (fetch may have failed)`;
+    const ff = spawnSync('git', ['merge', '--ff-only', `${remote}/${branch}`], { cwd, encoding: 'utf8', timeout: 60_000 });
+    return ff.status === 0 ? null : `could not fast-forward to ${remote}/${branch}: ${lastLine(ff.stderr) || `exit ${ff.status}`}`;
+  };
   if (fs.existsSync(path.join(dir, '.git'))) {
     // a spawn that died between the checkout and the launch: reuse it if it is already the right one
     const head = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout?.trim();
-    return head === branch ? { ok: true, path: dir, branch, freed: null } : { ok: false, why: `${worktreePath(name)} already exists on ${head || 'a detached HEAD'}` };
+    if (head !== branch) return { ok: false, why: `${worktreePath(name)} already exists on ${head || 'a detached HEAD'}` };
+    git(['fetch', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
+    return { ok: true, path: dir, branch, freed: null, stale: fastForwardToRemote(dir) };
   }
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   // best effort: no remote, no network, or a branch only this host has must not stop the checkout
@@ -333,13 +353,16 @@ export function worktreeOnBranch(root, name, branch, { number = null, remote = '
   let r = git(['worktree', 'add', dir, branch]);
   if (r.status !== 0) r = git(['worktree', 'add', '--track', '-b', branch, dir, `${remote}/${branch}`]);
   if (r.status !== 0) return { ok: false, why: `git worktree add ${worktreePath(name)} ${branch} failed: ${lastLine(r.stderr) || `exit ${r.status}`}` };
-  return { ok: true, path: dir, branch, freed };
+  // best effort: catch the local branch up to what was actually fetched, so an ordinary push from
+  // this checkout lands — a diverged local branch is reported, never forced
+  return { ok: true, path: dir, branch, freed, stale: fastForwardToRemote(dir) };
 }
 
 /**
- * Is `hkb` on PATH? Generated files (the Stop hook, `.mcp.json`) name the binary when it is and fall
- * back to this checkout's `bin/hkb.js` when it is not — a hook or an MCP client started by a GUI
- * inherits a PATH that may have neither.
+ * Is `hkb` on PATH? Tracked files a global install serves (`--shared-hooks`, the harness hook files,
+ * `.mcp.json`) name the bare binary when it is; the worker launch line prefers this checkout's
+ * `bin/hkb.js` whenever it is durable, because a hook started by the session daemon inherits a PATH
+ * that may have neither.
  *
  * The PATH asked about is the one *those* processes get, which is not this one's: `npx hkb init` and
  * `npm run` both prepend `node_modules/.bin`, so an unfiltered lookup answers yes for a repo that
