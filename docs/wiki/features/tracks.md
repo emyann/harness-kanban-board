@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "touching src/track.js, the track branch of the dispatcher tick, the claude-track profile's allow-list, or the runner brief"
 covers:
   - path: src/track.js
-    sha: e6b33306270308138c9b2595c185c56c6fd2b211
+    sha: 4741b0697555435dcb76768a44ec86e1ef6eb4a0
   - path: src/dispatch.js
     sha: fb85767e0b4b962930ee74c608c5bb0e1bd7ae4f
   - path: src/board.js
@@ -15,7 +15,7 @@ covers:
   - path: src/gc.js
     sha: 40672cb7a84da7170be3f5d99df42f326f9dc1e5
 related: [architecture/overview, features/harness-profiles, concepts/worker-identity, decisions/adr-004-roles-and-adoption]
-generated_at_commit: 1aed45a
+generated_at_commit: b20276e
 last_refreshed: 2026-08-29
 ---
 
@@ -160,7 +160,9 @@ is exactly why they are written down:
   that beat unless the node itself does, since `ScheduleWakeup` is not on the orchestrator's
   allow-list and it cannot wake itself to heartbeat. The per-node brief tells every subagent to run
   `hkb heartbeat <root>` (not its own number) every ~10 minutes for exactly this reason
-  (`casHeartbeat`, `src/lock.js`) — but, like the verb check above, it is brief-level: a subagent
+  (`casHeartbeat`, `src/lock.js`). The beat defends only against `stale_after`: the tick checks the root's
+  `max_runtime` first (`src/dispatch.js`, default 3600 s) and times the root out regardless of beats, so a
+  track root also needs `kb.max_runtime` larger than the whole track — heartbeat is necessary, not sufficient — but, like the verb check above, it is brief-level: a subagent
   that skips it leaves the whole track exposed to reclaim past the hour mark, uncovering every node
   for a cold worker.
 - **A daemon-leaked `KB_TASK` in a child resolves to the wrong task.** `subagentStopHook`'s

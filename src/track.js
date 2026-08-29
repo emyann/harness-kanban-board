@@ -361,7 +361,7 @@ export function trackContext({ repo, board, track, attempt, waves = null, fanout
     L.push('   move on to the rest of the wave.');
     L.push(`3. **Heartbeat while they work.** \`hkb heartbeat ${n}\` every ~10 minutes. Your turn may end while children`);
     L.push('   are still running — that is normal, and hkb\'s Stop hook stands aside while a subagent of this attempt is');
-    L.push('   live, so you will not be nudged for a verb mid-wave. Wake yourself and check on them.');
+    L.push('   live, so you will not be nudged for a verb mid-wave. You cannot wake yourself: the next thing you see is a subagent returning — check on the wave then.');
     L.push('4. **Verify each node recorded a verb** — do not take the subagent\'s word for it. `hkb show <n> --json` and');
     L.push('   read `status`: `done`, `blocked` or `review` means the node ended; still `running` means it did not, and');
     L.push('   nothing else in this session will nudge it (the Stop nudge keys on KB_TASK, which is the root, not the');
