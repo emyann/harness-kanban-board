@@ -299,8 +299,9 @@ A card that blocks on the same reason three times stops going back to *blocked* 
   restarting and take it to the human with the tail of `dispatch.log`: `up` is not a supervisor, and neither
   are you.
 - **What the board is spending.** Once a cycle, `hkb stats --json`: `attempts.by_outcome` for how the window is
-  going, `spend.by_profile` for what it cost, per profile. (There is no per-model breakdown — `spend.usage` is
-  five token counters for the whole window — so a per-model claim is one you cannot make from this output.) When
+  going, `spend.by_profile` for what it cost, per profile. (There is no per-model breakdown — `spend.usage` is a
+  turn count and four token counters for the whole window — so a per-model claim is one this output cannot
+  support.) When
   one *shape* of card keeps failing its first attempt — the same kind of work, the same rung of the model ladder
   — that is a **proposal** for the human (start that shape higher with `kb.model`, or reorder the profile's
   ladder), never an edit you make. Model choice is board policy like any other.

@@ -7,7 +7,7 @@ audience: [dev, ops]
 read_when: "changing what a session may do on someone's board, adding an event kind / status / outcome / block kind, or wondering why the operator's limits are prose rather than a guard"
 covers:
   - path: skills/kanban/SKILL.md
-    sha: dd45aeca67178e556d9426803731b38bb96697d1
+    sha: 126448356021a0b7baa32d6189ade646cff5a787
   - path: commands/operate.md
     sha: 7c1cb7c0a592fc3ea8ca641ca37b860a975ded66
   - path: src/watch.js
@@ -22,7 +22,7 @@ covers:
     sha: 8821eb7b1550e01b157424dd32480518eb7b8b71
   - path: src/stats.js
     sha: f81bc37dad19e253bf23a696ba899b4219dd5e53
-generated_at_commit: 29375f5
+generated_at_commit: 0cb3088
 last_refreshed: 2026-08-28
 related: [features/planning-commands, decisions/adr-004-roles-and-adoption, features/up-and-down, features/review-loop, concepts/roles-and-seats]
 ---
@@ -134,7 +134,8 @@ wrong:
 - **The spend row is ahead of the data.** The section asks for `hkb stats --json`
   once a cycle and names `attempts.by_outcome` and `spend.by_profile`
   (`src/stats.js`), which exist. A per-model breakdown does not — `zeroUsage()`
-  is five token counters for the whole window, with no `by_model` — and neither
+  (`src/stats.js:93`) is a turn count and four token counters, summed for the
+  whole window, and `hkb stats --json` carries no `by_model` — and neither
   do per-*shape* completion rates or the model ladder they would argue for: they
   arrive with the cards that record a per-attempt model and an effort/ladder
   field. Until then the row is a judgement the operator makes from outcomes, and
