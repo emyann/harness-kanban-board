@@ -144,7 +144,9 @@ It stays true now that the runner hands each node to its own **isolated subagent
 2.1.251 (#129), a subagent inherits the root's `CLAUDE_CODE_SESSION_ID` and `CLAUDE_JOB_DIR`, so a node finished
 from inside a child still stamps the runner's session. The child's *worktree* is its own — a repo-level
 `.claude/worktrees/agent-<id>`, a sibling of `kb-<n>-<k>` and not nested under it, removed with its branch when the
-subagent returns unchanged (which is why the node brief says commit and push before returning). The launch's hooks
+subagent returns unchanged. A subagent that committed keeps its worktree — with `kb/<n>` checked out — until
+`hkb gc` clears it, which it does once that branch's PR is merged or closed (which is why the node brief says
+commit and push before returning). The launch's hooks
 fire in there too, `PreToolUse` included, and `SubagentStop` is what tells the Stop nudge to stand aside while a
 wave is still running.
 

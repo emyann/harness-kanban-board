@@ -7,13 +7,15 @@ audience: [dev]
 read_when: "touching src/track.js, the track branch of the dispatcher tick, the claude-track profile's allow-list, or the runner brief"
 covers:
   - path: src/track.js
-    sha: 6f26148b7d31a58c4d2f919dcaff050e26d00ce2
+    sha: e6b33306270308138c9b2595c185c56c6fd2b211
   - path: src/dispatch.js
     sha: fb85767e0b4b962930ee74c608c5bb0e1bd7ae4f
   - path: src/board.js
     sha: 70992e7f84308320417651ed6c5d309028a4f581
+  - path: src/gc.js
+    sha: 40672cb7a84da7170be3f5d99df42f326f9dc1e5
 related: [architecture/overview, features/harness-profiles, concepts/worker-identity, decisions/adr-004-roles-and-adoption]
-generated_at_commit: d102a4e
+generated_at_commit: 1aed45a
 last_refreshed: 2026-08-29
 ---
 
@@ -114,7 +116,10 @@ is exactly why they are written down:
   moment `Agent` is allow-listed. Nothing else was needed.
 - The child's checkout is `.claude/worktrees/agent-<id>` **at the repo level** —
   a sibling of `kb-<n>-<k>`, not nested — and is **removed with its branch when
-  the subagent returns unchanged**. Hence the brief's *commit and push before
+  the subagent returns unchanged**. A subagent that committed keeps its
+  worktree, with `kb/<n>` checked out, until `hkb gc` clears it — which it now
+  does once that branch's PR is merged or closed (`agentWorktreeNode`/
+  `sweepAgentWorktrees`, `src/gc.js`). Hence the brief's *commit and push before
   you return*. The name is the harness's, so `parseWorktreeName` can never
   identify the node from the checkout; the brief passes `<n>` explicitly.
 - The child inherits the root's `CLAUDE_CODE_SESSION_ID` and `CLAUDE_JOB_DIR`,
@@ -149,3 +154,17 @@ is exactly why they are written down:
   re-checks them — `/kanban:decompose` enforces disjointness when the graph is
   built. A hand-written graph with overlapping paths will have siblings fighting
   over the same files in different worktrees.
+- **A `--bg` root longer than `stale_after` (3600s) with the wrong beat is reclaimed while its
+  subagents are still live.** The tick applies `stale_after` to the running attempt and then falls
+  back to the lock-ref beat (`src/dispatch.js`); a root parked waiting on a node has nothing writing
+  that beat unless the node itself does, since `ScheduleWakeup` is not on the orchestrator's
+  allow-list and it cannot wake itself to heartbeat. The per-node brief tells every subagent to run
+  `hkb heartbeat <root>` (not its own number) every ~10 minutes for exactly this reason
+  (`casHeartbeat`, `src/lock.js`) — but, like the verb check above, it is brief-level: a subagent
+  that skips it leaves the whole track exposed to reclaim past the hour mark, uncovering every node
+  for a cold worker.
+- **A daemon-leaked `KB_TASK` in a child resolves to the wrong task.** `subagentStopHook`'s
+  `attemptIdentity` accepts an environment with `profile: null` rather than falling back to
+  `CLAUDE_PROJECT_DIR`, so a `KB_TASK` leaked into a child's environment by the daemon (#150) makes
+  the hook resolve the leaked task instead of the track root, suppressing the root's own `Stop` up to
+  `MAX_SUPPRESSED_STOPS`.

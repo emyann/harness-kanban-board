@@ -394,10 +394,21 @@ test('the fan-out brief makes the runner an orchestrator: claim the wave, spawn 
   // the per-node brief the subagent gets: a pointer to its own context, not a pasted one
   assert.match(p, /## The per-node brief/);
   assert.match(p, /Run `hkb context <n>` first/);
-  assert.match(p, /Commit AND push before you return/, 'the child worktree is deleted when it returns');
+  assert.match(p, /Commit AND push before you return/, 'the child worktree only goes away automatically when left unchanged');
   assert.match(p, /hkb finish <n> --from-stdin < \/tmp\/kb-<n>\.json/);
   assert.match(p, /Do not spawn subagents of your own/);
   assert.doesNotMatch(p, /<<'EOF'/);
+  // #197.1: the child's `hkb context <n>` says "work on the current branch" — that is the child's own
+  // throwaway checkout, not the node's, so the per-node brief overrides it explicitly
+  assert.match(p, /its current-branch line\n\s+does not apply to you/);
+  assert.match(p, /use\n\s+`kb\/<n>`, the next step/);
+  // #197.1: the orchestrator's own turn ends the moment it spawns a wave and it cannot wake itself
+  // (ScheduleWakeup is not allow-listed), so each child must heartbeat the *root*, not itself
+  assert.match(p, /Run `hkb heartbeat 26` — the root, not #<n> — every ~10 minutes while you work/);
+  // #197.1: a spawn that errors leaves a node claimed with nobody working it — the wave loop must say
+  // what to do about it, not just how to spawn
+  assert.match(p, /If a spawn itself fails/);
+  assert.match(p, /Work it yourself\n\s+in this checkout, sequentially, or `hkb block <n> "<why>" --kind transient`/);
   // the siblings of wave 1 are named, and they go out together
   assert.match(p, /Start with wave 1: claim #41, #43, then spawn both subagents in one message\.$/);
   assert.ok(!p.includes('undefined'), 'no unsubstituted field');
