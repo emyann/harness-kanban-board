@@ -67,8 +67,8 @@ pages:
     summary: "Operator, supervisor, dispatcher, workers: who decides, who judges, who loops, who codes — and which seats are optional."
     status: planned
   - slug: features/tracks
-    summary: "One session executes a whole DAG subgraph: per-node claims as checkpoints, stacked node PRs, fallback to node-by-node."
-    status: planned
+    summary: "One session orchestrates a whole DAG subgraph: a wave of siblings as one isolated subagent each, per-node claims as checkpoints, stacked node PRs, fallback to node-by-node."
+    status: seeded
   - slug: features/harness-profiles
     summary: "The shipped profiles (claude, claude-p, claude-track, claude-action, copilot-cli, codex): modes, permissions, models, and what each harness can and cannot do."
     status: planned

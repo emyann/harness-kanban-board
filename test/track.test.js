@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_KB, L, parseSkillVersion } from '../src/model.js';
 import {
   resolveTrack, trackWaves, trackPaths, trackReadiness, planTracks, trackContext,
-  trackAlreadyAttempted, isTrackProfile, trackAgents, trackGraph, trackMermaid, mermaidLabel,
+  trackAlreadyAttempted, isTrackProfile, trackAgents, trackGraph, trackMermaid, mermaidLabel, trackFanout,
 } from '../src/track.js';
 import { main } from '../src/cli.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
@@ -347,16 +347,115 @@ test('the runner is told to keep KB_TASK on the root — a node claim must not s
   assert.match(p, /Ignore the `export KB_TASK=…` line it prints — this session's KB_TASK is\n\s+the root, #26, and it must stay that way\./);
 });
 
+// ---------- the fan-out brief: one orchestrator, one isolated subagent per node ----------
+
+/** The launch writes the prompt to a file and exits; the tick does not wait for it. */
+async function readWhenWritten(file, tries = 200) {
+  for (let i = 0; i < tries; i++) {
+    const s = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+    if (s) return s;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error(`${file} was never written by the launch`);
+}
+
+/** the diamond of the acceptance: #41 and #43 are path-disjoint siblings, #42 waits for both. */
+const diamond = () => [
+  node(41, { title: 'Token bucket', kb: { paths: ['src/limit.js'] } }),
+  node(43, { title: 'Docs', kb: { paths: ['docs/'] } }),
+  node(42, { title: 'Wire it in', status: 'todo', blocks: [41, 43], kb: { paths: ['src/server.js'] } }),
+  node(26, { title: 'Rate-limit the API', status: 'todo', agent: 'claude-track', blocks: [42], body: 'the root brief' }),
+];
+
+// The allow-list IS the capability: under `--permission-mode dontAsk` an unlisted tool is denied,
+// never prompted, so a brief that told a runner without `Agent` to fan out would only buy it a
+// refusal. That is why the brief is picked from the profile rather than assumed.
+test('only a profile that may spawn subagents is told to — the allow-list picks the brief', () => {
+  assert.equal(trackFanout(DEFAULT_BOARD, 'claude-track'), true, 'the shipped track profile carries Agent');
+  assert.equal(trackFanout(DEFAULT_BOARD, 'claude'), false, 'a cold node worker stays single-agent');
+  assert.equal(trackFanout(DEFAULT_BOARD, 'codex'), false, 'no allow-list at all is not permission to spawn');
+  assert.equal(trackFanout(DEFAULT_BOARD, 'nope'), false);
+  assert.equal(trackFanout({ profiles: { x: { allowed_tools: ['Agent'] } } }, 'x'), true);
+});
+
+test('the fan-out brief makes the runner an orchestrator: claim the wave, spawn one isolated subagent per node', () => {
+  const track = resolveTrack(26, by(diamond()));
+  const p = trackContext({ repo: 'acme/board', board: 'default', track, attempt: 1, fanout: true });
+
+  assert.match(p, /^You are the TRACK RUNNER for hkb track #26 \(attempt 1\)/, 'SKILL.md keys off this opening');
+  assert.match(p, /You are its ORCHESTRATOR/);
+  assert.match(p, /you do not work the nodes\nyourself/);
+  // the wave loop, in order
+  assert.match(p, /## The wave loop/);
+  assert.ok(p.indexOf('**Claim the wave.**') < p.indexOf('**Spawn one subagent per claimed node, all in one message**'));
+  assert.match(p, /`isolation: "worktree"`/, 'two agents cannot share a checkout');
+  assert.match(p, /\*\*Verify each node recorded a verb\*\*/);
+  assert.match(p, /\*\*Only then start the next wave\.\*\*/);
+  // the per-node brief the subagent gets: a pointer to its own context, not a pasted one
+  assert.match(p, /## The per-node brief/);
+  assert.match(p, /Run `hkb context <n>` first/);
+  assert.match(p, /Commit AND push before you return/, 'the child worktree is deleted when it returns');
+  assert.match(p, /hkb finish <n> --from-stdin < \/tmp\/kb-<n>\.json/);
+  assert.match(p, /Do not spawn subagents of your own/);
+  assert.doesNotMatch(p, /<<'EOF'/);
+  // the siblings of wave 1 are named, and they go out together
+  assert.match(p, /Start with wave 1: claim #41, #43, then spawn both subagents in one message\.$/);
+  assert.ok(!p.includes('undefined'), 'no unsubstituted field');
+});
+
+test('fan-out or not, the per-node protocol and the track rules are the same', () => {
+  const track = resolveTrack(26, by(diamond()));
+  const seq = trackContext({ repo: 'acme/board', board: 'default', track, attempt: 1 });
+  const fan = trackContext({ repo: 'acme/board', board: 'default', track, attempt: 1, fanout: true });
+
+  for (const p of [seq, fan]) {
+    assert.match(p, /\*\*Heartbeat the root, not the nodes\.\*\* `hkb heartbeat 26`/);
+    assert.match(p, /\*\*A node that blocks parks only its branch\.\*\*/);
+    assert.match(p, /Never `git push --force`/);
+    assert.match(p, /hkb block <n> "why" --kind/);
+    assert.ok(p.includes('kb.paths'), 'scope is a rule in both');
+    assert.ok(p.includes('exactly one `Closes #'), 'one PR per node is what makes a node a checkpoint');
+  }
+  // and the sequential brief never mentions a tool it is not allowed to call
+  assert.doesNotMatch(seq, /ORCHESTRATOR|isolation: "worktree"|## The wave loop/);
+});
+
+test('the dispatcher hands the runner the brief its profile can actually execute', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-trackprompt-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const out = path.join(dir, 'prompt.txt');
+  const launch = ['node', '-e', `require('fs').writeFileSync(${JSON.stringify(out)}, process.argv[1] || '')`, '{prompt}'];
+  const spawner = (tools) => ({
+    claude: { mode: 'process', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] },
+    'claude-track': { mode: 'process', track: true, track_agents: ['claude', 'claude-track'], max_in_progress: 1, model: null, allowed_tools: tools, launch },
+  });
+
+  const h = harness({ profiles: spawner(['Agent']) });
+  t.after(h.cleanup);
+  seedChain(h.gh);
+  await h.tick();
+  assert.match(await readWhenWritten(out), /You are its ORCHESTRATOR/);
+
+  fs.rmSync(out, { force: true });
+  const plain = harness({ profiles: spawner([]) });
+  t.after(plain.cleanup);
+  seedChain(plain.gh);
+  await plain.tick();
+  const p = await readWhenWritten(out);
+  assert.doesNotMatch(p, /ORCHESTRATOR/, 'a runner that cannot spawn is told to walk the nodes');
+  assert.match(p, /## The loop — once per node/);
+});
+
 // ---------- the tick ----------
 
-function harness({ dispatch = {}, host = 'test-host' } = {}) {
+function harness({ dispatch = {}, host = 'test-host', profiles = null } = {}) {
   const gh = new FakeGh();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-track-'));
   const cfg = {
     ...DEFAULT_BOARD,
     repo: gh.nameWithOwner,
     dispatch: { ...DEFAULT_BOARD.dispatch, ...dispatch },
-    profiles: {
+    profiles: profiles || {
       claude: { mode: 'process', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] },
       'claude-track': { mode: 'process', track: true, track_agents: ['claude', 'claude-track'], max_in_progress: 1, model: null, allowed_tools: [], launch: ['true'] },
     },
@@ -565,7 +664,7 @@ test('the skill teaches the loop the runner is actually given, by the names the 
   assert.match(proto, /^## Tracks — the second execution engine/m);
   assert.ok(proto.includes('track_nodes'), 'the attempt fields a track adds must be in the data model');
   // the version has to move, or `hkb doctor` will call a stale installed copy current
-  assert.equal(parseSkillVersion(skill), '0.6.0');
+  assert.equal(parseSkillVersion(skill), '0.7.0');
 });
 
 test('with no track profile on the board nothing changes: the same claims, and no track work', async (t) => {

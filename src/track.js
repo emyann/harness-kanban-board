@@ -23,6 +23,18 @@ export function isTrackProfile(cfg, name) {
 }
 
 /**
+ * May this profile's runner fan a wave out to one subagent per node? The tool allow-list is the whole
+ * answer: a launch under `--permission-mode dontAsk` DENIES a tool that is not on it rather than
+ * prompting, so a brief that told an un-allow-listed runner to spawn would only buy it a refusal.
+ * `claude-track` carries `Agent`; every other shipped profile does not, and gets the sequential brief,
+ * which is always a correct way to run a track — the board reads the same either way.
+ */
+export function trackFanout(cfg, name) {
+  const tools = cfg?.profiles?.[name]?.allowed_tools;
+  return Array.isArray(tools) && tools.includes('Agent');
+}
+
+/**
  * Node profiles a track profile can run inside its own session (`track_agents` in board.json).
  * A track with a node outside this set needs a second harness, and one session cannot be two — so
  * it is simply not claimable as a track and falls back to node dispatch. Unset → only its own name.
@@ -277,25 +289,39 @@ function nodeLine(t) {
 
 /**
  * What the runner is told. Pure, and deliberately cheap: it names the graph and the loop, and sends
- * the runner to `hkb context <n>` for each node's real brief — the same `workerContext` a cold
- * worker gets, fetched when the node starts rather than for all N nodes at spawn time.
+ * the runner (or each node's subagent) to `hkb context <n>` for that node's real brief — the same
+ * `workerContext` a cold worker gets, fetched when the node starts rather than for all N nodes at
+ * spawn time. That is also why the fan-out brief hands a subagent a *pointer* rather than a pasted
+ * context: the orchestrator's window stays the size of the plan, not the sum of every node's.
+ *
+ * `fanout` (the profile allows the `Agent` tool — see `trackFanout`) picks the execution model:
+ * one isolated subagent per node with siblings running at the same time, or the older one-node-
+ * after-another walk. Everything the board sees is identical; only who does the work moves.
  */
-export function trackContext({ repo, board, track, attempt, waves = null }) {
+export function trackContext({ repo, board, track, attempt, waves = null, fanout = false }) {
   const root = track.root;
   const n = root.number;
   const k = attempt;
   const ws = waves && waves.length ? waves : trackWaves(track);
   const nodeWaves = ws.map((w) => w.filter((t) => t.number !== n)).filter((w) => w.length);
   const first = nodeWaves[0]?.[0]?.number ?? n;
+  const wave1 = nodeWaves[0] || [];
   const L = [];
 
   L.push(`You are the TRACK RUNNER for hkb track #${n} (attempt ${k}) in ${repo}, board "${board}".`);
   L.push('');
   L.push('A track is a connected subgraph of the board: this root plus everything it is still blocked by.');
-  L.push(`You execute all ${track.nodes.length + 1} tasks in this one session, in dependency order. The board is still`);
-  L.push('the source of truth: every node is claimed, worked and finished with its own terminal verb, so every');
-  L.push('node is a durable checkpoint. Nothing here replaces the worker protocol — it runs it once per node.');
-  L.push('If you die halfway, the ordinary dispatcher picks up whatever is left, one cold session per node.');
+  if (fanout) {
+    L.push(`You are its ORCHESTRATOR. You hold the plan for all ${track.nodes.length + 1} tasks; you do not work the nodes`);
+    L.push('yourself. Each node goes to **its own isolated subagent** — the `Agent` tool with `isolation: "worktree"` —');
+    L.push('and the nodes of one wave run **at the same time**, because nothing in a wave depends on anything else in');
+    L.push('it. You claim, you spawn, you collect, you move to the next wave; the root is the one node you do yourself.');
+  } else {
+    L.push(`You execute all ${track.nodes.length + 1} tasks in this one session, in dependency order.`);
+  }
+  L.push('The board is still the source of truth: every node is claimed, worked and finished with its own terminal');
+  L.push('verb, so every node is a durable checkpoint. Nothing here replaces the worker protocol — it runs it once');
+  L.push('per node. If you die halfway, the ordinary dispatcher picks up whatever is left, one cold session per node.');
   L.push('');
   L.push(`# Track root #${n}: ${root.title}`);
   L.push('');
@@ -314,39 +340,103 @@ export function trackContext({ repo, board, track, attempt, waves = null }) {
   L.push('then the root:');
   L.push(nodeLine(root));
   L.push('');
-  L.push('Work the waves in order. Inside one wave the nodes are independent: run them one after another, or');
-  L.push('fan them out to subagents if your harness has them — one worktree each, because two agents cannot');
-  L.push('share a checkout. The board reads the same either way, so sequence is always a safe answer.');
-  L.push('');
+  if (fanout) {
+    L.push('Work the waves in order, and **a whole wave at a time**: its nodes are independent of each other and of');
+    L.push('nothing else that is left, so they run concurrently — one subagent, one worktree each, because two agents');
+    L.push('cannot share a checkout. A wave is done when every node in it has recorded a terminal verb.');
+    L.push('');
 
-  L.push('## The loop — once per node, in the order above');
-  L.push('');
-  L.push(`1. \`hkb context <n>\` — the exact brief that node's own worker would get: body, \`kb\` settings, parent`);
-  L.push('   results, prior attempts. Read it before you touch anything; it is where the decisions live.');
-  L.push(`2. \`hkb claim <n>\` — creates \`refs/kb/locks/<n>/<attempt>\` and moves the node to *running*. If it`);
-  L.push('   answers `held`, another worker owns that node: leave it alone, skip everything blocked by it, and');
-  L.push(`   carry on with the rest. Ignore the \`export KB_TASK=…\` line it prints — this session's KB_TASK is`);
-  L.push(`   the root, #${n}, and it must stay that way.`);
-  L.push('3. Do the work on a branch of its own: `git switch -c kb/<n> <base>`, where `<base>` is the branch of');
-  L.push('   the node this one is blocked by, or the default branch when it has none.');
-  L.push('4. Push and open a **draft** PR whose body contains `Closes #<n>`, based on that same `<base>`:');
-  L.push('   `gh pr create --draft --base <base> --title "…" --body "Closes #<n>\\n\\n<what/why/how verified>"`.');
-  L.push('   One PR per node, and exactly one `Closes #` in it. That is what makes a node a checkpoint: its');
-  L.push('   issue closes when *its* PR merges. A PR that closed several nodes would drag the unfinished ones');
-  L.push('   into *review* behind it, and the dispatcher could never finish them for you.');
-  L.push('5. Finish the node with EXACTLY ONE terminal verb — the same three any worker has:');
-  L.push('```bash');
-  L.push('# write /tmp/kb-<n>.json with your editor tool:');
-  L.push('# {"summary": "<what changed, for the next node and the next worker>",');
-  L.push('#  "metadata": {"changed_files": ["..."], "verification": ["<commands you ran>"], "residual_risk": ["..."]}}');
-  L.push('hkb finish <n> --from-stdin < /tmp/kb-<n>.json');
-  L.push('```');
-  L.push('   `finish` is `complete` under a name no shell claims — say `finish`, and redirect a file rather than');
-  L.push('   using a heredoc, so a harness that vets your command line word by word still runs it.');
-  L.push('   - `hkb block <n> "why" --kind needs_input|dependency|capability|transient` when that node cannot proceed');
-  L.push('   - `hkb request-review <n> --summary "..."` when a reviewer must look before it counts as done');
-  L.push('6. Only then start the next node. Its `hkb context` will show the result you just wrote.');
-  L.push('');
+    L.push('## The wave loop — repeat until the nodes are gone');
+    L.push('');
+    L.push('1. **Claim the wave.** `hkb claim <n>` once per node in it — one command per Bash call. Each claim creates');
+    L.push(`   \`refs/kb/locks/<n>/<attempt>\` and moves the node to *running*. If one answers \`held\`, another worker`);
+    L.push('   owns that node: drop it, drop everything it blocks, and carry on with the rest of the wave. Ignore the');
+    L.push(`   \`export KB_TASK=…\` line a claim prints — this session's KB_TASK is the root, #${n}, and it must stay that way.`);
+    L.push('2. **Spawn one subagent per claimed node, all in one message**, so they actually run at the same time:');
+    L.push('   the `Agent` tool, `isolation: "worktree"`, and the per-node brief below as the prompt. Sending them one');
+    L.push('   message apart is a sequential track wearing a fan-out coat. Cap it at 4 in flight; a wider wave goes in');
+    L.push('   batches of 4.');
+    L.push(`3. **Heartbeat while they work.** \`hkb heartbeat ${n}\` every ~10 minutes. Your turn may end while children`);
+    L.push('   are still running — that is normal, and hkb\'s Stop hook stands aside while a subagent of this attempt is');
+    L.push('   live, so you will not be nudged for a verb mid-wave. Wake yourself and check on them.');
+    L.push('4. **Verify each node recorded a verb** — do not take the subagent\'s word for it. `hkb show <n> --json` and');
+    L.push('   read `status`: `done`, `blocked` or `review` means the node ended; still `running` means it did not, and');
+    L.push('   nothing else in this session will nudge it (the Stop nudge keys on KB_TASK, which is the root, not the');
+    L.push('   child). A node the subagent left `running`:');
+    L.push('   - work landed and a PR is open → file the verb yourself from its report: `hkb finish <n> --from-stdin < …`');
+    L.push('   - it got nowhere → `hkb block <n> "<what it hit>" --kind transient` and treat it as a blocked node');
+    L.push('5. **Only then start the next wave.** A wave with a node still `running` is not finished, and a dependent');
+    L.push('   that starts on top of an unfinished blocker has no branch to base itself on.');
+    L.push('');
+
+    L.push('## The per-node brief — what you put in each `Agent` prompt');
+    L.push('');
+    L.push('Substitute `<n>`, and `<base>` = the branch of the node this one is blocked by (`kb/<blocker>`), or the');
+    L.push('default branch when it has none. Send the pointer, not the text: `hkb context <n>` is the same brief a cold');
+    L.push('worker gets, and letting the child fetch it keeps your own window the size of the plan.');
+    L.push('');
+    L.push('```');
+    L.push(`You are the worker for hkb task #<n>, one node of track #${n} in ${repo}, board "${board}".`);
+    L.push('Work ONLY #<n>. It is already claimed for you — do not run `hkb claim`.');
+    L.push('');
+    L.push('1. Run `hkb context <n>` first. That is your brief: the body, the `kb` settings, the parent');
+    L.push('   results, the prior attempts. Read it before you touch anything.');
+    L.push('2. `git switch -c kb/<n> <base>` and stay inside the node\'s `kb.paths`. Everything outside them');
+    L.push('   belongs to somebody else\'s worktree, including your siblings running right now.');
+    L.push('3. Commit AND push before you return. This worktree is deleted when you finish; anything you did');
+    L.push('   not push goes with it.');
+    L.push('4. Open a **draft** PR based on `<base>` whose body contains exactly one `Closes #<n>`:');
+    L.push('   `gh pr create --draft --base <base> --title "…" --body "Closes #<n>\\n\\n<what/why/how verified>"`');
+    L.push('5. Finish with EXACTLY ONE terminal verb, on #<n> and no other number:');
+    L.push('   write /tmp/kb-<n>.json with your editor tool, then');
+    L.push('   `hkb finish <n> --from-stdin < /tmp/kb-<n>.json`');
+    L.push('   {"summary": "<what changed, for the next node>", "metadata": {"changed_files": [...],');
+    L.push('    "verification": ["<commands you ran>"], "residual_risk": [...]}}');
+    L.push('   - `hkb block <n> "why" --kind needs_input|dependency|capability|transient` if you cannot proceed');
+    L.push('   - `hkb request-review <n> --summary "…"` if a reviewer must look first');
+    L.push('6. `KB_TASK` in your environment names the track root, not you. Ignore it.');
+    L.push('7. One command per Bash call: no `;`, no `&&`, no `$VAR` (`printenv NAME` reads the environment).');
+    L.push('   The worktree guard refuses a compound command outright, and a refusal costs you a turn.');
+    L.push('8. Do not spawn subagents of your own, and never `git push --force`.');
+    L.push('');
+    L.push('Report back: the node number, the verb you ran, the PR url, and one line on what you landed.');
+    L.push('```');
+    L.push('');
+  } else {
+    L.push('Work the waves in order. Inside one wave the nodes are independent: run them one after another, or');
+    L.push('fan them out to subagents if your harness has them — one worktree each, because two agents cannot');
+    L.push('share a checkout. The board reads the same either way, so sequence is always a safe answer.');
+    L.push('');
+
+    L.push('## The loop — once per node, in the order above');
+    L.push('');
+    L.push(`1. \`hkb context <n>\` — the exact brief that node's own worker would get: body, \`kb\` settings, parent`);
+    L.push('   results, prior attempts. Read it before you touch anything; it is where the decisions live.');
+    L.push(`2. \`hkb claim <n>\` — creates \`refs/kb/locks/<n>/<attempt>\` and moves the node to *running*. If it`);
+    L.push('   answers `held`, another worker owns that node: leave it alone, skip everything blocked by it, and');
+    L.push(`   carry on with the rest. Ignore the \`export KB_TASK=…\` line it prints — this session's KB_TASK is`);
+    L.push(`   the root, #${n}, and it must stay that way.`);
+    L.push('3. Do the work on a branch of its own: `git switch -c kb/<n> <base>`, where `<base>` is the branch of');
+    L.push('   the node this one is blocked by, or the default branch when it has none.');
+    L.push('4. Push and open a **draft** PR whose body contains `Closes #<n>`, based on that same `<base>`:');
+    L.push('   `gh pr create --draft --base <base> --title "…" --body "Closes #<n>\\n\\n<what/why/how verified>"`.');
+    L.push('   One PR per node, and exactly one `Closes #` in it. That is what makes a node a checkpoint: its');
+    L.push('   issue closes when *its* PR merges. A PR that closed several nodes would drag the unfinished ones');
+    L.push('   into *review* behind it, and the dispatcher could never finish them for you.');
+    L.push('5. Finish the node with EXACTLY ONE terminal verb — the same three any worker has:');
+    L.push('```bash');
+    L.push('# write /tmp/kb-<n>.json with your editor tool:');
+    L.push('# {"summary": "<what changed, for the next node and the next worker>",');
+    L.push('#  "metadata": {"changed_files": ["..."], "verification": ["<commands you ran>"], "residual_risk": ["..."]}}');
+    L.push('hkb finish <n> --from-stdin < /tmp/kb-<n>.json');
+    L.push('```');
+    L.push('   `finish` is `complete` under a name no shell claims — say `finish`, and redirect a file rather than');
+    L.push('   using a heredoc, so a harness that vets your command line word by word still runs it.');
+    L.push('   - `hkb block <n> "why" --kind needs_input|dependency|capability|transient` when that node cannot proceed');
+    L.push('   - `hkb request-review <n> --summary "..."` when a reviewer must look before it counts as done');
+    L.push('6. Only then start the next node. Its `hkb context` will show the result you just wrote.');
+    L.push('');
+  }
 
   L.push('## Rules that are different because you are a track');
   L.push('');
@@ -354,13 +444,33 @@ export function trackContext({ repo, board, track, attempt, waves = null }) {
   L.push('  lease covers the whole track: the dispatcher will not reclaim a node while this attempt is alive.');
   L.push(`  If it prints \`LOCK_LOST\`, stop **everything** at once — do not commit, do not push, do not call a`);
   L.push('  terminal verb on any node. The track was reclaimed and the board now belongs to someone else.');
-  L.push('- **Claim as you go, never up front.** A lock you hold and do not work is a node nobody else can run.');
-  L.push('  Claim a node when you are about to start it, and end it before you claim the next.');
+  if (fanout) {
+    L.push('- **Claim a wave at a time, never the whole graph.** A lock you hold and are not working is a node nobody');
+    L.push('  else can run. Claim the wave you are about to spawn, and let it end before you claim the next.');
+  } else {
+    L.push('- **Claim as you go, never up front.** A lock you hold and do not work is a node nobody else can run.');
+    L.push('  Claim a node when you are about to start it, and end it before you claim the next.');
+  }
   L.push('- **A node that blocks parks only its branch.** `hkb block <n> …`, then skip every node that is blocked');
   L.push('  by it, transitively, and keep going with the rest of the graph. Do not abandon the track for one');
   L.push('  bad node; finish what you can and say in the root\'s summary what you left and why.');
-  L.push('- **Stay inside each node\'s `kb.paths`** while you are on that node. They are what let the dispatcher');
-  L.push('  run other work beside you; a node that wanders outside them corrupts somebody else\'s worktree.');
+  if (fanout) {
+    L.push('  A wave is not all-or-nothing either: one subagent blocking parks its dependents, and its siblings still');
+    L.push('  finish and still count.');
+    L.push('- **`kb.paths` are what make a wave safe.** They are disjoint by construction (`/kanban:decompose` enforces');
+    L.push('  it), which is why these nodes can run at once at all. Each subagent stays inside its own; you stay out of');
+    L.push('  all of them until the root\'s own pass.');
+    L.push('- **One PR per node, and exactly one `Closes #` in it.** That is what makes a node a checkpoint: its issue');
+    L.push('  closes when *its* PR merges. Do not let a wave collapse into one PR — it would drag the unfinished nodes');
+    L.push('  into *review* behind it, where neither you nor the dispatcher could finish them.');
+    L.push('- **You are the only spawner.** Subagents do not spawn subagents, and nothing about a track puts a second');
+    L.push('  dispatcher on the board: `hkb dispatch` is what started you, and running it again double-claims work.');
+  } else {
+    L.push('- **Stay inside each node\'s `kb.paths`** while you are on that node. They are what let the dispatcher');
+    L.push('  run other work beside you; a node that wanders outside them corrupts somebody else\'s worktree.');
+  }
+  L.push('- **One command per Bash call.** No `;`, no `&&`, no `$VAR` — the worktree guard refuses a command it');
+  L.push('  cannot verify stays inside the checkout, and a refusal is final. `printenv NAME` reads the environment.');
   L.push('- **Never `git push --force`.** Never push a lock ref yourself.');
   L.push('');
 
@@ -368,9 +478,19 @@ export function trackContext({ repo, board, track, attempt, waves = null }) {
   L.push('');
   L.push(`When every node has ended, do the root's own pass — the one no child could: check that the pieces`);
   L.push('actually fit together, run the project\'s lint and tests over the whole result, and write the docs or');
-  L.push(`changelog that only make sense once. Then finish #${n} itself with exactly one terminal verb, the same`);
-  L.push('way, and stop. Its summary is the track\'s: what each node landed, what merged, what is still open.');
+  L.push('changelog that only make sense once.');
+  if (fanout) {
+    L.push('That pass is yours: you do it here, in this checkout, on top of the nodes\' branches, and you are the only');
+    L.push('one who has read every subagent\'s report.');
+  }
+  L.push(`Then finish #${n} itself with exactly one terminal verb, the same way, and stop. Its summary is the`);
+  L.push('track\'s: what each node landed, what merged, what is still open.');
   L.push('');
-  L.push(`Start with \`hkb context ${first}\`.`);
+  if (fanout && wave1.length) {
+    const spawnIt = wave1.length === 1 ? 'its subagent' : `${wave1.length === 2 ? 'both' : `all ${wave1.length}`} subagents in one message`;
+    L.push(`Start with wave 1: claim ${wave1.map((t) => `#${t.number}`).join(', ')}, then spawn ${spawnIt}.`);
+  } else {
+    L.push(`Start with \`hkb context ${first}\`.`);
+  }
   return L.join('\n');
 }

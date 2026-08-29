@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires the `gh` CLI (authenticated) and `hkb` (npm hkb-cli) on PATH. Works with Claude Code, GitHub Copilot CLI and Codex CLI.
 metadata:
   author: hkb
-  version: 0.6.0
+  version: 0.7.0
 allowed-tools: Bash(hkb *) Bash(gh api *) Bash(gh pr *) Bash(gh issue view *) Bash(git *)
 ---
 
@@ -101,11 +101,18 @@ double instead (`node --test test/dispatch.test.js`). Do not do work that belong
 
 A **track** is a connected subgraph of the board: a root task plus everything it is still blocked by — normally what
 `/kanban:decompose` just materialized. The dispatcher's ordinary engine runs one node per cold session; a track runner
-runs the whole subgraph in **one** session, in dependency order, with the context flowing in memory instead of being
-re-derived per node. You get one when the root carries `kb:agent:claude-track` — any profile with `"track": true` in
-`.kanban/board.json`.
+holds the whole subgraph in **one** session, with the context flowing in memory instead of being re-derived per node.
+You get one when the root carries `kb:agent:claude-track` — any profile with `"track": true` in `.kanban/board.json`.
 
-Nothing about the protocol changes. You run it once per node, in the order your prompt lists:
+You are an **orchestrator**, not a runner doing N things in a row. Your prompt lists the graph in **waves** — nothing
+in a wave depends on anything else in it — and for each wave you claim its nodes, hand **each node to its own isolated
+subagent** (the `Agent` tool, `isolation: "worktree"`, all of a wave's spawns in one message so they actually run
+together), collect them, verify each one recorded a verb, and only then start the next wave. The root is the one node
+you do yourself. Where the harness has no subagents the prompt says so and the nodes are walked one at a time instead;
+the board reads the same either way.
+
+Nothing about the protocol changes. It runs once per node — by you or by that node's subagent, in the order your
+prompt lists:
 
 | per node | |
 |---|---|
@@ -119,7 +126,11 @@ Step 5 is what makes a track safe to run at all: every node is a durable checkpo
 board the ordinary dispatcher can finish node by node — and it does. A root whose track attempt has ended is never
 handed to a second runner; the durable engine takes the rest.
 
-Four things really are different:
+A subagent shares your session id, so a node it finishes still records *your* session — but its worktree is its own
+and is **deleted when it returns**, so its brief must say: commit and push before you finish. Give it the node number,
+the base branch, and `hkb context <n>` as its brief; do not paste the context, or your window grows by every node.
+
+Five things really are different:
 
 - **Heartbeat the root, not the nodes.** `hkb heartbeat <root>` every ~10 minutes. That one lease covers the whole
   track: the dispatcher will not reclaim a node while the root's attempt is alive. `LOCK_LOST` means stop
@@ -127,8 +138,11 @@ Four things really are different:
 - **`KB_TASK` is the root, and stays the root.** `hkb claim <n>` prints an `export KB_TASK=…` line for a human
   claiming by hand; ignore it. `hkb` scopes `KB_ATTEMPT` to `KB_TASK`, so each verb you run on a node acts on that
   node's own open attempt without you passing anything.
-- **Claim as you go, never up front.** A lock you hold and are not working is a node nobody else can run. Claim a
-  node when you are about to start it; end it before you claim the next.
+- **Claim as you go, never up front.** A lock you hold and are not working is a node nobody else can run. Claim the
+  wave you are about to spawn; let it end before you claim the next.
+- **Verify the verb yourself.** The Stop nudge keys on `KB_TASK`, which is the root — it never fires for a subagent.
+  After a wave, `hkb show <n> --json` per node: `done`, `blocked` or `review` means it ended. A node left *running*
+  is one you finish from its report, or `hkb block <n> "…" --kind transient`. Never start the next wave over one.
 - **One PR per node, never one PR for several nodes.** A body with two `Closes #` drags the unfinished node into
   *review* behind the finished one, and then neither you nor the dispatcher can close it properly.
 
@@ -136,9 +150,11 @@ Four things really are different:
 transitively, and carry on with the rest of the graph. Do not abandon a track for one bad node: finish what you can,
 and say in the root's summary which branch you left and why.
 
-**Independent branches.** Nodes in the same wave — nothing in the graph between them — may be fanned out to subagents
-if your harness has them, one git worktree each, because two agents cannot share a checkout. Sequence is always a
-correct answer; the board reads the same either way.
+A wave is not all-or-nothing either: one subagent blocking parks its dependents, and its siblings still finish.
+
+**What keeps a wave safe** is that the nodes' `kb.paths` are disjoint — `/kanban:decompose` enforces it, and it is the
+same rule that lets the dispatcher run two cold nodes side by side. Each subagent stays inside its own; you stay out of
+all of them until the root's pass. Cap the fan-out at about four in flight, and send a wider wave in batches.
 
 **Finishing.** The root is the last node. Check that the pieces actually fit, run the project's lint and tests over
 the whole result, write the docs or changelog no child could — then one terminal verb for the root, whose summary is
@@ -452,9 +468,12 @@ brief step 3a puts in the root's body; without it the root's worker will cheerfu
 
 The root is also the handle for running the graph as a **track** — one session for the whole subgraph instead of one
 cold session per node. That is a per-goal choice, made after the graph exists: `hkb adopt <root> --agent claude-track
---status todo`. Prefer it when the children are tightly coupled (each one's output is the next one's input) and they
-all run on the same harness; leave it off when they are genuinely independent, because node dispatch runs those in
-parallel and a track does not. Either way the board is identical — see *When you run a track* above.
+--status todo`. Prefer it when the children belong to one goal — a shared design decision the orchestrator should hold
+in one head, branches that stack — and all run on the same harness. A track parallelises its independent children too,
+one subagent each, so "they are independent" is no longer a reason to leave it off; it is also the only way to run a
+wave wider than the board's `max_in_progress`, since a track is one slot. Leave it off for unrelated tasks, for a graph
+that spans harnesses, and when you want each task judged on its own attempt history. Either way the board is identical
+— see *When you run a track* above.
 
 A full worked example — the graph above, the resulting board, and the invariants it satisfies — is in
 `references/protocol.md`.

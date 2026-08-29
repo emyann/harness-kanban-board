@@ -54,6 +54,20 @@ test('every builtin is allow-listed in the argument-taking form', () => {
   for (const b of SAFE_BUILTINS) assert.ok(!claude().includes(`Bash(${b})`), `Bash(${b}) is the bare form — it denies \`${b} <args>\``);
 });
 
+// A track runner fans a wave out to one isolated subagent per node, and `Agent` is the whole unlock:
+// under `dontAsk` an unlisted tool is DENIED, not prompted. It stays off every other profile because a
+// cold node worker is one session doing one node — one that could fan out would spawn children nothing
+// on the board has claimed, inside the one worktree its own attempt owns (#129).
+test('only the track profile may spawn subagents', () => {
+  assert.ok(DEFAULT_PROFILES['claude-track'].allowed_tools.includes('Agent'), 'a track runner cannot orchestrate without it');
+  for (const [name, p] of Object.entries(DEFAULT_PROFILES)) {
+    if (name === 'claude-track') continue;
+    assert.ok(!(p.allowed_tools || []).includes('Agent'), `${name} must not be able to spawn subagents`);
+  }
+  assert.ok(!claude().includes('Agent'), 'CLAUDE_TOOLS itself stays single-agent');
+  for (const tool of claude()) assert.ok(DEFAULT_PROFILES['claude-track'].allowed_tools.includes(tool), `claude-track lost ${tool}`);
+});
+
 test('the hand-spliced Bash(true) is gone — true comes from SAFE_BUILTINS now', () => {
   assert.ok(!claude().includes('Bash(true)'));
   assert.ok(claude().includes('Bash(true *)'));

@@ -10,7 +10,7 @@ import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWork
 import { workerHookSettings } from './init.js';
 import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle } from './model.js';
 import { workerContext } from './context.js';
-import { planTracks, trackContext, trackPaths, trackAlreadyAttempted } from './track.js';
+import { planTracks, trackContext, trackPaths, trackAlreadyAttempted, trackFanout } from './track.js';
 import { GhError } from './gh.js';
 import { listKbJobs, readJobState, stopJob, matchJobByWorktree, jobSessionUpdate } from './jobs.js';
 import { isMirrorConfigured, syncProject, projectError } from './projects.js';
@@ -773,7 +773,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     try {
       spawned = await spawnWorker(ctx, t, profileName, k, {
         keepRef: !!children,
-        prompt: trackContext({ repo: ctx.repo.nameWithOwner, board: ctx.board, track: cand.track, attempt: k, waves: cand.waves }),
+        prompt: trackContext({ repo: ctx.repo.nameWithOwner, board: ctx.board, track: cand.track, attempt: k, waves: cand.waves, fanout: trackFanout(ctx.cfg, profileName) }),
       });
       if (!spawned.pid && !spawned.bg && !spawned.remote) throw new Error('spawn returned neither a pid nor a background launch');
     } catch (e) {

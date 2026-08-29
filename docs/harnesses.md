@@ -8,7 +8,7 @@ disk) whatever `hkb init --harness <name>` generates. This page is the per-harne
 | profile | harness | worktree | stop nudge | structured output | spend | `hkb init --harness` |
 | --- | --- | --- | --- | --- | --- | --- |
 | `claude` | Claude Code background agent | `claude --worktree` | `Stop` hook [on the launch line](#where-the-hooks-live) (`--settings`) | none — the log is the launch banner | tokens, from the session transcript | — (plain `hkb init`) |
-| `claude-track` | the same, run as a whole track | `claude --worktree` | same | none | one transcript for the whole track, counted once | — |
+| `claude-track` | the same, orchestrating a whole track — one isolated subagent per node | `claude --worktree`, plus one `.claude/worktrees/agent-<id>` per subagent | same | none | one transcript for the whole track, counted once — [subagents excepted](#a-track-is-one-session-however-many-nodes-it-holds) | — |
 | `claude-p` | Claude Code headless | `claude --worktree` | same | `--output-format json` | **a reported cost** | — |
 | `copilot-cli` | GitHub Copilot CLI | dispatcher (`git worktree add`) | `agentStop` hook in `.github/hooks/kanban.json` | none | none | `copilot` |
 | `codex` | OpenAI Codex CLI | dispatcher (`git worktree add`) | `Stop` hook in `.codex/hooks.json` | `--output-schema` | none | `codex` |
@@ -88,7 +88,7 @@ Per profile:
 | profile | what an attempt leaves behind | so `hkb stats` shows |
 | --- | --- | --- |
 | `claude` | a launch banner and nothing else — a background agent signs off with no JSON. What it leaves is the session its terminal verb records: an id and a transcript path ([how](#how-a-background-worker-records-a-session-nobody-told-it-about)) | **usage**, or an **estimate** once the board has rates |
-| `claude-track` | the same — and because the runner finishes each node from inside its own session, every node's row carries the *runner's* session id and transcript | as `claude`, but one transcript covers the whole track, and is counted once for it |
+| `claude-track` | the same — and because the runner finishes each node from inside its own session (its subagents included: they inherit its session id), every node's row carries the *runner's* session id and transcript | as `claude`, but one transcript covers the whole track and is counted once for it — and it holds the orchestrator's turns only, not its subagents' (#155) |
 | `claude-p` | `--output-format json`, so the log ends in Claude's own `{"session_id": …, "total_cost_usd": …, "num_turns": …}` | **reported**, per attempt, with turns |
 | `copilot-cli` | no structured output, and no cost in the `agentStop` payload | **nothing** |
 | `codex` | `--output-schema` shapes the terminal verb, not a bill | **nothing** |
@@ -139,6 +139,20 @@ A `claude-track` runner claims each node from inside the session already running
 carries the same `session_id` and `transcript_path` as the root. That is what lets `hkb show <node>` print a
 `claude --resume` line for a node nobody launched on its own, and it is the difference from a cold node — one
 the dispatcher started by itself, which has a session and a transcript of its own.
+
+It stays true now that the runner hands each node to its own **isolated subagent**: measured against Claude Code
+2.1.251 (#129), a subagent inherits the root's `CLAUDE_CODE_SESSION_ID` and `CLAUDE_JOB_DIR`, so a node finished
+from inside a child still stamps the runner's session. The child's *worktree* is its own — a repo-level
+`.claude/worktrees/agent-<id>`, a sibling of `kb-<n>-<k>` and not nested under it, removed with its branch when the
+subagent returns unchanged (which is why the node brief says commit and push before returning). The launch's hooks
+fire in there too, `PreToolUse` included, and `SubagentStop` is what tells the Stop nudge to stand aside while a
+wave is still running.
+
+What that costs is **under**-reported: a subagent's usage goes to a sidecar transcript,
+`~/.claude/projects/<proj>/<session>/subagents/agent-<id>.jsonl`, which `usageFromTranscript` does not open — so
+`hkb stats` prices the orchestrator's turns and none of its children's (#155). Whether `--max-budget-usd` counts
+them was not measurable without blowing through the budget, so `claude-track` launches with `--max-budget-usd 50`,
+sized as if it does.
 
 The bill does not divide the same way. Those tokens were spent once, and no per-node share of them is recorded
 anywhere — so `hkb stats` counts them once: a transcript is read once however many attempt rows name it, its

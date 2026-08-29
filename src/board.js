@@ -22,6 +22,14 @@ const BUILTIN_TOOLS = SAFE_BUILTINS.map((c) => `${c} *`);
 // deduped: `echo` and `printf` are on both lists, and a repeated pattern is noise in a flag a human reads
 const SHELL_PATTERNS = [...new Set([...SHELL_TOOLS, ...BUILTIN_TOOLS])];
 const CLAUDE_TOOLS = [...SHELL_PATTERNS.map((c) => `Bash(${c})`), 'Edit', 'Write', 'Read', 'Glob', 'Grep'];
+// A track runner is an ORCHESTRATOR: it fans a wave of independent nodes out to one isolated
+// subagent each (`Agent` with `isolation: "worktree"`), so siblings run at the same time instead of
+// one after another. `Agent` is the whole unlock — measured against Claude Code 2.1.251 (#129), a
+// `--bg --worktree` root under `dontAsk` spawns an isolated child the moment the tool is allow-listed,
+// and is DENIED rather than prompted without it. It stays off `CLAUDE_TOOLS` on purpose: a cold node
+// worker is one session doing one node, and a node worker that could fan out would spawn children
+// nothing on the board has claimed.
+const CLAUDE_TRACK_TOOLS = [...CLAUDE_TOOLS, 'Agent'];
 // Copilot CLI spells the same policy `--allow-tool 'shell(<cmd>)'`, one flag per pattern, plus the
 // built-in `write` tool for file edits. See the `--allow-tool={allowed_tools}` token in dispatch.js.
 // Copilot wildcards are `shell(cmd:*)` (verified against the CLI programmatic reference, 2026-08-26);
@@ -69,7 +77,7 @@ export const DEFAULT_PROFILES = {
     launch: ['claude', '--bg', '--name', 'kb #{n} · {title}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', ...CLAUDE_DENY, HOOK_SETTINGS_VAR, '--max-turns', '80', '--max-budget-usd', '5', '{model_args}', '{prompt}'],
   },
   'claude-track': {
-    description: 'Claude Code as a TRACK runner: one background session executes a whole subgraph — a root plus everything it is still blocked by — claiming, working and finishing each node through the ordinary verbs, so every node stays a durable checkpoint. Put `kb:agent:claude-track` on the root of a decomposed goal (`/kanban:decompose`) and give it a generous `max_runtime`: the dispatcher claims the root, counts the whole track as ONE running slot, and leaves the nodes alone while the runner holds them. `track_agents` is which node profiles this runner can execute in-session — a track with a node outside that list needs a second harness, so it is not claimable as a track and falls back to node-by-node dispatch. So does a track whose runner has already had one go: the durable engine always finishes.',
+    description: 'Claude Code as a TRACK runner: one background session ORCHESTRATES a whole subgraph — a root plus everything it is still blocked by. It does not do the nodes itself: it claims a wave of mutually-independent nodes and hands each to its own isolated subagent (`Agent` with `isolation: "worktree"`), so siblings run at the same time, then collects them and starts the next wave. Every node still goes through the ordinary verbs in its own worktree with its own PR, so every node stays a durable checkpoint and a runner that dies leaves a board the ordinary dispatcher finishes. Put `kb:agent:claude-track` on the root of a decomposed goal (`/kanban:decompose`) and give it a generous `max_runtime` and budget — it is one slot paying for a whole subgraph: the dispatcher claims the root, counts the whole track as ONE running slot, and leaves the nodes alone while the runner holds them. `track_agents` is which node profiles this runner can execute in-session — a track with a node outside that list needs a second harness, so it is not claimable as a track and falls back to node-by-node dispatch. So does a track whose runner has already had one go: the durable engine always finishes.',
     mode: 'claude-bg',
     track: true,
     track_agents: ['claude', 'claude-p', 'claude-track'],
@@ -77,8 +85,14 @@ export const DEFAULT_PROFILES = {
     max_in_progress: 1,
     model: null,
     effort: null,
-    allowed_tools: CLAUDE_TOOLS,
-    launch: ['claude', '--bg', '--name', 'kb track #{n} · {title}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', ...CLAUDE_DENY, HOOK_SETTINGS_VAR, '--max-turns', '400', '--max-budget-usd', '25', '{model_args}', '{prompt}'],
+    allowed_tools: CLAUDE_TRACK_TOOLS,
+    // Sized for a whole subgraph, not a node. The orchestrator's own turns go DOWN once the nodes are
+    // subagents — it claims, spawns, collects — but the envelope has to cover every child too: whether
+    // `--max-budget-usd` counts subagent tokens was not measurable in the #129 spike without blowing
+    // through it, so the budget is set as if it does. A track that runs out mid-wave is not a
+    // catastrophe (every finished node is a checkpoint and the ordinary dispatcher takes the rest),
+    // but it is a slot spent for less than it could have been.
+    launch: ['claude', '--bg', '--name', 'kb track #{n} · {title}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', ...CLAUDE_DENY, HOOK_SETTINGS_VAR, '--max-turns', '400', '--max-budget-usd', '50', '{model_args}', '{prompt}'],
   },
   'claude-p': {
     description: 'Claude Code headless (`claude -p`): a plain process that exits when done. Not listed in `claude agents`; use it where no session daemon exists (CI, containers).',
