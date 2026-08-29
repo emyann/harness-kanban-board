@@ -247,6 +247,18 @@ export function checkHooks(ctx, { ok, warn, bad }, { onPath = has, exists = (p) 
   } else {
     ok('stop hook', [...new Set(hooks.map((h) => h.file))].join(' and '));
   }
+  // Same question, for `SubagentStop` (#163): without it a track root's Stop hook cannot tell "a
+  // wave of subagents is still out" from "forgot the verb", and nudges falsely while one is running.
+  if (launched.length) {
+    consider(hkbCommandForHook('subagentstop', { binRel: null, onPath: onPath('hkb') }), `the ${launched.join(', ')} launch`);
+    ok('subagent-stop hook', `on the ${launched.join(', ')} launch (--settings), so no other session in this repo runs it`);
+  } else if (!hooks.some((h) => h.event === 'SubagentStop')) {
+    warn('subagent-stop hook',
+      `no launch on this board carries it and it is not in ${HOOK_SETTINGS.local} or ${HOOK_SETTINGS.shared} — a track root that fans a wave out to subagents gets nudged for the terminal verb while they are still running`,
+      'hkb init');
+  } else {
+    ok('subagent-stop hook', [...new Set(hooks.filter((h) => h.event === 'SubagentStop').map((h) => h.file))].join(' and '));
+  }
   for (const file of [...new Set(hooks.map((h) => h.file))]) {
     warn(STALE_HOOK_CHECK,
       `${file} configures hkb's hooks, so they run in every session in this repo${launched.length ? ' — and a worker runs them twice, once from there and once from its launch' : ''}`,

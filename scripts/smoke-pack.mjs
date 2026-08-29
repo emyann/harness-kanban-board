@@ -260,7 +260,7 @@ function checkLaunchHooks(root, repo) {
   try { settings = JSON.parse(dump.out); }
   catch { bad(`the launch's --settings is not JSON: ${dump.out.slice(0, 120)}`, 'Claude Code parses it as inline settings — see hookSettings in src/model.js'); return; }
   const events = Object.keys(settings.hooks || {}).sort().join(', ');
-  if (events !== 'PreToolUse, Stop') { bad(`the launch carries hooks "${events}", expected "PreToolUse, Stop"`, 'see CLAUDE_HOOKS in src/init.js'); return; }
+  if (events !== 'PreToolUse, Stop, SubagentStop') { bad(`the launch carries hooks "${events}", expected "PreToolUse, Stop, SubagentStop"`, 'see CLAUDE_HOOKS in src/init.js'); return; }
   if (dump.out.includes('_npx')) bad('the launch names the npx cache, which is not a durable path', 'see hkbCommandForHook in src/init.js');
   else ok(`the launch carries --settings (${events}), naming no npx cache`);
 
@@ -304,7 +304,7 @@ function checkInitInsideRepo(root, { what, slug, place }) {
 
     const commands = Object.values(settings.hooks || {}).flatMap((groups) => groups.flatMap((g) => g.hooks.map((h) => h.command)));
     const wanted = `$CLAUDE_PROJECT_DIR/${rel}`;
-    if (commands.length !== 2) bad(`${SHARED_SETTINGS} got ${commands.length} hook command(s), expected 2`, 'see CLAUDE_HOOKS in src/init.js');
+    if (commands.length !== 3) bad(`${SHARED_SETTINGS} got ${commands.length} hook command(s), expected 3`, 'see CLAUDE_HOOKS in src/init.js');
     else if (!commands.every((c) => c.includes(wanted))) bad(`${SHARED_SETTINGS} does not name ${wanted}: ${commands.join(' · ')}`, 'see projectBinRel in src/init.js');
     else if (commands.some((c) => c.includes(repo))) bad(`${SHARED_SETTINGS} names ${repo}, which is only a path on this machine`, 'a tracked file may only hold a $CLAUDE_PROJECT_DIR-relative command');
     else ok(`${SHARED_SETTINGS} (tracked) runs ${wanted}`);

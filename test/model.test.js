@@ -4,7 +4,7 @@ import {
   parseBodyBlock, serializeBodyBlock, DEFAULT_KB, statusOf, agentOf, boardOf,
   parseRunComment, serializeRunComment, emptyRun, openAttempt, parseResultComment, serializeResultComment,
   blockerDone, computeReady, pathsOverlap, sortForDispatch, slugify, lockRef, lockRefPath, hashReason,
-  normalizeHookInput, stripFrontmatter, sessionUpdate, parseRepoSpecs, boardKey, uniqueKeys,
+  normalizeHookInput, stripFrontmatter, sessionUpdate, parseRepoSpecs, boardKey, uniqueKeys, shouldNudgeOnStop,
 } from '../src/model.js';
 
 test('body block: round trip and defaults', () => {
@@ -93,6 +93,21 @@ test('stop-hook payload: Copilot camelCase folds onto Claude snake_case', () => 
   assert.equal(copilot.stop_hook_active, true);
   // and the normalised payload feeds the same attempt-row writer
   assert.deepEqual(sessionUpdate({}, copilot), { session_id: 'abc', transcript_path: '/t.jsonl' });
+});
+
+test('shouldNudgeOnStop: a track root waiting on its wave is not "forgot the verb" (#163 spike, job cadca6f1)', () => {
+  // 23:22:45 PreToolUse Agent (root)     — started: 1
+  // 23:22:54 Stop (root, child still live) — the false nudge this bug used to send
+  assert.equal(shouldNudgeOnStop({ started: 1, ended: 0 }), false);
+  // 23:23:03 SubagentStop                — ended: 1
+  // 23:23:19 PreToolUse Write (root resumes; a later Stop with nothing filed is the real case)
+  assert.equal(shouldNudgeOnStop({ started: 1, ended: 1 }), true);
+  // never suppress on a guess: no bookkeeping at all reads as {0, 0} and nudges as it always has
+  assert.equal(shouldNudgeOnStop({}), true);
+  assert.equal(shouldNudgeOnStop(undefined), true);
+  // a wave of several: one still out is enough to stand aside
+  assert.equal(shouldNudgeOnStop({ started: 3, ended: 2 }), false);
+  assert.equal(shouldNudgeOnStop({ started: 3, ended: 3 }), true);
 });
 
 test('stop-hook payload: Claude snake_case passes through, and wins over an alias', () => {

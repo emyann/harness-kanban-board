@@ -25,12 +25,20 @@
 // same `{"decision":"block"}` answer — but it runs no project hook at all until the project has been
 // trusted once, so its nudge is only as good as that setup step (docs/harnesses.md). `--output-schema`
 // shapes its final message; the terminal verb the worker ran is still what moved the card.
+//
+// `hkb hook subagentstop` — Claude Code's `SubagentStop`, registered beside `Stop` on the same worker
+// launch. A track root that fans a wave out to subagents ends its own turn while they run: `Stop`
+// fires for the root before `SubagentStop` fires for the child (measured, 2026-08-28 spike, job
+// `cadca6f1`). Answering that Stop with the usual "still running" nudge is a false positive — the
+// root is correctly waiting — so `preToolHook` counts every `Agent` tool call as a subagent "started"
+// and this hook counts every `SubagentStop` as one "ended", both under `.kanban/sessions/`, and
+// `stopHook` asks `shouldNudgeOnStop` (model.js) which one it is before it nudges (#163).
 import fs from 'node:fs';
 import path from 'node:path';
 import { kanbanDir } from './board.js';
 import { currentSession } from './jobs.js';
 import { getTask, loadRun, saveRun } from './tasks.js';
-import { openAttempt, sessionUpdate, normalizeHookInput, parseWorktreeName, attemptIdentity } from './model.js';
+import { openAttempt, sessionUpdate, normalizeHookInput, parseWorktreeName, attemptIdentity, shouldNudgeOnStop } from './model.js';
 
 /**
  * PreToolUse hook: hkb's own permission policy — **deny or say nothing**, never an allow, never a
@@ -59,9 +67,25 @@ import { openAttempt, sessionUpdate, normalizeHookInput, parseWorktreeName, atte
  * board does not have — a worker launched from another checkout, a hand-exported `KB_TASK`). The
  * `{}` fallback profile is not a conservative default, it is a *different, stricter* policy nobody
  * chose; standing aside with one line on stderr is the honest answer.
+ *
+ * It also reads every tool call for one more reason, ahead of the permission question and on
+ * whichever `source` `whichAttempt` answered: an `Agent` tool call is a subagent "started" (#163),
+ * recorded under `.kanban/sessions/` so `stopHook` can tell a track root waiting on its wave from one
+ * that forgot the verb. That bookkeeping runs on `claude --bg` (`source: 'worktree'`) too — it is
+ * exactly the session the spike caught — so it cannot share the `source: 'env'` gate below.
  */
-export async function preToolHook(ctx) {
-  if (whichAttempt(ctx.root, { profiles: ctx.cfg?.profiles, warn: 'hkb hook' })?.source !== 'env') return 0;
+export async function preToolHook(ctx, io = {}) {
+  const me = whichAttempt(ctx.root, { profiles: ctx.cfg?.profiles, warn: 'hkb hook' });
+  if (!me) return 0;
+  const readStdin = io.readStdin || (() => fs.readFileSync(0, 'utf8'));
+  let input = null;
+  try { input = JSON.parse(readStdin() || '{}'); } catch { input = null; }
+  if (input?.tool_name === 'Agent') {
+    try { recordAgentStart(ctx.root, me.n, me.k); } catch (e) {
+      process.stderr.write(`hkb hook: could not record the subagent start on #${me.n} (${e.message})\n`);
+    }
+  }
+  if (me.source !== 'env') return 0;
   const n = process.env.KB_TASK;
   const name = process.env.KB_PROFILE;
   const profile = name ? ctx.cfg?.profiles?.[name] : null;
@@ -70,8 +94,7 @@ export async function preToolHook(ctx) {
       " — standing aside; this session's launch flags are its whole permission policy\n");
     return 0;
   }
-  let input = {};
-  try { input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}'); } catch { return 0; }
+  if (!input) return 0; // stdin was not valid JSON
   const { decidePermission, allowedCommandsFrom } = await import('./model.js');
   const allowedCmds = allowedCommandsFrom(profile.allowed_tools || []);
   allowedCmds.add('hkb'); allowedCmds.add('git'); allowedCmds.add('gh');
@@ -107,6 +130,37 @@ const markerFile = (root, n, k) => path.join(sessionsDir(root), `${n}-${k}`);
 
 /** The leak line is one line per process, however many times the hook asks the same question. */
 let warnedLeak = null;
+
+// ---------- subagents live under this session (#163) ----------
+// One file beside the session marker, `<n>-<k>.subagents` rather than `<n>-<k>` so it never matches
+// `MARKER_RE` and `pendingTargets` never trips over it. `{started, ended}`: `preToolHook` bumps
+// `started` on every `Agent` tool call, `subagentStopHook` bumps `ended` on every `SubagentStop` —
+// the only two signals a hook sees for a subagent's whole life. An unreadable or absent file reads as
+// `{started: 0, ended: 0}`, which `shouldNudgeOnStop` (model.js) treats as "nudge as today": never
+// suppress on a guess.
+
+const agentsFile = (root, n, k) => path.join(sessionsDir(root), `${n}-${k}.subagents`);
+
+function readAgentCounts(root, n, k) {
+  try {
+    const { started, ended } = JSON.parse(fs.readFileSync(agentsFile(root, n, k), 'utf8'));
+    return { started: Number(started) || 0, ended: Number(ended) || 0 };
+  } catch { return { started: 0, ended: 0 }; }
+}
+
+function bumpAgentCount(root, n, k, field) {
+  const counts = readAgentCounts(root, n, k);
+  counts[field] += 1;
+  const file = agentsFile(root, n, k);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(counts));
+  return counts;
+}
+
+/** An `Agent` tool call just started under this attempt's session. */
+export function recordAgentStart(root, n, k) { return bumpAgentCount(root, n, k, 'started'); }
+/** A `SubagentStop` just fired for this attempt's session. */
+export function recordAgentEnd(root, n, k) { return bumpAgentCount(root, n, k, 'ended'); }
 
 /**
  * Which attempt this session is working — the question every line below depends on.
@@ -289,6 +343,15 @@ export async function stopHook(ctx, io = {}) {
     process.stderr.write(`hkb hook: could not record the session on #${n} (${e.message})\n`);
   }
   if (status !== 'running') return 0; // terminal verb already recorded
+  // Idle because the work is running in subagents, not because it is done (#163): a track root that
+  // fanned a wave out ends its own turn while they run, and its Stop fires before their SubagentStop
+  // does. Checked before the nudge counter is even opened, so a suppressed Stop does not burn one of
+  // the two real nudges the root still has once the wave finishes.
+  const agents = readAgentCounts(ctx.root, n, k);
+  if (!shouldNudgeOnStop(agents)) {
+    process.stderr.write(`hkb hook: #${n} has ${agents.started - agents.ended} subagent(s) still running — standing aside, not nudging\n`);
+    return 0;
+  }
   if (count >= 2) {
     process.stderr.write(`hkb hook: #${n} still running after 2 nudges — allowing stop (dispatcher will record protocol_violation)\n`);
     return 0;
@@ -299,5 +362,20 @@ export async function stopHook(ctx, io = {}) {
     `(\`finish\` is \`complete\` under a name no shell claims — say \`finish\`, and redirect a file rather than a heredoc, so a harness that vets your command line runs it.) ` +
     `(nudge ${count + 1}/2${input.stop_hook_active ? ', stop_hook_active' : ''})`;
   process.stdout.write(JSON.stringify({ decision: 'block', reason }) + '\n');
+  return 0;
+}
+
+/**
+ * `SubagentStop` — the other half of #163's bookkeeping. Fires once per subagent, on the same
+ * session's identity `Stop` uses, and has exactly one job: mark that subagent ended, so the next
+ * `Stop` on this attempt can tell a finished wave from a live one. Never nudges, never touches the
+ * board, never costs the nudge counter — a subagent ending is not the root forgetting its verb.
+ */
+export async function subagentStopHook(ctx) {
+  const me = whichAttempt(ctx.root, { profiles: ctx.cfg?.profiles, warn: 'hkb hook' });
+  if (!me) return 0;
+  try { recordAgentEnd(ctx.root, me.n, me.k); } catch (e) {
+    process.stderr.write(`hkb hook: could not record the subagent end on #${me.n} (${e.message})\n`);
+  }
   return 0;
 }

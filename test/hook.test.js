@@ -25,7 +25,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { attemptIdentity, worksInWorktree, scrubKbEnv, kbVarsIn, KB_ENV_VARS, worktreePath } from '../src/model.js';
-import { whichAttempt, stopHook, preToolHook, sessionForAttempt } from '../src/hook.js';
+import { whichAttempt, stopHook, preToolHook, subagentStopHook, sessionForAttempt } from '../src/hook.js';
 import { checkEnvLeak, daemonsWithKbEnv, ENV_LEAK_CHECK } from '../src/doctor.js';
 import { DEFAULT_BOARD, DEFAULT_PROFILES } from '../src/board.js';
 import { loadRun } from '../src/tasks.js';
@@ -190,6 +190,80 @@ test('stop hook: the same session, in the checkout the environment names, is a w
     assert.equal((await h.attempt(7, 1)).session_id, 'sid-7', 'a real worker still records its session');
     assert.equal(JSON.parse(h.out()).decision, 'block', 'and is still nudged for the terminal verb');
     assert.equal(h.err(), '');
+  } finally { h.cleanup(); }
+});
+
+// ---------- #163: a track root waiting on a wave of subagents is not "forgot the verb" ----------
+
+test('stop hook: a Stop while a subagent is still live stands aside, and does not burn a nudge', async () => {
+  const h = leakHarness({ cwd: 'kb-7-1', task: '7' });
+  try {
+    // 23:22:45 PreToolUse Agent (root) — the "started" signal
+    await preToolHook(h.ctx, { readStdin: () => JSON.stringify({ tool_name: 'Agent' }) });
+    // 23:22:54 Stop (root — the child has not fired SubagentStop yet)
+    const answer = await stopHook(h.ctx, { readStdin: () => JSON.stringify({ session_id: 'sid-7' }) });
+
+    assert.equal(answer, 0);
+    assert.equal(h.out(), '', 'no nudge: the root is correctly waiting on its wave');
+    assert.match(h.err(), /#7 has 1 subagent\(s\) still running — standing aside, not nudging/);
+    assert.equal(fs.existsSync(path.join(h.root, '.kanban', 'nudges', '7-1')), false, 'the nudge counter was never even opened');
+  } finally { h.cleanup(); }
+});
+
+test('stop hook: once every subagent has ended, a still-running task is nudged exactly as today', async () => {
+  const h = leakHarness({ cwd: 'kb-7-1', task: '7' });
+  try {
+    await preToolHook(h.ctx, { readStdin: () => JSON.stringify({ tool_name: 'Agent' }) });
+    await stopHook(h.ctx, { readStdin: () => JSON.stringify({ session_id: 'sid-7' }) }); // suppressed, spends nothing
+    await subagentStopHook(h.ctx); // 23:23:03 SubagentStop — the "ended" signal
+
+    const answer = await stopHook(h.ctx, { readStdin: () => '' }); // 23:23:19+ root resumes, then forgets the verb
+
+    assert.equal(answer, 0);
+    assert.equal(JSON.parse(h.out()).decision, 'block');
+    assert.match(JSON.parse(h.out()).reason, /nudge 1\/2/, 'the earlier suppressed Stop spent none of the two nudges');
+  } finally { h.cleanup(); }
+});
+
+test('stop hook: no Agent tool call ever seen — behaves exactly as before #163', async () => {
+  const h = leakHarness({ cwd: 'kb-7-1', task: '7' });
+  try {
+    await stopHook(h.ctx, { readStdin: () => JSON.stringify({ session_id: 'sid-7' }) });
+    assert.equal(JSON.parse(h.out()).decision, 'block', 'a cold worker with no subagents is nudged as always');
+  } finally { h.cleanup(); }
+});
+
+test('subagentStopHook: a leaked environment records nothing (not this session\'s to answer for)', async () => {
+  const h = leakHarness({ task: '146' });
+  try {
+    assert.equal(await subagentStopHook(h.ctx), 0);
+    assert.equal(h.writes(), 0);
+  } finally { h.cleanup(); }
+});
+
+test('pre-tool hook: a subagent start that cannot be recorded costs a stderr line, never the tool call', async () => {
+  const h = leakHarness({ cwd: 'kb-7-1', task: '7' });
+  try {
+    const mkdirSync = fs.mkdirSync;
+    fs.mkdirSync = () => { throw new Error('EACCES: permission denied'); };
+    try {
+      const answer = await preToolHook(h.ctx, { readStdin: () => JSON.stringify({ tool_name: 'Agent' }) });
+      assert.equal(answer, 0);
+    } finally { fs.mkdirSync = mkdirSync; }
+    assert.match(h.err(), /could not record the subagent start on #7 \(EACCES/);
+    // and the missing bookkeeping reads as {started: 0, ended: 0} — never suppress on a guess
+    const stop = await stopHook(h.ctx, { readStdin: () => '' });
+    assert.equal(stop, 0);
+    assert.equal(JSON.parse(h.out()).decision, 'block', 'nudged as always, since nothing was recorded to say otherwise');
+  } finally { h.cleanup(); }
+});
+
+test('pre-tool hook: only the `Agent` tool counts as a subagent start', async () => {
+  const h = leakHarness({ cwd: 'kb-7-1', task: '7' });
+  try {
+    await preToolHook(h.ctx, { readStdin: () => JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'npm test' } }) });
+    await stopHook(h.ctx, { readStdin: () => '' });
+    assert.equal(JSON.parse(h.out()).decision, 'block', 'a Bash call is not a subagent — the nudge fires as always');
   } finally { h.cleanup(); }
 });
 

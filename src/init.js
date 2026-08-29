@@ -282,19 +282,21 @@ export function hkbCommandForHook(verb = 'stop', { shared = false, onPath, pkgRo
 }
 
 /**
- * The hooks `hkb init` writes, as `event → hkb hook <verb>`. Both are inert outside a worker
+ * The hooks `hkb init` writes, as `event → hkb hook <verb>`. All three are inert outside a worker
  * session, and they are gated differently on purpose (`src/hook.js`, docs/harnesses.md): `Stop`
  * stands aside unless KB_TASK is set *or* it is sitting in a `kb-<n>-<k>` checkout, which is the
  * only thing a `claude --bg` session can be identified by; `PreToolUse` takes KB_TASK only, because
  * a checkout name says which task a session is and never which profile's allow-list to apply — so
- * it is live on the process-mode profiles (`claude-p`) and stands aside on `claude --bg`. Both are
- * `matcher: "*"` entries, and since #144 the only session that gets them is the one hkb launched.
+ * it is live on the process-mode profiles (`claude-p`) and stands aside on `claude --bg`. `SubagentStop`
+ * is gated the same as `Stop` — it records that a subagent `PreToolUse` started has ended, so `Stop`
+ * on a track root can tell "waiting on a wave" from "forgot the verb" (#163). All three are `matcher: "*"`
+ * entries, and since #144 the only session that gets them is the one hkb launched.
  */
-export const CLAUDE_HOOKS = { Stop: 'stop', PreToolUse: 'pretool' };
-const HOOK_NOTE = 'inert outside a worker session; Stop nudges for the terminal verb, PreToolUse denies (never allows) and takes KB_TASK only, so it is live on claude-p and stands aside on claude --bg';
+export const CLAUDE_HOOKS = { Stop: 'stop', PreToolUse: 'pretool', SubagentStop: 'subagentstop' };
+const HOOK_NOTE = 'inert outside a worker session; Stop nudges for the terminal verb (standing aside while a subagent is still running), PreToolUse denies (never allows) and takes KB_TASK only, so it is live on claude-p and stands aside on claude --bg, and SubagentStop just records that a subagent ended';
 
 /**
- * The `--settings` value every Claude worker launch carries: hkb's two hooks, running the hkb that
+ * The `--settings` value every Claude worker launch carries: hkb's hooks, running the hkb that
  * is here. `expandLaunch` (src/dispatch.js) spends it on `{hook_settings}`, and `hkb doctor` asks the
  * same question of the same command, so what it checks is what a worker will actually run.
  *

@@ -523,6 +523,25 @@ export function sessionUpdate(attempt, fields) {
   return Object.keys(out).length ? out : null;
 }
 
+/**
+ * Whether a Stop that finds the task still "running" is the real "forgot the verb" case, or a track
+ * root that correctly ended its own turn while a wave of subagents is still out (#163). `started` and
+ * `ended` come from the hook's own bookkeeping (`src/hook.js`): `PreToolUse` on the `Agent` tool is the
+ * only "started" signal a hook sees, `SubagentStop` the only "ended" one — measured order, 2026-08-28
+ * spike (job `cadca6f1`):
+ *
+ *   PreToolUse Agent (root)      → started: 1
+ *   Stop (root, children live)   → shouldNudgeOnStop({started: 1, ended: 0}) === false
+ *   SubagentStop                 → ended: 1
+ *   Stop (root resumes, forgets) → shouldNudgeOnStop({started: 1, ended: 1}) === true
+ *
+ * Unreadable or absent bookkeeping defaults to `{started: 0, ended: 0}` — nudge as today, on purpose
+ * (a false nudge costs a turn, a missed one costs the protocol; never suppress on a guess).
+ */
+export function shouldNudgeOnStop({ started = 0, ended = 0 } = {}) {
+  return ended >= started;
+}
+
 function fmtCost(usd) { return `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}`; }
 function fmtDuration(ms) {
   const s = Math.round(ms / 1000);
