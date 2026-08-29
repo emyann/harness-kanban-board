@@ -116,7 +116,10 @@ export async function checkMcp(ctx, { ok, warn, bad = warn }, { onPath = has, ex
       ? ok(MCP_FILE, `${MCP_KEY} → hkb`)
       : bad(MCP_FILE, '`hkb` is not on PATH here', 'npm i -g hkb-cli (or: hkb init --mcp, which writes a command that resolves here)');
   }
-  ok(MCP_FILE, `${MCP_KEY} → ${entry.command}`); // an absolute path: it names this machine on purpose
+  // `hkb init --mcp` never writes anything else — a bare `hkb` or a project-relative `node <rel>` are
+  // the only shapes it can produce (#166). Whatever else is here was hand-edited, or is left over from
+  // an older hkb: nothing further to check without knowing what it is meant to resolve against.
+  ok(MCP_FILE, `${MCP_KEY} → ${entry.command}`);
 }
 
 /**

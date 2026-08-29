@@ -265,6 +265,13 @@ hkb being run is *inside* the repo it is setting up, where it sits is a property
 the machine, so the command is exact here and correct on every other machine at the same time — commit the file,
 and a teammate's `git pull && npm install` is the whole setup, on a machine that never runs `hkb init` at all.
 
+`--mcp` also prints — never writes — the `~/.codex/config.toml` and `.vscode/mcp.json` equivalents, since neither
+file is hkb's to commit. `.vscode/mcp.json` is a workspace file VS Code resolves relative paths in against the
+project directory, same as `.mcp.json`, so it gets the same entry verbatim. `~/.codex/config.toml` is user-level:
+Codex resolves its `args` against wherever `codex` happens to start, not this project, so a project-relative path
+there would be right only in this one directory. That snippet always names `hkb` on PATH or this checkout's own
+`bin/hkb.js` made absolute — never the relative form the other three columns want.
+
 Only the middle column is measured differently. Claude Code sets `$CLAUDE_PROJECT_DIR` for hook commands
 precisely so a project can name its own files by a variable instead of a cwd; Codex and Copilot set neither,
 but both already run their hook's command from the project root — Codex's `-C <worktree>` is also its cwd, and

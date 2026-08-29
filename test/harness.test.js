@@ -1156,10 +1156,24 @@ test('mcpLaunch names a repo-carried hkb relative to the project directory, ungu
   const selfCheckout = mcpLaunch({ root, pkgRoot: root });
   assert.deepEqual(selfCheckout, { command: 'node', args: [BIN, 'mcp'] });
 
-  // no hkb inside the repo: falls back to the absolute, this-machine-only form (#146's third case)
+  // no hkb inside the repo: falls back to the plain `hkb` every teammate has to have on PATH, same
+  // as the harness files' `shared` case — never an absolute, this-machine-only path (#166 review)
   const elsewhere = mcpLaunch({ root, pkgRoot: '/elsewhere/node_modules/hkb-cli', onPath: false });
-  assert.equal(elsewhere.command, process.execPath);
-  assert.ok(path.isAbsolute(elsewhere.args[0]));
+  assert.deepEqual(elsewhere, { command: 'hkb', args: ['mcp'] });
+});
+
+test('mcpLaunch prefers a repo-carried hkb over PATH, same order as hkbCommandForHook', () => {
+  const root = '/repo';
+  const launch = mcpLaunch({ onPath: true, root, pkgRoot: path.join(root, 'node_modules', 'hkb-cli') });
+  assert.deepEqual(launch, { command: 'node', args: [DEP_REL, 'mcp'] }, 'a repo-carried hkb runs even when hkb is also on PATH');
+});
+
+test('mcpLaunch({ shared: false }) is the private, this-machine-only form for a config nothing commits', () => {
+  const onPath = mcpLaunch({ onPath: true, shared: false });
+  assert.deepEqual(onPath, { command: 'hkb', args: ['mcp'] });
+  const fallback = mcpLaunch({ onPath: false, shared: false });
+  assert.equal(fallback.command, process.execPath);
+  assert.ok(path.isAbsolute(fallback.args[0]));
 });
 
 test('installMcp writes no absolute path when the repo carries hkb itself, and the command resolves from the project root', () => {
