@@ -5,6 +5,18 @@ export const STATUSES = ['triage', 'todo', 'ready', 'running', 'blocked', 'revie
 export const OUTCOMES = ['completed', 'blocked', 'crashed', 'timed_out', 'spawn_failed', 'reclaimed', 'protocol_violation', 'gave_up', 'review_requested', 'changes_requested'];
 export const BLOCK_KINDS = ['dependency', 'needs_input', 'capability', 'transient', 'generic'];
 
+// The two things people pinned a whole `launch` array for (#182): a model and Claude Code's
+// `--effort`. Both are profile fields rendered into `{model_args}` now, so the pin is never needed.
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'];
+
+/** What `{model_args}` expands to: `--model <m>` then `--effort <e>`, either or both dropped when unset. Pure. */
+export function modelArgs(vars) {
+  const out = [];
+  if (vars.model) out.push('--model', vars.model);
+  if (vars.effort) out.push('--effort', vars.effort);
+  return out;
+}
+
 export const LABEL_COLORS = {
   'kb:status:triage': 'bfd4f2',
   'kb:status:todo': 'c2e0c6',

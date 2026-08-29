@@ -6,61 +6,13 @@
   "profiles": {
     "claude": {
       "model": "claude-sonnet-5",
-      "launch": [
-        "claude",
-        "--bg",
-        "--name",
-        "kb #{n} · {title}",
-        "--worktree",
-        "kb-{n}-{k}",
-        "--permission-mode",
-        "dontAsk",
-        "--effort",
-        "medium",
-        "--allowedTools",
-        "{allowed_tools}",
-        "--disallowedTools",
-        "Bash(hkb dispatch*)",
-        "Bash(git push --force*)",
-        "Bash(git push -f*)",
-        "{hook_settings}",
-        "--max-turns",
-        "80",
-        "--max-budget-usd",
-        "5",
-        "{model_args}",
-        "{prompt}"
-      ],
+      "effort": "medium",
       "max_in_progress": 4
     },
     "claude-action": {},
     "claude-track": {
       "model": "claude-opus-5",
-      "launch": [
-        "claude",
-        "--bg",
-        "--name",
-        "kb track #{n} · {title}",
-        "--worktree",
-        "kb-{n}-{k}",
-        "--permission-mode",
-        "dontAsk",
-        "--effort",
-        "medium",
-        "--allowedTools",
-        "{allowed_tools}",
-        "--disallowedTools",
-        "Bash(hkb dispatch*)",
-        "Bash(git push --force*)",
-        "Bash(git push -f*)",
-        "{hook_settings}",
-        "--max-turns",
-        "400",
-        "--max-budget-usd",
-        "25",
-        "{model_args}",
-        "{prompt}"
-      ]
+      "effort": "medium"
     }
   },
   "dispatch": {
