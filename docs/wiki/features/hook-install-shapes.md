@@ -7,7 +7,7 @@ audience: [dev, ops]
 read_when: "changing where hkb's Claude Code hooks are installed, what `hkb init` writes into a settings file, doctor's hook checks, or adopting hkb as a devDependency of a repo; also when a hook command in a repo does not resolve"
 covers:
   - path: src/init.js
-    sha: 6d05df9f01e23d69cb3572a9f29226e3867a0d51
+    sha: 9b546acacc6d26c4caa8dfba357b448a5554c0e4
   - path: src/model.js
     sha: 0b6cab6f25caa911b717dca9ba8c01d5a8510de5
   - path: src/board.js
@@ -19,7 +19,7 @@ covers:
   - path: scripts/smoke-pack.mjs
     sha: 402cbf447d95e8b33bec877e3dd2f5ebf897972c
 related: [architecture/overview, features/update-notice, concepts/roles-and-seats]
-generated_at_commit: a391898
+generated_at_commit: 2b3c6ef
 last_refreshed: 2026-08-28
 ---
 
