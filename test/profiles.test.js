@@ -189,6 +189,12 @@ test('doctor warns about a Claude launch with no `--permission-mode dontAsk`', (
   assert.match(results[0].fix, /add "--permission-mode", "dontAsk" to the launch/);
 });
 
+test('bypassPermissions and --dangerously-skip-permissions skip the prompt too (#159)', () => {
+  const bypass = { ...DEFAULT_PROFILES.claude, launch: DEFAULT_PROFILES.claude.launch.map((a) => a === 'dontAsk' ? 'bypassPermissions' : a) };
+  const dangerous = { ...DEFAULT_PROFILES['claude-p'], launch: [...DEFAULT_PROFILES['claude-p'].launch.filter((a) => a !== '--permission-mode' && a !== 'dontAsk'), '--dangerously-skip-permissions'] };
+  assert.deepEqual(promptingProfiles({ profiles: { claude: bypass, 'claude-p': dangerous } }), [], 'neither leaves a prompt for nobody to answer');
+});
+
 test('doctor is silent on the profiles hkb ships, and asks nothing of a non-Claude launch', (t) => {
   const { results, sink } = collect();
   assert.deepEqual(promptingProfiles({ profiles: DEFAULT_PROFILES }), []);

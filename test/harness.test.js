@@ -626,7 +626,11 @@ test('hkbCommandForHook never names an npx cache, whatever the local PATH says (
 test('a durable install is still named absolutely, and a tracked file never is', () => {
   const durable = path.join(path.sep, 'usr', 'lib', 'node_modules', 'hkb-cli');
   assert.equal(hkbCommandForHook('stop', { onPath: false, pkgRoot: durable }), `node "${path.join(durable, 'bin', 'hkb.js')}" hook stop`);
+  // A durable PKG_ROOT wins over a bare `hkb` even when one is on PATH (#171 — the hook runs under
+  // the session daemon's own PATH, not the dispatcher's, so PATH agreeing right now proves nothing).
+  assert.equal(hkbCommandForHook('stop', { onPath: true, pkgRoot: durable }), `node "${path.join(durable, 'bin', 'hkb.js')}" hook stop`);
   assert.equal(hkbCommandForHook('stop', { shared: true, onPath: false, pkgRoot: durable }), 'hkb hook stop', 'a shared file gets the portable form or nothing');
+  assert.equal(hkbCommandForHook('stop', { shared: true, onPath: true, pkgRoot: durable }), 'hkb hook stop', 'and neither does an onPath one');
 });
 
 // ---------- the third install shape: an hkb the repo itself carries (#146) ----------
@@ -839,8 +843,11 @@ test('hookSettings is the same shape a settings file gets, as one JSON string', 
 });
 
 test('workerHookSettings names the hkb that is running, never a project-relative one', () => {
+  // This checkout's PKG_ROOT is durable, so it is named absolutely even with a bare `hkb` on PATH
+  // (#171): the hook runs under the session daemon's own environment, which keeps its own PATH
+  // (#150), so a bare command re-resolves there rather than against the PATH this process observed.
   const onPath = JSON.parse(workerHookSettings({ onPath: true }));
-  assert.equal(onPath.hooks.Stop[0].hooks[0].command, 'hkb hook stop');
+  assert.match(onPath.hooks.Stop[0].hooks[0].command, /^node ".*bin[/\\]hkb\.js" hook stop$/);
 
   // The launch never leaves this machine, so an absolute path is CORRECT here — exactly the case a
   // tracked settings file had to rule out (#85).
@@ -872,6 +879,15 @@ test('expandLaunch spends the placeholder as a flag pair, or drops it', () => {
   const none = expandLaunch(p.launch, { prompt: 'x' }, p);
   assert.ok(!none.includes('--settings'), 'a flag with no value is a parse error waiting to happen, not a default');
   assert.ok(!none.includes(HOOK_SETTINGS_VAR), 'and the placeholder still goes');
+});
+
+test('expandLaunch refuses {hook_settings} embedded in a larger token', () => {
+  const p = DEFAULT_PROFILES['claude-p'];
+  // `--settings={hook_settings}` would render a bare `--settings=` when there is nothing to run —
+  // a flag Claude Code still has to parse, and silently wrong rather than caught at launch time.
+  const template = ['claude', `--settings=${HOOK_SETTINGS_VAR}`];
+  assert.throws(() => expandLaunch(template, { prompt: 'x' }, p), /embeds \{hook_settings\}/);
+  try { expandLaunch(template, { prompt: 'x' }, p); } catch (e) { assert.equal(e.exitCode, 2); }
 });
 
 // The whole reason `board.json` holds a token and not the JSON: that file is TRACKED, and the

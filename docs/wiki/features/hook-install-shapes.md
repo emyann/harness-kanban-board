@@ -7,13 +7,13 @@ audience: [dev, ops]
 read_when: "changing where hkb's Claude Code hooks are installed, what `hkb init` writes into a settings file, the Codex/Copilot hook files or .mcp.json, doctor's hook checks, or adopting hkb as a devDependency of a repo; also when a hook command in a repo does not resolve"
 covers:
   - path: src/init.js
-    sha: dd28e7c0fa2f5885faaef9ca2902368747ed9d8b
+    sha: 970e86ff80e854ba300883b70f50339c3b69dc1d
   - path: src/model.js
-    sha: afe2c3e44ea8b5518d656f69f6f19aa00e41872e
+    sha: 5e9c535ed93335f55ffc843c9936b05a5eb94010
   - path: src/board.js
-    sha: fd6f44def21b8286bbe5d9821209ccad1770df70
+    sha: 9c317252b63f7882b19c1e0723abb6ab198bb37c
   - path: src/doctor.js
-    sha: 815d85fc871585e6eb89c394a4613783c52351ec
+    sha: 132c03d155c4acb6bb09eec71536ca9ba25d10ca
   - path: src/mcp.js
     sha: 83243b4f880a005c6c06be3f1de396642f0cb3f8
   - path: skills/kanban/scripts/hkb
@@ -62,25 +62,29 @@ ride the worker's own launch line as `--settings '{"hooks":…}'`
 Two consequences worth holding on to:
 
 - The command in that JSON **may name this machine** — `node "<abs>/bin/hkb.js"`
-  when `hkb` is not on PATH — because a launch line is spent where it was built.
-  That is the exact case #85 had to forbid for a file other people read.
+  whenever `PKG_ROOT` is durable, whether or not `hkb` is also on PATH (#171) —
+  because a launch line is spent where it was built. That is the exact case
+  #85 had to forbid for a file other people read.
 - `.kanban/board.json` is **tracked**, so it holds the placeholder and never the
   JSON (the launch templates in `DEFAULT_PROFILES`, `src/board.js`). The value
   is resolved per spawn, in `spawnWorker`.
 
-`claude --bg` was measured before this was built, not assumed: a background
-launch hands the request to Claude Code's session daemon, so a per-launch flag
-reaches it only if the CLI forwards it. In Claude Code 2.1.251 the `--bg`
-dispatch path forwards exactly six per-launch sources — `--settings`,
-`--add-dir`, `--mcp-config`, both `--plugin-dir` flags and `--strict-mcp-config`
-— and passes a `--settings` value beginning with `{` through as inline JSON
-rather than resolving it as a path. That is why `claude` and `claude-track` get
-the hooks and not only the process-mode `claude-p`.
+`claude --bg` was measured live, not assumed: a background launch hands the
+request to Claude Code's session daemon, so a per-launch flag reaches it only
+if the CLI forwards it. The check was a `claude --bg` launch carrying
+`--settings '{"hooks":{"Stop":…}}'`, watched for the Stop hook to actually
+fire in that session — and it did, a few seconds after the launch returned
+(Claude Code 2.1.251, comment on #144). The forwarding path is `handleBgFlag →
+spawnBgSession`: its respawn-flag allowlist keeps `--settings <value>` as a
+pair when it re-execs into the daemon, and a value starting with `{` passes
+through untouched rather than being resolved as a path. That is why `claude`
+and `claude-track` get the hooks and not only the process-mode `claude-p`.
 
-> TODO-VERIFY: the six-source forwarding list and the inline-JSON branch were
-> read out of the shipped 2.1.251 binary's own argument-forwarding table, not
-> observed at runtime — re-check against a live `--bg` marker-file probe, and
-> on any Claude Code that changes the `--bg` handoff.
+Do not read `hkb doctor`'s `profile claude sessions` line as a re-run of that
+check: since #137 the dispatcher's tick also records the session id straight
+off the job record, on every profile, whether or not any hook ever fired. The
+Stop hook's own trace is narrower and on disk — the `.kanban/sessions/<n>-<k>`
+marker file it writes every time it runs (`src/hook.js`).
 
 ## One question, three answers — for the file `--shared-hooks` writes
 
@@ -101,11 +105,16 @@ installer too the next time npm cleans that cache.
 
 The launch calls the same function with `shared: false` **and `binRel: null`**
 (`workerHookSettings`), so it takes none of the rows above: it names the hkb
-that is running — a bare `hkb` when that is on PATH, an absolute
-`node "<abs>/bin/hkb.js"` otherwise, `npx -y hkb-cli` only from a cache. Passing
-`binRel` there would be a category error: `$CLAUDE_PROJECT_DIR` exists to be
-right on machines this one has never seen, and a launch never leaves this
-machine, so all it could add is the guard's silence — see below.
+that is running — an absolute `node "<abs>/bin/hkb.js"` whenever `PKG_ROOT` is
+durable, a bare `hkb` only as the fallback for the one case that cannot be
+named absolutely (hkb itself running out of an npx cache, with `hkb` on PATH),
+otherwise `npx -y hkb-cli` (#171 — this used to prefer the bare form whenever
+`hkb` happened to be on PATH, but the hook runs in the session daemon's own
+environment, which keeps its own PATH (#150): a bare command re-resolves
+*there*, not against the PATH the launch line observed). Passing `binRel`
+there would be a category error: `$CLAUDE_PROJECT_DIR` exists to be right on
+machines this one has never seen, and a launch never leaves this machine, so
+all it could add is the guard's silence — see below.
 
 ## Why living inside the repo changes the answer (#146)
 

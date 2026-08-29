@@ -5,7 +5,8 @@ import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
 import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES, HOOK_SETTINGS_VAR } from './board.js';
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun } from './tasks.js';
-import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, attemptIdentity, kbVarsIn } from './model.js';
+import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn } from './model.js';
+import { resolvedIdentity } from './hook.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, harnessHookCommand, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
 import { latestVersion } from './registry.js';
@@ -594,13 +595,19 @@ export const MODE_CHECK = 'permission mode';
  *
  * Only launches that spawn Claude Code itself are asked: `claude-action` runs `gh workflow run`, and
  * the flags of the run it triggers live in the workflow file, not here.
+ *
+ * `dontAsk` is not the only flag that turns a prompt into a policy: `--permission-mode
+ * bypassPermissions` and the older `--dangerously-skip-permissions` both skip the prompt too (#159),
+ * and flagging either here would tell an operator to add a flag that is already doing the job.
  */
 export function promptingProfiles(cfg) {
+  const SAFE_MODES = new Set(['dontAsk', 'bypassPermissions']);
   return Object.entries(cfg?.profiles || {})
     .filter(([, p]) => (p?.launch || [])[0] === 'claude')
     .filter(([, p]) => {
+      if ((p.launch || []).includes('--dangerously-skip-permissions')) return false;
       const i = p.launch.indexOf('--permission-mode');
-      return i < 0 || p.launch[i + 1] !== 'dontAsk';
+      return i < 0 || !SAFE_MODES.has(p.launch[i + 1]);
     })
     .map(([name]) => name);
 }
@@ -670,15 +677,7 @@ export function daemonsWithKbEnv({ proc = '/proc', match = /claude/ } = {}) {
  */
 export function checkEnvLeak(ctx, { warn }, { env = process.env, cwd = process.cwd(), daemons = daemonsWithKbEnv } = {}) {
   if (!env.KB_TASK) return null;
-  const herePath = path.resolve(cwd);
-  const rootPath = env.KB_ROOT ? path.resolve(env.KB_ROOT) : null;
-  const id = attemptIdentity({
-    env,
-    here: path.basename(herePath),
-    herePath,
-    rootPath,
-    profile: ctx.cfg?.profiles?.[env.KB_PROFILE] || null,
-  });
+  const { id, herePath, rootPath } = resolvedIdentity(cwd, { env, profiles: ctx.cfg?.profiles });
   if (!id?.leak) return null;
   const found = process.platform === 'linux' ? daemons() : [];
   const pids = found.map((d) => d.pid);

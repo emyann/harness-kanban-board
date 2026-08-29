@@ -46,11 +46,12 @@ export const CLAUDE_DENY = ['Bash(hkb dispatch*)', 'Bash(git push --force*)', 'B
 // the JSON itself: `.kanban/board.json` is TRACKED, and the command inside names whichever `hkb`
 // *this* machine has. The board keeps the token; only the launch ever holds the answer.
 //
-// Measured, not assumed (Claude Code 2.1.251): `--settings` is one of the six per-launch sources the
-// `--bg` path forwards into the session daemon, beside `--add-dir`, `--mcp-config` and the two
-// `--plugin-dir` flags, and a value starting with `{` is passed through as inline JSON rather than
-// resolved as a path. So the `claude` and `claude-track` profiles get the hooks too, not just the
-// process-mode ones.
+// Measured live, not read off the binary's argument tables (Claude Code 2.1.251, comment on #144): a
+// `claude --bg` launch carrying `--settings '{"hooks":…}'` fires the Stop hook a few seconds later, in
+// the session the daemon actually started. The forwarding path is `handleBgFlag → spawnBgSession`: its
+// respawn-flag allowlist keeps `--settings <value>` as a pair when it re-execs into the daemon, and a
+// value starting with `{` passes through untouched rather than being resolved as a path. So the
+// `claude` and `claude-track` profiles get the hooks too, not just the process-mode ones.
 export const HOOK_SETTINGS_VAR = '{hook_settings}';
 
 export const DEFAULT_PROFILES = {

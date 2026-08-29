@@ -360,7 +360,8 @@ test('a denied tool call gets the JSON Claude Code acts on, and is told to block
   const why = body.hookSpecificOutput.permissionDecisionReason;
   assert.match(why, /^hkb: /);
   assert.match(why, /curl/, 'the existing reason survives');
-  assert.match(why, /do not work around it/);
+  assert.doesNotMatch(why, /\.\./, 'no double dot even though the reason itself ends in a period (#159)');
+  assert.match(why, /do not work around it/, 'a capability denial gets the --kind capability sentence');
   assert.match(why, /hkb block 7 "needs <what>: <why>" --kind capability/, 'the task number is the one being worked');
   assert.match(why, /describe it, do not paste the command/);
   fs.rmSync(root, { recursive: true, force: true });
@@ -369,7 +370,23 @@ test('a denied tool call gets the JSON Claude Code acts on, and is told to block
 test('the dispatcher is denied here too — the launch denies it, and this layer agrees', () => {
   const root = board();
   const r = pretool(root, bash('hkb dispatch --loop 60'));
-  assert.match(JSON.parse(r.out).hookSpecificOutput.permissionDecisionReason, /it is what dispatched you/);
+  const why = JSON.parse(r.out).hookSpecificOutput.permissionDecisionReason;
+  assert.match(why, /it is what dispatched you/);
+  assert.doesNotMatch(why, /\.\./, 'no double dot');
+  // a policy denial (DENY_PATTERNS) is forbidden outright — a wider allow-list would not fix it, so
+  // it carries none of the "--kind capability" language a capability denial gets.
+  assert.doesNotMatch(why, /do not work around it/, 'a policy denial carries no capability sentence');
+  assert.doesNotMatch(why, /--kind capability/, 'a policy denial carries no capability sentence');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('a path denial outside the repo carries no capability sentence either', () => {
+  const root = board();
+  const r = pretool(root, { tool_name: 'Write', tool_input: { file_path: '/etc/passwd' } });
+  const why = JSON.parse(r.out).hookSpecificOutput.permissionDecisionReason;
+  assert.match(why, /outside the repository/);
+  assert.doesNotMatch(why, /\.\./, 'no double dot');
+  assert.doesNotMatch(why, /--kind capability/, 'a path denial carries no capability sentence');
   fs.rmSync(root, { recursive: true, force: true });
 });
 

@@ -70,6 +70,15 @@ export function expandLaunch(template, vars, profile) {
     // (#144). A flag pair or nothing, like `{model_args}`: an empty value would still be a `--settings`
     // Claude Code has to parse, and a board with no hkb to run has nothing to declare.
     if (el === HOOK_SETTINGS_VAR) { if (vars.hook_settings) out.push('--settings', vars.hook_settings); continue; }
+    // Embedded rather than a bare element — `--settings={hook_settings}` — is refused rather than
+    // silently mishandled: the generic substitution below would render a bare `--settings=` on a
+    // board with no hkb to run, which is a flag Claude Code still has to parse.
+    if (el.includes(HOOK_SETTINGS_VAR)) {
+      const err = new Error(`launch template "${el}" embeds ${HOOK_SETTINGS_VAR} inside a larger token; ` +
+        `use it as its own element ("--settings", "${HOOK_SETTINGS_VAR}") so an empty value drops the flag instead of rendering "--settings="`);
+      err.exitCode = 2;
+      throw err;
+    }
     out.push(el.replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? '')));
   }
   return out;

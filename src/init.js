@@ -293,9 +293,14 @@ export function hkbCommandForHook(verb = 'stop', { shared = false, onPath, pkgRo
   const rel = binRel === undefined ? projectBinRel(root, { pkgRoot }) : binRel;
   if (rel) return cwd ? relativeHookCommand(rel, verb) : guardedHookCommand(rel, verb);
   if (shared) return `hkb${suffix}`;
-  if (onPath ?? hkbOnPath()) return `hkb${suffix}`;
+  // A launch line names this machine's own hkb whenever that is durable: a bare `hkb` would re-resolve
+  // under the session daemon's own PATH, not the dispatcher's (#150) — so PATH agreeing right now is no
+  // guarantee it still will when the hook actually fires. Bare `hkb` is left only for the one case that
+  // cannot be named absolutely: hkb itself running out of an npx cache.
   const bin = path.join(pkgRoot, 'bin', 'hkb.js');
-  return isEphemeralPath(bin) ? `${NPX_COMMAND}${suffix}` : `node "${bin}"${suffix}`;
+  if (!isEphemeralPath(bin)) return `node "${bin}"${suffix}`;
+  if (onPath ?? hkbOnPath()) return `hkb${suffix}`;
+  return `${NPX_COMMAND}${suffix}`;
 }
 
 /**
