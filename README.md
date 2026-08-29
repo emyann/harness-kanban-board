@@ -275,7 +275,9 @@ own worktree, so it was never about two workers touching one file at once. `disp
 or one in *review* with a PR still open — the honest serial-landing version, since a card in review has not merged
 yet). Left unset, the default follows `merge.mode`: `"off"` for `"manual"` — where a card's PR then waits on a
 human, so "another card is running" stopped approximating "not merged yet" the moment a human sat between review
-and merge — and `"unmerged"` for `"auto"`, where `review → merged` is immediate, so it still does. Whatever the
+and merge — and `"unmerged"` for `"auto"`, where `review → merged` is immediate, so it still does. Any `merge.mode`
+that is not recognized as `"auto"` — including `"operator"` (#189) — is treated the same as `"manual"` here: a human
+still sits between review and merge, so the default stays `"off"` unless set explicitly. Whatever the
 mode, a card never holds its paths behind an attempt whose session has gone idle without crashing — a slow human
 reviewer is expected friction, a stuck agent session holding two other cards hostage is not. `hkb doctor` prints
 the effective mode and why; a guard hit in `--dry-run` or the tick log names the card and paths it collided with.

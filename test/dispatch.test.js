@@ -813,17 +813,18 @@ test('a claude --bg launch gets no KB_* at all; a child-process launch keeps its
   assert.equal(proc.KB_LOCK_REF, 'refs/kb/locks/8/1');
 });
 
-test('path_overlap guard: an idle running attempt never holds its paths, in any mode', async (t) => {
-  // No heartbeat for longer than the idle threshold (max(interval, 600s) — a plain heartbeat floors
-  // at 10 minutes, so one tick interval alone is too tight) is the idle signal a non-bg attempt has
-  // (#185) — still well inside stale_after (3600s default), so the reclaim pass leaves it running
-  // rather than reclaiming it; the path_overlap guard must still look straight past it.
+test('path_overlap guard: an idle no-job, no-pid attempt never holds its paths, in any mode', async (t) => {
+  // A hand-claimed (manual) attempt has neither a job record nor a pid to ask, so its lock-ref beat
+  // is the only advancing signal (#185, second pass). Past the idle threshold (max(interval, 1200s):
+  // a plain heartbeat floors at ~10 minutes, so one tick interval alone is too tight) but still well
+  // inside stale_after (3600s default), so the reclaim pass leaves it running rather than reclaiming
+  // it — the path_overlap guard must still look straight past it.
   const h = harness({ dispatch: { guards: { path_overlap: 'running' } } });
   t.after(h.cleanup);
-  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(1800), heartbeat_at: ago(700), pid: process.pid }]);
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(1800), heartbeat_at: ago(1800), lock_sha: 'a'.repeat(40), manual: true }]);
   h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
   h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
-  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+  h.gh.beat(7, 1, ago(1800));
 
   const s = await h.tick();
 
@@ -831,6 +832,45 @@ test('path_overlap guard: an idle running attempt never holds its paths, in any 
   assert.deepEqual(s.guarded, []);
   assert.deepEqual(s.claimed.map((c) => c.number), [8], '#7 has gone idle, so #8 is not held behind it');
   assert.match(h.log(), /#7: attempt 1 idle since/);
+});
+
+test('path_overlap guard: a live pid holds its paths no matter how old its heartbeat looks', async (t) => {
+  // The measured failure (#185, third pass): a `process` attempt's default heartbeat never touches
+  // the run comment either, so `lastSignal` sits at `started_at` for its whole life — a live pid
+  // must be as authoritative as a live job, not a stale timestamp.
+  const h = harness({ dispatch: { guards: { path_overlap: 'running' } } });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(1800), heartbeat_at: ago(1800), pid: process.pid }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
+  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.reclaimed, []);
+  assert.deepEqual(s.guarded, [{ number: 8, guard: 'path_overlap', collides_with: [{ number: 7, paths: ['src/'] }] }]);
+  assert.deepEqual(s.claimed, [], 'the pid is still alive, so #7 keeps holding #8 back');
+});
+
+test('path_overlap guard: a dry run never silences the real loop\'s idle log line', async (t) => {
+  // The idle line is logged once per attempt via state.idle_logged (#185) — a `--dry-run` tick must
+  // not persist that bookkeeping, or the real loop's next tick would find the key already set and
+  // say nothing the first time it actually observes the attempt go idle.
+  const h = harness({ dispatch: { guards: { path_overlap: 'running' } } });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(1800), heartbeat_at: ago(1800), lock_sha: 'a'.repeat(40), manual: true }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
+  h.gh.beat(7, 1, ago(1800));
+
+  await h.tick({ dryRun: true });
+  const before = h.logs.length;
+  const s = await h.tick();
+
+  assert.ok(
+    h.logs.slice(before).some((l) => /#7: attempt 1 idle since/.test(l)),
+    'the real tick still logs it — the dry run before it did not consume the once-per-attempt line',
+  );
+  assert.deepEqual(s.reclaimed, []);
 });
 
 test('path_overlap guard: a live bg job holds its paths no matter how old its heartbeat looks', async (t) => {

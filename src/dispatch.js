@@ -467,6 +467,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   state.claims = state.claims || {};
   state.idle_logged = state.idle_logged || {}; // path_overlap idle line: once per attempt, not once per tick
   for (const [k, v] of Object.entries(state.claims)) if (Date.now() - new Date(v).getTime() > 86_400_000) delete state.claims[k];
+  for (const [k, v] of Object.entries(state.idle_logged)) if (Date.now() - new Date(v).getTime() > 86_400_000) delete state.idle_logged[k];
   const touchedRecently = (n) => state.touched[n] && Date.now() - new Date(state.touched[n]).getTime() < 90_000;
   const touch = (n) => { state.touched[n] = nowIso(); };
 
@@ -532,11 +533,11 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
 
   // 1. reclaim stale / crashed / timed out / finished without a terminal verb
   // `idleNumbers` doubles as the path_overlap guard's liveness check (#185): a running task whose
-  // attempt has gone idle — no sign of life for longer than one tick — must never hold its paths
-  // against another card, whatever the guard's mode. Computed here because the job record and the
-  // heartbeat are already in hand for every running task this loop visits; a track node (covered by
-  // its root) never enters this loop, so it is never marked idle — the root's own heartbeat is its
-  // liveness, same as everywhere else in the tick.
+  // attempt has gone idle — no job, no live pid, and no heartbeat for well past its cadence — must
+  // never hold its paths against another card, whatever the guard's mode. Computed here because the
+  // job record, pid, and heartbeat are already in hand for every running task this loop visits; a
+  // track node (covered by its root) never enters this loop, so it is never marked idle — the
+  // root's own heartbeat is its liveness, same as everywhere else in the tick.
   const idleNumbers = new Set();
   for (const t of running) {
     if (touchedRecently(t.number)) continue; // our own transition may not be visible yet
@@ -593,6 +594,10 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       } else if (classifyJob(job) !== 'running' && secondsSince(a.started_at) > 30) outcome = 'protocol_violation';
     } else if (a.host === ctx.host && a.pid && !pidAlive(a.pid)) outcome = 'crashed';
     else if (a.host === ctx.host && !a.pid && !a.job && secondsSince(a.started_at) > 180) outcome = 'crashed'; // spawn never recorded a handle
+    // A live pid is as authoritative as a live job (#185, second pass): a `process` worker never
+    // touches the run comment either between heartbeats, so `lastSignal` alone would call it idle on
+    // the same schedule a bg attempt was. `process.kill(pid, 0)` costs nothing and settles it outright.
+    const livePid = a.host === ctx.host && !!a.pid && pidAlive(a.pid);
     if (!outcome && secondsSince(a.started_at) > maxRuntime) outcome = 'timed_out';
     else if (!outcome && secondsSince(lastSignal) > d.stale_after) {
       // A ref-CAS worker writes nothing to the run comment, so its real last signal is the commit
@@ -603,22 +608,31 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       if (secondsSince(lastSignal) > d.stale_after) outcome = 'reclaimed';
       else log(`#${t.number}: attempt ${a.attempt} beat on ${lockRef(t.number, a.attempt)} ${Math.round(secondsSince(lastSignal))}s ago — alive`);
     }
+    // A no-job, no-pid attempt (manual, remote, or a bg job on another host) has nothing but its
+    // heartbeat to ask, and the ref-CAS default never touches the run comment until the reclaim
+    // check above already thought it looked stale — which only fires past `stale_after`. Give the
+    // idle threshold, well inside `stale_after`, the same fresher read: one lock-ref commit read,
+    // only for an attempt that would otherwise be called idle on a stale run-comment timestamp.
+    const idleThreshold = Math.max(d.interval, 1200);
+    if (!outcome && !job && !livePid && secondsSince(lastSignal) > idleThreshold && secondsSince(lastSignal) <= d.stale_after) {
+      let beat = null;
+      try { beat = await lockBeatAt(ctx, lockShaOf(t.number, a.attempt)); } catch (e) { log(`#${t.number}: lock ref beat unreadable for the idle check (${e.message}); using the run comment`); }
+      lastSignal = lastSignalAt(a, beat);
+    }
     if (!outcome) {
-      // A no-job attempt's only signal is its heartbeat, which — on the default ref-CAS mode —
-      // never touches the run comment until the reclaim check above already thought it looked
-      // stale; a fallback attempt heartbeats on a ~10-minute floor even when it does write the
-      // comment (`comment` mode). One tick interval is too tight a threshold for either, so the
-      // idle guard uses the same order of magnitude as that cadence instead. A job-bearing attempt
-      // ignores this — its liveness comes from the job record, not from timing a signal at all.
-      const idleThreshold = Math.max(d.interval, 600);
-      if (attemptIdle(job, lastSignal, idleThreshold)) {
+      // A job-bearing attempt's liveness comes from the job record; a pid-bearing one from the pid
+      // itself. Only an attempt with neither falls back to timing a signal — the two-tick-plus
+      // threshold matches the ~10-minute heartbeat floor a `comment`-mode worker beats on.
+      if (attemptIdle(job, lastSignal, idleThreshold, Date.now(), livePid)) {
         idleNumbers.add(t.number);
         const key = `${t.number}/${a.attempt}`;
-        if (state.idle_logged[key] !== true) {
-          state.idle_logged[key] = true;
+        if (!state.idle_logged[key]) {
+          // A dry run must never persist this — it would silence the real loop's one log line for
+          // an attempt it never actually saw go idle (#185, second pass).
+          if (!dryRun) state.idle_logged[key] = nowIso();
           log(`#${t.number}: attempt ${a.attempt} idle since ${lastSignal || a.started_at} — path_overlap will not hold its paths`);
         }
-      } else {
+      } else if (!dryRun) {
         delete state.idle_logged[`${t.number}/${a.attempt}`];
       }
       if (dirty) await saveRun(ctx, t.number, runRec);

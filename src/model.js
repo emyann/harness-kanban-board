@@ -319,22 +319,25 @@ export function pathCollisions(paths, holders) {
 }
 
 /**
- * Has a running attempt gone idle — no sign of life for longer than one tick — so the path_overlap
- * guard (whatever its mode) must never count it as holding its paths? Pure.
+ * Has a running attempt gone idle — no sign of life for well past its heartbeat cadence — so the
+ * path_overlap guard (whatever its mode) must never count it as holding its paths? Pure.
  *
- * A `claude-bg` attempt's job record is authoritative: `jobAlive` is the daemon itself saying
- * whether the turn is still going, so a live job holds no matter how stale `lastSignal` looks — the
- * default heartbeat is a ref-CAS that never touches the run comment, so `lastSignal` sits at
- * `started_at` for the attempt's whole life and is not evidence of anything once a job exists to ask
- * instead. Only an attempt with no job (manual, remote, or a plain pid) falls back to `lastSignal`:
- * no heartbeat for longer than one tick interval. A fresh attempt with no signal yet (`lastSignal`
- * null) is never idle — there has been no time to go quiet.
+ * Two liveness sources outrank timing a signal at all: a `claude-bg` attempt's job record —
+ * `jobAlive` is the daemon itself saying whether the turn is still going, so a live job holds no
+ * matter how stale `lastSignal` looks (the default heartbeat is a ref-CAS that never touches the run
+ * comment, so `lastSignal` sits at `started_at` for the attempt's whole life) — and a `process`
+ * attempt's live pid, just as authoritative and just as unbothered by the same stale timestamp. Only
+ * an attempt with neither (manual, remote, or a bg job on another host) falls back to `lastSignal`:
+ * no heartbeat for longer than `intervalSeconds`, a threshold the caller sets above the ~10-minute
+ * floor a `comment`-mode worker beats on. A fresh attempt with no signal yet (`lastSignal` null) is
+ * never idle — there has been no time to go quiet.
  *
  * This never reclaims or ends the attempt (#136 owns that) — it only says whether the path_overlap
  * guard may skip over it.
  */
-export function attemptIdle(job, lastSignal, intervalSeconds, now = Date.now()) {
+export function attemptIdle(job, lastSignal, intervalSeconds, now = Date.now(), livePid = false) {
   if (job) return !jobAlive(job);
+  if (livePid) return false;
   if (!lastSignal) return false;
   const age = (now - new Date(lastSignal).getTime()) / 1000;
   return Number.isFinite(age) && age > intervalSeconds;

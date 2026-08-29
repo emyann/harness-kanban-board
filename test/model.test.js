@@ -123,6 +123,8 @@ test('attemptIdle: a job\'s own liveness is authoritative; a stale heartbeat onl
   assert.equal(attemptIdle({ state: 'stopped' }, null, 60, now), true, 'a dead job with no lastSignal at all is still idle');
   assert.equal(attemptIdle(null, new Date(now - 30_000).toISOString(), 60, now), false, 'no job: inside one tick interval');
   assert.equal(attemptIdle(null, new Date(now - 90_000).toISOString(), 60, now), true, 'no job: past one tick interval');
+  assert.equal(attemptIdle(null, hourAgo, 60, now, true), false, 'a live pid holds no matter how stale lastSignal looks, same as a live job');
+  assert.equal(attemptIdle(null, null, 60, now, true), false, 'a live pid with no signal at all still holds');
 });
 
 test('deadAtRecheck: a child dead at the recheck reports a failed entry, not a started one', () => {

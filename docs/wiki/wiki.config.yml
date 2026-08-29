@@ -96,6 +96,9 @@ pages:
   - slug: features/review-loop
     summary: "How a reviewed card goes back for another round on the same PR: the one exemption to the active_pr guard, the checkout on the PR's branch, and the block in the brief that stops a second PR."
     status: seeded
+  - slug: features/path-overlap-guard
+    summary: "The off/running/unmerged modes and their merge.mode defaults, and how idleness — job, pid, or lock-ref beat — keeps the guard from holding a card hostage behind a stuck session."
+    status: seeded
   - slug: decisions/adr-001-github-native-backend
     summary: "GitHub Issues + native dependencies + ref locks won over MCP-first and repo-native designs; stacked PRs rejected for board sequencing."
     status: planned
