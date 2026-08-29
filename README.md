@@ -461,15 +461,19 @@ about. Re-running init only *adds*: `hkb init --profiles claude-track` puts that
 leaves everything already there — including profiles you wrote by hand — untouched.
 
 `claude-track` is the same launcher pointed at a whole **track** — a root task plus everything still blocking it,
-usually what `/kanban:decompose` just materialized. One session executes the subgraph in dependency order instead of
-one cold session per node, so a dependent pair costs no tick of latency and no re-derived context; the board is
-unchanged, because the track runner still claims each node, works it, and finishes it with its own terminal verb. Every
-node stays a durable checkpoint, so a track runner that dies leaves a board the ordinary dispatcher finishes node by node —
-and a root that has had one track attempt is never handed to a second track runner. Put it on the **root only**
-(`hkb adopt <root> --agent claude-track --status todo`) and give it a `max_runtime` for the whole track. A track
-costs one `max_in_progress` slot however many nodes it holds; per-node `kb.paths` still guard against everything else
-running. Cross-harness tracks are out of scope: a node on a profile outside the track runner's `track_agents` simply makes
-the track un-claimable and the board falls back to node dispatch. See
+usually what `/kanban:decompose` just materialized. One session **orchestrates** the subgraph instead of one cold
+session per node: it walks the graph in waves of mutually-independent nodes, hands each node in a wave to its own
+isolated subagent (`Agent` with `isolation: "worktree"`, allow-listed on this profile and no other), and starts the
+next wave once they have all recorded a verb. So siblings run at the same time and a dependent pair costs no tick of
+latency and no re-derived context, while the board is unchanged: every node is still claimed, worked in its own
+worktree, and finished with its own terminal verb and its own PR. Every node stays a durable checkpoint, so a track
+runner that dies leaves a board the ordinary dispatcher finishes node by node — and a root that has had one track
+attempt is never handed to a second track runner. Put it on the **root only**
+(`hkb adopt <root> --agent claude-track --status todo`) and give it a `max_runtime` and a budget for the whole track.
+A track costs one `max_in_progress` slot however many nodes it holds — which makes it the only way to run a wave
+wider than the board's slot count — and per-node `kb.paths`, disjoint by construction, are what keep a wave from
+fighting over files. Cross-harness tracks are out of scope: a node on a profile outside the track runner's
+`track_agents` simply makes the track un-claimable and the board falls back to node dispatch. See
 [Tracks](skills/kanban/references/protocol.md#tracks--the-second-execution-engine).
 
 `copilot-cli` is the same deal for **GitHub Copilot CLI**, which is included in Copilot Free:

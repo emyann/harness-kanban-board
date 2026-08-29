@@ -228,18 +228,54 @@ issues, the same labels, the same verbs. What changes is who runs them.
 
 | | node dispatch (default) | track runner |
 |---|---|---|
-| Granularity | one cold session per node | one session for the whole subgraph |
+| Granularity | one cold session per node | one session for the whole subgraph — an **orchestrator**, one isolated subagent per node |
 | Selected by | any `ready` task | a root whose profile has `"track": true` (`claude-track`) |
 | Lock claimed by the dispatcher | the task's | the **root's** only |
-| Node locks | — | claimed by the runner, one at a time, as it reaches each node |
+| Node locks | — | claimed by the runner, a **wave** at a time, as it reaches each wave |
 | Heartbeat | the task's own lock ref | the **root's** lock ref covers every node under it |
 | `max_in_progress` | one slot per task | one slot per track, however many nodes it holds |
 | `path_overlap` | the task's `kb.paths` | the union of every node's `kb.paths` |
 | Between two dependent nodes | a tick of latency, and the context re-derived | in the same session, in memory |
+| Two independent nodes | both, if there are slots for both | both, inside the one slot |
 
 Everything else is deliberately identical, and that is the whole safety argument: **every node still goes through its
 own terminal verb**, so every node is a durable checkpoint. A runner that dies mid-track leaves a board with per-node
 truth on it, and the ordinary tick finishes the rest node by node — no new crash semantics, no new recovery path.
+
+### One orchestrator, one subagent per node
+
+A track runner does not do the nodes itself. It walks `trackWaves` — the track split so that nothing in a wave
+depends on anything else in it — and for each wave it claims the nodes, hands **each one to its own isolated
+subagent**, collects them, and only then starts the next wave. Siblings therefore run at the same time, and a
+seven-node track no longer carries seven nodes' context in one window.
+
+- **The `Agent` tool is the whole unlock.** A worker launches with `--permission-mode dontAsk`, which *denies* a
+  tool that is not on `--allowedTools` rather than prompting, so `Agent` is on the `claude-track` allow-list and on
+  no other shipped profile. `trackFanout(cfg, profile)` reads that list, and it is what picks which brief the runner
+  gets: without `Agent`, the older node-after-node brief, which is always a correct way to run a track. Cold node
+  workers stay single-agent on purpose — a node worker that could fan out would spawn children nothing has claimed.
+- **`isolation: "worktree"`.** Two agents cannot share a checkout, so each subagent gets its own — a repo-level
+  `.claude/worktrees/agent-<id>`, named by the harness and **auto-removed when the subagent returns**. That is why
+  the per-node brief says *commit and push before you return*: anything unpushed goes with the worktree.
+- **Disjoint `kb.paths` are what make a wave safe**, and `/kanban:decompose` already enforces them. The rule that
+  lets the dispatcher run two nodes side by side is the same rule that lets one wave run side by side.
+- **The subagent shares the root's session.** Measured (Claude Code 2.1.251, #129): inside a child,
+  `CLAUDE_CODE_SESSION_ID` and `CLAUDE_JOB_DIR` are the root's, so a node finished from a subagent records the
+  runner's session id and the track is still counted once (see `docs/harnesses.md`). The launch's hooks fire inside
+  children too, `PreToolUse` included, so the permission policy holds all the way down.
+- **The orchestrator verifies the verb, because nothing else will.** The Stop nudge keys on `KB_TASK`, which is the
+  root — it never fires for a child. So after every wave the runner reads `hkb show <n> --json` per node and, for a
+  node its subagent left `running`, files the verb itself or blocks it. That check is brief-level, not enforced code:
+  a node left `running` is exactly what the ordinary dispatcher reclaims after `stale_after` anyway.
+- **A wave is not all-or-nothing.** One subagent blocking parks its dependents transitively; its siblings still
+  finish and still count — the same skip-on-block semantics the sequential brief had.
+- **The root is the one node the orchestrator does itself**: the integration pass, on top of the nodes' branches,
+  by the only participant that has read every subagent's report.
+
+The envelope is sized for that: `claude-track` launches with `--max-turns 400 --max-budget-usd 50`. Whether
+`--max-budget-usd` counts subagent tokens was not measurable without exceeding it, so the budget is set as if it
+does, and `hkb stats` under-reports a fanned-out track — a subagent's usage goes to a sidecar transcript the stats
+reader does not open (#155).
 
 The dispatcher recognises a track root in step 5 of the tick, before it selects ready tasks:
 
@@ -254,10 +290,18 @@ The dispatcher recognises a track root in step 5 of the tick, before it selects 
 4. while that attempt is open, the nodes are *covered*: the tick will not reclaim them (they have no pid of their
    own — the root's lease is their liveness), will not claim them, and does not count their slots.
 
-The runner's contract is in `SKILL.md` under *When you run a track*: `hkb context <n>` → `hkb claim <n>` → work on a
-branch of its own → one draft PR with exactly one `Closes #<n>` → one terminal verb, per node, then the root last.
-One PR per node is what keeps a node a checkpoint: its issue closes when *its* PR merges. A single PR closing several
-nodes would park the unfinished ones in *review* behind it, where nothing could finish them.
+The runner's contract is in `SKILL.md` under *When you run a track*, and the node contract inside it is the ordinary
+worker one: `hkb context <n>` → `hkb claim <n>` → work on a branch of its own (`git switch -c kb/<n> <base>`, where
+`<base>` is the blocker's branch) → one draft PR with exactly one `Closes #<n>` → one terminal verb, per node, then
+the root last. One PR per node is what keeps a node a checkpoint: its issue closes when *its* PR merges. A single PR
+closing several nodes would park the unfinished ones in *review* behind it, where nothing could finish them.
+
+**When to prefer a track.** A track used to be the slower-but-cheaper engine: it saved a tick of latency per edge and
+one slot, and gave up the parallelism node dispatch had. It no longer gives that up. Prefer a track when the graph is
+one goal's — the nodes share a design decision the orchestrator should hold in one head, and the branches stack. Prefer
+node dispatch when the tasks are unrelated, when they span harnesses (`track_agents`), or when you want each one
+judged on its own attempt history. A track is also the only way to run a subgraph wider than `max_in_progress`: its
+wave costs one slot however wide it is.
 
 ```bash
 hkb adopt 12 --agent claude-track --status todo   # the decomposed root from the example above
