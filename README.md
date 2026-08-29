@@ -266,6 +266,30 @@ comment says *continued*, not opened. One card, one PR, as many rounds of review
 Only the latest attempt row exempts a card, so a continuation that crashes goes back to *review* rather than
 respawning: one `request-changes`, one relaunch, and the reviewer decides whether there is another.
 
+### `path_overlap`: two cards, the same files
+
+The guard exists to avoid the *merge* conflict when two open PRs touch the same files — every worker runs in its
+own worktree, so it was never about two workers touching one file at once. `dispatch.guards.path_overlap` in
+`.kanban/board.json` picks which cards count as "still in the way" of a candidate whose `kb.paths` overlap theirs:
+`"off"` (nothing does), `"running"` (a running card does — the pre-#185 behaviour), or `"unmerged"` (a running card,
+or one in *review* with a PR still open — the honest serial-landing version, since a card in review has not merged
+yet). Left unset, the default follows `merge.mode`: `"off"` for `"manual"` — where a card's PR then waits on a
+human, so "another card is running" stopped approximating "not merged yet" the moment a human sat between review
+and merge — and `"unmerged"` for `"auto"`, where `review → merged` is immediate, so it still does. Whatever the
+mode, a card never holds its paths behind an attempt whose session has gone idle without crashing — a slow human
+reviewer is expected friction, a stuck agent session holding two other cards hostage is not. `hkb doctor` prints
+the effective mode and why; a guard hit in `--dry-run` or the tick log names the card and paths it collided with.
+
+```jsonc
+"dispatch": { "guards": { "path_overlap": "off" } }        // never guard — the default on a manual board
+"dispatch": { "guards": { "path_overlap": "unmerged" } }    // guard until the holder's PR merges — the default with merge.mode: "auto"
+"dispatch": { "guards": { "path_overlap": "running" } }     // guard only while the holder is running — today's pre-#185 behaviour
+```
+
+With the guard off, conflicts are expected and cheap: every worker's finishing step merges the default branch in
+before it pushes, so a PR that lands second and conflicts is one continuation attempt away from clean — the same
+mechanism `hkb request-changes` already uses to send a card back.
+
 ## Keeping the board running
 
 A board that is meant to keep moving has two long-running processes: the dispatcher loop, and — if you want it —

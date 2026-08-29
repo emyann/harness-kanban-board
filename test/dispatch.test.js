@@ -639,8 +639,10 @@ test('withoutWorktreeFlag drops the harness\'s own checkout flag and nothing els
   assert.deepEqual(withoutWorktreeFlag(['codex', 'exec', '-C', '/w/kb-7-2', '--sandbox']), ['codex', 'exec', '-C', '/w/kb-7-2', '--sandbox']);
 });
 
-test('path_overlap guard: a ready task waits for the running task that owns its files', async (t) => {
-  const h = harness();
+test('path_overlap guard: a ready task waits for the running task that owns its files ("running" mode)', async (t) => {
+  // "running" is the mode a board keeps by setting it explicitly (#185) — the default on a manual
+  // board (this harness's default) is "off"; see the two default tests below.
+  const h = harness({ dispatch: { guards: { path_overlap: 'running' } } });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(30), heartbeat_at: ago(5), pid: process.pid }]);
   h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
@@ -651,10 +653,35 @@ test('path_overlap guard: a ready task waits for the running task that owns its 
   const s = await h.tick();
 
   assert.deepEqual(s.reclaimed, []); // the live worker is left alone
-  assert.deepEqual(s.guarded, [{ number: 8, guard: 'path_overlap' }]);
+  assert.deepEqual(s.guarded, [{ number: 8, guard: 'path_overlap', collides_with: [{ number: 7, paths: ['src/'] }] }]);
   assert.equal(h.gh.statusOf(8), 'ready');
   assert.deepEqual(s.claimed.map((c) => c.number), [9]); // a disjoint path still goes
   assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/7/1', 'refs/kb/locks/9/1']);
+});
+
+test('path_overlap guard: off by default on a manual board — both overlapping cards run', async (t) => {
+  const h = harness(); // dispatch.merge.mode defaults to "manual"
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(30), heartbeat_at: ago(5), pid: process.pid }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
+  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.guarded, []);
+  assert.deepEqual(s.claimed.map((c) => c.number), [8]);
+});
+
+test('path_overlap guard: "unmerged" on an auto-merge board keys on review, not just running', async (t) => {
+  const h = harness({ dispatch: { merge: { mode: 'auto' } } });
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'review', agent: 'claude', kb: { paths: ['src/'] }, prs: [{ number: 42, state: 'OPEN', isDraft: false }] }));
+  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.guarded, [{ number: 8, guard: 'path_overlap', collides_with: [{ number: 7, paths: ['src/'] }] }]);
+  assert.deepEqual(s.claimed, []);
 });
 
 test('recent_success guard: a task that just completed is not immediately re-run', async (t) => {
@@ -736,6 +763,92 @@ test('a claude --bg launch gets no KB_* at all; a child-process launch keeps its
   assert.equal(proc.KB_PROFILE, 'claude-p');
   assert.equal(proc.KB_ROOT, h.root);
   assert.equal(proc.KB_LOCK_REF, 'refs/kb/locks/8/1');
+});
+
+test('path_overlap guard: an idle running attempt never holds its paths, in any mode', async (t) => {
+  // No heartbeat for longer than one tick interval (default 60s) is the idle signal a non-bg
+  // attempt has (#185) — still well inside stale_after (3600s default), so the reclaim pass leaves
+  // it running rather than reclaiming it; the path_overlap guard must still look straight past it.
+  const h = harness({ dispatch: { guards: { path_overlap: 'running' } } });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(1800), heartbeat_at: ago(300), pid: process.pid }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
+  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.reclaimed, []); // still well inside stale_after — not reclaimed, just idle
+  assert.deepEqual(s.guarded, []);
+  assert.deepEqual(s.claimed.map((c) => c.number), [8], '#7 has gone idle, so #8 is not held behind it');
+});
+
+test('path_overlap guard: "unmerged" stops guarding once the holder\'s PR is merged', async (t) => {
+  const h = harness({ dispatch: { merge: { mode: 'auto' } } });
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', kb: { paths: ['src/'] } }));
+  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.guarded, []);
+  assert.deepEqual(s.claimed.map((c) => c.number), [8], 'done is neither running nor review — it merged, so it no longer holds anything');
+});
+
+test('path_overlap guard: two overlapping ready cards are both claimed in one tick on a manual board', async (t) => {
+  const h = harness(); // manual is the default merge.mode, so path_overlap defaults to "off"
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', kb: { paths: ['src/model.js'] } }));
+  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/model.js', 'src/dispatch.js'] } }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.guarded, []);
+  assert.deepEqual(s.claimed.map((c) => c.number).sort(), [7, 8]);
+});
+
+test('dry-run names the card and paths a guarded candidate collides with', async (t) => {
+  const h = harness({ dispatch: { guards: { path_overlap: 'running' } } });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(30), heartbeat_at: ago(5), pid: process.pid }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
+  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+
+  const s = await h.tick({ dryRun: true });
+
+  assert.deepEqual(s.guarded, [{ number: 8, guard: 'path_overlap', collides_with: [{ number: 7, paths: ['src/'] }] }]);
+});
+
+test('docs/wiki/log.md merges by union: two branches that both append to it never conflict', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-union-merge-')));
+  const git = (args, cwd = root) => {
+    const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+    return r.stdout;
+  };
+  git(['init', '-q', '-b', 'main']);
+  git(['config', 'user.email', 'test@example.com']);
+  git(['config', 'user.name', 'test']);
+  fs.writeFileSync(path.join(root, '.gitattributes'), 'docs/wiki/log.md merge=union\n');
+  fs.mkdirSync(path.join(root, 'docs', 'wiki'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'docs', 'wiki', 'log.md'), '- entry 0\n');
+  git(['add', '-A']);
+  git(['commit', '-q', '-m', 'base']);
+  git(['checkout', '-q', '-b', 'pr-a']);
+  fs.appendFileSync(path.join(root, 'docs', 'wiki', 'log.md'), '- entry from PR A\n');
+  git(['commit', '-q', '-am', 'PR A appends']);
+  git(['checkout', '-q', '-b', 'pr-b', 'main']);
+  fs.appendFileSync(path.join(root, 'docs', 'wiki', 'log.md'), '- entry from PR B\n');
+  git(['commit', '-q', '-am', 'PR B appends']);
+
+  git(['checkout', '-q', 'main']);
+  git(['merge', '-q', '--no-ff', '-m', 'merge A', 'pr-a']);
+  const r = spawnSync('git', ['merge', '--no-ff', '-m', 'merge B', 'pr-b'], { cwd: root, encoding: 'utf8' });
+  assert.equal(r.status, 0, `union merge must not conflict: ${r.stderr}`);
+
+  const merged = fs.readFileSync(path.join(root, 'docs', 'wiki', 'log.md'), 'utf8');
+  assert.match(merged, /entry from PR A/);
+  assert.match(merged, /entry from PR B/);
 });
 
 test('a dry run reports what it would do and writes nothing', async (t) => {

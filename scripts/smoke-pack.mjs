@@ -218,6 +218,9 @@ function checkInitOffline(bin, root) {
     const ignoredLines = (ignored || '').split('\n').map((l) => l.trim());
     if (ignored && ignoredLines.includes('.kanban/dispatch.pid')) ok('.gitignore carries the local-state block');
     else if (ignored) bad('the generated .gitignore is missing .kanban/dispatch.pid', 'see GITIGNORE_LINES in src/init.js');
+    const attrs = text('.gitattributes', 'see ensureGitAttributes in src/init.js');
+    if (attrs && attrs.split('\n').map((l) => l.trim()).includes('docs/wiki/log.md merge=union')) ok('.gitattributes: docs/wiki/log.md merge=union (#185)');
+    else if (attrs) bad('the generated .gitattributes is missing docs/wiki/log.md merge=union', 'see GITATTRIBUTES_LINES in src/init.js');
     // The whole of #144, from the installed tarball: an ordinary `hkb init` leaves BOTH settings
     // files alone, so a session somebody opens by hand in this repo pays nothing per tool call and
     // can never be failed by an `hkb` that stopped resolving.

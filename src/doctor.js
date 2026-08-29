@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
 import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES, HOOK_SETTINGS_VAR } from './board.js';
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun } from './tasks.js';
-import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn } from './model.js';
+import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard } from './model.js';
 import { resolvedIdentity } from './hook.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, harnessHookCommand, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
@@ -390,6 +390,19 @@ export async function checkMergePolicy(ctx, { ok, bad }) {
     ? ' — a `request-review --reviewer <user>` is held until they approve'
     : ' — nothing waits for a human: `request-review --reviewer <user>` requests a review, it does not require one';
   return ok(MERGE_CHECK, `auto (${policy.method}) — ${gate.detail}, and GitHub holds the merge until they pass${reviewNote}`);
+}
+
+export const PATH_OVERLAP_CHECK = 'path_overlap guard';
+
+/**
+ * The effective `path_overlap` mode and why — a board's own answer to "why did #184 wait on #182"
+ * before anyone has to read a tick log for it (#185). Never a failure: every mode is a legitimate
+ * choice, this just says which one is live and where it came from, and flags an unreadable value.
+ */
+export function checkPathOverlapGuard(ctx, { ok, bad }) {
+  const g = pathOverlapGuard(ctx.cfg);
+  if (g.error) return bad(PATH_OVERLAP_CHECK, g.error, `fix "dispatch": {"guards": {"path_overlap": "off"|"running"|"unmerged"}} in ${path.relative(ctx.root, boardFile(ctx.root))}`);
+  return ok(PATH_OVERLAP_CHECK, `${g.mode} (${g.source})`);
 }
 
 // ---------- the cards themselves ----------
@@ -1022,6 +1035,8 @@ export async function doctor(ctx, flags, log) {
 
   // the last step — silent unless the board asked GitHub to take it (`merge.mode: "auto"`)
   await checkMergePolicy(ctx, { ok, bad });
+
+  checkPathOverlapGuard(ctx, { ok, bad });
 
   // Projects v2 mirror — silent unless board.json links a project (the feature is off by default)
   await checkProject(ctx, { ok, bad, warn });

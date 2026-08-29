@@ -520,7 +520,7 @@ test('a track root whose subgraph is done is dispatched as an ordinary node — 
 });
 
 test('the path_overlap guard sees the whole track, not just the root', async (t) => {
-  const h = harness();
+  const h = harness({ dispatch: { guards: { path_overlap: 'running' } } });
   t.after(h.cleanup);
   const live = runWith([{ attempt: 1, host: 'test-host', started_at: ago(30), heartbeat_at: ago(5), pid: process.pid }]);
   h.gh.addIssue(kbIssue({ number: 9, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run: live }));

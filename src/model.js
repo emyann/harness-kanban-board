@@ -246,6 +246,98 @@ export function pathsOverlap(a = [], b = []) {
   return false;
 }
 
+// ---------- path_overlap guard ----------
+// The guard exists to avoid the *merge* conflict when two PRs touch the same files — every worker
+// already runs in its own worktree, so it was never about two workers touching one file at once.
+// "running" (today's behaviour) keys that on *running* attempts, which only approximates "avoid a
+// merge conflict" when review → merged is immediate (`merge.mode: "auto"`). On a `manual` board the
+// first card's PR then waits on a human and the guard buys nothing but serialisation — see #185.
+
+export const PATH_OVERLAP_MODES = ['off', 'running', 'unmerged'];
+
+/**
+ * The effective `path_overlap` guard mode and where it came from. Pure — never throws, so a bad
+ * value degrades to "off" rather than taking out the whole tick (same posture as `mergePolicy`).
+ *
+ * Precedence: an explicit `dispatch.guards.path_overlap` always wins. Failing that, the legacy
+ * boolean `dispatch.path_guard` — the only knob this guard had before #185 — is honored so a board
+ * that already set it keeps meaning what it meant (`true` → "running", `false` → "off"). Only when
+ * neither is set does the default follow `merge.mode`: "off" when the last step is manual (the
+ * guard's premise — "running approximates merged" — does not hold when a human sits between review
+ * and merge), "unmerged" when it is "auto" (where review → merged is immediate, so it does).
+ */
+export function pathOverlapGuard(cfg) {
+  const raw = cfg?.dispatch?.guards?.path_overlap;
+  if (raw != null) {
+    if (!PATH_OVERLAP_MODES.includes(raw)) {
+      return {
+        mode: 'off',
+        source: 'invalid',
+        error: `dispatch.guards.path_overlap must be one of ${PATH_OVERLAP_MODES.map((m) => JSON.stringify(m)).join(', ')}, not ${JSON.stringify(raw)}`,
+      };
+    }
+    return { mode: raw, source: 'dispatch.guards.path_overlap', error: null };
+  }
+  if (cfg?.dispatch?.path_guard === false) return { mode: 'off', source: 'dispatch.path_guard: false', error: null };
+  if (cfg?.dispatch?.path_guard === true) return { mode: 'running', source: 'dispatch.path_guard: true', error: null };
+  const policy = mergePolicy(cfg);
+  const mode = policy.auto ? 'unmerged' : 'off';
+  return { mode, source: `default for merge.mode ${JSON.stringify(policy.mode)}`, error: null };
+}
+
+/**
+ * Which open-board tasks hold their `paths` against the path_overlap guard, under one mode. Pure.
+ *   "off"      → nothing holds anything.
+ *   "running"  → today's behaviour: every running task, minus one whose attempt has gone idle
+ *                (`idleNumbers` — a running task an idle attempt must never hold behind, whatever
+ *                the mode; see `attemptIdle`).
+ *   "unmerged" → "running", plus a task in review whose PR is still open — it has not merged, so
+ *                the collision the guard exists to avoid is still ahead of it.
+ */
+export function pathHolders(tasks, mode, idleNumbers = new Set()) {
+  if (mode === 'off') return [];
+  return (tasks || []).filter((t) => {
+    if (t.status === 'running') return !idleNumbers.has(t.number);
+    if (mode === 'unmerged' && t.status === 'review') return (t.prs || []).some((p) => p && p.state === 'OPEN');
+    return false;
+  });
+}
+
+/**
+ * The holder(s) a candidate's `paths` collide with, and which of their paths — what a guard hit
+ * names instead of a bare "guarded: path_overlap" (#176, folded into #185). Pure.
+ * @param {string[]} paths the candidate's own `kb.paths`
+ * @param {Array<{number:number, kb?:{paths?:string[]}, paths?:string[]}>} holders from `pathHolders`
+ */
+export function pathCollisions(paths, holders) {
+  const out = [];
+  for (const h of holders || []) {
+    const hp = h.kb?.paths || h.paths || [];
+    if (hp.length && pathsOverlap(hp, paths)) out.push({ number: h.number, paths: hp });
+  }
+  return out;
+}
+
+/**
+ * Has a running attempt gone idle — no sign of life for longer than one tick — so the path_overlap
+ * guard (whatever its mode) must never count it as holding its paths? Pure.
+ *
+ * Two ways an attempt says its turn ended: a background-agent job record that is no longer
+ * `jobAlive` (the daemon says the turn is over), or — the only signal a non-bg attempt has — no
+ * heartbeat for longer than one tick interval. Either is enough; neither is required to agree, since
+ * a `claude-bg` attempt has both and a plain-pid one has only the second. A fresh attempt with no
+ * signal yet (`lastSignal` null) is never idle — there has been no time to go quiet.
+ *
+ * This never reclaims or ends the attempt (#136 owns that) — it only says whether the path_overlap
+ * guard may skip over it.
+ */
+export function attemptIdle(job, lastSignal, intervalSeconds, now = Date.now()) {
+  if (job && !jobAlive(job)) return true;
+  if (!lastSignal) return false;
+  const age = (now - new Date(lastSignal).getTime()) / 1000;
+  return Number.isFinite(age) && age > intervalSeconds;
+}
+
 export function slugify(title) {
   return String(title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'task';
 }

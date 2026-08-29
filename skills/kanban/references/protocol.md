@@ -124,7 +124,7 @@ the dispatcher owns their lock. `hkb heartbeat <n> --note "..."` always takes th
 ## Dispatcher tick (`hkb dispatch`)
 
 1. Replay `.kanban/outbox.jsonl` (writes queued while GitHub was unreachable).
-2. For every `running` task: crashed (pid gone on this host) · timed_out (`max_runtime`) · reclaimed (no signal for `stale_after`) → close the attempt, release the ref, `failures++`, back to `ready` or `gave_up`. The last signal is the freshest of `started_at`, `heartbeat_at` and **the committer date of the commit the lock ref points at** — the only trace a CAS heartbeat leaves. That commit is read only for an attempt that already looks stale, so a live board costs one extra request per reclaim decision and a quiet one costs none. A `remote` or `manual` attempt skips every local check — `max_runtime` and the heartbeat are the whole of it. That is what makes claiming by hand safe: the dispatcher never mistakes a pidless attempt for a crashed spawn, but it does reclaim one that stops beating for `stale_after` (1h by default).
+2. For every `running` task: crashed (pid gone on this host) · timed_out (`max_runtime`) · reclaimed (no signal for `stale_after`) → close the attempt, release the ref, `failures++`, back to `ready` or `gave_up`. The last signal is the freshest of `started_at`, `heartbeat_at` and **the committer date of the commit the lock ref points at** — the only trace a CAS heartbeat leaves. That commit is read only for an attempt that already looks stale, so a live board costs one extra request per reclaim decision and a quiet one costs none. A `remote` or `manual` attempt skips every local check — `max_runtime` and the heartbeat are the whole of it. That is what makes claiming by hand safe: the dispatcher never mistakes a pidless attempt for a crashed spawn, but it does reclaim one that stops beating for `stale_after` (1h by default). This same pass notes, for every attempt that survives it, whether the attempt has gone **idle** — a background-agent job record whose turn has ended, or no heartbeat for longer than one tick interval — so `path_overlap` (below) never holds a card's paths behind a session that stopped making progress without crashing.
 3. Sweep orphan lock refs (no matching open attempt).
 4. Promote `todo` → `ready`.
 5. Track roots first (see *Tracks* below): a root on a profile with `"track": true` whose whole subgraph is claimable takes the same caps and guards — with the union of its nodes' `kb.paths` — and spawns **one** session for all of it. Then `ready` tasks by priority: caps (`max_in_progress`, per-profile, daily spawn cap) → guards (`active_pr` → review *unless the latest attempt is `changes_requested`*, in which case the card is claimed and the attempt **continues that PR**; `blocker_auth` pause; `recent_success`; `path_overlap`) → claim ref → append attempt → label `running` → spawn the profile's launch command with `KB_*` env. A node a live track owns is skipped here and costs no slot. `hkb dispatch --profiles a,b` restricts *this step only* to profiles the host can launch — how the Actions dispatcher takes the `claude-action` tasks and leaves a laptop's `claude` ones alone; every other step still covers the whole board.
@@ -132,6 +132,28 @@ the dispatcher owns their lock. `hkb heartbeat <n> --note "..."` always takes th
 7. Mirror the labels onto the linked Projects v2 board, when there is one (see below).
 
 One GraphQL query per board per tick; everything else is per-task and only for tasks that changed state.
+
+### `path_overlap` guard — three modes
+
+The guard exists to avoid the *merge* conflict when two open PRs touch the same files, never the working-copy
+conflict — every worker already runs in its own worktree. `dispatch.guards.path_overlap` in `.kanban/board.json`
+picks which cards count as "still in the way" of a candidate whose `kb.paths` overlap theirs:
+
+| mode | holds a card's paths while it is... | earns its keep when |
+|---|---|---|
+| `"off"` | nothing — the guard never fires | `merge.mode` is `"manual"` (**the default**): the first card's PR then waits on a human, so "another card is running" does not approximate "not merged yet" — it never did, and serialising on it just spends parallelism for nothing. |
+| `"running"` | `running` | a board that wants today's (pre-#185) behaviour back — kept for that, not removed. |
+| `"unmerged"` | `running` **or** `review` with an open PR | `merge.mode` is `"auto"` (**the default there**): `review → merged` is immediate, so "not merged yet" is exactly `running` or `review`. |
+
+The effective mode, when `dispatch.guards.path_overlap` is unset, follows `merge.mode`: `"off"` for `"manual"`,
+`"unmerged"` for `"auto"`. Set it explicitly to override either default. The older `dispatch.path_guard: true|false`
+still works for a board that set it before this existed (`true` → `"running"`, `false` → `"off"`); an explicit
+`dispatch.guards.path_overlap` always wins over it. `hkb doctor` prints the effective mode and why.
+
+Whatever the mode, a card never holds its paths behind an **idle** attempt — one whose session has stopped making
+progress without crashing (see step 2 above): a slow human reviewer is expected friction, a stuck agent session
+is not, and the difference is not a MERGE_MODE thing. A guard hit — `--dry-run`, or the tick log — names the card
+and the paths it collides with, not just `guarded: path_overlap` (#176).
 
 ## Decomposition, worked
 

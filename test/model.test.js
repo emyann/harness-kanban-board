@@ -5,6 +5,7 @@ import {
   parseRunComment, serializeRunComment, emptyRun, openAttempt, parseResultComment, serializeResultComment,
   blockerDone, computeReady, pathsOverlap, sortForDispatch, slugify, lockRef, lockRefPath, hashReason,
   normalizeHookInput, stripFrontmatter, sessionUpdate, parseRepoSpecs, boardKey, uniqueKeys, shouldNudgeOnStop, deadAtRecheck,
+  pathOverlapGuard, pathHolders, pathCollisions, attemptIdle,
 } from '../src/model.js';
 
 test('body block: round trip and defaults', () => {
@@ -76,6 +77,47 @@ test('path overlap guard', () => {
   assert.equal(pathsOverlap(['packages/ui/'], ['packages/db/']), false);
   assert.equal(pathsOverlap([], ['x']), false);
   assert.equal(pathsOverlap([''], ['x']), true);
+});
+
+test('pathOverlapGuard: defaults follow merge.mode, explicit settings win', () => {
+  assert.deepEqual(pathOverlapGuard({}), { mode: 'off', source: 'default for merge.mode "manual"', error: null });
+  assert.deepEqual(pathOverlapGuard({ dispatch: { merge: { mode: 'auto' } } }), { mode: 'unmerged', source: 'default for merge.mode "auto"', error: null });
+  assert.equal(pathOverlapGuard({ dispatch: { path_guard: false } }).mode, 'off');
+  assert.equal(pathOverlapGuard({ dispatch: { path_guard: true } }).mode, 'running');
+  // an explicit dispatch.guards.path_overlap outranks the legacy boolean and the merge.mode default
+  assert.equal(pathOverlapGuard({ dispatch: { path_guard: true, guards: { path_overlap: 'off' } } }).mode, 'off');
+  assert.equal(pathOverlapGuard({ dispatch: { merge: { mode: 'auto' }, guards: { path_overlap: 'running' } } }).mode, 'running');
+  const bad = pathOverlapGuard({ dispatch: { guards: { path_overlap: 'sometimes' } } });
+  assert.equal(bad.mode, 'off');
+  assert.match(bad.error, /must be one of/);
+});
+
+test('pathHolders: mode decides who holds, idleNumbers overrides "running"', () => {
+  const tasks = [
+    { number: 1, status: 'running', kb: { paths: ['a/'] } },
+    { number: 2, status: 'review', prs: [{ state: 'OPEN' }], kb: { paths: ['b/'] } },
+    { number: 3, status: 'review', prs: [{ state: 'MERGED' }], kb: { paths: ['c/'] } },
+    { number: 4, status: 'ready', kb: { paths: ['d/'] } },
+  ];
+  assert.deepEqual(pathHolders(tasks, 'off'), []);
+  assert.deepEqual(pathHolders(tasks, 'running').map((t) => t.number), [1]);
+  assert.deepEqual(pathHolders(tasks, 'unmerged').map((t) => t.number), [1, 2]);
+  assert.deepEqual(pathHolders(tasks, 'running', new Set([1])), []);
+});
+
+test('pathCollisions: names the holder and the paths that overlap', () => {
+  const holders = [{ number: 7, kb: { paths: ['src/'] } }, { number: 9, kb: { paths: ['docs/'] } }];
+  assert.deepEqual(pathCollisions(['src/gh.js'], holders), [{ number: 7, paths: ['src/'] }]);
+  assert.deepEqual(pathCollisions(['test/'], holders), []);
+});
+
+test('attemptIdle: a dead job turn, or a stale heartbeat, either is enough', () => {
+  const now = Date.parse('2026-08-29T12:00:00Z');
+  assert.equal(attemptIdle(null, null, 60, now), false, 'no signal yet is never idle');
+  assert.equal(attemptIdle({ state: 'working' }, '2026-08-29T11:00:00Z', 60, now), true, 'a dead job turn is idle even mid-heartbeat-window');
+  assert.equal(attemptIdle(null, new Date(now - 30_000).toISOString(), 60, now), false, 'inside one tick interval');
+  assert.equal(attemptIdle(null, new Date(now - 90_000).toISOString(), 60, now), true, 'past one tick interval');
+  assert.equal(attemptIdle({ state: 'blocked' }, new Date(now - 30_000).toISOString(), 60, now), false, 'blocked-but-recent heartbeat: alive');
 });
 
 test('deadAtRecheck: a child dead at the recheck reports a failed entry, not a started one', () => {
