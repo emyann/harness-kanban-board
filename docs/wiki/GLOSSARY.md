@@ -93,8 +93,13 @@ deserves a `concepts/` page (link it).
   is not a supervisor: it never restarts anything (`src/up.js`).
 - **Tick** — one pass of the dispatcher loop: re-read the board, derive every
   action from it, hold nothing durable in the process (`src/dispatch.js`).
-- **Track** — a DAG subgraph executed by one session, claimed at its root;
-  nodes are claimed as the runner reaches them (`src/dispatch.js`).
+- **Track** — a DAG subgraph executed by one session, claimed at its root; that
+  session is an **orchestrator** — it claims a wave and hands each node to its
+  own isolated subagent rather than working them itself (`resolveTrack`,
+  `trackContext` in `src/track.js`; `features/tracks`).
+- **Wave** — one rank of a track: the nodes that depend on nothing else still
+  left in it, so they can all run at once. `trackWaves` (`src/track.js`) splits a
+  track into waves; wave 0 is the frontier.
 - **Transcript** — the JSONL an agent session writes as it runs, recorded on the
   attempt row as `transcript_path` by the terminal verb (`sessionForAttempt` in
   `src/hook.js`, off the job record `currentSession` reads in `src/jobs.js`) —
