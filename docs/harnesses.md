@@ -222,21 +222,30 @@ permission policy. So it carries the hooks too:
 
 ```
 claude --bg … --allowedTools … --disallowedTools … \
-  --settings '{"hooks":{"Stop":[{"matcher":"*","hooks":[{"type":"command","command":"hkb hook stop","timeout":30}]}], …}}'
+  --settings '{"hooks":{"Stop":[{"matcher":"*","hooks":[{"type":"command","command":"node \\"/home/you/hkb/bin/hkb.js\\" hook stop","timeout":30}]}], …}}'
 ```
 
-Two things follow. The command in there may name **this machine** — `node "/abs/path/bin/hkb.js" hook stop` when
-`hkb` is not on PATH — because a launch line is spent here and nowhere else; that is exactly the case a tracked
+Two things follow. The command in there names **this machine** — `node "/abs/path/bin/hkb.js" hook stop`, the hkb that
+runs the dispatcher, whenever it lives in a durable checkout or install (a bare `hkb` only when it sits in an
+npx cache) — because a launch line is spent here and nowhere else; that is exactly the case a tracked
 settings file had to rule out. And `.kanban/board.json`, which *is* tracked, holds only the placeholder
 `{hook_settings}`: the launch template stays true on every machine, and the JSON is built at spawn time.
 
-**`claude --bg` was measured, not assumed.** A background launch hands the request to Claude Code's session
-daemon, so a per-launch flag only reaches it if the CLI forwards it. Against Claude Code 2.1.251 it does:
-`--settings` is one of the six per-launch sources on the `--bg` forwarding path, beside `--add-dir`,
-`--mcp-config` and the two `--plugin-dir` flags, and a value starting with `{` is passed through as inline JSON
-rather than resolved as a path. That is why `claude` and `claude-track` get the hooks and not only `claude-p`.
-The standing empirical check is `hkb doctor`'s `profile claude sessions` line: a `--bg` attempt records its
-session id *from the Stop hook*, so a board whose recent attempts carry one is a board whose launch hooks fired.
+**`claude --bg` was measured live, not assumed.** A background launch hands the request to Claude Code's
+session daemon, so a per-launch flag only reaches it if the CLI forwards it. The check was a `claude --bg`
+launch carrying `--settings '{"hooks":{"Stop":…}}'`, watched for the hook to fire in that session — and it
+did, 4 s after the launch returned (2026-08-29, Claude Code 2.1.251, comment on
+[#144](https://github.com/emyann/harness-kanban-board/issues/144)). The path is `handleBgFlag →
+spawnBgSession`: its respawn-flag allowlist keeps `--settings <value>` as a pair when it re-execs into the
+daemon, and a value starting with `{` passes through untouched rather than being resolved as a path. That is
+why `claude` and `claude-track` get the hooks and not only `claude-p`.
+
+That measurement is not something `hkb doctor` can re-run on every board, so do not read its `profile claude
+sessions` line as proof the launch hooks fired: since
+[#137](https://github.com/emyann/harness-kanban-board/issues/137) the dispatcher's own tick also records the
+session id, straight off the job record, whether or not any hook ever ran. The Stop hook's actual trace is the
+`.kanban/sessions/<n>-<k>` marker file it writes on every fire — that file existing for an attempt is the
+empirical check for *that* attempt.
 
 Copilot CLI and Codex keep their own hook files (`.github/hooks/kanban.json`, `.codex/hooks.json`). Neither
 harness has a per-launch settings source to move them onto, and neither file is read by anything but that harness,
@@ -250,6 +259,13 @@ below).
 the protocol enforced in every session in the repo, not only in the ones hkb launched. Nothing removes hooks from
 that file again; they are a choice. A worker on such a board then runs each hook twice, once from the file and
 once from its launch, which costs a Stop nudge its second try and nothing else — `hkb doctor` says so.
+
+**Residual risk:** the nudge count in `.kanban/nudges/<n>-<k>` is shared by both copies of `Stop`, and both fire
+on the same turn — so one real stop attempt advances the count twice (0→1, then immediately 1→2) instead of
+once. A worker on a `--shared-hooks` board therefore gets one nudged turn to finish with a terminal verb, not
+the two a single-hook board gives it, before hkb stops blocking and leaves the attempt for the dispatcher to
+mark `protocol_violation`. `PreToolUse` has nothing equivalent to spend twice: it only ever denies or says
+nothing, and two passes through the same pure check agree with themselves.
 
 What may go in that file is unchanged, and it is the narrow question #85 and #146 settled: a tracked file is
 read on machines that are not this one, so only a command that means the same thing on all of them may go in it.

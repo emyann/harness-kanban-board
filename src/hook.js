@@ -61,8 +61,9 @@ import { openAttempt, sessionUpdate, normalizeHookInput, parseWorktreeName, atte
  * chose; standing aside with one line on stderr is the honest answer.
  */
 export async function preToolHook(ctx) {
-  if (whichAttempt(ctx.root, { profiles: ctx.cfg?.profiles, warn: 'hkb hook' })?.source !== 'env') return 0;
-  const n = process.env.KB_TASK;
+  const id = whichAttempt(ctx.root, { profiles: ctx.cfg?.profiles, warn: 'hkb hook' });
+  if (id?.source !== 'env') return 0;
+  const n = id.n;
   const name = process.env.KB_PROFILE;
   const profile = name ? ctx.cfg?.profiles?.[name] : null;
   if (!profile) {
@@ -76,12 +77,17 @@ export async function preToolHook(ctx) {
   const allowedCmds = allowedCommandsFrom(profile.allowed_tools || []);
   allowedCmds.add('hkb'); allowedCmds.add('git'); allowedCmds.add('gh');
   const root = process.env.KB_ROOT || ctx.root;
-  const { decision, reason } = decidePermission(input.tool_name, input.tool_input, { allowedCmds, root });
+  const { decision, reason, kind } = decidePermission(input.tool_name, input.tool_input, { allowedCmds, root });
   if (decision !== 'deny') return 0; // the launch's allow-list has the last word on what is allowed
   // A refusal is a fork in the road for a worker, and the wrong branch — rewriting the command until
-  // something gets through — is the expensive one. Name the other branch in the denial itself.
-  const say = `hkb: ${reason}. If the task cannot be done without this, do not work around it — run ` +
-    `\`hkb block ${n} "needs <what>: <why>" --kind capability\` (describe it, do not paste the command) and stop.`;
+  // something gets through — is the expensive one. Name the other branch in the denial itself — but
+  // only for `kind: 'capability'`: a policy denial (force-push, the dispatcher) or a path denial is
+  // forbidden outright, and `--kind capability` would misname it as something a wider allow-list fixes.
+  const base = `hkb: ${reason.replace(/\.+$/, '')}.`; // the reason can already end in a period (#159)
+  const say = kind === 'capability'
+    ? `${base} If the task cannot be done without this, do not work around it — run ` +
+      `\`hkb block ${n} "needs <what>: <why>" --kind capability\` (describe it, do not paste the command) and stop.`
+    : base;
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: say },
   }) + '\n');
@@ -105,8 +111,34 @@ const MARKER_RE = /^\d+-\d+$/;
 const sessionsDir = (root) => path.join(kanbanDir(root), 'sessions');
 const markerFile = (root, n, k) => path.join(sessionsDir(root), `${n}-${k}`);
 
-/** The leak line is one line per process, however many times the hook asks the same question. */
-let warnedLeak = null;
+/**
+ * The leak line is one line per process, however many times the hook asks the same question — but
+ * keyed on `root` too, not the message text alone: two different checkouts that happen to produce
+ * the identical leak sentence (same generic wording, e.g. "this is the board root") are two different
+ * things worth saying once each, and in-process tests that spin up a fresh board per case depend on
+ * exactly that (#150 review).
+ */
+const warnedLeaks = new Map();
+
+/**
+ * `attemptIdentity`'s answer for a plain `(root, env, profiles)` call — the resolve boilerplate
+ * `whichAttempt` and `checkEnvLeak` (src/doctor.js) both need before they can ask it anything,
+ * written once so the two never drift apart on how `herePath`/`rootPath` get resolved (#150 review).
+ * `model.js` stays import-free on purpose (its own doc comment says the caller resolves the paths),
+ * so the resolving lives here, next to the one `attemptIdentity` call that used to have two copies.
+ */
+export function resolvedIdentity(root, { env = process.env, profiles = null } = {}) {
+  const herePath = path.resolve(root);
+  const rootPath = env.KB_ROOT ? path.resolve(env.KB_ROOT) : null;
+  const id = attemptIdentity({
+    env,
+    here: path.basename(herePath),
+    herePath,
+    rootPath,
+    profile: profiles?.[env.KB_PROFILE] || null,
+  });
+  return { id, herePath, rootPath };
+}
 
 /**
  * Which attempt this session is working — the question every line below depends on.
@@ -129,17 +161,9 @@ let warnedLeak = null;
  * part of it, because only some profiles put their worker in a checkout hkb can check against.
  */
 export function whichAttempt(root = process.cwd(), { env = process.env, profiles = null, warn = 'hkb' } = {}) {
-  const herePath = path.resolve(root);
-  const rootPath = env.KB_ROOT ? path.resolve(env.KB_ROOT) : null;
-  const id = attemptIdentity({
-    env,
-    here: path.basename(herePath),
-    herePath,
-    rootPath,
-    profile: profiles?.[env.KB_PROFILE] || null,
-  });
-  if (id?.leak && warn && warnedLeak !== id.leak) {
-    warnedLeak = id.leak;
+  const { id, herePath } = resolvedIdentity(root, { env, profiles });
+  if (id?.leak && warn && warnedLeaks.get(herePath) !== id.leak) {
+    warnedLeaks.set(herePath, id.leak);
     process.stderr.write(`${warn}: ${id.leak}\n`);
   }
   return id?.n ? { n: id.n, k: id.k, source: id.source } : null;

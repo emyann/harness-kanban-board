@@ -13,16 +13,16 @@ covers:
   - path: src/watch.js
     sha: 8aba4c441e35c9241124c1278b5f4824706f7e52
   - path: src/model.js
-    sha: 609e04db257258eb80b83b89be9aee4e0d142d3c
+    sha: cf222b0724d3f53377dab94a262100dd985daf86
   - path: src/cli.js
     sha: 0adaae89a7236c2b3e647ce95994c75a34dc55f9
   - path: src/lifecycle.js
     sha: 3938c82f3e181fb260fc54bb2f3150074459e224
   - path: src/init.js
-    sha: dd28e7c0fa2f5885faaef9ca2902368747ed9d8b
+    sha: 28a9a921109337d3bd5c619859207995b579a06a
   - path: src/stats.js
     sha: f81bc37dad19e253bf23a696ba899b4219dd5e53
-generated_at_commit: bc8cf57
+generated_at_commit: 0e8e882
 last_refreshed: 2026-08-28
 related: [features/planning-commands, decisions/adr-004-roles-and-adoption, features/up-and-down, features/review-loop, concepts/roles-and-seats]
 ---
