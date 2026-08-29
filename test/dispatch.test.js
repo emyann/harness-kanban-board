@@ -834,6 +834,25 @@ test('path_overlap guard: an idle no-job, no-pid attempt never holds its paths, 
   assert.match(h.log(), /#7: attempt 1 idle since/);
 });
 
+test('path_overlap guard: a fresh lock-ref beat keeps a no-job, no-pid attempt holding its paths', async (t) => {
+  // The positive half of the case above (#185, third pass): the run comment says 30 minutes of
+  // silence, but the ref-CAS beat is 30 seconds old — the idle-threshold beat read must find it and
+  // the guard must keep #8 behind #7. This is the manual / remote / other-host shape of a live worker.
+  const h = harness({ dispatch: { guards: { path_overlap: 'running' } } });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(1800), heartbeat_at: ago(1800), lock_sha: 'a'.repeat(40), manual: true }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
+  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+  h.gh.beat(7, 1, ago(30));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.reclaimed, []);
+  assert.deepEqual(s.guarded, [{ number: 8, guard: 'path_overlap', collides_with: [{ number: 7, paths: ['src/'] }] }]);
+  assert.deepEqual(s.claimed, [], 'the beat is fresh, so #7 keeps holding #8 back');
+  assert.doesNotMatch(h.log(), /#7: attempt 1 idle since/);
+});
+
 test('path_overlap guard: a live pid holds its paths no matter how old its heartbeat looks', async (t) => {
   // The measured failure (#185, third pass): a `process` attempt's default heartbeat never touches
   // the run comment either, so `lastSignal` sits at `started_at` for its whole life — a live pid

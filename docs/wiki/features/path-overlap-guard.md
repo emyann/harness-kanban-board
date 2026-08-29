@@ -11,8 +11,8 @@ covers:
   - path: src/dispatch.js
     sha: 08cabfca37eae6e01b76bbeb8defd3066e90ea70
   - path: src/doctor.js
-    sha: 3c0e89c6cfd2daeb93533b05fa79b7544776ccf0
-generated_at_commit: 4513666
+    sha: 80ed434085da105bdd1c293146fecefe77795bc6
+generated_at_commit: 2024146
 last_refreshed: 2026-08-29
 related: [features/tracks, features/review-loop, concepts/worker-identity]
 ---
