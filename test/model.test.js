@@ -4,7 +4,7 @@ import {
   parseBodyBlock, serializeBodyBlock, DEFAULT_KB, statusOf, agentOf, boardOf,
   parseRunComment, serializeRunComment, emptyRun, openAttempt, parseResultComment, serializeResultComment,
   blockerDone, computeReady, pathsOverlap, sortForDispatch, slugify, lockRef, lockRefPath, hashReason,
-  normalizeHookInput, stripFrontmatter, sessionUpdate, parseRepoSpecs, boardKey, uniqueKeys,
+  normalizeHookInput, stripFrontmatter, sessionUpdate, parseRepoSpecs, boardKey, uniqueKeys, deadAtRecheck,
 } from '../src/model.js';
 
 test('body block: round trip and defaults', () => {
@@ -76,6 +76,12 @@ test('path overlap guard', () => {
   assert.equal(pathsOverlap(['packages/ui/'], ['packages/db/']), false);
   assert.equal(pathsOverlap([], ['x']), false);
   assert.equal(pathsOverlap([''], ['x']), true);
+});
+
+test('deadAtRecheck: a child dead at the recheck reports a failed entry, not a started one', () => {
+  const r = deadAtRecheck('serve', 4242, '.kanban/logs/serve.log');
+  assert.equal(r.line, 'serve exited immediately (pid 4242) — see .kanban/logs/serve.log');
+  assert.deepEqual(r.failed, { name: 'serve', pid: 4242, log: '.kanban/logs/serve.log' });
 });
 
 test('dispatch order: priority desc, then oldest', () => {

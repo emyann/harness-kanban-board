@@ -23,7 +23,8 @@ deserves a `concepts/` page (link it).
 - **Continuation** — an attempt that carries on an **open PR** the reviewer sent
   back instead of starting a branch of its own; marked `continues_pr` on the
   attempt row, and `continues_branch` when the dispatcher put the checkout on
-  the PR's head branch (`worktreeOnBranch` in `src/board.js`; see
+  the PR's head branch (and `continues_branch_stale` when that checkout could not be
+  fast-forwarded to the remote head) (`worktreeOnBranch` in `src/board.js`; see
   *features/review-loop*).
 - **Day stamp** — a `*_day` key in `.kanban/state.json` holding a UTC day, so a
   check that costs a network call runs at most once a day per checkout however
