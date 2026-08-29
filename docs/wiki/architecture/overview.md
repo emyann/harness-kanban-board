@@ -105,6 +105,16 @@ checks and would let one profile's worker run what the identical worker beside
 it is refused. A denial names the way out rather than inviting a workaround:
 `hkb block <n> "needs …" --kind capability`.
 
+**The launch line also carries the hooks** (`{hook_settings}` in the Claude
+launches, `src/board.js`; `workerHookSettings`, `src/init.js`). Both of hkb's
+Claude Code hooks are `matcher: "*"` and both are inert outside a worker, so a
+settings file — read by every session in the repo — bought other sessions a
+process per tool call and, once its command stopped resolving, a failure per
+tool call. `--settings` is a per-launch source, forwarded into the `--bg`
+session daemon, so the hooks reach only sessions hkb started and `hkb init`
+writes no settings file (`--shared-hooks` remains the opt-in). See
+[hook install shapes](../features/hook-install-shapes.md).
+
 *Which* card is the subtle part, and it is not always the environment. The
 dispatcher exports `KB_TASK`/`KB_ATTEMPT` on the launch (`src/dispatch.js`),
 which answers it for any harness run as a child process — but not for a

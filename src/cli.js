@@ -171,8 +171,8 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
   setup       init [--board slug] [--profiles a,b] [--harness copilot|codex] [--with-actions] [--mcp] [--import]
                    [--no-hook] [--shared-hooks] [--no-labels] [--project <number|new>]
                    --no-labels + --repo owner/name writes every local file and sends nothing (no gh, no network)
-                   hooks go in .claude/settings.local.json (per-developer); --shared-hooks writes the tracked
-                   .claude/settings.json instead, where the command is a plain hkb everyone must have on PATH
+                   the Stop/PreToolUse hooks ride the worker launch (claude --settings), so no settings file is
+                   written; --shared-hooks puts them in the tracked .claude/settings.json for every session too
               doctor [--api] [--json]
   tasks       create "title" [--body ..] [--blocked-by 12,13] [--agent claude] [--priority N] [--paths a/,b/]
                      [--model m] [--skills s1,s2] [--max-retries N] [--max-runtime S] [--scheduled-at ISO] [--triage] [--goal ".."]

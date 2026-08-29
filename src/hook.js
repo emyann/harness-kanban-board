@@ -8,9 +8,9 @@
 //   |            | Claude Code                       | Copilot CLI                              |
 //   | event      | `Stop`                            | `agentStop` (not `sessionEnd`, which is   |
 //   |            |                                   | too late to block)                        |
-//   | configured | `.claude/settings.local.json` `hooks.Stop` | `.github/hooks/kanban.json` `hooks.agentStop` |
-//   |            | (`.claude/settings.json` with `--shared-hooks`) |                                     |
-//   | installed  | `hkb init`                        | `hkb init --harness copilot`             |
+//   | configured | the worker launch's `--settings`  | `.github/hooks/kanban.json` `hooks.agentStop` |
+//   |            | (`.claude/settings.json` too, with `--shared-hooks`) |                           |
+//   | installed  | `hkb dispatch`, per launch        | `hkb init --harness copilot`             |
 //   | stdin      | snake_case: `session_id`,         | camelCase: `sessionId`, `transcriptPath`, |
 //   |            | `transcript_path`, `stop_hook_active` | `hookEventName`                      |
 //   | stdout     | `{"decision":"block","reason":…}` | same — Copilot documents `decision: block`|

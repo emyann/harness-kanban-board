@@ -11,10 +11,10 @@ covers:
   - path: web/index.html
     sha: 322aa96236ef37657a9a2326b83dc7b480672134
   - path: src/board.js
-    sha: 0d1c297b6990a63cf28b6bf18f9e4e85180b8c21
+    sha: 2e9735c80d0fcc92c298efd10b96def73f4ea03b
   - path: src/init.js
-    sha: f6be5541e140313a8db1ac8f9831d635cd4adc6a
-generated_at_commit: 48c374c
+    sha: 9b546acacc6d26c4caa8dfba357b448a5554c0e4
+generated_at_commit: 2b3c6ef
 last_refreshed: 2026-08-28
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
@@ -72,11 +72,11 @@ no flag, the user-level list at `~/.config/hkb/boards.json` (`userBoardsFile` /
 so a deleted repo cannot break `hkb serve` everywhere. A `#slug` after a path
 picks a board *inside* that checkout.
 
-**How a checkout gets on the list** (`registerUserBoard`, `src/board.js:525-531`;
-called once, from `registerCheckout` at `src/init.js:727-742`). Until #98 that
+**How a checkout gets on the list** (`registerUserBoard`, `src/board.js:538-544`;
+called once, from `registerCheckout` at `src/init.js:768-783`). Until #98 that
 file had a reader and no writer, so the only way onto the page was to hand-edit
 it — the one step of adoption a repo cannot tell you about from inside itself.
-`hkb init` now writes it as its last step (`src/init.js:889`), which is only
+`hkb init` now writes it as its last step (`src/init.js:939`), which is only
 defensible because of three properties:
 
 - **Idempotent.** Equivalence is the *resolved* path plus the board slug, so
@@ -84,7 +84,7 @@ defensible because of three properties:
   The pure merge (`mergeBoardEntry`, `src/model.js`) only ever appends: an entry
   it did not add keeps its position and its spelling, so a file you maintain by
   hand survives an init verbatim. The write itself is a temp file and a `rename`
-  (`saveUserBoards`, `src/board.js:487-499`) — this server reads that file while
+  (`saveUserBoards`, `src/board.js:500-512`) — this server reads that file while
   other commands add to it, so a half-written list must not be observable.
 - **Never silent.** One line either way, naming the file: `registered this
   checkout in … — hkb serve will show it`, or `already listed in …`. That line
@@ -95,7 +95,7 @@ defensible because of three properties:
   up; the list is a convenience beside it.
 
 A linked worktree registers its **main** checkout, never itself (`mainWorktree`,
-`src/board.js:507-514`, via `git rev-parse --git-common-dir`): a worker running
+`src/board.js:520-527`, via `git rev-parse --git-common-dir`): a worker running
 in `.claude/worktrees/kb-99-1` is in a directory that will be deleted, and it has
 no business on anyone's board list.
 
