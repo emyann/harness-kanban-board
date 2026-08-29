@@ -7,9 +7,11 @@ import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES, 
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun } from './tasks.js';
 import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins } from './model.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
-import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
+import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, harnessHookCommand, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
 import { latestVersion } from './registry.js';
 import { checkProject } from './projects.js';
+// mcp.js is imported dynamically inside checkMcp, not here: it imports cli.js, which imports this
+// file, and a static import here would make that a cycle.
 
 function has(cmd) { return spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).status === 0; }
 function version(cmd, args = ['--version']) { const r = spawnSync(cmd, args, { encoding: 'utf8' }); return r.status === 0 ? (r.stdout || r.stderr).trim().split('\n')[0] : null; }
@@ -59,16 +61,62 @@ const HARNESS_NOTE = {
  * A harness whose profile is configured but whose generated files are missing is a board that
  * dispatches and then enforces nothing. The file list comes from the generator itself, so this can
  * never drift from what `hkb init --harness <name>` writes.
+ *
+ * When the files are there, the command inside them gets the same resolve check `checkHooks` does for
+ * Claude's settings (#166): a `node <rel>` naming a file that is not there — this repo's own hkb has
+ * moved, or the devDependency has not been `npm install`ed yet — fails every Stop nudge outright,
+ * because unlike Claude's guarded form there is no exit-0 fallback in a file with no shell guaranteed.
  */
-export function checkHarnesses(ctx, { ok, warn }) {
+export function checkHarnesses(ctx, { ok, warn, bad = warn }, { onPath = has, exists = (p) => fs.existsSync(p) } = {}) {
   for (const [harness, profile] of Object.entries(HARNESS_PROFILE)) {
     if (!ctx.cfg.profiles?.[profile]) continue;
     const files = harnessFiles(harness).map((f) => f.rel);
     const missing = files.filter((f) => !fs.existsSync(path.join(ctx.root, f)));
-    missing.length
-      ? warn(`${harness} harness`, `missing ${missing.join(', ')}`, `hkb init --harness ${harness}`)
-      : ok(`${harness} harness`, `${files.join(' · ')} (${HARNESS_NOTE[harness] || 'stop nudge'})`);
+    if (missing.length) { warn(`${harness} harness`, `missing ${missing.join(', ')}`, `hkb init --harness ${harness}`); continue; }
+    ok(`${harness} harness`, `${files.join(' · ')} (${HARNESS_NOTE[harness] || 'stop nudge'})`);
+
+    const command = harnessHookCommand(ctx.root, harness);
+    if (!command) continue;
+    const need = hookCommandNeeds(command);
+    if (need.kind !== 'file') { onPath(need.target) || warn(`${harness} hook command`, `\`${need.target}\` is not on PATH here`, `npm i -g hkb-cli (or: hkb init --harness ${harness}, which writes a command that resolves here)`); continue; }
+    if (isEphemeralPath(need.target)) { bad(`${harness} hook command`, `${command} — the npx cache is not a durable path, so this stops working the moment it is cleaned`, `npm i -g hkb-cli, then hkb init --harness ${harness}`); continue; }
+    const target = path.isAbsolute(need.target) ? need.target : path.join(ctx.root, need.target);
+    exists(target)
+      ? ok(`${harness} hook command`, `${need.target} → ${target}`)
+      : bad(`${harness} hook command`, `${need.target} is not there — this repo's hkb has moved, or this checkout has not run \`npm install\` yet`, 'npm install (or hkb init --harness ' + harness + ' if that does not fix it)');
   }
+}
+
+/**
+ * `.mcp.json`'s `kanban` server, same resolve check as `checkHarnesses`/`checkHooks` (#166): a
+ * project-relative `node <rel>` naming a file that is not there, or a bare `hkb` that is not on PATH.
+ * Silent when the file does not exist, or does not carry hkb's own server — MCP is opt-in
+ * (`hkb init --mcp`), so having neither is not a state to warn about.
+ */
+export async function checkMcp(ctx, { ok, warn, bad = warn }, { onPath = has, exists = (p) => fs.existsSync(p) } = {}) {
+  const { MCP_FILE, MCP_KEY } = await import('./mcp.js');
+  const file = path.join(ctx.root, MCP_FILE);
+  if (!fs.existsSync(file)) return;
+  let doc;
+  try { doc = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (e) { return warn(MCP_FILE, `not valid JSON (${e.message})`, 'hkb init --mcp'); }
+  const entry = doc?.mcpServers?.[MCP_KEY];
+  if (!entry) return;
+  const isNode = path.basename(String(entry.command || '')).replace(/\.exe$/i, '') === 'node';
+  const rel = isNode ? entry.args?.[0] : null;
+  if (isNode && rel && !path.isAbsolute(rel)) {
+    if (isEphemeralPath(rel)) return bad(MCP_FILE, `${rel} — the npx cache is not a durable path, so this stops working the moment it is cleaned`, 'npm i -g hkb-cli, then hkb init --mcp');
+    const target = path.join(ctx.root, rel);
+    return exists(target)
+      ? ok(MCP_FILE, `${MCP_KEY} → node ${rel}`)
+      : bad(MCP_FILE, `${rel} is not there — this repo's hkb has moved, or this checkout has not run \`npm install\` yet`, 'npm install');
+  }
+  if (!isNode && entry.command === 'hkb') {
+    return onPath('hkb')
+      ? ok(MCP_FILE, `${MCP_KEY} → hkb`)
+      : bad(MCP_FILE, '`hkb` is not on PATH here', 'npm i -g hkb-cli (or: hkb init --mcp, which writes a command that resolves here)');
+  }
+  ok(MCP_FILE, `${MCP_KEY} → ${entry.command}`); // an absolute path: it names this machine on purpose
 }
 
 /**
@@ -851,12 +899,13 @@ export async function doctor(ctx, flags, log) {
     }
   }
   checkSkill(ctx, { ok, warn });
-  checkHarnesses(ctx, { ok, warn });
+  checkHarnesses(ctx, { ok, warn, bad });
   checkActions(ctx, { ok, warn });
   const claudeSkill = path.join(ctx.root, '.claude', 'skills', 'kanban');
   fs.existsSync(claudeSkill) ? ok('claude skill link', '.claude/skills/kanban') : warn('claude skill link', 'missing', 'hkb init');
   checkCommands(ctx, { ok, warn });
   checkHooks(ctx, { ok, warn, bad });
+  await checkMcp(ctx, { ok, warn, bad });
   checkDispatcher(ctx, { ok, warn });
   // which layer answers a denial, and whether a frozen copy of that layer has fallen behind:
   // local files only, so both run on a checkout with no repo behind it

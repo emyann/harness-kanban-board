@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hkbOnPath } from './board.js';
+import { projectBinRel } from './init.js';
 import { getTask, loadRun, latestResult, parentResults, addComment } from './tasks.js';
 import { heartbeat, complete, block, unblock, requestReview, createTask, linkTask, withOutbox } from './lifecycle.js';
 import { readVersion, terminalArgv } from './cli.js';
@@ -419,13 +420,19 @@ const tomlInner = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 const fill = (text, vars) => text.replace(/\{\{(\w+)\}\}/g, (m, k) => (k in vars ? vars[k] : m));
 
 /**
- * How a client should launch this server: `hkb mcp` when hkb is on PATH, else this checkout's
- * `bin/hkb.js` under the node running right now. An MCP client is often started by a GUI with a
- * minimal PATH, so the fallback is absolute on both halves.
+ * How a client should launch this server: `hkb mcp` when hkb is on PATH; else this repo's own copy,
+ * relative to the project directory Claude Code and VS Code launch MCP servers from, when `root`
+ * carries one (`npm i -D hkb-cli`, or hkb's own checkout — #166, the same case #146 named for the
+ * hook commands); else this checkout's `bin/hkb.js` under the node running right now. An MCP client is
+ * often started by a GUI with a minimal PATH, so that last fallback is absolute on both halves — it
+ * is the one form that names *this* machine, because unlike the first two it is not written into a
+ * tracked file.
  */
-export function mcpLaunch({ onPath = hkbOnPath() } = {}) {
+export function mcpLaunch({ onPath = hkbOnPath(), root = null, pkgRoot = PKG_ROOT } = {}) {
   if (onPath) return { command: 'hkb', args: ['mcp'] };
-  return { command: process.execPath, args: [path.join(PKG_ROOT, 'bin', 'hkb.js'), 'mcp'] };
+  const rel = projectBinRel(root, { pkgRoot });
+  if (rel) return { command: 'node', args: [rel, 'mcp'] };
+  return { command: process.execPath, args: [path.join(pkgRoot, 'bin', 'hkb.js'), 'mcp'] };
 }
 
 /** The server entry `.mcp.json` holds under `mcpServers.kanban`, straight out of the template. */
@@ -476,7 +483,7 @@ export function mcpSnippets(launch = mcpLaunch()) {
  * Write `.mcp.json` (merging, never clobbering) and return what to tell the user.
  * @returns {{ file: string, changed: boolean, servers: string[], entry: object, snippets: object[] }}
  */
-export function installMcp(root, launch = mcpLaunch()) {
+export function installMcp(root, launch = mcpLaunch({ root })) {
   const file = path.join(root, MCP_FILE);
   let current = null;
   try { current = fs.readFileSync(file, 'utf8'); } catch { /* not there yet */ }
