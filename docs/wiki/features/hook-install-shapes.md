@@ -13,7 +13,7 @@ covers:
   - path: src/board.js
     sha: fd6f44def21b8286bbe5d9821209ccad1770df70
   - path: src/doctor.js
-    sha: e7d087b59acd7fefce8c7c1acc1909f62171ec36
+    sha: 815d85fc871585e6eb89c394a4613783c52351ec
   - path: src/mcp.js
     sha: 83243b4f880a005c6c06be3f1de396642f0cb3f8
   - path: skills/kanban/scripts/hkb
@@ -21,7 +21,7 @@ covers:
   - path: scripts/smoke-pack.mjs
     sha: aea7c5459b0687a0401a52e6fafb20832c54b818
 related: [architecture/overview, features/update-notice, concepts/roles-and-seats]
-generated_at_commit: 4b37e18
+generated_at_commit: a30ac54
 last_refreshed: 2026-08-28
 ---
 
