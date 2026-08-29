@@ -9,13 +9,13 @@ covers:
   - path: src/track.js
     sha: 4741b0697555435dcb76768a44ec86e1ef6eb4a0
   - path: src/dispatch.js
-    sha: fb85767e0b4b962930ee74c608c5bb0e1bd7ae4f
+    sha: 08cabfca37eae6e01b76bbeb8defd3066e90ea70
   - path: src/board.js
-    sha: 70992e7f84308320417651ed6c5d309028a4f581
+    sha: 94fd687e1ae9474add007a2a3fce529576506360
   - path: src/gc.js
     sha: 40672cb7a84da7170be3f5d99df42f326f9dc1e5
 related: [architecture/overview, features/harness-profiles, concepts/worker-identity, decisions/adr-004-roles-and-adoption]
-generated_at_commit: b20276e
+generated_at_commit: 2024146
 last_refreshed: 2026-08-29
 ---
 

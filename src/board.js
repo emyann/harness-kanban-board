@@ -159,7 +159,14 @@ export const DEFAULT_BOARD = {
     block_recurrence_limit: 3,
     auth_pause: 1800,
     recent_success_window: 600,
-    path_guard: true,
+    // path_overlap avoids the *merge* conflict when two PRs touch the same files — not left here as
+    // a static default, because its right default depends on `merge.mode` (`pathOverlapGuard`,
+    // src/model.js): "off" on the manual boards most of them are (a card waits on a human between
+    // review and merge, so "another card is running" no longer approximates "not merged yet"),
+    // "unmerged" when `merge.mode` is "auto" (where review → merged is immediate, so it does). Set
+    // `guards: { path_overlap: "off" | "running" | "unmerged" }` to override either default; the
+    // pre-#185 `path_guard: true|false` still works too, for a board that already set it.
+    guards: { path_overlap: null },
     daily_spawn_cap: 40,
     // The last step. "manual" is today's behaviour: hkb never merges, the operator does. Set
     // { "mode": "auto", "method": "squash" } and the dispatcher asks GitHub's own auto-merge to

@@ -5,6 +5,7 @@ import {
   parseRunComment, serializeRunComment, emptyRun, openAttempt, parseResultComment, serializeResultComment,
   blockerDone, computeReady, pathsOverlap, sortForDispatch, slugify, lockRef, lockRefPath, hashReason,
   normalizeHookInput, stripFrontmatter, sessionUpdate, parseRepoSpecs, boardKey, uniqueKeys, shouldNudgeOnStop, deadAtRecheck,
+  pathOverlapGuard, pathHolders, pathCollisions, attemptIdle,
 } from '../src/model.js';
 
 test('body block: round trip and defaults', () => {
@@ -76,6 +77,54 @@ test('path overlap guard', () => {
   assert.equal(pathsOverlap(['packages/ui/'], ['packages/db/']), false);
   assert.equal(pathsOverlap([], ['x']), false);
   assert.equal(pathsOverlap([''], ['x']), true);
+});
+
+test('pathOverlapGuard: defaults follow merge.mode, explicit settings win', () => {
+  assert.deepEqual(pathOverlapGuard({}), { mode: 'off', source: 'default for merge.mode "manual"', error: null });
+  assert.deepEqual(pathOverlapGuard({ dispatch: { merge: { mode: 'auto' } } }), { mode: 'unmerged', source: 'default for merge.mode "auto"', error: null });
+  assert.equal(pathOverlapGuard({ dispatch: { path_guard: false } }).mode, 'off');
+  assert.equal(pathOverlapGuard({ dispatch: { path_guard: true } }).mode, 'running');
+  // an explicit dispatch.guards.path_overlap outranks the legacy boolean and the merge.mode default
+  assert.equal(pathOverlapGuard({ dispatch: { path_guard: true, guards: { path_overlap: 'off' } } }).mode, 'off');
+  assert.equal(pathOverlapGuard({ dispatch: { merge: { mode: 'auto' }, guards: { path_overlap: 'running' } } }).mode, 'running');
+  const bad = pathOverlapGuard({ dispatch: { guards: { path_overlap: 'sometimes' } } });
+  assert.equal(bad.mode, 'off');
+  assert.match(bad.error, /must be one of/);
+});
+
+test('pathHolders: mode decides who holds, idleNumbers overrides "running"', () => {
+  const tasks = [
+    { number: 1, status: 'running', kb: { paths: ['a/'] } },
+    { number: 2, status: 'review', prs: [{ state: 'OPEN' }], kb: { paths: ['b/'] } },
+    { number: 3, status: 'review', prs: [{ state: 'MERGED' }], kb: { paths: ['c/'] } },
+    { number: 4, status: 'ready', kb: { paths: ['d/'] } },
+  ];
+  assert.deepEqual(pathHolders(tasks, 'off'), []);
+  assert.deepEqual(pathHolders(tasks, 'running').map((t) => t.number), [1]);
+  assert.deepEqual(pathHolders(tasks, 'unmerged').map((t) => t.number), [1, 2]);
+  assert.deepEqual(pathHolders(tasks, 'running', new Set([1])), []);
+});
+
+test('pathCollisions: names the holder and the paths that overlap', () => {
+  const holders = [{ number: 7, kb: { paths: ['src/'] } }, { number: 9, kb: { paths: ['docs/'] } }];
+  assert.deepEqual(pathCollisions(['src/gh.js'], holders), [{ number: 7, paths: ['src/'] }]);
+  assert.deepEqual(pathCollisions(['test/'], holders), []);
+});
+
+test('attemptIdle: a job\'s own liveness is authoritative; a stale heartbeat only matters with no job', () => {
+  const now = Date.parse('2026-08-29T12:00:00Z');
+  const hourAgo = '2026-08-29T11:00:00Z'; // the default ref-CAS heartbeat never touches the run comment,
+  // so a bg attempt's `lastSignal` sits at `started_at` for its whole life — an hour-old value here is
+  // the ordinary case for a job that is very much still running, not evidence of anything.
+  assert.equal(attemptIdle(null, null, 60, now), false, 'no signal yet is never idle');
+  assert.equal(attemptIdle({ state: 'working' }, hourAgo, 60, now), false, 'a live job holds no matter how stale lastSignal looks');
+  assert.equal(attemptIdle({ state: 'blocked' }, hourAgo, 60, now), false, 'blocked on a permission prompt still counts as alive');
+  assert.equal(attemptIdle({ state: 'done' }, new Date(now - 5_000).toISOString(), 60, now), true, 'a finished job turn is idle even with a fresh-looking lastSignal');
+  assert.equal(attemptIdle({ state: 'stopped' }, null, 60, now), true, 'a dead job with no lastSignal at all is still idle');
+  assert.equal(attemptIdle(null, new Date(now - 30_000).toISOString(), 60, now), false, 'no job: inside one tick interval');
+  assert.equal(attemptIdle(null, new Date(now - 90_000).toISOString(), 60, now), true, 'no job: past one tick interval');
+  assert.equal(attemptIdle(null, hourAgo, 60, now, true), false, 'a live pid holds no matter how stale lastSignal looks, same as a live job');
+  assert.equal(attemptIdle(null, null, 60, now, true), false, 'a live pid with no signal at all still holds');
 });
 
 test('deadAtRecheck: a child dead at the recheck reports a failed entry, not a started one', () => {

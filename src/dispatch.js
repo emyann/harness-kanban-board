@@ -8,7 +8,7 @@ import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, 
 import { claim, release, listLocks, lockBeatAt, staleBaseSha, remoteName } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, pidFile, readPidFile, pidAlive, recordExit, clearExit, HOOK_SETTINGS_VAR } from './board.js';
 import { workerHookSettings } from './init.js';
-import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs } from './model.js';
+import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted, trackFanout } from './track.js';
 import { GhError } from './gh.js';
@@ -448,6 +448,8 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   ctx.requireBoard();
   const d = ctx.cfg.dispatch;
   const summary = { reconciled: [], reclaimed: [], promoted: [], guarded: [], claimed: [], spawn_failed: [], held: [], skipped: [], tracks: [], reaped: [], self_heal: [], auto_merge: [], fatal: null };
+  const pog = pathOverlapGuard(ctx.cfg);
+  if (pog.error) log(`dispatch.guards.path_overlap ignored — the guard stays off: ${pog.error}`);
   // The tick is the lifetime of every read the tick memoizes: the base sha is revalidated (304 when
   // the branch has not moved) the first time a claim needs it, never inherited from an older tick.
   staleBaseSha(ctx);
@@ -463,7 +465,9 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   // contradict it: a task touched < 90 s ago is skipped, a lock claimed < 15 min ago is never swept.
   state.touched = state.touched || {};
   state.claims = state.claims || {};
+  state.idle_logged = state.idle_logged || {}; // path_overlap idle line: once per attempt, not once per tick
   for (const [k, v] of Object.entries(state.claims)) if (Date.now() - new Date(v).getTime() > 86_400_000) delete state.claims[k];
+  for (const [k, v] of Object.entries(state.idle_logged)) if (Date.now() - new Date(v).getTime() > 86_400_000) delete state.idle_logged[k];
   const touchedRecently = (n) => state.touched[n] && Date.now() - new Date(state.touched[n]).getTime() < 90_000;
   const touch = (n) => { state.touched[n] = nowIso(); };
 
@@ -528,6 +532,13 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   const lockShaOf = (n, k) => (locks || []).find((l) => l.n === n && l.k === k)?.sha || null;
 
   // 1. reclaim stale / crashed / timed out / finished without a terminal verb
+  // `idleNumbers` doubles as the path_overlap guard's liveness check (#185): a running task whose
+  // attempt has gone idle — no job, no live pid, and no heartbeat for well past its cadence — must
+  // never hold its paths against another card, whatever the guard's mode. Computed here because the
+  // job record, pid, and heartbeat are already in hand for every running task this loop visits; a
+  // track node (covered by its root) never enters this loop, so it is never marked idle — the
+  // root's own heartbeat is its liveness, same as everywhere else in the tick.
+  const idleNumbers = new Set();
   for (const t of running) {
     if (touchedRecently(t.number)) continue; // our own transition may not be visible yet
     // a node inside a live track: its session is the root's, and the root's lock is what says
@@ -553,9 +564,10 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     // working it in their own terminal — there is no pid the dispatcher ever knew. Either way
     // max_runtime and the heartbeat below are the whole check; the no-handle rules further down
     // would call a perfectly live attempt crashed three minutes in.
+    let job = null; // the matched background-agent job, when this attempt has one — the idle check below reuses it
     if (a.remote || a.manual) { /* liveness is the heartbeat */ }
     else if (a.host === ctx.host && (a.job || a.bg)) {
-      let job = a.job ? (jobsById.get(a.job) || readJobState(a.job)) : null;
+      job = a.job ? (jobsById.get(a.job) || readJobState(a.job)) : null;
       if (!job && a.bg && a.log) {
         // the launch log contains "backgrounded · <id>" — the reliable source for the job id
         let id = null;
@@ -582,6 +594,10 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       } else if (classifyJob(job) !== 'running' && secondsSince(a.started_at) > 30) outcome = 'protocol_violation';
     } else if (a.host === ctx.host && a.pid && !pidAlive(a.pid)) outcome = 'crashed';
     else if (a.host === ctx.host && !a.pid && !a.job && secondsSince(a.started_at) > 180) outcome = 'crashed'; // spawn never recorded a handle
+    // A live pid is as authoritative as a live job (#185, second pass): a `process` worker never
+    // touches the run comment either between heartbeats, so `lastSignal` alone would call it idle on
+    // the same schedule a bg attempt was. `process.kill(pid, 0)` costs nothing and settles it outright.
+    const livePid = a.host === ctx.host && !!a.pid && pidAlive(a.pid);
     if (!outcome && secondsSince(a.started_at) > maxRuntime) outcome = 'timed_out';
     else if (!outcome && secondsSince(lastSignal) > d.stale_after) {
       // A ref-CAS worker writes nothing to the run comment, so its real last signal is the commit
@@ -592,7 +608,36 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       if (secondsSince(lastSignal) > d.stale_after) outcome = 'reclaimed';
       else log(`#${t.number}: attempt ${a.attempt} beat on ${lockRef(t.number, a.attempt)} ${Math.round(secondsSince(lastSignal))}s ago — alive`);
     }
-    if (!outcome) { if (dirty) await saveRun(ctx, t.number, runRec); continue; }
+    // A no-job, no-pid attempt (manual, remote, or a bg job on another host) has nothing but its
+    // heartbeat to ask, and the ref-CAS default never touches the run comment until the reclaim
+    // check above already thought it looked stale — which only fires past `stale_after`. Give the
+    // idle threshold, well inside `stale_after`, the same fresher read: one lock-ref commit read,
+    // only for an attempt that would otherwise be called idle on a stale run-comment timestamp.
+    const idleThreshold = Math.max(d.interval, 1200);
+    if (!outcome && !job && !livePid && secondsSince(lastSignal) > idleThreshold && secondsSince(lastSignal) <= d.stale_after) {
+      let beat = null;
+      try { beat = await lockBeatAt(ctx, lockShaOf(t.number, a.attempt)); } catch (e) { log(`#${t.number}: lock ref beat unreadable for the idle check (${e.message}); using the run comment`); }
+      lastSignal = lastSignalAt(a, beat);
+    }
+    if (!outcome) {
+      // A job-bearing attempt's liveness comes from the job record; a pid-bearing one from the pid
+      // itself. Only an attempt with neither falls back to timing a signal — the two-tick-plus
+      // threshold matches the ~10-minute heartbeat floor a `comment`-mode worker beats on.
+      if (attemptIdle(job, lastSignal, idleThreshold, Date.now(), livePid)) {
+        idleNumbers.add(t.number);
+        const key = `${t.number}/${a.attempt}`;
+        if (!state.idle_logged[key]) {
+          // A dry run must never persist this — it would silence the real loop's one log line for
+          // an attempt it never actually saw go idle (#185, second pass).
+          if (!dryRun) state.idle_logged[key] = nowIso();
+          log(`#${t.number}: attempt ${a.attempt} idle since ${lastSignal || a.started_at} — path_overlap will not hold its paths`);
+        }
+      } else if (!dryRun) {
+        delete state.idle_logged[`${t.number}/${a.attempt}`];
+      }
+      if (dirty) await saveRun(ctx, t.number, runRec);
+      continue;
+    }
     if (dryRun) { summary.reclaimed.push({ number: t.number, outcome, dry: true }); continue; }
     // failAttempt saves the same record, so a row written off in the tick that named its session
     // costs one write, not two — and goes to its post-mortem carrying the session.
@@ -655,7 +700,10 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   let slots = Math.max(0, d.max_in_progress - sessions.length);
   let budget = Math.min(max, slots);
   const ready = sortForDispatch(tasks.filter((t) => t.status === 'ready'));
-  const claimedPaths = runningNow.map((t) => t.kb.paths || []);
+  // path_overlap's holders, under the board's effective mode — see `pathOverlapGuard`. `idleNumbers`
+  // (computed in the reclaim pass above) already drops a running task whose attempt has gone idle;
+  // a card just claimed this same tick is pushed on below, always a holder, never idle.
+  const claimedPaths = pathHolders(tasks, pog.mode, idleNumbers).map((t) => ({ number: t.number, paths: t.kb.paths || [] }));
 
   // Claim health, per process and per task — see noteClaimResult. One verdict per task per tick, so
   // a root that is both a track candidate and its own frontier cannot count twice.
@@ -704,7 +752,12 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     const last = lastAttempt(runRec.run);
     if (last?.outcome === 'completed' && secondsSince(last.ended_at) < d.recent_success_window) { note('recent_success'); continue; }
     const paths = trackPaths(cand.track);
-    if (d.path_guard && paths.length && claimedPaths.some((p) => p.length && pathsOverlap(p, paths))) { note('path_overlap'); continue; }
+    const collides = pog.mode !== 'off' && paths.length ? pathCollisions(paths, claimedPaths) : [];
+    if (collides.length) {
+      note('path_overlap', { collides_with: collides });
+      log(`#${t.number}: track guarded (path_overlap, ${pog.mode}) — collides with ${collides.map((c) => `#${c.number} (${c.paths.join(', ')})`).join('; ')}`);
+      continue;
+    }
 
     const nodes = cand.track.nodes.map((x) => x.number);
     const k = runRec.run.attempts.length + 1;
@@ -759,7 +812,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     await saveRun(ctx, t.number, runRec);
     state.spawned_today = (state.spawned_today || 0) + 1;
     perProfile[profileName] = (perProfile[profileName] || 0) + 1;
-    claimedPaths.push(paths);
+    claimedPaths.push({ number: t.number, paths });
     for (const nn of nodes) coveredBy.set(nn, t.number); // the loop below must leave them to the runner
     claimedTracks.add(t.number);
     budget--;
@@ -805,7 +858,12 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     runRec = runRec || await loadRun(ctx, t.number);
     const last = lastAttempt(runRec.run);
     if (last?.outcome === 'completed' && secondsSince(last.ended_at) < d.recent_success_window) { summary.guarded.push({ number: t.number, guard: 'recent_success' }); continue; }
-    if (d.path_guard && (t.kb.paths || []).length && claimedPaths.some((p) => p.length && pathsOverlap(p, t.kb.paths))) { summary.guarded.push({ number: t.number, guard: 'path_overlap' }); continue; }
+    const pathCollides = pog.mode !== 'off' && (t.kb.paths || []).length ? pathCollisions(t.kb.paths, claimedPaths) : [];
+    if (pathCollides.length) {
+      summary.guarded.push({ number: t.number, guard: 'path_overlap', collides_with: pathCollides });
+      log(`#${t.number}: guarded (path_overlap, ${pog.mode}) — collides with ${pathCollides.map((c) => `#${c.number} (${c.paths.join(', ')})`).join('; ')}`);
+      continue;
+    }
     if (t.kb.scheduled_at && new Date(t.kb.scheduled_at) > new Date()) { summary.skipped.push({ number: t.number, why: 'scheduled later' }); continue; }
 
     const k = runRec.run.attempts.length + 1;
@@ -849,7 +907,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     await saveRun(ctx, t.number, runRec);
     state.spawned_today = (state.spawned_today || 0) + 1;
     perProfile[profileName] = (perProfile[profileName] || 0) + 1;
-    claimedPaths.push(t.kb.paths || []);
+    claimedPaths.push({ number: t.number, paths: t.kb.paths || [] });
     budget--;
     const handle = spawned.remote
       ? `started elsewhere by \`${spawned.argv.slice(0, 4).join(' ')}\` — its heartbeat is the only liveness`

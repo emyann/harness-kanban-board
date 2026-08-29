@@ -834,6 +834,26 @@ export function ensureGitignore(root) {
   return true;
 }
 
+// The one universal conflict a `docs/wiki/` (see docs/wiki/AGENTS.md) makes impossible outright:
+// every worker that touches it appends to `log.md`, so two open PRs both touching it never disagree
+// about anything but *order* — union is the correct merge, not a conflict to land through a
+// continuation attempt (#185). Harmless on a repo with no `docs/wiki/`: a gitattributes pattern for a
+// path that does not exist yet costs nothing, and starts working the moment the wiki does.
+export const GITATTRIBUTES_LINES = ['docs/wiki/log.md merge=union'];
+
+/** Append whatever `.gitattributes` lines are missing. Per-line, so it is idempotent and additive. */
+export function ensureGitAttributes(root) {
+  const file = path.join(root, '.gitattributes');
+  const wanted = GITATTRIBUTES_LINES;
+  let text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  const have = new Set(text.split('\n').map((l) => l.trim()));
+  const missing = wanted.filter((w) => !have.has(w));
+  if (!missing.length) return false;
+  text = text.trimEnd() + (text ? '\n' : '') + missing.join('\n') + '\n';
+  fs.writeFileSync(file, text);
+  return true;
+}
+
 // ---------- the user-level board list ----------
 // `hkb serve` can show several checkouts on one page, and the list of them lives outside every repo,
 // in `~/.config/hkb/boards.json`. Until now the only way onto that page was to hand-edit that file —
@@ -1025,6 +1045,7 @@ export async function init(ctx, flags, log) {
     }
   }
   if (ensureGitignore(root)) log('updated .gitignore');
+  if (ensureGitAttributes(root)) log('updated .gitattributes (docs/wiki/log.md merge=union — the append-only log never conflicts)');
   const section = fs.readFileSync(path.join(PKG_ROOT, 'templates', 'doc-section.md'), 'utf8');
   for (const f of ['CLAUDE.md', 'AGENTS.md']) { upsertSection(path.join(root, f), section); }
   log('upserted hkb section in CLAUDE.md and AGENTS.md');
