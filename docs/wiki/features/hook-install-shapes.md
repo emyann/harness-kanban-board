@@ -9,11 +9,11 @@ covers:
   - path: src/init.js
     sha: 28a9a921109337d3bd5c619859207995b579a06a
   - path: src/model.js
-    sha: cf222b0724d3f53377dab94a262100dd985daf86
+    sha: bd036ba8ceb20bc5d08dfc2b2aadfa7dbfb16719
   - path: src/board.js
-    sha: f73b03ee9a45e03e763922ddf57c2e4028405bdd
+    sha: 4309cd3c93e8ace0a8b0699440c331efeac44d65
   - path: src/doctor.js
-    sha: 612c492fd4e9792a5d4d3039a336f43730e08d52
+    sha: dae1f0beaa7f849f096dd8ae049ce83f927c040b
   - path: src/mcp.js
     sha: 83243b4f880a005c6c06be3f1de396642f0cb3f8
   - path: skills/kanban/scripts/hkb
@@ -21,8 +21,8 @@ covers:
   - path: scripts/smoke-pack.mjs
     sha: aea7c5459b0687a0401a52e6fafb20832c54b818
 related: [architecture/overview, features/update-notice, concepts/roles-and-seats]
-generated_at_commit: 0e8e882
-last_refreshed: 2026-08-28
+generated_at_commit: 802ea81
+last_refreshed: 2026-08-29
 ---
 
 # Where a hook command may say hkb is
@@ -206,9 +206,17 @@ variable. Two checks belong to the move itself:
   the file win whole, so a launch an older `init` wrote out never gains the
   flag, and with no settings file to fall back on that profile's workers would
   quietly get no Stop nudge and record no session id. This is the same
-  frozen-copy blind spot `worker permissions` watches on `allowed_tools`, and
-  the fix branches the same way: drop `"launch"` from one of hkb's own profiles,
-  or add the token by hand to a custom one.
+  frozen-copy blind spot `worker permissions` watches on `allowed_tools`. Since
+  #182 the fix on one of hkb's own profiles names the surgical repair instead
+  of the blunt one — insert `"{hook_settings}"` right after the launch's
+  `"--disallowedTools"` group, or drop `"launch"` entirely if the pin added
+  nothing but `--model`/`--effort` (`src/doctor.js` `checkHooks`, the
+  `DEFAULT_PROFILES[name]` branch): both are profile fields now (`effort` is
+  validated in `loadBoard`, `src/board.js`, against `EFFORT_LEVELS` in
+  `src/model.js`, and rendered into `{model_args}` by `modelArgs`, also
+  `src/model.js`) — a pin is never needed just to set them. A custom-named
+  profile still has no default behind it, so it is told to add the token by
+  hand.
 
 Three older verdicts are specific to the command shape:
 

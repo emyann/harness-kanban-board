@@ -8,8 +8,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DEFAULT_PROFILES, DEFAULT_BOARD } from '../src/board.js';
-import { SAFE_BUILTINS, allowedCommandsFrom, harnessCommands, uncoveredBuiltins } from '../src/model.js';
+import { DEFAULT_PROFILES, DEFAULT_BOARD, loadBoard } from '../src/board.js';
+import { SAFE_BUILTINS, EFFORT_LEVELS, modelArgs, allowedCommandsFrom, harnessCommands, uncoveredBuiltins } from '../src/model.js';
 import { actionsFiles, ACTIONS_PROFILE } from '../src/init.js';
 import { checkWorkerPermissions, workflowAllowedTools, PERMS_CHECK, checkPermissionMode, promptingProfiles, MODE_CHECK } from '../src/doctor.js';
 
@@ -202,4 +202,33 @@ test('doctor is silent on the profiles hkb ships, and asks nothing of a non-Clau
   assert.deepEqual(results, [], 'nothing to act on is nothing to print');
   // claude-action runs `gh workflow run`: the flags of the run it triggers live in the workflow file
   assert.deepEqual(promptingProfiles({ profiles: { 'claude-action': DEFAULT_PROFILES['claude-action'], codex: DEFAULT_PROFILES.codex } }), []);
+});
+
+// ---------- effort: the other reason a launch used to be pinned (#182) ----------
+
+test('modelArgs renders --model then --effort, either or both dropped when unset', () => {
+  assert.deepEqual(modelArgs({}), []);
+  assert.deepEqual(modelArgs({ model: 'opus' }), ['--model', 'opus']);
+  assert.deepEqual(modelArgs({ effort: 'medium' }), ['--effort', 'medium']);
+  assert.deepEqual(modelArgs({ model: 'opus', effort: 'medium' }), ['--model', 'opus', '--effort', 'medium']);
+});
+
+test('loadBoard accepts a known effort level on a profile', (t) => {
+  const root = scratch(t);
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { claude: { ...DEFAULT_PROFILES.claude, effort: 'medium' } } }));
+  const cfg = loadBoard(root);
+  assert.equal(cfg.profiles.claude.effort, 'medium');
+});
+
+test('loadBoard rejects an unknown effort level, naming the allowed set', (t) => {
+  const root = scratch(t);
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { claude: { ...DEFAULT_PROFILES.claude, effort: 'urgent' } } }));
+  assert.throws(() => loadBoard(root), (e) => {
+    assert.match(e.message, /profile "claude" has effort "urgent"/);
+    assert.match(e.message, new RegExp(EFFORT_LEVELS.join(', ')));
+    assert.equal(e.exitCode, 2);
+    return true;
+  });
 });

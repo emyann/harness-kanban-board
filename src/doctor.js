@@ -276,7 +276,7 @@ export function checkHooks(ctx, { ok, warn, bad }, { onPath = has, exists = (p) 
     warn(LAUNCH_HOOK_CHECK,
       `the ${name} launch in ${path.relative(ctx.root, boardFile(ctx.root))} predates the hooks moving onto it, so its workers get no Stop nudge and record no session id`,
       DEFAULT_PROFILES[name]
-        ? `drop "launch" from the ${name} profile in that file to take hkb's own`
+        ? `insert "${HOOK_SETTINGS_VAR}" into the ${name} profile's launch, right after its "--disallowedTools" group — or drop "launch" from that profile instead if the pin adds nothing but --model/--effort, which are profile fields now`
         : `add "${HOOK_SETTINGS_VAR}" to that launch — it is not one of hkb's own profiles, so there is no default to fall back to`);
   }
   const launched = hookLaunchProfiles(ctx.cfg);

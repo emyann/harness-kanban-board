@@ -8,7 +8,7 @@ import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, 
 import { claim, release, listLocks, lockBeatAt, staleBaseSha, remoteName } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, pidFile, readPidFile, pidAlive, recordExit, clearExit, HOOK_SETTINGS_VAR } from './board.js';
 import { workerHookSettings } from './init.js';
-import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv } from './model.js';
+import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted } from './track.js';
 import { GhError } from './gh.js';
@@ -65,7 +65,7 @@ export function expandLaunch(template, vars, profile) {
     // that repeat the flag instead of taking a list (Copilot CLI).
     const perTool = /^(--[\w-]+)=\{allowed_tools\}$/.exec(el);
     if (perTool) { for (const t of profile.allowed_tools || []) out.push(perTool[1], t); continue; }
-    if (el === '{model_args}') { if (vars.model) out.push('--model', vars.model); continue; }
+    if (el === '{model_args}') { out.push(...modelArgs(vars)); continue; }
     // hkb's hooks, on the launch instead of in a settings file every session in the repo reads
     // (#144). A flag pair or nothing, like `{model_args}`: an empty value would still be a `--settings`
     // Claude Code has to parse, and a board with no hkb to run has nothing to declare.
@@ -144,7 +144,7 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
   // find `hkb` on PATH, and a Copilot or Codex spawn has no use for the answer.
   const vars = {
     n: task.number, k: attempt, slug: slugify(task.title), title: task.title.replace(/[\r\n]+/g, ' ').slice(0, 80),
-    model: task.kb.model || profile.model || '', prompt, board: ctx.board, repo: ctx.repo.nameWithOwner,
+    model: task.kb.model || profile.model || '', effort: profile.effort || '', prompt, board: ctx.board, repo: ctx.repo.nameWithOwner,
     worktree: wt ? path.join(ctx.root, worktreePath(wt)) : ctx.root,
     hook_settings: (profile.launch || []).includes(HOOK_SETTINGS_VAR) ? workerHookSettings() : '',
   };

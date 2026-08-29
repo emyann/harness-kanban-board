@@ -206,7 +206,7 @@ is that procedure — installed by the same `hkb init`, delegating to the same s
    block kind each one landed on: what to read, which verb to run, and when the answer is "not yours".
 4. **The seat boundary, in writing.** It drives verbs — `comment`, `unblock` when the answer was already on the
    board, `request-changes`, `up` after an exit 4. It never merges on a `manual` board, never edits
-   `.kanban/board.json` (profiles, `allowed_tools`, models, `merge.mode`), never re-prioritises someone else's
+   `.kanban/board.json` (profiles, `allowed_tools`, models, `effort`, `merge.mode`), never re-prioritises someone else's
    queue, never clears `kb:needs-human` for any reason but an answer it has just written onto the card, and
    never starts a second dispatcher. What it cannot decide, it hands back whole: the card, what it read, what it
    would do, and whether it needs a decision, a credential or an approval.

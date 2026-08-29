@@ -30,6 +30,7 @@ tell you it *spent*, which is a real reason to pick one over another:
   "heartbeat": "auto",            // "ref" (CAS on the lock ref) · "comment" · "auto"
   "max_in_progress": 1,
   "model": null,                  // per-profile default; a task's `model` wins
+  "effort": null,                 // "low" | "medium" | "high" | "xhigh" — Claude Code's --effort
   "allowed_tools": null,          // per-command allowlist, for harnesses that have one
   "launch": ["codex", "exec", "-C", "{worktree}", "..."]
 }
@@ -37,9 +38,17 @@ tell you it *spent*, which is a real reason to pick one over another:
 
 Placeholders in `launch`: `{n}` `{k}` `{slug}` `{title}` `{board}` `{repo}` `{model}` `{prompt}`, and
 `{worktree}` — the absolute path of the checkout the dispatcher is about to create for this attempt (the board
-root for profiles without `workspace: "worktree"`). `{model_args}` expands to `--model <m>` or to nothing;
-`{allowed_tools}` splices the list in, and `--flag={allowed_tools}` repeats `--flag <entry>` per entry.
-Nothing else is interpolated, so a launch array is safe to read and safe to edit.
+root for profiles without `workspace: "worktree"`). `{model_args}` expands to `--model <m>`, `--effort <e>`,
+both, or neither; `{allowed_tools}` splices the list in, and `--flag={allowed_tools}` repeats `--flag <entry>`
+per entry. Nothing else is interpolated, so a launch array is safe to read and safe to edit.
+
+`model` and `effort` are the two things people used to pin a whole `launch` array for (#182) — they render
+into `{model_args}` on the `claude`, `claude-track` and `claude-p` profiles, so the pin is never needed just to
+set them. `effort` is validated at load: an unknown value fails `hkb doctor`/every command with exit 2, naming
+`low`, `medium`, `high`, `xhigh`. Copilot CLI and Codex have no verified `--effort` equivalent, so leave it
+unset on `copilot-cli` and `codex` — setting it there would still render `--effort <v>` through the same
+`{model_args}` token, and neither CLI is known to accept that flag. A launch pinned before this field existed
+should drop the pin (see `launch hooks` below) rather than carry `--effort` by hand.
 
 ## Which profiles a board gets
 
@@ -361,9 +370,11 @@ Three checks guard the layer that is doing the enforcing, and all of them read l
 - **`launch hooks`** catches a launch frozen in `board.json` before the hooks moved onto it. `loadBoard`
   deep-merges the file over hkb's defaults and an array in the file wins whole, so a `launch` an older `init`
   wrote out keeps its shape forever — and since nothing is being written into a settings file to make up for it,
-  that profile's workers would quietly get no Stop nudge and record no session id. The fix branches the same way
-  `worker permissions` does: drop `"launch"` from one of hkb's own profiles to take the default back, or add
-  `"{hook_settings}"` by hand to a custom one, which has no default behind it.
+  that profile's workers would quietly get no Stop nudge and record no session id. The fix names the surgical
+  repair rather than the blunt one: insert `"{hook_settings}"` into the launch, right after its
+  `"--disallowedTools"` group, on one of hkb's own profiles — or drop `"launch"` there entirely if the only
+  reason it was pinned was `--model`/`--effort`, which are profile fields now (see above) and need no pin at
+  all. A custom-named profile has no default behind it, so it is told to add `"{hook_settings}"` by hand.
 - **`worker permissions`** catches a **frozen copy** of an allow-list, which no default change can reach: a
   profile that pins `allowed_tools` in `board.json`, and the `--allowedTools` line `hkb init --with-actions`
   bakes into the generated worker workflow. Both keep denying `cd`, `export`, `command`, `env` until someone
@@ -685,6 +696,7 @@ transitions, and the PAT's limit is 5,000 requests an hour instead of 1,000.
 | nothing runs at all | the workflows are not on the default branch | commit and push them; `hkb doctor` says so |
 | a task sits `running` for an hour after the run was cancelled | a cancelled or killed job is only noticed at `stale_after` — there is no `workflow_run` crash detection for remote attempts yet | lower `stale_after`, or `hkb dispatch` from a laptop too |
 | a task's `model` is ignored | the per-task override is not plumbed through workflow inputs | set the model in `claude_args` in the worker workflow |
+| a profile's `effort` does nothing here | the Actions worker workflow's `claude_args` is a hand-written flag list, not rendered from `{model_args}` | add `--effort <v>` to `claude_args` in the worker workflow yourself |
 | `--profiles: no profile "claude-action" in board.json` | the workflow was committed without the profile | `hkb init --with-actions` |
 
 Honest latency, laptop off: **15-75 minutes**. The 60-second cadence is the local loop, and the two are safe to

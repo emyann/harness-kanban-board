@@ -235,6 +235,22 @@ test('expandLaunch leaves --model out when no model is set, in both flag styles'
   );
 });
 
+// The pin `effort` replaces (#182): a board that just wants `--effort medium` on the claude launch no
+// longer needs a frozen copy of it, because the field renders through the same `{model_args}` token
+// `--model` already used.
+test('a claude profile with no pinned launch renders --effort through {model_args}', () => {
+  const profile = { ...DEFAULT_PROFILES.claude, effort: 'medium' };
+  const argv = expandLaunch(profile.launch, { n: 1, k: 1, title: 't', prompt: 'do the thing', effort: profile.effort }, profile);
+  assert.deepEqual(argv.slice(argv.indexOf('--effort'), argv.indexOf('--effort') + 2), ['--effort', 'medium']);
+});
+
+test('{model_args} renders --model then --effort, either or both dropped when unset', () => {
+  assert.deepEqual(expandLaunch(['{model_args}'], {}, {}), []);
+  assert.deepEqual(expandLaunch(['{model_args}'], { model: 'opus' }, {}), ['--model', 'opus']);
+  assert.deepEqual(expandLaunch(['{model_args}'], { effort: 'high' }, {}), ['--effort', 'high']);
+  assert.deepEqual(expandLaunch(['{model_args}'], { model: 'opus', effort: 'high' }, {}), ['--model', 'opus', '--effort', 'high']);
+});
+
 // ---------- the worktree the dispatcher makes for a harness that has no flag for it ----------
 
 function gitRepo() {
@@ -1009,7 +1025,8 @@ test('doctor catches a launch frozen in board.json before the hooks moved onto i
   const said = results.filter((r) => r.name === LAUNCH_HOOK_CHECK);
   assert.deepEqual(said.map((r) => r.ok), [null, null]);
   assert.match(said[0].detail, /predates the hooks moving onto it, so its workers get no Stop nudge and record no session id/);
-  assert.match(said[0].fix, /drop "launch" from the claude profile/, "one of hkb's own takes its list back when the key goes");
+  assert.match(said[0].fix, /insert "\{hook_settings\}" into the claude profile's launch/, 'names the surgical fix, not "drop launch"');
+  assert.match(said[0].fix, /--model\/--effort, which are profile fields now/, 'and the escape hatch for a pin that only added those');
   assert.match(said[1].fix, /add "\{hook_settings\}" to that launch/, 'a custom name has no default to fall back to');
   assert.deepEqual(staleHookLaunches({ profiles: { claude: DEFAULT_PROFILES.claude, codex: DEFAULT_PROFILES.codex } }), [], 'a current launch and a non-Claude one are both fine');
 });

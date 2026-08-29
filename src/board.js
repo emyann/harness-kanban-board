@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghCmd } from './gh.js';
-import { worktreePath, parseRepoSpecs, mergeBoardEntry, stripNodeModulesBin, pidFileStale, SAFE_BUILTINS } from './model.js';
+import { worktreePath, parseRepoSpecs, mergeBoardEntry, stripNodeModulesBin, pidFileStale, SAFE_BUILTINS, EFFORT_LEVELS } from './model.js';
 
 // A background worker has nobody to answer a permission prompt, so the allowlist must cover
 // every command an agent plausibly reaches for; anything else is denied, never prompted (see #23).
@@ -64,6 +64,7 @@ export const DEFAULT_PROFILES = {
     heartbeat: 'auto',
     max_in_progress: 2,
     model: null,
+    effort: null,
     allowed_tools: CLAUDE_TOOLS,
     launch: ['claude', '--bg', '--name', 'kb #{n} · {title}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', ...CLAUDE_DENY, HOOK_SETTINGS_VAR, '--max-turns', '80', '--max-budget-usd', '5', '{model_args}', '{prompt}'],
   },
@@ -75,6 +76,7 @@ export const DEFAULT_PROFILES = {
     heartbeat: 'auto',
     max_in_progress: 1,
     model: null,
+    effort: null,
     allowed_tools: CLAUDE_TOOLS,
     launch: ['claude', '--bg', '--name', 'kb track #{n} · {title}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', ...CLAUDE_DENY, HOOK_SETTINGS_VAR, '--max-turns', '400', '--max-budget-usd', '25', '{model_args}', '{prompt}'],
   },
@@ -84,6 +86,7 @@ export const DEFAULT_PROFILES = {
     heartbeat: 'auto',
     max_in_progress: 2,
     model: null,
+    effort: null,
     allowed_tools: CLAUDE_TOOLS,
     launch: ['claude', '-p', '{prompt}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', ...CLAUDE_DENY, HOOK_SETTINGS_VAR, '--output-format', 'json', '--max-turns', '80', '--max-budget-usd', '5', '{model_args}'],
   },
@@ -401,6 +404,16 @@ export function loadBoard(root) {
   // profiles: keep only what the user declared, each merged over the default of the same name
   cfg.profiles = {};
   for (const [name, p] of Object.entries(raw.profiles || DEFAULT_PROFILES)) cfg.profiles[name] = deepMerge(DEFAULT_PROFILES[name] || {}, p);
+  // `effort` renders `--effort <v>` through `{model_args}` (#182) — the one other thing a launch used
+  // to be pinned for. Validated here, once, so a typo fails loudly at load time rather than as a flag
+  // value the harness itself rejects.
+  for (const [name, p] of Object.entries(cfg.profiles)) {
+    if (p.effort != null && !EFFORT_LEVELS.includes(p.effort)) {
+      const err = new Error(`profile "${name}" has effort "${p.effort}" in ${file} — must be one of ${EFFORT_LEVELS.join(', ')}`);
+      err.exitCode = 2;
+      throw err;
+    }
+  }
   return cfg;
 }
 
