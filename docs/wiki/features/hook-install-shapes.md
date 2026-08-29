@@ -1,25 +1,25 @@
 ---
 title: Where a hook command may say hkb is
-summary: A `matcher:"*"` hook that cannot resolve breaks every tool call in a repo — so what `hkb init` writes depends on where the running hkb lives, and only one that lives inside the repo earns the tracked settings file.
+summary: hkb's hooks ride the worker launch (`--settings`) so no other session in the repo runs them; a settings file is opt-in, and what may go in that one still depends on where the running hkb lives.
 category: features
 kind: explanation
 audience: [dev, ops]
-read_when: "changing what `hkb init` writes into a Claude Code settings file, doctor's hook checks, or adopting hkb as a devDependency of a repo; also when a hook command in a repo does not resolve"
+read_when: "changing where hkb's Claude Code hooks are installed, what `hkb init` writes into a settings file, doctor's hook checks, or adopting hkb as a devDependency of a repo; also when a hook command in a repo does not resolve"
 covers:
   - path: src/init.js
-    sha: 7fb79f0d1b16daef34b17a8b3b313d24ce2a5e36
+    sha: 6d05df9f01e23d69cb3572a9f29226e3867a0d51
   - path: src/model.js
-    sha: 9ec1c457784b57b6c9e4d8e0eb1de1d4ea2693cc
+    sha: 0b6cab6f25caa911b717dca9ba8c01d5a8510de5
   - path: src/board.js
-    sha: 0d1c297b6990a63cf28b6bf18f9e4e85180b8c21
+    sha: 2e9735c80d0fcc92c298efd10b96def73f4ea03b
   - path: src/doctor.js
-    sha: 874e74bb49f3d9c6a20ffd504d4845909b1b360b
+    sha: c1af53e6c337215c307f81b54a77c098e9ff6514
   - path: skills/kanban/scripts/hkb
     sha: 619505ca77807157084e456057e1857eb9a31419
   - path: scripts/smoke-pack.mjs
-    sha: 0e2463ed7aff790ed98e3a2cf8dfcfb09b98054d
+    sha: 402cbf447d95e8b33bec877e3dd2f5ebf897972c
 related: [architecture/overview, features/update-notice, concepts/roles-and-seats]
-generated_at_commit: a29cf97
+generated_at_commit: a391898
 last_refreshed: 2026-08-28
 ---
 
@@ -34,33 +34,76 @@ last_refreshed: 2026-08-28
 ## The constraint that makes this hard
 
 Both hooks are registered with `matcher: "*"` (`CLAUDE_HOOKS`, `src/init.js`),
-so the `PreToolUse` one runs before *every tool call in every session* in that
-repo — including sessions that have nothing to do with the board. A command
-that does not resolve therefore fails constantly, with an error nobody in that
-repo wrote or can explain. Meanwhile both hooks are inert without `KB_TASK`
-(`src/hook.js`), so all that noise buys exactly nothing in an ordinary session.
+so the `PreToolUse` one runs before *every tool call* in every session that
+reads the file it is in — including sessions that have nothing to do with the
+board. A command that does not resolve therefore fails constantly, with an
+error nobody in that repo wrote or can explain. Meanwhile both hooks are inert
+without `KB_TASK` (`src/hook.js`), so all that noise buys exactly nothing in an
+ordinary session.
 
 The blast radius is why the tracked `.claude/settings.json` was off-limits for
 so long (#85): it is read by teammates, and *most* commands hkb can write are
 true only on the machine that wrote them.
 
-## One question, four answers
+## The answer that removed the question (#144)
 
-`hkbCommandForHook` (`src/init.js`) is the single decision point, and
-`hookPlacement` picks the file from the same facts. The question it asks is not
-"which package manager" but **"is the running hkb inside the repo it is setting
-up"**:
+A settings file was always the wrong container: hkb's hooks serve exactly one
+kind of session — the worker hkb launched — and both settings files are read by
+every session in the repo. So the default is now **neither file**. The hooks
+ride the worker's own launch line as `--settings '{"hooks":…}'`
+(`HOOK_SETTINGS_VAR` in `src/board.js`, spent by `expandLaunch` in
+`src/dispatch.js`), built by `workerHookSettings` (`src/init.js`) over the pure
+`hookSettings` (`src/model.js`). `installClaudeHooks` writes no file unless
+`--shared-hooks` asks, and strips hkb's own entries out of
+`.claude/settings.local.json` on every run.
 
-| where the running hkb lives | command written | file |
-|---|---|---|
-| inside the repo — `npm i -D hkb-cli` | `f="$CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js"; [ -f "$f" ] \|\| exit 0; exec node "$f" hook stop` | `.claude/settings.json`, **tracked**, no flag |
-| inside the repo — a checkout of hkb setting *itself* up | the same, with `$CLAUDE_PROJECT_DIR/bin/hkb.js` | `.claude/settings.json`, **tracked** |
-| `npm i -g hkb-cli` | `hkb hook stop` | `.claude/settings.local.json`; tracked only with `--shared-hooks` |
-| somebody else's checkout, or `npx` from the cache | `node "<abs>/bin/hkb.js" …`, or `npx -y hkb-cli …` | `.claude/settings.local.json` only |
+Two consequences worth holding on to:
 
-The last row's absolute path is never written into a tracked file, and an npx
-cache path is never written *anywhere* — `isEphemeralPath` rejects it, because
-it stops existing for the installer too the next time npm cleans that cache.
+- The command in that JSON **may name this machine** — `node "<abs>/bin/hkb.js"`
+  when `hkb` is not on PATH — because a launch line is spent where it was built.
+  That is the exact case #85 had to forbid for a file other people read.
+- `.kanban/board.json` is **tracked**, so it holds the placeholder and never the
+  JSON (the launch templates in `DEFAULT_PROFILES`, `src/board.js`). The value
+  is resolved per spawn, in `spawnWorker`.
+
+`claude --bg` was measured before this was built, not assumed: a background
+launch hands the request to Claude Code's session daemon, so a per-launch flag
+reaches it only if the CLI forwards it. In Claude Code 2.1.251 the `--bg`
+dispatch path forwards exactly six per-launch sources — `--settings`,
+`--add-dir`, `--mcp-config`, both `--plugin-dir` flags and `--strict-mcp-config`
+— and passes a `--settings` value beginning with `{` through as inline JSON
+rather than resolving it as a path. That is why `claude` and `claude-track` get
+the hooks and not only the process-mode `claude-p`.
+
+> TODO-VERIFY: the six-source forwarding list and the inline-JSON branch were
+> read out of the shipped 2.1.251 binary's own argument-forwarding table, not
+> observed at runtime — re-check against a live `--bg` marker-file probe, and
+> on any Claude Code that changes the `--bg` handoff.
+
+## One question, three answers — for the file `--shared-hooks` writes
+
+`hkbCommandForHook` (`src/init.js`) is still the single decision point, and it
+still governs what a *tracked* file may say. The question it asks is not "which
+package manager" but **"is the running hkb inside the repo it is setting up"**:
+
+| where the running hkb lives | command written with `--shared-hooks` |
+|---|---|
+| inside the repo — `npm i -D hkb-cli` | `f="$CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js"; [ -f "$f" ] \|\| exit 0; exec node "$f" hook stop` |
+| inside the repo — a checkout of hkb setting *itself* up | the same, with `$CLAUDE_PROJECT_DIR/bin/hkb.js` |
+| anywhere else — a global, another checkout, an npx cache | `hkb hook stop` |
+
+The third row never gets an absolute path: a tracked file may only hold a
+portable command (`isPortableHookCommand`). An npx cache path is never written
+*anywhere* — `isEphemeralPath` rejects it, because it stops existing for the
+installer too the next time npm cleans that cache.
+
+The launch calls the same function with `shared: false` **and `binRel: null`**
+(`workerHookSettings`), so it takes none of the rows above: it names the hkb
+that is running — a bare `hkb` when that is on PATH, an absolute
+`node "<abs>/bin/hkb.js"` otherwise, `npx -y hkb-cli` only from a cache. Passing
+`binRel` there would be a category error: `$CLAUDE_PROJECT_DIR` exists to be
+right on machines this one has never seen, and a launch never leaves this
+machine, so all it could add is the guard's silence — see below.
 
 ## Why living inside the repo changes the answer (#146)
 
@@ -71,10 +114,12 @@ the same one at the same relative path; with a checkout of hkb the file is
 simply *there*, in the same place for everyone who cloned it. Claude Code sets
 `CLAUDE_PROJECT_DIR` for hook commands precisely so a project can name its own
 files, so this is the one command that is exact *here* and correct *everywhere
-else* at the same time. `isPortableHookCommand` says so, `hookPlacement` puts it
-in the tracked file without anybody passing `--shared-hooks`, and a teammate's
-`git pull && npm install` is then the entire setup — they never run `hkb init`
-at all.
+else* at the same time. `isPortableHookCommand` says so, and it is what makes
+`--shared-hooks` worth using at all on such a repo: commit
+`.claude/settings.json` and a teammate's `git pull && npm install` is the entire
+setup — they never run `hkb init`. (Before #144 this shape *chose* the tracked
+file on its own. It no longer does: being portable answers "may it go there",
+never "should it", and only a human asking wants hooks in every session.)
 
 The second row is not a curiosity: hkb's own repo is that case, and the
 `hkb: not found` noise that filed #146 was read there as well as on the adopter.
@@ -119,15 +164,42 @@ A worker runs in `.claude/worktrees/kb-<n>-<k>` (`worktreePath`,
 checkout. So `guardedHookCommand` tests for its own file and exits 0 silently
 when it is missing. Nothing is lost by waiting: both hooks are inert without
 `KB_TASK` anyway, and by the time the `Stop` hook has a nudge to deliver the
-worker has installed. The cost is a real one to name in the worker prompt on
-such a board — work finished before `npm ci` gets no Stop nudge (#144 closes
-this by handing the worker the absolute path of the hkb that ran the dispatcher).
+worker has installed.
+
+#144 closed the cost that came with waiting, and this is the reason
+`workerHookSettings` passes `binRel: null`. A worker's `$CLAUDE_PROJECT_DIR` is
+that empty worktree, so a guarded command in its launch would be silent for
+exactly the early part of an attempt where a short card can be finished without
+ever seeing a Stop nudge. The launch names the hkb that ran the dispatcher
+instead — installed by definition — and the guard is left to the
+`--shared-hooks` file, which the worker also reads and where it is still exactly
+right: silence until the install.
 
 ## What doctor makes of it
 
-`checkHooks` (`src/doctor.js`) resolves `$CLAUDE_PROJECT_DIR` against the repo
-root before looking (`resolveHookPath`) and reports the file it found, not the
-variable. Three of its verdicts are specific to this shape:
+`checkHooks` (`src/doctor.js`) asks its question of the *launch* first — it
+builds the command a worker will run with `hkbCommandForHook` and checks that,
+naming `hookLaunchProfiles` as the source — and of any settings file that still
+has hkb hooks second. It resolves `$CLAUDE_PROJECT_DIR` against the repo root
+before looking (`resolveHookPath`, which normalises to platform separators so a
+Windows lookup is not half-POSIX) and reports the file it found, not the
+variable. Two checks belong to the move itself:
+
+- **`hooks in settings`** — a warning per settings file that still configures
+  hkb's hooks, because they run in every session there and a worker runs them
+  twice. The per-developer copy's fix is `hkb init`, which removes it; the
+  tracked one is the operator's to delete, since `--shared-hooks` writes it on
+  purpose.
+- **`launch hooks`** — a warning per Claude launch frozen in `board.json`
+  without `{hook_settings}` (`staleHookLaunches`). `loadBoard` lets an array in
+  the file win whole, so a launch an older `init` wrote out never gains the
+  flag, and with no settings file to fall back on that profile's workers would
+  quietly get no Stop nudge and record no session id. This is the same
+  frozen-copy blind spot `worker permissions` watches on `allowed_tools`, and
+  the fix branches the same way: drop `"launch"` from one of hkb's own profiles,
+  or add the token by hand to a custom one.
+
+Three older verdicts are specific to the command shape:
 
 - a **guarded** command whose file is missing is a *warning* naming
   `npm install` — that is the normal state of a checkout nobody has installed
@@ -152,8 +224,8 @@ and two pure functions had to grow up rather than gain a special case:
 - `isHkbHookCommand` now accepts `;` as well as whitespace after the binary,
   because the guarded form names `hkb.js` inside an assignment that ends with
   one. It has to keep matching every form hkb has *ever* written: that predicate
-  is what lets init move and rewrite its own hooks without touching an
-  operator's (`stripHkbHooks`).
+  is what lets init rewrite and — since #144 — *remove* its own hooks without
+  touching an operator's (`stripHkbHooks`).
 
 ## What needed no case at all
 

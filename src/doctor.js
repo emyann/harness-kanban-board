@@ -237,8 +237,9 @@ export function checkHooks(ctx, { ok, warn, bad }, { onPath = has, exists = (p) 
     byTarget.get(key).where.add(where);
   };
   if (launched.length) {
-    // the command a worker will really run: `hkbCommandForHook` is what builds the launch's copy
-    consider(hkbCommandForHook('stop', { root: ctx.root, binRel, onPath: onPath('hkb') }), `the ${launched.join(', ')} launch`);
+    // the command a worker will really run — `workerHookSettings` builds the launch's copy the same
+    // way, `binRel: null` included: a launch names the hkb running here, never a project-relative one
+    consider(hkbCommandForHook('stop', { binRel: null, onPath: onPath('hkb') }), `the ${launched.join(', ')} launch`);
     ok('stop hook', `on the ${launched.join(', ')} launch (--settings), so no other session in this repo runs it`);
   } else if (!hooks.some((h) => h.event === 'Stop')) {
     return warn('stop hook', `no launch on this board carries it and it is not in ${HOOK_SETTINGS.local} or ${HOOK_SETTINGS.shared} — workers that exit without a terminal verb are only caught by the dispatcher`, 'hkb init');

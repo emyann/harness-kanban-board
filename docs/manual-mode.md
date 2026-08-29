@@ -11,12 +11,20 @@ undone: turning the tick on later is one command against a board that already ha
 ## Day one
 
 ```bash
-npx hkb-cli init                 # labels, .kanban/board.json, the worker skill, the Stop + PreToolUse hooks, the CLAUDE.md/AGENTS.md section
+npx hkb-cli init --shared-hooks  # labels, .kanban/board.json, the worker skill, the Stop + PreToolUse hooks, the CLAUDE.md/AGENTS.md section
 npx hkb-cli doctor --api         # gh auth, labels, GraphQL fields, the issue-dependency API and lock-ref CAS
 ```
 
-Setup is the same one an autonomous board gets — you simply never start the loop. Skip `--with-actions`, and
-keep the hooks: they are what makes an agent *you* launch obey the protocol (see *Hand the card to an agent*).
+Setup is the same one an autonomous board gets — you simply never start the loop. Skip `--with-actions`.
+
+`--shared-hooks` is the one flag manual mode really wants, and the reason is the whole shape of this page. hkb's
+`Stop` and `PreToolUse` hooks normally ride the launch line of a worker *hkb started* (`claude --settings`), so
+they reach no other session in the repo — which is right for a board whose workers hkb spawns, and exactly wrong
+here, because in manual mode **you** are the launcher. `--shared-hooks` puts them in the tracked
+`.claude/settings.json` instead, where every session in the repo reads them, and they are what makes an agent you
+launch obey the protocol (see *Hand the card to an agent*). The command written there is a plain `hkb`, so it
+wants `hkb` on your PATH — [which is checked, and why](harnesses.md#where-the-hooks-live).
+
 Everything below assumes `hkb` on your PATH (`npm i -g hkb-cli`); `npx hkb-cli <verb>` works just as well.
 
 ## File the work
@@ -171,13 +179,22 @@ The `export` line that `claim` prints is for the agent's session, not for yours:
 KB_TASK=42 KB_ATTEMPT=1 KB_PROFILE=claude claude "$(hkb context 42)"
 ```
 
-With `KB_TASK` set, the hooks `hkb init` installed come alive in that session: the `Stop` hook nudges an agent
+With `KB_TASK` set, the hooks come alive in that session: the `Stop` hook nudges an agent
 that tries to end its turn without a terminal verb (twice, then it lets go), and the `PreToolUse` hook applies the
 worker permission policy — files outside the repo refused, commands off the profile's allowlist refused, decided
 rather than prompted. It only ever **denies**: anything it does not object to it passes over in silence, so your
 own `claude` flags stay in charge of what is allowed. That is why `KB_PROFILE` is worth naming: without it — or
 with a name this board has no profile for — the hook has no allowlist to apply, and rather than invent a stricter
 one it stands aside with a line on stderr and leaves the session's own flags as the whole policy.
+
+Those hooks reach a session you launched only if they are in a settings file — which is what `--shared-hooks`
+above is for. Without it they ride the launch line of workers hkb starts and nothing else, so a hand-started
+`claude` gets none of them; `hkb doctor`'s `stop hook` line says which of the two your board has. If you would
+rather not commit them, pass them yourself:
+
+```bash
+KB_TASK=42 KB_ATTEMPT=1 KB_PROFILE=claude claude --settings '{"hooks":{"Stop":[{"matcher":"*","hooks":[{"type":"command","command":"hkb hook stop","timeout":30}]}],"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"hkb hook pretool","timeout":30}]}]}}' "$(hkb context 42)"
+```
 
 You need none of those variables yourself. Every verb takes the task number and resolves the card's open attempt,
 so `hkb heartbeat 42` and `hkb complete 42 …` work from any shell, agent or no agent.

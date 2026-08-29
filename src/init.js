@@ -300,12 +300,17 @@ const HOOK_NOTE = 'inert outside a worker session; Stop nudges for the terminal 
  * The command may name this machine — `node "/abs/path/bin/hkb.js"` — because a launch line is
  * spent here and nowhere else. `.kanban/board.json` holds the placeholder, never this string, so
  * the tracked board stays true on every machine that reads it.
+ *
+ * `binRel: null`, deliberately: the `$CLAUDE_PROJECT_DIR` form exists to be right on machines this
+ * one has never seen, and a launch never leaves this machine. Here it would only cost — a worker's
+ * `$CLAUDE_PROJECT_DIR` is its fresh worktree, which has no `node_modules` until `npm ci`, so the
+ * hooks would be silent for exactly the early part of an attempt where a card can be finished
+ * without them. The hkb that ran the dispatcher is installed by definition; name that one.
  * @returns the JSON string, or '' when there is no command to run (the launch then drops the flag)
  */
-export function workerHookSettings({ root = null, binRel, onPath } = {}) {
-  const rel = binRel === undefined ? projectBinRel(root) : binRel;
+export function workerHookSettings({ onPath } = {}) {
   const on = onPath ?? hkbOnPath();
-  return hookSettings(CLAUDE_HOOKS, (verb) => hkbCommandForHook(verb, { root, binRel: rel, onPath: on }));
+  return hookSettings(CLAUDE_HOOKS, (verb) => hkbCommandForHook(verb, { binRel: null, onPath: on }));
 }
 
 /**
@@ -706,7 +711,9 @@ export function installHarness(root, name, { command } = {}) {
 // Everything hkb writes under `.kanban/` except `board.json`, which is the one tracked file, plus
 // .claude/worktrees/ — worker checkouts, both Claude Code's `--worktree` and the ones the dispatcher
 // makes itself for profiles with `workspace: "worktree"` (Copilot CLI) — and .claude/settings.local.json,
-// where the hooks go by default: it names this machine's `hkb`, so it must never be committable (#85).
+// which is per-developer by definition (#85). hkb no longer writes hooks there (#144), and takes out any an
+// older init left, but the line stays: everything else in that file is still one machine's, and a repo that
+// began before #144 has one to un-commit rather than to start committing.
 // This repo's own `.gitignore` must be a superset of this list; `test/init.test.js` holds that line,
 // so a lesson learned here cannot stay here (`.kanban/dispatch.pid` did, for a while).
 export const GITIGNORE_LINES = [
@@ -875,7 +882,7 @@ export async function init(ctx, flags, log) {
       // What the launch will actually run, resolved the way it will be resolved at spawn time. The
       // npx form is the one worth a word: it is correct — the cache path never is — but it re-checks
       // the registry on every hook fire, which is a wait on every stop.
-      const launch = hkbCommandForHook('stop', { root, binRel: hooks.binRel });
+      const launch = hkbCommandForHook('stop', { binRel: null });
       if (launch.startsWith(NPX_COMMAND)) {
         log(`  the launch will run \`${NPX_COMMAND} hook stop\`: hkb is not on PATH and this package is in the npx cache, which is not a durable path. \`npm i -g hkb-cli\` for a faster one`);
       }

@@ -131,7 +131,7 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
     n: task.number, k: attempt, slug: slugify(task.title), title: task.title.replace(/[\r\n]+/g, ' ').slice(0, 80),
     model: task.kb.model || profile.model || '', prompt, board: ctx.board, repo: ctx.repo.nameWithOwner,
     worktree: wt ? path.join(ctx.root, worktreePath(wt)) : ctx.root,
-    hook_settings: (profile.launch || []).includes(HOOK_SETTINGS_VAR) ? workerHookSettings({ root: ctx.root }) : '',
+    hook_settings: (profile.launch || []).includes(HOOK_SETTINGS_VAR) ? workerHookSettings() : '',
   };
   const argv = cont?.ok && !ownsWt ? withoutWorktreeFlag(expandLaunch(profile.launch, vars, profile)) : expandLaunch(profile.launch, vars, profile);
   const continued = cont && { pr: continuePr.number, branch: cont.ok ? cont.branch : null, why: cont.ok ? null : cont.why };

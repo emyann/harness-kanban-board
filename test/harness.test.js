@@ -195,6 +195,24 @@ test('the generated Actions worker carries the same deny list as a local launch'
   assert.ok(CLAUDE_DENY.includes('Bash(hkb dispatch*)'));
 });
 
+// The runner's workflow is a TRACKED, generated file, so — unlike a local launch — it may not carry
+// a command that only resolves on the machine that ran `hkb init --with-actions`. The runner puts
+// `hkb` on PATH itself, so the portable form is both correct there and identical in every diff.
+test('the generated Actions worker carries the hooks, in a form no machine owns', () => {
+  const yml = actionsFiles().find((f) => /worker-claude/.test(f.rel)).contents;
+  const m = /--settings '([^']*)'/.exec(yml);
+  assert.ok(m, '--settings went missing from the worker workflow');
+  assert.ok(!m[1].includes("'"), 'the JSON is wrapped in single quotes for the runner shell, so it may not contain one');
+  const hooks = JSON.parse(m[1]).hooks;
+  for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
+    assert.deepEqual(hooks[event], [hookEntry(`hkb hook ${verb}`)], `${event}: a runner installs hkb on PATH; a path here would name somebody's laptop`);
+  }
+  assert.equal(yml.split("--settings '").length - 1, 1, 'exactly one, on the claude step');
+  // KB_TASK is what makes them live at all, and unlike `claude --bg` a runner really has it
+  assert.match(yml, /KB_TASK: \$\{\{ inputs\.task \}\}/);
+  assert.match(yml, /KB_PROFILE: claude-action/);
+});
+
 test('Copilot gets no dispatch deny — its pattern language is unverified for it (told in the prompt instead)', () => {
   const p = DEFAULT_PROFILES['copilot-cli'];
   const argv = expandLaunch(p.launch, { prompt: 'x' }, p);
@@ -819,17 +837,17 @@ test('hookSettings is the same shape a settings file gets, as one JSON string', 
   assert.equal(hookSettings(CLAUDE_HOOKS, () => ''), '', 'and neither does a command that could not be built');
 });
 
-test('workerHookSettings names the hkb that is here, however it is installed', () => {
-  const onPath = JSON.parse(workerHookSettings({ root: '/repo', binRel: null, onPath: true }));
+test('workerHookSettings names the hkb that is running, never a project-relative one', () => {
+  const onPath = JSON.parse(workerHookSettings({ onPath: true }));
   assert.equal(onPath.hooks.Stop[0].hooks[0].command, 'hkb hook stop');
-
-  const carried = JSON.parse(workerHookSettings({ root: '/repo', binRel: DEP_REL, onPath: true }));
-  assert.equal(carried.hooks.PreToolUse[0].hooks[0].command, guardedHookCommand(DEP_REL, 'pretool'), 'the copy the repo pinned wins over PATH');
 
   // The launch never leaves this machine, so an absolute path is CORRECT here — exactly the case a
   // tracked settings file had to rule out (#85).
-  const local = JSON.parse(workerHookSettings({ root: null, binRel: null, onPath: false }));
-  assert.match(local.hooks.Stop[0].hooks[0].command, /^node ".*bin[/\\]hkb\.js" hook stop$/);
+  const local = JSON.parse(workerHookSettings({ onPath: false }));
+  assert.match(local.hooks.PreToolUse[0].hooks[0].command, /^node ".*bin[/\\]hkb\.js" hook pretool$/);
+  assert.ok(!JSON.stringify(local).includes(PROJECT_DIR),
+    'a worker\'s $CLAUDE_PROJECT_DIR is its fresh worktree, with no node_modules until `npm ci` — the guarded form would be silent for exactly the part of an attempt that most needs the hooks');
+  assert.ok(fs.existsSync(/^node "([^"]+)"/.exec(local.hooks.Stop[0].hooks[0].command)[1]), 'and the hkb that ran the dispatcher is installed by definition');
 });
 
 test('every Claude launch carries the hooks, and nothing else does', () => {
