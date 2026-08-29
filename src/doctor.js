@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
-import { boardFile, api, readState, writeState, DEFAULT_PROFILES } from './board.js';
+import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES } from './board.js';
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun } from './tasks.js';
 import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins } from './model.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
@@ -68,6 +68,23 @@ export function checkHarnesses(ctx, { ok, warn }) {
       ? warn(`${harness} harness`, `missing ${missing.join(', ')}`, `hkb init --harness ${harness}`)
       : ok(`${harness} harness`, `${files.join(' · ')} (${HARNESS_NOTE[harness] || 'stop nudge'})`);
   }
+}
+
+/**
+ * Everything else here checks whether the board *could* run. This one asks whether it *is*: a
+ * perfectly configured board with no dispatcher is the commonest reason nothing is moving, and it
+ * used to be the one thing doctor could not tell you. One `ok`/`warn` line off the pid file — no
+ * board read, no network, nothing that could make `hkb doctor` slower or more expensive.
+ *
+ * A warning, never a failure: a board driven by hand, by Actions or by cron is a legitimate board,
+ * and `hkb doctor` must not call it broken.
+ */
+export function checkDispatcher(ctx, { ok, warn }) {
+  const st = processState(ctx.root, 'dispatch');
+  if (st.running) return ok('dispatcher', `running pid ${st.pid} · log ${st.log}`);
+  if (st.stale) return warn('dispatcher', 'no dispatcher running — .kanban/dispatch.pid predates this boot and names nothing of ours', 'hkb up');
+  if (st.exit !== null) return warn('dispatcher', `no dispatcher running — the last one exited (${st.exit}) at ${st.exited_at}`, 'hkb up');
+  warn('dispatcher', 'no dispatcher running', 'hkb up');
 }
 
 /**
@@ -754,6 +771,7 @@ export async function doctor(ctx, flags, log) {
   fs.existsSync(claudeSkill) ? ok('claude skill link', '.claude/skills/kanban') : warn('claude skill link', 'missing', 'hkb init');
   checkCommands(ctx, { ok, warn });
   checkHooks(ctx, { ok, warn, bad });
+  checkDispatcher(ctx, { ok, warn });
   // which layer answers a denial, and whether a frozen copy of that layer has fallen behind:
   // local files only, so both run on a checkout with no repo behind it
   checkPolicyLayer(ctx, { ok });
@@ -830,7 +848,12 @@ function report(results, ctx, log) {
     log(`${mark} ${r.name.padEnd(36)} ${r.detail || ''}${r.fix && r.ok !== true ? `  → ${r.fix}` : ''}`);
   }
   const bad = results.filter((r) => r.ok === false).length;
-  log(bad ? `\n${bad} problem(s). Fix them before \`hkb dispatch\`.` : '\nAll good. `hkb dispatch --loop 60` when ready.');
+  // "`hkb up` when ready" three lines under "dispatcher running pid 3843" reads as advice from a tool
+  // that did not read its own output. A board that is already up gets told what is already true.
+  const up = results.find((r) => r.name === 'dispatcher')?.ok === true;
+  log(bad ? `\n${bad} problem(s). Fix them before \`hkb dispatch\`.`
+    : up ? '\nAll good, and the dispatcher is up. `hkb up --status` says what is running.'
+      : '\nAll good. `hkb up` when ready (`hkb up --serve` for the board too).');
   return bad ? 1 : 0;
 }
 
