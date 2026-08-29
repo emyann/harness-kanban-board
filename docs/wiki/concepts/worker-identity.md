@@ -7,19 +7,19 @@ audience: [dev, ops]
 read_when: "touching the launch environment, the Stop or PreToolUse hooks, session_id/transcript_path on an attempt row, or anything that reads KB_TASK"
 covers:
   - path: src/hook.js
-    sha: a916f483bc40afa074ca3befd1eeecc983c0b695
+    sha: 6e79fbd145c93eeec750f83a525d8b50f1020d6b
   - path: src/model.js
-    sha: 25f89a9ae0826e8a86bc8e3c4ccb7e4370dc17ed
+    sha: 4f9fc4e9b2e79f4251564d420f9f509d2a1f8029
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/dispatch.js
     sha: f2e060e5aa89dfbae8cefde0f7c06282302e3992
   - path: src/doctor.js
-    sha: 7110f80cfd0af69a3bb6388cc2a51b56a4d0bbeb
+    sha: 0d30df823b6c0548ec7df76c51097023a0c251a3
   - path: src/lifecycle.js
     sha: 20ebc63bcdd5e63634de41fb620aa84a38e720b3
-generated_at_commit: da0785f
-last_refreshed: 2026-08-28
+generated_at_commit: 46e1051
+last_refreshed: 2026-08-29
 related: [architecture/overview, features/harness-profiles, features/tracks, decisions/adr-004-roles-and-adoption]
 ---
 
@@ -146,6 +146,31 @@ overwrite a verb's own record of itself.
 > The one row this could not repair is the one that prompted it: #146 attempt 1
 > was already closed, so no tick will look at it again. It was corrected once by
 > applying the same function to the job id the row already carried.
+
+## A fourth session that answers for the root: `SubagentStop` from the child's own cwd
+
+`SubagentStop` (#163) breaks the "checkout answers for itself" pattern above in
+one specific way: it fires from the **child's** worktree
+(`.claude/worktrees/agent-<id>`, measured 2026-08-28, spike job `cadca6f1`),
+never the root's `kb-<n>-<k>` checkout — so `whichAttempt(ctx.root)` answers
+nothing there, silently, because a child worktree's basename parses as neither
+a `kb-<n>-<k>` checkout nor a leaked environment (it carries no `KB_*` at all).
+`subagentStopHook` (`src/hook.js`) falls back to `process.env.CLAUDE_PROJECT_DIR`
+— which Claude Code sets to the *root* session's project directory even inside
+a child's own turn — and re-asks `whichAttempt` there. Skipping that fallback
+was reviewed and rejected on PR #178: without it, `ended` never advances for a
+session that ever spawns a subagent, and the root goes unnudged for the rest
+of the attempt.
+
+That bookkeeping (`started`/`ended`/`suppressed` under
+`.kanban/sessions/<n>-<k>.subagents`) is append-only, not read-modify-write —
+two `SubagentStop`s landing together must not both read `ended: 0` and both
+write `ended: 1`, which would lose one of them the same way the missing
+`CLAUDE_PROJECT_DIR` fallback did. And because a denied `Agent` call or a
+subagent that dies before firing `SubagentStop` can leave `started` ahead of
+`ended` forever, `shouldNudgeOnStop` (`src/model.js`) bounds how many
+consecutive Stops it will suppress before nudging anyway — see its doc comment
+for the exact count and the idle-tick cadence it is chosen against.
 
 ## For ops
 
