@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghCmd } from './gh.js';
-import { worktreePath, parseRepoSpecs, mergeBoardEntry, pidFileStale, SAFE_BUILTINS } from './model.js';
+import { worktreePath, parseRepoSpecs, mergeBoardEntry, stripNodeModulesBin, pidFileStale, SAFE_BUILTINS } from './model.js';
 
 // A background worker has nobody to answer a permission prompt, so the allowlist must cover
 // every command an agent plausibly reaches for; anything else is denied, never prompted (see #23).
@@ -327,9 +327,14 @@ export function worktreeOnBranch(root, name, branch, { number = null, remote = '
  * Is `hkb` on PATH? Generated files (the Stop hook, `.mcp.json`) name the binary when it is and fall
  * back to this checkout's `bin/hkb.js` when it is not — a hook or an MCP client started by a GUI
  * inherits a PATH that may have neither.
+ *
+ * The PATH asked about is the one *those* processes get, which is not this one's: `npx hkb init` and
+ * `npm run` both prepend `node_modules/.bin`, so an unfiltered lookup answers yes for a repo that
+ * only installed hkb as a dependency and the generated command then resolves nowhere else (#146).
  */
 export function hkbOnPath() {
-  const which = spawnSync('sh', ['-c', 'command -v hkb'], { encoding: 'utf8' });
+  const env = { ...process.env, PATH: stripNodeModulesBin(process.env.PATH || '', path.delimiter) };
+  const which = spawnSync('sh', ['-c', 'command -v hkb'], { encoding: 'utf8', env });
   return which.status === 0 && !!which.stdout.trim();
 }
 

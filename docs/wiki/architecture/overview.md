@@ -32,7 +32,7 @@ covers:
     sha: 9a5a658d95cd1b463cb3d6c78f0625e66f7b8bb6
 generated_at_commit: c46b183
 last_refreshed: 2026-08-28
-related: [concepts/board-protocol, concepts/claims-and-leases, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice]
+related: [concepts/board-protocol, concepts/claims-and-leases, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
 
 # hkb at a glance
@@ -153,3 +153,4 @@ claims, and attempts — backend-neutral by construction, so a future
 - [dispatcher-tick](../architecture/dispatcher-tick.md)
 - [roles-and-seats](../concepts/roles-and-seats.md)
 - [Telling an adopter their hkb is old](../features/update-notice.md)
+- [Where a hook command may say hkb is](../features/hook-install-shapes.md)

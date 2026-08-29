@@ -7,14 +7,14 @@ audience: [dev]
 read_when: "touching hkb serve, the board page, the user-level board list, or anything that has to work across more than one checkout"
 covers:
   - path: src/serve.js
-    sha: 2d846a589a4ea4fc7f86b814bcb1646ad8f12cc7
+    sha: 5565e6d7d79d189d7e62000065340848c669ab38
   - path: web/index.html
     sha: 322aa96236ef37657a9a2326b83dc7b480672134
   - path: src/board.js
-    sha: 154fa693a787519c62ea7864c90fdf42f16b137a
+    sha: 0d1c297b6990a63cf28b6bf18f9e4e85180b8c21
   - path: src/init.js
-    sha: 6a359c28a8f3236ddf69cbe06bdf99142fdede5e
-generated_at_commit: cb9e43d
+    sha: 7fb79f0d1b16daef34b17a8b3b313d24ce2a5e36
+generated_at_commit: a29cf97
 last_refreshed: 2026-08-28
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
@@ -30,11 +30,11 @@ related: [architecture/overview, concepts/board-protocol, architecture/dispatche
 
 ## The surface
 
-Seven columns, fixed: `COLUMNS` in `src/serve.js:21` and `COLS` in the page,
+Seven columns, fixed: `COLUMNS` in `src/serve.js:20` and `COLS` in the page,
 which a test pins to each other (`test/serve.test.js`, "the page draws the
 columns the server serves"). `archived` is a verb, not a column.
 
-Four routes, and nothing else (`parseRoute`, `src/serve.js:196-209`):
+Four routes, and nothing else (`parseRoute`, `src/serve.js:219-232`):
 
 | route | what it is |
 | --- | --- |
@@ -44,7 +44,7 @@ Four routes, and nothing else (`parseRoute`, `src/serve.js:196-209`):
 | `GET \| POST /api/tasks/<n>[/<verb>]` | the same, unscoped — see *ambiguity* below |
 
 There is no auth. The server binds `127.0.0.1` and `checkOrigin`
-(`src/serve.js:226-240`) refuses a non-loopback `Host` (the DNS-rebinding
+(`src/serve.js:249-263`) refuses a non-loopback `Host` (the DNS-rebinding
 defence) and any cross-origin `Origin`; POST bodies must be
 `application/json`, which is what stops a plain HTML form from driving it.
 
@@ -54,7 +54,7 @@ once the port is bound and drops it on the way out (`claimServePid`,
 start detached and `hkb down --serve` can stop. That same file is why a taken
 port can be reported as *already up on that port* rather than the generic
 advice — but only when it names a live process that is not this one
-(`portInUse`, `src/serve.js:621-627`). The pid protocol is
+(`portInUse`, `src/serve.js:622-628`). The pid protocol is
 [features/up-and-down](up-and-down.md).
 
 ## One server, many boards
@@ -64,7 +64,7 @@ checkout, `ctx.repo` an owner/name, `ctx.board` a `kb:board:*` slug. So holding
 several boards is exactly this: hold several contexts, and route every read
 and every write through the right one.
 
-**Where the list comes from** (`serveContexts`, `src/serve.js:128-141`). The
+**Where the list comes from** (`serveContexts`, `src/serve.js:151-164`). The
 checkout you ran in is always first. Then either `--repos <path,path>` — an
 explicit flag, so a path that is not an `hkb init`ed checkout is fatal — or, with
 no flag, the user-level list at `~/.config/hkb/boards.json` (`userBoardsFile` /
@@ -72,11 +72,11 @@ no flag, the user-level list at `~/.config/hkb/boards.json` (`userBoardsFile` /
 so a deleted repo cannot break `hkb serve` everywhere. A `#slug` after a path
 picks a board *inside* that checkout.
 
-**How a checkout gets on the list** (`registerUserBoard`, `src/board.js:377-383`;
-called once, from `registerCheckout` at `src/init.js:609-624`). Until #98 that
+**How a checkout gets on the list** (`registerUserBoard`, `src/board.js:525-531`;
+called once, from `registerCheckout` at `src/init.js:726-741`). Until #98 that
 file had a reader and no writer, so the only way onto the page was to hand-edit
 it — the one step of adoption a repo cannot tell you about from inside itself.
-`hkb init` now writes it as its last step (`src/init.js:766`), which is only
+`hkb init` now writes it as its last step (`src/init.js:888`), which is only
 defensible because of three properties:
 
 - **Idempotent.** Equivalence is the *resolved* path plus the board slug, so
@@ -84,7 +84,7 @@ defensible because of three properties:
   The pure merge (`mergeBoardEntry`, `src/model.js`) only ever appends: an entry
   it did not add keeps its position and its spelling, so a file you maintain by
   hand survives an init verbatim. The write itself is a temp file and a `rename`
-  (`saveUserBoards`, `src/board.js:339-351`) — this server reads that file while
+  (`saveUserBoards`, `src/board.js:487-499`) — this server reads that file while
   other commands add to it, so a half-written list must not be observable.
 - **Never silent.** One line either way, naming the file: `registered this
   checkout in … — hkb serve will show it`, or `already listed in …`. That line
@@ -95,7 +95,7 @@ defensible because of three properties:
   up; the list is a convenience beside it.
 
 A linked worktree registers its **main** checkout, never itself (`mainWorktree`,
-`src/board.js:359-366`, via `git rev-parse --git-common-dir`): a worker running
+`src/board.js:507-514`, via `git rev-parse --git-common-dir`): a worker running
 in `.claude/worktrees/kb-99-1` is in a directory that will be deleted, and it has
 no business on anyone's board list.
 
@@ -110,7 +110,7 @@ others, and a checkout that registers itself is not an exception — running
 `hkb init` in a directory *is* the act of naming it. That is the distinction that
 makes automatic registration compatible with the promise.
 
-**The list is live** (`reloadBoards`, `src/serve.js:350-372`). `serveContexts`
+**The list is live** (`reloadBoards`, `src/serve.js:373-395`). `serveContexts`
 runs again at most once per poll interval, driven by the requests the page
 already makes — no timer, and nothing re-read while nobody is watching. It costs
 no GitHub call: `loadUserBoards` is a local file read. A board that appeared is
@@ -123,7 +123,7 @@ never reloads. Both failure modes are reported once, not once per poll: a stale
 entry's `skipping …` line, and a `boards.json` that stops parsing (which keeps
 the boards the server already holds).
 
-**How a board is addressed** (`keyBoards`, `src/serve.js:147-156`). Each board
+**How a board is addressed** (`keyBoards`, `src/serve.js:170-179`). Each board
 gets a key of `owner~repo~slug` (`boardKey` in `src/model.js` collapses anything
 outside `[A-Za-z0-9._-]` to `~`, so a key is always one safe path segment), made
 unique by `uniqueKeys` if two ever collide. Two checkouts of the same repo on the
@@ -131,7 +131,7 @@ same board fold into one entry — one board, one query.
 
 **What is per board.** Each entry owns a closure with its own cache, its own
 in-flight read, its own `generation` counter and its own detail map
-(`boardState`, `src/serve.js:375`). That is where the isolation actually
+(`boardState`, `src/serve.js:398`). That is where the isolation actually
 lives: `dispatcherState(b.ctx.root)` reads *that* checkout's
 `.kanban/dispatch.pid`, `logPathFor(b.ctx.root, …)` resolves *that* checkout's
 `.kanban/logs`, and a verb runs `spec.run(d, b.ctx, n, body)` against *that*
@@ -159,7 +159,7 @@ and renders every other board normally.
 
 ## A drag is a verb
 
-`MOVES` (`src/serve.js:33-46`) is the whole table of column-to-column moves the
+`MOVES` (`src/serve.js:32-46`) is the whole table of column-to-column moves the
 protocol has a verb for; `NO_SUCH_VERB` explains the columns that can never be a
 drop target (nothing but the dispatcher starts a task, nothing but `hkb complete`
 reaches review or done). `moveDecision` is pure — no I/O, no GitHub — and returns
@@ -228,7 +228,7 @@ step. A module `<script>` is not an option either: a top-level `import` makes
 
 **The one place the picture can be wrong, and says so.** Without GitHub's GraphQL
 `blockedBy` field, `fetchBoard` REST-fills `todo`/`blocked` cards only
-(`fillBlockedByRest`, `src/tasks.js:64-72`, applied at `src/tasks.js:94`) —
+(`fillBlockedByRest`, `src/tasks.js:64-72`, applied at `src/tasks.js:99`) —
 widening that would be a per-task
 REST call on every read, which Values 2 and 3 forbid. That leaves a fingerprint
 the page can read off the payload it already has: edges exist, and *none* of them

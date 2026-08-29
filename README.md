@@ -15,7 +15,16 @@ npx hkb-cli up --serve           # the dispatcher and the board, started detache
 ```
 
 That is the whole free path. `npx hkb-cli init --import` also pulls your existing open issues onto the board as
-*triage*. Prefer it on your PATH? `npm i -g hkb-cli`, then drop the `npx`.
+*triage*.
+
+For a repo you keep, install it there — `npm i -D hkb-cli`, then `npx hkb init`. The version is pinned in your
+`package.json` and lockfile, so every machine and every teammate gets the same one from `npm install`, and it is
+what lets `init` put the Claude Code hooks in the **tracked** `.claude/settings.json`: it writes
+`$CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js`, which is the same file in every checkout and a silent
+`exit 0` in one that has not run `npm install` yet. Commit that file and a teammate's `git pull && npm install`
+is the whole setup. `npm i -g hkb-cli` is the alternative — `hkb` on your PATH, and hooks in the per-developer
+`.claude/settings.local.json`, because a global install is a fact about your machine and not about the repo
+([which settings file, and why](docs/harnesses.md#which-settings-file-the-hooks-go-in)).
 
 `hkb up` is idempotent: run it twice and the second run reports what is already running and starts nothing.
 `hkb up --status` says what is up, `hkb down` stops it, and both processes log to `.kanban/logs/`. Want the loop

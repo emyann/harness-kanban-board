@@ -6,18 +6,32 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, CLAUDE_DENY, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot, hkbOnPath, registerUserBoard, userBoardsFile, mainWorktree } from './board.js';
 import { ensureLabels, fetchBoard, addLabels } from './tasks.js';
 import { rest } from './gh.js';
-import { L, STATUSES, parseSkillVersion, stripFrontmatter } from './model.js';
+import { L, STATUSES, parseSkillVersion, stripFrontmatter, insideRepo, worktreePath } from './model.js';
 
 export const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MARK_START = '<!-- hkb:start -->';
 const MARK_END = '<!-- hkb:end -->';
+
+/** The package's own package.json, resolved relative to this file — the same answer from any cwd. */
+function packageJson() { return JSON.parse(fs.readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8')); }
 
 /**
  * Single source of truth for the version: the package's own package.json, resolved relative to this
  * file — so it is the same answer from any cwd, with no build step. `hkb version` prints it and the
  * daily registry check compares it (src/doctor.js).
  */
-export function packageVersion() { return JSON.parse(fs.readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8')).version; }
+export function packageVersion() { return packageJson().version; }
+
+/**
+ * Where this package's entry point sits inside it — `bin/hkb.js`, read out of package.json rather
+ * than spelled out, so moving the bin moves every generated command that names it. POSIX-separated:
+ * it is only ever appended to a path that goes into a `/bin/sh` command line.
+ */
+export function packageBinRel() {
+  const pkg = packageJson();
+  const bin = typeof pkg.bin === 'string' ? pkg.bin : Object.values(pkg.bin || {})[0];
+  return String(bin || 'bin/hkb.js').replace(/^\.?\//, '').replace(/\\/g, '/');
+}
 
 function copyDir(src, dst) {
   fs.mkdirSync(dst, { recursive: true });
@@ -152,15 +166,28 @@ function upsertSection(file, section) {
 
 // ---------- the Claude Code hooks ----------
 // Two hooks, and the question of which settings file they go in (#85). `.claude/settings.json` is
-// tracked and shared, and no command hkb can write means the same thing in everyone's checkout:
-// a bare `hkb` is only on PATH for whoever ran `npm i -g hkb-cli`, and an absolute path into this
-// package is wrong for every teammate — under `npx` it is inside the cache, so it stops existing for
-// the installer too, the moment that cache is cleaned. A `matcher: "*"` PreToolUse hook that cannot
-// resolve fails on *every tool call in every session* in that repo.
+// tracked and shared, and most commands hkb can write do not mean the same thing in everyone's
+// checkout: a bare `hkb` is only on PATH for whoever ran `npm i -g hkb-cli`, and an absolute path
+// into this package is wrong for every teammate — under `npx` it is inside the cache, so it stops
+// existing for the installer too, the moment that cache is cleaned. A `matcher: "*"` PreToolUse hook
+// that cannot resolve fails on *every tool call in every session* in that repo.
 // So the default is `.claude/settings.local.json`: per-developer, gitignored, honest about serving
 // whoever runs the board rather than the repo. `--shared-hooks` opts into the tracked file, where
 // only the portable `hkb hook <verb>` form is ever written and `hkb doctor` is what tells a teammate
 // it does not resolve for them.
+//
+// There is a third case, and it is the one that makes the tracked file honest (#146). When the hkb
+// being run lives INSIDE the repo it is setting up, the answer to "where is hkb" is a property of
+// the *project*, not of the machine, and Claude Code hands a hook `$CLAUDE_PROJECT_DIR` precisely so
+// a project can say so. Two installs land there and the command does not care which: `npm i -D
+// hkb-cli`, the version pinned in package.json and the lockfile, at `node_modules/hkb-cli`; and
+// hkb's own checkout, where the repo *is* the package. So the rule is not "is it a devDependency"
+// but "is it under the root", and the path written is the one measured from there — never one
+// composed out of the package's name, which a pnpm store or a nested install would get wrong.
+// That command is exact and portable at once, so it goes in the tracked file by default: a
+// teammate's `git pull && npm install` is then the whole setup. It guards its own file, because a
+// worker's fresh worktree has no `node_modules` until it runs `npm ci` and a hook that is not
+// installed yet must be silent, not loud.
 
 /** The two files Claude Code reads hooks from, relative to the repo root. */
 export const HOOK_SETTINGS = {
@@ -171,6 +198,11 @@ export const HOOK_SETTINGS = {
 /** How a machine with no `hkb` on PATH and no durable checkout still gets a working hook. */
 export const NPX_COMMAND = 'npx -y hkb-cli';
 
+/** The one variable Claude Code guarantees a hook command: this repo, on whatever machine runs it. */
+export const PROJECT_DIR = '$CLAUDE_PROJECT_DIR';
+const PROJECT_DIR_RE = /\$\{CLAUDE_PROJECT_DIR\}|\$CLAUDE_PROJECT_DIR/g;
+const PROJECT_DIR_HEAD = /^(\$\{CLAUDE_PROJECT_DIR\}|\$CLAUDE_PROJECT_DIR)[\\/]/;
+
 /**
  * Is this path inside an npx cache? Such a path is not durable — it is wrong for every teammate and
  * gone from this machine as soon as the cache is cleaned — so nothing generated may ever name it.
@@ -178,13 +210,55 @@ export const NPX_COMMAND = 'npx -y hkb-cli';
 export function isEphemeralPath(p) { return /(^|[\\/])_npx([\\/]|$)/.test(String(p || '')); }
 
 /**
+ * Where the running hkb's entry point sits relative to `root`, when it is inside it — the whole
+ * remainder measured, never composed (#146): `bin/hkb.js` for hkb's own checkout,
+ * `node_modules/hkb-cli/bin/hkb.js` for a `npm i -D hkb-cli`, and whatever a pnpm store or a nested
+ * install actually resolved to. Null when the hkb running this init is somewhere else — a global,
+ * an npx cache, another checkout — which is every install shape a project cannot name for itself.
+ *
+ * Two paths under the root are refused rather than named. An npx cache is never durable wherever it
+ * sits. And a `.claude/worktrees/<attempt>` checkout is gitignored and gone with the attempt, so an
+ * hkb run out of one must not put that path in a file the whole team reads.
+ * POSIX separators on purpose: the result goes into a `/bin/sh` command line, not into `path.join`.
+ */
+export function projectBinRel(root, { pkgRoot = PKG_ROOT } = {}) {
+  const rel = insideRepo(root, pkgRoot);
+  if (rel === null || isEphemeralPath(pkgRoot) || rel.startsWith(worktreePath(''))) return null;
+  return [rel, packageBinRel()].filter(Boolean).join('/');
+}
+
+/**
+ * The hook command for an hkb the repo itself carries: name the file once, exit 0 when it is not
+ * there, exec it when it is. The guard is not defensive padding — a worker runs in
+ * `.claude/worktrees/kb-<n>-<k>`, a fresh checkout whose `node_modules` does not exist until it runs
+ * `npm ci`, and `$CLAUDE_PROJECT_DIR` there is the worktree. Both hooks are inert without KB_TASK
+ * anyway, so the honest behaviour before the install is silence; by the time the Stop hook has
+ * anything to say, `npm ci` has run.
+ */
+export function guardedHookCommand(rel, verb) {
+  return `f="${PROJECT_DIR}/${rel}"; [ -f "$f" ] || exit 0; exec node "$f" hook ${verb}`;
+}
+
+/** Substitute `$CLAUDE_PROJECT_DIR` for the repo it stands for, so doctor can look for the file. */
+export function resolveHookPath(target, root) {
+  return String(target ?? '').replace(PROJECT_DIR_RE, () => String(root ?? ''));
+}
+
+/**
  * The command a hook should run.
  * @param verb one of the values in CLAUDE_HOOKS
- * @param shared true when the command goes in a tracked file — then it is always the plain binary,
- *   because an absolute path is a lie on any machine but this one
+ * @param shared true when the command goes in a tracked file — then it is the plain binary, because
+ *   an absolute path is a lie on any machine but this one
+ * @param root the repo root, for a Claude Code hook: only there is `$CLAUDE_PROJECT_DIR` set, so
+ *   only there can the repo's own hkb be named — pass nothing for a harness that reads its own hook file
+ * @param binRel `projectBinRel`'s answer, when the caller already has it (or a test supplies it)
  */
-export function hkbCommandForHook(verb = 'stop', { shared = false, onPath, pkgRoot = PKG_ROOT } = {}) {
+export function hkbCommandForHook(verb = 'stop', { shared = false, onPath, pkgRoot = PKG_ROOT, root = null, binRel } = {}) {
   const suffix = ` hook ${verb}`;
+  // An hkb the repo carries is the one that runs, wherever the command is going: it is the one form
+  // that is exact here and correct everywhere else.
+  const rel = binRel === undefined ? projectBinRel(root, { pkgRoot }) : binRel;
+  if (rel) return guardedHookCommand(rel, verb);
   if (shared) return `hkb${suffix}`;
   if (onPath ?? hkbOnPath()) return `hkb${suffix}`;
   const bin = path.join(pkgRoot, 'bin', 'hkb.js');
@@ -204,30 +278,61 @@ export function hkbCommandForHook(verb = 'stop', { shared = false, onPath, pkgRo
 export const CLAUDE_HOOKS = { Stop: 'stop', PreToolUse: 'pretool' };
 const HOOK_NOTE = 'inert outside a worker session; Stop nudges for the terminal verb, PreToolUse denies (never allows) and takes KB_TASK only, so it is live on claude-p and stands aside on claude --bg';
 
-/** Split a command into its arguments, honouring the double quotes hkb writes around a path. */
-function tokens(command) { return (String(command || '').match(/"[^"]*"|\S+/g) || []).map((t) => t.replace(/^"|"$/g, '')); }
+/**
+ * Split a command into its words, honouring the quotes hkb writes around a path and breaking at the
+ * `;` that separates one command from the next — a guarded form is three commands on one line.
+ */
+function tokens(command) {
+  return (String(command || '').match(/"[^"]*"|'[^']*'|[^\s;]+/g) || []).map(unquote);
+}
+/** A word the shell would unquote: the pair has to match, so `f="…"` keeps its own quotes. */
+function unquote(word) { return String(word).replace(/^(["'])([\s\S]*)\1$/, '$2'); }
 
 /**
- * What a configured hook command needs before it can run: the file a `node "<path>"` form names, or
- * the binary the command starts with. Pure — `hkb doctor` does the looking.
- * @returns {{ kind: 'file'|'bin', target: string }}
+ * What a configured hook command needs before it can run: the file a `node <path>` form names, or the
+ * binary the command starts with — plus whether the command checks for that file itself, which is the
+ * difference between "broken" and "not installed yet". Pure; `hkb doctor` does the looking.
+ *
+ * `node` is looked for anywhere in the line rather than only at the front, and `VAR=<path>`
+ * assignments are expanded, so a command that names its file once and then tests it (`guardedHookCommand`)
+ * is read as needing that file — no shape of hkb's is special-cased here.
+ * @returns {{ kind: 'file'|'bin', target: string, guarded: boolean }}
  */
 export function hookCommandNeeds(command) {
-  const [first = '', second] = tokens(command);
-  if (path.basename(first).replace(/\.exe$/i, '') === 'node' && second) return { kind: 'file', target: second };
-  return { kind: 'bin', target: first };
+  const words = tokens(command);
+  const vars = {};
+  for (const w of words) {
+    const assign = /^([A-Za-z_]\w*)=([\s\S]*)$/.exec(w);
+    if (assign) vars[assign[1]] = unquote(assign[2]);
+  }
+  const expand = (s) => String(s).replace(/\$\{(\w+)\}|\$(\w+)/g, (m, a, b) => vars[a || b] ?? m);
+  // `[ -f "$f" ] || exit 0`: the command answers "is it there" before it runs, so a missing file is
+  // a silent no-op rather than an error on every tool call.
+  const guarded = /\[\s+-[a-z]\s/.test(String(command || '')) && /\bexit\s+0\b/.test(String(command || ''));
+  const at = words.findIndex((w) => path.basename(w).replace(/\.exe$/i, '') === 'node');
+  if (at >= 0 && words[at + 1]) return { kind: 'file', target: expand(words[at + 1]), guarded };
+  return { kind: 'bin', target: words[0] || '', guarded };
 }
 
-/** Does `command` run one of hkb's own hook verbs? Matches every form hkb has ever written. */
+/**
+ * Does `command` run one of hkb's own hook verbs? Matches every form hkb has ever written — which
+ * now includes one where the binary is named inside a `f="…";` assignment rather than as a word, so
+ * a `;` closes the name as validly as a space does.
+ */
 export function isHkbHookCommand(command, verb) {
   const c = String(command || '').trim();
-  return /(^|[\s"'/\\])hkb(-cli)?(@\S+?)?(\.js)?["']?(\s|$)/.test(c) && new RegExp(`\\bhook\\s+${verb}\\s*$`).test(c);
+  return /(^|[\s"'/\\])hkb(-cli)?(@\S+?)?(\.js)?["']?([\s;]|$)/.test(c) && new RegExp(`\\bhook\\s+${verb}\\s*$`).test(c);
 }
 
-/** A command that means the same thing on every machine: a plain binary, never a path into a checkout. */
+/**
+ * A command that means the same thing on every machine: a plain binary, or a file named relative to
+ * `$CLAUDE_PROJECT_DIR` — which is this repo wherever it is checked out. Never a path into a checkout.
+ */
 export function isPortableHookCommand(command) {
   const need = hookCommandNeeds(command);
-  return need.kind === 'bin' && !!need.target && !path.isAbsolute(need.target) && !isEphemeralPath(need.target);
+  if (!need.target || isEphemeralPath(need.target)) return false;
+  if (need.kind === 'file') return PROJECT_DIR_HEAD.test(need.target);
+  return !path.isAbsolute(need.target);
 }
 
 /** Every hkb hook in a parsed settings object, as `{ event, verb, command, portable }`. */
@@ -252,11 +357,16 @@ export function hkbHooks(settings) {
  * the same thing on every machine — somebody chose that, so init leaves them there. Hooks in the
  * tracked file naming a path are the bug this exists to fix, and get moved. `--shared-hooks` says
  * "shared" outright. Either way they end up in exactly one file: two copies fire every nudge twice.
+ *
+ * `portable` is the third case (#146): the command init is about to write is itself portable — the
+ * repo's own hkb named through `$CLAUDE_PROJECT_DIR` — so the tracked file is where it belongs and
+ * nobody has to ask for it. Any copy in the per-developer file is stale by construction and moves.
+ * @param portable true when the command about to be written means the same thing on every machine
  * @returns {{ file: 'local'|'shared', movedFrom: 'local'|'shared'|null }}
  */
-export function hookPlacement({ local, shared, wantShared = false } = {}) {
+export function hookPlacement({ local, shared, wantShared = false, portable = false } = {}) {
   const inLocal = hkbHooks(local), inShared = hkbHooks(shared);
-  if (wantShared) return { file: 'shared', movedFrom: inLocal.length ? 'local' : null };
+  if (wantShared || portable) return { file: 'shared', movedFrom: inLocal.length ? 'local' : null };
   if (!inLocal.length && inShared.length && inShared.every((h) => h.portable)) return { file: 'shared', movedFrom: null };
   return { file: 'local', movedFrom: inShared.length ? 'shared' : null };
 }
@@ -295,8 +405,11 @@ export function hookSummary(added, { file = HOOK_SETTINGS.local, movedFrom = nul
   const what = added.length
     ? `added ${names(added)} to ${file}${kept.length ? `; ${names(kept)} already there` : ''}`
     : `${names(all)} already present in ${file}`;
-  const moved = movedFrom ? `; moved out of ${movedFrom}, which is shared and cannot name this machine` : '';
-  const fixed = repaired.length ? `; rewrote the ${names(repaired)} command, which named a path that is not there for everyone` : '';
+  const why = movedFrom === HOOK_SETTINGS.shared
+    ? ', which is shared and cannot name this machine'
+    : ', because this command resolves in every checkout and belongs where everyone reads it';
+  const moved = movedFrom ? `; moved out of ${movedFrom}${why}` : '';
+  const fixed = repaired.length ? `; rewrote the ${names(repaired)} command, which did not resolve for everyone that file serves` : '';
   return `${what}${moved}${fixed} (${HOOK_NOTE})`;
 }
 
@@ -305,9 +418,9 @@ export function hookSummary(added, { file = HOOK_SETTINGS.local, movedFrom = nul
  * everything else in that file alone and removing hkb's hooks from the other one so no nudge fires
  * twice. Returns what it did, or null when the target file could not be parsed — in which case it
  * has already said so through `log`.
- * @returns {{ file, added, repaired, movedFrom, command }|null} paths relative to `root`
+ * @returns {{ file, added, repaired, movedFrom, command, binRel }|null} paths relative to `root`
  */
-export function installClaudeHooks(root, log, { shared: wantShared = false } = {}) {
+export function installClaudeHooks(root, log, { shared: wantShared = false, binRel = projectBinRel(root) } = {}) {
   const parse = (rel) => {
     const abs = path.join(root, rel);
     if (!fs.existsSync(abs)) return { ok: true, settings: {} };
@@ -315,7 +428,7 @@ export function installClaudeHooks(root, log, { shared: wantShared = false } = {
     catch (e) { return { ok: false, error: e.message, settings: null }; }
   };
   const read = { local: parse(HOOK_SETTINGS.local), shared: parse(HOOK_SETTINGS.shared) };
-  const { file, movedFrom } = hookPlacement({ local: read.local.settings, shared: read.shared.settings, wantShared });
+  const { file, movedFrom } = hookPlacement({ local: read.local.settings, shared: read.shared.settings, wantShared, portable: !!binRel });
   const target = read[file];
   if (!target.ok) { log(`skip hooks: ${HOOK_SETTINGS[file]} is not valid JSON (${target.error})`); return null; }
   const other = read[file === 'local' ? 'shared' : 'local'];
@@ -326,7 +439,7 @@ export function installClaudeHooks(root, log, { shared: wantShared = false } = {
   const added = [], repaired = [];
   let stopCommand = null;
   for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
-    const cmd = hkbCommandForHook(verb, { shared: file === 'shared' });
+    const cmd = hkbCommandForHook(verb, { shared: file === 'shared', root, binRel });
     const groups = settings.hooks[event] = settings.hooks[event] || [];
     const mine = groups.flatMap((g) => (g?.hooks || []).filter((h) => isHkbHookCommand(h?.command, verb)));
     if (!mine.length) {
@@ -335,8 +448,11 @@ export function installClaudeHooks(root, log, { shared: wantShared = false } = {
     } else {
       // A tracked file may hold nothing but a portable command; a local one keeps whatever the
       // operator typed, except an npx-cache path, which stopped being a path when the cache went.
+      // On a repo that carries its own hkb there is exactly one right answer — the copy it carries —
+      // so anything else there, `hkb` on PATH included, is rewritten to it.
       for (const h of mine) {
-        if (file === 'shared' ? isPortableHookCommand(h.command) : !isEphemeralPath(h.command)) continue;
+        const fine = binRel ? h.command === cmd : (file === 'shared' ? isPortableHookCommand(h.command) : !isEphemeralPath(h.command));
+        if (fine) continue;
         h.command = cmd;
         if (!repaired.includes(event)) repaired.push(event);
       }
@@ -349,7 +465,7 @@ export function installClaudeHooks(root, log, { shared: wantShared = false } = {
   };
   if (added.length || repaired.length) write(HOOK_SETTINGS[file], settings);
   if (movedFrom && stripHkbHooks(read[movedFrom].settings)) write(HOOK_SETTINGS[movedFrom], read[movedFrom].settings);
-  return { file: HOOK_SETTINGS[file], added, repaired, movedFrom: movedFrom ? HOOK_SETTINGS[movedFrom] : null, command: stopCommand };
+  return { file: HOOK_SETTINGS[file], added, repaired, movedFrom: movedFrom ? HOOK_SETTINGS[movedFrom] : null, command: stopCommand, binRel };
 }
 
 /**
@@ -711,7 +827,12 @@ export async function init(ctx, flags, log) {
     const hooks = installClaudeHooks(root, log, { shared: !!flags['shared-hooks'] });
     if (hooks) {
       log(hookSummary(hooks.added, hooks));
-      if (hooks.added.length && hooks.file === HOOK_SETTINGS.local) {
+      if (hooks.binRel) {
+        // Two ways to carry your own hkb, and a teammate's setup differs by one command: a
+        // devDependency needs `npm install` to put the file there, a checkout of hkb already has it.
+        const installed = hooks.binRel.startsWith('node_modules/');
+        log(`  the command runs this repo's own ${hooks.binRel} through $CLAUDE_PROJECT_DIR — the same file in every checkout${installed ? ' that has run `npm install`' : ''}, and a silent exit 0 before it. That is why it went in the tracked file: commit it, and a teammate's \`git pull${installed ? ' && npm install' : ''}\` is the whole setup`);
+      } else if (hooks.added.length && hooks.file === HOOK_SETTINGS.local) {
         log(`  that file is per-developer and gitignored; \`hkb init --shared-hooks\` writes ${HOOK_SETTINGS.shared} instead — tracked, so the command there is a plain \`hkb\` every teammate has to have on PATH`);
       }
       if (hooks.command?.startsWith(NPX_COMMAND)) {

@@ -634,6 +634,45 @@ export function compareVersions(a, b) {
   return 0;
 }
 
+// ---------- where the running hkb came from ----------
+// The generated hook command differs by install shape (src/init.js hkbCommandForHook): a global
+// `npm i -g`, an `npx` run out of a cache that is gone the next time npm cleans it, and — the one
+// that is exact and the same on every machine at once — an hkb that lives INSIDE the repo it is
+// setting up. That last one is not one shape but two, and the difference does not matter: a
+// `npm i -D hkb-cli` devDependency sits at `node_modules/hkb-cli`, hkb's own checkout is the repo
+// root itself, and both are named the same way, relative to `$CLAUDE_PROJECT_DIR`.
+
+/**
+ * Where `target` sits inside `root`, as a `/`-separated relative path — `''` when it *is* `root`,
+ * null when it is somewhere else entirely (#146). The remainder is measured, never composed: a
+ * pnpm store resolves through `node_modules/.pnpm/<name>@<version>/node_modules/<name>`, and a path
+ * built out of the package's name instead would name a file that is not there.
+ *
+ * A path comparison, never PATH: `npx` puts `node_modules/.bin` on its child's PATH, so "is hkb on
+ * PATH" answers yes for a repo-local install too — and then answers no in the plain `/bin/sh` a hook
+ * runs in. String work rather than `node:path` so this file stays I/O- and import-free; both
+ * arguments are already absolute where it is called, and the result is POSIX because it goes into a
+ * shell command line rather than back into `path.join`.
+ */
+export function insideRepo(root, target) {
+  const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  const [base, t] = [norm(root), norm(target)];
+  if (!base || !t) return null;
+  if (t === base) return '';
+  return t.startsWith(`${base}/`) ? t.slice(base.length + 1) : null;
+}
+
+/**
+ * `PATH` without its `node_modules/.bin` entries — the PATH a *hook* will actually have. `npx` and
+ * `npm run` prepend one; the `/bin/sh` Claude Code starts a hook command in never has it. So a binary
+ * found only there is not on PATH for the thing being configured, and a command written on that
+ * evidence fails on every tool call in every session (#146).
+ * @param sep the platform's PATH delimiter (`path.delimiter`) — passed in, so this stays pure
+ */
+export function stripNodeModulesBin(PATH, sep = ':') {
+  return String(PATH || '').split(sep).filter((e) => !/node_modules[\\/]+\.bin[\\/]*$/.test(e.trim())).join(sep);
+}
+
 // ---------- worker permission policy (PreToolUse hook) ----------
 // A background worker has nobody to answer a prompt, so hkb decides itself:
 // explicit allow or deny-with-reason, never "ask". Pure and unit-tested.
