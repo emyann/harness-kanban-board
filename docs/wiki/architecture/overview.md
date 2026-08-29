@@ -7,32 +7,32 @@ audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: 0dc546fc625e1f725aa446b68a2bdf915b34aca2
+    sha: fcfd5ca89889587f6973eb826579baaa86ccbfa4
   - path: src/gh.js
     sha: b728c07d7f5e7bfd29e3dc4c2e0e2786d29522ee
   - path: src/model.js
-    sha: 75de5e5f6c86b87fd90d878b77643a805d020251
+    sha: fc0671faed32f913ec5bcbe16819476f50ceeeb2
   - path: src/tasks.js
     sha: 2faa63591dbb3f96fcb3747141f9e4d42ae24736
   - path: src/lock.js
     sha: 680eae74c9955003c948a6df9750c25548ccaf86
   - path: src/lifecycle.js
-    sha: c729b37a295528722f19a3d2382c5f40d7537084
+    sha: 20ebc63bcdd5e63634de41fb620aa84a38e720b3
   - path: src/dispatch.js
-    sha: 0cdcd4fea6cdc34ea29807ca292f5de26bd03019
+    sha: 202feb141cef1529814ea4fedc91514f3f446335
   - path: src/context.js
-    sha: 0de994e57a7d7540c632757864e1af8027cffa03
+    sha: 6ba989c8c5bed05f5271c3cc7c91b27986f8d850
   - path: src/hook.js
-    sha: 76c8c61468a9382d8e554081b316c5faace75ba0
+    sha: a1c4de45dbb0a29e6bf602b0925e9a1da3be498a
   - path: src/jobs.js
-    sha: ee051802f87ebbf0b1ac87aab43247505398a15b
+    sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/board.js
-    sha: 7e895ff3e7e8380a61fd275e609d93dfce2140e1
+    sha: 0d1c297b6990a63cf28b6bf18f9e4e85180b8c21
   - path: src/doctor.js
-    sha: 9a5a658d95cd1b463cb3d6c78f0625e66f7b8bb6
-generated_at_commit: c46b183
+    sha: a6afe38be8a47394bf2341c24a24cec2a0d9ed1c
+generated_at_commit: 9597b41
 last_refreshed: 2026-08-28
-related: [concepts/board-protocol, concepts/claims-and-leases, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
+related: [concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
 
 # hkb at a glance
@@ -123,7 +123,12 @@ daemon and exits, so that environment stops at the CLI and never reaches the
 session doing the work. The default profile is one of those. `whichAttempt`
 (`src/hook.js`) therefore falls back to the `kb-<n>-<k>` checkout the launch
 names, which is already the identity the tick matches a running job by
-(`matchJobByWorktree`, `src/jobs.js`).
+(`matchJobByWorktree`, `src/jobs.js`). And when the two *disagree* the checkout
+wins: an environment can be inherited — a session daemon a `claude --bg` launch
+cold-started keeps that launch's `KB_TASK` for life and hands it to every
+session it hosts — where a directory cannot, so hkb no longer passes any `KB_*`
+on that launch and a hook that finds a contradicted one stands aside
+(`attemptIdentity`, `src/model.js`; see *concepts/worker-identity*).
 
 Session identity travels the same asymmetry. What session a worker *is*
 (`CLAUDE_CODE_SESSION_ID`, plus the job record `currentSession` reads in

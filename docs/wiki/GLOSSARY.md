@@ -102,6 +102,15 @@ deserves a `concepts/` page (link it).
   A file on the host that ran the attempt, never board state — and hkb's last
   answer to "what did this cost" when the harness reported none
   (`usageFromTranscript` in `src/stats.js`).
+- **Job record** — what Claude Code keeps for a background agent at
+  `~/.claude/jobs/<id>/state.json`: the session it is running and the transcript
+  that session writes. A `claude --bg` worker's only local way to name itself,
+  and the tick's only way to name it from outside (`src/jobs.js`).
 - **Worker** — the seat that codes: one session holding one attempt on one task
   — any harness, an Actions job, or the operator running the verbs by hand
   (`src/lifecycle.js`).
+- **Worker identity** — the answer to "which attempt is this session?": the
+  launch environment (`KB_TASK`…), else the `kb-<n>-<k>` checkout — and, when the
+  two disagree, the checkout, because an environment can be inherited and a
+  directory cannot (`attemptIdentity` in `src/model.js`, `whichAttempt` in
+  `src/hook.js`; see *concepts/worker-identity*).

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { KB_JOB_NAME_RE, sessionFromJobState, sessionUpdate } from './model.js';
+import { KB_JOB_NAME_RE, SESSION_FIELDS, sessionFromJobState, sessionUpdate } from './model.js';
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
@@ -70,14 +70,24 @@ function jobSession(job, root = jobsDir()) {
  * for the attempts no verb ever reaches — crashed, timed out, protocol_violation — which are exactly
  * the ones a human reopens with `claude --resume` and the ones `hkb stats` could not price.
  *
- * Blanks only. A row a verb has already stamped is left byte-identical, and a record naming a
- * different session (a resumed job is one record over two) is not half-merged into the row.
+ * Blanks, and one correction. A row a verb has already stamped is left byte-identical — but a row
+ * naming a *different* session than the job actually running this attempt is not a row to preserve:
+ * the tick resolved that job from the attempt's own checkout, and a hook stamp can come from any
+ * session that happened to have `KB_TASK` in its environment (#150 — a session daemon started by a
+ * `claude --bg` launch handed #146's identity to an operator's conversation, whose Stop hook then
+ * claimed the work). So the job wins, and the whole session goes with it: the fields the job cannot
+ * name are cleared rather than left describing the session we just replaced.
  * @returns {{session_id?: string, transcript_path?: string}|null} null when there is nothing to write
  */
 export function jobSessionUpdate(attempt, job, root = jobsDir()) {
   if (!job) return null;
   const found = jobSession(job, root);
-  if (!found || (attempt?.session_id && attempt.session_id !== found.session_id)) return null;
+  if (!found) return null;
+  if (attempt?.session_id && found.session_id && attempt.session_id !== found.session_id) {
+    const fix = sessionUpdate(attempt, found) || {};
+    for (const k of SESSION_FIELDS) if (found[k] === undefined && attempt[k] !== undefined) fix[k] = undefined;
+    return Object.keys(fix).length ? fix : null;
+  }
   const blanks = {};
   for (const [k, v] of Object.entries(found)) if (attempt?.[k] === undefined) blanks[k] = v;
   return sessionUpdate(attempt, blanks);

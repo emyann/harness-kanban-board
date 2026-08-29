@@ -8,7 +8,7 @@ import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, 
 import { claim, release, listLocks, lockBeatAt, staleBaseSha, remoteName } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, pidFile, readPidFile, pidAlive, recordExit, clearExit, HOOK_SETTINGS_VAR } from './board.js';
 import { workerHookSettings } from './init.js';
-import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix } from './model.js';
+import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted } from './track.js';
 import { GhError } from './gh.js';
@@ -135,7 +135,12 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
   };
   const argv = cont?.ok && !ownsWt ? withoutWorktreeFlag(expandLaunch(profile.launch, vars, profile)) : expandLaunch(profile.launch, vars, profile);
   const continued = cont && { pr: continuePr.number, branch: cont.ok ? cont.branch : null, why: cont.ok ? null : cont.why };
-  const env = {
+  // The launch environment is the worker's identity for every harness we run as a child process:
+  // it dies with that process. `claude --bg` is the exception — it hands the request to Claude
+  // Code's session daemon and exits, and a launch that finds no daemon *starts* one, which then
+  // keeps this environment for its whole life and hands it to every session it hosts (#150). It
+  // reaches no worker there anyway (#125: the checkout is that profile's identity), so it goes.
+  const env = profile.mode === 'claude-bg' ? scrubKbEnv(process.env) : {
     ...process.env,
     KB_TASK: String(task.number), KB_ATTEMPT: String(attempt), KB_BOARD: ctx.board, KB_REPO: ctx.repo.nameWithOwner,
     KB_LOCK_REF: lockRef(task.number, attempt), KB_ROOT: ctx.root, KB_PROFILE: profileName,
@@ -548,9 +553,14 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       // are the ones that never run one, and the job record already says everything they need.
       const session = dryRun ? null : jobSessionUpdate(a, job);
       if (session) {
+        // The job the tick matched to this attempt outranks whatever stamped the row: a hook fires
+        // in whichever session had `KB_TASK` in its environment, and that is not always this one
+        // (#150). Say so when it happens — a rewritten session id is the kind of correction an
+        // operator must be able to find afterwards.
+        const wrong = a.session_id && session.session_id && session.session_id !== a.session_id ? a.session_id : null;
         Object.assign(a, session);
         dirty = true;
-        log(`#${t.number}: attempt ${a.attempt} ${formatSession(a)}`);
+        log(`#${t.number}: attempt ${a.attempt} ${formatSession(a)}${wrong ? ` — corrected: the row named session ${wrong}, which is not the session job ${a.job || job.id} is running` : ''}`);
       }
       if (!job) {
         if (secondsSince(a.started_at) > 180) outcome = 'crashed'; // cold daemon start gets 3 min to register

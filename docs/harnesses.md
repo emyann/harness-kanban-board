@@ -303,7 +303,7 @@ The two hooks sit on top of that, gated differently, and on the default profile 
 | | `Stop` — the terminal-verb nudge | `PreToolUse` — hkb's permission policy |
 | --- | --- | --- |
 | where it comes from | the launch's `--settings` (Claude), the harness's own hook file otherwise | same |
-| what identifies the session | `KB_TASK`, else the `kb-<n>-<k>` checkout name | `KB_TASK` only |
+| what identifies the session | `KB_TASK`, else the `kb-<n>-<k>` checkout name — and the checkout when the two disagree | `KB_TASK` only, and only where the checkout agrees |
 | what it may answer | `{"decision":"block"}`, at most twice | **`deny`, or nothing** — never `allow` |
 | `claude` / `claude-track` (`claude --bg`) | **live** — the checkout names the attempt | **inert** — the launch's `--allowedTools` and `--disallowedTools` are the whole policy |
 | `claude-p` (`mode: "process"`) | live | live, and can only subtract from those launch flags |
@@ -351,6 +351,51 @@ Three checks guard the layer that is doing the enforcing, and all of them read l
 - **`permission mode`** warns when a `claude` launch has lost `--permission-mode dontAsk`. Without it a call
   outside the allow-list *prompts* instead of being denied, and a background worker has nobody to answer: the
   attempt does not fail, it hangs until `max_runtime` reclaims it. Silent when every launch says `dontAsk`.
+
+### The `claude` profile's launch carries no `KB_*` at all
+
+The dispatcher puts `KB_TASK`/`KB_ATTEMPT`/`KB_BOARD`/`KB_REPO`/`KB_LOCK_REF`/`KB_ROOT`/`KB_PROFILE` on every
+launch **except** a `claude --bg` one, which gets an environment with every `KB_*` key removed. The reason is
+the asymmetry above, read the other way round: the daemon does not forward the launch environment to the session
+it hosts — so those variables reach no worker there and buy nothing — but a launch that finds **no daemon
+running starts one**, and the daemon then keeps that environment for its whole life.
+
+Measured on this board on 2026-08-28 ([#150](https://github.com/emyann/harness-kanban-board/issues/150)): a cold
+start for #146 left `KB_TASK=146 KB_ATTEMPT=1 KB_PROFILE=claude KB_ROOT=…` in the daemon, and every session it
+went on to host inherited them — including an operator conversation that predated the card. Three things
+followed, and all three are what a worker's identity is *supposed* to do, done to the wrong session:
+
+- its Stop hook recorded that conversation's `session_id` and transcript on #146's attempt row, so
+  `hkb show 146`'s resume line reopened an operator's conversation instead of the worker;
+- hkb's `PreToolUse` policy applied the profile's allowlist to the operator's shell — a diagnostic `for … do …
+  done` loop denied, and a card body denied for *mentioning* `hkb dispatch`;
+- had the card still been `running`, the Stop hook would have nudged that conversation, twice, to finish
+  somebody else's task.
+
+So the launch hands over nothing, and the two hooks refuse an environment their checkout contradicts: a session
+whose `KB_TASK` names a task it is plainly not sitting in the worktree of falls back to the checkout (usually to
+nothing at all) and says so once on stderr — not only at the board root: the same daemon that leaked into an
+operator's shell can go on to host a session for an unrelated review worktree or an entirely different repo, and
+`KB_ROOT` joined with `kb-<n>-<k>` is the only cwd that counts as evidence for the environment.
+
+```
+hkb hook: KB_TASK=146 in the environment but this is not its worktree (this is the board root); ignoring
+```
+
+A daemon started before this fix keeps its inherited variables until it is restarted. `hkb doctor` says so when
+it is run inside one, and on Linux names the pid:
+
+```
+! worker environment   this shell thinks it is a worker for #146 on profile claude, but it is the board root — a
+                       `claude --bg` launch probably started the Claude Code session daemon with that
+                       environment, and every session it hosts inherits it. The daemon holding KB_TASK
+                       KB_ATTEMPT KB_PROFILE KB_ROOT: pid 22486. …
+                         → let the sessions it hosts finish, then end the daemon (pid 22486) — the next
+                           `claude --bg` starts a clean one
+```
+
+Nothing changes for the other profiles: `claude-p`, `copilot-cli` and `codex` are child processes whose
+environment dies with them and is their only identity, and `claude-action` gets its `KB_*` from the workflow.
 
 ### The command a worker cannot type: `complete`, and heredocs
 

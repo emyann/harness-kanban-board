@@ -60,6 +60,9 @@ pages:
   - slug: concepts/claims-and-leases
     summary: "Git refs as the only atomic CAS on GitHub: claim classification (created/held/unknown), heartbeats, LOCK_LOST, and the self-heal ladder."
     status: planned
+  - slug: concepts/worker-identity
+    summary: "The three answers to \"which attempt is this session?\" (launch environment, checkout, job record), the order of trust between them, and why a `claude --bg` launch must hand over none of them."
+    status: seeded
   - slug: concepts/roles-and-seats
     summary: "Operator, supervisor, dispatcher, workers: who decides, who judges, who loops, who codes — and which seats are optional."
     status: planned
