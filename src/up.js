@@ -86,6 +86,20 @@ function claimPid(root, name, pid) {
 }
 
 /**
+ * Remove `<name>.pid` only if it does not, right now, claim a live process — a fresh read, not the
+ * `processState`/`claimPid` snapshot the caller acted on, because a concurrent `hkb up` or the
+ * process's own startup can have rewritten it to a live pid in between. That is the one invariant
+ * (see the file header): a pid file is never dropped while it names something alive.
+ * `deps.readPidFile` exists so a test can inject a write between the caller's snapshot and this read.
+ */
+function dropDeadPidFile(root, name, deps = {}) {
+  const read = deps.readPidFile || readPidFile;
+  const f = read(root, name);
+  if (f.pid && (f.stale || !pidAlive(f.pid))) { fs.rmSync(pidFile(root, name), { force: true }); return true; }
+  return false;
+}
+
+/**
  * Start one process detached — the same `spawn(..., { detached: true, stdio: ['ignore', fd, fd] })` +
  * `unref()` the dispatcher uses for workers, so `hkb up` can exit and leave the board running.
  * Output is appended to `.kanban/logs/<name>.log`, under one `# <ISO> started pid N` header per start.
@@ -121,7 +135,11 @@ async function startProcess(ctx, name, flags, deps = {}) {
   await sleep(deps.spawnCheckMs ?? SPAWN_CHECK_MS);
   if (!pidAlive(child.pid)) {
     const r = deadAtRecheck(name, child.pid, rel);
-    return { pid: child.pid, line: r.line, failed: { name: r.name, pid: r.pid, log: r.log } };
+    // `up` owns this claim (it just wrote it) and has just verified the pid dead — tidy it rather
+    // than leaving `serve.pid` naming the corpse it just reported as `failed`. `claimed` narrows this
+    // to our own claim; `dropDeadPidFile`'s own fresh read is what keeps a concurrent live claim safe.
+    if (claimed) dropDeadPidFile(ctx.root, name, deps);
+    return { pid: child.pid, line: r.line, failed: r.failed };
   }
   if (!claimed) {
     const { pid: holder } = readPidFile(ctx.root, name);
@@ -218,9 +236,13 @@ export async function down(ctx, flags = {}, out = () => {}, deps = {}) {
       // Not stale, no exit recorded — plain "not running" — but a pid file can still be sitting there
       // naming a process that is simply dead (crashed without dropping its own claim); leaving it is
       // what let a later report keep calling the board down when a stray file said otherwise (#164).
-      const { pid: left } = readPidFile(ctx.root, name);
-      if (left) fs.rmSync(pidFile(ctx.root, name), { force: true });
-      lines.push(st.exit === null && !st.stale ? `${name} not running` : processLine(st));
+      // `dropDeadPidFile` re-reads rather than trusting `st`: a concurrent `hkb up` (or the child's own
+      // startup claim) can have rewritten the file to a live pid since `processState` took `st`, and
+      // that live claim must survive even though `st.running` says stopped.
+      const removed = dropDeadPidFile(ctx.root, name, deps);
+      lines.push(st.stale
+        ? `${name} stopped (pid file predates this boot — ${removed ? 'removed' : 'hkb up replaces it'})`
+        : (st.exit === null ? `${name} not running` : processLine(st)));
       continue;
     }
     try { (deps.kill || process.kill.bind(process))(st.pid, 'SIGTERM'); } catch (e) {

@@ -1083,7 +1083,8 @@ export function startLogLine(at, pid, argv = []) {
  * entry, not a `started` one — a script that only reads `started`/exit-code must see this as the
  * failure it is (#164). `log` is the log path relative to the board root, the same one the line
  * points at.
+ * @returns {{line: string, failed: {name: string, pid: number, log: string}}}
  */
 export function deadAtRecheck(name, pid, log) {
-  return { name, pid, log, line: `${name} exited immediately (pid ${pid}) — see ${log}` };
+  return { line: `${name} exited immediately (pid ${pid}) — see ${log}`, failed: { name, pid, log } };
 }
