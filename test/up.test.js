@@ -320,8 +320,37 @@ test('up looks again a beat later, and does not claim to have started a corpse',
   const dead = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
   await new Promise((r) => dead.on('exit', r));
   const out = sink();
-  await up(ctxOf(root), {}, out, upDeps(fakeSpawn(dead.pid)));
+  const code = await up(ctxOf(root), {}, out, upDeps(fakeSpawn(dead.pid)));
   assert.match(out.lines[0], /^dispatch exited immediately \(pid \d+\) — see \.kanban[/\\]logs[/\\]dispatch\.log$/);
+  assert.equal(code, 1, 'a corpse in `started` is a clean run for a board that is not up (#164)');
+});
+
+/**
+ * The bug the second-pass review of #151 measured (#164): `hkb up --serve --port 80` on a refused
+ * port died at the recheck, but still went into `started`, exit 0, no `--json` error field — a script
+ * that only reads `started`/exit-code sees a board that is up. The loop half still starts and reports
+ * fine next to it.
+ */
+test('a child dead at the recheck is `failed`, not `started`, under both outputs — and up exits 1', async () => {
+  const root = tmpRoot();
+  const dead = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+  await new Promise((r) => dead.on('exit', r));
+  const alive = process.pid;
+  const pids = [alive, dead.pid]; // dispatch starts fine; serve is the one that dies
+  const spawnFn = () => ({ pid: pids.shift(), on() {}, unref() {} });
+
+  const out = sink();
+  const code = await up(ctxOf(root, { json: true }), { serve: true }, out, upDeps(spawnFn));
+  assert.equal(code, 1);
+  const j = JSON.parse(out.lines.join('\n'));
+  assert.deepEqual(j.started, ['dispatch']);
+  assert.deepEqual(j.failed, [{ name: 'serve', pid: dead.pid, log: path.join('.kanban', 'logs', 'serve.log') }]);
+  assert.equal(j.dispatch.running, true, 'the loop half still started');
+  assert.equal(j.serve.running, false);
+
+  const human = sink();
+  const humanCode = await up(ctxOf(root), { serve: true }, human, upDeps(() => ({ pid: dead.pid, on() {}, unref() {} })));
+  assert.equal(humanCode, 1);
 });
 
 test('a rival up that got there first keeps the pid file, and the loser says so', async () => {
@@ -378,6 +407,41 @@ test('down never reports stopped while the process is still up, and leaves the c
   assert.match(out.lines[0], /^dispatch: pid \d+ still running 1s after SIGTERM — a tick in flight finishes first/);
   assert.equal(readPidFile(root, 'dispatch').pid, child.pid, 'the claim is true, so it stands: the next hkb up must find it');
   assert.equal(statusReport(ctx).dispatch.running, true, 'and --status agrees rather than lying about it');
+});
+
+/**
+ * `down` on a pid file naming a process that is simply dead (crashed without dropping its own claim)
+ * used to say "not running" and leave the file — the next `hkb up --status` kept reporting the same
+ * stale claim forever. `down` tidies it, same as it tidies the file of a process it watched die (#164).
+ */
+test('down tidies a pid file whose process is already dead, even though there was nothing to signal', async () => {
+  const root = tmpRoot();
+  fs.writeFileSync(pidFile(root, 'dispatch'), '2147483646\n'); // a pid nothing answers for
+  const out = sink();
+  assert.equal(await down(ctxOf(root), {}, out), 0);
+  assert.equal(out.lines[0], 'dispatch not running');
+  assert.equal(fs.existsSync(pidFile(root, 'dispatch')), false, 'a dead claim helps nobody');
+});
+
+/**
+ * A kill that throws ESRCH means the process died between `processState`'s liveness check and this
+ * signal — `down` was asked for it to be gone, and it is. That is `stopped`, not `failed` (#164).
+ */
+test('a kill that races the process\'s own death (ESRCH) counts as stopped, not failed', async () => {
+  const root = tmpRoot();
+  fs.writeFileSync(pidFile(root, 'dispatch'), `${process.pid}\n`); // alive, so down gets as far as the signal
+  const out = sink();
+  const kill = () => { throw Object.assign(new Error('no such process'), { code: 'ESRCH' }); };
+  assert.equal(await down(ctxOf(root, { json: true }), {}, out, { kill }), 0);
+  const j = JSON.parse(out.lines.join('\n'));
+  assert.deepEqual(j.stopped, [{ name: 'dispatch', pid: process.pid }]);
+  assert.deepEqual(j.failed, []);
+  assert.equal(fs.existsSync(pidFile(root, 'dispatch')), false, 'the claim died with the process; nothing left to tidy later');
+
+  fs.writeFileSync(pidFile(root, 'dispatch'), `${process.pid}\n`);
+  const human = sink();
+  await down(ctxOf(root), {}, human, { kill });
+  assert.match(human.lines[0], /^dispatch stopped \(SIGTERM to pid \d+\); workers keep running$/);
 });
 
 test('down says so when there is nothing to stop, and points at the server it left alone', async () => {
