@@ -330,17 +330,17 @@ allow-list covers the builtins hkb's own guard calls safe (`SAFE_BUILTINS` — #
 already working. Copilot has no equivalent deny: a space-star pattern in its `--deny-tool` language is
 unverified, and a deny that silently matches nothing is worse than none, so its workers are told in the prompt.
 
-The two hooks sit on top of that, gated differently, and on the default profile only one of them is live:
+The three hooks sit on top of that, gated differently, and on the default profile only two of them are live:
 
-| | `Stop` — the terminal-verb nudge | `PreToolUse` — hkb's permission policy |
-| --- | --- | --- |
-| where it comes from | the launch's `--settings` (Claude), the harness's own hook file otherwise | same |
-| what identifies the session | `KB_TASK`, else the `kb-<n>-<k>` checkout name — and the checkout when the two disagree | `KB_TASK` only, and only where the checkout agrees |
-| what it may answer | `{"decision":"block"}`, at most twice | **`deny`, or nothing** — never `allow` |
-| `claude` / `claude-track` (`claude --bg`) | **live** — the checkout names the attempt | **inert** — the launch's `--allowedTools` and `--disallowedTools` are the whole policy |
-| `claude-p` (`mode: "process"`) | live | live, and can only subtract from those launch flags |
-| `claude-action` (`mode: "trigger"`) | live — the workflow sets `KB_TASK`; the `if: always()` step is the backstop | live — the workflow sets `KB_PROFILE` too |
-| `copilot-cli`, `codex` | their own `agentStop` / `Stop` hook file | their own `--allow-tool` / `--sandbox` — they never read `.claude/settings*.json` |
+| | `Stop` — the terminal-verb nudge | `PreToolUse` — hkb's permission policy | `SubagentStop` — subagent bookkeeping |
+| --- | --- | --- | --- |
+| where it comes from | the launch's `--settings` (Claude), the harness's own hook file otherwise | same | same (Claude Code only — Copilot and Codex have no subagent tool) |
+| what identifies the session | `KB_TASK`, else the `kb-<n>-<k>` checkout name — and the checkout when the two disagree | `KB_TASK` only, and only where the checkout agrees | `CLAUDE_PROJECT_DIR`, tried first whenever it disagrees with the cwd — the cwd otherwise |
+| what it may answer | `{"decision":"block"}`, at most twice | **`deny`, or nothing** — never `allow` | nothing — it only records that a subagent ended |
+| `claude` / `claude-track` (`claude --bg`) | **live** — the checkout names the attempt | **inert** — the launch's `--allowedTools` and `--disallowedTools` are the whole policy | **live** — needed to tell a track root waiting on its wave from one that forgot the verb (#163) |
+| `claude-p` (`mode: "process"`) | live | live, and can only subtract from those launch flags | live |
+| `claude-action` (`mode: "trigger"`) | live — the workflow sets `KB_TASK`; the `if: always()` step is the backstop | live — the workflow sets `KB_PROFILE` too | live |
+| `copilot-cli`, `codex` | their own `agentStop` / `Stop` hook file | their own `--allow-tool` / `--sandbox` — they never read `.claude/settings*.json` | n/a — neither harness has a subagent tool of its own |
 
 Installing the hooks on the launch does **not** change that `claude --bg` row: the session daemon was started
 long before, with an environment of its own, so `KB_TASK` never reaches it and `PreToolUse` still stands aside
@@ -406,7 +406,7 @@ followed, and all three are what a worker's identity is *supposed* to do, done t
 - had the card still been `running`, the Stop hook would have nudged that conversation, twice, to finish
   somebody else's task.
 
-So the launch hands over nothing, and the two hooks refuse an environment their checkout contradicts: a session
+So the launch hands over nothing, and the three hooks refuse an environment their checkout contradicts: a session
 whose `KB_TASK` names a task it is plainly not sitting in the worktree of falls back to the checkout (usually to
 nothing at all) and says so once on stderr — not only at the board root: the same daemon that leaked into an
 operator's shell can go on to host a session for an unrelated review worktree or an entirely different repo, and

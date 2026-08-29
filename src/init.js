@@ -166,14 +166,14 @@ function upsertSection(file, section) {
 }
 
 // ---------- the Claude Code hooks ----------
-// Both hooks serve exactly one kind of session — the worker hkb launched — so that is the only
+// All three hooks serve exactly one kind of session — the worker hkb launched — so that is the only
 // session that gets them: they ride the `claude` launch line as `--settings '{"hooks":…}'`, built by
 // `workerHookSettings` below and spent by `expandLaunch` (src/dispatch.js). `hkb init` writes them
 // into a settings file only when asked (`--shared-hooks`), and clears out anything an older init
 // left in the per-developer one.
 //
 // That is the whole of #144, and it is a retraction. A settings file is read by *every* session in
-// the repo, and both hooks are `matcher: "*"`, so an `hkb` that stops resolving there — an nvm
+// the repo, and all three hooks are `matcher: "*"`, so an `hkb` that stops resolving there — an nvm
 // switch, a cleaned npx cache, a teammate who never installed it — becomes a failed `PreToolUse` on
 // every tool call in sessions that have nothing to do with the board. Observed on a real board;
 // #85 moved the file and taught `doctor` to see it, but only a per-launch source removes the
