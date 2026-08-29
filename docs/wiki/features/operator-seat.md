@@ -7,22 +7,22 @@ audience: [dev, ops]
 read_when: "changing what a session may do on someone's board, adding an event kind / status / outcome / block kind, or wondering why the operator's limits are prose rather than a guard"
 covers:
   - path: skills/kanban/SKILL.md
-    sha: 82ee5a477635636bd4b6c486d03c038e8e38681d
+    sha: edb06f1958238ec56506fb23b840f6a84cf33fb1
   - path: commands/operate.md
     sha: 7c1cb7c0a592fc3ea8ca641ca37b860a975ded66
   - path: src/watch.js
     sha: 8aba4c441e35c9241124c1278b5f4824706f7e52
   - path: src/model.js
-    sha: 05d5005975c54ed17d366d6816bdb81231c9e121
+    sha: 9ec1c457784b57b6c9e4d8e0eb1de1d4ea2693cc
   - path: src/cli.js
     sha: 605d15016a708933fa4ff4a9f7358d426134549c
   - path: src/lifecycle.js
     sha: 2affd18fb3d2882db47ba164199b10160ba70ddb
   - path: src/init.js
-    sha: 5989d2cc46ad9e774f0564cedd9ae304b6ee83d6
+    sha: f6be5541e140313a8db1ac8f9831d635cd4adc6a
   - path: src/stats.js
     sha: f81bc37dad19e253bf23a696ba899b4219dd5e53
-generated_at_commit: 2c62289
+generated_at_commit: caf698a
 last_refreshed: 2026-08-28
 related: [features/planning-commands, decisions/adr-004-roles-and-adoption, features/up-and-down, features/review-loop, concepts/roles-and-seats]
 ---
@@ -43,7 +43,7 @@ related: [features/planning-commands, decisions/adr-004-roles-and-adoption, feat
 
 A worker is *told* what to do by the thing that launched it, and hkb enforces
 the rest: `refuseIfWorker` (`src/cli.js:234-237`) refuses `dispatch`, `up` and
-`down` outright, the same three land in `DENY_PATTERNS` (`src/model.js:642-650`)
+`down` outright, the same three land in `DENY_PATTERNS` (`src/model.js:681-689`)
 for the PreToolUse hook, and the shipped Claude launches deny the dispatcher at
 the harness level. Every one of those tests `process.env.KB_TASK`.
 

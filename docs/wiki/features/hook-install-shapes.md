@@ -7,19 +7,19 @@ audience: [dev, ops]
 read_when: "changing what `hkb init` writes into a Claude Code settings file, doctor's hook checks, or adopting hkb as a devDependency of a repo; also when a hook command in a repo does not resolve"
 covers:
   - path: src/init.js
-    sha: 7fb79f0d1b16daef34b17a8b3b313d24ce2a5e36
+    sha: f6be5541e140313a8db1ac8f9831d635cd4adc6a
   - path: src/model.js
     sha: 9ec1c457784b57b6c9e4d8e0eb1de1d4ea2693cc
   - path: src/board.js
     sha: 0d1c297b6990a63cf28b6bf18f9e4e85180b8c21
   - path: src/doctor.js
-    sha: 874e74bb49f3d9c6a20ffd504d4845909b1b360b
+    sha: 83357ec4cb9b5f8a7e097bc85130f340f1d61022
   - path: skills/kanban/scripts/hkb
     sha: 619505ca77807157084e456057e1857eb9a31419
   - path: scripts/smoke-pack.mjs
-    sha: 0e2463ed7aff790ed98e3a2cf8dfcfb09b98054d
+    sha: 30596ec815538e855a3c4fa646a9ed98a36784d2
 related: [architecture/overview, features/update-notice, concepts/roles-and-seats]
-generated_at_commit: a29cf97
+generated_at_commit: caf698a
 last_refreshed: 2026-08-28
 ---
 

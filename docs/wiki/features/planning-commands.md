@@ -71,7 +71,7 @@ Two consequences worth knowing before editing:
 
 Each command file is a handful of lines that sends the reader to the section of `SKILL.md` with the
 same name (`commands/decompose.md`, `commands/specify.md`; the sections are at
-`skills/kanban/SKILL.md:319` and `:347`). Nothing about the procedure is restated there, because two
+`skills/kanban/SKILL.md:322` and `:350`). Nothing about the procedure is restated there, because two
 copies of a procedure are one copy plus a future divergence — and the same text has to serve harnesses
 with no slash commands at all. Copilot CLI and Codex read the skill and ask for the section by name;
 they get the identical procedure.
