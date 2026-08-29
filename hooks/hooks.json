@@ -11,6 +11,18 @@
           }
         ]
       }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "hkb hook subagentstop",
+            "timeout": 30
+          }
+        ]
+      }
     ]
   }
 }

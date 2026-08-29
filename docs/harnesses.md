@@ -201,7 +201,7 @@ prints a `session …` line, and a `claude --resume`, for an attempt whose sessi
 `hkb init` is all it takes: the skill lands in `.agents/skills/kanban` (linked from `.claude/skills/kanban`), the
 slash commands land in `.claude/commands/kanban/` (`/kanban:specify`, `/kanban:decompose`, `/kanban:operate` — the
 directory name is the namespace, so they are the same names the plugin registers), and
-the `Stop` + `PreToolUse` hooks go **on the worker launch**, not into a settings file. `claude` runs each
+the `Stop` + `PreToolUse` + `SubagentStop` hooks go **on the worker launch**, not into a settings file. `claude` runs each
 worker as a background agent (`claude --bg`, visible in `claude agents`, attachable with `claude attach <job>`);
 `claude-p` is the headless variant for CI and containers. Both isolate themselves with `--worktree kb-<n>-<k>`.
 
@@ -210,8 +210,8 @@ worker as a background agent (`claude --bg`, visible in `claude agents`, attacha
 On the launch line, as `--settings '{"hooks":…}'` — so the only session that ever sees them is the worker hkb
 started. `hkb init` writes nothing into `.claude/settings.json` or `.claude/settings.local.json`.
 
-That is a retraction, and it is worth saying why (#144). Both hooks are `matcher: "*"` and both are inert outside
-a worker, so what a settings file bought every *other* session in the repo was a shell and a node process per tool
+That is a retraction, and it is worth saying why (#144). All three hooks are `matcher: "*"` and all three are inert
+outside a worker, so what a settings file bought every *other* session in the repo was a shell and a node process per tool
 call to return 0 — and, the day the command stopped resolving, a logged failure per tool call instead. That is not
 hypothetical: on a real board an nvm version switch took `hkb` off PATH, and from then on every tool call in every
 Claude Code session in that repo logged `PreToolUse:Bash hook error … /bin/sh: 1: hkb: not found`. #85 moved the
@@ -255,7 +255,7 @@ below).
 
 ### `--shared-hooks`: when you do want them in every session
 
-`hkb init --shared-hooks` writes the two hooks into the tracked `.claude/settings.json` — for a team that wants
+`hkb init --shared-hooks` writes all three hooks into the tracked `.claude/settings.json` — for a team that wants
 the protocol enforced in every session in the repo, not only in the ones hkb launched. Nothing removes hooks from
 that file again; they are a choice. A worker on such a board then runs each hook twice, once from the file and
 once from its launch, which costs a Stop nudge its second try and nothing else — `hkb doctor` says so.
@@ -305,7 +305,7 @@ checkout, which is gitignored and gone with the attempt.
 
 The guard is the rest of it. A worker's `.claude/worktrees/kb-<n>-<k>` is a fresh checkout with no `node_modules`
 until it runs `npm ci`, and `$CLAUDE_PROJECT_DIR` there is the worktree — so the command tests for its own file
-and exits 0 in silence when it is not there yet. Nothing is lost: both hooks are inert without `KB_TASK` anyway,
+and exits 0 in silence when it is not there yet. Nothing is lost: all three hooks are inert without `KB_TASK` anyway,
 and by the time the `Stop` hook has anything to nudge about, the worker has installed. `hkb doctor` reports that
 state as a warning naming `npm install`, not a failure; it is the normal state of a checkout nobody has installed
 yet. (The launch's own copy of the hooks is not guarded and does not need to be: it names the hkb that is

@@ -17,8 +17,8 @@ npx hkb-cli up --serve           # the dispatcher and the board, started detache
 That is the whole free path. `npx hkb-cli init --import` also pulls your existing open issues onto the board as
 *triage*.
 
-`init` writes **no Claude Code hooks into your settings files**. hkb's `Stop` and `PreToolUse` hooks serve
-exactly one kind of session — the worker hkb launched — so they ride that worker's launch line
+`init` writes **no Claude Code hooks into your settings files**. hkb's `Stop`, `PreToolUse` and
+`SubagentStop` hooks serve exactly one kind of session — the worker hkb launched — so they ride that worker's launch line
 (`claude --settings '{"hooks":…}'`) and nothing else in the repo ever runs them. A session you open by hand pays
 nothing per tool call, and an `hkb` that stops resolving cannot fail one
 ([where the hooks live, and why](docs/harnesses.md#where-the-hooks-live)). `hkb init --shared-hooks` is the

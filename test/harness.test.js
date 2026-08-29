@@ -501,7 +501,7 @@ test('--shared-hooks writes the tracked file, and only ever a plain `hkb`', () =
   const root = scratch();
   const r = installClaudeHooks(root, () => {}, { shared: true });
   assert.equal(r.file, SHARED);
-  assert.deepEqual(r.added, ['Stop', 'PreToolUse']);
+  assert.deepEqual(r.added, ['Stop', 'PreToolUse', 'SubagentStop']);
   assert.equal(fs.existsSync(path.join(root, LOCAL)), false);
   for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
     assert.equal(commandsOf(readSettings(root, SHARED).hooks[event])[0], `hkb hook ${verb}`, 'a tracked file cannot name this machine');
@@ -515,9 +515,9 @@ test('--shared-hooks writes the tracked file and clears the per-developer one', 
   const r = installClaudeHooks(root, () => {}, { shared: true });
 
   assert.equal(r.file, SHARED);
-  assert.deepEqual([r.added, r.cleared], [['Stop', 'PreToolUse'], ['Stop', 'PreToolUse']]);
+  assert.deepEqual([r.added, r.cleared], [['Stop', 'PreToolUse', 'SubagentStop'], ['Stop', 'PreToolUse', 'SubagentStop']]);
   assert.equal(readSettings(root, LOCAL).hooks, undefined, 'one file, or every nudge fires twice');
-  assert.deepEqual(Object.keys(readSettings(root, SHARED).hooks), ['Stop', 'PreToolUse']);
+  assert.deepEqual(Object.keys(readSettings(root, SHARED).hooks), ['Stop', 'PreToolUse', 'SubagentStop']);
 });
 
 test('a path in the tracked file is rewritten, never left for a teammate to trip over (#85)', () => {
@@ -526,7 +526,7 @@ test('a path in the tracked file is rewritten, never left for a teammate to trip
 
   const r = installClaudeHooks(root, () => {}, { shared: true });
 
-  assert.deepEqual([r.added, r.repaired], [[], ['Stop', 'PreToolUse']]);
+  assert.deepEqual([r.added, r.repaired], [[], ['Stop', 'PreToolUse', 'SubagentStop']]);
   const shared = readSettings(root, SHARED);
   assert.equal(shared.model, 'opus', 'the rest of the tracked file is untouched');
   assert.deepEqual(commandsOf(shared.hooks.Stop), ['hkb hook stop'], 'a tracked file gets the portable form or nothing');
@@ -550,7 +550,7 @@ test('installClaudeHooks leaves the rest of the settings file alone', () => {
     hooks: { Stop: [{ matcher: '*', hooks: [{ type: 'command', command: 'make lint' }] }] },
   });
 
-  assert.deepEqual(installClaudeHooks(root, () => {}, { shared: true }).added, ['Stop', 'PreToolUse']);
+  assert.deepEqual(installClaudeHooks(root, () => {}, { shared: true }).added, ['Stop', 'PreToolUse', 'SubagentStop']);
 
   const s = readSettings(root, SHARED);
   assert.equal(s.model, 'opus', 'settings that are not ours must survive');
@@ -594,12 +594,12 @@ test('an unparseable per-developer file is called out, because it may still hold
 
 test('init says where the hooks run, what it wrote and what it took away', () => {
   const launch = hookSummary({});
-  assert.match(launch, /^Stop and PreToolUse hooks ride the worker launch \(`claude --settings`\) — no session but a worker's ever sees them/);
+  assert.match(launch, /^Stop and PreToolUse and SubagentStop hooks ride the worker launch \(`claude --settings`\) — no session but a worker's ever sees them/);
   assert.match(hookSummary({ cleared: ['Stop'] }), /removed the Stop hook hkb left in \.claude\/settings\.local\.json, which fired in every session in this repo/);
   const shared = hookSummary({ file: SHARED, added: ['Stop', 'PreToolUse'] });
   assert.match(shared, /^added Stop and PreToolUse hooks to \.claude\/settings\.json/);
-  assert.match(hookSummary({ file: SHARED, added: ['PreToolUse'] }), /^added PreToolUse hook to \.claude\/settings\.json; Stop hook already there/);
-  assert.match(hookSummary({ file: SHARED }), /^Stop and PreToolUse hooks already present in \.claude\/settings\.json/);
+  assert.match(hookSummary({ file: SHARED, added: ['PreToolUse'] }), /^added PreToolUse hook to \.claude\/settings\.json; Stop and SubagentStop hooks already there/);
+  assert.match(hookSummary({ file: SHARED }), /^Stop and PreToolUse and SubagentStop hooks already present in \.claude\/settings\.json/);
   assert.match(hookSummary({ file: SHARED, repaired: ['Stop'] }), /rewrote the Stop hook command, which did not resolve for everyone that file serves/);
   // #146 review: on a repo that carries its own hkb, the plain `$CLAUDE_PROJECT_DIR` form already
   // resolved for everyone — what the rewrite adds is the guard, and saying otherwise was false.
@@ -729,7 +729,7 @@ test('--shared-hooks on a repo that carries its own hkb writes the guarded form 
 
   assert.equal(r.file, SHARED);
   assert.equal(r.binRel, BIN);
-  assert.deepEqual(r.added, ['Stop', 'PreToolUse']);
+  assert.deepEqual(r.added, ['Stop', 'PreToolUse', 'SubagentStop']);
   assert.equal(fs.existsSync(path.join(root, LOCAL)), false, 'nothing is left in the per-developer file');
 
   for (const h of hkbHooks(readSettings(root, SHARED))) {
@@ -750,7 +750,7 @@ test('--shared-hooks writes the repo\'s own hkb, guarded, for a devDependency to
   const root = scratch();
   const r = installClaudeHooks(root, () => {}, { shared: true, binRel: DEP_REL });
 
-  assert.deepEqual([r.file, r.binRel, r.added], [SHARED, DEP_REL, ['Stop', 'PreToolUse']]);
+  assert.deepEqual([r.file, r.binRel, r.added], [SHARED, DEP_REL, ['Stop', 'PreToolUse', 'SubagentStop']]);
   for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
     assert.equal(commandsOf(readSettings(root, SHARED).hooks[event])[0], guardedHookCommand(DEP_REL, verb));
   }
@@ -762,7 +762,7 @@ test('a bare `hkb` in the tracked file is rewritten once the repo installs its o
 
   const r = installClaudeHooks(root, () => {}, { shared: true, binRel: DEP_REL });
 
-  assert.deepEqual([r.added, r.repaired], [[], ['Stop', 'PreToolUse']], '`hkb` on PATH is a fact about a machine; the pinned copy is a fact about the repo');
+  assert.deepEqual([r.added, r.repaired], [[], ['Stop', 'PreToolUse', 'SubagentStop']], '`hkb` on PATH is a fact about a machine; the pinned copy is a fact about the repo');
   assert.equal(commandsOf(readSettings(root, SHARED).hooks.Stop)[0], guardedHookCommand(DEP_REL, 'stop'));
 });
 
@@ -778,10 +778,10 @@ test('a portable but unguarded command is rewritten for the guard, and reported 
 
   const r = installClaudeHooks(root, () => {}, { shared: true, binRel: DEP_REL });
 
-  assert.deepEqual([r.added, r.repaired], [[], ['Stop', 'PreToolUse']]);
+  assert.deepEqual([r.added, r.repaired], [[], ['Stop', 'PreToolUse', 'SubagentStop']]);
   assert.equal(commandsOf(readSettings(root, SHARED).hooks.Stop)[0], guardedHookCommand(DEP_REL, 'stop'));
   const said = hookSummary(r);
-  assert.match(said, /rewrote the Stop and PreToolUse hooks command to name this repo's own hkb, guarded/);
+  assert.match(said, /rewrote the Stop and PreToolUse and SubagentStop hooks command to name this repo's own hkb, guarded/);
   assert.ok(!said.includes('did not resolve'), `it did resolve — doctor passes it one line earlier: ${said}`);
 });
 
@@ -831,7 +831,7 @@ test('hookSettings is the same shape a settings file gets, as one JSON string', 
   const json = hookSettings(CLAUDE_HOOKS, (verb) => `hkb hook ${verb}`);
   const parsed = JSON.parse(json);
   assert.deepEqual(Object.keys(parsed), ['hooks'], 'nothing but hooks: --settings is merged over the session, not a replacement for it');
-  assert.deepEqual(Object.keys(parsed.hooks), ['Stop', 'PreToolUse']);
+  assert.deepEqual(Object.keys(parsed.hooks), ['Stop', 'PreToolUse', 'SubagentStop']);
   for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
     assert.deepEqual(parsed.hooks[event], [hookEntry(`hkb hook ${verb}`)], `${event} must match what installClaudeHooks writes`);
     assert.equal(parsed.hooks[event][0].hooks[0].timeout, 30);
@@ -963,6 +963,28 @@ test('doctor says so when nothing anywhere configures the stop hook', () => {
   assert.equal(finding(results, 'hook command'), undefined, 'nothing to resolve when nothing is configured');
 });
 
+// #163: an older board configured before SubagentStop existed still has a Stop hook, so it passes
+// that check — but its Stop hook cannot tell a track root waiting on its wave from one that forgot
+// the verb, and doctor has to say so the same way it says a missing Stop hook.
+test('doctor warns when SubagentStop is missing on a board that only carries Stop and PreToolUse (#163)', () => {
+  const root = scratch();
+  writeSettings(root, SHARED, {
+    hooks: {
+      Stop: [{ matcher: '*', hooks: [{ type: 'command', command: 'hkb hook stop', timeout: 30 }] }],
+      PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: 'hkb hook pretool', timeout: 30 }] }],
+    },
+  });
+  const { results, sink } = findings();
+
+  checkHooks({ root }, sink, { onPath: () => true, exists: () => true });
+
+  assert.equal(finding(results, 'stop hook').ok, true, 'Stop is still configured, so that check still passes on its own');
+  const missing = finding(results, 'subagent-stop hook');
+  assert.equal(missing.ok, null);
+  assert.match(missing.detail, /a track root that fans a wave out to subagents gets nudged for the terminal verb while they are still running/);
+  assert.match(missing.fix, /^hkb init/);
+});
+
 // The move itself: what doctor asks about is the command a worker will run, and where it says that
 // command comes from is the launch — not a file whose noise filed the card.
 test('doctor checks the launch line, and names it (#144)', () => {
@@ -975,6 +997,7 @@ test('doctor checks the launch line, and names it (#144)', () => {
   const stop = finding(results, 'stop hook');
   assert.equal(stop.ok, true);
   assert.match(stop.detail, /^on the claude, claude-p launch \(--settings\), so no other session in this repo runs it$/, 'codex reads its own hook file, so it is not on this list');
+  assert.equal(finding(results, 'subagent-stop hook').ok, true, 'it rides the same launch as Stop');
   assert.equal(finding(results, 'hook command').ok, true, '`hkb` is on PATH in this fixture, so the launch resolves');
   assert.equal(finding(results, STALE_HOOK_CHECK), undefined, 'and there is no settings file to complain about');
 });
@@ -1095,7 +1118,7 @@ test('findClaudeHooks reads both files and reports the one it cannot parse', () 
   const { hooks, unreadable } = findClaudeHooks(root);
 
   assert.deepEqual(unreadable.map((u) => u.file), [LOCAL]);
-  assert.deepEqual(hooks.map((h) => `${h.file} ${h.event}`), [`${SHARED} Stop`, `${SHARED} PreToolUse`]);
+  assert.deepEqual(hooks.map((h) => `${h.file} ${h.event}`), [`${SHARED} Stop`, `${SHARED} PreToolUse`, `${SHARED} SubagentStop`]);
 });
 
 test('`hkb help` lists every hook verb the CLI routes', () => {
