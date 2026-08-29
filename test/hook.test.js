@@ -24,7 +24,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { attemptIdentity, worksInWorktree, scrubKbEnv, kbVarsIn, KB_ENV_VARS } from '../src/model.js';
+import { attemptIdentity, worksInWorktree, scrubKbEnv, kbVarsIn, KB_ENV_VARS, worktreePath } from '../src/model.js';
 import { whichAttempt, stopHook, preToolHook, sessionForAttempt } from '../src/hook.js';
 import { checkEnvLeak, daemonsWithKbEnv, ENV_LEAK_CHECK } from '../src/doctor.js';
 import { DEFAULT_BOARD, DEFAULT_PROFILES } from '../src/board.js';
@@ -37,14 +37,16 @@ const PROFILES = {
   'claude-action': DEFAULT_PROFILES['claude-action'], // mode: trigger — the worker is an Actions checkout
   codex: DEFAULT_PROFILES.codex,                 // workspace: worktree — the dispatcher makes the checkout
 };
-const bg = { env: { KB_TASK: '146', KB_ATTEMPT: '1', KB_PROFILE: 'claude', KB_ROOT: '/repo' }, profile: PROFILES.claude };
+const ROOT = '/repo';
+const wtPath = (n, k) => `${ROOT}/${worktreePath(`kb-${n}-${k}`)}`;
+const bg = { env: { KB_TASK: '146', KB_ATTEMPT: '1', KB_PROFILE: 'claude', KB_ROOT: ROOT }, profile: PROFILES.claude, rootPath: ROOT };
 
 // ---------- the rule, pure ----------
 
 test('attemptIdentity: the environment and the checkout agree — nothing changes', () => {
-  assert.deepEqual(attemptIdentity({ ...bg, here: 'kb-146-1' }), { n: '146', k: '1', source: 'env' });
+  assert.deepEqual(attemptIdentity({ ...bg, here: 'kb-146-1', herePath: wtPath(146, 1) }), { n: '146', k: '1', source: 'env' });
   // no KB_ATTEMPT: the checkout supplies it, as it always has
-  assert.deepEqual(attemptIdentity({ env: { KB_TASK: '146' }, here: 'kb-146-3', profile: PROFILES.claude }),
+  assert.deepEqual(attemptIdentity({ env: { KB_TASK: '146' }, here: 'kb-146-3', herePath: wtPath(146, 3), rootPath: ROOT, profile: PROFILES.claude }),
     { n: '146', k: '3', source: 'env' });
   // no environment at all: the checkout is the whole answer (#125)
   assert.deepEqual(attemptIdentity({ here: 'kb-18-2' }), { n: '18', k: '2', source: 'worktree' });
@@ -54,38 +56,54 @@ test('attemptIdentity: the environment and the checkout agree — nothing change
 
 test('attemptIdentity: a leaked environment is dropped, and says so once', () => {
   // the incident: the operator's session, at the board root, wearing #146's identity
-  const atRoot = attemptIdentity({ ...bg, here: 'harness-kanban-board', atRoot: true });
+  const atRoot = attemptIdentity({ ...bg, here: 'harness-kanban-board', herePath: ROOT });
   assert.equal(atRoot.n, undefined, 'no identity at all: this session is nobody');
   assert.match(atRoot.leak, /^KB_TASK=146 in the environment but this is not its worktree \(this is the board root\); ignoring$/);
   // another worker's checkout: the checkout wins, because it is the one thing that cannot be inherited
-  const other = attemptIdentity({ ...bg, here: 'kb-150-1' });
+  const other = attemptIdentity({ ...bg, here: 'kb-150-1', herePath: wtPath(150, 1) });
   assert.deepEqual({ n: other.n, k: other.k, source: other.source }, { n: '150', k: '1', source: 'worktree' });
   assert.match(other.leak, /kb-150-1 is #150 attempt 1/);
   // same task, another attempt — a retry launched while the daemon still held the first one
-  assert.equal(attemptIdentity({ ...bg, here: 'kb-146-2' }).k, '2');
+  assert.equal(attemptIdentity({ ...bg, here: 'kb-146-2', herePath: wtPath(146, 2) }).k, '2');
 });
 
 test('attemptIdentity: a cwd that is neither the board root nor a kb-<n>-<k> checkout is also a leak', () => {
   // a review worktree (not kb-<n>-<k>): a poisoned daemon reached beyond the board root, and the
   // basename alone would have looked like "nothing here contradicts it" before #150 B1
-  const review = attemptIdentity({ ...bg, here: 'review-152' });
+  const review = attemptIdentity({ ...bg, here: 'review-152', herePath: `${ROOT}/review-152` });
   assert.equal(review.n, undefined);
   assert.match(review.leak, /^KB_TASK=146 in the environment but this is not its worktree \(review-152 is not a kb-<n>-<k> worktree\); ignoring$/);
   // a foreign repo entirely: same poisoned daemon, a session hosted for an unrelated project
-  const foreign = attemptIdentity({ ...bg, here: 'pipao-v2' });
+  const foreign = attemptIdentity({ ...bg, here: 'pipao-v2', herePath: '/home/u/pipao-v2' });
   assert.equal(foreign.n, undefined);
   assert.match(foreign.leak, /pipao-v2 is not a kb-<n>-<k> worktree/);
 });
 
+test('attemptIdentity: a same-named checkout under the wrong KB_ROOT is a leak too (#150 B1)', () => {
+  // the basename matches this task and attempt exactly, but the real cwd is not under this
+  // environment's KB_ROOT — a same-numbered worktree in an unrelated board, reached because a
+  // daemon poisoned by one board's KB_ROOT went on to host a session for a different repo entirely.
+  // The checkout still answers (this cwd really is *a* kb-146-1, just not this KB_ROOT's) — but as
+  // `source: 'worktree'` with a leak note, never `'env'`, so the worker policy stands aside (the
+  // probe this closes: source used to come back `'env'` here, with the policy live)
+  const wrongRepo = attemptIdentity({ ...bg, here: 'kb-146-1', herePath: '/other-repo/.claude/worktrees/kb-146-1' });
+  assert.deepEqual({ n: wrongRepo.n, k: wrongRepo.k, source: wrongRepo.source }, { n: '146', k: '1', source: 'worktree' });
+  assert.match(wrongRepo.leak, /^KB_TASK=146 in the environment but this is not its worktree \(kb-146-1 is not under KB_ROOT \(\/repo\)\); ignoring$/);
+  // KB_ROOT unset entirely: agreement can never be proven, so even a plausible-looking checkout leaks
+  const noRoot = attemptIdentity({ env: { KB_TASK: '146', KB_ATTEMPT: '1', KB_PROFILE: 'claude' }, here: 'kb-146-1', herePath: wtPath(146, 1), rootPath: null, profile: PROFILES.claude });
+  assert.equal(noRoot.source, 'worktree');
+  assert.match(noRoot.leak, /KB_ROOT is not set/);
+});
+
 test('attemptIdentity: judged only where hkb knows where the worker sits', () => {
-  const at = (profile, extra = {}) => attemptIdentity({ ...bg, profile, here: 'somewhere-else', ...extra });
+  const at = (profile, extra = {}) => attemptIdentity({ ...bg, profile, here: 'somewhere-else', herePath: `${ROOT}/somewhere-else`, ...extra });
   // an Actions worker: KB_TASK set by the workflow, cwd the runner's checkout, no KB_ROOT to compare
   assert.deepEqual(at(PROFILES['claude-action']), { n: '146', k: '1', source: 'env' });
   // `claude -p`: a child process whose environment dies with it, so it can never be a leak source
-  assert.deepEqual(at(PROFILES['claude-p'], { atRoot: true }), { n: '146', k: '1', source: 'env' });
-  assert.deepEqual(at(null, { atRoot: true }), { n: '146', k: '1', source: 'env' }, 'an unknown profile is never second-guessed');
+  assert.deepEqual(at(PROFILES['claude-p']), { n: '146', k: '1', source: 'env' });
+  assert.deepEqual(at(null), { n: '146', k: '1', source: 'env' }, 'an unknown profile is never second-guessed');
   // a directory that is nobody's worktree is not evidence *for* the environment either — only a
-  // checkout naming this task and attempt agrees with it (#150 B1)
+  // checkout naming this task and attempt, rooted where the launch put it, agrees with it (#150 B1)
   const somewhereElse = at(PROFILES.claude);
   assert.equal(somewhereElse.n, undefined, 'a directory that is not this attempt\'s worktree is a leak too');
   assert.match(somewhereElse.leak, /somewhere-else is not a kb-<n>-<k> worktree/);
@@ -261,6 +279,18 @@ test('doctor: a review worktree or a foreign repo carrying a leaked KB_TASK is a
   });
   assert.match(foreign.detail, /pipao-v2 is not that task's worktree/);
   assert.equal(f.out.length, 2);
+});
+
+test('doctor: a same-numbered kb-<n>-<k> checkout under an unrelated KB_ROOT is reported too (#150 B1)', () => {
+  // the probe that found the gap: the checkout's basename matches, but it sits under a KB_ROOT this
+  // environment never claimed — a daemon poisoned by one board's KB_ROOT hosting a session for another
+  const f = findings();
+  const found = checkEnvLeak(doctorCtx, f, {
+    env: { KB_TASK: '146', KB_ATTEMPT: '1', KB_PROFILE: 'claude', KB_ROOT: '/nonexistent' },
+    cwd: '/repo/.claude/worktrees/kb-146-1', daemons: () => [],
+  });
+  assert.match(found.detail, /kb-146-1 is not that task's worktree/);
+  assert.equal(f.out.length, 1);
 });
 
 test('daemonsWithKbEnv: a session daemon holding KB_* is named; anything else is not', () => {

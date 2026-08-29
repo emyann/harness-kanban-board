@@ -7,18 +7,18 @@ audience: [dev, ops]
 read_when: "touching the launch environment, the Stop or PreToolUse hooks, session_id/transcript_path on an attempt row, or anything that reads KB_TASK"
 covers:
   - path: src/hook.js
-    sha: a1c4de45dbb0a29e6bf602b0925e9a1da3be498a
+    sha: a916f483bc40afa074ca3befd1eeecc983c0b695
   - path: src/model.js
-    sha: fc0671faed32f913ec5bcbe16819476f50ceeeb2
+    sha: 25f89a9ae0826e8a86bc8e3c4ccb7e4370dc17ed
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/dispatch.js
-    sha: 202feb141cef1529814ea4fedc91514f3f446335
+    sha: f2e060e5aa89dfbae8cefde0f7c06282302e3992
   - path: src/doctor.js
-    sha: a6afe38be8a47394bf2341c24a24cec2a0d9ed1c
+    sha: 7110f80cfd0af69a3bb6388cc2a51b56a4d0bbeb
   - path: src/lifecycle.js
     sha: 20ebc63bcdd5e63634de41fb620aa84a38e720b3
-generated_at_commit: 9597b41
+generated_at_commit: da0785f
 last_refreshed: 2026-08-28
 related: [architecture/overview, features/harness-profiles, features/tracks, decisions/adr-004-roles-and-adoption]
 ---
@@ -74,23 +74,32 @@ only identity there is, and it dies with the process, so it can never leak.
 
 ## When they disagree, the checkout wins
 
-`attemptIdentity` (`src/model.js`) holds the rule, and `whichAttempt` gives it
-the cwd's basename plus whether that cwd *is* `KB_ROOT`. An environment naming a
-task whose worktree this plainly is not is a leak, not an identity: it is
-dropped, the checkout answers if it can, and the caller gets one line on stderr
+`attemptIdentity` (`src/model.js`) holds the rule, and `whichAttempt`
+(`src/hook.js`) — `checkEnvLeak` (`src/doctor.js`) does the same — gives it the
+cwd's basename *and* `path.resolve`d absolute path, plus `KB_ROOT`'s own
+resolved path. An environment naming a task whose worktree this plainly is not
+is a leak, not an identity: it is dropped, the checkout answers if it can, and
+the caller gets one line on stderr
 (`hkb hook: KB_TASK=146 in the environment but this is not its worktree …`).
 
 The judgement is deliberately narrow in *which profiles* it applies to, but not
 in *which cwd* counts as agreement: only a `kb-<n>-<k>` checkout naming this
-exact task and attempt is evidence for the environment. Everything else — the
-board root, a `kb-<n>-<k>` naming a different attempt, a review worktree, a
-session the same poisoned daemon went on to host for an unrelated repo — is a
-leak. That widening (#150's own follow-up review, "B1") mattered because a
-daemon's `KB_ROOT` and `KB_TASK` outlive the incident that started it: they sit
-in that process's environment until it is restarted, and it can go on to host
-sessions anywhere on the host, not only at the one board root that happened to
-launch it. It only fires at all for a profile whose worker hkb actually knows
-the location of (`worksInWorktree`,
+exact task and attempt, whose resolved path equals `KB_ROOT` joined with that
+same `kb-<n>-<k>` (`worktreePath`, `src/model.js`), is evidence for the
+environment. A directory that merely happens to be *named* right — a
+same-numbered `kb-<n>-<k>` worktree under an unrelated board's `KB_ROOT`, not
+only a review worktree or a foreign repo entirely — fails that path compare and
+is a leak too, even though its basename alone would have agreed (`source:
+'worktree'`, not `'env'`, so the checkout still names an attempt, just not
+authoritatively). `KB_ROOT` unset is the same failure mode: with nothing to
+compare against, agreement can never be proven. That exact-path requirement
+(#150's own follow-up review, "B1" — the initial cut compared only basenames,
+so a same-numbered checkout anywhere still read as agreement) mattered because
+a daemon's `KB_ROOT` and `KB_TASK` outlive the incident that started it: they
+sit in that process's environment until it is restarted, and it can go on to
+host sessions anywhere on the host, not only under the one `KB_ROOT` that
+happened to launch it. It only fires at all for a profile whose worker hkb
+actually knows the location of (`worksInWorktree`,
 `src/model.js`: `mode: "claude-bg"`, whose job is matched by its worktree, and
 `workspace: "worktree"`, which the dispatcher hands that directory as its cwd).
 A `mode: "process"` Claude profile also passes `--worktree`, but where *its*

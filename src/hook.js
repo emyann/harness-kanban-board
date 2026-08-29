@@ -129,11 +129,13 @@ let warnedLeak = null;
  * part of it, because only some profiles put their worker in a checkout hkb can check against.
  */
 export function whichAttempt(root = process.cwd(), { env = process.env, profiles = null, warn = 'hkb' } = {}) {
-  const here = path.resolve(root);
+  const herePath = path.resolve(root);
+  const rootPath = env.KB_ROOT ? path.resolve(env.KB_ROOT) : null;
   const id = attemptIdentity({
     env,
-    here: path.basename(here),
-    atRoot: !!env.KB_ROOT && path.resolve(env.KB_ROOT) === here,
+    here: path.basename(herePath),
+    herePath,
+    rootPath,
     profile: profiles?.[env.KB_PROFILE] || null,
   });
   if (id?.leak && warn && warnedLeak !== id.leak) {

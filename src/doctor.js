@@ -619,11 +619,13 @@ export function daemonsWithKbEnv({ proc = '/proc', match = /claude/ } = {}) {
  */
 export function checkEnvLeak(ctx, { warn }, { env = process.env, cwd = process.cwd(), daemons = daemonsWithKbEnv } = {}) {
   if (!env.KB_TASK) return null;
-  const here = path.resolve(cwd);
+  const herePath = path.resolve(cwd);
+  const rootPath = env.KB_ROOT ? path.resolve(env.KB_ROOT) : null;
   const id = attemptIdentity({
     env,
-    here: path.basename(here),
-    atRoot: !!env.KB_ROOT && path.resolve(env.KB_ROOT) === here,
+    here: path.basename(herePath),
+    herePath,
+    rootPath,
     profile: ctx.cfg?.profiles?.[env.KB_PROFILE] || null,
   });
   if (!id?.leak) return null;
@@ -636,7 +638,7 @@ export function checkEnvLeak(ctx, { warn }, { env = process.env, cwd = process.c
   const finding = {
     name: ENV_LEAK_CHECK,
     ok: null,
-    detail: `this shell thinks it is a worker for #${env.KB_TASK}${env.KB_PROFILE ? ` on profile ${env.KB_PROFILE}` : ''}, but ${env.KB_ROOT && path.resolve(env.KB_ROOT) === here ? 'it is the board root' : `${path.basename(here)} is not that task's worktree`} — a \`claude --bg\` launch probably started the Claude Code session daemon with that environment, and every session it hosts inherits it.${named} hkb stands aside where it can see the contradiction (no nudge, no session stamp, no permission policy here), but nothing else does`,
+    detail: `this shell thinks it is a worker for #${env.KB_TASK}${env.KB_PROFILE ? ` on profile ${env.KB_PROFILE}` : ''}, but ${rootPath && herePath === rootPath ? 'it is the board root' : `${path.basename(herePath)} is not that task's worktree`} — a \`claude --bg\` launch probably started the Claude Code session daemon with that environment, and every session it hosts inherits it.${named} hkb stands aside where it can see the contradiction (no nudge, no session stamp, no permission policy here), but nothing else does`,
     fix: `let the sessions it hosts finish, then end the daemon${found.length ? ` (pid ${some})` : ''} — the next \`claude --bg\` starts a clean one. hkb's own launches no longer pass KB_* to a background agent, so a dispatcher on this version cannot poison the replacement`,
   };
   warn(finding.name, finding.detail, finding.fix);

@@ -629,28 +629,38 @@ export function worksInWorktree(profile) {
  * Only judged for a profile whose worker really does sit in a worktree (`worksInWorktree`) — for
  * every other profile the environment is that worker's whole identity and is trusted exactly as it
  * always has been. For one that does, the worker's root is deterministic: `KB_ROOT` joined with
- * `kb-<n>-<k>` (`ensureWorktree`, src/board.js), or `KB_ROOT` itself for a track root. Any *other*
- * cwd disagrees with the environment, whatever it is — the board root, another attempt's checkout,
- * a review worktree, a session hosted from a different repo entirely (a daemon poisoned by one
- * board carries `KB_ROOT` into every project it goes on to host, #150 B1). Evidence for agreement is
- * therefore exactly one thing: a `kb-<n>-<k>` checkout naming this same task and attempt. Everything
- * else is a leak, not an identity.
+ * `kb-<n>-<k>` (`ensureWorktree`, src/board.js), or `KB_ROOT` itself for a track root. Evidence for
+ * agreement is therefore exactly one thing: `herePath` — the cwd's resolved absolute path — equal to
+ * `rootPath` joined with that same `kb-<n>-<k>`. A directory that merely happens to be *named*
+ * `kb-<n>-<k>` — a same-numbered worktree under an unrelated `KB_ROOT`, a review worktree copied
+ * elsewhere, a session hosted from a different repo whose daemon was poisoned by this board's
+ * `KB_ROOT` (#150 B1) — fails that comparison and is a leak, not an identity, even though
+ * `parseWorktreeName` still reads its basename correctly. When `rootPath` is unknown (`KB_ROOT`
+ * unset) agreement can never be proven, so it is a leak too.
  *
- * @param {{env?: object, here?: string, atRoot?: boolean, profile?: object|null}} where
- *   `here` is the cwd's basename and `atRoot` says the cwd is `KB_ROOT` itself.
+ * @param {{env?: object, here?: string, herePath?: string, rootPath?: string|null, profile?: object|null}} where
+ *   `here` is the cwd's basename, `herePath`/`rootPath` the caller's already-`path.resolve`d absolute
+ *   paths of the cwd and of `KB_ROOT` (`rootPath` is `null` when `KB_ROOT` is unset).
  * @returns {{n: string, k: string, source: 'env'|'worktree', leak?: string}|{leak: string}|null}
  */
-export function attemptIdentity({ env = {}, here = '', atRoot = false, profile = null } = {}) {
+export function attemptIdentity({ env = {}, here = '', herePath = '', rootPath = null, profile = null } = {}) {
   const wt = parseWorktreeName(here);
   const n = env.KB_TASK ? String(env.KB_TASK) : null;
   if (!n) return wt ? { ...wt, source: 'worktree' } : null;
   const k = env.KB_ATTEMPT ? String(env.KB_ATTEMPT) : '0';
-  // the checkout agrees (or there is no attempt number to disagree about): the environment stands
-  if (wt && wt.n === n && (wt.k === k || k === '0')) return { n, k: wt.k, source: 'env' };
+  const numbersAgree = wt && wt.n === n && (wt.k === k || k === '0');
+  const expectedPath = numbersAgree && rootPath ? `${rootPath}/${worktreePath(`kb-${wt.n}-${wt.k}`)}` : null;
+  // the checkout agrees — same task/attempt AND actually rooted where the launch put it
+  if (expectedPath && expectedPath === herePath) return { n, k: wt.k, source: 'env' };
   if (!worksInWorktree(profile)) return { n, k, source: 'env' };
-  // anywhere else — the board root, a mismatched kb-<n>-<k>, a review worktree, a foreign repo — is
-  // not this attempt's worktree, whether or not it happens to be *somebody's* worktree (#150 B1)
-  const where = wt ? `${here} is #${wt.n} attempt ${wt.k}` : atRoot ? 'this is the board root' : `${here || 'here'} is not a kb-<n>-<k> worktree`;
+  // anywhere else — the board root, a mismatched kb-<n>-<k>, a same-named checkout under a foreign
+  // KB_ROOT, a review worktree — is not this attempt's worktree, whether or not it happens to be
+  // *somebody's* worktree (#150 B1)
+  const atRoot = !!rootPath && herePath === rootPath;
+  let where;
+  if (!wt) where = atRoot ? 'this is the board root' : `${here || 'here'} is not a kb-<n>-<k> worktree`;
+  else if (!numbersAgree) where = `${here} is #${wt.n} attempt ${wt.k}`;
+  else where = rootPath ? `${here} is not under KB_ROOT (${rootPath})` : 'KB_ROOT is not set';
   const leak = `KB_TASK=${n} in the environment but this is not its worktree (${where}); ignoring`;
   return wt ? { ...wt, source: 'worktree', leak } : { leak };
 }
