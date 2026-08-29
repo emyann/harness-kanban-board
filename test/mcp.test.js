@@ -352,27 +352,44 @@ test('installMcp writes the file, and says what changed', () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-test('the printed Codex and VS Code snippets carry the same launch, escaped for their format', () => {
-  const [codex, vscode] = mcpSnippets({ command: 'C:\\node\\node.exe', args: ['C:\\hkb\\bin\\hkb.js', 'mcp'] });
-  assert.equal(codex.file, '~/.codex/config.toml');
-  assert.match(codex.text, /^\[mcp_servers\.kanban\]$/m);
-  assert.match(codex.text, /^command = "C:\\\\node\\\\node\.exe"$/m, 'a Windows path must not smuggle escapes into the TOML');
-  assert.match(codex.text, /^args = \["C:\\\\hkb\\\\bin\\\\hkb\.js","mcp"\]$/m);
-  assert.ok(!codex.text.includes('{{'), 'placeholder left unsubstituted');
-
+test('the printed VS Code snippet carries the same launch as .mcp.json, escaped for its format', () => {
+  const launch = { command: 'C:\\node\\node.exe', args: ['C:\\hkb\\bin\\hkb.js', 'mcp'] };
+  const [, vscode] = mcpSnippets(launch, { onPath: true }); // onPath: true keeps codex's own launch out of the way
   assert.equal(vscode.file, '.vscode/mcp.json');
   const doc = JSON.parse(vscode.text);
-  assert.deepEqual(doc.servers.kanban, { type: 'stdio', command: 'C:\\node\\node.exe', args: ['C:\\hkb\\bin\\hkb.js', 'mcp'] });
+  assert.deepEqual(doc.servers.kanban, { type: 'stdio', ...launch });
 });
 
-test('with hkb off PATH the config names this checkout, absolutely, on both halves', () => {
-  const onPath = mcpLaunch({ onPath: true });
-  assert.deepEqual(onPath, { command: 'hkb', args: ['mcp'] });
-  const fallback = mcpLaunch({ onPath: false });
-  assert.equal(fallback.command, process.execPath);
-  assert.equal(fallback.args[0], path.join(REPO, 'bin', 'hkb.js'));
-  assert.ok(fs.existsSync(fallback.args[0]));
-  assert.equal(fallback.args[1], 'mcp');
+test('the printed Codex snippet is always absolute, never the project-relative form .mcp.json gets', () => {
+  const launch = { command: 'node', args: ['node_modules/hkb-cli/bin/hkb.js', 'mcp'] };
+  const [codex] = mcpSnippets(launch, { onPath: false, pkgRoot: REPO });
+  assert.equal(codex.file, '~/.codex/config.toml');
+  assert.match(codex.text, /^\[mcp_servers\.kanban\]$/m);
+  const bin = path.join(REPO, 'bin', 'hkb.js');
+  assert.match(codex.text, new RegExp(`^args = \\["${bin.replace(/\\/g, '\\\\\\\\')}","mcp"\\]$`, 'm'));
+  assert.ok(!codex.text.includes('{{'), 'placeholder left unsubstituted');
+
+  const [onPath] = mcpSnippets(launch, { onPath: true });
+  assert.match(onPath.text, /^command = "hkb"$/m, 'hkb on PATH: the codex snippet trusts it too, even when .mcp.json names a repo-carried copy');
+});
+
+test('a backslash in the resolved path is escaped, not smuggled into the TOML', () => {
+  const [codex] = mcpSnippets(mcpLaunch({ onPath: true }), { onPath: false, pkgRoot: 'C:\\hkb' });
+  const argsLine = codex.text.split('\n').find((l) => l.startsWith('args'));
+  assert.match(argsLine, /\\\\hkb/, 'a lone backslash would break the TOML basic string');
+});
+
+test('with hkb neither in the repo nor on PATH, .mcp.json still gets bare `hkb` — never an absolute, this-machine-only path', () => {
+  const shared = mcpLaunch({ onPath: false });
+  assert.deepEqual(shared, { command: 'hkb', args: ['mcp'] });
+});
+
+test('but the private Codex config, which nothing commits, is absolute on both halves in that case', () => {
+  const private_ = mcpLaunch({ onPath: false, shared: false });
+  assert.equal(private_.command, process.execPath);
+  assert.equal(private_.args[0], path.join(REPO, 'bin', 'hkb.js'));
+  assert.ok(fs.existsSync(private_.args[0]));
+  assert.equal(private_.args[1], 'mcp');
 });
 
 test('this repo ships the mcp templates the generator reads', () => {

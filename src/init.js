@@ -249,6 +249,20 @@ export function guardedHookCommand(rel, verb) {
 }
 
 /**
+ * The hook command for an hkb the repo carries, written into a harness file that has no
+ * `$CLAUDE_PROJECT_DIR` of its own — Codex's `-C <worktree>` and Copilot's dispatcher-made checkout
+ * are both the hook's cwd, so the plain relative path resolves there without a variable. No
+ * `[ -f … ] || exit 0` guard: whether either harness runs `command` through a shell is undocumented,
+ * and the guard's `f="…"; …` syntax is only valid there — as a bare argv it would try to exec a
+ * program literally named `f="…";`. The one form that is correct either way is the plain one; the
+ * cost is a hard failure, rather than a silent exit 0, in the narrow window before a fresh worktree
+ * has run `npm ci`.
+ */
+export function relativeHookCommand(rel, verb) {
+  return `node "${rel}" hook ${verb}`;
+}
+
+/**
  * Substitute `$CLAUDE_PROJECT_DIR` for the repo it stands for, so doctor can look for the file.
  * The variable's own text is POSIX-separated because it goes into a `/bin/sh` command line; what
  * comes out here is a path this process is about to `stat`, so it is normalised to the platform's
@@ -268,13 +282,16 @@ export function resolveHookPath(target, root) {
  * @param root the repo root, for a Claude Code hook: only there is `$CLAUDE_PROJECT_DIR` set, so
  *   only there can the repo's own hkb be named — pass nothing for a harness that reads its own hook file
  * @param binRel `projectBinRel`'s answer, when the caller already has it (or a test supplies it)
+ * @param cwd true for a harness whose hook already runs from the project root and has no
+ *   `$CLAUDE_PROJECT_DIR` to name it by (Codex, Copilot) — the repo's own hkb is then named relative
+ *   to that cwd, unguarded (`relativeHookCommand`), rather than through the variable
  */
-export function hkbCommandForHook(verb = 'stop', { shared = false, onPath, pkgRoot = PKG_ROOT, root = null, binRel } = {}) {
+export function hkbCommandForHook(verb = 'stop', { shared = false, onPath, pkgRoot = PKG_ROOT, root = null, binRel, cwd = false } = {}) {
   const suffix = ` hook ${verb}`;
   // An hkb the repo carries is the one that runs, wherever the command is going: it is the one form
   // that is exact here and correct everywhere else.
   const rel = binRel === undefined ? projectBinRel(root, { pkgRoot }) : binRel;
-  if (rel) return guardedHookCommand(rel, verb);
+  if (rel) return cwd ? relativeHookCommand(rel, verb) : guardedHookCommand(rel, verb);
   if (shared) return `hkb${suffix}`;
   if (onPath ?? hkbOnPath()) return `hkb${suffix}`;
   const bin = path.join(pkgRoot, 'bin', 'hkb.js');
@@ -558,6 +575,23 @@ const HARNESS_FILES = {
     { rel: path.join('.codex', 'README.md'), contents: fill(template('codex', 'notes.md'), { command, root: tomlInner(root), gitdir: tomlInner(path.join(root, '.git')) }) },
   ],
 };
+
+// Which file — and which event inside it — carries the hook command, so `hkb doctor` can read back
+// exactly what `hkb init --harness <name>` wrote without a second template to parse.
+const HARNESS_HOOK_FILE = {
+  copilot: { rel: path.join('.github', 'hooks', 'kanban.json'), event: 'agentStop' },
+  codex: { rel: path.join('.codex', 'hooks.json'), event: 'Stop' },
+};
+
+/** The hook command a harness's own generated file currently holds on disk, or null. */
+export function harnessHookCommand(root, name) {
+  const spec = HARNESS_HOOK_FILE[name];
+  if (!spec) return null;
+  try {
+    const settings = JSON.parse(fs.readFileSync(path.join(root, spec.rel), 'utf8'));
+    return settings?.hooks?.[spec.event]?.[0]?.hooks?.[0]?.command || null;
+  } catch { return null; }
+}
 
 /**
  * The files `hkb init --harness <name>` writes, as `[{ rel, contents }]` — nothing is written here,
@@ -893,8 +927,17 @@ export async function init(ctx, flags, log) {
     }
   }
   for (const h of harnesses) {
-    const written = installHarness(root, h, { command: hkbCommandForHook() });
+    // `cwd: true` and `shared: true`: this file is tracked and read from a project root that has no
+    // $CLAUDE_PROJECT_DIR of its own, so the command is either this repo's own hkb, relative and
+    // unguarded, or the plain `hkb` every teammate has to have on PATH — never a path into this
+    // machine's checkout (#166).
+    const binRel = projectBinRel(root);
+    const written = installHarness(root, h, { command: hkbCommandForHook('stop', { root, cwd: true, shared: true, binRel }) });
     log(written.length ? `harness ${h}: wrote ${written.join(', ')}` : `harness ${h}: files already up to date`);
+    if (written.length && binRel) {
+      const installed = binRel.startsWith('node_modules/');
+      log(`  the command runs this repo's own ${binRel} from the project root the ${h} hook already runs in${installed ? ' — a teammate needs \`npm install\` too' : ''}`);
+    }
   }
   // 5a. optional GitHub Actions dispatcher + worker. The files are all init writes; the two secrets
   //     and the push to the default branch are the user's, and Actions runs nothing until both.
@@ -909,9 +952,14 @@ export async function init(ctx, flags, log) {
   // 5b. optional MCP server config. Only .mcp.json is ours to write — Claude Code and Copilot CLI
   //     read it verbatim; Codex's is user-level and VS Code's belongs to the editor, so those are printed.
   if (flags.mcp) {
-    const { installMcp } = await import('./mcp.js');
-    const m = installMcp(root);
+    const { installMcp, mcpLaunch } = await import('./mcp.js');
+    const launch = mcpLaunch({ root });
+    const m = installMcp(root, launch);
     log(m.changed ? `wrote .mcp.json (servers: ${m.servers.join(', ')})` : '.mcp.json already has the kanban server');
+    if (launch.command === 'node' && !path.isAbsolute(launch.args[0] || '')) {
+      const installed = launch.args[0].startsWith('node_modules/');
+      log(`  the command runs this repo's own ${launch.args[0]} — resolves on every machine that has this checkout${installed ? ' and has run `npm install`' : ''}, from the project directory Claude Code and VS Code launch MCP servers in`);
+    }
     for (const s of m.snippets) {
       log('');
       log(`${s.file} — not written for you (${s.note}); paste:`);

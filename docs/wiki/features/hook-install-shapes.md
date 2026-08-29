@@ -4,22 +4,24 @@ summary: hkb's hooks ride the worker launch (`--settings`) so no other session i
 category: features
 kind: explanation
 audience: [dev, ops]
-read_when: "changing where hkb's Claude Code hooks are installed, what `hkb init` writes into a settings file, doctor's hook checks, or adopting hkb as a devDependency of a repo; also when a hook command in a repo does not resolve"
+read_when: "changing where hkb's Claude Code hooks are installed, what `hkb init` writes into a settings file, the Codex/Copilot hook files or .mcp.json, doctor's hook checks, or adopting hkb as a devDependency of a repo; also when a hook command in a repo does not resolve"
 covers:
   - path: src/init.js
-    sha: 8821eb7b1550e01b157424dd32480518eb7b8b71
+    sha: dd28e7c0fa2f5885faaef9ca2902368747ed9d8b
   - path: src/model.js
-    sha: 0b6cab6f25caa911b717dca9ba8c01d5a8510de5
+    sha: afe2c3e44ea8b5518d656f69f6f19aa00e41872e
   - path: src/board.js
-    sha: 2e9735c80d0fcc92c298efd10b96def73f4ea03b
+    sha: fd6f44def21b8286bbe5d9821209ccad1770df70
   - path: src/doctor.js
-    sha: d58e598b920b6699567fe6c613df9905b89c7b33
+    sha: 815d85fc871585e6eb89c394a4613783c52351ec
+  - path: src/mcp.js
+    sha: 83243b4f880a005c6c06be3f1de396642f0cb3f8
   - path: skills/kanban/scripts/hkb
     sha: 619505ca77807157084e456057e1857eb9a31419
   - path: scripts/smoke-pack.mjs
     sha: aea7c5459b0687a0401a52e6fafb20832c54b818
 related: [architecture/overview, features/update-notice, concepts/roles-and-seats]
-generated_at_commit: 29375f5
+generated_at_commit: a30ac54
 last_refreshed: 2026-08-28
 ---
 
@@ -226,6 +228,61 @@ and two pure functions had to grow up rather than gain a special case:
   one. It has to keep matching every form hkb has *ever* written: that predicate
   is what lets init rewrite and — since #144 — *remove* its own hooks without
   touching an operator's (`stripHkbHooks`).
+
+## Codex, Copilot and `.mcp.json` get the same remainder, unguarded (#166)
+
+`projectBinRel` measures one remainder; four writers spend it. Two more —
+`installHarness` and `mcpLaunch` (`src/init.js`, `src/mcp.js`) — used to call
+`hkbCommandForHook()`/`projectBinRel()` with no `root`, so on a devDependency
+or self-checkout repo they always fell through to the machine-specific branch
+and wrote an absolute path into the tracked `.codex/hooks.json`,
+`.github/hooks/kanban.json` and `.mcp.json` — the exact failure #146 fixed for
+Claude's settings file, just not reached from these two call sites.
+
+Neither Codex nor Copilot sets `$CLAUDE_PROJECT_DIR`, but both already run
+their hook's command from the project root — Codex's `-C <worktree>` is also
+its cwd, and Copilot's dispatcher-made worktree the same — so the fix is the
+same remainder, named relative to that cwd instead of through a variable:
+`relativeHookCommand` (`src/init.js`), reached through
+`hkbCommandForHook(verb, { cwd: true })`. `mcpLaunch` (`src/mcp.js`, `shared:
+true` by default) checks the remainder first too, in the same order
+`hkbCommandForHook` does — an hkb the repo carries is the one that runs even
+when a global `hkb` is also on PATH — and when there is none, it falls back
+to the plain `hkb` every teammate has to have on PATH, the same as a harness
+file's `shared` branch; `.mcp.json` never carries an absolute, this-machine
+path, because unlike a launch line it is a file every checkout reads.
+
+`mcpSnippets` prints two more configs that are not `hkb init`'s to write —
+Codex's user-level `~/.codex/config.toml` and the workspace `.vscode/mcp.json`
+— and only one of them may reuse `.mcp.json`'s launch. VS Code resolves a
+relative path in `.vscode/mcp.json` against the project directory, same as
+Claude Code does for `.mcp.json`, so it gets the same entry verbatim. Codex
+resolves `~/.codex/config.toml`'s `args` against wherever `codex` happens to
+start, not this project, so the project-relative form would be right only in
+the one directory that printed it and silently wrong everywhere else — that
+snippet gets its own launch instead, `mcpLaunch({ shared: false })`: bare
+`hkb` when that is on PATH, else this checkout's own `bin/hkb.js` made
+absolute. That absolute form is exactly what #146 ruled out of every
+*tracked* file — it is fine here only because nothing commits a paste into a
+user's own `~/.codex/config.toml`.
+
+The one thing that does **not** carry over to the relative hook forms is the
+guard. `guardedHookCommand`'s `f="…"; [ -f "$f" ] || exit 0; exec …` is shell
+syntax, and whether Codex or Copilot run `command` through a shell is not
+documented by either — so `relativeHookCommand` ships unguarded: `node
+"<rel>" hook <verb>`, correct as plain argv or as a `sh -c` line either way.
+The cost is a hard failure, rather than the guarded form's silent exit 0, in
+the narrow window before a fresh worktree has run `npm ci` — accepted rather
+than risk a `f="…";` that some harness might exec literally as a program
+name. `checkHarnesses` and the new `checkMcp` (`src/doctor.js`) run the same
+resolve check on these files that `checkHooks` runs on Claude's settings,
+reading the command back out of the generated JSON (`harnessHookCommand`)
+rather than trusting what was last written; `checkMcp` treats anything past a
+bare `hkb` or a resolving project-relative `node <rel>` as untracked ground —
+`hkb init --mcp` never writes a third shape, so whatever else is there was
+edited by hand or left by an older hkb. `docs/harnesses.md` has the
+side-by-side table of what all three writers produce for each install shape,
+plus the printed-snippet exception.
 
 ## What needed no case at all
 
