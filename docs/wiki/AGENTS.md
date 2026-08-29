@@ -177,7 +177,10 @@ Append one line per notable wiki operation, newest last:
 ```
 
 It gives future sessions recency awareness for free. Append-only; never
-rewrite history. Verbs: added / refreshed / superseded / archived /
+rewrite history. Being append-only is also why `hkb init` (and this repo's
+own `.gitattributes`) marks it `docs/wiki/log.md merge=union` — two
+branches that each append a line merge cleanly instead of conflicting on
+every PR (#185). Verbs: added / refreshed / superseded / archived /
 **audited** / triage departures. The `audited` verb is also a machine
 signal — the audit workflow's due-list and the check workflow's dust line
 parse `## YYYY-MM-DD — audited <category/slug> (N claims: …)` — so audited

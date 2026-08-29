@@ -536,7 +536,10 @@ export async function main(argv) {
         log(`${flags['dry-run'] ? '[dry-run] ' : ''}reclaimed ${n('reclaimed')} · promoted ${n('promoted')} · claimed ${n('claimed')} · tracks ${s.tracks.filter((x) => x.ok).length}/${n('tracks')} · guarded ${n('guarded')} · held ${n('held')} · skipped ${n('skipped')}`);
         for (const t of s.tracks) log(`  track #${t.root} (${t.nodes.length + 1} nodes): ${t.ok ? `claimed attempt ${t.attempt} → ${t.profile}` : t.why}`);
         for (const c of s.claimed) log(`  claimed #${c.number} attempt ${c.attempt} → ${c.profile}${c.pid ? ' pid ' + c.pid : ''}`);
-        for (const g of s.guarded) log(`  guarded #${g.number}: ${g.guard}`);
+        for (const g of s.guarded) {
+          const collides = (g.collides_with || []).map((c) => `#${c.number} (${c.paths.join(', ')})`).join('; ');
+          log(`  guarded #${g.number}: ${g.guard}${collides ? ` — collides with ${collides}` : ''}`);
+        }
         for (const k of s.skipped) log(`  skipped #${k.number}: ${k.why}`);
       }
       return 0;

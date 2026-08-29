@@ -51,6 +51,54 @@ function harness({ dispatch = {}, board = 'default', host = 'test-host', root: g
   };
 }
 
+/** `~/.claude/jobs` as `claude --bg` keeps it: a directory per job, holding its state.json. */
+function jobsRootWith(records, into) {
+  for (const [id, state] of Object.entries(records)) {
+    fs.mkdirSync(path.join(into, id), { recursive: true });
+    if (state) fs.writeFileSync(path.join(into, id, 'state.json'), JSON.stringify(state));
+  }
+  return into;
+}
+
+/** A `claude` on PATH that answers `claude agents --json` with the given listing. */
+function stubClaude(root, jobs) {
+  const bin = path.join(root, 'stub-bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const listing = path.join(bin, 'agents.json');
+  fs.writeFileSync(listing, JSON.stringify(jobs));
+  fs.writeFileSync(path.join(bin, 'claude'), [
+    '#!/bin/sh',
+    'case "$1" in',
+    `  agents) cat ${JSON.stringify(listing)} ;;`,
+    '  stop) exit 0 ;;',
+    '  *) exit 1 ;;',
+    'esac',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
+}
+
+/**
+ * `harness()` plus a `claude-bg` profile, a stubbed `claude` on PATH, and a HOME whose
+ * `.claude/jobs` holds the given job records — `jobsDir()` reads $HOME, which is the only way to
+ * put a job record where the dispatcher's idle check looks for one.
+ */
+function bgHarness({ jobs = [], records = {}, dispatch = {} } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-dispatch-bg-'));
+  const home = path.join(root, 'home');
+  jobsRootWith(records, path.join(home, '.claude', 'jobs'));
+  const h = harness({
+    root, dispatch,
+    profiles: { claude: { mode: 'claude-bg', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] } },
+  });
+  const savedEnv = { PATH: process.env.PATH, HOME: process.env.HOME };
+  process.env.HOME = home;
+  stubClaude(root, jobs);
+  const cleanup = h.cleanup;
+  h.cleanup = () => { cleanup(); Object.assign(process.env, savedEnv); };
+  return h;
+}
+
 test('todo → ready only when every blocker closed as completed', async (t) => {
   const h = harness();
   t.after(h.cleanup);
@@ -766,12 +814,13 @@ test('a claude --bg launch gets no KB_* at all; a child-process launch keeps its
 });
 
 test('path_overlap guard: an idle running attempt never holds its paths, in any mode', async (t) => {
-  // No heartbeat for longer than one tick interval (default 60s) is the idle signal a non-bg
-  // attempt has (#185) — still well inside stale_after (3600s default), so the reclaim pass leaves
-  // it running rather than reclaiming it; the path_overlap guard must still look straight past it.
+  // No heartbeat for longer than the idle threshold (max(interval, 600s) — a plain heartbeat floors
+  // at 10 minutes, so one tick interval alone is too tight) is the idle signal a non-bg attempt has
+  // (#185) — still well inside stale_after (3600s default), so the reclaim pass leaves it running
+  // rather than reclaiming it; the path_overlap guard must still look straight past it.
   const h = harness({ dispatch: { guards: { path_overlap: 'running' } } });
   t.after(h.cleanup);
-  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(1800), heartbeat_at: ago(300), pid: process.pid }]);
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(1800), heartbeat_at: ago(700), pid: process.pid }]);
   h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
   h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
   h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
@@ -781,6 +830,48 @@ test('path_overlap guard: an idle running attempt never holds its paths, in any 
   assert.deepEqual(s.reclaimed, []); // still well inside stale_after — not reclaimed, just idle
   assert.deepEqual(s.guarded, []);
   assert.deepEqual(s.claimed.map((c) => c.number), [8], '#7 has gone idle, so #8 is not held behind it');
+  assert.match(h.log(), /#7: attempt 1 idle since/);
+});
+
+test('path_overlap guard: a live bg job holds its paths no matter how old its heartbeat looks', async (t) => {
+  // The measured failure (#185, reviewed): a `claude --bg` worker's default heartbeat is a ref-CAS
+  // that never touches the run comment, so `lastSignal` sits at `started_at` for the attempt's whole
+  // life. A job record showing the turn still going must be the authority, not that stale timestamp.
+  const h = bgHarness({
+    dispatch: { guards: { path_overlap: 'running' } },
+    jobs: [{ kind: 'background', id: 'j7', pid: 1007, name: 'kb #7 · task', cwd: '/repo/.claude/worktrees/kb-7-1', state: 'working', status: 'busy' }],
+  });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'test-host', bg: true, job: 'j7', wt: 'kb-7-1', started_at: ago(1800), heartbeat_at: ago(1800) }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'], max_runtime: 86_400 }, run }));
+  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.reclaimed, []);
+  assert.deepEqual(s.guarded, [{ number: 8, guard: 'path_overlap', collides_with: [{ number: 7, paths: ['src/'] }] }]);
+  assert.deepEqual(s.claimed, [], 'the job is still working, so #7 keeps holding #8 back');
+});
+
+test('path_overlap guard: a bg job whose turn ended never holds its paths, even with a recent-looking heartbeat', async (t) => {
+  const h = bgHarness({
+    dispatch: { guards: { path_overlap: 'running' } },
+    jobs: [{ kind: 'background', id: 'j7', pid: 1007, name: 'kb #7 · task', cwd: '/repo/.claude/worktrees/kb-7-1', state: 'done', status: 'idle' }],
+  });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'test-host', bg: true, job: 'j7', wt: 'kb-7-1', started_at: ago(120), heartbeat_at: ago(5) }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'], max_runtime: 86_400 }, run }));
+  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+
+  const s = await h.tick();
+
+  // classifyJob(job) !== 'running' and started_at is > 30s old: this attempt is also reclaimed as
+  // protocol_violation this same tick, which is fine — the point under test is that path_overlap
+  // never held #8 behind it in the meantime.
+  assert.deepEqual(s.guarded, []);
+  assert.deepEqual(s.claimed.map((c) => c.number), [8]);
 });
 
 test('path_overlap guard: "unmerged" stops guarding once the holder\'s PR is merged', async (t) => {

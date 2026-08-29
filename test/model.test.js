@@ -111,13 +111,18 @@ test('pathCollisions: names the holder and the paths that overlap', () => {
   assert.deepEqual(pathCollisions(['test/'], holders), []);
 });
 
-test('attemptIdle: a dead job turn, or a stale heartbeat, either is enough', () => {
+test('attemptIdle: a job\'s own liveness is authoritative; a stale heartbeat only matters with no job', () => {
   const now = Date.parse('2026-08-29T12:00:00Z');
+  const hourAgo = '2026-08-29T11:00:00Z'; // the default ref-CAS heartbeat never touches the run comment,
+  // so a bg attempt's `lastSignal` sits at `started_at` for its whole life — an hour-old value here is
+  // the ordinary case for a job that is very much still running, not evidence of anything.
   assert.equal(attemptIdle(null, null, 60, now), false, 'no signal yet is never idle');
-  assert.equal(attemptIdle({ state: 'working' }, '2026-08-29T11:00:00Z', 60, now), true, 'a dead job turn is idle even mid-heartbeat-window');
-  assert.equal(attemptIdle(null, new Date(now - 30_000).toISOString(), 60, now), false, 'inside one tick interval');
-  assert.equal(attemptIdle(null, new Date(now - 90_000).toISOString(), 60, now), true, 'past one tick interval');
-  assert.equal(attemptIdle({ state: 'blocked' }, new Date(now - 30_000).toISOString(), 60, now), false, 'blocked-but-recent heartbeat: alive');
+  assert.equal(attemptIdle({ state: 'working' }, hourAgo, 60, now), false, 'a live job holds no matter how stale lastSignal looks');
+  assert.equal(attemptIdle({ state: 'blocked' }, hourAgo, 60, now), false, 'blocked on a permission prompt still counts as alive');
+  assert.equal(attemptIdle({ state: 'done' }, new Date(now - 5_000).toISOString(), 60, now), true, 'a finished job turn is idle even with a fresh-looking lastSignal');
+  assert.equal(attemptIdle({ state: 'stopped' }, null, 60, now), true, 'a dead job with no lastSignal at all is still idle');
+  assert.equal(attemptIdle(null, new Date(now - 30_000).toISOString(), 60, now), false, 'no job: inside one tick interval');
+  assert.equal(attemptIdle(null, new Date(now - 90_000).toISOString(), 60, now), true, 'no job: past one tick interval');
 });
 
 test('deadAtRecheck: a child dead at the recheck reports a failed entry, not a started one', () => {

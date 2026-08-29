@@ -465,6 +465,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   // contradict it: a task touched < 90 s ago is skipped, a lock claimed < 15 min ago is never swept.
   state.touched = state.touched || {};
   state.claims = state.claims || {};
+  state.idle_logged = state.idle_logged || {}; // path_overlap idle line: once per attempt, not once per tick
   for (const [k, v] of Object.entries(state.claims)) if (Date.now() - new Date(v).getTime() > 86_400_000) delete state.claims[k];
   const touchedRecently = (n) => state.touched[n] && Date.now() - new Date(state.touched[n]).getTime() < 90_000;
   const touch = (n) => { state.touched[n] = nowIso(); };
@@ -603,9 +604,22 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       else log(`#${t.number}: attempt ${a.attempt} beat on ${lockRef(t.number, a.attempt)} ${Math.round(secondsSince(lastSignal))}s ago — alive`);
     }
     if (!outcome) {
-      if (attemptIdle(job, lastSignal, d.interval)) {
+      // A no-job attempt's only signal is its heartbeat, which — on the default ref-CAS mode —
+      // never touches the run comment until the reclaim check above already thought it looked
+      // stale; a fallback attempt heartbeats on a ~10-minute floor even when it does write the
+      // comment (`comment` mode). One tick interval is too tight a threshold for either, so the
+      // idle guard uses the same order of magnitude as that cadence instead. A job-bearing attempt
+      // ignores this — its liveness comes from the job record, not from timing a signal at all.
+      const idleThreshold = Math.max(d.interval, 600);
+      if (attemptIdle(job, lastSignal, idleThreshold)) {
         idleNumbers.add(t.number);
-        log(`#${t.number}: attempt ${a.attempt} idle since ${lastSignal || a.started_at} — path_overlap will not hold its paths`);
+        const key = `${t.number}/${a.attempt}`;
+        if (state.idle_logged[key] !== true) {
+          state.idle_logged[key] = true;
+          log(`#${t.number}: attempt ${a.attempt} idle since ${lastSignal || a.started_at} — path_overlap will not hold its paths`);
+        }
+      } else {
+        delete state.idle_logged[`${t.number}/${a.attempt}`];
       }
       if (dirty) await saveRun(ctx, t.number, runRec);
       continue;
@@ -725,7 +739,11 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     if (last?.outcome === 'completed' && secondsSince(last.ended_at) < d.recent_success_window) { note('recent_success'); continue; }
     const paths = trackPaths(cand.track);
     const collides = pog.mode !== 'off' && paths.length ? pathCollisions(paths, claimedPaths) : [];
-    if (collides.length) { note('path_overlap', { collides_with: collides }); continue; }
+    if (collides.length) {
+      note('path_overlap', { collides_with: collides });
+      log(`#${t.number}: track guarded (path_overlap, ${pog.mode}) — collides with ${collides.map((c) => `#${c.number} (${c.paths.join(', ')})`).join('; ')}`);
+      continue;
+    }
 
     const nodes = cand.track.nodes.map((x) => x.number);
     const k = runRec.run.attempts.length + 1;
