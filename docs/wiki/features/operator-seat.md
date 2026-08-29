@@ -13,16 +13,16 @@ covers:
   - path: src/watch.js
     sha: 8aba4c441e35c9241124c1278b5f4824706f7e52
   - path: src/model.js
-    sha: 9ec1c457784b57b6c9e4d8e0eb1de1d4ea2693cc
+    sha: 0b6cab6f25caa911b717dca9ba8c01d5a8510de5
   - path: src/cli.js
-    sha: 03dd92fa22118051a8ab5f6fc9ef4269488ac41d
+    sha: 61d45ac3e0e5db14140374ee021c50eda045030f
   - path: src/lifecycle.js
     sha: 2affd18fb3d2882db47ba164199b10160ba70ddb
   - path: src/init.js
-    sha: f6be5541e140313a8db1ac8f9831d635cd4adc6a
+    sha: 8821eb7b1550e01b157424dd32480518eb7b8b71
   - path: src/stats.js
     sha: f81bc37dad19e253bf23a696ba899b4219dd5e53
-generated_at_commit: 48c374c
+generated_at_commit: 29375f5
 last_refreshed: 2026-08-28
 related: [features/planning-commands, decisions/adr-004-roles-and-adoption, features/up-and-down, features/review-loop, concepts/roles-and-seats]
 ---
@@ -43,7 +43,7 @@ related: [features/planning-commands, decisions/adr-004-roles-and-adoption, feat
 
 A worker is *told* what to do by the thing that launched it, and hkb enforces
 the rest: `refuseIfWorker` (`src/cli.js:235-238`) refuses `dispatch`, `up` and
-`down` outright, the same three land in `DENY_PATTERNS` (`src/model.js:681-689`)
+`down` outright, the same three land in `DENY_PATTERNS` (`src/model.js:724-732`)
 for the PreToolUse hook, and the shipped Claude launches deny the dispatcher at
 the harness level. Every one of those tests `process.env.KB_TASK`.
 
