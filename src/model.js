@@ -1071,3 +1071,13 @@ export function startDecision(st, { now = new Date() } = {}) {
 export function startLogLine(at, pid, argv = []) {
   return `# ${at} started pid ${pid}${argv.length ? ` — ${argv.join(' ')}` : ''}\n`;
 }
+
+/**
+ * What `up` reports for a child that is already dead at the `SPAWN_CHECK_MS` recheck: a `failed`
+ * entry, not a `started` one — a script that only reads `started`/exit-code must see this as the
+ * failure it is (#164). `log` is the log path relative to the board root, the same one the line
+ * points at.
+ */
+export function deadAtRecheck(name, pid, log) {
+  return { name, pid, log, line: `${name} exited immediately (pid ${pid}) — see ${log}` };
+}

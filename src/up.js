@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 import {
   ensureLocalDirs, pidFile, processLogFile, processState, readPidFile, pidAlive, clearExit,
 } from './board.js';
-import { PROCESSES, detachedEnv, startDecision, processLine, startLogLine, stopWaitMs } from './model.js';
+import { PROCESSES, detachedEnv, startDecision, processLine, startLogLine, stopWaitMs, deadAtRecheck } from './model.js';
 
 const usage = (msg) => { const e = new Error(msg); e.exitCode = 2; return e; };
 const nowIso = () => new Date().toISOString();
@@ -93,8 +93,9 @@ function claimPid(root, name, pid) {
  * Then it looks once more, a beat later. "started pid 3843" about a process that died in the same
  * millisecond is the one thing `up` can say that is worse than an error — the operator walks away
  * believing the board is running. The recheck costs 300ms once and turns that into a line naming the
- * log that holds the reason.
- * @returns {{pid: number, line: string}}
+ * log that holds the reason — and, since the process never actually came up, a `failed` entry rather
+ * than a `started` one (#164).
+ * @returns {{pid: number, line: string, failed: {name: string, pid: number, log: string}|null}}
  */
 async function startProcess(ctx, name, flags, deps = {}) {
   ensureLocalDirs(ctx.root);
@@ -118,12 +119,15 @@ async function startProcess(ctx, name, flags, deps = {}) {
   // (or the bound port) is about to refuse, and the pid file must keep naming the winner.
   const claimed = claimPid(ctx.root, name, child.pid);
   await sleep(deps.spawnCheckMs ?? SPAWN_CHECK_MS);
-  if (!pidAlive(child.pid)) return { pid: child.pid, line: `${name} exited immediately (pid ${child.pid}) — see ${rel}` };
+  if (!pidAlive(child.pid)) {
+    const r = deadAtRecheck(name, child.pid, rel);
+    return { pid: child.pid, line: r.line, failed: { name: r.name, pid: r.pid, log: r.log } };
+  }
   if (!claimed) {
     const { pid: holder } = readPidFile(ctx.root, name);
-    return { pid: child.pid, line: `${name} started pid ${child.pid}, but ${path.relative(ctx.root, pidFile(ctx.root, name))} names pid ${holder} — one of the two will be refused; hkb up --status says which survived` };
+    return { pid: child.pid, line: `${name} started pid ${child.pid}, but ${path.relative(ctx.root, pidFile(ctx.root, name))} names pid ${holder} — one of the two will be refused; hkb up --status says which survived`, failed: null };
   }
-  return { pid: child.pid, line: `${name} started pid ${child.pid} · log ${rel}` };
+  return { pid: child.pid, line: `${name} started pid ${child.pid} · log ${rel}`, failed: null };
 }
 
 /** `{ dispatch: {...}, serve: {...} }` — pid files and liveness, no board read and no network. */
@@ -150,19 +154,20 @@ export async function up(ctx, flags = {}, out = () => {}, deps = {}) {
 
   const now = new Date();
   const started = [];
+  const failed = [];
   const already = [];
   const lines = [];
   for (const name of names) {
     const decision = startDecision(status[name], { now });
     if (!decision.start) { already.push(name); lines.push(decision.line); continue; }
-    const { line } = await startProcess(ctx, name, flags, deps);
-    started.push(name);
+    const { line, failed: entry } = await startProcess(ctx, name, flags, deps);
+    if (entry) failed.push(entry); else started.push(name);
     lines.push(line);
   }
-  const report = { started, already, ...statusReport(ctx) };
+  const report = { started, failed, already, ...statusReport(ctx) };
   if (ctx.json) out(JSON.stringify(report, null, 2));
   else for (const line of lines) out(line);
-  return 0;
+  return failed.length ? 1 : 0;
 }
 
 /**
@@ -201,21 +206,40 @@ export async function down(ctx, flags = {}, out = () => {}, deps = {}) {
   const stopped = [];
   const failed = [];
   const lines = [];
+  // The process drops its own pid file on exit; a process that was not one of ours, or died before it
+  // could, leaves it, and a file naming a dead pid helps nobody. Only ever tidy the same pid.
+  const tidyPidFile = (name, pid) => {
+    const { pid: left } = readPidFile(ctx.root, name);
+    if (left === pid) fs.rmSync(pidFile(ctx.root, name), { force: true });
+  };
   for (const name of names) {
     const st = processState(ctx.root, name);
-    if (!st.running) { lines.push(st.exit === null && !st.stale ? `${name} not running` : processLine(st)); continue; }
+    if (!st.running) {
+      // Not stale, no exit recorded — plain "not running" — but a pid file can still be sitting there
+      // naming a process that is simply dead (crashed without dropping its own claim); leaving it is
+      // what let a later report keep calling the board down when a stray file said otherwise (#164).
+      const { pid: left } = readPidFile(ctx.root, name);
+      if (left) fs.rmSync(pidFile(ctx.root, name), { force: true });
+      lines.push(st.exit === null && !st.stale ? `${name} not running` : processLine(st));
+      continue;
+    }
     try { (deps.kill || process.kill.bind(process))(st.pid, 'SIGTERM'); } catch (e) {
       const error = e.code || e.message;
+      // ESRCH means the process died between `processState`'s liveness check and this signal — it is
+      // gone, which is what `down` was asked for, not a failure to report.
+      if (error === 'ESRCH') {
+        stopped.push({ name, pid: st.pid });
+        tidyPidFile(name, st.pid);
+        lines.push(`${name} stopped (SIGTERM to pid ${st.pid})${name === 'dispatch' ? '; workers keep running' : ''}`);
+        continue;
+      }
       failed.push({ name, pid: st.pid, error });
       lines.push(`${name}: could not signal pid ${st.pid} (${error}) — stop it yourself; ${path.relative(ctx.root, pidFile(ctx.root, name))} still names it`);
       continue;
     }
     if (await waitGone(st.pid, budget, deps)) {
       stopped.push({ name, pid: st.pid });
-      // The process drops its own pid file; a process that was not one of ours (or was killed before
-      // it could) leaves it, and a file naming a dead pid helps nobody. Only ever the same pid.
-      const { pid: left } = readPidFile(ctx.root, name);
-      if (left === st.pid) fs.rmSync(pidFile(ctx.root, name), { force: true });
+      tidyPidFile(name, st.pid);
       lines.push(`${name} stopped (SIGTERM to pid ${st.pid})${name === 'dispatch' ? '; workers keep running' : ''}`);
     } else {
       const error = `still running ${Math.round(budget / 1000)}s after SIGTERM`;
