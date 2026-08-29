@@ -398,6 +398,21 @@ export function detectRepo() {
   return { owner, repo, nameWithOwner: j.nameWithOwner, defaultBranch: j.defaultBranchRef?.name || 'main' };
 }
 
+/**
+ * A Claude launch frozen in `board.json` before the hooks moved onto it (#144). Pure.
+ *
+ * `loadBoard` deep-merges the file over hkb's defaults and an array in the file wins whole, so a
+ * board whose `launch` was written out by an earlier `init` keeps that array forever — and a re-run
+ * of `init` writes it straight back. The same frozen-copy blind spot `worker permissions` watches
+ * for on `allowed_tools` (#138/#145), and here it costs a worker its Stop nudge and its session id,
+ * because nothing is being written into a settings file to make up for it any more.
+ */
+export function staleHookLaunches(cfg) {
+  return Object.entries(cfg?.profiles || {})
+    .filter(([, p]) => (p?.launch || [])[0] === 'claude' && !p.launch.includes(HOOK_SETTINGS_VAR))
+    .map(([n]) => n);
+}
+
 function deepMerge(base, over) {
   if (!over || typeof over !== 'object' || Array.isArray(over)) return over === undefined ? base : over;
   const out = { ...base };
@@ -424,6 +439,22 @@ export function loadBoard(root) {
   for (const [name, p] of Object.entries(cfg.profiles)) {
     if (p.effort != null && !EFFORT_LEVELS.includes(p.effort)) {
       const err = new Error(`profile "${name}" has effort "${p.effort}" in ${file} — must be one of ${EFFORT_LEVELS.join(', ')}`);
+      err.exitCode = 2;
+      throw err;
+    }
+  }
+  // `{model_args}` renders `--effort <v>` on whatever launch carries it, but only Claude Code has a
+  // verified `--effort` flag (#188 — measured: `codex exec --effort high` and `copilot ... --effort
+  // high` both die on the CLI's own "unknown option" before the worker gets a turn). Refuse it at
+  // load, the same as an unknown level above, rather than let the first spawn discover it. Every
+  // built-in non-Claude profile has `launch[0]` name its harness (`codex`, `copilot`), so that is
+  // what the message points at; `claude-action` is the one exception — it only *triggers* a Claude
+  // Code Action run (`launch[0]` is `gh`), and `effort` there is accepted and ignored rather than
+  // refused (see docs/harnesses.md).
+  for (const [name, p] of Object.entries(cfg.profiles)) {
+    const harness = (p.launch || [])[0];
+    if (p.effort != null && harness !== 'claude' && name !== 'claude-action') {
+      const err = new Error(`profile "${name}" sets effort, but its harness (${harness || name}) takes no --effort flag; remove it`);
       err.exitCode = 2;
       throw err;
     }

@@ -42,13 +42,24 @@ root for profiles without `workspace: "worktree"`). `{model_args}` expands to `-
 both, or neither; `{allowed_tools}` splices the list in, and `--flag={allowed_tools}` repeats `--flag <entry>`
 per entry. Nothing else is interpolated, so a launch array is safe to read and safe to edit.
 
+If you pin `launch` on `claude`, `claude-track` or `claude-p` yourself rather than using the built-in, it must
+still carry `{hook_settings}` (or the worker gets no Stop nudge and records no session id — see `launch hooks`
+below, and note `hkb init` now repairs this on its own), `{allowed_tools}` (or `--allowedTools` swallows
+whatever comes next), `{model_args}` (or `model`/`effort` render nowhere) and `{prompt}`. `hkb doctor` only ever
+checks for `{hook_settings}`; the other three are your own launch failing in ways this project has not written a
+check for yet.
+
 `model` and `effort` are the two things people used to pin a whole `launch` array for (#182) — they render
 into `{model_args}` on the `claude`, `claude-track` and `claude-p` profiles, so the pin is never needed just to
 set them. `effort` is validated at load: an unknown value fails `hkb doctor`/every command with exit 2, naming
-`low`, `medium`, `high`, `xhigh`. Copilot CLI and Codex have no verified `--effort` equivalent, so leave it
-unset on `copilot-cli` and `codex` — setting it there would still render `--effort <v>` through the same
-`{model_args}` token, and neither CLI is known to accept that flag. A launch pinned before this field existed
-should drop the pin (see `launch hooks` below) rather than carry `--effort` by hand.
+`low`, `medium`, `high`, `xhigh`. Copilot CLI and Codex have no verified `--effort` equivalent — measured:
+`codex exec --effort high` and `copilot ... --effort high` both die on the CLI's own "unknown option" before a
+worker gets a turn — so `loadBoard` refuses `effort` outright on any profile whose `launch[0]` is not `claude`,
+naming the profile and the fix. `claude-action` is the one exception: its launch only *triggers* a Claude Code
+Action run (`launch[0]` is `gh`), so `effort` there is accepted and, for now, ignored — nothing plumbs it into
+`claude_args` in `templates/actions/kanban-worker-claude.yml` yet. A launch pinned before the `model`/`effort`
+fields existed should drop the pin (see `launch hooks` below) rather than carry `--effort` by hand — `hkb init`
+does this for you when the pin adds nothing else.
 
 ## Which profiles a board gets
 
@@ -386,11 +397,14 @@ Three checks guard the layer that is doing the enforcing, and all of them read l
 - **`launch hooks`** catches a launch frozen in `board.json` before the hooks moved onto it. `loadBoard`
   deep-merges the file over hkb's defaults and an array in the file wins whole, so a `launch` an older `init`
   wrote out keeps its shape forever — and since nothing is being written into a settings file to make up for it,
-  that profile's workers would quietly get no Stop nudge and record no session id. The fix names the surgical
-  repair rather than the blunt one: insert `"{hook_settings}"` into the launch, right after its
-  `"--disallowedTools"` group, on one of hkb's own profiles — or drop `"launch"` there entirely if the only
-  reason it was pinned was `--model`/`--effort`, which are profile fields now (see above) and need no pin at
-  all. A custom-named profile has no default behind it, so it is told to add `"{hook_settings}"` by hand.
+  that profile's workers would quietly get no Stop nudge and record no session id. `hkb init` now repairs this
+  itself, so re-running it is normally the fix: it applies the surgical repair rather than the blunt one — insert
+  `"{hook_settings}"` into the launch, right after its `"--disallowedTools"` group, on one of hkb's own profiles —
+  or drop `"launch"` there entirely if the only reason it was pinned was `--model`/`--effort`, which are profile
+  fields now (see above) and need no pin at all, moving those values into the profile's own fields. It prints one
+  line naming which repair it made, per profile, and says nothing on a re-run once there is nothing left stale.
+  A custom-named profile has no default behind it, so both init and doctor's fix text tell you to add
+  `"{hook_settings}"` by hand.
 - **`worker permissions`** catches a **frozen copy** of an allow-list, which no default change can reach: a
   profile that pins `allowed_tools` in `board.json`, and the `--allowedTools` line `hkb init --with-actions`
   bakes into the generated worker workflow. Both keep denying `cd`, `export`, `command`, `env` until someone

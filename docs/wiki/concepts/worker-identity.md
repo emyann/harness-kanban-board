@@ -13,12 +13,12 @@ covers:
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/dispatch.js
-    sha: f77434a18f848d18668de413c650210c0f65b125
+    sha: fb85767e0b4b962930ee74c608c5bb0e1bd7ae4f
   - path: src/doctor.js
-    sha: 237d41029a9eb4eb0ce56f8b5231a453ce4bd200
+    sha: 726a4571cf94906b8f54183c2b3223e125ad6149
   - path: src/lifecycle.js
     sha: 3938c82f3e181fb260fc54bb2f3150074459e224
-generated_at_commit: d102a4e
+generated_at_commit: 39d9c05
 last_refreshed: 2026-08-29
 related: [architecture/overview, features/harness-profiles, features/tracks, decisions/adr-004-roles-and-adoption]
 ---

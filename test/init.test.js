@@ -17,7 +17,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { init, ensureGitignore, GITIGNORE_LINES, CLAUDE_HOOKS, HOOK_SETTINGS, agentsSkillDir, packageSkillDir, readSkillVersion, commandFiles, commandNames } from '../src/init.js';
 import { parseArgs } from '../src/cli.js';
-import { makeContext, DEFAULT_PROFILES, userBoardsFile } from '../src/board.js';
+import { makeContext, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, userBoardsFile } from '../src/board.js';
+import { checkHooks, LAUNCH_HOOK_CHECK } from '../src/doctor.js';
 import { L, STATUSES } from '../src/model.js';
 import { FakeGh } from './fake-gh.js';
 
@@ -378,6 +379,57 @@ test('a re-run is additive: a profile added by hand survives and gets its label'
   assert.deepEqual(Object.keys(after.profiles), ['claude', 'codex'], 're-running init must never silently delete work');
   assert.equal(after.profiles.codex.max_in_progress, 3, "and never overwrite the operator's edit");
   assert.ok(created(first.gh).includes(L.agent('codex')), 'a profile on the board gets its kb:agent label');
+});
+
+// ---------- repairing a claude launch pinned before the hooks moved onto it (#144, #188) ----------
+// `boardProfiles` only ever ADDS profiles (#72); an existing one, pinned stale, used to come back
+// out of `loadBoard`'s deep-merge unchanged — expanded with "effort": null and every other field the
+// current default carries, but with the same missing `{hook_settings}` and not one word said about
+// it. This is doctor's own `launch hooks` fix, actually applied by `hkb init` instead of only reported.
+
+test('a pinned claude launch missing {hook_settings} is repaired, and init says what it inserted', async () => {
+  const first = await runInit();
+  const cfg = board(first.root);
+  const stale = DEFAULT_PROFILES.claude.launch.filter((el) => el !== HOOK_SETTINGS_VAR);
+  cfg.profiles.claude.launch = stale; // frozen the way an older `init` would have left it
+  fs.writeFileSync(path.join(first.root, BOARD_FILE), JSON.stringify(cfg, null, 2) + '\n');
+
+  const { printed } = await runInit([], first);
+
+  const after = board(first.root);
+  assert.deepEqual(after.profiles.claude.launch, DEFAULT_PROFILES.claude.launch, 'inserted right after the --disallowedTools group, reconstructing the default exactly');
+  assert.ok(printed.some((l) => l === 'profile "claude": inserted "{hook_settings}" after --disallowedTools in the claude launch'),
+    `init must name the repair, not do it in silence:\n${printed.join('\n')}`);
+
+  const { results, sink } = (() => {
+    const results = [];
+    return { results, sink: { ok: (name, detail) => results.push({ name, ok: true, detail }), warn: (name, detail, fix) => results.push({ name, ok: null, detail, fix }) } };
+  })();
+  checkHooks({ root: first.root, cfg: after }, sink, { onPath: () => true, exists: () => true, binRel: null });
+  assert.equal(results.find((r) => r.name === LAUNCH_HOOK_CHECK), undefined, 'doctor must be clean after the repair');
+
+  // and a second run is silent about it — there is nothing left to fix
+  const again = await runInit([], first);
+  assert.ok(!again.printed.some((l) => l.includes('inserted "{hook_settings}"')), 'idempotent: nothing stale, nothing to say');
+});
+
+test('a pin that only ever added --model/--effort is dropped, not repaired in place', async () => {
+  const first = await runInit();
+  const cfg = board(first.root);
+  const pinned = DEFAULT_PROFILES.claude.launch
+    .filter((el) => el !== HOOK_SETTINGS_VAR && el !== '{model_args}');
+  pinned.splice(pinned.indexOf('{prompt}'), 0, '--model', 'opus', '--effort', 'high');
+  cfg.profiles.claude.launch = pinned;
+  fs.writeFileSync(path.join(first.root, BOARD_FILE), JSON.stringify(cfg, null, 2) + '\n');
+
+  const { printed } = await runInit([], first);
+
+  const after = board(first.root);
+  assert.equal(after.profiles.claude.launch, undefined, 'the pin added nothing hkb\'s own default does not, so it is dropped back to it');
+  assert.equal(after.profiles.claude.model, 'opus');
+  assert.equal(after.profiles.claude.effort, 'high');
+  assert.ok(printed.some((l) => l.startsWith('profile "claude": the pinned claude launch added nothing but --model opus and --effort high')),
+    `init must say what it moved, not silently switch launches:\n${printed.join('\n')}`);
 });
 
 test('--no-labels writes every local file and sends nothing', async () => {

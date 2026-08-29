@@ -11,19 +11,19 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/dispatch.js
-    sha: 0cdcd4fea6cdc34ea29807ca292f5de26bd03019
+    sha: fb85767e0b4b962930ee74c608c5bb0e1bd7ae4f
   - path: src/context.js
-    sha: 0de994e57a7d7540c632757864e1af8027cffa03
+    sha: ab7afc4eb5158a879ea1700221892229329dce64
   - path: src/cli.js
-    sha: 2c479aef7d882bb7cfaba9b16ccd39a522133134
+    sha: 2369b0d3a0f5d1363efffa8cc37fd2e47e018155
   - path: src/lifecycle.js
-    sha: 67b6fb458425948ce61d6a7a324649cb79e1c648
+    sha: 3938c82f3e181fb260fc54bb2f3150074459e224
   - path: skills/kanban/SKILL.md
-    sha: e397953d4181d3ed62c9c2fa50cd5518bb74e4d0
+    sha: 6371b1ff24fa12109c2bf1563194daffdc7c7df0
   - path: skills/kanban/references/protocol.md
-    sha: b85575461f90ae0790e278bcdab91f7de1e725c6
-generated_at_commit: c7ee90c
-last_refreshed: 2026-08-28
+    sha: 9433f5adf49637daf8664589ec6519fb1577803b
+generated_at_commit: 39d9c05
+last_refreshed: 2026-08-29
 related: [concepts/roles-and-seats, architecture/overview, concepts/board-protocol]
 ---
 

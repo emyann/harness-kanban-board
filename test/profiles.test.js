@@ -246,3 +246,27 @@ test('loadBoard rejects an unknown effort level, naming the allowed set', (t) =>
     return true;
   });
 });
+
+// A codex/copilot launch renders `{model_args}` too (#188 — measured: `codex exec --effort high` and
+// `copilot ... --effort high` both die on the CLI's own "unknown option"), so an `effort` on either
+// profile has to be refused before the first spawn ever discovers it, exactly like an unknown level.
+test('loadBoard refuses effort on a harness with no --effort flag, naming the fix', (t) => {
+  for (const name of ['codex', 'copilot-cli']) {
+    const root = scratch(t);
+    fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { [name]: { ...DEFAULT_PROFILES[name], effort: 'high' } } }));
+    assert.throws(() => loadBoard(root), (e) => {
+      assert.match(e.message, new RegExp(`profile "${name}" sets effort, but its harness \\(${DEFAULT_PROFILES[name].launch[0]}\\) takes no --effort flag; remove it`));
+      assert.equal(e.exitCode, 2);
+      return true;
+    }, name);
+  }
+});
+
+test('loadBoard leaves claude-action alone: effort is accepted there and ignored, not refused', (t) => {
+  const root = scratch(t);
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { 'claude-action': { ...DEFAULT_PROFILES['claude-action'], effort: 'high' } } }));
+  const cfg = loadBoard(root);
+  assert.equal(cfg.profiles['claude-action'].effort, 'high', 'accepted at load time; the workflow it triggers does not plumb it through yet');
+});

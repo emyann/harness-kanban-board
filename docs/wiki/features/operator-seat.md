@@ -7,7 +7,7 @@ audience: [dev, ops]
 read_when: "changing what a session may do on someone's board, adding an event kind / status / outcome / block kind, or wondering why the operator's limits are prose rather than a guard"
 covers:
   - path: skills/kanban/SKILL.md
-    sha: 5dfc9a8c77c35bb99f4c849d23070a48b27423f5
+    sha: 6371b1ff24fa12109c2bf1563194daffdc7c7df0
   - path: commands/operate.md
     sha: 7c1cb7c0a592fc3ea8ca641ca37b860a975ded66
   - path: src/watch.js
@@ -19,10 +19,10 @@ covers:
   - path: src/lifecycle.js
     sha: 3938c82f3e181fb260fc54bb2f3150074459e224
   - path: src/init.js
-    sha: 3591ba82629cba3e64c1d4fd85fefd13b842c88c
+    sha: 97954d3aaabb24d3b64b45aa10c2bad5cac4a3e4
   - path: src/stats.js
     sha: f81bc37dad19e253bf23a696ba899b4219dd5e53
-generated_at_commit: d102a4e
+generated_at_commit: 39d9c05
 last_refreshed: 2026-08-29
 related: [features/planning-commands, decisions/adr-004-roles-and-adoption, features/up-and-down, features/review-loop, concepts/roles-and-seats]
 ---
