@@ -29,7 +29,8 @@
         "5",
         "{model_args}",
         "{prompt}"
-      ]
+      ],
+      "max_in_progress": 4
     },
     "claude-action": {},
     "claude-track": {
@@ -59,5 +60,8 @@
         "{prompt}"
       ]
     }
+  },
+  "dispatch": {
+    "max_in_progress": 4
   }
 }
