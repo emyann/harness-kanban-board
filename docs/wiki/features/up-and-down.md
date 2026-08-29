@@ -16,7 +16,7 @@ covers:
     sha: 2eddf03a53b71951da0a3f3cbfcad8d7025ed771
   - path: src/serve.js
     sha: 5565e6d7d79d189d7e62000065340848c669ab38
-generated_at_commit: 27d45af
+generated_at_commit: bc8cf57
 last_refreshed: 2026-08-28
 related: [architecture/overview, features/web-board, concepts/roles-and-seats, architecture/dispatcher-tick]
 ---

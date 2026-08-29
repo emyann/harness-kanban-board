@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hkbOnPath } from './board.js';
+import { projectBinRel } from './init.js';
 import { getTask, loadRun, latestResult, parentResults, addComment } from './tasks.js';
 import { heartbeat, complete, block, unblock, requestReview, createTask, linkTask, withOutbox } from './lifecycle.js';
 import { readVersion, terminalArgv } from './cli.js';
@@ -419,13 +420,21 @@ const tomlInner = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 const fill = (text, vars) => text.replace(/\{\{(\w+)\}\}/g, (m, k) => (k in vars ? vars[k] : m));
 
 /**
- * How a client should launch this server: `hkb mcp` when hkb is on PATH, else this checkout's
- * `bin/hkb.js` under the node running right now. An MCP client is often started by a GUI with a
- * minimal PATH, so the fallback is absolute on both halves.
+ * How a client should launch this server, for `.mcp.json` — a **tracked** file: this repo's own
+ * copy, relative to the project directory Claude Code and VS Code launch MCP servers from, when
+ * `root` carries one (`npm i -D hkb-cli`, or hkb's own checkout — #166, the same case #146 named for
+ * the hook commands); an hkb the repo carries is the one that runs, wherever the command is going,
+ * the same order `hkbCommandForHook` checks in (src/init.js). Otherwise the plain `hkb` every
+ * teammate has to have on PATH — never a path into this machine's checkout, because unlike the first
+ * case that would be a lie on every other machine that reads the file (`shared: false` trades that
+ * for the absolute, this-machine-only form, for a config nothing commits — see `mcpSnippets`).
  */
-export function mcpLaunch({ onPath = hkbOnPath() } = {}) {
+export function mcpLaunch({ onPath = hkbOnPath(), root = null, pkgRoot = PKG_ROOT, shared = true } = {}) {
+  const rel = projectBinRel(root, { pkgRoot });
+  if (rel) return { command: 'node', args: [rel, 'mcp'] };
+  if (shared) return { command: 'hkb', args: ['mcp'] };
   if (onPath) return { command: 'hkb', args: ['mcp'] };
-  return { command: process.execPath, args: [path.join(PKG_ROOT, 'bin', 'hkb.js'), 'mcp'] };
+  return { command: process.execPath, args: [path.join(pkgRoot, 'bin', 'hkb.js'), 'mcp'] };
 }
 
 /** The server entry `.mcp.json` holds under `mcpServers.kanban`, straight out of the template. */
@@ -454,21 +463,30 @@ export function mergeMcpJson(current, entry) {
   return { text, changed: text !== current, servers: Object.keys({ ...doc.mcpServers, [MCP_KEY]: entry }) };
 }
 
+const snippetVars = (launch) => ({
+  args: JSON.stringify(launch.args),
+  tomlCommand: tomlInner(launch.command),
+  jsonCommand: JSON.stringify(launch.command).slice(1, -1),
+});
+
 /**
  * The two configs that are not ours to write: Codex reads MCP servers from the user-level
- * `~/.codex/config.toml`, and VS Code from `.vscode/mcp.json` (a workspace file an editor owns).
- * So they are printed, not generated.
+ * `~/.codex/config.toml`, and VS Code from `.vscode/mcp.json` (a workspace file an editor owns). So
+ * they are printed, not generated — and unlike `.mcp.json` neither is a file every checkout shares:
+ * `.vscode/mcp.json` still means the same thing on any machine that has this checkout, so it gets
+ * `launch` verbatim, but `~/.codex/config.toml` is user-level and Codex resolves its `args` against
+ * wherever `codex` happens to start, not this project — a `node_modules/hkb-cli/bin/hkb.js` there
+ * would be right only in this one directory and silently wrong everywhere else. So it gets its own
+ * launch instead: `hkb` when that is on PATH (true on any machine with it), else this checkout's own
+ * `bin/hkb.js`, made absolute (`mcpLaunch({ shared: false })` — right only here, which is exactly what
+ * a file this machine's `codex` alone reads is for).
  * @returns {[{ file: string, note: string, text: string }]}
  */
-export function mcpSnippets(launch = mcpLaunch()) {
-  const vars = {
-    args: JSON.stringify(launch.args),
-    tomlCommand: tomlInner(launch.command),
-    jsonCommand: JSON.stringify(launch.command).slice(1, -1),
-  };
+export function mcpSnippets(launch = mcpLaunch(), { onPath = hkbOnPath(), pkgRoot = PKG_ROOT } = {}) {
+  const codexLaunch = mcpLaunch({ onPath, pkgRoot, shared: false });
   return [
-    { file: '~/.codex/config.toml', note: 'Codex reads MCP servers from the user config, not the repo', text: fill(template('codex.toml'), vars).trimEnd() },
-    { file: '.vscode/mcp.json', note: 'VS Code / Copilot', text: fill(template('vscode.json'), vars).trimEnd() },
+    { file: '~/.codex/config.toml', note: 'Codex reads MCP servers from the user config, not the repo, so this names hkb absolutely', text: fill(template('codex.toml'), snippetVars(codexLaunch)).trimEnd() },
+    { file: '.vscode/mcp.json', note: 'VS Code / Copilot', text: fill(template('vscode.json'), snippetVars(launch)).trimEnd() },
   ];
 }
 
@@ -476,12 +494,12 @@ export function mcpSnippets(launch = mcpLaunch()) {
  * Write `.mcp.json` (merging, never clobbering) and return what to tell the user.
  * @returns {{ file: string, changed: boolean, servers: string[], entry: object, snippets: object[] }}
  */
-export function installMcp(root, launch = mcpLaunch()) {
+export function installMcp(root, launch = mcpLaunch({ root }), { onPath = hkbOnPath(), pkgRoot = PKG_ROOT } = {}) {
   const file = path.join(root, MCP_FILE);
   let current = null;
   try { current = fs.readFileSync(file, 'utf8'); } catch { /* not there yet */ }
   const entry = mcpEntry(launch);
   const merged = mergeMcpJson(current, entry);
   if (merged.changed) fs.writeFileSync(file, merged.text);
-  return { file: MCP_FILE, changed: merged.changed, servers: merged.servers, entry, snippets: mcpSnippets(launch) };
+  return { file: MCP_FILE, changed: merged.changed, servers: merged.servers, entry, snippets: mcpSnippets(launch, { onPath, pkgRoot }) };
 }
