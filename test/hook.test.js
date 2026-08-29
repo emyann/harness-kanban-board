@@ -225,6 +225,26 @@ test('stop hook: once every subagent has ended, a still-running task is nudged e
   } finally { h.cleanup(); }
 });
 
+test('stop hook: suppression is bounded — a stuck attempt is nudged again once it runs out (#163 review)', async () => {
+  const h = leakHarness({ cwd: 'kb-7-1', task: '7' });
+  try {
+    // A denied Agent call, or a subagent that died before firing SubagentStop, both leave `started`
+    // permanently ahead of `ended` — no SubagentStop ever arrives to say otherwise.
+    await preToolHook(h.ctx, { readStdin: () => JSON.stringify({ tool_name: 'Agent' }) });
+    for (let i = 0; i < 4; i++) {
+      const answer = await stopHook(h.ctx, { readStdin: () => '' });
+      assert.equal(answer, 0);
+      assert.equal(h.out(), '', `still within the bound at suppression ${i + 1}`);
+    }
+    assert.equal(fs.existsSync(path.join(h.root, '.kanban', 'nudges', '7-1')), false, 'none of the bounded suppressions spent a real nudge');
+
+    const answer = await stopHook(h.ctx, { readStdin: () => '' }); // past MAX_SUPPRESSED_STOPS
+    assert.equal(answer, 0);
+    assert.equal(JSON.parse(h.out()).decision, 'block', 'the attempt recovers instead of being suppressed forever');
+    assert.match(JSON.parse(h.out()).reason, /nudge 1\/2/, 'and still has both of its real nudges to spend');
+  } finally { h.cleanup(); }
+});
+
 test('stop hook: no Agent tool call ever seen — behaves exactly as before #163', async () => {
   const h = leakHarness({ cwd: 'kb-7-1', task: '7' });
   try {
@@ -239,6 +259,70 @@ test('subagentStopHook: a leaked environment records nothing (not this session\'
     assert.equal(await subagentStopHook(h.ctx), 0);
     assert.equal(h.writes(), 0);
   } finally { h.cleanup(); }
+});
+
+// The spike (2026-08-28, job cadca6f1) measured SubagentStop firing from the CHILD's own worktree —
+// `.claude/worktrees/agent-<id>` — never the root's `kb-<n>-<k>` checkout. That cwd carries no
+// KB_TASK either, so whichAttempt(cwd) answers nothing; what the child does carry is
+// CLAUDE_PROJECT_DIR, set by Claude Code to the root session's project directory. Without falling
+// back to it, `ended` is never recorded and a root that ever spawns a subagent is never nudged again.
+test('subagentStopHook: fired from the child agent worktree resolves the root via CLAUDE_PROJECT_DIR', async () => {
+  const gh = new FakeGh();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-child-'));
+  const root = path.join(dir, '.claude', 'worktrees', 'kb-9-1');
+  const child = path.join(dir, '.claude', 'worktrees', 'agent-aff2ce');
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.mkdirSync(child, { recursive: true });
+  gh.addIssue(kbIssue({ number: 9, status: 'running', agent: 'claude', run: runWith([{ attempt: 1, host: 'h', bg: true, wt: 'kb-9-1', started_at: '2026-08-28T23:00:00Z' }]) }));
+  const cfg = { ...DEFAULT_BOARD, repo: gh.nameWithOwner, profiles: PROFILES };
+  const rootCtx = { root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner }, board: 'default', host: 'h', json: false, caps: {}, _cache: {}, requireBoard() { return this; } };
+  const childCtx = { ...rootCtx, root: child };
+  const restore = gh.install();
+  const saved = { ...process.env };
+  for (const k of KB_ENV_VARS) delete process.env[k]; // a claude --bg root has none of these either
+  process.env.CLAUDE_PROJECT_DIR = root; // what the child's SubagentStop carries, per the spike
+  const err = [];
+  const write = process.stderr.write;
+  process.stderr.write = (s) => { err.push(String(s)); return true; };
+  try {
+    // 23:22:45 PreToolUse Agent (root)
+    await preToolHook(rootCtx, { readStdin: () => JSON.stringify({ tool_name: 'Agent' }) });
+    // 23:23:03 SubagentStop (child cwd — the one the root never sees)
+    assert.equal(await subagentStopHook(childCtx), 0);
+    assert.equal(err.join(''), '', 'the CLAUDE_PROJECT_DIR fallback is not a leak — nothing on stderr');
+    // 23:23:19+ root resumes, then forgets the verb — nudged, because the wave really is done now
+    const out = [];
+    const writeOut = process.stdout.write;
+    process.stdout.write = (s) => { out.push(String(s)); return true; };
+    try {
+      await stopHook(rootCtx, { readStdin: () => '' });
+    } finally { process.stdout.write = writeOut; }
+    assert.equal(JSON.parse(out.join('')).decision, 'block', 'the child\'s SubagentStop reached the root\'s own bookkeeping');
+  } finally {
+    process.stderr.write = write;
+    restore();
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+    Object.assign(process.env, saved);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// `recordAgentEnd` appends one line per call instead of read-modify-write (`{started,ended}` JSON,
+// pre-#163-review) precisely because a read-modify-write bump loses a finisher whenever two
+// SubagentStops overlap — both read `ended: 0`, both write back `ended: 1` — and a lost `ended` is
+// the exact never-nudged-again outcome #163 exists to prevent. Five back-to-back starts and ends
+// each land their own line, so the count survives however many calls interleave.
+test('recordAgentStart/recordAgentEnd: every call lands its own line, none overwritten', async () => {
+  const { recordAgentStart, recordAgentEnd } = await import('../src/hook.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-race-'));
+  try {
+    for (let i = 0; i < 5; i++) recordAgentStart(dir, '9', '1');
+    await Promise.all(Array.from({ length: 5 }, () => Promise.resolve().then(() => recordAgentEnd(dir, '9', '1'))));
+    const file = path.join(dir, '.kanban', 'sessions', '9-1.subagents');
+    const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+    assert.equal(lines.filter((l) => l === 'S').length, 5);
+    assert.equal(lines.filter((l) => l === 'E').length, 5, 'none of the 5 ends were lost to a stale read');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('pre-tool hook: a subagent start that cannot be recorded costs a stderr line, never the tool call', async () => {

@@ -133,34 +133,43 @@ let warnedLeak = null;
 
 // ---------- subagents live under this session (#163) ----------
 // One file beside the session marker, `<n>-<k>.subagents` rather than `<n>-<k>` so it never matches
-// `MARKER_RE` and `pendingTargets` never trips over it. `{started, ended}`: `preToolHook` bumps
-// `started` on every `Agent` tool call, `subagentStopHook` bumps `ended` on every `SubagentStop` —
-// the only two signals a hook sees for a subagent's whole life. An unreadable or absent file reads as
-// `{started: 0, ended: 0}`, which `shouldNudgeOnStop` (model.js) treats as "nudge as today": never
-// suppress on a guess.
+// `MARKER_RE` and `pendingTargets` never trips over it. `preToolHook` appends an `S` line on every
+// `Agent` tool call, `subagentStopHook` appends an `E` line on every `SubagentStop`, `stopHook`
+// appends an `X` line on every Stop it suppresses — the only signals a hook sees for a subagent's
+// whole life, plus the one `shouldNudgeOnStop` (model.js) needs to bound its own suppression.
+// Appending rather than read-modify-write is deliberate: two `SubagentStop`s finishing together must
+// not both read `ended: 0` and both write `ended: 1`, losing one forever (a wave with started > ended
+// for good is never nudged again). A short `fs.appendFileSync` write is atomic on POSIX (`O_APPEND`),
+// so concurrent finishers each keep their own line. An unreadable or absent file reads as
+// `{started: 0, ended: 0, suppressed: 0}`, which `shouldNudgeOnStop` treats as "nudge as today":
+// never suppress on a guess.
 
 const agentsFile = (root, n, k) => path.join(sessionsDir(root), `${n}-${k}.subagents`);
 
 function readAgentCounts(root, n, k) {
-  try {
-    const { started, ended } = JSON.parse(fs.readFileSync(agentsFile(root, n, k), 'utf8'));
-    return { started: Number(started) || 0, ended: Number(ended) || 0 };
-  } catch { return { started: 0, ended: 0 }; }
-}
-
-function bumpAgentCount(root, n, k, field) {
-  const counts = readAgentCounts(root, n, k);
-  counts[field] += 1;
-  const file = agentsFile(root, n, k);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(counts));
+  const counts = { started: 0, ended: 0, suppressed: 0 };
+  let text;
+  try { text = fs.readFileSync(agentsFile(root, n, k), 'utf8'); } catch { return counts; }
+  for (const line of text.split('\n')) {
+    if (line === 'S') counts.started++;
+    else if (line === 'E') counts.ended++;
+    else if (line === 'X') counts.suppressed++;
+  }
   return counts;
 }
 
+function appendAgentEvent(root, n, k, mark) {
+  const file = agentsFile(root, n, k);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, `${mark}\n`);
+}
+
 /** An `Agent` tool call just started under this attempt's session. */
-export function recordAgentStart(root, n, k) { return bumpAgentCount(root, n, k, 'started'); }
+export function recordAgentStart(root, n, k) { return appendAgentEvent(root, n, k, 'S'); }
 /** A `SubagentStop` just fired for this attempt's session. */
-export function recordAgentEnd(root, n, k) { return bumpAgentCount(root, n, k, 'ended'); }
+export function recordAgentEnd(root, n, k) { return appendAgentEvent(root, n, k, 'E'); }
+/** A Stop was suppressed for this attempt's session — counted so suppression stays bounded. */
+function recordSuppressedStop(root, n, k) { return appendAgentEvent(root, n, k, 'X'); }
 
 /**
  * Which attempt this session is working — the question every line below depends on.
@@ -349,6 +358,7 @@ export async function stopHook(ctx, io = {}) {
   // the two real nudges the root still has once the wave finishes.
   const agents = readAgentCounts(ctx.root, n, k);
   if (!shouldNudgeOnStop(agents)) {
+    try { recordSuppressedStop(ctx.root, n, k); } catch { /* best-effort: a lost count only means one more suppressed Stop before the bound catches it */ }
     process.stderr.write(`hkb hook: #${n} has ${agents.started - agents.ended} subagent(s) still running — standing aside, not nudging\n`);
     return 0;
   }
@@ -370,11 +380,24 @@ export async function stopHook(ctx, io = {}) {
  * session's identity `Stop` uses, and has exactly one job: mark that subagent ended, so the next
  * `Stop` on this attempt can tell a finished wave from a live one. Never nudges, never touches the
  * board, never costs the nudge counter — a subagent ending is not the root forgetting its verb.
+ *
+ * Unlike every other hook here, it does not run with the root's own `cwd`: measured (2026-08-28
+ * spike, job `cadca6f1`) at `.claude/worktrees/agent-<id>` — the child's own worktree, which does not
+ * parse as `kb-<n>-<k>` and carries none of the root's `KB_*` environment either. `whichAttempt(ctx.root)`
+ * is therefore always null there, which used to mean this hook silently recorded nothing — `started`
+ * stays forever ahead of `ended` and the root's Stop is suppressed for good. What the child *does*
+ * carry is `CLAUDE_PROJECT_DIR`, set by Claude Code to the root session's own project directory (the
+ * `kb-<n>-<k>` checkout) — so when the cwd itself answers nothing, fall back to asking that path.
  */
 export async function subagentStopHook(ctx) {
-  const me = whichAttempt(ctx.root, { profiles: ctx.cfg?.profiles, warn: 'hkb hook' });
+  let root = ctx.root;
+  let me = whichAttempt(root, { profiles: ctx.cfg?.profiles, warn: 'hkb hook' });
+  if (!me && process.env.CLAUDE_PROJECT_DIR) {
+    root = process.env.CLAUDE_PROJECT_DIR;
+    me = whichAttempt(root, { profiles: ctx.cfg?.profiles, warn: 'hkb hook' });
+  }
   if (!me) return 0;
-  try { recordAgentEnd(ctx.root, me.n, me.k); } catch (e) {
+  try { recordAgentEnd(root, me.n, me.k); } catch (e) {
     process.stderr.write(`hkb hook: could not record the subagent end on #${me.n} (${e.message})\n`);
   }
   return 0;

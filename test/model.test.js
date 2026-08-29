@@ -110,6 +110,19 @@ test('shouldNudgeOnStop: a track root waiting on its wave is not "forgot the ver
   assert.equal(shouldNudgeOnStop({ started: 3, ended: 3 }), true);
 });
 
+test('shouldNudgeOnStop: a denied Agent call or a dead subagent does not suppress forever', () => {
+  // started never catches up with ended — a permission denial, or a subagent that died mid-run and
+  // never fired SubagentStop. Below the bound, still stand aside: never suppress on a guess cuts both
+  // ways, and a genuinely long-running wave looks identical from here.
+  assert.equal(shouldNudgeOnStop({ started: 1, ended: 0, suppressed: 0 }), false);
+  assert.equal(shouldNudgeOnStop({ started: 1, ended: 0, suppressed: 3 }), false);
+  // past the bound, give up waiting and nudge anyway — a stuck attempt must recover eventually
+  assert.equal(shouldNudgeOnStop({ started: 1, ended: 0, suppressed: 4 }), true);
+  assert.equal(shouldNudgeOnStop({ started: 1, ended: 0, suppressed: 9 }), true);
+  // a finished wave is never held back by a stale suppressed count
+  assert.equal(shouldNudgeOnStop({ started: 1, ended: 1, suppressed: 9 }), true);
+});
+
 test('stop-hook payload: Claude snake_case passes through, and wins over an alias', () => {
   const claude = { session_id: 'x', transcript_path: '/t', stop_hook_active: false, total_cost_usd: 0.4, extra: 1 };
   assert.deepEqual(normalizeHookInput(claude), claude);

@@ -524,6 +524,18 @@ export function sessionUpdate(attempt, fields) {
 }
 
 /**
+ * A denied `Agent` call still fires `PreToolUse` before Claude Code refuses it, and a subagent can
+ * die mid-run without ever firing `SubagentStop` — both leave `started` permanently ahead of `ended`,
+ * which would suppress every future Stop on this attempt forever (worse than the false nudge #163 set
+ * out to fix). So suppression is bounded: once a Stop has been suppressed this many times in a row
+ * for the same attempt, `shouldNudgeOnStop` gives up waiting and nudges anyway. Chosen against the
+ * idle-tick cadence a track root reschedules itself on (20-30 minutes, see `ScheduleWakeup` guidance)
+ * — high enough that a wave with several genuinely long-running subagents does not trip it, low
+ * enough that a stuck attempt recovers within a couple of hours rather than never.
+ */
+const MAX_SUPPRESSED_STOPS = 4;
+
+/**
  * Whether a Stop that finds the task still "running" is the real "forgot the verb" case, or a track
  * root that correctly ended its own turn while a wave of subagents is still out (#163). `started` and
  * `ended` come from the hook's own bookkeeping (`src/hook.js`): `PreToolUse` on the `Agent` tool is the
@@ -537,9 +549,13 @@ export function sessionUpdate(attempt, fields) {
  *
  * Unreadable or absent bookkeeping defaults to `{started: 0, ended: 0}` — nudge as today, on purpose
  * (a false nudge costs a turn, a missed one costs the protocol; never suppress on a guess).
+ *
+ * `suppressed` is how many consecutive Stops this attempt has already had suppressed; past
+ * `MAX_SUPPRESSED_STOPS` a still-live-looking wave is nudged anyway (see above).
  */
-export function shouldNudgeOnStop({ started = 0, ended = 0 } = {}) {
-  return ended >= started;
+export function shouldNudgeOnStop({ started = 0, ended = 0, suppressed = 0 } = {}) {
+  if (ended >= started) return true;
+  return suppressed >= MAX_SUPPRESSED_STOPS;
 }
 
 function fmtCost(usd) { return `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}`; }
