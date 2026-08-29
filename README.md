@@ -9,7 +9,7 @@ no server, no database and no npm dependencies.
 Three commands, in a repo you can push to, with [`gh`](https://cli.github.com) already logged in:
 
 ```bash
-npx hkb-cli init                 # labels, .kanban/board.json, the worker skill, the Stop + PreToolUse hooks, a CLAUDE.md/AGENTS.md section
+npx hkb-cli init                 # labels, .kanban/board.json, the worker skill, a CLAUDE.md/AGENTS.md section
 npx hkb-cli doctor --api         # verifies gh auth, labels, GraphQL fields, the issue-dependency API and lock-ref CAS
 npx hkb-cli up --serve           # the dispatcher and the board, started detached — the terminal comes back
 ```
@@ -17,14 +17,19 @@ npx hkb-cli up --serve           # the dispatcher and the board, started detache
 That is the whole free path. `npx hkb-cli init --import` also pulls your existing open issues onto the board as
 *triage*.
 
+`init` writes **no Claude Code hooks into your settings files**. hkb's `Stop` and `PreToolUse` hooks serve
+exactly one kind of session — the worker hkb launched — so they ride that worker's launch line
+(`claude --settings '{"hooks":…}'`) and nothing else in the repo ever runs them. A session you open by hand pays
+nothing per tool call, and an `hkb` that stops resolving cannot fail one
+([where the hooks live, and why](docs/harnesses.md#where-the-hooks-live)). `hkb init --shared-hooks` is the
+opt-in for a team that *does* want them in every session in the repo.
+
 For a repo you keep, install it there — `npm i -D hkb-cli`, then `npx hkb init`. The version is pinned in your
 `package.json` and lockfile, so every machine and every teammate gets the same one from `npm install`, and it is
-what lets `init` put the Claude Code hooks in the **tracked** `.claude/settings.json`: it writes
-`$CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js`, which is the same file in every checkout and a silent
-`exit 0` in one that has not run `npm install` yet. Commit that file and a teammate's `git pull && npm install`
-is the whole setup. `npm i -g hkb-cli` is the alternative — `hkb` on your PATH, and hooks in the per-developer
-`.claude/settings.local.json`, because a global install is a fact about your machine and not about the repo
-([which settings file, and why](docs/harnesses.md#which-settings-file-the-hooks-go-in)).
+what makes `--shared-hooks` honest if you use it: the command it writes into the tracked `.claude/settings.json`
+is `$CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js`, the same file in every checkout and a silent `exit 0`
+in one that has not run `npm install` yet. `npm i -g hkb-cli` is the alternative — `hkb` on your PATH, which is a
+fact about your machine and not about the repo, so a tracked file can then only say a bare `hkb`.
 
 `hkb up` is idempotent: run it twice and the second run reports what is already running and starts nothing.
 `hkb up --status` says what is up, `hkb down` stops it, and both processes log to `.kanban/logs/`. Want the loop
@@ -32,7 +37,7 @@ in the foreground instead — under systemd, in a container, in a terminal you w
 still exactly that. See [Keeping the board running](#keeping-the-board-running).
 
 The labels are the only part of `init` that needs the network, so there is a way to do the rest without it:
-`npx hkb-cli init --repo owner/name --no-labels` writes every local file — the skill, the two hooks, the board,
+`npx hkb-cli init --repo owner/name --no-labels` writes every local file — the skill, the board,
 the `.gitignore` block, the `CLAUDE.md`/`AGENTS.md` section — and sends nothing at all, for a machine where `gh`
 is not logged in yet. Run `init` again without the flag when it is; everything else is idempotent.
 
@@ -611,8 +616,8 @@ doctor then names the installed version once with nothing to do about it.
 | runs table | one `<!-- kb-run -->` comment (attempts, failures, block loops) |
 | `kanban_complete(summary, metadata)` | `<!-- kb-result -->` comment; open PR → *review*, else issue closed |
 | worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link`, or the same nine as MCP tools (`hkb mcp`) |
-| stop nudge | Claude Code / Codex `Stop`, Copilot CLI `agentStop` hook (`hkb hook stop`, 2 nudges, inert unless the session is a worker's — `KB_TASK`, or the `kb-<n>-<k>` checkout it runs in, which is all a background agent has). Claude Code's pair goes in `.claude/settings.local.json` — per-developer and gitignored, because the command names whichever `hkb` *this* machine has; `hkb init --shared-hooks` puts them in the tracked `.claude/settings.json` instead, where the command is always a plain `hkb` every teammate needs on PATH (`hkb doctor` says so when it is not there) |
-| worker permissions | **the launch line**, on every profile: `--permission-mode dontAsk` (deny, never a prompt — nobody is there to answer one) with an `--allowedTools` list covering the shell builtins hkb's own guard calls safe, and `--disallowedTools "Bash(hkb dispatch*),Bash(git push --force*),Bash(git push -f*)"`. On top of it, where it runs, the Claude Code `PreToolUse` hook (`hkb hook pretool`, inert unless `KB_TASK` is set — so **not** on the `claude --bg` profiles): it may **deny or say nothing, never allow**, so it can only subtract from the launch's list — `kill`/`sudo`/`rm -rf <abs>` and file tools outside the worktree on top of the profile's allowlist. A denial tells the worker to `hkb block <n> "needs …" --kind capability` rather than work around it. `hkb doctor` prints which layer enforces on each profile, warns about a frozen allow-list or a launch that lost `dontAsk`, and [docs/harnesses.md](docs/harnesses.md#which-layer-is-actually-enforcing) has the table. `hkb init` writes the hook beside the Stop hook |
+| stop nudge | Claude Code / Codex `Stop`, Copilot CLI `agentStop` hook (`hkb hook stop`, 2 nudges, inert unless the session is a worker's — `KB_TASK`, or the `kb-<n>-<k>` checkout it runs in, which is all a background agent has). Claude Code's pair rides the **worker launch** as `--settings '{"hooks":…}'`, so no other session in the repo runs them and the command may name whichever `hkb` *this* machine has; `hkb init --shared-hooks` puts them in the tracked `.claude/settings.json` instead, for a team that wants them in every session, where the command is a plain `hkb` every teammate needs on PATH (`hkb doctor` says so when it is not there) |
+| worker permissions | **the launch line**, on every profile: `--permission-mode dontAsk` (deny, never a prompt — nobody is there to answer one) with an `--allowedTools` list covering the shell builtins hkb's own guard calls safe, and `--disallowedTools "Bash(hkb dispatch*),Bash(git push --force*),Bash(git push -f*)"`. On top of it, where it runs, the Claude Code `PreToolUse` hook (`hkb hook pretool`, inert unless `KB_TASK` is set — so **not** on the `claude --bg` profiles): it may **deny or say nothing, never allow**, so it can only subtract from the launch's list — `kill`/`sudo`/`rm -rf <abs>` and file tools outside the worktree on top of the profile's allowlist. A denial tells the worker to `hkb block <n> "needs …" --kind capability` rather than work around it. `hkb doctor` prints which layer enforces on each profile, warns about a frozen allow-list or a launch that lost `dontAsk`, and [docs/harnesses.md](docs/harnesses.md#which-layer-is-actually-enforcing) has the table. The launch carries this hook beside the Stop hook |
 | kanban dashboard | `hkb serve` — local page over the live board; drag-drop calls the same verbs |
 | live event stream | `hkb watch` / `hkb tail <n>` — conditional `GET` with `If-None-Match`; an unchanged board answers 304 and is not charged |
 | runs/spend report | `hkb stats` — the same labels and run comments, rolled up: outcomes, duration, spawns vs the daily cap, and spend per profile — `total_cost_usd` where the harness reported one, else the session transcript's tokens, priced at the board's `stats.rates` and labelled an estimate ([what each profile gives you](docs/harnesses.md#what-a-profile-can-tell-you-it-spent)) |
@@ -621,7 +626,7 @@ doctor then names the installed version once with nothing to do about it.
 ## Local state (gitignored)
 
 `.kanban/logs/` worker logs · `.kanban/state.json` spawn counters, auth pauses and the day stamps that keep the
-token-expiry and version checks to one probe a day · `.kanban/outbox.jsonl` writes queued while GitHub was unreachable (replayed on the next tick) · `.kanban/cache.json` GraphQL capability cache · `.kanban/dispatch.pid` the loop's singleton lock and `.kanban/serve.pid` the board server's, both [what `hkb up`/`hkb down` read](#keeping-the-board-running) · `.kanban/nudges/` and `.kanban/sessions/` stop-hook bookkeeping · `.claude/settings.local.json` the two hooks, whose command names this machine's `hkb`.
+token-expiry and version checks to one probe a day · `.kanban/outbox.jsonl` writes queued while GitHub was unreachable (replayed on the next tick) · `.kanban/cache.json` GraphQL capability cache · `.kanban/dispatch.pid` the loop's singleton lock and `.kanban/serve.pid` the board server's, both [what `hkb up`/`hkb down` read](#keeping-the-board-running) · `.kanban/nudges/` and `.kanban/sessions/` stop-hook bookkeeping · `.claude/settings.local.json` is still ignored, because an older `hkb init` put the two hooks there and the next one takes them back out.
 
 `hkb init` adds all of them to `.gitignore`, one line at a time — your own entries are left alone. `.kanban/board.json` is the exception: it is the board's configuration and belongs in the repo.
 

@@ -84,9 +84,13 @@ jobs:
           # set ONE of these two repository secrets — the other stays empty and is ignored
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # `--settings` is where hkb's own hooks live now: they serve the worker and nothing else,
+          # so they ride the launch rather than a settings file every session in the repo reads.
+          # The job's KB_TASK/KB_PROFILE env make both of them live here.
           claude_args: >-
             --allowedTools "{{allowed_tools}}"
             --disallowedTools "{{disallowed_tools}}"
+            --settings '{{hook_settings}}'
             --max-turns {{max_turns}}
         env:
           GH_TOKEN: ${{ secrets.KB_TOKEN }}

@@ -593,6 +593,49 @@ export function normalizeHookInput(raw) {
   return out;
 }
 
+// ---------- where hkb's hooks are declared ----------
+// One shape, two destinations. A `matcher: "*"` group per event is what Claude Code reads out of a
+// settings file (`installClaudeHooks`, src/init.js) and what it reads out of `--settings` on a
+// launch — so both are built here, and neither can drift from the other.
+//
+// The launch is the default (#144). hkb's hooks serve exactly one kind of session, the worker hkb
+// started, and a settings file is read by *every* session in that repo: an `hkb` that stops
+// resolving there — an nvm switch, a cleaned npx cache, a teammate without the global — turns into a
+// failed `PreToolUse` on every tool call in sessions that have nothing to do with the board. Claude
+// Code takes `--settings <file-or-json>` per launch, so the worker's hooks ride the same line that
+// already carries its whole permission policy and nobody else ever sees them.
+
+/** Every session's tools: hkb's hooks are not scoped to a tool, they are scoped to a session. */
+export const HOOK_MATCHER = '*';
+/** Seconds. Both hooks return in milliseconds unless they are talking to GitHub. */
+export const HOOK_TIMEOUT = 30;
+
+/** One `hooks.<Event>` entry running `command`, in the shape both destinations take. */
+export function hookEntry(command) {
+  return { matcher: HOOK_MATCHER, hooks: [{ type: 'command', command, timeout: HOOK_TIMEOUT }] };
+}
+
+/**
+ * hkb's hooks as the JSON string a `claude --settings` takes. Pure, so what a launch carries is
+ * tested without launching anything.
+ *
+ * Claude Code parses this value as inline settings when it starts with `{` and as a path otherwise,
+ * and — measured against 2.1.251 — forwards it into a `claude --bg` session with the rest of the
+ * per-launch sources, inline JSON verbatim. So the command inside may name *this* machine: the
+ * launch never leaves it, which is exactly what a tracked settings file could not say (#85).
+ * @param events `{ <Event>: <verb> }` — CLAUDE_HOOKS in src/init.js
+ * @param command `(verb) => string`, the shell command that runs that hook verb here
+ * @returns the JSON, or '' when there is nothing to declare — callers drop the flag on ''
+ */
+export function hookSettings(events, command) {
+  const hooks = {};
+  for (const [event, verb] of Object.entries(events || {})) {
+    const c = command(verb);
+    if (c) hooks[event] = [hookEntry(c)];
+  }
+  return Object.keys(hooks).length ? JSON.stringify({ hooks }) : '';
+}
+
 // ---------- installed skill version ----------
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---/;

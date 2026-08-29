@@ -7,12 +7,12 @@ disk) whatever `hkb init --harness <name>` generates. This page is the per-harne
 
 | profile | harness | worktree | stop nudge | structured output | spend | `hkb init --harness` |
 | --- | --- | --- | --- | --- | --- | --- |
-| `claude` | Claude Code background agent | `claude --worktree` | `Stop` hook in [a Claude settings file](#which-settings-file-the-hooks-go-in) | none — the log is the launch banner | tokens, from the session transcript | — (plain `hkb init`) |
+| `claude` | Claude Code background agent | `claude --worktree` | `Stop` hook [on the launch line](#where-the-hooks-live) (`--settings`) | none — the log is the launch banner | tokens, from the session transcript | — (plain `hkb init`) |
 | `claude-track` | the same, run as a whole track | `claude --worktree` | same | none | one transcript for the whole track, counted once | — |
 | `claude-p` | Claude Code headless | `claude --worktree` | same | `--output-format json` | **a reported cost** | — |
 | `copilot-cli` | GitHub Copilot CLI | dispatcher (`git worktree add`) | `agentStop` hook in `.github/hooks/kanban.json` | none | none | `copilot` |
 | `codex` | OpenAI Codex CLI | dispatcher (`git worktree add`) | `Stop` hook in `.codex/hooks.json` | `--output-schema` | none | `codex` |
-| `claude-action` | Claude Code in GitHub Actions | the Actions runner's own checkout | a final `if: always()` step | none | none — it runs off-host | `hkb init --with-actions` |
+| `claude-action` | Claude Code in GitHub Actions | the Actions runner's own checkout | `Stop` hook in `claude_args`, plus a final `if: always()` step | none | none — it runs off-host | `hkb init --with-actions` |
 
 Whatever the harness, the protocol is the same: claim the lock ref, work in the worktree, open a draft PR that
 says `Closes #<n>`, finish with exactly one terminal verb. The `hkb` verb the worker runs is always the source of
@@ -201,31 +201,68 @@ prints a `session …` line, and a `claude --resume`, for an attempt whose sessi
 `hkb init` is all it takes: the skill lands in `.agents/skills/kanban` (linked from `.claude/skills/kanban`), the
 two planning commands land in `.claude/commands/kanban/` (`/kanban:specify`, `/kanban:decompose` — the directory
 name is the namespace, so they are the same two names the plugin registers), and
-the `Stop` + `PreToolUse` hooks go into a Claude settings file. `claude` runs each worker as a background agent
-(`claude --bg`, visible in `claude agents`, attachable with `claude attach <job>`); `claude-p` is the headless
-variant for CI and containers. Both isolate themselves with `--worktree kb-<n>-<k>`.
+and the `Stop` + `PreToolUse` hooks go **on the worker launch**, not into a settings file. `claude` runs each
+worker as a background agent (`claude --bg`, visible in `claude agents`, attachable with `claude attach <job>`);
+`claude-p` is the headless variant for CI and containers. Both isolate themselves with `--worktree kb-<n>-<k>`.
 
-### Which settings file the hooks go in
+### Where the hooks live
 
-It depends on where the hkb that ran `init` lives, because that decides whether the command it writes can mean
-anything to anyone else. Both hooks use `matcher: "*"`, so a command that does not resolve fails on **every tool
-call in every session** in that repo — noise nobody there wrote or can explain. (Neither hook does anything in an
-ordinary session; it just fails loudly if the command is wrong.) So the rule is: a machine-specific command goes
-in the per-developer file, and only a command that is true everywhere may go in the tracked one.
+On the launch line, as `--settings '{"hooks":…}'` — so the only session that ever sees them is the worker hkb
+started. `hkb init` writes nothing into `.claude/settings.json` or `.claude/settings.local.json`.
 
-| where the hkb you ran `init` with lives | what `init` writes | where |
-| --- | --- | --- |
-| **inside the repo** — `npm i -D hkb-cli`, the repo's own devDependency | `f="$CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js"; [ -f "$f" ] \|\| exit 0; exec node "$f" hook stop` | **`.claude/settings.json`** — tracked, committed, no flag needed |
-| **inside the repo** — a checkout of hkb setting *itself* up | the same command, with `$CLAUDE_PROJECT_DIR/bin/hkb.js` | **`.claude/settings.json`** |
-| `npm i -g hkb-cli` | `hkb hook stop` | `.claude/settings.local.json` (gitignored), or `.claude/settings.json` with `--shared-hooks` |
-| somebody else's checkout, or `npx` with nothing installed | `node "/abs/path/bin/hkb.js" hook stop`, or `npx -y hkb-cli hook stop` from an npx cache | `.claude/settings.local.json` only |
+That is a retraction, and it is worth saying why (#144). Both hooks are `matcher: "*"` and both are inert outside
+a worker, so what a settings file bought every *other* session in the repo was a shell and a node process per tool
+call to return 0 — and, the day the command stopped resolving, a logged failure per tool call instead. That is not
+hypothetical: on a real board an nvm version switch took `hkb` off PATH, and from then on every tool call in every
+Claude Code session in that repo logged `PreToolUse:Bash hook error … /bin/sh: 1: hkb: not found`. #85 moved the
+file and taught `doctor` to see it; only moving off the file removes the exposure.
+
+Claude Code takes `--settings <file-or-json>` **per launch**, and the launch line is already the worker's whole
+permission policy. So it carries the hooks too:
+
+```
+claude --bg … --allowedTools … --disallowedTools … \
+  --settings '{"hooks":{"Stop":[{"matcher":"*","hooks":[{"type":"command","command":"hkb hook stop","timeout":30}]}], …}}'
+```
+
+Two things follow. The command in there may name **this machine** — `node "/abs/path/bin/hkb.js" hook stop` when
+`hkb` is not on PATH — because a launch line is spent here and nowhere else; that is exactly the case a tracked
+settings file had to rule out. And `.kanban/board.json`, which *is* tracked, holds only the placeholder
+`{hook_settings}`: the launch template stays true on every machine, and the JSON is built at spawn time.
+
+**`claude --bg` was measured, not assumed.** A background launch hands the request to Claude Code's session
+daemon, so a per-launch flag only reaches it if the CLI forwards it. Against Claude Code 2.1.251 it does:
+`--settings` is one of the six per-launch sources on the `--bg` forwarding path, beside `--add-dir`,
+`--mcp-config` and the two `--plugin-dir` flags, and a value starting with `{` is passed through as inline JSON
+rather than resolved as a path. That is why `claude` and `claude-track` get the hooks and not only `claude-p`.
+The standing empirical check is `hkb doctor`'s `profile claude sessions` line: a `--bg` attempt records its
+session id *from the Stop hook*, so a board whose recent attempts carry one is a board whose launch hooks fired.
+
+Copilot CLI and Codex keep their own hook files (`.github/hooks/kanban.json`, `.codex/hooks.json`). Neither
+harness has a per-launch settings source to move them onto, and neither file is read by anything but that harness,
+so neither carries the cost this section is about.
+
+### `--shared-hooks`: when you do want them in every session
+
+`hkb init --shared-hooks` writes the two hooks into the tracked `.claude/settings.json` — for a team that wants
+the protocol enforced in every session in the repo, not only in the ones hkb launched. Nothing removes hooks from
+that file again; they are a choice. A worker on such a board then runs each hook twice, once from the file and
+once from its launch, which costs a Stop nudge its second try and nothing else — `hkb doctor` says so.
+
+What may go in that file is unchanged, and it is the narrow question #85 and #146 settled: a tracked file is
+read on machines that are not this one, so only a command that means the same thing on all of them may go in it.
+
+| where the hkb you ran `init` with lives | what `--shared-hooks` writes |
+| --- | --- |
+| **inside the repo** — `npm i -D hkb-cli`, the repo's own devDependency | `f="$CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js"; [ -f "$f" ] \|\| exit 0; exec node "$f" hook stop` |
+| **inside the repo** — a checkout of hkb setting *itself* up | the same command, with `$CLAUDE_PROJECT_DIR/bin/hkb.js` |
+| anywhere else — a global, another checkout, an npx cache | `hkb hook stop`, which every teammate must have on PATH |
 
 The first two rows are the ones to want (#146), and they are one rule, not two: when the hkb being run is *inside*
 the repo it is setting up, where it sits is a property of the **project** rather than of the machine, and Claude
 Code sets `CLAUDE_PROJECT_DIR` for hook commands precisely so a project can name its own files. So the command is
-exact here and correct on every other machine at the same time. That is what makes the tracked file honest, and it
-is chosen without `--shared-hooks`: commit `.claude/settings.json`, and a teammate's `git pull && npm install` is
-the whole setup, on a machine that never runs `hkb init` at all.
+exact here and correct on every other machine at the same time: commit `.claude/settings.json`, and a teammate's
+`git pull && npm install` is the whole setup, on a machine that never runs `hkb init` at all.
 
 The path in it is *measured* from the repo root, never composed from the package's name — so a pnpm store
 (`node_modules/.pnpm/hkb-cli@0.1.4/node_modules/hkb-cli`) or a nested install is named as it actually is, and a
@@ -236,10 +273,10 @@ checkout, which is gitignored and gone with the attempt.
 The guard is the rest of it. A worker's `.claude/worktrees/kb-<n>-<k>` is a fresh checkout with no `node_modules`
 until it runs `npm ci`, and `$CLAUDE_PROJECT_DIR` there is the worktree — so the command tests for its own file
 and exits 0 in silence when it is not there yet. Nothing is lost: both hooks are inert without `KB_TASK` anyway,
-and by the time the `Stop` hook has anything to nudge about, the worker has installed. **On a board whose repo
-installs hkb this way, say so in the worker prompt** — a card whose work is finished before `npm ci` has run is a
-card whose Stop nudge never fired. `hkb doctor` reports that state as a warning naming `npm install`, not a
-failure; it is the normal state of a checkout nobody has installed yet.
+and by the time the `Stop` hook has anything to nudge about, the worker has installed. `hkb doctor` reports that
+state as a warning naming `npm install`, not a failure; it is the normal state of a checkout nobody has installed
+yet. (The launch's own copy of the hooks is not guarded and does not need to be: it names the hkb that is
+*running*, which by construction is there.)
 
 ### Which layer is actually enforcing
 
@@ -255,12 +292,17 @@ The two hooks sit on top of that, gated differently, and on the default profile 
 
 | | `Stop` — the terminal-verb nudge | `PreToolUse` — hkb's permission policy |
 | --- | --- | --- |
+| where it comes from | the launch's `--settings` (Claude), the harness's own hook file otherwise | same |
 | what identifies the session | `KB_TASK`, else the `kb-<n>-<k>` checkout name | `KB_TASK` only |
 | what it may answer | `{"decision":"block"}`, at most twice | **`deny`, or nothing** — never `allow` |
 | `claude` / `claude-track` (`claude --bg`) | **live** — the checkout names the attempt | **inert** — the launch's `--allowedTools` and `--disallowedTools` are the whole policy |
 | `claude-p` (`mode: "process"`) | live | live, and can only subtract from those launch flags |
-| `claude-action` (`mode: "trigger"`) | the workflow's `if: always()` step stands in | the workflow's own `--allowedTools` |
+| `claude-action` (`mode: "trigger"`) | live — the workflow sets `KB_TASK`; the `if: always()` step is the backstop | live — the workflow sets `KB_PROFILE` too |
 | `copilot-cli`, `codex` | their own `agentStop` / `Stop` hook file | their own `--allow-tool` / `--sandbox` — they never read `.claude/settings*.json` |
+
+Installing the hooks on the launch does **not** change that `claude --bg` row: the session daemon was started
+long before, with an environment of its own, so `KB_TASK` never reaches it and `PreToolUse` still stands aside
+there. The hook is present and declines to act, which is not the same as absent, and it is the answer #133 chose.
 
 A checkout name says which *task* a session is, never which *profile* launched it, and hkb's policy applied with
 no profile would allow `hkb`, `git` and `gh` and deny a worker `npm test` — so `PreToolUse` stands aside rather
@@ -281,8 +323,14 @@ run `hkb block <n> "needs …" --kind capability` and stop.*
 ✓ worker permissions  4 allow-lists cover the 16 shell builtins hkb calls safe
 ```
 
-Two checks guard the layer that is doing the enforcing, and both read local files only:
+Three checks guard the layer that is doing the enforcing, and all of them read local files only:
 
+- **`launch hooks`** catches a launch frozen in `board.json` before the hooks moved onto it. `loadBoard`
+  deep-merges the file over hkb's defaults and an array in the file wins whole, so a `launch` an older `init`
+  wrote out keeps its shape forever — and since nothing is being written into a settings file to make up for it,
+  that profile's workers would quietly get no Stop nudge and record no session id. The fix branches the same way
+  `worker permissions` does: drop `"launch"` from one of hkb's own profiles to take the default back, or add
+  `"{hook_settings}"` by hand to a custom one, which has no default behind it.
 - **`worker permissions`** catches a **frozen copy** of an allow-list, which no default change can reach: a
   profile that pins `allowed_tools` in `board.json`, and the `--allowedTools` line `hkb init --with-actions`
   bakes into the generated worker workflow. Both keep denying `cd`, `export`, `command`, `env` until someone
@@ -321,18 +369,36 @@ builtins and need no alias. Everything a worker reads — `hkb context`, the Sto
 now names `finish` and a redirect, because the two commands a *successful* worker must run were exactly the
 two it could not.
 
-`hkb init --shared-hooks` puts them in the tracked `.claude/settings.json` for the *global* install too — for a
-team where everyone runs `npm i -g hkb-cli`. That file then only ever gets the portable form, `hkb hook stop` /
-`hkb hook pretool`; an absolute path is never written into a file other people read. `hkb doctor` checks whatever
-is configured, in either file, and fails when the command cannot be resolved here:
+### What `hkb doctor` says about the hooks
+
+The question it asks is "can the command a worker will run actually run here", and where it says that command
+came from is the launch:
 
 ```
-✗ hook command    hkb hook stop — `hkb` is not on PATH here; the hook fails on every tool call in this repo
+✓ stop hook       on the claude, claude-track, claude-p launch (--settings), so no other session in this repo runs it
+✓ hook command    node "/usr/lib/node_modules/hkb-cli/bin/hkb.js" hook stop
+```
+
+A settings file is still read, because two kinds of repo have hkb hooks in one — a team that asked
+(`--shared-hooks`), and a repo an older init reached. Either way they fire in every session there, so both are
+reported, with different fixes: the per-developer copy is init's to remove, the tracked one is the operator's:
+
+```
+! hooks in settings   .claude/settings.local.json configures hkb's hooks, so they run in every session in this
+                      repo — and a worker runs them twice, once from there and once from its launch
+                        → hkb init — it removes them from the per-developer file
+```
+
+And whatever the source, a command that cannot resolve is a failure with the install in the fix:
+
+```
+✗ hook command    hkb hook stop in .claude/settings.json — `hkb` is not on PATH here; the hook fails on every
+                  tool call in every session in this repo
                     → npm i -g hkb-cli (or: hkb init, which writes a command that resolves here)
 ```
 
-On a repo that carries its own hkb, a bare `hkb` is that same failure even when it happens to work on the machine
-running doctor: it is not the copy the repo carries, and in the tracked file it is not even a copy everyone has —
+On a repo that carries its own hkb, a bare `hkb` in the tracked file is that same failure even when it happens to
+work on the machine running doctor: it is not the copy the repo carries, and it is not a copy everyone has —
 they have only what their checkout gave them.
 
 ```
@@ -347,11 +413,9 @@ as a warning naming `npm install`. The exception is a command that names a path 
 version-stamped pnpm store after an upgrade, say. Nothing installs that path back, so the hook would exit 0 in
 silence forever, and doctor calls it a failure naming `hkb init` instead.
 
-The hooks live in exactly one of the two files: init moves them rather than leaving a second copy, since two
-would fire every nudge twice. A re-run leaves a shared, portable setup where it is — but hooks in the tracked
-file naming a path get moved to the local one, an `npx` cache path (never durable: it is gone the next time
-npm cleans that cache) is rewritten wherever it is found, and an hkb inside the repo moves them the other way, out
-of the per-developer file and into the tracked one, because there is nothing machine-specific left to hide.
+Re-running `hkb init` is idempotent on all of this: it takes hkb's own hooks out of `.claude/settings.local.json`
+(and only hkb's own — an operator's hook in the same group stays), leaves the tracked file alone unless
+`--shared-hooks` is given, and rewrites a command there that is not the one that repo should have.
 
 ## GitHub Copilot CLI — `copilot-cli`
 
