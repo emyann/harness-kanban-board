@@ -30,7 +30,7 @@ import path from 'node:path';
 import { kanbanDir } from './board.js';
 import { currentSession } from './jobs.js';
 import { getTask, loadRun, saveRun } from './tasks.js';
-import { openAttempt, sessionUpdate, normalizeHookInput, parseWorktreeName } from './model.js';
+import { openAttempt, sessionUpdate, normalizeHookInput, parseWorktreeName, attemptIdentity } from './model.js';
 
 /**
  * PreToolUse hook: hkb's own permission policy — **deny or say nothing**, never an allow, never a
@@ -42,6 +42,11 @@ import { openAttempt, sessionUpdate, normalizeHookInput, parseWorktreeName } fro
  * and deny everything else — so a background worker, which is exactly the session the worktree
  * fallback would newly reach, would be denied `npm test`. Inert is the safe answer here; the launch
  * flags (`--allowedTools`, `--permission-mode`) are that session's real policy.
+ *
+ * Which is why `source: 'env'` is the gate rather than `KB_TASK` itself: an inherited `KB_TASK` the
+ * checkout contradicts is a leak, and enforcing a worker's allowlist on the operator's own shell is
+ * what that leak did (#150 — a diagnostic `for` loop denied, a card body denied for mentioning the
+ * dispatcher). A leaked environment falls back to the checkout, and the checkout is inert here.
  *
  * Which is also why an `allow` is never emitted. Worker policy on the default profile IS the launch
  * line, and on the profiles where this hook does run it must not *widen* it: a hook `allow`
@@ -56,8 +61,8 @@ import { openAttempt, sessionUpdate, normalizeHookInput, parseWorktreeName } fro
  * chose; standing aside with one line on stderr is the honest answer.
  */
 export async function preToolHook(ctx) {
+  if (whichAttempt(ctx.root, { profiles: ctx.cfg?.profiles, warn: 'hkb hook' })?.source !== 'env') return 0;
   const n = process.env.KB_TASK;
-  if (!n) return 0;
   const name = process.env.KB_PROFILE;
   const profile = name ? ctx.cfg?.profiles?.[name] : null;
   if (!profile) {
@@ -100,6 +105,9 @@ const MARKER_RE = /^\d+-\d+$/;
 const sessionsDir = (root) => path.join(kanbanDir(root), 'sessions');
 const markerFile = (root, n, k) => path.join(sessionsDir(root), `${n}-${k}`);
 
+/** The leak line is one line per process, however many times the hook asks the same question. */
+let warnedLeak = null;
+
 /**
  * Which attempt this session is working — the question every line below depends on.
  *
@@ -113,12 +121,28 @@ const markerFile = (root, n, k) => path.join(sessionsDir(root), `${n}-${k}`);
  * What such a session does have is its checkout. The launch names it `kb-<n>-<k>` and the dispatcher
  * already identifies a running job by exactly that name, so fall back to it: one basename, no file
  * read, no board read. `source` says which answer this was, for a caller that wants to log it.
+ *
+ * And when the two disagree, the checkout wins. A daemon that a `claude --bg` launch cold-started
+ * carries that launch's `KB_TASK` for life and hands it to every session it hosts, the operator's
+ * own included (#150) — so an environment naming a task whose worktree this plainly is not is
+ * dropped, with one line on stderr. `attemptIdentity` (src/model.js) holds the rule; the profile is
+ * part of it, because only some profiles put their worker in a checkout hkb can check against.
  */
-export function whichAttempt(root = process.cwd()) {
-  const n = process.env.KB_TASK;
-  if (n) return { n: String(n), k: process.env.KB_ATTEMPT || '0', source: 'env' };
-  const wt = parseWorktreeName(path.basename(path.resolve(root)));
-  return wt ? { ...wt, source: 'worktree' } : null;
+export function whichAttempt(root = process.cwd(), { env = process.env, profiles = null, warn = 'hkb' } = {}) {
+  const herePath = path.resolve(root);
+  const rootPath = env.KB_ROOT ? path.resolve(env.KB_ROOT) : null;
+  const id = attemptIdentity({
+    env,
+    here: path.basename(herePath),
+    herePath,
+    rootPath,
+    profile: profiles?.[env.KB_PROFILE] || null,
+  });
+  if (id?.leak && warn && warnedLeak !== id.leak) {
+    warnedLeak = id.leak;
+    process.stderr.write(`${warn}: ${id.leak}\n`);
+  }
+  return id?.n ? { n: id.n, k: id.k, source: id.source } : null;
 }
 
 /**
@@ -133,8 +157,8 @@ export function whichAttempt(root = process.cwd()) {
  * `wt` rides along for a claimed node, exactly as the hook does it: a node has no checkout of its
  * own, so a resume line must point at the runner's or name one that never existed.
  */
-export function sessionForAttempt(root, n, k, a, env = process.env) {
-  const me = whichAttempt(root);
+export function sessionForAttempt(root, n, k, a, { env = process.env, profiles = null } = {}) {
+  const me = whichAttempt(root, { env, profiles });
   if (!me) return null;
   const own = me.n === String(n) && me.k === String(k);
   const claim = own ? null : readClaim(markerFile(root, n, k));
@@ -158,8 +182,8 @@ function readClaim(file) {
  * `KB_TASK`. Never throws: a marker is a convenience, and a claim must not fail for one.
  * @returns true when a marker was written.
  */
-export function markSessionClaim(root, n, k) {
-  const me = whichAttempt(root);
+export function markSessionClaim(root, n, k, { env = process.env, profiles = null } = {}) {
+  const me = whichAttempt(root, { env, profiles });
   if (!me || me.n === String(n)) return false;
   try {
     const file = markerFile(root, n, k);
@@ -239,7 +263,7 @@ export async function stopHook(ctx, io = {}) {
   // Not a worker session: return before stdin is even read, as this hook always has. The checkout
   // is the second answer, not a second question — one basename, and only when the launch env is
   // missing (`whichAttempt`), so an ordinary session in an ordinary directory still costs nothing.
-  const me = whichAttempt(ctx.root);
+  const me = whichAttempt(ctx.root, { profiles: ctx.cfg?.profiles, warn: 'hkb hook' });
   if (!me) return 0;
   const { n, k } = me;
   const readStdin = io.readStdin || (() => fs.readFileSync(0, 'utf8'));

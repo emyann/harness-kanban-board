@@ -492,7 +492,7 @@ export async function main(argv) {
       await saveRun(ctx, n, runRec);
       // Claimed by hand from inside another task's session — a track runner working a node. Leave
       // the marker that tells this session's Stop hook to stamp that node with the session id too.
-      if (!flags.spawn) markSessionClaim(ctx.root, n, k);
+      if (!flags.spawn) markSessionClaim(ctx.root, n, k, { profiles: ctx.cfg?.profiles });
       await setStatus(ctx, t, 'running');
       await setAgent(ctx, t, profile); // `--profile` names who is running it, so it replaces the old label
       let pid = null;

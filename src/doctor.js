@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
 import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES, HOOK_SETTINGS_VAR } from './board.js';
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun } from './tasks.js';
-import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins } from './model.js';
+import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, attemptIdentity, kbVarsIn } from './model.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
 import { latestVersion } from './registry.js';
@@ -580,6 +580,71 @@ export function checkPolicyLayer(ctx, { ok }, { find = findClaudeHooks } = {}) {
   return layers;
 }
 
+// ---------- a worker's environment where no worker is ----------
+
+export const ENV_LEAK_CHECK = 'worker environment';
+
+/**
+ * Linux only, and only asked once something already looks wrong: which processes on this host hold
+ * `KB_*` in their environment while claiming to be a Claude Code session daemon. `/proc/<pid>/environ`
+ * is readable for our own processes and nobody else's, which is exactly the set we care about.
+ * Never throws — an unreadable `/proc` simply means the warning names no pid.
+ */
+export function daemonsWithKbEnv({ proc = '/proc', match = /claude/ } = {}) {
+  const out = [];
+  let pids = [];
+  try { pids = fs.readdirSync(proc).filter((d) => /^\d+$/.test(d)); } catch { return out; }
+  for (const pid of pids) {
+    try {
+      const cmd = fs.readFileSync(path.join(proc, pid, 'cmdline'), 'utf8').split('\0').join(' ');
+      if (!match.test(cmd) || !/\bdaemon\b/.test(cmd)) continue;
+      const vars = kbVarsIn(fs.readFileSync(path.join(proc, pid, 'environ'), 'utf8'));
+      if (vars.length) out.push({ pid: Number(pid), vars, cmd: cmd.trim().slice(0, 120) });
+    } catch { /* gone, or another user's: not ours to report */ }
+  }
+  return out;
+}
+
+/**
+ * Is doctor itself running with a worker's identity it has no business having?
+ *
+ * The shape this catches is one incident, exactly (#150): a `claude --bg` launch found no session
+ * daemon, started one, and that daemon kept `KB_TASK=146 KB_PROFILE=claude KB_ROOT=…` for its whole
+ * life — so every session it hosted, including conversations that predated the card, believed it was
+ * that worker. The Stop hook stamped the wrong session onto the attempt, and the worker permission
+ * policy was enforced on the operator's shell. hkb no longer launches that way (`scrubKbEnv`), but a
+ * daemon already poisoned stays poisoned until it is restarted, and nothing else on this host will
+ * tell the operator that. The verdict is `attemptIdentity`'s, so doctor says exactly what the hooks
+ * in the same environment will do.
+ */
+export function checkEnvLeak(ctx, { warn }, { env = process.env, cwd = process.cwd(), daemons = daemonsWithKbEnv } = {}) {
+  if (!env.KB_TASK) return null;
+  const herePath = path.resolve(cwd);
+  const rootPath = env.KB_ROOT ? path.resolve(env.KB_ROOT) : null;
+  const id = attemptIdentity({
+    env,
+    here: path.basename(herePath),
+    herePath,
+    rootPath,
+    profile: ctx.cfg?.profiles?.[env.KB_PROFILE] || null,
+  });
+  if (!id?.leak) return null;
+  const found = process.platform === 'linux' ? daemons() : [];
+  const pids = found.map((d) => d.pid);
+  const some = pids.slice(0, 3).join(', ') + (pids.length > 3 ? ` (+${pids.length - 3} more)` : '');
+  const named = found.length
+    ? ` The daemon${found.length > 1 ? 's' : ''} holding ${found[0].vars.join(' ')}: pid ${some}.`
+    : '';
+  const finding = {
+    name: ENV_LEAK_CHECK,
+    ok: null,
+    detail: `this shell thinks it is a worker for #${env.KB_TASK}${env.KB_PROFILE ? ` on profile ${env.KB_PROFILE}` : ''}, but ${rootPath && herePath === rootPath ? 'it is the board root' : `${path.basename(herePath)} is not that task's worktree`} — a \`claude --bg\` launch probably started the Claude Code session daemon with that environment, and every session it hosts inherits it.${named} hkb stands aside where it can see the contradiction (no nudge, no session stamp, no permission policy here), but nothing else does`,
+    fix: `let the sessions it hosts finish, then end the daemon${found.length ? ` (pid ${some})` : ''} — the next \`claude --bg\` starts a clean one. hkb's own launches no longer pass KB_* to a background agent, so a dispatcher on this version cannot poison the replacement`,
+  };
+  warn(finding.name, finding.detail, finding.fix);
+  return finding;
+}
+
 // ---------- KB_TOKEN expiry ----------
 
 /**
@@ -863,6 +928,8 @@ export async function doctor(ctx, flags, log) {
   checkPolicyLayer(ctx, { ok });
   checkPermissionMode(ctx, { warn });
   checkWorkerPermissions(ctx, { ok, warn });
+  // and whether this shell is carrying a worker's identity it should not have (#150)
+  checkEnvLeak(ctx, { warn });
 
   if (!ctx.repo) return report(results, ctx, log);
 

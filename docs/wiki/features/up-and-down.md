@@ -7,16 +7,16 @@ audience: [dev, ops]
 read_when: "touching hkb up/down, the dispatcher's singleton lock, the serve pid file, or anything that has to know whether a board is running"
 covers:
   - path: src/up.js
-    sha: ea8dbb2e04f73de5c05e87e9a56929a86f78a785
+    sha: df963724568a57ea60489c75de6211133f4847f0
   - path: src/model.js
-    sha: 0b6cab6f25caa911b717dca9ba8c01d5a8510de5
+    sha: cf33ac585ad7a7b54e9f2682649242632356f185
   - path: src/board.js
     sha: 2e9735c80d0fcc92c298efd10b96def73f4ea03b
   - path: src/dispatch.js
     sha: 54b6c916eee04b5a93b23ee3c8f2906a663f1207
   - path: src/serve.js
     sha: 5565e6d7d79d189d7e62000065340848c669ab38
-generated_at_commit: a391898
+generated_at_commit: c2486c9
 last_refreshed: 2026-08-28
 related: [architecture/overview, features/web-board, concepts/roles-and-seats, architecture/dispatcher-tick]
 ---
@@ -173,6 +173,15 @@ that threw and for the process that outlived the wait, and the exit code is 1.
 A human line that says "stop it yourself" while the JSON says `{stopped: []}` and
 exits 0 is a silent failure, which Value 5 forbids.
 
+Two edges of the same tidy-up (#164): a signal that throws `ESRCH` means the
+process died between `processState`'s liveness check and the `kill` call —
+`down` was asked for it to be gone, and it is, so that counts as `stopped`, not
+`failed` (`src/up.js:216-222`). And a pid file naming a process that is simply
+dead — crashed without dropping its own claim, never signalled at all — no
+longer sits there forever: `down` tidies it in the same branch that reports
+"not running" (`src/up.js:209-215`), the same way it tidies the file of a
+process it watched die.
+
 `down` stops the dispatcher; `down --serve` stops both. A board server left
 running by the asymmetry is not silent about it — `down` names it and the flag
 that would stop it — which is the compromise between the flag symmetry with `up`
@@ -205,6 +214,16 @@ an error, because the operator walks away believing the board is up. So
 `src/up.js:120-121`) and, if the child is gone, says `exited immediately (pid N) —
 see .kanban/logs/dispatch.log`, which is where the child's own refusal landed. The
 same recheck reports the losing side of a `claimPid` race rather than discarding
+it.
+
+A dead-at-recheck child goes into `--json`'s `failed: [{name, pid, log}]`, not
+`started` — the pure call is `deadAtRecheck` (`src/model.js`, beside
+`startDecision`) — and `up`'s exit code is 1 whenever `failed` is non-empty
+(`src/up.js:140-166`). The first cut (#151) reported this exact case as
+`started`, exit 0, no error field under `--json`: a script driving `hkb up
+--serve --port 80` against a refused port saw a clean run for a board that was
+not up (#164, second-pass review). The fix changes only what `up` reports —
+the process it just watched die is still gone, and `up` still does not restart
 it.
 
 ## Known limits
@@ -241,6 +260,9 @@ it.
   `failed`. `still running Ns after SIGTERM` is a tick in flight, not a hang —
   `hkb up --status` a moment later says whether it went. A `down` that says
   `stopped` has actually watched the process go.
+- `hkb up` returning non-zero means a child died at the recheck: `--json` names
+  it in `failed: [{name, pid, log}]`, with the log to read. Any process that did
+  start is still in `started`, and `up` does not retry the one that did not.
 - `stopped (pid file predates this boot)` after a reboot is expected: the file
   outlived the machine. `hkb up` replaces it; nothing needs deleting by hand.
 

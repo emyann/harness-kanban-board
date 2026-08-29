@@ -8,6 +8,10 @@
 
 - [hkb at a glance](./architecture/overview.md): The moving parts: CLI, board protocol, dispatcher loop, workers — and the one rule that shapes them all: the board is the only state.
 
+## Concepts
+
+- [Worker identity — which attempt a session is, and who may say so](./concepts/worker-identity.md): The three answers to "which attempt is this session?" (launch environment, checkout, job record), the order of trust between them, and why a `claude --bg` launch must hand over none of them.
+
 ## Features
 
 - [The last step — `dispatch.merge` and GitHub's auto-merge](./features/auto-merge.md): Why hkb never merges, how a board hands the last step to GitHub instead, and the branch-protection gate that is the only thing making that safe.

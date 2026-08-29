@@ -605,6 +605,61 @@ test('claims are create-if-absent, and releasing twice is not an error', async (
   assert.deepEqual(await listLocks(h.ctx), []);
 });
 
+// ---------- what the launch hands the harness ----------
+// `claude --bg` does not run the worker: it asks Claude Code's session daemon to, and a launch that
+// finds no daemon STARTS one — which then keeps the launch environment for its whole life and hands
+// it to every session it hosts, the operator's own included (#150). The environment reaches no
+// worker on that path anyway (#125: the `kb-<n>-<k>` checkout is that profile's identity), so it is
+// scrubbed. For every harness the dispatcher runs as a child process it is the whole identity, and
+// the hook's gate, so it stays exactly as it was.
+
+/** A launch that writes the environment it was given to `out`, and a `claude` that answers nothing. */
+function envRecorder(dir, name) {
+  const out = path.join(dir, `${name}.json`);
+  const bin = path.join(dir, 'stub-bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\nexit 1\n', { mode: 0o755 }); // `claude agents` finds none
+  return { out, launch: ['node', '-e', `require('fs').writeFileSync(${JSON.stringify(out)}, JSON.stringify(process.env))`] };
+}
+
+async function readWhenWritten(file, tries = 200) {
+  for (let i = 0; i < tries; i++) {
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { await new Promise((r) => setTimeout(r, 25)); }
+  }
+  throw new Error(`${file} was never written by the launch`);
+}
+
+test('a claude --bg launch gets no KB_* at all; a child-process launch keeps its identity', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-launchenv-'));
+  const background = envRecorder(dir, 'background');
+  const child = envRecorder(dir, 'child');
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${path.join(dir, 'stub-bin')}${path.delimiter}${savedPath}`;
+  const h = harness({
+    profiles: {
+      claude: { mode: 'claude-bg', max_in_progress: 2, model: null, allowed_tools: [], launch: background.launch },
+      'claude-p': { mode: 'process', max_in_progress: 2, model: null, allowed_tools: [], launch: child.launch },
+    },
+  });
+  t.after(() => { process.env.PATH = savedPath; h.cleanup(); fs.rmSync(dir, { recursive: true, force: true }); });
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude-p' }));
+
+  await h.tick();
+
+  const bg = await readWhenWritten(background.out);
+  assert.deepEqual(Object.keys(bg).filter((k) => k.startsWith('KB_')), [],
+    'a daemon started by this launch would carry these for its whole life');
+  assert.ok(bg.PATH, 'and everything else is still there');
+
+  const proc = await readWhenWritten(child.out);
+  assert.equal(proc.KB_TASK, '8', 'a child process has no checkout fallback: this is its only identity');
+  assert.equal(proc.KB_ATTEMPT, '1');
+  assert.equal(proc.KB_PROFILE, 'claude-p');
+  assert.equal(proc.KB_ROOT, h.root);
+  assert.equal(proc.KB_LOCK_REF, 'refs/kb/locks/8/1');
+});
+
 test('a dry run reports what it would do and writes nothing', async (t) => {
   const h = harness();
   t.after(h.cleanup);
