@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const pkgName = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).name;
 
@@ -36,6 +36,7 @@ const MUST_SHIP = [
   ['skills/kanban/schema/terminal.json', 'the Codex profile names it in --output-schema'],
   ['commands/specify.md', '`/kanban:specify`, which SKILL.md documents by name: the plugin registers commands/, `hkb init` copies it'],
   ['commands/decompose.md', '`/kanban:decompose`, likewise — an unshipped command file is an unknown command in someone else\'s session (#92)'],
+  ['commands/operate.md', '`/kanban:operate`, the operator seat\'s own procedure — same contract as the other two (#149)'],
   ['templates/doc-section.md', 'the CLAUDE.md/AGENTS.md section `hkb init` splices in'],
   ['templates/actions/kanban-dispatch.yml', '`hkb init --with-actions`'],
   ['templates/copilot/kanban-worker.agent.md', '`hkb init --harness copilot`'],
@@ -67,6 +68,7 @@ const FROM_PACKAGE = [
   ['.agents/skills/kanban/references/protocol.md', 'skills/kanban/references/protocol.md', 'whole'],
   ['.claude/commands/kanban/specify.md', 'commands/specify.md', 'whole'],
   ['.claude/commands/kanban/decompose.md', 'commands/decompose.md', 'whole'],
+  ['.claude/commands/kanban/operate.md', 'commands/operate.md', 'whole'],
   ['CLAUDE.md', 'templates/doc-section.md', 'section'],
   ['AGENTS.md', 'templates/doc-section.md', 'section'],
 ];
@@ -216,20 +218,14 @@ function checkInitOffline(bin, root) {
     const ignoredLines = (ignored || '').split('\n').map((l) => l.trim());
     if (ignored && ignoredLines.includes('.kanban/dispatch.pid')) ok('.gitignore carries the local-state block');
     else if (ignored) bad('the generated .gitignore is missing .kanban/dispatch.pid', 'see GITIGNORE_LINES in src/init.js');
-    // The hooks go in the per-developer file, and whatever command they carry has to be one that
-    // outlives this install: an `_npx` path is wrong for a teammate and gone once npm cleans the
-    // cache (#85). This is where a tarball run can prove it — the source tests cannot see PKG_ROOT
-    // land anywhere but this checkout.
-    const raw = text(LOCAL_SETTINGS, 'see installClaudeHooks in src/init.js');
-    const events = raw ? Object.keys(JSON.parse(raw).hooks || {}).sort().join(', ') : null;
-    if (events === 'PreToolUse, Stop') ok(`${LOCAL_SETTINGS} (${events})`);
-    else if (raw !== null) bad(`${LOCAL_SETTINGS} got hooks "${events}", expected "PreToolUse, Stop"`, 'see CLAUDE_HOOKS in src/init.js');
-    if (raw !== null && !ignoredLines.includes(LOCAL_SETTINGS)) bad(`${LOCAL_SETTINGS} names this machine and is not in the generated .gitignore`, 'see GITIGNORE_LINES in src/init.js');
-    if (fs.existsSync(path.join(repo, SHARED_SETTINGS))) bad(`\`hkb init\` wrote the tracked ${SHARED_SETTINGS}`, 'only --shared-hooks may — see hookPlacement in src/init.js');
-    else ok(`${SHARED_SETTINGS} was left for --shared-hooks`);
-    const npx = [LOCAL_SETTINGS, SHARED_SETTINGS].filter((rel) => (fs.existsSync(path.join(repo, rel)) ? fs.readFileSync(path.join(repo, rel), 'utf8').includes('_npx') : false));
-    if (npx.length) bad(`${npx.join(', ')} names the npx cache, which is not a durable path`, 'see hkbCommandForHook in src/init.js');
-    else ok('no settings file names the npx cache');
+    // The whole of #144, from the installed tarball: an ordinary `hkb init` leaves BOTH settings
+    // files alone, so a session somebody opens by hand in this repo pays nothing per tool call and
+    // can never be failed by an `hkb` that stopped resolving.
+    const wrote = [LOCAL_SETTINGS, SHARED_SETTINGS].filter((rel) => fs.existsSync(path.join(repo, rel)));
+    if (wrote.length) bad(`\`hkb init\` wrote ${wrote.join(' and ')}`, 'the hooks ride the launch; only --shared-hooks writes a file — see installClaudeHooks in src/init.js');
+    else ok('no hook in either settings file: an ordinary session in this repo pays nothing');
+    if (!ignoredLines.includes(LOCAL_SETTINGS)) bad(`${LOCAL_SETTINGS} may still be written by --shared-hooks' predecessors and is not in the generated .gitignore`, 'see GITIGNORE_LINES in src/init.js');
+    checkLaunchHooks(root, repo);
 
     // The next command an operator runs after init is `hkb up`, and `--status` is the half of it that
     // is safe to run anywhere: pid files only, no board read, no network, nothing started.
@@ -249,34 +245,62 @@ function checkInitOffline(bin, root) {
 }
 
 /**
+ * What a worker's launch will actually hand Claude Code (#144) — the answer that replaced the
+ * settings file. Only a tarball run can check it end to end: the value is built from the *installed*
+ * package's own location, so this is the one place that proves the command it names is a command
+ * `/bin/sh` really runs, and that it is silent in a session that is not a worker's.
+ */
+function checkLaunchHooks(root, repo) {
+  const dump = run(process.execPath, ['-e',
+    `import(${JSON.stringify(pathToFileURL(path.join(root, 'src', 'init.js')).href)})` +
+    '.then((m) => process.stdout.write(m.workerHookSettings({ root: process.cwd() })))',
+  ], { cwd: repo, env: cleanEnv() });
+  if (dump.status !== 0) { bad(`could not build the launch's --settings: ${dump.out}`, 'see workerHookSettings in src/init.js'); return; }
+  let settings;
+  try { settings = JSON.parse(dump.out); }
+  catch { bad(`the launch's --settings is not JSON: ${dump.out.slice(0, 120)}`, 'Claude Code parses it as inline settings — see hookSettings in src/model.js'); return; }
+  const events = Object.keys(settings.hooks || {}).sort().join(', ');
+  if (events !== 'PreToolUse, Stop') { bad(`the launch carries hooks "${events}", expected "PreToolUse, Stop"`, 'see CLAUDE_HOOKS in src/init.js'); return; }
+  if (dump.out.includes('_npx')) bad('the launch names the npx cache, which is not a durable path', 'see hkbCommandForHook in src/init.js');
+  else ok(`the launch carries --settings (${events}), naming no npx cache`);
+
+  const stop = settings.hooks.Stop[0].hooks[0].command;
+  const sh = run('sh', ['-c', stop], { cwd: repo, env: { ...cleanEnv(), CLAUDE_PROJECT_DIR: repo } });
+  if (sh.status !== 0) bad(`the launch's Stop hook command exited ${sh.status}: ${sh.out}`, 'a `matcher: "*"` hook that fails breaks every tool call in that session — see hkbCommandForHook in src/init.js');
+  else if (sh.out !== '') bad(`the launch's Stop hook command said "${sh.out}" outside a worker`, 'a hook outside a worker must be silent — see src/hook.js');
+  else ok('and that command exits 0 with no output outside a worker');
+}
+
+/**
  * The two install shapes where the hkb being run lives INSIDE the repo it is setting up (#146):
  * `npm i -D hkb-cli`, which lands at `node_modules/hkb-cli`, and a checkout of hkb itself, where the
  * repo *is* the package. Only a tarball run can prove these — the source tests cannot put PKG_ROOT
- * anywhere but this checkout — and what they have to prove is the whole promise of that shape: the
- * hook command lands in the **tracked** settings file, names the repo rather than this machine
- * (measured, so a layout hkb did not invent still comes out right), and is a command `/bin/sh`
- * really runs — silently when the file is not there yet, which is every worker's worktree until it
- * runs `npm ci`.
+ * anywhere but this checkout — and what they have to prove is the whole promise of that shape: with
+ * `--shared-hooks`, the hook command lands in the **tracked** settings file, names the repo rather
+ * than this machine (measured, so a layout hkb did not invent still comes out right), and is a
+ * command `/bin/sh` really runs — silently when the file is not there yet, which is every worker's
+ * worktree until it runs `npm ci`. Since #144 the flag is what asks for the file; the shape of the
+ * command it writes is unchanged, and is still the reason that file may be tracked at all.
  * @param place puts the package into the scratch repo; returns the bin to run and the path the
  *   written command must name, relative to the repo
  */
 function checkInitInsideRepo(root, { what, slug, place }) {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), `hkb-smoke-${slug}-`));
   const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-smoke-fresh-'));
-  log(`running hkb init ${what} ${repo}`);
+  log(`running hkb init --shared-hooks ${what} ${repo}`);
   try {
     run('git', ['init', '-q', '-b', 'main'], { cwd: repo });
     const { bin, rel } = place(repo);
 
-    const r = run(process.execPath, [bin, 'init', '--repo', `acme/smoke-${slug}`, '--no-labels'], { cwd: repo, env: cleanEnv() });
+    const r = run(process.execPath, [bin, 'init', '--repo', `acme/smoke-${slug}`, '--no-labels', '--shared-hooks'], { cwd: repo, env: cleanEnv() });
     if (r.status !== 0) {
-      bad(`\`hkb init\` ${what} exited ${r.status}: ${r.out}`, 'run `node scripts/smoke-pack.mjs --keep` and try it by hand');
+      bad(`\`hkb init --shared-hooks\` ${what} exited ${r.status}: ${r.out}`, 'run `node scripts/smoke-pack.mjs --keep` and try it by hand');
       return;
     }
-    if (fs.existsSync(path.join(repo, LOCAL_SETTINGS))) bad(`\`hkb init\` wrote ${LOCAL_SETTINGS} ${what}`, 'the command resolves in every checkout — see hookPlacement in src/init.js');
+    if (fs.existsSync(path.join(repo, LOCAL_SETTINGS))) bad(`\`hkb init\` wrote ${LOCAL_SETTINGS} ${what}`, 'the command resolves in every checkout, so it belongs in the tracked file — see installClaudeHooks in src/init.js');
     let settings = null;
     try { settings = JSON.parse(fs.readFileSync(path.join(repo, SHARED_SETTINGS), 'utf8')); }
-    catch { bad(`\`hkb init\` did not write the tracked ${SHARED_SETTINGS} ${what}`, 'an hkb inside the repo is the case that may — see hkbCommandForHook in src/init.js'); return; }
+    catch { bad(`\`hkb init --shared-hooks\` did not write the tracked ${SHARED_SETTINGS} ${what}`, 'an hkb inside the repo is the case that may — see hkbCommandForHook in src/init.js'); return; }
 
     const commands = Object.values(settings.hooks || {}).flatMap((groups) => groups.flatMap((g) => g.hooks.map((h) => h.command)));
     const wanted = `$CLAUDE_PROJECT_DIR/${rel}`;

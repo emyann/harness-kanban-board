@@ -10,15 +10,15 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
   harnessFiles, installHarness, installClaudeHooks, hookSummary, CLAUDE_HOOKS, resolveProfiles, boardProfiles,
-  HARNESSES, HARNESS_PROFILE, packageSkillDir, HOOK_SETTINGS, NPX_COMMAND, hkbCommandForHook, hookPlacement,
+  HARNESSES, HARNESS_PROFILE, packageSkillDir, HOOK_SETTINGS, NPX_COMMAND, hkbCommandForHook, workerHookSettings,
   hookCommandNeeds, isHkbHookCommand, isPortableHookCommand, isEphemeralPath, findClaudeHooks, actionsFiles,
   projectBinRel, guardedHookCommand, resolveHookPath, hkbHooks, PROJECT_DIR,
 } from '../src/init.js';
 import { parseArgs } from '../src/cli.js';
-import { DEFAULT_BOARD, DEFAULT_PROFILES, CLAUDE_DENY, ensureWorktree } from '../src/board.js';
+import { DEFAULT_BOARD, DEFAULT_PROFILES, CLAUDE_DENY, HOOK_SETTINGS_VAR, ensureWorktree } from '../src/board.js';
 import { expandLaunch, spawnWorker, tick } from '../src/dispatch.js';
-import { checkHarnesses, checkHooks } from '../src/doctor.js';
-import { stripFrontmatter, worktreePath, insideRepo, stripNodeModulesBin } from '../src/model.js';
+import { checkHarnesses, checkHooks, staleHookLaunches, STALE_HOOK_CHECK, LAUNCH_HOOK_CHECK } from '../src/doctor.js';
+import { stripFrontmatter, worktreePath, insideRepo, stripNodeModulesBin, hookSettings, hookEntry } from '../src/model.js';
 import { FakeGh, kbIssue } from './fake-gh.js';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
@@ -193,6 +193,24 @@ test('the generated Actions worker carries the same deny list as a local launch'
   assert.ok(m, '--disallowedTools went missing from the worker workflow');
   assert.deepEqual(m[1].split(','), CLAUDE_DENY);
   assert.ok(CLAUDE_DENY.includes('Bash(hkb dispatch*)'));
+});
+
+// The runner's workflow is a TRACKED, generated file, so — unlike a local launch — it may not carry
+// a command that only resolves on the machine that ran `hkb init --with-actions`. The runner puts
+// `hkb` on PATH itself, so the portable form is both correct there and identical in every diff.
+test('the generated Actions worker carries the hooks, in a form no machine owns', () => {
+  const yml = actionsFiles().find((f) => /worker-claude/.test(f.rel)).contents;
+  const m = /--settings '([^']*)'/.exec(yml);
+  assert.ok(m, '--settings went missing from the worker workflow');
+  assert.ok(!m[1].includes("'"), 'the JSON is wrapped in single quotes for the runner shell, so it may not contain one');
+  const hooks = JSON.parse(m[1]).hooks;
+  for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
+    assert.deepEqual(hooks[event], [hookEntry(`hkb hook ${verb}`)], `${event}: a runner installs hkb on PATH; a path here would name somebody's laptop`);
+  }
+  assert.equal(yml.split("--settings '").length - 1, 1, 'exactly one, on the claude step');
+  // KB_TASK is what makes them live at all, and unlike `claude --bg` a runner really has it
+  assert.match(yml, /KB_TASK: \$\{\{ inputs\.task \}\}/);
+  assert.match(yml, /KB_PROFILE: claude-action/);
 });
 
 test('Copilot gets no dispatch deny — its pattern language is unverified for it (told in the prompt instead)', () => {
@@ -421,11 +439,12 @@ test('this repo ships the codex templates the generator reads', () => {
 });
 
 // ---------- claude, the default harness: the hooks init writes into a settings file ----------
-// Unlike the generated harness files, these go into a file every other session in that repo reads.
-// The tracked `.claude/settings.json` is read on machines that are not this one, and no command hkb
-// can write means the same thing there (#85) — so the default is the gitignored
-// `.claude/settings.local.json`, `--shared-hooks` opts into the tracked file with the one portable
-// form, and either way: touch nothing else, land in exactly one file, and name everything written.
+// Unlike the generated harness files, a Claude settings file is read by every OTHER session in that
+// repo, and hkb's hooks serve exactly one session: the worker it launched. So since #144 they ride
+// the launch (`--settings`), init writes no settings file unless `--shared-hooks` asks for one, and
+// what an older init left in the per-developer file is taken back out. What a settings file still
+// gets, when it is asked for, is only ever a command that means the same thing on every machine
+// (#85) — a plain `hkb`, or the repo's own through `$CLAUDE_PROJECT_DIR` (#146).
 
 const LOCAL = HOOK_SETTINGS.local, SHARED = HOOK_SETTINGS.shared;
 const readSettings = (root, rel = LOCAL) => JSON.parse(fs.readFileSync(path.join(root, rel), 'utf8'));
@@ -438,24 +457,43 @@ const hookGroups = (verb, command) => [{ matcher: '*', hooks: [{ type: 'command'
 /** A settings object with hkb's two hooks running `command hook <verb>`. */
 const withHkbHooks = (command) => ({ hooks: Object.fromEntries(Object.entries(CLAUDE_HOOKS).map(([e, v]) => [e, hookGroups(v, command)])) });
 
-test('installClaudeHooks writes both hooks into the local, gitignored settings file', () => {
+test('installClaudeHooks writes no settings file at all by default (#144)', () => {
   const root = scratch();
   const r = installClaudeHooks(root, () => {});
-  assert.equal(r.file, LOCAL, 'a machine-specific command must not land in the tracked file');
-  assert.deepEqual(r.added, ['Stop', 'PreToolUse']);
-  assert.equal(fs.existsSync(path.join(root, SHARED)), false, 'nothing is written to the shared file by default');
+  assert.equal(r.file, null, 'the launch carries them; a settings file is read by every session in the repo');
+  assert.deepEqual([r.added, r.cleared], [[], []]);
+  for (const rel of [LOCAL, SHARED]) assert.equal(fs.existsSync(path.join(root, rel)), false, `${rel} must not even be created`);
+});
 
+test('an older init\'s hooks are removed from the per-developer file, and only ours', () => {
+  const root = scratch();
+  writeSettings(root, LOCAL, {
+    model: 'opus',
+    hooks: {
+      Stop: [{ matcher: '*', hooks: [{ type: 'command', command: 'make lint' }, { type: 'command', command: 'hkb hook stop', timeout: 30 }] }],
+      PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: 'node "/opt/hkb/bin/hkb.js" hook pretool', timeout: 30 }] }],
+    },
+  });
+
+  const r = installClaudeHooks(root, () => {});
+
+  assert.deepEqual([r.file, r.cleared], [null, ['Stop', 'PreToolUse']], 'both come out, whatever command they were running');
   const s = readSettings(root);
-  assert.deepEqual(Object.keys(s.hooks), ['Stop', 'PreToolUse'], 'no other event should be claimed');
-  for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
-    assert.equal(s.hooks[event].length, 1);
-    const [group] = s.hooks[event];
-    assert.equal(group.matcher, '*');
-    assert.deepEqual(group.hooks.map((h) => h.type), ['command']);
-    assert.equal(group.hooks[0].timeout, 30);
-    assert.match(group.hooks[0].command, new RegExp(`hkb.* hook ${verb}$`), `${event} must run \`hkb hook ${verb}\``);
-  }
-  assert.deepEqual(installClaudeHooks(root, () => {}).added, [], 'idempotent: a second init adds nothing');
+  assert.equal(s.model, 'opus', 'settings that are not ours must survive');
+  assert.deepEqual(commandsOf(s.hooks.Stop), ['make lint'], "and so must the operator's own hook in the same group");
+  assert.equal(s.hooks.PreToolUse, undefined, 'a group left holding nothing goes with it');
+  assert.match(hookSummary(r), /removed the Stop and PreToolUse hooks hkb left in .*settings\.local\.json/);
+  assert.deepEqual(installClaudeHooks(root, () => {}).cleared, [], 'idempotent: nothing left to take out');
+});
+
+test('the tracked file is never emptied out from under a team that chose it', () => {
+  const root = scratch();
+  writeSettings(root, SHARED, withHkbHooks('hkb'));
+
+  const r = installClaudeHooks(root, () => {});
+
+  assert.equal(r.file, null, 'a plain init still writes nothing');
+  assert.deepEqual(commandsOf(readSettings(root, SHARED).hooks.Stop), ['hkb hook stop'], 'hooks a human committed are a choice hkb does not overrule');
 });
 
 test('--shared-hooks writes the tracked file, and only ever a plain `hkb`', () => {
@@ -469,122 +507,103 @@ test('--shared-hooks writes the tracked file, and only ever a plain `hkb`', () =
   }
 });
 
-test('the hooks live in exactly one file — a second copy fires every nudge twice', () => {
+test('--shared-hooks writes the tracked file and clears the per-developer one', () => {
   const root = scratch();
-  installClaudeHooks(root, () => {});
-  const moved = installClaudeHooks(root, () => {}, { shared: true });
-  assert.equal(moved.file, SHARED);
-  assert.equal(moved.movedFrom, LOCAL);
-  assert.deepEqual(readSettings(root, LOCAL).hooks, undefined, "hkb's hooks are gone from the file it left");
+  writeSettings(root, LOCAL, withHkbHooks('node "/home/someone/checkout/hkb-cli/bin/hkb.js"'));
+
+  const r = installClaudeHooks(root, () => {}, { shared: true });
+
+  assert.equal(r.file, SHARED);
+  assert.deepEqual([r.added, r.cleared], [['Stop', 'PreToolUse'], ['Stop', 'PreToolUse']]);
+  assert.equal(readSettings(root, LOCAL).hooks, undefined, 'one file, or every nudge fires twice');
   assert.deepEqual(Object.keys(readSettings(root, SHARED).hooks), ['Stop', 'PreToolUse']);
 });
 
-test('hooks already in the tracked file with a portable command are left where they are', () => {
-  const root = scratch();
-  writeSettings(root, SHARED, withHkbHooks('hkb'));
-
-  const r = installClaudeHooks(root, () => {});
-
-  assert.equal(r.file, SHARED, 'a portable command in the shared file is a choice, not the bug');
-  assert.deepEqual(r.added, []);
-  assert.deepEqual(r.repaired, []);
-  assert.equal(fs.existsSync(path.join(root, LOCAL)), false);
-});
-
-test('hooks in the tracked file that name a path are moved into the local one (#85)', () => {
+test('a path in the tracked file is rewritten, never left for a teammate to trip over (#85)', () => {
   const root = scratch();
   writeSettings(root, SHARED, { model: 'opus', ...withHkbHooks('node "/home/someone/.npm/_npx/9f/node_modules/hkb-cli/bin/hkb.js"') });
 
-  const r = installClaudeHooks(root, () => {});
+  const r = installClaudeHooks(root, () => {}, { shared: true });
 
-  assert.equal(r.file, LOCAL);
-  assert.equal(r.movedFrom, SHARED);
-  assert.deepEqual(r.added, ['Stop', 'PreToolUse']);
+  assert.deepEqual([r.added, r.repaired], [[], ['Stop', 'PreToolUse']]);
   const shared = readSettings(root, SHARED);
   assert.equal(shared.model, 'opus', 'the rest of the tracked file is untouched');
-  assert.equal(shared.hooks, undefined, 'and the path that was only ever right on one machine is gone');
-  assert.ok(!JSON.stringify(readSettings(root, LOCAL)).includes('_npx'), 'the npx cache is never named again');
+  assert.deepEqual(commandsOf(shared.hooks.Stop), ['hkb hook stop'], 'a tracked file gets the portable form or nothing');
+  assert.ok(!JSON.stringify(shared).includes('_npx'), 'the npx cache is never named again');
 });
 
-test('an npx-cache path in the local file is repaired in place', () => {
+test('a portable command already in the tracked file is left byte-identical', () => {
   const root = scratch();
-  writeSettings(root, LOCAL, withHkbHooks('node "/home/someone/.npm/_npx/9f/node_modules/hkb-cli/bin/hkb.js"'));
+  writeSettings(root, SHARED, withHkbHooks('hkb'));
 
-  const r = installClaudeHooks(root, () => {});
+  const r = installClaudeHooks(root, () => {}, { shared: true });
 
-  assert.equal(r.file, LOCAL);
-  assert.deepEqual(r.added, []);
-  assert.deepEqual(r.repaired, ['Stop', 'PreToolUse'], 'a cache path stopped being a path when the cache went');
-  assert.ok(!JSON.stringify(readSettings(root, LOCAL)).includes('_npx'));
-});
-
-test('a hand-written local command survives a re-run', () => {
-  const root = scratch();
-  writeSettings(root, LOCAL, withHkbHooks('/opt/tools/hkb'));
-
-  const r = installClaudeHooks(root, () => {});
-
-  assert.deepEqual([r.added, r.repaired], [[], []], 'the local file is the operator\'s machine, and their command runs on it');
-  assert.equal(commandsOf(readSettings(root, LOCAL).hooks.Stop)[0], '/opt/tools/hkb hook stop');
+  assert.deepEqual([r.added, r.repaired], [[], []], 'it already means the same thing on every machine');
+  assert.deepEqual(commandsOf(readSettings(root, SHARED).hooks.Stop), ['hkb hook stop']);
 });
 
 test('installClaudeHooks leaves the rest of the settings file alone', () => {
   const root = scratch();
-  writeSettings(root, LOCAL, {
+  writeSettings(root, SHARED, {
     model: 'opus',
     hooks: { Stop: [{ matcher: '*', hooks: [{ type: 'command', command: 'make lint' }] }] },
   });
 
-  assert.deepEqual(installClaudeHooks(root, () => {}).added, ['Stop', 'PreToolUse']);
+  assert.deepEqual(installClaudeHooks(root, () => {}, { shared: true }).added, ['Stop', 'PreToolUse']);
 
-  const s = readSettings(root);
+  const s = readSettings(root, SHARED);
   assert.equal(s.model, 'opus', 'settings that are not ours must survive');
   assert.deepEqual(commandsOf(s.hooks.Stop).filter((c) => c === 'make lint'), ['make lint'], 'so must the operator\'s own hook');
   assert.equal(commandsOf(s.hooks.Stop).length, 2);
 });
 
-test("a group carrying the operator's hook beside ours keeps theirs when ours moves out", () => {
+test("a group carrying the operator's hook beside ours keeps theirs when ours is cleared out", () => {
   const root = scratch();
-  writeSettings(root, SHARED, {
+  writeSettings(root, LOCAL, {
     hooks: { Stop: [{ matcher: '*', hooks: [{ type: 'command', command: 'make lint' }, { type: 'command', command: 'node "/tmp/hkb/bin/hkb.js" hook stop' }] }] },
   });
 
   installClaudeHooks(root, () => {});
 
-  assert.deepEqual(commandsOf(readSettings(root, SHARED).hooks.Stop), ['make lint'], 'we only ever remove our own');
+  assert.deepEqual(commandsOf(readSettings(root, LOCAL).hooks.Stop), ['make lint'], 'we only ever remove our own');
 });
 
 test('installClaudeHooks reports a settings file it cannot parse rather than overwriting it', () => {
   const root = scratch();
-  writeSettings(root, LOCAL, '{ not json');
+  writeSettings(root, SHARED, '{ not json');
   const said = [];
 
-  assert.equal(installClaudeHooks(root, (s) => said.push(s)), null);
+  assert.equal(installClaudeHooks(root, (s) => said.push(s), { shared: true }), null);
 
-  assert.equal(fs.readFileSync(path.join(root, LOCAL), 'utf8'), '{ not json', 'the file is the operator\'s, not ours to rewrite');
+  assert.equal(fs.readFileSync(path.join(root, SHARED), 'utf8'), '{ not json', 'the file is the operator\'s, not ours to rewrite');
   assert.match(said.join('\n'), /not valid JSON/);
 });
 
-test('an unparseable *other* file is called out, because it may hold a second copy of the hooks', () => {
+test('an unparseable per-developer file is called out, because it may still hold the hooks', () => {
   const root = scratch();
-  writeSettings(root, SHARED, '{ not json');
+  writeSettings(root, LOCAL, '{ not json');
   const said = [];
 
   const r = installClaudeHooks(root, (s) => said.push(s), {});
 
-  assert.equal(r.file, LOCAL, 'the file we can read still gets the hooks');
-  assert.match(said.join('\n'), /settings\.json is not valid JSON.*fires twice/s);
+  assert.deepEqual([r.file, r.cleared], [null, []], 'nothing hkb can clean up, and nothing it will overwrite');
+  assert.equal(fs.readFileSync(path.join(root, LOCAL), 'utf8'), '{ not json');
+  assert.match(said.join('\n'), /settings\.local\.json is not valid JSON.*every session in this repo/s);
 });
 
-test('init names both hooks it wrote, where they went, and what the second one is for', () => {
-  const fresh = hookSummary(['Stop', 'PreToolUse']);
-  assert.match(fresh, /^added Stop and PreToolUse hooks to \.claude\/settings\.local\.json/);
-  assert.match(hookSummary([]), /^Stop and PreToolUse hooks already present in \.claude\/settings\.local\.json/);
-  assert.match(hookSummary(['PreToolUse']), /^added PreToolUse hook to \.claude\/settings\.local\.json; Stop hook already there/);
-  assert.match(hookSummary(['Stop', 'PreToolUse'], { file: SHARED }), /to \.claude\/settings\.json/);
-  assert.match(hookSummary([], { movedFrom: SHARED }), /moved out of \.claude\/settings\.json, which is shared/);
-  assert.match(hookSummary([], { repaired: ['Stop'] }), /rewrote the Stop hook command/);
-  for (const line of [fresh, hookSummary([]), hookSummary(['PreToolUse'])]) {
+test('init says where the hooks run, what it wrote and what it took away', () => {
+  const launch = hookSummary({});
+  assert.match(launch, /^Stop and PreToolUse hooks ride the worker launch \(`claude --settings`\) — no session but a worker's ever sees them/);
+  assert.match(hookSummary({ cleared: ['Stop'] }), /removed the Stop hook hkb left in \.claude\/settings\.local\.json, which fired in every session in this repo/);
+  const shared = hookSummary({ file: SHARED, added: ['Stop', 'PreToolUse'] });
+  assert.match(shared, /^added Stop and PreToolUse hooks to \.claude\/settings\.json/);
+  assert.match(hookSummary({ file: SHARED, added: ['PreToolUse'] }), /^added PreToolUse hook to \.claude\/settings\.json; Stop hook already there/);
+  assert.match(hookSummary({ file: SHARED }), /^Stop and PreToolUse hooks already present in \.claude\/settings\.json/);
+  assert.match(hookSummary({ file: SHARED, repaired: ['Stop'] }), /rewrote the Stop hook command, which did not resolve for everyone that file serves/);
+  // #146 review: on a repo that carries its own hkb, the plain `$CLAUDE_PROJECT_DIR` form already
+  // resolved for everyone — what the rewrite adds is the guard, and saying otherwise was false.
+  assert.match(hookSummary({ file: SHARED, repaired: ['Stop'], binRel: 'bin/hkb.js' }), /rewrote the Stop hook command to name this repo's own hkb, guarded/);
+  for (const line of [launch, shared, hookSummary({ file: SHARED, added: ['PreToolUse'] })]) {
     for (const event of Object.keys(CLAUDE_HOOKS)) assert.ok(line.includes(event), `${event} goes unnamed in: ${line}`);
     assert.match(line, /inert outside a worker session/, 'an operator reading this has to know both are no-ops in their own sessions');
     // the two gates differ, and a note that says otherwise is how #143 found the docs stale
@@ -686,31 +705,29 @@ test('hookCommandNeeds reads the guarded form: the file it names, and that it ch
   assert.equal(hookCommandNeeds(`f="${PROJECT_DIR}/${DEP_REL}"; [ -f "$f" ] || exit 0; exec node "\${f}" hook stop`).target, `${PROJECT_DIR}/${DEP_REL}`, '${f} is the same variable');
 });
 
-test('hookPlacement puts a portable command in the tracked file without being asked', () => {
-  const guarded = withHkbHooks(`f="${PROJECT_DIR}/${DEP_REL}"; [ -f "$f" ] || exit 0; exec node "$f"`);
-  assert.deepEqual(hookPlacement({ portable: true }), { file: 'shared', movedFrom: null }, 'no --shared-hooks needed: it resolves for everyone that file serves');
-  assert.deepEqual(hookPlacement({ local: withHkbHooks('hkb'), portable: true }), { file: 'shared', movedFrom: 'local' }, 'and the per-developer copy is stale by construction');
-  assert.deepEqual(hookPlacement({ shared: guarded, portable: true }), { file: 'shared', movedFrom: null });
-  assert.deepEqual(hookPlacement({ shared: guarded }), { file: 'shared', movedFrom: null }, 'read back on a machine that runs hkb from somewhere else, it is still portable and still stays put');
+// hkb's own repo IS the self-checkout case — the repo is the package. Since #144 the invariant it
+// has to hold is the *absence* of the file: hkb may not ship a hook that fires in every session of
+// every contributor's checkout, least of all a bare `hkb` that resolves on nobody's machine in
+// particular. The command shapes below are still exercised, through `--shared-hooks`.
+test('hkb\'s own repo ships no hook in either settings file (#144)', () => {
+  for (const rel of [LOCAL, SHARED]) {
+    const abs = path.join(REPO, rel);
+    if (!fs.existsSync(abs)) continue;
+    assert.deepEqual(hkbHooks(JSON.parse(fs.readFileSync(abs, 'utf8'))), [],
+      `${rel} in hkb's own repo configures hkb's hooks — they would run in every session every contributor opens here`);
+  }
 });
 
-// hkb's own repo IS the self-checkout case — the repo is the package — so its committed
-// `.claude/settings.json` is the fixture this feature has to be right about. Run init over a copy of
-// it and the whole chain is exercised on real content: what the file holds now, what init makes of
-// it, and that a second run leaves the result alone. The scratch copy is the subject because the
-// tracked file itself is the maintainer's to change, with `hkb init`.
-test('this repo\'s own committed hooks land on the self-checkout form, once', () => {
-  const committed = fs.readFileSync(path.join(REPO, SHARED), 'utf8');
+test('--shared-hooks on a repo that carries its own hkb writes the guarded form (#146)', () => {
   const root = scratch();
-  fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(root, SHARED), committed);
+  const r = installClaudeHooks(root, () => {}, { shared: true, binRel: BIN });
 
-  const r = installClaudeHooks(root, () => {}, { binRel: BIN });
-  assert.equal(r.file, SHARED, 'it was already tracked and it stays tracked: the command means the same thing to everyone');
-  assert.equal(fs.existsSync(path.join(root, LOCAL)), false, 'and nothing is left per-developer to fire every nudge twice');
+  assert.equal(r.file, SHARED);
+  assert.equal(r.binRel, BIN);
+  assert.deepEqual(r.added, ['Stop', 'PreToolUse']);
+  assert.equal(fs.existsSync(path.join(root, LOCAL)), false, 'nothing is left in the per-developer file');
 
-  const after = fs.readFileSync(path.join(root, SHARED), 'utf8');
-  for (const h of hkbHooks(JSON.parse(after))) {
+  for (const h of hkbHooks(readSettings(root, SHARED))) {
     const need = hookCommandNeeds(h.command);
     assert.equal(h.command, guardedHookCommand(BIN, CLAUDE_HOOKS[h.event]), `${h.event}: the checkout names its own bin, never this machine`);
     assert.deepEqual([need.target, need.guarded], [`${PROJECT_DIR}/${BIN}`, true], `${h.event}: doctor reads a path out of it, and knows it checks for itself`);
@@ -718,33 +735,49 @@ test('this repo\'s own committed hooks land on the self-checkout form, once', ()
     assert.ok(fs.existsSync(resolveHookPath(need.target, REPO)), `${h.event}: and in this checkout that resolves to a file that is really there`);
   }
 
-  const again = installClaudeHooks(root, () => {}, { binRel: BIN });
-  assert.deepEqual([again.added, again.repaired], [[], []], 'idempotent on real content, not just on a file the test wrote');
-  assert.equal(fs.readFileSync(path.join(root, SHARED), 'utf8'), after, 'byte-identical — a re-run may not churn a tracked file');
+  const before = fs.readFileSync(path.join(root, SHARED), 'utf8');
+  const again = installClaudeHooks(root, () => {}, { shared: true, binRel: BIN });
+  assert.deepEqual([again.added, again.repaired], [[], []], 'idempotent');
+  assert.equal(fs.readFileSync(path.join(root, SHARED), 'utf8'), before, 'byte-identical — a re-run may not churn a tracked file');
 });
 
-test('installClaudeHooks writes the repo\'s own hkb into the tracked file', () => {
+test('--shared-hooks writes the repo\'s own hkb, guarded, for a devDependency too', () => {
   const root = scratch();
-  const r = installClaudeHooks(root, () => {}, { binRel: DEP_REL });
+  const r = installClaudeHooks(root, () => {}, { shared: true, binRel: DEP_REL });
 
-  assert.equal(r.file, SHARED, 'a command that resolves in every checkout belongs where everyone reads it');
-  assert.equal(r.binRel, DEP_REL);
-  assert.deepEqual(r.added, ['Stop', 'PreToolUse']);
-  assert.equal(fs.existsSync(path.join(root, LOCAL)), false, 'nothing is left in the per-developer file');
+  assert.deepEqual([r.file, r.binRel, r.added], [SHARED, DEP_REL, ['Stop', 'PreToolUse']]);
   for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
     assert.equal(commandsOf(readSettings(root, SHARED).hooks[event])[0], guardedHookCommand(DEP_REL, verb));
   }
-  assert.deepEqual(installClaudeHooks(root, () => {}, { binRel: DEP_REL }).added, [], 'idempotent');
 });
 
 test('a bare `hkb` in the tracked file is rewritten once the repo installs its own', () => {
   const root = scratch();
   writeSettings(root, SHARED, withHkbHooks('hkb'));
 
-  const r = installClaudeHooks(root, () => {}, { binRel: DEP_REL });
+  const r = installClaudeHooks(root, () => {}, { shared: true, binRel: DEP_REL });
 
   assert.deepEqual([r.added, r.repaired], [[], ['Stop', 'PreToolUse']], '`hkb` on PATH is a fact about a machine; the pinned copy is a fact about the repo');
   assert.equal(commandsOf(readSettings(root, SHARED).hooks.Stop)[0], guardedHookCommand(DEP_REL, 'stop'));
+});
+
+// #146 review, item 1: the plain `node "$CLAUDE_PROJECT_DIR/<bin>"` form is already portable and
+// already resolves for everyone the tracked file serves. It is still rewritten — a worker's fresh
+// worktree has no `node_modules` until `npm ci`, and only the guarded form is silent there — but
+// what init SAYS about it has to be the guard, not a resolution failure that never happened.
+test('a portable but unguarded command is rewritten for the guard, and reported as that', () => {
+  const root = scratch();
+  const plain = `node "${PROJECT_DIR}/${DEP_REL}"`;
+  writeSettings(root, SHARED, withHkbHooks(plain));
+  assert.ok(isPortableHookCommand(`${plain} hook stop`), 'the premise: it resolves in every checkout as it stands');
+
+  const r = installClaudeHooks(root, () => {}, { shared: true, binRel: DEP_REL });
+
+  assert.deepEqual([r.added, r.repaired], [[], ['Stop', 'PreToolUse']]);
+  assert.equal(commandsOf(readSettings(root, SHARED).hooks.Stop)[0], guardedHookCommand(DEP_REL, 'stop'));
+  const said = hookSummary(r);
+  assert.match(said, /rewrote the Stop and PreToolUse hooks command to name this repo's own hkb, guarded/);
+  assert.ok(!said.includes('did not resolve'), `it did resolve — doctor passes it one line earlier: ${said}`);
 });
 
 test('a teammate running their own global hkb leaves the committed command alone', () => {
@@ -752,24 +785,11 @@ test('a teammate running their own global hkb leaves the committed command alone
   const committed = guardedHookCommand(DEP_REL, 'stop');
   writeSettings(root, SHARED, withHkbHooks(`f="${PROJECT_DIR}/${DEP_REL}"; [ -f "$f" ] || exit 0; exec node "$f"`));
 
-  const r = installClaudeHooks(root, () => {}, { binRel: null }); // their hkb is on PATH, not in this repo
+  const r = installClaudeHooks(root, () => {}, { shared: true, binRel: null }); // their hkb is on PATH, not in this repo
 
   assert.deepEqual([r.file, r.added, r.repaired], [SHARED, [], []], 'the tracked command is portable, and they did not write it');
   assert.equal(commandsOf(readSettings(root, SHARED).hooks.Stop)[0], committed);
   assert.equal(fs.existsSync(path.join(root, LOCAL)), false, 'and no second copy to fire every nudge twice');
-});
-
-test('hooks an earlier init left in the per-developer file move to the tracked one', () => {
-  const root = scratch();
-  writeSettings(root, LOCAL, { model: 'opus', ...withHkbHooks('node "/home/someone/checkout/hkb-cli/bin/hkb.js"') });
-
-  const r = installClaudeHooks(root, (s) => s, { binRel: DEP_REL });
-
-  assert.equal(r.movedFrom, LOCAL);
-  assert.deepEqual(r.added, ['Stop', 'PreToolUse']);
-  assert.equal(readSettings(root, LOCAL).model, 'opus', 'the rest of that file is untouched');
-  assert.equal(readSettings(root, LOCAL).hooks, undefined);
-  assert.match(hookSummary(r.added, r), /moved out of \.claude\/settings\.local\.json, because this command resolves in every checkout/);
 });
 
 test('isEphemeralPath catches an npx cache on either separator', () => {
@@ -798,15 +818,69 @@ test('every form hkb has ever written is recognised as ours, and nobody else\'s 
   assert.ok(!isPortableHookCommand('/opt/hkb-cli/bin/hkb hook stop'));
 });
 
-test('hookPlacement: fresh goes local, portable-shared stays, a path in the tracked file moves', () => {
-  const withPath = withHkbHooks('node "/opt/hkb-cli/bin/hkb.js"');
-  const portable = withHkbHooks('hkb');
-  assert.deepEqual(hookPlacement({}), { file: 'local', movedFrom: null });
-  assert.deepEqual(hookPlacement({ shared: portable }), { file: 'shared', movedFrom: null });
-  assert.deepEqual(hookPlacement({ shared: withPath }), { file: 'local', movedFrom: 'shared' });
-  assert.deepEqual(hookPlacement({ local: withPath, shared: portable }), { file: 'local', movedFrom: 'shared' }, 'never both');
-  assert.deepEqual(hookPlacement({ wantShared: true }), { file: 'shared', movedFrom: null });
-  assert.deepEqual(hookPlacement({ local: withPath, wantShared: true }), { file: 'shared', movedFrom: 'local' });
+// ---------- the launch line: what a worker's session actually gets ----------
+// The value is built without launching anything, which is the point of keeping it pure: the JSON a
+// worker will be handed is asserted here, and `expandLaunch` only has to spend it.
+
+test('hookSettings is the same shape a settings file gets, as one JSON string', () => {
+  const json = hookSettings(CLAUDE_HOOKS, (verb) => `hkb hook ${verb}`);
+  const parsed = JSON.parse(json);
+  assert.deepEqual(Object.keys(parsed), ['hooks'], 'nothing but hooks: --settings is merged over the session, not a replacement for it');
+  assert.deepEqual(Object.keys(parsed.hooks), ['Stop', 'PreToolUse']);
+  for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
+    assert.deepEqual(parsed.hooks[event], [hookEntry(`hkb hook ${verb}`)], `${event} must match what installClaudeHooks writes`);
+    assert.equal(parsed.hooks[event][0].hooks[0].timeout, 30);
+    assert.equal(parsed.hooks[event][0].matcher, '*');
+  }
+  assert.ok(json.startsWith('{'), 'Claude Code reads a value starting with { as inline JSON and anything else as a path');
+  assert.equal(hookSettings({}, () => 'x'), '', 'nothing to declare means no flag at all, not an empty --settings');
+  assert.equal(hookSettings(CLAUDE_HOOKS, () => ''), '', 'and neither does a command that could not be built');
+});
+
+test('workerHookSettings names the hkb that is running, never a project-relative one', () => {
+  const onPath = JSON.parse(workerHookSettings({ onPath: true }));
+  assert.equal(onPath.hooks.Stop[0].hooks[0].command, 'hkb hook stop');
+
+  // The launch never leaves this machine, so an absolute path is CORRECT here — exactly the case a
+  // tracked settings file had to rule out (#85).
+  const local = JSON.parse(workerHookSettings({ onPath: false }));
+  assert.match(local.hooks.PreToolUse[0].hooks[0].command, /^node ".*bin[/\\]hkb\.js" hook pretool$/);
+  assert.ok(!JSON.stringify(local).includes(PROJECT_DIR),
+    'a worker\'s $CLAUDE_PROJECT_DIR is its fresh worktree, with no node_modules until `npm ci` — the guarded form would be silent for exactly the part of an attempt that most needs the hooks');
+  assert.ok(fs.existsSync(/^node "([^"]+)"/.exec(local.hooks.Stop[0].hooks[0].command)[1]), 'and the hkb that ran the dispatcher is installed by definition');
+});
+
+test('every Claude launch carries the hooks, and nothing else does', () => {
+  for (const name of ['claude', 'claude-track', 'claude-p']) {
+    assert.ok(DEFAULT_PROFILES[name].launch.includes(HOOK_SETTINGS_VAR), `${name} must hand its worker hkb's hooks`);
+  }
+  for (const name of ['claude-action', 'copilot-cli', 'codex']) {
+    assert.ok(!DEFAULT_PROFILES[name].launch.includes(HOOK_SETTINGS_VAR), `${name} does not spawn Claude Code here`);
+  }
+});
+
+test('expandLaunch spends the placeholder as a flag pair, or drops it', () => {
+  const p = DEFAULT_PROFILES['claude-p'];
+  const json = hookSettings(CLAUDE_HOOKS, (verb) => `hkb hook ${verb}`);
+  const argv = expandLaunch(p.launch, { prompt: 'x', hook_settings: json }, p);
+  const at = argv.indexOf('--settings');
+  assert.ok(at > 0, `--settings missing from: ${argv.join(' ')}`);
+  assert.equal(argv[at + 1], json, 'one argument, unsplit — it is one JSON value');
+  assert.ok(!argv.includes(HOOK_SETTINGS_VAR), 'the placeholder itself must never reach the command line');
+
+  const none = expandLaunch(p.launch, { prompt: 'x' }, p);
+  assert.ok(!none.includes('--settings'), 'a flag with no value is a parse error waiting to happen, not a default');
+  assert.ok(!none.includes(HOOK_SETTINGS_VAR), 'and the placeholder still goes');
+});
+
+// The whole reason `board.json` holds a token and not the JSON: that file is TRACKED, and the
+// command inside names whichever hkb *this* machine has.
+test('the launch template a board commits never carries a machine-specific path', () => {
+  for (const p of Object.values(DEFAULT_PROFILES)) {
+    for (const el of p.launch) {
+      assert.ok(!/hkb\.js|_npx|hooks/.test(el), `a committed launch element names this machine: ${el}`);
+    }
+  }
 });
 
 // ---------- doctor: a hook that cannot resolve here ----------
@@ -848,20 +922,79 @@ test('doctor passes when it resolves, and names the npx cache as its own failure
   assert.match(cmd.detail, /npx cache is not a durable path/);
 });
 
-test('doctor names both copies when the hooks are configured twice, and the absence of any', () => {
+test('doctor warns about every settings file that still has hkb hooks in it (#144)', () => {
   const root = scratch();
   writeSettings(root, LOCAL, withHkbHooks('hkb'));
   writeSettings(root, SHARED, withHkbHooks('hkb'));
-  const both = findings();
-  checkHooks({ root }, both.sink, { onPath: () => true, exists: () => true });
-  assert.match(finding(both.results, 'stop hook').detail, /configured in both .* — every nudge fires twice/);
+  const { results, sink } = findings();
 
-  const none = findings();
-  checkHooks({ root: scratch() }, none.sink, { onPath: () => true, exists: () => true });
-  const missing = finding(none.results, 'stop hook');
+  checkHooks({ root }, sink, { onPath: () => true, exists: () => true });
+
+  const said = results.filter((r) => r.name === STALE_HOOK_CHECK);
+  assert.deepEqual(said.map((r) => r.ok), [null, null], 'a hook a human may have chosen is a warning, not a failure');
+  for (const r of said) assert.match(r.detail, /run in every session in this repo/);
+  assert.match(said.find((r) => r.detail.includes(LOCAL)).fix, /^hkb init/, 'init takes the per-developer copy out on its own');
+  assert.match(said.find((r) => r.detail.includes(SHARED)).fix, /delete hkb's hooks from .*settings\.json unless every session/, 'the tracked one is a choice, so it is the operator who deletes it');
+});
+
+test('doctor says so when nothing anywhere configures the stop hook', () => {
+  const { results, sink } = findings();
+  checkHooks({ root: scratch() }, sink, { onPath: () => true, exists: () => true });
+  const missing = finding(results, 'stop hook');
   assert.equal(missing.ok, null);
-  assert.match(missing.detail, /not configured in .*settings\.local\.json or .*settings\.json/);
-  assert.equal(finding(none.results, 'hook command'), undefined, 'nothing to resolve when nothing is configured');
+  assert.match(missing.detail, /no launch on this board carries it and it is not in .*settings\.local\.json or .*settings\.json/);
+  assert.equal(finding(results, 'hook command'), undefined, 'nothing to resolve when nothing is configured');
+});
+
+// The move itself: what doctor asks about is the command a worker will run, and where it says that
+// command comes from is the launch — not a file whose noise filed the card.
+test('doctor checks the launch line, and names it (#144)', () => {
+  const root = scratch();
+  const cfg = { profiles: { claude: DEFAULT_PROFILES.claude, 'claude-p': DEFAULT_PROFILES['claude-p'], codex: DEFAULT_PROFILES.codex } };
+  const { results, sink } = findings();
+
+  checkHooks({ root, cfg }, sink, { onPath: () => true, exists: () => true, binRel: null });
+
+  const stop = finding(results, 'stop hook');
+  assert.equal(stop.ok, true);
+  assert.match(stop.detail, /^on the claude, claude-p launch \(--settings\), so no other session in this repo runs it$/, 'codex reads its own hook file, so it is not on this list');
+  assert.equal(finding(results, 'hook command').ok, true, '`hkb` is on PATH in this fixture, so the launch resolves');
+  assert.equal(finding(results, STALE_HOOK_CHECK), undefined, 'and there is no settings file to complain about');
+});
+
+test('doctor fails a launch whose hkb is not there, and says whose tool calls it costs', () => {
+  const root = scratch();
+  const cfg = { profiles: { claude: DEFAULT_PROFILES.claude } };
+  const { results, sink } = findings();
+
+  // no hkb on PATH and none carried by the repo: the launch falls back to this package's own bin,
+  // which the fixture says is missing
+  checkHooks({ root, cfg }, sink, { onPath: () => false, exists: () => false, binRel: null });
+
+  const cmd = finding(results, 'hook command');
+  assert.equal(cmd.ok, false);
+  assert.match(cmd.detail, /in the claude launch/, 'the launch is where it came from, so the launch is what is named');
+  assert.match(cmd.detail, /fails on every tool call a worker makes/, 'and not "every session in this repo" — that is the thing this stopped doing');
+});
+
+// The upgrade path, and the one way this change can go quiet: `loadBoard` lets an array in
+// board.json win whole, so a launch an older `init` froze there never gains the flag — and nothing
+// is being written into a settings file to make up for it any more.
+test('doctor catches a launch frozen in board.json before the hooks moved onto it', () => {
+  const root = scratch();
+  const stale = DEFAULT_PROFILES.claude.launch.filter((el) => el !== HOOK_SETTINGS_VAR);
+  const cfg = { profiles: { claude: { ...DEFAULT_PROFILES.claude, launch: stale }, mine: { launch: [...stale] } } };
+  assert.deepEqual(staleHookLaunches(cfg), ['claude', 'mine']);
+
+  const { results, sink } = findings();
+  checkHooks({ root, cfg }, sink, { onPath: () => true, exists: () => true, binRel: null });
+
+  const said = results.filter((r) => r.name === LAUNCH_HOOK_CHECK);
+  assert.deepEqual(said.map((r) => r.ok), [null, null]);
+  assert.match(said[0].detail, /predates the hooks moving onto it, so its workers get no Stop nudge and record no session id/);
+  assert.match(said[0].fix, /drop "launch" from the claude profile/, "one of hkb's own takes its list back when the key goes");
+  assert.match(said[1].fix, /add "\{hook_settings\}" to that launch/, 'a custom name has no default to fall back to');
+  assert.deepEqual(staleHookLaunches({ profiles: { claude: DEFAULT_PROFILES.claude, codex: DEFAULT_PROFILES.codex } }), [], 'a current launch and a non-Claude one are both fine');
 });
 
 test('doctor resolves $CLAUDE_PROJECT_DIR before looking, and says what it found (#146)', () => {

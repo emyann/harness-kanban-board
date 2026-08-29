@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseSkillVersion, compareVersions } from '../src/model.js';
+import { parseSkillVersion, compareVersions, STATUSES, OUTCOMES, BLOCK_KINDS } from '../src/model.js';
+import { EVENT_KINDS } from '../src/watch.js';
 import { agentsSkillDir, isPackageRepo, linkSkill, copySkill, readSkillVersion, packageSkillDir, claudeCommandsDir, commandNames, installCommands } from '../src/init.js';
 import { checkSkill, checkCommands } from '../src/doctor.js';
 
@@ -180,7 +181,7 @@ test('doctor warns when the commands the skill documents are not registered (#92
   const root = tmpRepo('some-app');
   const missing = commandCheck(root);
   assert.equal(missing.ok, null);
-  assert.equal(missing.detail, '/kanban:decompose, /kanban:specify not registered — the skill documents them');
+  assert.equal(missing.detail, '/kanban:decompose, /kanban:operate, /kanban:specify not registered — the skill documents them');
   assert.equal(missing.fix, 'hkb init');
 
   installCommands(root);
@@ -192,6 +193,42 @@ test('this repo self-hosts its commands too: .claude/commands/kanban links to co
   assert.equal(fs.lstatSync(dir).isSymbolicLink(), true, 'a copy in the package repo would be a second source of truth');
   assert.equal(fs.readlinkSync(dir), path.join('..', '..', 'commands'));
   assert.equal(commandCheck(REPO).ok, true, 'the commands have to be registered in the repo that documents them');
+});
+
+// ---------- the operator's own section (#149) ----------
+// The operator seat is the one seat with a human in it, and `/kanban:operate` is the procedure a
+// session drives it by. Its reaction table is written against the vocabulary in src/watch.js and
+// src/model.js, so a token added there must not quietly become a transition nobody has a row for.
+
+/** The `## /kanban:operate` section of the shipped SKILL.md, up to the next top-level heading. */
+function operateSection() {
+  const skill = fs.readFileSync(path.join(REPO, 'skills', 'kanban', 'SKILL.md'), 'utf8');
+  const start = skill.indexOf('\n## /kanban:operate ');
+  assert.notEqual(start, -1, 'SKILL.md must carry the section the command delegates to');
+  const rest = skill.slice(start + 1);
+  const end = rest.indexOf('\n## ');
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
+test('the operate section has a row for every event kind, outcome and block kind (#149)', () => {
+  const section = operateSection();
+  for (const token of [...EVENT_KINDS, ...STATUSES, ...OUTCOMES, ...BLOCK_KINDS]) {
+    assert.ok(section.includes(`\`${token}\``),
+      `/kanban:operate must say what to do about \`${token}\` — an unnamed token is a transition the seat has no answer for`);
+  }
+});
+
+test('the operate section names the loop it runs and the line it must not cross (#149)', () => {
+  const section = operateSection();
+  // the procedure: one command up, hkb watch as the monitor, a digest per cycle
+  for (const bit of ['hkb up --serve', 'hkb up --status', 'hkb doctor', 'hkb watch --json --interval 60', 'hkb request-changes', 'hkb stats --json']) {
+    assert.ok(section.includes(bit), `the procedure must name ${bit}`);
+  }
+  assert.match(section, /Monitor tool/, 'a Claude Code session has to be told which tool arms the watch');
+  // and the boundary: what stays with the human
+  assert.match(section, /\.kanban\/board\.json/, 'board policy is the human\'s, so the file has to be named as off-limits');
+  assert.match(section, /`manual`/, 'the manual merge policy is the one approval the seat may never take');
+  assert.match(section, /hkb dispatch/, 'the seat must be told never to run the dispatcher itself');
 });
 
 test('this repo self-hosts: .agents/skills/kanban is a link to skills/kanban', () => {

@@ -6,7 +6,8 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, getTask, enableAutoMerge, branchProtection } from './tasks.js';
 import { claim, release, listLocks, lockBeatAt, staleBaseSha, remoteName } from './lock.js';
-import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, pidFile, readPidFile, pidAlive, recordExit, clearExit } from './board.js';
+import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, pidFile, readPidFile, pidAlive, recordExit, clearExit, HOOK_SETTINGS_VAR } from './board.js';
+import { workerHookSettings } from './init.js';
 import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted } from './track.js';
@@ -65,6 +66,10 @@ export function expandLaunch(template, vars, profile) {
     const perTool = /^(--[\w-]+)=\{allowed_tools\}$/.exec(el);
     if (perTool) { for (const t of profile.allowed_tools || []) out.push(perTool[1], t); continue; }
     if (el === '{model_args}') { if (vars.model) out.push('--model', vars.model); continue; }
+    // hkb's hooks, on the launch instead of in a settings file every session in the repo reads
+    // (#144). A flag pair or nothing, like `{model_args}`: an empty value would still be a `--settings`
+    // Claude Code has to parse, and a board with no hkb to run has nothing to declare.
+    if (el === HOOK_SETTINGS_VAR) { if (vars.hook_settings) out.push('--settings', vars.hook_settings); continue; }
     out.push(el.replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? '')));
   }
   return out;
@@ -120,7 +125,14 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
   // prints the real command without creating anything.
   const ownsWt = profile.workspace === 'worktree';
   const wt = ownsWt || cont?.ok ? name : null;
-  const vars = { n: task.number, k: attempt, slug: slugify(task.title), title: task.title.replace(/[\r\n]+/g, ' ').slice(0, 80), model: task.kb.model || profile.model || '', prompt, board: ctx.board, repo: ctx.repo.nameWithOwner, worktree: wt ? path.join(ctx.root, worktreePath(wt)) : ctx.root };
+  // `hook_settings` is asked for only by a launch that carries the placeholder — it shells out to
+  // find `hkb` on PATH, and a Copilot or Codex spawn has no use for the answer.
+  const vars = {
+    n: task.number, k: attempt, slug: slugify(task.title), title: task.title.replace(/[\r\n]+/g, ' ').slice(0, 80),
+    model: task.kb.model || profile.model || '', prompt, board: ctx.board, repo: ctx.repo.nameWithOwner,
+    worktree: wt ? path.join(ctx.root, worktreePath(wt)) : ctx.root,
+    hook_settings: (profile.launch || []).includes(HOOK_SETTINGS_VAR) ? workerHookSettings() : '',
+  };
   const argv = cont?.ok && !ownsWt ? withoutWorktreeFlag(expandLaunch(profile.launch, vars, profile)) : expandLaunch(profile.launch, vars, profile);
   const continued = cont && { pr: continuePr.number, branch: cont.ok ? cont.branch : null, why: cont.ok ? null : cont.why };
   // The launch environment is the worker's identity for every harness we run as a child process:

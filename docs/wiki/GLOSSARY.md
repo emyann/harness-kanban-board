@@ -54,6 +54,11 @@ deserves a `concepts/` page (link it).
   cards, steers by comment, reviews and merges, answers `kb:needs-human`,
   restarts a dispatcher that exited 4. "you", in a worker prompt
   (`decisions/adr-004-roles-and-adoption`).
+- **Operator session** — an agent session driving the operator's verbs on the
+  human's behalf, briefed by `/kanban:operate`. It has no `KB_TASK`, so no guard
+  in hkb applies to it: its limits — no merge on a `manual` board, no
+  `.kanban/board.json` edit, no second dispatcher — are the brief itself
+  (`skills/kanban/SKILL.md`; see *features/operator-seat*).
 - **Pid file** — `.kanban/dispatch.pid` and `.kanban/serve.pid`: one pid per line,
   written by the process itself and pre-written by `hkb up` for the child it
   spawned, and deleted only by the process that wrote it. Being named by one,
@@ -62,7 +67,9 @@ deserves a `concepts/` page (link it).
 - **Planning command** — `/kanban:specify` or `/kanban:decompose`: a harness slash
   command rather than an `hkb` verb, because both need a model and the dispatcher
   has none. One source in `commands/`, registered by the plugin and by `hkb init`
-  (`src/init.js`; see *features/planning-commands*).
+  (`src/init.js`; see *features/planning-commands*). `/kanban:operate` is the
+  third file in that directory and takes the same route, but it runs the board
+  rather than planning it (see *features/operator-seat*).
 - **Profile** — a harness adapter in `.kanban/board.json`: launch template, caps
   and heartbeat mode; `kb:agent:<profile>` says which one a task runs on. Not
   the model, the machine, or a person (`src/board.js`). Exactly one per card:
