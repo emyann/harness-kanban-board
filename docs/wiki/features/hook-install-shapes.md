@@ -7,39 +7,39 @@ audience: [dev, ops]
 read_when: "changing where hkb's Claude Code hooks are installed, what `hkb init` writes into a settings file, the Codex/Copilot hook files or .mcp.json, doctor's hook checks, or adopting hkb as a devDependency of a repo; also when a hook command in a repo does not resolve"
 covers:
   - path: src/init.js
-    sha: 28a9a921109337d3bd5c619859207995b579a06a
+    sha: 3591ba82629cba3e64c1d4fd85fefd13b842c88c
   - path: src/model.js
-    sha: bd036ba8ceb20bc5d08dfc2b2aadfa7dbfb16719
+    sha: 23bb576d15068653b10c068ed3c9f014f0353664
   - path: src/board.js
-    sha: 4309cd3c93e8ace0a8b0699440c331efeac44d65
+    sha: 38909683d493e1d5cce7f6e9f6eb38d24cc3fd72
   - path: src/doctor.js
-    sha: dae1f0beaa7f849f096dd8ae049ce83f927c040b
+    sha: 237d41029a9eb4eb0ce56f8b5231a453ce4bd200
   - path: src/mcp.js
     sha: 83243b4f880a005c6c06be3f1de396642f0cb3f8
   - path: skills/kanban/scripts/hkb
     sha: 619505ca77807157084e456057e1857eb9a31419
   - path: scripts/smoke-pack.mjs
-    sha: aea7c5459b0687a0401a52e6fafb20832c54b818
+    sha: 32bb83973bf13894c4d5201e14021a70d9257080
 related: [architecture/overview, features/update-notice, concepts/roles-and-seats]
-generated_at_commit: 802ea81
+generated_at_commit: d102a4e
 last_refreshed: 2026-08-29
 ---
 
 # Where a hook command may say hkb is
 
 > Everything else `hkb init` writes is data — labels, `board.json`, a copied
-> skill. The two Claude Code hooks are the one thing that is a **command line
+> skill. The three Claude Code hooks are the one thing that is a **command line
 > executed by somebody else's session**, in a plain `/bin/sh` with a PATH hkb
 > does not control, on machines hkb has never seen. That asymmetry is the whole
 > subject of this page.
 
 ## The constraint that makes this hard
 
-Both hooks are registered with `matcher: "*"` (`CLAUDE_HOOKS`, `src/init.js`),
+All three hooks are registered with `matcher: "*"` (`CLAUDE_HOOKS`, `src/init.js`),
 so the `PreToolUse` one runs before *every tool call* in every session that
 reads the file it is in — including sessions that have nothing to do with the
 board. A command that does not resolve therefore fails constantly, with an
-error nobody in that repo wrote or can explain. Meanwhile both hooks are inert
+error nobody in that repo wrote or can explain. Meanwhile all three hooks are inert
 without `KB_TASK` (`src/hook.js`), so all that noise buys exactly nothing in an
 ordinary session.
 
@@ -173,7 +173,7 @@ A worker runs in `.claude/worktrees/kb-<n>-<k>` (`worktreePath`,
 `src/model.js`), a fresh checkout with no `node_modules` until it runs
 `npm ci` — and `$CLAUDE_PROJECT_DIR` there is the worktree, not the main
 checkout. So `guardedHookCommand` tests for its own file and exits 0 silently
-when it is missing. Nothing is lost by waiting: both hooks are inert without
+when it is missing. Nothing is lost by waiting: all three hooks are inert without
 `KB_TASK` anyway, and by the time the `Stop` hook has a nudge to deliver the
 worker has installed.
 

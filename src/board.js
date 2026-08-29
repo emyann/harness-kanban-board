@@ -48,7 +48,7 @@ const COPILOT_TOOLS = [...new Set(SHELL_PATTERNS.map((c) => c.includes('*') ? `s
 // the prompt instead (SKILL.md, `hkb context`).
 export const CLAUDE_DENY = ['Bash(hkb dispatch*)', 'Bash(git push --force*)', 'Bash(git push -f*)'];
 
-// hkb's Stop and PreToolUse hooks, on the launch line rather than in a settings file (#144). The
+// hkb's Stop, PreToolUse and SubagentStop hooks, on the launch line rather than in a settings file (#144). The
 // placeholder expands to `--settings '{"hooks":…}'` at spawn time (`expandLaunch`, src/dispatch.js)
 // and to nothing when there is no command to run — which is the reason it is a placeholder and not
 // the JSON itself: `.kanban/board.json` is TRACKED, and the command inside names whichever `hkb`
