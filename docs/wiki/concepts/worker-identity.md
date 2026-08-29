@@ -7,18 +7,18 @@ audience: [dev, ops]
 read_when: "touching the launch environment, the Stop or PreToolUse hooks, session_id/transcript_path on an attempt row, or anything that reads KB_TASK"
 covers:
   - path: src/hook.js
-    sha: 6e79fbd145c93eeec750f83a525d8b50f1020d6b
+    sha: 18541f674ba7cd1cd7e0e6000d7ba8cc3191d765
   - path: src/model.js
-    sha: 4f9fc4e9b2e79f4251564d420f9f509d2a1f8029
+    sha: fce0b5057c4e40dceb41a3a43130800469d17156
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/dispatch.js
-    sha: f2e060e5aa89dfbae8cefde0f7c06282302e3992
+    sha: e4a749081cba52049a31ad1fc7df59f5be1750e0
   - path: src/doctor.js
-    sha: 0d30df823b6c0548ec7df76c51097023a0c251a3
+    sha: 5eb3cab286168d0e9f4d04108c46cee3beb25b07
   - path: src/lifecycle.js
-    sha: 20ebc63bcdd5e63634de41fb620aa84a38e720b3
-generated_at_commit: 46e1051
+    sha: 3938c82f3e181fb260fc54bb2f3150074459e224
+generated_at_commit: deb32a4
 last_refreshed: 2026-08-29
 related: [architecture/overview, features/harness-profiles, features/tracks, decisions/adr-004-roles-and-adoption]
 ---
