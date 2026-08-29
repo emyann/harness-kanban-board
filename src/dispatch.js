@@ -140,7 +140,7 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
     hook_settings: (profile.launch || []).includes(HOOK_SETTINGS_VAR) ? workerHookSettings() : '',
   };
   const argv = cont?.ok && !ownsWt ? withoutWorktreeFlag(expandLaunch(profile.launch, vars, profile)) : expandLaunch(profile.launch, vars, profile);
-  const continued = cont && { pr: continuePr.number, branch: cont.ok ? cont.branch : null, why: cont.ok ? cont.stale : cont.why };
+  const continued = continuePr && { pr: continuePr.number, branch: cont?.ok ? cont.branch : null, why: cont ? (cont.ok ? cont.stale : cont.why) : null };
   // The launch environment is the worker's identity for every harness we run as a child process:
   // it dies with that process. `claude --bg` is the exception — it hands the request to Claude
   // Code's session daemon and exits, and a launch that finds no daemon *starts* one, which then
@@ -848,11 +848,13 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
         ? `background agent in ${spawned.wt} (job id on next tick; claude agents to watch)`
         : `pid ${spawned.pid}${spawned.wt ? ` in ${worktreePath(spawned.wt)}` : ''}`;
     const continuing = !spawned.continued ? ''
-      : spawned.continued.branch
-        ? spawned.continued.why
-          ? `, continuing PR #${spawned.continued.pr} on ${spawned.continued.branch} (${spawned.continued.why}) — the brief says how to catch it up`
-          : `, continuing PR #${spawned.continued.pr} on ${spawned.continued.branch}`
-        : `, continuing PR #${spawned.continued.pr} from a fresh worktree (${spawned.continued.why}) — the brief says which PR to push to`;
+      : spawned.remote
+        ? `, continuing PR #${spawned.continued.pr} — the checkout happens in the trigger's own run, not here`
+        : spawned.continued.branch
+          ? spawned.continued.why
+            ? `, continuing PR #${spawned.continued.pr} on ${spawned.continued.branch} (${spawned.continued.why}) — the brief says how to catch it up`
+            : `, continuing PR #${spawned.continued.pr} on ${spawned.continued.branch}`
+          : `, continuing PR #${spawned.continued.pr} from a fresh worktree (${spawned.continued.why}) — the brief says which PR to push to`;
     summary.claimed.push({ number: t.number, attempt: k, profile: profileName, pid: spawned.pid, wt: spawned.wt || null, ...continues });
     log(`#${t.number}: claimed attempt ${k} → ${profileName} ${handle}${continuing} (log ${attempt.log})`);
     if (children && spawned.child) watchChild(ctx, t.number, k, spawned.child, children, state, profileName, log);

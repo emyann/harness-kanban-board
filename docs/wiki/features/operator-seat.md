@@ -13,16 +13,16 @@ covers:
   - path: src/watch.js
     sha: 8aba4c441e35c9241124c1278b5f4824706f7e52
   - path: src/model.js
-    sha: 44b1cb1b3ba2b0dcf9da5eff206c0dc0859e7ed3
+    sha: afe2c3e44ea8b5518d656f69f6f19aa00e41872e
   - path: src/cli.js
-    sha: ebf8bbf9c7b4cde00ecf38eccc0a56dddea3ac4d
+    sha: 0adaae89a7236c2b3e647ce95994c75a34dc55f9
   - path: src/lifecycle.js
-    sha: 09d0a396058f34b4e57b42caffd1d3b7b9e6e70e
+    sha: 3938c82f3e181fb260fc54bb2f3150074459e224
   - path: src/init.js
     sha: 8821eb7b1550e01b157424dd32480518eb7b8b71
   - path: src/stats.js
     sha: f81bc37dad19e253bf23a696ba899b4219dd5e53
-generated_at_commit: 384cb43
+generated_at_commit: 0a528d6
 last_refreshed: 2026-08-28
 related: [features/planning-commands, decisions/adr-004-roles-and-adoption, features/up-and-down, features/review-loop, concepts/roles-and-seats]
 ---
@@ -43,7 +43,7 @@ related: [features/planning-commands, decisions/adr-004-roles-and-adoption, feat
 
 A worker is *told* what to do by the thing that launched it, and hkb enforces
 the rest: `refuseIfWorker` (`src/cli.js:235-238`) refuses `dispatch`, `up` and
-`down` outright, the same three land in `DENY_PATTERNS` (`src/model.js:729-736`)
+`down` outright, the same three land in `DENY_PATTERNS` (`src/model.js:838-846`)
 for the PreToolUse hook, and the shipped Claude launches deny the dispatcher at
 the harness level. Every one of those tests `process.env.KB_TASK`.
 
@@ -107,14 +107,14 @@ wrong:
 
 - **`needs_input`: comment *then* unblock.** `unblock` clears `kb:needs-human`,
   resets the failure counter and sends the card back to *ready* / *todo*
-  (`src/lifecycle.js:302-313`). It carries no answer with it — so unblocking
+  (`src/lifecycle.js:304-314`). It carries no answer with it — so unblocking
   without first writing the answer onto the card relaunches a worker into the
   same wall, and burns an attempt doing it.
 - **Not every block asks for a human.** `block --kind dependency` puts the card
   in *todo* and adds no label; `transient` leaves it *blocked* with no label
-  either; the rest add `kb:needs-human` (`src/lifecycle.js:294-299`). The third
+  either; the rest add `kb:needs-human` (`src/lifecycle.js:296-301`). The third
   block on the *same reason* stops going to *blocked* at all and lands in
-  *triage* with the label (`block_recurrence_limit`, `src/lifecycle.js:283-293`)
+  *triage* with the label (`block_recurrence_limit`, `src/lifecycle.js:285-295`)
   — the board's own way of saying this is a loop, not a task.
 - **`review` is the seat's one real decision, and `manual` is a real answer.**
   On `dispatch.merge.mode: "auto"` the *dispatcher* enables GitHub's auto-merge

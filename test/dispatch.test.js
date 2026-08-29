@@ -405,6 +405,7 @@ test('a trigger-mode continuation records continues_pr only — no checkout, no 
   assert.equal(last.continues_pr, 42);
   assert.equal(last.continues_branch, undefined, 'the real checkout happens elsewhere; this run record must not claim one');
   assert.equal(last.wt, undefined);
+  assert.match(h.log(), /#7: claimed attempt 3 .*continuing PR #42/, 'the claim log line still names the PR it continues');
 });
 
 test('a claim that could not take the PR branch still runs, and says so', async (t) => {
@@ -511,6 +512,83 @@ test('a continued checkout is fast-forwarded to a branch a human pushed to since
   // an ordinary push from here must succeed — nothing to push, since the checkout is already at the head
   const push = spawnSync('git', ['push', 'origin', 'HEAD:worktree-kb-7-1'], { cwd: dir, encoding: 'utf8' });
   assert.equal(push.status, 0, push.stderr);
+});
+
+test('a branch this host has never fetched is reported as nothing to catch up to, not a divergence', async (t) => {
+  // no origin remote at all: the fetch fails silently and `origin/<branch>` was never created, so
+  // the ff-only merge has no ref to resolve — distinct from a real divergence (#162 review nit)
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-continue-noref-')));
+  const git = (...args) => {
+    const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+    return r.stdout.trim();
+  };
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 'test@example.com');
+  git('config', 'user.name', 'test');
+  git('commit', '-q', '--allow-empty', '-m', 'root');
+  git('worktree', 'add', '-q', '-b', 'worktree-kb-7-1', path.join(root, worktreePath('kb-7-1')));
+  const h = harness({ root });
+  t.after(h.cleanup);
+  const run = runWith([
+    { attempt: 1, ended_at: ago(600), outcome: 'review_requested', pr: 42 },
+    { attempt: 2, profile: 'reviewer', ended_at: ago(30), outcome: 'changes_requested', synthetic: true },
+  ]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.claimed.map((c) => c.number), [7]);
+  const last = h.gh.runOf(7).attempts.at(-1);
+  assert.equal(last.continues_branch, 'worktree-kb-7-1');
+  assert.match(last.continues_branch_stale, /no origin\/worktree-kb-7-1 ref to catch up to/);
+});
+
+test('a checkout reused from a dead spawn is still caught up to the remote head', async (t) => {
+  const origin = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-continue-reuse-origin-')));
+  const git = (cwd, ...args) => {
+    const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+    return r.stdout.trim();
+  };
+  git(origin, 'init', '-q', '--bare', '-b', 'main');
+  const human = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-continue-reuse-human-')));
+  git(human, 'clone', '-q', origin, '.');
+  git(human, 'config', 'user.email', 'test@example.com');
+  git(human, 'config', 'user.name', 'test');
+  git(human, 'commit', '-q', '--allow-empty', '-m', 'root');
+  git(human, 'push', '-q', 'origin', 'main');
+  git(human, 'checkout', '-q', '-b', 'worktree-kb-7-1');
+  git(human, 'commit', '-q', '--allow-empty', '-m', 'attempt 1');
+  git(human, 'push', '-q', 'origin', 'worktree-kb-7-1');
+
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-continue-reuse-root-')));
+  git(root, 'clone', '-q', origin, '.');
+  git(root, 'config', 'user.email', 'test@example.com');
+  git(root, 'config', 'user.name', 'test');
+  // a checkout that already exists at kb-7-3, as if a spawn died between the checkout and the launch
+  git(root, 'worktree', 'add', '-q', '-b', 'worktree-kb-7-1', path.join(root, worktreePath('kb-7-3')), 'origin/worktree-kb-7-1');
+
+  // a human pushes another commit while this reused checkout is still at the old one
+  git(human, 'commit', '-q', '--allow-empty', '-m', 'human fixup');
+  git(human, 'push', '-q', 'origin', 'worktree-kb-7-1');
+  const humanHead = git(human, 'rev-parse', 'worktree-kb-7-1');
+
+  const h = harness({ root });
+  t.after(h.cleanup);
+  const run = runWith([
+    { attempt: 1, ended_at: ago(600), outcome: 'review_requested', pr: 42 },
+    { attempt: 2, profile: 'reviewer', ended_at: ago(30), outcome: 'changes_requested', synthetic: true },
+  ]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.claimed.map((c) => c.number), [7]);
+  const dir = path.join(root, worktreePath('kb-7-3'));
+  assert.equal(git(dir, 'rev-parse', 'HEAD'), humanHead, 'the reused checkout was fetched and fast-forwarded too');
+  const last = h.gh.runOf(7).attempts.at(-1);
+  assert.equal(last.continues_branch_stale, undefined, 'a clean fast-forward has nothing to report');
 });
 
 test('the review loop turns: request-changes → claim → finish, all on one PR', async (t) => {

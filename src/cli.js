@@ -501,6 +501,7 @@ export async function main(argv) {
         pid = s.pid;
         runRec.run.attempts[k - 1].pid = pid;
         if (s.continued?.branch) runRec.run.attempts[k - 1].continues_branch = s.continued.branch;
+        if (s.continued?.branch && s.continued.why) runRec.run.attempts[k - 1].continues_branch_stale = s.continued.why;
         await saveRun(ctx, n, runRec);
       }
       out(ctx, { number: n, attempt: k, ref: c.ref, pid }, `#${n} claimed (attempt ${k}, ${c.ref})${pid ? ` pid ${pid}` : `\nexport KB_TASK=${n} KB_ATTEMPT=${k}   # then work, and finish with hkb complete|block|request-review`}`);

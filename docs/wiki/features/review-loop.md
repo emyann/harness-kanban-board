@@ -7,19 +7,21 @@ audience: [dev]
 read_when: "touching the active_pr guard, the claim loop's worktree creation, hkb request-changes, or the worker brief"
 covers:
   - path: src/model.js
-    sha: 44b1cb1b3ba2b0dcf9da5eff206c0dc0859e7ed3
+    sha: afe2c3e44ea8b5518d656f69f6f19aa00e41872e
   - path: src/dispatch.js
-    sha: 59d55d8501977caab57866f8defab8af65f85112
+    sha: 2eddf03a53b71951da0a3f3cbfcad8d7025ed771
   - path: src/board.js
-    sha: 46249085e19c4dfc0cfb762d48b3215218fd5472
+    sha: fd6f44def21b8286bbe5d9821209ccad1770df70
   - path: src/context.js
     sha: ab7afc4eb5158a879ea1700221892229329dce64
   - path: src/lifecycle.js
-    sha: 09d0a396058f34b4e57b42caffd1d3b7b9e6e70e
+    sha: 3938c82f3e181fb260fc54bb2f3150074459e224
   - path: src/gc.js
     sha: ae2cf14b7e83fa627fd9357545bd74294c001327
+  - path: src/cli.js
+    sha: 0adaae89a7236c2b3e647ce95994c75a34dc55f9
 related: [features/auto-merge, architecture/overview, architecture/dispatcher-tick]
-generated_at_commit: c2486c9
+generated_at_commit: 0a528d6
 last_refreshed: 2026-08-28
 ---
 
@@ -111,7 +113,12 @@ never a force: a clean fast-forward is silent, and a genuine divergence sets
 `stale` on the result, which `spawnWorker` (`src/dispatch.js`) turns into
 `continues_branch_stale` on the attempt row and a fallback to the brief's
 catch-up recipe (below) even though the checkout is, in fact, on the right
-branch.
+branch. The branch already has one when a died-mid-spawn attempt is reused
+(the checkout exists on the right branch already, above) — that path fetches
+and runs the same catch-up rather than trusting the leftover checkout as-is.
+`hkb claim --spawn` (`src/cli.js`) takes the same path as the dispatcher's own
+claim and records `continues_branch_stale` too, so a manual continuation is
+not silently less honest than an automatic one.
 
 **Trigger-mode profiles never make this checkout at all.** `claude-action`
 does not run the worker — its launch is `gh workflow run`, which fires an
@@ -120,7 +127,10 @@ checkout made here would sit unused while the real work happens somewhere
 else, so `spawnWorker` skips `worktreeOnBranch` outright when
 `profile.mode === 'trigger'`: such an attempt records `continues_pr` only,
 never `continues_branch`, and the run record stops claiming a checkout that
-was never made.
+was never made. The claim loop's own log line still names the PR being
+continued (`, continuing PR #<n> — the checkout happens in the trigger's own
+run, not here`) — only the checkout claim was ever wrong, not the fact that
+this attempt is a continuation.
 
 ## The brief is what actually prevents the second PR
 
@@ -165,10 +175,17 @@ changes_requested → completed`, all against one PR number.
   means the ordinary crash-retry ladder does not apply to it. A reviewer has to
   send it back again.
 - `worktreeOnBranch` assumes the remote is `origin` unless `remote` is set in
-  `board.json`; it fetches best-effort and a fetch failure is silent, falling
-  through to whatever the local branch holds — the ff-only merge above then
-  fails too (there is nothing new to merge), so the checkout is reported
-  `stale` rather than claimed current.
+  `board.json`; it fetches best-effort and a fetch failure is silent. Measured,
+  not assumed: when a tracking ref from an earlier fetch already exists, a
+  failed fetch leaves it exactly where it was, and `git merge --ff-only
+  origin/<branch>` against that stale ref succeeds trivially ("Already up to
+  date") — the checkout is reported **clean** even though the real remote may
+  be ahead. Only when no tracking ref exists yet (the first attempt to ever
+  fetch this branch name) does the ff-only merge have nothing to resolve —
+  `worktreeOnBranch` checks for that ref with `git rev-parse --verify --quiet`
+  before attempting the merge, so this case is reported `stale` with its own
+  message ("no `<remote>/<branch>` ref to catch up to") rather than the
+  generic ff-only failure a true divergence gets.
 - The continued worktree is `kb-<n>-<k>` with the *previous* attempt's branch
   checked out, so when the task finishes `hkb gc` removes the directory and
   deletes that local branch (`removeWorktree`, `src/gc.js`). Only the local one:
