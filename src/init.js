@@ -110,14 +110,15 @@ export function copySkill(root) {
   return readSkillVersion(dst);
 }
 
-// ---------- the planning commands ----------
-// `/kanban:specify` and `/kanban:decompose` are what SKILL.md documents by name, so something has to
-// register them. The package's `commands/` is the one source: `.claude-plugin/plugin.json` points at
-// it, and init copies it into `.claude/commands/kanban/` for the majority who install hkb from npm
+// ---------- the slash commands ----------
+// `/kanban:specify`, `/kanban:decompose` and `/kanban:operate` are what SKILL.md documents by name, so
+// something has to register them. The package's `commands/` is the one source: `.claude-plugin/plugin.json`
+// points at it, and init copies it into `.claude/commands/kanban/` for the majority who install hkb from npm
 // and never add the plugin. Both spellings produce the *same* name — a plugin namespaces its commands
 // by plugin name, a project namespaces them by directory — so the skill can document one invocation
 // that is true either way. The bodies delegate back to the SKILL.md section, so the procedure itself
-// is still written down exactly once (#92).
+// is still written down exactly once (#92). Nothing here enumerates them: the directory is the list,
+// so a fourth command is a file, and `hkb init` installs it with the others (#149).
 
 export function packageCommandsDir() { return path.join(PKG_ROOT, 'commands'); }
 export function claudeCommandsDir(root) { return path.join(root, '.claude', 'commands', 'kanban'); }
@@ -133,7 +134,7 @@ export function commandFiles() {
   }));
 }
 
-/** `/kanban:specify, /kanban:decompose` — what the commands are actually called, for the log line. */
+/** `/kanban:decompose, /kanban:operate, /kanban:specify` — what they are called, for the log line. */
 export function commandNames() {
   return commandFiles().map((f) => `/kanban:${path.basename(f.rel, '.md')}`);
 }
@@ -823,7 +824,7 @@ export async function init(ctx, flags, log) {
     }
   }
 
-  // 2b. the two planning commands the skill documents by name. Without these, `/kanban:decompose` is
+  // 2b. every slash command the skill documents by name. Without these, `/kanban:decompose` is
   //     an unknown command for everyone who installed hkb from npm rather than as a plugin (#92).
   const commands = installCommands(root);
   const named = commands.names.join(', ');

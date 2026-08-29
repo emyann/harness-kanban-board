@@ -49,6 +49,9 @@ npx hkb-cli create "Implement auth API" --blocked-by 41    # todo until #41 is d
 npx hkb-cli list                                           # triage todo ready running blocked review done
 ```
 
+`--priority` is a plain number and **higher wins** — the tick takes *ready* cards highest-priority first, oldest
+issue first within a tie. Cards default to `0`, so any positive number jumps the queue.
+
 ### Or drive it by hand
 
 No loop, no automation: take a card yourself and be the worker.
@@ -90,7 +93,8 @@ not a role.
 
 - **The operator is the human.** You own the repo, the token and the scope: you file and sharpen cards, steer with
   comments, review and merge, answer `kb:needs-human`, and restart a dispatcher that gave itself up. An agent
-  session may drive those verbs for you — the approvals and the credentials stay with you.
+  session may drive those verbs for you — [`/kanban:operate`](#running-the-board-from-a-session-kanbanoperate) is
+  its brief, and the approvals and the credentials stay with you.
 - **The dispatcher is a tick, not an agent — and not an orchestrator.** `hkb dispatch` promotes what became ready,
   reclaims what died, launches what it can, and exits. It holds no workflow and has no LLM in it: the graph lives
   on the cards as issue dependencies, and the loop only reconciles labels, locks and attempts against it. That
@@ -189,6 +193,24 @@ Both stop and show you what they propose before writing anything. `hkb init` ins
 two names. Their bodies delegate to the sections of the same name in
 [`skills/kanban/SKILL.md`](skills/kanban/SKILL.md), so a harness without slash commands — Copilot CLI, Codex —
 gets the identical procedure by asking the skill for it.
+
+### Running the board from a session: `/kanban:operate`
+
+The operator's seat is yours, but the loop it runs is a procedure, and a session can drive it. `/kanban:operate`
+is that procedure — installed by the same `hkb init`, delegating to the same skill:
+
+1. **Up.** `hkb up --serve`, then `hkb up --status`, then `hkb doctor` once, acting on every `✗`.
+2. **Watch, never poll.** `hkb watch --json --interval 60` as the session's monitor — conditional `GET`s, so a
+   quiet board is free. No `sleep`-and-`list`, and no tailing `dispatch.log` for state the board already has.
+3. **React per event kind.** One row for each of the ten kinds `hkb watch` emits, and for the status, outcome and
+   block kind each one landed on: what to read, which verb to run, and when the answer is "not yours".
+4. **The seat boundary, in writing.** It drives verbs — `comment`, `unblock` when the answer was already on the
+   board, `request-changes`, `up` after an exit 4. It never merges on a `manual` board, never edits
+   `.kanban/board.json` (profiles, `allowed_tools`, models, `merge.mode`), never re-prioritises someone else's
+   queue, never clears `kb:needs-human` for any reason but an answer it has just written onto the card, and
+   never starts a second dispatcher. What it cannot decide, it hands back whole: the card, what it read, what it
+   would do, and whether it needs a decision, a credential or an approval.
+5. **A digest per cycle** — `hkb watch`'s own one line per transition, plus what it did and what it handed back.
 
 ## The last step: who merges
 
