@@ -7,19 +7,19 @@ audience: [dev]
 read_when: "touching the active_pr guard, the claim loop's worktree creation, hkb request-changes, or the worker brief"
 covers:
   - path: src/model.js
-    sha: 2638a382485c8387f65f1e5160438293a8cf75e1
+    sha: 44b1cb1b3ba2b0dcf9da5eff206c0dc0859e7ed3
   - path: src/dispatch.js
-    sha: e1e1c59b9f199be57bb7cd1e6de32eef42864e45
+    sha: 59d55d8501977caab57866f8defab8af65f85112
   - path: src/board.js
-    sha: d075016fb95e37b07ef607b0112241a8622b68c7
+    sha: 46249085e19c4dfc0cfb762d48b3215218fd5472
   - path: src/context.js
-    sha: 6ba989c8c5bed05f5271c3cc7c91b27986f8d850
+    sha: ab7afc4eb5158a879ea1700221892229329dce64
   - path: src/lifecycle.js
-    sha: 2affd18fb3d2882db47ba164199b10160ba70ddb
+    sha: 09d0a396058f34b4e57b42caffd1d3b7b9e6e70e
   - path: src/gc.js
     sha: ae2cf14b7e83fa627fd9357545bd74294c001327
 related: [features/auto-merge, architecture/overview, architecture/dispatcher-tick]
-generated_at_commit: 8296f3f
+generated_at_commit: c2486c9
 last_refreshed: 2026-08-28
 ---
 
@@ -101,6 +101,27 @@ remote, the branch is gone — the attempt still runs, on an ordinary fresh
 worktree. The attempt row says which path was taken: `continues_pr` always,
 `continues_branch` only when the checkout is really on that branch.
 
+**Kept caught up, not just checked out (#162).** `git worktree add <dir>
+<branch>` reuses the *local* branch exactly as it is; the fetch just above it
+only updates `origin/<branch>`, so a human (or another host) pushing to the PR
+since the previous attempt left the checkout behind and its own eventual
+`git push` would be rejected non-fast-forward. `worktreeOnBranch` now runs
+`git merge --ff-only origin/<branch>` right after the add — best effort, and
+never a force: a clean fast-forward is silent, and a genuine divergence sets
+`stale` on the result, which `spawnWorker` (`src/dispatch.js`) turns into
+`continues_branch_stale` on the attempt row and a fallback to the brief's
+catch-up recipe (below) even though the checkout is, in fact, on the right
+branch.
+
+**Trigger-mode profiles never make this checkout at all.** `claude-action`
+does not run the worker — its launch is `gh workflow run`, which fires an
+Actions job that makes its own, unrelated `actions/checkout` elsewhere. A
+checkout made here would sit unused while the real work happens somewhere
+else, so `spawnWorker` skips `worktreeOnBranch` outright when
+`profile.mode === 'trigger'`: such an attempt records `continues_pr` only,
+never `continues_branch`, and the run record stops claiming a checkout that
+was never made.
+
 ## The brief is what actually prevents the second PR
 
 The checkout is a convenience; the instruction is the contract. `src/context.js`
@@ -118,7 +139,12 @@ sentence forbids and the shipped Claude and Copilot profiles deny outright
 
 Without the checkout the block carries the recipe instead (`git fetch` +
 `git reset --hard FETCH_HEAD`, then `git push origin HEAD:<branch>`), which
-works from whatever branch the fresh worktree happens to be on.
+works from whatever branch the fresh worktree happens to be on. A checkout
+that exists on the right branch but could not be fast-forwarded (`stale`,
+above) gets a third, accurate variant: fetch and `git reset --hard
+origin/<branch>` rather than the "already there" line or the fresh-branch
+recipe, so the brief never claims a plain `git push` will land when it would
+not.
 
 ## What the thread says afterwards
 
@@ -140,7 +166,9 @@ changes_requested → completed`, all against one PR number.
   send it back again.
 - `worktreeOnBranch` assumes the remote is `origin` unless `remote` is set in
   `board.json`; it fetches best-effort and a fetch failure is silent, falling
-  through to whatever the local branch holds.
+  through to whatever the local branch holds — the ff-only merge above then
+  fails too (there is nothing new to merge), so the checkout is reported
+  `stale` rather than claimed current.
 - The continued worktree is `kb-<n>-<k>` with the *previous* attempt's branch
   checked out, so when the task finishes `hkb gc` removes the directory and
   deletes that local branch (`removeWorktree`, `src/gc.js`). Only the local one:

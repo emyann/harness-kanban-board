@@ -15,7 +15,7 @@ import { stopHook, markSessionClaim } from './hook.js';
 import { init, packageVersion } from './init.js';
 import { doctor } from './doctor.js';
 import { gc } from './gc.js';
-import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, resumeCommand } from './model.js';
+import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, resumeCommand, activePrGuard } from './model.js';
 
 /** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
 const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'with-actions', 'mermaid', 'serve', 'help']);
@@ -436,7 +436,7 @@ export async function main(argv) {
       const p = resolveTerminalInput(cmd, flags, rest);
       const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || envAttempt(n) });
       const r = await withOutbox(ctx, replay, () => complete(ctx, n, { summary: p.summary, metadata: p.metadata, artifacts: p.artifacts, attempt: flags.attempt }));
-      out(ctx, r, `#${n} → ${r.status}${r.pr ? ` (waiting on ${r.pr_continued ? 'the PR it continued, ' : ''}PR #${r.pr})` : ''}`);
+      out(ctx, r, `#${n} → ${r.status}${r.pr ? ` (waiting on PR #${r.pr}${r.pr_continued ? ', continued' : ''})` : ''}`);
       return 0;
     }
     case 'block': {
@@ -479,10 +479,15 @@ export async function main(argv) {
       assertOnBoard(ctx, t);
       const runRec = await loadRun(ctx, n);
       const k = runRec.run.attempts.length + 1;
+      // an open PR with the reviewer's changes_requested row on top is a continuation, exactly like
+      // the dispatcher's own claim (`activePrGuard`, src/model.js) — a manual claim gets the same
+      // `continues_pr`/`continues_branch` bookkeeping, or `finish` will not say "continued" (#162)
+      const g = activePrGuard(runRec.run.attempts, t.prs);
+      const continuePr = g.continues ? g.pr : null;
       const c = await claim(ctx, n, k);
       if (c.result !== 'claimed') { out(ctx, c, `#${n}: ${c.result}${c.error ? ' — ' + c.error.message : ''}`); return c.result === 'held' ? 2 : 1; }
       const profile = flags.profile || t.agent || Object.keys(ctx.cfg.profiles)[0];
-      runRec.run.attempts.push({ attempt: k, profile, host: ctx.host, started_at: new Date().toISOString(), heartbeat_at: new Date().toISOString(), lock_sha: c.sha, manual: !flags.spawn });
+      runRec.run.attempts.push({ attempt: k, profile, host: ctx.host, started_at: new Date().toISOString(), heartbeat_at: new Date().toISOString(), lock_sha: c.sha, manual: !flags.spawn, ...(continuePr ? { continues_pr: continuePr.number } : {}) });
       const { saveRun } = await import('./tasks.js');
       await saveRun(ctx, n, runRec);
       // Claimed by hand from inside another task's session — a track runner working a node. Leave
@@ -491,7 +496,13 @@ export async function main(argv) {
       await setStatus(ctx, t, 'running');
       await setAgent(ctx, t, profile); // `--profile` names who is running it, so it replaces the old label
       let pid = null;
-      if (flags.spawn) { const s = await spawnWorker(ctx, t, profile, k); pid = s.pid; runRec.run.attempts[k - 1].pid = pid; await saveRun(ctx, n, runRec); }
+      if (flags.spawn) {
+        const s = await spawnWorker(ctx, t, profile, k, { continuePr });
+        pid = s.pid;
+        runRec.run.attempts[k - 1].pid = pid;
+        if (s.continued?.branch) runRec.run.attempts[k - 1].continues_branch = s.continued.branch;
+        await saveRun(ctx, n, runRec);
+      }
       out(ctx, { number: n, attempt: k, ref: c.ref, pid }, `#${n} claimed (attempt ${k}, ${c.ref})${pid ? ` pid ${pid}` : `\nexport KB_TASK=${n} KB_ATTEMPT=${k}   # then work, and finish with hkb complete|block|request-review`}`);
       return 0;
     }

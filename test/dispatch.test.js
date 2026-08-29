@@ -348,6 +348,20 @@ test('activePrGuard: only the reviewer\'s changes_requested row exempts an open 
   }
 });
 
+test('activePrGuard: with two open PRs, the last review_requested/completed row picks the winner', () => {
+  const first = { number: 41, state: 'OPEN', headRefName: 'worktree-kb-7-1' };
+  const second = { number: 43, state: 'OPEN', headRefName: 'worktree-kb-7-3' };
+  const attempts = [
+    { attempt: 1, profile: 'claude', outcome: 'review_requested', ended_at: ago(600), pr: 41 },
+    { attempt: 2, profile: 'claude', outcome: 'review_requested', ended_at: ago(60), pr: 43 },
+  ];
+
+  const got = activePrGuard(attempts, [first, second]);
+
+  assert.equal(got.pr.number, 43, 'the PR the latest review row named, not the first OPEN one in the list');
+  assert.equal(got.guard, true);
+});
+
 test('a card sent back by the reviewer is claimed, not guarded, and the attempt names the PR', async (t) => {
   const h = harness();
   t.after(h.cleanup);
@@ -370,6 +384,27 @@ test('a card sent back by the reviewer is claimed, not guarded, and the attempt 
   assert.equal(last.attempt, 3);
   assert.equal(last.continues_pr, 42, 'the run record says which PR this attempt continues');
   assert.match(h.log(), /#7: claimed attempt 3 .*continuing PR #42/);
+});
+
+test('a trigger-mode continuation records continues_pr only — no checkout, no continues_branch', async (t) => {
+  // trigger mode (claude-action) never runs the worker itself: the real checkout happens elsewhere,
+  // in a fresh `actions/checkout` this dispatcher never sees, so it must not claim one of its own (#162)
+  const h = harness({ profiles: { claude: { mode: 'trigger', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] } } });
+  t.after(h.cleanup);
+  const run = runWith([
+    { attempt: 1, ended_at: ago(600), outcome: 'review_requested', pr: 42 },
+    { attempt: 2, profile: 'reviewer', ended_at: ago(30), outcome: 'changes_requested', synthetic: true },
+  ]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.claimed.map((c) => c.number), [7]);
+  assert.ok(!fs.existsSync(path.join(h.root, worktreePath('kb-7-3'))), 'no worktree was made for a trigger-mode continuation');
+  const last = h.gh.runOf(7).attempts.at(-1);
+  assert.equal(last.continues_pr, 42);
+  assert.equal(last.continues_branch, undefined, 'the real checkout happens elsewhere; this run record must not claim one');
+  assert.equal(last.wt, undefined);
 });
 
 test('a claim that could not take the PR branch still runs, and says so', async (t) => {
@@ -425,6 +460,59 @@ test('the continuation runs in a worktree on the PR\'s own branch', async (t) =>
   assert.match(h.log(), /continuing PR #42 on worktree-kb-7-1/);
 });
 
+test('a continued checkout is fast-forwarded to a branch a human pushed to since the last attempt', async (t) => {
+  const origin = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-continue-origin-')));
+  const git = (cwd, ...args) => {
+    const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+    return r.stdout.trim();
+  };
+  git(origin, 'init', '-q', '--bare', '-b', 'main');
+
+  // a human clone: pushes the branch attempt 1 left, then a second commit attempt 3 has never seen
+  const human = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-continue-human-')));
+  git(human, 'clone', '-q', origin, '.');
+  git(human, 'config', 'user.email', 'test@example.com');
+  git(human, 'config', 'user.name', 'test');
+  git(human, 'commit', '-q', '--allow-empty', '-m', 'root');
+  git(human, 'push', '-q', 'origin', 'main');
+  git(human, 'checkout', '-q', '-b', 'worktree-kb-7-1');
+  git(human, 'commit', '-q', '--allow-empty', '-m', 'attempt 1');
+  git(human, 'push', '-q', 'origin', 'worktree-kb-7-1');
+
+  // the board root: a clone that made attempt 1's worktree at that same commit, then fell behind
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-continue-root-')));
+  git(root, 'clone', '-q', origin, '.');
+  git(root, 'config', 'user.email', 'test@example.com');
+  git(root, 'config', 'user.name', 'test');
+  git(root, 'worktree', 'add', '-q', '-b', 'worktree-kb-7-1', path.join(root, worktreePath('kb-7-1')), 'origin/worktree-kb-7-1');
+
+  // now a human pushes a second commit to the PR branch — attempt 3's local branch is behind it
+  git(human, 'commit', '-q', '--allow-empty', '-m', 'human fixup');
+  git(human, 'push', '-q', 'origin', 'worktree-kb-7-1');
+  const humanHead = git(human, 'rev-parse', 'worktree-kb-7-1');
+
+  const h = harness({ root });
+  t.after(h.cleanup);
+  const run = runWith([
+    { attempt: 1, ended_at: ago(600), outcome: 'review_requested', pr: 42 },
+    { attempt: 2, profile: 'reviewer', ended_at: ago(30), outcome: 'changes_requested', synthetic: true },
+  ]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.claimed.map((c) => c.number), [7]);
+  const dir = path.join(root, worktreePath('kb-7-3'));
+  assert.equal(git(dir, 'rev-parse', 'HEAD'), humanHead, 'the checkout was fast-forwarded to the branch\'s remote head');
+  const last = h.gh.runOf(7).attempts.at(-1);
+  assert.equal(last.continues_branch, 'worktree-kb-7-1');
+  assert.equal(last.continues_branch_stale, undefined, 'a clean fast-forward has nothing to report');
+  // an ordinary push from here must succeed — nothing to push, since the checkout is already at the head
+  const push = spawnSync('git', ['push', 'origin', 'HEAD:worktree-kb-7-1'], { cwd: dir, encoding: 'utf8' });
+  assert.equal(push.status, 0, push.stderr);
+});
+
 test('the review loop turns: request-changes → claim → finish, all on one PR', async (t) => {
   const h = harness();
   t.after(h.cleanup);
@@ -448,6 +536,19 @@ test('the review loop turns: request-changes → claim → finish, all on one PR
   assert.equal(h.gh.issues.get(7).prs.length, 1);
   const result = h.gh.issues.get(7).comments.map((c) => c.body).find((b) => b.startsWith(RESULT_MARKER));
   assert.match(result, /\*\*PR:\*\* #42 — continued after changes requested, not reopened/);
+});
+
+test('request-changes keeps the reviewer\'s note in full, unlike the other terminal verbs', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, started_at: ago(900), ended_at: ago(600), outcome: 'review_requested', summary: 'ready', pr: 42 }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'review', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', isDraft: false, headRefName: 'worktree-kb-7-1' }] }));
+  const longReason = 'item 1: fix the retry loop. '.repeat(60).trim();
+  assert.ok(longReason.length > 1500);
+
+  await requestChanges(h.ctx, 7, { reason: longReason });
+
+  assert.equal(h.gh.runOf(7).attempts.at(-1).reason, longReason, 'the attempt row must not be truncated to 400 chars');
 });
 
 test('withoutWorktreeFlag drops the harness\'s own checkout flag and nothing else', () => {

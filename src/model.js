@@ -205,13 +205,19 @@ export function computeReady(task, now = new Date()) {
  * `crashed` on top, so the guard parks the card in `review` again rather than respawning — one
  * relaunch per `request-changes`, and the reviewer decides whether there is a second.
  *
+ * A card can carry two open PRs (a stray one opened by hand, say); which one this attempt continues
+ * is not a guess — the last `review_requested`/`completed` row named it (`prAttemptFields`), so that
+ * PR wins over an arbitrary "first OPEN" pick when both are still open.
+ *
  * @param attempts the run record's `attempts[]`, oldest first
  * @param prs the card's PRs as the board query returns them (`{number, state, headRefName, ...}`)
  * @returns {{guard: boolean, pr: object|null, continues: boolean, why: string}}
  */
 export function activePrGuard(attempts, prs) {
-  const pr = (prs || []).find((p) => p && p.state === 'OPEN') || null;
-  if (!pr) return { guard: false, pr: null, continues: false, why: 'no open PR' };
+  const open = (prs || []).filter((p) => p && p.state === 'OPEN');
+  if (!open.length) return { guard: false, pr: null, continues: false, why: 'no open PR' };
+  const named = [...(attempts || [])].reverse().find((a) => a?.pr != null)?.pr;
+  const pr = (named != null && open.find((p) => p.number === named)) || open[0];
   const last = attempts?.length ? attempts[attempts.length - 1] : null;
   if (last?.outcome === 'changes_requested') {
     return { guard: false, pr, continues: true, why: `PR #${pr.number} has changes requested — the next attempt continues it` };

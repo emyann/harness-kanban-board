@@ -341,8 +341,10 @@ export async function requestChanges(ctx, number, { reason } = {}) {
   assertOnBoard(ctx, task);
   const runRec = await loadRun(ctx, number);
   const a = pickAttempt(runRec.run, {}, number) || { attempt: runRec.run.attempts.length };
-  // record as its own zero-duration attempt so history reads review_requested → changes_requested
-  runRec.run.attempts.push({ attempt: runRec.run.attempts.length + 1, profile: 'reviewer', host: ctx.host, started_at: nowIso(), ended_at: nowIso(), outcome: 'changes_requested', reason: String(reason).slice(0, 400), synthetic: true });
+  // record as its own zero-duration attempt so history reads review_requested → changes_requested.
+  // Unlike the other terminal verbs, this reason is never truncated: it is the reviewer's note, and a
+  // relaunched worker must see it in full rather than cut mid-sentence (#162).
+  runRec.run.attempts.push({ attempt: runRec.run.attempts.length + 1, profile: 'reviewer', host: ctx.host, started_at: nowIso(), ended_at: nowIso(), outcome: 'changes_requested', reason: String(reason), synthetic: true });
   await saveRun(ctx, number, runRec);
   await addComment(ctx, number, `**Changes requested** (after attempt ${a.attempt}): ${reason}`);
   if (task.state === 'CLOSED') await reopenIssue(ctx, number);

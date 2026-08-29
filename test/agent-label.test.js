@@ -17,7 +17,7 @@ import { DEFAULT_BOARD } from '../src/board.js';
 import { agentOf, agentsOf } from '../src/model.js';
 import { setAgent } from '../src/tasks.js';
 import { checkAgentLabels, AGENT_LABEL_CHECK } from '../src/doctor.js';
-import { FakeGh, kbIssue } from './fake-gh.js';
+import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
 const agentLabels = (gh, n) => gh.labelsOf(n).filter((l) => l.startsWith('kb:agent:'));
 
@@ -159,6 +159,21 @@ test('`hkb claim <n> --profile p` retargets the card too: it names who is runnin
   assert.deepEqual(agentLabels(h.gh, 7), ['kb:agent:codex']);
   assert.equal(h.gh.statusOf(7), 'running');
   assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/7/1']);
+});
+
+test('`hkb claim <n> --spawn` on a card the reviewer sent back records continues_pr like the dispatcher\'s own claim', async (t) => {
+  const h = harness(t);
+  const ago = (s) => new Date(Date.now() - s * 1000).toISOString();
+  const run = runWith([
+    { attempt: 1, ended_at: ago(600), outcome: 'review_requested', pr: 42 },
+    { attempt: 2, profile: 'reviewer', ended_at: ago(30), outcome: 'changes_requested', synthetic: true },
+  ]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
+
+  assert.equal(await main(['claim', '7', '--spawn']), 0);
+
+  const last = h.gh.runOf(7).attempts.at(-1);
+  assert.equal(last.continues_pr, 42, 'a manual --spawn claim gets the same continues_pr bookkeeping as the dispatcher');
 });
 
 // ---------- doctor ----------
