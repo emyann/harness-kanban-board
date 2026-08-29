@@ -254,6 +254,42 @@ test('a checkout the dispatcher already put on the PR branch is said so, once', 
   assert.doesNotMatch(out, /git reset --hard FETCH_HEAD/, 'the branch is already there: no recipe for taking it');
 });
 
+test('a checkout that could not be fast-forwarded gets the catch-up recipe, not a false "already there"', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(sentBack());
+
+  const out = await workerContext(h.ctx, await getTask(h.ctx, 42), 3, {
+    continuePr: { number: 147, branch: 'worktree-kb-42-1', base: 'main', checkedOut: false, stale: 'could not fast-forward to origin/worktree-kb-42-1: exit 1' },
+  });
+
+  assert.doesNotMatch(out, /already checked out on `worktree-kb-42-1`, so an ordinary `git push`/, 'a stale checkout must not claim to be at the PR head');
+  assert.match(out, /checked out on `worktree-kb-42-1`, but it could not be fast-forwarded to the PR's remote head \(could not fast-forward to origin\/worktree-kb-42-1: exit 1\)/);
+  assert.match(out, /git fetch origin worktree-kb-42-1 && git reset --hard origin\/worktree-kb-42-1/);
+});
+
+test('a long reviewer note reaches the brief whole, not cut at 400 chars', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  const longReason = 'item 1: fix the retry loop. '.repeat(60).trim(); // > 1500 chars
+  assert.ok(longReason.length > 1500);
+  h.gh.addIssue(kbIssue({
+    number: 42,
+    title: 'wire the client',
+    status: 'ready',
+    agent: 'claude',
+    run: runWith([
+      { attempt: 1, started_at: at(300), ended_at: at(200), outcome: 'review_requested', summary: 'ready for review', pr: 147 },
+      { attempt: 2, profile: 'reviewer', started_at: at(20), ended_at: at(20), outcome: 'changes_requested', reason: longReason, synthetic: true },
+    ]),
+    prs: [{ number: 147, state: 'OPEN', isDraft: true, headRefName: 'worktree-kb-42-1', baseRefName: 'main' }],
+  }));
+
+  const out = await workerContext(h.ctx, await getTask(h.ctx, 42), 3);
+
+  assert.ok(out.includes(longReason), 'the full reviewer note must be in the brief, not truncated');
+});
+
 test('an ordinary card gets no continuation block, open PR or not', async (t) => {
   const h = harness();
   t.after(h.cleanup);

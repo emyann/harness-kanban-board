@@ -11,10 +11,10 @@ covers:
   - path: web/index.html
     sha: 322aa96236ef37657a9a2326b83dc7b480672134
   - path: src/board.js
-    sha: 2e9735c80d0fcc92c298efd10b96def73f4ea03b
+    sha: fd6f44def21b8286bbe5d9821209ccad1770df70
   - path: src/init.js
     sha: 8821eb7b1550e01b157424dd32480518eb7b8b71
-generated_at_commit: 29375f5
+generated_at_commit: 0a528d6
 last_refreshed: 2026-08-28
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
