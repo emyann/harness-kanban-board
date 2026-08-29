@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
-import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES, HOOK_SETTINGS_VAR } from './board.js';
+import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches } from './board.js';
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun } from './tasks.js';
 import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn } from './model.js';
 import { resolvedIdentity } from './hook.js';
@@ -227,20 +227,9 @@ export function hookLaunchProfiles(cfg) {
   return Object.entries(cfg?.profiles || {}).filter(([, p]) => (p?.launch || []).includes(HOOK_SETTINGS_VAR)).map(([n]) => n);
 }
 
-/**
- * A Claude launch frozen in `board.json` before the hooks moved onto it (#144). Pure.
- *
- * `loadBoard` deep-merges the file over hkb's defaults and an array in the file wins whole, so a
- * board whose `launch` was written out by an earlier `init` keeps that array forever — and a re-run
- * of `init` writes it straight back. The same frozen-copy blind spot `worker permissions` watches
- * for on `allowed_tools` (#138/#145), and here it costs a worker its Stop nudge and its session id,
- * because nothing is being written into a settings file to make up for it any more.
- */
-export function staleHookLaunches(cfg) {
-  return Object.entries(cfg?.profiles || {})
-    .filter(([, p]) => (p?.launch || [])[0] === 'claude' && !p.launch.includes(HOOK_SETTINGS_VAR))
-    .map(([n]) => n);
-}
+// `staleHookLaunches` moved to board.js (#188): `hkb init` needs the same question to repair what
+// doctor only reports. Re-exported here so nothing that already imports it from doctor.js breaks.
+export { staleHookLaunches } from './board.js';
 
 export const STALE_HOOK_CHECK = 'hooks in settings';
 export const LAUNCH_HOOK_CHECK = 'launch hooks';

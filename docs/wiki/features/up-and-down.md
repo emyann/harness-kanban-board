@@ -11,12 +11,12 @@ covers:
   - path: src/model.js
     sha: 23bb576d15068653b10c068ed3c9f014f0353664
   - path: src/board.js
-    sha: 38909683d493e1d5cce7f6e9f6eb38d24cc3fd72
+    sha: 656fc1ff76b6cf1909ccacc5c69899ba24fb4010
   - path: src/dispatch.js
-    sha: f77434a18f848d18668de413c650210c0f65b125
+    sha: fb85767e0b4b962930ee74c608c5bb0e1bd7ae4f
   - path: src/serve.js
     sha: 5565e6d7d79d189d7e62000065340848c669ab38
-generated_at_commit: d102a4e
+generated_at_commit: 39d9c05
 last_refreshed: 2026-08-29
 related: [architecture/overview, features/web-board, concepts/roles-and-seats, architecture/dispatcher-tick]
 ---

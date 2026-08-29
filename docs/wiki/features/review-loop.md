@@ -9,9 +9,9 @@ covers:
   - path: src/model.js
     sha: 23bb576d15068653b10c068ed3c9f014f0353664
   - path: src/dispatch.js
-    sha: f77434a18f848d18668de413c650210c0f65b125
+    sha: fb85767e0b4b962930ee74c608c5bb0e1bd7ae4f
   - path: src/board.js
-    sha: 38909683d493e1d5cce7f6e9f6eb38d24cc3fd72
+    sha: 656fc1ff76b6cf1909ccacc5c69899ba24fb4010
   - path: src/context.js
     sha: ab7afc4eb5158a879ea1700221892229329dce64
   - path: src/lifecycle.js
@@ -21,7 +21,7 @@ covers:
   - path: src/cli.js
     sha: 2369b0d3a0f5d1363efffa8cc37fd2e47e018155
 related: [features/auto-merge, architecture/overview, architecture/dispatcher-tick]
-generated_at_commit: d102a4e
+generated_at_commit: 39d9c05
 last_refreshed: 2026-08-29
 ---
 

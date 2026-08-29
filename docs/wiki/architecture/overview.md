@@ -7,31 +7,31 @@ audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: fcfd5ca89889587f6973eb826579baaa86ccbfa4
+    sha: 2369b0d3a0f5d1363efffa8cc37fd2e47e018155
   - path: src/gh.js
     sha: b728c07d7f5e7bfd29e3dc4c2e0e2786d29522ee
   - path: src/model.js
-    sha: fc0671faed32f913ec5bcbe16819476f50ceeeb2
+    sha: 23bb576d15068653b10c068ed3c9f014f0353664
   - path: src/tasks.js
     sha: 2faa63591dbb3f96fcb3747141f9e4d42ae24736
   - path: src/lock.js
     sha: 680eae74c9955003c948a6df9750c25548ccaf86
   - path: src/lifecycle.js
-    sha: 20ebc63bcdd5e63634de41fb620aa84a38e720b3
+    sha: 3938c82f3e181fb260fc54bb2f3150074459e224
   - path: src/dispatch.js
-    sha: 202feb141cef1529814ea4fedc91514f3f446335
+    sha: fb85767e0b4b962930ee74c608c5bb0e1bd7ae4f
   - path: src/context.js
-    sha: 6ba989c8c5bed05f5271c3cc7c91b27986f8d850
+    sha: ab7afc4eb5158a879ea1700221892229329dce64
   - path: src/hook.js
-    sha: a1c4de45dbb0a29e6bf602b0925e9a1da3be498a
+    sha: 59a7921c49c6f28f9778b43ae4fce6d3280d567c
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/board.js
-    sha: 0d1c297b6990a63cf28b6bf18f9e4e85180b8c21
+    sha: 656fc1ff76b6cf1909ccacc5c69899ba24fb4010
   - path: src/doctor.js
-    sha: a6afe38be8a47394bf2341c24a24cec2a0d9ed1c
-generated_at_commit: 9597b41
-last_refreshed: 2026-08-28
+    sha: 726a4571cf94906b8f54183c2b3223e125ad6149
+generated_at_commit: 39d9c05
+last_refreshed: 2026-08-29
 related: [concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
 

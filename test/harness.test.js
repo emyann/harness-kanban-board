@@ -449,6 +449,30 @@ test('the dispatcher hands codex the worktree it is about to create, as an absol
   assert.ok(!fs.existsSync(path.join(root, '.claude', 'worktrees')), 'a dry run creates nothing');
 });
 
+// The wiring `expandLaunch`'s own `{model_args}` unit tests never exercise: `spawnWorker` is where a
+// profile's `effort` field actually becomes the token on argv (dispatch.js `effort: profile.effort ||
+// ''`), and nothing here pinned it — dropping that one field passed 815/815 (#188).
+test('spawnWorker renders a profile\'s effort onto argv through {model_args}', async (t) => {
+  const gh = new FakeGh();
+  const root = fs.realpathSync(scratch());
+  const profile = { ...DEFAULT_PROFILES.claude, effort: 'high' };
+  const ctx = {
+    root,
+    cfg: { ...DEFAULT_BOARD, repo: gh.nameWithOwner, profiles: { claude: profile } },
+    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
+  };
+  const restore = gh.install();
+  t.after(() => { restore(); fs.rmSync(root, { recursive: true, force: true }); });
+  gh.addIssue(kbIssue({ number: 13, status: 'ready', agent: 'claude' }));
+  const { fetchBoard } = await import('../src/tasks.js');
+  const [task] = await fetchBoard(ctx);
+
+  const { argv } = await spawnWorker(ctx, task, 'claude', 1, { dryRun: true });
+
+  assert.deepEqual(argv.slice(argv.indexOf('--effort'), argv.indexOf('--effort') + 2), ['--effort', 'high']);
+});
+
 test('this repo ships the codex templates the generator reads', () => {
   for (const f of ['hooks.json', 'notes.md']) {
     assert.ok(fs.existsSync(path.join(REPO, 'templates', 'codex', f)), `templates/codex/${f}`);

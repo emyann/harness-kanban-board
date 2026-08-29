@@ -7,13 +7,13 @@ audience: [dev, ops]
 read_when: "changing where hkb's Claude Code hooks are installed, what `hkb init` writes into a settings file, the Codex/Copilot hook files or .mcp.json, doctor's hook checks, or adopting hkb as a devDependency of a repo; also when a hook command in a repo does not resolve"
 covers:
   - path: src/init.js
-    sha: 3591ba82629cba3e64c1d4fd85fefd13b842c88c
+    sha: 97954d3aaabb24d3b64b45aa10c2bad5cac4a3e4
   - path: src/model.js
     sha: 23bb576d15068653b10c068ed3c9f014f0353664
   - path: src/board.js
-    sha: 38909683d493e1d5cce7f6e9f6eb38d24cc3fd72
+    sha: 656fc1ff76b6cf1909ccacc5c69899ba24fb4010
   - path: src/doctor.js
-    sha: 237d41029a9eb4eb0ce56f8b5231a453ce4bd200
+    sha: 726a4571cf94906b8f54183c2b3223e125ad6149
   - path: src/mcp.js
     sha: 83243b4f880a005c6c06be3f1de396642f0cb3f8
   - path: skills/kanban/scripts/hkb
@@ -21,7 +21,7 @@ covers:
   - path: scripts/smoke-pack.mjs
     sha: 32bb83973bf13894c4d5201e14021a70d9257080
 related: [architecture/overview, features/update-notice, concepts/roles-and-seats]
-generated_at_commit: d102a4e
+generated_at_commit: 39d9c05
 last_refreshed: 2026-08-29
 ---
 
@@ -202,21 +202,29 @@ variable. Two checks belong to the move itself:
   tracked one is the operator's to delete, since `--shared-hooks` writes it on
   purpose.
 - **`launch hooks`** — a warning per Claude launch frozen in `board.json`
-  without `{hook_settings}` (`staleHookLaunches`). `loadBoard` lets an array in
-  the file win whole, so a launch an older `init` wrote out never gains the
-  flag, and with no settings file to fall back on that profile's workers would
-  quietly get no Stop nudge and record no session id. This is the same
-  frozen-copy blind spot `worker permissions` watches on `allowed_tools`. Since
-  #182 the fix on one of hkb's own profiles names the surgical repair instead
-  of the blunt one — insert `"{hook_settings}"` right after the launch's
-  `"--disallowedTools"` group, or drop `"launch"` entirely if the pin added
-  nothing but `--model`/`--effort` (`src/doctor.js` `checkHooks`, the
-  `DEFAULT_PROFILES[name]` branch): both are profile fields now (`effort` is
-  validated in `loadBoard`, `src/board.js`, against `EFFORT_LEVELS` in
-  `src/model.js`, and rendered into `{model_args}` by `modelArgs`, also
-  `src/model.js`) — a pin is never needed just to set them. A custom-named
-  profile still has no default behind it, so it is told to add the token by
-  hand.
+  without `{hook_settings}` (`staleHookLaunches`, `src/board.js` — moved there
+  from `src/doctor.js` in #188 so `init` can call the same question doctor
+  only reports). `loadBoard` lets an array in the file win whole, so a launch
+  an older `init` wrote out never gains the flag, and with no settings file to
+  fall back on that profile's workers would quietly get no Stop nudge and
+  record no session id. This is the same frozen-copy blind spot `worker
+  permissions` watches on `allowed_tools`. Since #188 `hkb init` repairs this
+  itself rather than only naming the fix (`repairLaunchHooks`, `src/init.js`,
+  called from `init` right after `boardProfiles`): on one of hkb's own
+  profiles it inserts `"{hook_settings}"` right after the launch's
+  `"--disallowedTools"` group, or drops `"launch"` entirely and moves the
+  values across if the pin added nothing but literal `--model`/`--effort`
+  (both are profile fields now — `effort` is validated in `loadBoard`,
+  `src/board.js`, against `EFFORT_LEVELS` in `src/model.js`, and rendered into
+  `{model_args}` by `modelArgs`, also `src/model.js` — a pin is never needed
+  just to set them). It prints one line per profile it touches and is silent
+  once nothing is stale; a custom-named profile still has no default behind
+  it, so both `init` and doctor's fix text say to add the token by hand.
+  `loadBoard` also refuses `effort` outright on any profile whose `launch[0]`
+  is not `claude` (`claude-action` excepted — accepted and ignored, since its
+  launch only triggers a run elsewhere): Codex and Copilot CLI have no
+  verified `--effort` flag, so a worker used to only find that out from the
+  CLI's own error on first spawn.
 
 Three older verdicts are specific to the command shape:
 
