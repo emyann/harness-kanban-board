@@ -467,6 +467,26 @@ export function saveBoard(root, cfg) {
   fs.writeFileSync(boardFile(root), JSON.stringify(cfg, null, 2) + '\n');
 }
 
+/**
+ * `loadBoard`, but a hook is a guard rail and a guard rail that cannot read its own config must
+ * stand aside, never lock the door (#184): `error` carries `loadBoard`'s message instead of a throw.
+ * `cfg: null, error: null` is a board.json that plainly does not exist — nothing to say about that.
+ */
+export function loadBoardSafe(root) {
+  try { return { cfg: loadBoard(root), error: null }; } catch (e) { return { cfg: null, error: e.message }; }
+}
+
+/**
+ * The checkout whose board.json a hook should trust for policy: `KB_ROOT`'s when set, the worktree
+ * running the hook only when it is not. `KB_ROOT` names the dispatcher's own checkout, which is never
+ * mid-merge or half-edited the way a worker's own worktree can be — so it is not a fallback preference,
+ * it is the answer whenever it exists, on purpose: a worker whose board.json a hook read instead could
+ * loosen its own allowlist by editing the file it is supposed to be policed by (#184).
+ */
+export function hookBoardRoot(root, env = process.env) {
+  return env.KB_ROOT ? path.resolve(env.KB_ROOT) : root;
+}
+
 export function readState(root) {
   try { return JSON.parse(fs.readFileSync(stateFile(root), 'utf8')); } catch { return {}; }
 }
@@ -515,6 +535,47 @@ export function makeContextAt(root, { board = null, json = false } = {}) {
  */
 export function makeContext(flags = {}) {
   return makeContextAt(repoRoot(), { board: flags.board || process.env.KB_BOARD || null, json: !!flags.json });
+}
+
+/**
+ * The context a hook runs with — never throws, unlike `makeContext`/`makeContextAt`.
+ *
+ * `ctx.root` stays the worktree the hook is actually running in (session files, `whichAttempt` all
+ * key off it), but `ctx.cfg` — the policy `preToolHook` and `stopHook` apply — comes from
+ * `hookBoardRoot`: `KB_ROOT`'s board when set, this worktree's own file only when it is not (#184).
+ * `ctx.cfgError` names why that load failed, so a hook that finds it set can print one stderr line
+ * and stand aside instead of falling through to a "no profile"/"can't read #n" message that would
+ * misdiagnose a corrupt file as a missing one.
+ */
+export function makeHookContext(flags = {}, env = process.env) {
+  const root = repoRoot();
+  const cfgRoot = hookBoardRoot(root, env);
+  const { cfg, error } = loadBoardSafe(cfgRoot);
+  const repo = cfg?.repo ? parseRepo(cfg.repo) : null;
+  return {
+    root,
+    cfg,
+    cfgError: error,
+    repo,
+    board: flags.board || env.KB_BOARD || cfg?.board || 'default',
+    host: hostId(),
+    json: !!flags.json,
+    caps: {},
+    _cache: {},
+    requireBoard() {
+      if (!cfg) {
+        const e = new Error(error ? `${boardFile(cfgRoot)} is unreadable (${error})` : `no .kanban/board.json in ${cfgRoot}. Run \`hkb init\` first.`);
+        e.exitCode = 2;
+        throw e;
+      }
+      if (!repo) {
+        const e = new Error(`${boardFile(cfgRoot)} has no "repo". Run \`hkb init\` again or set "repo": "owner/name".`);
+        e.exitCode = 2;
+        throw e;
+      }
+      return this;
+    },
+  };
 }
 
 // ---------- the cross-repo board list ----------

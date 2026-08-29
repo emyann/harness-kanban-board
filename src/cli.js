@@ -1,6 +1,6 @@
 // Argument parsing + command routing. Every command has --json; output is stable for scripts and agents.
 import fs from 'node:fs';
-import { makeContext } from './board.js';
+import { makeContext, makeHookContext } from './board.js';
 import { getTask, fetchBoard, assertOnBoard, loadRun, latestResult, parentResults, issueEvents, addComment, addLabels, setAgent, setStatus, updateBody } from './tasks.js';
 import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, createTask, linkTask, withOutbox, envAttempt } from './lifecycle.js';
 import { tick, loop, spawnWorker } from './dispatch.js';
@@ -249,18 +249,22 @@ export async function main(argv) {
   const cmd = VERB_ALIASES[typed] || typed;
   if (!cmd || cmd === 'help' || flags.help) { process.stdout.write(HELP); return 0; }
   if (cmd === 'version') { const version = packageVersion(); out({ json: !!flags.json }, { version, node: process.version }, `hkb ${version}`); return 0; }
+  if (cmd === 'hook') {
+    // A hook never throws its way onto a worker's tool call (#184): `makeContext`/`ctx.requireBoard()`
+    // are for a human who can read the error, `makeHookContext` is for a guard rail that must stand
+    // aside instead when its own config is unreadable.
+    const ctx = makeHookContext(flags);
+    if (rest[0] === 'stop') return stopHook(ctx);
+    if (rest[0] === 'pretool') { const { preToolHook } = await import('./hook.js'); return preToolHook(ctx); }
+    if (rest[0] === 'subagentstop') { const { subagentStopHook } = await import('./hook.js'); return subagentStopHook(ctx); }
+    throw usage('hkb hook stop|pretool|subagentstop');
+  }
   const ctx = makeContext(flags);
   const argvForOutbox = process.env.KB_NO_OUTBOX ? null : argv;
 
   switch (cmd) {
     case 'init': return init(ctx, flags, log);
     case 'doctor': return doctor(ctx, flags, (s) => process.stdout.write(s + '\n'));
-    case 'hook': {
-      if (rest[0] === 'stop') return stopHook(ctx);
-      if (rest[0] === 'pretool') { const { preToolHook } = await import('./hook.js'); return preToolHook(ctx); }
-      if (rest[0] === 'subagentstop') { const { subagentStopHook } = await import('./hook.js'); return subagentStopHook(ctx); }
-      throw usage('hkb hook stop|pretool|subagentstop');
-    }
   }
   ctx.requireBoard();
 

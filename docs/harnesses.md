@@ -253,6 +253,10 @@ hypothetical: on a real board an nvm version switch took `hkb` off PATH, and fro
 Claude Code session in that repo logged `PreToolUse:Bash hook error … /bin/sh: 1: hkb: not found`. #85 moved the
 file and taught `doctor` to see it; only moving off the file removes the exposure.
 
+The same principle holds one level down: the hook never blocks a tool call because it cannot read its own
+config. A worktree's `.kanban/board.json` mid-merge or mid-edit prints one line on stderr and stands aside
+rather than failing the tool call that would fix it (#184).
+
 Claude Code takes `--settings <file-or-json>` **per launch**, and the launch line is already the worker's whole
 permission policy. So it carries the hooks too:
 
@@ -463,7 +467,7 @@ environment dies with them and is their only identity, and `claude-action` gets 
 
 ### The command a worker cannot type: `complete`, and heredocs
 
-There is a third layer, below both hooks, and it is the one that decides whether an attempt can end at all.
+There is a third layer, below the hooks, and it is the one that decides whether an attempt can end at all.
 A `claude --bg` worker runs in a **worktree-isolated session**, and Claude Code vets that session's command
 lines word by word before hkb ever sees them. Two shapes the protocol used to prescribe do not survive it —
 measured on Claude Code 2.1.250/2.1.251, from inside a live worker on this board (#125):

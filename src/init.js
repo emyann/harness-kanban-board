@@ -240,7 +240,7 @@ export function projectBinRel(root, { pkgRoot = PKG_ROOT } = {}) {
  * The hook command for an hkb the repo itself carries: name the file once, exit 0 when it is not
  * there, exec it when it is. The guard is not defensive padding — a worker runs in
  * `.claude/worktrees/kb-<n>-<k>`, a fresh checkout whose `node_modules` does not exist until it runs
- * `npm ci`, and `$CLAUDE_PROJECT_DIR` there is the worktree. Both hooks are inert without KB_TASK
+ * `npm ci`, and `$CLAUDE_PROJECT_DIR` there is the worktree. All three hooks are inert without KB_TASK
  * anyway, so the honest behaviour before the install is silence; by the time the Stop hook has
  * anything to say, `npm ci` has run.
  */
@@ -659,7 +659,7 @@ export function actionsFiles({ board = 'default', install = 'npm i -g hkb-cli', 
     // the same hooks a local Claude launch carries, on the same flag. `binRel: null` is what keeps
     // this file the same on every machine: the runner puts `hkb` on PATH itself (`{{install}}`), so
     // the portable form is both correct there and identical in everyone's diff. The workflow sets
-    // KB_TASK and KB_PROFILE as job env, so unlike `claude --bg` both hooks are live in a run.
+    // KB_TASK and KB_PROFILE as job env, so unlike `claude --bg` all three hooks are live in a run.
     hook_settings: hookSettings(CLAUDE_HOOKS, (verb) => hkbCommandForHook(verb, { shared: true, binRel: null })),
   };
   return ['kanban-dispatch.yml', 'kanban-worker-claude.yml'].map((name) => ({
