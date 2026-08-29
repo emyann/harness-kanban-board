@@ -11,7 +11,7 @@ covers:
   - path: src/model.js
     sha: cf222b0724d3f53377dab94a262100dd985daf86
   - path: src/board.js
-    sha: 9c317252b63f7882b19c1e0723abb6ab198bb37c
+    sha: f73b03ee9a45e03e763922ddf57c2e4028405bdd
   - path: src/doctor.js
     sha: 612c492fd4e9792a5d4d3039a336f43730e08d52
   - path: src/mcp.js
@@ -21,7 +21,7 @@ covers:
   - path: scripts/smoke-pack.mjs
     sha: aea7c5459b0687a0401a52e6fafb20832c54b818
 related: [architecture/overview, features/update-notice, concepts/roles-and-seats]
-generated_at_commit: 27c5925
+generated_at_commit: 0e8e882
 last_refreshed: 2026-08-28
 ---
 
@@ -73,7 +73,7 @@ Two consequences worth holding on to:
 request to Claude Code's session daemon, so a per-launch flag reaches it only
 if the CLI forwards it. The check was a `claude --bg` launch carrying
 `--settings '{"hooks":{"Stop":…}}'`, watched for the Stop hook to actually
-fire in that session — and it did, a few seconds after the launch returned
+fire in that session — and it did, 4 s after the launch returned (2026-08-29)
 (Claude Code 2.1.251, comment on #144). The forwarding path is `handleBgFlag →
 spawnBgSession`: its respawn-flag allowlist keeps `--settings <value>` as a
 pair when it re-execs into the daemon, and a value starting with `{` passes

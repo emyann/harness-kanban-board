@@ -47,7 +47,7 @@ export const CLAUDE_DENY = ['Bash(hkb dispatch*)', 'Bash(git push --force*)', 'B
 // *this* machine has. The board keeps the token; only the launch ever holds the answer.
 //
 // Measured live, not read off the binary's argument tables (Claude Code 2.1.251, comment on #144): a
-// `claude --bg` launch carrying `--settings '{"hooks":…}'` fires the Stop hook a few seconds later, in
+// `claude --bg` launch carrying `--settings '{"hooks":…}'` fires the Stop hook 4 s later (measured 2026-08-29), in
 // the session the daemon actually started. The forwarding path is `handleBgFlag → spawnBgSession`: its
 // respawn-flag allowlist keeps `--settings <value>` as a pair when it re-execs into the daemon, and a
 // value starting with `{` passes through untouched rather than being resolved as a path. So the
@@ -359,9 +359,10 @@ export function worktreeOnBranch(root, name, branch, { number = null, remote = '
 }
 
 /**
- * Is `hkb` on PATH? Generated files (the Stop hook, `.mcp.json`) name the binary when it is and fall
- * back to this checkout's `bin/hkb.js` when it is not — a hook or an MCP client started by a GUI
- * inherits a PATH that may have neither.
+ * Is `hkb` on PATH? Tracked files a global install serves (`--shared-hooks`, the harness hook files,
+ * `.mcp.json`) name the bare binary when it is; the worker launch line prefers this checkout's
+ * `bin/hkb.js` whenever it is durable, because a hook started by the session daemon inherits a PATH
+ * that may have neither.
  *
  * The PATH asked about is the one *those* processes get, which is not this one's: `npx hkb init` and
  * `npm run` both prepend `node_modules/.bin`, so an unfiltered lookup answers yes for a repo that

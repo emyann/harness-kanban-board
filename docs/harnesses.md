@@ -222,18 +222,19 @@ permission policy. So it carries the hooks too:
 
 ```
 claude --bg … --allowedTools … --disallowedTools … \
-  --settings '{"hooks":{"Stop":[{"matcher":"*","hooks":[{"type":"command","command":"hkb hook stop","timeout":30}]}], …}}'
+  --settings '{"hooks":{"Stop":[{"matcher":"*","hooks":[{"type":"command","command":"node \\"/home/you/hkb/bin/hkb.js\\" hook stop","timeout":30}]}], …}}'
 ```
 
-Two things follow. The command in there may name **this machine** — `node "/abs/path/bin/hkb.js" hook stop` when
-`hkb` is not on PATH — because a launch line is spent here and nowhere else; that is exactly the case a tracked
+Two things follow. The command in there names **this machine** — `node "/abs/path/bin/hkb.js" hook stop`, the hkb that
+runs the dispatcher, whenever it lives in a durable checkout or install (a bare `hkb` only when it sits in an
+npx cache) — because a launch line is spent here and nowhere else; that is exactly the case a tracked
 settings file had to rule out. And `.kanban/board.json`, which *is* tracked, holds only the placeholder
 `{hook_settings}`: the launch template stays true on every machine, and the JSON is built at spawn time.
 
 **`claude --bg` was measured live, not assumed.** A background launch hands the request to Claude Code's
 session daemon, so a per-launch flag only reaches it if the CLI forwards it. The check was a `claude --bg`
 launch carrying `--settings '{"hooks":{"Stop":…}}'`, watched for the hook to fire in that session — and it
-did, seconds later (Claude Code 2.1.251, comment on
+did, 4 s after the launch returned (2026-08-29, Claude Code 2.1.251, comment on
 [#144](https://github.com/emyann/harness-kanban-board/issues/144)). The path is `handleBgFlag →
 spawnBgSession`: its respawn-flag allowlist keeps `--settings <value>` as a pair when it re-execs into the
 daemon, and a value starting with `{` passes through untouched rather than being resolved as a path. That is
