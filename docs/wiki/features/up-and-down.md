@@ -9,14 +9,14 @@ covers:
   - path: src/up.js
     sha: ea8dbb2e04f73de5c05e87e9a56929a86f78a785
   - path: src/model.js
-    sha: 05d5005975c54ed17d366d6816bdb81231c9e121
+    sha: 9ec1c457784b57b6c9e4d8e0eb1de1d4ea2693cc
   - path: src/board.js
-    sha: 531dea5f01d7a5f6ea4b85ac525bbc2e7e0e8b3f
+    sha: 0d1c297b6990a63cf28b6bf18f9e4e85180b8c21
   - path: src/dispatch.js
     sha: 32409502ada00707c59aead46b3b8cdb9ed3a2cb
   - path: src/serve.js
     sha: 5565e6d7d79d189d7e62000065340848c669ab38
-generated_at_commit: 82910a4
+generated_at_commit: 6444cf9
 last_refreshed: 2026-08-28
 related: [architecture/overview, features/web-board, concepts/roles-and-seats, architecture/dispatcher-tick]
 ---
@@ -94,7 +94,7 @@ board to whatever `hkb` a login shell happens to find. (`process.argv[1]` would
 usually agree, but not when hkb is driven as a library, through a loader, or under
 `node --test`.)
 
-**No `KB_*`.** `detachedEnv` (`src/model.js:788-792`) strips every `KB_*` except
+**No `KB_*`.** `detachedEnv` (`src/model.js:827-831`) strips every `KB_*` except
 `KB_CONFIG_HOME`, and the board is passed as `--board` on the command line
 instead of inherited through `KB_BOARD` (`childArgv`, `src/up.js:49-54`). The
 reason is the failure this guards against, not tidiness: `KB_TASK` et al. are what
@@ -124,7 +124,7 @@ honest-but-useless answer would be "stopped". Hence the **exit record**:
 (`src/dispatch.js:998`), and `acquireLoopLock` clears it when a loop is running
 again (`src/dispatch.js:933`), as does a fresh `up` (`src/up.js:116`). `--status`
 then reports `dispatch exited (4) at 19:02 — hkb up restarts it`
-(`processLine`, `src/model.js:853-867`) — a sentence that names the fix without
+(`processLine`, `src/model.js:892-906`) — a sentence that names the fix without
 performing it.
 
 It lives in `state.json` rather than a file of its own on purpose: `state.json` is
@@ -162,7 +162,7 @@ The fix is in both halves, and both were needed:
   file on exit (`acquireLoopLock`, `src/dispatch.js:934-936`; `claimServePid`,
   `src/serve.js:132-134`); `down` waits, bounded by `stopWaitMs` (two of the
   loop's own intervals, floored at 5 s and capped at 120 s,
-  `src/model.js:825-829`), for `pidAlive` to go false. Only then does it tidy a
+  `src/model.js:864-868`), for `pidAlive` to go false. Only then does it tidy a
   file the dead process left behind, and only if it still names the same pid. If
   the wait runs out, the claim stands — because the claim is true — and `down`
   says so and exits non-zero.
@@ -187,7 +187,7 @@ names belongs to whoever the kernel handed it to next — so `kill(pid, 0)` says
 The guard is arithmetic, which is what a zero-dependency CLI can afford: a pid
 file whose mtime predates `Date.now() - os.uptime() * 1000` was written by a
 machine that has since rebooted, so it cannot name a live process of ours
-(`pidFileStale`, `src/model.js:812-817`; read by `readPidFile`,
+(`pidFileStale`, `src/model.js:851-856`; read by `readPidFile`,
 `src/board.js:176-183`). Every caller that acts on a pid reads that flag as *no
 claim here* — `processState`, the dispatcher's singleton lock, the server's claim
 and `portInUse`. The slack
@@ -231,7 +231,7 @@ it.
   stop. All of it is local: pid files and `kill(0)`, no GitHub call, no cost.
 - Logs are `.kanban/logs/dispatch.log` and `.kanban/logs/serve.log`, appended
   across restarts with one `# <ISO> started pid N — hkb …` header per start
-  (`startLogLine`, `src/model.js:881-883`). A child that died on startup left its
+  (`startLogLine`, `src/model.js:920-922`). A child that died on startup left its
   reason in there, under that header — and `up` says `exited immediately` rather
   than letting you find it later.
 - `dispatch exited (4)` means the loop asked to be restarted, and nothing did:
