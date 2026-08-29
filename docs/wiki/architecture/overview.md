@@ -7,32 +7,32 @@ audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: 0dc546fc625e1f725aa446b68a2bdf915b34aca2
+    sha: fcfd5ca89889587f6973eb826579baaa86ccbfa4
   - path: src/gh.js
     sha: b728c07d7f5e7bfd29e3dc4c2e0e2786d29522ee
   - path: src/model.js
-    sha: 75de5e5f6c86b87fd90d878b77643a805d020251
+    sha: fc0671faed32f913ec5bcbe16819476f50ceeeb2
   - path: src/tasks.js
     sha: 2faa63591dbb3f96fcb3747141f9e4d42ae24736
   - path: src/lock.js
     sha: 680eae74c9955003c948a6df9750c25548ccaf86
   - path: src/lifecycle.js
-    sha: c729b37a295528722f19a3d2382c5f40d7537084
+    sha: 20ebc63bcdd5e63634de41fb620aa84a38e720b3
   - path: src/dispatch.js
-    sha: 0cdcd4fea6cdc34ea29807ca292f5de26bd03019
+    sha: 202feb141cef1529814ea4fedc91514f3f446335
   - path: src/context.js
-    sha: 0de994e57a7d7540c632757864e1af8027cffa03
+    sha: 6ba989c8c5bed05f5271c3cc7c91b27986f8d850
   - path: src/hook.js
-    sha: 76c8c61468a9382d8e554081b316c5faace75ba0
+    sha: a1c4de45dbb0a29e6bf602b0925e9a1da3be498a
   - path: src/jobs.js
-    sha: ee051802f87ebbf0b1ac87aab43247505398a15b
+    sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/board.js
-    sha: 7e895ff3e7e8380a61fd275e609d93dfce2140e1
+    sha: 0d1c297b6990a63cf28b6bf18f9e4e85180b8c21
   - path: src/doctor.js
-    sha: 9a5a658d95cd1b463cb3d6c78f0625e66f7b8bb6
-generated_at_commit: c46b183
+    sha: a6afe38be8a47394bf2341c24a24cec2a0d9ed1c
+generated_at_commit: 9597b41
 last_refreshed: 2026-08-28
-related: [concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice]
+related: [concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
 
 # hkb at a glance
@@ -90,8 +90,20 @@ A worker is whatever a profile in `src/board.js` can launch — Claude Code,
 Copilot CLI, Codex, or a GitHub Actions run — pointed at one card. Its
 contract is small: the verbs in `src/lifecycle.js` (complete / block /
 request-review), a prompt assembled from the card by `src/context.js`, and
-guard rails enforced by the Stop/PreToolUse hooks in `src/hook.js`. The
-protocol is what a worker follows; the harness is interchangeable.
+guard rails on the launch line itself. The protocol is what a worker follows;
+the harness is interchangeable.
+
+**The launch line is the permission policy.** `--permission-mode dontAsk` with
+an `--allowedTools` / `--disallowedTools` pair (`CLAUDE_TOOLS` and
+`CLAUDE_DENY`, `src/board.js`) is the layer that is live on every profile,
+including the `claude --bg` default where the `KB_TASK`-gated PreToolUse hook
+never fires. So what a worker must never run is said there — `Bash(hkb
+dispatch*)` beside the force-push patterns — and hkb's own `preToolHook`
+(`src/hook.js`) is deliberately **deny-or-silent**: it can subtract from that
+list and never widen it, because a hook `allow` overrides Claude Code's own
+checks and would let one profile's worker run what the identical worker beside
+it is refused. A denial names the way out rather than inviting a workaround:
+`hkb block <n> "needs …" --kind capability`.
 
 *Which* card is the subtle part, and it is not always the environment. The
 dispatcher exports `KB_TASK`/`KB_ATTEMPT` on the launch (`src/dispatch.js`),
@@ -146,3 +158,4 @@ claims, and attempts — backend-neutral by construction, so a future
 - [dispatcher-tick](../architecture/dispatcher-tick.md)
 - [roles-and-seats](../concepts/roles-and-seats.md)
 - [Telling an adopter their hkb is old](../features/update-notice.md)
+- [Where a hook command may say hkb is](../features/hook-install-shapes.md)

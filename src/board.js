@@ -4,17 +4,41 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghCmd } from './gh.js';
-import { worktreePath, parseRepoSpecs, mergeBoardEntry } from './model.js';
+import { worktreePath, parseRepoSpecs, mergeBoardEntry, stripNodeModulesBin, pidFileStale, SAFE_BUILTINS } from './model.js';
 
 // A background worker has nobody to answer a permission prompt, so the allowlist must cover
 // every command an agent plausibly reaches for; anything else is denied, never prompted (see #23).
 const SHELL_TOOLS = ['hkb *', 'git *', 'gh pr *', 'gh issue view *', 'npm *', 'npx *', 'node *', 'cat *', 'ls *', 'mkdir *', 'head *', 'tail *', 'wc *', 'sed *', 'awk *', 'grep *', 'find *', 'diff *', 'cp *', 'mv *', 'touch *', 'chmod *', 'printf *', 'echo *', 'jq *'];
-const CLAUDE_TOOLS = [...SHELL_TOOLS.map((c) => `Bash(${c})`), 'Bash(true)', 'Edit', 'Write', 'Read', 'Glob', 'Grep'];
+// The shell builtins hkb's own PreToolUse guard already calls safe (`SAFE_BUILTINS`), said again in
+// the launch's language. Leaving them out made the two layers disagree, and under `dontAsk` the
+// harness denies rather than prompts — so it refused `cd`, `export`, `command`, `env` while hkb's
+// policy declared them fine, and workers burned turns rewriting commands (#138).
+//
+// The ` *` suffix is load-bearing, not decoration. Measured against Claude Code 2.1.251: with
+// `Bash(export)` the command `export FOO=1; echo ok` is DENIED and with `Bash(export *)` it is
+// allowed — and the suffixed form still covers the bare word, so one entry per builtin does it.
+// That is why `Bash(true)` no longer has to be spliced in by hand.
+const BUILTIN_TOOLS = SAFE_BUILTINS.map((c) => `${c} *`);
+// deduped: `echo` and `printf` are on both lists, and a repeated pattern is noise in a flag a human reads
+const SHELL_PATTERNS = [...new Set([...SHELL_TOOLS, ...BUILTIN_TOOLS])];
+const CLAUDE_TOOLS = [...SHELL_PATTERNS.map((c) => `Bash(${c})`), 'Edit', 'Write', 'Read', 'Glob', 'Grep'];
 // Copilot CLI spells the same policy `--allow-tool 'shell(<cmd>)'`, one flag per pattern, plus the
 // built-in `write` tool for file edits. See the `--allow-tool={allowed_tools}` token in dispatch.js.
 // Copilot wildcards are `shell(cmd:*)` (verified against the CLI programmatic reference, 2026-08-26);
 // a multiword prefix like `gh pr *` has no wildcard form, so it widens to the command's `cmd:*`.
-const COPILOT_TOOLS = [...new Set(SHELL_TOOLS.map((c) => c.includes('*') ? `shell(${c.split(' ')[0]}:*)` : `shell(${c})`)), 'write'];
+const COPILOT_TOOLS = [...new Set(SHELL_PATTERNS.map((c) => c.includes('*') ? `shell(${c.split(' ')[0]}:*)` : `shell(${c})`)), 'write'];
+
+// What the launch refuses outright, whatever the allow-list says. `Bash(hkb *)` allows every verb,
+// and the one a worker must never run is the one that dispatched it: a second dispatcher against the
+// live board claims a task somebody is already working. hkb's own PreToolUse guard has denied
+// `hkb dispatch` since #23, but that hook is `KB_TASK`-gated and so inert on the `claude --bg`
+// profiles most boards run — the launch line is the only layer that is live everywhere (#143).
+//
+// Copilot has no entry here on purpose: its deny language is `--deny-tool 'shell(<pattern>)'` and a
+// space-star pattern (`shell(hkb dispatch*)`) is unverified against that parser, so a deny that
+// silently matches nothing would read as protection there is none of. Copilot workers are told in
+// the prompt instead (SKILL.md, `hkb context`).
+export const CLAUDE_DENY = ['Bash(hkb dispatch*)', 'Bash(git push --force*)', 'Bash(git push -f*)'];
 
 export const DEFAULT_PROFILES = {
   claude: {
@@ -27,7 +51,7 @@ export const DEFAULT_PROFILES = {
     max_in_progress: 2,
     model: null,
     allowed_tools: CLAUDE_TOOLS,
-    launch: ['claude', '--bg', '--name', 'kb #{n} · {title}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', 'Bash(git push --force*)', 'Bash(git push -f*)', '--max-turns', '80', '--max-budget-usd', '5', '{model_args}', '{prompt}'],
+    launch: ['claude', '--bg', '--name', 'kb #{n} · {title}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', ...CLAUDE_DENY, '--max-turns', '80', '--max-budget-usd', '5', '{model_args}', '{prompt}'],
   },
   'claude-track': {
     description: 'Claude Code as a TRACK runner: one background session executes a whole subgraph — a root plus everything it is still blocked by — claiming, working and finishing each node through the ordinary verbs, so every node stays a durable checkpoint. Put `kb:agent:claude-track` on the root of a decomposed goal (`/kanban:decompose`) and give it a generous `max_runtime`: the dispatcher claims the root, counts the whole track as ONE running slot, and leaves the nodes alone while the runner holds them. `track_agents` is which node profiles this runner can execute in-session — a track with a node outside that list needs a second harness, so it is not claimable as a track and falls back to node-by-node dispatch. So does a track whose runner has already had one go: the durable engine always finishes.',
@@ -38,7 +62,7 @@ export const DEFAULT_PROFILES = {
     max_in_progress: 1,
     model: null,
     allowed_tools: CLAUDE_TOOLS,
-    launch: ['claude', '--bg', '--name', 'kb track #{n} · {title}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', 'Bash(git push --force*)', 'Bash(git push -f*)', '--max-turns', '400', '--max-budget-usd', '25', '{model_args}', '{prompt}'],
+    launch: ['claude', '--bg', '--name', 'kb track #{n} · {title}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', ...CLAUDE_DENY, '--max-turns', '400', '--max-budget-usd', '25', '{model_args}', '{prompt}'],
   },
   'claude-p': {
     description: 'Claude Code headless (`claude -p`): a plain process that exits when done. Not listed in `claude agents`; use it where no session daemon exists (CI, containers).',
@@ -47,7 +71,7 @@ export const DEFAULT_PROFILES = {
     max_in_progress: 2,
     model: null,
     allowed_tools: CLAUDE_TOOLS,
-    launch: ['claude', '-p', '{prompt}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', 'Bash(git push --force*)', 'Bash(git push -f*)', '--output-format', 'json', '--max-turns', '80', '--max-budget-usd', '5', '{model_args}'],
+    launch: ['claude', '-p', '{prompt}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', ...CLAUDE_DENY, '--output-format', 'json', '--max-turns', '80', '--max-budget-usd', '5', '{model_args}'],
   },
   'claude-action': {
     description: 'Claude Code in GitHub Actions (`anthropics/claude-code-action@v1`), for a board that has to keep moving with the laptop closed. The launch does not run a worker here: it fires `kanban-worker-claude.yml` with `gh workflow run` and exits, so the attempt is `remote` — no pid, no job, and the heartbeat plus `max_runtime` are the whole liveness check. `hkb init --with-actions` writes that workflow and the event-driven `kanban-dispatch.yml` beside it. Needs a KB_TOKEN secret, and one of CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY. Honest latency with nothing but Actions: 15-75 minutes (see the README).',
@@ -127,6 +151,80 @@ export function logsDir(root) { return path.join(kanbanDir(root), 'logs'); }
 export function outboxFile(root) { return path.join(kanbanDir(root), 'outbox.jsonl'); }
 export function stateFile(root) { return path.join(kanbanDir(root), 'state.json'); }
 
+// ---------- the long-running processes: dispatcher and web board ----------
+// `.kanban/<name>.pid` is written by the process itself (the dispatcher's singleton lock, the
+// server's claim) and by `hkb up` for the child it just spawned, so a second `up` a millisecond
+// later sees a live pid rather than starting a rival. One pid per line, nothing else: `hkb serve`
+// and `hkb doctor` both read these files, and a format is a contract.
+
+export function pidFile(root, name) { return path.join(kanbanDir(root), `${name}.pid`); }
+export function processLogFile(root, name) { return path.join(logsDir(root), `${name}.log`); }
+
+/** Is that pid a live process? EPERM means alive and not ours, which is still alive. */
+export function pidAlive(pid) {
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+
+/**
+ * The pid a pid file names, when it was written (mtime — the process wrote it as it started), and
+ * whether that claim survived a reboot: a file older than this boot names a pid the kernel has since
+ * handed to somebody else, so `stale` is the difference between stopping the dispatcher and stopping
+ * a stranger (`pidFileStale`). Every caller that acts on a pid — `processState`, the dispatcher's
+ * singleton lock, the server's claim — must read `stale` as "there is no claim here".
+ */
+export function readPidFile(root, name) {
+  try {
+    const file = pidFile(root, name);
+    const pid = Number(fs.readFileSync(file, 'utf8').trim()) || null;
+    const at = fs.statSync(file).mtime.toISOString();
+    return { pid, at, stale: pidFileStale(at, { uptime: os.uptime() }) };
+  } catch { return { pid: null, at: null, stale: false }; }
+}
+
+/**
+ * Why a process that is not running stopped, when it stopped on its own terms. Exit code 4 is the
+ * dispatcher loop giving itself up for a supervisor; nothing here restarts it, but `hkb up --status`
+ * has to be able to say that is what happened rather than reporting a plain "stopped".
+ *
+ * It lives in `state.json` — already local, already gitignored — so the feature costs no new file.
+ */
+export function recordExit(root, name, entry) {
+  const state = readState(root);
+  writeState(root, { ...state, exits: { ...(state.exits || {}), [name]: entry } });
+}
+
+export function readExit(root, name) { return readState(root).exits?.[name] || null; }
+
+/** Forget a recorded exit — the process is starting again, so its last death is no longer the news. */
+export function clearExit(root, name) {
+  const state = readState(root);
+  if (!state.exits?.[name]) return;
+  const exits = { ...state.exits };
+  delete exits[name];
+  writeState(root, { ...state, exits });
+}
+
+/**
+ * One process's state for `hkb up`, `hkb up --status`, `hkb down` and `hkb doctor`: the pid file, a
+ * liveness check and the exit record. No board read, no network — this is the filesystem answering.
+ */
+export function processState(root, name) {
+  const { pid, at, stale } = readPidFile(root, name);
+  const running = !stale && pidAlive(pid);
+  const exit = running ? null : readExit(root, name);
+  return {
+    name,
+    running,
+    pid: running ? pid : null,
+    since: running ? at : null,
+    stale: !!stale,
+    log: path.relative(root, processLogFile(root, name)),
+    exit: exit?.code ?? null,
+    exited_at: exit?.at ?? null,
+  };
+}
+
 export function ensureLocalDirs(root) {
   fs.mkdirSync(logsDir(root), { recursive: true });
   fs.mkdirSync(path.join(kanbanDir(root), 'nudges'), { recursive: true });
@@ -156,13 +254,87 @@ export function ensureWorktree(root, name) {
   return dir;
 }
 
+const lastLine = (s) => String(s || '').trim().split('\n').pop() || '';
+
+/**
+ * Which worktree of this checkout has `branch` checked out, if any — `{path, branch, locked}`.
+ * git refuses to check one branch out twice, so this is the question that has to be answered before
+ * a PR's branch can be reused. (`src/gc.js` owns the general listing and the sweeps; it imports this
+ * file, so the one question the dispatcher asks is answered here rather than borrowed from there.)
+ */
+function worktreeHolding(root, branch) {
+  const r = spawnSync('git', ['worktree', 'list', '--porcelain'], { cwd: root, encoding: 'utf8' });
+  if (r.status !== 0) return null;
+  const list = [];
+  let cur = null;
+  for (const line of r.stdout.split('\n')) {
+    if (line.startsWith('worktree ')) { cur = { path: line.slice(9) }; list.push(cur); }
+    else if (line.startsWith('branch ') && cur) cur.branch = line.slice(7).replace('refs/heads/', '');
+    else if (line.startsWith('locked') && cur) cur.locked = line.slice(6).trim() || 'locked';
+  }
+  return list.find((w) => w.branch === branch) || null;
+}
+
+/**
+ * The worktree for an attempt that **continues an open PR**: the same `.claude/worktrees/kb-<n>-<k>`
+ * every other attempt gets, but checked out on the PR's own head branch instead of a fresh one, so
+ * the attempt pushes to the PR the reviewer sent back rather than opening a second one (#153).
+ *
+ * The branch is fetched first (the PR may have been pushed from another host), and when the previous
+ * attempt's worktree still holds it — the usual case, since a card sitting in `review` is swept by
+ * nothing — that checkout is removed so git will hand the branch over. Only a worktree of **this**
+ * task is ever freed, and never one a live session still holds: `alive` is asked about the pid in
+ * the lock Claude Code writes, exactly as `hkb gc` does, and its default answer is "yes, leave it".
+ * `git worktree remove` takes the checkout, not the commits — the branch itself survives.
+ *
+ * Never throws: a refusal is `{ok: false, why}` and the caller falls back to an ordinary fresh
+ * worktree plus a brief that names the PR to continue (`src/context.js`).
+ * @returns {{ok: true, path: string, branch: string, freed: string|null} | {ok: false, why: string}}
+ */
+export function worktreeOnBranch(root, name, branch, { number = null, remote = 'origin', alive = () => true } = {}) {
+  if (!branch) return { ok: false, why: 'the board query returned no head branch for the PR' };
+  const dir = path.join(root, worktreePath(name));
+  // capped: this runs inside a tick, and a hung fetch must not hold the loop past its interval
+  const git = (args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: 60_000 });
+  if (fs.existsSync(path.join(dir, '.git'))) {
+    // a spawn that died between the checkout and the launch: reuse it if it is already the right one
+    const head = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout?.trim();
+    return head === branch ? { ok: true, path: dir, branch, freed: null } : { ok: false, why: `${worktreePath(name)} already exists on ${head || 'a detached HEAD'}` };
+  }
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  // best effort: no remote, no network, or a branch only this host has must not stop the checkout
+  git(['fetch', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
+  let freed = null;
+  const holder = worktreeHolding(root, branch);
+  if (holder) {
+    if (number == null || !path.basename(holder.path).startsWith(`kb-${number}-`)) return { ok: false, why: `${branch} is checked out in ${holder.path}` };
+    const pid = Number(/pid (\d+)/.exec(holder.locked || '')?.[1] || 0);
+    if (holder.locked && (!pid || alive(pid))) return { ok: false, why: `${branch} is checked out in ${holder.path}, held by a live session${pid ? ` (pid ${pid})` : ''}` };
+    if (holder.locked) git(['worktree', 'unlock', holder.path]);
+    const rm = git(['worktree', 'remove', '--force', holder.path]);
+    if (rm.status !== 0) return { ok: false, why: `could not free ${branch} from ${holder.path}: ${lastLine(rm.stderr) || `exit ${rm.status}`}` };
+    freed = holder.path;
+  }
+  git(['worktree', 'prune']); // a directory deleted by hand still holds its branch until this runs
+  // `git worktree add <dir> <branch>` reuses the local branch, or DWIMs one tracking <remote>/<branch>
+  let r = git(['worktree', 'add', dir, branch]);
+  if (r.status !== 0) r = git(['worktree', 'add', '--track', '-b', branch, dir, `${remote}/${branch}`]);
+  if (r.status !== 0) return { ok: false, why: `git worktree add ${worktreePath(name)} ${branch} failed: ${lastLine(r.stderr) || `exit ${r.status}`}` };
+  return { ok: true, path: dir, branch, freed };
+}
+
 /**
  * Is `hkb` on PATH? Generated files (the Stop hook, `.mcp.json`) name the binary when it is and fall
  * back to this checkout's `bin/hkb.js` when it is not — a hook or an MCP client started by a GUI
  * inherits a PATH that may have neither.
+ *
+ * The PATH asked about is the one *those* processes get, which is not this one's: `npx hkb init` and
+ * `npm run` both prepend `node_modules/.bin`, so an unfiltered lookup answers yes for a repo that
+ * only installed hkb as a dependency and the generated command then resolves nowhere else (#146).
  */
 export function hkbOnPath() {
-  const which = spawnSync('sh', ['-c', 'command -v hkb'], { encoding: 'utf8' });
+  const env = { ...process.env, PATH: stripNodeModulesBin(process.env.PATH || '', path.delimiter) };
+  const which = spawnSync('sh', ['-c', 'command -v hkb'], { encoding: 'utf8', env });
   return which.status === 0 && !!which.stdout.trim();
 }
 

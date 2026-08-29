@@ -5,6 +5,7 @@ import { getTask, fetchBoard, assertOnBoard, loadRun, latestResult, parentResult
 import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, createTask, linkTask, withOutbox, envAttempt } from './lifecycle.js';
 import { tick, loop, spawnWorker } from './dispatch.js';
 import { serve } from './serve.js';
+import { up, down } from './up.js';
 import { watch, tail } from './watch.js';
 import { stats } from './stats.js';
 import { claim } from './lock.js';
@@ -17,7 +18,7 @@ import { gc } from './gc.js';
 import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, resumeCommand } from './model.js';
 
 /** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
-const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'with-actions', 'mermaid', 'help']);
+const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'with-actions', 'mermaid', 'serve', 'help']);
 
 export function parseArgs(argv) {
   const flags = {};
@@ -188,7 +189,15 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
               --from-stdin with one JSON object {summary, metadata, artifacts, reason, kind, reviewer} (no shell quoting)
               finish is complete — the same verb under a name no shell claims: complete is a bash builtin,
               so a harness that vets a command word by word (Claude Code in a worktree) refuses to run it
-  dispatch    dispatch [--loop S] [--max N] [--profiles a,b] [--dry-run]     claim <n> [--profile p] [--spawn]
+  dispatch    up [--serve] [--loop S] [--port N]   start the dispatcher loop — and with --serve the board
+                    server — detached, idempotently, logging to .kanban/logs/<dispatch|serve>.log.
+                    Already running is reported, never started twice; up is not a supervisor and
+                    never restarts (exit 4 is the loop asking one to)
+              up --status [--json]     one line per process: running pid, since when, which log
+              down [--serve]           SIGTERM what the pid files name, then wait for them to be gone
+                    before saying stopped; workers are left alone. --json adds failed[] and the exit
+                    code is non-zero for a signal that failed or a process that outlived the wait
+              dispatch [--loop S] [--max N] [--profiles a,b] [--dry-run]     claim <n> [--profile p] [--spawn]
               gc [--yes]
   board       serve [--port 4666] [--host 127.0.0.1] [--poll 30]   local web board; drag-drop runs the same verbs
                     [--repos ../other,../third#release]   several checkouts on one page, one server, one port;
@@ -204,7 +213,7 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
 
   Global: --board <slug> (or KB_BOARD), --json.
   Exit codes: 0 ok · 1 error · 2 usage/state · 3 LOCK_LOST (stop now) · 4 the dispatcher loop gave itself up
-              (a supervisor — cron, systemd, Actions — or you starts a fresh one).
+              (a supervisor — cron, systemd, Actions — or hkb up starts a fresh one).
 `;
 
 // Single source of truth for the version: package.json, resolved relative to the package, not the
@@ -215,6 +224,17 @@ const out = (ctx, obj, text) => { process.stdout.write((ctx.json ? JSON.stringif
 const nums = (pos) => pos.map((p) => Number(String(p).replace(/^#/, ''))).filter((n) => Number.isInteger(n) && n > 0);
 const usage = (msg) => { const e = new Error(msg); e.exitCode = 2; return e; };
 const log = (s) => process.stderr.write(s + '\n');
+
+/**
+ * The dispatcher's life is not a worker's to touch: `dispatch` is what dispatched you, `up` starts a
+ * second one and `down` stops the one watching your own attempt. The PreToolUse hook refuses the same
+ * three command lines (`DENY_PATTERNS`, src/model.js); this is the layer that holds when a worker's
+ * harness has no hook at all.
+ */
+function refuseIfWorker(cmd) {
+  if (!process.env.KB_TASK) return;
+  throw usage(`you are worker for task #${process.env.KB_TASK} — workers never start or stop the dispatcher (\`hkb ${cmd}\`): it is what dispatched you, a second one against the live board causes double-claims, and stopping it strands every attempt it is watching. Test dispatch logic with the fake-gh test double: node --test test/dispatch.test.js`);
+}
 
 function taskLine(t) {
   const deps = t.blockedBy?.length ? ` ⇐ ${t.blockedBy.map((b) => (blockerDone(b) ? `#${b.number}✓` : `#${b.number}`)).join(',')}` : '';
@@ -415,7 +435,7 @@ export async function main(argv) {
       const p = resolveTerminalInput(cmd, flags, rest);
       const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || envAttempt(n) });
       const r = await withOutbox(ctx, replay, () => complete(ctx, n, { summary: p.summary, metadata: p.metadata, artifacts: p.artifacts, attempt: flags.attempt }));
-      out(ctx, r, `#${n} → ${r.status}${r.pr ? ` (waiting on PR #${r.pr})` : ''}`);
+      out(ctx, r, `#${n} → ${r.status}${r.pr ? ` (waiting on ${r.pr_continued ? 'the PR it continued, ' : ''}PR #${r.pr})` : ''}`);
       return 0;
     }
     case 'block': {
@@ -448,7 +468,7 @@ export async function main(argv) {
       const [n] = nums(rest);
       if (!n) throw usage('hkb request-changes <n> "reason"');
       const r = await requestChanges(ctx, n, { reason: rest.slice(1).join(' ') });
-      out(ctx, r, `#${n} → ${r.status}`);
+      out(ctx, r, `#${n} → ${r.status}${r.pr ? ` (PR #${r.pr} stays open; the next attempt continues it)` : ''}`);
       return 0;
     }
     case 'claim': {
@@ -474,8 +494,16 @@ export async function main(argv) {
       out(ctx, { number: n, attempt: k, ref: c.ref, pid }, `#${n} claimed (attempt ${k}, ${c.ref})${pid ? ` pid ${pid}` : `\nexport KB_TASK=${n} KB_ATTEMPT=${k}   # then work, and finish with hkb complete|block|request-review`}`);
       return 0;
     }
+    case 'up': {
+      refuseIfWorker(cmd);
+      return await up(ctx, flags, (s) => process.stdout.write(s + '\n'));
+    }
+    case 'down': {
+      refuseIfWorker(cmd);
+      return await down(ctx, flags, (s) => process.stdout.write(s + '\n'));
+    }
     case 'dispatch': {
-      if (process.env.KB_TASK) throw usage(`you are worker for task #${process.env.KB_TASK} — workers never run the dispatcher (it is what dispatched you, and a second one against the live board causes double-claims). Test dispatch logic with the fake-gh test double: node --test test/dispatch.test.js`);
+      refuseIfWorker(cmd);
       const max = flags.max ? Number(flags.max) : Infinity;
       // `--profiles a,b`: claim only tasks on these profiles. The Actions dispatcher passes
       // `--profiles claude-action` so an Actions runner never tries to launch a laptop-only harness.

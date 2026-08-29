@@ -20,6 +20,11 @@ deserves a `concepts/` page (link it).
   "task" in code and JSON (`src/tasks.js`).
 - **Claim** — an atomic take on a card: creating `refs/kb/locks/<n>/<k>`, the
   only CAS GitHub offers (`src/lock.js`).
+- **Continuation** — an attempt that carries on an **open PR** the reviewer sent
+  back instead of starting a branch of its own; marked `continues_pr` on the
+  attempt row, and `continues_branch` when the dispatcher put the checkout on
+  the PR's head branch (`worktreeOnBranch` in `src/board.js`; see
+  *features/review-loop*).
 - **Day stamp** — a `*_day` key in `.kanban/state.json` holding a UTC day, so a
   check that costs a network call runs at most once a day per checkout however
   often it is invoked; `token_expiry_day` and `version_check_day` are the two,
@@ -32,6 +37,15 @@ deserves a `concepts/` page (link it).
 - **Dispatcher** — the seat that ticks: `hkb dispatch` reconciles labels, locks
   and attempts against the graph on the cards. Not an orchestrator — it holds no
   workflow and has no LLM in it (`src/dispatch.js`; see *Tick*).
+- **Exit record** — `{code, at, reason}` under `exits` in `.kanban/state.json`,
+  written by a dispatcher loop that gave itself up (exit 4) and cleared when one
+  runs again, so `hkb up --status` can say why nothing is running instead of just
+  "stopped" (`src/board.js`; see *features/up-and-down*).
+- **Guard** — a reason the tick declines to claim a card it could otherwise
+  claim: `active_pr`, `blocker_auth`, `recent_success`, `path_overlap`
+  (`src/dispatch.js`). `active_pr` is the one with an exemption — a card whose
+  latest attempt is the reviewer's `changes_requested` row stays claimable and
+  becomes a *continuation* (`activePrGuard` in `src/model.js`).
 - **Handoff** — the structured result comment a finishing worker leaves so its
   dependents (and humans) start informed (`src/model.js`).
 - **Host** — machine identity, recorded per attempt, so the tick only checks a
@@ -40,6 +54,11 @@ deserves a `concepts/` page (link it).
   cards, steers by comment, reviews and merges, answers `kb:needs-human`,
   restarts a dispatcher that exited 4. "you", in a worker prompt
   (`decisions/adr-004-roles-and-adoption`).
+- **Pid file** — `.kanban/dispatch.pid` and `.kanban/serve.pid`: one pid per line,
+  written by the process itself and pre-written by `hkb up` for the child it
+  spawned, and deleted only by the process that wrote it. Being named by one,
+  answering `kill(pid, 0)`, and not being *stale* is the whole definition of
+  "running" here (`src/board.js`; see *features/up-and-down*).
 - **Planning command** — `/kanban:specify` or `/kanban:decompose`: a harness slash
   command rather than an `hkb` verb, because both need a model and the dispatcher
   has none. One source in `commands/`, registered by the plugin and by `hkb init`
@@ -55,9 +74,15 @@ deserves a `concepts/` page (link it).
   worker. Every other word (reviewer, profile, host, supervisor, track runner)
   is vocabulary, not a seat
   (`skills/kanban/references/protocol.md`; `decisions/adr-004-roles-and-adoption`).
+- **Stale pid file** — one whose mtime predates the machine's last boot
+  (`Date.now() - os.uptime()*1000`): the pid it names has been reissued to a
+  stranger, so it counts as no claim at all rather than as a running process —
+  which is what keeps `hkb down` from signalling one after a reboot
+  (`pidFileStale` in `src/model.js`; see *features/up-and-down*).
 - **Supervisor** — whatever restarts a dispatcher that exited 4: cron, systemd,
   Actions, or the operator. It restarts a process; it decides nothing
-  (`src/dispatch.js`).
+  (`src/dispatch.js`). `hkb up` *starts* a dispatcher and reports an exit 4, but
+  is not a supervisor: it never restarts anything (`src/up.js`).
 - **Tick** — one pass of the dispatcher loop: re-read the board, derive every
   action from it, hold nothing durable in the process (`src/dispatch.js`).
 - **Track** — a DAG subgraph executed by one session, claimed at its root;

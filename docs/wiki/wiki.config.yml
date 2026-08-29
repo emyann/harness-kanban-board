@@ -72,6 +72,9 @@ pages:
   - slug: features/harness-profiles
     summary: "The shipped profiles (claude, claude-p, claude-track, claude-action, copilot-cli, codex): modes, permissions, models, and what each harness can and cannot do."
     status: planned
+  - slug: features/up-and-down
+    summary: "The two long-running processes as one idempotent verb: pid files as the whole protocol, why the child gets no KB_*, and the line between reporting exit 4 and supervising it."
+    status: seeded
   - slug: features/web-board
     summary: "One local server, one inline page, N repos: how the board is read, how a drag becomes a verb, and how every request is routed to the board it names."
     status: seeded
@@ -81,8 +84,14 @@ pages:
   - slug: features/update-notice
     summary: "Updates are pull-only, so something has to say there is something to pull — one npm GET a day, in doctor and the dispatcher loop, and why a stale CLI hides a stale skill."
     status: seeded
+  - slug: features/hook-install-shapes
+    summary: "A `matcher:\"*\"` hook that cannot resolve breaks every tool call in a repo — so what `hkb init` writes depends on where the running hkb lives, and only one that lives inside the repo earns the tracked settings file."
+    status: seeded
   - slug: features/auto-merge
     summary: "Why hkb never merges, how a board hands the last step to GitHub's auto-merge, and the branch-protection gate that is the only thing making that safe."
+    status: seeded
+  - slug: features/review-loop
+    summary: "How a reviewed card goes back for another round on the same PR: the one exemption to the active_pr guard, the checkout on the PR's branch, and the block in the brief that stops a second PR."
     status: seeded
   - slug: decisions/adr-001-github-native-backend
     summary: "GitHub Issues + native dependencies + ref locks won over MCP-first and repo-native designs; stacked PRs rejected for board sequencing."

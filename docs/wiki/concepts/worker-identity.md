@@ -7,18 +7,18 @@ audience: [dev, ops]
 read_when: "touching the launch environment, the Stop or PreToolUse hooks, session_id/transcript_path on an attempt row, or anything that reads KB_TASK"
 covers:
   - path: src/hook.js
-    sha: d11a3bd7a64d8361b84629960d5fd7241310653b
+    sha: a1c4de45dbb0a29e6bf602b0925e9a1da3be498a
   - path: src/model.js
-    sha: 5ad39cab891d41e861433669ab2bbdcf9cb32e14
+    sha: fc0671faed32f913ec5bcbe16819476f50ceeeb2
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/dispatch.js
-    sha: 70d6292d039717756312c07912e5ccefc34d67f9
+    sha: 202feb141cef1529814ea4fedc91514f3f446335
   - path: src/doctor.js
-    sha: 09c03f6a1997ffaa12bbef2e3a2e975c535198f7
+    sha: a6afe38be8a47394bf2341c24a24cec2a0d9ed1c
   - path: src/lifecycle.js
-    sha: a77530a2b079996939d3c585d791e7a76dcf6efc
-generated_at_commit: 616f0b7
+    sha: 20ebc63bcdd5e63634de41fb620aa84a38e720b3
+generated_at_commit: 9597b41
 last_refreshed: 2026-08-28
 related: [architecture/overview, features/harness-profiles, features/tracks, decisions/adr-004-roles-and-adoption]
 ---
@@ -80,9 +80,17 @@ task whose worktree this plainly is not is a leak, not an identity: it is
 dropped, the checkout answers if it can, and the caller gets one line on stderr
 (`hkb hook: KB_TASK=146 in the environment but this is not its worktree …`).
 
-The judgement is deliberately narrow — it only fires on **evidence** (the cwd is
-the board root, or a `kb-<n>-<k>` naming a different attempt) and only for a
-profile whose worker hkb actually knows the location of (`worksInWorktree`,
+The judgement is deliberately narrow in *which profiles* it applies to, but not
+in *which cwd* counts as agreement: only a `kb-<n>-<k>` checkout naming this
+exact task and attempt is evidence for the environment. Everything else — the
+board root, a `kb-<n>-<k>` naming a different attempt, a review worktree, a
+session the same poisoned daemon went on to host for an unrelated repo — is a
+leak. That widening (#150's own follow-up review, "B1") mattered because a
+daemon's `KB_ROOT` and `KB_TASK` outlive the incident that started it: they sit
+in that process's environment until it is restarted, and it can go on to host
+sessions anywhere on the host, not only at the one board root that happened to
+launch it. It only fires at all for a profile whose worker hkb actually knows
+the location of (`worksInWorktree`,
 `src/model.js`: `mode: "claude-bg"`, whose job is matched by its worktree, and
 `workspace: "worktree"`, which the dispatcher hands that directory as its cwd).
 A `mode: "process"` Claude profile also passes `--worktree`, but where *its*

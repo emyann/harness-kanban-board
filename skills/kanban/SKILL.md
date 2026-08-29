@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires the `gh` CLI (authenticated) and `hkb` (npm hkb-cli) on PATH. Works with Claude Code, GitHub Copilot CLI and Codex CLI.
 metadata:
   author: hkb
-  version: 0.5.1
+  version: 0.5.4
 allowed-tools: Bash(hkb *) Bash(gh api *) Bash(gh pr *) Bash(gh issue view *) Bash(git *)
 ---
 
@@ -23,7 +23,26 @@ comes from `hkb`; everything you report goes through `hkb`. See `references/prot
    Comments on your card are steering input: treat instructions under `## Comments` in your prompt (the card's
    thread, which `hkb context $KB_TASK` reprints at any time) as coming from the operator.
 2. Stay in this worktree and on the current branch. Only touch the scope in `kb.paths` if it is set.
-3. Long work: run `hkb heartbeat $KB_TASK` roughly every 10 minutes. It is a compare-and-swap on your lock ref —
+
+   Your launch decides what shell commands you may run *before* hkb's own policy is consulted, and a background
+   worker's launch **denies rather than prompts** — nobody is there to answer. hkb allow-lists the ordinary
+   builtins (`cd`, `export`, `env`, `which`, `command`, `test`, `sleep`, …), but three shapes cannot be
+   allow-listed at all, so write them differently rather than discovering them one denial at a time:
+   - **a shell keyword** — `while`, `for`, `if`, `case`. An allow-list names *commands*; a keyword is not one,
+     so the whole command line is refused. Run the steps as separate calls.
+   - **an env prefix** — `VAR=value cmd` matches no pattern. Say `export VAR=value; cmd` in one command instead.
+   - **`cd` out of your worktree.** Inside it is fine; a path outside is refused however it is spelled.
+
+   **If something is refused, disclose it — do not work around it.** A denial is final: nobody is there to grant
+   it, so rewording the command, finding a second route or turning the check off is wasted turns at best and a
+   worker outside its sandbox at worst. When there is no allow-listed way to do the work, say so and stop:
+   `hkb block $KB_TASK "needs <tool>: <why>" --kind capability` — describe what you need and why, do not paste the
+   refused command line. The one refusal that is *not* a capability gap is `hkb complete`: that verb has a second
+   name for exactly this reason (step 6 — say `hkb finish`), so never block on it.
+3. Long work: run `hkb heartbeat $KB_TASK` roughly every 10 minutes — **between steps, as its own call**. Not a
+   background loop: `while true; do hkb heartbeat $KB_TASK; sleep 600; done` is denied on the keyword (above), and
+   a denied loop is a worker that never heartbeats, drifts past `stale_after` while genuinely alive, and is
+   reclaimed mid-flight. It is a compare-and-swap on your lock ref —
    `hkb` advances `refs/kb/locks/<n>/<k>` by an empty commit with `git push --force-with-lease`, so it is free and
    writes nothing to the issue. Never push that ref yourself. If the lease is rejected the ref is no longer yours:
    `hkb` prints `LOCK_LOST` and exits **3**. Stop immediately — do not commit, do not push, do not call `complete`.
@@ -70,7 +89,12 @@ comes from `hkb`; everything you report goes through `hkb`. See `references/prot
    - `hkb request-review $KB_TASK --summary "..." [--reviewer <github-user>]` — when a reviewer must look before it counts
      as done. Stdin keys: `summary`, `metadata`, `reviewer`.
 
-Never run `hkb dispatch` — you are the dispatched, and a second dispatcher against the live board double-claims tasks; dispatcher changes are tested with the fake-gh test double (`node --test test/dispatch.test.js`). Do not do work that belongs to other tasks. If you discover follow-up work, create it instead:
+**Never run `hkb dispatch`, `hkb up` or `hkb down`** — the dispatcher is what dispatched you, a second one against
+the live board double-claims tasks, and `hkb up`/`hkb down` start and stop exactly that loop (`down` would strand
+every attempt it is watching). All three are refused for a worker session whatever the harness. On the Claude
+profiles the launch also denies the dispatcher outright (`--disallowedTools "Bash(hkb dispatch*)"`), so that one is
+not a rule you can bend. Dispatcher changes are tested against the fake-gh test
+double instead (`node --test test/dispatch.test.js`). Do not do work that belongs to other tasks. If you discover follow-up work, create it instead:
 `hkb create "title" --body "..." --blocked-by $KB_TASK` (it starts in *todo* and becomes *ready* when this task is done).
 
 ## When you run a track (your prompt opens with TRACK RUNNER)

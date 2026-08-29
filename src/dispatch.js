@@ -5,9 +5,9 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, getTask, enableAutoMerge, branchProtection } from './tasks.js';
-import { claim, release, listLocks, lockBeatAt, staleBaseSha } from './lock.js';
-import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree } from './board.js';
-import { computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv } from './model.js';
+import { claim, release, listLocks, lockBeatAt, staleBaseSha, remoteName } from './lock.js';
+import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, pidFile, readPidFile, pidAlive, recordExit, clearExit } from './board.js';
+import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, pathsOverlap, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted } from './track.js';
 import { GhError } from './gh.js';
@@ -22,10 +22,9 @@ const secondsSince = (iso) => (iso ? (Date.now() - new Date(iso).getTime()) / 10
 /** Ticks between full `hkb gc --yes` sweeps when board.json says nothing. 0 turns them off. */
 export const GC_EVERY_TICKS = 30;
 
-export function pidAlive(pid) {
-  if (!pid) return false;
-  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
-}
+// `pidAlive` lives in board.js now, next to the pid files it answers about; re-exported here because
+// this is where every caller has always imported it from.
+export { pidAlive };
 
 function killPid(pid) {
   if (!pidAlive(pid)) return false;
@@ -72,22 +71,58 @@ export function expandLaunch(template, vars, profile) {
 }
 
 /**
+ * Drop a harness's own worktree flag from an expanded launch. Claude Code's `--worktree kb-<n>-<k>`
+ * asks it to make a checkout of its own, on a fresh branch; when the dispatcher has already made
+ * that same checkout on a PR's branch and runs the harness inside it, a second one would put the
+ * worker back where it must not be. Only `--worktree` goes — `codex exec -C {worktree}` names the
+ * dispatcher's own directory and has to stay.
+ */
+export function withoutWorktreeFlag(argv) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--worktree') { i++; continue; }
+    if (String(argv[i]).startsWith('--worktree=')) continue;
+    out.push(argv[i]);
+  }
+  return out;
+}
+
+/**
  * Launch one session for one attempt. `prompt` overrides the per-task worker context — a track
  * runner gets the whole subgraph's brief instead (see src/track.js); everything else about the
  * launch, the environment and the log is identical, because from here down a track *is* a worker.
+ *
+ * `continuePr` is the open PR this attempt must continue rather than duplicate (the card the
+ * reviewer sent back with `hkb request-changes`; see `activePrGuard`). The dispatcher makes that
+ * checkout itself, on the PR's head branch — every harness can be run in a directory, not all of
+ * them can be told which branch to make one on — and takes the harness's own worktree flag off the
+ * launch so there is one checkout, not two. When the branch cannot be had (still held by a live
+ * session, no remote, gone) the attempt runs anyway, on an ordinary fresh worktree, and the brief
+ * says which PR to continue and how: `continued` on the result records which of the two it was.
  */
-export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = false, keepRef = false, prompt: given = null } = {}) {
+export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = false, keepRef = false, prompt: given = null, continuePr = null } = {}) {
   const profile = ctx.cfg.profiles[profileName];
   if (!profile?.launch) throw new Error(`profile "${profileName}" has no launch template in board.json`);
-  const prompt = given ?? (await workerContext(ctx, task, attempt));
+  const name = `kb-${task.number}-${attempt}`;
+  const cont = !continuePr
+    ? null
+    : dryRun
+      ? { ok: !!continuePr.headRefName, branch: continuePr.headRefName || null, dry: true, why: 'the board query returned no head branch for the PR' } // a dry run creates nothing, and prints the command it would run
+      : worktreeOnBranch(ctx.root, name, continuePr.headRefName, { number: task.number, remote: remoteName(ctx), alive: pidAlive });
+  const prompt = given ?? (await workerContext(ctx, task, attempt, {
+    continuePr: continuePr && { number: continuePr.number, branch: continuePr.headRefName || null, base: continuePr.baseRefName || null, checkedOut: !!cont?.ok },
+  }));
   // Harnesses without a worktree flag (Copilot CLI, Codex) declare `workspace: "worktree"`; the
   // dispatcher makes the checkout and runs them in it. Everything else runs at the board root and
-  // isolates itself. `{worktree}` is that directory as an absolute path, for a harness that wants it
+  // isolates itself — unless this attempt continues a PR, where the dispatcher owns the checkout for
+  // every harness. `{worktree}` is that directory as an absolute path, for a harness that wants it
   // as an argument too (`codex exec -C <dir>`) — known before the checkout exists, so `--dry-run`
   // prints the real command without creating anything.
-  const wt = profile.workspace === 'worktree' ? `kb-${task.number}-${attempt}` : null;
+  const ownsWt = profile.workspace === 'worktree';
+  const wt = ownsWt || cont?.ok ? name : null;
   const vars = { n: task.number, k: attempt, slug: slugify(task.title), title: task.title.replace(/[\r\n]+/g, ' ').slice(0, 80), model: task.kb.model || profile.model || '', prompt, board: ctx.board, repo: ctx.repo.nameWithOwner, worktree: wt ? path.join(ctx.root, worktreePath(wt)) : ctx.root };
-  const argv = expandLaunch(profile.launch, vars, profile);
+  const argv = cont?.ok && !ownsWt ? withoutWorktreeFlag(expandLaunch(profile.launch, vars, profile)) : expandLaunch(profile.launch, vars, profile);
+  const continued = cont && { pr: continuePr.number, branch: cont.ok ? cont.branch : null, why: cont.ok ? null : cont.why };
   // The launch environment is the worker's identity for every harness we run as a child process:
   // it dies with that process. `claude --bg` is the exception — it hands the request to Claude
   // Code's session daemon and exits, and a launch that finds no daemon *starts* one, which then
@@ -98,7 +133,7 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
     KB_TASK: String(task.number), KB_ATTEMPT: String(attempt), KB_BOARD: ctx.board, KB_REPO: ctx.repo.nameWithOwner,
     KB_LOCK_REF: lockRef(task.number, attempt), KB_ROOT: ctx.root, KB_PROFILE: profileName,
   };
-  if (dryRun) return { argv, pid: null };
+  if (dryRun) return { argv, pid: null, continued };
   ensureLocalDirs(ctx.root);
   const cwd = wt ? ensureWorktree(ctx.root, wt) : ctx.root;
   const logFile = path.join(logsDir(ctx.root), `${task.number}-${attempt}.log`);
@@ -111,7 +146,7 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
     const out = `${r.stdout || ''}${r.stderr || ''}`.trim();
     fs.appendFileSync(logFile, `# ${nowIso()} trigger ${argv.join(' ')}\n${out}\n`);
     if (r.error || r.status !== 0) throw new Error(`${argv[0]}: ${(r.error?.message || out || `exit ${r.status}`).split('\n').filter(Boolean).pop()}`);
-    return { argv, pid: null, remote: true, logFile };
+    return { argv, pid: null, remote: true, logFile, continued };
   }
   if (profile.mode === 'claude-bg') {
     // Fire-and-forget: `claude --bg` prints "backgrounded · <id>" and exits, but a cold daemon
@@ -123,7 +158,7 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
     child.on('error', () => { /* surfaced next tick as crashed if the job never registers */ });
     fs.closeSync(fd);
     child.unref();
-    return { argv, pid: null, bg: true, wt: `kb-${task.number}-${attempt}`, logFile };
+    return { argv, pid: null, bg: true, wt: name, logFile, continued };
   }
   const fd = fs.openSync(logFile, 'a');
   fs.writeSync(fd, `# ${nowIso()} spawn ${argv[0]} for #${task.number} attempt ${attempt}${wt ? ` in ${worktreePath(wt)}` : ''}\n`);
@@ -131,7 +166,7 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
   child.on('error', () => { /* handled via exit code below */ });
   fs.closeSync(fd); // the child holds its own copy
   if (!keepRef) child.unref(); // one-shot dispatch must not wait for the worker
-  return { argv, pid: child.pid, child, wt, logFile };
+  return { argv, pid: child.pid, child, wt, logFile, continued };
 }
 
 // ---------- reconcile closed issues ----------
@@ -711,13 +746,24 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     if (t.status !== 'ready' || claimedTracks.has(t.number)) continue; // 3a took it: it is running its own track now
     if (coveredBy.has(t.number)) { summary.skipped.push({ number: t.number, why: `held for track #${coveredBy.get(t.number)}` }); continue; }
     if (touchedRecently(t.number)) { summary.skipped.push({ number: t.number, why: 'touched recently (stale-read guard)' }); continue; }
-    // active_pr guard first: it needs no extra call and must apply even when there is no slot
-    const openPrEarly = (t.prs || []).find((p) => p.state === 'OPEN');
-    if (openPrEarly) {
-      if (!dryRun) await setStatus(ctx, t, 'review');
-      summary.guarded.push({ number: t.number, guard: 'active_pr', pr: openPrEarly.number });
-      log(`#${t.number}: open PR #${openPrEarly.number} → review (active_pr guard)`);
-      continue;
+    // active_pr guard first: it must apply even when there is no slot, and for a card with no PR it
+    // costs nothing. The one exemption is the card `hkb request-changes` produced — its latest
+    // attempt is the reviewer's `changes_requested` row, and its open PR is what this attempt
+    // continues (#153). Deciding that needs the run record, which the claim below reads anyway; a
+    // card that is only guarded pays one read on the single tick where the guard fires and then
+    // leaves `ready`, so a board where nothing was sent back is unchanged.
+    let runRec = null;
+    let continuePr = null;
+    if ((t.prs || []).some((p) => p.state === 'OPEN')) {
+      runRec = await loadRun(ctx, t.number);
+      const g = activePrGuard(runRec.run.attempts, t.prs);
+      if (g.guard) {
+        if (!dryRun) await setStatus(ctx, t, 'review');
+        summary.guarded.push({ number: t.number, guard: 'active_pr', pr: g.pr.number });
+        log(`#${t.number}: open PR #${g.pr.number} → review (active_pr guard)`);
+        continue;
+      }
+      continuePr = g.pr;
     }
     if (budget <= 0) { summary.skipped.push({ number: t.number, why: 'no slot' }); continue; }
     if ((state.spawned_today || 0) >= d.daily_spawn_cap) { summary.skipped.push({ number: t.number, why: `daily spawn cap ${d.daily_spawn_cap}` }); continue; }
@@ -729,14 +775,15 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     // remaining guards (these read the run comment, so only for tasks that could actually be claimed)
     const pausedUntil = state.profile_paused_until[profileName];
     if (pausedUntil && new Date(pausedUntil) > new Date()) { summary.guarded.push({ number: t.number, guard: 'blocker_auth', until: pausedUntil }); continue; }
-    const runRec = await loadRun(ctx, t.number);
+    runRec = runRec || await loadRun(ctx, t.number);
     const last = lastAttempt(runRec.run);
     if (last?.outcome === 'completed' && secondsSince(last.ended_at) < d.recent_success_window) { summary.guarded.push({ number: t.number, guard: 'recent_success' }); continue; }
     if (d.path_guard && (t.kb.paths || []).length && claimedPaths.some((p) => p.length && pathsOverlap(p, t.kb.paths))) { summary.guarded.push({ number: t.number, guard: 'path_overlap' }); continue; }
     if (t.kb.scheduled_at && new Date(t.kb.scheduled_at) > new Date()) { summary.skipped.push({ number: t.number, why: 'scheduled later' }); continue; }
 
     const k = runRec.run.attempts.length + 1;
-    if (dryRun) { summary.claimed.push({ number: t.number, attempt: k, profile: profileName, dry: true }); budget--; continue; }
+    const continues = continuePr ? { continues_pr: continuePr.number } : {};
+    if (dryRun) { summary.claimed.push({ number: t.number, attempt: k, profile: profileName, dry: true, ...continues }); budget--; continue; }
     const c = await claim(ctx, t.number, k);
     if (selfHeal(t.number, c)) break;
     if (c.result === 'claimed') { state.claims[`${t.number}/${k}`] = nowIso(); touch(t.number); }
@@ -747,13 +794,13 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       continue;
     }
     // lock_sha starts the worker's heartbeat chain: the first `hkb heartbeat` leases on it
-    const attempt = { attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.sha, pid: null };
+    const attempt = { attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.sha, pid: null, ...continues };
     runRec.run.attempts.push(attempt);
     await saveRun(ctx, t.number, runRec);
     await setStatus(ctx, t, 'running', { add: t.agent ? [] : [L.agent(profileName)], remove: [L.needsHuman] });
     let spawned;
     try {
-      spawned = await spawnWorker(ctx, t, profileName, k, { keepRef: !!children });
+      spawned = await spawnWorker(ctx, t, profileName, k, { keepRef: !!children, continuePr });
       if (!spawned.pid && !spawned.bg && !spawned.remote) throw new Error('spawn returned neither a pid nor a background launch');
     } catch (e) {
       log(`#${t.number}: spawn failed: ${e.message}`);
@@ -765,6 +812,9 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     if (spawned.bg) attempt.bg = true;
     if (spawned.remote) attempt.remote = true;
     if (spawned.wt) attempt.wt = spawned.wt;
+    // which of the two continuation paths this attempt took: the branch, when the dispatcher put the
+    // checkout on the PR's own; nothing, when the brief is all that tells the worker to continue it
+    if (spawned.continued?.branch) attempt.continues_branch = spawned.continued.branch;
     attempt.log = path.relative(ctx.root, spawned.logFile);
     await saveRun(ctx, t.number, runRec);
     state.spawned_today = (state.spawned_today || 0) + 1;
@@ -776,8 +826,12 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       : spawned.bg
         ? `background agent in ${spawned.wt} (job id on next tick; claude agents to watch)`
         : `pid ${spawned.pid}${spawned.wt ? ` in ${worktreePath(spawned.wt)}` : ''}`;
-    summary.claimed.push({ number: t.number, attempt: k, profile: profileName, pid: spawned.pid, wt: spawned.wt || null });
-    log(`#${t.number}: claimed attempt ${k} → ${profileName} ${handle} (log ${attempt.log})`);
+    const continuing = !spawned.continued ? ''
+      : spawned.continued.branch
+        ? `, continuing PR #${spawned.continued.pr} on ${spawned.continued.branch}`
+        : `, continuing PR #${spawned.continued.pr} from a fresh worktree (${spawned.continued.why}) — the brief says which PR to push to`;
+    summary.claimed.push({ number: t.number, attempt: k, profile: profileName, pid: spawned.pid, wt: spawned.wt || null, ...continues });
+    log(`#${t.number}: claimed attempt ${k} → ${profileName} ${handle}${continuing} (log ${attempt.log})`);
     if (children && spawned.child) watchChild(ctx, t.number, k, spawned.child, children, state, profileName, log);
   }
 
@@ -872,17 +926,21 @@ function tailLog(ctx, rel, bytes = 4000) {
 /** Exactly one dispatcher loop per board root. Two concurrent loops fight: one sweeps the other's
  * fresh locks and kills its workers (observed 2026-08-26 when wrapper-pid kills left node alive). */
 function acquireLoopLock(ctx) {
-  const file = path.join(ctx.root, '.kanban', 'dispatch.pid');
+  const file = pidFile(ctx.root, 'dispatch');
   try {
-    const existing = Number(fs.readFileSync(file, 'utf8').trim());
-    if (existing && existing !== process.pid && pidAlive(existing)) {
-      const e = new Error(`another dispatcher loop is already running (pid ${existing}). If you are a worker session: never run the dispatcher. If you own this host and want to replace it, stop it yourself first.`);
+    // `hkb up` writes the pid of the child it just spawned into this file, so a loop finding its own
+    // pid here is finding its own claim, not a rival's. A file that predates the boot is no claim at
+    // all — after a reboot that pid belongs to a stranger (`readPidFile`).
+    const { pid: existing, stale } = readPidFile(ctx.root, 'dispatch');
+    if (!stale && existing && existing !== process.pid && pidAlive(existing)) {
+      const e = new Error(`another dispatcher loop is already running (pid ${existing}). If you are a worker session: never run the dispatcher. If you own this host and want to replace it, stop it yourself first (\`hkb down\`).`);
       e.exitCode = 2;
       throw e;
     }
   } catch (e) { if (e.exitCode) throw e; /* no or stale pidfile */ }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, String(process.pid) + '\n');
+  clearExit(ctx.root, 'dispatch'); // a loop is running again: the last one's exit is no longer the news
   const drop = () => { try { if (Number(fs.readFileSync(file, 'utf8').trim()) === process.pid) fs.rmSync(file); } catch { /* gone */ } };
   process.on('exit', drop);
   return drop;
@@ -890,16 +948,32 @@ function acquireLoopLock(ctx) {
 
 /**
  * The long-lived dispatcher. `sleeper` is the wait between ticks, injected so a test can run six
- * ticks in a millisecond. Throws (exit code 4) when a tick reports `fatal`: the self-heal ladder ran
- * out and the honest thing left is to die with a reason a supervisor and a human can both read.
+ * ticks in a millisecond; the default one is interruptible, so SIGTERM ends the loop between ticks
+ * rather than after another. Throws (exit code 4) when a tick reports `fatal`: the self-heal ladder
+ * ran out and the honest thing left is to die with a reason a supervisor and a human can both read.
  */
-export async function loop(ctx, { interval, max, profiles = null, log, sleeper = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
+export async function loop(ctx, { interval, max, profiles = null, log, sleeper = null }) {
   const dropLock = acquireLoopLock(ctx);
   log(`dispatcher pid ${process.pid} (singleton lock .kanban/dispatch.pid)`);
   const children = new Map();
   let stopping = false;
   let fatal = null;
-  const stop = () => { stopping = true; log('stopping after this tick (workers keep running; next dispatcher reclaims or adopts them)'); };
+  // The wait between ticks has to be interruptible, or a SIGTERM landing one second into a 60-second
+  // sleep buys a *whole further tick*: the loop would wake, run it, and only then notice it was asked
+  // to stop — while `hkb down` had already reported it stopped and `hkb up` had started its
+  // replacement. Two loops, one board, and the singleton lock never saw it coming. So `stop` resolves
+  // the sleep it is racing, and the loop leaves between ticks instead of through one. The default
+  // sleep is owned here rather than closed over, so the pending timer can be cleared with it.
+  let timer = null;
+  let wake = null;
+  const nap = sleeper || ((ms) => new Promise((resolve) => { timer = setTimeout(resolve, ms); }));
+  const stop = () => {
+    stopping = true;
+    log(wake ? 'stopping now (workers keep running; next dispatcher reclaims or adopts them)'
+      : 'stopping after this tick (workers keep running; next dispatcher reclaims or adopts them)');
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (wake) wake();
+  };
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
   for (;;) {
     const started = Date.now();
@@ -920,13 +994,18 @@ export async function loop(ctx, { interval, max, profiles = null, log, sleeper =
     }
     if (stopping) break;
     const wait = Math.max(5_000, interval * 1000 - (Date.now() - started));
-    await sleeper(wait);
+    await Promise.race([nap(wait), new Promise((resolve) => { wake = resolve; })]);
+    wake = null; timer = null; // the race is over: a signal from here on waits for the next tick
+    if (stopping) break;
   }
   dropLock();
   if (fatal) {
     const e = new Error(`dispatcher exiting: #${fatal.number} claim came back unknown ${fatal.streak} ticks in a row, ${fatal.streak - SELF_HEAL.dropAfter} of them after this process dropped every cache it had. Last error: ${fatal.error}. Start a new dispatcher — fresh state is what fixes this; if it fails the same way the fault is upstream, so check \`gh auth status\` and \`hkb doctor\`. Running workers are untouched: the next dispatcher adopts or reclaims them.`);
     e.exitCode = 4;
     log(`FATAL ${e.message}`);
+    // The pid file is gone (that is what `dropLock` means), so without this the next `hkb up --status`
+    // could only say "stopped" — which is true and useless. Nothing reads this to restart anything.
+    recordExit(ctx.root, 'dispatch', { code: 4, at: nowIso(), reason: e.message });
     throw e;
   }
 }

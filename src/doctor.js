@@ -3,11 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
-import { boardFile, api, readState, writeState } from './board.js';
+import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES } from './board.js';
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun } from './tasks.js';
-import { L, STATUSES, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, attemptIdentity, kbVarsIn } from './model.js';
+import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, attemptIdentity, kbVarsIn } from './model.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
-import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, isEphemeralPath, HOOK_SETTINGS, PKG_ROOT } from './init.js';
+import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
 import { latestVersion } from './registry.js';
 import { checkProject } from './projects.js';
 
@@ -71,6 +71,23 @@ export function checkHarnesses(ctx, { ok, warn }) {
 }
 
 /**
+ * Everything else here checks whether the board *could* run. This one asks whether it *is*: a
+ * perfectly configured board with no dispatcher is the commonest reason nothing is moving, and it
+ * used to be the one thing doctor could not tell you. One `ok`/`warn` line off the pid file — no
+ * board read, no network, nothing that could make `hkb doctor` slower or more expensive.
+ *
+ * A warning, never a failure: a board driven by hand, by Actions or by cron is a legitimate board,
+ * and `hkb doctor` must not call it broken.
+ */
+export function checkDispatcher(ctx, { ok, warn }) {
+  const st = processState(ctx.root, 'dispatch');
+  if (st.running) return ok('dispatcher', `running pid ${st.pid} · log ${st.log}`);
+  if (st.stale) return warn('dispatcher', 'no dispatcher running — .kanban/dispatch.pid predates this boot and names nothing of ours', 'hkb up');
+  if (st.exit !== null) return warn('dispatcher', `no dispatcher running — the last one exited (${st.exit}) at ${st.exited_at}`, 'hkb up');
+  warn('dispatcher', 'no dispatcher running', 'hkb up');
+}
+
+/**
  * A `trigger` profile is a launch that only asks Actions to do the work — so the workflow it names
  * has to exist, and it only ever runs from the default branch. Nothing here can check the secrets:
  * `gh secret list` needs admin, and their absence is reported by the workflow itself.
@@ -87,14 +104,87 @@ export function checkActions(ctx, { ok, warn }) {
     : warn('actions workflows', `${files.join(' · ')} are not committed — Actions only runs workflows on the default branch`, 'git add .github/workflows && commit, then push');
 }
 
+export const PERMS_CHECK = 'worker permissions';
+/**
+ * The one generated file that freezes an allow-list, named by the generator so it cannot drift.
+ * Rendered on first use, not at import: `actionsFiles()` fills both workflow templates, and every
+ * `hkb` invocation — `list`, `show`, a hook firing on every tool call — paid for that.
+ */
+let workerWorkflowFile = null;
+const WORKER_WORKFLOW_FILE = () => (workerWorkflowFile ??= actionsFiles().map((f) => f.rel).find((f) => /worker-claude/.test(f)));
+
+/** The `--allowedTools "…"` list baked into the generated worker workflow; null when it has none. */
+export function workflowAllowedTools(contents) {
+  const m = /--allowedTools\s+"([^"]*)"/.exec(String(contents || ''));
+  return m ? m[1].split(',').map((s) => s.trim()).filter(Boolean) : null;
+}
+
+const nameSome = (list, n = 4) => list.slice(0, n).join(', ') + (list.length > n ? ` +${list.length - n} more` : '');
+
+/**
+ * Two layers decide what a worker may run — hkb's PreToolUse guard and the launch's own
+ * `--allowedTools` — and under `--permission-mode dontAsk` the launch DENIES rather than prompts, so
+ * the stricter one wins outright. hkb ships a list that covers `SAFE_BUILTINS`; what this catches is
+ * a *frozen copy* of an older one, which no default change can reach: a profile that pins
+ * `allowed_tools` in board.json, and the `--allowedTools` line `hkb init --with-actions` bakes into
+ * the generated worker workflow. Both keep denying `cd`, `export`, `command`, `env` — commands hkb's
+ * own policy calls safe — until someone regenerates them (#138).
+ *
+ * Local files only, so it runs before the first API call. Silent on a board with no allow-list at
+ * all (a Codex-only board: its sandbox is the whole policy, so there is nothing to fall behind).
+ */
+export function checkWorkerPermissions(ctx, { ok, warn }, { read = (p) => fs.readFileSync(p, 'utf8'), exists = (p) => fs.existsSync(p) } = {}) {
+  const lists = [];
+  const board = path.relative(ctx.root, boardFile(ctx.root));
+  for (const [name, p] of Object.entries(ctx.cfg?.profiles || {})) {
+    if (!p?.allowed_tools) continue;
+    const missing = uncoveredBuiltins(p.allowed_tools);
+    lists.push({
+      where: `the ${name} profile in ${board}`,
+      missing,
+      // Only a profile hkb also ships a default for can be fixed by deletion: `loadBoard` deep-merges
+      // a board.json profile over `DEFAULT_PROFILES[name]`, so dropping the key there falls back to
+      // hkb's list. A custom-named profile has nothing behind it — dropping the key makes
+      // `{allowed_tools}` expand to nothing and `--allowedTools` swallow the next flag, so the only
+      // fix is to write the missing patterns in.
+      fix: DEFAULT_PROFILES[name]
+        ? `drop "allowed_tools" from the ${name} profile in ${board} to take hkb's own list`
+        : `add ${nameSome(missing.map((c) => `Bash(${c} *)`), 3)} to "allowed_tools" on the ${name} profile in ${board} — it is not one of hkb's own profiles, so there is no default to fall back to`,
+    });
+  }
+  const file = path.join(ctx.root, WORKER_WORKFLOW_FILE());
+  if (exists(file)) {
+    let baked = null;
+    try { baked = workflowAllowedTools(read(file)); } catch { /* unreadable: checkActions owns that */ }
+    if (baked) lists.push({ where: `the generated ${WORKER_WORKFLOW_FILE()}`, missing: uncoveredBuiltins(baked), fix: 'hkb init --with-actions' });
+  }
+  if (!lists.length) return null;
+  const stale = lists.filter((l) => l.missing.length);
+  // one check name whatever the answer: a `--json` consumer keys on it, and a name that changed
+  // between ok and warn meant the warning could only be found by reading the prose
+  for (const s of stale) {
+    warn(PERMS_CHECK, `${s.where} omits ${nameSome(s.missing)} — hkb's own guard permits them, but a \`dontAsk\` launch denies rather than prompts, so a worker is refused what hkb calls safe`, s.fix);
+  }
+  if (!stale.length) ok(PERMS_CHECK, `${lists.length} allow-list${lists.length === 1 ? '' : 's'} cover the ${SAFE_BUILTINS.length} shell builtins hkb calls safe`);
+  return lists;
+}
+
 /**
  * The Stop/PreToolUse hooks: which settings file holds them, and whether what they run can actually
  * run *here*. A hook command that does not resolve fails on every tool call in every session in the
  * repo — noise the reader did not write and cannot explain — and a hook that only half-exists is
  * worse than none, so this is a failure with the install in the fix, not a warning (#85). The lookups
  * are arguments so the check is testable without touching PATH.
+ *
+ * Three things follow from a repo that carries its own hkb (#146). `$CLAUDE_PROJECT_DIR` is resolved
+ * to the repo before the file is looked for, and reported, so the pass names what it found rather
+ * than the variable. A command naming a binary instead of that copy is a failure however well it
+ * happens to work on this machine: it is in the file everyone reads, and everyone else has only what
+ * their checkout gave them. And a guarded command whose file is missing is normally just an install
+ * that has not happened yet — except when the repo's hkb is somewhere else entirely, which is a
+ * committed path that has moved (a version-stamped pnpm store, say) and a hook silent forever.
  */
-export function checkHooks(ctx, { ok, warn, bad }, { onPath = has, exists = (p) => fs.existsSync(p) } = {}) {
+export function checkHooks(ctx, { ok, warn, bad }, { onPath = has, exists = (p) => fs.existsSync(p), binRel = projectBinRel(ctx.root) } = {}) {
   const { hooks, unreadable } = findClaudeHooks(ctx.root);
   for (const u of unreadable) warn('hooks settings', `${u.file} is not valid JSON (${u.error})`, 'fix the JSON, then hkb init');
   if (!hooks.some((h) => h.event === 'Stop')) {
@@ -106,21 +196,38 @@ export function checkHooks(ctx, { ok, warn, bad }, { onPath = has, exists = (p) 
     : ok('stop hook', files[0]);
   // one finding per thing that has to exist, not per hook: both commands normally need the same binary
   const byTarget = new Map();
-  for (const command of [...new Set(hooks.map((h) => h.command))]) {
-    const need = hookCommandNeeds(command);
+  for (const h of hooks) {
+    const need = hookCommandNeeds(h.command);
     const key = `${need.kind}:${need.target}`;
-    if (!byTarget.has(key)) byTarget.set(key, { need, commands: [] });
-    byTarget.get(key).commands.push(command);
+    if (!byTarget.has(key)) byTarget.set(key, { need, commands: new Set(), where: new Set() });
+    byTarget.get(key).commands.add(h.command);
+    byTarget.get(key).where.add(h.file);
   }
-  for (const { need, commands } of byTarget.values()) {
-    const what = commands.join(' · ');
+  for (const { need, commands, where } of byTarget.values()) {
+    const what = [...commands].join(' · ');
+    const target = resolveHookPath(need.target, ctx.root);
+    // A guarded command is a whole line of shell twice over; what the reader needs from a pass is the
+    // file it resolved to, which is exactly what this group is keyed by.
+    const found = target === need.target ? what : `${need.target} → ${target}`;
     if (isEphemeralPath(need.target)) {
       bad('hook command', `${what} — the npx cache is not a durable path, so this stops working the moment it is cleaned`, 'npm i -g hkb-cli, then hkb init');
-    } else if (need.kind === 'file' ? exists(need.target) : onPath(need.target)) {
-      ok('hook command', what);
+    } else if (binRel && need.kind === 'bin') {
+      bad('hook command',
+        `${what} in ${[...where].join(' and ')} — this repo carries hkb itself (${binRel}), and \`${need.target}\` is whatever each machine happens to have, or nothing`,
+        `hkb init — it rewrites the command as ${PROJECT_DIR}/${binRel}, which every checkout resolves`);
+    } else if (need.kind === 'file' ? exists(target) : onPath(need.target)) {
+      ok('hook command', found);
+    } else if (need.kind === 'file' && need.guarded) {
+      // Silent-until-installed is the honest reading only while the command still names where hkb
+      // would land. If the repo's own hkb is at a different path, the committed one has gone stale
+      // and no amount of installing brings it back — init is what rewrites it.
+      const moved = binRel && need.target !== `${PROJECT_DIR}/${binRel}`;
+      moved
+        ? bad('hook command', `${what} — ${target} is not there, and this repo's hkb is ${binRel}; the hook has been exiting 0 in silence`, `hkb init — it rewrites the command as ${PROJECT_DIR}/${binRel}`)
+        : warn('hook command', `${target} is not installed here — the hook exits 0 in silence until it is`, 'npm install');
     } else {
       bad('hook command',
-        `${what} — ${need.kind === 'file' ? `${need.target} is not there` : `\`${need.target}\` is not on PATH here`}; the hook fails on every tool call in this repo`,
+        `${what} — ${need.kind === 'file' ? `${target} is not there` : `\`${need.target}\` is not on PATH here`}; the hook fails on every tool call in this repo`,
         need.target === 'hkb' ? 'npm i -g hkb-cli (or: hkb init, which writes a command that resolves here)' : 'hkb init');
     }
   }
@@ -361,6 +468,38 @@ export function policyLayers(cfg, { preTool = false } = {}) {
     if (!preTool) return { profile: name, live: false, why: 'no PreToolUse hook is configured here' };
     return { profile: name, live: true, why: null };
   });
+}
+
+export const MODE_CHECK = 'permission mode';
+
+/**
+ * A worker launch that can still *prompt*. Pure.
+ *
+ * `--permission-mode dontAsk` is what turns Claude Code's allow-list into a policy instead of a
+ * questionnaire: without it a tool call outside the list opens a prompt, and there is nobody in a
+ * background worker to answer one. The attempt does not fail — it hangs, silently, until
+ * `max_runtime` reclaims it, which reads as a slow harness rather than a missing flag.
+ *
+ * Only launches that spawn Claude Code itself are asked: `claude-action` runs `gh workflow run`, and
+ * the flags of the run it triggers live in the workflow file, not here.
+ */
+export function promptingProfiles(cfg) {
+  return Object.entries(cfg?.profiles || {})
+    .filter(([, p]) => (p?.launch || [])[0] === 'claude')
+    .filter(([, p]) => {
+      const i = p.launch.indexOf('--permission-mode');
+      return i < 0 || p.launch[i + 1] !== 'dontAsk';
+    })
+    .map(([name]) => name);
+}
+
+/** Silent when every Claude launch says `dontAsk` — there is nothing an operator has to act on. */
+export function checkPermissionMode(ctx, { warn }) {
+  const prompting = promptingProfiles(ctx.cfg);
+  if (!prompting.length) return null;
+  warn(MODE_CHECK, `${prompting.join(', ')} launch${prompting.length === 1 ? 'es' : ''} without \`--permission-mode dontAsk\` — a prompt in a background worker blocks the attempt: nobody answers it and it hangs until max_runtime reclaims the task`,
+    `add "--permission-mode", "dontAsk" to the launch in ${path.relative(ctx.root, boardFile(ctx.root))}`);
+  return prompting;
 }
 
 /** One line, so the operator never has to work out which layer answered a denial. */
@@ -720,8 +859,12 @@ export async function doctor(ctx, flags, log) {
   fs.existsSync(claudeSkill) ? ok('claude skill link', '.claude/skills/kanban') : warn('claude skill link', 'missing', 'hkb init');
   checkCommands(ctx, { ok, warn });
   checkHooks(ctx, { ok, warn, bad });
-  // which layer answers a denial: local files only, so it runs on a checkout with no repo behind it
+  checkDispatcher(ctx, { ok, warn });
+  // which layer answers a denial, and whether a frozen copy of that layer has fallen behind:
+  // local files only, so both run on a checkout with no repo behind it
   checkPolicyLayer(ctx, { ok });
+  checkPermissionMode(ctx, { warn });
+  checkWorkerPermissions(ctx, { ok, warn });
   // and whether this shell is carrying a worker's identity it should not have (#150)
   checkEnvLeak(ctx, { warn });
 
@@ -795,7 +938,12 @@ function report(results, ctx, log) {
     log(`${mark} ${r.name.padEnd(36)} ${r.detail || ''}${r.fix && r.ok !== true ? `  → ${r.fix}` : ''}`);
   }
   const bad = results.filter((r) => r.ok === false).length;
-  log(bad ? `\n${bad} problem(s). Fix them before \`hkb dispatch\`.` : '\nAll good. `hkb dispatch --loop 60` when ready.');
+  // "`hkb up` when ready" three lines under "dispatcher running pid 3843" reads as advice from a tool
+  // that did not read its own output. A board that is already up gets told what is already true.
+  const up = results.find((r) => r.name === 'dispatcher')?.ok === true;
+  log(bad ? `\n${bad} problem(s). Fix them before \`hkb dispatch\`.`
+    : up ? '\nAll good, and the dispatcher is up. `hkb up --status` says what is running.'
+      : '\nAll good. `hkb up` when ready (`hkb up --serve` for the board too).');
   return bad ? 1 : 0;
 }
 

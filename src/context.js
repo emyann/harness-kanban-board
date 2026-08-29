@@ -1,6 +1,6 @@
 // `hkb context <n>` — exactly what a worker sees (Hermes `kanban_show` + protocol reminder).
 import { getTask, loadRun, parentResults, latestResult, listComments } from './tasks.js';
-import { openAttempt, RUN_MARKER, RESULT_MARKER } from './model.js';
+import { activePrGuard, openAttempt, RUN_MARKER, RESULT_MARKER } from './model.js';
 
 // ---------- the comment thread as steering input (pure; tested in test/context.test.js) ----------
 
@@ -67,7 +67,48 @@ export function formatComments(comments, { now = new Date(), limit = 2000 } = {}
   return kept.join('\n\n');
 }
 
-export async function workerContext(ctx, task, attempt) {
+/**
+ * The PR this attempt must continue, or null. Derived from the card, so `hkb context <n>` shows the
+ * same block the dispatcher put in the worker's brief: an open PR under a latest `changes_requested`
+ * row is a continuation, and anything else is not (`activePrGuard`, src/model.js).
+ * `checkedOut` is the one thing the card cannot answer — the dispatcher passes it in when it made
+ * the worktree on that branch itself (`worktreeOnBranch`, src/board.js).
+ */
+export function continuation(task, run, { checkedOut = false } = {}) {
+  const g = activePrGuard(run?.attempts || [], task.prs);
+  if (!g.continues) return null;
+  return { number: g.pr.number, branch: g.pr.headRefName || null, base: g.pr.baseRefName || null, checkedOut };
+}
+
+/**
+ * The one block a continuing worker must not miss: which PR is open, that the review is on it, and
+ * that pushing to its branch is the whole job — a second PR for one card is the failure this
+ * prevents (#153).
+ */
+function continuationBlock(cont, { base }) {
+  const b = cont.branch;
+  const lines = [
+    `## Continue PR #${cont.number} — do not open a second one`,
+    '',
+    `PR #${cont.number}${b ? ` (branch \`${b}\`)` : ''} is open with **changes requested** — the reviewer's note is the`,
+    'latest attempt below. Continue that PR rather than starting again: a second PR for one card is the',
+    'one thing that must not happen here.',
+    '',
+  ];
+  if (cont.checkedOut) {
+    lines.push(`- This worktree is already checked out on \`${b}\`, so an ordinary \`git push\` updates PR #${cont.number}.`);
+  } else if (b) {
+    lines.push(`- This worktree is on a fresh branch. Take the PR's head first: \`git fetch origin ${b} && git reset --hard FETCH_HEAD\`, and push with \`git push origin HEAD:${b}\`.`);
+  }
+  lines.push(
+    `- Merge \`origin/${base}\` into it before you finish (\`git fetch origin ${base} && git merge origin/${base}\`) — never rebase-and-force, never \`git push --force\`.`,
+    `- Finish with \`hkb finish\` as usual: the card goes back to *review* on the same PR. Do **not** run \`gh pr create\`.`,
+    '',
+  );
+  return lines;
+}
+
+export async function workerContext(ctx, task, attempt, { continuePr = null } = {}) {
   const { run } = await loadRun(ctx, task.number);
   const comments = formatComments(selectComments(await listComments(ctx, task.number), run)); // cached read — loadRun already fetched the thread
   const parents = await parentResults(ctx, task);
@@ -85,6 +126,9 @@ export async function workerContext(ctx, task, attempt) {
   if (task.kb.goal) lines.push(`## Acceptance criteria\n${task.kb.goal}\n`);
   if (task.kb.paths?.length) lines.push(`Scope: this task owns ${task.kb.paths.map((p) => '`' + p + '`').join(', ')} — stay inside it.\n`);
   if (task.kb.skills?.length) lines.push(`Skills to apply: ${task.kb.skills.map((s) => '`/' + s + '`').join(', ')}\n`);
+  const cont = continuePr ?? continuation(task, run);
+  const base = cont?.base || ctx.cfg?.default_branch || 'main';
+  if (cont) lines.push(...continuationBlock(cont, { base }));
   if (parents.length) {
     lines.push('## Parent task results');
     for (const p of parents) {
@@ -110,10 +154,19 @@ export async function workerContext(ctx, task, attempt) {
     lines.push('');
   }
   lines.push('## Protocol (hkb)');
-  lines.push(`1. Run \`hkb show ${n} --json\` if you need more detail. Work only in this worktree, on the current branch.`);
+  const where = cont?.checkedOut
+    ? `Work only in this worktree — it is already checked out on \`${cont.branch}\`, PR #${cont.number}'s branch.`
+    : cont
+      ? 'Work only in this worktree, on the branch of the PR you are continuing (see above).'
+      : 'Work only in this worktree, on the current branch.';
+  lines.push(`1. Run \`hkb show ${n} --json\` if you need more detail. ${where}`);
   lines.push(`2. Every ~10 minutes of long work run \`hkb heartbeat ${n}\` — it is a free compare-and-swap on your lock ref; never push that ref yourself. If it prints LOCK_LOST, stop immediately: do not commit, do not file a terminal verb.`);
-  lines.push('3. Commit with clear, plain messages (no Co-Authored-By trailers, no "Generated with" lines — in commits or PR bodies). Never `git push --force`. Before finishing: rebase on the default branch and run the project\'s lint/tests.');
-  lines.push(`4. Push and open a draft PR whose body contains \`Closes #${n}\`: \`gh pr create --draft --fill --body "Closes #${n}"\` (add a real description).`);
+  // a continued branch is already pushed, so rebasing it would need the force-push the protocol forbids
+  const upToDate = cont ? `merge \`origin/${base}\` in (never rebase: this branch is already pushed)` : 'rebase on the default branch';
+  lines.push(`3. Commit with clear, plain messages (no Co-Authored-By trailers, no "Generated with" lines — in commits or PR bodies). Never \`git push --force\`. Before finishing: ${upToDate} and run the project's lint/tests.`);
+  lines.push(cont
+    ? `4. PR #${cont.number} already exists and already closes #${n} — push to its branch${cont.branch ? ` (\`${cont.branch}\`)` : ''} instead of opening one, and never \`--force\`.`
+    : `4. Push and open a draft PR whose body contains \`Closes #${n}\`: \`gh pr create --draft --fill --body "Closes #${n}"\` (add a real description).`);
   lines.push('5. Finish with EXACTLY ONE terminal verb, then stop. Send the payload as one JSON object on stdin — no JSON goes through shell quoting. Write the file, then redirect it:');
   lines.push('```bash');
   lines.push(`# write /tmp/kb-${n}.json with your editor tool:`);
@@ -126,7 +179,8 @@ export async function workerContext(ctx, task, attempt) {
   lines.push(`   - \`hkb finish ${n} ...\` when done`);
   lines.push(`   - \`hkb block ${n} "<why>" --kind needs_input|dependency|capability|transient\` when you cannot proceed (stdin form: {"reason": "..", "kind": ".."})`);
   lines.push(`   - \`hkb request-review ${n} --summary "..."\` when you want a reviewer before it counts as done (stdin form: {"summary": "..", "reviewer": ".."})`);
-  lines.push('Do not do work that belongs to other tasks. Do not create tasks unless asked; if you must, `hkb create "title" --blocked-by ' + n + '`.');
+  lines.push(`6. **If a tool or command is refused, disclose it — do not work around it.** Your launch decides what you may run and it denies rather than prompts, so a refusal is final: no rewording, no second route, no disabling the check. When there is no allow-listed way to do the work, run \`hkb block ${n} "needs <tool>: <why>" --kind capability\` (describe what you need, do not paste the refused command) and stop. A refusal of \`hkb complete\` itself is never a reason to block — that one has another name: \`hkb finish\`.`);
+  lines.push('Never run `hkb dispatch` — it is what dispatched you; a second dispatcher double-claims tasks. Do not do work that belongs to other tasks. Do not create tasks unless asked; if you must, `hkb create "title" --blocked-by ' + n + '`.');
   return lines.join('\n');
 }
 

@@ -163,6 +163,9 @@ export function serializeResultComment(res) {
   if (meta.changed_files?.length) lines.push('**Changed files:** ' + meta.changed_files.map((f) => '`' + f + '`').join(', '));
   if (meta.verification?.length) lines.push('**Verification:** ' + meta.verification.map((f) => '`' + f + '`').join(', '));
   if (meta.residual_risk?.length) lines.push('**Residual risk:** ' + meta.residual_risk.join('; '));
+  // Which PR carries this attempt — and, when the reviewer sent the card back, that the attempt
+  // *continued* that PR instead of opening a second one (#153).
+  if (res.pr) lines.push(`**PR:** #${res.pr}${res.pr_continued ? ' — continued after changes requested, not reopened' : ''}`);
   if (res.artifacts?.length) lines.push('**Artifacts:** ' + res.artifacts.join(', '));
   lines.push('', '```json', JSON.stringify(res, null, 2), '```');
   return lines.join('\n');
@@ -184,6 +187,36 @@ export function computeReady(task, now = new Date()) {
   const at = task.kb?.scheduled_at;
   if (at && new Date(at).getTime() > now.getTime()) return false;
   return true;
+}
+
+/**
+ * The `active_pr` guard, and its one exemption — a pure function of the attempt rows and the card's
+ * PRs, so the tick can decide without a second thought and the table lives in a test.
+ *
+ * A `ready` card with an open PR normally goes straight back to `review`: its work is done and
+ * waiting on a human, and claiming it again would have a second worker redo it. The exception is
+ * exactly the card `hkb request-changes` produces. The reviewer's synthetic `changes_requested` row
+ * (protocol.md) *means* "this PR is open and must be continued", so there the open PR is the
+ * continuation target, not a duplicate risk — without the exemption the verb is a no-op on any board
+ * with a dispatcher: the card bounces back to `review` on the next tick and nothing reads the review
+ * (#153). Keyed on that row and nothing else; every other open-PR case keeps the guard.
+ *
+ * One consequence worth knowing: only the *latest* row exempts. A continuation that crashes leaves
+ * `crashed` on top, so the guard parks the card in `review` again rather than respawning — one
+ * relaunch per `request-changes`, and the reviewer decides whether there is a second.
+ *
+ * @param attempts the run record's `attempts[]`, oldest first
+ * @param prs the card's PRs as the board query returns them (`{number, state, headRefName, ...}`)
+ * @returns {{guard: boolean, pr: object|null, continues: boolean, why: string}}
+ */
+export function activePrGuard(attempts, prs) {
+  const pr = (prs || []).find((p) => p && p.state === 'OPEN') || null;
+  if (!pr) return { guard: false, pr: null, continues: false, why: 'no open PR' };
+  const last = attempts?.length ? attempts[attempts.length - 1] : null;
+  if (last?.outcome === 'changes_requested') {
+    return { guard: false, pr, continues: true, why: `PR #${pr.number} has changes requested — the next attempt continues it` };
+  }
+  return { guard: true, pr, continues: false, why: `PR #${pr.number} is open` };
 }
 
 export function pathsOverlap(a = [], b = []) {
@@ -593,10 +626,15 @@ export function worksInWorktree(profile) {
  * identity: it is dropped, the checkout answers if it can, and `leak` carries the one line the
  * caller owes whoever is reading stderr.
  *
- * Only judged for a profile whose worker really does sit in a worktree (`worksInWorktree`), and
- * only on evidence: the cwd is the board root, or a checkout naming a different attempt. Anywhere
- * else — no `KB_ROOT` to compare against, a directory that is nobody's worktree — the environment
- * is trusted exactly as it always has been.
+ * Only judged for a profile whose worker really does sit in a worktree (`worksInWorktree`) — for
+ * every other profile the environment is that worker's whole identity and is trusted exactly as it
+ * always has been. For one that does, the worker's root is deterministic: `KB_ROOT` joined with
+ * `kb-<n>-<k>` (`ensureWorktree`, src/board.js), or `KB_ROOT` itself for a track root. Any *other*
+ * cwd disagrees with the environment, whatever it is — the board root, another attempt's checkout,
+ * a review worktree, a session hosted from a different repo entirely (a daemon poisoned by one
+ * board carries `KB_ROOT` into every project it goes on to host, #150 B1). Evidence for agreement is
+ * therefore exactly one thing: a `kb-<n>-<k>` checkout naming this same task and attempt. Everything
+ * else is a leak, not an identity.
  *
  * @param {{env?: object, here?: string, atRoot?: boolean, profile?: object|null}} where
  *   `here` is the cwd's basename and `atRoot` says the cwd is `KB_ROOT` itself.
@@ -610,8 +648,9 @@ export function attemptIdentity({ env = {}, here = '', atRoot = false, profile =
   // the checkout agrees (or there is no attempt number to disagree about): the environment stands
   if (wt && wt.n === n && (wt.k === k || k === '0')) return { n, k: wt.k, source: 'env' };
   if (!worksInWorktree(profile)) return { n, k, source: 'env' };
-  if (!wt && !atRoot) return { n, k, source: 'env' }; // nothing here contradicts it
-  const where = wt ? `${here} is #${wt.n} attempt ${wt.k}` : 'this is the board root';
+  // anywhere else — the board root, a mismatched kb-<n>-<k>, a review worktree, a foreign repo — is
+  // not this attempt's worktree, whether or not it happens to be *somebody's* worktree (#150 B1)
+  const where = wt ? `${here} is #${wt.n} attempt ${wt.k}` : atRoot ? 'this is the board root' : `${here || 'here'} is not a kb-<n>-<k> worktree`;
   const leak = `KB_TASK=${n} in the environment but this is not its worktree (${where}); ignoring`;
   return wt ? { ...wt, source: 'worktree', leak } : { leak };
 }
@@ -693,13 +732,54 @@ export function compareVersions(a, b) {
   return 0;
 }
 
+// ---------- where the running hkb came from ----------
+// The generated hook command differs by install shape (src/init.js hkbCommandForHook): a global
+// `npm i -g`, an `npx` run out of a cache that is gone the next time npm cleans it, and — the one
+// that is exact and the same on every machine at once — an hkb that lives INSIDE the repo it is
+// setting up. That last one is not one shape but two, and the difference does not matter: a
+// `npm i -D hkb-cli` devDependency sits at `node_modules/hkb-cli`, hkb's own checkout is the repo
+// root itself, and both are named the same way, relative to `$CLAUDE_PROJECT_DIR`.
+
+/**
+ * Where `target` sits inside `root`, as a `/`-separated relative path — `''` when it *is* `root`,
+ * null when it is somewhere else entirely (#146). The remainder is measured, never composed: a
+ * pnpm store resolves through `node_modules/.pnpm/<name>@<version>/node_modules/<name>`, and a path
+ * built out of the package's name instead would name a file that is not there.
+ *
+ * A path comparison, never PATH: `npx` puts `node_modules/.bin` on its child's PATH, so "is hkb on
+ * PATH" answers yes for a repo-local install too — and then answers no in the plain `/bin/sh` a hook
+ * runs in. String work rather than `node:path` so this file stays I/O- and import-free; both
+ * arguments are already absolute where it is called, and the result is POSIX because it goes into a
+ * shell command line rather than back into `path.join`.
+ */
+export function insideRepo(root, target) {
+  const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  const [base, t] = [norm(root), norm(target)];
+  if (!base || !t) return null;
+  if (t === base) return '';
+  return t.startsWith(`${base}/`) ? t.slice(base.length + 1) : null;
+}
+
+/**
+ * `PATH` without its `node_modules/.bin` entries — the PATH a *hook* will actually have. `npx` and
+ * `npm run` prepend one; the `/bin/sh` Claude Code starts a hook command in never has it. So a binary
+ * found only there is not on PATH for the thing being configured, and a command written on that
+ * evidence fails on every tool call in every session (#146).
+ * @param sep the platform's PATH delimiter (`path.delimiter`) — passed in, so this stays pure
+ */
+export function stripNodeModulesBin(PATH, sep = ':') {
+  return String(PATH || '').split(sep).filter((e) => !/node_modules[\\/]+\.bin[\\/]*$/.test(e.trim())).join(sep);
+}
+
 // ---------- worker permission policy (PreToolUse hook) ----------
 // A background worker has nobody to answer a prompt, so hkb decides itself:
 // explicit allow or deny-with-reason, never "ask". Pure and unit-tested.
 
 export const SAFE_BUILTINS = ['cd', 'pwd', 'true', 'false', 'echo', 'printf', 'test', '[', 'env', 'which', 'command', 'type', 'sleep', 'time', 'set', 'export'];
 export const DENY_PATTERNS = [
-  { re: /\bhkb\s+dispatch\b/, why: 'workers never run the dispatcher — it is what dispatched you; a second dispatcher against the live board double-claims tasks. Test dispatch logic with the fake-gh test double (node --test test/dispatch.test.js)' },
+  // `up` starts a dispatcher and `down` stops the one that is running you — both are the dispatcher's
+  // life, and neither is a worker's to touch.
+  { re: /\bhkb\s+(dispatch|up|down)\b/, why: 'workers never start or stop the dispatcher — it is what dispatched you; a second dispatcher against the live board double-claims tasks, and stopping this one strands every attempt it is watching. Test dispatch logic with the fake-gh test double (node --test test/dispatch.test.js)' },
   { re: /\b(pkill|killall)\b|\bkill\s+(-\w+\s+)?[0-9]/, why: 'workers do not signal other processes' },
   { re: /git\s+push[^|;&]*(\s--force\b|\s-f\b|\s--force-with-lease)/, why: 'force-push is forbidden by the kanban protocol' },
   { re: /\bsudo\b/, why: 'no privilege escalation in a worker' },
@@ -713,6 +793,40 @@ export function allowedCommandsFrom(allowedTools = []) {
     if (m) out.add(m[1]);
   }
   return out;
+}
+
+/**
+ * The command names a launch's own allow-list actually spells — `Bash(git *)` and Copilot's
+ * `shell(git:*)` both name `git`. The sibling of `allowedCommandsFrom`, and deliberately the
+ * unseeded one: that function answers "what may a worker run", so seeding it with SAFE_BUILTINS is
+ * right; this one answers "what did the *launch* say", which is the only way to see a list that has
+ * fallen behind (#138). Anything that is not a shell pattern (`Edit`, `Read`, `write`) is not a
+ * command and is skipped.
+ */
+export function harnessCommands(allowedTools = []) {
+  const out = new Set();
+  for (const t of allowedTools || []) {
+    const m = /^(?:Bash|shell)\(\s*(.+?)\s*\)$/.exec(String(t));
+    if (!m) continue;
+    const first = m[1].split(/\s+/)[0].replace(/:\*$/, '');
+    if (first) out.add(first);
+  }
+  return out;
+}
+
+/**
+ * The SAFE_BUILTINS a launch's allow-list leaves out. hkb's own PreToolUse guard permits every one
+ * of them, so a list that omits them makes the two layers disagree — and under `--permission-mode
+ * dontAsk` the harness denies rather than prompts, so the stricter, staler layer wins and a worker
+ * spends its turns rewriting commands hkb already called safe.
+ *
+ * `null` means the profile has no per-command allow-list at all (Codex, whose sandbox is the whole
+ * policy): nothing to fall behind, so nothing to report.
+ */
+export function uncoveredBuiltins(allowedTools) {
+  if (!allowedTools) return [];
+  const have = harnessCommands(allowedTools);
+  return SAFE_BUILTINS.filter((c) => !have.has(c));
 }
 
 /**
@@ -783,4 +897,124 @@ export function hashReason(reason) {
   let h = 0;
   for (const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return h.toString(36);
+}
+
+// ---------- the long-running processes (`hkb up` / `hkb down`) ----------
+// A board keeps moving because two processes are up: the dispatcher loop, and (optionally) the web
+// board. `hkb up` starts them detached and idempotently; everything it decides is here, so the
+// decision, the status line and the log line are unit-tested and up.js is only the spawn and the
+// filesystem. A process's state is `{ name, running, pid, since, log, exit, exited_at }`.
+
+/** The processes `hkb up` knows how to start, in the order it starts them. */
+export const PROCESSES = ['dispatch', 'serve'];
+
+/**
+ * `KB_*` names a *worker*: KB_TASK/KB_ATTEMPT/KB_LOCK_REF/KB_PROFILE/KB_ROOT are what the dispatcher
+ * exports onto a worker's launch, and a process that carries them believes it is one. `hkb up` may be
+ * run from such a session (or from one that wrongly believes it is), and the daemons it starts outlive
+ * it — a dispatcher loop that thinks it is worker #148 would refuse to run and a `hook stop` inside it
+ * would write to a stranger's card. So the child gets none of them, and the board comes from `--board`
+ * on the command line instead of `KB_BOARD`.
+ *
+ * `KB_CONFIG_HOME` is the exception: it is not an identity, it is where `~/.config/hkb/boards.json`
+ * lives, and dropping it would send a test's or a smoke run's server at the real user-level list.
+ */
+export const DETACHED_ENV_KEEP = ['KB_CONFIG_HOME'];
+
+/** A copy of `env` with every worker-identity variable removed. Pure. */
+export function detachedEnv(env = {}) {
+  const out = {};
+  for (const [k, v] of Object.entries(env)) if (!k.startsWith('KB_') || DETACHED_ENV_KEEP.includes(k)) out[k] = v;
+  return out;
+}
+
+/**
+ * How much the boot comparison forgives. mtime is wall time and `os.uptime()` is monotonic, so the
+ * two disagree by a little; the slack errs towards *believing* a pid file, because calling a live
+ * dispatcher stale would start a second loop — the very bug the pid file exists to prevent.
+ */
+export const PID_BOOT_SLACK_MS = 5_000;
+
+/**
+ * Is this pid file a claim a reboot invalidated? A pid file is a claim, and after a reboot it is a
+ * claim on a pid the kernel has since handed to somebody else. `.kanban/*.pid` is a plain file: it
+ * survives the reboot, `pidAlive` says "yes, something answers to 3843", and `hkb down` would
+ * SIGTERM a stranger's process.
+ *
+ * The zero-dependency guard is arithmetic: a pid file written *before this machine booted* cannot
+ * name a process of ours that is still running, whatever `kill(pid, 0)` says. `uptime` is the
+ * machine's, in seconds (`os.uptime()`); `at` is the file's mtime. No uptime to compare against
+ * means no verdict, so the file is believed.
+ */
+export function pidFileStale(at, { now = Date.now(), uptime = 0 } = {}) {
+  if (!at || !uptime) return false;
+  const t = new Date(at).getTime();
+  if (Number.isNaN(t)) return false;
+  return t < now - uptime * 1000 - PID_BOOT_SLACK_MS;
+}
+
+/**
+ * How long `hkb down` waits for a process to be gone before it gives up and says so. A SIGTERM'd
+ * dispatcher wakes out of its sleep at once but still finishes a tick already in flight, and a tick
+ * is bounded by nothing shorter than the interval it runs on — so two of them, floored so a fast
+ * board still gets a fair wait and capped so `hkb down` never becomes the thing that hangs.
+ */
+export function stopWaitMs(interval, { min = 5_000, max = 120_000 } = {}) {
+  const n = Number(interval);
+  if (!Number.isFinite(n) || n <= 0) return min;
+  return Math.min(max, Math.max(min, Math.round(n * 2 * 1000)));
+}
+
+const pad2 = (n) => String(n).padStart(2, '0');
+
+/**
+ * An instant as an operator reads it: `19:02` when it is today, `2026-08-26 19:02` when it is not —
+ * "since 19:02" is a lie about a loop that has been up since Tuesday. Local time on purpose: this is
+ * for a human sitting at the machine the process runs on. Unparseable input → null.
+ */
+export function formatSince(iso, now = new Date()) {
+  const d = new Date(iso);
+  if (!iso || Number.isNaN(d.getTime())) return null;
+  const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  if (d.toDateString() === new Date(now).toDateString()) return hm;
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${hm}`;
+}
+
+/**
+ * One line per process, for `hkb up`, `hkb up --status` and `hkb down`.
+ *
+ * Exit code 4 is the dispatcher loop giving itself up for a supervisor to restart (`src/dispatch.js`).
+ * `hkb up` is not a supervisor and never restarts anything — so the honest thing is to report the exit
+ * and name the command that would start a fresh one.
+ */
+export function processLine(st, { now = new Date(), already = false } = {}) {
+  const log = st.log ? ` · log ${st.log}` : '';
+  if (st.running) {
+    const since = formatSince(st.since, now);
+    return `${st.name} ${already ? 'already ' : ''}running pid ${st.pid}${since ? ` since ${since}` : ''}${log}`;
+  }
+  // A pid file older than the boot names a pid this kernel has since reissued: say that, rather than
+  // a bare "stopped" that leaves an operator wondering why the file is there.
+  if (st.stale) return `${st.name} stopped (pid file predates this boot — hkb up replaces it)`;
+  if (st.exit !== null && st.exit !== undefined) {
+    const at = formatSince(st.exited_at, now);
+    return `${st.name} exited (${st.exit})${at ? ` at ${at}` : ''} — hkb up restarts it${log}`;
+  }
+  return `${st.name} stopped`;
+}
+
+/**
+ * Does `hkb up` start this process? A live pid file means "already running", not a second loop — the
+ * dispatcher's singleton lock would refuse the second one anyway, and saying so before spawning is
+ * the difference between an idempotent command and a command that leaves a corpse in the log.
+ * @returns {{start: boolean, line: string}}
+ */
+export function startDecision(st, { now = new Date() } = {}) {
+  if (st.running) return { start: false, line: processLine(st, { now, already: true }) };
+  return { start: true, line: null };
+}
+
+/** The `# <ISO> started pid N` header `hkb up` appends to a log before its child writes to it. */
+export function startLogLine(at, pid, argv = []) {
+  return `# ${at} started pid ${pid}${argv.length ? ` — ${argv.join(' ')}` : ''}\n`;
 }

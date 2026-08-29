@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { actionsFiles, installActions, triggerProfiles, resolveProfiles, hkbInstallForActions, ACTIONS_PROFILE, WORKER_WORKFLOW } from '../src/init.js';
-import { DEFAULT_BOARD, DEFAULT_PROFILES, loadBoard, readState, writeState } from '../src/board.js';
+import { DEFAULT_BOARD, DEFAULT_PROFILES, CLAUDE_DENY, loadBoard, readState, writeState } from '../src/board.js';
 import { expandLaunch, tick } from '../src/dispatch.js';
 import { checkActions } from '../src/doctor.js';
 import { parseArgs } from '../src/cli.js';
@@ -125,12 +125,14 @@ test('the worker prompt is `hkb context`, passed as data and never through a she
   assert.ok(!/\$\{\{ steps\./.test(brief.run), 'no step output may be interpolated into a run: block');
 });
 
-test('the worker runs with the same allowlist as a local Claude worker, force-push denied', () => {
+test('the worker runs with the same allowlist as a local Claude worker, dispatch and force-push denied', () => {
   const action = step(docs()[WORKER], 'work', 'anthropics/claude-code-action@v1');
   const tools = /--allowedTools "([^"]*)"/.exec(action.with.claude_args)[1].split(',');
   assert.deepEqual(tools, DEFAULT_PROFILES[ACTIONS_PROFILE].allowed_tools);
   assert.ok(tools.includes('Bash(hkb *)') && tools.includes('Bash(gh pr *)'));
-  assert.match(action.with.claude_args, /--disallowedTools "Bash\(git push --force\*\),Bash\(git push -f\*\)"/);
+  // the same list a local launch carries — a runner must refuse what a laptop refuses (#143)
+  assert.deepEqual(/--disallowedTools "([^"]*)"/.exec(action.with.claude_args)[1].split(','), CLAUDE_DENY);
+  assert.ok(CLAUDE_DENY.includes('Bash(hkb dispatch*)'), 'the one verb a worker must never run');
   assert.match(action.with.claude_args, /--max-turns 80/);
   assert.equal(action.env.GH_TOKEN, '${{ secrets.KB_TOKEN }}', 'hkb and gh inside the worker write with KB_TOKEN');
 });

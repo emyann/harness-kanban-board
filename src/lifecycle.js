@@ -258,11 +258,18 @@ export async function complete(ctx, number, { summary, metadata = {}, artifacts 
   const a = await finishAttempt(ctx, task, runRec, { attempt }, 'completed', { summary: String(summary).slice(0, 400), ...prAttemptFields(decision) });
   runRec.run.failures = 0;
   await saveRun(ctx, number, runRec);
-  await addComment(ctx, number, serializeResultComment({ kind: 'result', attempt: a.attempt, summary, metadata, artifacts, at: nowIso() }));
+  // An attempt the dispatcher started to continue a PR the reviewer sent back carries `continues_pr`
+  // (src/dispatch.js): the result comment names that PR and says it was continued, not opened, so a
+  // reader of the thread can see one PR carrying two rounds of review rather than wonder (#153).
+  const continued = !!(decision.pr && a.continues_pr === decision.pr.number);
+  await addComment(ctx, number, serializeResultComment({ kind: 'result', attempt: a.attempt, summary, metadata, artifacts, pr: decision.pr?.number ?? null, pr_continued: continued, at: nowIso() }));
   if (decision.pr) {
     const pr = await finishPr(ctx, decision);
     await setStatus(ctx, task, 'review', { remove: [L.needsHuman] });
-    return { number, attempt: a.attempt, status: 'review', ...pr, note: 'open PR found — task waits in review until the PR merges' };
+    const note = continued
+      ? `continued PR #${decision.pr.number} — task waits in review until it merges`
+      : 'open PR found — task waits in review until the PR merges';
+    return { number, attempt: a.attempt, status: 'review', ...pr, pr_continued: continued, note };
   }
   await setStatus(ctx, task, 'done', { remove: [L.needsHuman] });
   await closeIssue(ctx, number, 'completed');
@@ -314,12 +321,22 @@ export async function requestReview(ctx, number, { summary, metadata = {}, revie
   const runRec = await loadRun(ctx, number);
   const decision = prReadyDecision(task.prs);
   const a = await finishAttempt(ctx, task, runRec, { attempt }, 'review_requested', { summary: String(summary).slice(0, 400), ...prAttemptFields(decision) });
-  await addComment(ctx, number, serializeResultComment({ kind: 'review', attempt: a.attempt, summary, metadata, reviewer: reviewer || null, at: nowIso() }));
+  const continued = !!(decision.pr && a.continues_pr === decision.pr.number);
+  await addComment(ctx, number, serializeResultComment({ kind: 'review', attempt: a.attempt, summary, metadata, reviewer: reviewer || null, pr: decision.pr?.number ?? null, pr_continued: continued, at: nowIso() }));
   const pr = await finishPr(ctx, decision, { reviewer });
   await setStatus(ctx, task, 'review', { remove: [L.needsHuman] });
-  return { number, attempt: a.attempt, status: 'review', reviewer: reviewer || null, ...pr };
+  return { number, attempt: a.attempt, status: 'review', reviewer: reviewer || null, ...pr, pr_continued: continued };
 }
 
+/**
+ * Send a reviewed card back for another round, on the same PR.
+ *
+ * The `changes_requested` row this writes is not just history: it is what exempts the card from the
+ * `active_pr` guard on the next tick, so the dispatcher relaunches it instead of bouncing it back to
+ * `review`, and the attempt it starts continues this PR rather than opening a second one
+ * (`activePrGuard` in src/model.js, the claim loop in src/dispatch.js). The PR is deliberately left
+ * exactly as it is — open, drafts and all: it is the continuation target.
+ */
 export async function requestChanges(ctx, number, { reason } = {}) {
   if (!reason) { const e = new Error('a reason is required: hkb request-changes <n> "what must change"'); e.exitCode = 2; throw e; }
   const task = await getTask(ctx, number);
@@ -333,7 +350,13 @@ export async function requestChanges(ctx, number, { reason } = {}) {
   if (task.state === 'CLOSED') await reopenIssue(ctx, number);
   const target = computeReady(task) ? 'ready' : 'todo';
   await setStatus(ctx, task, target);
-  return { number, status: target };
+  const pr = (task.prs || []).find((p) => p && p.state === 'OPEN') || null;
+  return {
+    number,
+    status: target,
+    pr: pr?.number ?? null,
+    note: pr ? `PR #${pr.number} stays open; the next attempt continues it` : 'no open PR — the next attempt starts a branch of its own',
+  };
 }
 
 // ---------- board verbs (create, link) ----------

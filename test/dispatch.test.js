@@ -6,17 +6,19 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { tick } from '../src/dispatch.js';
+import { spawnSync } from 'node:child_process';
+import { tick, withoutWorktreeFlag } from '../src/dispatch.js';
 import { DEFAULT_BOARD } from '../src/board.js';
 import { claim, release, listLocks } from '../src/lock.js';
-import { L } from '../src/model.js';
+import { complete, requestChanges } from '../src/lifecycle.js';
+import { activePrGuard, L, RESULT_MARKER, worktreePath } from '../src/model.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
 const ago = (seconds) => new Date(Date.now() - seconds * 1000).toISOString();
 
-function harness({ dispatch = {}, board = 'default', host = 'test-host', profiles = null } = {}) {
+function harness({ dispatch = {}, board = 'default', host = 'test-host', root: given = null, profiles = null } = {}) {
   const gh = new FakeGh();
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-dispatch-'));
+  const root = given || fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-dispatch-'));
   const cfg = {
     ...DEFAULT_BOARD,
     repo: gh.nameWithOwner,
@@ -317,6 +319,145 @@ test('active_pr guard: an open PR sends a ready task to review, even with no slo
   assert.equal(h.gh.statusOf(8), 'ready'); // a merged PR is not a reason to wait
   assert.deepEqual(h.gh.lockRefs(), []);
   assert.match(h.log(), /#7: open PR #42 → review \(active_pr guard\)/);
+});
+
+// ---------- the active_pr guard and its one exemption (#153) ----------
+
+test('activePrGuard: only the reviewer\'s changes_requested row exempts an open PR', () => {
+  const pr = { number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' };
+  const merged = { number: 41, state: 'MERGED', merged: true };
+  const row = (outcome, over = {}) => ({ attempt: 1, profile: 'claude', ended_at: ago(60), outcome, ...over });
+  const sent_back = { attempt: 2, profile: 'reviewer', outcome: 'changes_requested', synthetic: true, ended_at: ago(10) };
+  const table = [
+    ['no PR at all', [row('completed')], [], { guard: false, continues: false }],
+    ['no PR, no attempts', [], [], { guard: false, continues: false }],
+    ['a merged PR is not a reason to wait', [row('completed')], [merged], { guard: false, continues: false }],
+    ['an open PR with no attempts', [], [pr], { guard: true, continues: false }],
+    ['an open PR after a completed attempt', [row('completed')], [pr], { guard: true, continues: false }],
+    ['an open PR after a review request', [row('review_requested')], [pr], { guard: true, continues: false }],
+    ['an open PR after a crash', [row('crashed')], [pr], { guard: true, continues: false }],
+    ['the card request-changes produces', [row('review_requested'), sent_back], [pr], { guard: false, continues: true }],
+    ['changes_requested, but not the latest row', [row('review_requested'), sent_back, row('crashed', { attempt: 3 })], [pr], { guard: true, continues: false }],
+    ['changes_requested with no open PR', [row('review_requested'), sent_back], [merged], { guard: false, continues: false }],
+  ];
+  for (const [why, attempts, prs, want] of table) {
+    const got = activePrGuard(attempts, prs);
+    assert.equal(got.guard, want.guard, `${why}: guard`);
+    assert.equal(got.continues, want.continues, `${why}: continues`);
+    assert.equal(got.pr?.number ?? null, prs.some((p) => p.state === 'OPEN') ? pr.number : null, `${why}: pr`);
+  }
+});
+
+test('a card sent back by the reviewer is claimed, not guarded, and the attempt names the PR', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  const run = runWith([
+    { attempt: 1, started_at: ago(900), ended_at: ago(600), outcome: 'review_requested', summary: 'done', pr: 42 },
+    { attempt: 2, profile: 'reviewer', started_at: ago(30), ended_at: ago(30), outcome: 'changes_requested', reason: 'rename the flag', synthetic: true },
+  ]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', isDraft: true, headRefName: 'worktree-kb-7-1' }] }));
+  // the ordinary case, side by side: an open PR with no reviewer row is still parked in review
+  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', prs: [{ number: 43, state: 'OPEN', isDraft: true }] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.guarded, [{ number: 8, guard: 'active_pr', pr: 43 }]);
+  assert.equal(h.gh.statusOf(8), 'review');
+  assert.deepEqual(s.claimed.map((c) => c.number), [7]);
+  assert.equal(s.claimed[0].continues_pr, 42);
+  assert.equal(h.gh.statusOf(7), 'running');
+  const last = h.gh.runOf(7).attempts.at(-1);
+  assert.equal(last.attempt, 3);
+  assert.equal(last.continues_pr, 42, 'the run record says which PR this attempt continues');
+  assert.match(h.log(), /#7: claimed attempt 3 .*continuing PR #42/);
+});
+
+test('a claim that could not take the PR branch still runs, and says so', async (t) => {
+  const h = harness(); // the board root is a plain temp directory: no git, so no checkout is possible
+  t.after(h.cleanup);
+  const run = runWith([
+    { attempt: 1, ended_at: ago(600), outcome: 'review_requested' },
+    { attempt: 2, profile: 'reviewer', ended_at: ago(30), outcome: 'changes_requested', synthetic: true },
+  ]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.claimed.map((c) => c.number), [7]);
+  const last = h.gh.runOf(7).attempts.at(-1);
+  assert.equal(last.continues_pr, 42);
+  assert.equal(last.continues_branch, undefined, 'no branch was checked out, so the row does not claim one');
+  assert.match(h.log(), /continuing PR #42 from a fresh worktree \(.*\) — the brief says which PR to push to/);
+});
+
+test('the continuation runs in a worktree on the PR\'s own branch', async (t) => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-continue-')));
+  const git = (...args) => {
+    const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+    return r.stdout.trim();
+  };
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 'test@example.com');
+  git('config', 'user.name', 'test');
+  git('commit', '-q', '--allow-empty', '-m', 'root');
+  // attempt 1's branch and the worktree still sitting on it — nothing sweeps a card in review
+  git('worktree', 'add', '-q', '-b', 'worktree-kb-7-1', path.join(root, worktreePath('kb-7-1')));
+  const h = harness({ root });
+  t.after(h.cleanup);
+  const run = runWith([
+    { attempt: 1, ended_at: ago(600), outcome: 'review_requested', pr: 42 },
+    { attempt: 2, profile: 'reviewer', ended_at: ago(30), outcome: 'changes_requested', synthetic: true },
+  ]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.claimed.map((c) => c.number), [7]);
+  const dir = path.join(root, worktreePath('kb-7-3'));
+  assert.ok(fs.existsSync(path.join(dir, '.git')), 'attempt 3 got a checkout of its own');
+  assert.equal(spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout.trim(), 'worktree-kb-7-1');
+  assert.ok(!fs.existsSync(path.join(root, worktreePath('kb-7-1'), '.git')), 'the ended attempt\'s checkout was freed to release the branch');
+  const last = h.gh.runOf(7).attempts.at(-1);
+  assert.equal(last.continues_pr, 42);
+  assert.equal(last.continues_branch, 'worktree-kb-7-1');
+  assert.equal(last.wt, 'kb-7-3');
+  assert.match(h.log(), /continuing PR #42 on worktree-kb-7-1/);
+});
+
+test('the review loop turns: request-changes → claim → finish, all on one PR', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, started_at: ago(900), ended_at: ago(600), outcome: 'review_requested', summary: 'ready', pr: 42 }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'review', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', isDraft: false, headRefName: 'worktree-kb-7-1' }] }));
+
+  const sentBack = await requestChanges(h.ctx, 7, { reason: 'rename the flag' });
+  assert.deepEqual(sentBack, { number: 7, status: 'ready', pr: 42, note: 'PR #42 stays open; the next attempt continues it' });
+
+  const s = await h.tick();
+  assert.deepEqual(s.claimed.map((c) => c.number), [7], 'the card the reviewer sent back is relaunched, not parked');
+
+  const done = await complete(h.ctx, 7, { summary: 'flag renamed', attempt: 3 });
+  assert.equal(done.status, 'review');
+  assert.equal(done.pr, 42);
+  assert.equal(done.pr_continued, true);
+  assert.match(done.note, /^continued PR #42 —/);
+
+  // one PR, three rows, and the result comment says the PR was continued rather than opened
+  assert.deepEqual(h.gh.runOf(7).attempts.map((a) => a.outcome), ['review_requested', 'changes_requested', 'completed']);
+  assert.equal(h.gh.issues.get(7).prs.length, 1);
+  const result = h.gh.issues.get(7).comments.map((c) => c.body).find((b) => b.startsWith(RESULT_MARKER));
+  assert.match(result, /\*\*PR:\*\* #42 — continued after changes requested, not reopened/);
+});
+
+test('withoutWorktreeFlag drops the harness\'s own checkout flag and nothing else', () => {
+  assert.deepEqual(
+    withoutWorktreeFlag(['claude', '--bg', '--worktree', 'kb-7-2', '--permission-mode', 'dontAsk', 'the prompt']),
+    ['claude', '--bg', '--permission-mode', 'dontAsk', 'the prompt'],
+  );
+  assert.deepEqual(withoutWorktreeFlag(['claude', '--worktree=kb-7-2', '-p']), ['claude', '-p']);
+  // codex's -C names the dispatcher's own directory: it must survive
+  assert.deepEqual(withoutWorktreeFlag(['codex', 'exec', '-C', '/w/kb-7-2', '--sandbox']), ['codex', 'exec', '-C', '/w/kb-7-2', '--sandbox']);
 });
 
 test('path_overlap guard: a ready task waits for the running task that owns its files', async (t) => {

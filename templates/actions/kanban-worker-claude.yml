@@ -86,7 +86,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: >-
             --allowedTools "{{allowed_tools}}"
-            --disallowedTools "Bash(git push --force*),Bash(git push -f*)"
+            --disallowedTools "{{disallowed_tools}}"
             --max-turns {{max_turns}}
         env:
           GH_TOKEN: ${{ secrets.KB_TOKEN }}

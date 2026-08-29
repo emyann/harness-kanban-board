@@ -173,9 +173,11 @@ KB_TASK=42 KB_ATTEMPT=1 KB_PROFILE=claude claude "$(hkb context 42)"
 
 With `KB_TASK` set, the hooks `hkb init` installed come alive in that session: the `Stop` hook nudges an agent
 that tries to end its turn without a terminal verb (twice, then it lets go), and the `PreToolUse` hook applies the
-worker permission policy — files inside the repo, commands on the profile's allowlist, decided rather than
-prompted. That is why `KB_PROFILE` is worth setting: with no profile named, the allowlist is only `hkb`, `git`,
-`gh` and shell builtins, so the agent's `npm test` is denied.
+worker permission policy — files outside the repo refused, commands off the profile's allowlist refused, decided
+rather than prompted. It only ever **denies**: anything it does not object to it passes over in silence, so your
+own `claude` flags stay in charge of what is allowed. That is why `KB_PROFILE` is worth naming: without it — or
+with a name this board has no profile for — the hook has no allowlist to apply, and rather than invent a stricter
+one it stands aside with a line on stderr and leaves the session's own flags as the whole policy.
 
 You need none of those variables yourself. Every verb takes the task number and resolves the card's open attempt,
 so `hkb heartbeat 42` and `hkb complete 42 …` work from any shell, agent or no agent.
