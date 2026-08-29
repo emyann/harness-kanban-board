@@ -866,7 +866,7 @@ export function normalizeHookInput(raw) {
 
 /** Every session's tools: hkb's hooks are not scoped to a tool, they are scoped to a session. */
 export const HOOK_MATCHER = '*';
-/** Seconds. Both hooks return in milliseconds unless they are talking to GitHub. */
+/** Seconds. All three hooks return in milliseconds unless they are talking to GitHub. */
 export const HOOK_TIMEOUT = 30;
 
 /** One `hooks.<Event>` entry running `command`, in the shape both destinations take. */

@@ -86,6 +86,10 @@ export async function preToolHook(ctx, io = {}) {
     }
   }
   if (id.source !== 'env') return 0;
+  if (ctx.cfgError) {
+    process.stderr.write(`hkb hook: cannot read .kanban/board.json (${ctx.cfgError}); standing aside\n`);
+    return 0;
+  }
   const n = id.n;
   const name = process.env.KB_PROFILE;
   const profile = name ? ctx.cfg?.profiles?.[name] : null;
@@ -351,6 +355,10 @@ export async function stopHook(ctx, io = {}) {
   // missing (`whichAttempt`), so an ordinary session in an ordinary directory still costs nothing.
   const me = whichAttempt(ctx.root, { profiles: ctx.cfg?.profiles, warn: 'hkb hook' });
   if (!me) return 0;
+  if (ctx.cfgError) {
+    process.stderr.write(`hkb hook: cannot read .kanban/board.json (${ctx.cfgError}); standing aside\n`);
+    return 0;
+  }
   const { n, k } = me;
   const readStdin = io.readStdin || (() => fs.readFileSync(0, 'utf8'));
   let input = {};
@@ -414,12 +422,13 @@ export async function stopHook(ctx, io = {}) {
  *
  * That env is tried *first*, whenever it is set and disagrees with the cwd — that disagreement is
  * the definition of "I am in a child checkout" (#187). Trying the cwd first, as #163 originally
- * shipped it, has two failure modes: every fire under a `claude -p` child (whose cwd IS the root, so
- * `CLAUDE_PROJECT_DIR` is redundant but harmless) printed `whichAttempt`'s "…; ignoring" leak line
- * once per SubagentStop because the cwd path alone looked like a leak; and worse, a child checkout
- * with no `.kanban/board.json` of its own falls through `whichAttempt(ctx.root)` to the *inherited*
- * `KB_*` env silently, recording `ended` into the child's own nonexistent `.kanban/` rather than the
- * root's — `ended` never advances there either, the original #163 bug on that one edge.
+ * shipped it, has two failure modes: measured, a child worktree whose cwd carries the root's
+ * inherited `KB_*` env and its own tracked `board.json` printed `whichAttempt`'s "…; ignoring" leak
+ * line once per SubagentStop, because the cwd path alone looked like a leak (`CLAUDE_PROJECT_DIR` was
+ * redundant there but harmless); and worse, a child checkout with no `.kanban/board.json` of its own
+ * falls through `whichAttempt(ctx.root)` to the *inherited* `KB_*` env silently, recording `ended`
+ * into the child's own nonexistent `.kanban/` rather than the root's — `ended` never advances there
+ * either, the original #163 bug on that one edge.
  */
 export async function subagentStopHook(ctx) {
   const projectDir = process.env.CLAUDE_PROJECT_DIR;
