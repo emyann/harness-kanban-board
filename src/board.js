@@ -302,17 +302,36 @@ function worktreeHolding(root, branch) {
  *
  * Never throws: a refusal is `{ok: false, why}` and the caller falls back to an ordinary fresh
  * worktree plus a brief that names the PR to continue (`src/context.js`).
- * @returns {{ok: true, path: string, branch: string, freed: string|null} | {ok: false, why: string}}
+ *
+ * `git worktree add <dir> <branch>` checks out the *local* branch as it already is — the fetch above
+ * only updates `origin/<branch>`, so a human (or another host) pushing to the PR since the last
+ * attempt leaves this checkout one or more commits behind, and its own eventual `git push` would be
+ * rejected non-fast-forward. Local commits the checkout has and the remote does not are never
+ * `stale` on their own — only `git merge --ff-only origin/<branch>` failing is: a plain fast-forward
+ * catches it up silently, a real divergence names why in `stale`, and the caller falls back to the
+ * recipe block instead of claiming the checkout is already at the PR's head.
+ * @returns {{ok: true, path: string, branch: string, freed: string|null, stale: string|null} | {ok: false, why: string}}
  */
 export function worktreeOnBranch(root, name, branch, { number = null, remote = 'origin', alive = () => true } = {}) {
   if (!branch) return { ok: false, why: 'the board query returned no head branch for the PR' };
   const dir = path.join(root, worktreePath(name));
   // capped: this runs inside a tick, and a hung fetch must not hold the loop past its interval
   const git = (args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: 60_000 });
+  // a repo with no <remote>/<branch> ref (fetch never ran, or it failed and this is the first time
+  // this branch was ever fetched) has nothing to fast-forward to — distinct from a real divergence,
+  // and worth saying so rather than reporting the same generic "could not fast-forward"
+  const fastForwardToRemote = (cwd) => {
+    const hasRef = spawnSync('git', ['rev-parse', '--verify', '--quiet', `${remote}/${branch}`], { cwd, encoding: 'utf8' }).status === 0;
+    if (!hasRef) return `no ${remote}/${branch} ref to catch up to (fetch may have failed)`;
+    const ff = spawnSync('git', ['merge', '--ff-only', `${remote}/${branch}`], { cwd, encoding: 'utf8', timeout: 60_000 });
+    return ff.status === 0 ? null : `could not fast-forward to ${remote}/${branch}: ${lastLine(ff.stderr) || `exit ${ff.status}`}`;
+  };
   if (fs.existsSync(path.join(dir, '.git'))) {
     // a spawn that died between the checkout and the launch: reuse it if it is already the right one
     const head = spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout?.trim();
-    return head === branch ? { ok: true, path: dir, branch, freed: null } : { ok: false, why: `${worktreePath(name)} already exists on ${head || 'a detached HEAD'}` };
+    if (head !== branch) return { ok: false, why: `${worktreePath(name)} already exists on ${head || 'a detached HEAD'}` };
+    git(['fetch', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
+    return { ok: true, path: dir, branch, freed: null, stale: fastForwardToRemote(dir) };
   }
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   // best effort: no remote, no network, or a branch only this host has must not stop the checkout
@@ -333,7 +352,9 @@ export function worktreeOnBranch(root, name, branch, { number = null, remote = '
   let r = git(['worktree', 'add', dir, branch]);
   if (r.status !== 0) r = git(['worktree', 'add', '--track', '-b', branch, dir, `${remote}/${branch}`]);
   if (r.status !== 0) return { ok: false, why: `git worktree add ${worktreePath(name)} ${branch} failed: ${lastLine(r.stderr) || `exit ${r.status}`}` };
-  return { ok: true, path: dir, branch, freed };
+  // best effort: catch the local branch up to what was actually fetched, so an ordinary push from
+  // this checkout lands — a diverged local branch is reported, never forced
+  return { ok: true, path: dir, branch, freed, stale: fastForwardToRemote(dir) };
 }
 
 /**

@@ -9,11 +9,11 @@ covers:
   - path: src/init.js
     sha: dd28e7c0fa2f5885faaef9ca2902368747ed9d8b
   - path: src/model.js
-    sha: a7f24b355ab97b4082b31f5f9208b99f394595df
+    sha: afe2c3e44ea8b5518d656f69f6f19aa00e41872e
   - path: src/board.js
-    sha: 2e9735c80d0fcc92c298efd10b96def73f4ea03b
+    sha: fd6f44def21b8286bbe5d9821209ccad1770df70
   - path: src/doctor.js
-    sha: f8e776f2d1be0e25e0fc482399a4a8824e9465ce
+    sha: e7d087b59acd7fefce8c7c1acc1909f62171ec36
   - path: src/mcp.js
     sha: 83243b4f880a005c6c06be3f1de396642f0cb3f8
   - path: skills/kanban/scripts/hkb
@@ -21,7 +21,7 @@ covers:
   - path: scripts/smoke-pack.mjs
     sha: aea7c5459b0687a0401a52e6fafb20832c54b818
 related: [architecture/overview, features/update-notice, concepts/roles-and-seats]
-generated_at_commit: 06f705c
+generated_at_commit: 4b37e18
 last_refreshed: 2026-08-28
 ---
 
