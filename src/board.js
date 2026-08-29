@@ -40,6 +40,19 @@ const COPILOT_TOOLS = [...new Set(SHELL_PATTERNS.map((c) => c.includes('*') ? `s
 // the prompt instead (SKILL.md, `hkb context`).
 export const CLAUDE_DENY = ['Bash(hkb dispatch*)', 'Bash(git push --force*)', 'Bash(git push -f*)'];
 
+// hkb's Stop and PreToolUse hooks, on the launch line rather than in a settings file (#144). The
+// placeholder expands to `--settings '{"hooks":…}'` at spawn time (`expandLaunch`, src/dispatch.js)
+// and to nothing when there is no command to run — which is the reason it is a placeholder and not
+// the JSON itself: `.kanban/board.json` is TRACKED, and the command inside names whichever `hkb`
+// *this* machine has. The board keeps the token; only the launch ever holds the answer.
+//
+// Measured, not assumed (Claude Code 2.1.251): `--settings` is one of the six per-launch sources the
+// `--bg` path forwards into the session daemon, beside `--add-dir`, `--mcp-config` and the two
+// `--plugin-dir` flags, and a value starting with `{` is passed through as inline JSON rather than
+// resolved as a path. So the `claude` and `claude-track` profiles get the hooks too, not just the
+// process-mode ones.
+export const HOOK_SETTINGS_VAR = '{hook_settings}';
+
 export const DEFAULT_PROFILES = {
   claude: {
     description: 'Claude Code on this machine as a background agent (free path): visible in `claude agents`, attachable with `claude attach <job>`, runs in a git worktree, opens a draft PR, finishes with one hkb terminal verb. The dispatcher stops the job once the attempt has ended.',
@@ -51,7 +64,7 @@ export const DEFAULT_PROFILES = {
     max_in_progress: 2,
     model: null,
     allowed_tools: CLAUDE_TOOLS,
-    launch: ['claude', '--bg', '--name', 'kb #{n} · {title}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', ...CLAUDE_DENY, '--max-turns', '80', '--max-budget-usd', '5', '{model_args}', '{prompt}'],
+    launch: ['claude', '--bg', '--name', 'kb #{n} · {title}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', ...CLAUDE_DENY, HOOK_SETTINGS_VAR, '--max-turns', '80', '--max-budget-usd', '5', '{model_args}', '{prompt}'],
   },
   'claude-track': {
     description: 'Claude Code as a TRACK runner: one background session executes a whole subgraph — a root plus everything it is still blocked by — claiming, working and finishing each node through the ordinary verbs, so every node stays a durable checkpoint. Put `kb:agent:claude-track` on the root of a decomposed goal (`/kanban:decompose`) and give it a generous `max_runtime`: the dispatcher claims the root, counts the whole track as ONE running slot, and leaves the nodes alone while the runner holds them. `track_agents` is which node profiles this runner can execute in-session — a track with a node outside that list needs a second harness, so it is not claimable as a track and falls back to node-by-node dispatch. So does a track whose runner has already had one go: the durable engine always finishes.',
@@ -62,7 +75,7 @@ export const DEFAULT_PROFILES = {
     max_in_progress: 1,
     model: null,
     allowed_tools: CLAUDE_TOOLS,
-    launch: ['claude', '--bg', '--name', 'kb track #{n} · {title}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', ...CLAUDE_DENY, '--max-turns', '400', '--max-budget-usd', '25', '{model_args}', '{prompt}'],
+    launch: ['claude', '--bg', '--name', 'kb track #{n} · {title}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', ...CLAUDE_DENY, HOOK_SETTINGS_VAR, '--max-turns', '400', '--max-budget-usd', '25', '{model_args}', '{prompt}'],
   },
   'claude-p': {
     description: 'Claude Code headless (`claude -p`): a plain process that exits when done. Not listed in `claude agents`; use it where no session daemon exists (CI, containers).',
@@ -71,7 +84,7 @@ export const DEFAULT_PROFILES = {
     max_in_progress: 2,
     model: null,
     allowed_tools: CLAUDE_TOOLS,
-    launch: ['claude', '-p', '{prompt}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', ...CLAUDE_DENY, '--output-format', 'json', '--max-turns', '80', '--max-budget-usd', '5', '{model_args}'],
+    launch: ['claude', '-p', '{prompt}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', ...CLAUDE_DENY, HOOK_SETTINGS_VAR, '--output-format', 'json', '--max-turns', '80', '--max-budget-usd', '5', '{model_args}'],
   },
   'claude-action': {
     description: 'Claude Code in GitHub Actions (`anthropics/claude-code-action@v1`), for a board that has to keep moving with the laptop closed. The launch does not run a worker here: it fires `kanban-worker-claude.yml` with `gh workflow run` and exits, so the attempt is `remote` — no pid, no job, and the heartbeat plus `max_runtime` are the whole liveness check. `hkb init --with-actions` writes that workflow and the event-driven `kanban-dispatch.yml` beside it. Needs a KB_TOKEN secret, and one of CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY. Honest latency with nothing but Actions: 15-75 minutes (see the README).',

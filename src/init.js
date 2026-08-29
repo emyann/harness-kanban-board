@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, CLAUDE_DENY, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot, hkbOnPath, registerUserBoard, userBoardsFile, mainWorktree } from './board.js';
 import { ensureLabels, fetchBoard, addLabels } from './tasks.js';
 import { rest } from './gh.js';
-import { L, STATUSES, parseSkillVersion, stripFrontmatter, insideRepo, worktreePath } from './model.js';
+import { L, STATUSES, parseSkillVersion, stripFrontmatter, insideRepo, worktreePath, hookEntry, hookSettings } from './model.js';
 
 export const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MARK_START = '<!-- hkb:start -->';
@@ -165,29 +165,37 @@ function upsertSection(file, section) {
 }
 
 // ---------- the Claude Code hooks ----------
-// Two hooks, and the question of which settings file they go in (#85). `.claude/settings.json` is
-// tracked and shared, and most commands hkb can write do not mean the same thing in everyone's
-// checkout: a bare `hkb` is only on PATH for whoever ran `npm i -g hkb-cli`, and an absolute path
-// into this package is wrong for every teammate — under `npx` it is inside the cache, so it stops
-// existing for the installer too, the moment that cache is cleaned. A `matcher: "*"` PreToolUse hook
-// that cannot resolve fails on *every tool call in every session* in that repo.
-// So the default is `.claude/settings.local.json`: per-developer, gitignored, honest about serving
-// whoever runs the board rather than the repo. `--shared-hooks` opts into the tracked file, where
-// only the portable `hkb hook <verb>` form is ever written and `hkb doctor` is what tells a teammate
-// it does not resolve for them.
+// Both hooks serve exactly one kind of session — the worker hkb launched — so that is the only
+// session that gets them: they ride the `claude` launch line as `--settings '{"hooks":…}'`, built by
+// `workerHookSettings` below and spent by `expandLaunch` (src/dispatch.js). `hkb init` writes them
+// into a settings file only when asked (`--shared-hooks`), and clears out anything an older init
+// left in the per-developer one.
 //
-// There is a third case, and it is the one that makes the tracked file honest (#146). When the hkb
-// being run lives INSIDE the repo it is setting up, the answer to "where is hkb" is a property of
-// the *project*, not of the machine, and Claude Code hands a hook `$CLAUDE_PROJECT_DIR` precisely so
-// a project can say so. Two installs land there and the command does not care which: `npm i -D
-// hkb-cli`, the version pinned in package.json and the lockfile, at `node_modules/hkb-cli`; and
-// hkb's own checkout, where the repo *is* the package. So the rule is not "is it a devDependency"
-// but "is it under the root", and the path written is the one measured from there — never one
-// composed out of the package's name, which a pnpm store or a nested install would get wrong.
-// That command is exact and portable at once, so it goes in the tracked file by default: a
-// teammate's `git pull && npm install` is then the whole setup. It guards its own file, because a
-// worker's fresh worktree has no `node_modules` until it runs `npm ci` and a hook that is not
-// installed yet must be silent, not loud.
+// That is the whole of #144, and it is a retraction. A settings file is read by *every* session in
+// the repo, and both hooks are `matcher: "*"`, so an `hkb` that stops resolving there — an nvm
+// switch, a cleaned npx cache, a teammate who never installed it — becomes a failed `PreToolUse` on
+// every tool call in sessions that have nothing to do with the board. Observed on a real board;
+// #85 moved the file and taught `doctor` to see it, but only a per-launch source removes the
+// exposure. The launch also gets the machine-specific command for free: it never leaves this
+// machine, so `node "<abs path>"` is *correct* there — precisely the case #85 had to rule out for a
+// file other people read.
+//
+// What a settings file is still for, and why the command shapes below all survive:
+//
+//   `--shared-hooks`      a team that wants the hooks in every session in the repo says so outright,
+//                         and the tracked file gets the portable `hkb hook <verb>` — never a path.
+//   an hkb inside the repo  when the hkb being run lives UNDER the repo it is setting up (#146 — a
+//                         `npm i -D hkb-cli` devDependency, or hkb's own checkout), where it sits is
+//                         a property of the *project*, and `$CLAUDE_PROJECT_DIR` is how a project
+//                         says so. That command is exact here and correct in every other checkout at
+//                         once, so `--shared-hooks` writes it rather than a bare `hkb`. The path is
+//                         measured from the root, never composed from the package's name, which a
+//                         pnpm store or a nested install would get wrong; and it guards its own file,
+//                         because a worker's fresh worktree has no `node_modules` until `npm ci` and
+//                         a hook that is not installed yet must be silent, not loud.
+//
+// Copilot (`.github/hooks/kanban.json`) and Codex (`.codex/hooks.json`) keep their files: neither
+// harness has a per-launch settings source to move them onto (docs/harnesses.md).
 
 /** The two files Claude Code reads hooks from, relative to the repo root. */
 export const HOOK_SETTINGS = {
@@ -239,9 +247,16 @@ export function guardedHookCommand(rel, verb) {
   return `f="${PROJECT_DIR}/${rel}"; [ -f "$f" ] || exit 0; exec node "$f" hook ${verb}`;
 }
 
-/** Substitute `$CLAUDE_PROJECT_DIR` for the repo it stands for, so doctor can look for the file. */
+/**
+ * Substitute `$CLAUDE_PROJECT_DIR` for the repo it stands for, so doctor can look for the file.
+ * The variable's own text is POSIX-separated because it goes into a `/bin/sh` command line; what
+ * comes out here is a path this process is about to `stat`, so it is normalised to the platform's
+ * separators — on Windows the two halves would otherwise disagree.
+ */
 export function resolveHookPath(target, root) {
-  return String(target ?? '').replace(PROJECT_DIR_RE, () => String(root ?? ''));
+  const s = String(target ?? '');
+  if (!/\$\{?CLAUDE_PROJECT_DIR\}?/.test(s)) return s; // a plain binary has nothing to resolve
+  return path.normalize(s.replace(PROJECT_DIR_RE, () => String(root ?? '')));
 }
 
 /**
@@ -271,12 +286,27 @@ export function hkbCommandForHook(verb = 'stop', { shared = false, onPath, pkgRo
  * stands aside unless KB_TASK is set *or* it is sitting in a `kb-<n>-<k>` checkout, which is the
  * only thing a `claude --bg` session can be identified by; `PreToolUse` takes KB_TASK only, because
  * a checkout name says which task a session is and never which profile's allow-list to apply — so
- * it is live on the process-mode profiles (`claude-p`) and stands aside on `claude --bg`. Both go
- * into a `matcher: "*"` entry in a file every other session in the repo reads, so init names both
- * and `hookSummary` says what they do.
+ * it is live on the process-mode profiles (`claude-p`) and stands aside on `claude --bg`. Both are
+ * `matcher: "*"` entries, and since #144 the only session that gets them is the one hkb launched.
  */
 export const CLAUDE_HOOKS = { Stop: 'stop', PreToolUse: 'pretool' };
 const HOOK_NOTE = 'inert outside a worker session; Stop nudges for the terminal verb, PreToolUse denies (never allows) and takes KB_TASK only, so it is live on claude-p and stands aside on claude --bg';
+
+/**
+ * The `--settings` value every Claude worker launch carries: hkb's two hooks, running the hkb that
+ * is here. `expandLaunch` (src/dispatch.js) spends it on `{hook_settings}`, and `hkb doctor` asks the
+ * same question of the same command, so what it checks is what a worker will actually run.
+ *
+ * The command may name this machine — `node "/abs/path/bin/hkb.js"` — because a launch line is
+ * spent here and nowhere else. `.kanban/board.json` holds the placeholder, never this string, so
+ * the tracked board stays true on every machine that reads it.
+ * @returns the JSON string, or '' when there is no command to run (the launch then drops the flag)
+ */
+export function workerHookSettings({ root = null, binRel, onPath } = {}) {
+  const rel = binRel === undefined ? projectBinRel(root) : binRel;
+  const on = onPath ?? hkbOnPath();
+  return hookSettings(CLAUDE_HOOKS, (verb) => hkbCommandForHook(verb, { root, binRel: rel, onPath: on }));
+}
 
 /**
  * Split a command into its words, honouring the quotes hkb writes around a path and breaking at the
@@ -350,28 +380,6 @@ export function hkbHooks(settings) {
 }
 
 /**
- * Which settings file hkb's hooks belong in, given what each one already holds. Pure: both parsed
- * files come in, so the policy is testable without a repo.
- *
- * A fresh repo gets the local file. Hooks already in the tracked file with a *portable* command mean
- * the same thing on every machine — somebody chose that, so init leaves them there. Hooks in the
- * tracked file naming a path are the bug this exists to fix, and get moved. `--shared-hooks` says
- * "shared" outright. Either way they end up in exactly one file: two copies fire every nudge twice.
- *
- * `portable` is the third case (#146): the command init is about to write is itself portable — the
- * repo's own hkb named through `$CLAUDE_PROJECT_DIR` — so the tracked file is where it belongs and
- * nobody has to ask for it. Any copy in the per-developer file is stale by construction and moves.
- * @param portable true when the command about to be written means the same thing on every machine
- * @returns {{ file: 'local'|'shared', movedFrom: 'local'|'shared'|null }}
- */
-export function hookPlacement({ local, shared, wantShared = false, portable = false } = {}) {
-  const inLocal = hkbHooks(local), inShared = hkbHooks(shared);
-  if (wantShared || portable) return { file: 'shared', movedFrom: inLocal.length ? 'local' : null };
-  if (!inLocal.length && inShared.length && inShared.every((h) => h.portable)) return { file: 'shared', movedFrom: null };
-  return { file: 'local', movedFrom: inShared.length ? 'shared' : null };
-}
-
-/**
  * Remove hkb's own hook entries from a parsed settings object, leaving every other hook — including
  * one the operator added to the same group — exactly as it was. Returns true when it changed.
  */
@@ -397,75 +405,97 @@ export function stripHkbHooks(settings) {
   return changed;
 }
 
-/** One line naming every hook init wrote and every one it found, and where they live. */
-export function hookSummary(added, { file = HOOK_SETTINGS.local, movedFrom = null, repaired = [] } = {}) {
+/**
+ * One line saying what init did about the hooks: where they run from now, anything it wrote into a
+ * settings file, and anything it took back out of one.
+ */
+export function hookSummary({ file = null, added = [], repaired = [], cleared = [], binRel = null } = {}) {
   const all = Object.keys(CLAUDE_HOOKS);
   const names = (xs) => `${xs.join(' and ')} hook${xs.length > 1 ? 's' : ''}`;
   const kept = all.filter((e) => !added.includes(e));
-  const what = added.length
-    ? `added ${names(added)} to ${file}${kept.length ? `; ${names(kept)} already there` : ''}`
-    : `${names(all)} already present in ${file}`;
-  const why = movedFrom === HOOK_SETTINGS.shared
-    ? ', which is shared and cannot name this machine'
-    : ', because this command resolves in every checkout and belongs where everyone reads it';
-  const moved = movedFrom ? `; moved out of ${movedFrom}${why}` : '';
-  const fixed = repaired.length ? `; rewrote the ${names(repaired)} command, which did not resolve for everyone that file serves` : '';
-  return `${what}${moved}${fixed} (${HOOK_NOTE})`;
+  const what = file
+    ? (added.length
+      ? `added ${names(added)} to ${file}${kept.length ? `; ${names(kept)} already there` : ''}`
+      : `${names(all)} already present in ${file}`)
+    : `${names(all)} ride the worker launch (\`claude --settings\`) — no session but a worker's ever sees them`;
+  // The rewrite is not a repair when what was there already resolved for everyone: on a repo that
+  // carries its own hkb the plain `node "$CLAUDE_PROJECT_DIR/<bin>"` form is portable and correct,
+  // and it is only the missing-file guard that a worker's fresh worktree needs (#146 review).
+  const fixed = repaired.length
+    ? `; rewrote the ${names(repaired)} command${binRel ? ' to name this repo\'s own hkb, guarded' : ', which did not resolve for everyone that file serves'}`
+    : '';
+  const gone = cleared.length ? `; removed the ${names(cleared)} hkb left in ${HOOK_SETTINGS.local}, which fired in every session in this repo` : '';
+  return `${what}${fixed}${gone} (${HOOK_NOTE})`;
 }
 
 /**
- * Write the hooks in `CLAUDE_HOOKS` into whichever settings file `hookPlacement` picks, leaving
- * everything else in that file alone and removing hkb's hooks from the other one so no nudge fires
- * twice. Returns what it did, or null when the target file could not be parsed — in which case it
- * has already said so through `log`.
- * @returns {{ file, added, repaired, movedFrom, command, binRel }|null} paths relative to `root`
+ * Put hkb's hooks where they belong, and take them out of where they no longer do.
+ *
+ * By default that is: nowhere on disk. The launch carries them (`workerHookSettings`), so the only
+ * write is a *removal* — hkb's own entries in the gitignored `.claude/settings.local.json`, which an
+ * older init put there and which fire in every session in the repo for no one's benefit. They are
+ * hkb's own by `isHkbHookCommand`, so nothing a human wrote is touched.
+ *
+ * `--shared-hooks` is the opt-in for a team that does want them in every session: the tracked
+ * `.claude/settings.json` gets the portable form — `hkb hook <verb>`, or the repo's own hkb through
+ * `$CLAUDE_PROJECT_DIR` when it carries one (#146). Nothing is ever removed from that file: hooks
+ * there were somebody's choice, and `hkb doctor` is what points out that a worker now has two copies.
+ *
+ * @returns {{ file, added, repaired, cleared, command, binRel }|null} paths relative to `root`;
+ *   null when the file it had to write could not be parsed — it has already said so through `log`.
  */
 export function installClaudeHooks(root, log, { shared: wantShared = false, binRel = projectBinRel(root) } = {}) {
   const parse = (rel) => {
     const abs = path.join(root, rel);
-    if (!fs.existsSync(abs)) return { ok: true, settings: {} };
-    try { return { ok: true, settings: JSON.parse(fs.readFileSync(abs, 'utf8')) }; }
-    catch (e) { return { ok: false, error: e.message, settings: null }; }
+    if (!fs.existsSync(abs)) return { ok: true, exists: false, settings: {} };
+    try { return { ok: true, exists: true, settings: JSON.parse(fs.readFileSync(abs, 'utf8')) }; }
+    catch (e) { return { ok: false, exists: true, error: e.message, settings: null }; }
   };
-  const read = { local: parse(HOOK_SETTINGS.local), shared: parse(HOOK_SETTINGS.shared) };
-  const { file, movedFrom } = hookPlacement({ local: read.local.settings, shared: read.shared.settings, wantShared, portable: !!binRel });
-  const target = read[file];
-  if (!target.ok) { log(`skip hooks: ${HOOK_SETTINGS[file]} is not valid JSON (${target.error})`); return null; }
-  const other = read[file === 'local' ? 'shared' : 'local'];
-  if (!other.ok) log(`note: ${HOOK_SETTINGS[file === 'local' ? 'shared' : 'local']} is not valid JSON (${other.error}) — if it configures hkb hooks too, every nudge fires twice`);
+  const write = (rel, value) => {
+    fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    fs.writeFileSync(path.join(root, rel), JSON.stringify(value, null, 2) + '\n');
+  };
+  const local = parse(HOOK_SETTINGS.local);
 
+  // 1. the per-developer file: hkb's to clean up, always. It is gitignored, so nobody is reviewing
+  //    what is in it, and what an older init left there is the exposure this whole change removes.
+  const cleared = [];
+  if (!local.ok) log(`note: ${HOOK_SETTINGS.local} is not valid JSON (${local.error}) — if it still configures hkb hooks, they fire in every session in this repo`);
+  else if (local.exists) {
+    for (const h of hkbHooks(local.settings)) if (!cleared.includes(h.event)) cleared.push(h.event);
+    if (stripHkbHooks(local.settings)) write(HOOK_SETTINGS.local, local.settings);
+  }
+  if (!wantShared) return { file: null, added: [], repaired: [], cleared, command: null, binRel };
+
+  // 2. `--shared-hooks`: the tracked file, and only ever a command that means the same thing in
+  //    every checkout — a plain `hkb`, or the repo's own hkb named through $CLAUDE_PROJECT_DIR.
+  const target = parse(HOOK_SETTINGS.shared);
+  if (!target.ok) { log(`skip hooks: ${HOOK_SETTINGS.shared} is not valid JSON (${target.error})`); return null; }
   const settings = target.settings;
   settings.hooks = settings.hooks || {};
   const added = [], repaired = [];
   let stopCommand = null;
   for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
-    const cmd = hkbCommandForHook(verb, { shared: file === 'shared', root, binRel });
+    const cmd = hkbCommandForHook(verb, { shared: true, root, binRel });
     const groups = settings.hooks[event] = settings.hooks[event] || [];
     const mine = groups.flatMap((g) => (g?.hooks || []).filter((h) => isHkbHookCommand(h?.command, verb)));
     if (!mine.length) {
-      groups.push({ matcher: '*', hooks: [{ type: 'command', command: cmd, timeout: 30 }] });
+      groups.push(hookEntry(cmd));
       added.push(event);
     } else {
-      // A tracked file may hold nothing but a portable command; a local one keeps whatever the
-      // operator typed, except an npx-cache path, which stopped being a path when the cache went.
-      // On a repo that carries its own hkb there is exactly one right answer — the copy it carries —
-      // so anything else there, `hkb` on PATH included, is rewritten to it.
+      // On a repo that carries its own hkb there is exactly one right answer — the copy it carries,
+      // guarded — so anything else there, `hkb` on PATH included, is rewritten to it. Otherwise the
+      // bar is portability: a path into somebody's checkout is a lie in a file everyone reads.
       for (const h of mine) {
-        const fine = binRel ? h.command === cmd : (file === 'shared' ? isPortableHookCommand(h.command) : !isEphemeralPath(h.command));
-        if (fine) continue;
+        if (binRel ? h.command === cmd : isPortableHookCommand(h.command)) continue;
         h.command = cmd;
         if (!repaired.includes(event)) repaired.push(event);
       }
     }
     if (event === 'Stop') stopCommand = mine.length ? mine[0].command : cmd;
   }
-  const write = (rel, value) => {
-    fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
-    fs.writeFileSync(path.join(root, rel), JSON.stringify(value, null, 2) + '\n');
-  };
-  if (added.length || repaired.length) write(HOOK_SETTINGS[file], settings);
-  if (movedFrom && stripHkbHooks(read[movedFrom].settings)) write(HOOK_SETTINGS[movedFrom], read[movedFrom].settings);
-  return { file: HOOK_SETTINGS[file], added, repaired, movedFrom: movedFrom ? HOOK_SETTINGS[movedFrom] : null, command: stopCommand, binRel };
+  if (added.length || repaired.length) write(HOOK_SETTINGS.shared, settings);
+  return { file: HOOK_SETTINGS.shared, added, repaired, cleared, command: stopCommand, binRel };
 }
 
 /**
@@ -579,6 +609,11 @@ export function actionsFiles({ board = 'default', install = 'npm i -g hkb-cli', 
     allowed_tools: (DEFAULT_PROFILES[ACTIONS_PROFILE].allowed_tools || []).join(','),
     // the same deny list the local Claude launches carry, so a runner refuses what a laptop refuses
     disallowed_tools: CLAUDE_DENY.join(','),
+    // the same hooks a local Claude launch carries, on the same flag. `binRel: null` is what keeps
+    // this file the same on every machine: the runner puts `hkb` on PATH itself (`{{install}}`), so
+    // the portable form is both correct there and identical in everyone's diff. The workflow sets
+    // KB_TASK and KB_PROFILE as job env, so unlike `claude --bg` both hooks are live in a run.
+    hook_settings: hookSettings(CLAUDE_HOOKS, (verb) => hkbCommandForHook(verb, { shared: true, binRel: null })),
   };
   return ['kanban-dispatch.yml', 'kanban-worker-claude.yml'].map((name) => ({
     rel: path.join(ACTIONS_DIR, name),
@@ -826,17 +861,26 @@ export async function init(ctx, flags, log) {
   else {
     const hooks = installClaudeHooks(root, log, { shared: !!flags['shared-hooks'] });
     if (hooks) {
-      log(hookSummary(hooks.added, hooks));
-      if (hooks.binRel) {
+      log(hookSummary(hooks));
+      if (!hooks.file) {
+        log(`  nothing was written to ${HOOK_SETTINGS.local} or ${HOOK_SETTINGS.shared}: hkb's hooks only ever serve the worker hkb launched, and a settings file is read by every session in this repo — one that could not find \`hkb\` used to fail a tool call in all of them. \`hkb init --shared-hooks\` still puts them in the tracked file if you want them everywhere`);
+      } else if (hooks.binRel) {
         // Two ways to carry your own hkb, and a teammate's setup differs by one command: a
         // devDependency needs `npm install` to put the file there, a checkout of hkb already has it.
         const installed = hooks.binRel.startsWith('node_modules/');
-        log(`  the command runs this repo's own ${hooks.binRel} through $CLAUDE_PROJECT_DIR — the same file in every checkout${installed ? ' that has run `npm install`' : ''}, and a silent exit 0 before it. That is why it went in the tracked file: commit it, and a teammate's \`git pull${installed ? ' && npm install' : ''}\` is the whole setup`);
-      } else if (hooks.added.length && hooks.file === HOOK_SETTINGS.local) {
-        log(`  that file is per-developer and gitignored; \`hkb init --shared-hooks\` writes ${HOOK_SETTINGS.shared} instead — tracked, so the command there is a plain \`hkb\` every teammate has to have on PATH`);
+        log(`  the command runs this repo's own ${hooks.binRel} through $CLAUDE_PROJECT_DIR — the same file in every checkout${installed ? ' that has run `npm install`' : ''}, and a silent exit 0 before it. Commit ${HOOK_SETTINGS.shared} and a teammate's \`git pull${installed ? ' && npm install' : ''}\` is the whole setup`);
+      } else {
+        log(`  ${HOOK_SETTINGS.shared} is tracked, so the command there is a plain \`hkb\` every teammate has to have on PATH. It fires in every session in this repo — that is what --shared-hooks is for — and a worker gets it twice, since the launch carries its own copy`);
+      }
+      // What the launch will actually run, resolved the way it will be resolved at spawn time. The
+      // npx form is the one worth a word: it is correct — the cache path never is — but it re-checks
+      // the registry on every hook fire, which is a wait on every stop.
+      const launch = hkbCommandForHook('stop', { root, binRel: hooks.binRel });
+      if (launch.startsWith(NPX_COMMAND)) {
+        log(`  the launch will run \`${NPX_COMMAND} hook stop\`: hkb is not on PATH and this package is in the npx cache, which is not a durable path. \`npm i -g hkb-cli\` for a faster one`);
       }
       if (hooks.command?.startsWith(NPX_COMMAND)) {
-        log(`  the hook runs \`${NPX_COMMAND}\`: hkb is not on PATH and this package is in the npx cache, which is not a durable path. \`npm i -g hkb-cli\` and re-run init for a faster one`);
+        log(`  the hook in ${hooks.file} runs \`${NPX_COMMAND}\`, which is not a durable path. \`npm i -g hkb-cli\` and re-run init`);
       }
     }
   }

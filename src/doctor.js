@@ -3,11 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
-import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES } from './board.js';
+import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES, HOOK_SETTINGS_VAR } from './board.js';
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun } from './tasks.js';
 import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins } from './model.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
-import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
+import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
 import { latestVersion } from './registry.js';
 import { checkProject } from './projects.js';
 
@@ -169,12 +169,42 @@ export function checkWorkerPermissions(ctx, { ok, warn }, { read = (p) => fs.rea
   return lists;
 }
 
+/** The profiles whose launch line carries hkb's hooks (`--settings`). Pure. */
+export function hookLaunchProfiles(cfg) {
+  return Object.entries(cfg?.profiles || {}).filter(([, p]) => (p?.launch || []).includes(HOOK_SETTINGS_VAR)).map(([n]) => n);
+}
+
 /**
- * The Stop/PreToolUse hooks: which settings file holds them, and whether what they run can actually
- * run *here*. A hook command that does not resolve fails on every tool call in every session in the
- * repo — noise the reader did not write and cannot explain — and a hook that only half-exists is
- * worse than none, so this is a failure with the install in the fix, not a warning (#85). The lookups
- * are arguments so the check is testable without touching PATH.
+ * A Claude launch frozen in `board.json` before the hooks moved onto it (#144). Pure.
+ *
+ * `loadBoard` deep-merges the file over hkb's defaults and an array in the file wins whole, so a
+ * board whose `launch` was written out by an earlier `init` keeps that array forever — and a re-run
+ * of `init` writes it straight back. The same frozen-copy blind spot `worker permissions` watches
+ * for on `allowed_tools` (#138/#145), and here it costs a worker its Stop nudge and its session id,
+ * because nothing is being written into a settings file to make up for it any more.
+ */
+export function staleHookLaunches(cfg) {
+  return Object.entries(cfg?.profiles || {})
+    .filter(([, p]) => (p?.launch || [])[0] === 'claude' && !p.launch.includes(HOOK_SETTINGS_VAR))
+    .map(([n]) => n);
+}
+
+export const STALE_HOOK_CHECK = 'hooks in settings';
+export const LAUNCH_HOOK_CHECK = 'launch hooks';
+
+/**
+ * The Stop/PreToolUse hooks: where a worker gets them, and whether what they run can actually run
+ * *here*. Since #144 the answer is the launch line — `claude --settings '{"hooks":…}'`, built by
+ * `workerHookSettings` — so that is the command this asks about, and it is asked once for the whole
+ * board rather than once per settings file. A command that does not resolve costs a worker its Stop
+ * nudge and its session id, so it is a failure with the install in the fix, not a warning. The
+ * lookups are arguments so the check is testable without touching PATH.
+ *
+ * A settings file is still checked when it holds hkb hooks, because two kinds of repo have them:
+ * one that asked (`--shared-hooks`), and one an older init left them in. Either way they fire in
+ * *every* session in that repo — which is the exposure #144 removed — so the per-developer file,
+ * which init now clears out, is reported as something to run init over, and the tracked file as the
+ * choice it is, with the duplicate a worker now gets named.
  *
  * Three things follow from a repo that carries its own hkb (#146). `$CLAUDE_PROJECT_DIR` is resolved
  * to the repo before the file is looked for, and reported, so the pass names what it found rather
@@ -187,22 +217,42 @@ export function checkWorkerPermissions(ctx, { ok, warn }, { read = (p) => fs.rea
 export function checkHooks(ctx, { ok, warn, bad }, { onPath = has, exists = (p) => fs.existsSync(p), binRel = projectBinRel(ctx.root) } = {}) {
   const { hooks, unreadable } = findClaudeHooks(ctx.root);
   for (const u of unreadable) warn('hooks settings', `${u.file} is not valid JSON (${u.error})`, 'fix the JSON, then hkb init');
-  if (!hooks.some((h) => h.event === 'Stop')) {
-    return warn('stop hook', `not configured in ${HOOK_SETTINGS.local} or ${HOOK_SETTINGS.shared} — workers that exit without a terminal verb are only caught by the dispatcher`, 'hkb init');
+  // Before anything else, because a board in this state has no hooks at all and the checks below
+  // would find nothing to report — which is exactly how it would stay quiet.
+  for (const name of staleHookLaunches(ctx.cfg)) {
+    warn(LAUNCH_HOOK_CHECK,
+      `the ${name} launch in ${path.relative(ctx.root, boardFile(ctx.root))} predates the hooks moving onto it, so its workers get no Stop nudge and record no session id`,
+      DEFAULT_PROFILES[name]
+        ? `drop "launch" from the ${name} profile in that file to take hkb's own`
+        : `add "${HOOK_SETTINGS_VAR}" to that launch — it is not one of hkb's own profiles, so there is no default to fall back to`);
   }
-  const files = [...new Set(hooks.map((h) => h.file))];
-  files.length > 1
-    ? warn('stop hook', `configured in both ${files.join(' and ')} — every nudge fires twice`, "delete hkb's hooks from one of them, then hkb init")
-    : ok('stop hook', files[0]);
+  const launched = hookLaunchProfiles(ctx.cfg);
   // one finding per thing that has to exist, not per hook: both commands normally need the same binary
   const byTarget = new Map();
-  for (const h of hooks) {
-    const need = hookCommandNeeds(h.command);
+  const consider = (command, where) => {
+    const need = hookCommandNeeds(command);
     const key = `${need.kind}:${need.target}`;
     if (!byTarget.has(key)) byTarget.set(key, { need, commands: new Set(), where: new Set() });
-    byTarget.get(key).commands.add(h.command);
-    byTarget.get(key).where.add(h.file);
+    byTarget.get(key).commands.add(command);
+    byTarget.get(key).where.add(where);
+  };
+  if (launched.length) {
+    // the command a worker will really run: `hkbCommandForHook` is what builds the launch's copy
+    consider(hkbCommandForHook('stop', { root: ctx.root, binRel, onPath: onPath('hkb') }), `the ${launched.join(', ')} launch`);
+    ok('stop hook', `on the ${launched.join(', ')} launch (--settings), so no other session in this repo runs it`);
+  } else if (!hooks.some((h) => h.event === 'Stop')) {
+    return warn('stop hook', `no launch on this board carries it and it is not in ${HOOK_SETTINGS.local} or ${HOOK_SETTINGS.shared} — workers that exit without a terminal verb are only caught by the dispatcher`, 'hkb init');
+  } else {
+    ok('stop hook', [...new Set(hooks.map((h) => h.file))].join(' and '));
   }
+  for (const file of [...new Set(hooks.map((h) => h.file))]) {
+    warn(STALE_HOOK_CHECK,
+      `${file} configures hkb's hooks, so they run in every session in this repo${launched.length ? ' — and a worker runs them twice, once from there and once from its launch' : ''}`,
+      file === HOOK_SETTINGS.local
+        ? 'hkb init — it removes them from the per-developer file'
+        : `delete hkb's hooks from ${file} unless every session in this repo should have them (that is what \`hkb init --shared-hooks\` writes)`);
+  }
+  for (const h of hooks) consider(h.command, h.file);
   for (const { need, commands, where } of byTarget.values()) {
     const what = [...commands].join(' · ');
     const target = resolveHookPath(need.target, ctx.root);
@@ -226,8 +276,11 @@ export function checkHooks(ctx, { ok, warn, bad }, { onPath = has, exists = (p) 
         ? bad('hook command', `${what} — ${target} is not there, and this repo's hkb is ${binRel}; the hook has been exiting 0 in silence`, `hkb init — it rewrites the command as ${PROJECT_DIR}/${binRel}`)
         : warn('hook command', `${target} is not installed here — the hook exits 0 in silence until it is`, 'npm install');
     } else {
+      // Where the failure lands is where the command came from: a settings file reaches every
+      // session in the repo, a launch line reaches only the workers hkb starts.
+      const inFile = [...where].some((w) => w === HOOK_SETTINGS.local || w === HOOK_SETTINGS.shared);
       bad('hook command',
-        `${what} — ${need.kind === 'file' ? `${target} is not there` : `\`${need.target}\` is not on PATH here`}; the hook fails on every tool call in this repo`,
+        `${what} in ${[...where].join(' and ')} — ${need.kind === 'file' ? `${target} is not there` : `\`${need.target}\` is not on PATH here`}; the hook fails on every tool call ${inFile ? 'in every session in this repo' : 'a worker makes'}`,
         need.target === 'hkb' ? 'npm i -g hkb-cli (or: hkb init, which writes a command that resolves here)' : 'hkb init');
     }
   }
@@ -457,6 +510,12 @@ export const POLICY_CHECK = 'permission policy';
  * launch only triggers a run elsewhere, which configures itself. In all three the launch's own
  * `--allowedTools`/`--allow-tool`/`--sandbox` flags are the whole policy — which is a real answer,
  * not a hole, and the point of saying it is that an operator debugging a denial knows where to look.
+ *
+ * "Configured here" is now mostly a per-profile question, not a repo-wide one (#144): a launch that
+ * carries `{hook_settings}` brings the hook with it. The repo-wide `preTool` stays as the second
+ * answer, for a board whose hooks are in a settings file — `--shared-hooks`, or an older init.
+ * Note what riding the launch does NOT change: a `claude --bg` session still never receives
+ * `KB_TASK`, so the hook is installed there and still stands aside. That gate is #125's, untouched.
  */
 export function policyLayers(cfg, { preTool = false } = {}) {
   return Object.entries(cfg?.profiles || {}).map(([name, p]) => {
@@ -465,7 +524,7 @@ export function policyLayers(cfg, { preTool = false } = {}) {
     if (p?.mode === 'trigger') return { profile: name, live: false, why: 'the triggered run brings its own settings' };
     if (p?.mode === 'claude-bg') return { profile: name, live: false, why: 'a `claude --bg` session never receives KB_TASK' };
     if ((p?.launch || [])[0] !== 'claude') return { profile: name, live: false, why: 'not Claude Code' };
-    if (!preTool) return { profile: name, live: false, why: 'no PreToolUse hook is configured here' };
+    if (!(preTool || (p.launch || []).includes(HOOK_SETTINGS_VAR))) return { profile: name, live: false, why: 'no PreToolUse hook is configured here' };
     return { profile: name, live: true, why: null };
   });
 }
