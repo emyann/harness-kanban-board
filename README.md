@@ -44,6 +44,9 @@ npx hkb-cli create "Implement auth API" --blocked-by 41    # todo until #41 is d
 npx hkb-cli list                                           # triage todo ready running blocked review done
 ```
 
+`--priority` is a plain number and **higher wins** — the tick takes *ready* cards highest-priority first, oldest
+issue first within a tie. Cards default to `0`, so any positive number jumps the queue.
+
 ### Or drive it by hand
 
 No loop, no automation: take a card yourself and be the worker.
@@ -198,7 +201,8 @@ is that procedure — installed by the same `hkb init`, delegating to the same s
    block kind each one landed on: what to read, which verb to run, and when the answer is "not yours".
 4. **The seat boundary, in writing.** It drives verbs — `comment`, `unblock` when the answer was already on the
    board, `request-changes`, `up` after an exit 4. It never merges on a `manual` board, never edits
-   `.kanban/board.json` (profiles, `allowed_tools`, models, `merge.mode`), never clears `kb:needs-human`, and
+   `.kanban/board.json` (profiles, `allowed_tools`, models, `merge.mode`), never re-prioritises someone else's
+   queue, never clears `kb:needs-human` for any reason but an answer it has just written onto the card, and
    never starts a second dispatcher. What it cannot decide, it hands back whole: the card, what it read, what it
    would do, and whether it needs a decision, a credential or an approval.
 5. **A digest per cycle** — `hkb watch`'s own one line per transition, plus what it did and what it handed back.

@@ -13,8 +13,8 @@ covers:
   - path: src/board.js
     sha: 0d1c297b6990a63cf28b6bf18f9e4e85180b8c21
   - path: src/init.js
-    sha: 7fb79f0d1b16daef34b17a8b3b313d24ce2a5e36
-generated_at_commit: a29cf97
+    sha: f6be5541e140313a8db1ac8f9831d635cd4adc6a
+generated_at_commit: 48c374c
 last_refreshed: 2026-08-28
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
@@ -73,10 +73,10 @@ so a deleted repo cannot break `hkb serve` everywhere. A `#slug` after a path
 picks a board *inside* that checkout.
 
 **How a checkout gets on the list** (`registerUserBoard`, `src/board.js:525-531`;
-called once, from `registerCheckout` at `src/init.js:726-741`). Until #98 that
+called once, from `registerCheckout` at `src/init.js:727-742`). Until #98 that
 file had a reader and no writer, so the only way onto the page was to hand-edit
 it — the one step of adoption a repo cannot tell you about from inside itself.
-`hkb init` now writes it as its last step (`src/init.js:888`), which is only
+`hkb init` now writes it as its last step (`src/init.js:889`), which is only
 defensible because of three properties:
 
 - **Idempotent.** Equivalence is the *resolved* path plus the board slug, so

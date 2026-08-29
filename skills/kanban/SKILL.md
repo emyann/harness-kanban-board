@@ -192,6 +192,10 @@ hkb up --status     # pid, since when, which log — the source of truth for wha
 hkb doctor          # once, at the top of the session
 ```
 
+One checkout can hold several boards, so if you were given a slug, pass it: `--board <slug>` on every command,
+or export `KB_BOARD=<slug>` once and drop the flag. No slug means the checkout's own board, and either way say
+which one you are operating in your first line.
+
 All of it is safe to type twice: a live pid file makes `hkb up` report the pid and spawn nothing. Act on every
 `✗` doctor prints before you watch anything — a hard failure is a board that cannot work (auth, missing labels,
 `merge.mode: "auto"` on a branch with no gate), and seeing it now is cheaper than seeing it in the first card it
@@ -199,9 +203,10 @@ breaks. A `!` is a line for the digest, not a stop.
 
 Start the loop no other way. `hkb dispatch --loop` in the foreground dies when your session does, and it is a
 *second* dispatcher if `up` already started one — two loops against one board double-claim cards. (The
-foreground form is for a human under a real supervisor: cron, systemd, Actions.) `hkb up` is your verb, and
-`hkb dispatch` is nobody's from inside a session — every worker launch denies it outright, which is the same
-rule seen from the other side.
+foreground form is for a human under a real supervisor: cron, systemd, Actions.) `hkb up` is your verb; a
+`hkb dispatch` that runs a tick is nobody's from inside a session — every worker launch denies it outright,
+which is the same rule seen from the other side. `hkb dispatch --dry-run` is the exception, and only because it
+runs nothing: it prints what the next tick would claim, which is a read.
 
 ### 2. Watch, don't poll
 
@@ -231,14 +236,19 @@ Three habits to skip, each of which a session has invented instead:
 
 ### 3. React, per event kind
 
-`hkb watch` emits ten kinds, and only some of them are a decision:
+`hkb watch` emits ten kinds, and only some of them are a decision. Under `--json` each event is one object with
+`number`, `kind`, `at`, and the fields that kind carries: `from`/`to` for `status`, `agent` and `needs-human`;
+`attempt` for `attempt`, `outcome` and `result`; `outcome` and `summary` for an `outcome`; `actor` and `text`
+for a `comment`. The middle column below is the human formatter's line for the same event — read it as the
+shape of what arrived, and switch on `kind` (or on `tags`, which carries the kind *and* the status or outcome
+`--kinds` matches on):
 
 | kind | prints as | what you do |
 |---|---|---|
 | `appeared` | `+ on the board (triage)` | nothing — unless you are the planner too, and then it is `/kanban:specify` work, not a card to start |
 | `status` | `ready → running` | per the status it landed on — the table below |
 | `agent` | `agent claude → claude-track` | nothing; name it in the digest if it was neither you nor the human |
-| `needs-human` | `⚠ needs-human` | the human — unless it arrived with a `blocked` card whose question you can genuinely answer (below). The label is never cleared on its own: `hkb unblock` is the only thing that clears it, and only ever as the last step of an answer you have just written onto the card |
+| `needs-human` | `⚠ needs-human` | the human — unless it arrived with a `blocked` card whose question you can genuinely answer (below). The label is never cleared on its own: `hkb unblock` is the only *operator* verb that clears it, and only ever as the last step of an answer you have just written onto the card |
 | `closed` | `closed (completed)` | nothing. `closed (not_planned)` is a decision somebody made — name it in the digest |
 | `reopened` | `reopened` | read the card. The tick reconciles *closed* issues, not reopened ones, so a card that came back sits where its label puts it until a human moves it |
 | `attempt` | `attempt 2 started (claude@host)` | nothing on attempt 1. On attempt 2 or later, go and read why the last one ended — before this one burns the same way |
@@ -250,7 +260,7 @@ Three habits to skip, each of which a session has invented instead:
 
 | status | what you do |
 |---|---|
-| `review` | the row that is really yours. Read the PR against the card's *Done when*, run the repo's own checks, then follow the board's merge policy — `dispatch.merge.mode` in `.kanban/board.json`, which `hkb doctor` also prints in a line. `"auto"` means the dispatcher already handed the merge to GitHub and its gates hold it; `"manual"` means **the human merges**, which is the entire meaning of the setting — a session that merges anyway has taken an approval nobody gave it. Falls short? `hkb request-changes <n> "<the one specific gap>"` puts it back on the same PR, and the reason you type *is* the next attempt's brief: name the gap, not the disappointment |
+| `review` | the row that is really yours. Read the PR against the card's *Done when*, run the repo's own checks, then follow the board's merge policy — `dispatch.merge.mode` in `.kanban/board.json`, which is the only place it is written: `hkb doctor` checks the policy but says nothing about a `"manual"` board, so silence there is not an answer. `"auto"` means the dispatcher already handed the merge to GitHub and its gates hold it; `"manual"` means **the human merges**, which is the entire meaning of the setting — a session that merges anyway has taken an approval nobody gave it. Falls short? `hkb request-changes <n> "<the one specific gap>"` puts it back on the same PR, and the reason you type *is* the next attempt's brief: name the gap, not the disappointment |
 | `blocked` | read the block kind off the attempt row (`hkb show <n>`), then the block table below |
 | `triage` | planning, not operating |
 | `todo`, `ready`, `running` | nothing — the tick owns these |
@@ -289,10 +299,11 @@ A card that blocks on the same reason three times stops going back to *blocked* 
   restarting and take it to the human with the tail of `dispatch.log`: `up` is not a supervisor, and neither
   are you.
 - **What the board is spending.** Once a cycle, `hkb stats --json`: `attempts.by_outcome` for how the window is
-  going, `spend.by_profile` and `spend.usage.by_model` for what it cost. When one *shape* of card keeps failing
-  its first attempt — the same kind of work, the same rung of the model ladder — that is a **proposal** for the
-  human (start that shape higher with `kb.model`, or reorder the profile's ladder), never an edit you make.
-  Model choice is board policy like any other.
+  going, `spend.by_profile` for what it cost, per profile. (There is no per-model breakdown — `spend.usage` is
+  five token counters for the whole window — so a per-model claim is one you cannot make from this output.) When
+  one *shape* of card keeps failing its first attempt — the same kind of work, the same rung of the model ladder
+  — that is a **proposal** for the human (start that shape higher with `kb.model`, or reorder the profile's
+  ladder), never an edit you make. Model choice is board policy like any other.
 
 ### 4. What is yours, and what is the human's
 
@@ -301,14 +312,17 @@ seat that can widen its own permissions is not a seat.
 
 **Yours:** every read — `list`, `show`, `log`, `graph`, `stats`, `watch`, `tail`, `doctor`; `hkb comment`;
 `hkb unblock`, when the answer was on the board and you have just written it there; `hkb request-changes`;
-`hkb up` after an exit 4; and `hkb create` for a card you can justify from evidence on the board — filed in
-*triage* and linked to the card that revealed it, not started.
+`hkb up` after an exit 4; and `hkb create` for a card you can justify from evidence on the board — filed with
+`--triage` and linked to the card that revealed it, not started. Say `--triage` and mean it: without the flag a
+card with no blockers lands in *ready*, and the next tick launches a worker on a sentence you wrote as a note.
+Leave `--priority` off too — it is a number where **higher wins**, and the queue's order is the human's.
 
 **Never yours:** merging on a `manual` board, and any release or publish; editing `.kanban/board.json` at all —
 profiles, `allowed_tools`, models, `max_in_progress`, `merge.mode`; re-prioritising, promoting or archiving
 someone else's plan; clearing `kb:needs-human` for any reason but an answer you have just written onto the card;
 spending on a paid profile the human has not agreed to;
-`git push --force`, anywhere; `hkb dispatch` in any form, and a second loop of any kind.
+`git push --force`, anywhere; and any `hkb dispatch` that *runs* a tick — `--loop`, `--max`, a bare `dispatch` —
+or a second loop of any kind. (`hkb dispatch --dry-run` writes nothing and is a read like any other.)
 
 When you hand something back, hand back the whole thing: the card, what you read, what you would do, and which
 of the three you need — a decision, a credential, or an approval. "#142 is blocked" is not a handback.

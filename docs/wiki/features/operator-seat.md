@@ -7,7 +7,7 @@ audience: [dev, ops]
 read_when: "changing what a session may do on someone's board, adding an event kind / status / outcome / block kind, or wondering why the operator's limits are prose rather than a guard"
 covers:
   - path: skills/kanban/SKILL.md
-    sha: edb06f1958238ec56506fb23b840f6a84cf33fb1
+    sha: dd45aeca67178e556d9426803731b38bb96697d1
   - path: commands/operate.md
     sha: 7c1cb7c0a592fc3ea8ca641ca37b860a975ded66
   - path: src/watch.js
@@ -15,14 +15,14 @@ covers:
   - path: src/model.js
     sha: 9ec1c457784b57b6c9e4d8e0eb1de1d4ea2693cc
   - path: src/cli.js
-    sha: 605d15016a708933fa4ff4a9f7358d426134549c
+    sha: 03dd92fa22118051a8ab5f6fc9ef4269488ac41d
   - path: src/lifecycle.js
     sha: 2affd18fb3d2882db47ba164199b10160ba70ddb
   - path: src/init.js
     sha: f6be5541e140313a8db1ac8f9831d635cd4adc6a
   - path: src/stats.js
     sha: f81bc37dad19e253bf23a696ba899b4219dd5e53
-generated_at_commit: caf698a
+generated_at_commit: 48c374c
 last_refreshed: 2026-08-28
 related: [features/planning-commands, decisions/adr-004-roles-and-adoption, features/up-and-down, features/review-loop, concepts/roles-and-seats]
 ---
@@ -42,7 +42,7 @@ related: [features/planning-commands, decisions/adr-004-roles-and-adoption, feat
 ## Why this seat is different from the other two
 
 A worker is *told* what to do by the thing that launched it, and hkb enforces
-the rest: `refuseIfWorker` (`src/cli.js:234-237`) refuses `dispatch`, `up` and
+the rest: `refuseIfWorker` (`src/cli.js:235-238`) refuses `dispatch`, `up` and
 `down` outright, the same three land in `DENY_PATTERNS` (`src/model.js:681-689`)
 for the PreToolUse hook, and the shipped Claude launches deny the dispatcher at
 the harness level. Every one of those tests `process.env.KB_TASK`.
@@ -132,12 +132,13 @@ wrong:
   session through a `review` and a `needs_input` transition. That verification is
   a human's, once, on a live board.
 - **The spend row is ahead of the data.** The section asks for `hkb stats --json`
-  once a cycle and names `attempts.by_outcome`, `spend.by_profile` and
-  `spend.usage.by_model` (`src/stats.js`), which exist. Per-*shape* completion
-  rates and the model ladder it would argue for do not: they arrive with the
-  cards that add a recorded per-attempt model and an effort/ladder field. Until
-  then the row is a judgement the operator makes from outcomes, and — either way
-  — a proposal to the human, never a `board.json` edit.
+  once a cycle and names `attempts.by_outcome` and `spend.by_profile`
+  (`src/stats.js`), which exist. A per-model breakdown does not — `zeroUsage()`
+  is five token counters for the whole window, with no `by_model` — and neither
+  do per-*shape* completion rates or the model ladder they would argue for: they
+  arrive with the cards that record a per-attempt model and an effort/ladder
+  field. Until then the row is a judgement the operator makes from outcomes, and
+  — either way — a proposal to the human, never a `board.json` edit.
 
 ## Related
 
