@@ -167,7 +167,17 @@ export async function getTask(ctx, number) {
   const q = `query($owner: String!, $repo: String!, $n: Int!) {
     repository(owner: $owner, name: $repo) { issue(number: $n) { ${ISSUE_FIELDS(ctx.caps)} } }
   }`;
-  const data = await graphql(q, { owner: ctx.repo.owner, repo: ctx.repo.repo, n: Number(number) });
+  let data;
+  try {
+    data = await graphql(q, { owner: ctx.repo.owner, repo: ctx.repo.repo, n: Number(number) });
+  } catch (e) {
+    if (e instanceof GhError && e.kind === 'notfound' && /could not resolve to (a|an) issue/i.test(e.message)) {
+      const err = new Error(`issue #${number} not found in ${ctx.repo.nameWithOwner}`);
+      err.exitCode = 2;
+      throw err;
+    }
+    throw e;
+  }
   const node = data.repository.issue;
   if (!node) { const e = new Error(`issue #${number} not found in ${ctx.repo.nameWithOwner}`); e.exitCode = 2; throw e; }
   const task = toTask(node);
