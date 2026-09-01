@@ -13,7 +13,10 @@ import {
   latestResult as realLatestResult, parentResults as realParentResults, addComment as realAddComment,
 } from './tasks.js';
 import { promote as realPromote, unblock as realUnblock, block as realBlock, requestChanges as realRequestChanges, archive as realArchive } from './lifecycle.js';
-import { logsDir, loadUserBoards, userBoardsFile, contextForPath, pidFile, readPidFile, pidAlive, processState } from './board.js';
+import {
+  logsDir, loadUserBoards, userBoardsFile, contextForPath, pidFile, readPidFile, pidAlive, processState,
+  writeServeUrl, dropServeUrl,
+} from './board.js';
 import { computeReady, blockerDone, formatSession, resumeCommand, parseRepoSpecs, boardKey, uniqueKeys } from './model.js';
 
 /** The columns of the web board. `archived` is a verb, not a column — archived tasks leave the board. */
@@ -110,7 +113,10 @@ export function dispatcherState(root) {
 
 /**
  * Claim `.kanban/serve.pid` for this server, so `hkb up --status` can see it and `hkb down --serve`
- * can stop it — including a `hkb serve` a human started by hand in a terminal.
+ * can stop it — including a `hkb serve` a human started by hand in a terminal. When the claim wins,
+ * also writes `.kanban/serve.url` (`url`, when given) to the real bound origin — `hkb up` pre-writes a
+ * guess from the `--port` it spawned with, and this is the child correcting it once the port is
+ * actually open (the one place a raced default or `--port 0` can differ from that guess).
  *
  * Unlike the dispatcher's singleton lock this refuses nothing: two servers on two ports out of one
  * checkout is a legitimate thing to want, and the port is the real singleton (see EADDRINUSE below).
@@ -119,7 +125,7 @@ export function dispatcherState(root) {
  * server finding its own pid here is finding its own claim.
  * @returns a function that drops the claim
  */
-export function claimServePid(root, log = () => {}) {
+export function claimServePid(root, log = () => {}, url = null) {
   const file = pidFile(root, 'serve');
   // A claim written before this boot is no claim: that pid now belongs to a stranger (`readPidFile`).
   const { pid: current, stale } = readPidFile(root, 'serve');
@@ -129,7 +135,11 @@ export function claimServePid(root, log = () => {}) {
   }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, String(process.pid) + '\n');
-  const drop = () => { try { if (Number(fs.readFileSync(file, 'utf8').trim()) === process.pid) fs.rmSync(file); } catch { /* gone */ } };
+  if (url) writeServeUrl(root, url);
+  const drop = () => {
+    try { if (Number(fs.readFileSync(file, 'utf8').trim()) === process.pid) fs.rmSync(file); } catch { /* gone */ }
+    if (url) dropServeUrl(root);
+  };
   process.on('exit', drop);
   return drop;
 }
@@ -652,7 +662,7 @@ export async function serve(ctx, flags = {}, log = () => {}, deps = {}) {
   }
   // Claimed after the port is bound, never before: a pid file written by a server that then failed to
   // listen would tell `hkb up --status` that a board is up when none is.
-  const dropPid = claimServePid(ctx.root, log);
+  const dropPid = claimServePid(ctx.root, log, s.url);
   await new Promise((resolve) => {
     const stop = () => { s.server.close(() => resolve()); s.server.closeAllConnections?.(); };
     process.once('SIGINT', stop);

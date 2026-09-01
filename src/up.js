@@ -24,8 +24,10 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   ensureLocalDirs, pidFile, processLogFile, processState, readPidFile, pidAlive, clearExit,
+  writeServeUrl, dropServeUrl,
 } from './board.js';
 import { PROCESSES, detachedEnv, startDecision, processLine, startLogLine, stopWaitMs, deadAtRecheck } from './model.js';
+import { DEFAULT_PORT } from './serve.js';
 
 const usage = (msg) => { const e = new Error(msg); e.exitCode = 2; return e; };
 const nowIso = () => new Date().toISOString();
@@ -68,6 +70,15 @@ function port(flags) {
 }
 
 /**
+ * The URL `hkb up` believes it is about to spawn `serve` on — `--port` is a flag on `up`, so the value
+ * is in hand before the child ever boots. `hkb serve`'s own `claimServePid` overwrites this with the
+ * real bound origin once the port is actually open, the same relationship the pid file has with
+ * `claimPid`: a good guess now, corrected the moment the child can speak for itself. `--host` is never
+ * passed to the child (`childArgv`), so it always binds `127.0.0.1`.
+ */
+function serveOrigin(flags) { return `http://127.0.0.1:${flags.port !== undefined ? port(flags) : DEFAULT_PORT}`; }
+
+/**
  * Write `<pid>` into `.kanban/<name>.pid` for the child that was just spawned, so a second `hkb up`
  * one millisecond later sees a live process instead of starting a rival — the child writes the same
  * file itself when it boots, but that takes a moment and idempotence cannot wait for it.
@@ -95,7 +106,11 @@ function claimPid(root, name, pid) {
 function dropDeadPidFile(root, name, deps = {}) {
   const read = deps.readPidFile || readPidFile;
   const f = read(root, name);
-  if (f.pid && (f.stale || !pidAlive(f.pid))) { fs.rmSync(pidFile(root, name), { force: true }); return true; }
+  if (f.pid && (f.stale || !pidAlive(f.pid))) {
+    fs.rmSync(pidFile(root, name), { force: true });
+    if (name === 'serve') dropServeUrl(root);
+    return true;
+  }
   return false;
 }
 
@@ -132,20 +147,24 @@ async function startProcess(ctx, name, flags, deps = {}) {
   // A rival `up` that got there first keeps the file: the loser's child is the one the singleton lock
   // (or the bound port) is about to refuse, and the pid file must keep naming the winner.
   const claimed = claimPid(ctx.root, name, child.pid);
+  // Same reasoning as the pid: pre-write the URL we are about to spawn on so `--status` a millisecond
+  // later has something truer than a log grep, then let the child's own `claimServePid` correct it.
+  if (claimed && name === 'serve') writeServeUrl(ctx.root, serveOrigin(flags));
   await sleep(deps.spawnCheckMs ?? SPAWN_CHECK_MS);
   if (!pidAlive(child.pid)) {
     const r = deadAtRecheck(name, child.pid, rel);
     // `up` owns this claim (it just wrote it) and has just verified the pid dead — tidy it rather
     // than leaving `serve.pid` naming the corpse it just reported as `failed`. `claimed` narrows this
     // to our own claim; `dropDeadPidFile`'s own fresh read is what keeps a concurrent live claim safe.
-    if (claimed) dropDeadPidFile(ctx.root, name, deps);
+    if (claimed) { dropDeadPidFile(ctx.root, name, deps); if (name === 'serve') dropServeUrl(ctx.root); }
     return { pid: child.pid, line: r.line, failed: r.failed };
   }
   if (!claimed) {
     const { pid: holder } = readPidFile(ctx.root, name);
     return { pid: child.pid, line: `${name} started pid ${child.pid}, but ${path.relative(ctx.root, pidFile(ctx.root, name))} names pid ${holder} — one of the two will be refused; hkb up --status says which survived`, failed: null };
   }
-  return { pid: child.pid, line: `${name} started pid ${child.pid} · log ${rel}`, failed: null };
+  const url = name === 'serve' ? ` · ${serveOrigin(flags)}` : '';
+  return { pid: child.pid, line: `${name} started pid ${child.pid}${url} · log ${rel}`, failed: null };
 }
 
 /** `{ dispatch: {...}, serve: {...} }` — pid files and liveness, no board read and no network. */
@@ -228,7 +247,7 @@ export async function down(ctx, flags = {}, out = () => {}, deps = {}) {
   // could, leaves it, and a file naming a dead pid helps nobody. Only ever tidy the same pid.
   const tidyPidFile = (name, pid) => {
     const { pid: left } = readPidFile(ctx.root, name);
-    if (left === pid) fs.rmSync(pidFile(ctx.root, name), { force: true });
+    if (left === pid) { fs.rmSync(pidFile(ctx.root, name), { force: true }); if (name === 'serve') dropServeUrl(ctx.root); }
   };
   for (const name of names) {
     const st = processState(ctx.root, name);

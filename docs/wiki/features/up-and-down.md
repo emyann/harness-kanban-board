@@ -7,16 +7,18 @@ audience: [dev, ops]
 read_when: "touching hkb up/down, the dispatcher's singleton lock, the serve pid file, or anything that has to know whether a board is running"
 covers:
   - path: src/up.js
-    sha: 6971cba6c83f88756b9dae1eea56ae20c0d28c09
+    sha: d071ce334a8166b27957bb2ad6c07dd683c306cb
   - path: src/model.js
-    sha: 022ed7b17c5debc59265f8a1627f82386864de00
+    sha: 1396e51d975eb47370284f457492711a4732a4bf
   - path: src/board.js
-    sha: 955f2c7cfc908fe46ebf264e0cb4c8e722c7a79c
+    sha: 72e9c66eb079e09ad4f221c84874351d794ecdf4
   - path: src/dispatch.js
-    sha: 6ceade7f5440ab4194c477cc1bb2cc2900b52632
+    sha: 91ca65eadb9e1b66fa8b8c9756dda334668edd74
   - path: src/serve.js
-    sha: 27c2fd3b6cc4fc0e57ab7897682eae0fae24206b
-generated_at_commit: bcd1dc5
+    sha: 83e21743007087c37dc114d32c7f6fce9fa61fab
+  - path: src/doctor.js
+    sha: 5969652bdbc10eb76cf20a3e682f8ac1b43c818e
+generated_at_commit: f04038f
 last_refreshed: 2026-09-01
 related: [architecture/overview, features/web-board, concepts/roles-and-seats, architecture/dispatcher-tick]
 ---
@@ -64,6 +66,32 @@ says so rather than reporting a start it did not win (`src/up.js:144-147`).
 **Nothing else deletes these files.** Each process removes its own on exit, and
 that is the invariant every other rule here rests on; see *`down` waits* below for
 what happened when `down` did not respect it.
+
+## The server's URL rides the same pre-write/correct pattern (#204)
+
+Before #204, nothing printed the URL a running `hkb serve` answers on — the
+only way to it was the first line of `.kanban/logs/serve.log`, a log grep for
+a fact the process already knows. `.kanban/serve.url` fixes that with the same
+two-writer shape the pid file already has:
+
+- **`hkb up`, before the child boots.** `--port` is a flag on `up`, so the
+  origin is in hand at spawn time — `serveOrigin(flags)` in `src/up.js` writes
+  `http://127.0.0.1:<port>` (default `DEFAULT_PORT` from `src/serve.js`) the
+  moment it wins the pid claim, mirroring `claimPid`'s own pre-write.
+- **`hkb serve`, once the port is actually bound.** `claimServePid` (now
+  `(root, log, url)`, `src/serve.js:122-135`) overwrites the guess with the
+  real bound origin — the one place a raced default, or `--port 0`, could have
+  differed from it.
+
+Both writers drop the file together with the pid claim (`dropServeUrl`,
+`src/board.js`), so a stopped server never leaves a stale URL behind.
+`processState(root, 'serve')` (`src/board.js`) reads it back only while
+`running` is true, and `processLine` (`src/model.js`) renders it inline —
+`serve running pid N since HH:MM · http://127.0.0.1:4666 · log ...` — so `hkb
+up --serve`, `hkb up --status --json` (`serve.url`) and `hkb doctor`'s `serve`
+line (`checkServe`, `src/doctor.js`) all name it without a log grep. This is
+what closes the opening report's first gap (`skills/kanban/SKILL.md` step 1):
+the board and its URL, from one command each.
 
 ## Why the server's claim refuses nothing
 

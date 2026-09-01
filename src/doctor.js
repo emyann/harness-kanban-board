@@ -141,6 +141,19 @@ export function checkDispatcher(ctx, { ok, warn }) {
 }
 
 /**
+ * Same question as `checkDispatcher`, for the web board — and the one place doctor names the URL a
+ * running server answers on, so an opening report never has to grep `.kanban/logs/serve.log` for it
+ * (`processState` reads it off `.kanban/serve.url`, `hkb up`/`hkb serve`'s own claim).
+ */
+export function checkServe(ctx, { ok, warn }) {
+  const st = processState(ctx.root, 'serve');
+  if (st.running) return ok('serve', `running pid ${st.pid}${st.url ? ` · ${st.url}` : ''} · log ${st.log}`);
+  if (st.stale) return warn('serve', 'no server running — .kanban/serve.pid predates this boot and names nothing of ours', 'hkb up --serve');
+  if (st.exit !== null) return warn('serve', `no server running — the last one exited (${st.exit}) at ${st.exited_at}`, 'hkb up --serve');
+  warn('serve', 'no server running', 'hkb up --serve');
+}
+
+/**
  * A `trigger` profile is a launch that only asks Actions to do the work — so the workflow it names
  * has to exist, and it only ever runs from the default branch. Nothing here can check the secrets:
  * `gh secret list` needs admin, and their absence is reported by the workflow itself.
@@ -1143,6 +1156,7 @@ export async function doctor(ctx, flags, log) {
   checkHooks(ctx, { ok, warn, bad });
   await checkMcp(ctx, { ok, warn, bad });
   checkDispatcher(ctx, { ok, warn });
+  checkServe(ctx, { ok, warn });
   // which layer answers a denial, and whether a frozen copy of that layer has fallen behind:
   // local files only, so both run on a checkout with no repo behind it
   checkPolicyLayer(ctx, { ok });
