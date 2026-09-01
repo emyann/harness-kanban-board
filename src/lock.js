@@ -6,7 +6,7 @@
 import { spawnSync } from 'node:child_process';
 import { rest, restRaw, GhError } from './gh.js';
 import { api } from './board.js';
-import { lockRef, lockRefPath, classifyLeasePush } from './model.js';
+import { lockRef, lockRefPath, classifyLeasePush, trackBranchName, trackBranchRoot } from './model.js';
 
 /** One conditional read of a branch head. A 304 means "still `known`" and costs no rate limit. */
 async function readHead(ctx, branch, known) {
@@ -76,6 +76,64 @@ export async function claim(ctx, n, k) {
     const result = classifyClaimError(e);
     return { result, ref: lockRef(n, k), sha: null, error: result === 'unknown' ? e : null };
   }
+}
+
+/**
+ * Create a track's integration branch from the default branch, idempotently, and return its name.
+ * A track root can be claimed more than once for the same subgraph — a runner that crashed before
+ * its attempt ever recorded `ended_at` leaves `trackAlreadyAttempted` false, so the next claim tries
+ * again — and the branch must be *reused*, not recreated: children already based work on it. Reusing
+ * on "already exists" is exactly the claim protocol's own "held" outcome, just for a ref nothing
+ * locks — so the classifier is shared. Any other failure (auth, rate limit, network) is left to
+ * throw: the caller treats it the same as a spawn that never started.
+ */
+export async function ensureTrackBranch(ctx, rootNumber) {
+  const name = trackBranchName(rootNumber);
+  const sha = await baseSha(ctx);
+  try {
+    await rest('POST', api(ctx, '/git/refs'), { body: { ref: `refs/heads/${name}`, sha } });
+  } catch (e) {
+    if (!(e instanceof GhError) || classifyClaimError(e) !== 'held') throw e;
+  }
+  return name;
+}
+
+/** Does this track branch still exist? Doctor's own read — never cached, never assumed. */
+export async function trackBranchSha(ctx, rootNumber) {
+  try {
+    const r = await rest('GET', api(ctx, `/git/ref/heads/${trackBranchName(rootNumber)}`));
+    return Array.isArray(r) ? null : r?.object?.sha || null;
+  } catch (e) {
+    if (e instanceof GhError && e.kind === 'notfound') return null;
+    throw e;
+  }
+}
+
+/** Delete a track's integration branch. Never throws on "already gone" — deletion is idempotent too. */
+export async function deleteTrackBranch(ctx, rootNumber) {
+  try {
+    await rest('DELETE', api(ctx, `/git/refs/heads/${trackBranchName(rootNumber)}`));
+    return true;
+  } catch (e) {
+    if (e instanceof GhError && (e.kind === 'notfound' || (e.kind === 'validation' && /does not exist/i.test(e.message)))) return false;
+    throw e;
+  }
+}
+
+/**
+ * Every track branch on the repo (`kb/track-<root>`), by root number — one paginated read via
+ * `git/matching-refs`, however many tracks the board has ever run. What `hkb doctor` cross-checks
+ * against the board to find one with no live runner (`checkTrackBranches`, src/doctor.js).
+ */
+export async function listTrackBranches(ctx) {
+  const rows = await rest('GET', api(ctx, '/git/matching-refs/heads/kb/track-'));
+  const out = [];
+  for (const row of rows || []) {
+    const name = String(row.ref || '').replace(/^refs\/heads\//, '');
+    const root = trackBranchRoot(name);
+    if (root) out.push({ branch: name, root, sha: row.object?.sha || null });
+  }
+  return out;
 }
 
 export async function lockExists(ctx, n, k) {

@@ -7,23 +7,25 @@ audience: [dev]
 read_when: "touching src/track.js, isTrackRoot, the track branch of the dispatcher tick, the claude-track profile's allow-list, or the runner brief"
 covers:
   - path: src/model.js
-    sha: 022ed7b17c5debc59265f8a1627f82386864de00
+    sha: 6656795be9d6890424538296436c507ee8ced5e0
   - path: src/track.js
-    sha: ed02aeeffe9c33ce3ce32abd652c59faec8e9286
+    sha: 286c5fff375e47a6f7ebf8d648671a9659872ab4
   - path: src/dispatch.js
-    sha: 6ceade7f5440ab4194c477cc1bb2cc2900b52632
+    sha: 91ca65eadb9e1b66fa8b8c9756dda334668edd74
   - path: src/init.js
     sha: aee5eed4dcc544f9a6fe81c7273f96432aaf1048
   - path: src/board.js
     sha: 955f2c7cfc908fe46ebf264e0cb4c8e722c7a79c
   - path: src/gc.js
-    sha: 40672cb7a84da7170be3f5d99df42f326f9dc1e5
+    sha: 04d99352d5029211f2a3c9ae8d591bcbab4aa366
   - path: src/tasks.js
-    sha: e0c09e408b3328d5ca7a4d9f512e4bda73b0d0f0
+    sha: 8542b5c7d4905306e774b95db8b8dcd4390b2748
   - path: src/doctor.js
-    sha: 4b49003dc44abe98a35f1c47b9472427e0ab6fba
+    sha: 5c9955ba4228a0722b3e3fce557a06890ff4f487
+  - path: src/lock.js
+    sha: e9920df913b5e6cd8a648dad6e679cf4a41a6a1a
 related: [architecture/overview, features/harness-profiles, features/review-loop, concepts/worker-identity, decisions/adr-004-roles-and-adoption]
-generated_at_commit: bcd1dc5
+generated_at_commit: 34529cf
 last_refreshed: 2026-09-01
 ---
 
@@ -188,51 +190,119 @@ is exactly why they are written down:
   mid-wave; #163 taught it to stand aside while a subagent of the attempt is
   live (see `concepts/worker-identity`).
 
-## Branch strategy: nodes stack on their blocker, and the board can see it
+## Branch strategy: every node stacks on the track branch, never on a sibling (#245)
 
-A node's brief (`trackContext`, `src/track.js`) is explicit about where its
-branch comes from: `git switch -c kb/<n> <base>`, where `<base>` is the branch
-of the node it is blocked by (`kb/<blocker>`), or the default branch when it
-has none — for both the sequential loop and the fan-out's per-node brief. A
-track therefore **stacks**: node B's PR targets node A's still-open branch
-rather than waiting for A to merge into the default branch first. That is a
-deliberate choice, not an accident of two agents happening to pick the same
-name — it is what lets a track's nodes run one after another inside a single
-attempt without a merge round-trip between each. Stacked PRs across *cards* on
-the board were rejected during hkb's original design (sequencing them would
-need PR-stacking machinery the board itself does not have); this is
-different — inside one track, the branches are the very thing that keeps the
-nodes in order, and every one of them still ends in its own PR, closed by its
-own `Closes #<n>` (`## The per-node brief`, above).
+Before #245, a node's brief pointed `<base>` at the branch of the node it was
+blocked by (`kb/<blocker>`), or the default branch when it had none — nodes
+stacked on each other, in a chain. Running track #191 (six cards, five
+children) broke that in three distinct ways in one attempt: `<base>` had no
+answer for a diamond (#227 was blocked by *two* children, so the runner
+improvised an unrecorded `kb/191-wave1` integration branch by hand), a stacked
+PR is invisible to `closedByPullRequestsReferences` (GitHub only links a PR
+into the default branch, so #227's card closed *done* with its work
+unmerged), and eager merging of a lower node pulled the base out from under
+everything stacked on it (#229's base branch was squash-merged and deleted
+mid-task). The correlation was the evidence: both children with no blockers
+sailed through, both children with blockers were lost.
 
-The cost of that choice is what #227 found operating hkb's own board: a PR
-whose `base` is `kb/<blocker>` rather than the default branch is one GitHub's
-`closedByPullRequestsReferences` will never link, so `hkb finish` saw `prs: []`
-and closed the card as *done* with the branch sitting there, unmerged, nothing
-left to chase it. That was never really a branch-strategy bug — the strategy
-was working as designed — it was `hkb`'s single source for "does this card
-have a PR" being narrower than the question it was asked. The fix landed in
-`src/tasks.js` (`taskBranchRe`/`openPrsByHead`, #234): a card with no PR from
-GraphQL is matched against a board-wide read of open PRs by **head** branch —
-`kb/<n>`, `kb-<n>-<k>`, `worktree-kb-<n>-<k>` — which finds a node's PR
-whatever its `base` is, stacked or not. `hkb finish` also refuses to land a
-card in *done* with no PR found at all (protocol_violation, unless the worker
-says `--no-pr "why"`), so a stacked branch that the fallback still cannot
-place stops the card rather than closing it silently. `hkb doctor`'s
-`checkOrphanedPrs` closes the remaining hole: a card already closed, whose
-`kb/<n>` branch still carries an open PR, is not revisited by an open-issues
-board read, so doctor asks about it separately.
+The fix replaces the chain with a hub. **A track claims its own integration
+branch, `kb/track-<root>` (`trackBranchName`, `src/model.js`), the moment it
+is claimed** — `ensureTrackBranch` (`src/lock.js`) creates it from the default
+branch, at the same claim sha the lock ref itself uses, and the dispatcher
+records it on the attempt row as `track_branch` (`src/dispatch.js`, the track
+claim) *before* anything is spawned. That is the whole reliability argument:
+the branch lives on the board, not in the runner's head, so a runner that dies
+never strands work nothing can find. `ensureTrackBranch` is idempotent — a
+retried claim (the first attempt crashed before it ever recorded `ended_at`)
+reuses the existing branch rather than recreating it, because children may
+already have based work on it.
 
-The track runner itself never creates a branch of its own (a "wave" branch
-distinct from any node's `kb/<n>`) — every branch on the board is one card's,
-named after that card, so `taskBranchRe` covers everything a track can
-produce. If a future runner ever needs a shared integration branch across
-several nodes, that branch would need its own place in the board's model
-(a card of its own, most likely) rather than existing only as a name a prompt
-happened to choose — nothing here does that today.
+```
+main
+ └── kb/track-<root>            created at claim time, from the default branch
+      ├── kb/<child-a>          branched from the track branch, PR into it
+      └── kb/<child-b>          branched from the track branch, PR into it
+ └── kb/track-<root> ──────────> one PR into main, after the root's own pass
+```
+
+**Every node branches from the track branch, whatever its blockers are** —
+`trackContext` (`src/track.js`) threads the branch name into both the
+sequential loop and the fan-out's per-node brief: `git fetch origin
+<track-branch> && git switch -c kb/<n> origin/<track-branch>`. The diamond
+that broke #227 disappears: two blockers and one blocker produce the same
+base, because a blocker's work is already sitting on the track branch by the
+time a dependent starts. A node's own branch is still `kb/<n>` — unchanged,
+still what `taskBranchRe` matches — only what it is cut *from* moved.
+
+Every node's PR still targets that branch, not the default one, so
+`closedByPullRequestsReferences` still never links it — this is exactly the
+rung that **requires #234**: the head-branch fallback (`taskBranchRe`/
+`openPrsByHead`/`branchFallbackPrs`, `src/tasks.js`) matches a PR by its
+**head** (`kb/<n>`) whatever its `base` is, so `hkb finish` still finds the
+node's PR through the fallback with a track-branch base exactly as it did with
+a sibling's. `hkb finish` still refuses to land a card in *done* with no PR
+found at all, and `hkb doctor`'s `checkOrphanedPrs` still catches a card that
+already closed with its branch's PR unreferenced.
+
+**The root's own pass runs on the track branch itself, not a `kb/<root>` of
+its own**, and opens the track's *one* PR into the default branch — the PR
+GitHub's own linking does auto-close, because that one targets the default
+branch (`## Finishing the track` in the brief, `src/track.js`). That makes the
+root's "check the pieces fit" verification a gate the work passes *before* it
+lands, rather than an audit of something already merged — #191's root
+verified work that had already shipped, unmerged branches and all.
+
+### Conflict on the way into the track branch is an event, not a discovery
+
+Two children's PRs colliding on their way into the track branch is the
+trigger the design settled on for reviewing the assembled whole, and it is a
+detectable signal rather than a judgement call: `trackConflictPass`
+(`src/dispatch.js`, run every tick after `autoMergePass`) reads every open PR
+whose base is a running track's branch (`openPrsByHead`, filtered by
+`baseRefName`), and asks GitHub outright via `prMergeStates` — one GraphQL
+request aliasing every candidate PR number, since REST's list-PRs endpoint
+carries neither `mergeable` nor `mergeStateStatus` and a track child's PR is
+exactly the shape `closedByPullRequestsReferences` cannot surface either. The
+pure verdict, `trackBranchConflict` (`src/model.js`), treats GitHub's own
+`'CONFLICTING'` as the only positive — `'UNKNOWN'` (not yet computed) is
+"ask again next tick", never a false alarm, and fewer than two candidate PRs
+can never conflict. A real conflict adds `kb:needs-human` to the root (the
+event `hkb watch` already reports the moment the label lands) and a comment
+naming which PRs collide, once per attempt — `track_conflict_notified` on the
+attempt row is what stops it from repeating every tick.
+
+### Lifecycle: created at claim, deleted once the root is settled
+
+A track branch is not the runner's to delete — `hkb gc`'s `sweepTrackBranches`
+(`src/gc.js`) is the one sweep in that file that costs a GitHub request rather
+than a local `git` call, because `ensureTrackBranch` makes the branch through
+the API rather than a local push. It deletes a root's `kb/track-<root>` once
+that root is *done* or *archived* — the same `finishedHere` predicate the
+ordinary branch sweep (`sweepBranches`) already uses — and leaves an open
+root's branch alone even if its last track attempt already ended without
+merging, because the branch may still hold work worth recovering by hand.
+That gap is exactly what `hkb doctor`'s `checkTrackBranches` is for: every
+`kb/track-<root>` on the repo (`listTrackBranches`, one `git/matching-refs`
+read), cross-checked against its root's last track attempt — no live root, or
+an attempt that already ended, is flagged as having no live runner, the same
+class of bug `checkOrphanedPrs` already covers for an unreferenced PR.
 
 ## Known gaps
 
+- **A dead runner's leftover nodes fall back to the default branch, not the
+  track branch.** `src/context.js`'s ordinary cold-worker brief (`workerContext`)
+  has no lookup from a node back to an ancestor track's `track_branch` — a
+  deliberate scope cut, not an oversight (`src/track.js`'s header comment). So
+  once a track's one run has ended (`trackAlreadyAttempted`) and node dispatch
+  picks up whatever is left, a node with no open PR yet starts on a fresh
+  worktree cut from the default branch and cannot see its still-unmerged
+  siblings' work sitting on `kb/track-<root>`. A node that *had* already opened
+  a PR is unaffected — `continuation`'s `cont.base` reads straight off that PR's
+  own `baseRefName`, which is the track branch, so a `request-changes` or a
+  reclaimed-mid-review node reattaches correctly either way. `hkb doctor`'s
+  `checkTrackBranches` is the safety net for the gap: it flags a track branch
+  with no live runner so a human notices and reconciles it by hand rather than
+  the tick silently losing the assembled work.
 - **The verb check is brief-level, not enforced.** The Stop nudge keys on
   `KB_TASK`, which is the root, so it never fires for a child. The orchestrator
   is told to read `hkb show <n> --json` after each wave and file or block a node

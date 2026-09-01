@@ -4,11 +4,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, getTask, enableAutoMerge, branchProtection } from './tasks.js';
-import { claim, release, listLocks, lockBeatAt, staleBaseSha, remoteName } from './lock.js';
+import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, addComment, getTask, enableAutoMerge, branchProtection, openPrsByHead, prMergeStates } from './tasks.js';
+import { claim, release, listLocks, lockBeatAt, staleBaseSha, remoteName, ensureTrackBranch } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, pidFile, readPidFile, pidAlive, recordExit, clearExit, HOOK_SETTINGS_VAR } from './board.js';
 import { workerHookSettings, PKG_ROOT, packageVersion } from './init.js';
-import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, authPauseReason, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle } from './model.js';
+import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, authPauseReason, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, isTrackRoot, trackBranchConflict } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted, trackFanout } from './track.js';
 import { GhError } from './gh.js';
@@ -336,6 +336,42 @@ export async function autoMergePass(ctx, tasks, { dryRun = false, log = () => {}
       out.push({ number: t.number, pr: d.pr.number, base: branch, ok: false, error: e.message });
       log(`#${t.number}: could not enable auto-merge on PR #${d.pr.number}: ${e.message}`);
     }
+  }
+  return out;
+}
+
+/**
+ * Two children conflicting on their way into a track branch, surfaced as a board event rather than
+ * left for a human to discover in the PR list — the trigger the design settled on: a conflict is the
+ * one thing that means the assembled whole needs a look, and it is a signal GitHub already computes
+ * (`mergeable`/`mergeStateStatus`) rather than a judgement hkb has to make. One tick per running
+ * track root that has a branch recorded, and at most once per attempt: `kb:needs-human` is the event
+ * (`hkb watch`'s `needs-human` kind reports it the moment the label lands), and the comment is the
+ * record a human resolving it will read.
+ */
+export async function trackConflictPass(ctx, tasks, { dryRun = false, log = () => {} } = {}) {
+  const out = [];
+  const roots = tasks.filter((t) => t.status === 'running' && !t.needsHuman && isTrackRoot(t, ctx.cfg, { board: tasks }).track);
+  for (const root of roots) {
+    const runRec = await loadRun(ctx, root.number);
+    const last = lastAttempt(runRec.run);
+    if (!last?.track || last.ended_at || !last.track_branch || last.track_conflict_notified) continue;
+    const branch = last.track_branch;
+    const byHead = await openPrsByHead(ctx);
+    const candidates = [...byHead.values()].filter((p) => p.baseRefName === branch);
+    if (candidates.length < 2) continue;
+    const states = await prMergeStates(ctx, candidates.map((p) => p.number));
+    const conflicting = trackBranchConflict(states);
+    if (!conflicting) continue;
+    const detail = `${conflicting.map((n) => `#${n}`).join(' and ')} conflict merging into \`${branch}\` — a human needs to reconcile them before more children land.`;
+    if (dryRun) { out.push({ root: root.number, branch, conflicting, dry: true }); log(`#${root.number}: [dry-run] would flag a track conflict on ${branch}: ${conflicting.join(', ')}`); continue; }
+    await addComment(ctx, root.number, `track conflict: ${detail}`);
+    await addLabels(ctx, root, [L.needsHuman]);
+    root.needsHuman = true;
+    last.track_conflict_notified = true;
+    await saveRun(ctx, root.number, runRec);
+    out.push({ root: root.number, branch, conflicting });
+    log(`#${root.number}: track conflict flagged on ${branch}: ${conflicting.join(', ')}`);
   }
   return out;
 }
@@ -812,7 +848,20 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       if (c.error?.kind === 'ratelimit' || c.error?.kind === 'auth') break;
       continue;
     }
-    const attempt = { attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.sha, pid: null, track: true, track_mode: cand.mode, track_nodes: nodes };
+    // The track branch is created here, at claim time, from the default branch — before anything
+    // is spawned, so a node's own brief can name it outright rather than derive it. It is recorded
+    // on the attempt row (`track_branch`) so a runner that dies never strands work nothing can find:
+    // the board, not the runner's head, is where the branch lives (docs/wiki/features/tracks.md).
+    let trackBranch;
+    try {
+      trackBranch = await ensureTrackBranch(ctx, t.number);
+    } catch (e) {
+      log(`#${t.number}: track branch could not be created: ${e.message}`);
+      await release(ctx, t.number, k);
+      note(`track branch: ${e.message}`);
+      continue;
+    }
+    const attempt = { attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.sha, pid: null, track: true, track_mode: cand.mode, track_nodes: nodes, track_branch: trackBranch };
     runRec.run.attempts.push(attempt);
     await saveRun(ctx, t.number, runRec);
     await setStatus(ctx, t, 'running', { remove: [L.needsHuman] });
@@ -820,7 +869,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     try {
       spawned = await spawnWorker(ctx, t, profileName, k, {
         keepRef: !!children,
-        prompt: trackContext({ repo: ctx.repo.nameWithOwner, board: ctx.board, track: cand.track, attempt: k, waves: cand.waves, fanout: trackFanout(ctx.cfg, profileName) }),
+        prompt: trackContext({ repo: ctx.repo.nameWithOwner, board: ctx.board, track: cand.track, attempt: k, waves: cand.waves, fanout: trackFanout(ctx.cfg, profileName), trackBranch, defaultBranch: ctx.cfg.default_branch || 'main' }),
       });
       if (!spawned.pid && !spawned.bg && !spawned.remote) throw new Error('spawn returned neither a pid nor a background launch');
     } catch (e) {
@@ -971,6 +1020,15 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   } catch (e) {
     summary.auto_merge_error = e.message;
     log(`auto-merge pass failed (the board is unaffected, and the next tick tries again): ${e.message}`);
+  }
+
+  // 3d. a running track's children conflicting on the way into its branch — surfaced once, not
+  //     rediscovered every tick.
+  try {
+    summary.track_conflicts = await trackConflictPass(ctx, tasks, { dryRun, log });
+  } catch (e) {
+    summary.track_conflicts_error = e.message;
+    log(`track conflict pass failed (the board is unaffected, and the next tick tries again): ${e.message}`);
   }
 
   // 4. mirror the labels onto the linked Projects v2 board (opt-in, one-way, never fatal).

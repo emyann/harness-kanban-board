@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fetchBoard, getTask, blockersOf, blockersKnown, branchFallbackPrs, openPrsByHead } from '../src/tasks.js';
+import { trackBranchName } from '../src/model.js';
 import { GROOM_BLOCKERS_CHECK, checkGroomBlockers } from '../src/doctor.js';
 import { GhError, setTransport } from '../src/gh.js';
 import { FakeGh, kbIssue } from './fake-gh.js';
@@ -211,6 +212,19 @@ test('getTask falls back to a PR by head branch when GitHub links nothing — a 
     assert.equal(task.prs.length, 1);
     assert.equal(task.prs[0].number, 232);
     assert.equal(task.prs[0].baseRefName, 'kb/191-wave1');
+    assert.equal(task.prs[0].state, 'OPEN');
+  } finally { cleanup(); }
+});
+
+test('getTask falls back for a child PR based on the track branch — #245: every child PRs into `kb/track-<root>`, whatever its blockers', async () => {
+  const { gh, ctx, cleanup } = harness();
+  try {
+    gh.addIssue(kbIssue({ number: 227, status: 'running' })); // a child of track #191, blocked by two siblings
+    gh.addPull({ number: 232, head: 'kb/227', base: trackBranchName(191) }); // the track's own integration branch
+    const task = await getTask(ctx, 227);
+    assert.equal(task.prs.length, 1);
+    assert.equal(task.prs[0].number, 232);
+    assert.equal(task.prs[0].baseRefName, 'kb/track-191');
     assert.equal(task.prs[0].state, 'OPEN');
   } finally { cleanup(); }
 });

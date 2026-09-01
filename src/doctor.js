@@ -7,7 +7,7 @@ import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES, 
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun, openPrsByHead, issueDatabaseId } from './tasks.js';
 import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren, branchTaskNumber } from './model.js';
 import { resolvedIdentity } from './hook.js';
-import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
+import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName, listTrackBranches } from './lock.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, harnessHookCommand, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
 import { latestVersion } from './registry.js';
 import { checkProject } from './projects.js';
@@ -464,6 +464,41 @@ export async function checkOrphanedPrs(ctx, { ok, warn }, { openByHead = openPrs
   warn(ORPHANED_PR_CHECK,
     `${plural(orphans.length, 'card')} closed with an open PR still sitting on its branch, unreferenced: ${detail}`,
     'reopen the card (hkb request-changes "…", or hkb adopt + hkb unblock) so a worker picks the PR back up, or merge the PR by hand and leave the card closed');
+  return orphans;
+}
+
+export const TRACK_BRANCH_CHECK = 'track branches';
+
+/**
+ * A track's own integration branch (`kb/track-<root>` — `trackBranchName`/`ensureTrackBranch`) with
+ * no live runner behind it: an orphaned branch is the same class of bug as an orphaned PR — work, or
+ * the husk of an abandoned attempt, sitting where nothing on the board can find its way back to it.
+ * "Live" means its root's most recent track attempt (the one that created *this* branch — a root can
+ * be retried, and a retry after the branch already exists reuses it, `ensureTrackBranch`) has not
+ * ended. A root that no longer exists on the board, or whose last such attempt ended (whatever the
+ * outcome — the branch survives a `finish` just as much as a `block`, since deleting it is `hkb gc`'s
+ * job, not the runner's), is exactly the branch this check is for.
+ *
+ * One `git/matching-refs` read for every track branch the repo has ever made, then one run-record
+ * read per branch — there are rarely more than a handful of tracks alive on a board at once.
+ */
+export async function checkTrackBranches(ctx, { ok, warn }, { branches = listTrackBranches, run = loadRun } = {}) {
+  const rows = await branches(ctx);
+  if (!rows.length) return ok(TRACK_BRANCH_CHECK, 'no track branches on the repo');
+  const orphans = [];
+  for (const { branch, root } of rows) {
+    let rec;
+    try { rec = await run(ctx, root); } catch (e) { orphans.push({ branch, root, reason: `#${root} could not be read: ${e.message}` }); continue; }
+    const attempts = (rec.run?.attempts || []).filter((a) => a.track && a.track_branch === branch);
+    const last = attempts[attempts.length - 1];
+    if (!last) { orphans.push({ branch, root, reason: 'no track attempt on the board ever recorded this branch' }); continue; }
+    if (last.ended_at) orphans.push({ branch, root, reason: `its last track attempt (#${root} attempt ${last.attempt}) ended: ${last.outcome || 'no outcome recorded'}` });
+  }
+  if (!orphans.length) return ok(TRACK_BRANCH_CHECK, `${plural(rows.length, 'track branch')}, every one with a live attempt`);
+  const detail = orphans.map((o) => `${o.branch} (${o.reason})`).join(' · ');
+  warn(TRACK_BRANCH_CHECK,
+    `${plural(orphans.length, 'track branch')} with no live runner: ${detail}`,
+    'merge or discard the work on it, then delete the branch (git push origin --delete <branch>) — hkb gc does this once its root is done or archived');
   return orphans;
 }
 
@@ -1134,6 +1169,7 @@ export async function doctor(ctx, flags, log) {
   await checkTaskSkills(ctx, { ok, warn }, { board });
   await checkSessions(ctx, { ok, warn }, { board });
   await checkOrphanedPrs(ctx, { ok, warn });
+  await checkTrackBranches(ctx, { ok, warn });
 
   // rate limit, token class, token expiry — one call
   await checkToken({ ok, warn, bad });

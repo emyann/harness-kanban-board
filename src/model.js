@@ -1440,6 +1440,36 @@ export function branchTaskNumber(branch) {
   return m ? Number(m[1]) : null;
 }
 
+/**
+ * A track's own integration branch — created from the default branch when the track is claimed
+ * (`ensureTrackBranch`, src/lock.js) and recorded as `track_branch` on the root's attempt row. Every
+ * node of the track, whatever its blockers, branches from this one and PRs into it; the root's own
+ * pass runs on it and opens the track's one PR into the default branch (`docs/wiki/features/tracks.md`).
+ */
+export function trackBranchName(rootNumber) {
+  return `kb/track-${Number(rootNumber)}`;
+}
+
+/** The inverse of `trackBranchName`: which root a track branch belongs to, or null. */
+export function trackBranchRoot(branch) {
+  const m = /^kb\/track-(\d+)$/.exec(String(branch ?? '').trim());
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Do two or more children conflict on their way into the track branch? `states` is a
+ * `Map<prNumber, {mergeable, mergeStateStatus}>` (`prMergeStates`, src/tasks.js) for every open PR
+ * whose base is that branch. `mergeable === 'CONFLICTING'` is GitHub's own verdict, computed
+ * asynchronously — `'UNKNOWN'` means "ask again next tick", never a false positive — and one PR
+ * cannot conflict with itself, so fewer than two candidates is never a conflict.
+ * @returns the conflicting PR numbers, or null when there is nothing to surface.
+ */
+export function trackBranchConflict(states) {
+  if (!states || states.size < 2) return null;
+  const conflicting = [...states.entries()].filter(([, s]) => s?.mergeable === 'CONFLICTING').map(([n]) => n);
+  return conflicting.length ? conflicting : null;
+}
+
 // ---------- the launch environment, and where it must not end up ----------
 
 /**

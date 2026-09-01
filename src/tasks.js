@@ -106,6 +106,27 @@ export function branchFallbackPrs(task, openByHead) {
   return found;
 }
 
+/**
+ * `mergeable`/`mergeStateStatus` for a batch of PR numbers, one GraphQL request whatever the count.
+ * REST's list-PRs endpoint (what `openPrsByHead` reads) carries neither field, and a track's
+ * children are exactly the PRs `closedByPullRequestsReferences` never surfaces either (it only
+ * links a PR into the default branch) — so this is the one place hkb asks GitHub outright whether
+ * two children conflict on their way into the track branch (`trackConflictPass`, src/dispatch.js).
+ */
+export async function prMergeStates(ctx, numbers) {
+  const nums = [...new Set((numbers || []).map(Number))].filter(Boolean);
+  if (!nums.length) return new Map();
+  const fields = nums.map((n) => `pr${n}: pullRequest(number: ${n}) { number mergeable mergeStateStatus }`).join('\n');
+  const q = `query($owner:String!,$repo:String!) { repository(owner:$owner, name:$repo) { ${fields} } }`;
+  const data = await graphql(q, { owner: ctx.repo.owner, repo: ctx.repo.repo });
+  const out = new Map();
+  for (const n of nums) {
+    const pr = data?.repository?.[`pr${n}`];
+    if (pr) out.set(n, { mergeable: pr.mergeable, mergeStateStatus: pr.mergeStateStatus });
+  }
+  return out;
+}
+
 /** Fill blockedBy via REST when the GraphQL field is unavailable. */
 async function fillBlockedByRest(ctx, task) {
   try {
