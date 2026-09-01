@@ -461,6 +461,22 @@ export async function boardOnce(ctx, fetch = fetchBoard) {
   try { return { tasks: await fetch(ctx, { blockers: false }) }; } catch (e) { return { error: e.message }; }
 }
 
+export const GROOM_BLOCKERS_CHECK = 'groom blockers';
+
+/**
+ * What a groom costs on this repo. `hkb groom` reports on every open card, so it asks
+ * `fetchBoard` for `blockers: 'all'` — and where GraphQL has no `Issue.blockedBy` that is one
+ * REST call per open card rather than the tick's todo/blocked handful. Nobody should discover
+ * that by running it on a board of two hundred; the price is named here, next to the capability.
+ */
+export function checkGroomBlockers(ctx, { ok, warn }, { caps, board = null } = {}) {
+  if (caps?.blockedByGql) return ok(GROOM_BLOCKERS_CHECK, 'blockers ride the board query — hkb groom costs no extra request');
+  const open = board && !board.error ? board.tasks.length : null;
+  const cost = open === null ? 'one REST call per open card' : `${plural(open, 'REST call')} — one per open card`;
+  warn(GROOM_BLOCKERS_CHECK, `no GraphQL Issue.blockedBy, so hkb groom fills blockers itself: ${cost}`,
+    'nothing to fix — expect the run to be slower than a tick on a large board');
+}
+
 export const TASK_SKILLS_CHECK = 'task skills';
 
 /**
@@ -1088,6 +1104,7 @@ export async function doctor(ctx, flags, log) {
     const caps = await detectCaps(ctx, { force: true });
     caps.blockedByGql ? ok('GraphQL Issue.blockedBy', 'available (one query per tick)') : warn('GraphQL Issue.blockedBy', 'not in schema — falling back to REST dependencies per task', 'check docs; run doctor again later');
     caps.closedByPrs ? ok('GraphQL closedByPullRequestsReferences', 'available (active_pr guard)') : warn('GraphQL closedByPullRequestsReferences', 'not in schema — active_pr guard disabled');
+    checkGroomBlockers(ctx, { ok, warn }, { caps, board });
   } catch (e) { bad('GraphQL', e.message); }
 
   // the last step — silent unless the board asked GitHub to take it (`merge.mode: "auto"`)
