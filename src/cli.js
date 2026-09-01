@@ -178,6 +178,8 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
                      [--model m] [--skills s1,s2] [--max-retries N] [--max-runtime S] [--scheduled-at ISO] [--triage] [--goal ".."]
                      --priority is a number and higher wins (0 unfiled/default, 1 normal, 2 next up, 3 urgent)
                      --triage files it unstarted, else it lands ready
+                     --skills grants the Skill tool on hkb's default profiles (Skill is in CLAUDE_TOOLS);
+                     a custom profile needs "Skill" in its own allowed_tools too, or hkb doctor flags it
               list [--status s] [--agent p] [--all] [--json]      show <n> [--json]      context <n>
               graph <n> [--mermaid] [--json]   the track rooted at <n> — the root plus everything still
                     blocking it — as a fenced mermaid block GitHub renders in issues, comments and files:
