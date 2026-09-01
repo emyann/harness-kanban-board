@@ -104,7 +104,10 @@ not a role.
 - **The operator is the human.** You own the repo, the token and the scope: you file and sharpen cards, steer with
   comments, review and merge, answer `kb:needs-human`, and restart a dispatcher that gave itself up. An agent
   session may drive those verbs for you — [`/kanban:operate`](#running-the-board-from-a-session-kanbanoperate) is
-  its brief, and the approvals and the credentials stay with you.
+  its brief, and the approvals stay with you — including the approval to delegate one of them, written down.
+  Delegating the click for a whole class of merges, under a stated condition, once, is still your call: it lives
+  in `.kanban/board.json` as `dispatch.merge.mode: "operator"`, not in a chat transcript the next session can't
+  see (see [The last step: who merges](#the-last-step-who-merges)).
 - **The dispatcher is a tick, not an agent — and not an orchestrator.** `hkb dispatch` promotes what became ready,
   reclaims what died, launches what it can, and exits. It holds no workflow and has no LLM in it: the graph lives
   on the cards as issue dependencies, and the loop only reconciles labels, locks and attempts against it. That
@@ -224,15 +227,33 @@ is that procedure — installed by the same `hkb init`, delegating to the same s
 
 ## The last step: who merges
 
-**hkb never merges.** A finished card waits in *review* with an open PR until that PR lands, and by default the
-human lands it. On a repo where you merge every agent PR a minute after it opens, that click is a rote step; on a
-repo with a careful review culture it is the one gate you would never give up. That is a difference between repos,
-so it is board policy — `dispatch.merge` in `.kanban/board.json`:
+**hkb never merges on its own initiative.** A finished card waits in *review* with an open PR until that PR lands,
+and by default the human lands it. On a repo where you merge every agent PR a minute after it opens, that click is
+a rote step; on a repo with a careful review culture it is the one gate you would never give up. That is a
+difference between repos, so it is board policy — `dispatch.merge` in `.kanban/board.json`:
 
 ```jsonc
 "dispatch": { "merge": { "mode": "manual" } }                  // the default — nothing changes
+"dispatch": { "merge": { "mode": "operator" } }                 // hkb merge <n>, once a review is on the card
 "dispatch": { "merge": { "mode": "auto", "method": "squash" } } // squash | merge | rebase
 ```
+
+`operator` is for the repo in between: you have told the session running the operator seat that it can merge, but
+only once it has actually reviewed the card — not blanket trust. `hkb merge <n>` is the one door that lands the PR
+under this mode; it checks the condition itself rather than take a session's word for it, and refuses, naming what
+is missing, when it is not met:
+
+```jsonc
+"dispatch": { "merge": { "mode": "operator", "require": { "checks": true, "review_comment": true } } } // both are the default
+```
+
+`require.review_comment` is satisfied by a `review_requested` attempt that already named a reviewer, or by
+`hkb merge <n> --summary "what you checked"` — the operator session's own review, written down as the reason it
+merged, not just remembered until the next restart. `require.checks` is satisfied by the PR's own checks coming
+back green (turn it off on a repo with no CI to speak of). A merge under `operator` leaves one comment on the
+card (`**Merged by the operator seat** — review: …, checks: …, method: …`) and the attempt that opened the PR
+gets `merged_by: "operator"` in the run record — `hkb log <n>` shows it, so the delegation is visible on the card
+itself, not just in whichever session's memory received it.
 
 On `auto` the dispatcher does not merge either: it enables **GitHub's own auto-merge** on the card's PR, once, when
 the card reaches review — one `enablePullRequestAutoMerge` per PR, no new query, no polling. GitHub takes it from

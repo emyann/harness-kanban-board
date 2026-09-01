@@ -349,11 +349,21 @@ export const MERGE_CHECK = 'merge policy';
  * whole difference between "the operator's rote click, automated" and "agent-authored code on the
  * default branch, unreviewed and untested". So the combination is a hard failure with a named fix,
  * and this check is what makes the feature safe to ship. Silent on a `manual` board — the default
- * changes nothing, so it has nothing to report.
+ * changes nothing, so it has nothing to report. `"operator"` is a delegation a human made in
+ * conversation, not a default anyone can reach by accident, so it always prints — mode and the
+ * condition `hkb merge` enforces — so the delegation is visible to whoever reads `hkb doctor` next,
+ * not just to the session that received it (#189).
  */
 export async function checkMergePolicy(ctx, { ok, bad }) {
   const policy = mergePolicy(ctx.cfg);
   if (policy.error) return bad(MERGE_CHECK, policy.error, `fix "dispatch": {"merge": {...}} in ${path.relative(ctx.root, boardFile(ctx.root))}`);
+  if (policy.mode === 'operator') {
+    const conditions = [];
+    if (policy.require.review_comment) conditions.push('a review on the card (a named reviewer, or hkb merge --summary naming what was checked)');
+    if (policy.require.checks) conditions.push('the PR\'s own checks green');
+    const condition = conditions.length ? conditions.join(' and ') : 'nothing — require.checks and require.review_comment are both off';
+    return ok(MERGE_CHECK, `operator (${policy.method}) — hkb merge <n> merges once ${condition}; otherwise it hands the PR back, same as manual`);
+  }
   if (policy.mode !== 'auto') return null;
   const branch = ctx.cfg.default_branch || 'main';
   let protection, gate;

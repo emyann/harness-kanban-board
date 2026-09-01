@@ -227,7 +227,10 @@ test('the operate section names the loop it runs and the line it must not cross 
   assert.match(section, /Monitor tool/, 'a Claude Code session has to be told which tool arms the watch');
   // and the boundary: what stays with the human
   assert.match(section, /\.kanban\/board\.json/, 'board policy is the human\'s, so the file has to be named as off-limits');
-  assert.match(section, /`manual`/, 'the manual merge policy is the one approval the seat may never take');
+  assert.match(section, /`"manual"`/, 'the manual merge policy is the one approval the seat may never take');
+  assert.match(section, /`"operator"`/, 'the operator merge policy is the one merge the seat may take, condition enforced by hkb merge');
+  assert.match(section, /`"auto"`/, 'the auto merge policy hands the merge to GitHub, so the seat has nothing to do');
+  assert.match(section, /hkb merge/, 'the operate section must name the verb that enforces the operator merge condition (#189)');
   assert.match(section, /hkb dispatch/, 'the seat must be told never to run the dispatcher itself');
 });
 

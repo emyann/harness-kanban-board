@@ -5,13 +5,13 @@ import { GhError, isOffline, graphql, rest } from './gh.js';
 import { outboxFile, api } from './board.js';
 import {
   getTask, assertOnBoard, loadRun, saveRun, setStatus, addLabels, removeLabel, addComment, closeIssue, reopenIssue,
-  fetchBoard, createIssue, ensureLabels, issueDatabaseId, addBlockedBy, removeBlockedBy,
+  fetchBoard, createIssue, ensureLabels, issueDatabaseId, addBlockedBy, removeBlockedBy, prChecksState, mergePullRequest,
 } from './tasks.js';
 import { release, lockExists, lockSha, localBeatSha, casHeartbeat, resyncBeatChain, dropBeatChain, remoteName } from './lock.js';
 import { sessionForAttempt } from './hook.js';
 import {
   openAttempt, computeReady, blockerDone, promoteDecision, serializeResultComment, serializeBodyBlock, hashReason,
-  heartbeatMode, lockRef, BLOCK_KINDS, DEFAULT_KB, L,
+  heartbeatMode, lockRef, BLOCK_KINDS, DEFAULT_KB, L, mergePolicy, mergeDecision,
 } from './model.js';
 import { resolveTrack } from './track.js';
 
@@ -360,6 +360,37 @@ export async function requestChanges(ctx, number, { reason } = {}) {
     pr: pr?.number ?? null,
     note: pr ? `PR #${pr.number} stays open; the next attempt continues it` : 'no open PR — the next attempt starts a branch of its own',
   };
+}
+
+/**
+ * `hkb merge <n>` — the verb `dispatch.merge.mode: "operator"` exists for (#189). A thin wrapper:
+ * the policy check and the refusal wording are `mergeDecision` (pure, in src/model.js), so the
+ * condition is enforced by code and not just remembered by whoever is driving the operator seat.
+ * `summary`, when given, both satisfies `require.review_comment` (naming what was checked, when no
+ * earlier `review_requested` row already named a reviewer) and becomes the review line in the
+ * record comment. Never merges on a `manual` or `auto` board, and never on a red check — see
+ * `mergeDecision`'s refusals for the exact wording of each.
+ */
+export async function mergeCard(ctx, number, { summary } = {}) {
+  const task = await getTask(ctx, number);
+  assertOnBoard(ctx, task);
+  const policy = mergePolicy(ctx.cfg);
+  const runRec = await loadRun(ctx, number);
+  const openPr = (task.prs || []).find((p) => p && p.state === 'OPEN') || null;
+  let checksState = null;
+  if (!policy.error && policy.mode === 'operator' && openPr) {
+    checksState = policy.require.checks ? await prChecksState(ctx, openPr.number) : 'SUCCESS';
+  }
+  const decision = mergeDecision(task, runRec.run, policy, { summary, checksState });
+  if (!decision.ok) { const e = new Error(decision.reason); e.exitCode = 2; throw e; }
+  const nodeId = await prNodeId(ctx, decision.pr);
+  if (!nodeId) { const e = new Error(`PR #${decision.pr.number} came back without a node id — merge refused`); e.exitCode = 2; throw e; }
+  await mergePullRequest(ctx, { nodeId }, decision.mergeMethod);
+  const attempt = [...runRec.run.attempts].reverse().find((a) => a.pr === decision.pr.number);
+  if (attempt) { attempt.merged_by = 'operator'; await saveRun(ctx, number, runRec); }
+  const checksNote = policy.require.checks ? 'green' : 'not required';
+  await addComment(ctx, number, `**Merged by the operator seat** — review: ${decision.reviewDetail || 'not required'}, checks: ${checksNote}, method: ${decision.method}`);
+  return { number, pr: decision.pr.number, method: decision.method, merged: true, merged_by: 'operator' };
 }
 
 // ---------- board verbs (create, link) ----------

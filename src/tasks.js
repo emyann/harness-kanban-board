@@ -352,6 +352,36 @@ export async function enableAutoMerge(ctx, pr, mergeMethod) {
   return out;
 }
 
+/**
+ * The PR's own check state — `SUCCESS`, `FAILURE`, `PENDING`, `ERROR`, `EXPECTED`, or `null` when
+ * the PR has no checks configured at all. This is what `dispatch.merge.require.checks` asks
+ * `hkb merge` to read before it will merge a card's PR under `mode: "operator"`: not the branch's
+ * required checks (that is `branchProtection`/`mergeGate`, for `"auto"`), but this PR's own commit.
+ */
+export async function prChecksState(ctx, number) {
+  const q = `query($owner: String!, $repo: String!, $n: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $n) { commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } }
+    }
+  }`;
+  const data = await graphql(q, { owner: ctx.repo.owner, repo: ctx.repo.repo, n: Number(number) });
+  return data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? null;
+}
+
+/**
+ * `hkb merge`'s one mutation: land the PR itself. Deliberately `gh api`'s `mergePullRequest`, not
+ * the `gh pr merge` subcommand — every GitHub-ism behind a `gh api` call, never a `gh pr`/`gh
+ * issue` subcommand, is a house rule (CLAUDE.md), and it is also what keeps the mutation testable
+ * against the fake-gh double instead of a real `gh` binary.
+ */
+export async function mergePullRequest(ctx, pr, mergeMethod) {
+  const q = `mutation($id: ID!, $method: PullRequestMergeMethod!) {
+    mergePullRequest(input: {pullRequestId: $id, mergeMethod: $method}) { pullRequest { number merged } }
+  }`;
+  const data = await graphql(q, { id: pr.nodeId, method: mergeMethod });
+  return data?.mergePullRequest?.pullRequest || null;
+}
+
 /** One ruleset rule's contribution to the gate; unknown types add nothing. */
 function fromRule(rule, out) {
   const p = rule?.parameters || {};

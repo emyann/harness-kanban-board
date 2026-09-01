@@ -289,7 +289,7 @@ shape of what arrived, and switch on `kind` (or on `tags`, which carries the kin
 
 | status | what you do |
 |---|---|
-| `review` | the row that is really yours. Read the PR against the card's *Done when*, run the repo's own checks, then follow the board's merge policy — `dispatch.merge.mode` in `.kanban/board.json`, which is the only place it is written: `hkb doctor` checks the policy but says nothing about a `"manual"` board, so silence there is not an answer. `"auto"` means the dispatcher already handed the merge to GitHub and its gates hold it; `"manual"` means **the human merges**, which is the entire meaning of the setting — a session that merges anyway has taken an approval nobody gave it. Falls short? `hkb request-changes <n> "<the one specific gap>"` puts it back on the same PR, and the reason you type *is* the next attempt's brief: name the gap, not the disappointment |
+| `review` | the row that is really yours. Read the PR against the card's *Done when*, run the repo's own checks, then follow the board's merge policy — `dispatch.merge.mode` in `.kanban/board.json`, which is the only place it is written: `hkb doctor` checks the policy but says nothing about a `"manual"` board, so silence there is not an answer (it does print `"operator"`'s condition, never silently). Three modes: `"manual"` means **the human merges**, which is the entire meaning of the setting — a session that merges anyway has taken an approval nobody gave it; `"operator"` means the human has delegated the click to this seat, but only once a review is on the card — read the PR, then run `hkb merge <n> --summary "what you checked"` and let it enforce the condition and write the record; it refuses, naming what is missing, if the condition is not met, so there is no way to merge past it by accident. `"auto"` means the dispatcher already handed the merge to GitHub and its gates hold it — nothing for you to do. Falls short, under any mode? `hkb request-changes <n> "<the one specific gap>"` puts it back on the same PR, and the reason you type *is* the next attempt's brief: name the gap, not the disappointment |
 | `blocked` | read the block kind off the attempt row (`hkb show <n>`), then the block table below |
 | `triage` | planning, not operating |
 | `todo`, `ready`, `running` | nothing — the tick owns these |
@@ -347,7 +347,9 @@ card with no blockers lands in *ready*, and the next tick launches a worker on a
 Leave `--priority` off too — it is a number where **higher wins** (band: `0` unfiled default · `1` normal · `2`
 next up · `3` urgent — see `README.md`), and the queue's order is the human's.
 
-**Never yours:** merging on a `manual` board, and any release or publish; editing `.kanban/board.json` at all —
+**Never yours:** merging on a `manual` board — on an `operator` board `hkb merge <n>` is the one exception, and only
+because the condition it enforces (a review on the card) is the human's approval, already given for the whole
+class, in `.kanban/board.json`; and any release or publish; editing `.kanban/board.json` at all —
 profiles, `allowed_tools`, models, `max_in_progress`, `merge.mode`; re-prioritising, promoting or archiving
 someone else's plan; clearing `kb:needs-human` for any reason but an answer you have just written onto the card;
 spending on a paid profile the human has not agreed to;
