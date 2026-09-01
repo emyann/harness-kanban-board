@@ -79,7 +79,10 @@ pages:
     summary: "One local server, one inline page, N repos: how the board is read, how a drag becomes a verb, and how every request is routed to the board it names."
     status: seeded
   - slug: features/planning-commands
-    summary: "The two board operations that need a model and so cannot be `hkb` verbs — one command source, registered twice, delegating to one procedure in SKILL.md."
+    summary: "The three board operations that need a model and so cannot be `hkb` verbs — one command source, registered twice, delegating to one procedure in SKILL.md."
+    status: seeded
+  - slug: features/backlog-grooming
+    summary: "The triage lane as a report: the arithmetic computed without a model from the one board read, the judgment left to the skill, and the human yes that is the only thing that writes."
     status: seeded
   - slug: features/operator-seat
     summary: "The third slash command — why the one seat hkb cannot enforce got a written brief instead, where its reaction table's vocabulary comes from, and what keeps the two in sync."

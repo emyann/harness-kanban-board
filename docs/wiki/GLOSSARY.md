@@ -65,11 +65,29 @@ deserves a `concepts/` page (link it).
   spawned, and deleted only by the process that wrote it. Being named by one,
   answering `kill(pid, 0)`, and not being *stale* is the whole definition of
   "running" here (`src/board.js`; see *features/up-and-down*).
-- **Planning command** — `/kanban:specify` or `/kanban:decompose`: a harness slash
-  command rather than an `hkb` verb, because both need a model and the dispatcher
+- **Grooming** — reading the triage lane as a report rather than by hand: `hkb groom`
+  computes every LLM-free finding from the one board read and writes nothing, and
+  `/kanban:groom` judges only what that report flags, proposes one table, and applies
+  a row only after a human's yes (`src/cli.js`, `skills/kanban/SKILL.md`; see
+  *features/backlog-grooming*).
+- **Finding / finding level** — one groomed observation about a card, `{kind, level,
+  evidence, suggests}`. `GROOM_KINDS` maps each kind to `act` (mechanical, safe to
+  propose), `ask` (real but false-positive-prone, a model must look), `info` (context,
+  never an action) or `needs_judgment` (a shortlist, explicitly not a verdict)
+  (`GROOM_KINDS` in `src/model.js`). The level says who is competent to decide, not
+  how bad it is.
+- **Groom action** — what one groomed card proposes, from the closed vocabulary
+  `GROOM_ACTIONS`: promote · specify · link-under · split · supersede · reprioritise ·
+  park · archive, plus `judge` and `none` (`src/model.js`). Exported so the skill's
+  action column can be pinned to it by a drift test.
+- **Hub path** — a path so many open cards name that it distinguishes none of them;
+  removed before two cards' paths are scored for overlap (`pathHubs` / `pathJaccard`
+  in `src/model.js`; see *features/backlog-grooming*).
+- **Planning command** — `/kanban:specify`, `/kanban:decompose` or `/kanban:groom`: a harness slash
+  command rather than an `hkb` verb, because each needs a model and the dispatcher
   has none. One source in `commands/`, registered by the plugin and by `hkb init`
   (`src/init.js`; see *features/planning-commands*). `/kanban:operate` is the
-  third file in that directory and takes the same route, but it runs the board
+  fourth file in that directory and takes the same route, but it runs the board
   rather than planning it (see *features/operator-seat*).
 - **Priority band** — the named scale for `kb.priority` (higher wins,
   default `0`): `0` unfiled · `1` normal · `2` next up · `3` urgent
