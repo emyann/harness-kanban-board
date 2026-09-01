@@ -49,6 +49,12 @@ deserves a `concepts/` page (link it).
   becomes a *continuation* (`activePrGuard` in `src/model.js`).
 - **Handoff** — the structured result comment a finishing worker leaves so its
   dependents (and humans) start informed (`src/model.js`).
+- **Head-branch fallback** — a card's PR found by matching an open PR's head
+  branch against `taskBranchRe(n)` (`kb/<n>`, `kb-<n>-<k>`,
+  `worktree-kb-<n>-<k>`) when GitHub's `closedByPullRequestsReferences` links
+  nothing — one board-wide read (`openPrsByHead`), applied whenever a card's
+  own `prs` comes back empty (`fillPrFallback`, `src/tasks.js`; `features/tracks`,
+  `features/review-loop`).
 - **Host** — machine identity, recorded per attempt, so the tick only checks a
   pid on the machine that owns it (`src/dispatch.js`).
 - **Operator** — the human seat: owns the repo, the token and the scope; files

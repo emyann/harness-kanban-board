@@ -7,22 +7,24 @@ audience: [dev]
 read_when: "touching the active_pr guard, the claim loop's worktree creation, hkb request-changes, or the worker brief"
 covers:
   - path: src/model.js
-    sha: 23bb576d15068653b10c068ed3c9f014f0353664
+    sha: 022ed7b17c5debc59265f8a1627f82386864de00
   - path: src/dispatch.js
-    sha: fb85767e0b4b962930ee74c608c5bb0e1bd7ae4f
+    sha: 529e913ae4f921a91dbdd1eb1f6a8a5245cd0035
   - path: src/board.js
-    sha: 656fc1ff76b6cf1909ccacc5c69899ba24fb4010
+    sha: 955f2c7cfc908fe46ebf264e0cb4c8e722c7a79c
   - path: src/context.js
     sha: ab7afc4eb5158a879ea1700221892229329dce64
   - path: src/lifecycle.js
-    sha: 3938c82f3e181fb260fc54bb2f3150074459e224
+    sha: 7752f392200fd6a7fc4a075d961e6c30f9182553
   - path: src/gc.js
-    sha: ae2cf14b7e83fa627fd9357545bd74294c001327
+    sha: 40672cb7a84da7170be3f5d99df42f326f9dc1e5
   - path: src/cli.js
-    sha: 2369b0d3a0f5d1363efffa8cc37fd2e47e018155
-related: [features/auto-merge, architecture/overview, architecture/dispatcher-tick]
-generated_at_commit: 39d9c05
-last_refreshed: 2026-08-29
+    sha: fe82dbddc2734ad4c8f179001ae814a9de4b72da
+  - path: src/tasks.js
+    sha: 8631ae5218f1d87ad2e247eb837b5a7e1255dd23
+related: [features/auto-merge, features/tracks, architecture/overview, architecture/dispatcher-tick]
+generated_at_commit: 5db5afa
+last_refreshed: 2026-09-01
 ---
 
 # The review loop — `request-changes` and continuing one PR
@@ -168,6 +170,32 @@ ready (PR #147 stays open; the next attempt continues it)`.
 
 So `hkb log <n>` on a card that went round twice reads `review_requested →
 changes_requested → completed`, all against one PR number.
+
+## Finding the PR at all — the head-branch fallback
+
+Everything above assumes `task.prs` already names the open PR. It comes from
+one place, `closedByPullRequestsReferences` (`src/tasks.js`), and that field
+only answers "would merging this PR close the issue" — which requires the PR
+to target the default branch, and (#228) came back empty at least once even
+then. When it does, `activePrGuard` never fires, `hkb finish` sees no PR and
+used to close the card as *done* with the branch left unmerged and nothing on
+the board chasing it (#227, #228 — see `features/tracks.md`'s branch-strategy
+section for the fuller incident).
+
+`fetchBoard`/`getTask` (`src/tasks.js`) now fall back to a **head**-branch
+match — `taskBranchRe(n)`, matching `kb/<n>`, `kb-<n>-<k>`,
+`worktree-kb-<n>-<k>` — whenever a card's own `prs` comes back empty: one
+board-wide `GET /pulls?state=open` (`openPrsByHead`), read once per tick (or
+once per single-card read), never once per card. Because the guard, the merge
+policy and this page's whole loop all read `task.prs`, the fallback is
+invisible to them by design — a stacked or otherwise unlinked PR is simply
+*found*, and everything above behaves exactly as written. `hkb finish` also
+refuses to land a card in *done* with no PR found at all (protocol_violation,
+`src/lifecycle.js`'s `noPrDecision`), unless the worker says `--no-pr "why"` —
+so a PR the fallback still cannot place stops the card rather than closing it
+silently. `hkb doctor`'s `checkOrphanedPrs` catches what neither can: a card
+that already went to *done* before this existed, whose branch still carries
+an open PR that an open-issues board read never revisits.
 
 ## Known gaps
 

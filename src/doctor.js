@@ -4,8 +4,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
 import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches } from './board.js';
-import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun } from './tasks.js';
-import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren } from './model.js';
+import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun, openPrsByHead, issueDatabaseId } from './tasks.js';
+import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren, branchTaskNumber } from './model.js';
 import { resolvedIdentity } from './hook.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, harnessHookCommand, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
@@ -427,6 +427,44 @@ export async function checkAgentLabels(ctx, { ok, warn }, { fetch = fetchBoard, 
   const detail = doubled.map((t) => `#${t.number} (${t.agents.join(' + ')} → runs as ${t.agents[0]})`).join(' · ');
   const fix = `hkb adopt ${doubled.map((t) => t.number).join(' ')} --agent <the profile it should run on> — adopt sets that one and takes the others off`;
   warn(AGENT_LABEL_CHECK, `${plural(doubled.length, 'task')} on two profiles at once: ${detail}`, fix);
+}
+
+export const ORPHANED_PR_CHECK = 'orphaned PRs';
+
+/**
+ * "Your board has lost track of work" — the check #234 was written for. An open PR whose head is a
+ * branch hkb itself would have created for one of its cards (`taskBranchRe`/`branchTaskNumber`),
+ * where the card no longer has any way to see it.
+ *
+ * `fetchBoard`/`getTask` now apply the same head-branch match as a live fallback for every *open*
+ * card (`fillPrFallback`, src/tasks.js), so an orphan on a card still open self-heals the moment
+ * anything reads it. What that fallback cannot reach is a card already closed — `fetchBoard`'s
+ * default read is open issues only, so a card that went to *done* (or *archived*) with the bug this
+ * task fixes never gets revisited, and its PR would sit there, unreferenced, forever. That is exactly
+ * #227 and #228: closed as done, work unmerged, nothing left to chase it. One read for every open PR
+ * on hkb's own branches, then one issue lookup per match (usually a handful) to see which are closed.
+ */
+export async function checkOrphanedPrs(ctx, { ok, warn }, { openByHead = openPrsByHead, issue = issueDatabaseId } = {}) {
+  const byHead = await openByHead(ctx);
+  const candidates = [];
+  for (const [head, pr] of byHead) {
+    const n = branchTaskNumber(head);
+    if (n) candidates.push({ n, pr });
+  }
+  if (!candidates.length) return ok(ORPHANED_PR_CHECK, 'no open PR sits on a branch hkb would have made for one of its own cards');
+  const orphans = [];
+  for (const { n, pr } of candidates) {
+    let row;
+    try { row = await issue(ctx, n); } catch { continue; } // unreadable — not this check's failure to report
+    if (String(row.state).toUpperCase() !== 'CLOSED') continue; // open: the live fallback already covers it
+    orphans.push({ n, pr: pr.number, reason: row.state_reason || 'closed', url: pr.url });
+  }
+  if (!orphans.length) return ok(ORPHANED_PR_CHECK, `${plural(candidates.length, 'open PR')} on hkb's own branches, all on cards still open`);
+  const detail = orphans.map((o) => `#${o.n} (${o.reason}) ← PR #${o.pr}`).join(' · ');
+  warn(ORPHANED_PR_CHECK,
+    `${plural(orphans.length, 'card')} closed with an open PR still sitting on its branch, unreferenced: ${detail}`,
+    'reopen the card (hkb request-changes "…", or hkb adopt + hkb unblock) so a worker picks the PR back up, or merge the PR by hand and leave the card closed');
+  return orphans;
 }
 
 export const TRACK_PROFILE_CHECK = 'track profile';
@@ -1095,6 +1133,7 @@ export async function doctor(ctx, flags, log) {
   await checkTrackProfile(ctx, { ok, warn });
   await checkTaskSkills(ctx, { ok, warn }, { board });
   await checkSessions(ctx, { ok, warn }, { board });
+  await checkOrphanedPrs(ctx, { ok, warn });
 
   // rate limit, token class, token expiry — one call
   await checkToken({ ok, warn, bad });

@@ -28,6 +28,11 @@ export class FakeGh {
     this.nextCommentId = 1000;
     this.commits = new Map(); // sha -> {date} — what a ref-CAS heartbeat leaves behind
     this.protection = new Map(); // branch -> classic protection payload, or the string 'forbidden'
+    // PRs GitHub's own linking declines to associate with any issue — visible only through the REST
+    // `GET /pulls` listing `openPrsByHead` reads, never through an issue's closedByPullRequestsReferences
+    // (#234's whole bug). Seeded separately from `issue.prs` on purpose: a PR added there would flow
+    // into both, which is exactly the case this store exists to NOT model.
+    this.openPulls = [];
     this.rules = new Map(); // branch -> the ruleset rules `GET /rules/branches/<b>` returns
     this.refs.set(`refs/heads/${defaultBranch}`, baseSha);
     this.transport = this.transport.bind(this);
@@ -61,6 +66,15 @@ export class FakeGh {
     this.issues.set(number, issue);
     for (const body of spec.comments || []) this.addComment(number, body);
     return issue;
+  }
+
+  /**
+   * A PR GitHub's own `closedByPullRequestsReferences` will never surface — the exact shape #234
+   * fixes: `head` is normally one of hkb's own branch names (`kb/<n>`, `kb-<n>-<k>`,
+   * `worktree-kb-<n>-<k>`) so the head-branch fallback finds it, whatever `base` is.
+   */
+  addPull({ number, head, base = this.defaultBranch, draft = false, state = 'open', nodeId = null } = {}) {
+    this.openPulls.push({ number, node_id: nodeId || `PR_kwFakeUnlinked${number}`, head: { ref: head }, base: { ref: base }, draft, state, html_url: `https://github.com/${this.nameWithOwner}/pull/${number}` });
   }
 
   addComment(number, body) {
@@ -201,6 +215,36 @@ export class FakeGh {
       }
     } else if (p === 'issues') {
       if (method === 'POST') return this.#issueRest(this.addIssue({ title: body.title, body: body.body, labels: body.labels }));
+    } else if (p === 'pulls') {
+      // Every issue's seeded `prs` flattened into one list, the shape `openPrsByHead` (src/tasks.js)
+      // reads — the head-branch fallback's board-wide read, so a test seeds a PR once, on the issue,
+      // and it is visible both ways: via closedByPullRequestsReferences and via this listing.
+      if (method === 'GET') {
+        const state = (q.get('state') || 'open').toLowerCase();
+        const all = [];
+        const seen = new Set();
+        for (const issue of this.issues.values()) {
+          for (const pr of issue.prs || []) {
+            if (state !== 'all' && String(pr.state).toLowerCase() !== state) continue;
+            seen.add(pr.number);
+            all.push({
+              number: pr.number,
+              node_id: pr.nodeId || pr.node_id || `PR_kwFake${pr.number}`,
+              draft: !!pr.isDraft,
+              html_url: pr.url || `https://github.com/${this.nameWithOwner}/pull/${pr.number}`,
+              head: { ref: pr.headRefName || null },
+              base: { ref: pr.baseRefName || this.defaultBranch },
+              auto_merge: pr.autoMergeEnabled ? {} : null,
+            });
+          }
+        }
+        for (const pr of this.openPulls) {
+          if (seen.has(pr.number)) continue; // an issue already carries this one — do not duplicate it
+          if (state !== 'all' && String(pr.state).toLowerCase() !== state) continue;
+          all.push({ ...pr, auto_merge: null });
+        }
+        return this.#page(all, q);
+      }
     } else if ((m = /^issues\/(\d+)$/.exec(p))) {
       const issue = this.#issue(m[1]);
       if (method === 'GET') return this.#issueRest(issue);

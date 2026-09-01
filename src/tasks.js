@@ -6,6 +6,7 @@ import { api, kanbanDir } from './board.js';
 import {
   L, LABEL_COLORS, STATUSES, parseBodyBlock, serializeBodyBlock, statusOf, agentOf, boardOf,
   parseRunComment, serializeRunComment, parseResultComment, RESULT_MARKER, emptyRun, pickRunComment,
+  taskBranchRe,
 } from './model.js';
 
 // ---------- capability detection (cached per repo in .kanban/cache.json) ----------
@@ -58,6 +59,51 @@ function toTask(node) {
     blockedBy: (node.blockedBy?.nodes || []).map((b) => ({ number: b.number, state: b.state, stateReason: b.stateReason, title: b.title })),
     prs: (node.closedByPullRequestsReferences?.nodes || []).map((p) => ({ number: p.number, nodeId: p.id, state: p.state, isDraft: p.isDraft, url: p.url, headRefName: p.headRefName, baseRefName: p.baseRefName || null, merged: p.merged, autoMergeEnabled: !!p.autoMergeRequest })),
   };
+}
+
+/**
+ * Every open PR on the repo, keyed by head branch — one paginated REST read. `closedByPullRequestsReferences`
+ * is hkb's only source for a task's PRs, and it answers a narrower question than hkb asks of it: it
+ * requires the PR to target the default branch, and #234 found at least one PR that met that bar and
+ * still came back empty. hkb generates the branch names it puts a card's work on itself
+ * (`taskBranchRe`), so a board-wide listing of open PRs, matched by head, is a fallback that costs one
+ * request whatever the board's size rather than one per unlinked card.
+ */
+export async function openPrsByHead(ctx) {
+  const out = new Map();
+  for (let page = 1; page <= 10; page++) {
+    const batch = await rest('GET', api(ctx, `/pulls?state=open&per_page=100&page=${page}`));
+    for (const p of batch || []) {
+      const head = p.head?.ref;
+      if (!head) continue;
+      out.set(head, {
+        number: p.number,
+        nodeId: p.node_id,
+        state: 'OPEN',
+        isDraft: !!p.draft,
+        url: p.html_url,
+        headRefName: head,
+        baseRefName: p.base?.ref || null,
+        merged: false,
+        autoMergeEnabled: !!p.auto_merge,
+      });
+    }
+    if (!batch || batch.length < 100) break;
+  }
+  return out;
+}
+
+/**
+ * A task with no PR from GraphQL, matched against a board-wide open-PR listing by head branch. Pure
+ * given the listing: never overrides a PR GitHub already linked, and never looks two tasks up in one
+ * call, so a card that legitimately has no PR still reports none.
+ */
+export function branchFallbackPrs(task, openByHead) {
+  if ((task.prs || []).length) return task.prs;
+  const re = taskBranchRe(task.number);
+  const found = [];
+  for (const [head, pr] of openByHead) if (re.test(head)) found.push(pr);
+  return found;
 }
 
 /** Fill blockedBy via REST when the GraphQL field is unavailable. */
@@ -135,6 +181,7 @@ export async function fetchBoard(ctx, { includeClosed = false, blockers = true }
     if (!conn.pageInfo.hasNextPage) break;
     cursor = conn.pageInfo.endCursor;
   }
+  await fillPrFallback(ctx, tasks);
   if (ctx.caps.blockedByGql) return tagBlockers(tasks, { source: 'graphql', filled: true, scope: 'all' });
   if (!blockers) return tagBlockers(tasks, { source: null, filled: false, scope: 'none' });
   const wanted = blockers === 'all'
@@ -142,6 +189,17 @@ export async function fetchBoard(ctx, { includeClosed = false, blockers = true }
     : (t) => t.status === 'todo' || t.status === 'blocked';
   for (const t of tasks) if (wanted(t)) await fillBlockedByRest(ctx, t);
   return tagBlockers(tasks, { source: 'rest', filled: true, scope: blockers === 'all' ? 'open' : 'waiting' });
+}
+
+/**
+ * The head-branch fallback (`branchFallbackPrs`), applied board-wide: one `openPrsByHead` read when
+ * at least one task came back with no PR from GraphQL, none at all otherwise. One request per tick,
+ * never one per card — the cost the fallback is allowed to spend (#234).
+ */
+async function fillPrFallback(ctx, tasks) {
+  if (!tasks.some((t) => !(t.prs || []).length)) return;
+  const openByHead = await openPrsByHead(ctx);
+  for (const t of tasks) t.prs = branchFallbackPrs(t, openByHead);
 }
 
 /**
@@ -182,6 +240,7 @@ export async function getTask(ctx, number) {
   if (!node) { const e = new Error(`issue #${number} not found in ${ctx.repo.nameWithOwner}`); e.exitCode = 2; throw e; }
   const task = toTask(node);
   if (!ctx.caps.blockedByGql) await fillBlockedByRest(ctx, task);
+  await fillPrFallback(ctx, [task]);
   return task;
 }
 

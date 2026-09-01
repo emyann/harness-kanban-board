@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fetchBoard, blockersOf, blockersKnown, getTask } from '../src/tasks.js';
+import { fetchBoard, getTask, blockersOf, blockersKnown, branchFallbackPrs, openPrsByHead } from '../src/tasks.js';
 import { GROOM_BLOCKERS_CHECK, checkGroomBlockers } from '../src/doctor.js';
 import { GhError, setTransport } from '../src/gh.js';
 import { FakeGh, kbIssue } from './fake-gh.js';
@@ -87,9 +87,10 @@ test("a repo with GraphQL blockedBy makes no extra request for 'all'", async () 
     const open = seed(gh);
     const tasks = await fetchBoard(ctx, { blockers: 'all' });
     assert.deepEqual(depCalls(gh), []);
-    // the capability probe plus exactly one board query, and nothing else
+    // the capability probe plus exactly one board query for blockers, and nothing else — the PR
+    // head-branch fallback still costs its one board-wide read, since none of these cards have a PR
     assert.equal(gh.calls.filter((c) => c.kind === 'graphql').length, 2);
-    assert.equal(gh.calls.filter((c) => c.kind !== 'graphql').length, 0);
+    assert.deepEqual(gh.calls.filter((c) => c.kind !== 'graphql').map((c) => c.path), ['repos/acme/board/pulls?state=open&per_page=100&page=1']);
     assert.deepEqual(withBlockers(tasks), open);
     assert.deepEqual(blockersOf(tasks), { source: 'graphql', filled: true, scope: 'all' });
   } finally { cleanup(); }
@@ -192,4 +193,98 @@ test('a missing issue number is notfound (exit 2), not a network error a termina
     restore();
     fs.rmSync(ctx.root, { recursive: true, force: true });
   }
+});
+
+// ---------- the head-branch fallback (#234) ----------
+//
+// closedByPullRequestsReferences only links a PR that targets the default branch, and #228 showed
+// it can come back empty even then. hkb hands its own work a branch name it chose itself
+// (kb/<n>, kb-<n>-<k>, worktree-kb-<n>-<k>), so a PR whose head is one of those is this card's PR
+// whatever GitHub's own linking believes.
+
+test('getTask falls back to a PR by head branch when GitHub links nothing — a non-default base, #227\'s exact shape', async () => {
+  const { gh, ctx, cleanup } = harness();
+  try {
+    gh.addIssue(kbIssue({ number: 227, status: 'running' })); // no prs: seeded — closedByPullRequestsReferences answers []
+    gh.addPull({ number: 232, head: 'kb/227', base: 'kb/191-wave1' }); // an intermediate branch, not main
+    const task = await getTask(ctx, 227);
+    assert.equal(task.prs.length, 1);
+    assert.equal(task.prs[0].number, 232);
+    assert.equal(task.prs[0].baseRefName, 'kb/191-wave1');
+    assert.equal(task.prs[0].state, 'OPEN');
+  } finally { cleanup(); }
+});
+
+test('getTask falls back for a worktree-kb-<n>-<k> head even against the default branch — #228\'s symptom', async () => {
+  const { gh, ctx, cleanup } = harness();
+  try {
+    gh.addIssue(kbIssue({ number: 228, status: 'running' }));
+    gh.addPull({ number: 233, head: 'worktree-kb-228-1', base: gh.defaultBranch });
+    const task = await getTask(ctx, 228);
+    assert.equal(task.prs.length, 1);
+    assert.equal(task.prs[0].number, 233);
+  } finally { cleanup(); }
+});
+
+test('getTask never overrides a PR GitHub already linked', async () => {
+  const { gh, ctx, cleanup } = harness();
+  try {
+    gh.addIssue(kbIssue({ number: 40, status: 'running', prs: [{ number: 41, state: 'OPEN', isDraft: true, headRefName: 'kb/40', baseRefName: gh.defaultBranch }] }));
+    gh.addPull({ number: 999, head: 'kb/40', base: 'some-other-branch' }); // would also match by head
+    const task = await getTask(ctx, 40);
+    assert.deepEqual(task.prs.map((p) => p.number), [41]);
+  } finally { cleanup(); }
+});
+
+test('getTask reports no PR for a card whose only open PRs belong to other cards', async () => {
+  const { gh, ctx, cleanup } = harness();
+  try {
+    gh.addIssue(kbIssue({ number: 50, status: 'running' }));
+    gh.addPull({ number: 51, head: 'kb/51', base: gh.defaultBranch }); // somebody else's card
+    const task = await getTask(ctx, 50);
+    assert.deepEqual(task.prs, []);
+  } finally { cleanup(); }
+});
+
+test('fetchBoard applies the same fallback board-wide, in one extra request', async () => {
+  const { gh, ctx, cleanup } = harness();
+  try {
+    gh.addIssue(kbIssue({ number: 60, status: 'running' }));
+    gh.addIssue(kbIssue({ number: 61, status: 'running' }));
+    gh.addPull({ number: 70, head: 'kb-60-1', base: 'kb/191-wave1' });
+    const tasks = await fetchBoard(ctx);
+    const pullCalls = gh.calls.filter((c) => c.kind === 'rest' && /\/pulls\?/.test(c.path || ''));
+    assert.equal(pullCalls.length, 1, 'one board-wide read, not one per card');
+    const t60 = tasks.find((t) => t.number === 60);
+    const t61 = tasks.find((t) => t.number === 61);
+    assert.equal(t60.prs[0]?.number, 70);
+    assert.deepEqual(t61.prs, []);
+  } finally { cleanup(); }
+});
+
+test('fetchBoard skips the fallback request entirely when every card already has its PR', async () => {
+  const { gh, ctx, cleanup } = harness();
+  try {
+    gh.addIssue(kbIssue({ number: 62, status: 'running', prs: [{ number: 63, state: 'OPEN', isDraft: false, headRefName: 'kb/62', baseRefName: gh.defaultBranch }] }));
+    await fetchBoard(ctx);
+    assert.equal(gh.calls.filter((c) => c.kind === 'rest' && /\/pulls\?/.test(c.path || '')).length, 0);
+  } finally { cleanup(); }
+});
+
+test('branchFallbackPrs: pure — never touches a task that already has a PR', () => {
+  const withPr = { number: 1, prs: [{ number: 2 }] };
+  assert.deepEqual(branchFallbackPrs(withPr, new Map([['kb/1', { number: 99 }]])), [{ number: 2 }]);
+  const withoutPr = { number: 1, prs: [] };
+  assert.deepEqual(branchFallbackPrs(withoutPr, new Map([['kb/1', { number: 99 }]])), [{ number: 99 }]);
+  assert.deepEqual(branchFallbackPrs(withoutPr, new Map([['kb/2', { number: 98 }]])), []);
+});
+
+test('openPrsByHead pages through every open PR the repo has', async () => {
+  const { gh, ctx, cleanup } = harness();
+  try {
+    for (let i = 0; i < 150; i++) gh.addPull({ number: 1000 + i, head: `kb/${1000 + i}` });
+    const byHead = await openPrsByHead(ctx);
+    assert.equal(byHead.size, 150);
+    assert.equal(byHead.get('kb/1149').number, 1149);
+  } finally { cleanup(); }
 });

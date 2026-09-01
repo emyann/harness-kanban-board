@@ -250,12 +250,46 @@ async function finishPr(ctx, decision, { reviewer } = {}) {
 /** `pr` / `pr_head` for the attempt row, so the run record says which PR the attempt produced. */
 export const prAttemptFields = (decision) => (decision.pr ? { pr: decision.pr.number, pr_head: decision.pr.headRefName || null } : {});
 
-export async function complete(ctx, number, { summary, metadata = {}, artifacts = [], attempt } = {}) {
+/**
+ * What a missing PR does to `complete`: naming the fix, never a silent `done`. Pure.
+ *
+ * A worker's brief says "open a draft PR that says Closes #n" — so a card `complete` reaches with no
+ * PR (not even via the head-branch fallback `getTask` already tried) is either a protocol violation
+ * or a card that genuinely needed no PR, and hkb cannot tell those apart from here (#234). Silently
+ * picking "done" is the failure the values forbid — the two cases above shipped as *done* with the
+ * work sitting in an unreferenced open PR. So without an explicit `noPr` override this refuses to
+ * land in done: it records the attempt as `protocol_violation` and leaves the card where a human
+ * (or the next attempt) will see it, instead of closing the issue out from under the missing work.
+ */
+export function noPrDecision(number, { noPr, noPrReason } = {}) {
+  if (noPr) return { ok: true, no_pr_reason: noPrReason ? String(noPrReason).slice(0, 300) : null };
+  return {
+    ok: false,
+    reason: `no PR found for #${number} — closedByPullRequestsReferences and the head-branch fallback ` +
+      `(kb/${number}, kb-${number}-*, worktree-kb-${number}-*) both came up empty. A worker's brief says ` +
+      `"open a draft PR that says Closes #${number}". Open it (or retarget an existing one onto this task's ` +
+      `own branch or the default branch) and finish again, or if this card genuinely needed no PR, ` +
+      `finish again with --no-pr "<why>".`,
+  };
+}
+
+export async function complete(ctx, number, { summary, metadata = {}, artifacts = [], attempt, noPr, noPrReason } = {}) {
   assertPayload({ summary, metadata, artifacts }, 'what changed, for the next worker');
   const task = await getTask(ctx, number);
   assertOnBoard(ctx, task);
   const runRec = await loadRun(ctx, number);
   const decision = prReadyDecision(task.prs);
+  if (!decision.pr) {
+    const noPrCheck = noPrDecision(number, { noPr, noPrReason });
+    if (!noPrCheck.ok) {
+      const a = await finishAttempt(ctx, task, runRec, { attempt }, 'protocol_violation', { reason: noPrCheck.reason.slice(0, 400) });
+      await saveRun(ctx, number, runRec);
+      await addComment(ctx, number, `**Protocol violation** (attempt ${a.attempt}): ${noPrCheck.reason}`);
+      await setStatus(ctx, task, 'blocked', { add: [L.needsHuman] });
+      return { number, attempt: a.attempt, status: 'blocked', protocol_violation: true, reason: noPrCheck.reason };
+    }
+    metadata = { ...metadata, no_pr: true, ...(noPrCheck.no_pr_reason ? { no_pr_reason: noPrCheck.no_pr_reason } : {}) };
+  }
   const a = await finishAttempt(ctx, task, runRec, { attempt }, 'completed', { summary: String(summary).slice(0, 400), ...prAttemptFields(decision) });
   runRec.run.failures = 0;
   await saveRun(ctx, number, runRec);

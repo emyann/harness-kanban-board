@@ -1386,6 +1386,29 @@ export function parseWorktreeName(name) {
   return m ? { n: m[1], k: m[2] } : null;
 }
 
+/**
+ * Every branch name hkb itself would put a task #n's work on: a dispatcher-made checkout
+ * (`kb-<n>-<k>`), a Claude Code worktree of one (`worktree-kb-<n>-<k>` — gc.js's `attemptOf`), or a
+ * track node's own branch (`kb/<n>` — `track.js`'s per-node brief). A PR whose head matches this is
+ * task #n's PR whatever GitHub's own `closedByPullRequestsReferences` believes — the field only
+ * answers "will merging this close #n", which needs the PR's base to be the default branch and
+ * still went blank at least once for a PR that met that bar (#234). Used both to fall back to a PR
+ * this task's own attempt opened (`src/tasks.js`) and to spot one doctor can see but the card can't.
+ */
+export function taskBranchRe(n) {
+  const num = Number(n);
+  return new RegExp(`^(?:worktree-)?kb-${num}-\\d+$|^kb/${num}$`);
+}
+
+/** The inverse of `taskBranchRe`: which task number, if any, a branch name belongs to. */
+export function branchTaskNumber(branch) {
+  const b = String(branch ?? '').trim();
+  let m = /^(?:worktree-)?kb-(\d+)-\d+$/.exec(b);
+  if (m) return Number(m[1]);
+  m = /^kb\/(\d+)$/.exec(b);
+  return m ? Number(m[1]) : null;
+}
+
 // ---------- the launch environment, and where it must not end up ----------
 
 /**
