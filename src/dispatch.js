@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, getTask, enableAutoMerge, branchProtection } from './tasks.js';
 import { claim, release, listLocks, lockBeatAt, staleBaseSha, remoteName } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, pidFile, readPidFile, pidAlive, recordExit, clearExit, HOOK_SETTINGS_VAR } from './board.js';
-import { workerHookSettings } from './init.js';
+import { workerHookSettings, PKG_ROOT, packageVersion } from './init.js';
 import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, authPauseReason, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted, trackFanout } from './track.js';
@@ -1077,17 +1077,39 @@ function acquireLoopLock(ctx) {
 }
 
 /**
+ * A fingerprint of the hkb this process would load if it started right now — read fresh every call,
+ * never cached, because that is the whole point: modules are loaded once at process start, so this
+ * is the only thing in the loop that ever sees a change on disk. `PKG_ROOT` is the running code's own
+ * directory (`init.js`'s `import.meta.url`); when the global `hkb` is a symlink into a git checkout —
+ * the case this guards, `hkb dispatch --loop` outliving a merge to `main` or a `git pull` — that
+ * checkout's HEAD moves on every such upgrade even when nobody bumps `package.json`, which only
+ * happens at release (`docs/releasing.md`). A real `npm i -g` replaces the package wholesale with no
+ * `.git` at all, so falls back to the version, which *does* change on every release by definition.
+ * Local `git rev-parse` only — no network, no GitHub call — so calling it every tick costs nothing
+ * an operator would notice.
+ */
+export function installStamp() {
+  const r = spawnSync('git', ['-C', PKG_ROOT, 'rev-parse', '--short=12', 'HEAD'], { encoding: 'utf8', timeout: 5_000 });
+  if (!r.error && r.status === 0 && r.stdout) return r.stdout.trim();
+  return packageVersion();
+}
+
+/**
  * The long-lived dispatcher. `sleeper` is the wait between ticks, injected so a test can run six
  * ticks in a millisecond; the default one is interruptible, so SIGTERM ends the loop between ticks
- * rather than after another. Throws (exit code 4) when a tick reports `fatal`: the self-heal ladder
- * ran out and the honest thing left is to die with a reason a supervisor and a human can both read.
+ * rather than after another. `installStamp` is injected the same way, so a test can move it without
+ * touching a real git checkout. Throws (exit code 4) when a tick reports `fatal` — the self-heal
+ * ladder ran out — or when the code on disk has moved past what this process loaded: either way the
+ * honest thing left is to die with a reason a supervisor and a human can both read.
  */
-export async function loop(ctx, { interval, max, profiles = null, log, sleeper = null }) {
+export async function loop(ctx, { interval, max, profiles = null, log, sleeper = null, installStamp: stamp = installStamp }) {
   const dropLock = acquireLoopLock(ctx);
   log(`dispatcher pid ${process.pid} (singleton lock .kanban/dispatch.pid)`);
+  const loaded = stamp();
   const children = new Map();
   let stopping = false;
   let fatal = null;
+  let upgrade = null;
   // The wait between ticks has to be interruptible, or a SIGTERM landing one second into a 60-second
   // sleep buys a *whole further tick*: the loop would wake, run it, and only then notice it was asked
   // to stop — while `hkb down` had already reported it stopped and `hkb up` had started its
@@ -1123,12 +1145,21 @@ export async function loop(ctx, { interval, max, profiles = null, log, sleeper =
       else log(`tick failed: ${e.message}`);
     }
     if (stopping) break;
+    const current = stamp();
+    if (current !== loaded) { upgrade = { loaded, current }; break; }
     const wait = Math.max(5_000, interval * 1000 - (Date.now() - started));
     await Promise.race([nap(wait), new Promise((resolve) => { wake = resolve; })]);
     wake = null; timer = null; // the race is over: a signal from here on waits for the next tick
     if (stopping) break;
   }
   dropLock();
+  if (upgrade) {
+    const e = new Error(`hkb: this loop is running ${upgrade.loaded}, the installed hkb is ${upgrade.current} — restarting. Running workers are untouched: the next dispatcher adopts or reclaims them.`);
+    e.exitCode = 4;
+    log(`FATAL ${e.message}`);
+    recordExit(ctx.root, 'dispatch', { code: 4, at: nowIso(), reason: e.message });
+    throw e;
+  }
   if (fatal) {
     const e = new Error(`dispatcher exiting: #${fatal.number} claim came back unknown ${fatal.streak} ticks in a row, ${fatal.streak - SELF_HEAL.dropAfter} of them after this process dropped every cache it had. Last error: ${fatal.error}. Start a new dispatcher — fresh state is what fixes this; if it fails the same way the fault is upstream, so check \`gh auth status\` and \`hkb doctor\`. Running workers are untouched: the next dispatcher adopts or reclaims them.`);
     e.exitCode = 4;

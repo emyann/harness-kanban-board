@@ -89,6 +89,16 @@ expires, and say when npm has moved past the hkb running it
 `features/update-notice`). Neither is a decision and neither can fail a tick —
 an unreachable probe is silent and simply retried.
 
+Modules load once, at process start, so a loop that has been up for hours
+keeps running the code it imported even after a merge to `main` changes the
+checkout the global `hkb` symlinks into (#140). Every tick, `loop` compares
+`installStamp()` — the checkout's own `git rev-parse HEAD` when it has one,
+the package version otherwise, both read fresh off disk, never cached — against
+the stamp it captured at startup. A mismatch is exit 4, the same code the
+self-heal ladder above uses: `hkb: this loop is running <old>, the installed
+hkb is <new> — restarting`. It is a local `git` call, not a GitHub read, so a
+board where the loop is current pays nothing per tick for it.
+
 ## Workers are any harness
 
 A worker is whatever a profile in `src/board.js` can launch — Claude Code,
