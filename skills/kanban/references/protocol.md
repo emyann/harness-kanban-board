@@ -133,6 +133,10 @@ the dispatcher owns their lock. `hkb heartbeat <n> --note "..."` always takes th
 
 One GraphQL query per board per tick; everything else is per-task and only for tasks that changed state.
 
+`hkb groom` is a **read** of the same board, exactly as `hkb dispatch --dry-run` is a read of this tick: it
+reports the backlog lane's findings from one board query and changes no status, no label and no transition.
+Nothing about the tick above depends on whether it has been run.
+
 ### `path_overlap` guard — three modes
 
 The guard exists to avoid the *merge* conflict when two open PRs touch the same files, never the working-copy
