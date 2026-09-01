@@ -354,6 +354,46 @@ test('failures past max_retries give up: blocked + kb:needs-human, no retry', as
   assert.equal(s.claimed.length, 0); // and it is not picked up again
 });
 
+test('protocol_violation with an open PR: the work landed, so the reason is recorded but the retry budget is not spent', async (t) => {
+  const h = bgHarness({
+    jobs: [{ kind: 'background', id: 'j7', pid: 1007, name: 'kb #7 · task', cwd: '/repo/.claude/worktrees/kb-7-1', state: 'done', status: 'idle' }],
+  });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'test-host', bg: true, job: 'j7', wt: 'kb-7-1', started_at: ago(120), heartbeat_at: ago(5) }]);
+  h.gh.addIssue(kbIssue({
+    number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run,
+    prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }],
+  }));
+  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'protocol_violation' }]);
+  const saved = h.gh.runOf(7);
+  assert.equal(saved.attempts[0].outcome, 'protocol_violation');
+  assert.equal(saved.attempts[0].pr, 42, 'the row names the PR the work landed on');
+  assert.equal(saved.failures, 0, 'no verb but an open PR is not a failure — nothing went wrong twice');
+  assert.equal(h.gh.statusOf(7), 'ready'); // the active_pr guard sends it to review on the next tick
+});
+
+test('protocol_violation with no PR: nothing to show, so it counts against the retry budget', async (t) => {
+  const h = bgHarness({
+    jobs: [{ kind: 'background', id: 'j7', pid: 1007, name: 'kb #7 · task', cwd: '/repo/.claude/worktrees/kb-7-1', state: 'done', status: 'idle' }],
+  });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'test-host', bg: true, job: 'j7', wt: 'kb-7-1', started_at: ago(120), heartbeat_at: ago(5) }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'protocol_violation' }]);
+  const saved = h.gh.runOf(7);
+  assert.equal(saved.attempts[0].outcome, 'protocol_violation');
+  assert.equal(saved.attempts[0].pr, undefined, 'no PR to name');
+  assert.equal(saved.failures, 1);
+});
+
 test('active_pr guard: an open PR sends a ready task to review, even with no slot', async (t) => {
   const h = harness();
   t.after(h.cleanup);

@@ -431,15 +431,20 @@ export function dropCommentCaches(ctx) {
 
 async function failAttempt(ctx, task, runRec, outcome, note, { kill = true } = {}) {
   const a = openAttempt(runRec.run);
+  // `protocol_violation` means "no terminal verb landed" — but a worker that pushed and opened a
+  // PR before losing its verb did the work; only the report failed. Stamping the PR onto the row
+  // is what tells that apart from a genuine no-show (#116), and it must not spend the retry budget.
+  const openPr = outcome === 'protocol_violation' ? (task.prs || []).find((p) => p.state === 'OPEN') : null;
   if (a) {
     if (kill && a.host === ctx.host && a.job && !a.job_stopped) { stopJob(a.job); a.job_stopped = true; }
     else if (kill && a.host === ctx.host && a.pid) killPid(a.pid);
     a.ended_at = nowIso();
     a.outcome = outcome;
     if (note) a.reason = String(note).slice(0, 300);
+    if (openPr) a.pr = openPr.number;
     await release(ctx, task.number, a.attempt);
   }
-  runRec.run.failures = (runRec.run.failures || 0) + 1;
+  if (!openPr) runRec.run.failures = (runRec.run.failures || 0) + 1;
   runRec.run.last_error = note || outcome;
   const limit = task.kb.max_retries ?? ctx.cfg.dispatch.failure_limit;
   if (runRec.run.failures > limit) {
