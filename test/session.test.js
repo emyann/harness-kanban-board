@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseSessionLog, sessionUpdate, formatSession, formatDenials, authPauseReason, resumeCommand, worktreePath, parseWorktreeName, sessionFromJobState } from '../src/model.js';
+import { parseSessionLog, sessionUpdate, formatSession, formatDenials, authPauseReason, resumeCommand, worktreePath, parseWorktreeName, sessionFromJobState, buildDeniedTools, deniedToolsUpdate, formatDeniedTools, denialDisplayTool, DENIAL_KINDS } from '../src/model.js';
 import { stopHook, markSessionClaim, whichAttempt, sessionForAttempt } from '../src/hook.js';
 import { currentSession } from '../src/jobs.js';
 import { complete } from '../src/lifecycle.js';
@@ -134,6 +134,67 @@ test('formatDenials: grouped by tool, first-seen order — "" for none', () => {
   assert.equal(formatDenials({}), '');
   assert.equal(formatDenials({ permission_denials: [] }), '');
   assert.equal(formatDenials(null), '');
+});
+
+// ---------- #130: the denied-tools ledger — every layer that can refuse a worker a tool ----------
+
+test('buildDeniedTools: permission_denials (kind permission-rule) merged with a transcript scan, grouped by tool+kind', () => {
+  const permissionDenials = [{ tool_name: 'Bash' }, { tool_name: 'Bash' }, { tool_name: 'WebFetch' }];
+  const transcriptDenials = [
+    { tool: 'mcp__react-aria__Button', kind: 'dontask-miss', first_seen: '2026-08-30T10:00:00Z' },
+    { tool: 'mcp__react-aria__Button', kind: 'dontask-miss', first_seen: '2026-08-30T09:00:00Z' },
+    { tool: 'Bash', kind: 'worktree-guard', first_seen: '2026-08-30T11:00:00Z' },
+  ];
+  assert.deepEqual(buildDeniedTools(permissionDenials, transcriptDenials), [
+    { tool: 'Bash', kind: 'permission-rule', count: 2, first_seen: null },
+    { tool: 'WebFetch', kind: 'permission-rule', count: 1, first_seen: null },
+    { tool: 'mcp__react-aria__Button', kind: 'dontask-miss', count: 2, first_seen: '2026-08-30T09:00:00Z' },
+    { tool: 'Bash', kind: 'worktree-guard', count: 1, first_seen: '2026-08-30T11:00:00Z' },
+  ]);
+  assert.equal(DENIAL_KINDS.RULE, 'permission-rule');
+});
+
+test('buildDeniedTools: a Bash denied by a --disallowedTools rule AND the worktree guard is two rows, not one', () => {
+  const rows = buildDeniedTools([{ tool_name: 'Bash' }], [{ tool: 'Bash', kind: 'worktree-guard', first_seen: 't1' }]);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map((r) => r.kind).sort(), ['permission-rule', 'worktree-guard']);
+});
+
+test('buildDeniedTools: nothing in, nothing out', () => {
+  assert.deepEqual(buildDeniedTools(null, null), []);
+  assert.deepEqual(buildDeniedTools([], []), []);
+});
+
+test('deniedToolsUpdate: only writes when the ledger actually changed — same "record once" contract as sessionUpdate', () => {
+  const list = [{ tool: 'Bash', kind: 'permission-rule', count: 2, first_seen: null }];
+  assert.equal(deniedToolsUpdate({ denied_tools: list }, list), null, 'unchanged by value, even a fresh array');
+  assert.deepEqual(deniedToolsUpdate({}, list), { denied_tools: list });
+  assert.equal(deniedToolsUpdate({ denied_tools: list }, []), null, 'nothing new to write');
+  assert.equal(deniedToolsUpdate({ denied_tools: list }, null), null);
+});
+
+test('denialDisplayTool: an MCP server\'s tools fold to its wildcard; anything else passes through', () => {
+  assert.equal(denialDisplayTool('mcp__react-aria__Button'), 'mcp__react-aria__*');
+  assert.equal(denialDisplayTool('mcp__playwright__navigate'), 'mcp__playwright__*');
+  assert.equal(denialDisplayTool('Bash'), 'Bash');
+  assert.equal(denialDisplayTool('Skill'), 'Skill');
+});
+
+test('formatDeniedTools: the ledger when the row carries one, MCP tools folded to their server, most-denied first', () => {
+  const a = {
+    denied_tools: [
+      { tool: 'mcp__react-aria__Button', kind: 'dontask-miss', count: 4, first_seen: null },
+      { tool: 'mcp__react-aria__Dialog', kind: 'dontask-miss', count: 3, first_seen: null },
+      { tool: 'Skill', kind: 'dontask-miss', count: 2, first_seen: null },
+    ],
+  };
+  assert.equal(formatDeniedTools(a), 'mcp__react-aria__* ×7, Skill ×2');
+});
+
+test('formatDeniedTools: falls back to the permission_denials-only reading when the row has no ledger yet', () => {
+  assert.equal(formatDeniedTools({ permission_denials: [{ tool_name: 'Bash' }] }), 'Bash ×1');
+  assert.equal(formatDeniedTools({}), '');
+  assert.equal(formatDeniedTools(null), '');
 });
 
 test('authPauseReason: api_error_status wins outright, no regex needed', () => {

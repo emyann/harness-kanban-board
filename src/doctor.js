@@ -5,12 +5,13 @@ import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
 import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches } from './board.js';
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun, openPrsByHead, issueDatabaseId } from './tasks.js';
-import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren, branchTaskNumber } from './model.js';
+import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren, branchTaskNumber, denialDisplayTool, DENIAL_KINDS } from './model.js';
 import { resolvedIdentity } from './hook.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName, listTrackBranches } from './lock.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, harnessHookCommand, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
 import { latestVersion } from './registry.js';
 import { checkProject } from './projects.js';
+import { mcpServersFromTranscript } from './stats.js';
 // mcp.js is imported dynamically inside checkMcp, not here: it imports cli.js, which imports this
 // file, and a static import here would make that a cycle.
 
@@ -730,6 +731,104 @@ export async function checkSessions(ctx, { ok, warn }, { board = null, fetch = f
   return found;
 }
 
+// ---------- #130: the denied-tools ledger, and whether an MCP server ever reached a worker ----------
+
+/**
+ * The board-wide denied-tools tally out of a sample of run records, grouped by (profile, kind,
+ * display tool) — `denialDisplayTool` folds an MCP server's tools to its wildcard, same as
+ * `formatDeniedTools` (model.js). Pure, most-denied first.
+ */
+export function tallyDeniedTools(runs) {
+  const byKey = new Map();
+  for (const run of runs || []) {
+    for (const a of run?.attempts || []) {
+      for (const d of a?.denied_tools || []) {
+        const tool = denialDisplayTool(d.tool);
+        const key = `${a.profile} ${d.kind} ${tool}`;
+        const row = byKey.get(key) || { profile: a.profile, kind: d.kind, tool, count: 0 };
+        row.count += d.count;
+        byKey.set(key, row);
+      }
+    }
+  }
+  return [...byKey.values()].sort((x, y) => y.count - x.count);
+}
+
+/**
+ * The single finding `hkb doctor` reports for the ledger: the most-denied tool becomes the exact
+ * edit, and which edit depends on which layer answered — a `dontask-miss` is an allowlist gap (add
+ * it to `allowed_tools`); a `permission-rule` is a `--disallowedTools` rule refusing it outright (a
+ * different edit, on the launch, not the allow-list); a `worktree-guard` denial gets no fix at all —
+ * no board.json edit reaches a structural guard, and saying so plainly beats a fix that would not
+ * work. Pure — `null` when the sample carries no ledger yet (an unpopulated board, or one still on
+ * an hkb older than #130).
+ */
+export function deniedToolsFinding(tally, board) {
+  if (!tally?.length) return null;
+  const top = tally[0];
+  const name = 'denied tools';
+  const detail = `${top.tool} denied ${plural(top.count, 'time')} on the ${top.profile} profile` + (top.kind === DENIAL_KINDS.DONTASK ? '' : ` (${top.kind})`);
+  if (top.kind === DENIAL_KINDS.DONTASK) {
+    return { name, ok: null, detail, fix: `add "${top.tool}" to "allowed_tools" on the ${top.profile} profile in ${board}` };
+  }
+  if (top.kind === DENIAL_KINDS.RULE) {
+    return { name, ok: null, detail, fix: `remove ${top.tool} from "disallowedTools" on the ${top.profile} profile's launch in ${board}, if a worker should have it` };
+  }
+  return { name, ok: null, detail: `${detail} — the worktree guard, not an allowlist: no board.json edit reaches it` };
+}
+
+/**
+ * Two questions the denied-tools ledger (#130) can answer, off one sample of run records shared with
+ * `checkSessions`'s pattern (newest-first, open board plus recently-closed):
+ *
+ *  1. What did workers most want and get refused, and what is the exact fix?
+ *  2. Does a repo `.mcp.json` server actually reach a `--bg dontAsk` worker at all? A server that
+ *     never loads there (wrong cwd, a daemon started before the file existed) leaves the ledger empty
+ *     for the wrong reason — nobody denied the tool, it was simply never there to deny. Checked
+ *     against the SAME sampled transcripts' `tool_use` blocks, so this costs no extra read.
+ */
+export async function checkDeniedTools(ctx, { ok, warn }, { board = null, fetch = fetchBoard, closed = fetchClosedRecent, load = loadRun, limit = SESSION_SAMPLE } = {}) {
+  const b = board || await boardOnce(ctx, fetch);
+  if (b.error) return;
+  let recent = [];
+  try { recent = await closed(ctx); } catch { /* the open board on its own still answers */ }
+  const seen = new Map();
+  for (const t of [...b.tasks, ...recent]) if (!seen.has(t.number)) seen.set(t.number, t);
+  const newest = [...seen.values()].sort((x, y) => String(y.updatedAt || '').localeCompare(String(x.updatedAt || '')) || y.number - x.number);
+
+  const runs = [];
+  let read = 0;
+  for (const t of newest.slice(0, limit)) {
+    try { runs.push((await load(ctx, t.number)).run); read++; } catch { /* one unreadable comment is not the end of the check */ }
+  }
+
+  const finding = deniedToolsFinding(tallyDeniedTools(runs), path.relative(ctx.root, boardFile(ctx.root)));
+  if (finding) (finding.ok ? ok : warn)(finding.name, finding.detail, finding.fix);
+
+  // MCP visibility only matters where a server could silently vanish: a repo `.mcp.json` naming one,
+  // and some profile running it in the background, the one launch a repo file can never reach if the
+  // daemon started before it existed or from a cwd that never re-reads it.
+  const bgProfiles = Object.entries(ctx.cfg?.profiles || {}).filter(([, p]) => p?.mode === 'claude-bg').map(([n]) => n);
+  const mcpFile = path.join(ctx.root, '.mcp.json');
+  if (!bgProfiles.length || !fs.existsSync(mcpFile)) return;
+  let doc;
+  try { doc = JSON.parse(fs.readFileSync(mcpFile, 'utf8')); } catch { return; } // checkMcp already reports bad JSON
+  const servers = Object.keys(doc?.mcpServers || {});
+  if (!servers.length) return;
+  const reached = new Set();
+  for (const run of runs) {
+    for (const a of run?.attempts || []) {
+      if (!bgProfiles.includes(a.profile) || !a.transcript_path) continue;
+      for (const s of mcpServersFromTranscript(ctx.root, a.transcript_path)) reached.add(s);
+    }
+  }
+  const invisible = servers.filter((s) => !reached.has(s));
+  if (!invisible.length) return ok('mcp visibility', `${servers.length} .mcp.json server${servers.length === 1 ? '' : 's'} reached a worker session (${plural(read, 'run record')} sampled)`);
+  warn('mcp visibility',
+    `${invisible.join(', ')} never showed up in a worker's tool calls across ${plural(read, 'run record')} sampled — invisible to a \`--bg\` worker leaves the denied-tools ledger empty for the wrong reason: nobody denied it, it was never there to deny`,
+    'check .mcp.json is readable from the `claude --bg` launch\'s own cwd, then restart the daemon (`hkb up`) so it re-reads the file');
+}
+
 // ---------- which layer is actually enforcing ----------
 
 export const POLICY_CHECK = 'permission policy';
@@ -1182,6 +1281,7 @@ export async function doctor(ctx, flags, log) {
   await checkTrackProfile(ctx, { ok, warn });
   await checkTaskSkills(ctx, { ok, warn }, { board });
   await checkSessions(ctx, { ok, warn }, { board });
+  await checkDeniedTools(ctx, { ok, warn }, { board });
   await checkOrphanedPrs(ctx, { ok, warn });
   await checkTrackBranches(ctx, { ok, warn });
 

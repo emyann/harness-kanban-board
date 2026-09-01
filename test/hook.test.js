@@ -194,6 +194,34 @@ test('stop hook: the same session, in the checkout the environment names, is a w
   } finally { h.cleanup(); }
 });
 
+// ---------- #130: the Stop hook is the one moment guaranteed to have the transcript on disk ----------
+
+test('stop hook: a transcript naming a dontAsk-miss lands denied_tools on the attempt row, alongside the session', async () => {
+  const h = leakHarness({ cwd: 'kb-7-1', task: '7' });
+  try {
+    fs.writeFileSync(path.join(h.root, 'sess-7.jsonl'), [
+      JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: 'Skill', input: {} }] } }),
+      JSON.stringify({ type: 'user', timestamp: '2026-08-28T09:05:00Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: "Permission to use Skill has been denied because Claude Code is running in don't ask mode.", is_error: true }] } }),
+    ].join('\n') + '\n');
+
+    await stopHook(h.ctx, { readStdin: () => JSON.stringify({ session_id: 'sid-7', transcript_path: 'sess-7.jsonl' }) });
+
+    const a = await h.attempt(7, 1);
+    assert.equal(a.session_id, 'sid-7');
+    assert.deepEqual(a.denied_tools, [{ tool: 'Skill', kind: 'dontask-miss', count: 1, first_seen: '2026-08-28T09:05:00Z' }]);
+  } finally { h.cleanup(); }
+});
+
+test('stop hook: no transcript path, no denied_tools — the session still records', async () => {
+  const h = leakHarness({ cwd: 'kb-7-1', task: '7' });
+  try {
+    await stopHook(h.ctx, { readStdin: () => JSON.stringify({ session_id: 'sid-7' }) });
+    const a = await h.attempt(7, 1);
+    assert.equal(a.session_id, 'sid-7');
+    assert.equal(a.denied_tools, undefined);
+  } finally { h.cleanup(); }
+});
+
 // ---------- #184: a hook that cannot read its own config stands aside, never blocks ----------
 
 test('stop hook: an unreadable board.json stands aside — no nudge, no board touched, one line', async () => {

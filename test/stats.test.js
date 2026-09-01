@@ -12,6 +12,7 @@ import {
   parseSince, tasksInWindow, collectAttempts, summarizeTasks, summarizeAttempts, summarizeSpend,
   spawnBudget, computeStats, formatStats, sessionFromLog, stats, DEFAULT_SINCE,
   parseTranscriptUsage, ratesFor, estimateCost, usageFromTranscript,
+  parseTranscriptDenials, deniedToolsFromTranscript, transcriptMcpServers, mcpServersFromTranscript, summarizeDeniedTools,
 } from '../src/stats.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
@@ -332,6 +333,94 @@ test('usageFromTranscript reads the attempt transcript off disk, and never fails
   assert.equal(usageFromTranscript(root, null), null);
 });
 
+// ---------- #130: the two denial shapes only a transcript carries ----------
+
+/** One assistant `tool_use` line — the tool name a following `tool_result` only carries by id. */
+const toolUse = (id, name, input = {}) => JSON.stringify({
+  type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input }] },
+});
+/** One user `tool_result` line answering `id`, plain-string content. */
+const toolResult = (id, text, timestamp) => JSON.stringify({
+  type: 'user', timestamp, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: text, is_error: true }] },
+});
+
+test('parseTranscriptDenials: a dontAsk allowlist miss names the tool and the line\'s own timestamp', () => {
+  const found = parseTranscriptDenials([
+    toolUse('toolu_1', 'mcp__react-aria__Button'),
+    toolResult('toolu_1', "Permission to use mcp__react-aria__Button has been denied because Claude Code is running in don't ask mode.", '2026-08-30T10:00:00.000Z'),
+  ]);
+  assert.deepEqual(found, [{ tool: 'mcp__react-aria__Button', kind: 'dontask-miss', first_seen: '2026-08-30T10:00:00.000Z' }]);
+});
+
+test('parseTranscriptDenials: the worktree guard is a tool ERROR, absent from permission_denials — names the tool_use that carries it', () => {
+  const found = parseTranscriptDenials([
+    toolUse('toolu_2', 'Bash', { command: 'hkb complete 130 --summary "done"' }),
+    toolResult('toolu_2', "this command runs a string through complete, which can't be verified to stay inside the worktree", '2026-08-30T10:05:00.000Z'),
+  ]);
+  assert.deepEqual(found, [{ tool: 'Bash', kind: 'worktree-guard', first_seen: '2026-08-30T10:05:00.000Z' }]);
+});
+
+test('parseTranscriptDenials: a tool_result whose content is an array of text blocks is read the same way', () => {
+  const found = parseTranscriptDenials([
+    toolUse('toolu_3', 'WebFetch'),
+    JSON.stringify({ type: 'user', timestamp: 't3', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_3', content: [{ type: 'text', text: "Permission to use WebFetch has been denied because Claude Code is running in don't ask mode." }] }] } }),
+  ]);
+  assert.deepEqual(found, [{ tool: 'WebFetch', kind: 'dontask-miss', first_seen: 't3' }]);
+});
+
+test('parseTranscriptDenials: shrugs at a transcript with neither shape, or nothing at all', () => {
+  assert.equal(parseTranscriptDenials([]), null);
+  assert.equal(parseTranscriptDenials([toolUse('t', 'Bash'), toolResult('t', 'ordinary tool output')]), null);
+  assert.equal(parseTranscriptDenials(['{"message":{"content":[{"type":"tool_result"']), null, 'a truncated line is skipped, not thrown on');
+});
+
+test('deniedToolsFromTranscript reads the attempt transcript off disk, relative or absolute, and never fails loudly', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-stats-denied-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'sess.jsonl');
+  fs.writeFileSync(file, [
+    toolUse('toolu_1', 'Skill'),
+    toolResult('toolu_1', "Permission to use Skill has been denied because Claude Code is running in don't ask mode.", 't1'),
+  ].join('\n') + '\n');
+  assert.deepEqual(deniedToolsFromTranscript(root, file), [{ tool: 'Skill', kind: 'dontask-miss', first_seen: 't1' }]);
+  assert.deepEqual(deniedToolsFromTranscript(root, 'sess.jsonl'), [{ tool: 'Skill', kind: 'dontask-miss', first_seen: 't1' }]);
+  assert.equal(deniedToolsFromTranscript(root, path.join(root, 'gone.jsonl')), null);
+  assert.equal(deniedToolsFromTranscript(root, null), null);
+});
+
+test('transcriptMcpServers: only mcp__<server>__ tool_use calls count, and each server once', () => {
+  const servers = transcriptMcpServers([
+    toolUse('a', 'mcp__react-aria__Button'),
+    toolUse('b', 'mcp__react-aria__Dialog'),
+    toolUse('c', 'mcp__playwright__navigate'),
+    toolUse('d', 'Bash'),
+  ]);
+  assert.deepEqual([...servers].sort(), ['playwright', 'react-aria']);
+  assert.deepEqual(transcriptMcpServers([]), new Set());
+});
+
+test('mcpServersFromTranscript reads off disk the same way deniedToolsFromTranscript does', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-stats-mcp-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'sess.jsonl'), toolUse('a', 'mcp__react-aria__Button') + '\n');
+  assert.deepEqual(mcpServersFromTranscript(root, 'sess.jsonl'), new Set(['react-aria']));
+  assert.deepEqual(mcpServersFromTranscript(root, path.join(root, 'gone.jsonl')), new Set());
+});
+
+test('summarizeDeniedTools sums denied_tools across attempt rows, grouped by tool+kind, most-denied first', () => {
+  const rows = [
+    { denied_tools: [{ tool: 'Bash', kind: 'permission-rule', count: 2, first_seen: null }] },
+    { denied_tools: [{ tool: 'mcp__react-aria__Button', kind: 'dontask-miss', count: 7, first_seen: 't1' }] },
+    { denied_tools: null },
+    { denied_tools: [{ tool: 'Bash', kind: 'permission-rule', count: 1, first_seen: null }] },
+  ];
+  assert.deepEqual(summarizeDeniedTools(rows), [
+    { tool: 'mcp__react-aria__Button', kind: 'dontask-miss', count: 7, attempts: 1 },
+    { tool: 'Bash', kind: 'permission-rule', count: 3, attempts: 2 },
+  ]);
+  assert.deepEqual(summarizeDeniedTools([]), []);
+});
+
 // ---------- pricing those tokens, when the board says what they cost ----------
 
 test('ratesFor matches a model exactly, then by prefix, then "default" — and fills the cache rates in', () => {
@@ -410,7 +499,7 @@ const report = () => computeStats({
 
 test('computeStats answers with a stable shape a script can rely on', () => {
   const s = report();
-  assert.deepEqual(Object.keys(s), ['board', 'repo', 'generated_at', 'since', 'window', 'tasks', 'attempts', 'spawns', 'spend', 'reads']);
+  assert.deepEqual(Object.keys(s), ['board', 'repo', 'generated_at', 'since', 'window', 'tasks', 'attempts', 'spawns', 'spend', 'denied_tools', 'reads']);
   assert.deepEqual(Object.keys(s.tasks.by_status), STATUSES);
   assert.deepEqual(Object.keys(s.attempts.by_outcome), OUTCOMES);
   assert.equal(s.tasks.total, 3);

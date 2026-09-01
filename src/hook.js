@@ -38,7 +38,8 @@ import path from 'node:path';
 import { kanbanDir } from './board.js';
 import { currentSession } from './jobs.js';
 import { getTask, loadRun, saveRun } from './tasks.js';
-import { openAttempt, sessionUpdate, normalizeHookInput, parseWorktreeName, attemptIdentity, shouldNudgeOnStop } from './model.js';
+import { openAttempt, sessionUpdate, normalizeHookInput, parseWorktreeName, attemptIdentity, shouldNudgeOnStop, buildDeniedTools, deniedToolsUpdate } from './model.js';
+import { deniedToolsFromTranscript } from './stats.js';
 
 /**
  * PreToolUse hook: hkb's own permission policy — **deny or say nothing**, never an allow, never a
@@ -323,7 +324,18 @@ async function writeSession(ctx, { n, k, wt, own = false }, input) {
   // took the node over — never write this session onto it.
   const a = rec.run.attempts.find((x) => String(x.attempt) === String(k)) || (own ? openAttempt(rec.run) : null);
   const fields = a && sessionUpdate(a, input);
-  const update = a && wt && !a.wt ? { ...fields, wt } : fields;
+  let update = a && wt && !a.wt ? { ...fields, wt } : fields;
+  // #130: the attempt is ending right now and its transcript, if any, is on this host's disk — the
+  // one moment a Stop hook is guaranteed to have it. `input.transcript_path` wins over the row's own
+  // (a fresher Stop always names the file more precisely); `a.permission_denials` covers the shape
+  // #155 already reads out of the CLI's own result, so only the other two shapes need the transcript.
+  const transcriptPath = input.transcript_path || a?.transcript_path;
+  if (a && transcriptPath) {
+    const transcriptDenials = deniedToolsFromTranscript(ctx.root, transcriptPath);
+    const deniedTools = buildDeniedTools((update?.permission_denials ?? a.permission_denials), transcriptDenials);
+    const denied = deniedToolsUpdate(a, deniedTools);
+    if (denied) update = { ...update, ...denied };
+  }
   if (update) { Object.assign(a, update); await saveRun(ctx, n, rec); }
   const mark = markerFile(ctx.root, n, k);
   fs.mkdirSync(path.dirname(mark), { recursive: true });

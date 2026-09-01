@@ -16,6 +16,7 @@ import {
   SESSION_CHECK, SESSION_FIX, SESSION_SAMPLE, POLICY_CHECK, TASK_SKILLS_CHECK,
   sessionTally, sessionFinding, checkSessions, boardOnce, checkAgentLabels, checkTaskSkills, policyLayers, checkPolicyLayer,
   TRACK_PROFILE_CHECK, checkTrackProfile, checkDispatcher, checkServe,
+  tallyDeniedTools, deniedToolsFinding, checkDeniedTools,
 } from '../src/doctor.js';
 import { setTransport, GhError } from '../src/gh.js';
 import { pidFile, writeServeUrl } from '../src/board.js';
@@ -769,6 +770,114 @@ test('the two card checks share one board query rather than paying for one each'
 
   const openBoard = h.gh.calls.slice(before).filter((c) => c.kind === 'graphql' && /states: \[OPEN\]/.test(c.query || ''));
   assert.deepEqual(openBoard, [], 'neither check re-reads the board it was handed');
+});
+
+// ---------- #130: the denied-tools ledger, and whether an MCP server ever reached a worker ----------
+
+test('tallyDeniedTools sums denied_tools across attempts, grouped by profile+kind+display tool, most-denied first', () => {
+  const runs = [runWith([
+    attempt(1, 'completed', { denied_tools: [{ tool: 'mcp__react-aria__Button', kind: 'dontask-miss', count: 3, first_seen: 't1' }] }),
+    attempt(2, 'timed_out', { denied_tools: [{ tool: 'mcp__react-aria__Dialog', kind: 'dontask-miss', count: 4, first_seen: 't2' }] }),
+    attempt(3, 'crashed', { profile: 'codex', denied_tools: [{ tool: 'Bash', kind: 'permission-rule', count: 1, first_seen: null }] }),
+  ])];
+  assert.deepEqual(tallyDeniedTools(runs), [
+    { profile: 'claude', kind: 'dontask-miss', tool: 'mcp__react-aria__*', count: 7 },
+    { profile: 'codex', kind: 'permission-rule', tool: 'Bash', count: 1 },
+  ]);
+  assert.deepEqual(tallyDeniedTools([]), []);
+  assert.deepEqual(tallyDeniedTools([runWith([attempt(1, 'completed')])]), []);
+});
+
+test('deniedToolsFinding: a dontAsk-miss becomes the exact allowed_tools edit', () => {
+  const f = deniedToolsFinding([{ profile: 'claude', kind: 'dontask-miss', tool: 'Skill', count: 5 }], 'board.json');
+  assert.equal(f.name, 'denied tools');
+  assert.equal(f.ok, null);
+  assert.equal(f.detail, 'Skill denied 5 times on the claude profile');
+  assert.equal(f.fix, 'add "Skill" to "allowed_tools" on the claude profile in board.json');
+});
+
+test('deniedToolsFinding: a permission-rule denial gets a different fix — the launch\'s disallowedTools, not the allowlist', () => {
+  const f = deniedToolsFinding([{ profile: 'claude', kind: 'permission-rule', tool: 'Bash', count: 2 }], 'board.json');
+  assert.match(f.detail, /\(permission-rule\)/);
+  assert.match(f.fix, /remove Bash from "disallowedTools"/);
+});
+
+test('deniedToolsFinding: the worktree guard gets no fix at all — no board.json edit reaches a structural guard', () => {
+  const f = deniedToolsFinding([{ profile: 'claude', kind: 'worktree-guard', tool: 'Bash', count: 9 }], 'board.json');
+  assert.match(f.detail, /the worktree guard, not an allowlist/);
+  assert.equal(f.fix, undefined);
+});
+
+test('deniedToolsFinding: null when the sample carries no ledger at all', () => {
+  assert.equal(deniedToolsFinding([], 'board.json'), null);
+  assert.equal(deniedToolsFinding(null, 'board.json'), null);
+});
+
+test('checkDeniedTools: reports the most-denied tool on a board that has some, and mcp visibility when a repo .mcp.json names a server', async (t) => {
+  const h = boardHarness(t);
+  const file = path.join(h.root, 'sess.jsonl');
+  fs.writeFileSync(file, JSON.stringify({
+    type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: 'mcp__react-aria__Button', input: {} }] },
+  }) + '\n');
+  h.gh.addIssue(kbIssue({
+    number: 40, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude',
+    updatedAt: '2026-08-27T09:00:00Z',
+    run: runWith([attempt(1, 'completed', { session: true, transcript_path: file, denied_tools: [{ tool: 'mcp__react-aria__Button', kind: 'dontask-miss', count: 6, first_seen: 't1' }] })]),
+  }));
+  fs.writeFileSync(path.join(h.root, '.mcp.json'), JSON.stringify({ mcpServers: { 'react-aria': { command: 'npx', args: ['react-aria-mcp'] }, playwright: { command: 'npx', args: ['playwright-mcp'] } } }));
+  const s = sink();
+
+  await checkDeniedTools(h.ctx, s);
+
+  const denied = s.results.find((r) => r.name === 'denied tools');
+  assert.equal(denied.detail, 'mcp__react-aria__* denied 6 times on the claude profile');
+  assert.equal(denied.fix, 'add "mcp__react-aria__*" to "allowed_tools" on the claude profile in .kanban/board.json');
+
+  const visibility = s.results.find((r) => r.name === 'mcp visibility');
+  assert.equal(visibility.ok, null, 'react-aria showed up, but playwright never did');
+  assert.match(visibility.detail, /playwright never showed up/);
+  assert.doesNotMatch(visibility.detail, /react-aria/, 'only the server that never appeared is named');
+});
+
+test('checkDeniedTools: every configured server reached a worker — ok, and says how many run records it sampled', async (t) => {
+  const h = boardHarness(t);
+  const file = path.join(h.root, 'sess.jsonl');
+  fs.writeFileSync(file, JSON.stringify({
+    type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: 'mcp__react-aria__Button', input: {} }] },
+  }) + '\n');
+  h.gh.addIssue(kbIssue({
+    number: 40, status: 'ready', agent: 'claude',
+    run: runWith([attempt(1, 'completed', { session: true, transcript_path: file })]),
+  }));
+  fs.writeFileSync(path.join(h.root, '.mcp.json'), JSON.stringify({ mcpServers: { 'react-aria': { command: 'npx', args: ['react-aria-mcp'] } } }));
+  const s = sink();
+
+  await checkDeniedTools(h.ctx, s);
+
+  const visibility = s.results.find((r) => r.name === 'mcp visibility');
+  assert.equal(visibility.ok, true);
+  assert.match(visibility.detail, /1 \.mcp\.json server reached a worker session/);
+});
+
+test('checkDeniedTools: no .mcp.json, or no claude-bg profile, asks nothing about visibility', async (t) => {
+  const h = boardHarness(t, { profiles: { 'claude-p': { mode: 'process', launch: ['claude', '-p'] } } });
+  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude-p', run: runWith([attempt(1, 'completed', { profile: 'claude-p' })]) }));
+  fs.writeFileSync(path.join(h.root, '.mcp.json'), JSON.stringify({ mcpServers: { 'react-aria': {} } }));
+  const s = sink();
+
+  await checkDeniedTools(h.ctx, s);
+
+  assert.equal(s.results.find((r) => r.name === 'mcp visibility'), undefined, 'no claude-bg profile runs it, so nothing could ever be invisible to one');
+});
+
+test('checkDeniedTools: a board with no ledger anywhere says nothing at all', async (t) => {
+  const h = boardHarness(t);
+  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', run: runWith([attempt(1, 'completed')]) }));
+  const s = sink();
+
+  await checkDeniedTools(h.ctx, s);
+
+  assert.deepEqual(s.results, []);
 });
 
 // ---------- kb.skills asks for a tool a profile may deny (#114) ----------

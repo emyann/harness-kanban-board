@@ -8,7 +8,7 @@ import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, 
 import { claim, release, listLocks, lockBeatAt, staleBaseSha, remoteName, ensureTrackBranch } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, pidFile, readPidFile, pidAlive, recordExit, clearExit, HOOK_SETTINGS_VAR } from './board.js';
 import { workerHookSettings, PKG_ROOT, packageVersion } from './init.js';
-import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, authPauseReason, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, isTrackRoot, trackBranchConflict } from './model.js';
+import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, authPauseReason, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, isTrackRoot, trackBranchConflict, buildDeniedTools, deniedToolsUpdate } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted, trackFanout } from './track.js';
 import { GhError } from './gh.js';
@@ -16,6 +16,25 @@ import { listKbJobs, readJobState, stopJob, matchJobByWorktree, jobSessionUpdate
 import { isMirrorConfigured, syncProject, projectError } from './projects.js';
 import { tokenExpiryNotice, versionNotice } from './doctor.js';
 import { sweep, sweepTask } from './gc.js';
+import { deniedToolsFromTranscript } from './stats.js';
+
+/**
+ * #130: an attempt is ending (or has just been reaped) and its transcript, if it named one, is on
+ * this host's disk — the Stop hook already tried this (src/hook.js), but a crashed or timed-out
+ * attempt never fires one, so the dispatcher gets the same one chance here. `a.permission_denials`
+ * covers the `--disallowedTools` shape #155 already reads out of the CLI's own result; only the
+ * dontAsk-miss and worktree-guard shapes need the transcript read. Mutates `a` in place and reports
+ * whether it changed anything, the same contract `sessionUpdate` + `Object.assign` already follow.
+ */
+function attachDeniedTools(ctx, a) {
+  if (!a?.transcript_path) return false;
+  const transcriptDenials = deniedToolsFromTranscript(ctx.root, a.transcript_path);
+  const deniedTools = buildDeniedTools(a.permission_denials, transcriptDenials);
+  const update = deniedToolsUpdate(a, deniedTools);
+  if (!update) return false;
+  Object.assign(a, update);
+  return true;
+}
 
 const nowIso = () => new Date().toISOString();
 const secondsSince = (iso) => (iso ? (Date.now() - new Date(iso).getTime()) / 1000 : Infinity);
@@ -699,6 +718,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       let session = null;
       try { session = sessionUpdate(a, parseSessionLog(tailLog(ctx, a.log, 200_000))); } catch { /* unreadable log */ }
       if (session) Object.assign(a, session);
+      try { attachDeniedTools(ctx, a); } catch { /* unreadable transcript */ }
     }
     // failAttempt saves the same record, so a row written off in the tick that named its session
     // costs one write, not two — and goes to its post-mortem carrying the session.
@@ -1087,6 +1107,8 @@ function watchChild(ctx, number, k, child, children, state, profileName, log) {
       let session = null;
       try { session = sessionUpdate(a, parsed); } catch { /* unreadable log */ }
       if (session) Object.assign(a, session);
+      let deniedDirty = false;
+      try { deniedDirty = attachDeniedTools(ctx, a); } catch { /* unreadable transcript */ }
       // `api_error_status` on the result says outright what the log-tail regex below only guessed
       // at; the regex now runs only when there was no JSON result line to read a status from.
       const pauseReason = authPauseReason(parsed, logText.slice(-4000));
@@ -1096,7 +1118,7 @@ function watchChild(ctx, number, k, child, children, state, profileName, log) {
         log(`#${number}: profile ${profileName} paused (${pauseReason})`);
       }
       if (a.ended_at) { // the worker finished properly — only the session numbers are new
-        if (session) { await saveRun(ctx, number, runRec); log(`#${number}: attempt ${k} ${formatSession(a)}`); }
+        if (session || deniedDirty) { await saveRun(ctx, number, runRec); log(`#${number}: attempt ${k} ${formatSession(a)}`); }
         return;
       }
       a.exit_code = code;

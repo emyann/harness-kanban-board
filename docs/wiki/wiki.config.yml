@@ -102,6 +102,9 @@ pages:
   - slug: features/path-overlap-guard
     summary: "The off/running/unmerged modes and their merge.mode defaults, and how idleness — job, pid, or lock-ref beat — keeps the guard from holding a card hostage behind a stuck session."
     status: seeded
+  - slug: features/denied-tools-ledger
+    summary: "Under --permission-mode dontAsk a denial is never a prompt, just a silent workaround — the ledger reads a worker's transcript for the three shapes a refusal takes and turns the worst one into the exact allowed_tools edit."
+    status: seeded
   - slug: decisions/adr-001-github-native-backend
     summary: "GitHub Issues + native dependencies + ref locks won over MCP-first and repo-native designs; stacked PRs rejected for board sequencing."
     status: planned

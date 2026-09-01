@@ -347,6 +347,37 @@ test('a crashed pid-mode attempt gets session and terminal_reason backfilled fro
   assert.equal(a.total_cost_usd, 0.12);
 });
 
+// #130: the same crashed pid-mode row also gets its denied-tools ledger — permission_denials from
+// the log's own result JSON, merged with a transcript scan for the two shapes that never land there.
+test('a crashed pid-mode attempt gets denied_tools backfilled from its log AND its transcript', async (t) => {
+  const h = harness({ dispatch: { stale_after: 3600 } });
+  t.after(h.cleanup);
+  const logRel = '.kanban/logs/7-1.log';
+  const transcriptRel = '.kanban/logs/7-1.jsonl';
+  fs.mkdirSync(path.dirname(path.join(h.root, logRel)), { recursive: true });
+  fs.writeFileSync(path.join(h.root, transcriptRel), [
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'g', name: 'Bash', input: { command: 'hkb complete 7 --summary x' } }] } }),
+    JSON.stringify({ type: 'user', timestamp: '2026-08-28T09:10:00Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'g', content: "this command runs a string through complete, which can't be verified to stay inside the worktree", is_error: true }] } }),
+  ].join('\n') + '\n');
+  fs.writeFileSync(path.join(h.root, logRel), JSON.stringify({
+    type: 'result', session_id: 'sid-crashed', total_cost_usd: 0.12, num_turns: 5, duration_ms: 12_000,
+    terminal_reason: 'max_turns', transcript_path: transcriptRel,
+    permission_denials: [{ tool_name: 'WebFetch' }],
+  }) + '\n');
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(600), heartbeat_at: ago(5), pid: 4_000_000, log: logRel }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.gh.beat(7, 1, ago(1));
+
+  const s = await h.tick({ max: 0 });
+
+  assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'crashed' }]);
+  const a = h.gh.runOf(7).attempts[0];
+  assert.deepEqual(a.denied_tools, [
+    { tool: 'WebFetch', kind: 'permission-rule', count: 1, first_seen: null },
+    { tool: 'Bash', kind: 'worktree-guard', count: 1, first_seen: '2026-08-28T09:10:00Z' },
+  ]);
+});
+
 test('failures past max_retries give up: blocked + kb:needs-human, no retry', async (t) => {
   const h = harness({ dispatch: { stale_after: 60 } });
   t.after(h.cleanup);
