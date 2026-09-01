@@ -9,21 +9,21 @@ covers:
   - path: src/model.js
     sha: 022ed7b17c5debc59265f8a1627f82386864de00
   - path: src/dispatch.js
-    sha: 529e913ae4f921a91dbdd1eb1f6a8a5245cd0035
+    sha: 6ceade7f5440ab4194c477cc1bb2cc2900b52632
   - path: src/board.js
     sha: 955f2c7cfc908fe46ebf264e0cb4c8e722c7a79c
   - path: src/context.js
     sha: ab7afc4eb5158a879ea1700221892229329dce64
   - path: src/lifecycle.js
-    sha: 7752f392200fd6a7fc4a075d961e6c30f9182553
+    sha: 98cf380069697936e2b62fb17402bae7099cf06f
   - path: src/gc.js
     sha: 40672cb7a84da7170be3f5d99df42f326f9dc1e5
   - path: src/cli.js
-    sha: fe82dbddc2734ad4c8f179001ae814a9de4b72da
+    sha: 13555690946205fd3e221a8c0b4dcb2b0a92c623
   - path: src/tasks.js
-    sha: 8631ae5218f1d87ad2e247eb837b5a7e1255dd23
+    sha: e0c09e408b3328d5ca7a4d9f512e4bda73b0d0f0
 related: [features/auto-merge, features/tracks, architecture/overview, architecture/dispatcher-tick]
-generated_at_commit: 5db5afa
+generated_at_commit: bcd1dc5
 last_refreshed: 2026-09-01
 ---
 

@@ -7,19 +7,19 @@ audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: edc60d49312690f0691119e2a3396aa3176fd0c7
+    sha: 13555690946205fd3e221a8c0b4dcb2b0a92c623
   - path: src/gh.js
-    sha: b728c07d7f5e7bfd29e3dc4c2e0e2786d29522ee
+    sha: 97d4dbad5a1c30beb49360d68283e65dc5155e1c
   - path: src/model.js
-    sha: 6717b59327df4d7d9bc175b8146081696cec1bbb
+    sha: 022ed7b17c5debc59265f8a1627f82386864de00
   - path: src/tasks.js
-    sha: 2faa63591dbb3f96fcb3747141f9e4d42ae24736
+    sha: e0c09e408b3328d5ca7a4d9f512e4bda73b0d0f0
   - path: src/lock.js
     sha: 680eae74c9955003c948a6df9750c25548ccaf86
   - path: src/lifecycle.js
-    sha: 3938c82f3e181fb260fc54bb2f3150074459e224
+    sha: 98cf380069697936e2b62fb17402bae7099cf06f
   - path: src/dispatch.js
-    sha: ce2fcdb53caa648426f64509294e3795a005b5cc
+    sha: 6ceade7f5440ab4194c477cc1bb2cc2900b52632
   - path: src/context.js
     sha: ab7afc4eb5158a879ea1700221892229329dce64
   - path: src/hook.js
@@ -27,10 +27,10 @@ covers:
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/board.js
-    sha: 05c992709b2d3d1d3ffd453dbbbd6b647de30fad
+    sha: 955f2c7cfc908fe46ebf264e0cb4c8e722c7a79c
   - path: src/doctor.js
-    sha: 80ed434085da105bdd1c293146fecefe77795bc6
-generated_at_commit: f2d9b40
+    sha: 4b49003dc44abe98a35f1c47b9472427e0ab6fba
+generated_at_commit: bcd1dc5
 last_refreshed: 2026-09-01
 related: [concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---

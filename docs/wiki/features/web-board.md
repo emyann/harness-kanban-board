@@ -11,16 +11,16 @@ covers:
   - path: web/index.html
     sha: 322aa96236ef37657a9a2326b83dc7b480672134
   - path: src/board.js
-    sha: 05c992709b2d3d1d3ffd453dbbbd6b647de30fad
+    sha: 955f2c7cfc908fe46ebf264e0cb4c8e722c7a79c
   - path: src/init.js
-    sha: 2f4e6b4e9f4316cec6c2adac223e97985246f299
+    sha: aee5eed4dcc544f9a6fe81c7273f96432aaf1048
   - path: src/lifecycle.js
-    sha: cd8905864dacb13d2a6943a43351e57818da0b2b
+    sha: 98cf380069697936e2b62fb17402bae7099cf06f
   - path: src/track.js
-    sha: 4741b0697555435dcb76768a44ec86e1ef6eb4a0
+    sha: ed02aeeffe9c33ce3ce32abd652c59faec8e9286
   - path: src/model.js
-    sha: cc168db441699c5b74401b1197d227bf6f8598ca
-generated_at_commit: 4714e4f
+    sha: 022ed7b17c5debc59265f8a1627f82386864de00
+generated_at_commit: bcd1dc5
 last_refreshed: 2026-09-01
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---

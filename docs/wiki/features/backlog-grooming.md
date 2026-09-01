@@ -7,22 +7,22 @@ audience: [dev]
 read_when: "adding a groom finding or action, changing the frozen groom --json shape, touching how blockers are filled, or wondering why hkb groom never promotes anything"
 covers:
   - path: src/model.js
-    sha: 96d73c3e1721735a52e0ca67752476040135d04a
+    sha: 022ed7b17c5debc59265f8a1627f82386864de00
   - path: src/cli.js
-    sha: c664cd02177c5e985b3f67814265549c9ef8af8b
+    sha: 13555690946205fd3e221a8c0b4dcb2b0a92c623
   - path: src/lifecycle.js
-    sha: ae17fbcb5a80bb369cdecd0d56097a1b8c73f846
+    sha: 98cf380069697936e2b62fb17402bae7099cf06f
   - path: src/tasks.js
-    sha: 109820a1b264151b5edc2956874791edd7df7e5c
+    sha: e0c09e408b3328d5ca7a4d9f512e4bda73b0d0f0
   - path: src/doctor.js
-    sha: 976283bd0771f28d8a687aa83509d62b86468210
+    sha: 4b49003dc44abe98a35f1c47b9472427e0ab6fba
   - path: skills/kanban/SKILL.md
-    sha: 15b56d9049e169776ccccb6bd75b2c36912048f7
+    sha: a6ffdcca307a58e568a02ff17cba8a00ef3e7caa
   - path: commands/groom.md
     sha: 4fc2dc2db984033fe8801e8d28b50e8e68fefddc
   - path: skills/kanban/references/protocol.md
     sha: 771770f1e8c420d821bf81c34bd63cd9dbc23d87
-generated_at_commit: 6400ac0
+generated_at_commit: bcd1dc5
 last_refreshed: 2026-09-01
 related: [features/planning-commands, features/operator-seat, features/path-overlap-guard, features/tracks]
 ---
