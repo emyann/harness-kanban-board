@@ -7,9 +7,9 @@ audience: [dev]
 read_when: "adding a groom finding or action, changing the frozen groom --json shape, touching how blockers are filled, or wondering why hkb groom never promotes anything"
 covers:
   - path: src/model.js
-    sha: 022ed7b17c5debc59265f8a1627f82386864de00
+    sha: d5bfd9d804c3838f356f7d160075e996545ec854
   - path: src/cli.js
-    sha: 13555690946205fd3e221a8c0b4dcb2b0a92c623
+    sha: 7ef282690255ad01f17c257a8c64ab5833176ec9
   - path: src/lifecycle.js
     sha: 98cf380069697936e2b62fb17402bae7099cf06f
   - path: src/tasks.js
@@ -22,7 +22,7 @@ covers:
     sha: 4fc2dc2db984033fe8801e8d28b50e8e68fefddc
   - path: skills/kanban/references/protocol.md
     sha: 771770f1e8c420d821bf81c34bd63cd9dbc23d87
-generated_at_commit: bcd1dc5
+generated_at_commit: b5616f3
 last_refreshed: 2026-09-01
 related: [features/planning-commands, features/operator-seat, features/path-overlap-guard, features/tracks]
 ---
@@ -140,6 +140,18 @@ partial edit changes only the keys named, and another runs every `hkb edit`
 line a groomed board actually suggests (`malformed_kb`, `no_paths`,
 `broad_path`, `priority_inversion`) straight through `hkb edit` and asserts
 none of them throw a usage error.
+
+`--priority` and `--scheduled-at` are validated before any of the `<n>` are
+touched (#243): `parsePriorityFlag`/`parseScheduledAtFlag`
+(`src/model.js`, pure, next to `priorityOf`) reject a non-integer priority or
+an unparseable date with an exit-2 usage error naming the flag and the
+expected shape, instead of `hkb edit`'s old behaviour of writing `Number('abc')`
+→ `null` into the kb block while reporting success. A `--scheduled-at` in the
+past is not refused — it comes back with a `warning` the CLI prints to
+stderr, since a past `scheduled_at` is a legal no-op the caller likely did not
+intend. `--paths ""` / `--goal ""` remain the documented way to clear those
+two fields — unchanged behaviour, now stated in the usage line rather than
+left silent.
 
 ## Known gaps
 
