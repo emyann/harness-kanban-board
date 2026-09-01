@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { loop, tick, noteClaimResult, dropCaches, SELF_HEAL } from '../src/dispatch.js';
+import { loop, tick, noteClaimResult, dropCaches, installStamp, SELF_HEAL } from '../src/dispatch.js';
 import { baseSha, staleBaseSha } from '../src/lock.js';
 import { DEFAULT_BOARD } from '../src/board.js';
 import { GhError, setTransport } from '../src/gh.js';
@@ -242,4 +242,42 @@ test('an unreachable GitHub never escalates: waiting is the fix, restarting is n
     assert.deepEqual(s.self_heal, []);
   }
   assert.doesNotMatch(h.log(), /self-heal/);
+});
+
+// ---------- 3. a loop that has been outlived by the code it loaded gives itself up (#140) ----------
+
+test('a loop whose install stamp changes between ticks exits 4 for a supervisor to restart', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+
+  let stamp = 'abc123';
+  const stampFn = () => stamp;
+  const sleeper = async () => { stamp = 'def456'; }; // "a merge to main" landing between two ticks
+
+  await assert.rejects(
+    () => loop(h.ctx, { interval: 60, max: Infinity, log: h.push, sleeper, installStamp: stampFn }),
+    (e) => {
+      assert.equal(e.exitCode, 4, 'non-zero, so a supervisor restarts it');
+      assert.match(e.message, /this loop is running abc123, the installed hkb is def456 — restarting/);
+      assert.match(e.message, /Running workers are untouched/);
+      return true;
+    },
+  );
+  assert.match(h.log(), /FATAL hkb: this loop is running abc123/);
+});
+
+test('a loop whose install stamp never changes never exits on its account', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+
+  let waits = 0;
+  const sleeper = async () => { if (++waits >= 3) throw new Error('stop the test'); };
+  await assert.rejects(() => loop(h.ctx, { interval: 60, max: Infinity, log: h.push, sleeper, installStamp: () => 'same' }), /stop the test/);
+  assert.equal(waits, 3);
+  assert.doesNotMatch(h.log(), /FATAL/);
+});
+
+test('installStamp reads the checkout\'s own git HEAD when it has one, falling back to the package version otherwise', () => {
+  const stamp = installStamp();
+  assert.match(stamp, /^[0-9a-f]{12}$|^\d+\.\d+\.\d+/, `expected a short git sha or a semver, got ${stamp}`);
 });
