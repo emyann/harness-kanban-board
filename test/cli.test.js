@@ -42,6 +42,30 @@ test('formatPromote: a forced leaf and a blocker skipped for a human read differ
   assert.equal(line, '#20 → ready (forced: blockers not done) · #30 blocked — needs human');
 });
 
+test('hkb promote --triage-only: a card that moved on is skipped, nothing forced (#238)', async (t) => {
+  const gh = new FakeGh();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-promote-'));
+  fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
+  gh.addIssue(kbIssue({ number: 70, title: 'still in triage', status: 'triage', agent: 'claude' }));
+  gh.addIssue(kbIssue({ number: 71, title: 'already moved on', status: 'todo', agent: 'claude' }));
+
+  const cwd = process.cwd();
+  const write = process.stdout.write.bind(process.stdout);
+  let printed = '';
+  process.stdout.write = (s) => { printed += s; return true; };
+  const restore = gh.install();
+  process.chdir(dir);
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+  await main(['promote', '70', '71', '--triage-only', '--json']);
+  const res = JSON.parse(printed);
+  const byNumber = new Map(res.map((r) => [r.number, r]));
+  assert.deepEqual(byNumber.get(70), { number: 70, status: 'todo', from: 'triage', forced: false });
+  assert.deepEqual(byNumber.get(71), { number: 71, status: 'todo', unchanged: true, skipped: true, reason: 'not in triage — already todo' });
+  assert.equal(gh.issues.get(71).labels.includes('kb:status:ready'), false, 'never forced');
+});
+
 // ---------- hkb groom (#227): the read verb, its frozen shape, and the unblocked nudge ----------
 
 /** The keys `--json` promises. Frozen: a later finding kind lands in `findings`, nothing is renamed. */
