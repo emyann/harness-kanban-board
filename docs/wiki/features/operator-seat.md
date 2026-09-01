@@ -7,7 +7,7 @@ audience: [dev, ops]
 read_when: "changing what a session may do on someone's board, adding an event kind / status / outcome / block kind, or wondering why the operator's limits are prose rather than a guard"
 covers:
   - path: skills/kanban/SKILL.md
-    sha: 5e836b405442f1a54e8981f6a75a9d1b7632b632
+    sha: 0c311e92c1252c5f58dd3e985eae63cbd82c16ea
   - path: commands/operate.md
     sha: 868663f4ad694f7e336ebbdfec7952e4afd621e1
   - path: src/watch.js
@@ -105,7 +105,8 @@ requires it to be said out loud with the promote decision under *Needs you*.
 The screen carries two lists, and the split between them is the seat's own
 line. *Needs you* is decisions only the human can take. *Start here* is up to
 four cards worth working now, ranked by what the board can actually say — a
-card in *review* first, then a `kb:needs-human` card whose answer is visible,
+defect in the board's own machinery first, because every other card runs on it
+and the human is running on it right now, then a card in *review*, then a `kb:needs-human` card whose answer is visible,
 then fan-in, the card the most others are blocked by — with `kb.priority`
 below all three, because the flag has a documented direction and no documented
 scale (#207) and numbers filed by different hands do not compare. The line ends

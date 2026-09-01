@@ -262,16 +262,19 @@ the command that acts on it named — not a dump of the top of a sorted list.
 
 Rank by what the board actually tells you, in this order, and stop at four:
 
-1. **A card in *review*.** It is the seat's own decision and it is holding a finished PR. Nothing else outranks
+1. **A defect in the board's own machinery, live in this session.** A card describing something broken in the
+   dispatcher, the lock, the hooks or the CLI outranks the work it would carry, because every other card runs
+   on it — and the human is running on it right now. Say what it costs them today, not what it is.
+2. **A card in *review*.** It is the seat's own decision and it is holding a finished PR. Nothing else outranks
    work that is already done.
-2. **A card wearing `kb:needs-human`** whose question you can see the answer to — say where the answer is, and
+3. **A card wearing `kb:needs-human`** whose question you can see the answer to — say where the answer is, and
    that unblocking it costs them one word.
-3. **The card the most other cards are blocked by.** Fan-in is the board's own statement of what is load-bearing,
+4. **The card the most other cards are blocked by.** Fan-in is the board's own statement of what is load-bearing,
    and `hkb graph <n>` draws it. One card unblocking four beats a card unblocking none, whatever their numbers.
-4. **Then `kb.priority`** — but say the number rather than leaning on it. It is an integer with a documented
+5. **Then `kb.priority`** — but say the number rather than leaning on it. It is an integer with a documented
    direction (higher wins) and no documented scale, so numbers filed by different hands on different days do not
    compare (#207). Where the number disagrees with fan-in, trust fan-in and say you did.
-5. **Then age**, oldest first, exactly as `sortReady` breaks its own ties.
+6. **Then age**, oldest first, exactly as `sortReady` breaks its own ties.
 
 Give each one a clause of *why it is on the list* — not a restatement of its title, which they can read — and
 end the line with the command that starts them, ready to approve:
