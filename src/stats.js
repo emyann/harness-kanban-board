@@ -33,7 +33,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { spawnSync } from 'node:child_process';
 import { fetchBoard, loadRun } from './tasks.js';
 import { readState, stateFile } from './board.js';
-import { STATUSES, OUTCOMES, parseSessionLog } from './model.js';
+import { STATUSES, OUTCOMES, parseSessionLog, denialDisplayTool } from './model.js';
 
 const usage = (msg) => { const e = new Error(msg); e.exitCode = 2; return e; };
 
@@ -138,6 +138,58 @@ export function parseTranscriptUsage(lines) {
     addUsage(per, msg.usage);
   }
   return total.turns ? { ...total, by_model } : null;
+}
+
+// ---------- #130: the two denial shapes only a transcript carries ----------
+//
+// Neither shape is a `PreToolUse` denial — both are `tool_result` blocks Claude Code writes back into
+// the transcript once a tool call it refused returns. An assistant `tool_use` names the tool; the
+// `tool_result` that answers it only carries the tool_use_id, so a single pass keeps a small map from
+// id to name as it goes, the same trick `permission_denials` needs `tool_use_id` for (#155).
+
+const DONTASK_RE = /Permission to use (\S+) has been denied because Claude Code is running in don't ask mode/;
+const WORKTREE_GUARD_RE = /can.t be verified to stay inside the worktree/;
+
+/** The text of a `tool_result` block, whichever shape its `content` came in. */
+function toolResultText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return content.map((c) => (typeof c?.text === 'string' ? c.text : '')).join('\n');
+  return '';
+}
+
+/**
+ * The dontAsk-miss and worktree-guard denials in a transcript — the two shapes #130 exists for,
+ * neither of which lands in `permission_denials` (see `buildDeniedTools`, src/model.js). One pass:
+ * an assistant message's `tool_use` blocks name the tool a later `tool_result` only carries by id.
+ * @returns {Array<{tool, kind, first_seen}>|null} one entry per denial, in transcript order — null
+ *   when the transcript held none (an empty file, a truncated one, one with nothing to report).
+ */
+export function parseTranscriptDenials(lines) {
+  const toolNameById = new Map();
+  const found = [];
+  for (const raw of lines) {
+    const line = typeof raw === 'string' ? raw.trim() : '';
+    if (line[0] !== '{') continue;
+    const obj = tryJson(line);
+    const msg = obj?.message;
+    if (!msg || !Array.isArray(msg.content)) continue;
+    if (msg.role === 'assistant') {
+      for (const block of msg.content) if (block?.type === 'tool_use' && block.id) toolNameById.set(block.id, block.name);
+      continue;
+    }
+    if (msg.role !== 'user') continue;
+    for (const block of msg.content) {
+      if (block?.type !== 'tool_result') continue;
+      const text = toolResultText(block.content);
+      if (!text) continue;
+      const dontAsk = text.match(DONTASK_RE);
+      if (dontAsk) { found.push({ tool: dontAsk[1], kind: 'dontask-miss', first_seen: obj.timestamp || null }); continue; }
+      if (WORKTREE_GUARD_RE.test(text)) {
+        found.push({ tool: toolNameById.get(block.tool_use_id) || 'Bash', kind: 'worktree-guard', first_seen: obj.timestamp || null });
+      }
+    }
+  }
+  return found.length ? found : null;
 }
 
 // ---------- pure: an estimate, when the board has said what its tokens cost ----------
@@ -285,6 +337,7 @@ export function collectAttempts(tasks, runs, since = null, { cost = () => null, 
         // rows the dispatcher or a reviewer writes for the record (gave_up, changes_requested):
         // real outcomes, but zero-duration bookkeeping — they must not drag the averages down
         synthetic: !!a.synthetic,
+        denied_tools: Array.isArray(a.denied_tools) && a.denied_tools.length ? a.denied_tools : null,
         ...priceOf(a, cost, transcript, rates),
       });
     }
@@ -448,6 +501,29 @@ export function summarizeSpend(rows) {
 }
 
 /**
+ * "Tools workers wanted and could not use" — `denied_tools` (#130) summed across every attempt in the
+ * window, grouped by tool+kind, most-denied first. `attempts` is how many distinct attempts hit that
+ * tool at all — a worker that hit the same rule nine times in one attempt and one that hit it once in
+ * nine attempts read very differently to an operator deciding whether to widen an allowlist.
+ * `[]` when nothing in the window carries a ledger yet — an unpopulated board reads as "none seen",
+ * not as an error.
+ */
+export function summarizeDeniedTools(rows) {
+  const byKey = new Map();
+  for (const r of rows) {
+    if (!r.denied_tools) continue;
+    for (const d of r.denied_tools) {
+      const key = `${d.kind} ${d.tool}`;
+      const row = byKey.get(key) || { tool: d.tool, kind: d.kind, count: 0, attempts: 0 };
+      row.count += d.count;
+      row.attempts += 1;
+      byKey.set(key, row);
+    }
+  }
+  return [...byKey.values()].sort((x, y) => y.count - x.count || x.tool.localeCompare(y.tool));
+}
+
+/**
  * Today's spawn count against the dispatcher's daily cap, out of `.kanban/state.json`.
  * The day is UTC, the same slice the tick uses, so a stale `spawn_day` reads as zero.
  * `state` is null when there is no dispatcher state here at all — a checkout that has never run a
@@ -481,6 +557,7 @@ export function computeStats({ board, repo, tasks = [], runs = new Map(), since 
     attempts: summarizeAttempts(rows),
     spawns: spawns || spawnBudget(null, null, now),
     spend: summarizeSpend(rows),
+    denied_tools: summarizeDeniedTools(rows),
     reads: { board: 1, run_comments: read },
   };
 }
@@ -572,6 +649,14 @@ export function formatStats(s) {
   }
   if (m.attempts_shared_session) lines.push(row('', `${some(m.attempts_shared_session)} ran inside a session another attempt carries — counted once, there, not once per node`));
   if (m.attempts_with_usage && !m.attempts_estimated) lines.push(row('', 'no price: put `"stats": {"rates": {"<model>": {"input": <$/Mtok>, "output": <$/Mtok>}}}` in .kanban/board.json for an estimate'));
+
+  if (s.denied_tools.length) {
+    const byDisplay = new Map();
+    for (const d of s.denied_tools) { const t = denialDisplayTool(d.tool); byDisplay.set(t, (byDisplay.get(t) || 0) + d.count); }
+    const grouped = [...byDisplay].sort((x, y) => y[1] - x[1]);
+    const top = grouped.slice(0, 5).map(([tool, n]) => `${tool} ×${n}`).join(', ');
+    lines.push(row('denied', `${top}${grouped.length > 5 ? `, +${grouped.length - 5} more` : ''} — tools workers wanted and could not use; \`hkb doctor\` proposes the allowlist edit`));
+  }
   lines.push('');
   lines.push(`read 1 board query + ${s.reads.run_comments} run record${s.reads.run_comments === 1 ? '' : 's'}; nothing was written.`);
   return lines.join('\n');
@@ -652,6 +737,47 @@ export function usageFromTranscript(root, attempt) {
   const p = attempt?.transcript_path;
   if (!p || typeof p !== 'string') return null;
   return parseTranscriptUsage(readLines(path.isAbsolute(p) ? p : path.join(root, p)));
+}
+
+/**
+ * `parseTranscriptDenials` over a transcript on disk — `transcript_path` may be relative to `root`,
+ * same convention as `usageFromTranscript`. The dispatcher (src/dispatch.js) and the Stop hook
+ * (src/hook.js) call this once, at the point they already have the path in hand (an attempt ending,
+ * or a reap), and hand the result to `buildDeniedTools` (src/model.js) to merge with whatever
+ * `permission_denials` the row already carries. null when there is nothing here to read.
+ */
+export function deniedToolsFromTranscript(root, transcriptPath) {
+  if (!transcriptPath || typeof transcriptPath !== 'string') return null;
+  return parseTranscriptDenials(readLines(path.isAbsolute(transcriptPath) ? transcriptPath : path.join(root, transcriptPath)));
+}
+
+/**
+ * The MCP servers a transcript actually called a tool from — out of its `tool_use` blocks, the
+ * `mcp__<server>__` ones only. `hkb doctor` (#130) uses this to tell "configured in `.mcp.json`" from
+ * "reached a worker at all": a server that never starts under a `--bg dontAsk` launch (wrong cwd,
+ * missing env, a `.mcp.json` the daemon never re-reads) leaves the denied-tools ledger empty for the
+ * wrong reason — nobody denied it, it was simply never there to deny.
+ */
+export function transcriptMcpServers(lines) {
+  const servers = new Set();
+  for (const raw of lines) {
+    const line = typeof raw === 'string' ? raw.trim() : '';
+    if (line[0] !== '{' || !line.includes('tool_use')) continue;
+    const msg = tryJson(line)?.message;
+    if (!msg || msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (block?.type !== 'tool_use' || typeof block.name !== 'string') continue;
+      const m = /^mcp__([^_]+)__/.exec(block.name);
+      if (m) servers.add(m[1]);
+    }
+  }
+  return servers;
+}
+
+/** `transcriptMcpServers` over a transcript on disk — same path convention as `usageFromTranscript`. */
+export function mcpServersFromTranscript(root, transcriptPath) {
+  if (!transcriptPath || typeof transcriptPath !== 'string') return new Set();
+  return transcriptMcpServers(readLines(path.isAbsolute(transcriptPath) ? transcriptPath : path.join(root, transcriptPath)));
 }
 
 // ---------- the command ----------

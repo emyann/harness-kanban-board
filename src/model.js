@@ -1411,6 +1411,78 @@ export function formatDenials(a) {
   return [...counts].map(([tool, n]) => `${tool} ×${n}`).join(', ');
 }
 
+// ---------- #130: the denied-tools ledger — every layer that can refuse a worker a tool ----------
+//
+// A worker under `--permission-mode dontAsk` never sees a prompt, so a refusal is silent to it and
+// visible to hkb only in the transcript it leaves behind. Three shapes land differently:
+//   - `permission-rule`  — a `--disallowedTools` rule; the CLI's own result names it under
+//     `permission_denials` (#155), already on the row, no transcript read needed;
+//   - `dontask-miss`     — *"Permission to use <tool> has been denied because Claude Code is running
+//     in don't ask mode"*, an allowlist miss (heredoc, `$(…)` substitution, an unlisted MCP tool) —
+//     a `tool_result` string, absent from `permission_denials`;
+//   - `worktree-guard`   — the worktree guard's *"…can't be verified to stay inside the worktree"*, a
+//     tool **error**, also absent from `permission_denials`.
+// Both transcript shapes are found by `parseTranscriptDenials` (src/stats.js, the only place that
+// reads a transcript); this module only classifies and merges what comes back.
+
+export const DENIAL_KINDS = { RULE: 'permission-rule', DONTASK: 'dontask-miss', GUARD: 'worktree-guard' };
+
+/**
+ * The denied-tools ledger for one attempt, `{tool, kind, count, first_seen}[]` — `permission_denials`
+ * (kind `permission-rule`, no per-item timestamp) merged with what a transcript scan found (kind
+ * `dontask-miss` / `worktree-guard`, each carrying the transcript line's own timestamp). Grouped by
+ * tool+kind so `mcp__react-aria__*` denied twice two different ways shows as two rows, not one;
+ * first-seen order, so `hkb show`/`--json` reads the same tool it happened to first refuse.
+ */
+export function buildDeniedTools(permissionDenials, transcriptDenials) {
+  const rows = new Map();
+  const bump = (tool, kind, firstSeen) => {
+    const key = `${kind} ${tool}`;
+    const row = rows.get(key);
+    if (row) {
+      row.count++;
+      if (firstSeen && (!row.first_seen || firstSeen < row.first_seen)) row.first_seen = firstSeen;
+    } else {
+      rows.set(key, { tool, kind: kind, count: 1, first_seen: firstSeen || null });
+    }
+  };
+  for (const d of permissionDenials || []) bump((d && (d.tool_name || d.tool)) || 'unknown', DENIAL_KINDS.RULE, null);
+  for (const d of transcriptDenials || []) bump((d && d.tool) || 'unknown', (d && d.kind) || DENIAL_KINDS.DONTASK, d && d.first_seen);
+  return [...rows.values()];
+}
+
+/**
+ * `denied_tools` unchanged by value → `null` (nothing to write), same "record once" contract as
+ * `sessionUpdate`. `attempt.denied_tools` is compared by value since a fresh transcript read never
+ * `===` what is already on the row.
+ */
+export function deniedToolsUpdate(attempt, deniedTools) {
+  if (!Array.isArray(deniedTools) || !deniedTools.length) return null;
+  const a = attempt || {};
+  return JSON.stringify(a.denied_tools) === JSON.stringify(deniedTools) ? null : { denied_tools: deniedTools };
+}
+
+/** `mcp__react-aria__Button` → `mcp__react-aria__*` — one server denied is one thing to fix, however
+ * many of its tools a worker happened to reach for. Any other tool name passes through unchanged. */
+export function denialDisplayTool(tool) {
+  const m = typeof tool === 'string' ? /^mcp__([^_]+)__/.exec(tool) : null;
+  return m ? `mcp__${m[1]}__*` : tool;
+}
+
+/**
+ * `mcp__react-aria__* ×7, Skill ×2` — the ledger when the row carries one (every kind folded
+ * together, an MCP server's tools folded to its wildcard, most-denied first), else the
+ * `permission_denials`-only fallback `formatDenials` has always given, for a row #130's transcript
+ * pass never reached. '' when there is nothing to show either way.
+ */
+export function formatDeniedTools(a) {
+  const list = a?.denied_tools;
+  if (!Array.isArray(list) || !list.length) return formatDenials(a);
+  const byTool = new Map();
+  for (const d of list) { const t = denialDisplayTool(d.tool); byTool.set(t, (byTool.get(t) || 0) + d.count); }
+  return [...byTool].sort((x, y) => y[1] - x[1]).map(([tool, n]) => `${tool} ×${n}`).join(', ');
+}
+
 /**
  * Whether a worker's exit reads as auth trouble worth pausing its profile for, out of what
  * `parseSessionLog` read from its log — `null` for no. A `401`/`429` on `api_error_status` is the
