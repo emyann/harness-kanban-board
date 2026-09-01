@@ -19,6 +19,7 @@ import { FakeGh, kbIssue } from './fake-gh.js';
 import {
   PROCESSES, detachedEnv, startDecision, processLine, startLogLine, formatSince, decidePermission,
   allowedCommandsFrom, pidFileStale, stopWaitMs, PID_BOOT_SLACK_MS,
+  pidClaimStale, cmdlineIsOurs, bootInstantMs, parseBtimeSec, parseKernBoottimeSec,
 } from '../src/model.js';
 
 const roots = [];
@@ -171,6 +172,89 @@ test('a pid file that predates the boot names a stranger, not a dispatcher', () 
   assert.equal(pidFileStale(new Date(now - uptime * 1000 - PID_BOOT_SLACK_MS + 1).toISOString(), { now, uptime }), false);
   assert.equal(pidFileStale(null, { now, uptime }), false);
   assert.equal(pidFileStale('2026-08-20T00:00:00Z', { now, uptime: 0 }), false, 'no uptime to compare against: believe the file');
+});
+
+test('bootInstantMs prefers a kernel-reported btime over the derived now - uptime', () => {
+  const now = Date.parse('2026-08-28T19:30:00Z');
+  assert.equal(bootInstantMs({ uptime: 3600, now }), now - 3600_000, 'no btime: derive it');
+  assert.equal(bootInstantMs({ btimeSec: 1000, uptime: 3600, now }), 1000_000, 'btime wins when there is one');
+  assert.equal(bootInstantMs({ now }), null, 'no evidence at all: no verdict');
+});
+
+test('parseBtimeSec / parseKernBoottimeSec read the boot instant out of real tool output', () => {
+  assert.equal(parseBtimeSec('cpu  1 2 3\nbtime 1690000000\nprocesses 4\n'), 1690000000);
+  assert.equal(parseBtimeSec('nothing here'), null);
+  assert.equal(parseKernBoottimeSec('{ sec = 1690000000, usec = 123456 } Wed Jul ...'), 1690000000);
+  assert.equal(parseKernBoottimeSec(''), null);
+});
+
+test('cmdlineIsOurs matches our own long-running processes and nothing else', () => {
+  assert.equal(cmdlineIsOurs(['node', '/x/bin/hkb.js', 'dispatch', '--loop', '60', '--board', 'default'].join('\0'), 'dispatch'), true);
+  assert.equal(cmdlineIsOurs(['node', '/x/bin/hkb.js', 'serve', '--board', 'default'].join('\0'), 'serve'), true);
+  assert.equal(cmdlineIsOurs(['node', '--test', 'test/up.test.js'].join('\0'), 'dispatch'), false, 'some other process entirely');
+  assert.equal(cmdlineIsOurs(['node', '/x/bin/hkb.js', 'dispatch'].join('\0'), 'dispatch'), false, 'dispatch without --loop is a one-shot tick, not the daemon');
+  assert.equal(cmdlineIsOurs(null, 'dispatch'), null, 'nothing to check against');
+  assert.equal(cmdlineIsOurs('', 'dispatch'), null);
+});
+
+/**
+ * The bug this task fixes: on WSL2 the wall clock resyncs against the Windows host across
+ * suspend/resume while `/proc/uptime` keeps counting on its own, so the derived boot instant walks
+ * forward past a pid file `hkb up` itself wrote earlier in the same session — `pidFileStale` alone
+ * says stale. Corroboration rescues it: the pid is alive and its `/proc/<pid>/cmdline` still says
+ * `hkb dispatch --loop`, so whatever the arithmetic concluded, this is our claim.
+ */
+test('pidClaimStale: a live pid whose cmdline is still ours is never stale, however the clock skewed', () => {
+  const uptime = 2054.62; // 34m14.62s up
+  const now = Date.parse('2026-09-01T17:42:32Z') + uptime * 1000; // derived boot = 17:42:32
+  const at = '2026-09-01T17:32:37Z'; // written 10 minutes "before boot" per the arithmetic
+  assert.equal(pidFileStale(at, { now, uptime }), true, 'the arithmetic alone gets this wrong');
+  const ours = pidClaimStale({
+    at, name: 'dispatch', alive: true, cmdline: ['node', '/x/bin/hkb.js', 'dispatch', '--loop', '60', '--board', 'default'].join('\0'),
+    now, uptime,
+  });
+  assert.equal(ours, false, 'corroborated: this is our own dispatcher, believed despite the skew');
+});
+
+test('pidClaimStale: a live pid that does NOT corroborate stays refused — the #202 reused-pid case', () => {
+  const now = Date.parse('2026-08-28T19:30:00Z');
+  const uptime = 3600; // booted 18:30, genuinely
+  const at = '2026-08-28T17:55:00Z'; // written before that real boot
+  const reissued = pidClaimStale({
+    at, name: 'dispatch', alive: true, cmdline: ['some-other-daemon', '--flag'].join('\0'), now, uptime,
+  });
+  assert.equal(reissued, true, 'the kernel handed this pid to a stranger; still refused');
+});
+
+test('pidClaimStale: with no /proc to corroborate against (macOS), the timestamp verdict stands', () => {
+  const uptime = 2054.62;
+  const now = Date.parse('2026-09-01T17:42:32Z') + uptime * 1000;
+  const at = '2026-09-01T17:32:37Z';
+  assert.equal(pidClaimStale({ at, name: 'dispatch', alive: true, cmdline: null, now, uptime }), true);
+});
+
+test('pidClaimStale never manufactures staleness the timestamp verdict did not already reach', () => {
+  const now = Date.parse('2026-08-28T19:30:00Z');
+  const uptime = 3600;
+  const at = '2026-08-28T19:02:00Z'; // written after boot: arithmetic already believes it
+  // an unrelated cmdline (or none at all) must not override a verdict that was already "not stale" —
+  // corroboration only ever rescues, never revokes
+  assert.equal(pidClaimStale({ at, name: 'dispatch', alive: true, cmdline: 'some-other-daemon', now, uptime }), false);
+  assert.equal(pidClaimStale({ at, name: 'dispatch', alive: false, cmdline: null, now, uptime }), false);
+});
+
+test('readPidFile: /proc corroboration rescues a live pid the timestamp alone would call stale', () => {
+  const root = tmpRoot();
+  const proc = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-proc-'));
+  try {
+    fs.writeFileSync(pidFile(root, 'dispatch'), `${process.pid}\n`);
+    fs.utimesSync(pidFile(root, 'dispatch'), new Date(0), new Date(0)); // 1970: arithmetic alone calls this stale
+    fs.mkdirSync(path.join(proc, String(process.pid)), { recursive: true });
+    fs.writeFileSync(path.join(proc, String(process.pid), 'cmdline'), ['node', 'bin/hkb.js', 'dispatch', '--loop', '60'].join('\0'));
+
+    assert.equal(readPidFile(root, 'dispatch', { proc: path.join(proc, 'nope') }).stale, true, 'no /proc to corroborate against: the timestamp verdict stands');
+    assert.equal(readPidFile(root, 'dispatch', { proc }).stale, false, "corroborated our own dispatcher: believed despite the file's age");
+  } finally { fs.rmSync(proc, { recursive: true, force: true }); }
 });
 
 test('a stale pid file reports stopped, and says why the file is there', () => {

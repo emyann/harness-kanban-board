@@ -1151,21 +1151,85 @@ export function detachedEnv(env = {}) {
 export const PID_BOOT_SLACK_MS = 5_000;
 
 /**
+ * Parse `btime` (the boot instant, epoch seconds, fixed at boot) out of `/proc/stat` text. Unlike
+ * `now - os.uptime()`, `btime` does not drift when the wall clock is resynced against a host while
+ * the machine is suspended (WSL2's VM clock does this across every suspend/resume). Pure; malformed
+ * or missing input is null — "no better boot instant than the derived one".
+ */
+export function parseBtimeSec(procStatText) {
+  const m = /^btime\s+(\d+)\s*$/m.exec(String(procStatText || ''));
+  return m ? Number(m[1]) : null;
+}
+
+/** Parse `sysctl -n kern.boottime` output (`{ sec = 1690000000, usec = 123456 } ...`), macOS's `btime`. Pure. */
+export function parseKernBoottimeSec(sysctlText) {
+  const m = /sec\s*=\s*(\d+)/.exec(String(sysctlText || ''));
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * When this machine booted, in ms since epoch: the kernel-reported instant (`btimeSec`) when one was
+ * found, else the derived `now - uptime`. Pure; no boot evidence at all (neither) means null — no
+ * verdict is possible.
+ */
+export function bootInstantMs({ btimeSec = null, uptime = 0, now = Date.now() } = {}) {
+  if (btimeSec) return btimeSec * 1000;
+  if (uptime) return now - uptime * 1000;
+  return null;
+}
+
+/**
  * Is this pid file a claim a reboot invalidated? A pid file is a claim, and after a reboot it is a
  * claim on a pid the kernel has since handed to somebody else. `.kanban/*.pid` is a plain file: it
  * survives the reboot, `pidAlive` says "yes, something answers to 3843", and `hkb down` would
  * SIGTERM a stranger's process.
  *
  * The zero-dependency guard is arithmetic: a pid file written *before this machine booted* cannot
- * name a process of ours that is still running, whatever `kill(pid, 0)` says. `uptime` is the
- * machine's, in seconds (`os.uptime()`); `at` is the file's mtime. No uptime to compare against
- * means no verdict, so the file is believed.
+ * name a process of ours that is still running, whatever `kill(pid, 0)` says. Boot is `bootInstantMs`
+ * — `btimeSec` when the caller has one, else derived from `uptime` (`os.uptime()`, seconds); `at` is
+ * the file's mtime. No boot instant to compare against means no verdict, so the file is believed.
  */
-export function pidFileStale(at, { now = Date.now(), uptime = 0 } = {}) {
-  if (!at || !uptime) return false;
+export function pidFileStale(at, { now = Date.now(), uptime = 0, btimeSec = null } = {}) {
+  if (!at) return false;
   const t = new Date(at).getTime();
   if (Number.isNaN(t)) return false;
-  return t < now - uptime * 1000 - PID_BOOT_SLACK_MS;
+  const boot = bootInstantMs({ btimeSec, uptime, now });
+  if (boot === null) return false;
+  return t < boot - PID_BOOT_SLACK_MS;
+}
+
+/**
+ * Does `/proc/<pid>/cmdline` (NUL-joined argv, as the kernel writes it) belong to our own
+ * `hkb dispatch --loop` / `hkb serve`? True or false once `/proc` answered; null when there is
+ * nothing to check it against (no `/proc` — macOS — or the caller has no cmdline at all), which
+ * tells `pidClaimStale` to fall back to the timestamp verdict rather than guess.
+ */
+export function cmdlineIsOurs(cmdline, name) {
+  if (cmdline == null) return null;
+  const argv = String(cmdline).split('\0').filter(Boolean);
+  if (!argv.length) return null;
+  const joined = argv.join(' ');
+  if (name === 'dispatch') return /\bdispatch\b/.test(joined) && /--loop\b/.test(joined);
+  if (name === 'serve') return /\bserve\b/.test(joined);
+  return false;
+}
+
+/**
+ * The staleness verdict `readPidFile` actually acts on: the timestamp verdict (`pidFileStale`),
+ * rescued when it says stale but the pid is demonstrably still ours. A wrong-stale verdict is not
+ * cosmetic — `startProcess`/the dispatcher's singleton lock/the server's claim all read "stale" as
+ * "no claim here" and start a rival (#205, WSL2: the wall clock resyncs against the host across
+ * suspend/resume while `/proc/uptime` keeps its own count, so the derived boot instant walks past
+ * pid files written earlier in the same session). Corroboration only ever *rescues* a stale verdict,
+ * never manufactures one the arithmetic didn't already reach — a pid file the timestamp already
+ * believes needs no `/proc` round-trip, and a live-but-unrelated pid is exactly the reused-pid case
+ * (#202) the arithmetic exists to refuse, so an inconclusive or contradicting cmdline leaves that
+ * refusal standing.
+ */
+export function pidClaimStale({ at, name, alive, cmdline, now = Date.now(), uptime = 0, btimeSec = null } = {}) {
+  if (!pidFileStale(at, { now, uptime, btimeSec })) return false;
+  if (!alive) return true;
+  return cmdlineIsOurs(cmdline, name) !== true;
 }
 
 /**
