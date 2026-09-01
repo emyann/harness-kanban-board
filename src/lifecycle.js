@@ -457,13 +457,24 @@ export async function linkTask(ctx, parent, child, { unlink = false } = {}) {
  * today's single-card behaviour, forcing included; a real subgraph never forces a blocker to `ready` —
  * see `promoteDecision`. Returns one row per card the track touches, moved or not, so a cascade that
  * moves several cards never reports as if it moved one.
+ *
+ * `triageOnly` (#238) is the guard a batch promote wants: a card named on the command line can have
+ * moved on — dispatched, hand-promoted — between the moment something decided to promote it and the
+ * moment this call runs. Without the guard, promoting a card that is no longer in *triage* silently
+ * forces it (a `todo` root has no open blockers of its own, so `allowForce` is true) and the caller had
+ * to notice a `forced` line in the output after the fact to catch it. With it, a root that is not in
+ * *triage* is skipped before anything is read or written — same shape as any other skip, so a batch
+ * that mixes triage and already-moved cards gets one report, not a forced write to explain away.
  */
-export async function promote(ctx, number) {
+export async function promote(ctx, number, { triageOnly = false } = {}) {
   const n = Number(number);
   const byNumber = new Map((await fetchBoard(ctx)).map((t) => [t.number, t]));
   let root = byNumber.get(n);
   if (!root) { root = await getTask(ctx, n); byNumber.set(n, root); }
   assertOnBoard(ctx, root);
+  if (triageOnly && root.status !== 'triage') {
+    return [{ number: root.number, status: root.status, unchanged: true, skipped: true, reason: `not in triage — already ${root.status}` }];
+  }
   const track = resolveTrack(n, byNumber);
   const allowForce = track.nodes.length === 0; // no open blockers: a track of one, today's behaviour
   const results = [];

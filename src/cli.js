@@ -18,7 +18,7 @@ import { gc } from './gc.js';
 import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, formatDenials, resumeCommand, activePrGuard, isTrackRoot, groomBoard, computeReady, pathOverlapGuard, GROOM_LEVELS } from './model.js';
 
 /** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
-const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'with-actions', 'mermaid', 'serve', 'off', 'on', 'help']);
+const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'triage-only', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'with-actions', 'mermaid', 'serve', 'off', 'on', 'help']);
 
 export function parseArgs(argv) {
   const flags = {};
@@ -550,8 +550,9 @@ export async function main(argv) {
     case 'promote': {
       const ns = nums(rest);
       if (!ns.length) throw usage('hkb promote <n>...');
+      const triageOnly = !!flags['triage-only'];
       const res = [];
-      for (const n of ns) res.push(...await promote(ctx, n));
+      for (const n of ns) res.push(...await promote(ctx, n, { triageOnly }));
       out(ctx, res, formatPromote(res));
       return 0;
     }

@@ -9,18 +9,20 @@ covers:
   - path: src/model.js
     sha: 96d73c3e1721735a52e0ca67752476040135d04a
   - path: src/cli.js
-    sha: c349ca9283acb8f7899354061cd7b9cdd7cefeef
+    sha: c664cd02177c5e985b3f67814265549c9ef8af8b
+  - path: src/lifecycle.js
+    sha: ae17fbcb5a80bb369cdecd0d56097a1b8c73f846
   - path: src/tasks.js
-    sha: f67ad46d8fdf8791f2477e0c55db8e2433a084b8
+    sha: 109820a1b264151b5edc2956874791edd7df7e5c
   - path: src/doctor.js
     sha: 976283bd0771f28d8a687aa83509d62b86468210
   - path: skills/kanban/SKILL.md
-    sha: 7c36fd46a71d2a636e88db89aa064a63e44ab5f3
+    sha: 15b56d9049e169776ccccb6bd75b2c36912048f7
   - path: commands/groom.md
     sha: 4fc2dc2db984033fe8801e8d28b50e8e68fefddc
   - path: skills/kanban/references/protocol.md
     sha: 771770f1e8c420d821bf81c34bd63cd9dbc23d87
-generated_at_commit: 108bd15
+generated_at_commit: 6400ac0
 last_refreshed: 2026-09-01
 related: [features/planning-commands, features/operator-seat, features/path-overlap-guard, features/tracks]
 ---
@@ -113,11 +115,13 @@ token argument for the shape is `bodyText`, which is attached only to cards that
 `/kanban:groom` (`skills/kanban/SKILL.md:503`, registered from `commands/groom.md`) reads the report
 **once**, judges only `judgment.cards` and `judgment.pairs`, proposes one table grouped by cluster, and
 then stops. Nothing is applied until a human says yes per row. What the approved batch may execute is
-deliberately short — `hkb comment`, `hkb create --triage --blocked-by`, `hkb link`, and one `hkb promote`
-of cards that are already in triage. `hkb edit` now exists (below) but the procedure does not yet route
-`specify`-flagged findings through it — a body/`kb` rewrite still goes through the `/kanban:specify` PATCH
-recipe. Archive, supersede and close-as-duplicate stay **handed back as pre-staged commands** rather than
-run, because the verbs that would make them safe do not exist yet (see the gaps below).
+deliberately short — `hkb comment`, `hkb create --triage --blocked-by`, `hkb link`, and one
+`hkb promote --triage-only` of cards that are already in triage, which skips and reports (rather than
+writes) a card that has moved on before the flag was applied. `hkb edit` now exists (below) but the
+procedure does not yet route `specify`-flagged findings through it — a body/`kb` rewrite still goes
+through the `/kanban:specify` PATCH recipe. Archive, supersede and close-as-duplicate stay **handed back
+as pre-staged commands** rather than run, because the verbs that would make them safe do not exist yet
+(see the gaps below).
 
 This is also the one sanctioned exception to the operator's "never promote" rule: the human's per-row yes
 is what makes the promotion theirs rather than the agent's.
@@ -139,9 +143,6 @@ none of them throw a usage error.
 
 ## Known gaps
 
-- **`hkb promote --triage-only` does not exist.** The design called for a flag that skips a card not in
-  triage without writing; `promote` takes numbers only, so the procedure leans on reading the `forced`
-  line in the output and treating it as a stop-and-report.
 - **No close-as-duplicate verb**, which is why the handback list exists at all.
 - Deliberately deferred as too noisy to be worth a row today: `stale` / `--older-than`, `decision_open`,
   `too_big`, `--comments`, and web-board chips — `src/serve.js` is untouched by the feature.

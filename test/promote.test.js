@@ -87,6 +87,30 @@ test('a blocker parked with a human is left alone by the cascade, and says why',
   } finally { cleanup(); }
 });
 
+test('--triage-only skips a card that moved on before anything is written (#238)', async () => {
+  const { gh, ctx, cleanup } = harness();
+  try {
+    gh.addIssue(kbIssue({ number: 60, status: 'todo', agent: 'claude' })); // no longer in triage
+
+    const res = await promote(ctx, 60, { triageOnly: true });
+    assert.deepEqual(res, [{ number: 60, status: 'todo', unchanged: true, skipped: true, reason: 'not in triage — already todo' }]);
+    // nothing written: still todo, no ready label
+    assert.equal(gh.issues.get(60).labels.includes('kb:status:ready'), false);
+    assert.equal(gh.issues.get(60).labels.includes('kb:status:todo'), true);
+  } finally { cleanup(); }
+});
+
+test('--triage-only promotes a card genuinely still in triage, same as without the flag', async () => {
+  const { gh, ctx, cleanup } = harness();
+  try {
+    gh.addIssue(kbIssue({ number: 61, status: 'triage', agent: 'claude' }));
+
+    const res = await promote(ctx, 61, { triageOnly: true });
+    assert.deepEqual(res, [{ number: 61, status: 'todo', from: 'triage', forced: false }]);
+    assert.equal(gh.issues.get(61).labels.includes('kb:status:todo'), true);
+  } finally { cleanup(); }
+});
+
 test('a card already past todo is reported skipped, with a reason, not silently dropped', async () => {
   const { gh, ctx, cleanup } = harness();
   try {

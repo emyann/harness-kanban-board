@@ -190,7 +190,8 @@ root's `kb.paths`, which guard the whole subgraph.
 - `hkb create "title" [--blocked-by 12,13] [--agent claude] [--priority N] [--paths apps/web/]` — add work.
   Decide before you fan out: put design decisions in the body; children cannot see their siblings.
 - `hkb link <parent> <child>` / `hkb unlink` — dependencies (same board only).
-- `hkb promote <n>` (triage → todo, or force ready) · `hkb unblock <n>` · `hkb request-changes <n> "reason"` · `hkb archive <n>`.
+- `hkb promote <n>` (triage → todo, or force ready; `--triage-only` skips a card no longer in triage instead of forcing it)
+  · `hkb unblock <n>` · `hkb request-changes <n> "reason"` · `hkb archive <n>`.
 - `hkb claim <n>` — take a task by hand, with no dispatcher: it creates the lock ref, moves the card to *running* and
   prints the `export KB_TASK=… KB_ATTEMPT=…` line to work under. The protocol is then exactly the worker's, above.
   A hand-claimed attempt has no process for anyone to watch, so **the heartbeat is the only thing holding it**:
@@ -636,7 +637,7 @@ gh api repos/{owner}/{repo}/issues/117 -X PATCH \
 hkb show 117 --json       # verify: kb._malformed means you broke the JSON, and a bad block falls back silently
 
 # e. ONE promote, last, of the cards approved for it — all of them in one command
-hkb promote 140 141 156
+hkb promote 140 141 156 --triage-only
 ```
 
 Five things about that order:
@@ -645,10 +646,12 @@ Five things about that order:
   launches a worker on a note you wrote. `--blocked-by <the card that revealed it>` is what makes it a finding
   rather than an orphan. Leave `--priority` off: the queue's order is the human's.
 - **Link before you promote.** A card promoted before its link is a card the tick can claim in between.
-- **One `hkb promote`, at the end, of cards that are in *triage*.** `hkb promote` on a card already in *todo*
-  **forces** it to *ready* with its blockers still open, and the output says so: a `forced` line — `→ ready
-  (forced: blockers not done)` — means you promoted something that was not a triage card. Stop and report it;
-  do not promote again to "fix" it.
+- **One `hkb promote --triage-only`, at the end, of cards that are in *triage*.** Without `--triage-only`,
+  `hkb promote` on a card already in *todo* **forces** it to *ready* with its blockers still open — a card in
+  the batch can move on between the moment you decided to promote it and the moment this runs. `--triage-only`
+  skips a card that is no longer in *triage* before writing anything and reports it skipped (`not in triage —
+  already todo`), instead of leaving you to notice a `forced` line after the fact. A skip there means the
+  batch is stale for that card: re-run `hkb groom` rather than promoting it again to "fix" it.
 - **Promoted N is a queue, not N running.** Promotion moves cards to *todo*; the tick makes the unblocked ones
   *ready* and claims at most `max_in_progress` of them. Say that in the digest, or "I promoted twelve" reads as
   twelve sessions.
