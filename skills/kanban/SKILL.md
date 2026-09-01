@@ -1,11 +1,11 @@
 ---
 name: kanban
-description: Work a hkb task from the GitHub Issues board — read the task with `hkb show`, work in the worktree, open a PR that closes the issue, and finish with exactly one terminal verb (complete / block / request-review). Use whenever KB_TASK is set, when asked to "work task <n>", "pick up the next kanban task", or to create/link tasks on the board. Also runs a whole track (a root plus everything blocking it) in one session, plans the board — `/kanban:specify <n>` rewrites a one-liner into a spec and promotes it, `/kanban:decompose <n>` proposes a dependency graph for a goal and materializes it once a human approves — and operates it: `/kanban:operate` brings the board up, watches it, and reacts per event kind while the approvals stay with the human.
+description: Work a hkb task from the GitHub Issues board — read the task with `hkb show`, work in the worktree, open a PR that closes the issue, and finish with exactly one terminal verb (complete / block / request-review). Use whenever KB_TASK is set, when asked to "work task <n>", "pick up the next kanban task", or to create/link tasks on the board. Also runs a whole track (a root plus everything blocking it) in one session, plans the board — `/kanban:specify <n>` rewrites a one-liner into a spec and promotes it, `/kanban:decompose <n>` proposes a dependency graph for a goal and materializes it once a human approves, `/kanban:groom` turns `hkb groom`'s triage report into one batch of proposals a human says yes to — and operates it: `/kanban:operate` brings the board up, watches it, and reacts per event kind while the approvals stay with the human.
 license: MIT
 compatibility: Requires the `gh` CLI (authenticated) and `hkb` (npm hkb-cli) on PATH. Works with Claude Code, GitHub Copilot CLI and Codex CLI.
 metadata:
   author: hkb
-  version: 0.8.0
+  version: 0.9.0
 allowed-tools: Bash(hkb *) Bash(gh api *) Bash(gh pr *) Bash(gh issue view *) Bash(git *)
 ---
 
@@ -198,10 +198,11 @@ root's `kb.paths`, which guard the whole subgraph.
   (1h by default) and your next heartbeat exits `LOCK_LOST`. `--spawn` hands it to the profile's launch command instead.
 - `hkb dispatch --dry-run` shows what the next tick would do; `hkb dispatch --loop 60` runs it.
 - Planning, not managing: `/kanban:specify <n>` sharpens one triage one-liner into a spec, `/kanban:decompose <n>`
-  splits a goal into a dependency graph. Both are below, and both stop for approval before they write anything.
+  splits a goal into a dependency graph, `/kanban:groom` reads the whole triage lane's report and proposes one
+  batch. All three are below, and all three stop for approval before they write anything.
 - Running the board rather than reading it: `/kanban:operate` — bring it up, watch it, react per event kind, and
   know what goes back to the human. Also below.
-- All three are **real slash commands**, registered by `hkb init` (which writes `.claude/commands/kanban/`) or by
+- All four are **real slash commands**, registered by `hkb init` (which writes `.claude/commands/kanban/`) or by
   the `kanban` plugin; their bodies do nothing but send you to the section of this file with the same name. In a
   harness with no slash commands — Copilot CLI, Codex — ask for the section by name instead; the procedure is
   identical, and `hkb` is the only thing any of them calls.
@@ -274,7 +275,7 @@ shape of what arrived, and switch on `kind` (or on `tags`, which carries the kin
 
 | kind | prints as | what you do |
 |---|---|---|
-| `appeared` | `+ on the board (triage)` | nothing — unless you are the planner too, and then it is `/kanban:specify` work, not a card to start |
+| `appeared` | `+ on the board (triage)` | nothing to start. If you are the planner too, run the `/kanban:groom` per-card pass over it (`hkb groom --json --status triage`) and **propose** — never promote — or `/kanban:specify` it if it is one sentence |
 | `status` | `ready → running` | per the status it landed on — the table below |
 | `agent` | `agent claude → claude-track` | nothing; name it in the digest if it was neither you nor the human |
 | `needs-human` | `⚠ needs-human` | the human — unless it arrived with a `blocked` card whose question you can genuinely answer (below). The label is never cleared on its own: `hkb unblock` is the only *operator* verb that clears it, and only ever as the last step of an answer you have just written onto the card |
@@ -291,7 +292,7 @@ shape of what arrived, and switch on `kind` (or on `tags`, which carries the kin
 |---|---|
 | `review` | the row that is really yours. Read the PR against the card's *Done when*, run the repo's own checks, then follow the board's merge policy — `dispatch.merge.mode` in `.kanban/board.json`, which is the only place it is written: `hkb doctor` checks the policy but says nothing about a `"manual"` board, so silence there is not an answer (it does print `"operator"`'s condition, never silently). Three modes: `"manual"` means **the human merges**, which is the entire meaning of the setting — a session that merges anyway has taken an approval nobody gave it; `"operator"` means the human has delegated the click to this seat, but only once a review is on the card — read the PR, then run `hkb merge <n> --summary "what you checked"` and let it enforce the condition and write the record; it refuses, naming what is missing, if the condition is not met, so there is no way to merge past it by accident. `"auto"` means the dispatcher already handed the merge to GitHub and its gates hold it — nothing for you to do. Falls short, under any mode? `hkb request-changes <n> "<the one specific gap>"` puts it back on the same PR, and the reason you type *is* the next attempt's brief: name the gap, not the disappointment |
 | `blocked` | read the block kind off the attempt row (`hkb show <n>`), then the block table below |
-| `triage` | planning, not operating |
+| `triage` | planning, not operating: run the `/kanban:groom` per-card pass (`hkb groom --json --status triage`) and **propose** — never promote. A card that landed here wearing `kb:needs-human` is a loop, and that one is the human's |
 | `todo`, `ready`, `running` | nothing — the tick owns these |
 | `done`, `archived` | nothing; archiving is the operator's own verb |
 
@@ -339,7 +340,8 @@ A card that blocks on the same reason three times stops going back to *blocked* 
 You drive the verbs. The credentials, the approvals and the money are theirs. The line is not about trust: a
 seat that can widen its own permissions is not a seat.
 
-**Yours:** every read — `list`, `show`, `log`, `graph`, `stats`, `watch`, `tail`, `doctor`; `hkb comment`;
+**Yours:** every read — `list`, `show`, `log`, `graph`, `groom`, `stats`, `watch`, `tail`, `doctor` (`hkb groom`
+is a read like `hkb dispatch --dry-run`: it writes nothing, whatever it proposes); `hkb comment`;
 `hkb unblock`, when the answer was on the board and you have just written it there; `hkb request-changes`;
 `hkb up` after an exit 4; and `hkb create` for a card you can justify from evidence on the board — filed with
 `--triage` and linked to the card that revealed it, not started. Say `--triage` and mean it: without the flag a
@@ -351,7 +353,8 @@ next up · `3` urgent — see `README.md`), and the queue's order is the human's
 because the condition it enforces (a review on the card) is the human's approval, already given for the whole
 class, in `.kanban/board.json`; and any release or publish; editing `.kanban/board.json` at all —
 profiles, `allowed_tools`, models, `max_in_progress`, `merge.mode`; re-prioritising, promoting or archiving
-someone else's plan; clearing `kb:needs-human` for any reason but an answer you have just written onto the card;
+someone else's plan — except the rows of a `/kanban:groom` or `/kanban:specify` table the human has said yes
+to, because the yes is what makes it theirs; clearing `kb:needs-human` for any reason but an answer you have just written onto the card;
 spending on a paid profile the human has not agreed to;
 `git push --force`, anywhere; and any `hkb dispatch` that *runs* a tick — `--loop`, `--max`, a bare `dispatch` —
 or a second loop of any kind. (`hkb dispatch --dry-run` writes nothing and is a read like any other.)
@@ -496,6 +499,178 @@ makes the track un-claimable and the board falls back to node dispatch on its ow
 
 A full worked example — the graph above, the resulting board, and the invariants it satisfies — is in
 `references/protocol.md`.
+
+## /kanban:groom — turn the board's report into a batch a human says yes to
+
+`hkb groom` reports; it never judges. It can tell you that #140's blockers are all closed, that #117's body has
+no *Why* heading, and that #133 and #150 name the same files — it cannot tell you whether #133 and #150 are the
+same *work*, which way a missing link points, or whether a thin body is a stub or a one-line chore that needs
+nothing. That is why there is no `hkb groom --apply`: the deciding half lives here, in a session, exactly like
+`/kanban:specify` and `/kanban:decompose`, and it stops for a yes before it writes anything.
+
+**v1 is the triage lane.** The report covers whatever `--status` you give it, but this procedure grooms cards
+that have not started. A *blocked* card is the operator's, not the groomer's — `/kanban:operate` §3 has the
+table for it.
+
+### 0. Seat check
+
+You are in the planner's seat. If `KB_TASK` is set you are a **worker**: grooming the board is not your task,
+and the cards it would touch are not in your `kb.paths`. Stop and do your card.
+
+Grooming writes nothing until step 5, and step 5 runs only on rows a human said yes to, one row at a time.
+
+### 1. Read the board once
+
+```bash
+hkb groom --json --status triage     # the whole report: one read, zero writes
+hkb dispatch --dry-run               # what the next tick would claim, so you know what is about to move
+```
+
+That is the entire read. **Not** `hkb list --json` (it has no findings, so you would derive them yourself and
+get a different answer than the report), and **never** a `hkb show` loop over the lane — a per-card read of a
+thirty-card board is thirty requests for something one already answered. `--bodies flagged` is the default and
+is the point: only the cards the report wants judged carry their body, so the read is the size of the question,
+not the size of the board.
+
+Two fields to read before any row: `blockers_source` — `graphql`, `rest` or `unknown`, and on `unknown` the
+graph findings mean nothing — and `summary.path_overlap`, the guard mode the pair wording is written against.
+`summary.levels` counts findings across the whole lane, not the rows you can see: under `--level` it will exceed
+the row count, by design.
+
+### 2. What each finding kind means, and what a false positive looks like
+
+One row per kind the report can emit. The **false positive** column is the one that matters: a finding is
+arithmetic, and arithmetic has no idea why you filed the card.
+
+| kind | prints as | what you do | what a false positive looks like |
+|---|---|---|---|
+| `unblocked` | `act` — `every blocker is closed as completed (#a, #b)` | propose `promote` | the card is parked in triage on purpose — a note somebody filed, not work anyone queued. Promoting it starts a worker on a sentence |
+| `no_paths` | `act` — `kb.paths is empty` | propose `specify`: give it the narrowest scope that holds the work | a card whose output is a decision or a comment, not files. It still wants paths if it will ever be dispatched |
+| `malformed_kb` | `act` — the `kb` block is not valid JSON | propose `specify`; the fix is the PATCH recipe in step 5 | a card that *quotes* the `kb` format in its body — the block that counts is the first line of the body, and only that one |
+| `cycle` | `act` — `dependency cycle: #a → #b → #a` | propose `link-under` and name the one link to cut | none: the cycle is arithmetic. Which link is wrong is the judgment, and cutting the wrong one just moves the deadlock |
+| `two_agents` | `act` — two `kb:agent` labels | propose `specify`: one profile, the first one | a re-adopt caught mid-flight. Re-read the card before you propose anything |
+| `blocker_off_board` | `act` — `#a blocks it but is not on this board` | propose `link-under`: adopt the blocker, or cut the link | the blocker lives on another board on purpose. Adopting it moves it, which is somebody else's plan |
+| `no_goal` | `act` when the body has no *Done when* heading, `info` when it has one | propose `specify` on the `act` form; ignore the `info` form | the body says when it is finished in prose under some other heading. The level is computed off the heading, not off the meaning |
+| `dead_blocker` | `ask` — `#a is closed as not planned / superseded — it can never be ready` | propose `link-under`, and say which link replaces it | the work was really done, by a successor card. Then the link moves to the successor; it does not just disappear |
+| `blocker_in_triage` | `ask` — `#a still in triage — this card cannot start` | propose `promote` for the blocker, in step 5's one batch | the blocker is parked deliberately, and the right answer is to leave both parked and say so |
+| `priority_inversion` | `ask` — `#a is p0 but this card is p2 — the blocker is dispatched last` | propose `reprioritise` — **handed back**, never run | `p0` is the unfiled default. A blocker nobody has filed is not a blocker somebody ranked low |
+| `thin_spec` | `ask` — `no Why/Done when heading (body N chars)` | propose `specify`, or `none` if the one line really is the whole task | a real spec under other headings — the evidence line says so itself — or a chore whose title is its spec |
+| `merged_pr_open` | `ask` — `PR #a merged into <base> but the card is still open` | read the base branch, then propose `none` or hand the card to the operator | the PR merged into a stack's base, not the default branch. The card is correctly open until the stack lands |
+| `broad_path` | `ask` — `src/ covers N other lane cards — narrow it or the guard means nothing` | propose `specify` with narrower paths | the card really does own the directory — a rename, a lint sweep, a codemod. Narrowing that one makes the guard *wrong* |
+| `no_blockers` | `info` — `nothing blocks it` | nothing. It is context for the row | — |
+| `unknown_blockers` | `info` — the repo has no GraphQL `blockedBy` and blockers were not filled | re-read with a read that fills blockers before you trust any graph finding | — it is a statement about the read, not about the card |
+| `mentions_unlinked` | `needs_judgment` — `names #a, #b but is linked to none of them` | step 3 | most `#n` are citations: prior art, a superseded card, a PR number. A mention is a shortlist, never a verdict |
+| `overlap_pair` | `needs_judgment` — `#a ~ #b  0.67  src/gc.js — will serialize under path_overlap` | step 3 | two cards touching different halves of one file, or a shared path that only escaped the hub cut because the board is small |
+
+`hkb groom` never says "duplicate". That word is a verdict, and the verdict is yours.
+
+### 3. Judge only the shortlist
+
+Read `judgment.cards` and `judgment.pairs` — nothing else needs a model, and every other row already carries its
+answer. One fixed question per kind, and the answer is one of the actions in step 4:
+
+- **`mentions_unlinked`** — for each `#m` the card names: *is `#m` a blocker of this card, a parent of it, or
+  the same work?* Blocker or parent → `link-under`. Same work → `supersede`. **None of the three → `none`**, and
+  that is the common answer: say so on the row and move on.
+- **`overlap_pair`** — *are these one card, two cards that must run in sequence, or two cards whose paths are
+  just too wide?* One card → `supersede`. Sequence → `link-under`. Too wide → `specify` the narrower paths.
+
+The bodies you need are already on the rows (`bodyText`, on flagged cards only). Read them. A pair judged from
+two titles is a coin flip with extra steps.
+
+### 4. Propose one table, then stop
+
+One table for the whole pass, grouped by cluster — a track and its children together, a pair on adjacent rows —
+so the human reads a plan and not a list. Every row carries its evidence and the exact command it would run.
+
+| card | action | target | evidence | exact command |
+|---|---|---|---|---|
+| #140 | `promote` | — | every blocker closed as completed (#138, #139) | `hkb promote 140` |
+| #133 | `link-under` | #150 | names #150; #150 lands the parser it needs | `hkb link 150 133` |
+| #117 | `specify` | — | no *Why* heading, body 3125 chars | the PATCH recipe, step 5 |
+| #151 | `supersede` | #133 | same work, judged from both bodies | handed back — pre-staged |
+| #148 | `none` | — | mentions #12 as prior art, not a dependency | — |
+
+The action column is a closed vocabulary — the same one `hkb groom` proposes with, so the report and this table
+cannot drift apart:
+
+| action | what it means | what the batch runs |
+|---|---|---|
+| `promote` | the card is ready to be queued | step 5e — the one `hkb promote` |
+| `specify` | the body or the `kb` block needs rewriting | step 5d, or hand back `/kanban:specify <n>` |
+| `link-under` | a dependency is missing, wrong, or pointing the wrong way | step 5c — `hkb link <parent> <child>` |
+| `split` | it is several tasks in one card | handed back — `/kanban:decompose <n>` |
+| `supersede` | two cards are the same work; one survives | handed back, pre-staged |
+| `reprioritise` | the queue's order is wrong | handed back, pre-staged — the order is the human's |
+| `park` | leave it in triage, on purpose, with the reason written down | step 5a — `hkb comment <n>` and nothing else |
+| `archive` | it is not work anybody will do | handed back, pre-staged — `hkb archive <n>` |
+| `judge` | the report handed the row to you | nothing: step 3 turns it into one of the above |
+| `none` | context only, or a false positive you have just ruled out | nothing |
+
+**Then stop for a yes.** Print the table and wait. Not "I will apply the safe ones" — the human approves rows,
+one at a time or a whole cluster at once, and an unapproved row is not a row you run. A batch nobody read is
+exactly the failure this procedure exists to prevent: a session that promoted thirty cards nobody queued.
+
+Four actions are **never in the batch**, whatever the answer: `supersede`, `archive`, `reprioritise` and cutting
+a link (`hkb unlink`). They are handed back as pre-staged command lines the human runs, because closing a card
+as a duplicate, archiving one, and editing a `kb` field each need a verb the CLI does not have yet — a `suggests`
+string in the report that names one is describing the fix, not handing you a command that exists.
+
+### 5. Apply the approved rows, in this order
+
+Per approved row, in this order, so that the record survives a stop halfway through:
+
+```bash
+# a. the judgment goes on the card first — it is the only durable record of why
+hkb comment 133 "groom: linked under #150 — #150 lands the parser this needs."
+
+# b. a card the pass revealed, filed unstarted and linked to what revealed it. Never --priority
+hkb create "Parser rejects a bare kb block" --triage --blocked-by 150 --body "$(cat /tmp/kb-new.md)"
+
+# c. the links
+hkb link 150 133          # link <parent> <child>: #133 is blocked by #150
+
+# d. a body or kb rewrite — the /kanban:specify recipe, keeping the <!-- kb: {...} --> first line intact
+gh api repos/{owner}/{repo}/issues/117 -X PATCH \
+  -H "X-GitHub-Api-Version: 2026-03-10" -F body=@/tmp/kb-117-body.md
+hkb show 117 --json       # verify: kb._malformed means you broke the JSON, and a bad block falls back silently
+
+# e. ONE promote, last, of the cards approved for it — all of them in one command
+hkb promote 140 141 156
+```
+
+Five things about that order:
+
+- **`hkb create --triage`, always.** Without the flag a card with no blockers lands in *ready* and the next tick
+  launches a worker on a note you wrote. `--blocked-by <the card that revealed it>` is what makes it a finding
+  rather than an orphan. Leave `--priority` off: the queue's order is the human's.
+- **Link before you promote.** A card promoted before its link is a card the tick can claim in between.
+- **One `hkb promote`, at the end, of cards that are in *triage*.** `hkb promote` on a card already in *todo*
+  **forces** it to *ready* with its blockers still open, and the output says so: a `forced` line — `→ ready
+  (forced: blockers not done)` — means you promoted something that was not a triage card. Stop and report it;
+  do not promote again to "fix" it.
+- **Promoted N is a queue, not N running.** Promotion moves cards to *todo*; the tick makes the unblocked ones
+  *ready* and claims at most `max_in_progress` of them. Say that in the digest, or "I promoted twelve" reads as
+  twelve sessions.
+- **Nothing else.** If a row needs a verb that is not one of these four, it was a handback, not a batch row.
+
+### 6. Verify what you did
+
+```bash
+hkb groom --status triage      # the findings you acted on are gone, and no new act-level row appeared
+hkb graph <root>               # the links you added draw the shape you proposed
+hkb dispatch --dry-run         # exactly the cards you promoted, and nothing else, is what the tick would claim
+```
+
+`hkb dispatch --dry-run` is the one that catches a bad promote before it costs a session: it runs nothing and
+prints what the next tick would claim. If it names a card you did not approve, say so before the tick runs.
+
+### 7. Report, in the operate §5 shape
+
+Three parts, and the third is not optional: **what the report said** (lane size, the level counts,
+`blockers_source`), **what you did** — one line per verb and card — and **what you handed back**, each with the
+pre-staged command and what you need: a decision, a credential, or an approval. Name the false positives you
+ruled out too. A finding you dismissed silently is one the next pass will raise again.
 
 ## Rules
 
