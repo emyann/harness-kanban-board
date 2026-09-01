@@ -10,6 +10,9 @@ import {
   COLUMNS, moveDecision, cardOf, boardEtag, parseRoute, checkOrigin, isLoopback,
   logPathFor, tailFile, missingFields, startServer, keyBoards, serveContexts,
 } from '../src/serve.js';
+import { promote } from '../src/lifecycle.js';
+import { getTask, fetchBoard } from '../src/tasks.js';
+import { FakeGh, kbIssue } from './fake-gh.js';
 
 const task = (over = {}) => ({
   number: 20, title: 'hkb serve', status: 'ready', agent: 'claude', board: 'default',
@@ -795,6 +798,41 @@ test('triage → ready promotes twice, the way two `hkb promote` calls would', a
     assert.equal((await post('/api/tasks/20/move', { to: 'ready' })).status, 200);
     assert.deepEqual(calls.map((c) => c.verb), ['promote', 'promote']);
   });
+});
+
+test('dragging a root into todo sweeps its open triage blockers along, through the real promote (#209)', async () => {
+  const gh = new FakeGh();
+  const restoreGh = gh.install();
+  try {
+    gh.addIssue(kbIssue({ number: 154, status: 'triage', agent: 'claude' }));
+    gh.addIssue(kbIssue({ number: 155, status: 'triage', agent: 'claude' }));
+    gh.addIssue(kbIssue({ number: 158, status: 'triage', agent: 'claude', blockedBy: [154, 155] }));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-serve-real-'));
+    fs.mkdirSync(path.join(root, '.kanban', 'logs'), { recursive: true });
+    const ctx = { root, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner }, board: 'default', host: 'testhost', _cache: {}, cfg: {} };
+    const deps = {
+      fetchBoard, getTask, promote, contexts: [ctx],
+      loadRun: async () => ({ run: { failures: 0, attempts: [] } }),
+      latestResult: async () => null, parentResults: async () => [], addComment: async () => ({ html_url: 'https://x/c' }),
+      unblock: async () => ({}), block: async () => ({}), requestChanges: async () => ({}), archive: async () => ({}),
+    };
+    const s = await startServer(ctx, { port: 0, poll: 30 }, () => {}, deps);
+    try {
+      const res = await fetch(s.url + '/api/tasks/158/move', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: 'todo' }),
+      });
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      // the dragged card's own outcome still drives `landed`
+      assert.equal(body.number, 158);
+      assert.equal(body.status, 'todo');
+      assert.equal(body.landed, null);
+      // every swept-up blocker rides along under `moved`
+      assert.deepEqual(body.moved.map((r) => [r.number, r.status]).sort(), [[154, 'todo'], [155, 'todo'], [158, 'todo']]);
+      assert.equal(gh.issues.get(154).labels.includes('kb:status:todo'), true);
+      assert.equal(gh.issues.get(155).labels.includes('kb:status:todo'), true);
+    } finally { await new Promise((r) => s.server.close(r)); }
+  } finally { restoreGh(); }
 });
 
 test('the drawer verbs route to the same functions as the CLI', async () => {

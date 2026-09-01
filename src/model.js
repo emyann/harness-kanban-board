@@ -272,6 +272,32 @@ export function isTrackRoot(task, cfg, { board = null } = {}) {
 }
 
 /**
+ * What `promote` does to one card, pure. `allowForce` is the single-node call on a card with no open
+ * blockers left (a track of one) — exactly today's behaviour, including forcing `todo`/`blocked`
+ * straight to `ready` over open blockers, because a human typing `hkb promote <n>` on that card is the
+ * override.
+ *
+ * A cascade sweeping up a card's still-open blockers must never do that (#209): forcing a blocker
+ * ready is worse than leaving it alone, because the root then reads "queued" while the graph under it
+ * is not. So with `allowForce: false` a `todo` card only advances when it is genuinely ready, and a
+ * `blocked` card — parked for a human, not for its blockers — is left alone outright.
+ */
+export function promoteDecision(task, { allowForce = false } = {}) {
+  const status = task.status;
+  if (status === 'triage') return { to: 'todo' };
+  if (status === 'todo') {
+    const ready = computeReady(task);
+    if (ready || allowForce) return { to: 'ready', forced: !ready };
+    return { to: status, skipped: true, reason: 'blockers still open' };
+  }
+  if (status === 'blocked') {
+    if (!allowForce) return { to: status, skipped: true, reason: 'blocked — needs human' };
+    return { to: 'ready', forced: !computeReady(task) };
+  }
+  return { to: status, skipped: true, reason: `already ${status}` };
+}
+
+/**
  * The `active_pr` guard, and its one exemption — a pure function of the attempt rows and the card's
  * PRs, so the tick can decide without a second thought and the table lives in a test.
  *

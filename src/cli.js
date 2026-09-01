@@ -228,6 +228,23 @@ export { packageVersion as readVersion };
 const out = (ctx, obj, text) => { process.stdout.write((ctx.json ? JSON.stringify(obj, null, 2) : text ?? JSON.stringify(obj, null, 2)) + '\n'); };
 const nums = (pos) => pos.map((p) => Number(String(p).replace(/^#/, ''))).filter((n) => Number.isInteger(n) && n > 0);
 const usage = (msg) => { const e = new Error(msg); e.exitCode = 2; return e; };
+
+/**
+ * One line per outcome `promote` produced, cards sharing an outcome grouped together — a cascade that
+ * moves several cards must never read like it moved one (#209). Moved cards get an arrow; skipped and
+ * unchanged cards get their reason instead, so a human can see at a glance what a drag actually did.
+ */
+export function formatPromote(res) {
+  const groups = [];
+  const byLabel = new Map();
+  for (const r of res) {
+    const label = r.unchanged ? (r.reason || `already ${r.status}`) : `→ ${r.status}${r.forced ? ' (forced: blockers not done)' : ''}`;
+    let g = byLabel.get(label);
+    if (!g) { g = { label, numbers: [] }; byLabel.set(label, g); groups.push(g); }
+    g.numbers.push(r.number);
+  }
+  return groups.map((g) => `${g.numbers.map((n) => `#${n}`).join(' ')} ${g.label}`).join(' · ');
+}
 const log = (s) => process.stderr.write(s + '\n');
 
 /**
@@ -411,8 +428,8 @@ export async function main(argv) {
       const ns = nums(rest);
       if (!ns.length) throw usage('hkb promote <n>...');
       const res = [];
-      for (const n of ns) res.push(await promote(ctx, n));
-      out(ctx, res, res.map((r) => `#${r.number} → ${r.status}${r.forced ? ' (forced: blockers not done)' : ''}`).join('\n'));
+      for (const n of ns) res.push(...await promote(ctx, n));
+      out(ctx, res, formatPromote(res));
       return 0;
     }
     case 'archive': {
