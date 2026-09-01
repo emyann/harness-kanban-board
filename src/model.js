@@ -1,5 +1,12 @@
 // Pure data model: labels, body block, run comment, result comment, readiness.
 // No I/O here — everything is unit-testable.
+//
+// The one import is `resolveTrack`, the dependency walk `src/track.js` already owns. It is a cycle
+// on paper (track.js imports this file) and none in practice: neither module touches the other at
+// evaluation time — every use is inside a function body, and function declarations are hoisted — so
+// whichever of the two an entry point reaches first, both finish loading. Amendment 1 of #191 asks
+// for exactly this: reuse the walk, do not write a second `detectCycles` that can disagree with it.
+import { resolveTrack } from './track.js';
 
 export const STATUSES = ['triage', 'todo', 'ready', 'running', 'blocked', 'review', 'done', 'archived'];
 export const OUTCOMES = ['completed', 'blocked', 'crashed', 'timed_out', 'spawn_failed', 'reclaimed', 'protocol_violation', 'gave_up', 'review_requested', 'changes_requested'];
@@ -567,6 +574,474 @@ export function priorityOf(task) { return Number(task.kb?.priority ?? 0) || 0; }
 /** Sort ready tasks: higher priority first, then oldest issue first. */
 export function sortForDispatch(tasks) {
   return [...tasks].sort((a, b) => priorityOf(b) - priorityOf(a) || a.number - b.number);
+}
+
+// ---------- grooming the backlog (`hkb groom`) ----------
+// The arithmetic half of a triage review: everything a human can work out from the board read alone,
+// without a model — is every blocker closed as completed, is `kb.paths` empty, does the body have a
+// spec shape, which cards name each other, which pairs share files. The judgment half (is this the
+// same work as that, which way does a link go) needs a model and stays in the skill; it appears here
+// only as a *shortlist*, never as a verdict.
+//
+// Everything is pure, like the rest of this file: an injected `now`, no clock, no network, no `ctx`,
+// and no writes — `hkb groom` is a read, exactly like `hkb dispatch --dry-run`.
+
+/** Levels a finding carries. `needs_judgment` is the shortlist level: a question, never an answer. */
+export const GROOM_LEVELS = ['act', 'ask', 'info', 'needs_judgment'];
+
+/**
+ * Every finding kind and the level it carries. `no_goal` is the one kind whose level is computed
+ * rather than fixed (#191 amendment 2): `act` when the body has no Done-when heading either, `info`
+ * when it does — on a real board most `goal: null` cards are promotable exactly as written, and
+ * calling all of them broken is how a report stops being read.
+ *
+ * Kinds are added over time; the `--json` field names around them are frozen, so a later kind lands
+ * in `findings` and nothing is renamed.
+ */
+export const GROOM_KINDS = Object.freeze({
+  // act — mechanical, one command fixes it
+  unblocked: 'act',
+  no_paths: 'act',
+  malformed_kb: 'act',
+  cycle: 'act',
+  two_agents: 'act',
+  blocker_off_board: 'act',
+  no_goal: 'act', // downgraded to 'info' when `specShape` finds a Done-when heading
+  // ask — a human decides; a false positive here is cheap, an automatic fix would not be
+  dead_blocker: 'ask',
+  blocker_in_triage: 'ask',
+  priority_inversion: 'ask',
+  thin_spec: 'ask',
+  merged_pr_open: 'ask',
+  broad_path: 'ask',
+  // info — context for the row, nothing to do
+  no_blockers: 'info',
+  unknown_blockers: 'info',
+  // shortlists for the model — always needs_judgment, never a verdict
+  mentions_unlinked: 'needs_judgment',
+  overlap_pair: 'needs_judgment',
+});
+
+/** The two kinds that are shortlists rather than findings: they set `needs_judgment` on the card. */
+export const GROOM_SHORTLISTS = ['mentions_unlinked', 'overlap_pair'];
+
+/**
+ * The closed vocabulary a groom row may propose. The first eight are actions a human can say yes to;
+ * `judge` hands the row to the model (a shortlist finding and nothing mechanical), and `none` is a
+ * row that is only there for context. Closed on purpose: the skill's action column is asserted
+ * against this list, so the report and the procedure cannot drift apart.
+ */
+export const GROOM_ACTIONS = Object.freeze([
+  'promote', 'specify', 'link-under', 'split', 'supersede', 'reprioritise', 'park', 'archive',
+  'judge', 'none',
+]);
+
+/** A body shorter than this reads as a stub however good its headings are. */
+const THIN_SPEC_CHARS = 400;
+/** Jaccard at or above which two cards' paths are worth a human's glance. */
+const OVERLAP_MIN = 0.4;
+/** How many other lane cards must sit under a path before it is "broad". */
+const BROAD_PATH_MIN = 3;
+
+/** `kb.paths` spelling → the form overlap is judged on, the same normalisation `pathsOverlap` uses. */
+function normPath(p) {
+  return String(p ?? '').replace(/\*+.*$/, '').replace(/\/+$/, '');
+}
+
+/** Blocker → the cards it blocks. Built over EVERY task passed in, whatever the lane filter says. */
+export function blocksIndex(tasks) {
+  const out = new Map();
+  for (const t of tasks || []) {
+    for (const b of t.blockedBy || []) {
+      const n = Number(b.number);
+      if (!Number.isFinite(n)) continue;
+      const list = out.get(n) || [];
+      if (!list.includes(t.number)) list.push(t.number);
+      out.set(n, list);
+    }
+  }
+  return out;
+}
+
+function daysSince(iso, now) {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return null;
+  return Math.max(0, Math.floor((new Date(now).getTime() - t) / 86_400_000));
+}
+
+/** Whole days since the issue was opened, against an injected `now`. null when it has no createdAt. */
+export function ageDays(task, now = new Date()) {
+  return daysSince(task?.createdAt, now);
+}
+
+// A heading, or the bold line people write instead of one. `##`, `**Why**` and `Done when:` all count
+// — #117's card has "Gap 1 / Gap 2 / Done when", so anchoring on `##` alone would call a real spec thin.
+const SPEC_HEADINGS = {
+  why: /^\s{0,3}(?:#{1,6}\s*|\*{1,2})?why\b/im,
+  what: /^\s{0,3}(?:#{1,6}\s*|\*{1,2})?what\b/im,
+  doneWhen: /^\s{0,3}(?:#{1,6}\s*|\*{1,2})?done[\s_-]?when\b/im,
+};
+
+/**
+ * Does this body look like a spec a cold worker could execute? Shape only — whether the *content* is
+ * good is a judgment, and this function deliberately cannot tell. `thin` is what `thin_spec` reads,
+ * and `doneWhen` is what decides whether a missing `kb.goal` is a problem or a formality.
+ */
+export function specShape(bodyText) {
+  const s = String(bodyText || '');
+  const found = {};
+  for (const [k, re] of Object.entries(SPEC_HEADINGS)) found[k] = re.test(s);
+  const missing = Object.keys(SPEC_HEADINGS).filter((k) => !found[k]);
+  const length = s.trim().length;
+  return { ...found, missing, length, thin: missing.length > 0 || length < THIN_SPEC_CHARS };
+}
+
+/** The `#n` this text names that are open cards on this board, ascending. Never a verdict — a shortlist. */
+export function cardMentions(text, openNumbers) {
+  const open = openNumbers instanceof Set ? openNumbers : new Set((openNumbers || []).map(Number));
+  const out = [];
+  for (const m of String(text || '').matchAll(/#(\d+)\b/g)) {
+    const n = Number(m[1]);
+    if (open.has(n) && !out.includes(n)) out.push(n);
+  }
+  return out.sort((a, b) => a - b);
+}
+
+const pathsOf = (t) => t?.kb?.paths || t?.paths || [];
+
+/**
+ * The paths so many cards name that they say nothing about any particular pair — `src/model.js` on a
+ * dozen cards is where the work is, not evidence that two of them collide. Hubs are removed before
+ * overlap is scored, which is the whole reason the score means anything.
+ * @returns {{path: string, cards: number}[]} busiest first
+ */
+export function pathHubs(tasks, share = 0.25) {
+  const all = tasks || [];
+  const counts = new Map();
+  for (const t of all) {
+    const seen = new Set();
+    for (const p of pathsOf(t)) {
+      const k = normPath(p);
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      counts.set(k, (counts.get(k) || 0) + 1);
+    }
+  }
+  // Three is the floor, however small the board: a path exactly *two* cards name is the pair signal
+  // `overlap_pair` exists to report, and calling it a hub would delete the only evidence there is.
+  const min = Math.max(3, Math.ceil(all.length * share));
+  return [...counts]
+    .filter(([, n]) => n >= min)
+    .map(([path, cards]) => ({ path, cards }))
+    .sort((a, b) => b.cards - a.cards || a.path.localeCompare(b.path));
+}
+
+/** Prefix-aware "these two path patterns touch", the same rule `pathsOverlap` applies pairwise. */
+const touches = (x, y) => x === y || x.startsWith(`${y}/`) || y.startsWith(`${x}/`);
+
+function overlapParts(a, b, hubs) {
+  const drop = new Set((hubs || []).map((h) => normPath(typeof h === 'string' ? h : h?.path)));
+  const clean = (list) => [...new Set((list || []).map(normPath))].filter((p) => p && !drop.has(p));
+  const A = clean(a);
+  const B = clean(b);
+  const sharedA = A.filter((x) => B.some((y) => touches(x, y)));
+  const sharedB = B.filter((y) => A.some((x) => touches(x, y)));
+  return { A, B, sharedA, sharedB, shared: [...new Set([...sharedA, ...sharedB])].sort() };
+}
+
+/**
+ * How much two cards' declared paths are the same work, in [0, 1], with hub paths removed first.
+ * Prefix-aware, so `src/` and `src/model.js` count as touching. Cards that declare no non-hub paths
+ * score 0 rather than NaN — "we know nothing" is not "they collide".
+ */
+export function pathJaccard(a, b, hubs = []) {
+  const { A, B, sharedA, sharedB } = overlapParts(a, b, hubs);
+  const inter = Math.min(sharedA.length, sharedB.length);
+  const union = A.length + B.length - inter;
+  return union > 0 ? inter / union : 0;
+}
+
+/**
+ * The board keyed by number, with a stub for every blocker that is closed but not on the read. Without
+ * the stubs `resolveTrack` would call a card's dead blocker "not on this board", and `dead_blocker`
+ * and `blocker_off_board` — two different problems with two different fixes — would fire together.
+ */
+function groomIndex(tasks) {
+  const byNumber = new Map((tasks || []).map((t) => [t.number, t]));
+  for (const t of tasks || []) {
+    for (const b of t.blockedBy || []) {
+      const n = Number(b.number);
+      if (!Number.isFinite(n) || byNumber.has(n)) continue;
+      if (String(b.state || '').toUpperCase() !== 'CLOSED') continue;
+      byNumber.set(n, { number: n, title: b.title || null, status: null, blockedBy: [], closedBlocker: true });
+    }
+  }
+  return byNumber;
+}
+
+/** GitHub's close reason in words a report can print. Never the d-word: that verdict is the model's. */
+function closedAs(reason) {
+  const r = String(reason || '').toUpperCase();
+  if (r === 'NOT_PLANNED') return 'not planned';
+  if (r === 'DUPLICATE') return 'superseded';
+  return 'without completing';
+}
+
+/**
+ * What one groomed card proposes, as a single value of `GROOM_ACTIONS`. Pure, total, and pinned by a
+ * test: this is the table, and the table is the contract the skill's action column is checked against.
+ *
+ * Mechanical rows win over `judge` on purpose. A card that is both unblocked and mentions another is
+ * still a `promote` — the shortlist has not gone anywhere, it is on the same row and the card is still
+ * in `judgment.cards`, so the model sees it either way and the human gets the cheap answer first.
+ *
+ * @param card a row from `groomBoard().cards` — anything with `findings`
+ */
+export function proposeAction(card) {
+  const kinds = new Set((card?.findings || []).map((f) => f.kind));
+  const any = (...ks) => ks.some((k) => kinds.has(k));
+  if (any('unblocked')) return 'promote';
+  if (any('cycle', 'blocker_off_board', 'dead_blocker', 'blocker_in_triage')) return 'link-under';
+  if (any('malformed_kb', 'no_paths', 'two_agents')) return 'specify';
+  // `no_goal` only proposes a rewrite when it is the `act` kind — with a Done-when heading present it
+  // is an `info` row and the card needs nothing (amendment 2).
+  if ((card?.findings || []).some((f) => f.kind === 'no_goal' && f.level === 'act')) return 'specify';
+  if (any('thin_spec', 'broad_path')) return 'specify';
+  if (any('priority_inversion')) return 'reprioritise';
+  if (any(...GROOM_SHORTLISTS)) return 'judge';
+  return 'none';
+}
+
+/**
+ * The whole lane report, from the raw `fetchBoard` array and nothing else — no `ctx`, no config
+ * object, no second read. That is the contract: a later card puts this same function behind `hkb
+ * serve`'s snapshot, so anything it needed beyond the array would have to be fetched twice.
+ *
+ * `blocksIndex`, mentions and hubs are computed over EVERY task passed in (amendment 9); `statuses`
+ * decides only which cards get a row. A triage card whose child is running still shows that child
+ * under `blocks`, which is the point.
+ *
+ * @param tasks the board read, as `fetchBoard` returns it
+ * @param opts.now injected clock — nothing here reads the real one
+ * @param opts.caps `ctx.caps`; `blockedByGql` false and blockers unfilled means an empty
+ *   `blockedBy` is *unknown*, never `no_blockers`
+ * @param opts.pairs how many overlap pairs to list (default 10)
+ * @param opts.statuses which lanes get a row (default triage, todo, ready)
+ * @param opts.guard the effective `path_overlap` mode (`pathOverlapGuard(cfg)` or its `mode`) — the
+ *   pair wording is guard-aware, because on a board with the guard off nothing serialises at all
+ * @param opts.bodies `flagged` (default), `all` or `none` — which rows carry `bodyText`
+ * @param opts.blockersFilled true when the caller REST-filled blockers (`blockers: 'all'`)
+ */
+export function groomBoard(tasks, opts = {}) {
+  const all = Array.isArray(tasks) ? tasks : [];
+  const {
+    now = new Date(),
+    caps = {},
+    pairs: pairLimit = 10,
+    statuses = ['triage', 'todo', 'ready'],
+    board = null,
+    guard = null,
+    bodies = 'flagged',
+    share = 0.25,
+    overlap = OVERLAP_MIN,
+    blockersFilled = null,
+  } = opts;
+
+  const at = new Date(now);
+  const wanted = new Set(statuses || []);
+  const byNumber = groomIndex(all);
+  const blocks = blocksIndex(all);
+  const hubs = pathHubs(all, share);
+  const openNumbers = new Set(all.filter((t) => String(t.state || 'OPEN').toUpperCase() === 'OPEN').map((t) => t.number));
+  const guardMode = typeof guard === 'string' ? guard : (guard?.mode ?? null);
+  const guardOn = guardMode != null && guardMode !== 'off';
+  const blockersKnown = !!caps.blockedByGql || !!blockersFilled;
+  const blockersSource = caps.blockedByGql ? 'graphql' : (blockersFilled ? 'rest' : 'unknown');
+
+  const lane = all.filter((t) => wanted.has(t.status));
+
+  const rows = lane.map((task) => {
+    const n = task.number;
+    const kb = task.kb || {};
+    const paths = kb.paths || [];
+    const blockedBy = task.blockedBy || [];
+    const childNumbers = blocks.get(n) || [];
+    const spec = specShape(task.bodyText);
+    const findings = [];
+    const add = (kind, evidence, suggests, level = GROOM_KINDS[kind]) => findings.push({ kind, level, evidence, suggests });
+
+    // --- the graph ---
+    if (!blockedBy.length) {
+      if (!blockersKnown) {
+        add('unknown_blockers', 'this repo has no GraphQL Issue.blockedBy and blockers were not filled — an empty list here means nothing', 'hkb groom --status triage on a read that fills blockers');
+      } else {
+        add('no_blockers', 'nothing blocks it', null);
+      }
+    } else if (task.status === 'triage' && computeReady(task, at)) {
+      // ≥ 1 blocker is the definition, not an optimisation: without it every unblocked triage card on
+      // the board matches and the finding stops meaning anything.
+      add('unblocked', `every blocker is closed as completed (${blockedBy.map((b) => `#${b.number}`).join(', ')})`, `hkb promote ${n}`);
+    }
+
+    const dead = blockedBy.filter((b) => String(b.state || '').toUpperCase() === 'CLOSED' && !blockerDone(b));
+    if (dead.length) {
+      add('dead_blocker', `${dead.map((b) => `#${b.number} is closed as ${closedAs(b.stateReason)}`).join('; ')} — it can never be ready`, `hkb unlink ${n} ${dead[0].number}`);
+    }
+    const openBlockers = blockedBy.filter((b) => String(b.state || 'OPEN').toUpperCase() !== 'CLOSED');
+    const inTriage = openBlockers.filter((b) => byNumber.get(Number(b.number))?.status === 'triage');
+    if (inTriage.length) {
+      add('blocker_in_triage', `${inTriage.map((b) => `#${b.number}`).join(', ')} still in triage — this card cannot start until they are promoted`, `hkb promote ${inTriage.map((b) => b.number).join(' ')}`);
+    }
+    const inverted = openBlockers.filter((b) => {
+      const bt = byNumber.get(Number(b.number));
+      return bt && !bt.closedBlocker && priorityOf(bt) < priorityOf(task);
+    });
+    if (inverted.length) {
+      add('priority_inversion', `${inverted.map((b) => `#${b.number} is p${priorityOf(byNumber.get(Number(b.number)))}`).join(', ')} but this card is p${priorityOf(task)} — the blocker is dispatched last`, `hkb edit ${inverted.map((b) => b.number).join(' ')} --priority ${priorityOf(task)}`);
+    }
+
+    // the walk `src/track.js` already owns — one source of truth for cycles and for holes in the graph
+    const walk = resolveTrack(n, byNumber);
+    if (walk.cycle && walk.cycle.includes(n)) {
+      add('cycle', `dependency cycle: ${walk.cycle.map((x) => `#${x}`).join(' → ')}`, `hkb unlink ${walk.cycle[0]} ${walk.cycle[1] ?? n}`);
+    }
+    if (walk.missing.length) {
+      add('blocker_off_board', `${walk.missing.map((x) => `#${x}`).join(', ')} block it but are not on this board`, `hkb adopt ${walk.missing.join(' ')}`);
+    }
+
+    // --- the card itself ---
+    if (kb._malformed) add('malformed_kb', 'the kb block at the top of the body is not valid JSON — every setting fell back to its default', `hkb edit ${n} --paths ... --goal "..."`);
+    if (!paths.length) add('no_paths', 'kb.paths is empty — the path_overlap guard can never hold anything for it', `hkb edit ${n} --paths <dirs>`);
+    if (!kb.goal) {
+      const level = spec.doneWhen ? 'info' : 'act';
+      add('no_goal', spec.doneWhen
+        ? 'kb.goal is null, but the body has a Done-when heading — promotable as written'
+        : 'kb.goal is null and the body has no Done-when heading — nothing says when this is finished',
+      spec.doneWhen ? null : `/kanban:specify ${n}`, level);
+    }
+    if (spec.thin) {
+      add('thin_spec', spec.missing.length
+        ? `no ${spec.missing.map((k) => (k === 'doneWhen' ? 'Done when' : k[0].toUpperCase() + k.slice(1))).join('/')} heading (body ${spec.length} chars) — a good spec under other headings is a false hit`
+        : `body is ${spec.length} chars`, `/kanban:specify ${n}`);
+    }
+    const agents = agentsOf(task.labels);
+    if (agents.length > 1) add('two_agents', `two kb:agent labels (${agents.join(', ')}) — the card dispatches as ${agents[0]} while reporting ${agents[agents.length - 1]}`, `hkb adopt ${n} --agent ${agents[0]}`);
+    const mergedPr = String(task.state || 'OPEN').toUpperCase() === 'OPEN' && (task.prs || []).find((p) => p?.merged);
+    if (mergedPr) add('merged_pr_open', `PR #${mergedPr.number} merged into ${mergedPr.baseRefName || '?'} but the card is still open — verify the base branch`, null);
+
+    // a path so many other lane cards sit under that it guards nothing in particular
+    const broad = [];
+    for (const p of paths) {
+      const k = normPath(p);
+      if (!k) continue;
+      const under = lane.filter((o) => o.number !== n && pathsOf(o).some((q) => {
+        const y = normPath(q);
+        return y && (y === k || y.startsWith(`${k}/`));
+      })).length;
+      if (under >= BROAD_PATH_MIN) broad.push({ path: k, cards: under });
+    }
+    if (broad.length) {
+      add('broad_path', `${broad.map((b) => `${b.path} covers ${b.cards} other lane cards`).join('; ')} — narrow it or the guard means nothing`, `hkb edit ${n} --paths <narrower>`);
+    }
+
+    // --- the shortlist ---
+    const linked = new Set([n, ...blockedBy.map((b) => Number(b.number)), ...childNumbers]);
+    const mentions = cardMentions(`${task.bodyText || ''}\n${kb.goal || ''}`, openNumbers).filter((m) => !linked.has(m));
+    if (mentions.length) {
+      add('mentions_unlinked', `names ${mentions.map((m) => `#${m}`).join(', ')} but is linked to none of them`, `judge: is one of them a blocker, a parent, or the same work?`);
+    }
+
+    return {
+      number: n,
+      title: task.title,
+      status: task.status,
+      agent: task.agent || null,
+      priority: priorityOf(task),
+      age_days: ageDays(task, at),
+      touched_days: daysSince(task.updatedAt, at),
+      paths,
+      goal: kb.goal ?? null,
+      blocked_by: blockedBy.map((b) => Number(b.number)),
+      blocks: childNumbers,
+      findings,
+      proposal: 'none',
+      needs_judgment: false,
+      _task: task,
+    };
+  });
+
+  // --- pairs: the other shortlist, scored across the lane once the rows exist ---
+  const byRow = new Map(rows.map((r) => [r.number, r]));
+  const scored = [];
+  for (let i = 0; i < rows.length; i++) {
+    for (let j = i + 1; j < rows.length; j++) {
+      const a = rows[i], b = rows[j];
+      const score = pathJaccard(a.paths, b.paths, hubs);
+      if (score < overlap) continue;
+      const { shared } = overlapParts(a.paths, b.paths, hubs);
+      scored.push({ a: a.number, b: b.number, score: Math.round(score * 100) / 100, shared, why: pairWhy(b.number, guardMode, guardOn) });
+    }
+  }
+  scored.sort((x, y) => y.score - x.score || x.a - y.a || x.b - y.b);
+  const listed = scored.slice(0, Math.max(0, pairLimit));
+  for (const p of listed) {
+    for (const [self, other] of [[p.a, p.b], [p.b, p.a]]) {
+      byRow.get(self)?.findings.push({
+        kind: 'overlap_pair',
+        level: GROOM_KINDS.overlap_pair,
+        evidence: `${pairWhy(other, guardMode, guardOn)} (${p.score}: ${p.shared.join(', ')})`,
+        suggests: 'judge: one card, two cards run in sequence, or two cards with narrower paths?',
+      });
+    }
+  }
+
+  // --- proposal, judgment and bodies, once every finding is on the row ---
+  const levels = { act: 0, ask: 0, info: 0, needs_judgment: 0 };
+  for (const r of rows) {
+    r.needs_judgment = r.findings.some((f) => GROOM_SHORTLISTS.includes(f.kind));
+    r.proposal = proposeAction(r);
+    for (const f of r.findings) levels[f.level] = (levels[f.level] || 0) + 1;
+    const task = r._task;
+    delete r._task;
+    // Only a flagged card carries its body. That is the whole token argument: the report is the size
+    // of the board, and the bodies are the size of only what a human was asked to look at.
+    if (bodies === 'all' || (bodies === 'flagged' && r.needs_judgment)) r.bodyText = task.bodyText || '';
+  }
+
+  const by_status = {};
+  for (const t of all) by_status[t.status || 'none'] = (by_status[t.status || 'none'] || 0) + 1;
+
+  return {
+    board,
+    read_at: at.toISOString(),
+    cards_read: all.length,
+    blockers_source: blockersSource,
+    summary: {
+      by_status,
+      hubs,
+      // Keyed on the guard mode (amendment 4): with the guard off nothing serialises, so the count of
+      // pairs that would take a second slot is zero however many share files.
+      one_slot: guardOn ? listed.length : 0,
+      levels,
+      lane: rows.length,
+      path_overlap: guardMode,
+    },
+    cards: rows,
+    pairs: listed,
+    judgment: {
+      cards: rows.filter((r) => r.needs_judgment).map((r) => r.number),
+      pairs: listed,
+    },
+  };
+}
+
+/** Amendment 4: the pair wording says what the board's own guard will actually do about it. */
+function pairWhy(other, mode, on) {
+  const head = `shares non-hub files with #${other} — a merge-conflict risk; serializes only when dispatch.guards.path_overlap is on`;
+  if (on) return `${head} — it is "${mode}" here, so they will serialize under path_overlap`;
+  if (mode === 'off') return `${head} — it is off here, so they will not`;
+  return `${head} — the mode was not passed in, so whether they serialize is unknown`;
 }
 
 // ---------- the last step: merging ----------
