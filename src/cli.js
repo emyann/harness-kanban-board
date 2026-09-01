@@ -15,7 +15,7 @@ import { stopHook, markSessionClaim } from './hook.js';
 import { init, packageVersion } from './init.js';
 import { doctor } from './doctor.js';
 import { gc } from './gc.js';
-import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, formatDenials, resumeCommand, activePrGuard, isTrackRoot, groomBoard, computeReady, pathOverlapGuard, GROOM_LEVELS } from './model.js';
+import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, formatDenials, resumeCommand, activePrGuard, isTrackRoot, groomBoard, computeReady, pathOverlapGuard, GROOM_LEVELS, parsePriorityFlag, parseScheduledAtFlag } from './model.js';
 
 /** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
 const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'triage-only', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'with-actions', 'mermaid', 'serve', 'off', 'on', 'help']);
@@ -202,7 +202,10 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
                     them as cold nodes instead, --on undoes it, --agent <a track profile> forces one
               edit <n>... [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]
                     sets exactly the kb keys named — every other key is left as read; the write half of
-                    what hkb groom's unblocked/no_paths/malformed_kb/broad_path/priority_inversion suggest
+                    what hkb groom's unblocked/no_paths/malformed_kb/broad_path/priority_inversion suggest.
+                    --paths "" or --goal "" clears that field. --priority must be an integer (0 unfiled ·
+                    1 normal · 2 next up · 3 urgent); --scheduled-at must be a valid ISO instant. Both are
+                    validated before any of the <n> are touched.
               link <parent> <child>   unlink <parent> <child>      promote <n>...      archive <n>...
               adopt <n>... [--agent p]     comment <n> "text"      log <n> [--json]    status <n>
   worker      heartbeat <n> [--note ..]     finish <n> --summary ".." [--metadata JSON|path.json] [--artifacts a,b]
@@ -571,13 +574,30 @@ export async function main(argv) {
     // Only the flags actually passed change; every other key of the kb block is left exactly as read.
     case 'edit': {
       const ns = nums(rest);
-      if (!ns.length) throw usage('hkb edit <n>... [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]');
+      if (!ns.length) {
+        throw usage('hkb edit <n>... [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]  ("" clears --paths or --goal)');
+      }
+      // Validate every flag before touching any card (#243): a bad flag must reject the whole
+      // command, not edit the first of several numbers and then fail on the second.
       const fields = {};
+      const warnings = [];
       if (flags.paths !== undefined) fields.paths = list(str(flags.paths), '--paths');
       if (flags.goal !== undefined) fields.goal = str(flags.goal);
-      if (flags['scheduled-at'] !== undefined) fields.scheduled_at = str(flags['scheduled-at']);
-      if (flags.priority !== undefined) fields.priority = Number(flags.priority);
-      if (!Object.keys(fields).length) throw usage('hkb edit <n>... needs at least one of --paths/--goal/--scheduled-at/--priority');
+      if (flags['scheduled-at'] !== undefined) {
+        const parsed = parseScheduledAtFlag(str(flags['scheduled-at']));
+        if (!parsed.ok) throw usage(parsed.error);
+        if (parsed.warning) warnings.push(parsed.warning);
+        fields.scheduled_at = parsed.value;
+      }
+      if (flags.priority !== undefined) {
+        const parsed = parsePriorityFlag(str(flags.priority));
+        if (!parsed.ok) throw usage(parsed.error);
+        fields.priority = parsed.value;
+      }
+      if (!Object.keys(fields).length) {
+        throw usage('hkb edit <n>... needs at least one of --paths/--goal/--scheduled-at/--priority');
+      }
+      for (const w of warnings) log(`warning: ${w}`);
       const res = [];
       for (const n of ns) {
         const t = await getTask(ctx, n);
