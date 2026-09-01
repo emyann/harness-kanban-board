@@ -9,15 +9,15 @@ covers:
   - path: src/up.js
     sha: 6971cba6c83f88756b9dae1eea56ae20c0d28c09
   - path: src/model.js
-    sha: 23bb576d15068653b10c068ed3c9f014f0353664
+    sha: fd44f5d9605315d53a51e7d32dc8ff08a1529989
   - path: src/board.js
-    sha: 656fc1ff76b6cf1909ccacc5c69899ba24fb4010
+    sha: 05c992709b2d3d1d3ffd453dbbbd6b647de30fad
   - path: src/dispatch.js
-    sha: fb85767e0b4b962930ee74c608c5bb0e1bd7ae4f
+    sha: b3d70045eb3c5e3c062121817dabe280c38e0ec9
   - path: src/serve.js
     sha: 5565e6d7d79d189d7e62000065340848c669ab38
-generated_at_commit: 39d9c05
-last_refreshed: 2026-08-29
+generated_at_commit: 8853948
+last_refreshed: 2026-09-01
 related: [architecture/overview, features/web-board, concepts/roles-and-seats, architecture/dispatcher-tick]
 ---
 
@@ -208,17 +208,43 @@ and never leaving a process the operator forgot about.
 names belongs to whoever the kernel handed it to next — so `kill(pid, 0)` says
 "alive", `--status` says "running", and `down` would SIGTERM a stranger's process.
 
-The guard is arithmetic, which is what a zero-dependency CLI can afford: a pid
-file whose mtime predates `Date.now() - os.uptime() * 1000` was written by a
-machine that has since rebooted, so it cannot name a live process of ours
-(`pidFileStale`, `src/model.js:1008-1013`; read by `readPidFile`,
-`src/board.js:189-196`). Every caller that acts on a pid reads that flag as *no
-claim here* — `processState`, the dispatcher's singleton lock, the server's claim
-and `portInUse`. The slack
-(`PID_BOOT_SLACK_MS`) errs towards **believing** a pid file, because the two
-clocks differ in kind (mtime is wall time, uptime is monotonic) and calling a live
-dispatcher stale is how you get the two loops this whole mechanism exists to
-prevent.
+The first guard is arithmetic, which is what a zero-dependency CLI can afford: a
+pid file whose mtime predates the boot instant was written by a machine that has
+since rebooted, so it cannot name a live process of ours (`pidFileStale`,
+`src/model.js:1192`). Boot, in turn, prefers a kernel-reported instant over a
+derived one — `/proc/stat`'s `btime` on Linux, `sysctl -n kern.boottime` on
+macOS — falling back to `Date.now() - os.uptime() * 1000` where neither is
+available (`bootInstantMs`, `src/model.js:1175`; the `/proc`/`sysctl` reads
+happen in `readPidFile`, `src/board.js:240-266`, and are injected so tests never
+touch a real `/proc`). The slack (`PID_BOOT_SLACK_MS`) errs towards
+**believing** a pid file, because the two clocks differ in kind (mtime is wall
+time, uptime is monotonic) and calling a live dispatcher stale is how you get
+the two loops this whole mechanism exists to prevent.
+
+**The arithmetic alone is not enough on WSL2** (#205). The WSL2 VM's clock is
+resynced against the Windows host across every suspend/resume while
+`/proc/uptime` keeps counting on its own, so the derived boot instant (and, on
+the one machine measured, `btime` too) walks forward past pid files `hkb up`
+itself wrote earlier in the same session — ten minutes of skew, unbounded, far
+past any slack that wouldn't defeat the guard. So a stale verdict is
+**corroborated before it is acted on**, not trusted on its own: if the pid is
+alive *and* `/proc/<pid>/cmdline` still names our own `hkb dispatch --loop` /
+`hkb serve`, the claim is ours whatever the arithmetic concluded
+(`pidClaimStale`, `src/model.js:1229`; the match itself, `cmdlineIsOurs`,
+`src/model.js:1207`). Corroboration only ever *rescues* a stale verdict — a pid
+file the arithmetic already believes is never checked against `/proc` at all,
+and a live pid whose cmdline does **not** match stays refused, which is what
+keeps the mirror bug (#202, a pid file surviving a *real* reboot and naming a
+pid the kernel has since reissued to a stranger) failing closed. Where there is
+no `/proc` to ask (macOS), the timestamp verdict stands on its own, same as
+before this fix.
+
+Every caller that acts on a pid reads `stale` as *no claim here* —
+`processState`, the dispatcher's singleton lock, the server's claim and
+`portInUse` — and none of them had to change: the corroboration lives entirely
+inside `readPidFile`, so `hkb up`'s own spawn gate (`startProcess` →
+`claimPid`, `src/up.js:79-86`) refuses a rival the same way it always did, just
+off a verdict that is now right on WSL2 too.
 
 ## `up` looks again before it says "started"
 
