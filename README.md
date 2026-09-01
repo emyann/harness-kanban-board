@@ -6,7 +6,17 @@ no server, no database and no npm dependencies.
 
 ## Quickstart
 
-Three commands, in a repo you can push to, with [`gh`](https://cli.github.com) already logged in:
+**Before you start**, three things have to be on the machine:
+
+- **Node >= 20** and the [GitHub CLI](https://cli.github.com), `gh auth login` already done.
+- **A repo you can push to** — hkb writes labels, issues and refs there.
+- **A coding agent on your PATH** — [Claude Code](https://claude.com/claude-code) for the default profiles,
+  or Copilot CLI / Codex with `init --harness`. hkb dispatches *to* a harness; it is not one. Without it
+  `init` and `up` still succeed and cards still reach *ready*, and then nothing claims them — the dispatcher
+  logs `spawn_failed` and the board looks stalled for a reason nothing on it explains. That is what step two
+  is for: a board with a `claude` profile and no `claude` on PATH is a hard `✗` in `hkb doctor`, named as such.
+
+Then three commands:
 
 ```bash
 npx hkb-cli init                 # labels, .kanban/board.json, the worker skill, a CLAUDE.md/AGENTS.md section
@@ -157,7 +167,7 @@ Every terminal verb also takes `--summary-file` / `--metadata-file` / `--reason-
 `--summary ".." --metadata '{..}'` flags — no harness has to push JSON through shell quoting.
 
 Humans get `hkb promote`, `hkb unblock`, `hkb request-changes`, `hkb comment`, `hkb link/unlink`, `hkb archive`,
-`hkb log`. `hkb --help` lists everything.
+`hkb edit` (the `kb` block — paths, goal, priority, scheduled-at) and `hkb log`. `hkb --help` lists everything.
 
 ### The dependency graph as a diagram: `hkb graph`
 
