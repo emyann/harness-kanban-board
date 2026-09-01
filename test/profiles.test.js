@@ -68,6 +68,15 @@ test('only the track profile may spawn subagents', () => {
   for (const tool of claude()) assert.ok(DEFAULT_PROFILES['claude-track'].allowed_tools.includes(tool), `claude-track lost ${tool}`);
 });
 
+// #114: a task's kb.skills tells the worker to invoke `Skill` — every Claude launch profile has to
+// grant it, or the field asks for a tool `dontAsk` is guaranteed to deny.
+test('every Claude launch profile grants the Skill tool', () => {
+  for (const [name, p] of Object.entries(DEFAULT_PROFILES)) {
+    if ((p.launch || [])[0] !== 'claude') continue;
+    assert.ok((p.allowed_tools || []).includes('Skill'), `${name} cannot use a task's kb.skills without it`);
+  }
+});
+
 test('the hand-spliced Bash(true) is gone — true comes from SAFE_BUILTINS now', () => {
   assert.ok(!claude().includes('Bash(true)'));
   assert.ok(claude().includes('Bash(true *)'));
