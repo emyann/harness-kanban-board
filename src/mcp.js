@@ -15,7 +15,7 @@ import { projectBinRel } from './init.js';
 import { getTask, loadRun, latestResult, parentResults, addComment } from './tasks.js';
 import { heartbeat, complete, block, unblock, requestReview, createTask, linkTask, withOutbox } from './lifecycle.js';
 import { readVersion, terminalArgv } from './cli.js';
-import { BLOCK_KINDS } from './model.js';
+import { BLOCK_KINDS, isTrackRoot } from './model.js';
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const usage = (msg) => { const e = new Error(msg); e.exitCode = 2; return e; };
@@ -73,7 +73,7 @@ export const TOOLS = [
       const { run } = await loadRun(ctx, n);
       const result = await latestResult(ctx, n);
       const parents = await parentResults(ctx, t);
-      return { ...t, run, result, parents };
+      return { ...t, run, result, parents, track: isTrackRoot(t, ctx.cfg) };
     },
   },
   {

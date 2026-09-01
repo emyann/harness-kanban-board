@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires the `gh` CLI (authenticated) and `hkb` (npm hkb-cli) on PATH. Works with Claude Code, GitHub Copilot CLI and Codex CLI.
 metadata:
   author: hkb
-  version: 0.7.0
+  version: 0.8.0
 allowed-tools: Bash(hkb *) Bash(gh api *) Bash(gh pr *) Bash(gh issue view *) Bash(git *)
 ---
 
@@ -102,7 +102,8 @@ double instead (`node --test test/dispatch.test.js`). Do not do work that belong
 A **track** is a connected subgraph of the board: a root task plus everything it is still blocked by — normally what
 `/kanban:decompose` just materialized. The dispatcher's ordinary engine runs one node per cold session; a track runner
 holds the whole subgraph in **one** session, with the context flowing in memory instead of being re-derived per node.
-You get one when the root carries `kb:agent:claude-track` — any profile with `"track": true` in `.kanban/board.json`.
+You get one whenever the root has unfinished children and the board has a profile with `"track": true` in
+`.kanban/board.json` that can execute the nodes' profiles — nobody has to ask for it. See *Setting a track up*.
 
 You are an **orchestrator**, not a runner doing N things in a row. Your prompt lists the graph in **waves** — nothing
 in a wave depends on anything else in it — and for each wave you claim its nodes, hand **each node to its own isolated
@@ -162,9 +163,21 @@ the track's: what each node landed, what is open, what you parked.
 
 ### Setting a track up
 
-- `/kanban:decompose <n>` builds the graph. Then put the track profile on the **root only**:
-  `hkb adopt <root> --agent claude-track --status todo`, and give it room — `max_runtime` for the whole track, not
-  for one node.
+**There is nothing to set up.** A track is a property of the graph, not a label: `/kanban:decompose <n>` builds the
+graph, and on the next tick the dispatcher hands the root — a card with unfinished children that nothing else is
+still blocked by — to one session on the board's track profile. `hkb track <root>` says so and why
+(`track: inferred — 3 unfinished children`); `hkb show <root>` repeats the verdict.
+
+The label is the **override**, both ways, and neither is the normal case:
+
+- `hkb adopt <root> --agent claude-track --status todo` **forces** a track — the historical switch, still honoured,
+  and the only way to make a root a track when its own profile is not one the track profile can execute.
+- `hkb track <root> --off` (the `kb:no-track` label) **opts out**: the children go out as cold nodes, one session
+  each, for a goal whose pieces have nothing to say to each other. `hkb track <root> --on` puts it back.
+
+Two things are still worth setting by hand: `max_runtime` for the whole track rather than for one node, and the
+root's `kb.paths`, which guard the whole subgraph.
+
 - Every node must be on a profile the runner can execute (`track_agents` on the track profile). A node on another
   harness makes the track un-claimable and the board simply falls back to node dispatch: the slower engine, not an
   error. So do a node another worker already owns, a node with an open PR, and a node wearing `kb:needs-human`.
@@ -468,12 +481,15 @@ Its worker gets every *leaf's* result under "Parent task results" (`hkb show <ro
 brief step 3a puts in the root's body; without it the root's worker will cheerfully redo a child's work.
 
 The root is also the handle for running the graph as a **track** — one session for the whole subgraph instead of one
-cold session per node. That is a per-goal choice, made after the graph exists: `hkb adopt <root> --agent claude-track
---status todo`. Prefer it when the children belong to one goal — a shared design decision the orchestrator should hold
-in one head, branches that stack — and all run on the same harness. A track parallelises its independent children too,
-one subagent each, so "they are independent" is no longer a reason to leave it off; it is also the only way to run a
-wave wider than the board's `max_in_progress`, since a track is one slot. Leave it off for unrelated tasks, for a graph
-that spans harnesses, and when you want each task judged on its own attempt history. Either way the board is identical
+cold session per node — and that is now what happens by default: a root with unfinished children is claimed as a track
+on the next tick, with no extra step. Nothing to type; `hkb track <root>` says what the dispatcher will do and why.
+
+It is the right default because a track parallelises its independent children too, one subagent each, so "they are
+independent" stopped being a reason against it; it keeps a goal's shared design decision in one head; and it is the
+only way to run a wave wider than the board's `max_in_progress`, since a track is one slot. Turn it **off** for a goal
+whose children have nothing to say to each other, or when you want each task judged on its own attempt history:
+`hkb track <root> --off`. A graph that spans harnesses needs no decision at all — a node the runner cannot execute
+makes the track un-claimable and the board falls back to node dispatch on its own. Either way the board is identical
 — see *When you run a track* above.
 
 A full worked example — the graph above, the resulting board, and the invariants it satisfies — is in

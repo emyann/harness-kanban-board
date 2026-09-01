@@ -253,7 +253,7 @@ issues, the same labels, the same verbs. What changes is who runs them.
 | | node dispatch (default) | track runner |
 |---|---|---|
 | Granularity | one cold session per node | one session for the whole subgraph — an **orchestrator**, one isolated subagent per node |
-| Selected by | any `ready` task | a root whose profile has `"track": true` (`claude-track`) |
+| Selected by | any `ready` task | a root with unfinished children, by default (`isTrackRoot`) — or any card whose own profile has `"track": true` |
 | Lock claimed by the dispatcher | the task's | the **root's** only |
 | Node locks | — | claimed by the runner, a **wave** at a time, as it reaches each wave |
 | Heartbeat | the task's own lock ref | the **root's** lock ref covers every node under it |
@@ -327,9 +327,15 @@ node dispatch when the tasks are unrelated, when they span harnesses (`track_age
 judged on its own attempt history. A track is also the only way to run a subgraph wider than `max_in_progress`: its
 wave costs one slot however wide it is.
 
+Which is what the dispatcher assumes: a card with unfinished children that nothing else is still blocked by is a
+track, on the board's track profile, with no adopt step (`isTrackRoot`, src/model.js). The `kb:agent:*` label is the
+override in both directions and stays on the card either way — it is what node dispatch reads on every fallback.
+
 ```bash
-hkb adopt 12 --agent claude-track --status todo   # the decomposed root from the example above
+hkb track 12                                      # → #12 track: inferred — 3 unfinished children; one claude-track …
 hkb dispatch --dry-run                            # → #12: [dry-run] would run track #41 → #42 → #43 → #12
+hkb track 12 --off                                # kb:no-track: run the children as cold nodes after all
+hkb adopt 12 --agent claude-track --status todo   # the other way: force a track the graph would not infer
 ```
 
 ## Projects v2 mirror (optional)

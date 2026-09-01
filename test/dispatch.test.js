@@ -1095,6 +1095,63 @@ test('docs/wiki/log.md merges by union: two branches that both append to it neve
   assert.match(merged, /entry from PR B/);
 });
 
+// ---------- a root with children is a track by default (#161) ----------
+
+/** The default harness profiles plus a track profile, so inference has somewhere to send a root. */
+const withTrack = () => ({
+  claude: { mode: 'process', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] },
+  'claude-track': { mode: 'process', track: true, track_agents: ['claude', 'claude-track'], max_in_progress: 1, model: null, allowed_tools: [], launch: ['true'] },
+});
+
+test('a root nobody adopted is dispatched as one track, and its children are left to it', async (t) => {
+  const h = harness({ profiles: withTrack() });
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 2, status: 'ready', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 3, status: 'todo', agent: 'claude', blockedBy: [1, 2] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.tracks.map((x) => [x.root, x.ok, x.mode, x.profile, x.nodes]), [[3, true, 'inferred', 'claude-track', [1, 2]]]);
+  assert.deepEqual(s.claimed, [], 'both leaves belong to the track: no cold session for either');
+  assert.deepEqual(s.skipped.map((x) => x.why), ['held for track #3', 'held for track #3']);
+  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/3/1'], 'one lock: the root');
+  assert.equal(h.gh.statusOf(3), 'running');
+});
+
+test('kb:no-track sends the same graph back to node dispatch, one cold session per leaf', async (t) => {
+  const h = harness({ profiles: withTrack() });
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 2, status: 'ready', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 3, status: 'todo', agent: 'claude', labels: [L.noTrack], blockedBy: [1, 2] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.tracks, []);
+  assert.deepEqual(s.claimed.map((c) => [c.number, c.profile]), [[1, 'claude'], [2, 'claude']]);
+  assert.equal(h.gh.statusOf(3), 'todo');
+});
+
+test('a running track counts against the track profile\'s cap, not against its card\'s label', async (t) => {
+  const h = harness({ profiles: withTrack() });
+  t.after(h.cleanup);
+  // #3 is already running its inferred track over #1; #6 is a second root that would like one too
+  const alive = runWith([{ attempt: 1, profile: 'claude-track', host: 'test-host', started_at: ago(60), heartbeat_at: ago(5), pid: process.pid, track: true, track_mode: 'inferred', track_nodes: [1] }]);
+  h.gh.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 3, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, blockedBy: [1], run: alive }));
+  h.gh.refs.set('refs/kb/locks/3/1', 'a'.repeat(40));
+  h.gh.addIssue(kbIssue({ number: 5, status: 'ready', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 6, status: 'todo', agent: 'claude', blockedBy: [5] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.tracks.map((x) => [x.root, x.ok, x.why]), [[6, false, 'profile claude-track at cap']]);
+  // and the refusal is the ordinary fallback: #5 goes out as a cold node rather than waiting
+  assert.deepEqual(s.claimed.map((c) => [c.number, c.profile]), [[5, 'claude']]);
+  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/3/1', 'refs/kb/locks/5/1']);
+});
+
 test('a dry run reports what it would do and writes nothing', async (t) => {
   const h = harness();
   t.after(h.cleanup);

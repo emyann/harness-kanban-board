@@ -1,22 +1,26 @@
 ---
 title: Tracks — the second engine, and why it became an orchestrator
-summary: One session for a whole subgraph: how a track is resolved and refused, why every node keeps its own verb and PR, and how a wave of siblings became one isolated subagent each instead of N things in a row.
+summary: One session for a whole subgraph: how a root is inferred from the graph, how a track is resolved and refused, why every node keeps its own verb and PR, and how a wave of siblings became one isolated subagent each instead of N things in a row.
 category: features
 kind: explanation
 audience: [dev]
-read_when: "touching src/track.js, the track branch of the dispatcher tick, the claude-track profile's allow-list, or the runner brief"
+read_when: "touching src/track.js, isTrackRoot, the track branch of the dispatcher tick, the claude-track profile's allow-list, or the runner brief"
 covers:
+  - path: src/model.js
+    sha: 316e1b58f411224718ad190fc49f45b27d6c529e
   - path: src/track.js
-    sha: 4741b0697555435dcb76768a44ec86e1ef6eb4a0
+    sha: ed02aeeffe9c33ce3ce32abd652c59faec8e9286
   - path: src/dispatch.js
-    sha: 08cabfca37eae6e01b76bbeb8defd3066e90ea70
+    sha: a3853481f55b7c7e9b3a18d61c9b9e456b531db4
+  - path: src/init.js
+    sha: aee5eed4dcc544f9a6fe81c7273f96432aaf1048
   - path: src/board.js
-    sha: 94fd687e1ae9474add007a2a3fce529576506360
+    sha: 05c992709b2d3d1d3ffd453dbbbd6b647de30fad
   - path: src/gc.js
     sha: 40672cb7a84da7170be3f5d99df42f326f9dc1e5
 related: [architecture/overview, features/harness-profiles, concepts/worker-identity, decisions/adr-004-roles-and-adoption]
-generated_at_commit: 2024146
-last_refreshed: 2026-08-29
+generated_at_commit: 37e1171
+last_refreshed: 2026-09-01
 ---
 
 # Tracks — the second engine, and why it became an orchestrator
@@ -48,11 +52,53 @@ than paying for N of them up front.
 Nothing in a wave depends on anything else in it, which is what makes a wave
 safe to run all at once.
 
+## Who is a root: the graph decides, the label overrides (#161)
+
+A track used to be a per-goal choice a human made *after* `/kanban:decompose`
+(`hkb adopt <root> --agent claude-track`), and the label history said how that
+went: three applications ever, all by hand, every other decomposed goal running
+node-by-node because nobody typed it. The flag existed because tracks were
+sequential (#40), so node dispatch was genuinely faster for independent
+siblings; #129 removed that reason. With that gone the mode is a property of the
+**graph**, so it is inferred:
+
+`isTrackRoot(task, cfg, {board})` (`src/model.js`, pure) answers
+`{track, mode, why, profile, children}` with one of four modes:
+
+| mode | when | runs as |
+|---|---|---|
+| `forced` | the card's own profile has `"track": true` | a track, even with nothing blocking it (`trackReadiness` then refuses in its own words) |
+| `opted-out` | the card carries `kb:no-track` | node dispatch |
+| `inferred` | it has ≥1 unfinished child, nothing on the board is still blocked by *it*, and some track profile's `track_agents` can execute its own profile | a track, on **that** profile |
+| `none` | anything else — a leaf, a root whose children are all done, a profile no track profile can run | node dispatch |
+
+Two consequences worth holding on to. **The label is never rewritten**: an
+inferred root keeps `kb:agent:claude` and runs on `claude-track`, because that
+label is what node dispatch reads on every fallback — so the tick takes the
+launch profile from the decision (`cand.profile`), and counts the running
+track's slot against that profile's cap rather than the card's
+(`plan.profiles`, `src/dispatch.js`). And **only the outermost root is
+inferred**: in `41 → 42 → 26`, `#42` has an unfinished child too, but `#26` is
+still blocked by it, so it is a node of the bigger track and not a candidate of
+its own. That check needs the whole board, which is why `board` is a parameter —
+`hkb show`, which reads one issue, answers without it and says only what the
+card is in isolation.
+
+`hkb track <n>` is the command for all of this: it prints the verdict and its
+reason, and `--off`/`--on` toggle `kb:no-track`. That label is created by
+`hkb init` alongside the statuses (`src/init.js`) and checked by `hkb doctor`'s
+`labels` line, so a board set up before inference landed is told to re-run init
+rather than left with an opt-out that only exists once someone hand-makes it in
+the GitHub UI. `hkb doctor` warns when a board
+holds cards with unfinished children and no profile with `"track": true` to send
+them to (`checkTrackProfile`, `src/doctor.js`) — the one configuration where
+inference silently has nowhere to go.
+
 ## The refusals are the design
 
-`trackReadiness` answers `{ok, why, waves}`, and **every "no" is a fallback,
-never an error**: node dispatch is always available, so anything unusual just
-means "dispatch it node by node". A non-track profile, a cycle, a root that is
+`trackReadiness` answers `{ok, why, waves, profile, mode}`, and **every "no" is
+a fallback, never an error**: node dispatch is always available, so anything
+unusual just means "dispatch it node by node". A card that is not a root, a cycle, a root that is
 not `todo`/`ready`, a `kb:needs-human` node, a node with an open PR, a blocker
 that is not on this board, a node scheduled for later, a node on a profile
 outside `track_agents` (cross-harness tracks are out of scope: one session is
@@ -60,7 +106,8 @@ one harness) — and, via `trackAlreadyAttempted`, **a root that has already had
 one runner**. That last one is the safety valve: the fast engine gets one go,
 then the durable one finishes whatever is left.
 
-`planTracks` runs live tracks first, so the nodes a running runner owns are
+`planTracks` asks `isTrackRoot` which cards are roots at all, then runs live
+tracks first, so the nodes a running runner owns are
 `covered` before any pending candidate is judged. `covered` is what tells the
 tick not to reclaim, not to claim, and **not to count the slots** of a node
 under a live root: a track is one session, so it is one running slot however
@@ -145,6 +192,12 @@ is exactly why they are written down:
   its subagent left `running`. If it does not, the node is simply a stale claim
   the ordinary dispatcher reclaims after `stale_after` — the failure mode is
   latency, not corruption.
+- **A root that is `running` for any other reason still covers its nodes.**
+  `planTracks` marks a running root's nodes `covered` from its status, not from
+  its run record, so a root someone claimed by hand (`hkb claim <root>`) holds
+  its children for as long as that attempt lives. True before #161 for
+  `claude-track` roots and now true for every inferred one; the effect is
+  latency (the children wait for one attempt to end), never a double claim.
 - **`hkb stats` under-reports a fanned-out track.** A subagent's usage goes to a
   sidecar transcript (`…/<session>/subagents/agent-<id>.jsonl`) that
   `usageFromTranscript` never opens (#155). Whether `--max-budget-usd` counts

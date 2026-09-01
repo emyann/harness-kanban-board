@@ -12,7 +12,7 @@
 // The per-node brief is deliberately *not* built here — `hkb context <n>` prints exactly the
 // `workerContext` that node's own cold worker would get, so the runner fetches it at the moment it
 // starts the node instead of the dispatcher paying for every node up front.
-import { blockerDone, sortForDispatch } from './model.js';
+import { blockerDone, sortForDispatch, isTrackRoot } from './model.js';
 
 /** Statuses a track may start from — for the root and for every node. */
 export const TRACK_STARTABLE = ['todo', 'ready'];
@@ -115,44 +115,69 @@ export function trackPaths(track) {
  * Every "no" is a fallback, never an error: node dispatch is the durable engine and is always
  * available, so anything unusual — a node someone else owns, a node on a different harness, a
  * blocker off the board, a node a human has to look at — simply means "dispatch it node by node".
- * @returns {{ok, why, waves}} `why` is the reason either way, for the log and for `--json`.
+ * Which profile runs it is the decision's, not the label's: an *inferred* track runs on the board's
+ * track profile while the root keeps its own `kb:agent:*` (that label is what the root's own node
+ * pass, and every fallback to node dispatch, still reads).
+ *
+ * @param tasks the open board, for the maximality half of `isTrackRoot` — omit and an interior
+ *   node of a chain reads as a root of its own.
+ * @returns {{ok, why, waves, profile, mode}} `why` is the reason either way, for the log and `--json`.
  */
-export function trackReadiness(track, cfg, { board = null } = {}) {
-  const no = (why) => ({ ok: false, why, waves: [] });
+export function trackReadiness(track, cfg, { board = null, tasks = null } = {}) {
+  let no = (why, extra = {}) => ({ ok: false, why, waves: [], profile: null, mode: 'none', ...extra });
   const root = track.root;
   if (!root) return no('no such task on the board');
-  if (!isTrackProfile(cfg, root.agent)) return no(`profile ${root.agent || 'none'} does not run tracks`);
+  const decision = isTrackRoot(root, cfg, { board: tasks });
+  if (!decision.track) return no(decision.why, { mode: decision.mode });
+  const profileName = decision.profile;
+  // from here every refusal is a fallback for a task that *is* a root: keep saying which kind.
+  no = (why) => ({ ok: false, why, waves: [], profile: profileName, mode: decision.mode });
   if (track.cycle) return no(`the subgraph has a cycle: ${track.cycle.map((n) => `#${n}`).join(' → ')}`);
   if (!TRACK_STARTABLE.includes(root.status)) return no(`the root is ${root.status}`);
   if (root.needsHuman) return no(`#${root.number} needs a human`);
   if ((root.prs || []).some((p) => p.state === 'OPEN')) return no(`#${root.number} already has an open PR`);
   if (!track.nodes.length) return no('nothing is blocking it any more — dispatch it as a single node');
   if (track.missing.length) return no(`${track.missing.map((n) => `#${n}`).join(', ')} block the track but are not on board "${board ?? '?'}"`);
-  const allowed = trackAgents(cfg, root.agent);
+  const allowed = trackAgents(cfg, profileName);
   for (const t of track.nodes) {
     if (!TRACK_STARTABLE.includes(t.status)) return no(`#${t.number} is ${t.status}`);
     if (t.needsHuman) return no(`#${t.number} needs a human`);
     if ((t.prs || []).some((p) => p.state === 'OPEN')) return no(`#${t.number} already has an open PR`);
     // cross-harness tracks are out of scope on purpose: one session is one harness
-    if (t.agent && !allowed.has(t.agent)) return no(`#${t.number} runs on ${t.agent}, which a ${root.agent} runner cannot execute`);
+    if (t.agent && !allowed.has(t.agent)) return no(`#${t.number} runs on ${t.agent}, which a ${profileName} runner cannot execute`);
   }
   const now = new Date();
   const later = track.order.find((t) => t.kb?.scheduled_at && new Date(t.kb.scheduled_at) > now);
   if (later) return no(`#${later.number} is scheduled for ${later.kb.scheduled_at}`);
-  return { ok: true, why: `${track.nodes.length} node${track.nodes.length === 1 ? '' : 's'} then the root`, waves: trackWaves(track) };
+  return {
+    ok: true,
+    why: `${track.nodes.length} node${track.nodes.length === 1 ? '' : 's'} then the root`,
+    waves: trackWaves(track),
+    profile: profileName,
+    mode: decision.mode,
+  };
 }
 
 /**
  * Every track on the board, from the one board read the tick already did — no extra request.
- * @returns {{candidates, covered}}
- *   candidates  track roots not running, best first: `{root, track, ok, why, waves}`
+ *
+ * Which tasks are roots is `isTrackRoot`'s answer, not a label's: a task with unfinished children
+ * that nothing else is still waiting on is a track by default, on the board's track profile.
+ * @returns {{candidates, covered, profiles}}
+ *   candidates  track roots not running, best first: `{root, track, ok, why, waves, profile, mode}`
  *   covered     Map<node number, running root number> — the nodes a live runner owns. The tick
  *               must not reclaim them, must not claim them, and must not count their slots: a
  *               track is ONE session, so it is ONE running slot however many nodes it holds.
+ *   profiles    Map<root number, profile> — the profile each root runs its track on, which for an
+ *               inferred root is not the `kb:agent:*` on the card. The tick counts a running
+ *               track's slot against *that* profile's cap, the one whose launch it is using.
  */
 export function planTracks(tasks, cfg, { board = null } = {}) {
-  const byNumber = new Map((tasks || []).map((t) => [t.number, t]));
-  const roots = sortForDispatch((tasks || []).filter((t) => isTrackProfile(cfg, t.agent)));
+  const all = tasks || [];
+  const byNumber = new Map(all.map((t) => [t.number, t]));
+  const decided = all.map((t) => [t, isTrackRoot(t, cfg, { board: all })]).filter(([, d]) => d.track);
+  const profiles = new Map(decided.map(([t, d]) => [t.number, d.profile]));
+  const roots = sortForDispatch(decided.map(([t]) => t));
   const covered = new Map();
   // live tracks first: a node one runner already owns is off the table for every other track
   const pending = [];
@@ -165,10 +190,10 @@ export function planTracks(tasks, cfg, { board = null } = {}) {
   const candidates = [];
   for (const { root, track } of pending) {
     const taken = track.nodes.find((t) => covered.has(t.number));
-    if (taken) { candidates.push({ root, track, ok: false, why: `#${taken.number} is already running in track #${covered.get(taken.number)}`, waves: [] }); continue; }
-    candidates.push({ root, track, ...trackReadiness(track, cfg, { board }) });
+    if (taken) { candidates.push({ root, track, ok: false, why: `#${taken.number} is already running in track #${covered.get(taken.number)}`, waves: [], profile: profiles.get(root.number), mode: 'none' }); continue; }
+    candidates.push({ root, track, ...trackReadiness(track, cfg, { board, tasks: all }) });
   }
-  return { candidates, covered };
+  return { candidates, covered, profiles };
 }
 
 // ---------- the track as a picture ----------

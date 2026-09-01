@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
 import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches } from './board.js';
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun } from './tasks.js';
-import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard } from './model.js';
+import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren } from './model.js';
 import { resolvedIdentity } from './hook.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, harnessHookCommand, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
@@ -417,6 +417,30 @@ export async function checkAgentLabels(ctx, { ok, warn }, { fetch = fetchBoard, 
   const detail = doubled.map((t) => `#${t.number} (${t.agents.join(' + ')} → runs as ${t.agents[0]})`).join(' · ');
   const fix = `hkb adopt ${doubled.map((t) => t.number).join(' ')} --agent <the profile it should run on> — adopt sets that one and takes the others off`;
   warn(AGENT_LABEL_CHECK, `${plural(doubled.length, 'task')} on two profiles at once: ${detail}`, fix);
+}
+
+export const TRACK_PROFILE_CHECK = 'track profile';
+
+/**
+ * Can this board run a track at all? A card with unfinished children is a track by default
+ * (`isTrackRoot`) — one session orchestrating the whole subgraph — but only if some profile in
+ * board.json carries `"track": true`. Without one every decomposed goal falls back to node
+ * dispatch: correct, just slower and with the context re-derived between every dependent pair.
+ *
+ * Configured boards pay nothing: the second board read (this one needs blockers, which the shared
+ * one deliberately skips) only happens when there is no track profile to find and the answer might
+ * therefore be actionable.
+ */
+export async function checkTrackProfile(ctx, { ok, warn }, { fetch = fetchBoard } = {}) {
+  const tracks = Object.entries(ctx.cfg?.profiles || {}).filter(([, p]) => p?.track).map(([n]) => n);
+  if (tracks.length) return ok(TRACK_PROFILE_CHECK, `${tracks.join(', ')} — a card with unfinished children runs as one session`);
+  let tasks;
+  try { tasks = await fetch(ctx); } catch (e) { return warn(TRACK_PROFILE_CHECK, `no profile runs tracks, and the board would not read: ${e.message}`); }
+  const roots = tasks.filter((t) => unfinishedChildren(t).length);
+  if (!roots.length) return ok(TRACK_PROFILE_CHECK, 'no profile runs tracks, and nothing on the board has unfinished children');
+  warn(TRACK_PROFILE_CHECK,
+    `${plural(roots.length, 'card')} with unfinished children (${nameSome(roots.map((t) => `#${t.number}`), 3)}) and no profile with "track": true — every one of them runs node by node`,
+    'hkb init --profiles claude-track — it adds the track profile to board.json; nothing else has to change');
 }
 
 /**
@@ -1034,7 +1058,7 @@ export async function doctor(ctx, flags, log) {
   try {
     const labels = new Set();
     for (let page = 1; page <= 3; page++) { const b = await rest('GET', api(ctx, `/labels?per_page=100&page=${page}`)); for (const l of b || []) labels.add(l.name); if (!b || b.length < 100) break; }
-    const missing = [...STATUSES.map(L.status), L.board(ctx.board), L.needsHuman].filter((l) => !labels.has(l));
+    const missing = [...STATUSES.map(L.status), L.board(ctx.board), L.needsHuman, L.noTrack].filter((l) => !labels.has(l));
     missing.length ? bad('labels', `missing ${missing.join(', ')}`, 'hkb init') : ok('labels', `${[...labels].filter((l) => l.startsWith('kb:')).length} kb:* labels`);
   } catch (e) { bad('labels', e.message); }
 
@@ -1042,6 +1066,7 @@ export async function doctor(ctx, flags, log) {
   // and a background profile that has stopped recording sessions is a board nothing can price
   const board = await boardOnce(ctx);
   await checkAgentLabels(ctx, { ok, warn }, { board });
+  await checkTrackProfile(ctx, { ok, warn });
   await checkTaskSkills(ctx, { ok, warn }, { board });
   await checkSessions(ctx, { ok, warn }, { board });
 

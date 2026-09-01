@@ -161,10 +161,10 @@ test('a fresh board is seeded with exactly the profiles asked for (#72)', async 
 
 test('the label set that reaches GitHub is the board\'s, and nothing else is written (#72)', async () => {
   const { root, gh, printed } = await runInit();
-  const want = [...STATUSES.map(L.status), L.board('default'), L.needsHuman, L.agent('claude')];
+  const want = [...STATUSES.map(L.status), L.board('default'), L.needsHuman, L.noTrack, L.agent('claude')];
 
   assert.deepEqual(created(gh).sort(), [...want].sort());
-  assert.equal(created(gh).length, 11, 'eight statuses + board + needs-human + one agent — the count is the regression');
+  assert.equal(created(gh).length, 12, 'eight statuses + board + needs-human + no-track + one agent — the count is the regression');
   assert.deepEqual(created(gh).filter((l) => l.startsWith('kb:agent:')), ['kb:agent:claude'], 'no labels for harnesses this repo will never install');
   assert.ok(printed.some((l) => l.startsWith('created labels: ')));
 

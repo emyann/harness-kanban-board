@@ -10,7 +10,7 @@
 
 ## Concepts
 
-- [Worker identity — which attempt a session is, and who may say so](./concepts/worker-identity.md): The three answers to "which attempt is this session?" (launch environment, checkout, job record), the order of trust between them, and why a `claude --bg` launch must hand over none of them.
+- [Worker identity — which attempt a session is, and who may say so](./concepts/worker-identity.md): The three answers to "which attempt is this session?" (launch environment, checkout, job record), the order of trust between them, why a `claude --bg` launch must hand over none of them, and — this is also the page for it — how `SubagentStop` resolves a fourth, child-checkout answer via `CLAUDE_PROJECT_DIR`.
 
 ## Features
 
@@ -20,7 +20,7 @@
 - [The path_overlap guard — three modes, and never behind an idle attempt](./features/path-overlap-guard.md): Why the guard exists (the merge conflict, not the worktree one), the off/running/unmerged modes and their merge.mode defaults, and how idleness — job, pid, or lock-ref beat — keeps it from holding a card hostage.
 - [The planning commands — `/kanban:specify` and `/kanban:decompose`](./features/planning-commands.md): The two board operations that need a model and so cannot be `hkb` verbs — one command source, registered twice, delegating to one procedure in SKILL.md.
 - [The review loop — `request-changes` and continuing one PR](./features/review-loop.md): How a reviewed card goes back for another round on the same PR: the one exemption to the active_pr guard, the checkout the dispatcher makes on the PR's branch, and the block in the brief that stops a second PR.
-- [Tracks — the second engine, and why it became an orchestrator](./features/tracks.md): One session for a whole subgraph: how a track is resolved and refused, why every node keeps its own verb and PR, and how a wave of siblings became one isolated subagent each instead of N things in a row.
+- [Tracks — the second engine, and why it became an orchestrator](./features/tracks.md): One session for a whole subgraph: how a root is inferred from the graph, how a track is resolved and refused, why every node keeps its own verb and PR, and how a wave of siblings became one isolated subagent each instead of N things in a row.
 - [Starting and stopping a board (`hkb up` / `hkb down`)](./features/up-and-down.md): The two long-running processes as one idempotent verb — pid files as the whole protocol, why only their writer may delete one, why the child gets no KB_*, and the line between reporting exit 4 and supervising it.
 - [Telling an adopter their hkb is old](./features/update-notice.md): Updates are pull-only, so something has to say there is something to pull — one npm GET a day, in doctor and the dispatcher loop, and why a stale CLI hides a stale skill.
 - [The web board (`hkb serve`)](./features/web-board.md): One local server, one inline page, N repos — where the board list comes from and who maintains it, how the board is read, how a drag becomes a verb, how every request is routed to the board it names, and how the drawer draws a card's dependency subgraph from the payload it already has.
