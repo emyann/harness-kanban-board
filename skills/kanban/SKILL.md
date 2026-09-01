@@ -238,7 +238,8 @@ dispatch pid <n> ✓ · serve pid <n> ✓ · doctor all ✓          (or: doctor
 <lanes: triage · todo+ready · running · blocked+review · done — empty lanes omitted,
  the priority spread only where it decides something>
 
-Needs you: at most three, most urgent first, one line each.
+Needs you:  at most three, most urgent first, one line each — decisions only they can take.
+Start here: up to four cards worth working now, why each, and the command that starts them.
 
 <merge mode> · watcher up (60s)
 ```
@@ -255,9 +256,40 @@ Needs you: at most three, most urgent first, one line each.
 - The serve URL is the whole point of `--serve` and the human's way into the board, so it leads the first line.
   `hkb up` does not print it yet — read it off the first line of `.kanban/logs/serve.log`.
 
+**Ranking *Start here*.** The point of the line is that a human who has just sat down can say "yes, those
+three" and have the board moving in one reply. Which means it is a *recommendation*, made from the board, with
+the command that acts on it named — not a dump of the top of a sorted list.
+
+Rank by what the board actually tells you, in this order, and stop at four:
+
+1. **A card in *review*.** It is the seat's own decision and it is holding a finished PR. Nothing else outranks
+   work that is already done.
+2. **A card wearing `kb:needs-human`** whose question you can see the answer to — say where the answer is, and
+   that unblocking it costs them one word.
+3. **The card the most other cards are blocked by.** Fan-in is the board's own statement of what is load-bearing,
+   and `hkb graph <n>` draws it. One card unblocking four beats a card unblocking none, whatever their numbers.
+4. **Then `kb.priority`** — but say the number rather than leaning on it. It is an integer with a documented
+   direction (higher wins) and no documented scale, so numbers filed by different hands on different days do not
+   compare (#207). Where the number disagrees with fan-in, trust fan-in and say you did.
+5. **Then age**, oldest first, exactly as `sortReady` breaks its own ties.
+
+Give each one a clause of *why it is on the list* — not a restatement of its title, which they can read — and
+end the line with the command that starts them, ready to approve:
+
+```
+Start here: #41 four cards are blocked by it · #43 the p3 nobody has picked up in a fortnight
+            #12 its own PR is open and waiting on a review
+            → hkb promote 41 43   (say the word and the next tick claims them; #12 is already yours to review)
+```
+
+Suggesting is yours; **promoting is theirs**, and the difference is the whole seat. Name the command, do not run
+it, and do not re-rank a queue the human has already ordered — a board with cards in *todo* or *ready* has been
+ordered, and *Start here* on such a board means "here is what the tick will take next", not a proposal to change
+it.
+
 A board with **no work in flight** — every open card in triage, or none at all — is the one thing the status
-lines cannot show: an idle dispatcher and a busy one print the same pid. Say it in a clause, and make *Needs
-you* the promote decision.
+lines cannot show: an idle dispatcher and a busy one print the same pid. Say it in a clause, and let *Start
+here* carry the promote suggestion — on such a board it is the only line that can move anything.
 
 ### 2. Watch, don't poll
 

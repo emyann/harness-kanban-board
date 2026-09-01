@@ -7,9 +7,9 @@ audience: [dev, ops]
 read_when: "changing what a session may do on someone's board, adding an event kind / status / outcome / block kind, or wondering why the operator's limits are prose rather than a guard"
 covers:
   - path: skills/kanban/SKILL.md
-    sha: 8fe3c3d505260ec6fd4d715727e47a1ce7b24311
+    sha: 5e836b405442f1a54e8981f6a75a9d1b7632b632
   - path: commands/operate.md
-    sha: a473da91251ac94939165ebe1a2f316d076b8ede
+    sha: 868663f4ad694f7e336ebbdfec7952e4afd621e1
   - path: src/watch.js
     sha: 8aba4c441e35c9241124c1278b5f4824706f7e52
   - path: src/model.js
@@ -101,6 +101,17 @@ dispatcher and a busy one print the same pid**. A board whose open cards are all
 *triage* will tick forever against an empty queue while every process reports
 healthy, so the lane table is the only place that difference shows, and the section
 requires it to be said out loud with the promote decision under *Needs you*.
+
+The screen carries two lists, and the split between them is the seat's own
+line. *Needs you* is decisions only the human can take. *Start here* is up to
+four cards worth working now, ranked by what the board can actually say — a
+card in *review* first, then a `kb:needs-human` card whose answer is visible,
+then fan-in, the card the most others are blocked by — with `kb.priority`
+below all three, because the flag has a documented direction and no documented
+scale (#207) and numbers filed by different hands do not compare. The line ends
+with the command that acts on it, unrun: suggesting is the seat's, promoting is
+the human's, and naming the verb without typing it is exactly where that
+boundary sits.
 
 The boundary is written into step 5: the opening report is step 1's, every cycle
 after it is the watch digest, and both keep the same economy — a transition, a verb

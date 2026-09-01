@@ -17,5 +17,6 @@ has — and **the credentials, the approvals and the board's policy stay with th
 verbs; you never widen your own permission to drive more of them.
 
 Open with the one-screen report step 1 specifies — the board and its URL, the two pids, one verdict for
-`hkb doctor`, the lanes, and at most three things that need the human — never a transcript of `doctor`. Close
-every cycle with the digest step 5 describes: what happened, what you did, what you handed back.
+`hkb doctor`, the lanes, the few things that need the human and the few cards worth starting — never a
+transcript of `doctor`. Close every cycle with the digest step 5 describes: what happened, what you did,
+what you handed back.
