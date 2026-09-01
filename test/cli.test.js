@@ -180,6 +180,109 @@ test('groomOptions: unknown --level and --bodies exit 2 naming the list', () => 
   for (const l of GROOM_LEVELS) assert.equal(groomOptions({ level: l }).level, l);
 });
 
+// ---------- hkb edit (#237): the write half of the kb block ----------
+
+test('hkb edit <n> --paths/--goal/--scheduled-at/--priority sets exactly those keys', async (t) => {
+  const gh = new FakeGh();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-edit-'));
+  fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
+  gh.addIssue(kbIssue({
+    number: 50, title: 'edit me', status: 'todo', agent: 'claude', body: SPEC,
+    kb: { paths: ['src/old.js'], goal: 'old goal', priority: 1, scheduled_at: null, max_runtime: 1800, max_retries: 4, model: 'sonnet', skills: ['s1'], workspace: 'worktree' },
+  }));
+  const cwd = process.cwd();
+  const write = process.stdout.write.bind(process.stdout);
+  let printed = '';
+  process.stdout.write = (s) => { printed += s; return true; };
+  const restore = gh.install();
+  process.chdir(dir);
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const run = async (...argv) => { printed = ''; await main(argv); return printed; };
+
+  await run('edit', '50', '--paths', 'src/new.js,src/other.js', '--goal', 'new goal', '--scheduled-at', '2026-09-02T00:00:00Z', '--priority', '3');
+  const shown = JSON.parse(await run('show', '50', '--json'));
+  assert.deepEqual(shown.kb.paths, ['src/new.js', 'src/other.js']);
+  assert.equal(shown.kb.goal, 'new goal');
+  assert.equal(shown.kb.scheduled_at, '2026-09-02T00:00:00Z');
+  assert.equal(shown.kb.priority, 3);
+  // everything not named on the command line survives untouched
+  assert.equal(shown.kb.max_runtime, 1800);
+  assert.equal(shown.kb.max_retries, 4);
+  assert.equal(shown.kb.model, 'sonnet');
+  assert.deepEqual(shown.kb.skills, ['s1']);
+  assert.equal(shown.kb.workspace, 'worktree');
+
+  // a second, narrower edit changes only what it names
+  await run('edit', '50', '--priority', '2');
+  const again = JSON.parse(await run('show', '50', '--json'));
+  assert.equal(again.kb.priority, 2);
+  assert.deepEqual(again.kb.paths, ['src/new.js', 'src/other.js'], 'untouched by the priority-only edit');
+  assert.equal(again.kb.goal, 'new goal', 'untouched by the priority-only edit');
+});
+
+test('hkb edit <n>... with no field flag is a usage error', async () => {
+  await assert.rejects(() => main(['edit', '50']), (e) => e.exitCode === 2);
+});
+
+// ---------- every `hkb edit` line hkb groom suggests is a command that runs ----------
+
+/** Tokenize a suggested shell line: splits on whitespace, "double quotes" kept together and stripped. */
+function tokenize(cmd) {
+  const out = [];
+  const re = /"([^"]*)"|(\S+)/g;
+  let m;
+  while ((m = re.exec(cmd))) out.push(m[1] !== undefined ? m[1] : m[2]);
+  return out;
+}
+
+test('hkb groom: every hkb edit line it suggests is a command hkb edit actually runs', async (t) => {
+  const gh = new FakeGh();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-edit-suggest-'));
+  fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
+
+  // malformed_kb: the block at the top of the body is not valid JSON
+  const malformed = kbIssue({ number: 100, title: 'bad kb block', status: 'triage', agent: 'claude', body: SPEC, kb: { paths: ['src/hundred.js'], goal: 'hundred' } });
+  malformed.body = '<!-- kb: {not json -->\n' + SPEC;
+  gh.addIssue(malformed);
+
+  // no_paths: kb.paths is empty
+  gh.addIssue(kbIssue({ number: 101, title: 'no paths', status: 'triage', agent: 'claude', body: SPEC, kb: { paths: [], goal: 'a goal' } }));
+
+  // broad_path: #113's own path covers three other lane cards
+  gh.addIssue(kbIssue({ number: 110, title: 'wide a', status: 'triage', agent: 'claude', body: SPEC, kb: { paths: ['src/wide/a.js'], goal: 'a' } }));
+  gh.addIssue(kbIssue({ number: 111, title: 'wide b', status: 'todo', agent: 'claude', body: SPEC, kb: { paths: ['src/wide/b.js'], goal: 'b' } }));
+  gh.addIssue(kbIssue({ number: 112, title: 'wide c', status: 'ready', agent: 'claude', body: SPEC, kb: { paths: ['src/wide/c.js'], goal: 'c' } }));
+  gh.addIssue(kbIssue({ number: 113, title: 'wide itself', status: 'triage', agent: 'claude', body: SPEC, kb: { paths: ['src/wide'], goal: 'wide' } }));
+
+  // priority_inversion: #120 (p0) blocks #121 (p2) — the blocker is dispatched last
+  gh.addIssue(kbIssue({ number: 120, title: 'low priority blocker', status: 'todo', agent: 'claude', body: SPEC, kb: { paths: ['src/blocker.js'], goal: 'blocker', priority: 0 } }));
+  gh.addIssue(kbIssue({ number: 121, title: 'urgent, blocked', status: 'todo', agent: 'claude', body: SPEC, kb: { paths: ['src/urgent.js'], goal: 'urgent', priority: 2 }, blockedBy: [120] }));
+
+  const cwd = process.cwd();
+  const write = process.stdout.write.bind(process.stdout);
+  let printed = '';
+  process.stdout.write = (s) => { printed += s; return true; };
+  const restore = gh.install();
+  process.chdir(dir);
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const run = async (...argv) => { printed = ''; await main(argv); return printed; };
+
+  const rep = JSON.parse(await run('groom', '--json', '--status', 'triage,todo,ready'));
+  const edits = rep.cards.flatMap((c) => c.findings).map((f) => f.suggests).filter((s) => typeof s === 'string' && s.startsWith('hkb edit '));
+  assert.ok(edits.some((s) => /^hkb edit 100 /.test(s)), 'malformed_kb suggested');
+  assert.ok(edits.some((s) => /^hkb edit 101 /.test(s)), 'no_paths suggested');
+  assert.ok(edits.some((s) => /^hkb edit 113 /.test(s)), 'broad_path suggested');
+  assert.ok(edits.some((s) => /^hkb edit 120 /.test(s)), 'priority_inversion suggested');
+  assert.ok(edits.length >= 4, 'all four findings fired');
+
+  for (const line of edits) {
+    const [, ...argv] = tokenize(line); // drop the leading "hkb"
+    await run(...argv); // throws on a usage error — the whole point of the test
+  }
+});
+
 test('filterGroomLevel and formatGroom are pure over the report shape', () => {
   const card = (number, findings, extra = {}) => ({ number, title: `t${number}`, status: 'triage', agent: 'claude', priority: 1, age_days: 2, touched_days: 1, paths: [], goal: null, blocked_by: [], blocks: [], findings, proposal: 'none', needs_judgment: false, ...extra });
   const rep = {
