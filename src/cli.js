@@ -15,7 +15,7 @@ import { stopHook, markSessionClaim } from './hook.js';
 import { init, packageVersion } from './init.js';
 import { doctor } from './doctor.js';
 import { gc } from './gc.js';
-import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, resumeCommand, activePrGuard } from './model.js';
+import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, formatDenials, resumeCommand, activePrGuard } from './model.js';
 
 /** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
 const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'with-actions', 'mermaid', 'serve', 'help']);
@@ -328,6 +328,9 @@ export async function main(argv) {
           if (a.job) process.stdout.write(`     job ${a.job}${a.ended_at ? '' : ' · claude attach ' + a.job}\n`);
           const session = formatSession(a);
           if (session) process.stdout.write(`     ${session}\n`);
+          if (a.terminal_reason) process.stdout.write(`     ended: ${a.terminal_reason}\n`);
+          const denials = formatDenials(a);
+          if (denials) process.stdout.write(`     denied: ${denials}\n`);
           const resume = resumeCommand(a, n);
           if (resume) process.stdout.write(`     ${resume}\n`);
         }
