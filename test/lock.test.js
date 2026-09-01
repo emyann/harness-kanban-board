@@ -59,3 +59,16 @@ test('gh error classification', () => {
   assert.equal(classify(503, ''), 'server');
   assert.equal(classify(0, 'To get started with GitHub CLI, please run: gh auth login'), 'auth');
 });
+
+test('a GraphQL "could not resolve" 404 is notfound, not network — a real DNS failure still is', () => {
+  assert.equal(classify(0, 'Could not resolve to an Issue with the number of 999999.'), 'notfound');
+  assert.equal(classify(0, 'Could not resolve to a Repository with the name \'acme/ghost\'.'), 'notfound');
+  assert.equal(classify(0, 'Could not resolve to a User with the login of \'ghost\'.'), 'notfound');
+  assert.equal(classify(0, 'Could not resolve to a node with the global id of \'abc\'.'), 'notfound');
+  assert.equal(classify(0, 'error connecting to api.github.com: dial tcp: no such host'), 'network');
+  assert.equal(classify(0, 'dial tcp: lookup api.github.com: no such host'), 'network');
+  assert.equal(classify(0, 'fatal: unable to access ...: Could not resolve host: github.com'), 'network');
+  assert.equal(classify(0, 'unexpected EOF'), 'network');
+  // "eof" must not fire on unrelated text that merely contains the substring
+  assert.equal(classify(0, 'geofencing is enabled for this repo'), 'unknown');
+});

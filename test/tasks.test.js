@@ -7,8 +7,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fetchBoard, blockersOf, blockersKnown } from '../src/tasks.js';
+import { fetchBoard, blockersOf, blockersKnown, getTask } from '../src/tasks.js';
 import { GROOM_BLOCKERS_CHECK, checkGroomBlockers } from '../src/doctor.js';
+import { GhError, setTransport } from '../src/gh.js';
 import { FakeGh, kbIssue } from './fake-gh.js';
 
 let seq = 0;
@@ -158,4 +159,37 @@ test('doctor names the REST-fill cost when the GraphQL field is absent', () => {
   checkGroomBlockers({}, { ok, warn }, { caps: { blockedByGql: true }, board: { tasks: [] } });
   assert.equal(results[0].ok, true);
   assert.match(results[0].detail, /no extra request/);
+});
+
+test('a missing issue number is notfound (exit 2), not a network error a terminal verb would queue forever (#141)', async () => {
+  const ctx = {
+    root: path.join(os.tmpdir(), `hkb-141-${process.pid}-${seq++}`),
+    repo: { owner: 'acme', repo: 'board', nameWithOwner: 'acme/board' },
+    board: 'default',
+    host: 'test-host',
+    json: false,
+    caps: {},
+    _cache: {},
+  };
+  const restore = setTransport((req) => {
+    if (req.kind !== 'graphql') throw new Error(`unexpected ${req.kind} call`);
+    if (/__type\(name:\s*"Issue"\)/.test(req.query)) return { __type: { fields: [{ name: 'number' }, { name: 'title' }, { name: 'labels' }] } };
+    if (/issue\(number:/.test(req.query)) {
+      // what `gh api graphql` reports for an issue number that does not exist: HTTP 200, no
+      // status line, an `errors` entry classify() must read as notfound, not network (#141)
+      throw new GhError('GraphQL failed (0): Could not resolve to an Issue with the number of 999999.', { status: 0, kind: 'notfound', path: 'graphql' });
+    }
+    throw new Error(`unexpected query: ${req.query}`);
+  });
+  try {
+    await assert.rejects(getTask(ctx, 999999), (e) => {
+      assert.equal(e.exitCode, 2);
+      assert.match(e.message, /issue #999999 not found in acme\/board/);
+      assert.notEqual(e.kind, 'network'); // never something `withOutbox` would queue for replay
+      return true;
+    });
+  } finally {
+    restore();
+    fs.rmSync(ctx.root, { recursive: true, force: true });
+  }
 });

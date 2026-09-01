@@ -27,7 +27,11 @@ export class GhError extends Error {
 
 export function classify(status, text) {
   const t = (text || '').toLowerCase();
-  if (/dial tcp|no such host|connection refused|network is unreachable|timeout|tls handshake|could not resolve|error connecting|eof/.test(t) && !status) return 'network';
+  // GitHub's GraphQL 404 idiom ("Could not resolve to an Issue with the number of 999999.")
+  // must not fall into the DNS-failure branch below — it means the node doesn't exist, not
+  // that the network is down.
+  if (!status && /could not resolve to (a|an) \w/.test(t)) return 'notfound';
+  if (/dial tcp|no such host|connection refused|network is unreachable|timeout|tls handshake|could not resolve host|could not resolve hostname|error connecting|\beof\b/.test(t) && !status) return 'network';
   if (status === 401) return 'auth';
   if (status === 403 && /rate limit|secondary|abuse/.test(t)) return 'ratelimit';
   if (status === 429) return 'ratelimit';
