@@ -713,7 +713,13 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   const runningNow = tasks.filter((t) => t.status === 'running');
   const sessions = runningNow.filter((t) => !coveredBy.has(t.number));
   const perProfile = {};
-  for (const t of sessions) perProfile[t.agent] = (perProfile[t.agent] || 0) + 1;
+  // a running *track* spends the track profile's slot, not its card's: an inferred root keeps
+  // `kb:agent:claude` while its session is the claude-track launch, and the cap that has to hold is
+  // the one whose launch is running.
+  for (const t of sessions) {
+    const p = (t.status === 'running' && plan.profiles.get(t.number)) || t.agent;
+    perProfile[p] = (perProfile[p] || 0) + 1;
+  }
   let slots = Math.max(0, d.max_in_progress - sessions.length);
   let budget = Math.min(max, slots);
   const ready = sortForDispatch(tasks.filter((t) => t.status === 'ready'));
@@ -750,12 +756,14 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   const claimedTracks = new Set(); // a root taken here is not also dispatched as a node below
   for (const cand of plan.candidates) {
     const t = cand.root;
-    const note = (why, extra = {}) => { summary.tracks.push({ root: t.number, nodes: cand.track.nodes.map((x) => x.number), ok: false, why, ...extra }); };
+    const note = (why, extra = {}) => { summary.tracks.push({ root: t.number, nodes: cand.track.nodes.map((x) => x.number), ok: false, why, mode: cand.mode || 'none', ...extra }); };
     if (!cand.ok) { note(cand.why); continue; }
     if (touchedRecently(t.number)) { note('touched recently (stale-read guard)'); continue; }
     if (budget <= 0) { note('no slot'); continue; }
     if ((state.spawned_today || 0) >= d.daily_spawn_cap) { note(`daily spawn cap ${d.daily_spawn_cap}`); continue; }
-    const profileName = t.agent;
+    // an inferred track runs on the board's track profile while the card keeps its own agent label:
+    // the label is what node dispatch reads if this ever falls back, so the decision never rewrites it.
+    const profileName = cand.profile || t.agent;
     const profile = ctx.cfg.profiles[profileName];
     if (!profile) { note(`unknown profile ${profileName} — \`hkb init --profiles ${profileName}\` adds it to board.json`); continue; }
     if (!dispatchable(profileName)) { note(`profile ${profileName} is not dispatched from this host`); continue; }
@@ -779,10 +787,10 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     const nodes = cand.track.nodes.map((x) => x.number);
     const k = runRec.run.attempts.length + 1;
     if (dryRun) {
-      summary.tracks.push({ root: t.number, nodes, ok: true, attempt: k, profile: profileName, dry: true });
+      summary.tracks.push({ root: t.number, nodes, ok: true, attempt: k, profile: profileName, mode: cand.mode, dry: true });
       claimedTracks.add(t.number);
       for (const nn of nodes) coveredBy.set(nn, t.number); // a dry run must report the same board as a real one
-      log(`#${t.number}: [dry-run] would run track ${[...nodes, t.number].map((x) => `#${x}`).join(' → ')} as one ${profileName} session`);
+      log(`#${t.number}: [dry-run] would run track ${[...nodes, t.number].map((x) => `#${x}`).join(' → ')} as one ${profileName} session (${cand.mode})`);
       budget--;
       continue;
     }
@@ -796,7 +804,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       if (c.error?.kind === 'ratelimit' || c.error?.kind === 'auth') break;
       continue;
     }
-    const attempt = { attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.sha, pid: null, track: true, track_nodes: nodes };
+    const attempt = { attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.sha, pid: null, track: true, track_mode: cand.mode, track_nodes: nodes };
     runRec.run.attempts.push(attempt);
     await saveRun(ctx, t.number, runRec);
     await setStatus(ctx, t, 'running', { remove: [L.needsHuman] });
@@ -833,8 +841,8 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     for (const nn of nodes) coveredBy.set(nn, t.number); // the loop below must leave them to the runner
     claimedTracks.add(t.number);
     budget--;
-    summary.tracks.push({ root: t.number, nodes, ok: true, attempt: k, profile: profileName, pid: spawned.pid, wt: spawned.wt || null });
-    log(`#${t.number}: claimed track attempt ${k} → ${profileName}, ${nodes.length + 1} nodes ${[...nodes, t.number].map((x) => `#${x}`).join(' → ')} (log ${attempt.log})`);
+    summary.tracks.push({ root: t.number, nodes, ok: true, attempt: k, profile: profileName, mode: cand.mode, pid: spawned.pid, wt: spawned.wt || null });
+    log(`#${t.number}: claimed track attempt ${k} → ${profileName} (${cand.mode}), ${nodes.length + 1} nodes ${[...nodes, t.number].map((x) => `#${x}`).join(' → ')} (log ${attempt.log})`);
     if (children && spawned.child) watchChild(ctx, t.number, k, spawned.child, children, state, profileName, log);
   }
 

@@ -27,6 +27,7 @@ export const LABEL_COLORS = {
   'kb:status:done': '0b7a75',
   'kb:status:archived': 'cccccc',
   'kb:needs-human': 'b60205',
+  'kb:no-track': 'ededed',
 };
 
 export const L = {
@@ -34,6 +35,8 @@ export const L = {
   agent: (p) => `kb:agent:${p}`,
   board: (b) => `kb:board:${b}`,
   needsHuman: 'kb:needs-human',
+  // "run my children as cold nodes": the opt-out half of the track inference (`isTrackRoot`).
+  noTrack: 'kb:no-track',
 };
 
 export const DEFAULT_KB = Object.freeze({
@@ -199,6 +202,73 @@ export function computeReady(task, now = new Date()) {
   const at = task.kb?.scheduled_at;
   if (at && new Date(at).getTime() > now.getTime()) return false;
   return true;
+}
+
+/** The blockers this task is still waiting on — its unfinished children, in board order. */
+export function unfinishedChildren(task) {
+  return (task?.blockedBy || []).filter((b) => !blockerDone(b)).map((b) => Number(b.number));
+}
+
+/**
+ * The board's track profile for a node on `agent`: a profile with `"track": true` whose
+ * `track_agents` can execute that node profile (unset `track_agents` → only its own name, so a
+ * board that never listed one infers nothing and keeps node dispatch). Pure; first match wins, in
+ * board.json order, so a board with two track profiles picks the one it declared first.
+ */
+export function trackProfileFor(cfg, agent) {
+  if (!agent) return null;
+  for (const [name, p] of Object.entries(cfg?.profiles || {})) {
+    if (!p?.track) continue;
+    if (name === agent) return name;
+    const list = Array.isArray(p.track_agents) && p.track_agents.length ? p.track_agents : [name];
+    if (list.includes(agent)) return name;
+  }
+  return null;
+}
+
+/** Statuses a parent must be in for its child to count as "inside someone else's track". */
+const LIVE_PARENT = ['triage', 'todo', 'ready', 'running', 'blocked', 'review'];
+
+/**
+ * Is this task a track root — a root the dispatcher should hand to ONE orchestrating session?
+ *
+ * A DAG has a root, edges, nodes and leaves: the root is the agent that runs, its children run
+ * inside it and report back, and the root finishes last. That is a property of the *graph*, so it
+ * is inferred rather than switched on: a task with at least one unfinished child, on a profile some
+ * track profile can execute, is a track. The label stays the override in both directions —
+ * `kb:agent:<a track profile>` forces one (the historical `hkb adopt --agent claude-track`), and
+ * `kb:no-track` opts a goal out when its children should run as cold nodes instead.
+ *
+ * Inference only fires for a *maximal* root. Pass the open board as `board` and a task that is
+ * itself still blocking something is a node of that bigger track, not a root of its own — without
+ * it every interior node of a chain would claim its own subgraph and race the real root. `board` is
+ * optional so a single-card caller (`hkb show`) can still say what the card is in isolation.
+ *
+ * Pure: no I/O, and every "no" is a fallback to node dispatch, never an error.
+ * @returns {{track, mode, why, profile, children}} mode: forced | inferred | opted-out | none
+ */
+export function isTrackRoot(task, cfg, { board = null } = {}) {
+  const children = unfinishedChildren(task || {});
+  const nope = (mode, why) => ({ track: false, mode, why, profile: null, children });
+  if (!task) return nope('none', 'no such task');
+  // the historical switch, and still the override: an explicit track profile is a track even with
+  // nothing left blocking it — `trackReadiness` then says so in the words it always did. It also
+  // beats `kb:no-track`: adopting a card onto a track profile is the more recent, more specific
+  // statement, and a card on that profile has no sensible node launch to fall back to anyway.
+  if (cfg?.profiles?.[task.agent]?.track) {
+    return { track: true, mode: 'forced', why: `kb:agent:${task.agent} forces a track`, profile: task.agent, children };
+  }
+  if (!children.length) return nope('none', 'nothing is blocking it any more — dispatch it as a single node');
+  if ((task.labels || []).includes(L.noTrack)) return nope('opted-out', `${L.noTrack} — its children run as cold nodes`);
+  const profile = trackProfileFor(cfg, task.agent);
+  if (!profile) return nope('none', `profile ${task.agent || 'none'} does not run tracks`);
+  if (board) {
+    const parent = board.find((t) => t.number !== task.number && LIVE_PARENT.includes(t.status)
+      && (t.blockedBy || []).some((b) => Number(b.number) === task.number && !blockerDone(b)));
+    if (parent) return nope('none', `#${parent.number} is still blocked by it — it is a node of that track, not a root`);
+  }
+  const n = children.length;
+  return { track: true, mode: 'inferred', why: `${n} unfinished child${n === 1 ? '' : 'ren'}`, profile, children };
 }
 
 /**

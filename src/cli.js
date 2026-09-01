@@ -1,7 +1,7 @@
 // Argument parsing + command routing. Every command has --json; output is stable for scripts and agents.
 import fs from 'node:fs';
 import { makeContext, makeHookContext } from './board.js';
-import { getTask, fetchBoard, assertOnBoard, loadRun, latestResult, parentResults, issueEvents, addComment, addLabels, setAgent, setStatus, updateBody } from './tasks.js';
+import { getTask, fetchBoard, assertOnBoard, loadRun, latestResult, parentResults, issueEvents, addComment, addLabels, ensureLabels, removeLabel, setAgent, setStatus, updateBody } from './tasks.js';
 import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, createTask, linkTask, withOutbox, envAttempt } from './lifecycle.js';
 import { tick, loop, spawnWorker } from './dispatch.js';
 import { serve } from './serve.js';
@@ -15,10 +15,10 @@ import { stopHook, markSessionClaim } from './hook.js';
 import { init, packageVersion } from './init.js';
 import { doctor } from './doctor.js';
 import { gc } from './gc.js';
-import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, resumeCommand, activePrGuard } from './model.js';
+import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, resumeCommand, activePrGuard, isTrackRoot } from './model.js';
 
 /** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
-const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'with-actions', 'mermaid', 'serve', 'help']);
+const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'with-actions', 'mermaid', 'serve', 'off', 'on', 'help']);
 
 export function parseArgs(argv) {
   const flags = {};
@@ -182,6 +182,9 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
               graph <n> [--mermaid] [--json]   the track rooted at <n> — the root plus everything still
                     blocking it — as a fenced mermaid block GitHub renders in issues, comments and files:
                     hkb comment 12 "$(hkb graph 12)"      --json adds { nodes, edges, mermaid }
+              track <n> [--off|--on] [--json]   whether #n runs as ONE orchestrated session and why.
+                    A card with unfinished children is a track by default; --off (kb:no-track) runs
+                    them as cold nodes instead, --on undoes it, --agent <a track profile> forces one
               link <parent> <child>   unlink <parent> <child>      promote <n>...      archive <n>...
               adopt <n>... [--agent p]     comment <n> "text"      log <n> [--json]    status <n>
   worker      heartbeat <n> [--note ..]     finish <n> --summary ".." [--metadata JSON|path.json] [--artifacts a,b]
@@ -242,6 +245,18 @@ function taskLine(t) {
   const deps = t.blockedBy?.length ? ` ⇐ ${t.blockedBy.map((b) => (blockerDone(b) ? `#${b.number}✓` : `#${b.number}`)).join(',')}` : '';
   const pr = t.prs?.find((p) => p.state === 'OPEN') ? ` PR#${t.prs.find((p) => p.state === 'OPEN').number}` : '';
   return `#${String(t.number).padEnd(5)} ${(t.status || '?').padEnd(8)} ${(t.agent || '-').padEnd(10)} p${t.kb.priority}  ${t.title}${deps}${pr}${t.needsHuman ? '  ⚠ needs-human' : ''}`;
+}
+
+/**
+ * One line for an `isTrackRoot` verdict: what the dispatcher will do with this card, why, and the
+ * command that overrides it. The override is named next to the answer on purpose — the mode is
+ * inferred now, so the only thing a human still has to know is how to say no.
+ */
+function trackLine(d, n) {
+  if (d.mode === 'inferred') return `inferred — ${d.why}; one ${d.profile} session runs the subgraph (\`hkb track ${n} --off\` runs them as cold nodes instead)`;
+  if (d.mode === 'forced') return `forced — ${d.why}`;
+  if (d.mode === 'opted-out') return `opted out — ${d.why} (\`hkb track ${n} --on\` puts it back)`;
+  return `no — ${d.why}`;
 }
 
 export async function main(argv) {
@@ -314,10 +329,14 @@ export async function main(argv) {
       const { run } = await loadRun(ctx, n);
       const result = await latestResult(ctx, n);
       const parents = await parentResults(ctx, t);
-      if (ctx.json) { out(ctx, { ...t, run, result, parents }); return 0; }
+      // the card in isolation: `hkb show` reads one issue, and only the board knows whether
+      // something else is still blocked by this one. `hkb track <n>` is the answer that does.
+      const trackVerdict = isTrackRoot(t, ctx.cfg);
+      if (ctx.json) { out(ctx, { ...t, run, result, parents, track: trackVerdict }); return 0; }
       process.stdout.write(`${taskLine(t)}\n${t.url}\n\n${t.bodyText.trim() || '(no description)'}\n\n`);
       process.stdout.write(`kb: ${JSON.stringify(t.kb)}\n`);
       if (t.blockedBy.length) process.stdout.write(`blocked by: ${t.blockedBy.map((b) => `#${b.number} ${b.title || ''} [${blockerDone(b) ? 'done' : String(b.state).toLowerCase()}]`).join('; ')}\n`);
+      if (trackVerdict.mode !== 'none' || trackVerdict.children.length) process.stdout.write(`track: ${trackLine(trackVerdict, n)}\n`);
       if (t.prs.length) process.stdout.write(`PRs: ${t.prs.map((p) => `#${p.number} ${p.state}${p.merged ? ' merged' : p.isDraft ? ' draft' : ''}`).join(', ')}\n`);
       if (run.attempts.length) {
         process.stdout.write(`\nattempts (failures ${run.failures}):\n`);
@@ -352,6 +371,25 @@ export async function main(argv) {
       const g = trackGraph(track);
       const mermaid = trackMermaid(g);
       out(ctx, { ...g, mermaid }, mermaid);
+      return 0;
+    }
+    // Will this card run as a track, and why — plus the one switch that overrides the answer.
+    // Reads the whole board because the decision is a graph one: a card something else is still
+    // blocked by is a node of that bigger track, not a root of its own.
+    case 'track': {
+      const [n] = nums(rest);
+      if (!n) throw usage('hkb track <n> [--off] [--on] [--json]');
+      const tasks = await fetchBoard(ctx);
+      const t = tasks.find((x) => x.number === n) || await getTask(ctx, n);
+      if (flags.off || flags.on) {
+        if (flags.off && flags.on) throw usage('hkb track <n> takes --off or --on, not both');
+        if (flags.off) { await ensureLabels(ctx, [L.noTrack]); await addLabels(ctx, t, [L.noTrack]); }
+        else await removeLabel(ctx, t, L.noTrack);
+      }
+      const d = isTrackRoot(t, ctx.cfg, { board: tasks });
+      const track = d.track ? resolveTrack(n, new Map(tasks.map((x) => [x.number, x]))) : null;
+      const nodes = track ? track.nodes.map((x) => x.number) : [];
+      out(ctx, { number: n, ...d, nodes }, `#${n} track: ${trackLine(d, n)}${nodes.length ? `\nnodes: ${nodes.map((x) => `#${x}`).join(' → ')} → #${n}` : ''}`);
       return 0;
     }
     case 'status': {

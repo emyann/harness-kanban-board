@@ -15,6 +15,7 @@ import {
   tokenExpiry, expiryFinding, checkTokenExpiry, checkToken, actionsAnnotation, emitAnnotations, tokenExpiryNotice,
   SESSION_CHECK, SESSION_FIX, SESSION_SAMPLE, POLICY_CHECK,
   sessionTally, sessionFinding, checkSessions, boardOnce, checkAgentLabels, policyLayers, checkPolicyLayer,
+  TRACK_PROFILE_CHECK, checkTrackProfile,
 } from '../src/doctor.js';
 import { setTransport, GhError } from '../src/gh.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
@@ -580,6 +581,42 @@ test('doctor warns on a board whose claude-bg attempts carry no session fields',
   assert.deepEqual(s.results.map((r) => [r.name, r.ok]), [['profile claude sessions', null]]);
   assert.match(s.results[0].detail, /none of the 3 ended attempts on this board carries a session id/);
   assert.equal(s.results[0].fix, SESSION_FIX);
+});
+
+test('a board with roots but no track profile is told what it is paying for it', async (t) => {
+  const h = boardHarness(t); // neither shipped profile here carries "track": true
+  h.gh.addIssue(kbIssue({ number: 41, status: 'ready', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 42, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 12, status: 'todo', agent: 'claude', blockedBy: [41] }));
+  h.gh.addIssue(kbIssue({ number: 13, status: 'todo', agent: 'claude', blockedBy: [42] })); // its child is done
+  const s = sink();
+
+  await checkTrackProfile(h.ctx, s);
+
+  assert.deepEqual(s.results.map((r) => [r.name, r.ok]), [[TRACK_PROFILE_CHECK, null]]);
+  assert.match(s.results[0].detail, /1 card with unfinished children \(#12\) and no profile with "track": true/);
+  assert.match(s.results[0].fix, /^hkb init --profiles claude-track/);
+});
+
+test('a board that has a track profile is a green line, and does not read the board at all', async (t) => {
+  const h = boardHarness(t, { profiles: { claude: { launch: ['claude'] }, 'claude-track': { track: true, launch: ['claude'] } } });
+  const s = sink();
+
+  await checkTrackProfile(h.ctx, s, { fetch: () => { throw new Error('the board must not be read: the answer is in board.json'); } });
+
+  assert.deepEqual(s.results.map((r) => [r.name, r.ok]), [[TRACK_PROFILE_CHECK, true]]);
+  assert.match(s.results[0].detail, /^claude-track — a card with unfinished children runs as one session/);
+});
+
+test('no track profile and no root either: nothing to fix, so nothing to warn about', async (t) => {
+  const h = boardHarness(t);
+  h.gh.addIssue(kbIssue({ number: 41, status: 'ready', agent: 'claude' }));
+  const s = sink();
+
+  await checkTrackProfile(h.ctx, s);
+
+  assert.deepEqual(s.results.map((r) => [r.name, r.ok]), [[TRACK_PROFILE_CHECK, true]]);
+  assert.match(s.results[0].detail, /nothing on the board has unfinished children/);
 });
 
 test('the completed attempts are on closed cards, so a closed card is read too', async (t) => {
