@@ -9,9 +9,9 @@ covers:
   - path: src/init.js
     sha: aee5eed4dcc544f9a6fe81c7273f96432aaf1048
   - path: src/doctor.js
-    sha: 976283bd0771f28d8a687aa83509d62b86468210
+    sha: 4b49003dc44abe98a35f1c47b9472427e0ab6fba
   - path: skills/kanban/SKILL.md
-    sha: 7c36fd46a71d2a636e88db89aa064a63e44ab5f3
+    sha: a6ffdcca307a58e568a02ff17cba8a00ef3e7caa
   - path: commands/specify.md
     sha: 4e307a13e4fd097f8581c312f9dca12868e1a62e
   - path: commands/decompose.md
@@ -20,7 +20,7 @@ covers:
     sha: 4fc2dc2db984033fe8801e8d28b50e8e68fefddc
   - path: scripts/smoke-pack.mjs
     sha: 2c56112698f348f50eb581891d91bc41ac2d8157
-generated_at_commit: 537c8aa
+generated_at_commit: bcd1dc5
 last_refreshed: 2026-09-01
 related: [features/backlog-grooming, features/operator-seat, architecture/overview, decisions/adr-004-roles-and-adoption, features/tracks]
 ---

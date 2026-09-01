@@ -7,19 +7,19 @@ audience: [dev, ops]
 read_when: "touching the launch environment, the Stop, PreToolUse or SubagentStop hooks, session_id/transcript_path on an attempt row, or anything that reads KB_TASK"
 covers:
   - path: src/hook.js
-    sha: 59a7921c49c6f28f9778b43ae4fce6d3280d567c
+    sha: 9c279d75961f372331295d9783dde522e4e175b2
   - path: src/model.js
-    sha: 23bb576d15068653b10c068ed3c9f014f0353664
+    sha: 022ed7b17c5debc59265f8a1627f82386864de00
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/dispatch.js
-    sha: fb85767e0b4b962930ee74c608c5bb0e1bd7ae4f
+    sha: 6ceade7f5440ab4194c477cc1bb2cc2900b52632
   - path: src/doctor.js
-    sha: 726a4571cf94906b8f54183c2b3223e125ad6149
+    sha: 4b49003dc44abe98a35f1c47b9472427e0ab6fba
   - path: src/lifecycle.js
-    sha: 3938c82f3e181fb260fc54bb2f3150074459e224
-generated_at_commit: 39d9c05
-last_refreshed: 2026-08-29
+    sha: 98cf380069697936e2b62fb17402bae7099cf06f
+generated_at_commit: bcd1dc5
+last_refreshed: 2026-09-01
 related: [architecture/overview, features/harness-profiles, features/tracks, decisions/adr-004-roles-and-adoption]
 ---
 
@@ -127,6 +127,21 @@ were, because neither can be the source of a leak.
 - **The tick** names the session behind a live background attempt from the job
   record, one tick after the launch, for the attempts no verb ever reaches
   (`jobSessionUpdate`, `src/jobs.js`).
+
+Answering the identity question is what makes the *rest* of the row worth
+having. `SESSION_FIELDS` (`src/model.js`) is what a stamp carries, and since
+#155 it is no longer only "which session, and what it cost": alongside
+`session_id` / `transcript_path` / `total_cost_usd` / `num_turns` /
+`duration_ms` it now records `terminal_reason`, `api_error_status`,
+`model_usage` and `permission_denials`. The point is what that removes — an
+attempt that ended badly used to require reopening its transcript to learn
+*why*, which is the one thing a post-mortem cannot do once the session is
+gone. Two consequences worth knowing before touching `sessionUpdate`: the
+result object names per-model usage `modelUsage`, camelCase and unlike every
+other field beside it, so it is read under an alias; and two of the four are an
+object and an array, so the "is this new?" comparison is by value — a
+reference check would call every Stop hook fire a change and rewrite the row
+each time.
 
 ## The tick's identity outranks a hook stamp
 

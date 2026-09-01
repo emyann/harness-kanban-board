@@ -11,7 +11,7 @@ covers:
   - path: src/track.js
     sha: ed02aeeffe9c33ce3ce32abd652c59faec8e9286
   - path: src/dispatch.js
-    sha: 529e913ae4f921a91dbdd1eb1f6a8a5245cd0035
+    sha: 6ceade7f5440ab4194c477cc1bb2cc2900b52632
   - path: src/init.js
     sha: aee5eed4dcc544f9a6fe81c7273f96432aaf1048
   - path: src/board.js
@@ -19,11 +19,11 @@ covers:
   - path: src/gc.js
     sha: 40672cb7a84da7170be3f5d99df42f326f9dc1e5
   - path: src/tasks.js
-    sha: 8631ae5218f1d87ad2e247eb837b5a7e1255dd23
+    sha: e0c09e408b3328d5ca7a4d9f512e4bda73b0d0f0
   - path: src/doctor.js
     sha: 4b49003dc44abe98a35f1c47b9472427e0ab6fba
 related: [architecture/overview, features/harness-profiles, features/review-loop, concepts/worker-identity, decisions/adr-004-roles-and-adoption]
-generated_at_commit: 5db5afa
+generated_at_commit: bcd1dc5
 last_refreshed: 2026-09-01
 ---
 
