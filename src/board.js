@@ -24,7 +24,9 @@ const SHELL_TOOLS = ['hkb *', 'git *', 'gh pr *', 'gh issue view *', 'npm *', 'n
 const BUILTIN_TOOLS = SAFE_BUILTINS.map((c) => `${c} *`);
 // deduped: `echo` and `printf` are on both lists, and a repeated pattern is noise in a flag a human reads
 const SHELL_PATTERNS = [...new Set([...SHELL_TOOLS, ...BUILTIN_TOOLS])];
-const CLAUDE_TOOLS = [...SHELL_PATTERNS.map((c) => `Bash(${c})`), 'Edit', 'Write', 'Read', 'Glob', 'Grep'];
+// `Skill` lets a worker load a task's `kb.skills` (src/context.js) — the field otherwise names a tool
+// `dontAsk` is guaranteed to deny, since an unlisted tool is refused rather than prompted (#114).
+const CLAUDE_TOOLS = [...SHELL_PATTERNS.map((c) => `Bash(${c})`), 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'Skill'];
 // A track runner is an ORCHESTRATOR: it fans a wave of independent nodes out to one isolated
 // subagent each (`Agent` with `isolation: "worktree"`), so siblings run at the same time instead of
 // one after another. `Agent` is the whole unlock — measured against Claude Code 2.1.251 (#129), a

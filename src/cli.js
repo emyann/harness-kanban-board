@@ -15,7 +15,7 @@ import { stopHook, markSessionClaim } from './hook.js';
 import { init, packageVersion } from './init.js';
 import { doctor } from './doctor.js';
 import { gc } from './gc.js';
-import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, resumeCommand, activePrGuard, isTrackRoot } from './model.js';
+import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, formatDenials, resumeCommand, activePrGuard, isTrackRoot } from './model.js';
 
 /** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
 const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'with-actions', 'mermaid', 'serve', 'off', 'on', 'help']);
@@ -178,6 +178,8 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
                      [--model m] [--skills s1,s2] [--max-retries N] [--max-runtime S] [--scheduled-at ISO] [--triage] [--goal ".."]
                      --priority is a number and higher wins (0 unfiled/default, 1 normal, 2 next up, 3 urgent)
                      --triage files it unstarted, else it lands ready
+                     --skills grants the Skill tool on hkb's default profiles (Skill is in CLAUDE_TOOLS);
+                     a custom profile needs "Skill" in its own allowed_tools too, or hkb doctor flags it
               list [--status s] [--agent p] [--all] [--json]      show <n> [--json]      context <n>
               graph <n> [--mermaid] [--json]   the track rooted at <n> — the root plus everything still
                     blocking it — as a fenced mermaid block GitHub renders in issues, comments and files:
@@ -364,6 +366,9 @@ export async function main(argv) {
           if (a.job) process.stdout.write(`     job ${a.job}${a.ended_at ? '' : ' · claude attach ' + a.job}\n`);
           const session = formatSession(a);
           if (session) process.stdout.write(`     ${session}\n`);
+          if (a.terminal_reason) process.stdout.write(`     ended: ${a.terminal_reason}\n`);
+          const denials = formatDenials(a);
+          if (denials) process.stdout.write(`     denied: ${denials}\n`);
           const resume = resumeCommand(a, n);
           if (resume) process.stdout.write(`     ${resume}\n`);
         }

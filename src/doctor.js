@@ -451,6 +451,38 @@ export async function boardOnce(ctx, fetch = fetchBoard) {
   try { return { tasks: await fetch(ctx, { blockers: false }) }; } catch (e) { return { error: e.message }; }
 }
 
+export const TASK_SKILLS_CHECK = 'task skills';
+
+/**
+ * A card's `kb.skills` (src/context.js) tells its worker to invoke the `Skill` tool — but only a
+ * Claude Code launch has that tool, and it only runs rather than being denied under `dontAsk` when
+ * the profile's `allowed_tools` names it (#114). hkb's own default profiles carry `Skill` now
+ * (`CLAUDE_TOOLS`, src/board.js), so this catches what the default cannot reach: a profile pinned
+ * in board.json before the fix, or a custom-named one that never had it — on a card that actually
+ * sets the field, so a board that never uses `kb.skills` has nothing to warn about.
+ *
+ * Non-Claude launches (Codex, Copilot) are skipped: `Skill` names a Claude Code tool, and their own
+ * `allowed_tools` lists mean something else entirely.
+ */
+export async function checkTaskSkills(ctx, { ok, warn }, { fetch = fetchBoard, board = null } = {}) {
+  const b = board || await boardOnce(ctx, fetch);
+  if (b.error) return warn(TASK_SKILLS_CHECK, `could not read the board: ${b.error}`);
+  const withSkills = b.tasks.filter((t) => t.kb.skills?.length);
+  if (!withSkills.length) return null;
+  const missing = withSkills.filter((t) => {
+    const p = ctx.cfg?.profiles?.[t.agent];
+    if (!p || (p.launch || [])[0] !== 'claude') return false;
+    return Array.isArray(p.allowed_tools) && !p.allowed_tools.includes('Skill');
+  });
+  if (!missing.length) return ok(TASK_SKILLS_CHECK, `${plural(withSkills.length, 'task')} set kb.skills, and every profile they run on allows the Skill tool`);
+  const detail = missing.map((t) => `#${t.number} (${t.agent})`).join(' · ');
+  const profiles = [...new Set(missing.map((t) => t.agent))];
+  warn(TASK_SKILLS_CHECK,
+    `${plural(missing.length, 'task')} set kb.skills but run on a profile whose allowed_tools denies Skill, and dontAsk denies rather than prompts: ${detail}`,
+    `add "Skill" to "allowed_tools" on the ${profiles.join(', ')} profile${profiles.length === 1 ? '' : 's'} in ${path.relative(ctx.root, boardFile(ctx.root))}`);
+  return missing;
+}
+
 // ---------- can this board be priced? ----------
 //
 // The hole this check exists for was found weeks late, by a spend report that was empty. A
@@ -1035,6 +1067,7 @@ export async function doctor(ctx, flags, log) {
   const board = await boardOnce(ctx);
   await checkAgentLabels(ctx, { ok, warn }, { board });
   await checkTrackProfile(ctx, { ok, warn });
+  await checkTaskSkills(ctx, { ok, warn }, { board });
   await checkSessions(ctx, { ok, warn }, { board });
 
   // rate limit, token class, token expiry — one call

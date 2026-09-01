@@ -13,8 +13,8 @@ import path from 'node:path';
 import {
   TOKEN_EXPIRY_HEADER, TOKEN_CHECK, TOKEN_FIX, TOKEN_WARN_DAYS,
   tokenExpiry, expiryFinding, checkTokenExpiry, checkToken, actionsAnnotation, emitAnnotations, tokenExpiryNotice,
-  SESSION_CHECK, SESSION_FIX, SESSION_SAMPLE, POLICY_CHECK,
-  sessionTally, sessionFinding, checkSessions, boardOnce, checkAgentLabels, policyLayers, checkPolicyLayer,
+  SESSION_CHECK, SESSION_FIX, SESSION_SAMPLE, POLICY_CHECK, TASK_SKILLS_CHECK,
+  sessionTally, sessionFinding, checkSessions, boardOnce, checkAgentLabels, checkTaskSkills, policyLayers, checkPolicyLayer,
   TRACK_PROFILE_CHECK, checkTrackProfile,
 } from '../src/doctor.js';
 import { setTransport, GhError } from '../src/gh.js';
@@ -714,6 +714,50 @@ test('the two card checks share one board query rather than paying for one each'
 
   const openBoard = h.gh.calls.slice(before).filter((c) => c.kind === 'graphql' && /states: \[OPEN\]/.test(c.query || ''));
   assert.deepEqual(openBoard, [], 'neither check re-reads the board it was handed');
+});
+
+// ---------- kb.skills asks for a tool a profile may deny (#114) ----------
+
+test('a board that sets no kb.skills has nothing to check', async (t) => {
+  const h = boardHarness(t);
+  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude' }));
+  const s = sink();
+
+  await checkTaskSkills(h.ctx, s);
+
+  assert.deepEqual(s.results, []);
+});
+
+test('kb.skills on a profile that allows Skill is fine', async (t) => {
+  const h = boardHarness(t, { profiles: { claude: { mode: 'claude-bg', launch: ['claude', '--bg'], allowed_tools: ['Read', 'Skill'] } } });
+  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', kb: { skills: ['kanban'] } }));
+  const s = sink();
+
+  await checkTaskSkills(h.ctx, s);
+
+  assert.deepEqual(s.results.map((r) => [r.name, r.ok]), [[TASK_SKILLS_CHECK, true]]);
+});
+
+test('kb.skills on a profile whose allowed_tools omits Skill is a warning naming the card and the fix', async (t) => {
+  const h = boardHarness(t, { profiles: { claude: { mode: 'claude-bg', launch: ['claude', '--bg'], allowed_tools: ['Read'] } } });
+  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', kb: { skills: ['kanban'] } }));
+  const s = sink();
+
+  await checkTaskSkills(h.ctx, s);
+
+  assert.deepEqual(s.results.map((r) => [r.name, r.ok]), [[TASK_SKILLS_CHECK, null]]);
+  assert.match(s.results[0].detail, /#40 \(claude\)/);
+  assert.match(s.results[0].fix, /add "Skill" to "allowed_tools" on the claude profile/);
+});
+
+test('kb.skills is silent on a launch Skill has no meaning for (codex has no per-command allow-list)', async (t) => {
+  const h = boardHarness(t, { profiles: { codex: { mode: 'process', launch: ['codex', 'exec'], allowed_tools: null } } });
+  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'codex', kb: { skills: ['kanban'] } }));
+  const s = sink();
+
+  await checkTaskSkills(h.ctx, s);
+
+  assert.deepEqual(s.results.map((r) => [r.name, r.ok]), [[TASK_SKILLS_CHECK, true]]);
 });
 
 // ---------- which layer is actually enforcing ----------

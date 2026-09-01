@@ -672,7 +672,12 @@ export function classifyJob(job) {
 // (`claude --resume <id>` inside the worker's worktree) and see what the attempt cost.
 
 /** Attempt-row fields that describe the underlying agent session. */
-export const SESSION_FIELDS = ['session_id', 'transcript_path', 'total_cost_usd', 'num_turns', 'duration_ms'];
+export const SESSION_FIELDS = ['session_id', 'transcript_path', 'total_cost_usd', 'num_turns', 'duration_ms', 'terminal_reason', 'api_error_status', 'model_usage', 'permission_denials'];
+
+// `claude -p --output-format json` names its per-model usage `modelUsage` — camelCase, unlike every
+// other field in the same result object — so it is read under that name and stored under hkb's own
+// snake_case spelling, the same aliasing `HOOK_FIELD_ALIASES` does for a hook payload.
+const RESULT_FIELD_ALIASES = { model_usage: 'modelUsage' };
 
 function tryJson(s) { try { return JSON.parse(s); } catch { return null; } }
 
@@ -681,9 +686,11 @@ function sessionFieldsOf(obj) {
   if (!obj || typeof obj !== 'object') return null;
   const out = {};
   for (const k of SESSION_FIELDS) {
-    const v = obj[k];
+    const v = obj[k] !== undefined ? obj[k] : obj[RESULT_FIELD_ALIASES[k]];
     if (typeof v === 'string' && v) out[k] = v;
     else if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
+    else if (k === 'model_usage' && v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length) out[k] = v;
+    else if (k === 'permission_denials' && Array.isArray(v) && v.length) out[k] = v;
   }
   return Object.keys(out).length ? out : null;
 }
@@ -702,9 +709,12 @@ export function sessionFromJobState(state) {
 
 /**
  * Session id and cost out of a worker log. `claude -p --output-format json` ends with one JSON
- * object holding `session_id`, `total_cost_usd`, `num_turns`, `duration_ms`; with `stream-json`
- * that object is the last line. Total: a truncated or non-JSON log yields null, never a throw —
- * the dispatcher must never lose a reclaim to a malformed log.
+ * object holding `session_id`, `total_cost_usd`, `num_turns`, `duration_ms`, and — since #155 — why
+ * it ended (`terminal_reason`, `api_error_status`), what it spent per model (`modelUsage`, read
+ * under hkb's `model_usage`) and which tool calls it never got to run (`permission_denials`); with
+ * `stream-json` that object is the last line. Total: a truncated or non-JSON log yields null, never
+ * a throw — the dispatcher must never lose a reclaim to a malformed log. Unknown fields are ignored,
+ * so an old log with none of this still parses exactly as it did before.
  */
 export function parseSessionLog(text, { maxLines = 200 } = {}) {
   const s = String(text || '');
@@ -730,7 +740,9 @@ export function sessionUpdate(attempt, fields) {
   if (!found) return null;
   const a = attempt || {};
   const out = {};
-  for (const [k, v] of Object.entries(found)) if (a[k] !== v) out[k] = v;
+  // `model_usage` and `permission_denials` are objects/arrays: a fresh JSON.parse of the same log
+  // never `===` the row's own copy, so a reference check would call every Stop hook fire "new".
+  for (const [k, v] of Object.entries(found)) if (JSON.stringify(a[k]) !== JSON.stringify(v)) out[k] = v;
   return Object.keys(out).length ? out : null;
 }
 
@@ -784,6 +796,32 @@ export function formatSession(a) {
   if (Number.isFinite(a.num_turns)) bits.push(`${a.num_turns} turns`);
   if (Number.isFinite(a.duration_ms)) bits.push(fmtDuration(a.duration_ms));
   return bits.join(' · ');
+}
+
+/** `Bash ×3, WebFetch ×1` from `permission_denials`, grouped by tool — '' when there are none. */
+export function formatDenials(a) {
+  const denials = a?.permission_denials;
+  if (!Array.isArray(denials) || !denials.length) return '';
+  const counts = new Map();
+  for (const d of denials) {
+    const tool = (d && (d.tool_name || d.tool)) || 'unknown';
+    counts.set(tool, (counts.get(tool) || 0) + 1);
+  }
+  return [...counts].map(([tool, n]) => `${tool} ×${n}`).join(', ');
+}
+
+/**
+ * Whether a worker's exit reads as auth trouble worth pausing its profile for, out of what
+ * `parseSessionLog` read from its log — `null` for no. A `401`/`429` on `api_error_status` is the
+ * result saying so outright; the log-tail pattern this replaces (#155) is kept as a fallback only for
+ * a log `parsed` found no JSON result line in at all, since a run that never reached the result
+ * object never sets `api_error_status` either.
+ */
+export function authPauseReason(parsed, logTail) {
+  const status = parsed ? Number(parsed.api_error_status) : NaN;
+  if (status === 401 || status === 429) return `api_error_status ${status}`;
+  if (!parsed && /429|rate limit|quota|401|unauthorized|not logged in/i.test(String(logTail || ''))) return 'log tail matched the auth-trouble pattern';
+  return null;
 }
 
 /** Where `claude --worktree kb-<n>-<k>` puts a worker's checkout, relative to the board root. */

@@ -323,6 +323,30 @@ test('a task past max_runtime is timed_out, not merely reclaimed', async (t) => 
   assert.equal(h.gh.runOf(7).attempts[0].outcome, 'timed_out');
 });
 
+// #155: a pid-mode attempt the tick writes off as crashed/timed_out has a log of its own, so it
+// gets session, cost and `terminal_reason` the way a `--bg` row has since #137.
+test('a crashed pid-mode attempt gets session and terminal_reason backfilled from its own log', async (t) => {
+  const h = harness({ dispatch: { stale_after: 3600 } });
+  t.after(h.cleanup);
+  const logRel = '.kanban/logs/7-1.log';
+  fs.mkdirSync(path.dirname(path.join(h.root, logRel)), { recursive: true });
+  fs.writeFileSync(path.join(h.root, logRel), JSON.stringify({
+    type: 'result', session_id: 'sid-crashed', total_cost_usd: 0.12, num_turns: 5, duration_ms: 12_000,
+    terminal_reason: 'max_turns',
+  }) + '\n');
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(600), heartbeat_at: ago(5), pid: 4_000_000, log: logRel }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.gh.beat(7, 1, ago(1));
+
+  const s = await h.tick({ max: 0 });
+
+  assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'crashed' }]);
+  const a = h.gh.runOf(7).attempts[0];
+  assert.equal(a.session_id, 'sid-crashed');
+  assert.equal(a.terminal_reason, 'max_turns');
+  assert.equal(a.total_cost_usd, 0.12);
+});
+
 test('failures past max_retries give up: blocked + kb:needs-human, no retry', async (t) => {
   const h = harness({ dispatch: { stale_after: 60 } });
   t.after(h.cleanup);
