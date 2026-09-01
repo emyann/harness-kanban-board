@@ -192,6 +192,9 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
               track <n> [--off|--on] [--json]   whether #n runs as ONE orchestrated session and why.
                     A card with unfinished children is a track by default; --off (kb:no-track) runs
                     them as cold nodes instead, --on undoes it, --agent <a track profile> forces one
+              edit <n>... [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]
+                    sets exactly the kb keys named — every other key is left as read; the write half of
+                    what hkb groom's unblocked/no_paths/malformed_kb/broad_path/priority_inversion suggest
               link <parent> <child>   unlink <parent> <child>      promote <n>...      archive <n>...
               adopt <n>... [--agent p]     comment <n> "text"      log <n> [--json]    status <n>
   worker      heartbeat <n> [--note ..]     finish <n> --summary ".." [--metadata JSON|path.json] [--artifacts a,b]
@@ -550,6 +553,28 @@ export async function main(argv) {
       const res = [];
       for (const n of ns) res.push(...await promote(ctx, n));
       out(ctx, res, formatPromote(res));
+      return 0;
+    }
+    // The write half of the kb block: `hkb groom`'s `unblocked`/`no_paths`/`malformed_kb`/`broad_path`/
+    // `priority_inversion` findings all suggest an `hkb edit` line — this is the verb that runs it.
+    // Only the flags actually passed change; every other key of the kb block is left exactly as read.
+    case 'edit': {
+      const ns = nums(rest);
+      if (!ns.length) throw usage('hkb edit <n>... [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]');
+      const fields = {};
+      if (flags.paths !== undefined) fields.paths = list(str(flags.paths), '--paths');
+      if (flags.goal !== undefined) fields.goal = str(flags.goal);
+      if (flags['scheduled-at'] !== undefined) fields.scheduled_at = str(flags['scheduled-at']);
+      if (flags.priority !== undefined) fields.priority = Number(flags.priority);
+      if (!Object.keys(fields).length) throw usage('hkb edit <n>... needs at least one of --paths/--goal/--scheduled-at/--priority');
+      const res = [];
+      for (const n of ns) {
+        const t = await getTask(ctx, n);
+        const kb = { ...t.kb, ...fields };
+        await updateBody(ctx, t, kb);
+        res.push({ number: n, kb });
+      }
+      out(ctx, res, res.map((r) => `#${r.number} kb: ${Object.keys(fields).join(', ')} set`).join('\n'));
       return 0;
     }
     case 'archive': {
