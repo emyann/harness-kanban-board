@@ -126,6 +126,13 @@ deserves a `concepts/` page (link it).
   own isolated subagent rather than working them itself (`resolveTrack`,
   `trackContext` in `src/track.js`; `features/tracks`). Which cards are tracks is
   inferred from the graph, not switched on: see **Track root**.
+- **Track branch** — a track's own integration branch, `kb/track-<root>`
+  (`trackBranchName`, `src/model.js`), created from the default branch at
+  claim time (`ensureTrackBranch`, `src/lock.js`) and recorded on the root's
+  attempt row so a runner that dies never strands work nothing can find.
+  Every node of the track branches from it and PRs into it, whatever its
+  blockers; the root's own pass runs on it and opens the track's one PR into
+  the default branch (`features/tracks`).
 - **Track root** — a card with at least one unfinished child that nothing else on
   the board is still blocked by. It is dispatched as a track by default, on the
   board's track profile; `kb:agent:<a track profile>` forces one and

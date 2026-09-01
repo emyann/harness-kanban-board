@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fetchBoard, loadRun, deleteComment } from './tasks.js';
-import { listLocks, listBeatChains, dropBeatChain } from './lock.js';
+import { listLocks, listBeatChains, dropBeatChain, listTrackBranches, deleteTrackBranch } from './lock.js';
 import { logsDir, kanbanDir } from './board.js';
 
 const git = (root, args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
@@ -180,6 +180,29 @@ export function sweepBranches(ctx, { finished = () => false, keep = [], only = n
 }
 
 /**
+ * Track branches (`kb/track-<root>`) whose root is settled — done or archived. Unlike every other
+ * sweep here, the branch lives on GitHub, not this checkout, because `ensureTrackBranch` creates it
+ * through the API rather than a local push (`src/lock.js`); this is the one sweep in the file that
+ * costs a request instead of a `git` call. A root that is still open is never touched here even if
+ * its last track attempt already ended without merging — that is `hkb doctor`'s `checkTrackBranches`
+ * to flag, not this sweep's to delete, because the branch may still hold work a human wants back.
+ */
+export async function sweepTrackBranches(ctx, { finished = () => false, yes = false, log = () => {} } = {}) {
+  const stats = { removed: 0, pending: 0, skipped: 0 };
+  let rows;
+  try { rows = await listTrackBranches(ctx); } catch (e) { log(`track branches skipped: ${e.message}`); return stats; }
+  for (const { branch, root } of rows) {
+    if (!finished(root)) continue;
+    if (!yes) { stats.pending++; log(`would delete track branch ${branch} (#${root} is settled) — pass --yes`); continue; }
+    try {
+      const removed = await deleteTrackBranch(ctx, root);
+      if (removed) { stats.removed++; log(`deleted track branch ${branch} (#${root} is settled)`); }
+    } catch (e) { stats.skipped++; log(`failed to delete track branch ${branch}: ${e.message}`); }
+  }
+  return stats;
+}
+
+/**
  * Older copies of the `<!-- kb-run -->` record, kept when two writers raced.
  * A task can only grow one while something writes to it, so a task whose issue has not been updated
  * since the last sweep is not read at all: `memo` is `{ "<n>": updatedAt }`, mutated in place, and
@@ -281,16 +304,18 @@ export async function sweep(ctx, { yes = false, days = 14, memo = null, log = ()
   const finished = (n) => { const t = byNumber.get(n); return !t || settled(t); };
   const finishedHere = (n) => { const t = byNumber.get(n); return !!t && settled(t); };
   const label = (n) => `task #${n} ${byNumber.get(n)?.status || 'not on board'}`;
-  const stats = { worktrees: 0, branches: 0, comments: 0, chains: 0, files: 0, pending: 0, skipped: 0, days, applied: !!yes };
+  const stats = { worktrees: 0, branches: 0, track_branches: 0, comments: 0, chains: 0, files: 0, pending: 0, skipped: 0, days, applied: !!yes };
 
   const wt = sweepWorktrees(ctx, { finished, yes, label, log });
   const prByBranch = (n, branch) => (byNumber.get(n)?.prs || []).find((p) => p.headRefName === branch) || null;
   const aw = sweepAgentWorktrees(ctx, { prByBranch, yes, log });
   const br = sweepBranches(ctx, { finished: finishedHere, yes, log });
+  const tb = await sweepTrackBranches(ctx, { finished: finishedHere, yes, log });
   stats.worktrees = wt.removed + aw.removed;
   stats.branches = br.removed;
-  stats.pending = wt.pending + aw.pending + br.pending;
-  stats.skipped = wt.skipped + wt.failed + aw.skipped + aw.failed + br.skipped;
+  stats.track_branches = tb.removed;
+  stats.pending = wt.pending + aw.pending + br.pending + tb.pending;
+  stats.skipped = wt.skipped + wt.failed + aw.skipped + aw.failed + br.skipped + tb.skipped;
 
   try { stats.comments = await sweepRunComments(ctx, tasks, { yes, memo: yes ? memo : null, log }); } catch (e) { log(`duplicate run comments skipped: ${e.message}`); }
   try { stats.chains = await sweepBeatChains(ctx, { yes, log }); } catch (e) { log(`beat chains skipped: ${e.message}`); }
@@ -309,6 +334,6 @@ export async function gc(ctx, flags, log) {
   const stats = await sweep(ctx, { yes: !!flags.yes, days, log });
   if (ctx.json) process.stdout.write(JSON.stringify(stats, null, 2) + '\n');
   else if (!stats.applied) log(`gc: nothing done — ${stats.pending} worktree/branch(es) and everything listed above would go. Re-run with --yes.`);
-  else log(`gc: ${stats.worktrees} worktree(s) removed, ${stats.branches} branch(es) deleted, ${stats.comments} duplicate run comment(s) deleted, ${stats.chains} local beat chain(s) dropped, ${stats.files} old file(s) pruned (retention ${stats.days}d)`);
+  else log(`gc: ${stats.worktrees} worktree(s) removed, ${stats.branches} branch(es) deleted, ${stats.track_branches} track branch(es) deleted, ${stats.comments} duplicate run comment(s) deleted, ${stats.chains} local beat chain(s) dropped, ${stats.files} old file(s) pruned (retention ${stats.days}d)`);
   return 0;
 }

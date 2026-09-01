@@ -12,7 +12,18 @@
 // The per-node brief is deliberately *not* built here — `hkb context <n>` prints exactly the
 // `workerContext` that node's own cold worker would get, so the runner fetches it at the moment it
 // starts the node instead of the dispatcher paying for every node up front.
-import { blockerDone, sortForDispatch, isTrackRoot } from './model.js';
+//
+// Every node branches from the track's own integration branch, `kb/track-<root>`
+// (`trackBranchName`, `src/model.js`; created at claim time by `ensureTrackBranch`, `src/lock.js`,
+// and recorded on the root's attempt row as `track_branch`) — never from a sibling. A **dead
+// runner's** leftover nodes are a deliberate, documented gap: `src/context.js`'s ordinary cold
+// worker brief does not (yet) look up an ancestor track's branch, so node dispatch picking up what
+// a runner left behind bases a fresh worktree on the default branch, not the track branch — it
+// cannot see its still-unmerged siblings' work. `hkb doctor`'s `checkTrackBranches` is the safety
+// net: it flags a track branch with no live runner so a human can reconcile it by hand (rebase the
+// leftover node onto it, or force the root back onto a track profile) rather than the tick silently
+// losing the assembled work, which was exactly #227/#229's failure mode this file replaces.
+import { blockerDone, sortForDispatch, isTrackRoot, trackBranchName } from './model.js';
 
 /** Statuses a track may start from — for the root and for every node. */
 export const TRACK_STARTABLE = ['todo', 'ready'];
@@ -323,10 +334,11 @@ function nodeLine(t) {
  * one isolated subagent per node with siblings running at the same time, or the older one-node-
  * after-another walk. Everything the board sees is identical; only who does the work moves.
  */
-export function trackContext({ repo, board, track, attempt, waves = null, fanout = false }) {
+export function trackContext({ repo, board, track, attempt, waves = null, fanout = false, trackBranch = null, defaultBranch = 'main' }) {
   const root = track.root;
   const n = root.number;
   const k = attempt;
+  const branch = trackBranch || trackBranchName(n);
   const ws = waves && waves.length ? waves : trackWaves(track);
   const nodeWaves = ws.map((w) => w.filter((t) => t.number !== n)).filter((w) => w.length);
   const first = nodeWaves[0]?.[0]?.number ?? n;
@@ -336,6 +348,10 @@ export function trackContext({ repo, board, track, attempt, waves = null, fanout
   L.push(`You are the TRACK RUNNER for hkb track #${n} (attempt ${k}) in ${repo}, board "${board}".`);
   L.push('');
   L.push('A track is a connected subgraph of the board: this root plus everything it is still blocked by.');
+  L.push(`Its integration branch, \`${branch}\`, already exists — created from \`${defaultBranch}\` the moment this`);
+  L.push('track was claimed, and recorded on this attempt so a runner that dies never strands work nothing');
+  L.push('can find. Every node branches from it, whatever its blockers, and PRs into it; your own pass runs');
+  L.push(`on it and opens the track's one PR into \`${defaultBranch}\`. Do not create a branch of your own for it.`);
   if (fanout) {
     L.push(`You are its ORCHESTRATOR. You hold the plan for all ${track.nodes.length + 1} tasks; you do not work the nodes`);
     L.push('yourself. Each node goes to **its own isolated subagent** — the `Agent` tool with `isolation: "worktree"` —');
@@ -399,9 +415,10 @@ export function trackContext({ repo, board, track, attempt, waves = null, fanout
 
     L.push('## The per-node brief — what you put in each `Agent` prompt');
     L.push('');
-    L.push('Substitute `<n>`, and `<base>` = the branch of the node this one is blocked by (`kb/<blocker>`), or the');
-    L.push('default branch when it has none. Send the pointer, not the text: `hkb context <n>` is the same brief a cold');
-    L.push('worker gets, and letting the child fetch it keeps your own window the size of the plan.');
+    L.push(`Substitute \`<n>\`; every node's base is the track branch, \`${branch}\` — the same one whatever the`);
+    L.push('node\'s blockers are, because those blockers already merged into it before this node started. Send');
+    L.push('the pointer, not the text: `hkb context <n>` is the same brief a cold worker gets, and letting the');
+    L.push('child fetch it keeps your own window the size of the plan.');
     L.push('');
     L.push('```');
     L.push(`You are the worker for hkb task #<n>, one node of track #${n} in ${repo}, board "${board}".`);
@@ -410,17 +427,21 @@ export function trackContext({ repo, board, track, attempt, waves = null, fanout
     L.push('1. Run `hkb context <n>` first. That is your brief: the body, the `kb` settings, the parent');
     L.push('   results, the prior attempts. Read it before you touch anything — but its current-branch line');
     L.push('   does not apply to you: this checkout is a throwaway `agent-<id>` one, not the node\'s; use');
-    L.push('   `kb/<n>`, the next step.');
-    L.push('2. `git switch -c kb/<n> <base>` and stay inside the node\'s `kb.paths`. Everything outside them');
-    L.push('   belongs to somebody else\'s worktree, including your siblings running right now.');
+    L.push(`   \`kb/<n>\`, based on \`${branch}\` (the track branch — see step 2), the next step.`);
+    L.push(`2. \`git fetch origin ${branch} && git switch -c kb/<n> origin/${branch}\` and stay inside the node's`);
+    L.push('   `kb.paths`. Everything outside them belongs to somebody else\'s worktree, including your siblings');
+    L.push('   running right now.');
     L.push(`3. Run \`hkb heartbeat ${n}\` — the root, not #<n> — every ~10 minutes while you work. The orchestrator's`);
     L.push('   own turn ends the moment it spawns you and it cannot wake itself, so this beat from inside you is what');
     L.push('   keeps the whole track from being reclaimed as stale while you are still running.');
     L.push('4. Commit AND push before you return. This worktree is only removed automatically when you leave it');
     L.push('   unchanged — once you commit, it can stick around until a later `hkb gc`; anything you did not push');
     L.push('   is not safe just because the worktree survives.');
-    L.push('5. Open a **draft** PR based on `<base>` whose body contains exactly one `Closes #<n>`:');
-    L.push('   `gh pr create --draft --base <base> --title "…" --body "Closes #<n>\\n\\n<what/why/how verified>"`');
+    L.push(`5. Open a **draft** PR based on \`${branch}\` whose body contains exactly one \`Closes #<n>\`:`);
+    L.push(`   \`gh pr create --draft --base ${branch} --title "…" --body "Closes #<n>\\n\\n<what/why/how verified>"\``);
+    L.push('   GitHub only auto-links `Closes #` for a PR into the default branch, so this one will not close the');
+    L.push('   issue itself — `hkb finish` still finds it through the head-branch fallback (`kb/<n>` matches whatever');
+    L.push('   its base is), and it is the *track branch\'s* own PR into the default branch that actually lands it.');
     L.push('6. Finish with EXACTLY ONE terminal verb, on #<n> and no other number:');
     L.push('   write /tmp/kb-<n>.json with your editor tool, then');
     L.push('   `hkb finish <n> --from-stdin < /tmp/kb-<n>.json`');
@@ -450,13 +471,17 @@ export function trackContext({ repo, board, track, attempt, waves = null, fanout
     L.push('   answers `held`, another worker owns that node: leave it alone, skip everything blocked by it, and');
     L.push(`   carry on with the rest. Ignore the \`export KB_TASK=…\` line it prints — this session's KB_TASK is`);
     L.push(`   the root, #${n}, and it must stay that way.`);
-    L.push('3. Do the work on a branch of its own: `git switch -c kb/<n> <base>`, where `<base>` is the branch of');
-    L.push('   the node this one is blocked by, or the default branch when it has none.');
-    L.push('4. Push and open a **draft** PR whose body contains `Closes #<n>`, based on that same `<base>`:');
-    L.push('   `gh pr create --draft --base <base> --title "…" --body "Closes #<n>\\n\\n<what/why/how verified>"`.');
-    L.push('   One PR per node, and exactly one `Closes #` in it. That is what makes a node a checkpoint: its');
-    L.push('   issue closes when *its* PR merges. A PR that closed several nodes would drag the unfinished ones');
-    L.push('   into *review* behind it, and the dispatcher could never finish them for you.');
+    L.push(`3. Do the work on a branch of its own: \`git fetch origin ${branch} && git switch -c kb/<n> origin/${branch}\`.`);
+    L.push(`   Every node's base is the track branch, \`${branch}\` — the same one whatever the node's blockers are,`);
+    L.push('   because those blockers already merged into it before this node started.');
+    L.push(`4. Push and open a **draft** PR whose body contains \`Closes #<n>\`, based on \`${branch}\`:`);
+    L.push(`   \`gh pr create --draft --base ${branch} --title "…" --body "Closes #<n>\\n\\n<what/why/how verified>"\`.`);
+    L.push('   One PR per node, and exactly one `Closes #` in it. GitHub only auto-links `Closes #` for a PR into');
+    L.push('   the default branch, so this one will not close the issue by merging — `hkb finish` still finds it');
+    L.push('   through the head-branch fallback (`kb/<n>` matches whatever its base is); it is the track branch\'s');
+    L.push('   own PR into the default branch, at the end, that actually lands the work. A PR that closed several');
+    L.push('   nodes would drag the unfinished ones into *review* behind it, and the dispatcher could never finish');
+    L.push('   them for you — so still exactly one `Closes #` each.');
     L.push('5. Finish the node with EXACTLY ONE terminal verb — the same three any worker has:');
     L.push('```bash');
     L.push('# write /tmp/kb-<n>.json with your editor tool:');
@@ -510,15 +535,23 @@ export function trackContext({ repo, board, track, attempt, waves = null, fanout
 
   L.push('## Finishing the track');
   L.push('');
-  L.push(`When every node has ended, do the root's own pass — the one no child could: check that the pieces`);
-  L.push('actually fit together, run the project\'s lint and tests over the whole result, and write the docs or');
-  L.push('changelog that only make sense once.');
+  L.push(`When every node has ended, switch to the track branch itself: \`git fetch origin ${branch} && git switch`);
+  L.push(`${branch}\`. It already holds every node's merged work — do the root's own pass there, the one no child`);
+  L.push('could: check that the pieces actually fit together, run the project\'s lint and tests over the whole');
+  L.push('result, and write the docs or changelog that only make sense once.');
   if (fanout) {
-    L.push('That pass is yours: you do it here, in this checkout, on top of the nodes\' branches, and you are the only');
-    L.push('one who has read every subagent\'s report.');
+    L.push('That pass is yours: you do it here, in this checkout, on top of the nodes\' merged work, and you are the');
+    L.push('only one who has read every subagent\'s report.');
   }
-  L.push(`Then finish #${n} itself with exactly one terminal verb, the same way, and stop. Its summary is the`);
-  L.push('track\'s: what each node landed, what merged, what is still open.');
+  L.push(`Then open the track's one PR into \`${defaultBranch}\`: \`gh pr create --draft --base ${defaultBranch} --head`);
+  L.push(`${branch} --title "…" --body "Closes #${n}\\n\\n<what the track landed>"\`. This is the PR GitHub *does*`);
+  L.push(`auto-link, so \`Closes #${n}\` closes the root the ordinary way once it merges. Finish #${n} itself with`);
+  L.push('exactly one terminal verb, the same way as any node, and stop. Its summary is the track\'s: what each');
+  L.push('node landed, what merged, what is still open.');
+  L.push('');
+  L.push(`The track branch is not yours to delete. It is cleaned up once the root's own PR merges or the root is`);
+  L.push('archived or closed as not planned — `hkb gc` sweeps it the same way it sweeps a finished attempt\'s');
+  L.push('worktree, and `hkb doctor` flags one still standing with no live runner.');
   L.push('');
   if (fanout && wave1.length) {
     const spawnIt = wave1.length === 1 ? 'its subagent' : `${wave1.length === 2 ? 'both' : `all ${wave1.length}`} subagents in one message`;

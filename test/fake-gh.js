@@ -73,8 +73,8 @@ export class FakeGh {
    * fixes: `head` is normally one of hkb's own branch names (`kb/<n>`, `kb-<n>-<k>`,
    * `worktree-kb-<n>-<k>`) so the head-branch fallback finds it, whatever `base` is.
    */
-  addPull({ number, head, base = this.defaultBranch, draft = false, state = 'open', nodeId = null } = {}) {
-    this.openPulls.push({ number, node_id: nodeId || `PR_kwFakeUnlinked${number}`, head: { ref: head }, base: { ref: base }, draft, state, html_url: `https://github.com/${this.nameWithOwner}/pull/${number}` });
+  addPull({ number, head, base = this.defaultBranch, draft = false, state = 'open', nodeId = null, mergeable = null, mergeStateStatus = null } = {}) {
+    this.openPulls.push({ number, node_id: nodeId || `PR_kwFakeUnlinked${number}`, head: { ref: head }, base: { ref: base }, draft, state, html_url: `https://github.com/${this.nameWithOwner}/pull/${number}`, mergeable, mergeStateStatus });
   }
 
   addComment(number, body) {
@@ -429,7 +429,24 @@ export class FakeGh {
     return null;
   }
 
+  /** Find a PR by number, across every issue's own `prs` AND the board-wide `openPulls` — the same
+   * two places `openPrsByHead`'s REST listing draws from, since a track child's PR (base ≠ default
+   * branch) is deliberately seeded there and never on an issue. */
+  #findPrByNumber(number) {
+    for (const issue of this.issues.values()) for (const pr of issue.prs) if (pr.number === number) return pr;
+    return this.openPulls.find((pr) => pr.number === number) || null;
+  }
+
   #graphql({ query, variables = {} }) {
+    if (/mergeStateStatus/.test(query)) {
+      const repository = {};
+      for (const m of query.matchAll(/pr(\d+):\s*pullRequest\(number:\s*\1\)/g)) {
+        const n = Number(m[1]);
+        const pr = this.#findPrByNumber(n);
+        repository[`pr${n}`] = pr ? { number: n, mergeable: pr.mergeable || 'UNKNOWN', mergeStateStatus: pr.mergeStateStatus || null } : null;
+      }
+      return { repository };
+    }
     if (/mergePullRequest/.test(query)) {
       const found = this.#findPr(variables.id);
       if (!found) throw this.#error(404, `GraphQL failed (404): Could not resolve to a node with the id ${variables.id}`);

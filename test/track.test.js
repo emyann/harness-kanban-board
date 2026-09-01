@@ -7,10 +7,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { tick } from '../src/dispatch.js';
+import { tick, trackConflictPass } from '../src/dispatch.js';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, readState, writeState } from '../src/board.js';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_KB, L, parseSkillVersion, isTrackRoot, trackProfileFor, unfinishedChildren } from '../src/model.js';
+import { DEFAULT_KB, L, parseSkillVersion, isTrackRoot, trackProfileFor, unfinishedChildren, trackBranchName, trackBranchRoot, trackBranchConflict } from '../src/model.js';
 import {
   resolveTrack, trackWaves, trackPaths, trackReadiness, planTracks, trackContext,
   trackAlreadyAttempted, isTrackProfile, trackAgents, trackGraph, trackMermaid, mermaidLabel, trackFanout,
@@ -437,7 +437,7 @@ test('the fan-out brief makes the runner an orchestrator: claim the wave, spawn 
   // #197.1: the child's `hkb context <n>` says "work on the current branch" — that is the child's own
   // throwaway checkout, not the node's, so the per-node brief overrides it explicitly
   assert.match(p, /its current-branch line\n\s+does not apply to you/);
-  assert.match(p, /use\n\s+`kb\/<n>`, the next step/);
+  assert.match(p, /`kb\/<n>`, based on `kb\/track-26` \(the track branch — see step 2\), the next step/);
   // #197.1: the orchestrator's own turn ends the moment it spawns a wave and it cannot wake itself
   // (ScheduleWakeup is not allow-listed), so each child must heartbeat the *root*, not itself
   assert.match(p, /Run `hkb heartbeat 26` — the root, not #<n> — every ~10 minutes while you work/);
@@ -548,6 +548,26 @@ test('a track root is claimed as ONE session, and its nodes are left to the runn
   assert.deepEqual(a.track_nodes, [41, 42]);
   assert.equal(a.log, '.kanban/logs/26-1.log');
   assert.match(h.log(), /#26: claimed track attempt 1 → claude-track \(forced\), 3 nodes #41 → #42 → #26/);
+  // the track branch: created from the default branch, at claim time, and recorded on the row —
+  // a runner that dies must not strand work nothing on the board can find
+  assert.equal(a.track_branch, 'kb/track-26');
+  assert.equal(h.gh.refs.get('refs/heads/kb/track-26'), h.gh.refs.get(`refs/heads/${h.gh.defaultBranch}`));
+});
+
+test('a track branch already there (a retry after a crashed first claim) is reused, never recreated', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  seedChain(h.gh);
+  // seed the branch as if a previous, now-dead claim already made it, at some other sha —
+  // ensureTrackBranch must not try to recreate it and must not lose the existing one
+  h.gh.refs.set('refs/heads/kb/track-26', 'c'.repeat(40));
+
+  const s = await h.tick();
+
+  assert.equal(s.tracks[0].ok, true);
+  assert.equal(h.gh.refs.get('refs/heads/kb/track-26'), 'c'.repeat(40), 'the existing branch survives untouched');
+  const [a] = h.gh.runOf(26).attempts;
+  assert.equal(a.track_branch, 'kb/track-26');
 });
 
 test('the whole track is one running slot, and its nodes are never reclaimed under it', async (t) => {
@@ -788,4 +808,45 @@ test('isTrackRoot: the graph decides, the label overrides in both directions', (
   assert.equal(trackProfileFor(CFG, 'codex'), null, 'track_agents is what a runner can execute');
   assert.equal(trackProfileFor({ profiles: { claude: {} } }, 'claude'), null);
   assert.deepEqual(unfinishedChildren(node(26, { blocks: [41, done(42)] })), [41]);
+});
+
+// ---------- surfacing a child-vs-child conflict on the track branch (#245) ----------
+
+test('two children conflicting on the way into the track branch is flagged once, as an event', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  const branch = 'kb/track-26';
+  const live = runWith([{ attempt: 1, host: h.ctx.host, started_at: ago(60), heartbeat_at: ago(5), track: true, track_branch: branch, track_nodes: [41, 42] }]);
+  h.gh.addIssue(kbIssue({ number: 26, status: 'running', agent: 'claude-track', kb: { max_runtime: 86_400, paths: ['docs/'] }, run: live }));
+  h.gh.refs.set(`refs/heads/${branch}`, 'f'.repeat(40));
+  h.gh.addPull({ number: 100, head: 'kb/41', base: branch, mergeable: 'CONFLICTING' });
+  h.gh.addPull({ number: 101, head: 'kb/42', base: branch, mergeable: 'MERGEABLE' });
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.track_conflicts.map((c) => [c.root, c.branch, c.conflicting]), [[26, branch, [100]]]);
+  assert.ok(h.gh.issues.get(26).labels.includes(L.needsHuman), 'the event: kb:needs-human lands on the root');
+  assert.ok(h.gh.issues.get(26).comments.some((c) => /track conflict/.test(c.body) && /#100/.test(c.body)));
+
+  // a second tick must not re-notify: the attempt row remembers it already flagged this branch
+  const [a] = h.gh.runOf(26).attempts;
+  assert.equal(a.track_conflict_notified, true);
+  const before = h.gh.issues.get(26).comments.length;
+  await h.tick();
+  assert.equal(h.gh.issues.get(26).comments.length, before, 'no repeat comment once notified');
+});
+
+test('trackBranchConflict: fewer than two PRs, or none CONFLICTING, is never a conflict', () => {
+  assert.equal(trackBranchConflict(new Map([[1, { mergeable: 'CONFLICTING' }]])), null, 'one PR cannot conflict with itself');
+  assert.equal(trackBranchConflict(new Map([[1, { mergeable: 'MERGEABLE' }], [2, { mergeable: 'UNKNOWN' }]])), null, 'UNKNOWN is "ask again", never a false positive');
+  assert.deepEqual(trackBranchConflict(new Map([[1, { mergeable: 'CONFLICTING' }], [2, { mergeable: 'MERGEABLE' }]])), [1]);
+});
+
+// ---------- naming the track branch (#245) ----------
+
+test('trackBranchName / trackBranchRoot round-trip, and only match hkb\'s own shape', () => {
+  assert.equal(trackBranchName(26), 'kb/track-26');
+  assert.equal(trackBranchRoot('kb/track-26'), 26);
+  assert.equal(trackBranchRoot('kb/26'), null, 'a node\'s own branch is not a track branch');
+  assert.equal(trackBranchRoot('kb/track-abc'), null);
 });
