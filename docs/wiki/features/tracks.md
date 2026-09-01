@@ -7,17 +7,19 @@ audience: [dev]
 read_when: "touching src/track.js, isTrackRoot, the track branch of the dispatcher tick, the claude-track profile's allow-list, or the runner brief"
 covers:
   - path: src/model.js
-    sha: 7c55fb09de4536a495753b3833ff210237152d03
+    sha: 316e1b58f411224718ad190fc49f45b27d6c529e
   - path: src/track.js
     sha: ed02aeeffe9c33ce3ce32abd652c59faec8e9286
   - path: src/dispatch.js
-    sha: be3d2881e7e57417fb1c527c98ccdfc64f349027
+    sha: a3853481f55b7c7e9b3a18d61c9b9e456b531db4
+  - path: src/init.js
+    sha: aee5eed4dcc544f9a6fe81c7273f96432aaf1048
   - path: src/board.js
     sha: 05c992709b2d3d1d3ffd453dbbbd6b647de30fad
   - path: src/gc.js
     sha: 40672cb7a84da7170be3f5d99df42f326f9dc1e5
 related: [architecture/overview, features/harness-profiles, concepts/worker-identity, decisions/adr-004-roles-and-adoption]
-generated_at_commit: 911c1b8
+generated_at_commit: 37e1171
 last_refreshed: 2026-09-01
 ---
 
@@ -83,7 +85,11 @@ its own. That check needs the whole board, which is why `board` is a parameter â
 card is in isolation.
 
 `hkb track <n>` is the command for all of this: it prints the verdict and its
-reason, and `--off`/`--on` toggle `kb:no-track`. `hkb doctor` warns when a board
+reason, and `--off`/`--on` toggle `kb:no-track`. That label is created by
+`hkb init` alongside the statuses (`src/init.js`) and checked by `hkb doctor`'s
+`labels` line, so a board set up before inference landed is told to re-run init
+rather than left with an opt-out that only exists once someone hand-makes it in
+the GitHub UI. `hkb doctor` warns when a board
 holds cards with unfinished children and no profile with `"track": true` to send
 them to (`checkTrackProfile`, `src/doctor.js`) â€” the one configuration where
 inference silently has nowhere to go.

@@ -968,7 +968,7 @@ export async function init(ctx, flags, log) {
   //    `hkb init --repo owner/name --no-labels` sets a repo up with `gh` logged out or absent: every
   //    local file is written and nothing is sent. That is the offline path `scripts/smoke-pack.mjs`
   //    runs to prove the *installed tarball* still ships the skill and the templates it copies from.
-  const labels = [...STATUSES.map(L.status), L.board(board), L.needsHuman, ...Object.keys(cfg.profiles).map(L.agent)];
+  const labels = [...STATUSES.map(L.status), L.board(board), L.needsHuman, L.noTrack, ...Object.keys(cfg.profiles).map(L.agent)];
   if (flags['no-labels']) {
     log(`skipped the ${labels.length} kb:* labels (--no-labels) — nothing was sent to ${repo.nameWithOwner}`);
   } else {

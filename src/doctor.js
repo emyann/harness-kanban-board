@@ -1026,7 +1026,7 @@ export async function doctor(ctx, flags, log) {
   try {
     const labels = new Set();
     for (let page = 1; page <= 3; page++) { const b = await rest('GET', api(ctx, `/labels?per_page=100&page=${page}`)); for (const l of b || []) labels.add(l.name); if (!b || b.length < 100) break; }
-    const missing = [...STATUSES.map(L.status), L.board(ctx.board), L.needsHuman].filter((l) => !labels.has(l));
+    const missing = [...STATUSES.map(L.status), L.board(ctx.board), L.needsHuman, L.noTrack].filter((l) => !labels.has(l));
     missing.length ? bad('labels', `missing ${missing.join(', ')}`, 'hkb init') : ok('labels', `${[...labels].filter((l) => l.startsWith('kb:')).length} kb:* labels`);
   } catch (e) { bad('labels', e.message); }
 
