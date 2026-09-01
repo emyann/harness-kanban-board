@@ -16,13 +16,21 @@ no server, no database and no npm dependencies.
   logs `spawn_failed` and the board looks stalled for a reason nothing on it explains. That is what step two
   is for: a board with a `claude` profile and no `claude` on PATH is a hard `✗` in `hkb doctor`, named as such.
 
-Then three commands:
+Then two commands and a session:
 
 ```bash
 npx hkb-cli init                 # labels, .kanban/board.json, the worker skill, a CLAUDE.md/AGENTS.md section
-npx hkb-cli doctor --api         # verifies gh auth, labels, GraphQL fields, the issue-dependency API and lock-ref CAS
-npx hkb-cli up --serve           # the dispatcher and the board, started detached — the terminal comes back
+npx hkb-cli doctor --api         # once, at setup: the probe that creates and deletes one ref, proving the
+                                 # issue-dependency API and lock-ref CAS actually work in *this* repo
 ```
+
+Then open Claude Code in the repo and run **[`/kanban:operate`](#running-the-board-from-a-session-kanbanoperate)**
+— `init` installed it. It starts the dispatcher and the web board, runs `hkb doctor`, and prints one screen: the
+board's URL, what is running, what needs a decision from you, and what is worth starting. That is the loop you
+stay in; every check `doctor --api` makes except the probes, it makes again every session.
+
+Rather drive it yourself — or run the loop under systemd, cron or a terminal you watch? `npx hkb-cli up --serve`
+starts both processes detached and the terminal comes back; see [Keeping the board running](#keeping-the-board-running).
 
 That is the whole free path. `npx hkb-cli init --import` also pulls your existing open issues onto the board as
 *triage*.
