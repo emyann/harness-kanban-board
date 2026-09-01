@@ -501,6 +501,9 @@ export async function startServer(ctx, flags = {}, log = () => {}, deps = {}) {
     if (missing.length) { const e = new Error(`${verb} needs ${missing.join(', ')}`); e.exitCode = 2; e.needs = missing; throw e; }
     const r = await spec.run(d, b.ctx, number, body);
     b.invalidate(number);
+    // `promote` (#209) can touch a whole subgraph, not just `number` — invalidate every card it
+    // named too, so the drawer for a swept-up blocker is not served its pre-promote state.
+    if (Array.isArray(r)) for (const row of r) if (row.number !== number) b.invalidate(row.number);
     return r;
   }
 
@@ -516,7 +519,14 @@ export async function startServer(ctx, flags = {}, log = () => {}, deps = {}) {
     if (missing.length) { const e = new Error(`moving #${number} from ${card.status} to ${to} needs ${missing.join(', ')}`); e.exitCode = 2; e.needs = missing; throw e; }
     let last = null;
     for (const verb of decision.steps) last = await runVerb(b, number, verb, body);
-    return { ...last, requested: to, note: decision.note, landed: last?.status === to ? null : `#${number} landed in ${last?.status}, not ${to}` };
+    // `promote` may answer with one row per card it swept up (#209); `number`'s own row is what
+    // decides whether the drag landed where it was dropped — the rest just rides along for `moved`.
+    const row = Array.isArray(last) ? last.find((r) => r.number === number) : last;
+    return {
+      ...row, requested: to, note: decision.note,
+      landed: row?.status === to ? null : `#${number} landed in ${row?.status}, not ${to}`,
+      ...(Array.isArray(last) ? { moved: last } : {}),
+    };
   }
 
   async function handle(req, res) {

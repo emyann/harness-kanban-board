@@ -7,15 +7,21 @@ audience: [dev]
 read_when: "touching hkb serve, the board page, the user-level board list, or anything that has to work across more than one checkout"
 covers:
   - path: src/serve.js
-    sha: 5565e6d7d79d189d7e62000065340848c669ab38
+    sha: 27c2fd3b6cc4fc0e57ab7897682eae0fae24206b
   - path: web/index.html
     sha: 322aa96236ef37657a9a2326b83dc7b480672134
   - path: src/board.js
-    sha: 656fc1ff76b6cf1909ccacc5c69899ba24fb4010
+    sha: 05c992709b2d3d1d3ffd453dbbbd6b647de30fad
   - path: src/init.js
-    sha: 97954d3aaabb24d3b64b45aa10c2bad5cac4a3e4
-generated_at_commit: 39d9c05
-last_refreshed: 2026-08-29
+    sha: 2f4e6b4e9f4316cec6c2adac223e97985246f299
+  - path: src/lifecycle.js
+    sha: cd8905864dacb13d2a6943a43351e57818da0b2b
+  - path: src/track.js
+    sha: 4741b0697555435dcb76768a44ec86e1ef6eb4a0
+  - path: src/model.js
+    sha: cc168db441699c5b74401b1197d227bf6f8598ca
+generated_at_commit: 4714e4f
+last_refreshed: 2026-09-01
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
 
@@ -170,6 +176,41 @@ could have produced.
 
 The decision is made against a **fresh** `getTask` on the card's own board, not
 against the snapshot the page happens to be showing.
+
+### Promote cascades forward, never backward (#209)
+
+`triage>todo` and `blocked>ready` still map to the single `promote` step, but
+`promote` itself (`src/lifecycle.js:430-448`) now moves a **subgraph**, not one
+card: it resolves `number` plus every task still blocking it
+(`resolveTrack`, `src/track.js:59`) and walks that in dependency order,
+blockers first. Dragging a root with open triage blockers therefore sweeps
+them along to `todo` in the same call — dropping only the root and leaving its
+blockers behind would land it in `todo` with no way for the tick to ever ready
+it, since the tick only promotes `todo`→`ready` once every blocker is closed
+(#209's original bug).
+
+The cascade never forces a blocker to `ready`: `promoteDecision`
+(`src/model.js`, next to `computeReady`) only lets a `todo` card advance when
+it is genuinely ready, and skips a `blocked` card outright rather than
+guessing at the human flag that put it there. Forcing stays available, but
+only for the single-card case — a card with no open blockers left resolves to
+a track of one, and *that* call keeps today's behaviour: `hkb promote <n>` on
+a `todo`/`blocked` leaf still forces it straight to `ready` and clears
+`needsHuman`, exactly as it did before #209. `runVerb`
+(`src/serve.js:497-508`) and `move` (`src/serve.js:513-527`) both accept
+`promote`'s answer as a list of `{number, status, ...}` rows and pick out the
+row for the dragged card to decide whether the drop landed; the rest ride
+along under `moved` and are not drawn specially — **no cascade logic lives in
+`serve.js`**, and no card the drag didn't request shows anything until the
+next poll re-reads the board. That is the same invariant `moveDecision`
+already protects: the board can never show a state no CLI command could have
+produced.
+
+There is no reverse cascade, and there is no reverse verb at all: `NO_SUCH_VERB.triage`
+refuses every drop back onto Triage, and the only backwards drag,
+onto `blocked`, takes a reason and touches one card. Blocking a root does not
+invalidate the work already done on its children, so `block` stays
+single-card by design, not by oversight.
 
 On the page, the board key travels with the card: `data-card="<key>#<n>"`, the
 same string goes into `dataTransfer` on `dragstart`, and the column's `drop`
