@@ -136,6 +136,7 @@ hkb create "Write auth tests" --blocked-by 42
 hkb show 42                    # task, blockers, attempts, parent results
 hkb list --status ready --json
 hkb dispatch --dry-run         # what the next tick would do
+hkb groom                      # the backlog lane as a proposal table — also a read, also writes nothing
 ```
 
 A worker — spawned by the dispatcher, or you by hand with `hkb claim 42` and `export KB_TASK=42 KB_ATTEMPT=1` —
@@ -192,18 +193,23 @@ borders only, so the diagram reads in GitHub's dark theme and its light one alik
 on the goal issue as the last step of materializing a graph; the board's own drawer draws the same subgraph
 live at [`hkb serve`](#the-board-in-a-browser).
 
-### Planning the board: two slash commands
+### Planning the board: three slash commands
 
-Two things a board needs are not CLI verbs, because they need a model and the dispatcher deliberately has none:
+Three things a board needs are not CLI verbs, because they need a model and the dispatcher deliberately has none:
 
 | | |
 |---|---|
 | `/kanban:specify <n>` | rewrites one triage one-liner into a spec a cold worker can execute — Why / What / Done when, plus `paths`, `priority` and `goal` — and promotes it |
 | `/kanban:decompose <n>` | proposes the whole dependency graph for a goal (children, blockers, disjoint `paths`), and materializes it on the board once you say yes |
+| `/kanban:groom` | reads the backlog lane with `hkb groom --json` and turns its findings — unblocked, thin spec, overlap, mentions — into one proposal table you approve row by row |
 
-Both stop and show you what they propose before writing anything. `hkb init` installs them into
+The CLI half of the last one is a plain read: `hkb groom` reports the lane from a single board query, the way
+`hkb dispatch --dry-run` reports the next tick, and writes nothing — no status, no label, no transition. The
+judgement about what to *do* with a finding is the slash command's, and yours.
+
+All three stop and show you what they propose before writing anything. `hkb init` installs them into
 `.claude/commands/kanban/`, so they work in Claude Code with nothing else installed; the plugin registers the same
-two names. Their bodies delegate to the sections of the same name in
+three names. Their bodies delegate to the sections of the same name in
 [`skills/kanban/SKILL.md`](skills/kanban/SKILL.md), so a harness without slash commands — Copilot CLI, Codex —
 gets the identical procedure by asking the skill for it.
 
