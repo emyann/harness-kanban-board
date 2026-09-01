@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "touching src/track.js, isTrackRoot, the track branch of the dispatcher tick, the claude-track profile's allow-list, or the runner brief"
 covers:
   - path: src/model.js
-    sha: ce3be7b212081a9c512a7c9ea3a1e1df5c908dce
+    sha: 6656795be9d6890424538296436c507ee8ced5e0
   - path: src/track.js
     sha: 286c5fff375e47a6f7ebf8d648671a9659872ab4
   - path: src/dispatch.js
@@ -25,7 +25,7 @@ covers:
   - path: src/lock.js
     sha: e9920df913b5e6cd8a648dad6e679cf4a41a6a1a
 related: [architecture/overview, features/harness-profiles, features/review-loop, concepts/worker-identity, decisions/adr-004-roles-and-adoption]
-generated_at_commit: 5a51d71
+generated_at_commit: 34529cf
 last_refreshed: 2026-09-01
 ---
 
