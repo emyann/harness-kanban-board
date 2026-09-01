@@ -176,7 +176,8 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
               doctor [--api] [--json]
   tasks       create "title" [--body ..] [--blocked-by 12,13] [--agent claude] [--priority N] [--paths a/,b/]
                      [--model m] [--skills s1,s2] [--max-retries N] [--max-runtime S] [--scheduled-at ISO] [--triage] [--goal ".."]
-                     --priority is a number and higher wins (default 0); --triage files it unstarted, else it lands ready
+                     --priority is a number and higher wins (0 unfiled/default, 1 normal, 2 next up, 3 urgent)
+                     --triage files it unstarted, else it lands ready
               list [--status s] [--agent p] [--all] [--json]      show <n> [--json]      context <n>
               graph <n> [--mermaid] [--json]   the track rooted at <n> — the root plus everything still
                     blocking it — as a fenced mermaid block GitHub renders in issues, comments and files:
