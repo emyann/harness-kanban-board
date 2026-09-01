@@ -243,8 +243,8 @@ runs nothing: it prints what the next tick would claim, which is a read.
 
 `/kanban:operate` is the first thing a human runs when they sit down. They want the board *working* and the
 smallest thing that tells them where to start; a session that replays `doctor` line by line has spent their
-attention before they have taken a single decision. Read `hkb list` once — every lane and priority in one board
-read — then print this shape, and nothing else:
+attention before they have taken a single decision. Read the board once — `hkb groom` gives the lanes, the
+priorities and the findings together, `hkb list` the lanes alone — then print this shape, and nothing else:
 
 ```
 Board `<slug>` · <owner/repo> → <serve URL>
@@ -286,9 +286,10 @@ Rank by what the board actually tells you, in this order, and stop at four:
    that unblocking it costs them one word.
 4. **The card the most other cards are blocked by.** Fan-in is the board's own statement of what is load-bearing,
    and `hkb graph <n>` draws it. One card unblocking four beats a card unblocking none, whatever their numbers.
-5. **Then `kb.priority`** — but say the number rather than leaning on it. It is an integer with a documented
-   direction (higher wins) and no documented scale, so numbers filed by different hands on different days do not
-   compare (#207). Where the number disagrees with fan-in, trust fan-in and say you did.
+5. **Then `kb.priority`** — say the number rather than leaning on it. The band is documented (`0` unfiled ·
+   `1` normal · `2` next up · `3` urgent, higher wins — `README.md`), but a card filed before it was written
+   carries a number chosen against no ruler at all, so an old number and a new one do not compare. Where the
+   number disagrees with fan-in, trust fan-in and say you did.
 6. **Then age**, oldest first, exactly as `sortReady` breaks its own ties.
 
 Give each one a clause of *why it is on the list* — not a restatement of its title, which they can read — and

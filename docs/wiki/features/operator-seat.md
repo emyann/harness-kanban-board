@@ -7,7 +7,7 @@ audience: [dev, ops]
 read_when: "changing what a session may do on someone's board, adding an event kind / status / outcome / block kind, or wondering why the operator's limits are prose rather than a guard"
 covers:
   - path: skills/kanban/SKILL.md
-    sha: 0c311e92c1252c5f58dd3e985eae63cbd82c16ea
+    sha: a6ffdcca307a58e568a02ff17cba8a00ef3e7caa
   - path: commands/operate.md
     sha: 868663f4ad694f7e336ebbdfec7952e4afd621e1
   - path: src/watch.js
