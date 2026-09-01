@@ -50,7 +50,17 @@ npx hkb-cli list                                           # triage todo ready r
 ```
 
 `--priority` is a plain number and **higher wins** — the tick takes *ready* cards highest-priority first, oldest
-issue first within a tie. Cards default to `0`, so any positive number jumps the queue.
+issue first within a tie. The band, so two filers share a ruler:
+
+| priority | meaning |
+|---|---|
+| `0` | unfiled (the default — no urgency claimed) |
+| `1` | normal |
+| `2` | next up |
+| `3` | urgent |
+
+Nothing stops a number above `3`; the band just names what most cards need. A card that outranks work it depends
+on is a filing mistake, not a valid use of the scale.
 
 ### Or drive it by hand
 

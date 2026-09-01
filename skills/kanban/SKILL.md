@@ -331,7 +331,8 @@ seat that can widen its own permissions is not a seat.
 `hkb up` after an exit 4; and `hkb create` for a card you can justify from evidence on the board — filed with
 `--triage` and linked to the card that revealed it, not started. Say `--triage` and mean it: without the flag a
 card with no blockers lands in *ready*, and the next tick launches a worker on a sentence you wrote as a note.
-Leave `--priority` off too — it is a number where **higher wins**, and the queue's order is the human's.
+Leave `--priority` off too — it is a number where **higher wins** (band: `0` unfiled default · `1` normal · `2`
+next up · `3` urgent — see `README.md`), and the queue's order is the human's.
 
 **Never yours:** merging on a `manual` board, and any release or publish; editing `.kanban/board.json` at all —
 profiles, `allowed_tools`, models, `max_in_progress`, `merge.mode`; re-prioritising, promoting or archiving
@@ -397,7 +398,7 @@ depend on the names. Then stop and wait for a yes.
 |---|---|---|---|---|---|
 | A | Token bucket + tests | — | `src/limit.js`, `test/limit.test.js` | claude | 2 |
 | B | Wire the limiter into the server | A | `src/server.js` | claude | 2 |
-| C | Document the limits and the 429 contract | — | `docs/`, `README.md` | claude | 3 |
+| C | Document the limits and the 429 contract | — | `docs/`, `README.md` | claude | 1 |
 
 Each child body is a spec in the `/kanban:specify` shape (Why / What / Done when) plus a **Contract** paragraph: the
 names, signatures, paths and flags this child must not invent, because a sibling depends on them.
@@ -430,7 +431,7 @@ hkb create "Token bucket + tests" --priority 2 --paths src/limit.js,test/limit.t
   --goal "npm test covers burst, refill and retryAfterMs" --body "$(cat /tmp/kb-child-a.md)"   # → #41 ready
 hkb create "Wire the limiter into the server" --blocked-by 41 --priority 2 --paths src/server.js \
   --goal "the 61st request in a minute gets 429 with Retry-After" --body "$(cat /tmp/kb-child-b.md)"  # → #42 todo
-hkb create "Document the limits and the 429 contract" --priority 3 --paths docs/,README.md \
+hkb create "Document the limits and the 429 contract" --priority 1 --paths docs/,README.md \
   --goal "README and docs/api.md state the limit, the headers and the 429 body" --body "$(cat /tmp/kb-child-c.md)"  # → #43 ready
 
 # c. the root is blocked by every leaf — every child nothing else depends on

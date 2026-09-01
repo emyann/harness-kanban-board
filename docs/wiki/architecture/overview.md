@@ -7,11 +7,11 @@ audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: 2369b0d3a0f5d1363efffa8cc37fd2e47e018155
+    sha: 9d65adbe374e33614e47a2e62d6ba456f4d37af8
   - path: src/gh.js
     sha: b728c07d7f5e7bfd29e3dc4c2e0e2786d29522ee
   - path: src/model.js
-    sha: 23bb576d15068653b10c068ed3c9f014f0353664
+    sha: fd44f5d9605315d53a51e7d32dc8ff08a1529989
   - path: src/tasks.js
     sha: 2faa63591dbb3f96fcb3747141f9e4d42ae24736
   - path: src/lock.js
@@ -19,19 +19,19 @@ covers:
   - path: src/lifecycle.js
     sha: 3938c82f3e181fb260fc54bb2f3150074459e224
   - path: src/dispatch.js
-    sha: fb85767e0b4b962930ee74c608c5bb0e1bd7ae4f
+    sha: b3d70045eb3c5e3c062121817dabe280c38e0ec9
   - path: src/context.js
     sha: ab7afc4eb5158a879ea1700221892229329dce64
   - path: src/hook.js
-    sha: 59a7921c49c6f28f9778b43ae4fce6d3280d567c
+    sha: 9c279d75961f372331295d9783dde522e4e175b2
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/board.js
-    sha: 656fc1ff76b6cf1909ccacc5c69899ba24fb4010
+    sha: 05c992709b2d3d1d3ffd453dbbbd6b647de30fad
   - path: src/doctor.js
-    sha: 726a4571cf94906b8f54183c2b3223e125ad6149
-generated_at_commit: 39d9c05
-last_refreshed: 2026-08-29
+    sha: 80ed434085da105bdd1c293146fecefe77795bc6
+generated_at_commit: 4714e4f
+last_refreshed: 2026-09-01
 related: [concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
 
@@ -67,7 +67,12 @@ rejected lease push is `LOCK_LOST` (exit 3) and the worker must stop.
 `src/dispatch.js` is a no-LLM loop. Each tick re-reads the whole board (one
 GraphQL query) and derives every action from it: replay unsent writes,
 reclaim crashed work, reap finished agents, promote cards whose blockers are
-done, then claim and spawn workers under guard rails. Its in-process memory
+done, then claim and spawn workers under guard rails, *ready* cards
+highest-`kb.priority` first and oldest issue first within a tie
+(`sortReady` in `src/model.js`). The number itself carries no enforced
+scale — `README.md` names a **priority band** (`0` unfiled default · `1`
+normal · `2` next up · `3` urgent) so two filers share a ruler, but
+`sortReady` only ever compares the raw integer. Its in-process memory
 is only an optimization — since the 2026-08-27 outage it drops its own caches
 and ultimately exits (code 4) when claims stop resolving, because a fresh
 process rebuilt from the board is always correct. Judgment (what to build,

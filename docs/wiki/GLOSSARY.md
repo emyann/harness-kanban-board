@@ -71,6 +71,10 @@ deserves a `concepts/` page (link it).
   (`src/init.js`; see *features/planning-commands*). `/kanban:operate` is the
   third file in that directory and takes the same route, but it runs the board
   rather than planning it (see *features/operator-seat*).
+- **Priority band** — the named scale for `kb.priority` (higher wins,
+  default `0`): `0` unfiled · `1` normal · `2` next up · `3` urgent
+  (`README.md`; `sortReady` in `src/model.js` does the actual sort, and does
+  not enforce the band — a filer can still go above `3`).
 - **Profile** — a harness adapter in `.kanban/board.json`: launch template, caps
   and heartbeat mode; `kb:agent:<profile>` says which one a task runs on. Not
   the model, the machine, or a person (`src/board.js`). Exactly one per card:

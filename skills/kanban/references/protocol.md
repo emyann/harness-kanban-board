@@ -34,7 +34,7 @@ the mistakes actually happen.
 | Board | label `kb:board:<slug>` | one issue belongs to one board; cross-board links are refused |
 | Profile (assignee) | label `kb:agent:<profile>` | profile = launcher + model + caps in `.kanban/board.json` |
 | Needs a human | label `kb:needs-human` | orthogonal flag; set on gave_up, block loops, most block kinds |
-| Machine fields | `<!-- kb: {...} -->` block at the top of the body | `priority, workspace, max_runtime, max_retries, model, skills[], paths[], scheduled_at, idempotency_key, goal`. `priority` is a number, **higher wins**, default `0` (`--priority N`; the tick sorts *ready* by it, then oldest issue first). Malformed → defaults, never a crash |
+| Machine fields | `<!-- kb: {...} -->` block at the top of the body | `priority, workspace, max_runtime, max_retries, model, skills[], paths[], scheduled_at, idempotency_key, goal`. `priority` is a number, **higher wins**, default `0` (`--priority N`; the tick sorts *ready* by it, then oldest issue first). Band: `0` unfiled (default) · `1` normal · `2` next up · `3` urgent — see `README.md`. Malformed → defaults, never a crash |
 | Dependencies | GitHub issue dependencies: child **blocked by** parent | Hermes parent→child. A blocker counts as done only when closed as *completed* |
 | Attempts (Hermes `runs`) | one `<!-- kb-run -->` comment, fenced JSON | `attempts[] {attempt, profile, host, pid, started_at, heartbeat_at, lock_sha, ended_at, outcome, summary, reason, log, session_id, transcript_path, total_cost_usd, num_turns, duration_ms}`, `failures`, `block_loops`. `lock_sha` is where the lock ref started, so the worker's first CAS heartbeat knows what to lease on. The session fields are recorded once, by the Stop hook and the dispatcher: `hkb show <n>` prints them with a `claude --resume <id>` line. A track attempt also carries `track: true` and `track_nodes[]` — the subgraph it was handed, and the marker that says this root has had its one go at the fast engine. An attempt from a `"mode": "trigger"` profile (`claude-action`) carries `remote: true`: the launch only *started* work elsewhere, so there is no pid or job anywhere to look at. An attempt from `hkb claim <n>` with no `--spawn` carries `manual: true` — the operator claimed it and is working it in their own terminal, so there is no pid either; both are judged by the heartbeat alone. An attempt the dispatcher started to **continue** a PR the reviewer sent back carries `continues_pr: <number>`, and `continues_branch: <head branch>` when the dispatcher managed to put the checkout on that branch, and `continues_branch_stale: <why>` when that checkout could not be fast-forwarded to the remote head (the brief then says how to catch it up) (without it, the brief is what tells the worker which PR to push to). `profile` is normally a board profile, but three values are **reserved and synthetic** (the row also carries `synthetic: true`, and opens and closes in the same instant): `dispatcher` — the tick wrote the row itself, out of retries (`gave_up`); `reviewer` — `hkb request-changes` sent the card back (`changes_requested`); `human` — the operator ran a terminal verb by hand on a task with no open attempt and no `kb:agent:*` label. Do not name a board profile after one of them |
 | Structured handoff | `<!-- kb-result -->` comment per completion / review request | `{summary, metadata{changed_files, verification, dependencies, residual_risk, retry_notes}, artifacts[]}` |
@@ -179,7 +179,7 @@ of them can see the others.
 ```bash
 hkb create "Token bucket + tests" --priority 2 --paths src/limit.js,test/limit.test.js --body "$(cat a.md)"     # → #41 ready
 hkb create "Wire the limiter into the server" --blocked-by 41 --priority 2 --paths src/server.js --body "$(cat b.md)"  # → #42 todo
-hkb create "Document the limits and the 429 contract" --priority 3 --paths docs/,README.md --body "$(cat c.md)" # → #43 ready
+hkb create "Document the limits and the 429 contract" --priority 1 --paths docs/,README.md --body "$(cat c.md)" # → #43 ready
 hkb link 42 12 && hkb link 43 12    # the leaves; #12 is now blocked by both
 hkb promote 12                      # triage → todo (link first: promote on a todo task forces ready)
 hkb graph 12 >> graph.md            # the picture of what you just built (below)
@@ -193,7 +193,7 @@ TODO
 
 READY
   #41    ready    claude     p2  Token bucket + tests
-  #43    ready    claude     p3  Document the limits and the 429 contract
+  #43    ready    claude     p1  Document the limits and the 429 contract
 ```
 
 Tick 1 claims **#41 and #43** together — their `paths` are disjoint, so `path_overlap` lets both run (default
