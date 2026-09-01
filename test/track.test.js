@@ -711,7 +711,7 @@ test('the skill teaches the loop the runner is actually given, by the names the 
   assert.match(proto, /^## Tracks — the second execution engine/m);
   assert.ok(proto.includes('track_nodes'), 'the attempt fields a track adds must be in the data model');
   // the version has to move, or `hkb doctor` will call a stale installed copy current
-  assert.equal(parseSkillVersion(skill), '0.7.0');
+  assert.equal(parseSkillVersion(skill), '0.8.0');
 });
 
 test('a root nobody adopted is a track anyway: inferred, on the board\'s track profile', async (t) => {

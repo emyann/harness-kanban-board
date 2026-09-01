@@ -504,8 +504,10 @@ next wave once they have all recorded a verb. So siblings run at the same time a
 latency and no re-derived context, while the board is unchanged: every node is still claimed, worked in its own
 worktree, and finished with its own terminal verb and its own PR. Every node stays a durable checkpoint, so a track
 runner that dies leaves a board the ordinary dispatcher finishes node by node — and a root that has had one track
-attempt is never handed to a second track runner. Put it on the **root only**
-(`hkb adopt <root> --agent claude-track --status todo`) and give it a `max_runtime` and a budget for the whole track.
+attempt is never handed to a second track runner. Nothing has to be turned on: a root with unfinished children is
+dispatched as a track by default, and `hkb track <root>` says so and why (`hkb track <root> --off` runs its children
+as cold nodes instead; `hkb adopt <root> --agent claude-track` forces one). Give the root a `max_runtime` and a
+budget for the whole track.
 A track costs one `max_in_progress` slot however many nodes it holds — which makes it the only way to run a wave
 wider than the board's slot count — and per-node `kb.paths`, disjoint by construction, are what keep a wave from
 fighting over files. Cross-harness tracks are out of scope: a node on a profile outside the track runner's

@@ -100,7 +100,12 @@ deserves a `concepts/` page (link it).
 - **Track** — a DAG subgraph executed by one session, claimed at its root; that
   session is an **orchestrator** — it claims a wave and hands each node to its
   own isolated subagent rather than working them itself (`resolveTrack`,
-  `trackContext` in `src/track.js`; `features/tracks`).
+  `trackContext` in `src/track.js`; `features/tracks`). Which cards are tracks is
+  inferred from the graph, not switched on: see **Track root**.
+- **Track root** — a card with at least one unfinished child that nothing else on
+  the board is still blocked by. It is dispatched as a track by default, on the
+  board's track profile; `kb:agent:<a track profile>` forces one and
+  `kb:no-track` opts out (`isTrackRoot`, `src/model.js`; `hkb track <n>`).
 - **Wave** — one rank of a track: the nodes that depend on nothing else still
   left in it, so they can all run at once. `trackWaves` (`src/track.js`) splits a
   track into waves; wave 0 is the frontier.
