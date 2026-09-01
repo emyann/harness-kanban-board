@@ -358,9 +358,10 @@ export const PATH_OVERLAP_MODES = ['off', 'running', 'unmerged'];
  * Precedence: an explicit `dispatch.guards.path_overlap` always wins. Failing that, the legacy
  * boolean `dispatch.path_guard` — the only knob this guard had before #185 — is honored so a board
  * that already set it keeps meaning what it meant (`true` → "running", `false` → "off"). Only when
- * neither is set does the default follow `merge.mode`: "off" when the last step is manual (the
- * guard's premise — "running approximates merged" — does not hold when a human sits between review
- * and merge), "unmerged" when it is "auto" (where review → merged is immediate, so it does).
+ * neither is set does the default follow `merge.mode`: "off" when the last step is manual or
+ * operator (the guard's premise — "running approximates merged" — does not hold when a human, or a
+ * human-set condition an operator session must clear, sits between review and merge), "unmerged"
+ * when it is "auto" (where review → merged is immediate, so it does).
  */
 export function pathOverlapGuard(cfg) {
   const raw = cfg?.dispatch?.guards?.path_overlap;
@@ -569,29 +570,98 @@ export function sortForDispatch(tasks) {
 }
 
 // ---------- the last step: merging ----------
-// hkb never merges. `dispatch.merge.mode: "auto"` asks *GitHub's* auto-merge to land a card's PR
-// once the branch's own gates are green; `"manual"` — the default, and what every board that
-// predates this says — leaves the last step to the operator. Whether that step is a rote chore or
+// hkb never merges on its own initiative. `dispatch.merge.mode: "auto"` asks *GitHub's* auto-merge
+// to land a card's PR once the branch's own gates are green; `"manual"` — the default, and what
+// every board that predates this says — leaves the last step to the operator, by hand, on GitHub.
+// `"operator"` is the middle ground: the human has delegated the click to whoever is driving the
+// operator seat, but only once a review is on the card — `hkb merge <n>` is the one door that
+// enforces the condition and writes down that it was met, so the delegation is board policy readers
+// can see, not a sentence a chat transcript loses on restart. Whether any of this is a rote chore or
 // the one gate worth keeping is a property of the repo, so it is board policy, not a product
-// decision. The dispatcher enables it, never the worker: merge authority is an operator concern.
+// decision. The dispatcher enables `auto` for the worker never for itself: merge authority is an
+// operator concern either way.
 
-export const MERGE_MODES = ['manual', 'auto'];
+export const MERGE_MODES = ['manual', 'operator', 'auto'];
 /** board.json spelling → the `PullRequestMergeMethod` enum `enablePullRequestAutoMerge` wants. */
 export const MERGE_METHODS = { squash: 'SQUASH', merge: 'MERGE', rebase: 'REBASE' };
 
 /**
  * The board's merge policy, normalised. Never throws: a policy hkb cannot read must not take out
- * every command that loads board.json, and `auto` stays false, so an unreadable policy behaves
- * exactly like today's `manual`. `error` is what doctor fails on and the tick prints.
+ * every command that loads board.json, and `auto`/`operator` stay false, so an unreadable policy
+ * behaves exactly like today's `manual`. `error` is what doctor fails on and the tick prints.
+ *
+ * `require` is only consulted under `"operator"`: `checks` (default on) refuses a merge whose PR
+ * checks are not green, `review_comment` (default on) refuses one with no review on the card. A
+ * board that trusts the operator seat unconditionally sets either to `false` explicitly — there is
+ * no way to end up there by omission.
  */
 export function mergePolicy(cfg) {
   const raw = cfg?.dispatch?.merge || {};
   const mode = raw.mode ?? 'manual';
   const method = raw.method ?? 'squash';
+  const requireRaw = raw.require || {};
+  const require = { checks: requireRaw.checks ?? true, review_comment: requireRaw.review_comment ?? true };
   const errors = [];
-  if (!MERGE_MODES.includes(mode)) errors.push(`dispatch.merge.mode must be ${MERGE_MODES.map((m) => `"${m}"`).join(' or ')}, not ${JSON.stringify(mode)}`);
+  if (!MERGE_MODES.includes(mode)) errors.push(`dispatch.merge.mode must be ${MERGE_MODES.map((m) => `"${m}"`).join(', ')}, not ${JSON.stringify(mode)}`);
   if (!MERGE_METHODS[method]) errors.push(`dispatch.merge.method must be one of ${Object.keys(MERGE_METHODS).join(', ')}, not ${JSON.stringify(method)}`);
-  return { mode, method, mergeMethod: MERGE_METHODS[method] || null, auto: !errors.length && mode === 'auto', error: errors.join('; ') || null };
+  if (typeof require.checks !== 'boolean') errors.push(`dispatch.merge.require.checks must be true or false, not ${JSON.stringify(requireRaw.checks)}`);
+  if (typeof require.review_comment !== 'boolean') errors.push(`dispatch.merge.require.review_comment must be true or false, not ${JSON.stringify(requireRaw.review_comment)}`);
+  const valid = !errors.length;
+  return {
+    mode, method, require,
+    mergeMethod: MERGE_METHODS[method] || null,
+    auto: valid && mode === 'auto',
+    operator: valid && mode === 'operator',
+    error: errors.join('; ') || null,
+  };
+}
+
+/**
+ * Is there a review on the card, for `dispatch.merge.mode: "operator"`'s condition? Two ways to
+ * clear it, either of which is "a review is on the card" per #189:
+ *   - a `review_requested` attempt naming a reviewer — the worker already asked a human by name.
+ *   - `summary` — what the operator session itself checked (tests run, Done-when items verified),
+ *     passed to `hkb merge --summary ".."` and written down as the merge record's review line. This
+ *     is deliberately how the operator seat's own review gets recorded: not a separate verb to
+ *     forget to run, but the one flag `hkb merge` already needs to enforce the condition.
+ * Pure — `run` is the run record's `.run`, already loaded by the caller.
+ */
+export function operatorReviewEvidence(run, { summary } = {}) {
+  const attempts = run?.attempts || [];
+  const reviewed = [...attempts].reverse().find((a) => a?.outcome === 'review_requested' && a.reviewer);
+  if (reviewed) return { ok: true, detail: `review requested from ${reviewed.reviewer} (attempt ${reviewed.attempt})` };
+  const s = summary != null ? String(summary).trim() : '';
+  if (s) return { ok: true, detail: s };
+  return { ok: false, detail: null };
+}
+
+/**
+ * Should `hkb merge <n>` merge this card's PR — and if not, why not, in the exact words the human
+ * asked for: "on a card without one it refuses naming the condition; with `manual` it refuses
+ * naming the mode." Pure: `checksState` is the PR's `statusCheckRollup.state` (or null when it
+ * could not be read), fetched by the caller so this stays testable without a GitHub token.
+ */
+export function mergeDecision(task, run, policy, { summary, checksState } = {}) {
+  if (policy.error) return { ok: false, reason: `dispatch.merge is misconfigured: ${policy.error}` };
+  if (policy.mode === 'manual') return { ok: false, reason: 'dispatch.merge.mode is "manual" — merging is the human\'s step; delegate it with "operator" or "auto" in .kanban/board.json' };
+  if (policy.mode === 'auto') return { ok: false, reason: 'dispatch.merge.mode is "auto" — GitHub merges the PR itself once its checks are green; hkb merge has nothing to do' };
+  // operator
+  if (task.status !== 'review') return { ok: false, reason: `#${task.number} is ${task.status}, not review` };
+  const pr = (task.prs || []).find((p) => p && p.state === 'OPEN') || null;
+  if (!pr) return { ok: false, reason: `#${task.number} has no open PR to merge` };
+  if (pr.isDraft) return { ok: false, reason: `PR #${pr.number} is still a draft` };
+  let evidence = { ok: true, detail: null };
+  if (policy.require.review_comment) {
+    evidence = operatorReviewEvidence(run, { summary });
+    if (!evidence.ok) {
+      return { ok: false, reason: `no review on #${task.number} — request one with a named reviewer (hkb request-review ${task.number} --reviewer <user>), or run hkb merge ${task.number} --summary "what you checked"` };
+    }
+  }
+  if (policy.require.checks) {
+    if (checksState == null) return { ok: false, reason: `PR #${pr.number}'s checks could not be read — merge refused` };
+    if (checksState !== 'SUCCESS') return { ok: false, reason: `PR #${pr.number}'s checks are ${String(checksState).toLowerCase()}, not green` };
+  }
+  return { ok: true, pr, method: policy.method, mergeMethod: policy.mergeMethod, reviewDetail: evidence.detail };
 }
 
 /**

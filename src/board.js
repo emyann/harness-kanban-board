@@ -173,10 +173,14 @@ export const DEFAULT_BOARD = {
     // pre-#185 `path_guard: true|false` still works too, for a board that already set it.
     guards: { path_overlap: null },
     daily_spawn_cap: 40,
-    // The last step. "manual" is today's behaviour: hkb never merges, the operator does. Set
-    // { "mode": "auto", "method": "squash" } and the dispatcher asks GitHub's own auto-merge to
-    // land a reviewed card's PR once the branch's required checks go green — one mutation per PR,
-    // and `hkb doctor` refuses the mode outright on a branch with nothing to wait for.
+    // The last step. "manual" is today's behaviour: hkb never merges, the operator does, by hand,
+    // on GitHub. "operator" delegates the click to whoever drives the operator seat, but only once
+    // a review is on the card — `hkb merge <n>` enforces that condition and writes down that it
+    // was met; see `mergePolicy`/`mergeDecision` in src/model.js. Set { "mode": "auto", "method":
+    // "squash" } and the dispatcher asks GitHub's own auto-merge to land a reviewed card's PR once
+    // the branch's required checks go green — one mutation per PR, and `hkb doctor` refuses the
+    // mode outright on a branch with nothing to wait for. `require: { checks, review_comment }`
+    // (both default true) only apply to "operator".
     merge: { mode: 'manual', method: 'squash' },
   },
   profiles: DEFAULT_PROFILES,

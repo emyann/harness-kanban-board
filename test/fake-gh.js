@@ -377,7 +377,30 @@ export class FakeGh {
     return node;
   }
 
+  /** Find a PR (and its issue) by GraphQL node id, across every issue. */
+  #findPr(nodeId) {
+    for (const issue of this.issues.values()) {
+      for (const pr of issue.prs) if ((pr.nodeId || `PR_kwFake${pr.number}`) === nodeId) return { issue, pr };
+    }
+    return null;
+  }
+
   #graphql({ query, variables = {} }) {
+    if (/mergePullRequest/.test(query)) {
+      const found = this.#findPr(variables.id);
+      if (!found) throw this.#error(404, `GraphQL failed (404): Could not resolve to a node with the id ${variables.id}`);
+      const { pr } = found;
+      if (pr.state !== 'OPEN') throw this.#error(422, `GraphQL failed (422): Pull request is ${String(pr.state).toLowerCase()}`);
+      pr.state = 'MERGED';
+      pr.merged = true;
+      return { mergePullRequest: { pullRequest: { number: pr.number, merged: true } } };
+    }
+    if (/statusCheckRollup/.test(query)) {
+      const issue = [...this.issues.values()].find((i) => i.prs.some((p) => p.number === Number(variables.n)));
+      const pr = issue?.prs.find((p) => p.number === Number(variables.n));
+      const state = pr && pr.checksState !== undefined ? pr.checksState : null;
+      return { repository: { pullRequest: pr ? { commits: { nodes: [{ commit: { statusCheckRollup: state ? { state } : null } }] } } : null } };
+    }
     if (/enablePullRequestAutoMerge/.test(query)) {
       for (const issue of this.issues.values()) {
         for (const pr of issue.prs) {

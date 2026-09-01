@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import { makeContext, makeHookContext } from './board.js';
 import { getTask, fetchBoard, assertOnBoard, loadRun, latestResult, parentResults, issueEvents, addComment, addLabels, ensureLabels, removeLabel, setAgent, setStatus, updateBody } from './tasks.js';
-import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, createTask, linkTask, withOutbox, envAttempt } from './lifecycle.js';
+import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, createTask, linkTask, withOutbox, envAttempt, mergeCard } from './lifecycle.js';
 import { tick, loop, spawnWorker } from './dispatch.js';
 import { serve } from './serve.js';
 import { up, down } from './up.js';
@@ -196,6 +196,9 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
               --from-stdin with one JSON object {summary, metadata, artifacts, reason, kind, reviewer} (no shell quoting)
               finish is complete — the same verb under a name no shell claims: complete is a bash builtin,
               so a harness that vets a command word by word (Claude Code in a worktree) refuses to run it
+  operator    merge <n> [--summary ".."]   merges #n's PR under dispatch.merge.mode "operator" once a
+                    review is on the card (a named reviewer, or --summary naming what was checked);
+                    refuses naming the condition otherwise, and refuses outright under "manual"/"auto"
   dispatch    up [--serve] [--loop S] [--port N]   start the dispatcher loop — and with --serve the board
                     server — detached, idempotently, logging to .kanban/logs/<dispatch|serve>.log.
                     Already running is reported, never started twice; up is not a supervisor and
@@ -536,6 +539,13 @@ export async function main(argv) {
       if (!n) throw usage('hkb request-changes <n> "reason"');
       const r = await requestChanges(ctx, n, { reason: rest.slice(1).join(' ') });
       out(ctx, r, `#${n} → ${r.status}${r.pr ? ` (PR #${r.pr} stays open; the next attempt continues it)` : ''}`);
+      return 0;
+    }
+    case 'merge': {
+      const [n] = nums(rest);
+      if (!n) throw usage('hkb merge <n> [--summary ".."]   merges under dispatch.merge.mode "operator" once a review is on the card');
+      const r = await mergeCard(ctx, n, { summary: flags.summary });
+      out(ctx, r, `#${n} → PR #${r.pr} merged (${r.method})`);
       return 0;
     }
     case 'claim': {
