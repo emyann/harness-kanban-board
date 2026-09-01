@@ -487,7 +487,7 @@ test('a worker whose harness names no session is left exactly as it was', async 
   const h = bgHarness({ job: false });
   try {
     delete process.env.CLAUDE_CODE_SESSION_ID; // Copilot, Codex, a plain shell
-    await complete(h.ctx, 30, { summary: 'done' });
+    await complete(h.ctx, 30, { summary: 'done', noPr: true });
     const a = await h.attempt(30, 1);
     assert.equal(a.session_id, undefined);
     assert.equal(a.transcript_path, undefined);

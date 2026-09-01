@@ -7,19 +7,23 @@ audience: [dev]
 read_when: "touching src/track.js, isTrackRoot, the track branch of the dispatcher tick, the claude-track profile's allow-list, or the runner brief"
 covers:
   - path: src/model.js
-    sha: 316e1b58f411224718ad190fc49f45b27d6c529e
+    sha: 022ed7b17c5debc59265f8a1627f82386864de00
   - path: src/track.js
     sha: ed02aeeffe9c33ce3ce32abd652c59faec8e9286
   - path: src/dispatch.js
-    sha: a3853481f55b7c7e9b3a18d61c9b9e456b531db4
+    sha: 529e913ae4f921a91dbdd1eb1f6a8a5245cd0035
   - path: src/init.js
     sha: aee5eed4dcc544f9a6fe81c7273f96432aaf1048
   - path: src/board.js
-    sha: 05c992709b2d3d1d3ffd453dbbbd6b647de30fad
+    sha: 955f2c7cfc908fe46ebf264e0cb4c8e722c7a79c
   - path: src/gc.js
     sha: 40672cb7a84da7170be3f5d99df42f326f9dc1e5
-related: [architecture/overview, features/harness-profiles, concepts/worker-identity, decisions/adr-004-roles-and-adoption]
-generated_at_commit: 37e1171
+  - path: src/tasks.js
+    sha: 8631ae5218f1d87ad2e247eb837b5a7e1255dd23
+  - path: src/doctor.js
+    sha: 4b49003dc44abe98a35f1c47b9472427e0ab6fba
+related: [architecture/overview, features/harness-profiles, features/review-loop, concepts/worker-identity, decisions/adr-004-roles-and-adoption]
+generated_at_commit: 5db5afa
 last_refreshed: 2026-09-01
 ---
 
@@ -183,6 +187,49 @@ is exactly why they are written down:
   fires at that moment. Left alone the Stop hook would nudge for a terminal verb
   mid-wave; #163 taught it to stand aside while a subagent of the attempt is
   live (see `concepts/worker-identity`).
+
+## Branch strategy: nodes stack on their blocker, and the board can see it
+
+A node's brief (`trackContext`, `src/track.js`) is explicit about where its
+branch comes from: `git switch -c kb/<n> <base>`, where `<base>` is the branch
+of the node it is blocked by (`kb/<blocker>`), or the default branch when it
+has none — for both the sequential loop and the fan-out's per-node brief. A
+track therefore **stacks**: node B's PR targets node A's still-open branch
+rather than waiting for A to merge into the default branch first. That is a
+deliberate choice, not an accident of two agents happening to pick the same
+name — it is what lets a track's nodes run one after another inside a single
+attempt without a merge round-trip between each. Stacked PRs across *cards* on
+the board were rejected during hkb's original design (sequencing them would
+need PR-stacking machinery the board itself does not have); this is
+different — inside one track, the branches are the very thing that keeps the
+nodes in order, and every one of them still ends in its own PR, closed by its
+own `Closes #<n>` (`## The per-node brief`, above).
+
+The cost of that choice is what #227 found operating hkb's own board: a PR
+whose `base` is `kb/<blocker>` rather than the default branch is one GitHub's
+`closedByPullRequestsReferences` will never link, so `hkb finish` saw `prs: []`
+and closed the card as *done* with the branch sitting there, unmerged, nothing
+left to chase it. That was never really a branch-strategy bug — the strategy
+was working as designed — it was `hkb`'s single source for "does this card
+have a PR" being narrower than the question it was asked. The fix landed in
+`src/tasks.js` (`taskBranchRe`/`openPrsByHead`, #234): a card with no PR from
+GraphQL is matched against a board-wide read of open PRs by **head** branch —
+`kb/<n>`, `kb-<n>-<k>`, `worktree-kb-<n>-<k>` — which finds a node's PR
+whatever its `base` is, stacked or not. `hkb finish` also refuses to land a
+card in *done* with no PR found at all (protocol_violation, unless the worker
+says `--no-pr "why"`), so a stacked branch that the fallback still cannot
+place stops the card rather than closing it silently. `hkb doctor`'s
+`checkOrphanedPrs` closes the remaining hole: a card already closed, whose
+`kb/<n>` branch still carries an open PR, is not revisited by an open-issues
+board read, so doctor asks about it separately.
+
+The track runner itself never creates a branch of its own (a "wave" branch
+distinct from any node's `kb/<n>`) — every branch on the board is one card's,
+named after that card, so `taskBranchRe` covers everything a track can
+produce. If a future runner ever needs a shared integration branch across
+several nodes, that branch would need its own place in the board's model
+(a card of its own, most likely) rather than existing only as a name a prompt
+happened to choose — nothing here does that today.
 
 ## Known gaps
 

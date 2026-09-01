@@ -195,7 +195,7 @@ test('a terminal verb takes the beat chain with it — worktrees share one ref s
   await heartbeat(h.ctx, 7);
   assert.deepEqual(listBeatChains(h.root).map((c) => c.ref), [LOCK]);
 
-  await complete(h.ctx, 7, { summary: 'done' });
+  await complete(h.ctx, 7, { summary: 'done', noPr: true, noPrReason: 'no PR needed for this test' });
 
   assert.equal(localBeatSha(h.root, 7, 1), null);
   assert.deepEqual(listBeatChains(h.root), []);

@@ -235,7 +235,7 @@ test('kanban_complete closes the attempt, exactly as the CLI verb does', async (
   const h = harness();
   t.after(h.cleanup);
 
-  const r = payload(await call(h.ctx, 'kanban_complete', { summary: 'wired the MCP server', metadata: { changed_files: ['src/mcp.js'] } }, { KB_TASK: '7', KB_ATTEMPT: '1' }));
+  const r = payload(await call(h.ctx, 'kanban_complete', { summary: 'wired the MCP server', metadata: { changed_files: ['src/mcp.js'] }, no_pr: 'no PR needed for this test' }, { KB_TASK: '7', KB_ATTEMPT: '1' }));
 
   assert.deepEqual({ number: r.number, attempt: r.attempt, status: r.status }, { number: 7, attempt: 1, status: 'done' });
   assert.equal(h.gh.statusOf(7), 'done');

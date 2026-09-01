@@ -87,11 +87,14 @@ export const TOOLS = [
   {
     name: 'kanban_complete',
     title: 'Finish the task',
-    description: 'The terminal verb for work that is done: closes the attempt, releases the lock, writes the result comment and moves the task to done — or to review while its pull request is still open. Exactly one terminal verb per attempt.',
-    properties: { task: TASK, summary: SUMMARY, metadata: METADATA, artifacts: ARTIFACTS },
+    description: 'The terminal verb for work that is done: closes the attempt, releases the lock, writes the result comment and moves the task to done — or to review while its pull request is still open. Refuses to land in done with no PR found (records a protocol_violation instead) unless no_pr names why this card needed none. Exactly one terminal verb per attempt.',
+    properties: {
+      task: TASK, summary: SUMMARY, metadata: METADATA, artifacts: ARTIFACTS,
+      no_pr: { type: 'string', description: 'Only when this card genuinely needed no pull request: why. Without it, completing with no PR found refuses and records a protocol_violation.' },
+    },
     required: ['summary'],
     replay: 'complete',
-    run: (ctx, n, a) => complete(ctx, n, { summary: a.summary, metadata: a.metadata, artifacts: a.artifacts }),
+    run: (ctx, n, a) => complete(ctx, n, { summary: a.summary, metadata: a.metadata, artifacts: a.artifacts, noPr: a.no_pr !== undefined, noPrReason: a.no_pr }),
   },
   {
     name: 'kanban_block',

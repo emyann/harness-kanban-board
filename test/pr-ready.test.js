@@ -2,7 +2,7 @@
 // or `gh pr merge` refuses it. Pure — no `gh`, no network.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { prReadyDecision, prAttemptFields } from '../src/lifecycle.js';
+import { prReadyDecision, prAttemptFields, noPrDecision } from '../src/lifecycle.js';
 
 const pr = (over = {}) => ({ number: 12, nodeId: 'PR_kwn', state: 'OPEN', isDraft: true, url: 'https://x/pull/12', headRefName: 'worktree-kb-15-6', merged: false, ...over });
 
@@ -43,6 +43,22 @@ test('closed and merged PRs are never touched', () => {
 test('a PR read without a node id is still a draft to fix (the caller looks the id up)', () => {
   const d = prReadyDecision([pr({ nodeId: undefined })]);
   assert.equal(d.markReady, true);
+});
+
+// ---------- what `complete` owes a card it found no PR on (#234) ----------
+
+test('noPrDecision: refuses by default, naming the branches it looked for', () => {
+  const d = noPrDecision(234);
+  assert.equal(d.ok, false);
+  assert.match(d.reason, /#234/);
+  assert.match(d.reason, /kb\/234/);
+  assert.match(d.reason, /--no-pr/);
+});
+
+test('noPrDecision: an explicit --no-pr override is accepted, with or without a reason', () => {
+  assert.deepEqual(noPrDecision(1, { noPr: true }), { ok: true, no_pr_reason: null });
+  assert.deepEqual(noPrDecision(1, { noPr: true, noPrReason: 'docs-only, nothing to merge' }), { ok: true, no_pr_reason: 'docs-only, nothing to merge' });
+  assert.equal(noPrDecision(1, { noPr: false }).ok, false);
 });
 
 test('attempt row records pr and pr_head, and stays empty without a PR', () => {

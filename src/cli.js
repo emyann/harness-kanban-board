@@ -41,7 +41,7 @@ export function parseArgs(argv) {
 // The protocol must not depend on shell quoting of JSON: every field can come inline, from a file, or from one JSON
 // object on stdin. Per field the precedence is inline > --*-file > --from-stdin. No GitHub calls happen here.
 
-const STDIN_KEYS = ['summary', 'metadata', 'artifacts', 'reason', 'kind', 'reviewer'];
+const STDIN_KEYS = ['summary', 'metadata', 'artifacts', 'reason', 'kind', 'reviewer', 'no_pr'];
 const TERMINAL_VERBS = ['complete', 'block', 'request-review'];
 
 /**
@@ -143,7 +143,12 @@ export function resolveTerminalInput(verb, flags, rest, io = {}) {
 
   const kind = str(flags.kind) ?? str(stdin.kind) ?? null;
   const reviewer = str(flags.reviewer) ?? str(stdin.reviewer) ?? null;
-  return { summary, metadata, artifacts, reason, kind, reviewer };
+  // --no-pr "<why>": complete only — an explicit statement that this card needed no PR, so `complete`
+  // does not have to guess between that and a protocol violation (#234). stdin's "no_pr" is the same field.
+  const noPrFlag = flags['no-pr'];
+  const noPrReason = typeof noPrFlag === 'string' ? noPrFlag : (typeof stdin.no_pr === 'string' ? stdin.no_pr : null);
+  const noPr = noPrFlag !== undefined || stdin.no_pr !== undefined;
+  return { summary, metadata, artifacts, reason, kind, reviewer, noPr, noPrReason };
 }
 
 /**
@@ -160,6 +165,9 @@ export function terminalArgv(verb, number, p, { board, attempt } = {}) {
     if (p.metadata && Object.keys(p.metadata).length) argv.push('--metadata', JSON.stringify(p.metadata));
     if (p.artifacts?.length) argv.push('--artifacts', p.artifacts.join(','));
     if (verb === 'request-review' && p.reviewer) argv.push('--reviewer', p.reviewer);
+    // `p` is either resolveTerminalInput's output (noPr/noPrReason) or a raw kanban_complete MCP call
+    // (no_pr) — terminalArgv replays both into the same CLI flag.
+    if (verb === 'complete' && (p.noPr || p.no_pr !== undefined)) argv.push('--no-pr', p.noPrReason || p.no_pr || '');
   }
   if (board) argv.push('--board', board);
   if (attempt) argv.push('--attempt', String(attempt));
@@ -201,9 +209,11 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
               block <n> "reason" [--kind dependency|needs_input|capability|transient]     unblock <n>...
               request-review <n> --summary ".." [--metadata ..] [--reviewer <github-user>]   request-changes <n> "reason"
               finish|block|request-review also take --summary-file <p> --metadata-file <p> --reason-file <p>, or
-              --from-stdin with one JSON object {summary, metadata, artifacts, reason, kind, reviewer} (no shell quoting)
+              --from-stdin with one JSON object {summary, metadata, artifacts, reason, kind, reviewer, no_pr} (no shell quoting)
               finish is complete — the same verb under a name no shell claims: complete is a bash builtin,
               so a harness that vets a command word by word (Claude Code in a worktree) refuses to run it
+              finish refuses to land in done with no PR found (records protocol_violation instead) unless
+              you pass --no-pr "why this card needed none"
   operator    merge <n> [--summary ".."]   merges #n's PR under dispatch.merge.mode "operator" once a
                     review is on the card (a named reviewer, or --summary naming what was checked);
                     refuses naming the condition otherwise, and refuses outright under "manual"/"auto"
@@ -639,11 +649,11 @@ export async function main(argv) {
     }
     case 'complete': {
       const [n] = nums(rest);
-      if (!n) throw usage('hkb finish <n> --summary ".." [--metadata JSON|path] [--artifacts a,b] | --summary-file p --metadata-file p | --from-stdin   (finish = complete)');
+      if (!n) throw usage('hkb finish <n> --summary ".." [--metadata JSON|path] [--artifacts a,b] [--no-pr "why"] | --summary-file p --metadata-file p | --from-stdin   (finish = complete)');
       const p = resolveTerminalInput(cmd, flags, rest);
       const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || envAttempt(n) });
-      const r = await withOutbox(ctx, replay, () => complete(ctx, n, { summary: p.summary, metadata: p.metadata, artifacts: p.artifacts, attempt: flags.attempt }));
-      out(ctx, r, `#${n} → ${r.status}${r.pr ? ` (waiting on PR #${r.pr}${r.pr_continued ? ', continued' : ''})` : ''}`);
+      const r = await withOutbox(ctx, replay, () => complete(ctx, n, { summary: p.summary, metadata: p.metadata, artifacts: p.artifacts, attempt: flags.attempt, noPr: p.noPr, noPrReason: p.noPrReason }));
+      out(ctx, r, r.protocol_violation ? `#${n} → ${r.status} (protocol violation: no PR found)` : `#${n} → ${r.status}${r.pr ? ` (waiting on PR #${r.pr}${r.pr_continued ? ', continued' : ''})` : ''}`);
       return 0;
     }
     case 'block': {
