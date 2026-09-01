@@ -7,9 +7,9 @@ audience: [dev, ops]
 read_when: "changing what a session may do on someone's board, adding an event kind / status / outcome / block kind, or wondering why the operator's limits are prose rather than a guard"
 covers:
   - path: skills/kanban/SKILL.md
-    sha: 6371b1ff24fa12109c2bf1563194daffdc7c7df0
+    sha: a6ffdcca307a58e568a02ff17cba8a00ef3e7caa
   - path: commands/operate.md
-    sha: 7c1cb7c0a592fc3ea8ca641ca37b860a975ded66
+    sha: 868663f4ad694f7e336ebbdfec7952e4afd621e1
   - path: src/watch.js
     sha: 8aba4c441e35c9241124c1278b5f4824706f7e52
   - path: src/model.js
@@ -79,6 +79,45 @@ There is no `hkb operate` verb for the same reason there is no `hkb decompose`:
 it would put an LLM inside the dispatcher. The seat reads a board and decides;
 the tick reconciles labels and never judges.
 
+## Step 1 prints a shape, not a report
+
+The section's first step brings the board up — `hkb up --serve`, `hkb up --status`,
+`hkb doctor` — and for a while it asked only that the session "say which board you
+are operating and what `hkb up --status` and `hkb doctor` report". Taken literally
+that is an instruction to transcribe: every doctor line replayed, the spend window
+recited, the seat's own rules restated at the human who wrote them. Operate is the
+first command of a session, so the cost lands where attention is scarcest — the
+human has read a page and still has to work out where to start.
+
+So step 1 now specifies the artefact instead of the topic: board and serve URL, the
+two pids, **one** verdict for `doctor`, a lane table, at most three things that need
+the human, the merge mode. The rules under it are all subtractive — `doctor`
+collapses to "all ✓" unless something is actually wrong, `hkb stats` belongs to
+step 3's once-a-cycle line and is news only when a number moved, and the seat's
+limits live in the section rather than in every opening.
+
+One rule is additive, and it is the one a status line cannot give you: **an idle
+dispatcher and a busy one print the same pid**. A board whose open cards are all in
+*triage* will tick forever against an empty queue while every process reports
+healthy, so the lane table is the only place that difference shows, and the section
+requires it to be said out loud with the promote decision under *Needs you*.
+
+The screen carries two lists, and the split between them is the seat's own
+line. *Needs you* is decisions only the human can take. *Start here* is up to
+four cards worth working now, ranked by what the board can actually say — a
+defect in the board's own machinery first, because every other card runs on it
+and the human is running on it right now, then a card in *review*, then a `kb:needs-human` card whose answer is visible,
+then fan-in, the card the most others are blocked by — with `kb.priority`
+below all three, because the flag has a documented direction and no documented
+scale (#207) and numbers filed by different hands do not compare. The line ends
+with the command that acts on it, unrun: suggesting is the seat's, promoting is
+the human's, and naming the verb without typing it is exactly where that
+boundary sits.
+
+The boundary is written into step 5: the opening report is step 1's, every cycle
+after it is the watch digest, and both keep the same economy — a transition, a verb
+and a handback are worth a line each.
+
 ## The reaction table is a projection of the code's vocabulary
 
 The middle of the section is a table per event kind, and its rows are not free
@@ -131,6 +170,12 @@ wrong:
   section names every token and the commands it must run; no test drives a
   session through a `review` and a `needs_input` transition. That verification is
   a human's, once, on a live board.
+- **The CLI cannot print step 1's screen.** The shape is specified; assembling
+  it is still manual. `hkb up` prints no serve URL, so the URL comes out of the
+  first line of `.kanban/logs/serve.log`, and the lane table comes from `hkb list`
+  (every open card, bodies and all) or from `stats --json`, which pays for a 7-day
+  attempt history to reach `tasks.by_status` and still has no priority spread.
+  Filed as #204.
 - **The spend row is ahead of the data.** The section asks for `hkb stats --json`
   once a cycle and names `attempts.by_outcome` and `spend.by_profile`
   (`src/stats.js`), which exist. A per-model breakdown does not — `zeroUsage()`
