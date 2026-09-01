@@ -416,6 +416,17 @@ export function dropCaches(ctx) {
   ctx.caps = {};
 }
 
+/**
+ * Forget every card's comments memo at the top of a tick: `base` (the branch sha) and `mergeGate`
+ * are legitimately per-process for the life of the loop, but `comments:<n>` is a run record, and a
+ * long-lived loop must not judge card #n on comments it fetched three ticks ago. A worker's
+ * `finish`/`block`, an operator's `request-changes`/`unblock`, all write from another process and
+ * are otherwise invisible to a loop that already read #n once (see #195).
+ */
+export function dropCommentCaches(ctx) {
+  for (const key of Object.keys(ctx._cache)) if (key.startsWith('comments:')) delete ctx._cache[key];
+}
+
 // ---------- tick ----------
 
 async function failAttempt(ctx, task, runRec, outcome, note, { kill = true } = {}) {
@@ -446,6 +457,7 @@ async function failAttempt(ctx, task, runRec, outcome, note, { kill = true } = {
 
 export async function tick(ctx, { max = Infinity, dryRun = false, children = null, profiles = null, log = () => {} } = {}) {
   ctx.requireBoard();
+  dropCommentCaches(ctx);
   const d = ctx.cfg.dispatch;
   const summary = { reconciled: [], reclaimed: [], promoted: [], guarded: [], claimed: [], spawn_failed: [], held: [], skipped: [], tracks: [], reaped: [], self_heal: [], auto_merge: [], fatal: null };
   const pog = pathOverlapGuard(ctx.cfg);

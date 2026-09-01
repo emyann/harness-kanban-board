@@ -677,6 +677,36 @@ test('request-changes keeps the reviewer\'s note in full, unlike the other termi
   assert.equal(h.gh.runOf(7).attempts.at(-1).reason, longReason, 'the attempt row must not be truncated to 400 chars');
 });
 
+// ---------- #195: a long-lived loop must not judge a card on a comments cache from an earlier tick ----------
+
+test('a request-changes from another process between ticks is honoured, not bounced by the loop\'s stale comments cache', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, started_at: ago(900), ended_at: ago(600), outcome: 'review_requested', summary: 'ready', pr: 42 }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', isDraft: true, headRefName: 'worktree-kb-7-1' }] }));
+
+  // tick 1: no changes_requested row yet, so the active_pr guard bounces #7 to review — and the
+  // loop's ctx now has #7's comments (only the review_requested row) memoized.
+  const s1 = await h.tick();
+  assert.deepEqual(s1.guarded, [{ number: 7, guard: 'active_pr', pr: 42 }]);
+  assert.equal(h.gh.statusOf(7), 'review');
+
+  // another process — a reviewer's own `hkb request-changes`, its own ctx and cache — sends it back.
+  const otherCtx = { ...h.ctx, _cache: {}, caps: {} };
+  const sentBack = await requestChanges(otherCtx, 7, { reason: 'rename the flag' });
+  assert.equal(sentBack.status, 'ready');
+
+  // tick 2, same long-lived loop ctx: judging #7 on tick 1's cached comments would still see only
+  // the review_requested row and guard it straight back to review — the exact bounce #153 removed
+  // and #195 observed on hkb's own board.
+  const s2 = await h.tick();
+
+  assert.deepEqual(s2.guarded, [], 'the changes_requested row written by another process must be seen');
+  assert.deepEqual(s2.claimed.map((c) => c.number), [7]);
+  assert.equal(s2.claimed[0].continues_pr, 42);
+  assert.equal(h.gh.statusOf(7), 'running');
+});
+
 test('withoutWorktreeFlag drops the harness\'s own checkout flag and nothing else', () => {
   assert.deepEqual(
     withoutWorktreeFlag(['claude', '--bg', '--worktree', 'kb-7-2', '--permission-mode', 'dontAsk', 'the prompt']),

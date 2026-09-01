@@ -230,7 +230,10 @@ export class FakeGh {
       }
     } else if ((m = /^issues\/(\d+)\/comments$/.exec(p))) {
       const issue = this.#issue(m[1]);
-      if (method === 'GET') return this.#page(issue.comments, q);
+      // A snapshot, not a live reference: real GitHub hands back a fresh JSON blob per call, so a
+      // PATCH after this read must never be visible through an array a caller is still holding — the
+      // exact thing a comments cache has to get wrong to reproduce #195.
+      if (method === 'GET') return this.#page(issue.comments, q).map((c) => ({ ...c }));
       if (method === 'POST') { this.#touch(issue); return this.addComment(issue.number, body.body); }
     } else if ((m = /^issues\/comments\/(\d+)$/.exec(p))) {
       const id = Number(m[1]);
