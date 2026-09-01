@@ -7,11 +7,11 @@ audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: 9d65adbe374e33614e47a2e62d6ba456f4d37af8
+    sha: edc60d49312690f0691119e2a3396aa3176fd0c7
   - path: src/gh.js
     sha: b728c07d7f5e7bfd29e3dc4c2e0e2786d29522ee
   - path: src/model.js
-    sha: fd44f5d9605315d53a51e7d32dc8ff08a1529989
+    sha: 6717b59327df4d7d9bc175b8146081696cec1bbb
   - path: src/tasks.js
     sha: 2faa63591dbb3f96fcb3747141f9e4d42ae24736
   - path: src/lock.js
@@ -19,7 +19,7 @@ covers:
   - path: src/lifecycle.js
     sha: 3938c82f3e181fb260fc54bb2f3150074459e224
   - path: src/dispatch.js
-    sha: b3d70045eb3c5e3c062121817dabe280c38e0ec9
+    sha: ce2fcdb53caa648426f64509294e3795a005b5cc
   - path: src/context.js
     sha: ab7afc4eb5158a879ea1700221892229329dce64
   - path: src/hook.js
@@ -30,7 +30,7 @@ covers:
     sha: 05c992709b2d3d1d3ffd453dbbbd6b647de30fad
   - path: src/doctor.js
     sha: 80ed434085da105bdd1c293146fecefe77795bc6
-generated_at_commit: 4714e4f
+generated_at_commit: f2d9b40
 last_refreshed: 2026-09-01
 related: [concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
@@ -155,7 +155,20 @@ those from the other end. It has already matched the background job to decide
 whether the attempt is alive, and that job names a record on disk;
 `jobSessionUpdate` (`src/jobs.js`) turns it into the same fields, one tick after
 the launch (`src/dispatch.js`). Blanks only: a row a verb has stamped is left
-exactly as it is, and a resumed job's record is never half-merged into one.
+exactly as it is, and a resumed job's record is never half-merged into one. A
+pid-mode attempt has no job record, but the same worker log `parseSessionLog`
+already reads for session and cost, so the tick backfills it from there too,
+the tick just before it calls `failAttempt` (`src/dispatch.js`).
+
+`parseSessionLog` (`src/model.js`) reads the whole result `claude -p
+--output-format json` signs off with, not just what to bill: `terminal_reason`
+and `api_error_status` say why the run ended, `model_usage` (read off the
+result's own `modelUsage`, the one camelCase field in an otherwise snake_case
+object) breaks cost down per model, and `permission_denials` is the tool calls
+the harness refused before the worker ever saw a prompt. `watchChild`
+(`src/dispatch.js`) reads `api_error_status` off that result to pause a
+profile on a 401/429, falling back to scanning the raw log tail only for a log
+with no JSON result line to read a status from at all.
 
 ## The seams that keep it portable
 

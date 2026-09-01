@@ -8,7 +8,7 @@ import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, 
 import { claim, release, listLocks, lockBeatAt, staleBaseSha, remoteName } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, pidFile, readPidFile, pidAlive, recordExit, clearExit, HOOK_SETTINGS_VAR } from './board.js';
 import { workerHookSettings } from './init.js';
-import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle } from './model.js';
+import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, authPauseReason, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted, trackFanout } from './track.js';
 import { GhError } from './gh.js';
@@ -656,6 +656,14 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       continue;
     }
     if (dryRun) { summary.reclaimed.push({ number: t.number, outcome, dry: true }); continue; }
+    // A pid-mode attempt has no job record to name its session (line ~593 above does that for a bg
+    // one) — but its own log ends the same way, so a `crashed`/`timed_out` row gets session and cost
+    // the way a `--bg` row has since #137, and now `terminal_reason` too (#155).
+    if (a.host === ctx.host && a.pid && !job && a.log) {
+      let session = null;
+      try { session = sessionUpdate(a, parseSessionLog(tailLog(ctx, a.log, 200_000))); } catch { /* unreadable log */ }
+      if (session) Object.assign(a, session);
+    }
     // failAttempt saves the same record, so a row written off in the tick that named its session
     // costs one write, not two — and goes to its post-mortem carrying the session.
     const result = await failAttempt(ctx, t, runRec, outcome, `${outcome} after ${Math.round(secondsSince(a.started_at))}s`);
@@ -1005,22 +1013,27 @@ function watchChild(ctx, number, k, child, children, state, profileName, log) {
       const runRec = await loadRun(ctx, number);
       const a = runRec.run.attempts.find((x) => x.attempt === k);
       if (!a) return;
-      // `claude -p --output-format json` signs off with the session id and what the run cost.
-      // A malformed log must never cost us the reclaim below, so this is its own try.
+      // `claude -p --output-format json` signs off with the session id, what the run cost, and —
+      // since #155 — why it ended. A malformed log must never cost us the reclaim below, so this is
+      // its own try.
       const logText = tailLog(ctx, a.log, 200_000);
+      const parsed = parseSessionLog(logText);
       let session = null;
-      try { session = sessionUpdate(a, parseSessionLog(logText)); } catch { /* unreadable log */ }
+      try { session = sessionUpdate(a, parsed); } catch { /* unreadable log */ }
       if (session) Object.assign(a, session);
+      // `api_error_status` on the result says outright what the log-tail regex below only guessed
+      // at; the regex now runs only when there was no JSON result line to read a status from.
+      const pauseReason = authPauseReason(parsed, logText.slice(-4000));
+      if (pauseReason) {
+        state.profile_paused_until[profileName] = new Date(Date.now() + ctx.cfg.dispatch.auth_pause * 1000).toISOString();
+        writeState(ctx.root, state);
+        log(`#${number}: profile ${profileName} paused (${pauseReason})`);
+      }
       if (a.ended_at) { // the worker finished properly — only the session numbers are new
         if (session) { await saveRun(ctx, number, runRec); log(`#${number}: attempt ${k} ${formatSession(a)}`); }
         return;
       }
       a.exit_code = code;
-      const logTail = logText.slice(-4000);
-      if (/429|rate limit|quota|401|unauthorized|not logged in/i.test(logTail)) {
-        state.profile_paused_until[profileName] = new Date(Date.now() + ctx.cfg.dispatch.auth_pause * 1000).toISOString();
-        writeState(ctx.root, state);
-      }
       const t = await getTask(ctx, number);
       const r = await failAttempt(ctx, t, runRec, 'protocol_violation', `worker exited (${code}) without a terminal verb`, { kill: false });
       log(`#${number}: attempt ${k} exited ${code} without complete/block → ${r}${session ? ` (${formatSession(a)})` : ''}`);
