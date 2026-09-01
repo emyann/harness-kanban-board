@@ -5,7 +5,7 @@ import {
   parseRunComment, serializeRunComment, emptyRun, openAttempt, parseResultComment, serializeResultComment,
   blockerDone, computeReady, promoteDecision, pathsOverlap, sortForDispatch, slugify, lockRef, lockRefPath, hashReason,
   normalizeHookInput, stripFrontmatter, sessionUpdate, parseRepoSpecs, boardKey, uniqueKeys, shouldNudgeOnStop, deadAtRecheck,
-  pathOverlapGuard, pathHolders, pathCollisions, attemptIdle,
+  pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, parsePriorityFlag, parseScheduledAtFlag,
 } from '../src/model.js';
 
 test('body block: round trip and defaults', () => {
@@ -254,4 +254,39 @@ test('misc helpers', () => {
   assert.equal(lockRefPath(12, 3), 'kb/locks/12/3');
   assert.equal(hashReason('Missing  AWS creds'), hashReason('missing aws creds'));
   assert.notEqual(hashReason('a'), hashReason('b'));
+});
+
+test('parsePriorityFlag: an integer parses, anything else names the flag and the band (#243)', () => {
+  assert.deepEqual(parsePriorityFlag('3'), { ok: true, value: 3 });
+  assert.deepEqual(parsePriorityFlag('0'), { ok: true, value: 0 });
+  assert.deepEqual(parsePriorityFlag('-1'), { ok: true, value: -1 });
+
+  for (const bad of ['abc', 'NaN', '', '  ', '2.5', '3abc', 'Infinity']) {
+    const r = parsePriorityFlag(bad);
+    assert.equal(r.ok, false, `expected ${JSON.stringify(bad)} to be rejected`);
+    assert.match(r.error, /--priority/);
+    assert.match(r.error, /unfiled/);
+    assert.match(r.error, new RegExp(JSON.stringify(bad).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  // never silently floored
+  assert.equal(parsePriorityFlag('2.5').ok, false);
+});
+
+test('parseScheduledAtFlag: an ISO instant parses, junk names the flag and the expected shape (#243)', () => {
+  const ok = parseScheduledAtFlag('2026-09-02T00:00:00Z', new Date('2026-01-01T00:00:00Z'));
+  assert.equal(ok.ok, true);
+  assert.equal(ok.value, '2026-09-02T00:00:00Z');
+  assert.equal(ok.warning, null);
+
+  for (const bad of ['nonsense', '', 'not-a-date']) {
+    const r = parseScheduledAtFlag(bad);
+    assert.equal(r.ok, false, `expected ${JSON.stringify(bad)} to be rejected`);
+    assert.match(r.error, /--scheduled-at/);
+    assert.match(r.error, /ISO/);
+  }
+
+  // a past instant is a warning, not a refusal
+  const past = parseScheduledAtFlag('2020-01-01T00:00:00Z', new Date('2026-01-01T00:00:00Z'));
+  assert.equal(past.ok, true);
+  assert.match(past.warning, /past/);
 });

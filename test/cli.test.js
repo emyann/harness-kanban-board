@@ -225,6 +225,71 @@ test('hkb edit <n>... with no field flag is a usage error', async () => {
   await assert.rejects(() => main(['edit', '50']), (e) => e.exitCode === 2);
 });
 
+// ---------- hkb edit rejects a non-numeric --priority / unparseable --scheduled-at (#243) ----------
+
+function setupEditBoard(t, tasks) {
+  const gh = new FakeGh();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-edit-validate-'));
+  fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
+  for (const task of tasks) gh.addIssue(kbIssue(task));
+  const cwd = process.cwd();
+  const write = process.stdout.write.bind(process.stdout);
+  let printed = '';
+  process.stdout.write = (s) => { printed += s; return true; };
+  const restore = gh.install();
+  process.chdir(dir);
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const run = async (...argv) => { printed = ''; await main(argv); return printed; };
+  return { gh, run };
+}
+
+test('hkb edit <n> --priority abc exits 2 naming the flag and the band, writes nothing', async (t) => {
+  const { run } = setupEditBoard(t, [{
+    number: 51, title: 'edit me', status: 'todo', agent: 'claude', body: SPEC,
+    kb: { paths: ['src/old.js'], goal: 'old goal', priority: 1 },
+  }]);
+  await assert.rejects(
+    () => main(['edit', '51', '--priority', 'abc']),
+    (e) => e.exitCode === 2 && /--priority/.test(e.message) && /unfiled/.test(e.message) && /abc/.test(e.message),
+  );
+  const shown = JSON.parse(await run('show', '51', '--json'));
+  assert.equal(shown.kb.priority, 1, 'priority left exactly as it was — never NaN, never null');
+});
+
+test('hkb edit <n> --priority 2.5 is rejected rather than floored', async (t) => {
+  const { run } = setupEditBoard(t, [{
+    number: 52, title: 'edit me', status: 'todo', agent: 'claude', body: SPEC, kb: { priority: 1 },
+  }]);
+  await assert.rejects(() => main(['edit', '52', '--priority', '2.5']), (e) => e.exitCode === 2 && /--priority/.test(e.message));
+  const shown = JSON.parse(await run('show', '52', '--json'));
+  assert.equal(shown.kb.priority, 1);
+});
+
+test('hkb edit <n> --scheduled-at nonsense exits 2 naming the flag and the expected shape, writes nothing', async (t) => {
+  const { run } = setupEditBoard(t, [{
+    number: 53, title: 'edit me', status: 'todo', agent: 'claude', body: SPEC, kb: { scheduled_at: null },
+  }]);
+  await assert.rejects(
+    () => main(['edit', '53', '--scheduled-at', 'nonsense']),
+    (e) => e.exitCode === 2 && /--scheduled-at/.test(e.message) && /ISO/.test(e.message) && /nonsense/.test(e.message),
+  );
+  const shown = JSON.parse(await run('show', '53', '--json'));
+  assert.equal(shown.kb.scheduled_at, null);
+});
+
+test('a multi-number hkb edit validates its flags once, before touching the first card', async (t) => {
+  const { run } = setupEditBoard(t, [
+    { number: 54, title: 'first', status: 'todo', agent: 'claude', body: SPEC, kb: { priority: 1 } },
+    { number: 55, title: 'second', status: 'todo', agent: 'claude', body: SPEC, kb: { priority: 1 } },
+  ]);
+  await assert.rejects(() => main(['edit', '54', '55', '--priority', 'nope']), (e) => e.exitCode === 2);
+  const first = JSON.parse(await run('show', '54', '--json'));
+  const second = JSON.parse(await run('show', '55', '--json'));
+  assert.equal(first.kb.priority, 1, 'the first card is untouched — validation ran before any write');
+  assert.equal(second.kb.priority, 1);
+});
+
 // ---------- every `hkb edit` line hkb groom suggests is a command that runs ----------
 
 /** Tokenize a suggested shell line: splits on whitespace, "double quotes" kept together and stripped. */

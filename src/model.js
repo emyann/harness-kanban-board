@@ -571,6 +571,37 @@ export function lastSignalAt(attempt, refBeatAt = null) {
 
 export function priorityOf(task) { return Number(task.kb?.priority ?? 0) || 0; }
 
+export const PRIORITY_BAND = '0 unfiled · 1 normal · 2 next up · 3 urgent';
+
+/**
+ * `hkb edit --priority` (#243): must be an integer, no silent `NaN` → `null`. A float is rejected
+ * rather than floored, since "3.5" is more likely a typo than an intentional half-priority.
+ */
+export function parsePriorityFlag(raw) {
+  if (typeof raw === 'string' && raw.trim() === '') {
+    return { ok: false, error: `--priority must be an integer (${PRIORITY_BAND}), got ${JSON.stringify(raw)}` };
+  }
+  const n = Number(raw);
+  if (!Number.isInteger(n)) {
+    return { ok: false, error: `--priority must be an integer (${PRIORITY_BAND}), got ${JSON.stringify(raw)}` };
+  }
+  return { ok: true, value: n };
+}
+
+/**
+ * `hkb edit --scheduled-at` (#243): must be a string `computeReady` can parse as an instant.
+ * A timestamp in the past is not refused — it is a legal, if likely unintended, no-op — so it comes
+ * back with a `warning` instead of an `error` for the caller to print.
+ */
+export function parseScheduledAtFlag(raw, now = new Date()) {
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) {
+    return { ok: false, error: `--scheduled-at must be a valid ISO instant (e.g. "2026-09-02T00:00:00Z"), got ${JSON.stringify(raw)}` };
+  }
+  const warning = d.getTime() < now.getTime() ? `--scheduled-at ${raw} is in the past — this card is ready immediately, not scheduled` : null;
+  return { ok: true, value: raw, warning };
+}
+
 /** Sort ready tasks: higher priority first, then oldest issue first. */
 export function sortForDispatch(tasks) {
   return [...tasks].sort((a, b) => priorityOf(b) - priorityOf(a) || a.number - b.number);
