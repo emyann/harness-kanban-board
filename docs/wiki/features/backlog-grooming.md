@@ -9,7 +9,7 @@ covers:
   - path: src/model.js
     sha: 96d73c3e1721735a52e0ca67752476040135d04a
   - path: src/cli.js
-    sha: a2f7071eb46efdf7682bcd93f5f40db6347d9dc0
+    sha: c349ca9283acb8f7899354061cd7b9cdd7cefeef
   - path: src/tasks.js
     sha: f67ad46d8fdf8791f2477e0c55db8e2433a084b8
   - path: src/doctor.js
@@ -20,7 +20,7 @@ covers:
     sha: 4fc2dc2db984033fe8801e8d28b50e8e68fefddc
   - path: skills/kanban/references/protocol.md
     sha: 771770f1e8c420d821bf81c34bd63cd9dbc23d87
-generated_at_commit: e69eedf
+generated_at_commit: 108bd15
 last_refreshed: 2026-09-01
 related: [features/planning-commands, features/operator-seat, features/path-overlap-guard, features/tracks]
 ---
@@ -114,20 +114,31 @@ token argument for the shape is `bodyText`, which is attached only to cards that
 **once**, judges only `judgment.cards` and `judgment.pairs`, proposes one table grouped by cluster, and
 then stops. Nothing is applied until a human says yes per row. What the approved batch may execute is
 deliberately short — `hkb comment`, `hkb create --triage --blocked-by`, `hkb link`, and one `hkb promote`
-of cards that are already in triage. Archive, supersede, close-as-duplicate and every `kb`-block edit are
-**handed back as pre-staged commands** rather than run, because the verbs that would make them safe do not
-exist yet (see the gaps below).
+of cards that are already in triage. `hkb edit` now exists (below) but the procedure does not yet route
+`specify`-flagged findings through it — a body/`kb` rewrite still goes through the `/kanban:specify` PATCH
+recipe. Archive, supersede and close-as-duplicate stay **handed back as pre-staged commands** rather than
+run, because the verbs that would make them safe do not exist yet (see the gaps below).
 
 This is also the one sanctioned exception to the operator's "never promote" rule: the human's per-row yes
 is what makes the promotion theirs rather than the agent's.
 
+## `hkb edit` — the write half of the kb block
+
+`hkb edit <n>... [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]`
+(`src/cli.js`, `case 'edit'`) sets exactly the kb keys a flag names, spreading
+them over the task's existing `kb` object and leaving every other key as read,
+then writes the block back with `updateBody` (`src/tasks.js:330`) — the same
+PATCH-the-body-block path `/kanban:specify` uses by hand. It takes multiple
+task numbers, like `promote`/`archive`, because `priority_inversion`'s
+suggestion can name more than one blocker at once
+(`src/model.js:901`). `test/cli.test.js` pins it two ways: one test asserts a
+partial edit changes only the keys named, and another runs every `hkb edit`
+line a groomed board actually suggests (`malformed_kb`, `no_paths`,
+`broad_path`, `priority_inversion`) straight through `hkb edit` and asserts
+none of them throw a usage error.
+
 ## Known gaps
 
-- **`hkb edit` does not exist.** Four finding kinds (`no_paths`, `malformed_kb`, `priority_inversion`,
-  `broad_path`) emit `suggests` strings of the form `hkb edit <n> --paths …`, but there is no
-  `case 'edit'` in `src/cli.js`. The report currently tells a reader to run a verb the CLI refuses —
-  a direct violation of "every error says what to do next". The skill section works around it by never
-  invoking `edit`; the fix is the verb.
 - **`hkb promote --triage-only` does not exist.** The design called for a flag that skips a card not in
   triage without writing; `promote` takes numbers only, so the procedure leans on reading the `forced`
   line in the output and treating it as a stop-and-report.
