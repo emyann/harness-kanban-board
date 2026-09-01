@@ -7,11 +7,11 @@ audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: 2369b0d3a0f5d1363efffa8cc37fd2e47e018155
+    sha: edc60d49312690f0691119e2a3396aa3176fd0c7
   - path: src/gh.js
     sha: b728c07d7f5e7bfd29e3dc4c2e0e2786d29522ee
   - path: src/model.js
-    sha: 23bb576d15068653b10c068ed3c9f014f0353664
+    sha: 6717b59327df4d7d9bc175b8146081696cec1bbb
   - path: src/tasks.js
     sha: 2faa63591dbb3f96fcb3747141f9e4d42ae24736
   - path: src/lock.js
@@ -19,19 +19,19 @@ covers:
   - path: src/lifecycle.js
     sha: 3938c82f3e181fb260fc54bb2f3150074459e224
   - path: src/dispatch.js
-    sha: fb85767e0b4b962930ee74c608c5bb0e1bd7ae4f
+    sha: ce2fcdb53caa648426f64509294e3795a005b5cc
   - path: src/context.js
     sha: ab7afc4eb5158a879ea1700221892229329dce64
   - path: src/hook.js
-    sha: 59a7921c49c6f28f9778b43ae4fce6d3280d567c
+    sha: 9c279d75961f372331295d9783dde522e4e175b2
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/board.js
-    sha: 656fc1ff76b6cf1909ccacc5c69899ba24fb4010
+    sha: 05c992709b2d3d1d3ffd453dbbbd6b647de30fad
   - path: src/doctor.js
-    sha: 726a4571cf94906b8f54183c2b3223e125ad6149
-generated_at_commit: 39d9c05
-last_refreshed: 2026-08-29
+    sha: 80ed434085da105bdd1c293146fecefe77795bc6
+generated_at_commit: f2d9b40
+last_refreshed: 2026-09-01
 related: [concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
 
@@ -67,7 +67,12 @@ rejected lease push is `LOCK_LOST` (exit 3) and the worker must stop.
 `src/dispatch.js` is a no-LLM loop. Each tick re-reads the whole board (one
 GraphQL query) and derives every action from it: replay unsent writes,
 reclaim crashed work, reap finished agents, promote cards whose blockers are
-done, then claim and spawn workers under guard rails. Its in-process memory
+done, then claim and spawn workers under guard rails, *ready* cards
+highest-`kb.priority` first and oldest issue first within a tie
+(`sortReady` in `src/model.js`). The number itself carries no enforced
+scale — `README.md` names a **priority band** (`0` unfiled default · `1`
+normal · `2` next up · `3` urgent) so two filers share a ruler, but
+`sortReady` only ever compares the raw integer. Its in-process memory
 is only an optimization — since the 2026-08-27 outage it drops its own caches
 and ultimately exits (code 4) when claims stop resolving, because a fresh
 process rebuilt from the board is always correct. Judgment (what to build,
@@ -83,6 +88,16 @@ expires, and say when npm has moved past the hkb running it
 (`tokenExpiryNotice`/`versionNotice`, `src/doctor.js`; see
 `features/update-notice`). Neither is a decision and neither can fail a tick —
 an unreachable probe is silent and simply retried.
+
+Modules load once, at process start, so a loop that has been up for hours
+keeps running the code it imported even after a merge to `main` changes the
+checkout the global `hkb` symlinks into (#140). Every tick, `loop` compares
+`installStamp()` — the checkout's own `git rev-parse HEAD` when it has one,
+the package version otherwise, both read fresh off disk, never cached — against
+the stamp it captured at startup. A mismatch is exit 4, the same code the
+self-heal ladder above uses: `hkb: this loop is running <old>, the installed
+hkb is <new> — restarting`. It is a local `git` call, not a GitHub read, so a
+board where the loop is current pays nothing per tick for it.
 
 ## Workers are any harness
 
@@ -150,7 +165,20 @@ those from the other end. It has already matched the background job to decide
 whether the attempt is alive, and that job names a record on disk;
 `jobSessionUpdate` (`src/jobs.js`) turns it into the same fields, one tick after
 the launch (`src/dispatch.js`). Blanks only: a row a verb has stamped is left
-exactly as it is, and a resumed job's record is never half-merged into one.
+exactly as it is, and a resumed job's record is never half-merged into one. A
+pid-mode attempt has no job record, but the same worker log `parseSessionLog`
+already reads for session and cost, so the tick backfills it from there too,
+the tick just before it calls `failAttempt` (`src/dispatch.js`).
+
+`parseSessionLog` (`src/model.js`) reads the whole result `claude -p
+--output-format json` signs off with, not just what to bill: `terminal_reason`
+and `api_error_status` say why the run ended, `model_usage` (read off the
+result's own `modelUsage`, the one camelCase field in an otherwise snake_case
+object) breaks cost down per model, and `permission_denials` is the tool calls
+the harness refused before the worker ever saw a prompt. `watchChild`
+(`src/dispatch.js`) reads `api_error_status` off that result to pause a
+profile on a 401/429, falling back to scanning the raw log tail only for a log
+with no JSON result line to read a status from at all.
 
 ## The seams that keep it portable
 

@@ -15,7 +15,7 @@ import { projectBinRel } from './init.js';
 import { getTask, loadRun, latestResult, parentResults, addComment } from './tasks.js';
 import { heartbeat, complete, block, unblock, requestReview, createTask, linkTask, withOutbox } from './lifecycle.js';
 import { readVersion, terminalArgv } from './cli.js';
-import { BLOCK_KINDS } from './model.js';
+import { BLOCK_KINDS, isTrackRoot } from './model.js';
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const usage = (msg) => { const e = new Error(msg); e.exitCode = 2; return e; };
@@ -73,7 +73,7 @@ export const TOOLS = [
       const { run } = await loadRun(ctx, n);
       const result = await latestResult(ctx, n);
       const parents = await parentResults(ctx, t);
-      return { ...t, run, result, parents };
+      return { ...t, run, result, parents, track: isTrackRoot(t, ctx.cfg) };
     },
   },
   {
@@ -87,11 +87,14 @@ export const TOOLS = [
   {
     name: 'kanban_complete',
     title: 'Finish the task',
-    description: 'The terminal verb for work that is done: closes the attempt, releases the lock, writes the result comment and moves the task to done — or to review while its pull request is still open. Exactly one terminal verb per attempt.',
-    properties: { task: TASK, summary: SUMMARY, metadata: METADATA, artifacts: ARTIFACTS },
+    description: 'The terminal verb for work that is done: closes the attempt, releases the lock, writes the result comment and moves the task to done — or to review while its pull request is still open. Refuses to land in done with no PR found (records a protocol_violation instead) unless no_pr names why this card needed none. Exactly one terminal verb per attempt.',
+    properties: {
+      task: TASK, summary: SUMMARY, metadata: METADATA, artifacts: ARTIFACTS,
+      no_pr: { type: 'string', description: 'Only when this card genuinely needed no pull request: why. Without it, completing with no PR found refuses and records a protocol_violation.' },
+    },
     required: ['summary'],
     replay: 'complete',
-    run: (ctx, n, a) => complete(ctx, n, { summary: a.summary, metadata: a.metadata, artifacts: a.artifacts }),
+    run: (ctx, n, a) => complete(ctx, n, { summary: a.summary, metadata: a.metadata, artifacts: a.artifacts, noPr: a.no_pr !== undefined, noPrReason: a.no_pr }),
   },
   {
     name: 'kanban_block',

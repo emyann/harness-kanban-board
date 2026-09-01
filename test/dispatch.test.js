@@ -323,6 +323,30 @@ test('a task past max_runtime is timed_out, not merely reclaimed', async (t) => 
   assert.equal(h.gh.runOf(7).attempts[0].outcome, 'timed_out');
 });
 
+// #155: a pid-mode attempt the tick writes off as crashed/timed_out has a log of its own, so it
+// gets session, cost and `terminal_reason` the way a `--bg` row has since #137.
+test('a crashed pid-mode attempt gets session and terminal_reason backfilled from its own log', async (t) => {
+  const h = harness({ dispatch: { stale_after: 3600 } });
+  t.after(h.cleanup);
+  const logRel = '.kanban/logs/7-1.log';
+  fs.mkdirSync(path.dirname(path.join(h.root, logRel)), { recursive: true });
+  fs.writeFileSync(path.join(h.root, logRel), JSON.stringify({
+    type: 'result', session_id: 'sid-crashed', total_cost_usd: 0.12, num_turns: 5, duration_ms: 12_000,
+    terminal_reason: 'max_turns',
+  }) + '\n');
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(600), heartbeat_at: ago(5), pid: 4_000_000, log: logRel }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.gh.beat(7, 1, ago(1));
+
+  const s = await h.tick({ max: 0 });
+
+  assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'crashed' }]);
+  const a = h.gh.runOf(7).attempts[0];
+  assert.equal(a.session_id, 'sid-crashed');
+  assert.equal(a.terminal_reason, 'max_turns');
+  assert.equal(a.total_cost_usd, 0.12);
+});
+
 test('failures past max_retries give up: blocked + kb:needs-human, no retry', async (t) => {
   const h = harness({ dispatch: { stale_after: 60 } });
   t.after(h.cleanup);
@@ -352,6 +376,46 @@ test('failures past max_retries give up: blocked + kb:needs-human, no retry', as
   assert.equal(last.profile, 'dispatcher');
   assert.match(last.reason, /3 consecutive failures \(limit 2\)/);
   assert.equal(s.claimed.length, 0); // and it is not picked up again
+});
+
+test('protocol_violation with an open PR: the work landed, so the reason is recorded but the retry budget is not spent', async (t) => {
+  const h = bgHarness({
+    jobs: [{ kind: 'background', id: 'j7', pid: 1007, name: 'kb #7 · task', cwd: '/repo/.claude/worktrees/kb-7-1', state: 'done', status: 'idle' }],
+  });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'test-host', bg: true, job: 'j7', wt: 'kb-7-1', started_at: ago(120), heartbeat_at: ago(5) }]);
+  h.gh.addIssue(kbIssue({
+    number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run,
+    prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }],
+  }));
+  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'protocol_violation' }]);
+  const saved = h.gh.runOf(7);
+  assert.equal(saved.attempts[0].outcome, 'protocol_violation');
+  assert.equal(saved.attempts[0].pr, 42, 'the row names the PR the work landed on');
+  assert.equal(saved.failures, 0, 'no verb but an open PR is not a failure — nothing went wrong twice');
+  assert.equal(h.gh.statusOf(7), 'ready'); // the active_pr guard sends it to review on the next tick
+});
+
+test('protocol_violation with no PR: nothing to show, so it counts against the retry budget', async (t) => {
+  const h = bgHarness({
+    jobs: [{ kind: 'background', id: 'j7', pid: 1007, name: 'kb #7 · task', cwd: '/repo/.claude/worktrees/kb-7-1', state: 'done', status: 'idle' }],
+  });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'test-host', bg: true, job: 'j7', wt: 'kb-7-1', started_at: ago(120), heartbeat_at: ago(5) }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'protocol_violation' }]);
+  const saved = h.gh.runOf(7);
+  assert.equal(saved.attempts[0].outcome, 'protocol_violation');
+  assert.equal(saved.attempts[0].pr, undefined, 'no PR to name');
+  assert.equal(saved.failures, 1);
 });
 
 test('active_pr guard: an open PR sends a ready task to review, even with no slot', async (t) => {
@@ -677,6 +741,36 @@ test('request-changes keeps the reviewer\'s note in full, unlike the other termi
   assert.equal(h.gh.runOf(7).attempts.at(-1).reason, longReason, 'the attempt row must not be truncated to 400 chars');
 });
 
+// ---------- #195: a long-lived loop must not judge a card on a comments cache from an earlier tick ----------
+
+test('a request-changes from another process between ticks is honoured, not bounced by the loop\'s stale comments cache', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, started_at: ago(900), ended_at: ago(600), outcome: 'review_requested', summary: 'ready', pr: 42 }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', isDraft: true, headRefName: 'worktree-kb-7-1' }] }));
+
+  // tick 1: no changes_requested row yet, so the active_pr guard bounces #7 to review — and the
+  // loop's ctx now has #7's comments (only the review_requested row) memoized.
+  const s1 = await h.tick();
+  assert.deepEqual(s1.guarded, [{ number: 7, guard: 'active_pr', pr: 42 }]);
+  assert.equal(h.gh.statusOf(7), 'review');
+
+  // another process — a reviewer's own `hkb request-changes`, its own ctx and cache — sends it back.
+  const otherCtx = { ...h.ctx, _cache: {}, caps: {} };
+  const sentBack = await requestChanges(otherCtx, 7, { reason: 'rename the flag' });
+  assert.equal(sentBack.status, 'ready');
+
+  // tick 2, same long-lived loop ctx: judging #7 on tick 1's cached comments would still see only
+  // the review_requested row and guard it straight back to review — the exact bounce #153 removed
+  // and #195 observed on hkb's own board.
+  const s2 = await h.tick();
+
+  assert.deepEqual(s2.guarded, [], 'the changes_requested row written by another process must be seen');
+  assert.deepEqual(s2.claimed.map((c) => c.number), [7]);
+  assert.equal(s2.claimed[0].continues_pr, 42);
+  assert.equal(h.gh.statusOf(7), 'running');
+});
+
 test('withoutWorktreeFlag drops the harness\'s own checkout flag and nothing else', () => {
   assert.deepEqual(
     withoutWorktreeFlag(['claude', '--bg', '--worktree', 'kb-7-2', '--permission-mode', 'dontAsk', 'the prompt']),
@@ -999,6 +1093,63 @@ test('docs/wiki/log.md merges by union: two branches that both append to it neve
   const merged = fs.readFileSync(path.join(root, 'docs', 'wiki', 'log.md'), 'utf8');
   assert.match(merged, /entry from PR A/);
   assert.match(merged, /entry from PR B/);
+});
+
+// ---------- a root with children is a track by default (#161) ----------
+
+/** The default harness profiles plus a track profile, so inference has somewhere to send a root. */
+const withTrack = () => ({
+  claude: { mode: 'process', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] },
+  'claude-track': { mode: 'process', track: true, track_agents: ['claude', 'claude-track'], max_in_progress: 1, model: null, allowed_tools: [], launch: ['true'] },
+});
+
+test('a root nobody adopted is dispatched as one track, and its children are left to it', async (t) => {
+  const h = harness({ profiles: withTrack() });
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 2, status: 'ready', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 3, status: 'todo', agent: 'claude', blockedBy: [1, 2] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.tracks.map((x) => [x.root, x.ok, x.mode, x.profile, x.nodes]), [[3, true, 'inferred', 'claude-track', [1, 2]]]);
+  assert.deepEqual(s.claimed, [], 'both leaves belong to the track: no cold session for either');
+  assert.deepEqual(s.skipped.map((x) => x.why), ['held for track #3', 'held for track #3']);
+  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/3/1'], 'one lock: the root');
+  assert.equal(h.gh.statusOf(3), 'running');
+});
+
+test('kb:no-track sends the same graph back to node dispatch, one cold session per leaf', async (t) => {
+  const h = harness({ profiles: withTrack() });
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 2, status: 'ready', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 3, status: 'todo', agent: 'claude', labels: [L.noTrack], blockedBy: [1, 2] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.tracks, []);
+  assert.deepEqual(s.claimed.map((c) => [c.number, c.profile]), [[1, 'claude'], [2, 'claude']]);
+  assert.equal(h.gh.statusOf(3), 'todo');
+});
+
+test('a running track counts against the track profile\'s cap, not against its card\'s label', async (t) => {
+  const h = harness({ profiles: withTrack() });
+  t.after(h.cleanup);
+  // #3 is already running its inferred track over #1; #6 is a second root that would like one too
+  const alive = runWith([{ attempt: 1, profile: 'claude-track', host: 'test-host', started_at: ago(60), heartbeat_at: ago(5), pid: process.pid, track: true, track_mode: 'inferred', track_nodes: [1] }]);
+  h.gh.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 3, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, blockedBy: [1], run: alive }));
+  h.gh.refs.set('refs/kb/locks/3/1', 'a'.repeat(40));
+  h.gh.addIssue(kbIssue({ number: 5, status: 'ready', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 6, status: 'todo', agent: 'claude', blockedBy: [5] }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.tracks.map((x) => [x.root, x.ok, x.why]), [[6, false, 'profile claude-track at cap']]);
+  // and the refusal is the ordinary fallback: #5 goes out as a cold node rather than waiting
+  assert.deepEqual(s.claimed.map((c) => [c.number, c.profile]), [[5, 'claude']]);
+  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/3/1', 'refs/kb/locks/5/1']);
 });
 
 test('a dry run reports what it would do and writes nothing', async (t) => {

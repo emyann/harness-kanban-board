@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, getTask, enableAutoMerge, branchProtection } from './tasks.js';
 import { claim, release, listLocks, lockBeatAt, staleBaseSha, remoteName } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, pidFile, readPidFile, pidAlive, recordExit, clearExit, HOOK_SETTINGS_VAR } from './board.js';
-import { workerHookSettings } from './init.js';
-import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle } from './model.js';
+import { workerHookSettings, PKG_ROOT, packageVersion } from './init.js';
+import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, authPauseReason, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted, trackFanout } from './track.js';
 import { GhError } from './gh.js';
@@ -416,19 +416,35 @@ export function dropCaches(ctx) {
   ctx.caps = {};
 }
 
+/**
+ * Forget every card's comments memo at the top of a tick: `base` (the branch sha) and `mergeGate`
+ * are legitimately per-process for the life of the loop, but `comments:<n>` is a run record, and a
+ * long-lived loop must not judge card #n on comments it fetched three ticks ago. A worker's
+ * `finish`/`block`, an operator's `request-changes`/`unblock`, all write from another process and
+ * are otherwise invisible to a loop that already read #n once (see #195).
+ */
+export function dropCommentCaches(ctx) {
+  for (const key of Object.keys(ctx._cache)) if (key.startsWith('comments:')) delete ctx._cache[key];
+}
+
 // ---------- tick ----------
 
 async function failAttempt(ctx, task, runRec, outcome, note, { kill = true } = {}) {
   const a = openAttempt(runRec.run);
+  // `protocol_violation` means "no terminal verb landed" — but a worker that pushed and opened a
+  // PR before losing its verb did the work; only the report failed. Stamping the PR onto the row
+  // is what tells that apart from a genuine no-show (#116), and it must not spend the retry budget.
+  const openPr = outcome === 'protocol_violation' ? (task.prs || []).find((p) => p.state === 'OPEN') : null;
   if (a) {
     if (kill && a.host === ctx.host && a.job && !a.job_stopped) { stopJob(a.job); a.job_stopped = true; }
     else if (kill && a.host === ctx.host && a.pid) killPid(a.pid);
     a.ended_at = nowIso();
     a.outcome = outcome;
     if (note) a.reason = String(note).slice(0, 300);
+    if (openPr) a.pr = openPr.number;
     await release(ctx, task.number, a.attempt);
   }
-  runRec.run.failures = (runRec.run.failures || 0) + 1;
+  if (!openPr) runRec.run.failures = (runRec.run.failures || 0) + 1;
   runRec.run.last_error = note || outcome;
   const limit = task.kb.max_retries ?? ctx.cfg.dispatch.failure_limit;
   if (runRec.run.failures > limit) {
@@ -446,6 +462,7 @@ async function failAttempt(ctx, task, runRec, outcome, note, { kill = true } = {
 
 export async function tick(ctx, { max = Infinity, dryRun = false, children = null, profiles = null, log = () => {} } = {}) {
   ctx.requireBoard();
+  dropCommentCaches(ctx);
   const d = ctx.cfg.dispatch;
   const summary = { reconciled: [], reclaimed: [], promoted: [], guarded: [], claimed: [], spawn_failed: [], held: [], skipped: [], tracks: [], reaped: [], self_heal: [], auto_merge: [], fatal: null };
   const pog = pathOverlapGuard(ctx.cfg);
@@ -639,6 +656,14 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       continue;
     }
     if (dryRun) { summary.reclaimed.push({ number: t.number, outcome, dry: true }); continue; }
+    // A pid-mode attempt has no job record to name its session (line ~593 above does that for a bg
+    // one) — but its own log ends the same way, so a `crashed`/`timed_out` row gets session and cost
+    // the way a `--bg` row has since #137, and now `terminal_reason` too (#155).
+    if (a.host === ctx.host && a.pid && !job && a.log) {
+      let session = null;
+      try { session = sessionUpdate(a, parseSessionLog(tailLog(ctx, a.log, 200_000))); } catch { /* unreadable log */ }
+      if (session) Object.assign(a, session);
+    }
     // failAttempt saves the same record, so a row written off in the tick that named its session
     // costs one write, not two — and goes to its post-mortem carrying the session.
     const result = await failAttempt(ctx, t, runRec, outcome, `${outcome} after ${Math.round(secondsSince(a.started_at))}s`);
@@ -696,7 +721,13 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   const runningNow = tasks.filter((t) => t.status === 'running');
   const sessions = runningNow.filter((t) => !coveredBy.has(t.number));
   const perProfile = {};
-  for (const t of sessions) perProfile[t.agent] = (perProfile[t.agent] || 0) + 1;
+  // a running *track* spends the track profile's slot, not its card's: an inferred root keeps
+  // `kb:agent:claude` while its session is the claude-track launch, and the cap that has to hold is
+  // the one whose launch is running.
+  for (const t of sessions) {
+    const p = (t.status === 'running' && plan.profiles.get(t.number)) || t.agent;
+    perProfile[p] = (perProfile[p] || 0) + 1;
+  }
   let slots = Math.max(0, d.max_in_progress - sessions.length);
   let budget = Math.min(max, slots);
   const ready = sortForDispatch(tasks.filter((t) => t.status === 'ready'));
@@ -733,12 +764,14 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   const claimedTracks = new Set(); // a root taken here is not also dispatched as a node below
   for (const cand of plan.candidates) {
     const t = cand.root;
-    const note = (why, extra = {}) => { summary.tracks.push({ root: t.number, nodes: cand.track.nodes.map((x) => x.number), ok: false, why, ...extra }); };
+    const note = (why, extra = {}) => { summary.tracks.push({ root: t.number, nodes: cand.track.nodes.map((x) => x.number), ok: false, why, mode: cand.mode || 'none', ...extra }); };
     if (!cand.ok) { note(cand.why); continue; }
     if (touchedRecently(t.number)) { note('touched recently (stale-read guard)'); continue; }
     if (budget <= 0) { note('no slot'); continue; }
     if ((state.spawned_today || 0) >= d.daily_spawn_cap) { note(`daily spawn cap ${d.daily_spawn_cap}`); continue; }
-    const profileName = t.agent;
+    // an inferred track runs on the board's track profile while the card keeps its own agent label:
+    // the label is what node dispatch reads if this ever falls back, so the decision never rewrites it.
+    const profileName = cand.profile || t.agent;
     const profile = ctx.cfg.profiles[profileName];
     if (!profile) { note(`unknown profile ${profileName} — \`hkb init --profiles ${profileName}\` adds it to board.json`); continue; }
     if (!dispatchable(profileName)) { note(`profile ${profileName} is not dispatched from this host`); continue; }
@@ -762,10 +795,10 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     const nodes = cand.track.nodes.map((x) => x.number);
     const k = runRec.run.attempts.length + 1;
     if (dryRun) {
-      summary.tracks.push({ root: t.number, nodes, ok: true, attempt: k, profile: profileName, dry: true });
+      summary.tracks.push({ root: t.number, nodes, ok: true, attempt: k, profile: profileName, mode: cand.mode, dry: true });
       claimedTracks.add(t.number);
       for (const nn of nodes) coveredBy.set(nn, t.number); // a dry run must report the same board as a real one
-      log(`#${t.number}: [dry-run] would run track ${[...nodes, t.number].map((x) => `#${x}`).join(' → ')} as one ${profileName} session`);
+      log(`#${t.number}: [dry-run] would run track ${[...nodes, t.number].map((x) => `#${x}`).join(' → ')} as one ${profileName} session (${cand.mode})`);
       budget--;
       continue;
     }
@@ -779,7 +812,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       if (c.error?.kind === 'ratelimit' || c.error?.kind === 'auth') break;
       continue;
     }
-    const attempt = { attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.sha, pid: null, track: true, track_nodes: nodes };
+    const attempt = { attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.sha, pid: null, track: true, track_mode: cand.mode, track_nodes: nodes };
     runRec.run.attempts.push(attempt);
     await saveRun(ctx, t.number, runRec);
     await setStatus(ctx, t, 'running', { remove: [L.needsHuman] });
@@ -816,8 +849,8 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     for (const nn of nodes) coveredBy.set(nn, t.number); // the loop below must leave them to the runner
     claimedTracks.add(t.number);
     budget--;
-    summary.tracks.push({ root: t.number, nodes, ok: true, attempt: k, profile: profileName, pid: spawned.pid, wt: spawned.wt || null });
-    log(`#${t.number}: claimed track attempt ${k} → ${profileName}, ${nodes.length + 1} nodes ${[...nodes, t.number].map((x) => `#${x}`).join(' → ')} (log ${attempt.log})`);
+    summary.tracks.push({ root: t.number, nodes, ok: true, attempt: k, profile: profileName, mode: cand.mode, pid: spawned.pid, wt: spawned.wt || null });
+    log(`#${t.number}: claimed track attempt ${k} → ${profileName} (${cand.mode}), ${nodes.length + 1} nodes ${[...nodes, t.number].map((x) => `#${x}`).join(' → ')} (log ${attempt.log})`);
     if (children && spawned.child) watchChild(ctx, t.number, k, spawned.child, children, state, profileName, log);
   }
 
@@ -988,22 +1021,27 @@ function watchChild(ctx, number, k, child, children, state, profileName, log) {
       const runRec = await loadRun(ctx, number);
       const a = runRec.run.attempts.find((x) => x.attempt === k);
       if (!a) return;
-      // `claude -p --output-format json` signs off with the session id and what the run cost.
-      // A malformed log must never cost us the reclaim below, so this is its own try.
+      // `claude -p --output-format json` signs off with the session id, what the run cost, and —
+      // since #155 — why it ended. A malformed log must never cost us the reclaim below, so this is
+      // its own try.
       const logText = tailLog(ctx, a.log, 200_000);
+      const parsed = parseSessionLog(logText);
       let session = null;
-      try { session = sessionUpdate(a, parseSessionLog(logText)); } catch { /* unreadable log */ }
+      try { session = sessionUpdate(a, parsed); } catch { /* unreadable log */ }
       if (session) Object.assign(a, session);
+      // `api_error_status` on the result says outright what the log-tail regex below only guessed
+      // at; the regex now runs only when there was no JSON result line to read a status from.
+      const pauseReason = authPauseReason(parsed, logText.slice(-4000));
+      if (pauseReason) {
+        state.profile_paused_until[profileName] = new Date(Date.now() + ctx.cfg.dispatch.auth_pause * 1000).toISOString();
+        writeState(ctx.root, state);
+        log(`#${number}: profile ${profileName} paused (${pauseReason})`);
+      }
       if (a.ended_at) { // the worker finished properly — only the session numbers are new
         if (session) { await saveRun(ctx, number, runRec); log(`#${number}: attempt ${k} ${formatSession(a)}`); }
         return;
       }
       a.exit_code = code;
-      const logTail = logText.slice(-4000);
-      if (/429|rate limit|quota|401|unauthorized|not logged in/i.test(logTail)) {
-        state.profile_paused_until[profileName] = new Date(Date.now() + ctx.cfg.dispatch.auth_pause * 1000).toISOString();
-        writeState(ctx.root, state);
-      }
       const t = await getTask(ctx, number);
       const r = await failAttempt(ctx, t, runRec, 'protocol_violation', `worker exited (${code}) without a terminal verb`, { kill: false });
       log(`#${number}: attempt ${k} exited ${code} without complete/block → ${r}${session ? ` (${formatSession(a)})` : ''}`);
@@ -1039,17 +1077,39 @@ function acquireLoopLock(ctx) {
 }
 
 /**
+ * A fingerprint of the hkb this process would load if it started right now — read fresh every call,
+ * never cached, because that is the whole point: modules are loaded once at process start, so this
+ * is the only thing in the loop that ever sees a change on disk. `PKG_ROOT` is the running code's own
+ * directory (`init.js`'s `import.meta.url`); when the global `hkb` is a symlink into a git checkout —
+ * the case this guards, `hkb dispatch --loop` outliving a merge to `main` or a `git pull` — that
+ * checkout's HEAD moves on every such upgrade even when nobody bumps `package.json`, which only
+ * happens at release (`docs/releasing.md`). A real `npm i -g` replaces the package wholesale with no
+ * `.git` at all, so falls back to the version, which *does* change on every release by definition.
+ * Local `git rev-parse` only — no network, no GitHub call — so calling it every tick costs nothing
+ * an operator would notice.
+ */
+export function installStamp() {
+  const r = spawnSync('git', ['-C', PKG_ROOT, 'rev-parse', '--short=12', 'HEAD'], { encoding: 'utf8', timeout: 5_000 });
+  if (!r.error && r.status === 0 && r.stdout) return r.stdout.trim();
+  return packageVersion();
+}
+
+/**
  * The long-lived dispatcher. `sleeper` is the wait between ticks, injected so a test can run six
  * ticks in a millisecond; the default one is interruptible, so SIGTERM ends the loop between ticks
- * rather than after another. Throws (exit code 4) when a tick reports `fatal`: the self-heal ladder
- * ran out and the honest thing left is to die with a reason a supervisor and a human can both read.
+ * rather than after another. `installStamp` is injected the same way, so a test can move it without
+ * touching a real git checkout. Throws (exit code 4) when a tick reports `fatal` — the self-heal
+ * ladder ran out — or when the code on disk has moved past what this process loaded: either way the
+ * honest thing left is to die with a reason a supervisor and a human can both read.
  */
-export async function loop(ctx, { interval, max, profiles = null, log, sleeper = null }) {
+export async function loop(ctx, { interval, max, profiles = null, log, sleeper = null, installStamp: stamp = installStamp }) {
   const dropLock = acquireLoopLock(ctx);
   log(`dispatcher pid ${process.pid} (singleton lock .kanban/dispatch.pid)`);
+  const loaded = stamp();
   const children = new Map();
   let stopping = false;
   let fatal = null;
+  let upgrade = null;
   // The wait between ticks has to be interruptible, or a SIGTERM landing one second into a 60-second
   // sleep buys a *whole further tick*: the loop would wake, run it, and only then notice it was asked
   // to stop — while `hkb down` had already reported it stopped and `hkb up` had started its
@@ -1085,12 +1145,21 @@ export async function loop(ctx, { interval, max, profiles = null, log, sleeper =
       else log(`tick failed: ${e.message}`);
     }
     if (stopping) break;
+    const current = stamp();
+    if (current !== loaded) { upgrade = { loaded, current }; break; }
     const wait = Math.max(5_000, interval * 1000 - (Date.now() - started));
     await Promise.race([nap(wait), new Promise((resolve) => { wake = resolve; })]);
     wake = null; timer = null; // the race is over: a signal from here on waits for the next tick
     if (stopping) break;
   }
   dropLock();
+  if (upgrade) {
+    const e = new Error(`hkb: this loop is running ${upgrade.loaded}, the installed hkb is ${upgrade.current} — restarting. Running workers are untouched: the next dispatcher adopts or reclaims them.`);
+    e.exitCode = 4;
+    log(`FATAL ${e.message}`);
+    recordExit(ctx.root, 'dispatch', { code: 4, at: nowIso(), reason: e.message });
+    throw e;
+  }
   if (fatal) {
     const e = new Error(`dispatcher exiting: #${fatal.number} claim came back unknown ${fatal.streak} ticks in a row, ${fatal.streak - SELF_HEAL.dropAfter} of them after this process dropped every cache it had. Last error: ${fatal.error}. Start a new dispatcher — fresh state is what fixes this; if it fails the same way the fault is upstream, so check \`gh auth status\` and \`hkb doctor\`. Running workers are untouched: the next dispatcher adopts or reclaims them.`);
     e.exitCode = 4;

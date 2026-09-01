@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   parseBodyBlock, serializeBodyBlock, DEFAULT_KB, statusOf, agentOf, boardOf,
   parseRunComment, serializeRunComment, emptyRun, openAttempt, parseResultComment, serializeResultComment,
-  blockerDone, computeReady, pathsOverlap, sortForDispatch, slugify, lockRef, lockRefPath, hashReason,
+  blockerDone, computeReady, promoteDecision, pathsOverlap, sortForDispatch, slugify, lockRef, lockRefPath, hashReason,
   normalizeHookInput, stripFrontmatter, sessionUpdate, parseRepoSpecs, boardKey, uniqueKeys, shouldNudgeOnStop, deadAtRecheck,
   pathOverlapGuard, pathHolders, pathCollisions, attemptIdle,
 } from '../src/model.js';
@@ -69,6 +69,30 @@ test('readiness: all blockers must be closed as completed', () => {
   const future = new Date(Date.now() + 3600_000).toISOString();
   assert.equal(computeReady(t([], { scheduled_at: future })), false);
   assert.equal(computeReady(t([], { scheduled_at: '2020-01-01T00:00:00Z' })), true);
+});
+
+test('promoteDecision (#209): triage always advances; todo/blocked only force on a real leaf', () => {
+  const task = (status, blockedBy = []) => ({ status, blockedBy, kb: { ...DEFAULT_KB } });
+
+  // triage always steps to todo, whether or not it is being called as a leaf
+  assert.deepEqual(promoteDecision(task('triage', [{ state: 'OPEN' }])), { to: 'todo' });
+  assert.deepEqual(promoteDecision(task('triage'), { allowForce: true }), { to: 'todo' });
+
+  // a leaf (no cascade) keeps today's behaviour: force straight to ready
+  assert.deepEqual(promoteDecision(task('todo', [{ state: 'OPEN' }]), { allowForce: true }), { to: 'ready', forced: true });
+  assert.deepEqual(promoteDecision(task('blocked', [{ state: 'OPEN' }]), { allowForce: true }), { to: 'ready', forced: true });
+  assert.deepEqual(promoteDecision(task('todo'), { allowForce: true }), { to: 'ready', forced: false });
+
+  // a card swept up by a real cascade is never forced
+  assert.deepEqual(promoteDecision(task('todo', [{ state: 'OPEN' }])), { to: 'todo', skipped: true, reason: 'blockers still open' });
+  assert.deepEqual(promoteDecision(task('todo')), { to: 'ready', forced: false }); // genuinely ready: not forcing
+  assert.deepEqual(promoteDecision(task('blocked', [{ state: 'OPEN' }])), { to: 'blocked', skipped: true, reason: 'blocked — needs human' });
+  assert.deepEqual(promoteDecision(task('blocked')), { to: 'blocked', skipped: true, reason: 'blocked — needs human' }); // left for the human either way
+
+  // past todo, or done/archived: never touched
+  for (const status of ['ready', 'running', 'review', 'done', 'archived']) {
+    assert.deepEqual(promoteDecision(task(status)), { to: status, skipped: true, reason: `already ${status}` });
+  }
 });
 
 test('path overlap guard', () => {

@@ -16,6 +16,7 @@
     }
   },
   "dispatch": {
-    "max_in_progress": 4
+    "max_in_progress": 4,
+    "merge": { "mode": "operator" }
   }
 }

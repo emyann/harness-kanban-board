@@ -14,8 +14,9 @@ import path from 'node:path';
 import { tick, autoMergePass } from '../src/dispatch.js';
 import { DEFAULT_BOARD } from '../src/board.js';
 import { checkMergePolicy, MERGE_CHECK } from '../src/doctor.js';
-import { mergePolicy, autoMergeDecision, mergeGate } from '../src/model.js';
-import { FakeGh, kbIssue } from './fake-gh.js';
+import { mergePolicy, autoMergeDecision, mergeGate, mergeDecision, operatorReviewEvidence, emptyRun } from '../src/model.js';
+import { mergeCard } from '../src/lifecycle.js';
+import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
 function harness({ merge = null, board = 'default', allowAutoMerge = true } = {}) {
   const gh = new FakeGh({ allowAutoMerge });
@@ -65,6 +66,7 @@ test('a board.json that predates the feature reads as today: manual, and nothing
     const p = mergePolicy(cfg);
     assert.equal(p.mode, 'manual');
     assert.equal(p.auto, false);
+    assert.equal(p.operator, false);
     assert.equal(p.error, null);
   }
   // and the shipped default says it out loud rather than leaving it to the fallback
@@ -72,18 +74,33 @@ test('a board.json that predates the feature reads as today: manual, and nothing
 });
 
 test('mode auto takes squash unless the board asks for another method', () => {
-  assert.deepEqual(mergePolicy({ dispatch: { merge: { mode: 'auto' } } }), { mode: 'auto', method: 'squash', mergeMethod: 'SQUASH', auto: true, error: null });
+  const require = { checks: true, review_comment: true };
+  assert.deepEqual(mergePolicy({ dispatch: { merge: { mode: 'auto' } } }), { mode: 'auto', method: 'squash', require, mergeMethod: 'SQUASH', auto: true, operator: false, error: null });
   assert.equal(mergePolicy({ dispatch: { merge: { mode: 'auto', method: 'rebase' } } }).mergeMethod, 'REBASE');
   assert.equal(mergePolicy({ dispatch: { merge: { mode: 'auto', method: 'merge' } } }).mergeMethod, 'MERGE');
+});
+
+test('mode operator: require.checks and require.review_comment default on, and can be turned off', () => {
+  const p = mergePolicy({ dispatch: { merge: { mode: 'operator' } } });
+  assert.equal(p.operator, true);
+  assert.equal(p.auto, false);
+  assert.deepEqual(p.require, { checks: true, review_comment: true });
+
+  const off = mergePolicy({ dispatch: { merge: { mode: 'operator', require: { checks: false, review_comment: false } } } });
+  assert.deepEqual(off.require, { checks: false, review_comment: false });
 });
 
 test('a policy hkb cannot read never merges: it names the mistake and stays manual', () => {
   const bad = mergePolicy({ dispatch: { merge: { mode: 'yes' } } });
   assert.equal(bad.auto, false);
-  assert.match(bad.error, /dispatch\.merge\.mode must be "manual" or "auto", not "yes"/);
+  assert.equal(bad.operator, false);
+  assert.match(bad.error, /dispatch\.merge\.mode must be "manual", "operator", "auto", not "yes"/);
   const method = mergePolicy({ dispatch: { merge: { mode: 'auto', method: 'fast-forward' } } });
   assert.equal(method.auto, false);
   assert.match(method.error, /dispatch\.merge\.method must be one of squash, merge, rebase/);
+  const badRequire = mergePolicy({ dispatch: { merge: { mode: 'operator', require: { checks: 'yes' } } } });
+  assert.equal(badRequire.operator, false);
+  assert.match(badRequire.error, /dispatch\.merge\.require\.checks must be true or false/);
 });
 
 // ---------- which PR, pure ----------
@@ -113,6 +130,67 @@ test('everything else is left alone, and says why', () => {
     assert.equal(d.enable, false, `${why} should not enable`);
     assert.match(d.why, why);
   }
+});
+
+// ---------- operator mode, pure (#189) ----------
+
+const operatorPolicy = mergePolicy({ dispatch: { merge: { mode: 'operator' } } });
+const manualPolicy = mergePolicy({});
+const reviewCard = (over = {}) => ({ number: 9, status: 'review', prs: [{ ...openPr(), nodeId: 'PR_kw9' }], ...over });
+
+test('a review naming a reviewer is evidence; a bare completed attempt is not', () => {
+  const run = { ...emptyRun(), attempts: [{ attempt: 1, outcome: 'completed' }] };
+  assert.equal(operatorReviewEvidence(run).ok, false);
+  const withReviewer = { ...emptyRun(), attempts: [{ attempt: 1, outcome: 'review_requested', reviewer: 'alice' }] };
+  const e = operatorReviewEvidence(withReviewer);
+  assert.equal(e.ok, true);
+  assert.match(e.detail, /alice \(attempt 1\)/);
+});
+
+test('a summary at merge time is evidence too, when nothing named a reviewer', () => {
+  const run = emptyRun();
+  assert.equal(operatorReviewEvidence(run, { summary: '  ' }).ok, false); // blank does not count
+  const e = operatorReviewEvidence(run, { summary: 'ran the suite, checked Done-when #1-3' });
+  assert.equal(e.ok, true);
+  assert.equal(e.detail, 'ran the suite, checked Done-when #1-3');
+});
+
+test('manual and auto refuse hkb merge outright, naming the mode', () => {
+  assert.match(mergeDecision(reviewCard(), emptyRun(), manualPolicy).reason, /mode is "manual" — merging is the human's step/);
+  const autoPolicy = mergePolicy({ dispatch: { merge: { mode: 'auto' } } });
+  assert.match(mergeDecision(reviewCard(), emptyRun(), autoPolicy).reason, /mode is "auto" — GitHub merges the PR itself/);
+});
+
+test('operator without a review on the card refuses, naming the condition', () => {
+  const d = mergeDecision(reviewCard(), emptyRun(), operatorPolicy, { checksState: 'SUCCESS' });
+  assert.equal(d.ok, false);
+  assert.match(d.reason, /no review on #9 — request one with a named reviewer.*or run hkb merge 9 --summary/);
+});
+
+test('operator with a review but red checks refuses, naming the checks', () => {
+  const d = mergeDecision(reviewCard(), emptyRun(), operatorPolicy, { summary: 'checked it', checksState: 'FAILURE' });
+  assert.equal(d.ok, false);
+  assert.match(d.reason, /PR #100's checks are failure, not green/);
+});
+
+test('operator with a review and green checks merges', () => {
+  const d = mergeDecision(reviewCard(), emptyRun(), operatorPolicy, { summary: 'ran npm test, verified Done-when', checksState: 'SUCCESS' });
+  assert.equal(d.ok, true);
+  assert.equal(d.pr.number, 100);
+  assert.equal(d.method, 'squash');
+  assert.equal(d.reviewDetail, 'ran npm test, verified Done-when');
+});
+
+test('turning require.checks off skips the checks read entirely', () => {
+  const lenient = mergePolicy({ dispatch: { merge: { mode: 'operator', require: { checks: false } } } });
+  const d = mergeDecision(reviewCard(), emptyRun(), lenient, { summary: 'looked at it', checksState: null });
+  assert.equal(d.ok, true);
+});
+
+test('operator refuses off-review-status and no-PR cards the same as auto does', () => {
+  assert.match(mergeDecision(reviewCard({ status: 'running' }), emptyRun(), operatorPolicy).reason, /is running, not review/);
+  assert.match(mergeDecision(reviewCard({ prs: [] }), emptyRun(), operatorPolicy).reason, /no open PR to merge/);
+  assert.match(mergeDecision(reviewCard({ prs: [{ ...openPr(), isDraft: true, nodeId: 'PR_kw9' }] }), emptyRun(), operatorPolicy).reason, /still a draft/);
 });
 
 // ---------- the gate, pure ----------
@@ -330,6 +408,31 @@ test('doctor says nothing about a manual board — the default reports nothing t
   assert.deepEqual(gateReads(h.gh), []);
 });
 
+test('doctor always names the operator mode and its condition — never silent, unlike manual', async (t) => {
+  const h = harness({ merge: { mode: 'operator' } });
+  t.after(h.cleanup);
+  const s = sink();
+
+  await checkMergePolicy(h.ctx, s);
+
+  assert.equal(s.results.length, 1);
+  assert.equal(s.results[0].ok, true);
+  assert.match(s.results[0].detail, /operator \(squash\) — hkb merge <n> merges once/);
+  assert.match(s.results[0].detail, /a review on the card/);
+  assert.match(s.results[0].detail, /the PR's own checks green/);
+});
+
+test('doctor names only what require still asks for, once turned down', async (t) => {
+  const h = harness({ merge: { mode: 'operator', require: { checks: false } } });
+  t.after(h.cleanup);
+  const s = sink();
+
+  await checkMergePolicy(h.ctx, s);
+
+  assert.doesNotMatch(s.results[0].detail, /checks green/);
+  assert.match(s.results[0].detail, /a review on the card/);
+});
+
 test('doctor FAILS on auto without a gate, and names the fix', async (t) => {
   const h = harness({ merge: { mode: 'auto' } });
   t.after(h.cleanup);
@@ -400,4 +503,73 @@ test('doctor fails a policy it cannot read, whatever the branch looks like', asy
   assert.match(s.results[0].detail, /dispatch\.merge\.method must be one of/);
   assert.match(s.results[0].fix, /board\.json/);
   assert.deepEqual(gateReads(h.gh), []); // it never got as far as asking GitHub
+});
+
+// ---------- `hkb merge`, end to end against the fake ----------
+
+const mergeMutations = (gh) => gh.calls.filter((c) => c.kind === 'graphql' && /mergePullRequest/.test(c.query || ''));
+
+test('hkb merge refuses on a manual board, naming the mode — and merges nothing', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [{ ...openPr(), checksState: 'SUCCESS' }] }));
+
+  await assert.rejects(mergeCard(h.ctx, 1, { summary: 'checked it' }), /mode is "manual"/);
+  assert.deepEqual(mergeMutations(h.gh), []);
+});
+
+test('hkb merge refuses an operator card with no review, naming the condition', async (t) => {
+  const h = harness({ merge: { mode: 'operator' } });
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [{ ...openPr(), checksState: 'SUCCESS' }] }));
+
+  await assert.rejects(mergeCard(h.ctx, 1), /no review on #1/);
+  assert.deepEqual(mergeMutations(h.gh), []);
+});
+
+test('hkb merge refuses a red-check operator card even with a summary', async (t) => {
+  const h = harness({ merge: { mode: 'operator' } });
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [{ ...openPr(), checksState: 'FAILURE' }] }));
+
+  await assert.rejects(mergeCard(h.ctx, 1, { summary: 'looked at it' }), /checks are failure, not green/);
+  assert.deepEqual(mergeMutations(h.gh), []);
+});
+
+test('hkb merge on an operator board merges once a summary is given, and writes the record', async (t) => {
+  const h = harness({ merge: { mode: 'operator' } });
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({
+    number: 1, status: 'review', agent: 'claude',
+    prs: [{ ...openPr(), checksState: 'SUCCESS' }],
+    run: runWith([{ attempt: 1, outcome: 'review_requested', pr: 100, ended_at: '2026-08-26T01:00:00Z' }]),
+  }));
+
+  const r = await mergeCard(h.ctx, 1, { summary: 'ran the suite, checked Done-when #1-3' });
+
+  assert.equal(r.merged, true);
+  assert.equal(r.pr, 100);
+  assert.equal(r.merged_by, 'operator');
+  assert.equal(mergeMutations(h.gh).length, 1);
+  assert.equal(h.gh.issues.get(1).prs[0].merged, true);
+  const comments = h.gh.issues.get(1).comments.map((c) => c.body);
+  assert.ok(comments.some((b) => /\*\*Merged by the operator seat\*\* — review: ran the suite.*checks: green, method: squash/.test(b)));
+  const run = h.gh.issues.get(1).comments.map((c) => c.body).join('');
+  assert.match(run, /"merged_by": "operator"/);
+});
+
+test('hkb merge with a reviewer already on record needs no summary', async (t) => {
+  const h = harness({ merge: { mode: 'operator' } });
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({
+    number: 1, status: 'review', agent: 'claude',
+    prs: [{ ...openPr(), checksState: 'SUCCESS' }],
+    run: runWith([{ attempt: 1, outcome: 'review_requested', reviewer: 'alice', pr: 100, ended_at: '2026-08-26T01:00:00Z' }]),
+  }));
+
+  const r = await mergeCard(h.ctx, 1);
+
+  assert.equal(r.merged, true);
+  const comments = h.gh.issues.get(1).comments.map((c) => c.body);
+  assert.ok(comments.some((b) => /review: review requested from alice \(attempt 1\)/.test(b)));
 });

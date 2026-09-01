@@ -6,6 +6,7 @@ import { api, kanbanDir } from './board.js';
 import {
   L, LABEL_COLORS, STATUSES, parseBodyBlock, serializeBodyBlock, statusOf, agentOf, boardOf,
   parseRunComment, serializeRunComment, parseResultComment, RESULT_MARKER, emptyRun, pickRunComment,
+  taskBranchRe,
 } from './model.js';
 
 // ---------- capability detection (cached per repo in .kanban/cache.json) ----------
@@ -60,6 +61,51 @@ function toTask(node) {
   };
 }
 
+/**
+ * Every open PR on the repo, keyed by head branch — one paginated REST read. `closedByPullRequestsReferences`
+ * is hkb's only source for a task's PRs, and it answers a narrower question than hkb asks of it: it
+ * requires the PR to target the default branch, and #234 found at least one PR that met that bar and
+ * still came back empty. hkb generates the branch names it puts a card's work on itself
+ * (`taskBranchRe`), so a board-wide listing of open PRs, matched by head, is a fallback that costs one
+ * request whatever the board's size rather than one per unlinked card.
+ */
+export async function openPrsByHead(ctx) {
+  const out = new Map();
+  for (let page = 1; page <= 10; page++) {
+    const batch = await rest('GET', api(ctx, `/pulls?state=open&per_page=100&page=${page}`));
+    for (const p of batch || []) {
+      const head = p.head?.ref;
+      if (!head) continue;
+      out.set(head, {
+        number: p.number,
+        nodeId: p.node_id,
+        state: 'OPEN',
+        isDraft: !!p.draft,
+        url: p.html_url,
+        headRefName: head,
+        baseRefName: p.base?.ref || null,
+        merged: false,
+        autoMergeEnabled: !!p.auto_merge,
+      });
+    }
+    if (!batch || batch.length < 100) break;
+  }
+  return out;
+}
+
+/**
+ * A task with no PR from GraphQL, matched against a board-wide open-PR listing by head branch. Pure
+ * given the listing: never overrides a PR GitHub already linked, and never looks two tasks up in one
+ * call, so a card that legitimately has no PR still reports none.
+ */
+export function branchFallbackPrs(task, openByHead) {
+  if ((task.prs || []).length) return task.prs;
+  const re = taskBranchRe(task.number);
+  const found = [];
+  for (const [head, pr] of openByHead) if (re.test(head)) found.push(pr);
+  return found;
+}
+
 /** Fill blockedBy via REST when the GraphQL field is unavailable. */
 async function fillBlockedByRest(ctx, task) {
   try {
@@ -72,9 +118,48 @@ async function fillBlockedByRest(ctx, task) {
 }
 
 /**
- * Every task on the board, one query per page. `blockers: false` is for a caller that only reads
- * labels (doctor): on a repo without the GraphQL `blockedBy` field the fill-in below is one REST
- * call per waiting task, and a check about labels must not cost a board's worth of them.
+ * What a board's `blockedBy` lists actually mean, recorded on the array `fetchBoard` returns.
+ *
+ *   source  'graphql' (they rode the board query), 'rest' (one call per card), or null
+ *   filled  were they looked up at all
+ *   scope   'all' every card · 'open' every open card · 'waiting' only todo/blocked · 'none'
+ *
+ * A caller that cannot tell these apart reports "no blockers" for a card nobody asked about —
+ * a silently wrong answer, which is the one failure mode the values forbid.
+ */
+function tagBlockers(tasks, meta) {
+  // non-enumerable: JSON.stringify, Object.keys and every spread of the board stay an array of tasks
+  Object.defineProperty(tasks, 'blockers', { value: Object.freeze(meta), enumerable: false, configurable: true });
+  return tasks;
+}
+
+/** The blocker provenance of a board `fetchBoard` returned. Safe on any array. */
+export function blockersOf(board) {
+  return board?.blockers || { source: null, filled: false, scope: 'none' };
+}
+
+/**
+ * Is this task's `blockedBy` a real answer, or was it simply never looked up? An empty list on a
+ * card outside the fill-in's scope means "unknown", never "no blockers".
+ */
+export function blockersKnown(board, task) {
+  const { scope } = blockersOf(board);
+  if (scope === 'all') return true;
+  if (scope === 'open') return String(task?.state || 'OPEN').toUpperCase() === 'OPEN';
+  if (scope === 'waiting') return task?.status === 'todo' || task?.status === 'blocked';
+  return false;
+}
+
+/**
+ * Every task on the board, one query per page.
+ *
+ * `blockers` says how much the caller needs on a repo *without* the GraphQL `blockedBy` field,
+ * where each list costs one REST call:
+ *   true   the tick's lanes only — todo and blocked, the cards a promote decision reads
+ *   'all'  every open card, for a caller (`hkb groom`) that reports on all of them
+ *   false  none, for a caller that only reads labels (doctor) and must not pay a board's worth
+ * On a repo that *has* the field all three are the same single query and cost nothing extra.
+ * Either way the result carries `blockers` — see `blockersOf` / `blockersKnown`.
  */
 export async function fetchBoard(ctx, { includeClosed = false, blockers = true } = {}) {
   await detectCaps(ctx);
@@ -96,8 +181,25 @@ export async function fetchBoard(ctx, { includeClosed = false, blockers = true }
     if (!conn.pageInfo.hasNextPage) break;
     cursor = conn.pageInfo.endCursor;
   }
-  if (blockers && !ctx.caps.blockedByGql) for (const t of tasks) if (t.status === 'todo' || t.status === 'blocked') await fillBlockedByRest(ctx, t);
-  return tasks;
+  await fillPrFallback(ctx, tasks);
+  if (ctx.caps.blockedByGql) return tagBlockers(tasks, { source: 'graphql', filled: true, scope: 'all' });
+  if (!blockers) return tagBlockers(tasks, { source: null, filled: false, scope: 'none' });
+  const wanted = blockers === 'all'
+    ? (t) => String(t.state).toUpperCase() === 'OPEN'
+    : (t) => t.status === 'todo' || t.status === 'blocked';
+  for (const t of tasks) if (wanted(t)) await fillBlockedByRest(ctx, t);
+  return tagBlockers(tasks, { source: 'rest', filled: true, scope: blockers === 'all' ? 'open' : 'waiting' });
+}
+
+/**
+ * The head-branch fallback (`branchFallbackPrs`), applied board-wide: one `openPrsByHead` read when
+ * at least one task came back with no PR from GraphQL, none at all otherwise. One request per tick,
+ * never one per card — the cost the fallback is allowed to spend (#234).
+ */
+async function fillPrFallback(ctx, tasks) {
+  if (!tasks.some((t) => !(t.prs || []).length)) return;
+  const openByHead = await openPrsByHead(ctx);
+  for (const t of tasks) t.prs = branchFallbackPrs(t, openByHead);
 }
 
 /**
@@ -123,11 +225,22 @@ export async function getTask(ctx, number) {
   const q = `query($owner: String!, $repo: String!, $n: Int!) {
     repository(owner: $owner, name: $repo) { issue(number: $n) { ${ISSUE_FIELDS(ctx.caps)} } }
   }`;
-  const data = await graphql(q, { owner: ctx.repo.owner, repo: ctx.repo.repo, n: Number(number) });
+  let data;
+  try {
+    data = await graphql(q, { owner: ctx.repo.owner, repo: ctx.repo.repo, n: Number(number) });
+  } catch (e) {
+    if (e instanceof GhError && e.kind === 'notfound' && /could not resolve to (a|an) issue/i.test(e.message)) {
+      const err = new Error(`issue #${number} not found in ${ctx.repo.nameWithOwner}`);
+      err.exitCode = 2;
+      throw err;
+    }
+    throw e;
+  }
   const node = data.repository.issue;
   if (!node) { const e = new Error(`issue #${number} not found in ${ctx.repo.nameWithOwner}`); e.exitCode = 2; throw e; }
   const task = toTask(node);
   if (!ctx.caps.blockedByGql) await fillBlockedByRest(ctx, task);
+  await fillPrFallback(ctx, [task]);
   return task;
 }
 
@@ -350,6 +463,36 @@ export async function enableAutoMerge(ctx, pr, mergeMethod) {
   const out = data?.enablePullRequestAutoMerge?.pullRequest || null;
   if (out) pr.autoMergeEnabled = true;
   return out;
+}
+
+/**
+ * The PR's own check state — `SUCCESS`, `FAILURE`, `PENDING`, `ERROR`, `EXPECTED`, or `null` when
+ * the PR has no checks configured at all. This is what `dispatch.merge.require.checks` asks
+ * `hkb merge` to read before it will merge a card's PR under `mode: "operator"`: not the branch's
+ * required checks (that is `branchProtection`/`mergeGate`, for `"auto"`), but this PR's own commit.
+ */
+export async function prChecksState(ctx, number) {
+  const q = `query($owner: String!, $repo: String!, $n: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $n) { commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } }
+    }
+  }`;
+  const data = await graphql(q, { owner: ctx.repo.owner, repo: ctx.repo.repo, n: Number(number) });
+  return data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? null;
+}
+
+/**
+ * `hkb merge`'s one mutation: land the PR itself. Deliberately `gh api`'s `mergePullRequest`, not
+ * the `gh pr merge` subcommand — every GitHub-ism behind a `gh api` call, never a `gh pr`/`gh
+ * issue` subcommand, is a house rule (CLAUDE.md), and it is also what keeps the mutation testable
+ * against the fake-gh double instead of a real `gh` binary.
+ */
+export async function mergePullRequest(ctx, pr, mergeMethod) {
+  const q = `mutation($id: ID!, $method: PullRequestMergeMethod!) {
+    mergePullRequest(input: {pullRequestId: $id, mergeMethod: $method}) { pullRequest { number merged } }
+  }`;
+  const data = await graphql(q, { id: pr.nodeId, method: mergeMethod });
+  return data?.mergePullRequest?.pullRequest || null;
 }
 
 /** One ruleset rule's contribution to the gate; unknown types add nothing. */

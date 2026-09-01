@@ -10,7 +10,7 @@ import path from 'node:path';
 import { tick } from '../src/dispatch.js';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, readState, writeState } from '../src/board.js';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_KB, L, parseSkillVersion } from '../src/model.js';
+import { DEFAULT_KB, L, parseSkillVersion, isTrackRoot, trackProfileFor, unfinishedChildren } from '../src/model.js';
 import {
   resolveTrack, trackWaves, trackPaths, trackReadiness, planTracks, trackContext,
   trackAlreadyAttempted, isTrackProfile, trackAgents, trackGraph, trackMermaid, mermaidLabel, trackFanout,
@@ -29,13 +29,14 @@ const CFG = {
 };
 
 /** A task in the shape `toTask` produces, with only the fields tracks read. */
-function node(number, { title, status = 'ready', agent = 'claude', blocks = [], kb = {}, prs = [], needsHuman = false, body = 'do it' } = {}) {
+function node(number, { title, status = 'ready', agent = 'claude', blocks = [], kb = {}, prs = [], needsHuman = false, body = 'do it', labels = [] } = {}) {
   return {
     number,
     title: title || `task ${number}`,
     bodyText: body,
     status,
     agent,
+    labels,
     needsHuman,
     prs,
     kb: { ...DEFAULT_KB, ...kb },
@@ -43,6 +44,8 @@ function node(number, { title, status = 'ready', agent = 'claude', blocks = [], 
   };
 }
 const done = (n) => ({ number: n, state: 'CLOSED', stateReason: 'COMPLETED', title: `task ${n}` });
+/** An `isTrackRoot` verdict, small enough to assert a table of. */
+const pick = (d) => [d.mode, d.track, d.profile];
 const by = (tasks) => new Map(tasks.map((t) => [t.number, t]));
 
 // ---------- resolving the subgraph ----------
@@ -119,7 +122,8 @@ test('a decomposed goal on a track profile is claimable as one track', () => {
 
 test('every refusal is a fallback to node dispatch, and says which node caused it', () => {
   const cases = [
-    [chain({ 26: { agent: 'claude' } }), /profile claude does not run tracks/],
+    [chain({ 26: { agent: 'codex' } }), /profile codex does not run tracks/],
+    [chain({ 26: { agent: 'claude', labels: [L.noTrack] } }), /kb:no-track — its children run as cold nodes/],
     [chain({ 26: { status: 'running' } }), /the root is running/],
     [chain({ 26: { needsHuman: true } }), /#26 needs a human/],
     [chain({ 26: { prs: [{ number: 9, state: 'OPEN' }] } }), /#26 already has an open PR/],
@@ -267,6 +271,38 @@ test('a blocker closed as completed is finished work, so it is not in the pictur
 
   assert.ok(!m.includes('n41'), 'the track is what is left, and so is its diagram');
   assert.ok(m.includes('  n42 --> n12'));
+});
+
+test('`hkb track <n>` says which it is and why, and --off/--on is the switch', async (t) => {
+  const gh = new FakeGh();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-trackcmd-'));
+  fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
+  gh.addIssue(kbIssue({ number: 41, status: 'ready', agent: 'claude' }));
+  gh.addIssue(kbIssue({ number: 42, status: 'todo', agent: 'claude', blockedBy: [41] }));
+  gh.addIssue(kbIssue({ number: 12, status: 'todo', agent: 'claude', blockedBy: [42] }));
+  const cwd = process.cwd();
+  const restore = gh.install();
+  const write = process.stdout.write.bind(process.stdout);
+  let printed = '';
+  process.stdout.write = (s) => { printed += s; return true; };
+  process.chdir(dir);
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const run = async (...argv) => { printed = ''; await main(argv); return printed; };
+
+  assert.match(await run('track', '12'), /#12 track: inferred — 1 unfinished child; one claude-track session runs the subgraph/);
+  assert.match(printed, /nodes: #41 → #42 → #12/);
+  assert.match(await run('track', '42'), /#12 is still blocked by it — it is a node of that track, not a root/);
+
+  await run('track', '12', '--off');
+  assert.ok(gh.labelsOf(12).includes(L.noTrack));
+  const off = JSON.parse(await run('track', '12', '--json'));
+  assert.deepEqual([off.mode, off.track, off.nodes], ['opted-out', false, []]);
+  assert.match(await run('show', '12'), /^track: opted out — kb:no-track .* \(`hkb track 12 --on` puts it back\)$/m);
+
+  await run('track', '12', '--on');
+  assert.ok(!gh.labelsOf(12).includes(L.noTrack));
+  assert.equal(JSON.parse(await run('show', '12', '--json')).track.mode, 'inferred');
 });
 
 test('`hkb graph <n>` prints the block; --json carries nodes, edges and the very same mermaid', async (t) => {
@@ -511,7 +547,7 @@ test('a track root is claimed as ONE session, and its nodes are left to the runn
   assert.equal(a.track, true);
   assert.deepEqual(a.track_nodes, [41, 42]);
   assert.equal(a.log, '.kanban/logs/26-1.log');
-  assert.match(h.log(), /#26: claimed track attempt 1 → claude-track, 3 nodes #41 → #42 → #26/);
+  assert.match(h.log(), /#26: claimed track attempt 1 → claude-track \(forced\), 3 nodes #41 → #42 → #26/);
 });
 
 test('the whole track is one running slot, and its nodes are never reclaimed under it', async (t) => {
@@ -651,7 +687,7 @@ test('a dry run says which track it would take, and writes nothing', async (t) =
 
   const s = await h.tick({ dryRun: true });
 
-  assert.deepEqual(s.tracks, [{ root: 26, nodes: [41, 42], ok: true, attempt: 1, profile: 'claude-track', dry: true }]);
+  assert.deepEqual(s.tracks, [{ root: 26, nodes: [41, 42], ok: true, attempt: 1, profile: 'claude-track', mode: 'forced', dry: true }]);
   assert.deepEqual(s.claimed, [], 'the leaf is the track\'s, so it is not offered to a node worker either');
   assert.equal(h.gh.statusOf(26), 'todo');
   assert.deepEqual(h.gh.lockRefs(), []);
@@ -675,16 +711,81 @@ test('the skill teaches the loop the runner is actually given, by the names the 
   assert.match(proto, /^## Tracks — the second execution engine/m);
   assert.ok(proto.includes('track_nodes'), 'the attempt fields a track adds must be in the data model');
   // the version has to move, or `hkb doctor` will call a stale installed copy current
-  assert.equal(parseSkillVersion(skill), '0.7.0');
+  assert.equal(parseSkillVersion(skill), '0.9.0');
 });
 
-test('with no track profile on the board nothing changes: the same claims, and no track work', async (t) => {
+test('a root nobody adopted is a track anyway: inferred, on the board\'s track profile', async (t) => {
   const h = harness();
   t.after(h.cleanup);
+  seedChain(h.gh, { root: { agent: 'claude' } }); // exactly what /kanban:decompose leaves behind
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.tracks.map((x) => [x.root, x.ok, x.mode, x.profile]), [[26, true, 'inferred', 'claude-track']]);
+  assert.deepEqual(s.claimed, [], 'the leaf is the track\'s: no cold session for it');
+  assert.equal(h.gh.statusOf(26), 'running');
+  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/26/1']);
+  assert.deepEqual(h.gh.labelsOf(26).filter((l) => l.startsWith('kb:agent:')), ['kb:agent:claude'],
+    'the decision never rewrites the label — that label is what node dispatch reads on a fallback');
+  const [a] = h.gh.runOf(26).attempts;
+  assert.equal(a.profile, 'claude-track', 'the launch is the track profile\'s, whatever the card says');
+  assert.equal(a.track_mode, 'inferred');
+});
+
+test('kb:no-track opts a goal out: its children run as cold nodes, one at a time', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  seedChain(h.gh, { root: { agent: 'claude', labels: [L.noTrack] } });
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.tracks, [], 'not even a candidate: it is not a root any more');
+  assert.deepEqual(s.claimed.map((c) => [c.number, c.profile]), [[41, 'claude']]);
+  assert.equal(h.gh.statusOf(26), 'todo');
+});
+
+test('a board with no track profile at all keeps node dispatch — inference has nothing to infer to', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  delete h.ctx.cfg.profiles['claude-track'];
   seedChain(h.gh, { root: { agent: 'claude' } });
 
   const s = await h.tick();
 
   assert.deepEqual(s.tracks, []);
   assert.deepEqual(s.claimed.map((c) => c.number), [41]);
+});
+
+test('only the outermost root is inferred: an interior node is a node of the bigger track', () => {
+  //   41 → 42 → 26, with nothing labelled: 42 has an unfinished child, but 26 is still waiting on it
+  const tasks = [node(41), node(42, { status: 'todo', blocks: [41] }), node(26, { status: 'todo', blocks: [42] })];
+  const plan = planTracks(tasks, CFG, { board: 'default' });
+
+  assert.deepEqual(plan.candidates.map((c) => [c.root.number, c.ok, c.mode]), [[26, true, 'inferred']]);
+  assert.deepEqual([...plan.profiles.entries()], [[26, 'claude-track']]);
+  assert.equal(isTrackRoot(tasks[1], CFG, { board: tasks }).track, false, '#42 is a node, not a root');
+  assert.match(isTrackRoot(tasks[1], CFG, { board: tasks }).why, /#26 is still blocked by it/);
+  assert.equal(isTrackRoot(tasks[1], CFG).track, true, 'in isolation, with no board, it reads as a root of its own');
+});
+
+test('isTrackRoot: the graph decides, the label overrides in both directions', () => {
+  const withChildren = (over = {}) => node(26, { status: 'todo', blocks: [41, 42], ...over });
+
+  assert.deepEqual(pick(isTrackRoot(withChildren(), CFG)), ['inferred', true, 'claude-track']);
+  assert.equal(isTrackRoot(withChildren(), CFG).why, '2 unfinished children');
+  assert.equal(isTrackRoot(node(26, { status: 'todo', blocks: [41] }), CFG).why, '1 unfinished child');
+  assert.deepEqual(pick(isTrackRoot(withChildren({ agent: 'claude-track' }), CFG)), ['forced', true, 'claude-track']);
+  assert.deepEqual(pick(isTrackRoot(withChildren({ labels: [L.noTrack] }), CFG)), ['opted-out', false, null]);
+  assert.deepEqual(pick(isTrackRoot(withChildren({ agent: 'codex' }), CFG)), ['none', false, null]);
+  // a leaf is never a track, and a root whose children are all done is a plain node again
+  assert.deepEqual(pick(isTrackRoot(node(41), CFG)), ['none', false, null]);
+  assert.deepEqual(pick(isTrackRoot(node(26, { blocks: [done(41)] }), CFG)), ['none', false, null]);
+  // ...but an explicitly adopted root stays forced, so trackReadiness says it in its own words
+  assert.deepEqual(pick(isTrackRoot(node(26, { agent: 'claude-track', blocks: [done(41)] }), CFG)), ['forced', true, 'claude-track']);
+  assert.deepEqual(pick(isTrackRoot(null, CFG)), ['none', false, null]);
+
+  assert.equal(trackProfileFor(CFG, 'claude'), 'claude-track');
+  assert.equal(trackProfileFor(CFG, 'codex'), null, 'track_agents is what a runner can execute');
+  assert.equal(trackProfileFor({ profiles: { claude: {} } }, 'claude'), null);
+  assert.deepEqual(unfinishedChildren(node(26, { blocks: [41, done(42)] })), [41]);
 });

@@ -50,7 +50,17 @@ npx hkb-cli list                                           # triage todo ready r
 ```
 
 `--priority` is a plain number and **higher wins** — the tick takes *ready* cards highest-priority first, oldest
-issue first within a tie. Cards default to `0`, so any positive number jumps the queue.
+issue first within a tie. The band, so two filers share a ruler:
+
+| priority | meaning |
+|---|---|
+| `0` | unfiled (the default — no urgency claimed) |
+| `1` | normal |
+| `2` | next up |
+| `3` | urgent |
+
+Nothing stops a number above `3`; the band just names what most cards need. A card that outranks work it depends
+on is a filing mistake, not a valid use of the scale.
 
 ### Or drive it by hand
 
@@ -94,7 +104,10 @@ not a role.
 - **The operator is the human.** You own the repo, the token and the scope: you file and sharpen cards, steer with
   comments, review and merge, answer `kb:needs-human`, and restart a dispatcher that gave itself up. An agent
   session may drive those verbs for you — [`/kanban:operate`](#running-the-board-from-a-session-kanbanoperate) is
-  its brief, and the approvals and the credentials stay with you.
+  its brief, and the approvals stay with you — including the approval to delegate one of them, written down.
+  Delegating the click for a whole class of merges, under a stated condition, once, is still your call: it lives
+  in `.kanban/board.json` as `dispatch.merge.mode: "operator"`, not in a chat transcript the next session can't
+  see (see [The last step: who merges](#the-last-step-who-merges)).
 - **The dispatcher is a tick, not an agent — and not an orchestrator.** `hkb dispatch` promotes what became ready,
   reclaims what died, launches what it can, and exits. It holds no workflow and has no LLM in it: the graph lives
   on the cards as issue dependencies, and the loop only reconciles labels, locks and attempts against it. That
@@ -123,6 +136,7 @@ hkb create "Write auth tests" --blocked-by 42
 hkb show 42                    # task, blockers, attempts, parent results
 hkb list --status ready --json
 hkb dispatch --dry-run         # what the next tick would do
+hkb groom                      # the backlog lane as a proposal table — also a read, also writes nothing
 ```
 
 A worker — spawned by the dispatcher, or you by hand with `hkb claim 42` and `export KB_TASK=42 KB_ATTEMPT=1` —
@@ -179,18 +193,23 @@ borders only, so the diagram reads in GitHub's dark theme and its light one alik
 on the goal issue as the last step of materializing a graph; the board's own drawer draws the same subgraph
 live at [`hkb serve`](#the-board-in-a-browser).
 
-### Planning the board: two slash commands
+### Planning the board: three slash commands
 
-Two things a board needs are not CLI verbs, because they need a model and the dispatcher deliberately has none:
+Three things a board needs are not CLI verbs, because they need a model and the dispatcher deliberately has none:
 
 | | |
 |---|---|
 | `/kanban:specify <n>` | rewrites one triage one-liner into a spec a cold worker can execute — Why / What / Done when, plus `paths`, `priority` and `goal` — and promotes it |
 | `/kanban:decompose <n>` | proposes the whole dependency graph for a goal (children, blockers, disjoint `paths`), and materializes it on the board once you say yes |
+| `/kanban:groom` | reads the backlog lane with `hkb groom --json` and turns its findings — unblocked, thin spec, overlap, mentions — into one proposal table you approve row by row |
 
-Both stop and show you what they propose before writing anything. `hkb init` installs them into
+The CLI half of the last one is a plain read: `hkb groom` reports the lane from a single board query, the way
+`hkb dispatch --dry-run` reports the next tick, and writes nothing — no status, no label, no transition. The
+judgement about what to *do* with a finding is the slash command's, and yours.
+
+All three stop and show you what they propose before writing anything. `hkb init` installs them into
 `.claude/commands/kanban/`, so they work in Claude Code with nothing else installed; the plugin registers the same
-two names. Their bodies delegate to the sections of the same name in
+three names. Their bodies delegate to the sections of the same name in
 [`skills/kanban/SKILL.md`](skills/kanban/SKILL.md), so a harness without slash commands — Copilot CLI, Codex —
 gets the identical procedure by asking the skill for it.
 
@@ -214,15 +233,33 @@ is that procedure — installed by the same `hkb init`, delegating to the same s
 
 ## The last step: who merges
 
-**hkb never merges.** A finished card waits in *review* with an open PR until that PR lands, and by default the
-human lands it. On a repo where you merge every agent PR a minute after it opens, that click is a rote step; on a
-repo with a careful review culture it is the one gate you would never give up. That is a difference between repos,
-so it is board policy — `dispatch.merge` in `.kanban/board.json`:
+**hkb never merges on its own initiative.** A finished card waits in *review* with an open PR until that PR lands,
+and by default the human lands it. On a repo where you merge every agent PR a minute after it opens, that click is
+a rote step; on a repo with a careful review culture it is the one gate you would never give up. That is a
+difference between repos, so it is board policy — `dispatch.merge` in `.kanban/board.json`:
 
 ```jsonc
 "dispatch": { "merge": { "mode": "manual" } }                  // the default — nothing changes
+"dispatch": { "merge": { "mode": "operator" } }                 // hkb merge <n>, once a review is on the card
 "dispatch": { "merge": { "mode": "auto", "method": "squash" } } // squash | merge | rebase
 ```
+
+`operator` is for the repo in between: you have told the session running the operator seat that it can merge, but
+only once it has actually reviewed the card — not blanket trust. `hkb merge <n>` is the one door that lands the PR
+under this mode; it checks the condition itself rather than take a session's word for it, and refuses, naming what
+is missing, when it is not met:
+
+```jsonc
+"dispatch": { "merge": { "mode": "operator", "require": { "checks": true, "review_comment": true } } } // both are the default
+```
+
+`require.review_comment` is satisfied by a `review_requested` attempt that already named a reviewer, or by
+`hkb merge <n> --summary "what you checked"` — the operator session's own review, written down as the reason it
+merged, not just remembered until the next restart. `require.checks` is satisfied by the PR's own checks coming
+back green (turn it off on a repo with no CI to speak of). A merge under `operator` leaves one comment on the
+card (`**Merged by the operator seat** — review: …, checks: …, method: …`) and the attempt that opened the PR
+gets `merged_by: "operator"` in the run record — `hkb log <n>` shows it, so the delegation is visible on the card
+itself, not just in whichever session's memory received it.
 
 On `auto` the dispatcher does not merge either: it enables **GitHub's own auto-merge** on the card's PR, once, when
 the card reaches review — one `enablePullRequestAutoMerge` per PR, no new query, no polling. GitHub takes it from
@@ -494,8 +531,10 @@ next wave once they have all recorded a verb. So siblings run at the same time a
 latency and no re-derived context, while the board is unchanged: every node is still claimed, worked in its own
 worktree, and finished with its own terminal verb and its own PR. Every node stays a durable checkpoint, so a track
 runner that dies leaves a board the ordinary dispatcher finishes node by node — and a root that has had one track
-attempt is never handed to a second track runner. Put it on the **root only**
-(`hkb adopt <root> --agent claude-track --status todo`) and give it a `max_runtime` and a budget for the whole track.
+attempt is never handed to a second track runner. Nothing has to be turned on: a root with unfinished children is
+dispatched as a track by default, and `hkb track <root>` says so and why (`hkb track <root> --off` runs its children
+as cold nodes instead; `hkb adopt <root> --agent claude-track` forces one). Give the root a `max_runtime` and a
+budget for the whole track.
 A track costs one `max_in_progress` slot however many nodes it holds — which makes it the only way to run a wave
 wider than the board's slot count — and per-node `kb.paths`, disjoint by construction, are what keep a wave from
 fighting over files. Cross-harness tracks are out of scope: a node on a profile outside the track runner's

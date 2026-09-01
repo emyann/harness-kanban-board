@@ -1,8 +1,8 @@
 // Argument parsing + command routing. Every command has --json; output is stable for scripts and agents.
 import fs from 'node:fs';
 import { makeContext, makeHookContext } from './board.js';
-import { getTask, fetchBoard, assertOnBoard, loadRun, latestResult, parentResults, issueEvents, addComment, addLabels, setAgent, setStatus, updateBody } from './tasks.js';
-import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, createTask, linkTask, withOutbox, envAttempt } from './lifecycle.js';
+import { getTask, fetchBoard, assertOnBoard, loadRun, latestResult, parentResults, issueEvents, addComment, addLabels, ensureLabels, removeLabel, setAgent, setStatus, updateBody, blockersOf, blockersKnown } from './tasks.js';
+import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, createTask, linkTask, withOutbox, envAttempt, mergeCard } from './lifecycle.js';
 import { tick, loop, spawnWorker } from './dispatch.js';
 import { serve } from './serve.js';
 import { up, down } from './up.js';
@@ -15,10 +15,10 @@ import { stopHook, markSessionClaim } from './hook.js';
 import { init, packageVersion } from './init.js';
 import { doctor } from './doctor.js';
 import { gc } from './gc.js';
-import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, resumeCommand, activePrGuard } from './model.js';
+import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, formatDenials, resumeCommand, activePrGuard, isTrackRoot, groomBoard, computeReady, pathOverlapGuard, GROOM_LEVELS } from './model.js';
 
 /** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
-const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'with-actions', 'mermaid', 'serve', 'help']);
+const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'triage-only', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'with-actions', 'mermaid', 'serve', 'off', 'on', 'help']);
 
 export function parseArgs(argv) {
   const flags = {};
@@ -41,7 +41,7 @@ export function parseArgs(argv) {
 // The protocol must not depend on shell quoting of JSON: every field can come inline, from a file, or from one JSON
 // object on stdin. Per field the precedence is inline > --*-file > --from-stdin. No GitHub calls happen here.
 
-const STDIN_KEYS = ['summary', 'metadata', 'artifacts', 'reason', 'kind', 'reviewer'];
+const STDIN_KEYS = ['summary', 'metadata', 'artifacts', 'reason', 'kind', 'reviewer', 'no_pr'];
 const TERMINAL_VERBS = ['complete', 'block', 'request-review'];
 
 /**
@@ -143,7 +143,12 @@ export function resolveTerminalInput(verb, flags, rest, io = {}) {
 
   const kind = str(flags.kind) ?? str(stdin.kind) ?? null;
   const reviewer = str(flags.reviewer) ?? str(stdin.reviewer) ?? null;
-  return { summary, metadata, artifacts, reason, kind, reviewer };
+  // --no-pr "<why>": complete only — an explicit statement that this card needed no PR, so `complete`
+  // does not have to guess between that and a protocol violation (#234). stdin's "no_pr" is the same field.
+  const noPrFlag = flags['no-pr'];
+  const noPrReason = typeof noPrFlag === 'string' ? noPrFlag : (typeof stdin.no_pr === 'string' ? stdin.no_pr : null);
+  const noPr = noPrFlag !== undefined || stdin.no_pr !== undefined;
+  return { summary, metadata, artifacts, reason, kind, reviewer, noPr, noPrReason };
 }
 
 /**
@@ -160,6 +165,9 @@ export function terminalArgv(verb, number, p, { board, attempt } = {}) {
     if (p.metadata && Object.keys(p.metadata).length) argv.push('--metadata', JSON.stringify(p.metadata));
     if (p.artifacts?.length) argv.push('--artifacts', p.artifacts.join(','));
     if (verb === 'request-review' && p.reviewer) argv.push('--reviewer', p.reviewer);
+    // `p` is either resolveTerminalInput's output (noPr/noPrReason) or a raw kanban_complete MCP call
+    // (no_pr) — terminalArgv replays both into the same CLI flag.
+    if (verb === 'complete' && (p.noPr || p.no_pr !== undefined)) argv.push('--no-pr', p.noPrReason || p.no_pr || '');
   }
   if (board) argv.push('--board', board);
   if (attempt) argv.push('--attempt', String(attempt));
@@ -176,20 +184,39 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
               doctor [--api] [--json]
   tasks       create "title" [--body ..] [--blocked-by 12,13] [--agent claude] [--priority N] [--paths a/,b/]
                      [--model m] [--skills s1,s2] [--max-retries N] [--max-runtime S] [--scheduled-at ISO] [--triage] [--goal ".."]
-                     --priority is a number and higher wins (default 0); --triage files it unstarted, else it lands ready
+                     --priority is a number and higher wins (0 unfiled/default, 1 normal, 2 next up, 3 urgent)
+                     --triage files it unstarted, else it lands ready
+                     --skills grants the Skill tool on hkb's default profiles (Skill is in CLAUDE_TOOLS);
+                     a custom profile needs "Skill" in its own allowed_tools too, or hkb doctor flags it
               list [--status s] [--agent p] [--all] [--json]      show <n> [--json]      context <n>
+                    a triage card whose blockers are all done is flagged ⇡ unblocked
+              groom [--status triage,todo,ready] [--all] [--pairs N] [--level act|ask|info]
+                    [--bodies flagged|all|none] [--json]   the lane as a proposal table — unblocked,
+                    thin spec, overlap, mentions — from one board read. A read like dispatch --dry-run:
+                    it writes nothing. Only a card needing judgment carries its bodyText
               graph <n> [--mermaid] [--json]   the track rooted at <n> — the root plus everything still
                     blocking it — as a fenced mermaid block GitHub renders in issues, comments and files:
                     hkb comment 12 "$(hkb graph 12)"      --json adds { nodes, edges, mermaid }
+              track <n> [--off|--on] [--json]   whether #n runs as ONE orchestrated session and why.
+                    A card with unfinished children is a track by default; --off (kb:no-track) runs
+                    them as cold nodes instead, --on undoes it, --agent <a track profile> forces one
+              edit <n>... [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]
+                    sets exactly the kb keys named — every other key is left as read; the write half of
+                    what hkb groom's unblocked/no_paths/malformed_kb/broad_path/priority_inversion suggest
               link <parent> <child>   unlink <parent> <child>      promote <n>...      archive <n>...
               adopt <n>... [--agent p]     comment <n> "text"      log <n> [--json]    status <n>
   worker      heartbeat <n> [--note ..]     finish <n> --summary ".." [--metadata JSON|path.json] [--artifacts a,b]
               block <n> "reason" [--kind dependency|needs_input|capability|transient]     unblock <n>...
               request-review <n> --summary ".." [--metadata ..] [--reviewer <github-user>]   request-changes <n> "reason"
               finish|block|request-review also take --summary-file <p> --metadata-file <p> --reason-file <p>, or
-              --from-stdin with one JSON object {summary, metadata, artifacts, reason, kind, reviewer} (no shell quoting)
+              --from-stdin with one JSON object {summary, metadata, artifacts, reason, kind, reviewer, no_pr} (no shell quoting)
               finish is complete — the same verb under a name no shell claims: complete is a bash builtin,
               so a harness that vets a command word by word (Claude Code in a worktree) refuses to run it
+              finish refuses to land in done with no PR found (records protocol_violation instead) unless
+              you pass --no-pr "why this card needed none"
+  operator    merge <n> [--summary ".."]   merges #n's PR under dispatch.merge.mode "operator" once a
+                    review is on the card (a named reviewer, or --summary naming what was checked);
+                    refuses naming the condition otherwise, and refuses outright under "manual"/"auto"
   dispatch    up [--serve] [--loop S] [--port N]   start the dispatcher loop — and with --serve the board
                     server — detached, idempotently, logging to .kanban/logs/<dispatch|serve>.log.
                     Already running is reported, never started twice; up is not a supervisor and
@@ -224,7 +251,102 @@ export { packageVersion as readVersion };
 const out = (ctx, obj, text) => { process.stdout.write((ctx.json ? JSON.stringify(obj, null, 2) : text ?? JSON.stringify(obj, null, 2)) + '\n'); };
 const nums = (pos) => pos.map((p) => Number(String(p).replace(/^#/, ''))).filter((n) => Number.isInteger(n) && n > 0);
 const usage = (msg) => { const e = new Error(msg); e.exitCode = 2; return e; };
+
+/**
+ * One line per outcome `promote` produced, cards sharing an outcome grouped together — a cascade that
+ * moves several cards must never read like it moved one (#209). Moved cards get an arrow; skipped and
+ * unchanged cards get their reason instead, so a human can see at a glance what a drag actually did.
+ */
+export function formatPromote(res) {
+  const groups = [];
+  const byLabel = new Map();
+  for (const r of res) {
+    const label = r.unchanged ? (r.reason || `already ${r.status}`) : `→ ${r.status}${r.forced ? ' (forced: blockers not done)' : ''}`;
+    let g = byLabel.get(label);
+    if (!g) { g = { label, numbers: [] }; byLabel.set(label, g); groups.push(g); }
+    g.numbers.push(r.number);
+  }
+  return groups.map((g) => `${g.numbers.map((n) => `#${n}`).join(' ')} ${g.label}`).join(' · ');
+}
 const log = (s) => process.stderr.write(s + '\n');
+
+// ---------- groom: a read, like `hkb dispatch --dry-run` ----------
+
+/** Which lanes get a row when `--status` is not given. */
+const GROOM_STATUSES = ['triage', 'todo', 'ready'];
+/** What `--bodies` accepts. `flagged` is the default and the whole token argument. */
+const GROOM_BODIES = ['flagged', 'all', 'none'];
+
+/**
+ * `hkb groom`'s flags, validated before a single request goes out. Pure, so the error text is a
+ * unit test rather than a network round trip. Unknown `--level`/`--bodies` values exit 2 naming the
+ * list they had to choose from, per the error rule in CLAUDE.md.
+ */
+export function groomOptions(flags = {}) {
+  const statuses = flags.status === undefined ? [...GROOM_STATUSES] : list(str(flags.status), '--status');
+  if (!statuses.length) throw usage(`--status: name at least one lane, comma-separated. Known: ${STATUSES.join(', ')}`);
+  for (const s of statuses) if (!STATUSES.includes(s)) throw usage(`--status: unknown lane "${s}" — one of ${STATUSES.join(', ')}`);
+
+  const level = flags.level === undefined ? null : str(flags.level);
+  if (flags.level !== undefined && (level === null || !GROOM_LEVELS.includes(level))) {
+    throw usage(`--level: unknown level ${JSON.stringify(level ?? flags.level)} — one of ${GROOM_LEVELS.join(', ')}`);
+  }
+
+  const bodies = flags.bodies === undefined ? 'flagged' : str(flags.bodies);
+  if (flags.bodies !== undefined && (bodies === null || !GROOM_BODIES.includes(bodies))) {
+    throw usage(`--bodies: unknown value ${JSON.stringify(bodies ?? flags.bodies)} — one of ${GROOM_BODIES.join(', ')}`);
+  }
+
+  let pairs = 10;
+  if (flags.pairs !== undefined) {
+    pairs = Number(flags.pairs);
+    if (!Number.isInteger(pairs) || pairs < 0) throw usage(`--pairs: a whole number of pairs to list, not ${JSON.stringify(flags.pairs)}`);
+  }
+  return { statuses, level, bodies, pairs, all: !!flags.all };
+}
+
+/**
+ * `--level` is a view over the rows, not a second report: `summary` and `pairs` stay the whole
+ * lane's truth (that is what the counts are for), and only `cards` — with `judgment.cards`, which is
+ * derived from them — narrows to the rows carrying a finding at that level.
+ */
+export function filterGroomLevel(rep, level) {
+  if (!level) return rep;
+  const cards = rep.cards.filter((c) => c.findings.some((f) => f.level === level));
+  const kept = new Set(cards.map((c) => c.number));
+  return { ...rep, cards, judgment: { ...rep.judgment, cards: rep.judgment.cards.filter((n) => kept.has(n)) } };
+}
+
+/**
+ * The human report: a header a person can scan, one `taskLine` row per card ending in its proposal
+ * with the evidence under it, the pair block, and a footer counting what is waiting.
+ * `byNumber` is the board read the report came from — the rows are rendered from the real tasks so
+ * `hkb groom` and `hkb list` print the same card the same way.
+ */
+export function formatGroom(rep, byNumber = new Map()) {
+  const s = rep.summary;
+  const open = Object.entries(s.by_status).reduce((n, [, v]) => n + v, 0);
+  const lanes = Object.keys(s.by_status).sort().map((k) => `${s.by_status[k]} ${k}`).join(' · ');
+  const hubs = s.hubs.length ? s.hubs.map((h) => `${h.path} (${h.cards})`).join(', ') : '(none)';
+  const lines = [`${open} card${open === 1 ? '' : 's'} · ${lanes} · hubs: ${hubs}`, ''];
+
+  if (!rep.cards.length) lines.push('(no card matches)');
+  for (const c of rep.cards) {
+    const t = byNumber.get(c.number);
+    const row = t ? taskLine(t, { known: true }) : `#${String(c.number).padEnd(5)} ${(c.status || '?').padEnd(8)} ${(c.agent || '-').padEnd(10)} p${c.priority}  ${c.title}`;
+    lines.push(`${row}  ⇒ ${c.proposal}`);
+    for (const f of c.findings) lines.push(`      ${f.kind} (${f.level}): ${f.evidence}${f.suggests ? ` → ${f.suggests}` : ''}`);
+  }
+
+  if (rep.pairs.length) {
+    lines.push('', `pairs (${s.one_slot} would take one slot under path_overlap: ${s.path_overlap ?? 'off'})`);
+    for (const p of rep.pairs) lines.push(`  #${p.a} ~ #${p.b}  ${p.score}  ${p.shared.join(', ')} — ${p.why}`);
+  }
+
+  const l = s.levels;
+  lines.push('', `act ${l.act || 0} · ask ${l.ask || 0} · info ${l.info || 0} · judge ${rep.judgment.cards.length} card${rep.judgment.cards.length === 1 ? '' : 's'}, ${rep.judgment.pairs.length} pair${rep.judgment.pairs.length === 1 ? '' : 's'} · blockers from ${rep.blockers_source}`);
+  return lines.join('\n');
+}
 
 /**
  * The dispatcher's life is not a worker's to touch: `dispatch` is what dispatched you, `up` starts a
@@ -237,10 +359,30 @@ function refuseIfWorker(cmd) {
   throw usage(`you are worker for task #${process.env.KB_TASK} — workers never start or stop the dispatcher (\`hkb ${cmd}\`): it is what dispatched you, a second one against the live board causes double-claims, and stopping it strands every attempt it is watching. Test dispatch logic with the fake-gh test double: node --test test/dispatch.test.js`);
 }
 
-function taskLine(t) {
+/**
+ * One line per card. `known` says whether this task's `blockedBy` is a real answer (`blockersKnown`,
+ * src/tasks.js) — the ` ⇡ unblocked` nudge is computed here in memory, from the same rule
+ * `groomBoard` uses (≥ 1 blocker, all done, not parked by `scheduled_at`), and is never guessed: on a
+ * read that did not fill blockers an empty list means "not looked up", not "nothing blocks it".
+ * No new field, no write, no extra request — a triage card whose blockers are all done says so.
+ */
+function taskLine(t, { known = false } = {}) {
   const deps = t.blockedBy?.length ? ` ⇐ ${t.blockedBy.map((b) => (blockerDone(b) ? `#${b.number}✓` : `#${b.number}`)).join(',')}` : '';
   const pr = t.prs?.find((p) => p.state === 'OPEN') ? ` PR#${t.prs.find((p) => p.state === 'OPEN').number}` : '';
-  return `#${String(t.number).padEnd(5)} ${(t.status || '?').padEnd(8)} ${(t.agent || '-').padEnd(10)} p${t.kb.priority}  ${t.title}${deps}${pr}${t.needsHuman ? '  ⚠ needs-human' : ''}`;
+  const unblocked = known && t.status === 'triage' && (t.blockedBy?.length || 0) >= 1 && computeReady(t) ? '  ⇡ unblocked' : '';
+  return `#${String(t.number).padEnd(5)} ${(t.status || '?').padEnd(8)} ${(t.agent || '-').padEnd(10)} p${t.kb.priority}  ${t.title}${deps}${pr}${unblocked}${t.needsHuman ? '  ⚠ needs-human' : ''}`;
+}
+
+/**
+ * One line for an `isTrackRoot` verdict: what the dispatcher will do with this card, why, and the
+ * command that overrides it. The override is named next to the answer on purpose — the mode is
+ * inferred now, so the only thing a human still has to know is how to say no.
+ */
+function trackLine(d, n) {
+  if (d.mode === 'inferred') return `inferred — ${d.why}; one ${d.profile} session runs the subgraph (\`hkb track ${n} --off\` runs them as cold nodes instead)`;
+  if (d.mode === 'forced') return `forced — ${d.why}`;
+  if (d.mode === 'opted-out') return `opted out — ${d.why} (\`hkb track ${n} --on\` puts it back)`;
+  return `no — ${d.why}`;
 }
 
 export async function main(argv) {
@@ -302,8 +444,29 @@ export async function main(argv) {
       let cur = null;
       for (const t of rows) {
         if (t.status !== cur) { cur = t.status; process.stdout.write(`\n${cur.toUpperCase()}\n`); }
-        process.stdout.write('  ' + taskLine(t) + '\n');
+        process.stdout.write('  ' + taskLine(t, { known: blockersKnown(tasks, t) }) + '\n');
       }
+      return 0;
+    }
+    // The lane, judged by arithmetic. One board read (blockers filled for every open card), then the
+    // pure `groomBoard` — no LLM, and **no writes**: `hkb groom` is a read exactly like
+    // `hkb dispatch --dry-run`, and nothing here may change a status, a label or a body.
+    case 'groom': {
+      const o = groomOptions(flags); // validated before the request, so a typo costs nothing
+      const tasks = await fetchBoard(ctx, { includeClosed: o.all, blockers: 'all' });
+      const rep = filterGroomLevel(groomBoard(tasks, {
+        now: new Date(),
+        caps: ctx.caps,
+        pairs: o.pairs,
+        statuses: o.statuses,
+        board: ctx.board,
+        guard: pathOverlapGuard(ctx.cfg),
+        bodies: o.bodies,
+        // provenance lives on the array `fetchBoard` returned and does not survive a reshape,
+        // so it is read here, against that array, and handed to the pure function as a fact
+        blockersFilled: blockersOf(tasks).filled,
+      }), o.level);
+      out(ctx, rep, formatGroom(rep, new Map(tasks.map((t) => [t.number, t]))));
       return 0;
     }
     case 'show': {
@@ -313,10 +476,14 @@ export async function main(argv) {
       const { run } = await loadRun(ctx, n);
       const result = await latestResult(ctx, n);
       const parents = await parentResults(ctx, t);
-      if (ctx.json) { out(ctx, { ...t, run, result, parents }); return 0; }
-      process.stdout.write(`${taskLine(t)}\n${t.url}\n\n${t.bodyText.trim() || '(no description)'}\n\n`);
+      // the card in isolation: `hkb show` reads one issue, and only the board knows whether
+      // something else is still blocked by this one. `hkb track <n>` is the answer that does.
+      const trackVerdict = isTrackRoot(t, ctx.cfg);
+      if (ctx.json) { out(ctx, { ...t, run, result, parents, track: trackVerdict }); return 0; }
+      process.stdout.write(`${taskLine(t, { known: true })}\n${t.url}\n\n${t.bodyText.trim() || '(no description)'}\n\n`);
       process.stdout.write(`kb: ${JSON.stringify(t.kb)}\n`);
       if (t.blockedBy.length) process.stdout.write(`blocked by: ${t.blockedBy.map((b) => `#${b.number} ${b.title || ''} [${blockerDone(b) ? 'done' : String(b.state).toLowerCase()}]`).join('; ')}\n`);
+      if (trackVerdict.mode !== 'none' || trackVerdict.children.length) process.stdout.write(`track: ${trackLine(trackVerdict, n)}\n`);
       if (t.prs.length) process.stdout.write(`PRs: ${t.prs.map((p) => `#${p.number} ${p.state}${p.merged ? ' merged' : p.isDraft ? ' draft' : ''}`).join(', ')}\n`);
       if (run.attempts.length) {
         process.stdout.write(`\nattempts (failures ${run.failures}):\n`);
@@ -327,6 +494,9 @@ export async function main(argv) {
           if (a.job) process.stdout.write(`     job ${a.job}${a.ended_at ? '' : ' · claude attach ' + a.job}\n`);
           const session = formatSession(a);
           if (session) process.stdout.write(`     ${session}\n`);
+          if (a.terminal_reason) process.stdout.write(`     ended: ${a.terminal_reason}\n`);
+          const denials = formatDenials(a);
+          if (denials) process.stdout.write(`     denied: ${denials}\n`);
           const resume = resumeCommand(a, n);
           if (resume) process.stdout.write(`     ${resume}\n`);
         }
@@ -353,6 +523,25 @@ export async function main(argv) {
       out(ctx, { ...g, mermaid }, mermaid);
       return 0;
     }
+    // Will this card run as a track, and why — plus the one switch that overrides the answer.
+    // Reads the whole board because the decision is a graph one: a card something else is still
+    // blocked by is a node of that bigger track, not a root of its own.
+    case 'track': {
+      const [n] = nums(rest);
+      if (!n) throw usage('hkb track <n> [--off] [--on] [--json]');
+      const tasks = await fetchBoard(ctx);
+      const t = tasks.find((x) => x.number === n) || await getTask(ctx, n);
+      if (flags.off || flags.on) {
+        if (flags.off && flags.on) throw usage('hkb track <n> takes --off or --on, not both');
+        if (flags.off) { await ensureLabels(ctx, [L.noTrack]); await addLabels(ctx, t, [L.noTrack]); }
+        else await removeLabel(ctx, t, L.noTrack);
+      }
+      const d = isTrackRoot(t, ctx.cfg, { board: tasks });
+      const track = d.track ? resolveTrack(n, new Map(tasks.map((x) => [x.number, x]))) : null;
+      const nodes = track ? track.nodes.map((x) => x.number) : [];
+      out(ctx, { number: n, ...d, nodes }, `#${n} track: ${trackLine(d, n)}${nodes.length ? `\nnodes: ${nodes.map((x) => `#${x}`).join(' → ')} → #${n}` : ''}`);
+      return 0;
+    }
     case 'status': {
       const [n] = nums(rest);
       if (!n) throw usage('hkb status <n>');
@@ -371,9 +560,32 @@ export async function main(argv) {
     case 'promote': {
       const ns = nums(rest);
       if (!ns.length) throw usage('hkb promote <n>...');
+      const triageOnly = !!flags['triage-only'];
       const res = [];
-      for (const n of ns) res.push(await promote(ctx, n));
-      out(ctx, res, res.map((r) => `#${r.number} → ${r.status}${r.forced ? ' (forced: blockers not done)' : ''}`).join('\n'));
+      for (const n of ns) res.push(...await promote(ctx, n, { triageOnly }));
+      out(ctx, res, formatPromote(res));
+      return 0;
+    }
+    // The write half of the kb block: `hkb groom`'s `unblocked`/`no_paths`/`malformed_kb`/`broad_path`/
+    // `priority_inversion` findings all suggest an `hkb edit` line — this is the verb that runs it.
+    // Only the flags actually passed change; every other key of the kb block is left exactly as read.
+    case 'edit': {
+      const ns = nums(rest);
+      if (!ns.length) throw usage('hkb edit <n>... [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]');
+      const fields = {};
+      if (flags.paths !== undefined) fields.paths = list(str(flags.paths), '--paths');
+      if (flags.goal !== undefined) fields.goal = str(flags.goal);
+      if (flags['scheduled-at'] !== undefined) fields.scheduled_at = str(flags['scheduled-at']);
+      if (flags.priority !== undefined) fields.priority = Number(flags.priority);
+      if (!Object.keys(fields).length) throw usage('hkb edit <n>... needs at least one of --paths/--goal/--scheduled-at/--priority');
+      const res = [];
+      for (const n of ns) {
+        const t = await getTask(ctx, n);
+        const kb = { ...t.kb, ...fields };
+        await updateBody(ctx, t, kb);
+        res.push({ number: n, kb });
+      }
+      out(ctx, res, res.map((r) => `#${r.number} kb: ${Object.keys(fields).join(', ')} set`).join('\n'));
       return 0;
     }
     case 'archive': {
@@ -437,11 +649,11 @@ export async function main(argv) {
     }
     case 'complete': {
       const [n] = nums(rest);
-      if (!n) throw usage('hkb finish <n> --summary ".." [--metadata JSON|path] [--artifacts a,b] | --summary-file p --metadata-file p | --from-stdin   (finish = complete)');
+      if (!n) throw usage('hkb finish <n> --summary ".." [--metadata JSON|path] [--artifacts a,b] [--no-pr "why"] | --summary-file p --metadata-file p | --from-stdin   (finish = complete)');
       const p = resolveTerminalInput(cmd, flags, rest);
       const replay = argvForOutbox && terminalArgv(cmd, n, p, { board: ctx.board, attempt: flags.attempt || envAttempt(n) });
-      const r = await withOutbox(ctx, replay, () => complete(ctx, n, { summary: p.summary, metadata: p.metadata, artifacts: p.artifacts, attempt: flags.attempt }));
-      out(ctx, r, `#${n} → ${r.status}${r.pr ? ` (waiting on PR #${r.pr}${r.pr_continued ? ', continued' : ''})` : ''}`);
+      const r = await withOutbox(ctx, replay, () => complete(ctx, n, { summary: p.summary, metadata: p.metadata, artifacts: p.artifacts, attempt: flags.attempt, noPr: p.noPr, noPrReason: p.noPrReason }));
+      out(ctx, r, r.protocol_violation ? `#${n} → ${r.status} (protocol violation: no PR found)` : `#${n} → ${r.status}${r.pr ? ` (waiting on PR #${r.pr}${r.pr_continued ? ', continued' : ''})` : ''}`);
       return 0;
     }
     case 'block': {
@@ -475,6 +687,13 @@ export async function main(argv) {
       if (!n) throw usage('hkb request-changes <n> "reason"');
       const r = await requestChanges(ctx, n, { reason: rest.slice(1).join(' ') });
       out(ctx, r, `#${n} → ${r.status}${r.pr ? ` (PR #${r.pr} stays open; the next attempt continues it)` : ''}`);
+      return 0;
+    }
+    case 'merge': {
+      const [n] = nums(rest);
+      if (!n) throw usage('hkb merge <n> [--summary ".."]   merges under dispatch.merge.mode "operator" once a review is on the card');
+      const r = await mergeCard(ctx, n, { summary: flags.summary });
+      out(ctx, r, `#${n} → PR #${r.pr} merged (${r.method})`);
       return 0;
     }
     case 'claim': {

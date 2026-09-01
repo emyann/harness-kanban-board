@@ -34,7 +34,7 @@ the mistakes actually happen.
 | Board | label `kb:board:<slug>` | one issue belongs to one board; cross-board links are refused |
 | Profile (assignee) | label `kb:agent:<profile>` | profile = launcher + model + caps in `.kanban/board.json` |
 | Needs a human | label `kb:needs-human` | orthogonal flag; set on gave_up, block loops, most block kinds |
-| Machine fields | `<!-- kb: {...} -->` block at the top of the body | `priority, workspace, max_runtime, max_retries, model, skills[], paths[], scheduled_at, idempotency_key, goal`. `priority` is a number, **higher wins**, default `0` (`--priority N`; the tick sorts *ready* by it, then oldest issue first). Malformed → defaults, never a crash |
+| Machine fields | `<!-- kb: {...} -->` block at the top of the body | `priority, workspace, max_runtime, max_retries, model, skills[], paths[], scheduled_at, idempotency_key, goal`. `priority` is a number, **higher wins**, default `0` (`--priority N`; the tick sorts *ready* by it, then oldest issue first). Band: `0` unfiled (default) · `1` normal · `2` next up · `3` urgent — see `README.md`. Malformed → defaults, never a crash |
 | Dependencies | GitHub issue dependencies: child **blocked by** parent | Hermes parent→child. A blocker counts as done only when closed as *completed* |
 | Attempts (Hermes `runs`) | one `<!-- kb-run -->` comment, fenced JSON | `attempts[] {attempt, profile, host, pid, started_at, heartbeat_at, lock_sha, ended_at, outcome, summary, reason, log, session_id, transcript_path, total_cost_usd, num_turns, duration_ms}`, `failures`, `block_loops`. `lock_sha` is where the lock ref started, so the worker's first CAS heartbeat knows what to lease on. The session fields are recorded once, by the Stop hook and the dispatcher: `hkb show <n>` prints them with a `claude --resume <id>` line. A track attempt also carries `track: true` and `track_nodes[]` — the subgraph it was handed, and the marker that says this root has had its one go at the fast engine. An attempt from a `"mode": "trigger"` profile (`claude-action`) carries `remote: true`: the launch only *started* work elsewhere, so there is no pid or job anywhere to look at. An attempt from `hkb claim <n>` with no `--spawn` carries `manual: true` — the operator claimed it and is working it in their own terminal, so there is no pid either; both are judged by the heartbeat alone. An attempt the dispatcher started to **continue** a PR the reviewer sent back carries `continues_pr: <number>`, and `continues_branch: <head branch>` when the dispatcher managed to put the checkout on that branch, and `continues_branch_stale: <why>` when that checkout could not be fast-forwarded to the remote head (the brief then says how to catch it up) (without it, the brief is what tells the worker which PR to push to). `profile` is normally a board profile, but three values are **reserved and synthetic** (the row also carries `synthetic: true`, and opens and closes in the same instant): `dispatcher` — the tick wrote the row itself, out of retries (`gave_up`); `reviewer` — `hkb request-changes` sent the card back (`changes_requested`); `human` — the operator ran a terminal verb by hand on a task with no open attempt and no `kb:agent:*` label. Do not name a board profile after one of them |
 | Structured handoff | `<!-- kb-result -->` comment per completion / review request | `{summary, metadata{changed_files, verification, dependencies, residual_risk, retry_notes}, artifacts[]}` |
@@ -42,7 +42,7 @@ the mistakes actually happen.
 | Claim | git ref `refs/kb/locks/<n>/<attempt>` | create = atomic claim (201 claimed / held on **422 "Reference already exists"** — the observed duplicate response, verified 2026-08-26 — or 409 / anything else unknown → back off) |
 | Heartbeat | the same ref, advanced by CAS | `git push origin <new>:<ref> --force-with-lease=<ref>:<expected>`; rejected lease = `LOCK_LOST` (exit 3). See below |
 | Output | branch + draft PR with `Closes #n` | PR merge closes the issue; an open PR moves the task to `review` |
-| Merging | the operator, or GitHub's auto-merge — never hkb, never a worker | `dispatch.merge.mode` in `.kanban/board.json`: `manual` (default) leaves the last step to the human; `auto` has the **dispatcher** enable GitHub's auto-merge on the card's PR once, at review time. Board policy, because a rote click on one repo is the one gate worth keeping on another. `hkb doctor` refuses `auto` on a base branch that requires no status check and no approving review — auto-merge there lands the PR the moment it opens |
+| Merging | the operator, the operator seat, or GitHub's auto-merge — never a worker | `dispatch.merge.mode` in `.kanban/board.json`, three-way: `manual` (default) leaves the last step to the human, by hand, on GitHub; `operator` delegates the click to whoever drives the operator seat, but only once a review is on the card — `hkb merge <n>` (optionally `--summary "what you checked"`) enforces the condition (`dispatch.merge.require: {checks, review_comment}`, both default on) and refuses, naming what is missing, when it is not met; `auto` has the **dispatcher** enable GitHub's auto-merge on the card's PR once, at review time. Board policy, because a rote click on one repo is the one gate worth keeping on another, and a human delegating it in conversation is still the human's call — `dispatch.merge.mode: "operator"` is how that delegation gets written down instead of re-litigated every session (#189). `hkb doctor` refuses `auto` on a base branch that requires no status check and no approving review — auto-merge there lands the PR the moment it opens; it prints `operator`'s effective condition instead of staying silent, since that mode is never a default anyone reaches by accident |
 
 Precedence when they disagree: run comment > labels > body block.
 
@@ -133,6 +133,10 @@ the dispatcher owns their lock. `hkb heartbeat <n> --note "..."` always takes th
 
 One GraphQL query per board per tick; everything else is per-task and only for tasks that changed state.
 
+`hkb groom` is a **read** of the same board, exactly as `hkb dispatch --dry-run` is a read of this tick: it
+reports the backlog lane's findings from one board query and changes no status, no label and no transition.
+Nothing about the tick above depends on whether it has been run.
+
 ### `path_overlap` guard — three modes
 
 The guard exists to avoid the *merge* conflict when two open PRs touch the same files, never the working-copy
@@ -179,7 +183,7 @@ of them can see the others.
 ```bash
 hkb create "Token bucket + tests" --priority 2 --paths src/limit.js,test/limit.test.js --body "$(cat a.md)"     # → #41 ready
 hkb create "Wire the limiter into the server" --blocked-by 41 --priority 2 --paths src/server.js --body "$(cat b.md)"  # → #42 todo
-hkb create "Document the limits and the 429 contract" --priority 3 --paths docs/,README.md --body "$(cat c.md)" # → #43 ready
+hkb create "Document the limits and the 429 contract" --priority 1 --paths docs/,README.md --body "$(cat c.md)" # → #43 ready
 hkb link 42 12 && hkb link 43 12    # the leaves; #12 is now blocked by both
 hkb promote 12                      # triage → todo (link first: promote on a todo task forces ready)
 hkb graph 12 >> graph.md            # the picture of what you just built (below)
@@ -193,7 +197,7 @@ TODO
 
 READY
   #41    ready    claude     p2  Token bucket + tests
-  #43    ready    claude     p3  Document the limits and the 429 contract
+  #43    ready    claude     p1  Document the limits and the 429 contract
 ```
 
 Tick 1 claims **#41 and #43** together — their `paths` are disjoint, so `path_overlap` lets both run (default
@@ -253,7 +257,7 @@ issues, the same labels, the same verbs. What changes is who runs them.
 | | node dispatch (default) | track runner |
 |---|---|---|
 | Granularity | one cold session per node | one session for the whole subgraph — an **orchestrator**, one isolated subagent per node |
-| Selected by | any `ready` task | a root whose profile has `"track": true` (`claude-track`) |
+| Selected by | any `ready` task | a root with unfinished children, by default (`isTrackRoot`) — or any card whose own profile has `"track": true` |
 | Lock claimed by the dispatcher | the task's | the **root's** only |
 | Node locks | — | claimed by the runner, a **wave** at a time, as it reaches each wave |
 | Heartbeat | the task's own lock ref | the **root's** lock ref covers every node under it |
@@ -327,9 +331,15 @@ node dispatch when the tasks are unrelated, when they span harnesses (`track_age
 judged on its own attempt history. A track is also the only way to run a subgraph wider than `max_in_progress`: its
 wave costs one slot however wide it is.
 
+Which is what the dispatcher assumes: a card with unfinished children that nothing else is still blocked by is a
+track, on the board's track profile, with no adopt step (`isTrackRoot`, src/model.js). The `kb:agent:*` label is the
+override in both directions and stays on the card either way — it is what node dispatch reads on every fallback.
+
 ```bash
-hkb adopt 12 --agent claude-track --status todo   # the decomposed root from the example above
+hkb track 12                                      # → #12 track: inferred — 3 unfinished children; one claude-track …
 hkb dispatch --dry-run                            # → #12: [dry-run] would run track #41 → #42 → #43 → #12
+hkb track 12 --off                                # kb:no-track: run the children as cold nodes after all
+hkb adopt 12 --agent claude-track --status todo   # the other way: force a track the graph would not infer
 ```
 
 ## Projects v2 mirror (optional)

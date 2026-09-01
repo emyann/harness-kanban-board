@@ -2,9 +2,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { ghCmd } from './gh.js';
-import { worktreePath, parseRepoSpecs, mergeBoardEntry, stripNodeModulesBin, pidFileStale, SAFE_BUILTINS, EFFORT_LEVELS } from './model.js';
+import {
+  worktreePath, parseRepoSpecs, mergeBoardEntry, stripNodeModulesBin, pidClaimStale,
+  parseBtimeSec, parseKernBoottimeSec, SAFE_BUILTINS, EFFORT_LEVELS,
+} from './model.js';
 
 // A background worker has nobody to answer a permission prompt, so the allowlist must cover
 // every command an agent plausibly reaches for; anything else is denied, never prompted (see #23).
@@ -21,7 +24,9 @@ const SHELL_TOOLS = ['hkb *', 'git *', 'gh pr *', 'gh issue view *', 'npm *', 'n
 const BUILTIN_TOOLS = SAFE_BUILTINS.map((c) => `${c} *`);
 // deduped: `echo` and `printf` are on both lists, and a repeated pattern is noise in a flag a human reads
 const SHELL_PATTERNS = [...new Set([...SHELL_TOOLS, ...BUILTIN_TOOLS])];
-const CLAUDE_TOOLS = [...SHELL_PATTERNS.map((c) => `Bash(${c})`), 'Edit', 'Write', 'Read', 'Glob', 'Grep'];
+// `Skill` lets a worker load a task's `kb.skills` (src/context.js) — the field otherwise names a tool
+// `dontAsk` is guaranteed to deny, since an unlisted tool is refused rather than prompted (#114).
+const CLAUDE_TOOLS = [...SHELL_PATTERNS.map((c) => `Bash(${c})`), 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'Skill'];
 // A track runner is an ORCHESTRATOR: it fans a wave of independent nodes out to one isolated
 // subagent each (`Agent` with `isolation: "worktree"`), so siblings run at the same time instead of
 // one after another. `Agent` is the whole unlock — measured against Claude Code 2.1.251 (#129), a
@@ -168,10 +173,14 @@ export const DEFAULT_BOARD = {
     // pre-#185 `path_guard: true|false` still works too, for a board that already set it.
     guards: { path_overlap: null },
     daily_spawn_cap: 40,
-    // The last step. "manual" is today's behaviour: hkb never merges, the operator does. Set
-    // { "mode": "auto", "method": "squash" } and the dispatcher asks GitHub's own auto-merge to
-    // land a reviewed card's PR once the branch's required checks go green — one mutation per PR,
-    // and `hkb doctor` refuses the mode outright on a branch with nothing to wait for.
+    // The last step. "manual" is today's behaviour: hkb never merges, the operator does, by hand,
+    // on GitHub. "operator" delegates the click to whoever drives the operator seat, but only once
+    // a review is on the card — `hkb merge <n>` enforces that condition and writes down that it
+    // was met; see `mergePolicy`/`mergeDecision` in src/model.js. Set { "mode": "auto", "method":
+    // "squash" } and the dispatcher asks GitHub's own auto-merge to land a reviewed card's PR once
+    // the branch's required checks go green — one mutation per PR, and `hkb doctor` refuses the
+    // mode outright on a branch with nothing to wait for. `require: { checks, review_comment }`
+    // (both default true) only apply to "operator".
     merge: { mode: 'manual', method: 'squash' },
   },
   profiles: DEFAULT_PROFILES,
@@ -204,19 +213,47 @@ export function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
 
+/** `/proc/<pid>/cmdline`, raw (NUL-joined argv) — null if there is no `/proc` or the pid is gone. */
+function readCmdline(pid, proc) {
+  if (!pid) return null;
+  try { return fs.readFileSync(path.join(proc, String(pid), 'cmdline'), 'utf8'); } catch { return null; }
+}
+
+/**
+ * The kernel-reported boot instant, in epoch seconds — `/proc/stat`'s `btime` on Linux, `sysctl -n
+ * kern.boottime` on macOS — or null where neither is available (`pidFileStale` then derives boot
+ * from `os.uptime()` instead).
+ */
+function readBtimeSec(proc) {
+  if (process.platform === 'darwin') {
+    try { return parseKernBoottimeSec(execFileSync('sysctl', ['-n', 'kern.boottime'], { encoding: 'utf8' })); } catch { return null; }
+  }
+  try { return parseBtimeSec(fs.readFileSync(path.join(proc, 'stat'), 'utf8')); } catch { return null; }
+}
+
 /**
  * The pid a pid file names, when it was written (mtime — the process wrote it as it started), and
  * whether that claim survived a reboot: a file older than this boot names a pid the kernel has since
  * handed to somebody else, so `stale` is the difference between stopping the dispatcher and stopping
- * a stranger (`pidFileStale`). Every caller that acts on a pid — `processState`, the dispatcher's
- * singleton lock, the server's claim — must read `stale` as "there is no claim here".
+ * a stranger. The timestamp verdict is corroborated against `/proc/<pid>/cmdline` before it is acted
+ * on (`pidClaimStale`) — a live pid whose argv still says `hkb dispatch --loop` / `hkb serve` is ours
+ * whatever the arithmetic says (WSL2's clock resyncing across suspend/resume walks the derived boot
+ * instant past pid files written earlier in the same session, #205); a live pid that does not match
+ * stays refused (#202's reused-pid case). Every caller that acts on a pid — `processState`, the
+ * dispatcher's singleton lock, the server's claim — must read `stale` as "there is no claim here".
+ * `proc` is injected so a test can fake `/proc` without a real reboot or a real stranger process.
  */
-export function readPidFile(root, name) {
+export function readPidFile(root, name, { proc = '/proc' } = {}) {
   try {
     const file = pidFile(root, name);
     const pid = Number(fs.readFileSync(file, 'utf8').trim()) || null;
     const at = fs.statSync(file).mtime.toISOString();
-    return { pid, at, stale: pidFileStale(at, { uptime: os.uptime() }) };
+    const alive = pidAlive(pid);
+    const stale = pidClaimStale({
+      at, name, alive, cmdline: alive ? readCmdline(pid, proc) : null,
+      uptime: os.uptime(), btimeSec: readBtimeSec(proc),
+    });
+    return { pid, at, stale };
   } catch { return { pid: null, at: null, stale: false }; }
 }
 

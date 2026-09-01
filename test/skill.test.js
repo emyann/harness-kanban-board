@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseSkillVersion, compareVersions, STATUSES, OUTCOMES, BLOCK_KINDS } from '../src/model.js';
+import { parseSkillVersion, compareVersions, STATUSES, OUTCOMES, BLOCK_KINDS, GROOM_KINDS, GROOM_ACTIONS } from '../src/model.js';
 import { EVENT_KINDS } from '../src/watch.js';
 import { agentsSkillDir, isPackageRepo, linkSkill, copySkill, readSkillVersion, packageSkillDir, claudeCommandsDir, commandNames, installCommands } from '../src/init.js';
 import { checkSkill, checkCommands } from '../src/doctor.js';
@@ -181,7 +181,7 @@ test('doctor warns when the commands the skill documents are not registered (#92
   const root = tmpRepo('some-app');
   const missing = commandCheck(root);
   assert.equal(missing.ok, null);
-  assert.equal(missing.detail, '/kanban:decompose, /kanban:operate, /kanban:specify not registered — the skill documents them');
+  assert.equal(missing.detail, '/kanban:decompose, /kanban:groom, /kanban:operate, /kanban:specify not registered — the skill documents them');
   assert.equal(missing.fix, 'hkb init');
 
   installCommands(root);
@@ -227,8 +227,84 @@ test('the operate section names the loop it runs and the line it must not cross 
   assert.match(section, /Monitor tool/, 'a Claude Code session has to be told which tool arms the watch');
   // and the boundary: what stays with the human
   assert.match(section, /\.kanban\/board\.json/, 'board policy is the human\'s, so the file has to be named as off-limits');
-  assert.match(section, /`manual`/, 'the manual merge policy is the one approval the seat may never take');
+  assert.match(section, /`"manual"`/, 'the manual merge policy is the one approval the seat may never take');
+  assert.match(section, /`"operator"`/, 'the operator merge policy is the one merge the seat may take, condition enforced by hkb merge');
+  assert.match(section, /`"auto"`/, 'the auto merge policy hands the merge to GitHub, so the seat has nothing to do');
+  assert.match(section, /hkb merge/, 'the operate section must name the verb that enforces the operator merge condition (#189)');
   assert.match(section, /hkb dispatch/, 'the seat must be told never to run the dispatcher itself');
+});
+
+// ---------- the groomer's own section (#228) ----------
+// `hkb groom` reports and never judges; this section is the judging half. Its findings table is written
+// against GROOM_KINDS and its action column against GROOM_ACTIONS, so a kind or an action added to
+// src/model.js must not become a report row the procedure has no answer for — and the procedure must
+// not invent a verb the CLI does not have.
+
+/** A `## <title>` section of the shipped SKILL.md, up to the next top-level heading. */
+function skillSection(title) {
+  const skill = fs.readFileSync(path.join(REPO, 'skills', 'kanban', 'SKILL.md'), 'utf8');
+  const start = skill.indexOf(`\n## ${title}`);
+  assert.notEqual(start, -1, `SKILL.md must carry the ${title} section the command delegates to`);
+  const rest = skill.slice(start + 1);
+  const end = rest.indexOf('\n## ', 1);
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
+const groomSection = () => skillSection('/kanban:groom ');
+
+/** The first cell of every body row of the markdown table whose header line contains `header`. */
+function tableColumn(section, header) {
+  const lines = section.split('\n');
+  const at = lines.findIndex((l) => l.startsWith('|') && l.includes(header));
+  assert.notEqual(at, -1, `the groom section must carry the table headed "${header}"`);
+  const out = [];
+  for (const line of lines.slice(at + 2)) {
+    if (!line.startsWith('|')) break;
+    out.push(line.split('|')[1].trim().replace(/`/g, ''));
+  }
+  return out;
+}
+
+test('the groom section has a row for every GROOM_KINDS kind (#228)', () => {
+  const kinds = tableColumn(groomSection(), '| kind | prints as |');
+  for (const kind of Object.keys(GROOM_KINDS)) {
+    assert.ok(kinds.includes(kind),
+      `/kanban:groom must say what to do about \`${kind}\` — a kind with no row is a finding the pass has no answer for`);
+  }
+  assert.deepEqual([...new Set(kinds)], kinds, 'one row per kind, not two');
+});
+
+test('the groom action column is exactly GROOM_ACTIONS (#228)', () => {
+  const section = groomSection();
+  const actions = tableColumn(section, '| action | what it means |');
+  assert.deepEqual([...actions].sort(), [...GROOM_ACTIONS].sort(),
+    'the action vocabulary is closed: every GROOM_ACTIONS value gets a row and nothing else may');
+  // and the worked table proposes with the same words, so the example cannot drift from the vocabulary
+  const lines = section.split('\n');
+  const at = lines.findIndex((l) => l.startsWith('| card | action |'));
+  assert.notEqual(at, -1, 'the section must show one worked proposal table');
+  for (const line of lines.slice(at + 2)) {
+    if (!line.startsWith('|')) break;
+    const action = line.split('|')[2].trim().replace(/`/g, '');
+    assert.ok(GROOM_ACTIONS.includes(action), `"${action}" is not a GROOM_ACTIONS value`);
+  }
+});
+
+test('the groom section invokes only real hkb verbs, and reads the board once (#228)', () => {
+  const section = groomSection();
+  const cli = fs.readFileSync(path.join(REPO, 'src', 'cli.js'), 'utf8');
+  for (const [, verb] of section.matchAll(/\bhkb ([a-z][a-z-]*)/g)) {
+    assert.ok(cli.includes(`case '${verb}'`),
+      `/kanban:groom names \`hkb ${verb}\`, which is not a case in src/cli.js — the procedure may not invent a verb`);
+  }
+  for (const bit of ['hkb groom --json', 'stop for a yes', '--triage', 'forced']) {
+    assert.ok(section.includes(bit), `the procedure must name ${bit}`);
+  }
+  // the dispatcher is a read here and nothing else: --dry-run always, --loop never
+  for (const after of section.split('hkb dispatch').slice(1)) {
+    assert.ok(after.startsWith(' --dry-run'), 'every `hkb dispatch` in the groom section must be `--dry-run`');
+  }
+  assert.equal(section.includes('--loop'), false, 'the groomer never starts a dispatcher loop');
 });
 
 test('this repo self-hosts: .agents/skills/kanban is a link to skills/kanban', () => {

@@ -5,14 +5,15 @@ import { GhError, isOffline, graphql, rest } from './gh.js';
 import { outboxFile, api } from './board.js';
 import {
   getTask, assertOnBoard, loadRun, saveRun, setStatus, addLabels, removeLabel, addComment, closeIssue, reopenIssue,
-  fetchBoard, createIssue, ensureLabels, issueDatabaseId, addBlockedBy, removeBlockedBy,
+  fetchBoard, createIssue, ensureLabels, issueDatabaseId, addBlockedBy, removeBlockedBy, prChecksState, mergePullRequest,
 } from './tasks.js';
 import { release, lockExists, lockSha, localBeatSha, casHeartbeat, resyncBeatChain, dropBeatChain, remoteName } from './lock.js';
 import { sessionForAttempt } from './hook.js';
 import {
-  openAttempt, computeReady, blockerDone, serializeResultComment, serializeBodyBlock, hashReason,
-  heartbeatMode, lockRef, BLOCK_KINDS, DEFAULT_KB, L,
+  openAttempt, computeReady, blockerDone, promoteDecision, serializeResultComment, serializeBodyBlock, hashReason,
+  heartbeatMode, lockRef, BLOCK_KINDS, DEFAULT_KB, L, mergePolicy, mergeDecision,
 } from './model.js';
+import { resolveTrack } from './track.js';
 
 const nowIso = () => new Date().toISOString();
 
@@ -249,12 +250,46 @@ async function finishPr(ctx, decision, { reviewer } = {}) {
 /** `pr` / `pr_head` for the attempt row, so the run record says which PR the attempt produced. */
 export const prAttemptFields = (decision) => (decision.pr ? { pr: decision.pr.number, pr_head: decision.pr.headRefName || null } : {});
 
-export async function complete(ctx, number, { summary, metadata = {}, artifacts = [], attempt } = {}) {
+/**
+ * What a missing PR does to `complete`: naming the fix, never a silent `done`. Pure.
+ *
+ * A worker's brief says "open a draft PR that says Closes #n" — so a card `complete` reaches with no
+ * PR (not even via the head-branch fallback `getTask` already tried) is either a protocol violation
+ * or a card that genuinely needed no PR, and hkb cannot tell those apart from here (#234). Silently
+ * picking "done" is the failure the values forbid — the two cases above shipped as *done* with the
+ * work sitting in an unreferenced open PR. So without an explicit `noPr` override this refuses to
+ * land in done: it records the attempt as `protocol_violation` and leaves the card where a human
+ * (or the next attempt) will see it, instead of closing the issue out from under the missing work.
+ */
+export function noPrDecision(number, { noPr, noPrReason } = {}) {
+  if (noPr) return { ok: true, no_pr_reason: noPrReason ? String(noPrReason).slice(0, 300) : null };
+  return {
+    ok: false,
+    reason: `no PR found for #${number} — closedByPullRequestsReferences and the head-branch fallback ` +
+      `(kb/${number}, kb-${number}-*, worktree-kb-${number}-*) both came up empty. A worker's brief says ` +
+      `"open a draft PR that says Closes #${number}". Open it (or retarget an existing one onto this task's ` +
+      `own branch or the default branch) and finish again, or if this card genuinely needed no PR, ` +
+      `finish again with --no-pr "<why>".`,
+  };
+}
+
+export async function complete(ctx, number, { summary, metadata = {}, artifacts = [], attempt, noPr, noPrReason } = {}) {
   assertPayload({ summary, metadata, artifacts }, 'what changed, for the next worker');
   const task = await getTask(ctx, number);
   assertOnBoard(ctx, task);
   const runRec = await loadRun(ctx, number);
   const decision = prReadyDecision(task.prs);
+  if (!decision.pr) {
+    const noPrCheck = noPrDecision(number, { noPr, noPrReason });
+    if (!noPrCheck.ok) {
+      const a = await finishAttempt(ctx, task, runRec, { attempt }, 'protocol_violation', { reason: noPrCheck.reason.slice(0, 400) });
+      await saveRun(ctx, number, runRec);
+      await addComment(ctx, number, `**Protocol violation** (attempt ${a.attempt}): ${noPrCheck.reason}`);
+      await setStatus(ctx, task, 'blocked', { add: [L.needsHuman] });
+      return { number, attempt: a.attempt, status: 'blocked', protocol_violation: true, reason: noPrCheck.reason };
+    }
+    metadata = { ...metadata, no_pr: true, ...(noPrCheck.no_pr_reason ? { no_pr_reason: noPrCheck.no_pr_reason } : {}) };
+  }
   const a = await finishAttempt(ctx, task, runRec, { attempt }, 'completed', { summary: String(summary).slice(0, 400), ...prAttemptFields(decision) });
   runRec.run.failures = 0;
   await saveRun(ctx, number, runRec);
@@ -361,6 +396,37 @@ export async function requestChanges(ctx, number, { reason } = {}) {
   };
 }
 
+/**
+ * `hkb merge <n>` — the verb `dispatch.merge.mode: "operator"` exists for (#189). A thin wrapper:
+ * the policy check and the refusal wording are `mergeDecision` (pure, in src/model.js), so the
+ * condition is enforced by code and not just remembered by whoever is driving the operator seat.
+ * `summary`, when given, both satisfies `require.review_comment` (naming what was checked, when no
+ * earlier `review_requested` row already named a reviewer) and becomes the review line in the
+ * record comment. Never merges on a `manual` or `auto` board, and never on a red check — see
+ * `mergeDecision`'s refusals for the exact wording of each.
+ */
+export async function mergeCard(ctx, number, { summary } = {}) {
+  const task = await getTask(ctx, number);
+  assertOnBoard(ctx, task);
+  const policy = mergePolicy(ctx.cfg);
+  const runRec = await loadRun(ctx, number);
+  const openPr = (task.prs || []).find((p) => p && p.state === 'OPEN') || null;
+  let checksState = null;
+  if (!policy.error && policy.mode === 'operator' && openPr) {
+    checksState = policy.require.checks ? await prChecksState(ctx, openPr.number) : 'SUCCESS';
+  }
+  const decision = mergeDecision(task, runRec.run, policy, { summary, checksState });
+  if (!decision.ok) { const e = new Error(decision.reason); e.exitCode = 2; throw e; }
+  const nodeId = await prNodeId(ctx, decision.pr);
+  if (!nodeId) { const e = new Error(`PR #${decision.pr.number} came back without a node id — merge refused`); e.exitCode = 2; throw e; }
+  await mergePullRequest(ctx, { nodeId }, decision.mergeMethod);
+  const attempt = [...runRec.run.attempts].reverse().find((a) => a.pr === decision.pr.number);
+  if (attempt) { attempt.merged_by = 'operator'; await saveRun(ctx, number, runRec); }
+  const checksNote = policy.require.checks ? 'green' : 'not required';
+  await addComment(ctx, number, `**Merged by the operator seat** — review: ${decision.reviewDetail || 'not required'}, checks: ${checksNote}, method: ${decision.method}`);
+  return { number, pr: decision.pr.number, method: decision.method, merged: true, merged_by: 'operator' };
+}
+
 // ---------- board verbs (create, link) ----------
 
 /**
@@ -419,16 +485,42 @@ export async function linkTask(ctx, parent, child, { unlink = false } = {}) {
   return { parent, child, status: fresh.status, linked: !unlink };
 }
 
-export async function promote(ctx, number) {
-  const task = await getTask(ctx, number);
-  assertOnBoard(ctx, task);
-  if (task.status === 'triage') { await setStatus(ctx, task, 'todo'); return { number, status: 'todo' }; }
-  if (['todo', 'blocked'].includes(task.status)) {
-    await removeLabel(ctx, task, L.needsHuman);
-    await setStatus(ctx, task, 'ready');
-    return { number, status: 'ready', forced: !computeReady(task) };
+/**
+ * Promote `number` and every task still blocking it (`resolveTrack`, #209) — the root plus its
+ * subgraph, one call. A card with no open blockers left resolves to a track of one and gets exactly
+ * today's single-card behaviour, forcing included; a real subgraph never forces a blocker to `ready` —
+ * see `promoteDecision`. Returns one row per card the track touches, moved or not, so a cascade that
+ * moves several cards never reports as if it moved one.
+ *
+ * `triageOnly` (#238) is the guard a batch promote wants: a card named on the command line can have
+ * moved on — dispatched, hand-promoted — between the moment something decided to promote it and the
+ * moment this call runs. Without the guard, promoting a card that is no longer in *triage* silently
+ * forces it (a `todo` root has no open blockers of its own, so `allowForce` is true) and the caller had
+ * to notice a `forced` line in the output after the fact to catch it. With it, a root that is not in
+ * *triage* is skipped before anything is read or written — same shape as any other skip, so a batch
+ * that mixes triage and already-moved cards gets one report, not a forced write to explain away.
+ */
+export async function promote(ctx, number, { triageOnly = false } = {}) {
+  const n = Number(number);
+  const byNumber = new Map((await fetchBoard(ctx)).map((t) => [t.number, t]));
+  let root = byNumber.get(n);
+  if (!root) { root = await getTask(ctx, n); byNumber.set(n, root); }
+  assertOnBoard(ctx, root);
+  if (triageOnly && root.status !== 'triage') {
+    return [{ number: root.number, status: root.status, unchanged: true, skipped: true, reason: `not in triage — already ${root.status}` }];
   }
-  return { number, status: task.status, unchanged: true };
+  const track = resolveTrack(n, byNumber);
+  const allowForce = track.nodes.length === 0; // no open blockers: a track of one, today's behaviour
+  const results = [];
+  for (const t of track.order) {
+    const decision = promoteDecision(t, { allowForce });
+    const from = t.status;
+    if (decision.to === from) { results.push({ number: t.number, status: from, unchanged: true, skipped: !!decision.skipped, reason: decision.reason }); continue; }
+    if (decision.to === 'ready') await removeLabel(ctx, t, L.needsHuman);
+    await setStatus(ctx, t, decision.to);
+    results.push({ number: t.number, status: decision.to, from, forced: !!decision.forced });
+  }
+  return results;
 }
 
 export async function archive(ctx, number) {

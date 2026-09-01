@@ -4,8 +4,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
 import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches } from './board.js';
-import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun } from './tasks.js';
-import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard } from './model.js';
+import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun, openPrsByHead, issueDatabaseId } from './tasks.js';
+import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren, branchTaskNumber } from './model.js';
 import { resolvedIdentity } from './hook.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName } from './lock.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, harnessHookCommand, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
@@ -349,11 +349,21 @@ export const MERGE_CHECK = 'merge policy';
  * whole difference between "the operator's rote click, automated" and "agent-authored code on the
  * default branch, unreviewed and untested". So the combination is a hard failure with a named fix,
  * and this check is what makes the feature safe to ship. Silent on a `manual` board — the default
- * changes nothing, so it has nothing to report.
+ * changes nothing, so it has nothing to report. `"operator"` is a delegation a human made in
+ * conversation, not a default anyone can reach by accident, so it always prints — mode and the
+ * condition `hkb merge` enforces — so the delegation is visible to whoever reads `hkb doctor` next,
+ * not just to the session that received it (#189).
  */
 export async function checkMergePolicy(ctx, { ok, bad }) {
   const policy = mergePolicy(ctx.cfg);
   if (policy.error) return bad(MERGE_CHECK, policy.error, `fix "dispatch": {"merge": {...}} in ${path.relative(ctx.root, boardFile(ctx.root))}`);
+  if (policy.mode === 'operator') {
+    const conditions = [];
+    if (policy.require.review_comment) conditions.push('a review on the card (a named reviewer, or hkb merge --summary naming what was checked)');
+    if (policy.require.checks) conditions.push('the PR\'s own checks green');
+    const condition = conditions.length ? conditions.join(' and ') : 'nothing — require.checks and require.review_comment are both off';
+    return ok(MERGE_CHECK, `operator (${policy.method}) — hkb merge <n> merges once ${condition}; otherwise it hands the PR back, same as manual`);
+  }
   if (policy.mode !== 'auto') return null;
   const branch = ctx.cfg.default_branch || 'main';
   let protection, gate;
@@ -419,12 +429,122 @@ export async function checkAgentLabels(ctx, { ok, warn }, { fetch = fetchBoard, 
   warn(AGENT_LABEL_CHECK, `${plural(doubled.length, 'task')} on two profiles at once: ${detail}`, fix);
 }
 
+export const ORPHANED_PR_CHECK = 'orphaned PRs';
+
+/**
+ * "Your board has lost track of work" — the check #234 was written for. An open PR whose head is a
+ * branch hkb itself would have created for one of its cards (`taskBranchRe`/`branchTaskNumber`),
+ * where the card no longer has any way to see it.
+ *
+ * `fetchBoard`/`getTask` now apply the same head-branch match as a live fallback for every *open*
+ * card (`fillPrFallback`, src/tasks.js), so an orphan on a card still open self-heals the moment
+ * anything reads it. What that fallback cannot reach is a card already closed — `fetchBoard`'s
+ * default read is open issues only, so a card that went to *done* (or *archived*) with the bug this
+ * task fixes never gets revisited, and its PR would sit there, unreferenced, forever. That is exactly
+ * #227 and #228: closed as done, work unmerged, nothing left to chase it. One read for every open PR
+ * on hkb's own branches, then one issue lookup per match (usually a handful) to see which are closed.
+ */
+export async function checkOrphanedPrs(ctx, { ok, warn }, { openByHead = openPrsByHead, issue = issueDatabaseId } = {}) {
+  const byHead = await openByHead(ctx);
+  const candidates = [];
+  for (const [head, pr] of byHead) {
+    const n = branchTaskNumber(head);
+    if (n) candidates.push({ n, pr });
+  }
+  if (!candidates.length) return ok(ORPHANED_PR_CHECK, 'no open PR sits on a branch hkb would have made for one of its own cards');
+  const orphans = [];
+  for (const { n, pr } of candidates) {
+    let row;
+    try { row = await issue(ctx, n); } catch { continue; } // unreadable — not this check's failure to report
+    if (String(row.state).toUpperCase() !== 'CLOSED') continue; // open: the live fallback already covers it
+    orphans.push({ n, pr: pr.number, reason: row.state_reason || 'closed', url: pr.url });
+  }
+  if (!orphans.length) return ok(ORPHANED_PR_CHECK, `${plural(candidates.length, 'open PR')} on hkb's own branches, all on cards still open`);
+  const detail = orphans.map((o) => `#${o.n} (${o.reason}) ← PR #${o.pr}`).join(' · ');
+  warn(ORPHANED_PR_CHECK,
+    `${plural(orphans.length, 'card')} closed with an open PR still sitting on its branch, unreferenced: ${detail}`,
+    'reopen the card (hkb request-changes "…", or hkb adopt + hkb unblock) so a worker picks the PR back up, or merge the PR by hand and leave the card closed');
+  return orphans;
+}
+
+export const TRACK_PROFILE_CHECK = 'track profile';
+
+/**
+ * Can this board run a track at all? A card with unfinished children is a track by default
+ * (`isTrackRoot`) — one session orchestrating the whole subgraph — but only if some profile in
+ * board.json carries `"track": true`. Without one every decomposed goal falls back to node
+ * dispatch: correct, just slower and with the context re-derived between every dependent pair.
+ *
+ * Configured boards pay nothing: the second board read (this one needs blockers, which the shared
+ * one deliberately skips) only happens when there is no track profile to find and the answer might
+ * therefore be actionable.
+ */
+export async function checkTrackProfile(ctx, { ok, warn }, { fetch = fetchBoard } = {}) {
+  const tracks = Object.entries(ctx.cfg?.profiles || {}).filter(([, p]) => p?.track).map(([n]) => n);
+  if (tracks.length) return ok(TRACK_PROFILE_CHECK, `${tracks.join(', ')} — a card with unfinished children runs as one session`);
+  let tasks;
+  try { tasks = await fetch(ctx); } catch (e) { return warn(TRACK_PROFILE_CHECK, `no profile runs tracks, and the board would not read: ${e.message}`); }
+  const roots = tasks.filter((t) => unfinishedChildren(t).length);
+  if (!roots.length) return ok(TRACK_PROFILE_CHECK, 'no profile runs tracks, and nothing on the board has unfinished children');
+  warn(TRACK_PROFILE_CHECK,
+    `${plural(roots.length, 'card')} with unfinished children (${nameSome(roots.map((t) => `#${t.number}`), 3)}) and no profile with "track": true — every one of them runs node by node`,
+    'hkb init --profiles claude-track — it adds the track profile to board.json; nothing else has to change');
+}
+
 /**
  * The one board read the card checks share. Returns `{tasks}` or `{error}` so each check reports
  * the failure in its own words rather than one of them swallowing it for the others.
  */
 export async function boardOnce(ctx, fetch = fetchBoard) {
   try { return { tasks: await fetch(ctx, { blockers: false }) }; } catch (e) { return { error: e.message }; }
+}
+
+export const GROOM_BLOCKERS_CHECK = 'groom blockers';
+
+/**
+ * What a groom costs on this repo. `hkb groom` reports on every open card, so it asks
+ * `fetchBoard` for `blockers: 'all'` — and where GraphQL has no `Issue.blockedBy` that is one
+ * REST call per open card rather than the tick's todo/blocked handful. Nobody should discover
+ * that by running it on a board of two hundred; the price is named here, next to the capability.
+ */
+export function checkGroomBlockers(ctx, { ok, warn }, { caps, board = null } = {}) {
+  if (caps?.blockedByGql) return ok(GROOM_BLOCKERS_CHECK, 'blockers ride the board query — hkb groom costs no extra request');
+  const open = board && !board.error ? board.tasks.length : null;
+  const cost = open === null ? 'one REST call per open card' : `${plural(open, 'REST call')} — one per open card`;
+  warn(GROOM_BLOCKERS_CHECK, `no GraphQL Issue.blockedBy, so hkb groom fills blockers itself: ${cost}`,
+    'nothing to fix — expect the run to be slower than a tick on a large board');
+}
+
+export const TASK_SKILLS_CHECK = 'task skills';
+
+/**
+ * A card's `kb.skills` (src/context.js) tells its worker to invoke the `Skill` tool — but only a
+ * Claude Code launch has that tool, and it only runs rather than being denied under `dontAsk` when
+ * the profile's `allowed_tools` names it (#114). hkb's own default profiles carry `Skill` now
+ * (`CLAUDE_TOOLS`, src/board.js), so this catches what the default cannot reach: a profile pinned
+ * in board.json before the fix, or a custom-named one that never had it — on a card that actually
+ * sets the field, so a board that never uses `kb.skills` has nothing to warn about.
+ *
+ * Non-Claude launches (Codex, Copilot) are skipped: `Skill` names a Claude Code tool, and their own
+ * `allowed_tools` lists mean something else entirely.
+ */
+export async function checkTaskSkills(ctx, { ok, warn }, { fetch = fetchBoard, board = null } = {}) {
+  const b = board || await boardOnce(ctx, fetch);
+  if (b.error) return warn(TASK_SKILLS_CHECK, `could not read the board: ${b.error}`);
+  const withSkills = b.tasks.filter((t) => t.kb.skills?.length);
+  if (!withSkills.length) return null;
+  const missing = withSkills.filter((t) => {
+    const p = ctx.cfg?.profiles?.[t.agent];
+    if (!p || (p.launch || [])[0] !== 'claude') return false;
+    return Array.isArray(p.allowed_tools) && !p.allowed_tools.includes('Skill');
+  });
+  if (!missing.length) return ok(TASK_SKILLS_CHECK, `${plural(withSkills.length, 'task')} set kb.skills, and every profile they run on allows the Skill tool`);
+  const detail = missing.map((t) => `#${t.number} (${t.agent})`).join(' · ');
+  const profiles = [...new Set(missing.map((t) => t.agent))];
+  warn(TASK_SKILLS_CHECK,
+    `${plural(missing.length, 'task')} set kb.skills but run on a profile whose allowed_tools denies Skill, and dontAsk denies rather than prompts: ${detail}`,
+    `add "Skill" to "allowed_tools" on the ${profiles.join(', ')} profile${profiles.length === 1 ? '' : 's'} in ${path.relative(ctx.root, boardFile(ctx.root))}`);
+  return missing;
 }
 
 // ---------- can this board be priced? ----------
@@ -1002,7 +1122,7 @@ export async function doctor(ctx, flags, log) {
   try {
     const labels = new Set();
     for (let page = 1; page <= 3; page++) { const b = await rest('GET', api(ctx, `/labels?per_page=100&page=${page}`)); for (const l of b || []) labels.add(l.name); if (!b || b.length < 100) break; }
-    const missing = [...STATUSES.map(L.status), L.board(ctx.board), L.needsHuman].filter((l) => !labels.has(l));
+    const missing = [...STATUSES.map(L.status), L.board(ctx.board), L.needsHuman, L.noTrack].filter((l) => !labels.has(l));
     missing.length ? bad('labels', `missing ${missing.join(', ')}`, 'hkb init') : ok('labels', `${[...labels].filter((l) => l.startsWith('kb:')).length} kb:* labels`);
   } catch (e) { bad('labels', e.message); }
 
@@ -1010,7 +1130,10 @@ export async function doctor(ctx, flags, log) {
   // and a background profile that has stopped recording sessions is a board nothing can price
   const board = await boardOnce(ctx);
   await checkAgentLabels(ctx, { ok, warn }, { board });
+  await checkTrackProfile(ctx, { ok, warn });
+  await checkTaskSkills(ctx, { ok, warn }, { board });
   await checkSessions(ctx, { ok, warn }, { board });
+  await checkOrphanedPrs(ctx, { ok, warn });
 
   // rate limit, token class, token expiry — one call
   await checkToken({ ok, warn, bad });
@@ -1020,6 +1143,7 @@ export async function doctor(ctx, flags, log) {
     const caps = await detectCaps(ctx, { force: true });
     caps.blockedByGql ? ok('GraphQL Issue.blockedBy', 'available (one query per tick)') : warn('GraphQL Issue.blockedBy', 'not in schema — falling back to REST dependencies per task', 'check docs; run doctor again later');
     caps.closedByPrs ? ok('GraphQL closedByPullRequestsReferences', 'available (active_pr guard)') : warn('GraphQL closedByPullRequestsReferences', 'not in schema — active_pr guard disabled');
+    checkGroomBlockers(ctx, { ok, warn }, { caps, board });
   } catch (e) { bad('GraphQL', e.message); }
 
   // the last step — silent unless the board asked GitHub to take it (`merge.mode: "auto"`)
