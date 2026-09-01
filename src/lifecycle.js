@@ -10,9 +10,10 @@ import {
 import { release, lockExists, lockSha, localBeatSha, casHeartbeat, resyncBeatChain, dropBeatChain, remoteName } from './lock.js';
 import { sessionForAttempt } from './hook.js';
 import {
-  openAttempt, computeReady, blockerDone, serializeResultComment, serializeBodyBlock, hashReason,
+  openAttempt, computeReady, blockerDone, promoteDecision, serializeResultComment, serializeBodyBlock, hashReason,
   heartbeatMode, lockRef, BLOCK_KINDS, DEFAULT_KB, L,
 } from './model.js';
+import { resolveTrack } from './track.js';
 
 const nowIso = () => new Date().toISOString();
 
@@ -419,16 +420,31 @@ export async function linkTask(ctx, parent, child, { unlink = false } = {}) {
   return { parent, child, status: fresh.status, linked: !unlink };
 }
 
+/**
+ * Promote `number` and every task still blocking it (`resolveTrack`, #209) — the root plus its
+ * subgraph, one call. A card with no open blockers left resolves to a track of one and gets exactly
+ * today's single-card behaviour, forcing included; a real subgraph never forces a blocker to `ready` —
+ * see `promoteDecision`. Returns one row per card the track touches, moved or not, so a cascade that
+ * moves several cards never reports as if it moved one.
+ */
 export async function promote(ctx, number) {
-  const task = await getTask(ctx, number);
-  assertOnBoard(ctx, task);
-  if (task.status === 'triage') { await setStatus(ctx, task, 'todo'); return { number, status: 'todo' }; }
-  if (['todo', 'blocked'].includes(task.status)) {
-    await removeLabel(ctx, task, L.needsHuman);
-    await setStatus(ctx, task, 'ready');
-    return { number, status: 'ready', forced: !computeReady(task) };
+  const n = Number(number);
+  const byNumber = new Map((await fetchBoard(ctx)).map((t) => [t.number, t]));
+  let root = byNumber.get(n);
+  if (!root) { root = await getTask(ctx, n); byNumber.set(n, root); }
+  assertOnBoard(ctx, root);
+  const track = resolveTrack(n, byNumber);
+  const allowForce = track.nodes.length === 0; // no open blockers: a track of one, today's behaviour
+  const results = [];
+  for (const t of track.order) {
+    const decision = promoteDecision(t, { allowForce });
+    const from = t.status;
+    if (decision.to === from) { results.push({ number: t.number, status: from, unchanged: true, skipped: !!decision.skipped, reason: decision.reason }); continue; }
+    if (decision.to === 'ready') await removeLabel(ctx, t, L.needsHuman);
+    await setStatus(ctx, t, decision.to);
+    results.push({ number: t.number, status: decision.to, from, forced: !!decision.forced });
   }
-  return { number, status: task.status, unchanged: true };
+  return results;
 }
 
 export async function archive(ctx, number) {
