@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseArgs, formatPromote } from '../src/cli.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { parseArgs, formatPromote, main, groomOptions, filterGroomLevel, formatGroom } from '../src/cli.js';
+import { DEFAULT_BOARD } from '../src/board.js';
+import { GROOM_LEVELS } from '../src/model.js';
+import { FakeGh, kbIssue } from './fake-gh.js';
 
 test('parseArgs: positionals, --k v, --k=v, booleans, --', () => {
   const { flags, pos } = parseArgs(['create', 'Add auth', '--blocked-by', '12,13', '--priority=2', '--triage', '--json', '--', '--not-a-flag']);
@@ -34,4 +40,143 @@ test('formatPromote: a forced leaf and a blocker skipped for a human read differ
     { number: 30, status: 'blocked', unchanged: true, skipped: true, reason: 'blocked — needs human' },
   ]);
   assert.equal(line, '#20 → ready (forced: blockers not done) · #30 blocked — needs human');
+});
+
+// ---------- hkb groom (#227): the read verb, its frozen shape, and the unblocked nudge ----------
+
+/** The keys `--json` promises. Frozen: a later finding kind lands in `findings`, nothing is renamed. */
+const REPORT_KEYS = ['board', 'read_at', 'cards_read', 'blockers_source', 'summary', 'cards', 'pairs', 'judgment'];
+const CARD_KEYS = ['number', 'title', 'status', 'agent', 'priority', 'age_days', 'touched_days', 'paths', 'goal', 'blocked_by', 'blocks', 'findings', 'proposal', 'needs_judgment'];
+
+const SPEC = `## Why\n${'why '.repeat(60)}\n\n## What\n${'what '.repeat(60)}\n\n## Done when\n- [ ] it works\n`;
+
+/** A board with one of each interesting row, and a chdir'd checkout `main()` can run against. */
+function groomHarness(t) {
+  const gh = new FakeGh();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-groom-'));
+  fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
+  gh.addIssue(kbIssue({ number: 1, title: 'the blocker', status: 'done', state: 'CLOSED' }));
+  // every blocker done → unblocked → promote, and nothing to judge
+  gh.addIssue(kbIssue({ number: 10, title: 'ready to go', status: 'triage', agent: 'claude', blockedBy: [1], body: SPEC, kb: { paths: ['src/ten.js'], goal: 'ten' } }));
+  // nothing blocks it, thin body → specify, and nothing to judge either
+  gh.addIssue(kbIssue({ number: 11, title: 'a stub', status: 'triage', agent: 'claude', body: 'do it' }));
+  // names #11 and is linked to nothing → mentions_unlinked → needs_judgment → carries its body
+  gh.addIssue(kbIssue({ number: 12, title: 'the judged one', status: 'triage', agent: 'claude', body: `${SPEC}\nsee #11 for context`, kb: { paths: ['src/twelve.js'], goal: 'twelve' } }));
+  gh.addIssue(kbIssue({ number: 13, title: 'already moving', status: 'running', agent: 'claude', body: SPEC, kb: { paths: ['src/thirteen.js'], goal: 'thirteen' } }));
+
+  const cwd = process.cwd();
+  const write = process.stdout.write.bind(process.stdout);
+  let printed = '';
+  process.stdout.write = (s) => { printed += s; return true; };
+  const restore = gh.install();
+  process.chdir(dir);
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+  return { gh, run: async (...argv) => { printed = ''; gh.calls.length = 0; await main(argv); return printed; } };
+}
+
+const boardQueries = (gh) => gh.calls.filter((c) => c.kind === 'graphql' && String(c.query || '').includes('issues(first: 100'));
+const writes = (gh) => gh.calls.filter((c) => c.kind !== 'graphql' && !['GET', null, undefined].includes(c.method));
+
+test('hkb groom --json: one board query, zero writes, and the frozen key set', async (t) => {
+  const { gh, run } = groomHarness(t);
+  const rep = JSON.parse(await run('groom', '--json'));
+
+  assert.equal(boardQueries(gh).length, 1, 'one board read per groom, whatever the lane');
+  assert.deepEqual(writes(gh), [], 'groom is a read, exactly like dispatch --dry-run');
+  assert.deepEqual(Object.keys(rep), REPORT_KEYS);
+  assert.equal(rep.board, 'default');
+  assert.equal(rep.blockers_source, 'graphql');
+  assert.deepEqual(Object.keys(rep.summary).sort(), ['by_status', 'hubs', 'lane', 'levels', 'one_slot', 'path_overlap']);
+  assert.deepEqual(rep.cards.map((c) => c.number), [10, 11, 12], 'triage/todo/ready by default — #13 is running');
+  for (const c of rep.cards) assert.deepEqual(Object.keys(c).filter((k) => k !== 'bodyText'), CARD_KEYS);
+  const ten = rep.cards.find((c) => c.number === 10);
+  assert.equal(ten.proposal, 'promote');
+  assert.ok(ten.findings.some((f) => f.kind === 'unblocked' && f.level === 'act'));
+});
+
+test('hkb groom: only a card needing judgment carries its bodyText — the whole token argument', async (t) => {
+  const { run } = groomHarness(t);
+  const flagged = JSON.parse(await run('groom', '--json'));
+  const has = (rep, n) => Object.hasOwn(rep.cards.find((c) => c.number === n), 'bodyText');
+
+  assert.deepEqual(flagged.judgment.cards, [12]);
+  assert.ok(has(flagged, 12), 'the judged card is the one a human was asked to read');
+  assert.ok(!has(flagged, 10) && !has(flagged, 11), 'a card nobody has to judge carries no body at all');
+
+  const all = JSON.parse(await run('groom', '--json', '--bodies', 'all'));
+  for (const c of all.cards) assert.ok(Object.hasOwn(c, 'bodyText'));
+  const none = JSON.parse(await run('groom', '--json', '--bodies', 'none'));
+  for (const c of none.cards) assert.ok(!Object.hasOwn(c, 'bodyText'));
+});
+
+test('hkb groom prints one row per card, each ending in its proposal, under a header and a footer', async (t) => {
+  const { run } = groomHarness(t);
+  const text = await run('groom', '--status', 'triage');
+  const rows = text.split('\n').filter((l) => /^#\d/.test(l));
+
+  assert.deepEqual(rows.map((l) => Number(/^#(\d+)/.exec(l)[1])), [10, 11, 12]);
+  for (const r of rows) assert.match(r, / ⇒ (promote|specify|link-under|reprioritise|judge|none)$/);
+  assert.match(text, /^\d+ cards · .* · hubs: /);
+  assert.match(text, /\nact \d+ · ask \d+ · info \d+ · judge \d+ cards?, \d+ pairs? · blockers from graphql\n$/);
+  assert.match(rows.find((r) => r.startsWith('#10')), / ⇡ unblocked {2}⇒ promote$/);
+});
+
+test('hkb groom --level narrows the rows without rewriting the report', async (t) => {
+  const { run } = groomHarness(t);
+  const act = JSON.parse(await run('groom', '--json', '--level', 'act'));
+
+  assert.ok(act.cards.length && act.cards.every((c) => c.findings.some((f) => f.level === 'act')));
+  assert.ok(!act.cards.some((c) => c.number === 12), 'nothing mechanical on the judged card');
+  assert.deepEqual(act.judgment.cards, [], 'judgment.cards follows the rows it is derived from');
+  assert.equal(act.summary.lane, 3, 'the counts stay the whole lane, which is what they are for');
+});
+
+test('hkb list: a triage card whose blockers are all done says so, in memory', async (t) => {
+  const { gh, run } = groomHarness(t);
+  const text = await run('list', '--status', 'triage');
+
+  assert.match(text, /#10 .* ⇐ #1✓ {2}⇡ unblocked/);
+  assert.ok(!/#11 .*⇡ unblocked/.test(text), 'no blockers at all is not "unblocked" — it is the default');
+  assert.deepEqual(writes(gh), [], 'the nudge costs no write and no extra request');
+});
+
+test('groomOptions: unknown --level and --bodies exit 2 naming the list', () => {
+  for (const [flags, re] of [
+    [{ level: 'urgent' }, /^--level: unknown level "urgent" — one of act, ask, info, needs_judgment$/],
+    [{ level: true }, /^--level: unknown level true/],
+    [{ bodies: 'some' }, /^--bodies: unknown value "some" — one of flagged, all, none$/],
+    [{ status: 'nope' }, /^--status: unknown lane "nope" — one of /],
+    [{ pairs: 'lots' }, /^--pairs: a whole number/],
+  ]) {
+    assert.throws(() => groomOptions(flags), (e) => e.exitCode === 2 && re.test(e.message), JSON.stringify(flags));
+  }
+  assert.deepEqual(groomOptions({}), { statuses: ['triage', 'todo', 'ready'], level: null, bodies: 'flagged', pairs: 10, all: false });
+  assert.deepEqual(groomOptions({ status: 'triage', level: 'ask', bodies: 'none', pairs: '0', all: true }), { statuses: ['triage'], level: 'ask', bodies: 'none', pairs: 0, all: true });
+  for (const l of GROOM_LEVELS) assert.equal(groomOptions({ level: l }).level, l);
+});
+
+test('filterGroomLevel and formatGroom are pure over the report shape', () => {
+  const card = (number, findings, extra = {}) => ({ number, title: `t${number}`, status: 'triage', agent: 'claude', priority: 1, age_days: 2, touched_days: 1, paths: [], goal: null, blocked_by: [], blocks: [], findings, proposal: 'none', needs_judgment: false, ...extra });
+  const rep = {
+    board: 'default', read_at: '2026-09-01T00:00:00.000Z', cards_read: 2, blockers_source: 'rest',
+    summary: { by_status: { triage: 2 }, hubs: [{ path: 'src/model.js', cards: 4 }], one_slot: 1, levels: { act: 1, ask: 1, info: 0, needs_judgment: 0 }, lane: 2, path_overlap: 'running' },
+    cards: [card(1, [{ kind: 'unblocked', level: 'act', evidence: 'all done', suggests: 'hkb promote 1' }], { proposal: 'promote' }), card(2, [{ kind: 'thin_spec', level: 'ask', evidence: 'body is 12 chars', suggests: null }])],
+    pairs: [{ a: 1, b: 2, score: 0.5, shared: ['src/a.js'], why: 'will serialize under path_overlap' }],
+    judgment: { cards: [2], pairs: [] },
+  };
+  const act = filterGroomLevel(rep, 'act');
+  assert.deepEqual(act.cards.map((c) => c.number), [1]);
+  assert.deepEqual(act.judgment.cards, []);
+  assert.equal(filterGroomLevel(rep, null), rep, 'no --level is the report itself');
+  assert.deepEqual(rep.cards.map((c) => c.number), [1, 2], 'the input is never mutated');
+
+  const text = formatGroom(rep);
+  assert.match(text, /^2 cards · 2 triage · hubs: src\/model\.js \(4\)/);
+  assert.ok(text.includes('  ⇒ promote'));
+  assert.ok(text.includes('      unblocked (act): all done → hkb promote 1'));
+  assert.ok(text.includes('      thin_spec (ask): body is 12 chars\n'), 'a finding with nothing to suggest prints no arrow');
+  assert.ok(text.includes('  #1 ~ #2  0.5  src/a.js — will serialize under path_overlap'));
+  assert.match(text, /act 1 · ask 1 · info 0 · judge 1 card, 0 pairs · blockers from rest$/);
+  assert.ok(!/duplicate/i.test(text), 'the CLI never says duplicate');
 });
