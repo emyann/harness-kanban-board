@@ -5,7 +5,7 @@ import {
   parseRunComment, serializeRunComment, emptyRun, openAttempt, parseResultComment, serializeResultComment,
   blockerDone, computeReady, promoteDecision, pathsOverlap, sortForDispatch, slugify, lockRef, lockRefPath, hashReason,
   normalizeHookInput, stripFrontmatter, sessionUpdate, parseRepoSpecs, boardKey, uniqueKeys, shouldNudgeOnStop, deadAtRecheck,
-  pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, parsePriorityFlag, parseScheduledAtFlag,
+  pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, parsePriorityFlag, parseScheduledAtFlag, boardSummary,
 } from '../src/model.js';
 
 test('body block: round trip and defaults', () => {
@@ -289,4 +289,39 @@ test('parseScheduledAtFlag: an ISO instant parses, junk names the flag and the e
   const past = parseScheduledAtFlag('2020-01-01T00:00:00Z', new Date('2026-01-01T00:00:00Z'));
   assert.equal(past.ok, true);
   assert.match(past.warning, /past/);
+});
+
+// ---------- boardSummary (#204): the opening report's one read ----------
+
+const task = (over) => ({ number: 1, title: 't', status: 'triage', agent: 'claude', kb: { priority: 0 }, needsHuman: false, ...over });
+
+test('boardSummary: per-lane counts and the priority spread within each lane', () => {
+  const s = boardSummary([
+    task({ number: 1, status: 'triage', kb: { priority: 0 } }),
+    task({ number: 2, status: 'triage', kb: { priority: 2 } }),
+    task({ number: 3, status: 'triage', kb: { priority: 2 } }),
+    task({ number: 4, status: 'running', kb: { priority: 1 } }),
+  ]);
+  assert.equal(s.cards, 4);
+  assert.deepEqual(s.by_status, { triage: 3, running: 1 });
+  assert.deepEqual(s.priority, { triage: { 0: 1, 2: 2 }, running: { 1: 1 } });
+  assert.deepEqual(s.needs_human, []);
+});
+
+test('boardSummary: needs-human cards carry enough to act on, and nothing else', () => {
+  const s = boardSummary([
+    task({ number: 5, status: 'blocked', title: 'stuck', agent: 'claude', kb: { priority: 3 }, needsHuman: true }),
+    task({ number: 6, status: 'triage', needsHuman: false }),
+  ]);
+  assert.deepEqual(s.needs_human, [{ number: 5, title: 'stuck', status: 'blocked', agent: 'claude', priority: 3 }]);
+});
+
+test('boardSummary: no issue bodies anywhere in the shape', () => {
+  const s = boardSummary([task({ body: 'a whole issue body', bodyText: 'a whole issue body' })]);
+  assert.equal(JSON.stringify(s).includes('a whole issue body'), false);
+});
+
+test('boardSummary: an empty or missing board is the empty summary, not a throw', () => {
+  assert.deepEqual(boardSummary([]), { cards: 0, by_status: {}, priority: {}, needs_human: [] });
+  assert.deepEqual(boardSummary(undefined), { cards: 0, by_status: {}, priority: {}, needs_human: [] });
 });

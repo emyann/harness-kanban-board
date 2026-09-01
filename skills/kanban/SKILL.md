@@ -244,7 +244,8 @@ runs nothing: it prints what the next tick would claim, which is a read.
 `/kanban:operate` is the first thing a human runs when they sit down. They want the board *working* and the
 smallest thing that tells them where to start; a session that replays `doctor` line by line has spent their
 attention before they have taken a single decision. Read the board once — `hkb groom` gives the lanes, the
-priorities and the findings together, `hkb list` the lanes alone — then print this shape, and nothing else:
+priorities and the findings together, `hkb list --summary` the lane table alone (counts, priority spread,
+`kb:needs-human` cards — no bodies) — then print this shape, and nothing else:
 
 ```
 Board `<slug>` · <owner/repo> → <serve URL>
@@ -269,7 +270,7 @@ Start here: up to four cards worth working now, why each, and the command that s
   here; it does not need restating at them every session. The merge mode earns its clause because it decides
   whether *review* is your lane or theirs.
 - The serve URL is the whole point of `--serve` and the human's way into the board, so it leads the first line.
-  `hkb up` does not print it yet — read it off the first line of `.kanban/logs/serve.log`.
+  `hkb up --serve` and `hkb up --status` both name it (`serve.url` under `--json`) — no log to read.
 
 **Ranking *Start here*.** The point of the line is that a human who has just sat down can say "yes, those
 three" and have the board moving in one reply. Which means it is a *recommendation*, made from the board, with

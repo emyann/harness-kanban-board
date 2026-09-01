@@ -15,7 +15,7 @@ import { stopHook, markSessionClaim } from './hook.js';
 import { init, packageVersion } from './init.js';
 import { doctor } from './doctor.js';
 import { gc } from './gc.js';
-import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, formatDenials, resumeCommand, activePrGuard, isTrackRoot, groomBoard, computeReady, pathOverlapGuard, GROOM_LEVELS, parsePriorityFlag, parseScheduledAtFlag } from './model.js';
+import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, formatDenials, resumeCommand, activePrGuard, isTrackRoot, groomBoard, boardSummary, computeReady, pathOverlapGuard, GROOM_LEVELS, parsePriorityFlag, parseScheduledAtFlag } from './model.js';
 
 /** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
 const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'triage-only', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'with-actions', 'mermaid', 'serve', 'off', 'on', 'help']);
@@ -190,6 +190,8 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
                      a custom profile needs "Skill" in its own allowed_tools too, or hkb doctor flags it
               list [--status s] [--agent p] [--all] [--json]      show <n> [--json]      context <n>
                     a triage card whose blockers are all done is flagged ⇡ unblocked
+              list --summary [--json]   per-lane counts, the priority spread within each and the
+                    kb:needs-human cards, no bodies — one board read, what an opening report needs
               groom [--status triage,todo,ready] [--all] [--pairs N] [--level act|ask|info]
                     [--bodies flagged|all|none] [--json]   the lane as a proposal table — unblocked,
                     thin spec, overlap, mentions — from one board read. A read like dispatch --dry-run:
@@ -224,7 +226,8 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
                     server — detached, idempotently, logging to .kanban/logs/<dispatch|serve>.log.
                     Already running is reported, never started twice; up is not a supervisor and
                     never restarts (exit 4 is the loop asking one to)
-              up --status [--json]     one line per process: running pid, since when, which log
+              up --status [--json]     one line per process: running pid, since when, which log —
+                    and, for serve, the URL it is answering on (serve.url in --json)
               down [--serve]           SIGTERM what the pid files name, then wait for them to be gone
                     before saying stopped; workers are left alone. --json adds failed[] and the exit
                     code is non-zero for a signal that failed or a process that outlived the wait
@@ -437,6 +440,20 @@ export async function main(argv) {
     }
     case 'list': {
       const tasks = await fetchBoard(ctx, { includeClosed: !!flags.all });
+      // The board's shape without its bodies: one read, no per-card lines — what an opening report
+      // needs (is anything in flight, what is waiting on a human) that scanning `hkb list`'s rows or
+      // paying for `hkb stats`'s 7-day history cannot answer any cheaper.
+      if (flags.summary) {
+        const s = boardSummary(tasks);
+        const lanes = STATUSES.filter((st) => s.by_status[st]).map((st) => {
+          const spread = Object.entries(s.priority[st]).sort((a, b) => b[0] - a[0]).map(([p, n]) => `p${p}:${n}`).join(' ');
+          return `${st} ${s.by_status[st]}${spread ? ` (${spread})` : ''}`;
+        }).join(' · ');
+        const human = [`${s.cards} card${s.cards === 1 ? '' : 's'} on board "${ctx.board}" · ${lanes || '(none)'}`];
+        if (s.needs_human.length) human.push(`needs-human: ${s.needs_human.map((t) => `#${t.number} ${t.title}`).join(' · ')}`);
+        out(ctx, s, human.join('\n'));
+        return 0;
+      }
       let rows = tasks;
       if (flags.status) rows = rows.filter((t) => t.status === flags.status);
       if (flags.agent) rows = rows.filter((t) => t.agent === flags.agent);

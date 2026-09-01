@@ -7,20 +7,20 @@ audience: [dev]
 read_when: "touching hkb serve, the board page, the user-level board list, or anything that has to work across more than one checkout"
 covers:
   - path: src/serve.js
-    sha: 27c2fd3b6cc4fc0e57ab7897682eae0fae24206b
+    sha: 83e21743007087c37dc114d32c7f6fce9fa61fab
   - path: web/index.html
     sha: 322aa96236ef37657a9a2326b83dc7b480672134
   - path: src/board.js
-    sha: 955f2c7cfc908fe46ebf264e0cb4c8e722c7a79c
+    sha: 72e9c66eb079e09ad4f221c84874351d794ecdf4
   - path: src/init.js
     sha: aee5eed4dcc544f9a6fe81c7273f96432aaf1048
   - path: src/lifecycle.js
     sha: 98cf380069697936e2b62fb17402bae7099cf06f
   - path: src/track.js
-    sha: ed02aeeffe9c33ce3ce32abd652c59faec8e9286
+    sha: 286c5fff375e47a6f7ebf8d648671a9659872ab4
   - path: src/model.js
-    sha: 022ed7b17c5debc59265f8a1627f82386864de00
-generated_at_commit: bcd1dc5
+    sha: 1396e51d975eb47370284f457492711a4732a4bf
+generated_at_commit: f04038f
 last_refreshed: 2026-09-01
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
@@ -62,6 +62,14 @@ port can be reported as *already up on that port* rather than the generic
 advice — but only when it names a live process that is not this one
 (`portInUse`, `src/serve.js:622-628`). The pid protocol is
 [features/up-and-down](up-and-down.md).
+
+Since #204 `claimServePid` also carries the URL: it writes `.kanban/serve.url`
+to the real bound origin (`http://<host>:<port>`) once the port is actually
+open, overwriting the guess `hkb up` pre-wrote from `--port` at spawn time —
+the same pre-write/correct relationship the pid file already has with
+`claimPid`. `processState('serve', ...)` reads it back (`src/board.js`), so
+`hkb up --serve`, `hkb up --status` and `hkb doctor` all name the URL without
+grepping `.kanban/logs/serve.log`.
 
 ## One server, many boards
 

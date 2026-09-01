@@ -7,22 +7,26 @@ audience: [dev, ops]
 read_when: "changing what a session may do on someone's board, adding an event kind / status / outcome / block kind, or wondering why the operator's limits are prose rather than a guard"
 covers:
   - path: skills/kanban/SKILL.md
-    sha: a6ffdcca307a58e568a02ff17cba8a00ef3e7caa
+    sha: b63cf4b5f47e342aeb35272b03b62d55a364d996
   - path: commands/operate.md
     sha: 868663f4ad694f7e336ebbdfec7952e4afd621e1
   - path: src/watch.js
     sha: 8aba4c441e35c9241124c1278b5f4824706f7e52
   - path: src/model.js
-    sha: 022ed7b17c5debc59265f8a1627f82386864de00
+    sha: 1396e51d975eb47370284f457492711a4732a4bf
   - path: src/cli.js
-    sha: 13555690946205fd3e221a8c0b4dcb2b0a92c623
+    sha: 36d51b6fc11f9737ee96578bd4fb74e866b8c50b
   - path: src/lifecycle.js
     sha: 98cf380069697936e2b62fb17402bae7099cf06f
   - path: src/init.js
     sha: aee5eed4dcc544f9a6fe81c7273f96432aaf1048
   - path: src/stats.js
     sha: f81bc37dad19e253bf23a696ba899b4219dd5e53
-generated_at_commit: bcd1dc5
+  - path: src/doctor.js
+    sha: 5969652bdbc10eb76cf20a3e682f8ac1b43c818e
+  - path: src/up.js
+    sha: d071ce334a8166b27957bb2ad6c07dd683c306cb
+generated_at_commit: f04038f
 last_refreshed: 2026-09-01
 related: [features/planning-commands, decisions/adr-004-roles-and-adoption, features/up-and-down, features/review-loop, concepts/roles-and-seats]
 ---
@@ -170,12 +174,16 @@ wrong:
   section names every token and the commands it must run; no test drives a
   session through a `review` and a `needs_input` transition. That verification is
   a human's, once, on a live board.
-- **The CLI cannot print step 1's screen.** The shape is specified; assembling
-  it is still manual. `hkb up` prints no serve URL, so the URL comes out of the
-  first line of `.kanban/logs/serve.log`, and the lane table comes from `hkb list`
-  (every open card, bodies and all) or from `stats --json`, which pays for a 7-day
-  attempt history to reach `tasks.by_status` and still has no priority spread.
-  Filed as #204.
+- **Assembling step 1's screen is no longer by hand (#204).** `hkb up --serve`
+  and `hkb up --status` now name the running server's URL — from
+  `.kanban/serve.url`, not a `.kanban/logs/serve.log` grep — and `hkb doctor`
+  carries it on its `serve` line too (`checkServe`, `src/doctor.js`). The lane
+  table comes from `hkb list --summary [--json]` (`boardSummary`,
+  `src/model.js`): per-status counts, the priority spread within each, and the
+  `kb:needs-human` cards, from the one board read the tick already makes — no
+  issue bodies, and no `stats --json` 7-day history paid for a lane count.
+  What is still manual is composing those four reads into the screen itself;
+  a session follows the spec in `skills/kanban/SKILL.md` step 1 by hand.
 - **The spend row is ahead of the data.** The section asks for `hkb stats --json`
   once a cycle and names `attempts.by_outcome` and `spend.by_profile`
   (`src/stats.js`), which exist. A per-model breakdown does not — `zeroUsage()`

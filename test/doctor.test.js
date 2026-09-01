@@ -15,9 +15,10 @@ import {
   tokenExpiry, expiryFinding, checkTokenExpiry, checkToken, actionsAnnotation, emitAnnotations, tokenExpiryNotice,
   SESSION_CHECK, SESSION_FIX, SESSION_SAMPLE, POLICY_CHECK, TASK_SKILLS_CHECK,
   sessionTally, sessionFinding, checkSessions, boardOnce, checkAgentLabels, checkTaskSkills, policyLayers, checkPolicyLayer,
-  TRACK_PROFILE_CHECK, checkTrackProfile,
+  TRACK_PROFILE_CHECK, checkTrackProfile, checkDispatcher, checkServe,
 } from '../src/doctor.js';
 import { setTransport, GhError } from '../src/gh.js';
+import { pidFile, writeServeUrl } from '../src/board.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
 const HOUR = 3_600_000;
@@ -309,6 +310,60 @@ function tmpRoot() {
   return root;
 }
 const stateOf = (root) => JSON.parse(fs.readFileSync(path.join(root, '.kanban', 'state.json'), 'utf8'));
+
+// ---------- the two long-running processes ----------
+
+function results() {
+  const rows = [];
+  const ok = (name, detail) => rows.push({ name, ok: true, detail });
+  const warn = (name, detail, fix) => rows.push({ name, ok: null, detail, fix });
+  return { rows, ok, warn };
+}
+
+test('checkServe: nothing has ever started it', () => {
+  const root = tmpRoot();
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  const r = results();
+  checkServe({ root }, r);
+  assert.deepEqual(r.rows, [{ name: 'serve', ok: null, detail: 'no server running', fix: 'hkb up --serve' }]);
+});
+
+/**
+ * The URL is the whole point of `--serve` (#204): a running server's line names it, from
+ * `.kanban/serve.url`, the same file `hkb up --status` reads — no `.kanban/logs/serve.log` grep.
+ */
+test('checkServe: running names the URL and the log, exactly like checkDispatcher does for the pid', () => {
+  const root = tmpRoot();
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(pidFile(root, 'serve'), `${process.pid}\n`);
+  writeServeUrl(root, 'http://127.0.0.1:4666');
+  const r = results();
+  checkServe({ root }, r);
+  assert.equal(r.rows.length, 1);
+  assert.equal(r.rows[0].ok, true);
+  assert.match(r.rows[0].detail, /^running pid \d+ · http:\/\/127\.0\.0\.1:4666 · log \.kanban[/\\]logs[/\\]serve\.log$/);
+});
+
+test('checkServe: running with no serve.url yet (a rare race) still says running, without a bogus URL', () => {
+  const root = tmpRoot();
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(pidFile(root, 'serve'), `${process.pid}\n`);
+  const r = results();
+  checkServe({ root }, r);
+  assert.equal(r.rows[0].detail, `running pid ${process.pid} · log .kanban/logs/serve.log`);
+});
+
+test('checkDispatcher and checkServe read the same pid-file shape, name-scoped to their own process', () => {
+  const root = tmpRoot();
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(pidFile(root, 'dispatch'), `${process.pid}\n`);
+  const r = results();
+  checkDispatcher({ root }, r);
+  checkServe({ root }, r);
+  assert.deepEqual(r.rows.map((x) => x.name), ['dispatcher', 'serve']);
+  assert.equal(r.rows[0].ok, true);
+  assert.equal(r.rows[1].ok, null);
+});
 
 /**
  * The loop's notice with everything it would otherwise read off the process injected: the clock, the

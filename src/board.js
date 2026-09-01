@@ -207,6 +207,19 @@ export function stateFile(root) { return path.join(kanbanDir(root), 'state.json'
 export function pidFile(root, name) { return path.join(kanbanDir(root), `${name}.pid`); }
 export function processLogFile(root, name) { return path.join(logsDir(root), `${name}.log`); }
 
+// `serve.url` is the one fact `.kanban/serve.pid` cannot carry — a pid is a bare number, and the URL
+// is the whole reason a human runs `--serve`. `hkb up` pre-writes it from the port it is about to
+// spawn with (the same reasoning as `claimPid`: idempotence cannot wait for the child to boot), and
+// `hkb serve` overwrites it with the real bound origin once the port is actually open — the one place
+// port 0 (OS-assigned) or a raced default can differ from the guess.
+export function serveUrlFile(root) { return path.join(kanbanDir(root), 'serve.url'); }
+export function readServeUrl(root) { try { return fs.readFileSync(serveUrlFile(root), 'utf8').trim() || null; } catch { return null; } }
+export function writeServeUrl(root, url) {
+  fs.mkdirSync(kanbanDir(root), { recursive: true });
+  fs.writeFileSync(serveUrlFile(root), url + '\n');
+}
+export function dropServeUrl(root) { try { fs.rmSync(serveUrlFile(root), { force: true }); } catch { /* gone */ } }
+
 /** Is that pid a live process? EPERM means alive and not ours, which is still alive. */
 export function pidAlive(pid) {
   if (!pid) return false;
@@ -297,6 +310,7 @@ export function processState(root, name) {
     log: path.relative(root, processLogFile(root, name)),
     exit: exit?.code ?? null,
     exited_at: exit?.at ?? null,
+    ...(name === 'serve' ? { url: running ? readServeUrl(root) : null } : {}),
   };
 }
 

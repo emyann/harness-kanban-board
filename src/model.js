@@ -845,6 +845,31 @@ export function proposeAction(card) {
 }
 
 /**
+ * The board's shape without its bodies: per-lane counts, the priority spread within each lane, and
+ * the cards wearing `kb:needs-human` — the one read `hkb list --summary` answers with. This is what
+ * an operator's opening screen needs (is anything in flight, what is waiting on a human) and what
+ * `hkb list`'s 29-bodies-to-learn-triage-is-full and `hkb stats`'s 7-day spend history both cost too
+ * much to answer. Pure — `fetchBoard` already paid for the query; this just reshapes what it returned.
+ *
+ * @param tasks the board read, as `fetchBoard` returns it
+ */
+export function boardSummary(tasks) {
+  const all = Array.isArray(tasks) ? tasks : [];
+  const by_status = {};
+  const priority = {};
+  const needs_human = [];
+  for (const t of all) {
+    const status = t.status || 'none';
+    by_status[status] = (by_status[status] || 0) + 1;
+    const p = Number(t.kb?.priority ?? 0) || 0;
+    priority[status] = priority[status] || {};
+    priority[status][p] = (priority[status][p] || 0) + 1;
+    if (t.needsHuman) needs_human.push({ number: t.number, title: t.title, status, agent: t.agent, priority: p });
+  }
+  return { cards: all.length, by_status, priority, needs_human };
+}
+
+/**
  * The whole lane report, from the raw `fetchBoard` array and nothing else — no `ctx`, no config
  * object, no second read. That is the contract: a later card puts this same function behind `hkb
  * serve`'s snapshot, so anything it needed beyond the array would have to be fetched twice.
@@ -2033,7 +2058,8 @@ export function processLine(st, { now = new Date(), already = false } = {}) {
   const log = st.log ? ` · log ${st.log}` : '';
   if (st.running) {
     const since = formatSince(st.since, now);
-    return `${st.name} ${already ? 'already ' : ''}running pid ${st.pid}${since ? ` since ${since}` : ''}${log}`;
+    const url = st.url ? ` · ${st.url}` : '';
+    return `${st.name} ${already ? 'already ' : ''}running pid ${st.pid}${since ? ` since ${since}` : ''}${url}${log}`;
   }
   // A pid file older than the boot names a pid this kernel has since reissued: say that, rather than
   // a bare "stopped" that leaves an operator wondering why the file is there.

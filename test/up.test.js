@@ -14,7 +14,7 @@ import { spawn } from 'node:child_process';
 import { up, down, statusReport, childArgv, hkbBin } from '../src/up.js';
 import { claimServePid, portInUse } from '../src/serve.js';
 import { loop } from '../src/dispatch.js';
-import { pidFile, processState, readPidFile, recordExit, readExit, DEFAULT_BOARD } from '../src/board.js';
+import { pidFile, processState, readPidFile, recordExit, readExit, readServeUrl, writeServeUrl, DEFAULT_BOARD } from '../src/board.js';
 import { FakeGh, kbIssue } from './fake-gh.js';
 import {
   PROCESSES, detachedEnv, startDecision, processLine, startLogLine, formatSince, decidePermission,
@@ -401,6 +401,62 @@ test('--port implies --serve, and up --json names what it started and what was a
   assert.equal(j.dispatch.running, true);
 });
 
+// ---------- the serve URL ----------
+
+/**
+ * `--port` is a flag on `up`, so it knows the URL before the child ever boots (#204). This is the
+ * pre-write half: `hkb serve`'s own `claimServePid` is what corrects it once the port is actually
+ * bound, tested in serve.test.js.
+ */
+test('up --serve names the URL it is spawning on, in the started line and --status', async () => {
+  const root = tmpRoot();
+  const out = sink();
+  await up(ctxOf(root, { json: true }), { serve: true }, out, upDeps(fakeSpawn()));
+  const j = JSON.parse(out.lines.join('\n'));
+  assert.equal(j.serve.url, 'http://127.0.0.1:4666', 'the default port, no --port given');
+  assert.equal(readServeUrl(root), 'http://127.0.0.1:4666');
+
+  const human = sink();
+  await up(ctxOf(root), { status: true }, human, upDeps(fakeSpawn()));
+  assert.match(human.lines.find((l) => l.startsWith('serve')), /^serve running pid \d+ since \d\d:\d\d · http:\/\/127\.0\.0\.1:4666 · log/);
+});
+
+test('up --serve --port 4700 spawns on the port it names, and --status agrees', async () => {
+  const root = tmpRoot();
+  const out = sink();
+  await up(ctxOf(root, { json: true }), { port: '4700' }, out, upDeps(fakeSpawn()));
+  const j = JSON.parse(out.lines.join('\n'));
+  assert.equal(j.serve.url, 'http://127.0.0.1:4700');
+});
+
+test('dispatch has no url field: only serve carries one', async () => {
+  const root = tmpRoot();
+  const out = sink();
+  await up(ctxOf(root, { json: true }), {}, out, upDeps(fakeSpawn()));
+  const j = JSON.parse(out.lines.join('\n'));
+  assert.equal('url' in j.dispatch, false);
+});
+
+test('a serve child dead at the recheck leaves no serve.url behind either', async () => {
+  const root = tmpRoot();
+  const dead = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+  await new Promise((r) => dead.on('exit', r));
+  const out = sink();
+  await up(ctxOf(root, { json: true }), { serve: true }, out, upDeps(fakeSpawn(dead.pid)));
+  assert.equal(readServeUrl(root), null, 'up must not leave a URL naming a server that never came up');
+});
+
+test('down --serve drops serve.url along with serve.pid', async (t) => {
+  const root = tmpRoot();
+  // A real (harmless) child, never the test process itself — `down` sends a real SIGTERM here.
+  const child = sleeper(t);
+  const out = sink();
+  await up(ctxOf(root, { json: true }), { serve: true }, out, upDeps(fakeSpawn(child.pid)));
+  assert.ok(readServeUrl(root), 'sanity: up wrote one');
+  await down(ctxOf(root), { serve: true }, sink());
+  assert.equal(readServeUrl(root), null, 'the URL is stale once the server it named is gone');
+});
+
 test('starting again clears the exit that was reported while nothing was running', async () => {
   const root = tmpRoot();
   recordExit(root, 'dispatch', { code: 4, at: '2026-08-28T19:02:00Z', reason: 'gave itself up' });
@@ -719,6 +775,38 @@ test('hkb serve claims the pid file it is stopped by, and never clobbers a live 
   claimServePid(root, (s) => lines.push(s));
   assert.equal(fs.readFileSync(pidFile(root, 'serve'), 'utf8').trim(), String(other.pid));
   assert.match(lines[0], /another hkb serve holds .*serve\.pid \(pid \d+\)/);
+});
+
+/**
+ * `hkb up` pre-writes a guess at the URL from the `--port` it spawned with; `claimServePid` is the
+ * child correcting it once the port is actually bound — the real bound origin wins, and it goes away
+ * with the claim, the same as the pid it rides along with.
+ */
+test('claimServePid overwrites the pre-written URL with the real one, and drops it with the claim', () => {
+  const root = tmpRoot();
+  writeServeUrl(root, 'http://127.0.0.1:4666'); // up's guess, before the child could confirm
+  const drop = claimServePid(root, () => {}, 'http://127.0.0.1:4700'); // port 0 landed elsewhere
+  assert.equal(readServeUrl(root), 'http://127.0.0.1:4700');
+  drop();
+  assert.equal(readServeUrl(root), null, 'the URL is stale once the claim it rode in on is gone');
+});
+
+test('claimServePid with no url leaves whatever serve.url already says alone', () => {
+  const root = tmpRoot();
+  writeServeUrl(root, 'http://127.0.0.1:4666');
+  const drop = claimServePid(root, () => {});
+  assert.equal(readServeUrl(root), 'http://127.0.0.1:4666', 'no url argument: nothing here to correct or to own');
+  drop();
+  assert.equal(readServeUrl(root), 'http://127.0.0.1:4666', 'and so nothing here to drop either');
+});
+
+test('a losing claimServePid never touches the winner\'s serve.url', (t) => {
+  const root = tmpRoot();
+  const other = sleeper(t);
+  fs.writeFileSync(pidFile(root, 'serve'), `${other.pid}\n`);
+  writeServeUrl(root, 'http://127.0.0.1:4666');
+  claimServePid(root, () => {}, 'http://127.0.0.1:9999');
+  assert.equal(readServeUrl(root), 'http://127.0.0.1:4666', 'the loser must not overwrite the URL the winner is actually answering on');
 });
 
 test('a taken port is only reported as "already up" when the pid file agrees', (t) => {

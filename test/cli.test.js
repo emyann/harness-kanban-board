@@ -165,6 +165,48 @@ test('hkb list: a triage card whose blockers are all done says so, in memory', a
   assert.deepEqual(writes(gh), [], 'the nudge costs no write and no extra request');
 });
 
+// ---------- hkb list --summary (#204): the opening report's one read ----------
+
+test('hkb list --summary --json: one board read, per-lane counts, no bodies', async (t) => {
+  const { gh, run } = groomHarness(t);
+  const s = JSON.parse(await run('list', '--summary', '--json'));
+
+  assert.equal(boardQueries(gh).length, 1, 'the same single board read `hkb list` already pays for');
+  assert.deepEqual(Object.keys(s), ['cards', 'by_status', 'priority', 'needs_human']);
+  assert.equal(s.cards, 4);
+  assert.deepEqual(s.by_status, { triage: 3, running: 1 });
+  assert.equal(JSON.stringify(s).includes(SPEC), false, 'no issue bodies in the summary');
+});
+
+test('hkb list --summary prints lanes with their priority spread, and needs-human separately', async (t) => {
+  const { run } = groomHarness(t);
+  const text = await run('list', '--summary');
+  assert.equal(text, '4 cards on board "default" · triage 3 (p0:3) · running 1 (p0:1)\n');
+});
+
+test('hkb list --summary names needs-human cards on their own line', async (t) => {
+  const gh = new FakeGh();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-list-summary-'));
+  fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
+  gh.addIssue(kbIssue({ number: 20, title: 'stuck on a human', status: 'blocked', agent: 'claude', needsHuman: true, kb: { priority: 3 } }));
+  gh.addIssue(kbIssue({ number: 21, title: 'moving fine', status: 'triage', agent: 'claude' }));
+
+  const cwd = process.cwd();
+  const write = process.stdout.write.bind(process.stdout);
+  let printed = '';
+  process.stdout.write = (s) => { printed += s; return true; };
+  const restore = gh.install();
+  process.chdir(dir);
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const run = async (...argv) => { printed = ''; await main(argv); return printed; };
+
+  const text = await run('list', '--summary');
+  assert.match(text, /needs-human: #20 stuck on a human$/m);
+  const s = JSON.parse(await run('list', '--summary', '--json'));
+  assert.deepEqual(s.needs_human, [{ number: 20, title: 'stuck on a human', status: 'blocked', agent: 'claude', priority: 3 }]);
+});
+
 test('groomOptions: unknown --level and --bodies exit 2 naming the list', () => {
   for (const [flags, re] of [
     [{ level: 'urgent' }, /^--level: unknown level "urgent" — one of act, ask, info, needs_judgment$/],
