@@ -72,9 +72,48 @@ async function fillBlockedByRest(ctx, task) {
 }
 
 /**
- * Every task on the board, one query per page. `blockers: false` is for a caller that only reads
- * labels (doctor): on a repo without the GraphQL `blockedBy` field the fill-in below is one REST
- * call per waiting task, and a check about labels must not cost a board's worth of them.
+ * What a board's `blockedBy` lists actually mean, recorded on the array `fetchBoard` returns.
+ *
+ *   source  'graphql' (they rode the board query), 'rest' (one call per card), or null
+ *   filled  were they looked up at all
+ *   scope   'all' every card · 'open' every open card · 'waiting' only todo/blocked · 'none'
+ *
+ * A caller that cannot tell these apart reports "no blockers" for a card nobody asked about —
+ * a silently wrong answer, which is the one failure mode the values forbid.
+ */
+function tagBlockers(tasks, meta) {
+  // non-enumerable: JSON.stringify, Object.keys and every spread of the board stay an array of tasks
+  Object.defineProperty(tasks, 'blockers', { value: Object.freeze(meta), enumerable: false, configurable: true });
+  return tasks;
+}
+
+/** The blocker provenance of a board `fetchBoard` returned. Safe on any array. */
+export function blockersOf(board) {
+  return board?.blockers || { source: null, filled: false, scope: 'none' };
+}
+
+/**
+ * Is this task's `blockedBy` a real answer, or was it simply never looked up? An empty list on a
+ * card outside the fill-in's scope means "unknown", never "no blockers".
+ */
+export function blockersKnown(board, task) {
+  const { scope } = blockersOf(board);
+  if (scope === 'all') return true;
+  if (scope === 'open') return String(task?.state || 'OPEN').toUpperCase() === 'OPEN';
+  if (scope === 'waiting') return task?.status === 'todo' || task?.status === 'blocked';
+  return false;
+}
+
+/**
+ * Every task on the board, one query per page.
+ *
+ * `blockers` says how much the caller needs on a repo *without* the GraphQL `blockedBy` field,
+ * where each list costs one REST call:
+ *   true   the tick's lanes only — todo and blocked, the cards a promote decision reads
+ *   'all'  every open card, for a caller (`hkb groom`) that reports on all of them
+ *   false  none, for a caller that only reads labels (doctor) and must not pay a board's worth
+ * On a repo that *has* the field all three are the same single query and cost nothing extra.
+ * Either way the result carries `blockers` — see `blockersOf` / `blockersKnown`.
  */
 export async function fetchBoard(ctx, { includeClosed = false, blockers = true } = {}) {
   await detectCaps(ctx);
@@ -96,8 +135,13 @@ export async function fetchBoard(ctx, { includeClosed = false, blockers = true }
     if (!conn.pageInfo.hasNextPage) break;
     cursor = conn.pageInfo.endCursor;
   }
-  if (blockers && !ctx.caps.blockedByGql) for (const t of tasks) if (t.status === 'todo' || t.status === 'blocked') await fillBlockedByRest(ctx, t);
-  return tasks;
+  if (ctx.caps.blockedByGql) return tagBlockers(tasks, { source: 'graphql', filled: true, scope: 'all' });
+  if (!blockers) return tagBlockers(tasks, { source: null, filled: false, scope: 'none' });
+  const wanted = blockers === 'all'
+    ? (t) => String(t.state).toUpperCase() === 'OPEN'
+    : (t) => t.status === 'todo' || t.status === 'blocked';
+  for (const t of tasks) if (wanted(t)) await fillBlockedByRest(ctx, t);
+  return tagBlockers(tasks, { source: 'rest', filled: true, scope: blockers === 'all' ? 'open' : 'waiting' });
 }
 
 /**
