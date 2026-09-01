@@ -224,6 +224,41 @@ foreground form is for a human under a real supervisor: cron, systemd, Actions.)
 which is the same rule seen from the other side. `hkb dispatch --dry-run` is the exception, and only because it
 runs nothing: it prints what the next tick would claim, which is a read.
 
+#### The opening report — a screen, not an essay
+
+`/kanban:operate` is the first thing a human runs when they sit down. They want the board *working* and the
+smallest thing that tells them where to start; a session that replays `doctor` line by line has spent their
+attention before they have taken a single decision. Read `hkb list` once — every lane and priority in one board
+read — then print this shape, and nothing else:
+
+```
+Board `<slug>` · <owner/repo> → <serve URL>
+dispatch pid <n> ✓ · serve pid <n> ✓ · doctor all ✓          (or: doctor 1 ✗, 2 !)
+
+<lanes: triage · todo+ready · running · blocked+review · done — empty lanes omitted,
+ the priority spread only where it decides something>
+
+Needs you: at most three, most urgent first, one line each.
+
+<merge mode> · watcher up (60s)
+```
+
+- **`doctor` collapses to one verdict.** All green is the words "all ✓", never the list. Spend a line on a `✗`
+  and on a `!` a human would act on; a skipped probe is not one.
+- **Three under *Needs you*, at most** — each a decision they own and can take now. A fourth is a backlog, and
+  a backlog is what `hkb list` is already for.
+- **No statistics at open.** `hkb stats` is step 3's once-a-cycle line, and news only when a number moved. An
+  opening that recites attempt outcomes and dollars reports the past to somebody trying to start.
+- **No reasoning, no procedure, no what-you-considered.** Which verbs are yours and which are theirs is written
+  here; it does not need restating at them every session. The merge mode earns its clause because it decides
+  whether *review* is your lane or theirs.
+- The serve URL is the whole point of `--serve` and the human's way into the board, so it leads the first line.
+  `hkb up` does not print it yet — read it off the first line of `.kanban/logs/serve.log`.
+
+A board with **no work in flight** — every open card in triage, or none at all — is the one thing the status
+lines cannot show: an idle dispatcher and a busy one print the same pid. Say it in a clause, and make *Needs
+you* the promote decision.
+
 ### 2. Watch, don't poll
 
 ```bash
@@ -348,6 +383,9 @@ of the three you need — a decision, a credential, or an approval. "#142 is blo
 The digest `hkb watch` already prints — one line per transition — is the report. Add two things under it: **what
 you did**, one line per verb and card, and **what you handed back**, with what you need from the human. A quiet
 cycle says so, and says what is in flight (`hkb list --status running`).
+
+The opening report is step 1’s; every cycle after it is this digest, and it inherits the same economy — a
+transition, a verb and a handback are worth a line each, and nothing else is worth one.
 
 ## /kanban:specify \<n\> — rewrite a one-liner into a spec
 

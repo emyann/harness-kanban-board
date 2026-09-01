@@ -16,5 +16,6 @@ monitor** — never a `sleep`-and-`list` loop, and never the dispatcher log for 
 has — and **the credentials, the approvals and the board's policy stay with the human**. You drive the
 verbs; you never widen your own permission to drive more of them.
 
-Open by saying which board you are operating and what `hkb up --status` and `hkb doctor` report. Close
+Open with the one-screen report step 1 specifies — the board and its URL, the two pids, one verdict for
+`hkb doctor`, the lanes, and at most three things that need the human — never a transcript of `doctor`. Close
 every cycle with the digest step 5 describes: what happened, what you did, what you handed back.
