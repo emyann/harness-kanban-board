@@ -9,18 +9,20 @@ covers:
   - path: src/model.js
     sha: 96d73c3e1721735a52e0ca67752476040135d04a
   - path: src/cli.js
-    sha: a2f7071eb46efdf7682bcd93f5f40db6347d9dc0
+    sha: 8e0d8cdfe17869d3814bf3ce4e9bd80c0dc296c1
+  - path: src/lifecycle.js
+    sha: ae17fbcb5a80bb369cdecd0d56097a1b8c73f846
   - path: src/tasks.js
     sha: f67ad46d8fdf8791f2477e0c55db8e2433a084b8
   - path: src/doctor.js
     sha: 976283bd0771f28d8a687aa83509d62b86468210
   - path: skills/kanban/SKILL.md
-    sha: 7c36fd46a71d2a636e88db89aa064a63e44ab5f3
+    sha: 15b56d9049e169776ccccb6bd75b2c36912048f7
   - path: commands/groom.md
     sha: 4fc2dc2db984033fe8801e8d28b50e8e68fefddc
   - path: skills/kanban/references/protocol.md
     sha: 771770f1e8c420d821bf81c34bd63cd9dbc23d87
-generated_at_commit: e69eedf
+generated_at_commit: d4b2edd
 last_refreshed: 2026-09-01
 related: [features/planning-commands, features/operator-seat, features/path-overlap-guard, features/tracks]
 ---
@@ -113,10 +115,10 @@ token argument for the shape is `bodyText`, which is attached only to cards that
 `/kanban:groom` (`skills/kanban/SKILL.md:503`, registered from `commands/groom.md`) reads the report
 **once**, judges only `judgment.cards` and `judgment.pairs`, proposes one table grouped by cluster, and
 then stops. Nothing is applied until a human says yes per row. What the approved batch may execute is
-deliberately short — `hkb comment`, `hkb create --triage --blocked-by`, `hkb link`, and one `hkb promote`
-of cards that are already in triage. Archive, supersede, close-as-duplicate and every `kb`-block edit are
-**handed back as pre-staged commands** rather than run, because the verbs that would make them safe do not
-exist yet (see the gaps below).
+deliberately short — `hkb comment`, `hkb create --triage --blocked-by`, `hkb link`, and one
+`hkb promote --triage-only` of cards that are already in triage. Archive, supersede, close-as-duplicate
+and every `kb`-block edit are **handed back as pre-staged commands** rather than run, because the verbs
+that would make them safe do not exist yet (see the gaps below).
 
 This is also the one sanctioned exception to the operator's "never promote" rule: the human's per-row yes
 is what makes the promotion theirs rather than the agent's.
@@ -128,9 +130,6 @@ is what makes the promotion theirs rather than the agent's.
   `case 'edit'` in `src/cli.js`. The report currently tells a reader to run a verb the CLI refuses —
   a direct violation of "every error says what to do next". The skill section works around it by never
   invoking `edit`; the fix is the verb.
-- **`hkb promote --triage-only` does not exist.** The design called for a flag that skips a card not in
-  triage without writing; `promote` takes numbers only, so the procedure leans on reading the `forced`
-  line in the output and treating it as a stop-and-report.
 - **No close-as-duplicate verb**, which is why the handback list exists at all.
 - Deliberately deferred as too noisy to be worth a row today: `stale` / `--older-than`, `decision_open`,
   `too_big`, `--comments`, and web-board chips — `src/serve.js` is untouched by the feature.
