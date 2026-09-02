@@ -8,10 +8,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DEFAULT_PROFILES, DEFAULT_BOARD, loadBoard } from '../src/board.js';
-import { SAFE_BUILTINS, EFFORT_LEVELS, CAPABILITIES, capabilityCommand, modelArgs, allowedCommandsFrom, harnessCommands, uncoveredBuiltins } from '../src/model.js';
-import { actionsFiles, ACTIONS_PROFILE } from '../src/init.js';
+import { spawnSync } from 'node:child_process';
+import { DEFAULT_PROFILES, DEFAULT_BOARD, loadBoard, makeContext } from '../src/board.js';
+import { SAFE_BUILTINS, EFFORT_LEVELS, TOOL_POSTURES, CAPABILITIES, toolPosture, capabilityCommand, modelArgs, allowedCommandsFrom, harnessCommands, uncoveredBuiltins } from '../src/model.js';
+import { actionsFiles, ACTIONS_PROFILE, init } from '../src/init.js';
+import { parseArgs } from '../src/cli.js';
 import { checkWorkerPermissions, workflowAllowedTools, PERMS_CHECK, checkPermissionMode, promptingProfiles, MODE_CHECK } from '../src/doctor.js';
+import { FakeGh } from './fake-gh.js';
 
 const claude = () => DEFAULT_PROFILES.claude.allowed_tools;
 const copilot = () => DEFAULT_PROFILES['copilot-cli'].allowed_tools;
@@ -280,6 +283,40 @@ test('loadBoard leaves claude-action alone: effort is accepted there and ignored
   assert.equal(cfg.profiles['claude-action'].effort, 'high', 'accepted at load time; the workflow it triggers does not plumb it through yet');
 });
 
+// ---------- tools posture: a profile states inherit or curate, absent meaning today's behaviour (#256) ----------
+
+test('toolPosture: absent is curate — a profile with no "tools" key resolves byte-identically to today', () => {
+  assert.equal(toolPosture({}), 'curate');
+  assert.equal(toolPosture(DEFAULT_PROFILES.claude), 'curate', 'no shipped profile carries "tools" yet');
+  assert.equal(toolPosture(null), 'curate');
+  assert.equal(toolPosture(undefined), 'curate');
+});
+
+test('toolPosture: "inherit" resolves to itself, anything unrecognised falls back to "curate"', () => {
+  assert.equal(toolPosture({ tools: 'inherit' }), 'inherit');
+  assert.equal(toolPosture({ tools: 'curate' }), 'curate');
+  assert.equal(toolPosture({ tools: 'yolo' }), 'curate', 'loadBoard refuses this before the resolver ever sees it — belt and suspenders');
+});
+
+test('loadBoard accepts "tools": "inherit" or "curate" on a profile', (t) => {
+  const root = scratch(t);
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { claude: { ...DEFAULT_PROFILES.claude, tools: 'inherit' } } }));
+  assert.equal(loadBoard(root).profiles.claude.tools, 'inherit');
+});
+
+test('loadBoard rejects an unknown tools posture, naming both allowed values', (t) => {
+  const root = scratch(t);
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { claude: { ...DEFAULT_PROFILES.claude, tools: 'yolo' } } }));
+  assert.throws(() => loadBoard(root), (e) => {
+    assert.match(e.message, /profile "claude" has tools "yolo"/);
+    assert.match(e.message, new RegExp(TOOL_POSTURES.join(', ')));
+    assert.equal(e.exitCode, 2);
+    return true;
+  });
+});
+
 // ---------- capabilities: an intent from a closed vocabulary, bound to what this harness calls it (#217) ----------
 //
 // The point of the key is portability: the *intent* (`review`) is hkb's, the *binding* (`/code-review`)
@@ -331,6 +368,82 @@ test('loadBoard rejects an unknown intent, naming the vocabulary', (t) => {
     assert.equal(e.exitCode, 2);
     return true;
   });
+});
+
+test('loadBoard on a board with no "tools" key at all is unchanged from before this field existed', (t) => {
+  const root = scratch(t);
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { claude: DEFAULT_PROFILES.claude } }));
+  const cfg = loadBoard(root);
+  assert.equal(cfg.profiles.claude.tools, undefined);
+  assert.equal(toolPosture(cfg.profiles.claude), 'curate');
+});
+
+// ---------- hkb init: says which posture the board got, and what it means, in one line ----------
+
+const NWO = 'acme/tools-posture';
+
+function gitRepo() {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-tools-')));
+  const git = (...args) => assert.equal(spawnSync('git', args, { cwd: root, encoding: 'utf8' }).status, 0, `git ${args.join(' ')}`);
+  git('init', '-q', '-b', 'main');
+  return root;
+}
+
+/**
+ * `init()`, exactly as the CLI runs it, against a temp git repo and a config home of its own.
+ * Pass `into` to re-init a root a previous call made — the second `init` over an existing
+ * board.json is a different code path from the first, and the posture line has to survive it.
+ */
+async function runInit(extra = [], into = null) {
+  const root = into || gitRepo();
+  const gh = new FakeGh();
+  const restore = gh.install();
+  const printed = [];
+  const cwd = process.cwd();
+  const originalConfigHome = process.env.KB_CONFIG_HOME;
+  process.chdir(root);
+  process.env.KB_CONFIG_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-tools-config-'));
+  try {
+    const { flags } = parseArgs(['init', '--repo', NWO, '--no-labels', ...extra]);
+    const code = await init(makeContext(flags), flags, (s) => printed.push(s));
+    return { root, printed, code };
+  } finally {
+    process.chdir(cwd);
+    if (originalConfigHome === undefined) delete process.env.KB_CONFIG_HOME;
+    else process.env.KB_CONFIG_HOME = originalConfigHome;
+    restore();
+  }
+}
+
+test('hkb init prints the tool posture it gave the board, and what it means', async () => {
+  const { printed, code } = await runInit();
+  assert.equal(code, 0);
+  const line = printed.find((l) => l.startsWith('tools: '));
+  assert.ok(line, `no line named the tool posture; printed:\n${printed.join('\n')}`);
+  assert.match(line, /curate/);
+  assert.match(line, /inherit/, 'the one line should also say how to get the opposite');
+});
+
+// The line's whole job is to name the posture this board has, so it must read the board, not a
+// constant: an `init` over a profile that already says "inherit" and hears "curate (default)" is
+// worse than silence, because it is the one place a human is told what their workers may reach for.
+test('the posture line names the profile that inherits, on a board that already set one', async (t) => {
+  const { root } = await runInit();
+  const file = path.join(root, '.kanban', 'board.json');
+  const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  cfg.profiles.claude.tools = 'inherit';
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 2));
+  const { printed } = await runInit([], root);
+  const line = printed.find((l) => l.startsWith('tools: '));
+  assert.match(line, /inherit on .*claude/, 'names the profile, not the default');
+  assert.doesNotMatch(line, /curate \(default\)/);
+});
+
+test('hkb init writes no "tools" key — a fresh board still resolves it by the silent default', async () => {
+  const { root } = await runInit();
+  const cfg = JSON.parse(fs.readFileSync(path.join(root, '.kanban', 'board.json'), 'utf8'));
+  assert.equal(cfg.profiles.claude.tools, undefined);
 });
 
 test('loadBoard rejects a capabilities map that is not a map, or a binding that names no command', (t) => {
