@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "adding a capability intent, binding one on a board, or touching how a launch's tool list is derived"
 covers:
   - path: src/model.js
-    sha: 25cb09aef78191e9964b40d7a9b03590d7182b7b
+    sha: 4e63d8cb11f662324cd2f2d4888b471e980db053
   - path: src/board.js
     sha: 28238d1670e4c6c0807b0113adb47a8a40069b37
   - path: src/doctor.js
-    sha: 8a0caafbda710c469b0f6e93c7d578af4d8c60d7
-generated_at_commit: 2853bda
+    sha: 9625ca70f81eb363002a01afbe515b540ee81d9a
+generated_at_commit: aaa6f14
 last_refreshed: 2026-09-01
 related: [features/harness-profiles, concepts/worker-identity]
 ---

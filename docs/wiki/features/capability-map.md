@@ -7,13 +7,13 @@ audience: [dev]
 read_when: "adding or binding a capability intent, or changing how a launch's tool list is derived"
 covers:
   - path: src/model.js
-    sha: 25cb09aef78191e9964b40d7a9b03590d7182b7b
+    sha: 4e63d8cb11f662324cd2f2d4888b471e980db053
   - path: src/board.js
     sha: 28238d1670e4c6c0807b0113adb47a8a40069b37
   - path: src/context.js
     sha: aa62c340280ec085020e25c9936c7806a2420a55
   - path: src/doctor.js
-    sha: 8a0caafbda710c469b0f6e93c7d578af4d8c60d7
+    sha: 9625ca70f81eb363002a01afbe515b540ee81d9a
   - path: src/dispatch.js
     sha: 57105684f4ae338631827e766717e3b87bcdd9c9
   - path: src/track.js
@@ -22,7 +22,7 @@ covers:
     sha: c7f5ce80b8a0ccfe64b2c4eda3f9b95db343b490
   - path: skills/kanban/SKILL.md
     sha: 386f0eebb9da5374092734e492e109f8f9ceed4e
-generated_at_commit: f90c1e3
+generated_at_commit: aaa6f14
 last_refreshed: 2026-09-01
 related: [concepts/capability-portability, features/harness-profiles, features/operator-seat]
 ---
