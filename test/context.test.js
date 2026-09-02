@@ -7,9 +7,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { workerContext, selectComments, formatComments, isHumanComment } from '../src/context.js';
+import { workerContext, selectComments, formatComments, isHumanComment, briefIntents, capabilityLine } from '../src/context.js';
 import { getTask } from '../src/tasks.js';
-import { RUN_MARKER, RESULT_MARKER, serializeResultComment, serializeRunComment } from '../src/model.js';
+import { CAPABILITIES, RUN_MARKER, RESULT_MARKER, serializeResultComment, serializeRunComment } from '../src/model.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
 const NOW = new Date('2026-08-26T12:00:00Z');
@@ -324,4 +324,90 @@ test('the protocol asks for a finishing command a shell-vetting harness will run
   assert.doesNotMatch(out, /--from-stdin <<'EOF'/, 'no command in the prompt may be a heredoc');
   // and it says why, so a worker that reads only this prompt knows which spelling to type
   assert.match(out, /`finish` is `complete`/);
+});
+
+// ---------- capabilities: the intent travels, the binding is local (#260) ----------
+
+/** Give the harness's ctx a board config, since a bare `hkb context` run has none. */
+function withProfiles(ctx, profiles) {
+  ctx.cfg = { ...(ctx.cfg || {}), profiles };
+  return ctx;
+}
+
+test('briefIntents is derived from the card, never from a command name', () => {
+  assert.deepEqual(briefIntents({ kb: {} }), []);
+  assert.deepEqual(briefIntents({ kb: { goal: 'it works' } }), ['goal']);
+  assert.deepEqual(briefIntents({ kb: {} }, { cont: { number: 147 } }), ['review']);
+  assert.deepEqual(briefIntents({ kb: { goal: 'it works' } }, { cont: { number: 147 } }), ['goal', 'review']);
+  // `specify` happens before a card is dispatched: no worker brief ever triggers it
+  assert.ok(!briefIntents({ kb: { goal: 'g' } }, { cont: { number: 1 } }).includes('specify'));
+});
+
+test('capabilityLine names the board\'s own string, and is null for anything unbound', () => {
+  const p = { capabilities: { goal: '::state-the-outcome' } };
+  assert.match(capabilityLine(p, 'goal'), /^On this harness that is `::state-the-outcome` — /);
+  assert.equal(capabilityLine(p, 'review'), null, 'an unbound intent is prose, not an error');
+  assert.equal(capabilityLine({}, 'goal'), null);
+  assert.equal(capabilityLine(null, 'goal'), null);
+  assert.equal(capabilityLine({ capabilities: { goal: '/g' } }, 'not-an-intent'), null);
+});
+
+test('a card whose profile binds `goal` has the bound command named beside the acceptance criteria', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 9, status: 'ready', agent: 'claude', kb: { goal: 'the client speaks v2' } }));
+  withProfiles(h.ctx, { claude: { capabilities: { goal: '/goal' } } });
+
+  const out = await workerContext(h.ctx, await getTask(h.ctx, 9));
+
+  assert.match(out, /## Acceptance criteria\nthe client speaks v2\nOn this harness that is `\/goal` — state the outcome/);
+});
+
+test('an unmapped intent keeps today\'s prose, and a board with no capabilities gets a byte-identical brief', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 9, status: 'ready', agent: 'claude', kb: { goal: 'the client speaks v2' } }));
+
+  const none = await workerContext(withProfiles(h.ctx, { claude: {} }), await getTask(h.ctx, 9));
+  const noCfg = await workerContext({ ...h.ctx, cfg: undefined }, await getTask(h.ctx, 9));
+  // a profile that binds a *different* intent must not leak into this card's brief either
+  const other = await workerContext(withProfiles(h.ctx, { claude: { capabilities: { specify: '/specify' } } }), await getTask(h.ctx, 9));
+  const bound = await workerContext(withProfiles(h.ctx, { claude: { capabilities: { goal: '/goal' } } }), await getTask(h.ctx, 9));
+
+  assert.equal(none, noCfg, 'declaring no capabilities is byte-identical to having no board config at all');
+  assert.equal(other, noCfg, 'an unbound intent renders nothing — no error, no warning, no extra line');
+  assert.match(none, /## Acceptance criteria\nthe client speaks v2\n/, 'the heading stays');
+  assert.ok(!none.includes('On this harness that is'));
+  assert.notEqual(bound, none, 'and a binding does change the brief, or none of this is being read');
+});
+
+test('a continuation whose profile binds `review` is told what this harness calls it', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(sentBack());
+  withProfiles(h.ctx, { claude: { capabilities: { review: '::second-look' } } });
+
+  const out = await workerContext(h.ctx, await getTask(h.ctx, 42), 3);
+
+  // hkb echoes the board's own string: it has no idea what a review command is called here
+  assert.match(out, /Read what is already there before you change it\. On this harness that is `::second-look` — a second pass over work that already exists/);
+  assert.ok(out.indexOf('::second-look') > out.indexOf('## Continue PR #147'), 'the line belongs to the continuation block');
+});
+
+test('hkb names no harness command in a brief the board did not bind', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(sentBack());
+  h.gh.addIssue(kbIssue({ number: 9, status: 'ready', agent: 'claude', kb: { goal: 'the client speaks v2', skills: ['kanban'] } }));
+
+  for (const n of [42, 9]) {
+    const out = await workerContext(withProfiles(h.ctx, { claude: {} }), await getTask(h.ctx, n), 3);
+    for (const cmd of ['/code-review', '/goal', '/specify', '/review']) {
+      assert.ok(!out.includes(cmd), `#${n}: the brief must not name ${cmd} — hkb knows intents, boards know commands`);
+    }
+  }
+  // the vocabulary itself carries meanings, never commands, so nothing hkb ships can leak one
+  for (const [intent, meaning] of Object.entries(CAPABILITIES)) {
+    assert.ok(!meaning.includes('/'), `CAPABILITIES.${intent} must be prose, not a command`);
+  }
 });

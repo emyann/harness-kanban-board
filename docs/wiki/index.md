@@ -10,6 +10,7 @@
 
 ## Concepts
 
+- [The capability map — the intent travels, the binding is local](./concepts/capability-portability.md): The portability contract behind a profile's `capabilities`: hkb ships a closed vocabulary of intents, a board binds each one to what its own harness calls it, an unbound intent falls back to prose, and the permission a binding needs is derived from the binding rather than typed twice.
 - [Worker identity — which attempt a session is, and who may say so](./concepts/worker-identity.md): The three answers to "which attempt is this session?" (launch environment, checkout, job record), the order of trust between them, why a `claude --bg` launch must hand over none of them, and — this is also the page for it — how `SubagentStop` resolves a fourth, child-checkout answer via `CLAUDE_PROJECT_DIR`.
 
 ## Features
