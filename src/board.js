@@ -6,7 +6,7 @@ import { spawnSync, execFileSync } from 'node:child_process';
 import { ghCmd } from './gh.js';
 import {
   worktreePath, parseRepoSpecs, mergeBoardEntry, stripNodeModulesBin, pidClaimStale,
-  parseBtimeSec, parseKernBoottimeSec, SAFE_BUILTINS, EFFORT_LEVELS,
+  parseBtimeSec, parseKernBoottimeSec, SAFE_BUILTINS, EFFORT_LEVELS, TOOL_POSTURES,
 } from './model.js';
 
 // A background worker has nobody to answer a permission prompt, so the allowlist must cover
@@ -513,6 +513,16 @@ export function loadBoard(root) {
     const harness = (p.launch || [])[0];
     if (p.effort != null && harness !== 'claude' && name !== 'claude-action') {
       const err = new Error(`profile "${name}" sets effort, but its harness (${harness || name}) takes no --effort flag; remove it`);
+      err.exitCode = 2;
+      throw err;
+    }
+  }
+  // A profile's tool posture (#256): "inherit" or "curate", validated the same way as effort above —
+  // once, at load, so a typo fails loudly here rather than reaching a launch line silently as
+  // "curate" (the resolver's default for anything it does not recognise as "inherit").
+  for (const [name, p] of Object.entries(cfg.profiles)) {
+    if (p.tools != null && !TOOL_POSTURES.includes(p.tools)) {
+      const err = new Error(`profile "${name}" has tools "${p.tools}" in ${file} — must be one of ${TOOL_POSTURES.join(', ')}`);
       err.exitCode = 2;
       throw err;
     }

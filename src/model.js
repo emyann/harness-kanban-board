@@ -16,6 +16,26 @@ export const BLOCK_KINDS = ['dependency', 'needs_input', 'capability', 'transien
 // `--effort`. Both are profile fields rendered into `{model_args}` now, so the pin is never needed.
 export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'];
 
+// A profile's tool posture. `curate` is the fixed allow-list hkb has always launched with
+// (`CLAUDE_TOOLS`, `src/board.js`) — under `--permission-mode dontAsk` an unlisted tool is DENIED,
+// never prompted, so this is the strict end of the range. `inherit` is the other end: the launching
+// session's own tools, unnarrowed by a per-command allow-list. Neither this list nor `toolPosture`
+// picks one — that stays a board's choice (`hkb init`) or a profile author's; this is only the two
+// spellings `loadBoard` accepts and the resolver that reads them back.
+export const TOOL_POSTURES = ['inherit', 'curate'];
+
+/**
+ * A profile's tool posture. Pure — no board read, so it is testable without one.
+ *
+ * Absent `"tools"` means `"curate"`: every board that predates this field keeps launching exactly as
+ * it does today, byte for byte, with no edit and no migration. `loadBoard` refuses any value that
+ * is not one of `TOOL_POSTURES` before this ever sees it, so an invalid string is not a case this
+ * function has to consider.
+ */
+export function toolPosture(profile) {
+  return profile?.tools === 'inherit' ? 'inherit' : 'curate';
+}
+
 /** What `{model_args}` expands to: `--model <m>` then `--effort <e>`, either or both dropped when unset. Pure. */
 export function modelArgs(vars) {
   const out = [];

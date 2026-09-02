@@ -954,6 +954,11 @@ export async function init(ctx, flags, log) {
   saveBoard(root, cfg);
   ensureLocalDirs(root);
   log(`${existing ? 'updated' : 'wrote'} .kanban/board.json (board "${board}", profiles ${Object.keys(cfg.profiles).join(', ')})`);
+  // The tool posture (#256): unstated on every profile above, which resolves to "curate" — a
+  // worker's `allowed_tools` is the whole grant, nothing outside it is ever reachable. Say so here,
+  // once, since defaulting it quietly is the bug this field exists to fix; set "tools": "inherit" on
+  // a profile to hand it the launching session's own tools instead.
+  log('tools: curate (default) — a worker gets exactly its profile\'s allowed_tools, nothing else; set "tools": "inherit" on a profile in board.json for the opposite');
   ctx.cfg = cfg; ctx.repo = { owner: repo.nameWithOwner.split('/')[0], repo: repo.nameWithOwner.split('/')[1], nameWithOwner: repo.nameWithOwner }; ctx.board = board;
 
   // 3b. optional Projects v2 mirror (opt-in, one-way). Everything above is already saved, so a
