@@ -309,10 +309,11 @@ function transcriptOnce(read, sessions) {
  * ended inside it; an open one always is — it is happening now, whenever it started. (Same reasoning
  * as `tasksInWindow`: a long attempt that has been quiet for hours is the one you asked about.)
  * @param {Map|object} runs   task number → run record
- * @param {(a) => object|null} cost   session fields from the worker's log, for a row that has none
- * @param {(a) => object|null} usage  token totals from the session transcript, for a row with neither
+ * @param {object} [opts]
+ * @param {(a: any) => object|null} opts.cost   session fields from the worker's log, for a row that has none
+ * @param {(a: any) => object|null} opts.usage  token totals from the session transcript, for a row with neither
  *   — called at most once per distinct `transcript_path`, however many attempts name it
- * @param {object|null} rates         `stats.rates`, which turns those tokens into an estimate
+ * @param {object|null} opts.rates         `stats.rates`, which turns those tokens into an estimate
  */
 export function collectAttempts(tasks, runs, since = null, { cost = () => null, usage = () => null, rates = null } = {}) {
   const floor = since ? Date.parse(since) : null;

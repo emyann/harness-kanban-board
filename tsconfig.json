@@ -1,0 +1,18 @@
+{
+  // Not a build. `tsc --noEmit` reads the JSDoc the sources already carry and checks it — nothing is
+  // compiled and nothing is emitted, so hkb stays dependency-free at runtime: `node bin/hkb.js` in a
+  // fresh clone works with no `npm install`. Track C turns the sources into `.ts`; this file grows
+  // into that config rather than being replaced.
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2022",
+    "lib": ["es2023"],
+    "strict": false,
+    "skipLibCheck": true
+  },
+  "include": ["bin/**/*.js", "src/**/*.js", "scripts/**/*.mjs", "types/**/*.d.ts"]
+}

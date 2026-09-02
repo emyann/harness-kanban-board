@@ -6,6 +6,14 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # 22 is the floor `engines` claims, 24 is the recommended line. Two floors is a real signal — a
+    # syntax or API that only exists on 24 has to fail somewhere — so this one is a matrix where the
+    # single-version job above it was not.
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24]
+    name: test (node ${{ matrix.node-version }})
     steps:
       - uses: actions/checkout@v7
       # `package-manager-cache: false` on every setup-node with a checkout behind it. v5 turned
@@ -16,8 +24,11 @@ jobs:
       # left to depend on a field nothing else here cares about.
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           package-manager-cache: false
+      # The only dependency is `typescript`, and only `npm run lint`'s type check needs it. `npm test`
+      # and the CLI itself run with an empty node_modules — that is the point of the smoke job.
+      - run: npm install --no-audit --no-fund
       - run: npm run lint
       # Two runs in one job rather than a matrix: same signal, half the runners. UTC is what Actions
       # gives us and what most CI everywhere gives us; America/New_York is a contributor's laptop,
@@ -35,17 +46,23 @@ jobs:
   # shipping `skills/` or `templates/` fails here rather than on a stranger's first `npx hkb-cli init`.
   # It runs beside `test` rather than after it: two independent signals, and neither waits.
   #
-  # On Node 20 on purpose — the floor `engines` claims, which nothing else checks. The `test` job
-  # above covers the current release. That floor is about the node that runs `hkb`, and is unrelated
-  # to the node24 the actions themselves run on; setup-node still installs any version it is asked for.
+  # On 22 and 26 on purpose: the floor `engines` claims and the current line — the two ends nothing
+  # else checks (the `test` matrix covers 22 and 24 in between). That floor is about the node that runs
+  # `hkb`, and is unrelated to the node the actions themselves run on; setup-node still installs any
+  # version it is asked for. No `npm install` here on purpose either: the tarball must run with nothing
+  # installed beside it, so `typescript` being a devDependency has to stay invisible to it.
   smoke:
-    name: packed artifact
+    name: packed artifact (node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 26]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: ${{ matrix.node-version }}
           package-manager-cache: false
       - run: node scripts/smoke-pack.mjs

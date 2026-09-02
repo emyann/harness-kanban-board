@@ -208,6 +208,10 @@ export function blockersKnown(board, task) {
  * On a repo that *has* the field all three are the same single query and cost nothing extra.
  * Either way the result carries `blockers` — see `blockersOf` / `blockersKnown`.
  */
+/**
+ * @param {any} ctx
+ * @param {{includeClosed?: boolean, blockers?: boolean|'all'}} [opts]
+ */
 export async function fetchBoard(ctx, { includeClosed = false, blockers = true } = {}) {
   await detectCaps(ctx);
   const states = includeClosed ? '[OPEN, CLOSED]' : '[OPEN]';

@@ -286,6 +286,10 @@ export function resolveHookPath(target, root) {
  *   `$CLAUDE_PROJECT_DIR` to name it by (Codex, Copilot) — the repo's own hkb is then named relative
  *   to that cwd, unguarded (`relativeHookCommand`), rather than through the variable
  */
+/**
+ * @param {string} [verb]
+ * @param {{shared?: boolean, onPath?: boolean, pkgRoot?: string, root?: string|null, binRel?: string|null, cwd?: boolean}} [opts]
+ */
 export function hkbCommandForHook(verb = 'stop', { shared = false, onPath, pkgRoot = PKG_ROOT, root = null, binRel, cwd = false } = {}) {
   const suffix = ` hook ${verb}`;
   // An hkb the repo carries is the one that runs, wherever the command is going: it is the one form
@@ -333,6 +337,7 @@ const HOOK_NOTE = 'inert outside a worker session; Stop nudges for the terminal 
  * without them. The hkb that ran the dispatcher is installed by definition; name that one.
  * @returns the JSON string, or '' when there is no command to run (the launch then drops the flag)
  */
+/** @param {{onPath?: boolean}} [opts] */
 export function workerHookSettings({ onPath } = {}) {
   const on = onPath ?? hkbOnPath();
   return hookSettings(CLAUDE_HOOKS, (verb) => hkbCommandForHook(verb, { binRel: null, onPath: on }));
@@ -530,7 +535,7 @@ export function installClaudeHooks(root, log, { shared: wantShared = false, binR
 
 /**
  * hkb's hooks as they are actually configured, from both settings files — what `hkb doctor` checks.
- * @returns {{ hooks: [{ file, event, verb, command, portable }], unreadable: [{ file, error }] }}
+ * @returns {{ hooks: {file: string, event: any, verb: any, command: any, portable: any}[], unreadable: {file: string, error: any}[] }}
  */
 export function findClaudeHooks(root) {
   const hooks = [], unreadable = [];
@@ -720,7 +725,7 @@ export function resolveProfiles(flags = {}) {
  * @param profiles resolved profile names (`resolveProfiles`)
  * @param onUnknown called with the name of a profile that has no built-in launch template
  */
-export function boardProfiles(existing, profiles, onUnknown = () => {}) {
+export function boardProfiles(existing, profiles, onUnknown = /** @type {(p: string) => void} */ (() => {})) {
   const out = existing ? { ...existing } : {};
   for (const p of profiles) {
     if (out[p]) continue;
@@ -796,6 +801,11 @@ function writeAll(root, files) {
 }
 
 /** Write a harness's files. Returns the relative paths that actually changed. */
+/**
+ * @param {string} root
+ * @param {string} name
+ * @param {{command?: string}} [opts]
+ */
 export function installHarness(root, name, { command } = {}) {
   return writeAll(root, harnessFiles(name, { command, root }));
 }

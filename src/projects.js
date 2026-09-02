@@ -130,8 +130,10 @@ export function hasProjectScope(scopes) {
  * @param items  `[{ id, number, optionId, optionName, labels }]` — the project's items, issues only
  * @param tasks  `[{ number, nodeId, status }]` — the open board, labels already canonical
  * @param options `{ status: optionId }` from board.json
- * @param opts.extra `{ number: status }` — statuses this tick set on issues that left the open board
- * @param opts.boardLabel only items carrying this label are touched; anything else in the Project is left alone
+ * @param {object} [opts]
+ * @param [opts.extra] `{ number: status }` — statuses this tick set on issues that left the open board
+ * @param [opts.boardLabel]
+ * @param {number} [opts.maxAdds] how many adds this tick may make only items carrying this label are touched; anything else in the Project is left alone
  */
 export function planSync(items, tasks, options = {}, { extra = {}, boardLabel = null, maxAdds = MAX_ADDS_PER_TICK } = {}) {
   const desired = new Map();
@@ -307,7 +309,7 @@ export async function probeProject(project) {
  * Link (or create) a Projects v2 board and return the block board.json stores.
  * Idempotent: re-running finds the same project and writes nothing when the options already fit.
  */
-export async function linkProject(ctx, spec, log = () => {}) {
+export async function linkProject(ctx, spec, log = /** @type {(...a: any[]) => void} */ (() => {})) {
   const want = parseProjectSpec(spec);
   const scopes = parseTokenScopes(ghAuthStatus().text);
   if (hasProjectScope(scopes) === false) {
@@ -380,7 +382,7 @@ function throttled(state, key, log, message, everyMs = 3600_000) {
  * Never throws: a Project that was deleted, or a token that lost the scope, costs the mirror and
  * nothing else. Returns a `--json`-stable summary.
  */
-export async function syncProject(ctx, tasks, { dryRun = false, extra = {}, state = {}, log = () => {} } = {}) {
+export async function syncProject(ctx, tasks, { dryRun = false, extra = {}, state = {}, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   const p = ctx.cfg?.project;
   if (!isMirrorConfigured(ctx.cfg)) return { skipped: 'not configured' };
   let items;

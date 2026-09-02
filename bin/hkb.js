@@ -1,5 +1,14 @@
 #!/usr/bin/env node
-import { main } from '../src/cli.js';
+// Node 22 emits an ExperimentalWarning for `node:sqlite`; 24 does not. The store (ADR-006) needs it,
+// and a warning on every command on the floor version is noise a user cannot act on. Replacing the
+// default 'warning' listener rather than passing --no-warnings keeps every *other* warning printing.
+process.removeAllListeners('warning');
+process.on('warning', (w) => {
+  if (w.name === 'ExperimentalWarning' && /SQLite/.test(w.message)) return;
+  process.stderr.write(`${w.name}: ${w.message}\n`);
+});
+
+const { main } = await import('../src/cli.js');
 
 main(process.argv.slice(2)).then(
   (code) => process.exit(typeof code === 'number' ? code : 0),
