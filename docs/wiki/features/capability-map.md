@@ -15,14 +15,14 @@ covers:
   - path: src/doctor.js
     sha: 9625ca70f81eb363002a01afbe515b540ee81d9a
   - path: src/dispatch.js
-    sha: 57105684f4ae338631827e766717e3b87bcdd9c9
+    sha: 18a622a26529bfb3b7a16cacc44f1079eee4cfb8
   - path: src/track.js
-    sha: 286c5fff375e47a6f7ebf8d648671a9659872ab4
+    sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
   - path: src/hook.js
-    sha: c7f5ce80b8a0ccfe64b2c4eda3f9b95db343b490
+    sha: e47513833b60b70d069be5e9b768486e5bf3f9e9
   - path: skills/kanban/SKILL.md
     sha: 386f0eebb9da5374092734e492e109f8f9ceed4e
-generated_at_commit: aaa6f14
+generated_at_commit: 1590a97
 last_refreshed: 2026-09-01
 related: [concepts/capability-portability, features/harness-profiles, features/operator-seat]
 ---
@@ -98,12 +98,16 @@ Shipped across #255 (seam), #259 (vocabulary and binding), #260 (brief), #261
   the bound command — the #114 drift returning through the card rather than the
   profile. Nothing reports it: the removal is not in `dropped`, which records only
   what the card asked for and did not get (`src/model.js`).
-- **Two readers of `allowed_tools` remain outside the seam.** `trackFanout`
-  (`src/track.js`) decides whether a track runner may fan out by testing the
-  profile's raw list for `Agent`, and the Stop hook derives its allowed commands
-  the same way (`src/hook.js`). Neither builds a launch, so neither breaks the
-  "one derivation" rule as written — but neither sees a card's narrowing or a
-  derived grant either.
+- **Fixed (#273): the two readers outside the seam now go through `effectiveTools`.**
+  `trackFanout` (`src/track.js`) took an optional `task` and derives its `Agent`
+  check from `effectiveTools(profile, task, cfg)`, so a root card whose `kb.tools`
+  narrows `Agent` away no longer gets told to fan out — `src/dispatch.js` passes
+  the root task at the one call site. The Stop hook's `preToolHook`
+  (`src/hook.js`) derives `allowedCmds` from `effectiveTools(profile, null,
+  ctx.cfg).tools` rather than the profile's raw list, so a capability-derived
+  grant is on its radar too; it passes no `task` because it fires once per tool
+  call, and fetching the card there would be a request per call rather than per
+  session — so it still cannot see a card's `kb.tools`/`kb.mcp` narrowing.
 - **The drift guarantee is Claude-only.** One invocation shape is known; a
   binding on any other harness implies no tool. Honest, but it means doctor can
   only prove the two agree where hkb knows how the command is invoked.

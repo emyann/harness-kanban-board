@@ -23,7 +23,7 @@
 // net: it flags a track branch with no live runner so a human can reconcile it by hand (rebase the
 // leftover node onto it, or force the root back onto a track profile) rather than the tick silently
 // losing the assembled work, which was exactly #227/#229's failure mode this file replaces.
-import { blockerDone, sortForDispatch, isTrackRoot, trackBranchName } from './model.js';
+import { blockerDone, sortForDispatch, isTrackRoot, trackBranchName, effectiveTools } from './model.js';
 
 /** Statuses a track may start from — for the root and for every node. */
 export const TRACK_STARTABLE = ['todo', 'ready'];
@@ -39,10 +39,18 @@ export function isTrackProfile(cfg, name) {
  * prompting, so a brief that told an un-allow-listed runner to spawn would only buy it a refusal.
  * `claude-track` carries `Agent`; every other shipped profile does not, and gets the sequential brief,
  * which is always a correct way to run a track — the board reads the same either way.
+ *
+ * Goes through `effectiveTools` (src/model.js) rather than reading `allowed_tools` off the profile
+ * directly, so the root's own card is part of the answer: a `kb.tools` narrowing that drops `Agent`
+ * from the root's effective grant must also drop it from here, or the runner is told to fan out into
+ * a tool its own launch line no longer carries. `task` is the root task, optional so a caller that has
+ * not resolved it yet still gets the profile's (capability-widened) answer.
  */
-export function trackFanout(cfg, name) {
-  const tools = cfg?.profiles?.[name]?.allowed_tools;
-  return Array.isArray(tools) && tools.includes('Agent');
+export function trackFanout(cfg, name, task = null) {
+  const profile = cfg?.profiles?.[name];
+  if (!profile) return false;
+  const { tools } = effectiveTools(profile, task, cfg);
+  return tools.includes('Agent');
 }
 
 /**
