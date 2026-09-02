@@ -6,7 +6,10 @@ import {
   blockerDone, computeReady, promoteDecision, pathsOverlap, sortForDispatch, slugify, lockRef, lockRefPath, hashReason,
   normalizeHookInput, stripFrontmatter, sessionUpdate, parseRepoSpecs, boardKey, uniqueKeys, shouldNudgeOnStop, deadAtRecheck,
   pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, parsePriorityFlag, parseScheduledAtFlag, boardSummary,
+  effectiveTools, modelArgs,
 } from '../src/model.js';
+import { expandLaunch } from '../src/dispatch.js';
+import { DEFAULT_PROFILES, HOOK_SETTINGS_VAR } from '../src/board.js';
 
 test('body block: round trip and defaults', () => {
   const kb = { ...DEFAULT_KB, priority: 3, paths: ['apps/web/'] };
@@ -324,4 +327,97 @@ test('boardSummary: no issue bodies anywhere in the shape', () => {
 test('boardSummary: an empty or missing board is the empty summary, not a throw', () => {
   assert.deepEqual(boardSummary([]), { cards: 0, by_status: {}, priority: {}, needs_human: [] });
   assert.deepEqual(boardSummary(undefined), { cards: 0, by_status: {}, priority: {}, needs_human: [] });
+});
+
+// ---------- effectiveTools: the one derivation of a launch's tool list (#255) ----------
+// The seam #223 (a tool posture) and #217 (a capability map) both plug into. Today it answers with
+// the profile's grant, narrowed by the card — so the first assertion is that nothing moved.
+
+/** How `expandLaunch` spent `{allowed_tools}` before the seam: straight off the profile. */
+function legacyExpand(template, vars, profile) {
+  const out = [];
+  for (const el of template) {
+    if (el === '{allowed_tools}') { out.push(...(profile.allowed_tools || [])); continue; }
+    const perTool = /^(--[\w-]+)=\{allowed_tools\}$/.exec(el);
+    if (perTool) { for (const t of profile.allowed_tools || []) out.push(perTool[1], t); continue; }
+    if (el === '{model_args}') { out.push(...modelArgs(vars)); continue; }
+    if (el === HOOK_SETTINGS_VAR) { if (vars.hook_settings) out.push('--settings', vars.hook_settings); continue; }
+    out.push(el.replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? '')));
+  }
+  return out;
+}
+
+const LAUNCH_VARS = { n: 7, k: 2, title: 'a card', slug: 'a-card', prompt: 'do the thing', board: 'default', repo: 'acme/board', worktree: '/w/kb-7-2' };
+
+test('effectiveTools: every shipped profile launch line is byte-identical to the pre-seam one', () => {
+  for (const [name, profile] of Object.entries(DEFAULT_PROFILES)) {
+    if (!profile.launch) continue;
+    assert.deepEqual(
+      expandLaunch(profile.launch, LAUNCH_VARS, profile),
+      legacyExpand(profile.launch, LAUNCH_VARS, profile),
+      `profile ${name} launch line moved`,
+    );
+    // and with a card attached, which is how the dispatcher calls it — no kb.tools, no change
+    assert.deepEqual(
+      expandLaunch(profile.launch, LAUNCH_VARS, profile, { task: { kb: { ...DEFAULT_KB } }, board: {} }),
+      legacyExpand(profile.launch, LAUNCH_VARS, profile),
+      `profile ${name} launch line moved for an ordinary card`,
+    );
+  }
+  for (const name of ['claude', 'claude-track', 'claude-p']) {
+    assert.ok(DEFAULT_PROFILES[name]?.launch, `${name} must stay a shipped profile for this pin to mean anything`);
+  }
+});
+
+test('effectiveTools: no card, or a card with nothing to say, is the profile grant unchanged', () => {
+  const profile = { allowed_tools: ['Read', 'Edit', 'Bash(git *)'] };
+  assert.deepEqual(effectiveTools(profile), { tools: ['Read', 'Edit', 'Bash(git *)'], dropped: [] });
+  assert.deepEqual(effectiveTools(profile, { kb: { ...DEFAULT_KB } }, {}).tools, ['Read', 'Edit', 'Bash(git *)']);
+  // a profile with no per-command allow-list (codex: the sandbox is the policy) expands to nothing
+  assert.deepEqual(effectiveTools({ allowed_tools: null }, { kb: {} }, {}), { tools: [], dropped: [] });
+});
+
+test('effectiveTools: the returned list is a copy — a caller cannot mutate the profile grant', () => {
+  const profile = { allowed_tools: ['Read'] };
+  effectiveTools(profile).tools.push('Bash(rm *)');
+  assert.deepEqual(profile.allowed_tools, ['Read']);
+});
+
+test('effectiveTools: a card narrows its profile grant', () => {
+  const profile = { allowed_tools: ['Read', 'Edit', 'Write', 'Bash(git *)'] };
+  const { tools, dropped } = effectiveTools(profile, { kb: { tools: ['Read', 'Bash(git status)'] } }, {});
+  assert.deepEqual(tools, ['Read', 'Bash(git status)'], 'a narrower Bash pattern under a granted wildcard is kept as the card wrote it');
+  assert.deepEqual(dropped, []);
+});
+
+test('effectiveTools: a card cannot widen — what the profile lacks is dropped and reported', () => {
+  const profile = { allowed_tools: ['Read', 'Bash(git *)'] };
+  const { tools, dropped } = effectiveTools(profile, { kb: { tools: ['Read', 'Write', 'Bash(rm -rf /)'] } }, {});
+  assert.deepEqual(tools, ['Read'], 'nothing the profile does not grant reaches the launch');
+  assert.deepEqual(dropped.map((d) => d.tool), ['Write', 'Bash(rm -rf /)']);
+  assert.deepEqual([...new Set(dropped.map((d) => d.source))], ['kb.tools']);
+  for (const d of dropped) assert.match(d.reason, /not granted/);
+});
+
+test('effectiveTools: a widening card reaches the launch as the profile grant minus what it lost', () => {
+  const profile = { allowed_tools: ['Read', 'Edit'], launch: ['x', '--allowedTools', '{allowed_tools}'] };
+  const argv = expandLaunch(profile.launch, {}, profile, { task: { kb: { tools: ['Read', 'Write'] } }, board: {} });
+  assert.deepEqual(argv, ['x', '--allowedTools', 'Read'], 'Write was asked for and never granted');
+});
+
+test('effectiveTools: kb.mcp keeps only the named servers, and an ungranted server is dropped', () => {
+  const profile = { allowed_tools: ['Read', 'mcp__react-aria__*', 'mcp__figma__get_file'] };
+  const { tools, dropped } = effectiveTools(profile, { kb: { mcp: ['react-aria'] } }, {});
+  assert.deepEqual(tools, ['Read', 'mcp__react-aria__*'], 'non-MCP grants are untouched; the unnamed server goes');
+  assert.deepEqual(dropped, []);
+
+  const widen = effectiveTools(profile, { kb: { mcp: ['react-aria', 'stripe'] } }, {});
+  assert.deepEqual(widen.tools, ['Read', 'mcp__react-aria__*']);
+  assert.deepEqual(widen.dropped, [{ tool: 'mcp__stripe__*', source: 'kb.mcp', reason: 'not granted by the profile' }]);
+});
+
+test('effectiveTools: kb.tools and kb.mcp compose — the card narrows on both axes at once', () => {
+  const profile = { allowed_tools: ['Read', 'Edit', 'mcp__react-aria__*', 'mcp__figma__*'] };
+  const { tools } = effectiveTools(profile, { kb: { tools: ['Read', 'mcp__react-aria__*', 'mcp__figma__*'], mcp: ['react-aria'] } }, {});
+  assert.deepEqual(tools, ['Read', 'mcp__react-aria__*']);
 });
