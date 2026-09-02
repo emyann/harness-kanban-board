@@ -170,3 +170,7 @@ deserves a `concepts/` page (link it).
   two disagree, the checkout, because an environment can be inherited and a
   directory cannot (`attemptIdentity` in `src/model.js`, `whichAttempt` in
   `src/hook.js`; see *concepts/worker-identity*).
+- **Control plane** — hkb read as Kubernetes reads itself: the store is etcd, a host running the dispatcher loop is a node, the tick is kubelet + scheduler + controller-manager in one loop, a board is a namespace, a card a Job, an attempt a Pod (*decisions/adr-005-control-plane*; design in `docs/local-first.md` §2).
+- **Store** — the board's state behind one interface (`docs/local-first.md` §6.4): today `src/tasks.js` + `src/lock.js` on GitHub; after track A, two local tiers — the durable half on the `kb-board` git branch, the live half and an index in `.git/hkb/index.db` (*decisions/adr-006-local-store*).
+- **Suspended** — a card an operator's `hkb stop <n>` parked: it keeps its lane and the tick skips it until `hkb start <n>` (`kb.suspended`, *decisions/adr-005-control-plane*).
+- **Bridge** — the later GitHub adapter that publishes board state to issues and pulls only forge state (PRs, merges) back; never a claim, a lock, an attempt or a pause (`docs/local-first.md` §8).

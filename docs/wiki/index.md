@@ -34,6 +34,8 @@
 ## Decisions
 
 - [ADR-004: Three seats — operator, dispatcher, worker](./decisions/adr-004-roles-and-adoption.md): hkb has exactly three seats (operator = the human, dispatcher = a tick, worker = any harness); the dispatcher is not an orchestrator, and adoption is a ladder of the same protocol driven by hand or by the tick.
+- [ADR-005: hkb is a control plane — a board is a namespace, a host is the node, a pause lives on its object](./decisions/adr-005-control-plane.md): The Kubernetes model is adopted as hkb's mental model with one correction (a board is a namespace, not a node); the operator gets start/pause/resume/stop at worker and board level; a pause is recorded on the object it pauses; the tick stays one loop; the runtime behind a profile mode becomes a seam.
+- [ADR-006: The source of truth is local and travels with a clone — a git branch plus a SQLite index; GitHub becomes a bridge later](./decisions/adr-006-local-store.md): The board's state moves off GitHub into two local tiers (durable content on a dedicated git branch, live state and an index in node:sqlite under the common git dir); a board has one control plane; the Actions runner is removed; the GitHub store is retired and returns later as a bridge adapter under a strict direction rule; the Node floor becomes 22.13 and TypeScript ships transpiled.
 
 ## Planned (not yet written)
 
