@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "touching kb.tools/kb.mcp on a card, a profile's tool posture or MCP list, or anything that decides what a worker may run"
 covers:
   - path: src/model.js
-    sha: 3fc2333b8ea559cea894aad79c82906b0d7b4387
+    sha: 76768c101bd61f923359547dbf6f8a8dfd64732a
   - path: src/tasks.js
     sha: 6cbae757123f219fc49887566f1f647936dcc88e
   - path: src/doctor.js
     sha: 5abc1e90778b7ac61fab595b66146c00e965927d
-generated_at_commit: 77b1616
+generated_at_commit: 6c9f65f
 last_refreshed: 2026-09-01
 related: [concepts/capability-portability, features/denied-tools-ledger, features/harness-profiles]
 ---
@@ -84,6 +84,11 @@ posture at all.
 
 ## Known gaps
 
-- The posture is printed, not yet spent: `effectiveTools` derives from
-  `allowed_tools` whatever the posture says. Wiring `inherit` into the launch line
-  and resolving `mcp` into it belong to other cards on the same track.
+- `mcp` **is** now resolved into the grant: under `curate` a declared server adds
+  `mcp__<server>__*`, under `inherit` an excluded server's grant is stripped
+  (`applyProfileMcp`, `src/model.js`).
+- What is still only printed is the posture's effect on the *launch*:
+  `src/dispatch.js` never consults `toolPosture`, so an `inherit` profile still
+  gets an explicit `--allowedTools` list under `dontAsk`. See
+  `features/worker-tool-posture` for the feature as a whole and the state of that
+  gap.

@@ -1147,7 +1147,10 @@ test('doctor prints each profile posture, its ceiling and its MCP answer; absent
 test('under curate a declared mcp list is what a worker may reach, and it is printed as such', () => {
   const s = sink();
   checkToolPosture({ root: '/nowhere', cfg: { profiles: { claude: { launch: ['claude'], allowed_tools: ['Read'], mcp: ['react-aria', 'figma'] } } } }, s);
-  assert.match(s.results[0].detail, /claude: curate, 1 tool, mcp: react-aria, figma/);
+  // 3, not 1: naming a server under curate is what *grants* it (`applyProfileMcp`, src/model.js), so
+  // the ceiling is Read plus an `mcp__<server>__*` per declared server. The count is the effective
+  // grant, never the hand-written allowed_tools — that is the whole point of one derivation.
+  assert.match(s.results[0].detail, /claude: curate, 3 tools, mcp: react-aria, figma/);
 });
 
 test('doctor is silent about card grants on a board where no card asks for either key', async (t) => {
