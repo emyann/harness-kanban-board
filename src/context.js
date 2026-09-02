@@ -1,6 +1,6 @@
 // `hkb context <n>` — exactly what a worker sees (Hermes `kanban_show` + protocol reminder).
 import { getTask, loadRun, parentResults, latestResult, listComments } from './tasks.js';
-import { activePrGuard, openAttempt, capabilityCommand, CAPABILITIES, RUN_MARKER, RESULT_MARKER } from './model.js';
+import { activePrGuard, openAttempt, capabilityCommand, CAPABILITIES, RUN_MARKER, RESULT_MARKER, effectiveTools } from './model.js';
 
 // ---------- the comment thread as steering input (pure; tested in test/context.test.js) ----------
 
@@ -138,6 +138,31 @@ export function briefIntents(task, { cont = null } = {}) {
  * what it means (`CAPABILITIES`), never the command. `null` is the ordinary answer: every board that
  * has never heard of `capabilities` gets a byte-identical brief to the one it got before.
  */
+/**
+ * One line naming the MCP servers this worker may reach, or null when nothing narrows them. Pure.
+ *
+ * The answer comes from `effectiveTools` (src/model.js) — the one derivation of what a launch may
+ * use — and is never recomputed here. #130 is what this line is for: a worker that could not tell
+ * whether the repo's own `react-aria` server was available built the components from training
+ * knowledge and said nothing. Naming the set (and naming it as *empty* when it is empty) turns a
+ * silent guess into a disclosable refusal.
+ *
+ * `null` is the ordinary answer: a board that declares no `mcp` and no posture renders the brief it
+ * rendered before this existed, byte for byte.
+ */
+export function mcpLine(profile, task, board = null) {
+  const { posture, allow, deny } = effectiveTools(profile, task, board).mcp;
+  if (posture === 'inherit') {
+    const except = deny.length ? ` — except ${deny.map((s) => '`' + s + '`').join(', ')}, which this board withholds from workers` : '';
+    if (!allow) return `MCP: you inherit this session's MCP servers${except}.`;
+    const only = allow.length ? allow.map((s) => '`' + s + '`').join(', ') : 'none';
+    return `MCP: of this session's servers this card may use ${only}${except}.`;
+  }
+  if (!allow) return null;
+  if (!allow.length) return 'MCP: no MCP server is available to you. If the work needs one, say so — do not work around it.';
+  return `MCP servers available to you: ${allow.map((s) => '`' + s + '`').join(', ')}. Any other MCP server is denied — say so rather than guessing.`;
+}
+
 export function capabilityLine(profile, intent) {
   const cmd = capabilityCommand(profile, intent);
   if (!cmd) return null;
@@ -171,6 +196,8 @@ export async function workerContext(ctx, task, attempt, { continuePr = null, pro
   if (task.kb.goal) lines.push(`## Acceptance criteria\n${task.kb.goal}\n${goalCmd ? goalCmd + '\n' : ''}`);
   if (task.kb.paths?.length) lines.push(`Scope: this task owns ${task.kb.paths.map((p) => '`' + p + '`').join(', ')} — stay inside it.\n`);
   if (task.kb.skills?.length) lines.push(`Skills to apply: ${task.kb.skills.map((s) => '`/' + s + '`').join(', ')}\n`);
+  const mcp = mcpLine(prof, task, ctx.cfg);
+  if (mcp) lines.push(`${mcp}\n`);
   if (cont) {
     lines.push(...continuationBlock(cont, { base }));
     const reviewCmd = bound('review');

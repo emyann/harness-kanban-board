@@ -371,10 +371,14 @@ test('effectiveTools: every shipped profile launch line is byte-identical to the
 
 test('effectiveTools: no card, or a card with nothing to say, is the profile grant unchanged', () => {
   const profile = { allowed_tools: ['Read', 'Edit', 'Bash(git *)'] };
-  assert.deepEqual(effectiveTools(profile), { tools: ['Read', 'Edit', 'Bash(git *)'], dropped: [] });
+  // `mcp` (#257) rides along on every answer; the grant itself is what this test pins.
+  const bare = ({ tools, dropped }) => ({ tools, dropped });
+  assert.deepEqual(bare(effectiveTools(profile)), { tools: ['Read', 'Edit', 'Bash(git *)'], dropped: [] });
   assert.deepEqual(effectiveTools(profile, { kb: { ...DEFAULT_KB } }, {}).tools, ['Read', 'Edit', 'Bash(git *)']);
   // a profile with no per-command allow-list (codex: the sandbox is the policy) expands to nothing
-  assert.deepEqual(effectiveTools({ allowed_tools: null }, { kb: {} }, {}), { tools: [], dropped: [] });
+  assert.deepEqual(bare(effectiveTools({ allowed_tools: null }, { kb: {} }, {})), { tools: [], dropped: [] });
+  // a board that never mentions MCP gets no answer about it either — "whatever the session has"
+  assert.deepEqual(effectiveTools(profile).mcp, { posture: 'curate', allow: null, deny: [] });
 });
 
 test('effectiveTools: the returned list is a copy — a caller cannot mutate the profile grant', () => {

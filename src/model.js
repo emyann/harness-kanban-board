@@ -69,21 +69,35 @@ export function modelArgs(vars) {
  * seat problem one rung down. Neither key ships as configuration in this card: absent, which is
  * every card today, the profile's grant comes back untouched.
  *
- * Returns `{ tools, dropped }` — `dropped` is a list of `{ tool, source, reason }`, returned
- * rather than swallowed so a caller can say what it took away.
+ * A profile's `mcp` names MCP servers, and what naming them means is the posture (`toolPosture`):
+ * under `curate` it is the whitelist — the servers a worker **may** reach, and no others, with each
+ * named server's tools added to the grant so a server sitting in the repo's own `.mcp.json` is
+ * actually usable (#130: a worker denied `react-aria` built from training knowledge and said
+ * nothing). Under `inherit` the same key is the **subtraction**: the worker keeps the session's
+ * servers minus these, which is how "a Supabase server that writes to production" is kept out of an
+ * unattended worker's hands. A profile that names no `mcp` is untouched either way.
+ *
+ * Returns `{ tools, dropped, mcp }` — `dropped` is a list of `{ tool, source, reason }`, returned
+ * rather than swallowed so a caller can say what it took away, and `mcp` is
+ * `{ posture, allow, deny }`: `allow` is the servers this worker may reach (`null` = "whatever the
+ * session has", the only honest answer when nothing narrows it), `deny` the ones subtracted from it.
  */
-// eslint-disable-next-line no-unused-vars -- `board` is an extension point: #223 reads it, this card does not
+// eslint-disable-next-line no-unused-vars -- `board` is an extension point kept for the signature siblings were given
 export function effectiveTools(profile, task = null, board = null) {
   // `allowed_tools: null` is "this harness has no per-command allow-list" (Codex: the sandbox is
   // the policy). It expands to nothing on a launch, and there is nothing for a card to narrow —
   // and nothing for a capability binding to widen either: adding a tool to a list that is not
   // there would turn "no allow-list" into an allow-list of one.
-  const granted = grantWithCapabilities(profile);
+  const dropped = [];
+  const posture = toolPosture(profile);
+  const declared = profileMcp(profile);
+  const granted = applyProfileMcp(grantWithCapabilities(profile), profile, posture, declared, dropped);
   const kb = task?.kb || {};
   const wantTools = Array.isArray(kb.tools) ? kb.tools : null;
   const wantMcp = Array.isArray(kb.mcp) ? kb.mcp : null;
-  const dropped = [];
-  if (!wantTools && !wantMcp) return { tools: [...granted], dropped };
+  const deny = posture === 'inherit' && declared ? [...declared] : [];
+  const reach = (tools, cardServers) => mcpReach({ posture, declared, deny, tools, cardServers, profile });
+  if (!wantTools && !wantMcp) return { tools: [...granted], dropped, mcp: reach(granted, null) };
 
   const grantedBy = (want) => granted.find((g) => covers(g, want)) || null;
 
@@ -96,19 +110,26 @@ export function effectiveTools(profile, task = null, board = null) {
     }
     tools = keep;
   }
+  let cardServers = null;
   if (wantMcp) {
     const allowedServers = new Set();
     for (const server of wantMcp) {
       const pattern = `mcp__${server}__*`;
-      if (granted.some((g) => covers(g, pattern) || mcpServerOf(g) === server)) allowedServers.add(server);
-      else dropped.push({ tool: pattern, source: 'kb.mcp', reason: 'not granted by the profile' });
+      // Under `inherit` there is no per-command allow-list to check a card against: the session's
+      // servers are the ceiling and the profile's `mcp` is the subtraction from it, so the only
+      // thing a card can be refused is a server the profile already excluded. Under `curate` the
+      // grant is the ceiling, exactly as before.
+      const ok = posture === 'inherit' ? !deny.includes(server) : granted.some((g) => covers(g, pattern) || mcpServerOf(g) === server);
+      if (ok) allowedServers.add(server);
+      else dropped.push({ tool: pattern, source: 'kb.mcp', reason: posture === 'inherit' ? 'excluded by the profile' : 'not granted by the profile' });
     }
     tools = tools.filter((t) => {
       const server = mcpServerOf(t);
       return server === null || allowedServers.has(server);
     });
+    cardServers = [...allowedServers];
   }
-  return { tools, dropped };
+  return { tools, dropped, mcp: reach(tools, cardServers) };
 }
 
 /**
@@ -122,6 +143,81 @@ function covers(grant, want) {
   if (!String(grant).includes('*')) return false;
   const re = new RegExp(`^${String(grant).split('*').map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
   return re.test(String(want));
+}
+
+/**
+ * A profile's `mcp` as a clean list of server names, or `null` when the profile does not declare it.
+ * `null` and `[]` are deliberately different answers: `null` is "this board never mentioned MCP" and
+ * changes nothing anywhere, `[]` under `curate` is "no server at all", which is a choice a board can
+ * make. Pure.
+ */
+export function profileMcp(profile) {
+  const raw = profile?.mcp;
+  if (!Array.isArray(raw)) return null;
+  return [...new Set(raw.filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()))];
+}
+
+/**
+ * The profile's own MCP decision, applied to its grant before any card sees it. Pure.
+ *
+ * `curate`: the grant keeps only the named servers' tools and *gains* `mcp__<server>__*` for each
+ * name — naming a server is what makes it reachable, which is the whole point (a repo's `.mcp.json`
+ * server is otherwise defined, inherited, and then denied). A profile with `allowed_tools: null` is
+ * left alone: that harness has no allow-list to add to.
+ *
+ * `inherit`: the named servers are the subtraction, so any grant they carry is taken away too — a
+ * board that excludes a production database must not hand it back through `allowed_tools`.
+ */
+function applyProfileMcp(granted, profile, posture, declared, dropped) {
+  if (!declared) return granted;
+  const seen = new Set();
+  const drop = (server, reason) => {
+    if (seen.has(server)) return;
+    seen.add(server);
+    dropped.push({ tool: `mcp__${server}__*`, source: 'profile.mcp', reason });
+  };
+  if (posture === 'inherit') {
+    return granted.filter((t) => {
+      const server = mcpServerOf(t);
+      if (server === null || !declared.includes(server)) return true;
+      drop(server, 'excluded by the profile');
+      return false;
+    });
+  }
+  const kept = granted.filter((t) => {
+    const server = mcpServerOf(t);
+    if (server === null || declared.includes(server)) return true;
+    drop(server, 'not named by the profile');
+    return false;
+  });
+  if (profile?.allowed_tools == null) return kept;
+  for (const server of declared) {
+    const pattern = `mcp__${server}__*`;
+    if (!kept.some((g) => covers(g, pattern))) kept.push(pattern);
+  }
+  return kept;
+}
+
+/**
+ * What this worker may actually reach, as server names: `{ posture, allow, deny }`. Pure.
+ *
+ * `allow: null` means "whatever the session has" — the only honest answer for a board that has
+ * never mentioned MCP, and the reason a brief for such a board says nothing new. Under `curate`
+ * with a declared list, `allow` is read back off the final grant rather than off the declaration,
+ * so a card's narrowing is already in it and there is no second derivation to disagree with.
+ */
+function mcpReach({ posture, declared, deny, tools, cardServers, profile }) {
+  if (posture === 'inherit') {
+    return { posture, allow: cardServers ? [...cardServers] : null, deny: [...deny] };
+  }
+  if (!declared && !cardServers) return { posture, allow: null, deny: [] };
+  if (profile?.allowed_tools == null) return { posture, allow: cardServers ? [...cardServers] : null, deny: [] };
+  const allow = [];
+  for (const t of tools) {
+    const server = mcpServerOf(t);
+    if (server !== null && !allow.includes(server)) allow.push(server);
+  }
+  return { posture, allow, deny: [] };
 }
 
 /** `mcp__<server>__<tool>` → `<server>`; anything else → null. Pure. */
