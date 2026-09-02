@@ -6,7 +6,7 @@ import { spawnSync, execFileSync } from 'node:child_process';
 import { ghCmd } from './gh.js';
 import {
   worktreePath, parseRepoSpecs, mergeBoardEntry, stripNodeModulesBin, pidClaimStale,
-  parseBtimeSec, parseKernBoottimeSec, SAFE_BUILTINS, EFFORT_LEVELS, TOOL_POSTURES,
+  parseBtimeSec, parseKernBoottimeSec, SAFE_BUILTINS, EFFORT_LEVELS, TOOL_POSTURES, CAPABILITIES,
 } from './model.js';
 
 // A background worker has nobody to answer a permission prompt, so the allowlist must cover
@@ -525,6 +525,30 @@ export function loadBoard(root) {
       const err = new Error(`profile "${name}" has tools "${p.tools}" in ${file} — must be one of ${TOOL_POSTURES.join(', ')}`);
       err.exitCode = 2;
       throw err;
+    }
+  }
+  // `capabilities` binds an intent from the closed `CAPABILITIES` vocabulary to what *this* harness
+  // calls it (#217). Validated here, once, for the same reason `effort` is: the alternative is a
+  // worker being told to run a command from a typo'd intent nothing will ever bind. An *unbound*
+  // intent is not an error — that is the fallback to today's prose brief — but an intent hkb has
+  // never heard of is, and the message names the vocabulary so the fix is a rename, not a search.
+  for (const [name, p] of Object.entries(cfg.profiles)) {
+    if (p.capabilities == null) continue;
+    const fail = (msg) => {
+      const err = new Error(`profile "${name}" in ${file}: ${msg}`);
+      err.exitCode = 2;
+      throw err;
+    };
+    if (typeof p.capabilities !== 'object' || Array.isArray(p.capabilities)) {
+      fail(`"capabilities" must be an object mapping an intent to this harness's command, e.g. {"review": "/code-review"}`);
+    }
+    for (const [intent, command] of Object.entries(p.capabilities)) {
+      if (!Object.hasOwn(CAPABILITIES, intent)) {
+        fail(`unknown capability "${intent}" — must be one of ${Object.keys(CAPABILITIES).join(', ')}`);
+      }
+      if (typeof command !== 'string' || !command.trim()) {
+        fail(`capability "${intent}" must name this harness's command as a non-empty string`);
+      }
     }
   }
   return cfg;

@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
 import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches } from './board.js';
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun, openPrsByHead, issueDatabaseId } from './tasks.js';
-import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren, branchTaskNumber, denialDisplayTool, DENIAL_KINDS, mcpVisibilityDiagnosis, mcpGrantedTo } from './model.js';
+import { L, STATUSES, SAFE_BUILTINS, capabilityGrants, effectiveTools, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren, branchTaskNumber, denialDisplayTool, DENIAL_KINDS, mcpVisibilityDiagnosis, mcpGrantedTo } from './model.js';
 import { resolvedIdentity } from './hook.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName, listTrackBranches } from './lock.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, harnessHookCommand, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
@@ -236,6 +236,52 @@ export function checkWorkerPermissions(ctx, { ok, warn }, { read = (p) => fs.rea
   }
   if (!stale.length) ok(PERMS_CHECK, `${lists.length} allow-list${lists.length === 1 ? '' : 's'} cover the ${SAFE_BUILTINS.length} shell builtins hkb calls safe`);
   return lists;
+}
+
+export const CAPABILITIES_CHECK = 'capability map';
+
+/**
+ * What each profile binds, and whether its launch can actually grant it — the check #114 asked for,
+ * generalised. #114 was a card naming a skill on a profile whose `allowed_tools` denied `Skill`;
+ * this is any binding whose implied tool never reaches the command line.
+ *
+ * The grant itself is **not** recomputed here. `effectiveTools` (src/model.js) is the one derivation
+ * of a launch's tool list, so this asks it — a check that worked out the answer for itself could
+ * disagree with the launch, which is the exact failure the map exists to end. What is left for this
+ * function is the half `effectiveTools` cannot see: whether the launch line still spends
+ * `{allowed_tools}` at all. A profile that dropped that token renders a perfect tool list into
+ * nothing.
+ *
+ * Silent on a board that binds nothing — which is every board that has never heard of the key.
+ * Config only, so it runs before the first API call.
+ */
+export function checkCapabilityMap(ctx, { ok, warn }) {
+  const board = path.relative(ctx.root, boardFile(ctx.root));
+  const bound = [];
+  const broken = [];
+  for (const [name, profile] of Object.entries(ctx.cfg?.profiles || {})) {
+    const grants = capabilityGrants(profile);
+    if (!grants.length) continue;
+    const { tools } = effectiveTools(profile, null, ctx.cfg);
+    const spends = (profile?.launch || []).some((el) => String(el).includes('{allowed_tools}'));
+    for (const g of grants) {
+      bound.push(`${name}: ${g.intent} → ${g.command}${g.tool ? ` (${g.tool})` : ''}`);
+      if (!g.tool) continue;
+      if (!tools.includes(g.tool)) broken.push({ name, ...g, why: `its "allowed_tools" is not a list, so the launch grants no tools at all` });
+      else if (!spends) broken.push({ name, ...g, why: `its launch line never spends {allowed_tools}, so the grant never reaches the command line` });
+    }
+  }
+  if (!bound.length) return null;
+  // the map is printed whatever the verdict: an operator reading doctor to find what this board
+  // calls "review" must not have to first make every binding pass
+  ok(CAPABILITIES_CHECK, `${bound.length} bound: ${bound.join(' · ')}`);
+  for (const b of broken) {
+    warn(CAPABILITIES_CHECK,
+      `the ${b.name} profile binds ${b.intent} to ${b.command}, which needs the ${b.tool} tool — but ${b.why}, and a \`dontAsk\` launch denies rather than prompts`,
+      `give the ${b.name} profile in ${board} an "allowed_tools" list and a launch that spends {allowed_tools}, or bind ${b.intent} to something this launch can invoke`);
+  }
+  if (!broken.length) ok(CAPABILITIES_CHECK, 'every binding is one its launch can grant');
+  return { bound, broken };
 }
 
 /** The profiles whose launch line carries hkb's hooks (`--settings`). Pure. */
@@ -1294,6 +1340,8 @@ export async function doctor(ctx, flags, log) {
   checkPolicyLayer(ctx, { ok });
   checkPermissionMode(ctx, { warn });
   checkWorkerPermissions(ctx, { ok, warn });
+  // what each profile calls the intents it binds, and whether its launch can actually grant them
+  checkCapabilityMap(ctx, { ok, warn });
   // and whether this shell is carrying a worker's identity it should not have (#150)
   checkEnvLeak(ctx, { warn });
 

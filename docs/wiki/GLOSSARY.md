@@ -16,6 +16,12 @@ deserves a `concepts/` page (link it).
 - **Board key** — the URL-safe `owner~repo~slug` id `hkb serve` gives each board
   it holds, and the path segment every request names it by
   (`boardKey`/`uniqueKeys` in `src/model.js`; see *features/web-board*).
+- **Binding** — what one board's profile calls an *intent*, written in
+  `profile.capabilities` and validated by `loadBoard` (`src/board.js`). Local by
+  design: hkb reads it and never writes a command name of its own.
+- **Capability map** — a profile's `intent → command` bindings, the first
+  profile field about what a session reaches for rather than how it starts; see
+  *features/capability-map* and *concepts/capability-portability*.
 - **Card / task** — a GitHub issue on the board; "card" in kanban prose,
   "task" in code and JSON (`src/tasks.js`).
 - **Claim** — an atomic take on a card: creating `refs/kb/locks/<n>/<k>`, the
@@ -57,6 +63,10 @@ deserves a `concepts/` page (link it).
   `features/review-loop`).
 - **Host** — machine identity, recorded per attempt, so the tick only checks a
   pid on the machine that owns it (`src/dispatch.js`).
+- **Intent** — a kind of work from the closed `CAPABILITIES` vocabulary
+  (`src/model.js`), each shipped with its one-line meaning. The portable half: an
+  intent travels between harnesses, its *binding* does not. Unbound is the
+  ordinary answer, and it means today's prose brief.
 - **Operator** — the human seat: owns the repo, the token and the scope; files
   cards, steers by comment, reviews and merges, answers `kb:needs-human`,
   restarts a dispatcher that exited 4. "you", in a worker prompt

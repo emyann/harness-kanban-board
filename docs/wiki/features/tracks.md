@@ -7,25 +7,25 @@ audience: [dev]
 read_when: "touching src/track.js, isTrackRoot, the track branch of the dispatcher tick, the claude-track profile's allow-list, or the runner brief"
 covers:
   - path: src/model.js
-    sha: 6656795be9d6890424538296436c507ee8ced5e0
+    sha: 4e63d8cb11f662324cd2f2d4888b471e980db053
   - path: src/track.js
-    sha: 286c5fff375e47a6f7ebf8d648671a9659872ab4
+    sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
   - path: src/dispatch.js
-    sha: 91ca65eadb9e1b66fa8b8c9756dda334668edd74
+    sha: 18a622a26529bfb3b7a16cacc44f1079eee4cfb8
   - path: src/init.js
-    sha: aee5eed4dcc544f9a6fe81c7273f96432aaf1048
+    sha: ef82ab4c5a872e8bfda06227c8ae1ae9812eeaa3
   - path: src/board.js
-    sha: 955f2c7cfc908fe46ebf264e0cb4c8e722c7a79c
+    sha: 28238d1670e4c6c0807b0113adb47a8a40069b37
   - path: src/gc.js
     sha: 04d99352d5029211f2a3c9ae8d591bcbab4aa366
   - path: src/tasks.js
     sha: 8542b5c7d4905306e774b95db8b8dcd4390b2748
   - path: src/doctor.js
-    sha: 5c9955ba4228a0722b3e3fce557a06890ff4f487
+    sha: 9625ca70f81eb363002a01afbe515b540ee81d9a
   - path: src/lock.js
     sha: e9920df913b5e6cd8a648dad6e679cf4a41a6a1a
 related: [architecture/overview, features/harness-profiles, features/review-loop, concepts/worker-identity, decisions/adr-004-roles-and-adoption]
-generated_at_commit: 34529cf
+generated_at_commit: 1590a97
 last_refreshed: 2026-09-01
 ---
 
@@ -148,11 +148,14 @@ What changed is only the runner's brief and one line of allow-list:
   *denies* an unlisted tool rather than prompting, so the allow-list is the
   capability. Cold node workers stay single-agent on purpose: one that could
   fan out would spawn children nothing on the board has claimed.
-- **`trackFanout(cfg, profile)`** (`src/track.js`) reads that list, and the
-  dispatcher passes its answer to `trackContext` when it builds the track prompt
-  (`src/dispatch.js`, the track branch of the tick). A profile without `Agent`
-  gets the older node-after-node brief, which is always a correct way to run a
-  track — the board reads the same either way.
+- **`trackFanout(cfg, profile, task)`** (`src/track.js`) checks for `Agent` via
+  `effectiveTools(profile, task, cfg)` rather than the profile's raw list (#273),
+  so the root card's own `kb.tools` can narrow `Agent` away — the dispatcher
+  passes the root task at its one call site (`src/dispatch.js`, the track branch
+  of the tick) and passes its answer to `trackContext` when it builds the track
+  prompt. A profile without `Agent` (or a card that narrowed it away) gets the
+  older node-after-node brief, which is always a correct way to run a track —
+  the board reads the same either way.
 - **`trackContext({..., fanout: true})`** is an orchestrator brief: claim the
   wave, spawn one subagent per node *in a single message* (sequential spawns are
   a fan-out coat over a sequential track), heartbeat the root while they work,
