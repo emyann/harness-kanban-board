@@ -35,6 +35,14 @@ export function modelArgs(vars) {
  * board config are all already here, so neither sibling has to change it. No posture and no map
  * are implemented — a stub for either would only invite a second derivation beside this one.
  *
+ * A profile's `capabilities` map widens it, and only it. A binding invoked with a tool the launch
+ * must name — a slash command on a Claude launch, which is the `Skill` tool — puts that tool in the
+ * grant **because of the binding**, derived here and nowhere else. #114 happened because the field
+ * naming a capability and the launch granting it were two hand-maintained facts, and under `dontAsk`
+ * an unlisted tool is denied rather than prompted, so the drift was silent. Deriving it means a
+ * binding cannot outlive its permission. The widening happens *before* the card narrows, so a card
+ * can still take it away like anything else: the profile grants, the card chooses.
+ *
  * A card narrows, never widens. `kb.tools` (a tool allow-list) and `kb.mcp` (MCP server names)
  * intersect with the profile's grant; anything the card asks for that its profile does not have is
  * **dropped and recorded**, never granted — a card that could widen its own permissions is the
@@ -44,11 +52,13 @@ export function modelArgs(vars) {
  * Returns `{ tools, dropped }` — `dropped` is a list of `{ tool, source, reason }`, returned
  * rather than swallowed so a caller can say what it took away.
  */
-// eslint-disable-next-line no-unused-vars -- `board` is an extension point: #223 and #217 read it, this card does not
+// eslint-disable-next-line no-unused-vars -- `board` is an extension point: #223 reads it, this card does not
 export function effectiveTools(profile, task = null, board = null) {
   // `allowed_tools: null` is "this harness has no per-command allow-list" (Codex: the sandbox is
-  // the policy). It expands to nothing on a launch, and there is nothing for a card to narrow.
-  const granted = profile?.allowed_tools || [];
+  // the policy). It expands to nothing on a launch, and there is nothing for a card to narrow —
+  // and nothing for a capability binding to widen either: adding a tool to a list that is not
+  // there would turn "no allow-list" into an allow-list of one.
+  const granted = grantWithCapabilities(profile);
   const kb = task?.kb || {};
   const wantTools = Array.isArray(kb.tools) ? kb.tools : null;
   const wantMcp = Array.isArray(kb.mcp) ? kb.mcp : null;
@@ -134,6 +144,59 @@ export function capabilityCommand(profile, intent) {
   if (!Object.hasOwn(CAPABILITIES, intent)) return null;
   const bound = map[intent];
   return typeof bound === 'string' && bound.trim() ? bound : null;
+}
+
+/** Claude Code's tool for invoking a slash command / skill. The one tool a binding can imply. */
+export const SKILL_TOOL = 'Skill';
+
+/**
+ * The tool a launch must name for `command` to be invocable on this profile's harness, or `null`
+ * when there is nothing to grant. Pure.
+ *
+ * Only one shape is known: a slash command on a Claude Code launch, which that harness invokes with
+ * the `Skill` tool. Anything else answers `null` — a shell verb, a binding on a Copilot or Codex
+ * launch, a harness whose slash commands need no tool. `null` is not a complaint: it means "this
+ * launch needs no extra permission for that binding", which is the honest answer wherever hkb does
+ * not know the harness's invocation. hkb still names no command: it reads the *shape* of whatever
+ * the board wrote, never the name.
+ */
+export function capabilityTool(profile, command) {
+  if (typeof command !== 'string' || !command.trim().startsWith('/')) return null;
+  return (profile?.launch || [])[0] === 'claude' ? SKILL_TOOL : null;
+}
+
+/**
+ * Every intent this profile binds, as `{ intent, command, tool }` — `tool` being what the launch
+ * must grant for the binding to be usable, or `null` when nothing extra is needed. Pure.
+ *
+ * The single reading of a profile's map. `effectiveTools` derives its grant from this, and
+ * `hkb doctor` prints and checks this; nothing computes a grant a second way.
+ */
+export function capabilityGrants(profile) {
+  const out = [];
+  for (const intent of Object.keys(CAPABILITIES)) {
+    const command = capabilityCommand(profile, intent);
+    if (command) out.push({ intent, command, tool: capabilityTool(profile, command) });
+  }
+  return out;
+}
+
+/**
+ * The profile's own grant plus whatever its capability bindings imply. Pure, internal: the widening
+ * has exactly one caller, `effectiveTools`, which is what keeps the derivation single.
+ *
+ * A profile that binds nothing gets its list back untouched — not a copy with the same contents, an
+ * identical list — so every board that has never heard of `capabilities` renders a byte-identical
+ * launch line.
+ */
+function grantWithCapabilities(profile) {
+  const base = profile?.allowed_tools;
+  if (!Array.isArray(base)) return base || [];
+  const implied = capabilityGrants(profile).map((g) => g.tool).filter(Boolean);
+  if (!implied.length) return base;
+  const out = [...base];
+  for (const tool of implied) if (!out.some((g) => covers(g, tool))) out.push(tool);
+  return out;
 }
 
 export const LABEL_COLORS = {
