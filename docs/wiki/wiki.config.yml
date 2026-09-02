@@ -66,6 +66,9 @@ pages:
   - slug: concepts/capability-portability
     summary: "The portability contract behind a profile's `capabilities`: a closed vocabulary of intents, a local binding, an unmapped intent as prose, and the permission derived from the binding."
     status: seeded
+  - slug: features/capability-map
+    summary: "How a profile came to say what it reaches for inside a session: the intent vocabulary, the board-local binding, the brief that names it, the tool grant derived from it, and the doctor check that proves the two agree."
+    status: seeded
   - slug: concepts/roles-and-seats
     summary: "Operator, supervisor, dispatcher, workers: who decides, who judges, who loops, who codes — and which seats are optional."
     status: planned
