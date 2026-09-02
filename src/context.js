@@ -1,6 +1,6 @@
 // `hkb context <n>` — exactly what a worker sees (Hermes `kanban_show` + protocol reminder).
 import { getTask, loadRun, parentResults, latestResult, listComments } from './tasks.js';
-import { activePrGuard, openAttempt, RUN_MARKER, RESULT_MARKER } from './model.js';
+import { activePrGuard, openAttempt, capabilityCommand, CAPABILITIES, RUN_MARKER, RESULT_MARKER } from './model.js';
 
 // ---------- the comment thread as steering input (pure; tested in test/context.test.js) ----------
 
@@ -112,7 +112,39 @@ function continuationBlock(cont, { base }) {
   return lines;
 }
 
-export async function workerContext(ctx, task, attempt, { continuePr = null } = {}) {
+/**
+ * The capability intents this card triggers, in the order the brief renders them. Pure.
+ *
+ * A card triggers an intent by what it *is*, never by naming a command: a card with acceptance
+ * criteria is work with an outcome to state (`goal`); a card continuing a PR that came back with
+ * changes requested has work that already exists to re-read before touching it (`review`). Whether
+ * the worker is then told a command is the profile's business (`capabilityCommand`) — an intent no
+ * profile binds simply renders nothing extra, which is today's brief.
+ *
+ * `specify` is deliberately never triggered here: turning a one-liner into a spec happens *before* a
+ * card is dispatched, so no worker brief is the place for it.
+ */
+export function briefIntents(task, { cont = null } = {}) {
+  const intents = [];
+  if (task?.kb?.goal) intents.push('goal');
+  if (cont) intents.push('review');
+  return intents;
+}
+
+/**
+ * One line naming what **this** harness calls `intent`, or null when nothing binds it. Pure.
+ *
+ * The command text comes from the board's own config and nowhere else — hkb knows the intent and
+ * what it means (`CAPABILITIES`), never the command. `null` is the ordinary answer: every board that
+ * has never heard of `capabilities` gets a byte-identical brief to the one it got before.
+ */
+export function capabilityLine(profile, intent) {
+  const cmd = capabilityCommand(profile, intent);
+  if (!cmd) return null;
+  return `On this harness that is \`${cmd}\` — ${CAPABILITIES[intent]}.`;
+}
+
+export async function workerContext(ctx, task, attempt, { continuePr = null, profile = null } = {}) {
   const { run } = await loadRun(ctx, task.number);
   const comments = formatComments(selectComments(await listComments(ctx, task.number), run)); // cached read — loadRun already fetched the thread
   const parents = await parentResults(ctx, task);
@@ -127,12 +159,23 @@ export async function workerContext(ctx, task, attempt, { continuePr = null } = 
   lines.push('');
   lines.push(task.bodyText.trim() || '(no description)');
   lines.push('');
-  if (task.kb.goal) lines.push(`## Acceptance criteria\n${task.kb.goal}\n`);
-  if (task.kb.paths?.length) lines.push(`Scope: this task owns ${task.kb.paths.map((p) => '`' + p + '`').join(', ')} — stay inside it.\n`);
-  if (task.kb.skills?.length) lines.push(`Skills to apply: ${task.kb.skills.map((s) => '`/' + s + '`').join(', ')}\n`);
   const cont = continuePr ?? continuation(task, run);
   const base = cont?.base || ctx.cfg?.default_branch || 'main';
-  if (cont) lines.push(...continuationBlock(cont, { base }));
+  // The profile that will run this card. Only its `capabilities` map is read here, and only to name
+  // what this harness calls an intent the card already triggers: an unbound intent adds nothing, so a
+  // board that declares none renders exactly the brief it rendered before capabilities existed.
+  const prof = profile ?? ctx.cfg?.profiles?.[task.agent] ?? null;
+  const intents = briefIntents(task, { cont });
+  const bound = (intent) => (intents.includes(intent) ? capabilityLine(prof, intent) : null);
+  const goalCmd = bound('goal');
+  if (task.kb.goal) lines.push(`## Acceptance criteria\n${task.kb.goal}\n${goalCmd ? goalCmd + '\n' : ''}`);
+  if (task.kb.paths?.length) lines.push(`Scope: this task owns ${task.kb.paths.map((p) => '`' + p + '`').join(', ')} — stay inside it.\n`);
+  if (task.kb.skills?.length) lines.push(`Skills to apply: ${task.kb.skills.map((s) => '`/' + s + '`').join(', ')}\n`);
+  if (cont) {
+    lines.push(...continuationBlock(cont, { base }));
+    const reviewCmd = bound('review');
+    if (reviewCmd) lines.push(`Read what is already there before you change it. ${reviewCmd}`, '');
+  }
   if (parents.length) {
     lines.push('## Parent task results');
     for (const p of parents) {
