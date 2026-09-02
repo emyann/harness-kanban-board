@@ -8,7 +8,7 @@ import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, 
 import { claim, release, listLocks, lockBeatAt, staleBaseSha, remoteName, ensureTrackBranch } from './lock.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, pidFile, readPidFile, pidAlive, recordExit, clearExit, HOOK_SETTINGS_VAR } from './board.js';
 import { workerHookSettings, PKG_ROOT, packageVersion } from './init.js';
-import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, authPauseReason, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, isTrackRoot, trackBranchConflict, buildDeniedTools, deniedToolsUpdate } from './model.js';
+import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, authPauseReason, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, effectiveTools, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, isTrackRoot, trackBranchConflict, buildDeniedTools, deniedToolsUpdate } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted, trackFanout } from './track.js';
 import { GhError } from './gh.js';
@@ -76,14 +76,22 @@ export function replayOutbox(ctx, log) {
 
 // ---------- worker spawn ----------
 
-export function expandLaunch(template, vars, profile) {
+/**
+ * Render a profile's launch template. `{allowed_tools}` is *not* read off the profile here: the
+ * tool list comes from `effectiveTools` (src/model.js), the one place that derives what a worker
+ * may use. Pass the card and the board config as `ctx` and the card's narrowing applies; pass
+ * neither — every existing caller — and the profile's grant expands exactly as it always did.
+ * What the narrowing took away is `effectiveTools`'s `dropped`; `spawnWorker` reports it.
+ */
+export function expandLaunch(template, vars, profile, { task = null, board = null } = {}) {
+  const { tools } = effectiveTools(profile, task, board);
   const out = [];
   for (const el of template) {
-    if (el === '{allowed_tools}') { out.push(...(profile.allowed_tools || [])); continue; }
+    if (el === '{allowed_tools}') { out.push(...tools); continue; }
     // `--allow-tool={allowed_tools}` → one `--allow-tool <pattern>` pair per entry, for harnesses
     // that repeat the flag instead of taking a list (Copilot CLI).
     const perTool = /^(--[\w-]+)=\{allowed_tools\}$/.exec(el);
-    if (perTool) { for (const t of profile.allowed_tools || []) out.push(perTool[1], t); continue; }
+    if (perTool) { for (const t of tools) out.push(perTool[1], t); continue; }
     if (el === '{model_args}') { out.push(...modelArgs(vars)); continue; }
     // hkb's hooks, on the launch instead of in a settings file every session in the repo reads
     // (#144). A flag pair or nothing, like `{model_args}`: an empty value would still be a `--settings`
@@ -101,6 +109,16 @@ export function expandLaunch(template, vars, profile) {
     out.push(el.replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? '')));
   }
   return out;
+}
+
+/**
+ * Say what the card asked for and did not get. A worker under `--permission-mode dontAsk` meets a
+ * narrowed grant as a silent refusal, so the tick names the drop at spawn time instead.
+ */
+function logDroppedTools(task, profileName, spawned, log) {
+  const dropped = spawned?.tools_dropped || [];
+  if (!dropped.length || typeof log !== 'function') return;
+  log(`#${task.number}: dropped ${dropped.map((d) => `${d.tool} (${d.source})`).join(', ')} — the ${profileName} profile does not grant it; a card narrows, never widens`);
 }
 
 /**
@@ -167,7 +185,14 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
     worktree: wt ? path.join(ctx.root, worktreePath(wt)) : ctx.root,
     hook_settings: (profile.launch || []).includes(HOOK_SETTINGS_VAR) ? workerHookSettings() : '',
   };
-  const argv = cont?.ok && !ownsWt ? withoutWorktreeFlag(expandLaunch(profile.launch, vars, profile)) : expandLaunch(profile.launch, vars, profile);
+  // The card is part of the launch's tool derivation now (`effectiveTools`, src/model.js): it can
+  // narrow the profile's grant, never widen it. `dropped` rides out on the result so the tick can
+  // say what a card asked for and did not get, instead of a worker discovering it as a refusal.
+  const launchCtx = { task, board: ctx.cfg };
+  const { dropped: toolsDropped } = effectiveTools(profile, task, ctx.cfg);
+  const argv = cont?.ok && !ownsWt
+    ? withoutWorktreeFlag(expandLaunch(profile.launch, vars, profile, launchCtx))
+    : expandLaunch(profile.launch, vars, profile, launchCtx);
   const continued = continuePr && { pr: continuePr.number, branch: cont?.ok ? cont.branch : null, why: cont ? (cont.ok ? cont.stale : cont.why) : null };
   // The launch environment is the worker's identity for every harness we run as a child process:
   // it dies with that process. `claude --bg` is the exception — it hands the request to Claude
@@ -179,7 +204,7 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
     KB_TASK: String(task.number), KB_ATTEMPT: String(attempt), KB_BOARD: ctx.board, KB_REPO: ctx.repo.nameWithOwner,
     KB_LOCK_REF: lockRef(task.number, attempt), KB_ROOT: ctx.root, KB_PROFILE: profileName,
   };
-  if (dryRun) return { argv, pid: null, continued };
+  if (dryRun) return { argv, pid: null, continued, tools_dropped: toolsDropped };
   ensureLocalDirs(ctx.root);
   const cwd = wt ? ensureWorktree(ctx.root, wt) : ctx.root;
   const logFile = path.join(logsDir(ctx.root), `${task.number}-${attempt}.log`);
@@ -192,7 +217,7 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
     const out = `${r.stdout || ''}${r.stderr || ''}`.trim();
     fs.appendFileSync(logFile, `# ${nowIso()} trigger ${argv.join(' ')}\n${out}\n`);
     if (r.error || r.status !== 0) throw new Error(`${argv[0]}: ${(r.error?.message || out || `exit ${r.status}`).split('\n').filter(Boolean).pop()}`);
-    return { argv, pid: null, remote: true, logFile, continued };
+    return { argv, pid: null, remote: true, logFile, continued, tools_dropped: toolsDropped };
   }
   if (profile.mode === 'claude-bg') {
     // Fire-and-forget: `claude --bg` prints "backgrounded · <id>" and exits, but a cold daemon
@@ -204,7 +229,7 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
     child.on('error', () => { /* surfaced next tick as crashed if the job never registers */ });
     fs.closeSync(fd);
     child.unref();
-    return { argv, pid: null, bg: true, wt: name, logFile, continued };
+    return { argv, pid: null, bg: true, wt: name, logFile, continued, tools_dropped: toolsDropped };
   }
   const fd = fs.openSync(logFile, 'a');
   fs.writeSync(fd, `# ${nowIso()} spawn ${argv[0]} for #${task.number} attempt ${attempt}${wt ? ` in ${worktreePath(wt)}` : ''}\n`);
@@ -212,7 +237,7 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
   child.on('error', () => { /* handled via exit code below */ });
   fs.closeSync(fd); // the child holds its own copy
   if (!keepRef) child.unref(); // one-shot dispatch must not wait for the worker
-  return { argv, pid: child.pid, child, wt, logFile, continued };
+  return { argv, pid: child.pid, child, wt, logFile, continued, tools_dropped: toolsDropped };
 }
 
 // ---------- reconcile closed issues ----------
@@ -920,6 +945,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     budget--;
     summary.tracks.push({ root: t.number, nodes, ok: true, attempt: k, profile: profileName, mode: cand.mode, pid: spawned.pid, wt: spawned.wt || null });
     log(`#${t.number}: claimed track attempt ${k} → ${profileName} (${cand.mode}), ${nodes.length + 1} nodes ${[...nodes, t.number].map((x) => `#${x}`).join(' → ')} (log ${attempt.log})`);
+    logDroppedTools(t, profileName, spawned, log);
     if (children && spawned.child) watchChild(ctx, t.number, k, spawned.child, children, state, profileName, log);
   }
 
@@ -1026,6 +1052,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
           : `, continuing PR #${spawned.continued.pr} from a fresh worktree (${spawned.continued.why}) — the brief says which PR to push to`;
     summary.claimed.push({ number: t.number, attempt: k, profile: profileName, pid: spawned.pid, wt: spawned.wt || null, ...continues });
     log(`#${t.number}: claimed attempt ${k} → ${profileName} ${handle}${continuing} (log ${attempt.log})`);
+    logDroppedTools(t, profileName, spawned, log);
     if (children && spawned.child) watchChild(ctx, t.number, k, spawned.child, children, state, profileName, log);
   }
 

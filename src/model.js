@@ -24,6 +24,82 @@ export function modelArgs(vars) {
   return out;
 }
 
+/**
+ * The one derivation of "what may this worker use". Pure.
+ *
+ * Today the answer is the profile's `allowed_tools`, narrowed by the card — the same list the
+ * launch site used to read for itself. The value here is the *shape*, not the logic: two features
+ * are about to make this answer depend on more than one input (a tool posture, #223; a capability
+ * map that derives `Skill` from a bound intent, #217), and each of them plugs into this function
+ * instead of reaching into `src/dispatch.js`. Hence the signature: `profile`, the card, and the
+ * board config are all already here, so neither sibling has to change it. No posture and no map
+ * are implemented — a stub for either would only invite a second derivation beside this one.
+ *
+ * A card narrows, never widens. `kb.tools` (a tool allow-list) and `kb.mcp` (MCP server names)
+ * intersect with the profile's grant; anything the card asks for that its profile does not have is
+ * **dropped and recorded**, never granted — a card that could widen its own permissions is the
+ * seat problem one rung down. Neither key ships as configuration in this card: absent, which is
+ * every card today, the profile's grant comes back untouched.
+ *
+ * Returns `{ tools, dropped }` — `dropped` is a list of `{ tool, source, reason }`, returned
+ * rather than swallowed so a caller can say what it took away.
+ */
+// eslint-disable-next-line no-unused-vars -- `board` is an extension point: #223 and #217 read it, this card does not
+export function effectiveTools(profile, task = null, board = null) {
+  // `allowed_tools: null` is "this harness has no per-command allow-list" (Codex: the sandbox is
+  // the policy). It expands to nothing on a launch, and there is nothing for a card to narrow.
+  const granted = profile?.allowed_tools || [];
+  const kb = task?.kb || {};
+  const wantTools = Array.isArray(kb.tools) ? kb.tools : null;
+  const wantMcp = Array.isArray(kb.mcp) ? kb.mcp : null;
+  const dropped = [];
+  if (!wantTools && !wantMcp) return { tools: [...granted], dropped };
+
+  const grantedBy = (want) => granted.find((g) => covers(g, want)) || null;
+
+  let tools = [...granted];
+  if (wantTools) {
+    const keep = [];
+    for (const want of wantTools) {
+      if (grantedBy(want)) keep.push(want);
+      else dropped.push({ tool: want, source: 'kb.tools', reason: 'not granted by the profile' });
+    }
+    tools = keep;
+  }
+  if (wantMcp) {
+    const allowedServers = new Set();
+    for (const server of wantMcp) {
+      const pattern = `mcp__${server}__*`;
+      if (granted.some((g) => covers(g, pattern) || mcpServerOf(g) === server)) allowedServers.add(server);
+      else dropped.push({ tool: pattern, source: 'kb.mcp', reason: 'not granted by the profile' });
+    }
+    tools = tools.filter((t) => {
+      const server = mcpServerOf(t);
+      return server === null || allowedServers.has(server);
+    });
+  }
+  return { tools, dropped };
+}
+
+/**
+ * Does a granted pattern cover a wanted one? `*` is the only wildcard the allow-lists use, and it
+ * stands for any run of characters — `Bash(git *)` covers `Bash(git status)`, `mcp__x__*` covers
+ * `mcp__x__read`. Everything else is compared literally, so a card asking for exactly what the
+ * profile grants always matches. Pure.
+ */
+function covers(grant, want) {
+  if (grant === want) return true;
+  if (!String(grant).includes('*')) return false;
+  const re = new RegExp(`^${String(grant).split('*').map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
+  return re.test(String(want));
+}
+
+/** `mcp__<server>__<tool>` → `<server>`; anything else → null. Pure. */
+function mcpServerOf(tool) {
+  const parts = String(tool).split('__');
+  return parts.length >= 3 && parts[0] === 'mcp' && parts[1] ? parts[1] : null;
+}
+
 export const LABEL_COLORS = {
   'kb:status:triage': 'bfd4f2',
   'kb:status:todo': 'c2e0c6',
