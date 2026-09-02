@@ -100,6 +100,42 @@ function mcpServerOf(tool) {
   return parts.length >= 3 && parts[0] === 'mcp' && parts[1] ? parts[1] : null;
 }
 
+/**
+ * The closed vocabulary of capability *intents*, each mapped to what the intent means. A profile's
+ * `capabilities` binds an intent to what **this** harness calls it — `{ "review": "/code-review" }`
+ * on a Claude board, something else entirely on a Copilot or Codex one. The intent travels; the
+ * binding is local, which is the whole reason the vocabulary is here and no command name ever is:
+ * hkb must never name `/code-review` itself outside a board's own config.
+ *
+ * Frozen and pinned by a test the way `EVENT_KINDS` and `GROOM_KINDS` are, so adding an intent is a
+ * deliberate act — a key with no meaning beside it fails the suite. Start small; a vocabulary that
+ * grows a term per feature is a vocabulary nobody can bind.
+ *
+ * An intent nothing binds is **not** an error: it falls back to today's prose brief. That is what
+ * keeps every board that has never heard of `capabilities` working byte-identically.
+ */
+export const CAPABILITIES = Object.freeze({
+  review: 'a second pass over work that already exists — read the diff and report what is wrong with it, changing nothing',
+  goal: 'state the outcome a piece of work is for, so a worker can tell done from finished',
+  specify: 'turn a one-line ask into a spec a cold worker can execute without asking a question',
+});
+
+/**
+ * What this harness calls `intent`, or `null` when nothing binds it. Pure.
+ *
+ * `null` is the ordinary answer, not a failure: an unbound intent means "no local command for this,
+ * say it in prose", and every board today answers `null` to every intent. An intent outside
+ * `CAPABILITIES` is a caller bug rather than a config one — `loadBoard` already refused the config —
+ * so it answers `null` too rather than throwing inside a launch.
+ */
+export function capabilityCommand(profile, intent) {
+  const map = profile?.capabilities;
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return null;
+  if (!Object.hasOwn(CAPABILITIES, intent)) return null;
+  const bound = map[intent];
+  return typeof bound === 'string' && bound.trim() ? bound : null;
+}
+
 export const LABEL_COLORS = {
   'kb:status:triage': 'bfd4f2',
   'kb:status:todo': 'c2e0c6',

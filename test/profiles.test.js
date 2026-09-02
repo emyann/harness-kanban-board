@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DEFAULT_PROFILES, DEFAULT_BOARD, loadBoard } from '../src/board.js';
-import { SAFE_BUILTINS, EFFORT_LEVELS, modelArgs, allowedCommandsFrom, harnessCommands, uncoveredBuiltins } from '../src/model.js';
+import { SAFE_BUILTINS, EFFORT_LEVELS, CAPABILITIES, capabilityCommand, modelArgs, allowedCommandsFrom, harnessCommands, uncoveredBuiltins } from '../src/model.js';
 import { actionsFiles, ACTIONS_PROFILE } from '../src/init.js';
 import { checkWorkerPermissions, workflowAllowedTools, PERMS_CHECK, checkPermissionMode, promptingProfiles, MODE_CHECK } from '../src/doctor.js';
 
@@ -278,4 +278,96 @@ test('loadBoard leaves claude-action alone: effort is accepted there and ignored
   fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { 'claude-action': { ...DEFAULT_PROFILES['claude-action'], effort: 'high' } } }));
   const cfg = loadBoard(root);
   assert.equal(cfg.profiles['claude-action'].effort, 'high', 'accepted at load time; the workflow it triggers does not plumb it through yet');
+});
+
+// ---------- capabilities: an intent from a closed vocabulary, bound to what this harness calls it (#217) ----------
+//
+// The point of the key is portability: the *intent* (`review`) is hkb's, the *binding* (`/code-review`)
+// is the board's. So the vocabulary lives in src/model.js and no command name ever does — and a board
+// that has never heard of the key must be indistinguishable from one written before it existed.
+
+/** Write a board.json carrying `profiles` into a scratch root and return the root. */
+function boardRoot(t, profiles) {
+  const root = scratch(t);
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles }));
+  return root;
+}
+
+test('every CAPABILITIES intent says what it means, and this file names it', async () => {
+  const src = fs.readFileSync(new URL('./profiles.test.js', import.meta.url), 'utf8');
+  assert.ok(Object.keys(CAPABILITIES).length > 0);
+  assert.ok(Object.isFrozen(CAPABILITIES), 'the vocabulary is closed — freezing is what says so');
+  for (const [intent, meaning] of Object.entries(CAPABILITIES)) {
+    assert.match(intent, /^[a-z][a-z_]*$/, `${intent} is not an intent name`);
+    assert.equal(typeof meaning, 'string');
+    assert.ok(meaning.trim().split(/\s+/).length >= 5,
+      `${intent} has no meaning beside it — an intent nobody can read is an intent nobody can bind`);
+    assert.ok(src.includes(`'${intent}'`), `no case in this file names ${intent}`);
+  }
+});
+
+test('the vocabulary is intents only — hkb never names a harness command itself', () => {
+  for (const meaning of Object.values(CAPABILITIES)) {
+    assert.ok(!meaning.includes('/'), 'a slash command in the vocabulary is a binding leaking out of a board');
+  }
+  const shipped = JSON.stringify(DEFAULT_PROFILES);
+  assert.ok(!shipped.includes('capabilities'), 'no shipped profile binds anything: absent means today\'s behaviour');
+});
+
+test('loadBoard accepts a capabilities map of known intents', (t) => {
+  const bound = { review: '/code-review', goal: '/goal', specify: '/kanban:specify' };
+  const cfg = loadBoard(boardRoot(t, { claude: { ...DEFAULT_PROFILES.claude, capabilities: bound } }));
+  assert.deepEqual(cfg.profiles.claude.capabilities, bound);
+  assert.equal(capabilityCommand(cfg.profiles.claude, 'review'), '/code-review');
+});
+
+test('loadBoard rejects an unknown intent, naming the vocabulary', (t) => {
+  const root = boardRoot(t, { claude: { ...DEFAULT_PROFILES.claude, capabilities: { reveiw: '/code-review' } } });
+  assert.throws(() => loadBoard(root), (e) => {
+    assert.match(e.message, /profile "claude"/);
+    assert.match(e.message, /unknown capability "reveiw"/);
+    assert.match(e.message, new RegExp(Object.keys(CAPABILITIES).join(', ')));
+    assert.equal(e.exitCode, 2);
+    return true;
+  });
+});
+
+test('loadBoard rejects a capabilities map that is not a map, or a binding that names no command', (t) => {
+  const bad = [
+    [['review'], /must be an object mapping an intent/],
+    ['/code-review', /must be an object mapping an intent/],
+    [{ review: '' }, /capability "review" must name this harness's command/],
+    [{ review: 42 }, /capability "review" must name this harness's command/],
+  ];
+  for (const [capabilities, re] of bad) {
+    const root = boardRoot(t, { claude: { ...DEFAULT_PROFILES.claude, capabilities } });
+    assert.throws(() => loadBoard(root), (e) => {
+      assert.match(e.message, re);
+      assert.equal(e.exitCode, 2);
+      return true;
+    }, JSON.stringify(capabilities));
+  }
+});
+
+// The whole promise of the feature: a Copilot or Codex board that never heard of `capabilities` is
+// not merely "still working" — it loads to exactly the same object it did before the key existed.
+test('a board with no capabilities key loads byte-identically to today', (t) => {
+  const cfg = loadBoard(boardRoot(t, { claude: DEFAULT_PROFILES.claude, codex: DEFAULT_PROFILES.codex }));
+  assert.deepEqual(cfg.profiles.claude, DEFAULT_PROFILES.claude);
+  assert.deepEqual(cfg.profiles.codex, DEFAULT_PROFILES.codex);
+  assert.ok(!JSON.stringify(cfg).includes('capabilities'), 'nothing is defaulted in — absent stays absent');
+  for (const p of Object.values(cfg.profiles)) assert.equal(capabilityCommand(p, 'review'), null);
+});
+
+test('capabilityCommand: bound wins, unbound is null and never a throw', () => {
+  const p = { capabilities: { review: '/code-review', goal: '  ' } };
+  assert.equal(capabilityCommand(p, 'review'), '/code-review');
+  assert.equal(capabilityCommand(p, 'goal'), null, 'a blank binding binds nothing');
+  assert.equal(capabilityCommand(p, 'specify'), null, 'an unmapped intent falls back to the prose brief');
+  assert.equal(capabilityCommand(p, 'nonsense'), null, 'an intent outside the vocabulary is a caller bug, not a crash');
+  for (const notAProfile of [null, undefined, {}, { capabilities: null }, { capabilities: ['review'] }]) {
+    assert.equal(capabilityCommand(notAProfile, 'review'), null);
+  }
+  assert.equal(capabilityCommand({ capabilities: { toString: '/nope' } }, 'toString'), null, 'inherited keys bind nothing');
 });
