@@ -317,6 +317,36 @@ test('loadBoard rejects an unknown tools posture, naming both allowed values', (
   });
 });
 
+test('loadBoard accepts an mcp list of server names on a profile', (t) => {
+  const root = scratch(t);
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { claude: { ...DEFAULT_PROFILES.claude, mcp: ['react-aria'] } } }));
+  assert.deepEqual(loadBoard(root).profiles.claude.mcp, ['react-aria']);
+});
+
+// The dangerous shape is not a typo'd *name* — doctor is the place to notice a server nobody has —
+// but a wrong *type*: the resolver reads a non-array as "declared nothing", so a board that wrote
+// `"mcp": "supabase"` meaning to exclude a production server would silently keep granting it.
+for (const bad of [{ mcp: 'supabase' }, { mcp: ['react-aria', ''] }, { mcp: [{ name: 'x' }] }]) {
+  test(`loadBoard rejects mcp ${JSON.stringify(bad.mcp)} — it must be an array of server names`, (t) => {
+    const root = scratch(t);
+    fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { claude: { ...DEFAULT_PROFILES.claude, ...bad } } }));
+    assert.throws(() => loadBoard(root), (e) => {
+      assert.match(e.message, /profile "claude" has mcp /);
+      assert.equal(e.exitCode, 2);
+      return true;
+    });
+  });
+}
+
+test('a profile that declares no mcp key still loads, and is the shipped default', (t) => {
+  const root = scratch(t);
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { claude: { ...DEFAULT_PROFILES.claude } } }));
+  assert.equal(loadBoard(root).profiles.claude.mcp, undefined);
+});
+
 // ---------- capabilities: an intent from a closed vocabulary, bound to what this harness calls it (#217) ----------
 //
 // The point of the key is portability: the *intent* (`review`) is hkb's, the *binding* (`/code-review`)

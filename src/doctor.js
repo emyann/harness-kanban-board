@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
 import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches } from './board.js';
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun, openPrsByHead, issueDatabaseId } from './tasks.js';
-import { L, STATUSES, SAFE_BUILTINS, capabilityGrants, effectiveTools, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren, branchTaskNumber, denialDisplayTool, DENIAL_KINDS, mcpVisibilityDiagnosis, mcpGrantedTo } from './model.js';
+import { L, STATUSES, SAFE_BUILTINS, capabilityGrants, effectiveTools, toolPosture, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren, branchTaskNumber, denialDisplayTool, DENIAL_KINDS, mcpVisibilityDiagnosis, mcpGrantedTo } from './model.js';
 import { resolvedIdentity } from './hook.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName, listTrackBranches } from './lock.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, harnessHookCommand, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
@@ -282,6 +282,111 @@ export function checkCapabilityMap(ctx, { ok, warn }) {
   }
   if (!broken.length) ok(CAPABILITIES_CHECK, 'every binding is one its launch can grant');
   return { bound, broken };
+}
+
+export const TOOL_POSTURE_CHECK = 'tool posture';
+
+/**
+ * What the board actually decided about a worker's tools, printed — the half of #223 that a config
+ * file alone cannot deliver. A posture nobody can see is the bug the whole track exists to fix: an
+ * operator must be able to read one line and know whether a profile inherits the launching session's
+ * tools or curates its own list, and which MCP servers that answer covers.
+ *
+ * Printed unconditionally, like the capability map, and never a warning on its own: `curate` and
+ * `inherit` are both legitimate answers, and absent means `curate` (`toolPosture`, src/model.js), so
+ * every board that predates the field prints the posture it has always had.
+ *
+ * The tool count comes from `effectiveTools` — the one derivation of a launch's tool list — with no
+ * card, so it is the profile's *ceiling*: the most any worker on this profile can be granted. A card
+ * only ever lowers it (`checkCardGrants`), and nothing but a human editing board.json raises it.
+ *
+ * Config only, so it runs before the first API call.
+ */
+export function checkToolPosture(ctx, { ok }) {
+  const profiles = Object.entries(ctx.cfg?.profiles || {});
+  if (!profiles.length) return null;
+  const lines = profiles.map(([name, p]) => {
+    const { tools } = effectiveTools(p, null, ctx.cfg);
+    const ceiling = p?.allowed_tools
+      ? `${plural(tools.length, 'tool')}`
+      : 'no allow-list (the sandbox is the policy)';
+    return `${name}: ${toolPosture(p)}, ${ceiling}, ${mcpPosture(p, tools)}`;
+  });
+  ok(TOOL_POSTURE_CHECK, lines.join(' · '));
+  return lines;
+}
+
+/**
+ * A profile's MCP answer in one clause. `mcp` on a profile means opposite things at the two
+ * postures — under `curate` the servers a worker **may** reach, under `inherit` the servers to
+ * exclude — so the line says which reading applies rather than printing a bare list. A board that
+ * has not declared the key falls back to naming the servers its own `allowed_tools` already reaches,
+ * which is what a worker gets today.
+ */
+function mcpPosture(profile, tools) {
+  const declared = Array.isArray(profile?.mcp) ? profile.mcp : null;
+  if (declared) {
+    return toolPosture(profile) === 'inherit'
+      ? `mcp: the session's own, less ${declared.join(', ') || 'nothing'}`
+      : `mcp: ${declared.join(', ') || 'none'}`;
+  }
+  const servers = [...new Set(tools.map(mcpServerNamed).filter(Boolean))];
+  return servers.length ? `mcp from allowed_tools: ${servers.join(', ')}` : 'mcp: none';
+}
+
+/** `mcp__<server>__<tool>` → `<server>`, else null. Names a server; decides no grant. Pure. */
+function mcpServerNamed(tool) {
+  const parts = String(tool).split('__');
+  return parts.length >= 3 && parts[0] === 'mcp' && parts[1] ? parts[1] : null;
+}
+
+export const CARD_GRANTS_CHECK = 'card grants';
+
+/**
+ * The other half: a card that assumes something its board never said. `kb.tools` and `kb.mcp` are
+ * **subsets only** — a card lowers the ceiling for one task and can never raise it — so anything a
+ * card asks for that its profile does not grant is dropped at the launch, silently as far as the
+ * card's author is concerned. This is where it stops being silent.
+ *
+ * The verdict is not recomputed here. `effectiveTools` (src/model.js) already returns what it
+ * dropped and why, and this asks it with the card, exactly as the dispatcher does — a check that
+ * worked the answer out for itself could disagree with the launch, which is the failure the whole
+ * seam exists to prevent. A key that is present but is not a list of names narrows nothing at all
+ * and is reported as its own line: it reads like a restriction and is not one.
+ *
+ * Silent on a board where no card sets either key, which is every board today.
+ */
+export async function checkCardGrants(ctx, { ok, warn }, { fetch = fetchBoard, board = null } = {}) {
+  const b = board || await boardOnce(ctx, fetch);
+  if (b.error) return warn(CARD_GRANTS_CHECK, `could not read the board: ${b.error}`);
+  const asks = b.tasks.filter((t) => t.kb?.tools !== undefined || t.kb?.mcp !== undefined);
+  if (!asks.length) return null;
+  const boardPath = path.relative(ctx.root, boardFile(ctx.root));
+  const malformed = [];
+  const widening = [];
+  for (const t of asks) {
+    for (const key of ['tools', 'mcp']) {
+      if (t.kb[key] !== undefined && !Array.isArray(t.kb[key])) malformed.push({ number: t.number, key });
+    }
+    const profile = ctx.cfg?.profiles?.[t.agent];
+    if (!profile) continue; // a card on no profile at all is `checkAgentLabels`'s finding, not this one
+    const { dropped } = effectiveTools(profile, t, ctx.cfg);
+    if (dropped.length) widening.push({ task: t, dropped });
+  }
+  for (const m of malformed) {
+    warn(CARD_GRANTS_CHECK, `kb.${m.key} on #${m.number} is not a list of names, so it narrows nothing — the card reads as restricted and is not`,
+      `write kb.${m.key} on #${m.number} as a JSON list of ${m.key === 'mcp' ? 'server names' : 'tool patterns'}, or drop the key`);
+  }
+  for (const w of widening) {
+    const names = nameSome(w.dropped.map((d) => d.tool));
+    warn(CARD_GRANTS_CHECK,
+      `#${w.task.number} (${w.task.agent}) asks for ${names}, which the ${w.task.agent} profile does not grant — dropped at the launch, never granted: a card narrows its profile's grant and only a human editing ${boardPath} widens it`,
+      `drop ${names} from kb.tools/kb.mcp on #${w.task.number}, or — if the worker really needs it — add it to "allowed_tools" on the ${w.task.agent} profile in ${boardPath}`);
+  }
+  if (!malformed.length && !widening.length) {
+    ok(CARD_GRANTS_CHECK, `narrowing on ${plural(asks.length, 'card')}: every tool and server they name is one their profile already grants`);
+  }
+  return { asks: asks.length, malformed, widening };
 }
 
 /** The profiles whose launch line carries hkb's hooks (`--settings`). Pure. */
@@ -1342,6 +1447,8 @@ export async function doctor(ctx, flags, log) {
   checkWorkerPermissions(ctx, { ok, warn });
   // what each profile calls the intents it binds, and whether its launch can actually grant them
   checkCapabilityMap(ctx, { ok, warn });
+  // and what the board decided about tools at all: the posture, the ceiling, the MCP answer
+  checkToolPosture(ctx, { ok });
   // and whether this shell is carrying a worker's identity it should not have (#150)
   checkEnvLeak(ctx, { warn });
 
@@ -1361,6 +1468,8 @@ export async function doctor(ctx, flags, log) {
   await checkAgentLabels(ctx, { ok, warn }, { board });
   await checkTrackProfile(ctx, { ok, warn });
   await checkTaskSkills(ctx, { ok, warn }, { board });
+  // a card asking for what its profile does not grant: dropped at the launch unless someone says so
+  await checkCardGrants(ctx, { ok, warn }, { board });
   await checkSessions(ctx, { ok, warn }, { board });
   await checkDeniedTools(ctx, { ok, warn }, { board });
   await checkOrphanedPrs(ctx, { ok, warn });

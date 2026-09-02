@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { workerContext, selectComments, formatComments, isHumanComment, briefIntents, capabilityLine } from '../src/context.js';
+import { workerContext, selectComments, formatComments, isHumanComment, briefIntents, capabilityLine, mcpLine } from '../src/context.js';
 import { getTask } from '../src/tasks.js';
 import { CAPABILITIES, RUN_MARKER, RESULT_MARKER, serializeResultComment, serializeRunComment } from '../src/model.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
@@ -410,4 +410,43 @@ test('hkb names no harness command in a brief the board did not bind', async (t)
   for (const [intent, meaning] of Object.entries(CAPABILITIES)) {
     assert.ok(!meaning.includes('/'), `CAPABILITIES.${intent} must be prose, not a command`);
   }
+});
+
+// ---------- #257: the brief says which MCP servers the worker has ----------
+
+test('mcpLine: the answer is effectiveTools\', rendered — a whitelist, a subtraction, or nothing', () => {
+  const card = { kb: {} };
+  assert.equal(mcpLine({ allowed_tools: ['Read'] }, card), null, 'a board that says nothing about MCP gets no line');
+  assert.equal(mcpLine(null, card), null);
+
+  assert.match(mcpLine({ mcp: ['react-aria'], allowed_tools: ['Read'] }, card),
+    /^MCP servers available to you: `react-aria`\. Any other MCP server is denied/);
+  assert.match(mcpLine({ mcp: [], allowed_tools: ['Read'] }, card), /^MCP: no MCP server is available to you\./);
+
+  assert.equal(mcpLine({ tools: 'inherit', allowed_tools: ['Read'] }, card),
+    'MCP: you inherit this session\'s MCP servers.');
+  assert.match(mcpLine({ tools: 'inherit', mcp: ['supabase'], allowed_tools: ['Read'] }, card),
+    /^MCP: you inherit this session's MCP servers — except `supabase`, which this board withholds/);
+});
+
+test('mcpLine: a card\'s own narrowing is already in the line, not recomputed beside it', () => {
+  const profile = { mcp: ['react-aria', 'figma'], allowed_tools: ['Read'] };
+  assert.match(mcpLine(profile, { kb: { mcp: ['react-aria'] } }), /available to you: `react-aria`\./);
+  assert.match(mcpLine(profile, { kb: {} }), /available to you: `react-aria`, `figma`\./);
+});
+
+test('the brief names the servers a curate board gave this worker, and stays silent otherwise', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 9, status: 'ready', agent: 'claude', kb: { goal: 'ship the panel' } }));
+
+  const silent = await workerContext(withProfiles(h.ctx, { claude: { allowed_tools: ['Read'] } }), await getTask(h.ctx, 9));
+  const named = await workerContext(withProfiles(h.ctx, { claude: { mcp: ['react-aria'], allowed_tools: ['Read'] } }), await getTask(h.ctx, 9));
+  const withheld = await workerContext(withProfiles(h.ctx, { claude: { tools: 'inherit', mcp: ['supabase'], allowed_tools: ['Read'] } }), await getTask(h.ctx, 9));
+
+  assert.ok(!silent.includes('MCP'), 'a board that declares no mcp and no posture gets the brief it got before');
+  assert.match(named, /MCP servers available to you: `react-aria`\./);
+  assert.match(withheld, /you inherit this session's MCP servers — except `supabase`/);
+  // #130: the worker must be able to tell, rather than guess and stay quiet about it
+  assert.match(named, /say so rather than guessing/);
 });

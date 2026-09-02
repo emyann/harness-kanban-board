@@ -526,6 +526,15 @@ export function loadBoard(root) {
       err.exitCode = 2;
       throw err;
     }
+    // `mcp` is a list of server names, and its *shape* is checked here for the same reason: the
+    // resolver is defensive about junk, so a non-list would otherwise be read as "declared nothing"
+    // and a board that meant to exclude a production server would silently grant it. Names only —
+    // whether a named server exists is a `.mcp.json` question `hkb doctor` is the place to ask.
+    if (p.mcp != null && (!Array.isArray(p.mcp) || p.mcp.some((s) => typeof s !== 'string' || !s.trim()))) {
+      const err = new Error(`profile "${name}" has mcp ${JSON.stringify(p.mcp)} in ${file} — must be an array of server names, the servers a worker may reach under "tools": "curate" and the ones to exclude under "inherit"`);
+      err.exitCode = 2;
+      throw err;
+    }
   }
   // `capabilities` binds an intent from the closed `CAPABILITIES` vocabulary to what *this* harness
   // calls it (#217). Validated here, once, for the same reason `effort` is: the alternative is a

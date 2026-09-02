@@ -18,8 +18,10 @@ import {
   TRACK_PROFILE_CHECK, checkTrackProfile, checkDispatcher, checkServe,
   tallyDeniedTools, deniedToolsFinding, checkDeniedTools,
   CAPABILITIES_CHECK, checkCapabilityMap,
+  TOOL_POSTURE_CHECK, checkToolPosture, CARD_GRANTS_CHECK, checkCardGrants,
 } from '../src/doctor.js';
-import { CAPABILITIES, capabilityGrants, effectiveTools } from '../src/model.js';
+import { CAPABILITIES, capabilityGrants, effectiveTools, toolPosture } from '../src/model.js';
+import { normalizeCardGrants } from '../src/tasks.js';
 import { setTransport, GhError } from '../src/gh.js';
 import { pidFile, writeServeUrl, DEFAULT_PROFILES } from '../src/board.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
@@ -1091,4 +1093,110 @@ test('doctor does not recompute the grant: a launch effectiveTools covers is nev
     checkCapabilityMap({ root: '/nowhere', cfg: { profiles: { claude: bindingProfile({ [intent]: '/x' }) } } }, s);
     assert.deepEqual(s.results.filter((r) => r.ok === null), [], `${intent} is granted, so nothing to warn about`);
   }
+});
+
+// ---------- the ceiling rule: the board grants, a card lowers, only a human raises (#258) ----------
+//
+// The board is the ceiling. `kb.tools` / `kb.mcp` on a card are subsets only — they lower it for one
+// task and can never raise it — and `hkb doctor` must print what the board actually decided, because
+// a posture nobody can see is the bug this whole track exists to fix. Nothing below asserts a grant
+// by restating it: every grant assertion goes through `effectiveTools`, the one derivation, exactly
+// as the launch and the check do.
+
+test('the card grant keys are normalised where they enter: names only, trimmed, deduplicated, order kept', () => {
+  const kb = { tools: ['  Read ', 'Read', 'Edit', '', 7, null, { Bash: true }], mcp: ['react-aria', 'react-aria'] };
+  normalizeCardGrants(kb);
+  assert.deepEqual(kb.tools, ['Read', 'Edit'], 'blanks and non-names are not something any profile can grant');
+  assert.deepEqual(kb.mcp, ['react-aria']);
+});
+
+test('an empty card list is kept — "none of them" is the strictest narrowing a card can ask for', () => {
+  const kb = { tools: [], mcp: [] };
+  normalizeCardGrants(kb);
+  assert.deepEqual(kb, { tools: [], mcp: [] });
+  const profile = { allowed_tools: ['Read', 'Edit'] };
+  assert.deepEqual(effectiveTools(profile, { kb }, {}).tools, [], 'and it reaches the launch as no tools at all');
+});
+
+test('a key that is not a list is left alone rather than guessed at — guessing is the one thing that could widen', () => {
+  const kb = { tools: 'Read', mcp: { 'react-aria': true } };
+  normalizeCardGrants(kb);
+  assert.deepEqual(kb, { tools: 'Read', mcp: { 'react-aria': true } });
+  const profile = { allowed_tools: ['Read', 'Edit'] };
+  assert.deepEqual(effectiveTools(profile, { kb }, {}).tools, ['Read', 'Edit'], 'it narrows nothing; doctor says so');
+});
+
+test('doctor prints each profile posture, its ceiling and its MCP answer; absent means curate', () => {
+  const s = sink();
+  const cfg = { profiles: {
+    claude: { launch: ['claude', '--bg'], allowed_tools: ['Read', 'Edit', 'mcp__react-aria__*'] },
+    open: { launch: ['claude', '--bg'], tools: 'inherit', allowed_tools: ['Read'], mcp: ['supabase'] },
+    codex: { launch: ['codex', 'exec'], allowed_tools: null },
+  } };
+  checkToolPosture({ root: '/nowhere', cfg }, s);
+
+  assert.deepEqual(s.results.map((r) => [r.name, r.ok]), [[TOOL_POSTURE_CHECK, true]]);
+  const line = s.results[0].detail;
+  // the posture is read off the resolver, never typed here: absent resolves to curate
+  assert.match(line, new RegExp(`claude: ${toolPosture(cfg.profiles.claude)}, 3 tools`));
+  assert.match(line, /claude: curate, 3 tools, mcp from allowed_tools: react-aria/);
+  assert.match(line, /open: inherit, 1 tool, mcp: the session's own, less supabase/);
+  assert.match(line, /codex: curate, no allow-list \(the sandbox is the policy\), mcp: none/);
+});
+
+test('under curate a declared mcp list is what a worker may reach, and it is printed as such', () => {
+  const s = sink();
+  checkToolPosture({ root: '/nowhere', cfg: { profiles: { claude: { launch: ['claude'], allowed_tools: ['Read'], mcp: ['react-aria', 'figma'] } } } }, s);
+  // 3, not 1: naming a server under curate is what *grants* it (`applyProfileMcp`, src/model.js), so
+  // the ceiling is Read plus an `mcp__<server>__*` per declared server. The count is the effective
+  // grant, never the hand-written allowed_tools — that is the whole point of one derivation.
+  assert.match(s.results[0].detail, /claude: curate, 3 tools, mcp: react-aria, figma/);
+});
+
+test('doctor is silent about card grants on a board where no card asks for either key', async (t) => {
+  const h = boardHarness(t);
+  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude' }));
+  const s = sink();
+
+  assert.equal(await checkCardGrants(h.ctx, s), null);
+  assert.deepEqual(s.results, []);
+});
+
+test('a card that narrows inside its profile grant passes, and doctor says how many narrow', async (t) => {
+  const h = boardHarness(t, { profiles: { claude: { mode: 'claude-bg', launch: ['claude', '--bg'], allowed_tools: ['Read', 'Edit', 'mcp__react-aria__read'] } } });
+  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', kb: { tools: ['Read'], mcp: ['react-aria'] } }));
+  const s = sink();
+
+  await checkCardGrants(h.ctx, s);
+
+  assert.deepEqual(s.results.map((r) => [r.name, r.ok]), [[CARD_GRANTS_CHECK, true]]);
+  assert.match(s.results[0].detail, /narrowing on 1 card: every tool and server they name is one their profile already grants/);
+});
+
+test('a card asking for what its profile lacks is flagged: dropped, never granted, and only board.json widens', async (t) => {
+  const h = boardHarness(t, { profiles: { claude: { mode: 'claude-bg', launch: ['claude', '--bg'], allowed_tools: ['Read'] } } });
+  h.gh.addIssue(kbIssue({ number: 41, status: 'ready', agent: 'claude', kb: { tools: ['Read', 'Bash(rm -rf /)'], mcp: ['stripe'] } }));
+  const s = sink();
+
+  await checkCardGrants(h.ctx, s);
+
+  const warned = s.results.filter((r) => r.ok === null);
+  assert.equal(warned.length, 1);
+  assert.match(warned[0].detail, /#41 \(claude\) asks for Bash\(rm -rf \/\), mcp__stripe__\*/);
+  assert.match(warned[0].detail, /dropped at the launch, never granted/);
+  assert.match(warned[0].detail, /only a human editing .*board\.json widens it/);
+  assert.match(warned[0].fix, /add it to "allowed_tools" on the claude profile/);
+});
+
+test('a card grant key that is not a list is reported: it reads as a restriction and is not one', async (t) => {
+  const h = boardHarness(t, { profiles: { claude: { mode: 'claude-bg', launch: ['claude', '--bg'], allowed_tools: ['Read'] } } });
+  h.gh.addIssue(kbIssue({ number: 42, status: 'ready', agent: 'claude', kb: { tools: 'Read' } }));
+  const s = sink();
+
+  await checkCardGrants(h.ctx, s);
+
+  const warned = s.results.filter((r) => r.ok === null);
+  assert.equal(warned.length, 1);
+  assert.match(warned[0].detail, /kb\.tools on #42 is not a list of names, so it narrows nothing/);
+  assert.match(warned[0].fix, /JSON list of tool patterns/);
 });

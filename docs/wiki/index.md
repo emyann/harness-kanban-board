@@ -11,6 +11,7 @@
 ## Concepts
 
 - [The capability map — the intent travels, the binding is local](./concepts/capability-portability.md): The portability contract behind a profile's `capabilities`: hkb ships a closed vocabulary of intents, a board binds each one to what its own harness calls it, an unbound intent falls back to prose, and the permission a binding needs is derived from the binding rather than typed twice.
+- [The tool-grant ceiling — the board grants, a card lowers, only a human raises](./concepts/tool-grant-ceiling.md): The one-sentence ceiling rule behind a worker's permissions: the board's profile is the ceiling, `kb.tools`/`kb.mcp` on a card can only lower it, and nothing raises it but a human editing board.json — plus where that rule is enforced and where doctor prints it.
 - [Worker identity — which attempt a session is, and who may say so](./concepts/worker-identity.md): The three answers to "which attempt is this session?" (launch environment, checkout, job record), the order of trust between them, why a `claude --bg` launch must hand over none of them, and — this is also the page for it — how `SubagentStop` resolves a fourth, child-checkout answer via `CLAUDE_PROJECT_DIR`.
 
 ## Features
@@ -28,6 +29,7 @@
 - [Starting and stopping a board (`hkb up` / `hkb down`)](./features/up-and-down.md): The two long-running processes as one idempotent verb — pid files as the whole protocol, why only their writer may delete one, why the child gets no KB_*, and the line between reporting exit 4 and supervising it.
 - [Telling an adopter their hkb is old](./features/update-notice.md): Updates are pull-only, so something has to say there is something to pull — one npm GET a day, in doctor and the dispatcher loop, and why a stale CLI hides a stale skill.
 - [The web board (`hkb serve`)](./features/web-board.md): One local server, one inline page, N repos — where the board list comes from and who maintains it, how the board is read, how a drag becomes a verb, how every request is routed to the board it names, and how the drawer draws a card's dependency subgraph from the payload it already has.
+- [Worker tool posture — what power an unattended worker holds, and who decided it](./features/worker-tool-posture.md): The board states whether a profile inherits the session's tools or curates its own list, names the MCP servers that answer covers, and lets a card lower the ceiling — one posture, derived in one place, printed by doctor.
 
 ## Decisions
 
