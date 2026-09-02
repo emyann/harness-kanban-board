@@ -129,6 +129,12 @@ pages:
   - slug: decisions/adr-004-roles-and-adoption
     summary: "The canonical seat taxonomy (operator/supervisor/dispatcher/worker) and the adoption ladder for workflows simpler than the full DAG."
     status: seeded
+  - slug: decisions/adr-005-control-plane
+    summary: "hkb is a control plane: a board is a namespace, a host is the node, a pause lives on its object; start/pause/resume/stop at worker and board level; the runtime seam; the sleep-aware tick."
+    status: seeded
+  - slug: decisions/adr-006-local-store
+    summary: "The source of truth is local and travels with a clone — a kb-board git branch plus a node:sqlite index; one control plane per board; the Actions runner removed; GitHub retired as a store and kept as a later bridge; Node floor 22.13; TypeScript transpiled at publish."
+    status: seeded
   - slug: gotchas/long-lived-process-rot
     summary: "The #61 outage: a 90-minute-old loop 404ing on every claim while a fresh process succeeded — why caches are per-tick and the loop exits 4."
     status: planned
