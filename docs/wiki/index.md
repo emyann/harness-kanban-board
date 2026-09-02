@@ -11,6 +11,7 @@
 ## Concepts
 
 - [The capability map — the intent travels, the binding is local](./concepts/capability-portability.md): The portability contract behind a profile's `capabilities`: hkb ships a closed vocabulary of intents, a board binds each one to what its own harness calls it, an unbound intent falls back to prose, and the permission a binding needs is derived from the binding rather than typed twice.
+- [The tool-grant ceiling — the board grants, a card lowers, only a human raises](./concepts/tool-grant-ceiling.md): The one-sentence ceiling rule behind a worker's permissions: the board's profile is the ceiling, `kb.tools`/`kb.mcp` on a card can only lower it, and nothing raises it but a human editing board.json — plus where that rule is enforced and where doctor prints it.
 - [Worker identity — which attempt a session is, and who may say so](./concepts/worker-identity.md): The three answers to "which attempt is this session?" (launch environment, checkout, job record), the order of trust between them, why a `claude --bg` launch must hand over none of them, and — this is also the page for it — how `SubagentStop` resolves a fourth, child-checkout answer via `CLAUDE_PROJECT_DIR`.
 
 ## Features
