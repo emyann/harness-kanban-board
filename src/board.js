@@ -262,10 +262,10 @@ export function readPidFile(root, name, { proc = '/proc' } = {}) {
     const pid = Number(fs.readFileSync(file, 'utf8').trim()) || null;
     const at = fs.statSync(file).mtime.toISOString();
     const alive = pidAlive(pid);
-    const stale = pidClaimStale({
+    const stale = pidClaimStale(/** @type {any} */ ({
       at, name, alive, cmdline: alive ? readCmdline(pid, proc) : null,
       uptime: os.uptime(), btimeSec: readBtimeSec(proc),
-    });
+    }));
     return { pid, at, stale };
   } catch { return { pid: null, at: null, stale: false }; }
 }
@@ -357,7 +357,7 @@ function worktreeHolding(root, branch) {
   const list = [];
   let cur = null;
   for (const line of r.stdout.split('\n')) {
-    if (line.startsWith('worktree ')) { cur = { path: line.slice(9) }; list.push(cur); }
+    if (line.startsWith('worktree ')) { cur = /** @type {{path: string, branch?: string, locked?: string}} */ ({ path: line.slice(9) }); list.push(cur); }
     else if (line.startsWith('branch ') && cur) cur.branch = line.slice(7).replace('refs/heads/', '');
     else if (line.startsWith('locked') && cur) cur.locked = line.slice(6).trim() || 'locked';
   }
@@ -386,7 +386,11 @@ function worktreeHolding(root, branch) {
  * `stale` on their own — only `git merge --ff-only origin/<branch>` failing is: a plain fast-forward
  * catches it up silently, a real divergence names why in `stale`, and the caller falls back to the
  * recipe block instead of claiming the checkout is already at the PR's head.
- * @returns {{ok: true, path: string, branch: string, freed: string|null, stale: string|null} | {ok: false, why: string}}
+ * @param {string} root
+ * @param {string} name
+ * @param {string|null} branch
+ * @param {{number?: number|null, remote?: string, alive?: (pid: number) => boolean}} [opts]
+ * @returns {{ok: true, path: string, branch: string, freed: string|null, stale: string|null} | {ok: false, why: string, path?: undefined, branch?: undefined, freed?: undefined, stale?: undefined}}
  */
 export function worktreeOnBranch(root, name, branch, { number = null, remote = 'origin', alive = () => true } = {}) {
   if (!branch) return { ok: false, why: 'the board query returned no head branch for the PR' };

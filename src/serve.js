@@ -57,7 +57,7 @@ const NO_SUCH_VERB = {
 
 /**
  * Which verb(s) a drag from one column to another maps to. Pure — no I/O, no GitHub.
- * @returns {{ok: true, steps: string[], needs: string[], note: string|null}} or {{ok: false, reason: string}}
+ * @returns {{ok: true, steps: string[], needs: string[], note: string|null, reason?: undefined} | {ok: false, reason: string, steps?: undefined, needs?: undefined, note?: undefined}}
  */
 export function moveDecision(task, to) {
   if (!COLUMNS.includes(to)) return { ok: false, reason: `"${to}" is not a column (${COLUMNS.join(', ')})` };
@@ -125,7 +125,7 @@ export function dispatcherState(root) {
  * server finding its own pid here is finding its own claim.
  * @returns a function that drops the claim
  */
-export function claimServePid(root, log = () => {}, url = null) {
+export function claimServePid(root, log = /** @type {(...a: any[]) => void} */ (() => {}), url = null) {
   const file = pidFile(root, 'serve');
   // A claim written before this boot is no claim: that pid now belongs to a stranger (`readPidFile`).
   const { pid: current, stale } = readPidFile(root, 'serve');
@@ -158,7 +158,7 @@ export function claimServePid(root, log = () => {}, url = null) {
  * a checkout added to it is served without a restart. It must stay pure enough to bear repeating —
  * no writes, and every message through `log`.
  */
-export function serveContexts(ctx, flags = {}, log = () => {}) {
+export function serveContexts(ctx, flags = {}, log = /** @type {(...a: any[]) => void} */ (() => {})) {
   const explicit = flags.repos !== undefined;
   if (flags.repos === true) { const e = new Error('--repos needs a value, e.g. --repos ../other-repo,../third'); e.exitCode = 2; throw e; }
   const file = userBoardsFile();
@@ -327,7 +327,10 @@ const PAGE_FILE = new URL('../web/index.html', import.meta.url);
  * Start the HTTP server and return it. `deps` exists so tests drive the whole surface without `gh`.
  * @returns {Promise<{server, url, port, host, poll}>}
  */
-export async function startServer(ctx, flags = {}, log = () => {}, deps = {}) {
+/**
+ * @returns {Promise<{server: any, port: number, host: string, poll: number, url: string, boards: {key: string, repo: any, board: string, root: string}[]}>}
+ */
+export async function startServer(ctx, flags = {}, log = /** @type {(...a: any[]) => void} */ (() => {}), deps = {}) {
   const d = {
     fetchBoard: realFetchBoard, getTask: realGetTask, loadRun: realLoadRun, latestResult: realLatestResult,
     parentResults: realParentResults, addComment: realAddComment, promote: realPromote, unblock: realUnblock,
@@ -622,7 +625,7 @@ export async function startServer(ctx, flags = {}, log = () => {}, deps = {}) {
     server.once('error', onError);
     server.listen(port, host, () => { server.removeListener('error', onError); resolve(); });
   });
-  const bound = server.address();
+  const bound = /** @type {import('node:net').AddressInfo} */ (server.address());
   const shown = bound.address === '::' || bound.address === '0.0.0.0' ? 'localhost' : bound.address.includes(':') ? `[${bound.address}]` : bound.address;
   return {
     server, port: bound.port, host, poll, url: `http://${shown}:${bound.port}`,
@@ -648,7 +651,7 @@ export function portInUse(root, port) {
 }
 
 /** `hkb serve` — runs until the process is interrupted. */
-export async function serve(ctx, flags = {}, log = () => {}, deps = {}) {
+export async function serve(ctx, flags = {}, log = /** @type {(...a: any[]) => void} */ (() => {}), deps = {}) {
   const s = await startServer(ctx, flags, log, deps);
   if (!isLoopback(s.host)) {
     log(`WARNING: --host ${s.host} exposes this board beyond 127.0.0.1. hkb serve has NO auth: anyone who can`);

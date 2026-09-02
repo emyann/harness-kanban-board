@@ -161,6 +161,7 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
   const profile = ctx.cfg.profiles[profileName];
   if (!profile?.launch) throw new Error(`profile "${profileName}" has no launch template in board.json`);
   const name = `kb-${task.number}-${attempt}`;
+  /** @type {{ok: boolean, path?: string, branch?: string|null, freed?: string|null, stale?: string|null, dry?: boolean, why?: string}|null} */
   const cont = !continuePr || profile.mode === 'trigger'
     ? null
     : dryRun
@@ -297,7 +298,7 @@ export function shouldReconcile(tasks, cache) {
   return { run: false, why: 'nothing in flight and the board has not moved' };
 }
 
-async function reconcileClosed(ctx, tasks, state, { dryRun = false, log = () => {} } = {}) {
+async function reconcileClosed(ctx, tasks, state, { dryRun = false, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   const gate = shouldReconcile(tasks, state.reconcile);
   if (!gate.run) return { skipped: gate.why, reconciled: [] };
   // Capped at one page: a backlog larger than that drains a page per tick, because a tick
@@ -356,7 +357,7 @@ async function gateFor(ctx, branch) {
  * which would mean landing agent-authored code unreviewed and untested. So a branch without a gate
  * is never enabled — it is reported, every tick, with the fix.
  */
-export async function autoMergePass(ctx, tasks, { dryRun = false, log = () => {} } = {}) {
+export async function autoMergePass(ctx, tasks, { dryRun = false, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   const policy = mergePolicy(ctx.cfg);
   const out = [];
   if (policy.error) { log(`dispatch.merge ignored — the last step stays manual: ${policy.error}`); return out; }
@@ -393,7 +394,7 @@ export async function autoMergePass(ctx, tasks, { dryRun = false, log = () => {}
  * (`hkb watch`'s `needs-human` kind reports it the moment the label lands), and the comment is the
  * record a human resolving it will read.
  */
-export async function trackConflictPass(ctx, tasks, { dryRun = false, log = () => {} } = {}) {
+export async function trackConflictPass(ctx, tasks, { dryRun = false, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   const out = [];
   const roots = tasks.filter((t) => t.status === 'running' && !t.needsHuman && isTrackRoot(t, ctx.cfg, { board: tasks }).track);
   for (const root of roots) {
@@ -473,6 +474,7 @@ const EXCUSED_KINDS = new Set(['ratelimit', 'network']);
  * @returns {{action:'none'|'drop_caches'|'exit', streak:number, error:string|null}}
  */
 export function noteClaimResult(health, number, c, { dropAfter = SELF_HEAL.dropAfter, giveUpAfter = SELF_HEAL.giveUpAfter } = {}) {
+  /** @type {(streak?: number, error?: string|null) => {action:'none'|'drop_caches'|'exit', streak:number, error:string|null}} */
   const none = (streak = 0, error = null) => ({ action: 'none', streak, error });
   if (!health) return none();
   if (c?.result !== 'unknown') { health.delete(number); return none(); } // claimed or held: healthy
@@ -540,7 +542,7 @@ async function failAttempt(ctx, task, runRec, outcome, note, { kill = true } = {
   return outcome;
 }
 
-export async function tick(ctx, { max = Infinity, dryRun = false, children = null, profiles = null, log = () => {} } = {}) {
+export async function tick(ctx, { max = Infinity, dryRun = false, children = null, profiles = null, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   ctx.requireBoard();
   dropCommentCaches(ctx);
   const d = ctx.cfg.dispatch;
@@ -906,7 +908,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       note(`track branch: ${e.message}`);
       continue;
     }
-    const attempt = { attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.sha, pid: null, track: true, track_mode: cand.mode, track_nodes: nodes, track_branch: trackBranch };
+    const attempt = /** @type {HkbAttempt} */ ({ attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.sha, pid: null, track: true, track_mode: cand.mode, track_nodes: nodes, track_branch: trackBranch });
     runRec.run.attempts.push(attempt);
     await saveRun(ctx, t.number, runRec);
     await setStatus(ctx, t, 'running', { remove: [L.needsHuman] });
@@ -1007,7 +1009,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       continue;
     }
     // lock_sha starts the worker's heartbeat chain: the first `hkb heartbeat` leases on it
-    const attempt = { attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.sha, pid: null, ...continues };
+    const attempt = /** @type {HkbAttempt} */ ({ attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.sha, pid: null, ...continues });
     runRec.run.attempts.push(attempt);
     await saveRun(ctx, t.number, runRec);
     await setStatus(ctx, t, 'running', { add: t.agent ? [] : [L.agent(profileName)], remove: [L.needsHuman] });

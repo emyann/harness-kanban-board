@@ -155,6 +155,12 @@ export function resolveTerminalInput(verb, flags, rest, io = {}) {
  * The inline-flag form of a resolved payload. Used for the offline outbox: replay re-spawns `hkb <argv>` without a
  * stdin or the worker's temp files, so the queued command must be self-contained. No shell is involved, so no quoting.
  */
+/**
+ * @param {string} verb
+ * @param {number} number
+ * @param {any} p
+ * @param {{board?: string, attempt?: number}} [opts]
+ */
 export function terminalArgv(verb, number, p, { board, attempt } = {}) {
   const argv = [verb, String(number)];
   if (verb === 'block') {
@@ -446,7 +452,7 @@ export async function main(argv) {
       if (flags.summary) {
         const s = boardSummary(tasks);
         const lanes = STATUSES.filter((st) => s.by_status[st]).map((st) => {
-          const spread = Object.entries(s.priority[st]).sort((a, b) => b[0] - a[0]).map(([p, n]) => `p${p}:${n}`).join(' ');
+          const spread = Object.entries(s.priority[st]).sort((a, b) => Number(b[0]) - Number(a[0])).map(([p, n]) => `p${p}:${n}`).join(' ');
           return `${st} ${s.by_status[st]}${spread ? ` (${spread})` : ''}`;
         }).join(' · ');
         const human = [`${s.cards} card${s.cards === 1 ? '' : 's'} on board "${ctx.board}" · ${lanes || '(none)'}`];

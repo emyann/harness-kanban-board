@@ -1,11 +1,11 @@
 # hkb — contributor guide
 
-`hkb` is a zero-dependency Node (>= 20, ESM) CLI that turns GitHub Issues into a Hermes-style kanban for coding agents.
+`hkb` is a zero-dependency Node (>= 22.13, ESM) CLI that turns GitHub Issues into a Hermes-style kanban for coding agents.
 Read `README.md` for the model and `skills/kanban/references/protocol.md` for the exact protocol before changing behaviour.
 
 ## Values (in priority order)
 
-1. **Portable** — the protocol is labels, issue dependencies, refs and comments; any harness drives it through `gh`.
+1. **Portable** — the protocol is labels, issue dependencies, refs and comments; any harness drives it through `hkb` verbs; GitHub is the default store today and becomes a bridge (ADR-006).
 2. **Frugal** — no npm dependencies; no LLM in the dispatcher; one GraphQL query per board per tick; every write is justified.
 3. **Performance** — conditional reads, no polling loops inside commands, no per-task calls when a board-wide one exists.
 4. **Frictionless** — the default path asks nothing of the human that the tool could work out itself: one command over two, a

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { parseArgs, formatPromote, main, groomOptions, filterGroomLevel, formatGroom } from '../src/cli.js';
 import { DEFAULT_BOARD } from '../src/board.js';
 import { GROOM_LEVELS } from '../src/model.js';
@@ -413,4 +415,43 @@ test('filterGroomLevel and formatGroom are pure over the report shape', () => {
   assert.ok(text.includes('  #1 ~ #2  0.5  src/a.js — will serialize under path_overlap'));
   assert.match(text, /act 1 · ask 1 · info 0 · judge 1 card, 0 pairs · blockers from rest$/);
   assert.ok(!/duplicate/i.test(text), 'the CLI never says duplicate');
+});
+
+// ---------- the entry point's warning filter (bin/hkb.js) ----------
+//
+// On Node 22 `node:sqlite` emits an ExperimentalWarning; on 24 it does not. The store the board is
+// moving to needs that module, and a warning on every single command — one a user cannot act on —
+// is not something the floor version should cost. What must NOT happen is a blanket `--no-warnings`,
+// so these three cases pin the shape: nothing on a clean run, everything else still printed, and
+// only the SQLite line dropped.
+
+const BIN = fileURLToPath(new URL('../bin/hkb.js', import.meta.url));
+
+/**
+ * Import bin/hkb.js for its side effect — installing the filter — then emit `script`'s warnings.
+ * `process.exit` is stubbed out first because the entry point runs a command and exits, and a
+ * warning is delivered on the next tick: without the stub the process is gone before it prints.
+ * stdout is ignored; only stderr is under test.
+ */
+function warningsAfterLoadingBin(script) {
+  const code = `process.exit = () => {}; process.argv = [process.argv[0], 'hkb', 'version']; `
+    + `await import(${JSON.stringify(BIN)}).catch(() => {}); ${script}`;
+  return spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8' }).stderr;
+}
+
+test('hkb version prints nothing on stderr — no warning rides along with an ordinary command', () => {
+  const r = spawnSync(process.execPath, [BIN, 'version'], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr, '', 'stderr must be empty on the Node this test runs on');
+});
+
+test('the filter drops the node:sqlite ExperimentalWarning', () => {
+  const stderr = warningsAfterLoadingBin("process.emitWarning('SQLite is an experimental feature and might change at any time', 'ExperimentalWarning');");
+  assert.ok(!/SQLite/.test(stderr), `expected the SQLite warning to be dropped, got: ${stderr}`);
+});
+
+test('every other warning still reaches stderr — the filter is not --no-warnings', () => {
+  const stderr = warningsAfterLoadingBin("process.emitWarning('boom', 'ExperimentalWarning'); process.emitWarning('old thing', 'DeprecationWarning');");
+  assert.match(stderr, /ExperimentalWarning: boom/, 'a non-SQLite ExperimentalWarning must still print');
+  assert.match(stderr, /DeprecationWarning: old thing/, 'other warning classes are untouched');
 });

@@ -36,7 +36,7 @@ export function listWorktrees(root) {
   const out = [];
   let cur = null;
   for (const line of r.stdout.split('\n')) {
-    if (line.startsWith('worktree ')) { cur = { path: line.slice(9) }; out.push(cur); }
+    if (line.startsWith('worktree ')) { cur = /** @type {{path: string, branch?: string, locked?: string}} */ ({ path: line.slice(9) }); out.push(cur); }
     else if (line.startsWith('branch ') && cur) cur.branch = line.slice(7).replace('refs/heads/', '');
     else if (line.startsWith('locked') && cur) cur.locked = line.slice(6).trim() || 'locked';
   }
@@ -114,7 +114,11 @@ export function isMerged(root, branch, bases) {
  * Worktrees of finished attempts, and the branch each had checked out.
  * `finished(n, k)` decides; nothing else is touched.
  */
-export function sweepWorktrees(ctx, { finished, only = null, yes = false, quiet = false, label = () => '', log = () => {} } = {}) {
+/**
+ * @param {any} ctx
+ * @param {{finished?: (n: number, k?: number) => boolean, only?: any, yes?: boolean, quiet?: boolean, label?: (n: number, k?: number) => string, log?: (...a: any[]) => void}} [opts]
+ */
+export function sweepWorktrees(ctx, { finished, only = null, yes = false, quiet = false, label = /** @type {(n: number) => string} */ (() => ''), log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   const stats = { removed: 0, pending: 0, skipped: 0, failed: 0 };
   for (const w of listWorktrees(ctx.root)) {
     const at = worktreeAttempt(w);
@@ -138,7 +142,11 @@ export function sweepWorktrees(ctx, { finished, only = null, yes = false, quiet 
  * answers that per node — a merged or closed PR means the branch's work is either landed or abandoned, so
  * the checkout has nothing left to protect; an open PR, or none yet, is still someone's in-flight work.
  */
-export function sweepAgentWorktrees(ctx, { prByBranch, only = null, yes = false, quiet = false, log = () => {} } = {}) {
+/**
+ * @param {any} ctx
+ * @param {{prByBranch?: any, only?: any, yes?: boolean, quiet?: boolean, log?: (...a: any[]) => void}} [opts]
+ */
+export function sweepAgentWorktrees(ctx, { prByBranch, only = null, yes = false, quiet = false, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   const stats = { removed: 0, pending: 0, skipped: 0, failed: 0 };
   for (const w of listWorktrees(ctx.root)) {
     const at = agentWorktreeNode(w);
@@ -161,7 +169,7 @@ export function sweepAgentWorktrees(ctx, { prByBranch, only = null, yes = false,
  * existed on this host), and any that is already an ancestor of the default branch — that one
  * carries no work a merge has not taken, whatever the task is doing.
  */
-export function sweepBranches(ctx, { finished = () => false, keep = [], only = null, yes = false, quiet = false, log = () => {} } = {}) {
+export function sweepBranches(ctx, { finished = /** @type {(n: number, k?: number) => boolean} */ (() => false), keep = [], only = null, yes = false, quiet = false, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   const stats = { removed: 0, pending: 0, skipped: 0 };
   const kept = new Set((keep || []).map(Number)); // attempts of `only` that must survive, merged or not
   const bases = baseRefs(ctx.root, ctx.cfg);
@@ -187,7 +195,7 @@ export function sweepBranches(ctx, { finished = () => false, keep = [], only = n
  * its last track attempt already ended without merging — that is `hkb doctor`'s `checkTrackBranches`
  * to flag, not this sweep's to delete, because the branch may still hold work a human wants back.
  */
-export async function sweepTrackBranches(ctx, { finished = () => false, yes = false, log = () => {} } = {}) {
+export async function sweepTrackBranches(ctx, { finished = /** @type {(n: number, k?: number) => boolean} */ (() => false), yes = false, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   const stats = { removed: 0, pending: 0, skipped: 0 };
   let rows;
   try { rows = await listTrackBranches(ctx); } catch (e) { log(`track branches skipped: ${e.message}`); return stats; }
@@ -208,7 +216,7 @@ export async function sweepTrackBranches(ctx, { finished = () => false, yes = fa
  * since the last sweep is not read at all: `memo` is `{ "<n>": updatedAt }`, mutated in place, and
  * the caller decides where it lives. That is what makes this sweep affordable on every tick.
  */
-export async function sweepRunComments(ctx, tasks, { yes = false, memo = null, log = () => {} } = {}) {
+export async function sweepRunComments(ctx, tasks, { yes = false, memo = null, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   let deleted = 0;
   for (const t of tasks) {
     if (memo && t.updatedAt && memo[t.number] === t.updatedAt) continue;
@@ -229,7 +237,7 @@ export async function sweepRunComments(ctx, tasks, { yes = false, memo = null, l
  * Local mirrors of lock refs GitHub no longer has: an attempt that ended without its worker
  * (reclaimed, crashed) leaves one behind, and every worktree shares this ref store.
  */
-export async function sweepBeatChains(ctx, { only = null, yes = false, log = () => {} } = {}) {
+export async function sweepBeatChains(ctx, { only = null, yes = false, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   const live = new Set((await listLocks(ctx)).map((l) => `${l.n}/${l.k}`));
   let dropped = 0;
   for (const c of listBeatChains(ctx.root)) {
@@ -242,7 +250,7 @@ export async function sweepBeatChains(ctx, { only = null, yes = false, log = () 
 }
 
 /** Logs and nudges older than the retention window. */
-export function sweepFiles(ctx, { days = 14, yes = false, log = () => {} } = {}) {
+export function sweepFiles(ctx, { days = 14, yes = false, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   let pruned = 0;
   if (!Number.isFinite(days) || days < 0) return pruned; // a broken retention must never mean "delete everything"
   const cutoff = Date.now() - days * 86400_000;
@@ -268,7 +276,7 @@ export function sweepFiles(ctx, { days = 14, yes = false, log = () => {} } = {})
  * Failures (a worktree a live session still holds) are silent and counted in `pending`: the caller
  * asks again next pass, which is how a session that outlives its task still gets cleaned up.
  */
-export function sweepTask(ctx, n, { keep = [], log = () => {} } = {}) {
+export function sweepTask(ctx, n, { keep = [], log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   const kept = new Set((keep || []).map(Number));
   const finished = (num, k) => num === n && !kept.has(k);
   const opts = { finished, keep, only: n, yes: true, quiet: true };
@@ -293,7 +301,7 @@ export function sweepTask(ctx, n, { keep = [], log = () => {} } = {}) {
  * no issue at all; a human running `hkb gc` passes none and gets the thorough pass.
  * @returns stats, for `--json` and for the tick summary
  */
-export async function sweep(ctx, { yes = false, days = 14, memo = null, log = () => {} } = {}) {
+export async function sweep(ctx, { yes = false, days = 14, memo = null, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   ctx.requireBoard();
   const tasks = await fetchBoard(ctx, { includeClosed: true });
   const byNumber = new Map(tasks.map((t) => [t.number, t]));

@@ -709,6 +709,11 @@ export const GROOM_BLOCKERS_CHECK = 'groom blockers';
  * REST call per open card rather than the tick's todo/blocked handful. Nobody should discover
  * that by running it on a board of two hundred; the price is named here, next to the capability.
  */
+/**
+ * @param {any} ctx
+ * @param {{ok: Function, warn: Function}} report
+ * @param {{caps?: any, board?: any}} [opts]
+ */
 export function checkGroomBlockers(ctx, { ok, warn }, { caps, board = null } = {}) {
   if (caps?.blockedByGql) return ok(GROOM_BLOCKERS_CHECK, 'blockers ride the board query — hkb groom costs no extra request');
   const open = board && !board.error ? board.tasks.length : null;

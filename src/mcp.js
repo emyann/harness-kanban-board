@@ -365,7 +365,7 @@ const MAX_LINE = 8 * 1024 * 1024; // a client that never sends a newline must no
  * lifecycle verbs racing on one issue is not something the protocol should have to survive.
  * @returns {Promise<number>} exit code
  */
-export function serveStdio(ctx, { input = process.stdin, output = process.stdout, env = process.env, log = () => {} } = {}) {
+export function serveStdio(ctx, { input = process.stdin, output = process.stdout, env = process.env, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   const session = { protocolVersion: null, client: null };
   const exec = (name, args) => callTool(ctx, name, args, env);
   const write = (res) => { if (res) output.write(JSON.stringify(res) + '\n'); };
@@ -483,7 +483,7 @@ const snippetVars = (launch) => ({
  * launch instead: `hkb` when that is on PATH (true on any machine with it), else this checkout's own
  * `bin/hkb.js`, made absolute (`mcpLaunch({ shared: false })` — right only here, which is exactly what
  * a file this machine's `codex` alone reads is for).
- * @returns {[{ file: string, note: string, text: string }]}
+ * @returns {{ file: string, note: string, text: string }[]}
  */
 export function mcpSnippets(launch = mcpLaunch(), { onPath = hkbOnPath(), pkgRoot = PKG_ROOT } = {}) {
   const codexLaunch = mcpLaunch({ onPath, pkgRoot, shared: false });

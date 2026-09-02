@@ -8,7 +8,7 @@ no server, no database and no npm dependencies.
 
 **Before you start**, three things have to be on the machine:
 
-- **Node >= 20** and the [GitHub CLI](https://cli.github.com), `gh auth login` already done.
+- **Node >= 22.13, 24 recommended** and the [GitHub CLI](https://cli.github.com), `gh auth login` already done.
 - **A repo you can push to** — hkb writes labels, issues and refs there.
 - **A coding agent on your PATH** — [Claude Code](https://claude.com/claude-code) for the default profiles,
   or Copilot CLI / Codex with `init --harness`. hkb dispatches *to* a harness; it is not one. Without it
@@ -752,4 +752,4 @@ One file lives outside it. `~/.config/hkb/boards.json` (`$XDG_CONFIG_HOME`/`$KB_
   design leans on, each with the probe that confirmed it.
 - [Design rationale](docs/EVALUATION.md) — judged alternatives and the roadmap.
 
-Requires Node >= 20 and the [GitHub CLI](https://cli.github.com), authenticated. MIT licensed.
+Requires Node >= 22.13 (24 recommended) and the [GitHub CLI](https://cli.github.com), authenticated. MIT licensed.

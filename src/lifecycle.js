@@ -117,6 +117,11 @@ async function resolveRejectedLease(ctx, n, k, opts) {
  *   comment       — a floored write to the run record, for workers that cannot push refs.
  * A `--note` is content, so it always takes the comment path.
  */
+/**
+ * @param {any} ctx
+ * @param {number} number
+ * @param {{note?: string, attempt?: number}} [opts]
+ */
 export async function heartbeat(ctx, number, { note, attempt } = {}) {
   const opts = { remote: remoteName(ctx) };
   const envK = Number(attempt || envAttempt(number) || 0);
@@ -170,6 +175,10 @@ export async function heartbeat(ctx, number, { note, attempt } = {}) {
 
 const SUMMARY_HINT = 'pass it with --summary ".." / --summary-file <path>, or as {"summary": ".."} on stdin with --from-stdin';
 
+/**
+ * @param {{summary?: any, metadata?: any, artifacts?: any}} payload
+ * @param {string} what
+ */
 function assertPayload({ summary, metadata, artifacts }, what) {
   if (!summary || typeof summary !== 'string') { const e = new Error(`a summary is required (${what}) — ${SUMMARY_HINT}`); e.exitCode = 2; throw e; }
   if (metadata !== null && (typeof metadata !== 'object' || Array.isArray(metadata))) { const e = new Error('metadata must be a JSON object'); e.exitCode = 2; throw e; }
@@ -213,6 +222,11 @@ async function isGithubUser(ctx, login) {
  * Leave the PR mergeable: take it out of draft, and (request-review) put the reviewer on it.
  * Never throws — the attempt is already closed by the time this runs, so trouble here is
  * reported on the result object and on stderr, not raised.
+ */
+/**
+ * @param {any} ctx
+ * @param {any} decision
+ * @param {{reviewer?: string}} [opts]
  */
 async function finishPr(ctx, decision, { reviewer } = {}) {
   const pr = decision.pr;
@@ -261,6 +275,10 @@ export const prAttemptFields = (decision) => (decision.pr ? { pr: decision.pr.nu
  * land in done: it records the attempt as `protocol_violation` and leaves the card where a human
  * (or the next attempt) will see it, instead of closing the issue out from under the missing work.
  */
+/**
+ * @param {number} number
+ * @param {{noPr?: boolean, noPrReason?: string}} [opts]
+ */
 export function noPrDecision(number, { noPr, noPrReason } = {}) {
   if (noPr) return { ok: true, no_pr_reason: noPrReason ? String(noPrReason).slice(0, 300) : null };
   return {
@@ -273,6 +291,11 @@ export function noPrDecision(number, { noPr, noPrReason } = {}) {
   };
 }
 
+/**
+ * @param {any} ctx
+ * @param {number} number
+ * @param {{summary?: string, metadata?: object, artifacts?: any[], attempt?: number, noPr?: boolean, noPrReason?: string}} [opts]
+ */
 export async function complete(ctx, number, { summary, metadata = {}, artifacts = [], attempt, noPr, noPrReason } = {}) {
   assertPayload({ summary, metadata, artifacts }, 'what changed, for the next worker');
   const task = await getTask(ctx, number);
@@ -311,6 +334,11 @@ export async function complete(ctx, number, { summary, metadata = {}, artifacts 
   return { number, attempt: a.attempt, status: 'done' };
 }
 
+/**
+ * @param {any} ctx
+ * @param {number} number
+ * @param {{reason?: string, kind?: string, attempt?: number}} [opts]
+ */
 export async function block(ctx, number, { reason, kind = 'generic', attempt } = {}) {
   if (!reason) { const e = new Error('a reason is required: hkb block <n> "why" [--kind dependency|needs_input|capability|transient], or --reason-file <path>, or {"reason": "..", "kind": ".."} on stdin with --from-stdin'); e.exitCode = 2; throw e; }
   if (!BLOCK_KINDS.includes(kind)) { const e = new Error(`--kind must be one of ${BLOCK_KINDS.join('|')}`); e.exitCode = 2; throw e; }
@@ -349,6 +377,11 @@ export async function unblock(ctx, number) {
   return { number, status: target };
 }
 
+/**
+ * @param {any} ctx
+ * @param {number} number
+ * @param {{summary?: string, metadata?: object, reviewer?: string, attempt?: number}} [opts]
+ */
 export async function requestReview(ctx, number, { summary, metadata = {}, reviewer, attempt } = {}) {
   assertPayload({ summary, metadata }, 'what the reviewer should look at');
   const task = await getTask(ctx, number);
@@ -371,6 +404,11 @@ export async function requestReview(ctx, number, { summary, metadata = {}, revie
  * `review`, and the attempt it starts continues this PR rather than opening a second one
  * (`activePrGuard` in src/model.js, the claim loop in src/dispatch.js). The PR is deliberately left
  * exactly as it is — open, drafts and all: it is the continuation target.
+ */
+/**
+ * @param {any} ctx
+ * @param {number} number
+ * @param {{reason?: string}} [opts]
  */
 export async function requestChanges(ctx, number, { reason } = {}) {
   if (!reason) { const e = new Error('a reason is required: hkb request-changes <n> "what must change"'); e.exitCode = 2; throw e; }
@@ -405,6 +443,11 @@ export async function requestChanges(ctx, number, { reason } = {}) {
  * record comment. Never merges on a `manual` or `auto` board, and never on a red check — see
  * `mergeDecision`'s refusals for the exact wording of each.
  */
+/**
+ * @param {any} ctx
+ * @param {number} number
+ * @param {{summary?: string}} [opts]
+ */
 export async function mergeCard(ctx, number, { summary } = {}) {
   const task = await getTask(ctx, number);
   assertOnBoard(ctx, task);
@@ -433,11 +476,12 @@ export async function mergeCard(ctx, number, { summary } = {}) {
  * Add a task to the board. The caller hands over an already-typed spec — the CLI parses its flags
  * into this shape, `hkb mcp` gets it as JSON — so this is the single place that decides the status a
  * new task starts in and refuses a cross-board blocker.
+ * @param {object} [spec]
  * @param spec.kb overrides for the issue's kb block (priority, paths, scheduled_at, ...)
  * @param spec.parents task numbers this one is blocked by
- * @returns {{number, status, agent, blocked_by, url, duplicate?}}
+ * @returns {Promise<{number: number, status: string, agent: string|null, blocked_by: number[], url: string, duplicate?: any}>}
  */
-export async function createTask(ctx, { title, body = '', kb = {}, agent = null, parents = [], triage = false } = {}) {
+export async function createTask(ctx, { title = '', body = '', kb = {}, agent = null, parents = [], triage = false } = {}) {
   if (!title || typeof title !== 'string' || !title.trim()) { const e = new Error('a title is required: hkb create "title" [--body ..] [--blocked-by n,n]'); e.exitCode = 2; throw e; }
   const spec = { ...DEFAULT_KB, ...kb };
   if (spec.scheduled_at) {

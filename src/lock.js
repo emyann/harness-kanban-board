@@ -58,7 +58,10 @@ export function classifyClaimError(err) {
   return 'unknown'; // 422 (spam/validation), 403, 429, 5xx, network: never conclude "held"
 }
 
-/** @returns {'claimed'|'held'|'unknown'} plus the error for 'unknown'. `sha` starts the beat chain. */
+/**
+ * @returns {Promise<{result: 'claimed'|'held'|'unknown', ref: string, sha: string|null, error?: Error|null}>}
+ *   `result` is the outcome, with `error` carried only for 'unknown'. `sha` starts the beat chain.
+ */
 export async function claim(ctx, n, k) {
   let sha;
   try {
@@ -227,6 +230,7 @@ export function remoteName(ctx) { return ctx?.cfg?.remote || 'origin'; }
  */
 export function casHeartbeat(root, n, k, expected, { remote = 'origin', at = new Date() } = {}) {
   const ref = lockRef(n, k);
+  /** @type {(detail: string) => {result:'ok'|'lost'|'unavailable', sha:string|null, expected:string, detail:string}} */
   const fail = (detail) => ({ result: 'unavailable', sha: null, expected, detail });
   if (!SHA_RE.test(String(expected || ''))) return fail(`no sha to lease on (expected: ${expected ?? 'none'})`);
 
