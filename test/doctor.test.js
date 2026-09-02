@@ -17,9 +17,11 @@ import {
   sessionTally, sessionFinding, checkSessions, boardOnce, checkAgentLabels, checkTaskSkills, policyLayers, checkPolicyLayer,
   TRACK_PROFILE_CHECK, checkTrackProfile, checkDispatcher, checkServe,
   tallyDeniedTools, deniedToolsFinding, checkDeniedTools,
+  CAPABILITIES_CHECK, checkCapabilityMap,
 } from '../src/doctor.js';
+import { CAPABILITIES, capabilityGrants, effectiveTools } from '../src/model.js';
 import { setTransport, GhError } from '../src/gh.js';
-import { pidFile, writeServeUrl } from '../src/board.js';
+import { pidFile, writeServeUrl, DEFAULT_PROFILES } from '../src/board.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
 const HOUR = 3_600_000;
@@ -992,4 +994,101 @@ test("with no PreToolUse hook configured, nothing of hkb's enforces anywhere", (
   const s = sink();
   checkPolicyLayer({ root: '/nowhere', cfg }, s, { find: () => ({ hooks: [{ event: 'Stop' }], unreadable: [] }) });
   assert.match(s.results[0].detail, /^hkb's PreToolUse policy enforces on no profile here/);
+});
+
+// ---------- the grant is derived from the capability map (#261) ----------
+//
+// #114 was a field naming a capability and a launch granting it kept as two hand-maintained facts.
+// They drifted, and under `dontAsk` an unlisted tool is denied rather than prompted, so the drift
+// was silent. These tests exist to make that shape impossible a second time: nothing below writes
+// the expected tool by hand — every assertion asks `capabilityGrants` what the binding needs and
+// then asks `effectiveTools`, the one derivation of a launch's tool list, whether it is granted.
+
+/** A Claude-shaped profile whose `allowed_tools` deliberately omits whatever a binding will imply. */
+const bindingProfile = (capabilities) => ({
+  launch: ['claude', '--bg', '--allowedTools', '{allowed_tools}'],
+  allowed_tools: ['Read', 'Edit'],
+  capabilities,
+});
+
+test('a binding and its permission cannot drift: whatever a grant needs, the launch grants', () => {
+  for (const intent of Object.keys(CAPABILITIES)) {
+    const profile = bindingProfile({ [intent]: '/whatever-this-harness-calls-it' });
+    const grants = capabilityGrants(profile);
+    assert.equal(grants.length, 1, `${intent} is bound, so exactly one grant is derived`);
+    assert.ok(grants[0].tool, `${intent} bound to a slash command needs a tool on a Claude launch`);
+    // the assertion never names the tool: it is read off the derivation, so a change to what a
+    // binding implies moves both sides at once or fails here
+    assert.ok(effectiveTools(profile, null, {}).tools.includes(grants[0].tool),
+      `${intent}: the launch must grant ${grants[0].tool} because the profile binds it`);
+    assert.ok(!profile.allowed_tools.includes(grants[0].tool),
+      'and it is granted by derivation, not because someone also typed it into allowed_tools');
+  }
+});
+
+test('the derived grant is the profile widening itself — a card can still narrow it away', () => {
+  const profile = bindingProfile({ review: '/review-here' });
+  const [grant] = capabilityGrants(profile);
+  assert.ok(effectiveTools(profile, { kb: { tools: ['Read', grant.tool] } }, {}).tools.includes(grant.tool),
+    'a card may ask for the derived tool: the profile grants it, so it is not dropped');
+  assert.ok(!effectiveTools(profile, { kb: { tools: ['Read'] } }, {}).tools.includes(grant.tool),
+    'and a card that narrows past it takes it away, like any other tool');
+});
+
+test('a binding invoked some other way implies nothing, and a non-Claude launch is left alone', () => {
+  const shell = { launch: ['claude', '--bg'], allowed_tools: ['Read'], capabilities: { review: 'make review' } };
+  assert.equal(capabilityGrants(shell)[0].tool, null, 'not a slash command: nothing to grant');
+  assert.deepEqual(effectiveTools(shell, null, {}).tools, ['Read']);
+  const copilot = { launch: ['copilot', '-p'], allowed_tools: ['shell(git *)'], capabilities: { review: '/review' } };
+  assert.equal(capabilityGrants(copilot)[0].tool, null, 'hkb does not know how this harness invokes it');
+  assert.deepEqual(effectiveTools(copilot, null, {}).tools, ['shell(git *)']);
+});
+
+test('a board that declares no capabilities has a byte-identical launch line', () => {
+  for (const [name, p] of Object.entries(DEFAULT_PROFILES)) {
+    assert.deepEqual(capabilityGrants(p), [], `${name} binds nothing by default`);
+    const { tools, dropped } = effectiveTools(p, null, {});
+    assert.deepEqual(dropped, []);
+    assert.deepEqual(tools, p.allowed_tools || [], `${name}: the grant is the profile's own list, unchanged`);
+  }
+});
+
+test('doctor is silent about a board that binds nothing', () => {
+  const s = sink();
+  assert.equal(checkCapabilityMap({ root: '/nowhere', cfg: { profiles: DEFAULT_PROFILES } }, s), null);
+  assert.deepEqual(s.results, []);
+});
+
+test('doctor prints the map, one line naming the intent, the binding and the tool it needs', () => {
+  const s = sink();
+  const cfg = { profiles: { claude: bindingProfile({ review: '/code-review', goal: '/goal' }) } };
+  checkCapabilityMap({ root: '/nowhere', cfg }, s);
+  assert.deepEqual(s.results.map((r) => [r.name, r.ok]), [[CAPABILITIES_CHECK, true], [CAPABILITIES_CHECK, true]]);
+  assert.match(s.results[0].detail, /claude: review → \/code-review \(Skill\)/);
+  assert.match(s.results[0].detail, /claude: goal → \/goal \(Skill\)/);
+});
+
+test('doctor flags a binding the launch cannot grant, and says how to fix it', () => {
+  const noList = sink();
+  checkCapabilityMap({ root: '/nowhere', cfg: { profiles: { claude: { launch: ['claude', '--bg', '--allowedTools', '{allowed_tools}'], allowed_tools: null, capabilities: { review: '/code-review' } } } } }, noList);
+  const warned = noList.results.filter((r) => r.ok === null);
+  assert.equal(warned.length, 1);
+  assert.match(warned[0].detail, /binds review to \/code-review, which needs the Skill tool/);
+  assert.match(warned[0].detail, /denies rather than prompts/);
+  assert.match(warned[0].fix, /"allowed_tools"/);
+
+  // and the half effectiveTools cannot see: a perfect tool list a launch line never spends
+  const unspent = sink();
+  checkCapabilityMap({ root: '/nowhere', cfg: { profiles: { claude: { launch: ['claude', '--bg'], allowed_tools: ['Read'], capabilities: { review: '/code-review' } } } } }, unspent);
+  const dropped = unspent.results.filter((r) => r.ok === null);
+  assert.equal(dropped.length, 1);
+  assert.match(dropped[0].detail, /never spends \{allowed_tools\}/);
+});
+
+test('doctor does not recompute the grant: a launch effectiveTools covers is never flagged', () => {
+  for (const intent of Object.keys(CAPABILITIES)) {
+    const s = sink();
+    checkCapabilityMap({ root: '/nowhere', cfg: { profiles: { claude: bindingProfile({ [intent]: '/x' }) } } }, s);
+    assert.deepEqual(s.results.filter((r) => r.ok === null), [], `${intent} is granted, so nothing to warn about`);
+  }
 });
