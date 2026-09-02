@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
 import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches } from './board.js';
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun, openPrsByHead, issueDatabaseId } from './tasks.js';
-import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren, branchTaskNumber, denialDisplayTool, DENIAL_KINDS } from './model.js';
+import { L, STATUSES, SAFE_BUILTINS, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren, branchTaskNumber, denialDisplayTool, DENIAL_KINDS, mcpVisibilityDiagnosis, mcpGrantedTo } from './model.js';
 import { resolvedIdentity } from './hook.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName, listTrackBranches } from './lock.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, harnessHookCommand, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
@@ -17,6 +17,8 @@ import { mcpServersFromTranscript } from './stats.js';
 
 function has(cmd) { return spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).status === 0; }
 function version(cmd, args = ['--version']) { const r = spawnSync(cmd, args, { encoding: 'utf8' }); return r.status === 0 ? (r.stdout || r.stderr).trim().split('\n')[0] : null; }
+/** A settings*.json for `mcpVisibilityDiagnosis`/`mcpSplitApprovals` — `null` when missing or unreadable. */
+function readSettingsJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } }
 
 /**
  * `.agents/skills/kanban` is either a link to the in-repo source (hkb's own repo — cannot go stale)
@@ -824,9 +826,40 @@ export async function checkDeniedTools(ctx, { ok, warn }, { board = null, fetch 
   }
   const invisible = servers.filter((s) => !reached.has(s));
   if (!invisible.length) return ok('mcp visibility', `${servers.length} .mcp.json server${servers.length === 1 ? '' : 's'} reached a worker session (${plural(read, 'run record')} sampled)`);
+
+  // #254: before falling back to "check .mcp.json is readable", ask the three files that can actually
+  // say why — a server a profile grants but only the gitignored settings.local.json ever approved
+  // never reaches a worktree at all, which is a different bug than one that reached it and sat unused.
+  const shared = readSettingsJson(path.join(ctx.root, HOOK_SETTINGS.shared));
+  const local = readSettingsJson(path.join(ctx.root, HOOK_SETTINGS.local));
+  const diagnosed = invisible.map((s) => {
+    const granted = bgProfiles.some((p) => mcpGrantedTo(s, ctx.cfg?.profiles?.[p]?.allowed_tools));
+    return { server: s, diagnosis: mcpVisibilityDiagnosis(s, { granted, shared, local }) };
+  });
+  const localOnly = diagnosed.filter((d) => d.diagnosis?.kind === 'local-only');
+  const unapproved = diagnosed.filter((d) => d.diagnosis?.kind === 'unapproved');
+  const unused = diagnosed.filter((d) => d.diagnosis?.kind === 'unused');
+  const unknown = diagnosed.filter((d) => !d.diagnosis);
+
+  const parts = [], fixes = [];
+  if (localOnly.length) {
+    parts.push(`${localOnly.map((d) => d.server).join(', ')} approved for a developer's machine only (${localOnly.map((d) => `${d.diagnosis.line} in ${HOOK_SETTINGS.local}`).join('; ')}) — a worktree never receives that file, so it was never approved for one`);
+    fixes.push(`move ${localOnly.map((d) => d.diagnosis.line).join(', ')} from ${HOOK_SETTINGS.local} to ${HOOK_SETTINGS.shared}`);
+  }
+  if (unapproved.length) {
+    parts.push(`${unapproved.map((d) => d.server).join(', ')} granted in allowed_tools but approved in neither settings file — never approved for a worktree either`);
+    fixes.push(`add ${unapproved.map((d) => `"${d.server}"`).join(', ')} to "enabledMcpjsonServers" in ${HOOK_SETTINGS.shared}`);
+  }
+  if (unused.length) {
+    parts.push(`${unused.map((d) => d.server).join(', ')} approved in ${HOOK_SETTINGS.shared}, so it did reach a worktree — this is a server that was there and unused, not one that was never approved`);
+  }
+  if (unknown.length) {
+    parts.push(`${unknown.map((d) => d.server).join(', ')} never showed up in a worker's tool calls`);
+    fixes.push('check .mcp.json is readable from the `claude --bg` launch\'s own cwd, then restart the daemon (`hkb up`) so it re-reads the file');
+  }
   warn('mcp visibility',
-    `${invisible.join(', ')} never showed up in a worker's tool calls across ${plural(read, 'run record')} sampled — invisible to a \`--bg\` worker leaves the denied-tools ledger empty for the wrong reason: nobody denied it, it was never there to deny`,
-    'check .mcp.json is readable from the `claude --bg` launch\'s own cwd, then restart the daemon (`hkb up`) so it re-reads the file');
+    `${parts.join(' · ')} (${plural(read, 'run record')} sampled)`,
+    fixes.join(' · '));
 }
 
 // ---------- which layer is actually enforcing ----------

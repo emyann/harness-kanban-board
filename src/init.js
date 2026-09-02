@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, CLAUDE_DENY, HOOK_SETTINGS_VAR, staleHookLaunches, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot, hkbOnPath, registerUserBoard, userBoardsFile, mainWorktree } from './board.js';
 import { ensureLabels, fetchBoard, addLabels } from './tasks.js';
 import { rest } from './gh.js';
-import { L, STATUSES, parseSkillVersion, stripFrontmatter, insideRepo, worktreePath, hookEntry, hookSettings } from './model.js';
+import { L, STATUSES, parseSkillVersion, stripFrontmatter, insideRepo, worktreePath, hookEntry, hookSettings, mcpSplitApprovals } from './model.js';
 
 export const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MARK_START = '<!-- hkb:start -->';
@@ -1042,6 +1042,23 @@ export async function init(ctx, flags, log) {
       log('');
       log(`${s.file} — not written for you (${s.note}); paste:`);
       for (const line of s.text.split('\n')) log(`    ${line}`);
+    }
+  }
+  // 5c. #254: a repo whose `.mcp.json` servers are granted in a profile's allowed_tools but approved
+  //     only in the gitignored `.claude/settings.local.json` is a board whose workers will silently
+  //     get no MCP — every worktree carries tracked files only, and that approval is not one of them.
+  //     Say so now, while a human is here thinking about setup, rather than leaving it to doctor.
+  {
+    const mcpFile = path.join(root, '.mcp.json');
+    if (fs.existsSync(mcpFile)) {
+      let doc = null;
+      try { doc = JSON.parse(fs.readFileSync(mcpFile, 'utf8')); } catch { /* not this step's failure to report */ }
+      const servers = Object.keys(doc?.mcpServers || {});
+      const readJson = (rel) => { try { return JSON.parse(fs.readFileSync(path.join(root, rel), 'utf8')); } catch { return null; } };
+      const split = servers.length ? mcpSplitApprovals(servers, cfg.profiles, { shared: readJson(HOOK_SETTINGS.shared), local: readJson(HOOK_SETTINGS.local) }) : [];
+      for (const { server, line } of split) {
+        log(`note: ${server} is defined in .mcp.json and granted in allowed_tools, but ${line} is only in ${HOOK_SETTINGS.local} — a worker's worktree never receives that file, so ${server} will never load there. Move ${line} into ${HOOK_SETTINGS.shared} instead.`);
+      }
     }
   }
   if (ensureGitignore(root)) log('updated .gitignore');

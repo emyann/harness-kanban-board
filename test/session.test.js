@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseSessionLog, sessionUpdate, formatSession, formatDenials, authPauseReason, resumeCommand, worktreePath, parseWorktreeName, sessionFromJobState, buildDeniedTools, deniedToolsUpdate, formatDeniedTools, denialDisplayTool, DENIAL_KINDS } from '../src/model.js';
+import { parseSessionLog, sessionUpdate, formatSession, formatDenials, authPauseReason, resumeCommand, worktreePath, parseWorktreeName, sessionFromJobState, buildDeniedTools, deniedToolsUpdate, formatDeniedTools, denialDisplayTool, DENIAL_KINDS, mcpApproved, mcpApprovalLine, mcpGrantedTo, mcpVisibilityDiagnosis, mcpSplitApprovals } from '../src/model.js';
 import { stopHook, markSessionClaim, whichAttempt, sessionForAttempt } from '../src/hook.js';
 import { currentSession } from '../src/jobs.js';
 import { complete } from '../src/lifecycle.js';
@@ -195,6 +195,60 @@ test('formatDeniedTools: falls back to the permission_denials-only reading when 
   assert.equal(formatDeniedTools({ permission_denials: [{ tool_name: 'Bash' }] }), 'Bash ×1');
   assert.equal(formatDeniedTools({}), '');
   assert.equal(formatDeniedTools(null), '');
+});
+
+// ---------- #254: mcpApproved / mcpVisibilityDiagnosis / mcpSplitApprovals ----------
+
+test('mcpApproved: enabledMcpjsonServers names the server, or enableAllProjectMcpServers is true, or neither is present', () => {
+  assert.equal(mcpApproved('react-aria', { enabledMcpjsonServers: ['react-aria', 'vercel'] }), true);
+  assert.equal(mcpApproved('supabase', { enabledMcpjsonServers: ['react-aria', 'vercel'] }), false);
+  assert.equal(mcpApproved('supabase', { enableAllProjectMcpServers: true }), true);
+  assert.equal(mcpApproved('react-aria', null), false);
+  assert.equal(mcpApproved('react-aria', {}), false);
+});
+
+test('mcpApprovalLine: the exact line a fix would move', () => {
+  assert.equal(mcpApprovalLine('react-aria', { enabledMcpjsonServers: ['react-aria'] }), '"react-aria" in "enabledMcpjsonServers"');
+  assert.equal(mcpApprovalLine('react-aria', { enableAllProjectMcpServers: true }), '"enableAllProjectMcpServers": true');
+  assert.equal(mcpApprovalLine('react-aria', { enabledMcpjsonServers: ['vercel'] }), null);
+  assert.equal(mcpApprovalLine('react-aria', null), null);
+});
+
+test('mcpGrantedTo: a profile grants a server when allowed_tools carries one of its mcp__<server>__ tools', () => {
+  assert.equal(mcpGrantedTo('react-aria', ['mcp__react-aria__*']), true);
+  assert.equal(mcpGrantedTo('react-aria', ['mcp__react-aria__Button']), true);
+  assert.equal(mcpGrantedTo('react-aria', ['Bash(git *)']), false);
+  assert.equal(mcpGrantedTo('react-aria', null), false);
+});
+
+test('mcpVisibilityDiagnosis: approved only in the per-developer file — never approved for a worktree, and names the line', () => {
+  const d = mcpVisibilityDiagnosis('react-aria', { granted: true, shared: null, local: { enabledMcpjsonServers: ['react-aria'] } });
+  assert.deepEqual(d, { kind: 'local-only', line: '"react-aria" in "enabledMcpjsonServers"' });
+});
+
+test('mcpVisibilityDiagnosis: approved in the tracked file — it reached the worktree, so this is "there and unused"', () => {
+  const d = mcpVisibilityDiagnosis('react-aria', { granted: true, shared: { enabledMcpjsonServers: ['react-aria'] }, local: null });
+  assert.deepEqual(d, { kind: 'unused' });
+});
+
+test('mcpVisibilityDiagnosis: granted but approved nowhere hkb can see', () => {
+  const d = mcpVisibilityDiagnosis('react-aria', { granted: true, shared: null, local: null });
+  assert.deepEqual(d, { kind: 'unapproved' });
+});
+
+test('mcpVisibilityDiagnosis: never granted at all — not diagnosable from these three files', () => {
+  assert.equal(mcpVisibilityDiagnosis('react-aria', { granted: false, shared: null, local: { enabledMcpjsonServers: ['react-aria'] } }), null);
+});
+
+test('mcpSplitApprovals: one row per server a profile grants and only settings.local.json approves', () => {
+  const profiles = { claude: { allowed_tools: ['mcp__react-aria__*'] }, 'claude-p': { allowed_tools: ['mcp__vercel__*'] } };
+  const local = { enabledMcpjsonServers: ['react-aria', 'vercel'] };
+  const shared = { enabledMcpjsonServers: ['vercel'] };
+  assert.deepEqual(mcpSplitApprovals(['react-aria', 'vercel', 'supabase'], profiles, { shared, local }), [
+    { server: 'react-aria', line: '"react-aria" in "enabledMcpjsonServers"' },
+  ]);
+  assert.deepEqual(mcpSplitApprovals(['react-aria'], profiles, { shared: null, local: null }), []);
+  assert.deepEqual(mcpSplitApprovals([], profiles, { shared, local }), []);
 });
 
 test('authPauseReason: api_error_status wins outright, no regex needed', () => {
