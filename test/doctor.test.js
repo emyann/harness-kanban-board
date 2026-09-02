@@ -870,6 +870,39 @@ test('checkDeniedTools: no .mcp.json, or no claude-bg profile, asks nothing abou
   assert.equal(s.results.find((r) => r.name === 'mcp visibility'), undefined, 'no claude-bg profile runs it, so nothing could ever be invisible to one');
 });
 
+test('checkDeniedTools: #254 — a server approved only in settings.local.json was never approved for a worktree, and the fix names the exact line and file', async (t) => {
+  const h = boardHarness(t, { profiles: { claude: { mode: 'claude-bg', launch: ['claude', '--bg'], allowed_tools: ['mcp__react-aria__*'] } } });
+  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', run: runWith([attempt(1, 'completed')]) }));
+  fs.writeFileSync(path.join(h.root, '.mcp.json'), JSON.stringify({ mcpServers: { 'react-aria': { command: 'npx', args: ['react-aria-mcp'] } } }));
+  fs.mkdirSync(path.join(h.root, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(h.root, '.claude', 'settings.local.json'), JSON.stringify({ enabledMcpjsonServers: ['react-aria'] }));
+  const s = sink();
+
+  await checkDeniedTools(h.ctx, s);
+
+  const visibility = s.results.find((r) => r.name === 'mcp visibility');
+  assert.equal(visibility.ok, null);
+  assert.match(visibility.detail, /react-aria approved for a developer's machine only/);
+  assert.match(visibility.detail, /"react-aria" in "enabledMcpjsonServers" in \.claude\/settings\.local\.json/);
+  assert.match(visibility.detail, /never approved for one/);
+  assert.match(visibility.fix, /move "react-aria" in "enabledMcpjsonServers" from \.claude\/settings\.local\.json to \.claude\/settings\.json/);
+});
+
+test('checkDeniedTools: #254 — approved in the tracked settings.json, so it reached the worktree: reported as unused, not unapproved', async (t) => {
+  const h = boardHarness(t, { profiles: { claude: { mode: 'claude-bg', launch: ['claude', '--bg'], allowed_tools: ['mcp__react-aria__*'] } } });
+  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', run: runWith([attempt(1, 'completed')]) }));
+  fs.writeFileSync(path.join(h.root, '.mcp.json'), JSON.stringify({ mcpServers: { 'react-aria': { command: 'npx', args: ['react-aria-mcp'] } } }));
+  fs.mkdirSync(path.join(h.root, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(h.root, '.claude', 'settings.json'), JSON.stringify({ enabledMcpjsonServers: ['react-aria'] }));
+  const s = sink();
+
+  await checkDeniedTools(h.ctx, s);
+
+  const visibility = s.results.find((r) => r.name === 'mcp visibility');
+  assert.match(visibility.detail, /react-aria approved in \.claude\/settings\.json, so it did reach a worktree/);
+  assert.match(visibility.detail, /there and unused, not one that was never approved/);
+});
+
 test('checkDeniedTools: a board with no ledger anywhere says nothing at all', async (t) => {
   const h = boardHarness(t);
   h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', run: runWith([attempt(1, 'completed')]) }));

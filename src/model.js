@@ -1483,6 +1483,70 @@ export function formatDeniedTools(a) {
   return [...byTool].sort((x, y) => y[1] - x[1]).map(([tool, n]) => `${tool} ×${n}`).join(', ');
 }
 
+// ---------- #254: why an MCP server never reached a worker's worktree ----------
+//
+// A worktree carries tracked files only, and a Claude Code project splits its MCP config across two
+// of them with deliberately different lifetimes: `.mcp.json` *defines* a server, a profile's
+// `allowed_tools` *grants* it to a worker, and Claude Code's own approval switch —
+// `enabledMcpjsonServers` / `enableAllProjectMcpServers` — decides whether either of those actually
+// does anything. Claude Code writes that switch into `.claude/settings.local.json`, gitignored and
+// never checked out into a worktree, so a server approved only there looks granted on the board and
+// is inert on every worker. These three functions read that switch from an already-parsed settings
+// object — the caller does the file I/O (doctor.js, init.js) — so the diagnosis itself is pure.
+
+/** Does `settings` (a parsed `.claude/settings*.json`, or `null` if missing/unreadable) approve `server`? */
+export function mcpApproved(server, settings) {
+  if (!settings) return false;
+  if (settings.enableAllProjectMcpServers === true) return true;
+  return Array.isArray(settings.enabledMcpjsonServers) && settings.enabledMcpjsonServers.includes(server);
+}
+
+/** The exact line in `settings` that approves `server` — what a fix says to move, or `null`. */
+export function mcpApprovalLine(server, settings) {
+  if (!settings) return null;
+  if (settings.enableAllProjectMcpServers === true) return '"enableAllProjectMcpServers": true';
+  if (Array.isArray(settings.enabledMcpjsonServers) && settings.enabledMcpjsonServers.includes(server)) return `"${server}" in "enabledMcpjsonServers"`;
+  return null;
+}
+
+/** Does any of a profile's `allowed_tools` actually ask a worker to use `server`? */
+export function mcpGrantedTo(server, allowedTools) {
+  return Array.isArray(allowedTools) && allowedTools.some((t) => typeof t === 'string' && t.startsWith(`mcp__${server}__`));
+}
+
+/**
+ * Why `server` never showed up in a worker's own transcript, from the three files above —
+ * `{kind: 'local-only', line}` when it is approved only in the per-developer file (the fix: move
+ * `line` into the tracked one); `{kind: 'unapproved'}` when a profile grants it but no settings file
+ * approves it anywhere; `{kind: 'unused'}` when it is already approved in the tracked file, so the
+ * worktree really did have it and something else explains the silence — a worker that never needed
+ * it, most likely; `null` when no profile even grants it, which is a different bug this cannot narrow
+ * further (the ledger's own "never there to deny" case).
+ */
+export function mcpVisibilityDiagnosis(server, { granted, shared, local } = {}) {
+  if (!granted) return null;
+  if (mcpApproved(server, shared)) return { kind: 'unused' };
+  const line = mcpApprovalLine(server, local);
+  return line ? { kind: 'local-only', line } : { kind: 'unapproved' };
+}
+
+/**
+ * Which of a repo's `.mcp.json` servers are diagnosably split (init reports this, doctor does too): a
+ * server defined in `.mcp.json`, granted in at least one profile's `allowed_tools`, and approved only
+ * in the gitignored per-developer settings file. One row per such server; `[]` when nothing here is
+ * split, whatever else the settings files hold.
+ */
+export function mcpSplitApprovals(servers, profiles, { shared, local } = {}) {
+  const out = [];
+  for (const server of servers || []) {
+    const granted = Object.values(profiles || {}).some((p) => mcpGrantedTo(server, p?.allowed_tools));
+    if (!granted) continue;
+    const diagnosis = mcpVisibilityDiagnosis(server, { granted, shared, local });
+    if (diagnosis?.kind === 'local-only') out.push({ server, line: diagnosis.line });
+  }
+  return out;
+}
+
 /**
  * Whether a worker's exit reads as auth trouble worth pausing its profile for, out of what
  * `parseSessionLog` read from its log — `null` for no. A `401`/`429` on `api_error_status` is the
