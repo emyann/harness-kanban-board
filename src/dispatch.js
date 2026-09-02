@@ -914,7 +914,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     try {
       spawned = await spawnWorker(ctx, t, profileName, k, {
         keepRef: !!children,
-        prompt: trackContext({ repo: ctx.repo.nameWithOwner, board: ctx.board, track: cand.track, attempt: k, waves: cand.waves, fanout: trackFanout(ctx.cfg, profileName), trackBranch, defaultBranch: ctx.cfg.default_branch || 'main' }),
+        prompt: trackContext({ repo: ctx.repo.nameWithOwner, board: ctx.board, track: cand.track, attempt: k, waves: cand.waves, fanout: trackFanout(ctx.cfg, profileName, t), trackBranch, defaultBranch: ctx.cfg.default_branch || 'main' }),
       });
       if (!spawned.pid && !spawned.bg && !spawned.remote) throw new Error('spawn returned neither a pid nor a background launch');
     } catch (e) {

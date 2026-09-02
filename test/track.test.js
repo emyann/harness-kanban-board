@@ -414,6 +414,19 @@ test('only a profile that may spawn subagents is told to — the allow-list pick
   assert.equal(trackFanout({ profiles: { x: { allowed_tools: ['Agent'] } } }, 'x'), true);
 });
 
+// #273: `trackFanout` used to read `allowed_tools` off the profile directly, so a root card that
+// narrowed its own grant away from `Agent` (`kb.tools`) was still told to fan out — a brief the
+// runner's own launch line, built from `effectiveTools`, would then refuse. Routing through the same
+// derivation keeps the two in agreement.
+test('a card that narrows Agent out of its own grant does not get the fan-out brief', () => {
+  const cfg = { profiles: { 'claude-track': { allowed_tools: ['Agent', 'Bash(git *)'] } } };
+  const root = node(26, { agent: 'claude-track', kb: { tools: ['Bash(git *)'] } });
+  assert.equal(trackFanout(cfg, 'claude-track', root), false, 'kb.tools dropped Agent — no fan-out');
+  assert.equal(trackFanout(cfg, 'claude-track'), true, 'with no card the profile grant alone still says yes');
+  assert.equal(trackFanout(cfg, 'claude-track', node(26, { agent: 'claude-track' })), true,
+    'a card with no kb.tools narrowing leaves the grant untouched');
+});
+
 test('the fan-out brief makes the runner an orchestrator: claim the wave, spawn one isolated subagent per node', () => {
   const track = resolveTrack(26, by(diamond()));
   const p = trackContext({ repo: 'acme/board', board: 'default', track, attempt: 1, fanout: true });

@@ -100,8 +100,13 @@ export async function preToolHook(ctx, io = {}) {
     return 0;
   }
   if (!input) return 0; // stdin was not valid JSON
-  const { decidePermission, allowedCommandsFrom } = await import('./model.js');
-  const allowedCmds = allowedCommandsFrom(profile.allowed_tools || []);
+  const { decidePermission, allowedCommandsFrom, effectiveTools } = await import('./model.js');
+  // Same derivation the launch line itself reads (`effectiveTools`, src/model.js), not the
+  // profile's raw `allowed_tools` — so a capability binding's implied grant is on this hook's
+  // radar too. No `task` here: this hook fires on every tool call, and fetching the card to see
+  // its `kb.tools`/`kb.mcp` narrowing would cost a request per call rather than per session.
+  const { tools } = effectiveTools(profile, null, ctx.cfg);
+  const allowedCmds = allowedCommandsFrom(tools);
   allowedCmds.add('hkb'); allowedCmds.add('git'); allowedCmds.add('gh');
   const root = process.env.KB_ROOT || ctx.root;
   const { decision, reason, kind } = decidePermission(input.tool_name, input.tool_input, { allowedCmds, root });
