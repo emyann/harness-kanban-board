@@ -35,9 +35,35 @@ const ISSUE_FIELDS = (caps) => `
   ${caps.closedByPrs ? 'closedByPullRequestsReferences(first: 5, includeClosedPrs: true) { nodes { id number state isDraft url headRefName baseRefName merged autoMergeRequest { enabledAt mergeMethod } } }' : ''}
 `;
 
+/**
+ * The card-level grant keys, as `effectiveTools` will read them.
+ *
+ * `kb.tools` (tool patterns) and `kb.mcp` (MCP server names) are the two keys a card narrows its
+ * profile's grant with — subsets only, enforced in `effectiveTools` (src/model.js) and nowhere else.
+ * This is the path that feeds them in, so it is where their shape is settled: a list of non-empty
+ * names, trimmed, deduplicated, order kept. Anything else in the list — a number, an object, a blank
+ * string — is not a name any profile can grant, so it is removed here rather than travelling to the
+ * launch to be dropped there with a confusing reason.
+ *
+ * A key that is not a list at all is left exactly as written. It narrows nothing (`effectiveTools`
+ * only reads arrays), and coercing it would be a guess at what the author meant on the one axis
+ * where guessing widens someone's permissions; `hkb doctor`'s `card grants` check reports it instead.
+ * An empty list stays empty — "this task gets none of them" is a legitimate narrowing, and the
+ * strictest one a card can ask for.
+ */
+export function normalizeCardGrants(kb) {
+  for (const key of ['tools', 'mcp']) {
+    if (!Array.isArray(kb?.[key])) continue;
+    const names = kb[key].filter((n) => typeof n === 'string' && n.trim()).map((n) => n.trim());
+    kb[key] = [...new Set(names)];
+  }
+  return kb;
+}
+
 function toTask(node) {
   const labels = (node.labels?.nodes || []).map((l) => l.name);
   const { kb, rest: bodyText } = parseBodyBlock(node.body);
+  normalizeCardGrants(kb);
   return {
     number: node.number,
     nodeId: node.id,
