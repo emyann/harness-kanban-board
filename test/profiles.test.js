@@ -390,9 +390,13 @@ function gitRepo() {
   return root;
 }
 
-/** `init()`, exactly as the CLI runs it, against a temp git repo and a config home of its own. */
-async function runInit(extra = []) {
-  const root = gitRepo();
+/**
+ * `init()`, exactly as the CLI runs it, against a temp git repo and a config home of its own.
+ * Pass `into` to re-init a root a previous call made — the second `init` over an existing
+ * board.json is a different code path from the first, and the posture line has to survive it.
+ */
+async function runInit(extra = [], into = null) {
+  const root = into || gitRepo();
   const gh = new FakeGh();
   const restore = gh.install();
   const printed = [];
@@ -419,6 +423,21 @@ test('hkb init prints the tool posture it gave the board, and what it means', as
   assert.ok(line, `no line named the tool posture; printed:\n${printed.join('\n')}`);
   assert.match(line, /curate/);
   assert.match(line, /inherit/, 'the one line should also say how to get the opposite');
+});
+
+// The line's whole job is to name the posture this board has, so it must read the board, not a
+// constant: an `init` over a profile that already says "inherit" and hears "curate (default)" is
+// worse than silence, because it is the one place a human is told what their workers may reach for.
+test('the posture line names the profile that inherits, on a board that already set one', async (t) => {
+  const { root } = await runInit();
+  const file = path.join(root, '.kanban', 'board.json');
+  const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  cfg.profiles.claude.tools = 'inherit';
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 2));
+  const { printed } = await runInit([], root);
+  const line = printed.find((l) => l.startsWith('tools: '));
+  assert.match(line, /inherit on .*claude/, 'names the profile, not the default');
+  assert.doesNotMatch(line, /curate \(default\)/);
 });
 
 test('hkb init writes no "tools" key — a fresh board still resolves it by the silent default', async () => {

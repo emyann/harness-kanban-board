@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, CLAUDE_DENY, HOOK_SETTINGS_VAR, staleHookLaunches, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot, hkbOnPath, registerUserBoard, userBoardsFile, mainWorktree } from './board.js';
 import { ensureLabels, fetchBoard, addLabels } from './tasks.js';
 import { rest } from './gh.js';
-import { L, STATUSES, parseSkillVersion, stripFrontmatter, insideRepo, worktreePath, hookEntry, hookSettings, mcpSplitApprovals } from './model.js';
+import { L, STATUSES, parseSkillVersion, stripFrontmatter, insideRepo, worktreePath, hookEntry, hookSettings, mcpSplitApprovals, toolPosture } from './model.js';
 
 export const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MARK_START = '<!-- hkb:start -->';
@@ -955,11 +955,13 @@ export async function init(ctx, flags, log) {
   saveBoard(root, cfg);
   ensureLocalDirs(root);
   log(`${existing ? 'updated' : 'wrote'} .kanban/board.json (board "${board}", profiles ${Object.keys(cfg.profiles).join(', ')})`);
-  // The tool posture (#256): unstated on every profile above, which resolves to "curate" — a
-  // worker's `allowed_tools` is the whole grant, nothing outside it is ever reachable. Say so here,
-  // once, since defaulting it quietly is the bug this field exists to fix; set "tools": "inherit" on
-  // a profile to hand it the launching session's own tools instead.
-  log('tools: curate (default) — a worker gets exactly its profile\'s allowed_tools, nothing else; set "tools": "inherit" on a profile in board.json for the opposite');
+  // The tool posture (#256). Say it out loud, because defaulting it quietly is the bug this field
+  // exists to fix — and read it back off the board rather than assuming, so an `init` over a board
+  // that already set "tools": "inherit" is told what it actually has, not what a fresh board gets.
+  const inheriting = Object.entries(cfg.profiles).filter(([, p]) => toolPosture(p) === 'inherit').map(([n]) => n);
+  log(inheriting.length
+    ? `tools: inherit on ${inheriting.join(', ')} (the launching session's own tools), curate elsewhere; drop the key from a profile for curate`
+    : 'tools: curate (default) — a worker gets exactly its profile\'s allowed_tools, nothing else; set "tools": "inherit" on a profile in board.json for the opposite');
   ctx.cfg = cfg; ctx.repo = { owner: repo.nameWithOwner.split('/')[0], repo: repo.nameWithOwner.split('/')[1], nameWithOwner: repo.nameWithOwner }; ctx.board = board;
 
   // 3b. optional Projects v2 mirror (opt-in, one-way). Everything above is already saved, so a
