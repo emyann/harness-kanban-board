@@ -69,6 +69,9 @@ pages:
   - slug: concepts/tool-grant-ceiling
     summary: "The ceiling rule for a worker's permissions: the board's profile grants, kb.tools/kb.mcp on a card only lower it, and nothing raises it but a human editing board.json — with where it is enforced and where doctor prints it."
     status: seeded
+  - slug: features/worker-tool-posture
+    summary: "What power an unattended worker holds and who decided it: the inherit/curate posture, the mcp key that whitelists at one end and subtracts at the other, one derivation in effectiveTools, and what doctor prints."
+    status: seeded
   - slug: features/capability-map
     summary: "How a profile came to say what it reaches for inside a session: the intent vocabulary, the board-local binding, the brief that names it, the tool grant derived from it, and the doctor check that proves the two agree."
     status: seeded
