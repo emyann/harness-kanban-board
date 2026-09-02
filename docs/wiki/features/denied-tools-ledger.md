@@ -7,7 +7,7 @@ audience: [dev, ops]
 read_when: "touching denied_tools, permission_denials, hkb show/stats/doctor's denial reporting, or the two transcript-only denial shapes (dontask-miss, worktree-guard)"
 covers:
   - path: src/model.js
-    sha: 192dc2a6359d5c9aed42cdd918615ff87b60e486
+    sha: da2e9819afadb0fdda2c95fb3e6750bda727e207
   - path: src/stats.js
     sha: 8dd6c0032f972f3eb3fbf6e0dde4c01257765c0b
   - path: src/hook.js
@@ -15,9 +15,11 @@ covers:
   - path: src/dispatch.js
     sha: 4c660ef30b45b404c5744c55f30488afe1b20178
   - path: src/doctor.js
-    sha: d0e4138cff6e016f14fb89bb16b5eedac1c3c8d9
+    sha: 3d52c57a00096587f6c374f99c36567a2db205d8
+  - path: src/init.js
+    sha: 1e75c0d47cc9a5441400e7d36da394a6a0e1551a
 related: [concepts/worker-identity, features/operator-seat, gotchas/long-lived-process-rot]
-generated_at_commit: f04038f
+generated_at_commit: d1d460e
 last_refreshed: 2026-09-01
 ---
 
@@ -107,6 +109,26 @@ or `hkb stats`:
   `transcriptMcpServers`/`mcpServersFromTranscript` (`src/stats.js`) read the
   same sampled transcripts' `tool_use` blocks for `mcp__<server>__` calls, so
   this costs no extra read beyond the denied-tools sample itself.
+  Since #254, before falling back to that generic reading, `checkDeniedTools`
+  asks a more specific question of a server a profile actually grants: is it
+  approved anywhere a worktree can see? `mcpVisibilityDiagnosis` (`src/model.js`)
+  reads `.mcp.json`, the granting profile's `allowed_tools`, and the parsed
+  contents of `.claude/settings.json`/`.claude/settings.local.json` —
+  Claude Code's own `enabledMcpjsonServers`/`enableAllProjectMcpServers`
+  switch — and returns one of three: `local-only` (approved only in the
+  gitignored per-developer file, which a worktree never receives — the fix
+  names the exact line and tells the operator to move it into the tracked
+  file), `unapproved` (granted but approved nowhere hkb can see), or `unused`
+  (already approved in the tracked file, so the worktree genuinely had it —
+  this is "there and unused", a different bug than "never approved", and gets
+  no fix at all). Only when none of the three apply — the server was never
+  even granted — does the check fall back to the old, undiagnosed wording.
+  `hkb init` (`mcpSplitApprovals`, called from `src/init.js`) runs the same
+  `local-only` diagnosis against whatever `.mcp.json` and settings files a
+  repo already has, so the split is reported at setup too, before a worker
+  ever runs. See [worker identity](../concepts/worker-identity.md#a-worktree-carries-no-developer-approvals-either-254)
+  for the general rule this is one instance of: a worktree carries tracked
+  files only, and none of the developer's own approvals.
 - **`hkb show` and the serve drawer are NOT wired to this ledger.**
   `formatDeniedTools` (`src/model.js`) exists and is a straight drop-in for
   `cli.js`'s existing `formatDenials(a)` call — but `src/cli.js` and

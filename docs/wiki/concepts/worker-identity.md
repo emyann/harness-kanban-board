@@ -7,18 +7,18 @@ audience: [dev, ops]
 read_when: "touching the launch environment, the Stop, PreToolUse or SubagentStop hooks, session_id/transcript_path on an attempt row, or anything that reads KB_TASK"
 covers:
   - path: src/hook.js
-    sha: 9c279d75961f372331295d9783dde522e4e175b2
+    sha: c7f5ce80b8a0ccfe64b2c4eda3f9b95db343b490
   - path: src/model.js
-    sha: 022ed7b17c5debc59265f8a1627f82386864de00
+    sha: da2e9819afadb0fdda2c95fb3e6750bda727e207
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/dispatch.js
-    sha: 6ceade7f5440ab4194c477cc1bb2cc2900b52632
+    sha: 4c660ef30b45b404c5744c55f30488afe1b20178
   - path: src/doctor.js
-    sha: 4b49003dc44abe98a35f1c47b9472427e0ab6fba
+    sha: 3d52c57a00096587f6c374f99c36567a2db205d8
   - path: src/lifecycle.js
     sha: 98cf380069697936e2b62fb17402bae7099cf06f
-generated_at_commit: bcd1dc5
+generated_at_commit: d1d460e
 last_refreshed: 2026-09-01
 related: [architecture/overview, features/harness-profiles, features/tracks, decisions/adr-004-roles-and-adoption]
 ---
@@ -107,6 +107,27 @@ hooks run is the harness's business; a `trigger` profile's worker runs in an
 Actions checkout that is nobody's worktree and sets no `KB_ROOT`
 (`templates/actions/kanban-worker-claude.yml`). Both are left exactly as they
 were, because neither can be the source of a leak.
+
+## A worktree carries no developer approvals either (#254)
+
+The identity question above is about *which attempt a session is*; a related
+and easily-conflated one is *what that session inherits from the repo it runs
+in* — and the same worktree boundary answers both the same way. **A worker's
+worktree carries tracked files only, and none of the developer's own
+approvals**: `.mcp.json` and `.claude/settings.json` are tracked and reach a
+worktree, but `.claude/settings.local.json` — where Claude Code writes
+`enabledMcpjsonServers`/`enableAllProjectMcpServers`, a trust decision one
+human made on one machine — is gitignored and never checked out into one. A
+server defined in `.mcp.json` and granted in a profile's `allowed_tools` looks
+granted on the board; if its only approval lives in the local file, it is
+inert on every worker, silently, because nothing about the launch or the
+allow-list says so. `mcpVisibilityDiagnosis`/`mcpApproved` (`src/model.js`)
+read the three files this can be diagnosed from, and `checkDeniedTools`'s
+`mcp visibility` check (`src/doctor.js`) and `hkb init` (`src/init.js`) both
+report it — see [the denied-tools ledger](../features/denied-tools-ledger.md)
+for the mechanism. MCP is only the first instance found; anything else Claude
+Code records in `settings.local.json` (trusted directories, remembered
+permission decisions) is invisible to a worker the same way.
 
 ## What each reader does with the answer
 

@@ -211,6 +211,36 @@ test('a hook an older init left in the per-developer file is taken back out (#14
   assert.ok(printed.some((l) => /removed the Stop and PreToolUse hooks hkb left/.test(l)), `init must say it took them out:\n${printed.join('\n')}`);
 });
 
+// #254: a repo whose `.mcp.json` server is granted on the board but approved only in the
+// gitignored per-developer file is a board whose workers will silently get no MCP. `hkb init` is the
+// moment a human is present and thinking about setup, so it says so — the same diagnosis `hkb doctor`
+// gives later, at the moment it can still be fixed before the first worker runs.
+test('init reports a server approved only in settings.local.json, naming the line and the file to move it to (#254)', async () => {
+  const root = gitRepo();
+  fs.writeFileSync(path.join(root, '.mcp.json'), JSON.stringify({ mcpServers: { 'react-aria': { command: 'npx', args: ['react-aria-mcp'] } } }));
+  fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(root, HOOK_SETTINGS.local), JSON.stringify({ enabledMcpjsonServers: ['react-aria'] }));
+
+  await runInit(['--profiles', 'claude'], { root });
+  // the default `claude` profile only ever ships `Skill`/`Bash`/etc — a repo has to opt a server into
+  // allowed_tools itself, so the fixture edits board.json the way a human granting `react-aria` would.
+  const boardPath = path.join(root, BOARD_FILE);
+  const cfg = JSON.parse(read(root, BOARD_FILE));
+  cfg.profiles.claude.allowed_tools = [...(cfg.profiles.claude.allowed_tools || []), 'mcp__react-aria__*'];
+  fs.writeFileSync(boardPath, JSON.stringify(cfg, null, 2));
+
+  const again = await runInit(['--profiles', 'claude'], { root });
+  const note = again.printed.find((l) => l.includes('react-aria'));
+  assert.ok(note, `init must name the split:\n${again.printed.join('\n')}`);
+  assert.match(note, /"react-aria" in "enabledMcpjsonServers".*only in .*settings\.local\.json/);
+  assert.match(note, /Move .* into .*settings\.json/);
+});
+
+test('init says nothing about mcp approval when there is nothing to diagnose (no .mcp.json, or already tracked)', async () => {
+  const { printed } = await runInit();
+  assert.ok(!printed.some((l) => l.includes('enabledMcpjsonServers')), 'no .mcp.json at all: nothing to report');
+});
+
 test('--shared-hooks writes the tracked file, with a command that is true on every machine (#85)', async () => {
   const { root, printed } = await runInit(['--shared-hooks']);
 
