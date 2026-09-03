@@ -1,27 +1,27 @@
 ---
 title: hkb at a glance
-summary: "The moving parts: CLI, board protocol, dispatcher loop, workers — and the one rule that shapes them all: the board is the only state."
+summary: "The moving parts: CLI, board protocol, dispatcher loop, workers — and the one rule that shapes them all: the store is the only state."
 category: architecture
 kind: explanation
 audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: 714c403fbed1f62cefdf1309b6eacd5891e5a9e7
+    sha: fc69279838602cde09a8e804e4c5456878b71eff
   - path: src/gh.js
     sha: 8154ea477e52ed3f769238f1c1bda588fd767798
   - path: src/model.js
     sha: d3729c517eb72a690f7248b5769ea03d22f6d794
   - path: src/store/index.js
-    sha: 5f004d44f491f4907f68e2167040861d1db7bdfe
+    sha: d440f1432159b01433599dd285c26dceae2596a3
   - path: src/store/github.js
-    sha: 7bfbce21d6891866046f79dfd3a1eb6c27e29bce
+    sha: 7b384d0c64870f7b33c209325359b8e2630856ad
   - path: src/forge.js
     sha: 92bb85cf8c2730d347ad44c40a9b9e0e513261b4
   - path: src/lifecycle.js
-    sha: f5e110c3df6217c577ebaec04af30a3ebae15689
+    sha: c1b743d8c3e6ef9dabd62ce11b5dbc18d6d9e4bf
   - path: src/dispatch.js
-    sha: 03a5343ec44b7c1b2e2f769203389eb91f108949
+    sha: db423b5e353e4257adeef46e9670148bf630acdb
   - path: src/context.js
     sha: dd52c78fc489f76891c2124f7842d543d580546d
   - path: src/hook.js
@@ -31,35 +31,42 @@ covers:
   - path: src/board.js
     sha: 53192b4670920a4ead1181c925075285dc8ee105
   - path: src/doctor.js
-    sha: 3b520a130b4376aac0e9b326adbdf9659ff38c97
-generated_at_commit: d18fb5d
+    sha: 1f944284e5e63b03d83e0ca43c17a115aaafd7bb
+generated_at_commit: 103ecf4
 last_refreshed: 2026-09-03
-related: [concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
+related: [concepts/store, concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
 
 # hkb at a glance
 
-> hkb turns GitHub Issues into a Hermes-style kanban that coding agents work
-> autonomously. Every structural choice below follows from one rule: **the
-> board is the only durable state**. Processes hold caches, never truth — so
-> any process (dispatcher, worker, a human's laptop) can
-> crash at any moment and the system re-derives itself from GitHub.
+> hkb is a Hermes-style kanban that coding agents work autonomously, on a
+> board that lives either locally (the default) or as GitHub Issues. Every
+> structural choice below follows from one rule: **the store is the only
+> durable state**. Processes hold caches, never truth — so any process
+> (dispatcher, worker, a human's laptop) can crash at any moment and the
+> system re-derives itself from whatever `openStore(ctx)` answers.
 
 ## The state model
 
-A task is a GitHub issue wearing the board's labels (`kb:status:*`,
-`kb:agent:*`, `kb:board:*`); structured fields ride in an HTML-comment block
-in the issue body, and execution history rides in two structured comments —
-a run record (attempts) and a result record (the handoff) — parsed and
-serialized by pure functions in `src/model.js`. Issue⇄task translation and
-every board read/write live in `src/store/github.js`, behind the `Store`
-interface (`src/store/index.js`) — `src/tasks.js` and `src/lock.js` are now
-re-export shims over it that nothing in `src/` imports, because every verb
-reaches board state through `openStore(ctx)` (*architecture/store-seam*). All of
-this paragraph describes the **GitHub** store; on the local one a card is a file
-on the `kb-board` branch and the same verbs read it unchanged
-(*architecture/local-store*). Dependencies use GitHub's native `blocked_by` issue
-relations, which makes the board a DAG, not a list.
+A board is whatever `openStore(ctx)` (`src/store/index.js`) answers, and a
+new board defaults to the **local** store: a card is a file on the `kb-board`
+git branch, `.git/hkb/index.db` (`node:sqlite`) indexes it and holds locks and
+the event log, and both are composed behind the interface by
+`src/store/local.js` (*concepts/store*, *architecture/local-store*). The
+**GitHub** store is still here — `--store github`, and this repository's own
+board runs on it — where a task is a GitHub issue wearing the board's labels
+(`kb:status:*`, `kb:agent:*`, `kb:board:*`), structured fields ride in an
+HTML-comment block in the issue body, and execution history rides in two
+structured comments (a run record and a result record), all parsed and
+serialized by pure functions in `src/model.js`
+(`src/store/github.js`). Which driver a board is on is decided once, by
+`storeKind(ctx)`, and nothing above the interface branches on it —
+`src/tasks.js` and `src/lock.js` are re-export shims nothing in `src/`
+imports, because every verb reaches board state through the same
+`openStore(ctx)` call whichever driver answers it
+(*architecture/store-seam*). Dependencies are edges between tasks
+(`blocked_by`), which makes the board a DAG, not a list — GitHub's native
+issue relations on that driver, rows in the index on the local one.
 
 ## The one atomic primitive
 
@@ -203,6 +210,7 @@ See [the store seam](store-seam.md). Pure decision logic stays in
 
 ## Related
 
+- [store](../concepts/store.md)
 - [board-protocol](../concepts/board-protocol.md)
 - [claims-and-leases](../concepts/claims-and-leases.md)
 - [dispatcher-tick](../architecture/dispatcher-tick.md)

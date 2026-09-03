@@ -63,6 +63,9 @@ pages:
   - slug: architecture/local-store
     summary: "How the kb-board branch and the .git/hkb index compose into one Store: what open() reconciles, the commit-index-wake order every durable verb follows, which reads go to which tier, and the one-writer rule that makes a clone a reader."
     status: seeded
+  - slug: concepts/store
+    summary: "The concept underneath both drivers: a board is whatever openStore(ctx) answers, one of two tiers on the local driver does the writing and the other does the indexing, and a process holds a cache, never the truth."
+    status: seeded
   - slug: concepts/board-protocol
     summary: "Statuses, kb:* labels, the body block, run/result comments, terminal verbs — the backend-neutral contract every harness drives through gh."
     status: planned
