@@ -19,8 +19,8 @@ covers:
   - path: commands/groom.md
     sha: 4fc2dc2db984033fe8801e8d28b50e8e68fefddc
   - path: scripts/smoke-pack.mjs
-    sha: 2c56112698f348f50eb581891d91bc41ac2d8157
-generated_at_commit: 2a3a7e3
+    sha: 11b1836f6a618f8049aedca5f7fde477a0878b48
+generated_at_commit: cac8231
 last_refreshed: 2026-09-02
 related: [features/backlog-grooming, features/operator-seat, architecture/overview, decisions/adr-004-roles-and-adoption, features/tracks]
 ---

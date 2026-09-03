@@ -19,9 +19,9 @@ covers:
   - path: skills/kanban/scripts/hkb
     sha: 619505ca77807157084e456057e1857eb9a31419
   - path: scripts/smoke-pack.mjs
-    sha: 2c56112698f348f50eb581891d91bc41ac2d8157
+    sha: 11b1836f6a618f8049aedca5f7fde477a0878b48
 related: [architecture/overview, features/update-notice, concepts/roles-and-seats]
-generated_at_commit: 2a3a7e3
+generated_at_commit: cac8231
 last_refreshed: 2026-09-02
 ---
 
