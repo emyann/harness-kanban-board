@@ -13,13 +13,13 @@ covers:
   - path: src/hook.js
     sha: 97b9054fbe1769059b882e4779f8279deaf184d8
   - path: src/dispatch.js
-    sha: 26a3197921f09d3ef2f4a21f1858c1cc6b5e7fd6
+    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
   - path: src/doctor.js
     sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
   - path: src/init.js
     sha: c905bab09d496c7b7fe2aaa0c92d2109fdd30432
 related: [concepts/worker-identity, features/operator-seat, gotchas/long-lived-process-rot]
-generated_at_commit: 2a3a7e3
+generated_at_commit: 237bb61
 last_refreshed: 2026-09-02
 ---
 

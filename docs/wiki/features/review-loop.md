@@ -9,21 +9,23 @@ covers:
   - path: src/model.js
     sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/dispatch.js
-    sha: 26a3197921f09d3ef2f4a21f1858c1cc6b5e7fd6
+    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
   - path: src/board.js
-    sha: 42bd1bb173651d9109208a702564cfc3e5e51410
+    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
   - path: src/context.js
     sha: 0eecc3f46fa4d71d3fa12598b474c76e0bc7733d
   - path: src/lifecycle.js
-    sha: 375fbf9240dd19c4ea89c63465546cf71182deac
+    sha: c3c49b90e80c7e68d44b4f8f999debcfa484de80
   - path: src/gc.js
     sha: 5c9f92377d47e7bca75c32fc675dfa50e617e7a5
   - path: src/cli.js
     sha: 9d7fc11ad734643205e89668a176d4f29115805f
-  - path: src/tasks.js
-    sha: 95ce07de549ce2c22222d43f36967006cdd372f8
+  - path: src/store/github.js
+    sha: e2708642df0ef4599f450e643b9b67eeeb0b2ad5
+  - path: src/forge.js
+    sha: 20dd384386ca63bc98d103b2e7728f29a95bc87c
 related: [features/auto-merge, features/tracks, architecture/overview, architecture/dispatcher-tick]
-generated_at_commit: 2a3a7e3
+generated_at_commit: 237bb61
 last_refreshed: 2026-09-02
 ---
 
@@ -170,7 +172,7 @@ changes_requested → completed`, all against one PR number.
 ## Finding the PR at all — the head-branch fallback
 
 Everything above assumes `task.prs` already names the open PR. It comes from
-one place, `closedByPullRequestsReferences` (`src/tasks.js`), and that field
+one place, `closedByPullRequestsReferences` (`ISSUE_FIELDS`, `src/store/github.js`), and that field
 only answers "would merging this PR close the issue" — which requires the PR
 to target the default branch, and (#228) came back empty at least once even
 then. When it does, `activePrGuard` never fires, `hkb finish` sees no PR and
@@ -178,10 +180,10 @@ used to close the card as *done* with the branch left unmerged and nothing on
 the board chasing it (#227, #228 — see `features/tracks.md`'s branch-strategy
 section for the fuller incident).
 
-`fetchBoard`/`getTask` (`src/tasks.js`) now fall back to a **head**-branch
+`fetchBoard`/`getTask` (`src/store/github.js`) now fall back to a **head**-branch
 match — `taskBranchRe(n)`, matching `kb/<n>`, `kb-<n>-<k>`,
 `worktree-kb-<n>-<k>` — whenever a card's own `prs` comes back empty: one
-board-wide `GET /pulls?state=open` (`openPrsByHead`), read once per tick (or
+board-wide `GET /pulls?state=open` (`openPrsByHead`, `src/forge.js`), read once per tick (or
 once per single-card read), never once per card. Because the guard, the merge
 policy and this page's whole loop all read `task.prs`, the fallback is
 invisible to them by design — a stacked or otherwise unlinked PR is simply

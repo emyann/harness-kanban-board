@@ -11,16 +11,16 @@ covers:
   - path: web/index.html
     sha: 322aa96236ef37657a9a2326b83dc7b480672134
   - path: src/board.js
-    sha: 42bd1bb173651d9109208a702564cfc3e5e51410
+    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
   - path: src/init.js
     sha: c905bab09d496c7b7fe2aaa0c92d2109fdd30432
   - path: src/lifecycle.js
-    sha: 375fbf9240dd19c4ea89c63465546cf71182deac
+    sha: c3c49b90e80c7e68d44b4f8f999debcfa484de80
   - path: src/track.js
     sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
   - path: src/model.js
     sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
-generated_at_commit: 2a3a7e3
+generated_at_commit: 237bb61
 last_refreshed: 2026-09-02
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
@@ -277,7 +277,7 @@ step. A module `<script>` is not an option either: a top-level `import` makes
 
 **The one place the picture can be wrong, and says so.** Without GitHub's GraphQL
 `blockedBy` field, `fetchBoard` REST-fills `todo`/`blocked` cards only
-(`fillBlockedByRest`, `src/tasks.js:64-72`, applied at `src/tasks.js:99`) —
+(`fillBlockedByRest`, applied in `fetchBoard`, `src/store/github.js`) —
 widening that would be a per-task
 REST call on every read, which Values 2 and 3 forbid. That leaves a fingerprint
 the page can read off the payload it already has: edges exist, and *none* of them

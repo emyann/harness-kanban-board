@@ -9,7 +9,7 @@ covers:
   - path: src/model.js
     sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/board.js
-    sha: 42bd1bb173651d9109208a702564cfc3e5e51410
+    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
   - path: src/context.js
     sha: 0eecc3f46fa4d71d3fa12598b474c76e0bc7733d
   - path: src/init.js
@@ -17,9 +17,9 @@ covers:
   - path: src/doctor.js
     sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
   - path: src/dispatch.js
-    sha: 26a3197921f09d3ef2f4a21f1858c1cc6b5e7fd6
+    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
 related: [concepts/tool-grant-ceiling, features/denied-tools-ledger, features/capability-map, features/harness-profiles]
-generated_at_commit: 2a3a7e3
+generated_at_commit: 237bb61
 last_refreshed: 2026-09-02
 ---
 
