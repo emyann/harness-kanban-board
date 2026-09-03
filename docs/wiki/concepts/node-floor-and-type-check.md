@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "changing engines.node, adding a devDependency, editing bin/hkb.js, or making `npm run lint` fail on something that is not a syntax error"
 covers:
   - path: package.json
-    sha: WRITTEN-BY-wiki-stamp
+    sha: e0c6c8eeda7d091e841f1a764486ad9a57edd0f5
   - path: bin/hkb.js
     sha: 4ce96dc62bf6ff158f7cc5c3068946ace4badf79
   - path: tsconfig.json
@@ -18,7 +18,7 @@ covers:
     sha: 52d8567c27bedbe1e8cb73e7f9ccfaecaeb72e99
   - path: .github/workflows/release.yml
     sha: 66ac3edbc8dbc9b4bd3d155f788aef0e3c2fb3ca
-generated_at_commit: 0fabaeb
+generated_at_commit: 447b51e
 last_refreshed: 2026-09-02
 related:
   - decisions/adr-006-local-store.md
