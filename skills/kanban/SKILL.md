@@ -1,6 +1,6 @@
 ---
 name: kanban
-description: Work a hkb task from the GitHub Issues board — read the task with `hkb show`, work in the worktree, open a PR that closes the issue, and finish with exactly one terminal verb (complete / block / request-review). Use whenever KB_TASK is set, when asked to "work task <n>", "pick up the next kanban task", or to create/link tasks on the board. Also runs a whole track (a root plus everything blocking it) in one session, plans the board — `/kanban:specify <n>` rewrites a one-liner into a spec and promotes it, `/kanban:decompose <n>` proposes a dependency graph for a goal and materializes it once a human approves, `/kanban:groom` turns `hkb groom`'s triage report into one batch of proposals a human says yes to — and operates it: `/kanban:operate` brings the board up, watches it, and reacts per event kind while the approvals stay with the human.
+description: Work a hkb task from the board — read the task with `hkb show`, work in the worktree, open a PR on the card's own branch, and finish with exactly one terminal verb (complete / block / request-review). Use whenever KB_TASK is set, when asked to "work task <n>", "pick up the next kanban task", or to create/link tasks on the board. Also runs a whole track (a root plus everything blocking it) in one session, plans the board — `/kanban:specify <n>` rewrites a one-liner into a spec and promotes it, `/kanban:decompose <n>` proposes a dependency graph for a goal and materializes it once a human approves, `/kanban:groom` turns `hkb groom`'s triage report into one batch of proposals a human says yes to — and operates it: `/kanban:operate` brings the board up, watches it, and reacts per event kind while the approvals stay with the human.
 license: MIT
 compatibility: Requires the `gh` CLI (authenticated) and `hkb` (npm hkb-cli) on PATH. Works with Claude Code, GitHub Copilot CLI and Codex CLI.
 metadata:
@@ -11,10 +11,14 @@ allowed-tools: Bash(hkb *) Bash(gh api *) Bash(gh pr *) Bash(gh issue view *) Ba
 
 # kanban — the board protocol
 
-The board is GitHub Issues. A task is an issue with `kb:*` labels; its dependencies are GitHub issue dependencies
-(`blocked by`). The dispatcher (`hkb dispatch`) claims a task by creating the git ref `refs/kb/locks/<n>/<attempt>`
-and launches you with `KB_TASK`, `KB_ATTEMPT`, `KB_BOARD`, `KB_REPO` set. Everything you need to know about the task
-comes from `hkb`; everything you report goes through `hkb`. See `references/protocol.md` for the data model.
+**The board lives in this repository**, on a git branch called `kb-board`, with an index beside it in `.git/hkb/`.
+A task is a card on that branch; its dependencies are a field on the card. The dispatcher (`hkb dispatch`) claims a
+task by taking a row in the index and launches you with `KB_TASK`, `KB_ATTEMPT`, `KB_BOARD`, `KB_REPO` set.
+Everything you need to know about the task comes from `hkb`; everything you report goes through `hkb`. See
+`references/protocol.md` for the data model.
+
+**Pull requests are the exception**: they are still GitHub's, and a PR is tied to its card by *the name of its head
+branch* — `kb-<n>-<k>` — and by nothing else. There is no issue for it to reference.
 
 ## When you are the worker (KB_TASK is set)
 
@@ -42,17 +46,18 @@ comes from `hkb`; everything you report goes through `hkb`. See `references/prot
 3. Long work: run `hkb heartbeat $KB_TASK` roughly every 10 minutes — **between steps, as its own call**. Not a
    background loop: `while true; do hkb heartbeat $KB_TASK; sleep 600; done` is denied on the keyword (above), and
    a denied loop is a worker that never heartbeats, drifts past `stale_after` while genuinely alive, and is
-   reclaimed mid-flight. It is a compare-and-swap on your lock ref —
-   `hkb` advances `refs/kb/locks/<n>/<k>` by an empty commit with `git push --force-with-lease`, so it is free and
-   writes nothing to the issue. Never push that ref yourself. If the lease is rejected the ref is no longer yours:
-   `hkb` prints `LOCK_LOST` and exits **3**. Stop immediately — do not commit, do not push, do not call `complete`.
-   The dispatcher reclaimed the task and a new attempt owns it. (Workers that cannot push refs — cloud tiers, with
-   `"heartbeat": "comment"` on their profile — heartbeat by writing the run record instead, floored at 10 minutes;
-   `hkb` falls back to that by itself when git cannot reach the remote, and says so.)
+   reclaimed mid-flight. It is a compare-and-swap on your claim: free, and it writes nothing to the card. If the
+   lease is rejected the claim is no longer yours: `hkb` prints `LOCK_LOST` and exits **3**. Stop immediately — do
+   not commit, do not push, do not call `complete`. The dispatcher reclaimed the task and a new attempt owns it.
+   (When the store cannot make the swap at all, `hkb` records the beat on the run record instead, floored at 10
+   minutes, and says so.)
 4. Commit in small, clear steps. Never `git push --force`. Before finishing: `git fetch origin && git rebase origin/<default>`,
    then run the project's lint and tests (see CLAUDE.md / AGENTS.md).
-5. Push and open a **draft** PR whose body contains `Closes #$KB_TASK` and a real description:
-   `gh pr create --draft --title "..." --body "Closes #$KB_TASK\n\n<what/why/how verified>"`.
+5. Push and open a **draft** PR with a real description: `gh pr create --draft --fill`.
+   **Keep the branch name you were given** — `kb-$KB_TASK-<attempt>` (or `worktree-kb-…`, or `kb/$KB_TASK`).
+   That name is the *only* thing that ties the pull request to this card: hkb matches the repository's open PRs
+   by head branch. A PR opened from any other branch is one hkb cannot see, and `hkb finish` will refuse to land
+   the card in *done* because it found none.
 6. Finish with **exactly one** terminal verb, then stop. Send the payload as one JSON object on stdin so no JSON
    has to survive your shell's quoting. Write the file with your editor tool, then redirect it:
 
@@ -118,9 +123,9 @@ prompt lists:
 | per node | |
 |---|---|
 | 1 | `hkb context <n>` — the exact brief that node's own cold worker would get. Read it before you touch anything |
-| 2 | `hkb claim <n>` — creates `refs/kb/locks/<n>/<k>` and moves the node to *running*. `held` means another worker owns it: skip it and everything behind it |
+| 2 | `hkb claim <n>` — takes the claim on that node and moves it to *running*. `held` means another worker owns it: skip it and everything behind it |
 | 3 | work, on a branch of its own cut from the branch of the node it is blocked by (or the default branch when it has none) |
-| 4 | push, and open one **draft** PR per node — `--base` that same branch, exactly one `Closes #<n>` in the body |
+| 4 | push, and open one **draft** PR per node — `--base` that same branch, head branch `kb/<n>`, one PR per node |
 | 5 | exactly one terminal verb for that node: `hkb finish <n>` / `hkb block <n>` / `hkb request-review <n>` |
 
 Step 5 is what makes a track safe to run at all: every node is a durable checkpoint, so a runner that dies leaves a
@@ -144,7 +149,8 @@ Five things really are different:
 - **Verify the verb yourself.** The Stop nudge keys on `KB_TASK`, which is the root — it never fires for a subagent.
   After a wave, `hkb show <n> --json` per node: `done`, `blocked` or `review` means it ended. A node left *running*
   is one you finish from its report, or `hkb block <n> "…" --kind transient`. Never start the next wave over one.
-- **One PR per node, never one PR for several nodes.** A body with two `Closes #` drags the unfinished node into
+- **One PR per node, never one PR for several nodes.** hkb matches a PR to a card by its head branch, so one PR
+  can only ever belong to one node; a PR carrying two drags the unmatched node into
   *review* behind the finished one, and then neither you nor the dispatcher can close it properly.
 
 **A node that blocks parks only its branch.** `hkb block <n> "why" --kind …`, then skip everything blocked by it,
