@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "writing a verb that reads or writes board state, adding a store driver, or wondering why tasks.js and lock.js are two lines long"
 covers:
   - path: src/store/index.js
-    sha: d440f1432159b01433599dd285c26dceae2596a3
+    sha: 04921bfad186d789e2fe70ab53620867abed5e40
   - path: src/store/github.js
     sha: 7b384d0c64870f7b33c209325359b8e2630856ad
   - path: src/forge.js
@@ -32,7 +32,7 @@ covers:
     sha: 387c7e3da22fb00d1d070903abc12e7f64dfc7cf
   - path: src/init.js
     sha: fb4b0eb97192e874591ed4940a1e2f32775c1429
-generated_at_commit: 0cd9e5c
+generated_at_commit: f7072ce
 last_refreshed: 2026-09-03
 related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-and-leases, concepts/board-protocol]
 ---
@@ -324,6 +324,41 @@ A scenario asserts the **interface's** shape, never a tier's. The local store
 widens what `src/store/sqlite.js`'s `heartbeat` returns to the §6.4 four fields
 in `LocalStore.heartbeat` rather than in the index, because the index is a tier
 with tests of its own and the interface is the composed class's contract.
+
+`DRIVERS` carries a third entry, `test/fake-store.js` — the in-memory double the
+rest of the suite asserts board behaviour through. It is not a product driver,
+and it runs here for one reason: a double that answers a method differently from
+the real drivers turns every assertion made through it into a lie that passes.
+
+## `setStore`: how a test asserts on the board rather than on GitHub
+
+`setStore(fn)` (`src/store/index.js`) replaces what `openStore` and
+`openStoreReadOnly` hand back, and returns a restore function the way
+`setTransport` (`src/gh.js`) does. Production never sets it; it exists for
+`test/fake-store.js`.
+
+The problem it solves is `docs/local-first.md` §11: 121 assertion sites in 21
+test files found out things the protocol states in its own words — *the lock was
+released*, *the run record was not rewritten*, *a check with nothing to check
+costs nothing* — by reading the in-memory GitHub's REST log (`gh.calls`,
+`gh.lockRefs()`). Every one of them pinned `src/store/github.js` in place, so
+nothing under it could be deleted (§10, track C). Through the interface the same
+sentences are `store.writes()`, `await store.locks()` and
+`store.callsOf('listTasks')`, and they are true of any driver.
+
+Two deliberate limits. The override is **not** consulted by `storeKind`: what a
+board is kept in is still `"store"` in `.kanban/board.json` and nothing else, so
+a test that swaps the store does not also change what `hkb doctor`, `hkb gc` and
+`hkb init` say the board *is*. And the double covers board state only — a pull
+request is `src/forge.js` on every board, so a test that asserts on one installs
+`test/fake-gh.js` underneath and reads `gh.requestsMatching(...)`. The two
+doubles compose.
+
+`test/verbs-portable.test.js` is the other half: the scenarios the migrated
+files rewrote — a promote, a claim and its run record, a live worker left alone,
+a reclaim, a dry run, a terminal verb — run unchanged against the double *and*
+against the real local driver in a scratch repository. That is what says the
+rewritten assertions are portable, rather than asserting that they are.
 
 ## Related
 

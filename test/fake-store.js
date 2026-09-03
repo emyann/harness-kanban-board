@@ -9,7 +9,7 @@
 //   assert.deepEqual(await store.locks(), ['7/1']);
 //   assert.deepEqual(store.writes(), []);            // "and nothing was written"
 //
-// Why it exists: 121 assertion sites read `gh.requests`, `gh.lockRefs()` and `gh.runOf()` — the shape
+// Why it exists: 121 assertion sites read the fake GitHub's request log and its lock refs — the shape
 // of GitHub's REST API — to find out things the protocol states in its own words ("the lock was
 // released", "the run record was not rewritten", "a check with nothing to check costs nothing").
 // Every one of those sites pinned `src/store/github.js` in place (docs/local-first.md §10-§11).
@@ -39,7 +39,7 @@ export const WRITE_METHODS = Object.freeze([
 
 /**
  * The live claims, as `"<n>/<k>"` strings, sorted — the portable form of what
- * `gh.lockRefs()` used to answer with (`refs/kb/locks/7/1` names a GitHub ref; a store that keeps
+ * the fake GitHub used to answer with (`refs/kb/locks/7/1` names a GitHub ref; a store that keeps
  * its claims in a table has no such name, and `listLocks()` is what both have).
  * @param {any} store
  */
