@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "adding a durable store verb, debugging a board write that lost or refused, or wondering why a worker's worktree stays clean while the board moves"
 covers:
   - path: src/store/git.js
-    sha: d14687668a4fe389a5df367c0ead56a6f8cb1166
+    sha: 5974220967c8ae52be092e744fe8e75f0e9772a5
   - path: src/store/index.js
     sha: 8bbf72f8391d88be9ae35eec0c79501b657cc41d
   - path: src/board.js
-    sha: 86496d859ba1af4f78d539ff99f8707805129458
-generated_at_commit: 5d3bc73
+    sha: 2b79935a23669a802b9be2bb2bccdb878d5f425a
+generated_at_commit: 627805d
 last_refreshed: 2026-09-02
 related: [architecture/store-seam, decisions/adr-006-local-store, decisions/adr-005-control-plane, concepts/claims-and-leases]
 ---
@@ -46,6 +46,12 @@ via `mainWorktree` (`src/board.js`) — never `git rev-parse --show-toplevel`,
 which inside a linked worktree answers with the throwaway directory and would
 give each worker a private board that happens to share a name.
 
+"The common git directory's parent" is the right answer for *where the board's
+checkout is* and the wrong one for *where a file inside the git directory goes*
+— they differ in a submodule or a `--separate-git-dir` clone, where `.git` is a
+file. Anything that wants a path in the git directory (the index, `.git/hkb/`)
+asks `storeGitDir` (`src/board.js`) rather than joining `.git` back on.
+
 `src/store/git.js` also *unsets* `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`
 and their relatives before every call. A hook runs with those exported; one of
 them leaking through is how a store write would end up staging somebody's
@@ -67,6 +73,18 @@ spawned:
 
 The temporary index is rebuilt from nothing on every write, so a deleted card
 is simply a card that is not listed — there is no delete path to get wrong.
+That cuts both ways, and it is the branch's sharpest edge: **a path the write
+does not list is a path deleted.** The tier owns `board.json`, `cards/` and
+`runs/` and carries every other entry across at the sha and mode it already had
+(`isOwned` / `_land`, `src/store/git.js`) — without that, a `README.md` somebody
+put on the branch disappeared on the first `setStatus`, and the no-op guard
+(which compares only owned paths) reported that nothing had changed.
+
+Reads are memoized on the tip sha, and a successful write leaves the tree it
+just built behind it, parsed back out of the bytes that landed. So a tick that
+asks about twenty cards decodes the tree once, and the `getTask` every verb does
+after its own commit costs one `rev-parse`. The memo is keyed on the sha, so a
+writer in another process invalidates it by definition.
 
 ## `update-ref` is the concurrency story
 
@@ -85,7 +103,10 @@ called breaks that property — read what you need *inside* the callback.
 
 A write whose bytes are identical to what is already there lands **no commit**.
 The branch's history is a history of decisions, and a verb that decided nothing
-should not appear in it.
+should not appear in it. That holds only because `_patch` compares the card
+before and after the mutation and leaves `updated_at` alone when nothing moved:
+a timestamp stamped unconditionally makes every verb "a change", so `setStatus`
+to the status a card already has would land a commit saying so.
 
 ## One writer per board
 
@@ -95,8 +116,30 @@ and refuses on any other host with exit 2 naming `hkb init --take-over`
 clone useful: a friend who clones has no local `kb-board`, so the tier falls
 back to `refs/remotes/<remote>/kb-board` and they get a read-only board.
 
-Two hosts writing one branch is not supported in this version — integer ids
-allocated from `board.json.next_id` would collide.
+Two hosts writing one branch is not supported in this version, and the reason
+is **not** that ids would collide: a CAS refusal re-reads and replays the
+mutation on the newer tree, so two writers racing to create a card get two
+different numbers (`src/store/git.js`, `commit`; `test/store-git.test.js`, "a
+concurrent writer makes the CAS refuse"). Allocation is also guarded — an id a
+card already occupies is never handed out, whatever `board.json` says
+(`nextId`, `src/store/git.js`).
+
+What the rule really buys is everything *around* the branch: the index
+(`.git/hkb/index.db`) is host-local, so is the dispatcher, and a second host
+writing decisions into the branch would be making them against an index it
+cannot see. `board.host` is the enforcement; the collision story was the wrong
+justification for a right rule.
+
+### A clone can read, and cannot write
+
+A fresh clone has `refs/remotes/origin/kb-board` and no local branch. Reads fall
+back to it; a **write refuses with the branch command that fixes it**, because
+the compare-and-swap is on `refs/heads/kb-board` and there is nothing there to
+swap. Git says `cannot lock ref … unable to resolve reference` for that, which
+is one word away from what it says for real contention (`is at X but expected
+Y`) — telling them apart is `classifyRefWrite` (`src/store/git.js`), and getting
+it wrong turned "there is no branch here" into five retries and a message
+blaming a writer on another host.
 
 ## What is *not* on the branch
 
@@ -122,3 +165,15 @@ because a caller must not have to know which store answered.
 Labels get the same treatment: `kb:status:*`, `kb:agent:*`, `kb:board:*` and
 `kb:needs-human` are columns, and anything else a caller adds (`kb:no-track`, a
 human's own label) is carried verbatim so `getTask` gives it back.
+
+Two things a caller's task object carries that this tier cannot know: `prs` and
+`url` are `src/forge.js`'s, and every verb here reads back a card with them
+empty. The verbs therefore *merge* into the caller's task rather than replacing
+it (`syncTask`, `src/store/git.js`) — `requestChanges` calls `setStatus` and
+then reads `task.prs`, so a wholesale copy erased the open PR it was about to
+continue and reported "no open PR" for a card that had one.
+
+Notes and results share `runs/<id>.json`, and which one a body is gets decided
+by `startsWith(RESULT_MARKER)` *and* a successful parse — a human note that
+merely quotes the marker is a note. Filing it as a result loses it from
+`listNotes` and makes `latestResult` hand the next worker an empty handoff.

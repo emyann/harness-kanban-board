@@ -22,8 +22,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { storeRoot, hostId } from '../board.js';
+import { storeRoot, hostId, runGit, gitSays as short, GIT_SHA_RE as SHA_RE, normalizeCardGrants } from '../board.js';
 import {
   DEFAULT_KB, L, STATUSES, emptyRun, parseResultComment, serializeBodyBlock,
   RESULT_MARKER, RUN_MARKER, statusOf, agentOf,
@@ -32,9 +31,10 @@ import {
 export const BOARD_BRANCH = 'kb-board';
 export const BOARD_REF = `refs/heads/${BOARD_BRANCH}`;
 const ZERO_OID = '0'.repeat(40);
-const SHA_RE = /^[0-9a-f]{40}$/;
 const BLOB_MODE = '100644';
 const MAX_CAS_RETRIES = 5;
+/** How many git sub-commands `trace` keeps. The *last* 500 — the ones that just failed. */
+const TRACE_CAP = 500;
 
 /**
  * The methods of §6.4 this tier owns. The rest of the interface — `claim`, `release`, `listLocks`,
@@ -58,60 +58,19 @@ function fail(message, exitCode = 2) {
   return e;
 }
 
-/** The two lines of git output worth putting in an error message. */
-function short(s) {
-  const lines = String(s || '').split('\n').map((l) => l.trim()).filter(Boolean);
-  const loud = lines.filter((l) => /^(fatal|error|warning|!)/i.test(l));
-  return (loud.length ? loud : lines).slice(0, 2).join(' ').slice(0, 200);
-}
-
-// ---------- git ----------
-
-const GIT_ENV = {
-  GIT_AUTHOR_NAME: 'hkb', GIT_AUTHOR_EMAIL: 'hkb@local',
-  GIT_COMMITTER_NAME: 'hkb', GIT_COMMITTER_EMAIL: 'hkb@local',
-  GIT_TERMINAL_PROMPT: '0', // nobody is here to answer a credential prompt
-};
-
-// Anything a hook, a `git` alias or a parent process may have exported that would silently point our
-// plumbing at another repository — or at somebody else's index. `hkb`'s own Stop hook runs inside
-// `git` sometimes; `GIT_INDEX_FILE` leaking in is how a store write ends up staging a worker's files.
-const GIT_UNSET = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_COMMON_DIR', 'GIT_NAMESPACE', 'GIT_ALTERNATE_OBJECT_DIRECTORIES'];
-
-function gitEnv(extra = {}) {
-  const env = { ...process.env, ...GIT_ENV, ...extra };
-  for (const k of GIT_UNSET) if (!(k in extra)) delete env[k];
-  return env;
-}
-
-/**
- * Run git at the store root. Never throws — the caller reads `status` and classifies.
- * @returns {{status: number|null, out: string, stdout: string, buffer: Buffer|null}}
- */
-function git(root, args, { input = null, env = {}, timeout = 30_000, binary = false } = {}) {
-  const res = spawnSync('git', args, {
-    cwd: root, input, timeout, env: gitEnv(env),
-    // `undefined` is spawnSync's own default, and the only way to get Buffers back while still
-    // handing it a string on stdin — the literal 'buffer' encodes the *input* too, and throws.
-    encoding: binary ? undefined : 'utf8',
-    maxBuffer: 256 * 1024 * 1024,
-  });
-  const out = binary
-    ? `${res.stderr ? String(res.stderr) : ''}`
-    : `${res.stdout || ''}${res.stderr || ''}`;
-  if (res.error) return { status: null, out: `${out}${res.error.message}`, stdout: '', buffer: null };
-  return {
-    status: res.status,
-    out,
-    stdout: binary ? '' : String(res.stdout || '').trim(),
-    buffer: binary ? /** @type {any} */ (res.stdout) : null,
-  };
-}
-
 // ---------- the file format ----------
 
-/** Sorted keys, all the way down; arrays keep their order. */
+/**
+ * Sorted keys, all the way down; arrays keep their order.
+ *
+ * `toJSON` is honoured before descending, because `JSON.stringify` would have honoured it: without
+ * that, a `Date` in an attempt field is an object with no own enumerable keys, so it sorts to `{}`
+ * and the branch records `"started_at": {}` where the caller wrote a timestamp.
+ */
 function sortDeep(v) {
+  if (v && typeof v === 'object' && typeof (/** @type {any} */ (v).toJSON) === 'function') {
+    return sortDeep(/** @type {any} */ (v).toJSON());
+  }
   if (Array.isArray(v)) return v.map(sortDeep);
   if (v && typeof v === 'object') {
     /** @type {any} */ const out = {};
@@ -124,15 +83,6 @@ function sortDeep(v) {
 /** §6.2's on-branch format: sorted keys, two-space JSON, one trailing newline. */
 export function fileJson(value) {
   return `${JSON.stringify(sortDeep(value), null, 2)}\n`;
-}
-
-/** Same dedupe `src/store/github.js` applies to a card's grant lists — never a widening guess. */
-function normalizeGrants(kb) {
-  for (const key of ['tools', 'mcp']) {
-    if (!Array.isArray(kb?.[key])) continue;
-    kb[key] = [...new Set(kb[key].filter((n) => typeof n === 'string' && n.trim()).map((n) => n.trim()))];
-  }
-  return kb;
 }
 
 // ---------- the card record ----------
@@ -148,12 +98,12 @@ const HOISTED = ['priority', 'paths', 'goal', 'scheduled_at'];
 function kbOf(card) {
   const kb = { ...DEFAULT_KB, ...(card.kb || {}) };
   for (const k of HOISTED) if (card[k] !== undefined) kb[k] = card[k];
-  return normalizeGrants(kb);
+  return normalizeCardGrants(kb);
 }
 
 /** Split a `kb` into the hoisted columns and what is left. */
 function splitKb(kb = {}) {
-  const full = normalizeGrants({ ...DEFAULT_KB, ...kb });
+  const full = normalizeCardGrants({ ...DEFAULT_KB, ...kb });
   /** @type {any} */ const rest = {};
   for (const [k, v] of Object.entries(full)) if (!HOISTED.includes(k)) rest[k] = v;
   return {
@@ -251,24 +201,39 @@ export class GitTier {
     this.now = now;
     /** Every git sub-command this tier ran, newest last. Capped; `hkb doctor` and the tests read it. */
     this.trace = [];
+    /** The last tree read, keyed by the sha it was read at. See `readTree`. */
+    this._snap = null;
   }
 
   /** @param {string[]} args */
   _git(args, opts) {
-    if (this.trace.length > 500) this.trace.length = 0;
+    if (this.trace.length >= TRACE_CAP) this.trace.splice(0, this.trace.length - TRACE_CAP + 1);
     this.trace.push(args[0]);
-    return git(this.root, args, opts);
+    return runGit(this.root, args, opts);
+  }
+
+  /** The branch this tier's ref names — `refs/heads/kb-board` is `kb-board`. */
+  get branch() { return this.ref.replace(/^refs\/heads\//, ''); }
+
+  /**
+   * Where the board is, and whether that is a ref this host may write.
+   *
+   * `local: false` means the only copy here is the remote-tracking one — a fresh clone. The board
+   * *reads* from there; a write must not, because the compare-and-swap is on `this.ref`, and CASing
+   * a local ref against a sha only `refs/remotes/...` has fails with git's absent-ref message, which
+   * is not contention however much it looks like it (`classifyRefWrite`).
+   * @returns {{sha: string|null, local: boolean}}
+   */
+  _tip() {
+    const local = this._git(['rev-parse', '--verify', '--quiet', `${this.ref}^{commit}`]);
+    if (local.status === 0 && SHA_RE.test(local.stdout)) return { sha: local.stdout, local: true };
+    const tracked = this._git(['rev-parse', '--verify', '--quiet', `refs/remotes/${this.remote}/${this.branch}^{commit}`]);
+    if (tracked.status === 0 && SHA_RE.test(tracked.stdout)) return { sha: tracked.stdout, local: false };
+    return { sha: null, local: false };
   }
 
   /** The commit the board is at, or null when the branch does not exist here or on the remote. */
-  tip() {
-    const local = this._git(['rev-parse', '--verify', '--quiet', `${this.ref}^{commit}`]);
-    if (local.status === 0 && SHA_RE.test(local.stdout)) return local.stdout;
-    // A friend who cloned has `origin/kb-board` and no local branch: the board reads, and `commit()`
-    // refuses anyway because `board.json` names another host (§6.2, "One writer").
-    const tracked = this._git(['rev-parse', '--verify', '--quiet', `refs/remotes/${this.remote}/${BOARD_BRANCH}^{commit}`]);
-    return tracked.status === 0 && SHA_RE.test(tracked.stdout) ? tracked.stdout : null;
-  }
+  tip() { return this._tip().sha; }
 
   /** Has the board been created here at all? */
   exists() { return this.tip() !== null; }
@@ -277,44 +242,61 @@ export class GitTier {
    * The whole board, at one commit.
    *
    * One `ls-tree -r` for the paths and one `cat-file --batch` for the bytes — two processes for a
-   * board of any size, and never one per file.
-   * @returns {{tip: string|null, board: any, cards: Map<number, any>, runs: Map<number, any>, files: Map<string, {sha: string, text: string}>}}
+   * board of any size, and never one per file. Both are skipped entirely when the branch has not
+   * moved since the last read: the tree is memoized on the sha `_tip()` answers with, so a tick that
+   * asks about twelve cards decodes the tree once instead of twelve times, and a verb's `getTask`
+   * after its own commit reads the tree the commit already built. The caller gets a copy, so a
+   * mutation of what it hands back cannot poison the next reader.
+   *
+   * @returns {{tip: string|null, local: boolean, board: any, cards: Map<number, any>, runs: Map<number, any>, files: Map<string, {sha: string, mode: string, text: string|null}>}}
    */
   readTree() {
-    const tip = this.tip();
-    const empty = { tip: null, board: null, cards: new Map(), runs: new Map(), files: new Map() };
-    if (!tip) return empty;
+    const { sha: tip, local } = this._tip();
+    if (!tip) return { tip: null, local: false, board: null, cards: new Map(), runs: new Map(), files: new Map() };
+    if (this._snap && this._snap.tip === tip && this._snap.local === local) return cloneTree(this._snap);
 
     const listed = this._git(['ls-tree', '-r', '-z', tip]);
-    if (listed.status !== 0) throw fail(`cannot read ${this.ref} at ${tip.slice(0, 7)}: ${short(listed.out) || 'git ls-tree failed'} — check the branch with \`git log ${BOARD_BRANCH}\``);
+    if (listed.status !== 0) throw fail(`cannot read ${this.ref} at ${tip.slice(0, 7)}: ${short(listed.out) || 'git ls-tree failed'} — check the branch with \`git log ${this.branch}\``);
 
-    /** @type {{sha: string, file: string}[]} */
+    /** @type {{sha: string, mode: string, type: string, file: string}[]} */
     const entries = [];
     for (const row of listed.stdout.split('\0')) {
       if (!row) continue;
       const tab = row.indexOf('\t');
       if (tab < 0) continue;
-      const [, type, sha] = row.slice(0, tab).split(/\s+/);
-      if (type !== 'blob') continue;
-      entries.push({ sha, file: row.slice(tab + 1) });
+      const [mode, type, sha] = row.slice(0, tab).split(/\s+/);
+      entries.push({ mode, type, sha, file: row.slice(tab + 1) });
     }
 
+    /** @type {Map<string, {sha: string, mode: string, text: string|null}>} */
     const files = new Map();
-    if (entries.length) {
-      const batch = this._git(['cat-file', '--batch'], { input: `${entries.map((e) => e.sha).join('\n')}\n`, binary: true });
+    // Only blobs are decoded — a gitlink (mode 160000) has no bytes to read, and it is still an
+    // entry the write path has to put back or it would disappear from the branch.
+    const blobs = entries.filter((e) => e.type === 'blob');
+    let texts = [];
+    if (blobs.length) {
+      const batch = this._git(['cat-file', '--batch'], { input: `${blobs.map((e) => e.sha).join('\n')}\n`, binary: true });
       if (batch.status !== 0 || !batch.buffer) throw fail(`cannot read the board's blobs at ${tip.slice(0, 7)}: ${short(batch.out) || 'git cat-file --batch failed'}`);
-      const texts = parseBatch(batch.buffer, entries.length);
-      entries.forEach((e, i) => files.set(e.file, { sha: e.sha, text: texts[i] ?? '' }));
+      texts = parseBatch(batch.buffer, blobs.length);
+    }
+    let blob = 0;
+    for (const e of entries) {
+      files.set(e.file, { sha: e.sha, mode: e.mode, text: e.type === 'blob' ? (texts[blob++] ?? '') : null });
     }
 
+    this._snap = this._parseFiles(files, tip, local);
+    return cloneTree(this._snap);
+  }
+
+  /** The board, the cards and the runs a set of file bytes holds. @returns {any} */
+  _parseFiles(files, tip, local) {
     const parse = (file) => {
       const hit = files.get(file);
-      if (!hit) return null;
+      if (!hit || hit.text === null || hit.text === undefined) return null;
       try { return JSON.parse(hit.text); } catch (e) {
-        throw fail(`${file} on ${BOARD_BRANCH} is not JSON (${/** @type {Error} */ (e).message}) — inspect it with \`git show ${BOARD_BRANCH}:${file}\``);
+        throw fail(`${file} on ${this.branch} is not JSON (${/** @type {Error} */ (e).message}) — inspect it with \`git show ${this.branch}:${file}\``);
       }
     };
-
     const board = parse('board.json');
     const cards = new Map();
     const runs = new Map();
@@ -324,8 +306,11 @@ export class GitTier {
       const run = /^runs\/(\d+)\.json$/.exec(file);
       if (run) runs.set(Number(run[1]), parse(file));
     }
-    return { tip, board, cards, runs, files };
+    return { tip, local, board, cards, runs, files };
   }
+
+  /** Forget the memoized tree. Only a test that moves the branch behind this tier's back needs it. */
+  forget() { this._snap = null; }
 
   // ---------- writing ----------
 
@@ -347,9 +332,10 @@ export class GitTier {
     for (let attempt = 1; attempt <= MAX_CAS_RETRIES; attempt++) {
       const snap = this.readTree();
       if (!snap.tip && !allowMissing) {
-        throw fail(`there is no ${BOARD_BRANCH} branch in ${this.root} — run \`hkb init\` to create the board`);
+        throw fail(`there is no ${this.branch} branch in ${this.root} — run \`hkb init\` to create the board`);
       }
       if (!allowForeignHost) this._assertOwner(snap.board);
+      this._assertWritableRef(snap);
 
       const tree = { board: snap.board, cards: snap.cards, runs: snap.runs };
       const value = mutate(tree);
@@ -361,17 +347,45 @@ export class GitTier {
 
       const text = typeof message === 'function' ? message(value, tree) : message;
       const landed = this._land(want, snap, text);
-      if (landed.ok) return { tip: landed.sha, changed: true, value };
+      if (landed.ok) {
+        // The tree this write just built *is* the branch now, so the `getTask` every verb does after
+        // its commit reads it from here instead of spawning another `ls-tree`/`cat-file` pair. It is
+        // parsed back out of the bytes that landed, not taken from the mutation's own objects: a
+        // caller that wrote a `Date` must read back what the branch says, which is a string.
+        this._snap = this._parseFiles(landed.files, /** @type {string} */ (landed.sha), true);
+        return { tip: landed.sha, changed: true, value };
+      }
       last = landed.detail;
-      if (!landed.contended) throw fail(`cannot write ${BOARD_BRANCH}: ${landed.detail}`);
+      if (landed.verdict === 'absent') throw fail(this._absentRefMessage(landed.detail));
+      if (landed.verdict !== 'contended') throw fail(`cannot write ${this.branch}: ${landed.detail}`);
+      this.forget(); // somebody else moved the ref: the memo is a tree that no longer exists
     }
     const at = this.tip();
     const owner = this.readTree().board?.host || 'unknown';
     throw fail(
-      `${BOARD_BRANCH} moved under this write ${MAX_CAS_RETRIES} times — another hkb on host "${owner}" is writing this board `
+      `${this.branch} moved under this write ${MAX_CAS_RETRIES} times — another hkb on host "${owner}" is writing this board `
       + `(${this.ref} is at ${at ? at.slice(0, 7) : 'nothing'}${last ? `; git said: ${last}` : ''}). `
       + 'Wait for it to finish, or stop it with `hkb down`, then run this again.',
     );
+  }
+
+  /**
+   * A write needs a *local* ref to compare-and-swap. On a clone there is only
+   * `refs/remotes/<remote>/kb-board`, which reads fine and cannot be CASed: the update-ref would
+   * lease `refs/heads/kb-board` against a sha that ref has never held, git would answer "unable to
+   * resolve reference", and — before this — that read as contention, so the write retried five times
+   * and blamed a writer that does not exist.
+   */
+  _assertWritableRef(snap) {
+    if (!snap.tip || snap.local) return;
+    throw fail(this._absentRefMessage());
+  }
+
+  _absentRefMessage(detail = '') {
+    return `the board here is a read-only copy: ${this.remote}/${this.branch} exists but ${this.ref} does not, `
+      + `so there is nothing to compare-and-swap against. Create the local branch with `
+      + `\`git -C ${this.root} branch ${this.branch} ${this.remote}/${this.branch}\`, then take the board over `
+      + `with \`hkb init --take-over\` if this host should be the one writing it${detail ? ` (git said: ${detail})` : ''}.`;
   }
 
   /** `board.json` names one owning host; every other host reads (§6.2, "One writer"). */
@@ -379,7 +393,7 @@ export class GitTier {
     const owner = board?.host ?? null;
     if (!owner || owner === this.host) return;
     throw fail(
-      `this board belongs to host "${owner}" and this is "${this.host}" — the ${BOARD_BRANCH} branch has one writer. `
+      `this board belongs to host "${owner}" and this is "${this.host}" — the ${this.branch} branch has one writer. `
       + 'Read it here with `hkb list`, or move it to this host with `hkb init --take-over`.',
     );
   }
@@ -401,9 +415,11 @@ export class GitTier {
 
   /**
    * One chain: hash the changed blobs, build a tree against a throwaway index, commit it, CAS the ref.
-   * @returns {{ok: boolean, sha: string|null, contended: boolean, detail: string}}
+   * @returns {{ok: boolean, sha: string|null, verdict: 'ok'|'contended'|'absent'|'error', detail: string, files: Map<string, {sha: string, mode: string, text: string|null}>}}
    */
   _land(want, snap, message) {
+    /** @type {(verdict: 'contended'|'absent'|'error', detail: string) => any} */
+    const no = (verdict, detail) => ({ ok: false, sha: null, verdict, detail, files: snap.files });
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-tree-'));
     try {
       // 1. blobs — only for the files whose bytes actually changed. `--stdin-paths` hashes them all
@@ -418,27 +434,34 @@ export class GitTier {
         fresh.push(file);
         tmpPaths.push(tmp);
       }
-      /** @type {Map<string, string>} */ const shas = new Map();
-      for (const [file, hit] of snap.files) if (want.has(file)) shas.set(file, hit.sha);
+      /** @type {Map<string, {sha: string, mode: string, text: string|null}>} */
+      const entries = new Map();
+      for (const [file, hit] of snap.files) {
+        // Everything the tier does not own — a README somebody put on the branch, a `.gitattributes`,
+        // a whole directory of notes — is carried across at the sha and mode it already had. The
+        // index below is rebuilt from nothing, so a path left out here is a path *deleted*, silently.
+        if (!isOwned(file)) { entries.set(file, hit); continue; }
+        if (want.has(file)) entries.set(file, { sha: hit.sha, mode: BLOB_MODE, text: hit.text });
+      }
       if (tmpPaths.length) {
         const hashed = this._git(['hash-object', '-w', '-t', 'blob', '--stdin-paths'], { input: `${tmpPaths.join('\n')}\n` });
         const lines = hashed.stdout.split('\n').filter(Boolean);
         if (hashed.status !== 0 || lines.length !== fresh.length) {
-          return { ok: false, sha: null, contended: false, detail: short(hashed.out) || 'git hash-object failed' };
+          return no('error', short(hashed.out) || 'git hash-object failed');
         }
-        fresh.forEach((file, n) => shas.set(file, lines[n]));
+        fresh.forEach((file, n) => entries.set(file, { sha: lines[n], mode: BLOB_MODE, text: want.get(file) ?? null }));
       }
 
       // 2. the tree, built in a temporary index that no working tree is attached to. The index is
       //    rebuilt from nothing every time, so a deleted card is a card that is simply not listed.
       const index = path.join(scratch, 'index');
-      const info = [...want.keys()].sort().map((file) => `${BLOB_MODE} ${shas.get(file)}\t${file}`).join('\n');
+      const info = [...entries.keys()].sort().map((file) => `${entries.get(file)?.mode || BLOB_MODE} ${entries.get(file)?.sha}\t${file}`).join('\n');
       const added = this._git(['update-index', '--add', '--index-info'], { input: `${info}\n`, env: { GIT_INDEX_FILE: index } });
-      if (added.status !== 0) return { ok: false, sha: null, contended: false, detail: short(added.out) || 'git update-index failed' };
+      if (added.status !== 0) return no('error', short(added.out) || 'git update-index failed');
 
       const wrote = this._git(['write-tree'], { env: { GIT_INDEX_FILE: index } });
       if (wrote.status !== 0 || !SHA_RE.test(wrote.stdout)) {
-        return { ok: false, sha: null, contended: false, detail: short(wrote.out) || 'git write-tree failed' };
+        return no('error', short(wrote.out) || 'git write-tree failed');
       }
 
       // 3. the commit, and 4. the compare-and-swap. `update-ref <ref> <new> <old>` is the whole of the
@@ -447,12 +470,12 @@ export class GitTier {
       if (snap.tip) args.push('-p', snap.tip);
       const made = this._git(args);
       if (made.status !== 0 || !SHA_RE.test(made.stdout)) {
-        return { ok: false, sha: null, contended: false, detail: short(made.out) || 'git commit-tree failed' };
+        return no('error', short(made.out) || 'git commit-tree failed');
       }
 
       const cas = this._git(['update-ref', '-m', message, this.ref, made.stdout, snap.tip || ZERO_OID]);
-      if (cas.status === 0) return { ok: true, sha: made.stdout, contended: false, detail: '' };
-      return { ok: false, sha: null, contended: isContended(cas.out), detail: short(cas.out) || 'git update-ref failed' };
+      if (cas.status === 0) return { ok: true, sha: made.stdout, verdict: 'ok', detail: '', files: entries };
+      return no(classifyRefWrite(cas.out), short(cas.out) || 'git update-ref failed');
     } finally {
       fs.rmSync(scratch, { recursive: true, force: true });
     }
@@ -484,7 +507,7 @@ export class GitTier {
   /** Move the board to this host. §6.2: the branch has one writer, and this is how the writer changes. */
   takeOver(host = this.host) {
     const r = this.commit((t) => {
-      if (!t.board) throw fail(`there is no ${BOARD_BRANCH} branch in ${this.root} — run \`hkb init\` first`);
+      if (!t.board) throw fail(`there is no ${this.branch} branch in ${this.root} — run \`hkb init\` first`);
       t.board.host = host;
     }, `hkb: board moved to host ${host}`, { allowForeignHost: true });
     return { host, changed: r.changed, tip: r.tip };
@@ -496,7 +519,7 @@ export class GitTier {
 
   board() {
     const b = this.readTree().board;
-    if (!b) throw fail(`there is no ${BOARD_BRANCH} branch in ${this.root} — run \`hkb init\` to create the board`);
+    if (!b) throw fail(`there is no ${this.branch} branch in ${this.root} — run \`hkb init\` to create the board`);
     return {
       slug: b.slug,
       host: b.host ?? null,
@@ -508,7 +531,7 @@ export class GitTier {
 
   setBoard(patch = {}) {
     this.commit((t) => {
-      if (!t.board) throw fail(`there is no ${BOARD_BRANCH} branch in ${this.root} — run \`hkb init\` to create the board`);
+      if (!t.board) throw fail(`there is no ${this.branch} branch in ${this.root} — run \`hkb init\` to create the board`);
       // `settings` merges, everything else is replaced: a caller patching one setting must not have
       // to read the whole document back and hand it in again.
       const { settings, ...rest } = patch;
@@ -543,7 +566,7 @@ export class GitTier {
   getTask(n) {
     const snap = this.readTree();
     const card = snap.cards.get(Number(n));
-    if (!card) throw fail(`card #${n} is not on the ${BOARD_BRANCH} board in ${this.root} — \`hkb list\` shows what is`);
+    if (!card) throw fail(`card #${n} is not on the ${this.branch} board in ${this.root} — \`hkb list\` shows what is`);
     return toTask(card, snap.board?.slug || 'default', snap.cards);
   }
 
@@ -553,7 +576,8 @@ export class GitTier {
     if (!STATUSES.includes(status)) throw fail(`createTask: invalid status "${status}" — one of ${STATUSES.join(', ')}`);
     const at = this.now().toISOString();
     const { value: id } = this.commit((t) => {
-      const next = Number(t.board?.next_id) || nextFree(t.cards);
+      if (!t.board) throw fail(`there is no board.json on ${this.branch} in ${this.root} — run \`hkb init\` to create the board`);
+      const next = nextId(t.board, t.cards);
       t.board.next_id = next + 1;
       const { rest, priority, paths, goal, scheduled_at } = splitKb(kb);
       t.cards.set(next, {
@@ -652,6 +676,7 @@ export class GitTier {
       const card = need(t.cards, c, this.root);
       need(t.cards, p, this.root);
       const list = new Set(card.blocked_by || []);
+      if (list.has(p)) return; // already linked — see `_patch` on why that is not a commit
       list.add(p);
       card.blocked_by = [...list].sort((x, y) => x - y);
       card.updated_at = this.now().toISOString();
@@ -721,19 +746,25 @@ export class GitTier {
    * A note is what a *person* wrote. hkb's own records arrive here too — `hkb finish` hands the
    * result through the same call the GitHub store posts a comment with — so a body carrying the
    * result marker is parsed and filed as a result instead, which is what `latestResult` reads.
+   *
+   * The test is `startsWith`, and the parse has to succeed. `includes` filed *any* note quoting the
+   * marker — a human writing "the `<!-- hkb:result -->` block was empty" — as a result: the note
+   * vanished from `listNotes`, and `latestResult` handed the next worker `{at, url: null}` as its
+   * parent's handoff, because `parseResultComment` had returned null and the spread of null is `{}`.
+   * The GitHub store filters its comments with `startsWith` for the same reason.
    */
   addNote(n, text) {
     const id = Number(n);
     const at = this.now().toISOString();
     const body = String(text ?? '');
     const note = { id: null, at, actor: null, text: body };
+    const parsed = body.startsWith(RESULT_MARKER) ? parseResultComment(body) : null;
     this.commit((t) => {
       need(t.cards, id, this.root);
       const file = runFileOf(t.runs, id);
-      if (body.includes(RESULT_MARKER)) {
-        const parsed = parseResultComment(body);
-        file.results = [...(file.results || []), { ...(parsed || {}), at }];
-      } else if (body.includes(RUN_MARKER)) {
+      if (parsed) {
+        file.results = [...(file.results || []), { ...parsed, at }];
+      } else if (body.startsWith(RUN_MARKER)) {
         // The run record has a file of its own; a run comment arriving as a note is a caller that has
         // not been moved onto `saveRun` yet, and swallowing it silently would lose an attempt.
         throw fail(`addNote: #${id} — the run record is not a note; use saveRun(${id}, rec)`);
@@ -754,12 +785,22 @@ export class GitTier {
 
   // ---------- internals ----------
 
-  /** One card, patched and committed. */
+  /**
+   * One card, patched and committed — and *only* committed if the patch decided something.
+   *
+   * `updated_at` used to be stamped unconditionally, which made every verb a commit whether or not
+   * it changed anything: `setStatus` to the status the card already has, `addLabels` with a label
+   * that is on it, `removeLabel` for one that never was. `git log kb-board` is meant to be the
+   * board's history of decisions (§6.1), and a tick that re-asserts the state of twenty cards would
+   * have written twenty commits saying nothing. The GitHub store returns early in the same places.
+   */
   _patch(n, fn, message) {
     const id = Number(n);
     return this.commit((t) => {
       const card = need(t.cards, id, this.root);
+      const before = fileJson(card);
       fn(card);
+      if (fileJson(card) === before) return; // nothing decided, so nothing to record
       card.updated_at = this.now().toISOString();
     }, message);
   }
@@ -794,12 +835,37 @@ function parseBatch(buf, expected) {
   return out;
 }
 
-/** Did the mutation actually change any bytes? */
+/**
+ * The paths this tier owns and rewrites. Everything else on the branch is somebody's — a README, a
+ * `.gitattributes`, a directory of notes — and the write path carries it across untouched.
+ */
+function isOwned(file) {
+  return file === 'board.json' || file.startsWith('cards/') || file.startsWith('runs/');
+}
+
+/** Did the mutation actually change any bytes? Only the tier's own paths can have. */
 function sameTree(want, files) {
-  const had = [...files.keys()].filter((f) => f === 'board.json' || f.startsWith('cards/') || f.startsWith('runs/'));
+  const had = [...files.keys()].filter(isOwned);
   if (had.length !== want.size) return false;
   for (const [file, text] of want) if (files.get(file)?.text !== text) return false;
   return true;
+}
+
+/**
+ * A copy of a read tree, so the memo cannot be edited by whoever it was handed to.
+ *
+ * `files` is shared by reference: its values are `{sha, mode, text}` of immutable strings and
+ * nothing writes to them. The card and run records are what a mutation edits in place.
+ */
+function cloneTree(snap) {
+  return {
+    tip: snap.tip,
+    local: snap.local,
+    board: snap.board ? structuredClone(snap.board) : snap.board,
+    cards: new Map([...snap.cards].map(([id, c]) => [id, c ? structuredClone(c) : c])),
+    runs: new Map([...snap.runs].map(([id, r]) => [id, r ? structuredClone(r) : r])),
+    files: new Map(snap.files),
+  };
 }
 
 /** A run file with nothing in it is a file the branch does not need to carry. */
@@ -808,15 +874,43 @@ function isEmptyRunFile(run) {
     && !run.failures && !run.last_error && !Object.keys(run.block_loops || {}).length;
 }
 
-/** `update-ref` refusing because somebody else moved the branch first — the CAS doing its job. */
-function isContended(out) {
-  return /cannot lock ref|unable to lock|is at [0-9a-f]+ but expected|reference already exists|ref .* is at/i.test(String(out || ''));
+/**
+ * Why `update-ref` refused, from what git said. Measured against git 2.43:
+ *
+ *   contended — `cannot lock ref 'refs/heads/kb-board': is at <sha> but expected <sha>`
+ *   absent    — `cannot lock ref 'refs/heads/nope': unable to resolve reference 'refs/heads/nope'`
+ *
+ * Both start "cannot lock ref", which is why matching that alone read a branch that is *not there*
+ * as a writer that is: the retry then replayed five times and blamed a host nobody is running on.
+ * A missing ref is a fact about this clone, and retrying cannot change it.
+ * @returns {'contended'|'absent'|'error'}
+ */
+function classifyRefWrite(out) {
+  const text = String(out || '');
+  if (/unable to resolve reference|reference is missing but/i.test(text)) return 'absent';
+  if (/cannot lock ref|unable to lock|is at [0-9a-f]+ but expected|reference already exists|ref .* is at/i.test(text)) return 'contended';
+  return 'error';
 }
 
 function nextFree(cards) {
   let max = 0;
   for (const id of cards.keys()) if (id > max) max = id;
   return max + 1;
+}
+
+/**
+ * The next id to hand out: `board.json`'s `next_id`, but never one a card already occupies.
+ *
+ * `next_id` is a number in a file the design invites a human to read and a merge to touch. Trusting
+ * it made `createTask` overwrite card #1 — no error, no trace, the card simply became the new one —
+ * whenever it had been rewound by hand or by a bad merge. `nextFree` was already here as the
+ * NaN fallback; it is the guard on every allocation now. (`Number(x) || nextFree(...)` was also
+ * falsy on `next_id: 0`, which is exactly the value a truncated file has.)
+ */
+function nextId(board, cards) {
+  const free = nextFree(cards);
+  const want = Number(board?.next_id);
+  return Number.isInteger(want) && want > 0 ? Math.max(want, free) : free;
 }
 
 function need(cards, id, root) {
@@ -856,11 +950,29 @@ function applyLabels(card, { add = [], remove = [] } = {}) {
 }
 
 /**
+ * What `src/forge.js` fills in and this tier cannot: the branch has no pull requests and no issue
+ * URL. `toTask` hardcodes them empty, so copying them over a caller's task *erases* them.
+ */
+const FORGE_FIELDS = ['prs', 'url', 'nodeId'];
+
+/**
  * Bring the caller's task object up to date in place. Every verb on the GitHub store does this — a
  * caller holds one task through a whole tick and reads `task.status` after moving it — so a driver
  * that returned a fresh object and left the old one stale would break them silently.
+ *
+ * It *merges*: a field this tier does not know about keeps the value the caller already had.
+ * Replacing wholesale is how `requestChanges` broke — it calls `setStatus` and then reads
+ * `task.prs`, and the empty `prs` from a fresh read had just overwritten the open PR it was about
+ * to continue, so it reported "no open PR" for a card that had one.
  */
 function syncTask(task, read) {
-  for (const k of Object.keys(read)) task[k] = read[k];
+  for (const k of Object.keys(read)) {
+    if (FORGE_FIELDS.includes(k) && isEmptyForgeValue(read[k]) && !isEmptyForgeValue(task[k])) continue;
+    task[k] = read[k];
+  }
   return task;
+}
+
+function isEmptyForgeValue(v) {
+  return v === null || v === undefined || (Array.isArray(v) && v.length === 0);
 }

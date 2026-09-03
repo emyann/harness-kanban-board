@@ -207,6 +207,88 @@ export function repoRoot(cwd = process.cwd()) {
   return cwd;
 }
 
+// ---------- running git ----------
+// One helper, used by everything in hkb that shells out to git: the `kb-board` branch
+// (`src/store/git.js`) and the lock-ref heartbeat (`src/store/github.js`). They had a copy each,
+// with an undocumented drift in `gitSays`'s "which line is the loud one" regex, which meant the same
+// failure printed differently depending on which store hit it.
+
+export const GIT_ENV = {
+  GIT_AUTHOR_NAME: 'hkb', GIT_AUTHOR_EMAIL: 'hkb@local',
+  GIT_COMMITTER_NAME: 'hkb', GIT_COMMITTER_EMAIL: 'hkb@local',
+  GIT_TERMINAL_PROMPT: '0', // nobody is here to answer a credential prompt
+};
+
+export const GIT_SHA_RE = /^[0-9a-f]{40}$/;
+
+// Anything a hook, a `git` alias or a parent process may have exported that would silently point our
+// plumbing at another repository — or at somebody else's index. `hkb`'s own Stop hook runs inside
+// `git` sometimes; `GIT_INDEX_FILE` leaking in is how a store write ends up staging a worker's files.
+const GIT_UNSET = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_COMMON_DIR', 'GIT_NAMESPACE', 'GIT_ALTERNATE_OBJECT_DIRECTORIES'];
+
+function gitEnv(extra = {}) {
+  const env = { ...process.env, ...GIT_ENV, ...extra };
+  for (const k of GIT_UNSET) if (!(k in extra)) delete env[k];
+  return env;
+}
+
+/** The two lines of git output worth putting in an error message. */
+export function gitSays(s) {
+  const lines = String(s || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const loud = lines.filter((l) => /^(fatal|error|warning|remote|!)/i.test(l));
+  return (loud.length ? loud : lines).slice(0, 2).join(' ').slice(0, 200);
+}
+
+/**
+ * Run git at `root`. Never throws — the caller reads `status` and classifies.
+ * @param {string} root
+ * @param {string[]} args
+ * @param {{input?: string|null, env?: Record<string, string>, timeout?: number, binary?: boolean}} [opts]
+ * @returns {{status: number|null, out: string, stdout: string, buffer: Buffer|null}}
+ */
+export function runGit(root, args, { input = null, env = {}, timeout = 30_000, binary = false } = {}) {
+  const res = spawnSync('git', args, {
+    cwd: root, input, timeout, env: gitEnv(env),
+    // `undefined` is spawnSync's own default, and the only way to get Buffers back while still
+    // handing it a string on stdin — the literal 'buffer' encodes the *input* too, and throws.
+    encoding: binary ? undefined : 'utf8',
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  const out = binary
+    ? `${res.stderr ? String(res.stderr) : ''}`
+    : `${res.stdout || ''}${res.stderr || ''}`;
+  if (res.error) return { status: null, out: `${out}${res.error.message}`, stdout: '', buffer: null };
+  return {
+    status: res.status,
+    out,
+    stdout: binary ? '' : String(res.stdout || '').trim(),
+    buffer: binary ? /** @type {any} */ (res.stdout) : null,
+  };
+}
+
+/**
+ * A card's grant lists (`kb.tools`, `kb.mcp`), deduped and trimmed — never a widening guess.
+ *
+ * An empty string is not a name any profile can grant, so it is removed here rather than travelling
+ * to the launch to be dropped there with a confusing reason. A key that is not a list at all is left
+ * exactly as written: it narrows nothing (`effectiveTools` only reads arrays), and coercing it would
+ * be a guess at what the author meant on the one axis where guessing widens someone's permissions;
+ * `hkb doctor`'s `card grants` check reports it instead. An empty list stays empty — "this task gets
+ * none of them" is a legitimate narrowing, and the strictest one a card can ask for.
+ *
+ * It lives here rather than in either store because both of them read cards: the GitHub driver
+ * parses the machine block out of an issue body, the local one reads `cards/<id>.json`, and a card
+ * that came back with different grants depending on which store answered would be a permissions bug.
+ */
+export function normalizeCardGrants(kb) {
+  for (const key of ['tools', 'mcp']) {
+    if (!Array.isArray(kb?.[key])) continue;
+    const names = kb[key].filter((n) => typeof n === 'string' && n.trim()).map((n) => n.trim());
+    kb[key] = [...new Set(names)];
+  }
+  return kb;
+}
+
 export function kanbanDir(root) { return path.join(root, '.kanban'); }
 export function boardFile(root) { return path.join(kanbanDir(root), 'board.json'); }
 export function logsDir(root) { return path.join(kanbanDir(root), 'logs'); }
@@ -801,12 +883,44 @@ export function saveUserBoards(list, file = userBoardsFile()) {
  * Anything unexpected (no git, a bare repo, a path that is gone) keeps `root`.
  */
 export function mainWorktree(root) {
-  const r = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: root, encoding: 'utf8' });
-  if (r.status !== 0 || !r.stdout.trim()) return root;
-  const common = path.resolve(root, r.stdout.trim());
+  const common = gitCommonDir(root);
+  if (!common) return root;
   if (path.basename(common) !== '.git') return root;
   const main = path.dirname(common);
   return fs.existsSync(main) ? main : root;
+}
+
+/**
+ * The repository's **common** git directory — `.git` in an ordinary checkout, and the real thing in
+ * a linked worktree, a submodule (`.git` is a *file* there) or a `--separate-git-dir` clone. Null
+ * when `root` is not in a repository.
+ *
+ * `mainWorktree` answers with this directory's *parent* and only when it is literally named `.git`,
+ * which is right for "where does the board's checkout live" and wrong for "where do I put a file
+ * inside the git dir": joining `.git` onto the parent again is how `.git/hkb/index.db` became
+ * `<file>/hkb/index.db` — a raw `ENOTDIR` — in a submodule. Anything that wants a path *in* the git
+ * directory asks for it here (`storeGitDir`) instead of rebuilding it from the parent.
+ */
+export function gitCommonDir(root) {
+  const r = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: root, encoding: 'utf8' });
+  if (r.status !== 0 || !r.stdout.trim()) return null;
+  return path.resolve(root, r.stdout.trim());
+}
+
+/**
+ * Where hkb's own files go inside git: the common git directory for `ctx`, or `<storeRoot>/.git`
+ * when there is no git to ask (a test root, a directory that is not a repository).
+ *
+ * Cached on the context beside `storeRoot`, for the same reason: the answer cannot change while this
+ * process runs, and `openIndex` is called on every verb.
+ */
+export function storeGitDir(ctx) {
+  const root = typeof ctx === 'string' ? ctx : (ctx?.root || process.cwd());
+  const cache = typeof ctx === 'object' && ctx?._cache ? ctx._cache : null;
+  if (cache?.storeGitDir) return cache.storeGitDir;
+  const dir = gitCommonDir(root) || path.join(storeRoot(ctx), '.git');
+  if (cache) cache.storeGitDir = dir;
+  return dir;
 }
 
 /**

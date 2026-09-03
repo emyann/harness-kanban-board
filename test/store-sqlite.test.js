@@ -15,31 +15,58 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync, spawn } from 'node:child_process';
-import { openIndex, openIndexReadOnly, indexFile, LOCAL_EVENT_KINDS, LIVE_ATTEMPT_FIELDS, SCHEMA_VERSION } from '../src/store/sqlite.js';
+import { openIndex, openIndexReadOnly, indexFile, indexDir, LOCAL_EVENT_KINDS, LIVE_ATTEMPT_FIELDS, SCHEMA_VERSION } from '../src/store/sqlite.js';
+import { GitTier } from '../src/store/git.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.dirname(here);
 const SQLITE_SRC = path.join(repo, 'src', 'store', 'sqlite.js');
 
-/** A temp root with the `.git/hkb` and `.kanban` shape the index expects, and no git in sight. */
+/** The git dir of a temp root — the argument `indexFile` takes, and what `storeGitDir` answers. */
+const gitDirOf = (root) => path.join(root, '.git');
+
+/**
+ * A temp root with the `.git/hkb` and `.kanban` shape the index expects, and no git in sight.
+ *
+ * The removal is registered through `open()` rather than here so it runs *after* every index this
+ * test opened is closed: `t.after` hooks run in the order they were registered, so a root that
+ * cleaned itself up first deleted a WAL database with a live connection on it — survivable on
+ * POSIX, `EBUSY` on Windows.
+ */
 function tmpRoot(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-index-'));
   fs.mkdirSync(path.join(root, '.git'), { recursive: true });
   fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  /** @type {{close: () => void}[]} */ const open = [];
+  OPEN.set(root, open);
+  t.after(() => {
+    for (const idx of open.splice(0)) { try { idx.close(); } catch { /* already closed */ } }
+    OPEN.delete(root);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
   return root;
 }
 
+/** Every index opened against a temp root, so the root's cleanup can close them before removing it. */
+const OPEN = new Map();
+
 /** An index on a temp root. `root` and `file` are passed together so nothing asks git anything. */
 function open(t, root, opts = {}) {
-  const idx = openIndex(null, { root, file: indexFile(root), ...opts });
-  t.after(() => idx.close());
+  const idx = openIndex(null, { root, file: indexFile(gitDirOf(root)), ...opts });
+  OPEN.get(root)?.push(idx);
   return idx;
 }
 
 /** A tree of A4's shape (§6.2): the board document, the cards, the run records. */
 function tree({ tip = 'sha1', cards = [], runs = [], board = {} } = {}) {
-  return { tip, board: { slug: 'default', host: 'test-host', paused_at: null, paused_by: null, settings: { dispatch: {} }, ...board }, cards, runs };
+  return {
+    tip,
+    board: board === null ? undefined : { slug: 'default', host: 'test-host', paused_at: null, paused_by: null, settings: { dispatch: {} }, ...board },
+    // A4's `readTree()` hands Maps keyed by id; the array form below is the same records after a
+    // JSON round trip. `load()` reads both and nothing else.
+    cards: new Map(cards.map((c) => [c.id, c])),
+    runs: new Map(runs.map((r) => [r.id, r])),
+  };
 }
 
 const card = (id, over = {}) => ({
@@ -65,7 +92,7 @@ test('index: the file lands under the common git dir, the schema is created once
   // CREATE that runs again on a live database.
   const again = open(t, root);
   assert.equal(again.tip(), 'sha1');
-  assert.equal(again.getTask(1).title, 'card 1');
+  assert.equal(again.getTaskRow(1).title, 'card 1');
   assert.equal(again.db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version').value, String(SCHEMA_VERSION));
 });
 
@@ -74,7 +101,7 @@ test('index: an index from a future schema version says so and names the fix, ra
   const idx = open(t, root);
   idx.db.prepare('UPDATE meta SET value = ? WHERE key = ?').run(String(SCHEMA_VERSION + 7), 'schema_version');
   idx.close();
-  assert.throws(() => openIndex(null, { root, file: indexFile(root) }), (e) => e.exitCode === 2 && /rm /.test(e.message));
+  assert.throws(() => openIndex(null, { root, file: indexFile(gitDirOf(root)) }), (e) => e.exitCode === 2 && /rm /.test(e.message));
 });
 
 test('index: journal_mode is WAL — four processes read while the loop writes', (t) => {
@@ -103,8 +130,8 @@ test('load: the tree becomes tables, and a second load with a changed tree repla
   assert.equal(idx.tip(), 'aaa');
   assert.equal(idx.board().host, 'test-host');
   assert.deepEqual(idx.board().settings, { dispatch: {} });
-  assert.deepEqual(idx.getTask(2).blocked_by, [1]);
-  assert.deepEqual(idx.getTask(1).paths, ['src/1.js']);
+  assert.deepEqual(idx.getTaskRow(2).blocked_by, [1]);
+  assert.deepEqual(idx.getTaskRow(1).paths, ['src/1.js']);
 
   const attempt = idx.getAttempt(2, 1);
   assert.equal(attempt.outcome, 'done');
@@ -116,9 +143,9 @@ test('load: the tree becomes tables, and a second load with a changed tree repla
   const second = idx.load(tree({ tip: 'bbb', cards: [card(2, { title: 'renamed' }), card(3)] }));
   assert.equal(second.tasks, 2);
   assert.equal(idx.tip(), 'bbb');
-  assert.equal(idx.getTask(1), null, 'a card that left the branch leaves the index');
-  assert.equal(idx.getTask(2).title, 'renamed');
-  assert.deepEqual(idx.getTask(2).blocked_by, [], 'links are replaced, not accumulated');
+  assert.equal(idx.getTaskRow(1), null, 'a card that left the branch leaves the index');
+  assert.equal(idx.getTaskRow(2).title, 'renamed');
+  assert.deepEqual(idx.getTaskRow(2).blocked_by, [], 'links are replaced, not accumulated');
   assert.equal(idx.getAttempt(2, 1), null, 'the closed attempt rows are replaced too');
   assert.equal(idx.db.prepare('SELECT count(*) c FROM results').get().c, 0);
   assert.equal(idx.db.prepare('SELECT count(*) c FROM runs').get().c, 0);
@@ -149,12 +176,112 @@ test('load: needsLoad is the cheap question asked on every open', (t) => {
   assert.equal(idx.needsLoad('bbb'), true);
 });
 
-test('load: a card map keyed by id reads the same as a card array', (t) => {
+test('load: the Map A4 hands back and the array it becomes through JSON read the same', (t) => {
   const a = open(t, tmpRoot(t));
   const b = open(t, tmpRoot(t));
-  a.load(tree({ cards: [card(7, { title: 'seven' })] }));
-  b.load(tree({ cards: { 7: { ...card(7, { title: 'seven' }), id: undefined } } }));
-  assert.deepEqual(a.getTask(7), b.getTask(7));
+  a.load(tree({ cards: [card(7, { title: 'seven' })] })); // `tree()` builds Maps, as readTree() does
+  b.load({ tip: 'sha1', board: { slug: 'default' }, cards: [card(7, { title: 'seven' })], runs: [] });
+  assert.deepEqual(a.getTaskRow(7), b.getTaskRow(7));
+});
+
+test('load: a shape the branch does not write is refused, not half-read', (t) => {
+  const idx = open(t, tmpRoot(t));
+  // An id-keyed plain object used to be accepted, which is how a `Map` — the shape A4 actually
+  // hands over — read as zero cards: `Object.entries(map)` is empty, so the load "succeeded" and
+  // indexed nothing. One shape, and anything else says so.
+  assert.throws(
+    () => idx.load({ tip: 'a', cards: { 7: card(7) } }),
+    (e) => e.exitCode === 2 && /Map keyed by id/.test(e.message),
+  );
+  assert.throws(() => idx.load({ tip: 'a', cards: [], runs: 'runs/7.json' }), (e) => e.exitCode === 2);
+  assert.equal(idx.tip(), null, 'and a refused load changed nothing');
+});
+
+test('load: a board key the tree omits keeps the board — a pause does not vanish on a rebuild', (t) => {
+  const idx = open(t, tmpRoot(t));
+  idx.load(tree({ tip: 'aaa', cards: [card(1)], board: { paused_at: '2026-09-02T09:00:00Z', paused_by: 'me', settings: { dispatch: { interval: 60 } } } }));
+  assert.equal(idx.board().paused_at, '2026-09-02T09:00:00Z');
+
+  // a partial read — a caller that had the cards but not the document — must not read as "running"
+  idx.load({ tip: 'bbb', cards: new Map([[1, card(1)]]), runs: new Map() });
+  const after = idx.board();
+  assert.equal(after.tip_sha, 'bbb', 'the tip still moves');
+  assert.equal(after.paused_at, '2026-09-02T09:00:00Z', 'a board-wide pause is not the cards\' to drop');
+  assert.equal(after.paused_by, 'me');
+  assert.equal(after.host, 'test-host');
+  assert.deepEqual(after.settings, { dispatch: { interval: 60 } });
+  assert.equal(after.slug, 'default');
+
+  // and when the document IS there, it is authoritative — including its nulls
+  idx.load(tree({ tip: 'ccc', cards: [card(1)] }));
+  assert.equal(idx.board().paused_at, null, 'the branch says the board is running again');
+});
+
+test('load: a card the tree names twice, and a field the schema cannot hold, say which file to look at', (t) => {
+  const idx = open(t, tmpRoot(t));
+  assert.throws(
+    () => idx.load({ tip: 'a', cards: [card(3), card(3, { title: 'again' })], runs: [] }),
+    (e) => e.exitCode === 2 && /two cards numbered 3/.test(e.message),
+  );
+  assert.throws(
+    () => idx.load(tree({ cards: [card(4, { title: { not: 'a string' } })] })),
+    (e) => e.exitCode === 2 && /cards\/4\.json/.test(e.message),
+  );
+  assert.equal(idx.db.prepare('SELECT count(*) c FROM tasks').get().c, 0, 'and neither load left half a board behind');
+});
+
+test('load: a lock whose attempt the branch closed, or whose card left it, is not a lock', (t) => {
+  const idx = open(t, tmpRoot(t));
+  idx.load(tree({ tip: 'aaa', cards: [card(1), card(2)] }));
+  idx.claim(1, 1, { profile: 'claude' });
+  idx.claim(2, 1, { profile: 'claude' });
+  assert.equal(idx.listLocks().length, 2);
+
+  // #1's worker finished: the branch carries its attempt with an ended_at. #2 left the board.
+  idx.load(tree({
+    tip: 'bbb',
+    cards: [card(1)],
+    runs: [{ id: 1, attempts: [{ attempt: 1, profile: 'claude', started_at: '2026-09-01T01:00:00Z', ended_at: '2026-09-01T02:00:00Z', outcome: 'done' }] }],
+  }));
+  assert.deepEqual(idx.listLocks(), [], '§6.1 retires the tick\'s orphan sweep — this is where it happens instead');
+  assert.equal(idx.getAttempt(1, 1).outcome, 'done');
+});
+
+test('load: an attempt record carrying a task_id of its own lands on its own card, not that one', (t) => {
+  const idx = open(t, tmpRoot(t));
+  idx.load(tree({
+    tip: 'aaa',
+    cards: [card(1), card(2)],
+    runs: [
+      { id: 1, attempts: [{ attempt: 1, ended_at: '2026-09-01T02:00:00Z', outcome: 'ours' }] },
+      // `task_id` is in the schema's column list, so it used to be written straight through — the
+      // row landed on card 1 and INSERT OR REPLACE quietly replaced that card's attempt.
+      { id: 2, attempts: [{ attempt: 1, task_id: 1, n: 1, ended_at: '2026-09-01T03:00:00Z', outcome: 'theirs' }] },
+    ],
+  }));
+  assert.equal(idx.getAttempt(1, 1).outcome, 'ours', 'card 1 still has its own attempt');
+  assert.equal(idx.getAttempt(2, 1).outcome, 'theirs');
+  assert.equal(idx.getAttempt(2, 1).n, 2, 'and the row knows which card it is on');
+  assert.equal(idx.db.prepare('SELECT count(*) c FROM attempts').get().c, 2);
+});
+
+test('listTaskRows answers the whole board with its blockers, not one query per card', (t) => {
+  const idx = open(t, tmpRoot(t));
+  const cards = [];
+  for (let i = 1; i <= 20; i++) cards.push(card(i, { blocked_by: i > 1 ? [i - 1] : [], status: i % 2 ? 'ready' : 'done' }));
+  idx.load(tree({ cards }));
+
+  const rows = idx.listTaskRows();
+  assert.equal(rows.length, 20);
+  assert.deepEqual(rows.map((r) => r.id), cards.map((c) => c.id));
+  assert.deepEqual(rows[9].blocked_by, [9], 'every row still carries its blockers');
+  assert.deepEqual(rows[0].blocked_by, []);
+  assert.deepEqual(idx.listTaskRows({ status: 'ready' }).map((r) => r.id), [1, 3, 5, 7, 9, 11, 13, 15, 17, 19]);
+
+  // the lookup is by blocked_id, and `links` is UNIQUE(blocker_id, blocked_id) — the wrong leading
+  // column, so without this index the grouping query is a scan
+  const plan = idx.db.prepare('EXPLAIN QUERY PLAN SELECT blocker_id, blocked_id FROM links WHERE blocked_id = ?').all().map((r) => r.detail).join(' ');
+  assert.match(plan, /links_blocked/, `the blocker lookup has an index to use (${plan})`);
 });
 
 // ---------- the claim ----------
@@ -166,7 +293,7 @@ test('claim: the first wins with a token, the second is held, and a release free
   const first = idx.claim(5, 1);
   assert.equal(first.result, 'claimed');
   assert.ok(first.token, 'a claim hands back the token its heartbeat leases on');
-  assert.equal(idx.getTask(5).status, 'running', 'the same transaction moved the card');
+  assert.equal(idx.getTaskRow(5).status, 'running', 'the same transaction moved the card');
   assert.ok(idx.getAttempt(5, 1), 'and opened the attempt row');
 
   const second = idx.claim(5, 1);
@@ -199,9 +326,10 @@ test('claim: two processes racing for the same card — exactly one wins', (t) =
 
   const runner = path.join(root, 'claimer.mjs');
   fs.writeFileSync(runner, `
+import path from 'node:path';
 import { openIndex, indexFile } from ${JSON.stringify(pathToSrc())};
 const [root, at] = process.argv.slice(2);
-const idx = openIndex(null, { root, file: indexFile(root), timeout: 10000 });
+const idx = openIndex(null, { root, file: indexFile(path.join(root, '.git')), timeout: 10000 });
 while (Date.now() < Number(at)) { /* a barrier, so both are inside BEGIN IMMEDIATE at once */ }
 const r = idx.claim(9, 1, { profile: 'p' + process.pid });
 idx.close();
@@ -304,6 +432,22 @@ test('setAttempt writes the live fields, refuses the durable ones, and events a 
   for (const f of LIVE_ATTEMPT_FIELDS) assert.doesNotThrow(() => idx.setAttempt(4, 1, { [f]: null }));
 });
 
+test('setAttempt cannot forge a heartbeat — the beat is the lease, and the lease needs the token', (t) => {
+  const idx = open(t, tmpRoot(t));
+  idx.load(tree({ cards: [card(4)] }));
+  const { token } = idx.claim(4, 1);
+  idx.heartbeat(4, 1, token);
+  const real = idx.getAttempt(4, 1).heartbeat_at;
+
+  assert.ok(!LIVE_ATTEMPT_FIELDS.includes('heartbeat_at'));
+  // A worker the reap already declared lost could otherwise keep its attempt looking alive with no
+  // token at all — `setAttempt` asks for none.
+  assert.throws(() => idx.setAttempt(4, 1, { heartbeat_at: new Date().toISOString() }), (e) => e.exitCode === 2 && /heartbeat_at/.test(e.message));
+  assert.equal(idx.getAttempt(4, 1).heartbeat_at, real);
+  assert.equal(idx.heartbeat(4, 1, 'a-token-nobody-holds').result, 'lost');
+  assert.equal(idx.getAttempt(4, 1).heartbeat_at, real, 'and a lost beat writes nothing either');
+});
+
 // ---------- events ----------
 
 test('events: every mutating call appends exactly one, and a call that changed nothing appends none', (t) => {
@@ -352,6 +496,21 @@ test('events: id order, an exclusive cursor, and the shape a stream reader gets'
   assert.throws(() => idx.appendEvent({ kind: 'invented' }), (e) => e.exitCode === 2);
 });
 
+test('events: the log has a ceiling — a beat every ten minutes is a row nobody decided to write', (t) => {
+  const idx = open(t, tmpRoot(t));
+  idx.load(tree({ cards: [card(1)] }));
+  for (let i = 0; i < 40; i++) idx.appendEvent({ kind: 'status', task_id: 1, payload: { i } });
+  assert.equal(idx.db.prepare('SELECT count(*) c FROM events').get().c, 40);
+
+  assert.equal(idx.trimEvents({ keep: 10 }), 30, 'the oldest rows go');
+  const left = idx.events({ after: 0, limit: 1000 });
+  assert.equal(left.length, 10);
+  assert.deepEqual(left.map((e) => e.payload.i), [30, 31, 32, 33, 34, 35, 36, 37, 38, 39], 'and the newest stay');
+  assert.equal(idx.trimEvents({ keep: 1000 }), 0, 'a log under the ceiling is left alone');
+  // the cursor still works for a reader that fell off the back: `after` is an id, not an offset
+  assert.equal(idx.events({ after: 0 })[0].id, left[0].id);
+});
+
 // ---------- wake() ----------
 
 test('wake: no pid file is a no-op, a dead pid is a no-op, and neither throws', (t) => {
@@ -396,6 +555,85 @@ setTimeout(() => process.exit(1), 10000);
   });
 });
 
+test('wake: a pid file older than this boot is a stranger, and nobody signals a stranger', (t) => {
+  const root = tmpRoot(t);
+  const idx = open(t, root);
+  const flag = path.join(root, 'woke');
+  const sleeper = path.join(root, 'sleeper.mjs');
+  fs.writeFileSync(sleeper, `
+import fs from 'node:fs';
+process.on('SIGUSR1', () => { fs.writeFileSync(${JSON.stringify(flag)}, 'woke'); });
+process.stdout.write('ready');
+setTimeout(() => process.exit(0), 3000);
+`);
+  const kid = spawn(process.execPath, [sleeper], { stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(() => { try { kid.kill('SIGKILL'); } catch { /* already gone */ } });
+
+  return new Promise((resolve, reject) => {
+    kid.stdout.once('data', () => {
+      try {
+        const pidPath = path.join(root, '.kanban', 'dispatch.pid');
+        fs.writeFileSync(pidPath, `${kid.pid}\n`);
+        // The claim was written before this boot, and the process holding that pid now is not a
+        // dispatcher: `readPidFile` calls that stale, and `wake()` used to re-read the file by hand
+        // and never ask. A live pid the kernel reused after a reboot belongs to somebody else.
+        fs.utimesSync(pidPath, new Date(0), new Date(0));
+        assert.equal(idx.wake(), false, 'a stale claim names a stranger, not the loop');
+        assert.equal(fs.existsSync(flag), false, 'and nothing was signalled');
+        resolve();
+      } catch (e) { reject(e); } finally { try { kid.kill('SIGKILL'); } catch { /* gone */ } }
+    });
+    kid.on('error', reject);
+  });
+});
+
+// ---------- where the file goes ----------
+
+test('index: a checkout whose .git is a file still gets an index, not ENOTDIR', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-sep-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const work = path.join(dir, 'work');
+  const gitDir = path.join(dir, 'elsewhere.git');
+  const r = spawnSync('git', ['init', '-q', '--separate-git-dir', gitDir, work], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(fs.statSync(path.join(work, '.git')).isFile(), '`.git` is a file here — a submodule looks the same');
+
+  // `storeRoot(ctx)` answers with the *parent* of the common git dir and only when it is named
+  // `.git`, so joining `.git` back on gave `<work>/.git/hkb/index.db` — a path through a file.
+  const ctx = { root: work, cfg: {}, board: 'default', json: false, _cache: {} };
+  const idx = openIndex(ctx);
+  t.after(() => idx.close());
+  assert.equal(idx.file, path.join(gitDir, 'hkb', 'index.db'));
+  assert.ok(fs.existsSync(idx.file));
+  idx.load(tree({ cards: [card(1)] }));
+  assert.equal(idx.getTaskRow(1).title, 'card 1');
+});
+
+// ---------- two boards in one repository ----------
+
+test('two boards in one repo are two indexes, and one index never answers for the other', (t) => {
+  const root = tmpRoot(t);
+  const alpha = openIndex(null, { root, gitDir: gitDirOf(root), slug: 'alpha' });
+  const beta = openIndex(null, { root, gitDir: gitDirOf(root), slug: 'beta' });
+  OPEN.get(root).push(alpha, beta);
+
+  assert.notEqual(alpha.file, beta.file, '`--repos` and the {path, board} entries are a documented shape');
+  assert.equal(path.dirname(alpha.file), indexDir(gitDirOf(root)));
+  alpha.load(tree({ tip: 'a', cards: [card(1, { title: 'alpha card' })], board: { slug: 'alpha' } }));
+  beta.load(tree({ tip: 'b', cards: [card(1, { title: 'beta card' })], board: { slug: 'beta' } }));
+
+  assert.equal(alpha.board().slug, 'alpha');
+  assert.equal(beta.board().slug, 'beta');
+  assert.equal(alpha.getTaskRow(1).title, 'alpha card');
+  assert.equal(beta.getTaskRow(1).title, 'beta card', 'beta reading alpha\'s cards is two boards sharing one index');
+
+  // and a caller that names alpha's file while asking for beta is told, not quietly answered
+  assert.throws(
+    () => openIndex(null, { root, file: alpha.file, slug: 'beta' }),
+    (e) => e.exitCode === 2 && /holds board "alpha"/.test(e.message),
+  );
+});
+
 // ---------- the read-only connection (`hkb serve`) ----------
 
 test('read-only: serve reads the board and every write refuses, naming who may write', (t) => {
@@ -404,9 +642,9 @@ test('read-only: serve reads the board and every write refuses, naming who may w
   idx.load(tree({ cards: [card(8)] }));
   idx.claim(8, 1);
 
-  const ro = openIndexReadOnly(null, { root, file: indexFile(root) });
+  const ro = openIndexReadOnly(null, { root, file: indexFile(gitDirOf(root)) });
   t.after(() => ro.close());
-  assert.equal(ro.getTask(8).title, 'card 8');
+  assert.equal(ro.getTaskRow(8).title, 'card 8');
   assert.equal(ro.listLocks().length, 1);
   assert.ok(ro.events({ after: 0 }).length > 0, 'serve feeds its stream from the same cursor');
   for (const call of [() => ro.claim(8, 2), () => ro.release(8, 1), () => ro.heartbeat(8, 1, 'x'), () => ro.load(tree()), () => ro.setAttempt(8, 1, { pid: 1 }), () => ro.appendEvent({ kind: 'status' })]) {
@@ -414,10 +652,89 @@ test('read-only: serve reads the board and every write refuses, naming who may w
   }
 });
 
+test('read-only: serve refuses an index another hkb wrote, exactly as the writing connection does', (t) => {
+  const root = tmpRoot(t);
+  const idx = open(t, root);
+  idx.load(tree({ cards: [card(8)] }));
+  idx.db.prepare('UPDATE meta SET value = ? WHERE key = ?').run(String(SCHEMA_VERSION + 7), 'schema_version');
+  idx.close();
+  // `openIndex` has always checked this; `openIndexReadOnly` skipped it, so `hkb serve` happily read
+  // an index whose columns it does not know — and it cannot create the schema to repair it either.
+  assert.throws(
+    () => openIndexReadOnly(null, { root, file: indexFile(gitDirOf(root)) }),
+    (e) => e.exitCode === 2 && /schema version/.test(e.message) && /rm /.test(e.message),
+  );
+});
+
 test('read-only: an index that is not there yet says so instead of creating one behind serve', (t) => {
   const root = tmpRoot(t);
-  assert.throws(() => openIndexReadOnly(null, { root, file: indexFile(root) }), (e) => e.exitCode === 2 && /hkb up/.test(e.message));
-  assert.equal(fs.existsSync(indexFile(root)), false, 'and it did not create the file on the way past');
+  assert.throws(() => openIndexReadOnly(null, { root, file: indexFile(gitDirOf(root)) }), (e) => e.exitCode === 2 && /hkb up/.test(e.message));
+  assert.equal(fs.existsSync(indexFile(gitDirOf(root))), false, 'and it did not create the file on the way past');
+});
+
+// ---------- the two tiers agree on one tree shape ----------
+//
+// This is the only place the two modules meet, and it is on purpose: composing them into one driver
+// is A6's (#294). What is asserted here is narrower and is what A6 needs to be true first — that
+// what `GitTier.readTree()` hands over is exactly what `load()` reads, field for field, with no
+// translation in between. Both tiers were written in parallel against §6.2, and the tolerance that
+// used to paper over a disagreement (four shapes accepted, a `Map` silently reading as zero cards)
+// is gone, so a drift fails here rather than costing a field at runtime.
+
+test('shape: what the git tier reads is what the index loads — no translation between them', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-shape-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const repoDir = path.join(dir, 'main');
+  fs.mkdirSync(repoDir);
+  const git = (...args) => spawnSync('git', args, { cwd: repoDir, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+  git('init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(repoDir, 'a.txt'), 'hi\n');
+  git('add', 'a.txt');
+  git('commit', '-qm', 'init');
+
+  const tier = new GitTier(repoDir, { host: 'test-host' });
+  tier.init('default', 'test-host', { settings: { dispatch: { interval: 60 } } });
+  const parent = tier.createTask({ title: 'the parent', status: 'done', agent: 'claude', kb: { priority: 3, paths: ['src/x.js'] } });
+  const child = tier.createTask({ title: 'the child', status: 'ready', agent: 'claude' });
+  tier.addBlockedBy(child.number, parent.number);
+  tier.setStatus(child, 'blocked', { add: ['kb:needs-human'] });
+  tier.saveRun(parent.number, {
+    id: null,
+    run: {
+      failures: 1,
+      block_loops: { needs_input: 1 },
+      last_error: 'nope',
+      attempts: [{ attempt: 1, profile: 'claude', host: 'test-host', started_at: '2026-09-01T01:00:00Z', ended_at: '2026-09-01T02:00:00Z', outcome: 'done', track: true, track_nodes: [3, 4] }],
+    },
+  });
+  tier.addNote(parent.number, 'a human said this');
+
+  const idx = openIndex(null, { root: repoDir, gitDir: path.join(repoDir, '.git'), slug: 'default' });
+  t.after(() => idx.close());
+  const counts = idx.load(tier.readTree());
+
+  assert.deepEqual([counts.tasks, counts.links, counts.runs, counts.attempts], [2, 1, 1, 1]);
+  assert.equal(idx.tip(), tier.tip(), 'the index records the commit it was built from');
+  assert.equal(idx.board().host, 'test-host');
+  assert.deepEqual(idx.board().settings, { dispatch: { interval: 60 } });
+
+  const p = idx.getTaskRow(parent.number);
+  assert.equal(p.title, 'the parent');
+  assert.equal(p.status, 'done');
+  assert.equal(p.agent, 'claude');
+  assert.equal(p.priority, 3, 'the hoisted columns land in their own columns');
+  assert.deepEqual(p.paths, ['src/x.js']);
+  assert.ok(p.created_at && p.updated_at);
+
+  const c = idx.getTaskRow(child.number);
+  assert.deepEqual(c.blocked_by, [parent.number], 'blockers are card numbers on both sides');
+  assert.equal(c.needs_human, true, 'and `needs_human` is one field with one name');
+
+  const attempt = idx.getAttempt(parent.number, 1);
+  assert.equal(attempt.outcome, 'done');
+  assert.equal(attempt.track, true);
+  assert.deepEqual(attempt.track_nodes, [3, 4]);
+  assert.equal(idx.db.prepare('SELECT failures, last_error FROM runs WHERE task_id = ?').get(parent.number).failures, 1);
 });
 
 // ---------- the two invariants the card states outright ----------
@@ -430,8 +747,8 @@ test('the module never shells out — no git, no child process, anywhere in it',
     assert.ok(!code.includes(fn), `${fn} has no business in the index`);
   }
   assert.doesNotMatch(code, /['"`]git['"`]/, 'no git command line anywhere in the module');
-  // The one git question — where the common git dir is — is `storeRoot`'s, asked once per context.
-  assert.match(src, /import \{ storeRoot[^}]*\} from '\.\.\/board\.js'/);
+  // The one git question — where the common git dir is — is `storeGitDir`'s, asked once per context.
+  assert.match(src, /import \{[^}]*storeGitDir[^}]*\} from '\.\.\/board\.js'/);
 });
 
 test('node:sqlite prints nothing on stderr through bin/hkb.js\'s warning filter', () => {
