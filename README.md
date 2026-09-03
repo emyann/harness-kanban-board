@@ -164,8 +164,17 @@ nothing can read a *closed* card's blockers, so those cards are imported marked 
 named (a closed card is settled, so the missing edge gates nothing); and a card with more than 500 comments
 leaves its oldest notes behind, listed by number.
 The leftover `refs/kb/locks/*` on the remote and the local beat chains are deleted, since a local board keeps
-its locks in the index. Re-running `init` never touches a branch that already exists: a second import over a
-board that has since been worked would overwrite it with GitHub's stale copy, so it is refused and says so.
+its locks in the index — but only the ones on cards this import moved (a lock ref carries no board name, so the
+namespace holds every board in the repository), and only after reading each one's last beat. A lock somebody is
+still beating on stops the whole migration **before the first commit**: deleting it would leave that worker
+heartbeating into a missing ref, exiting `LOCK_LOST` mid-task. Stop the dispatcher and let the workers finish,
+or run `hkb init --import --force` to migrate anyway and lose them.
+
+Re-running `init` never touches a branch that already exists: a second import over a board that has since been
+worked would overwrite it with GitHub's stale copy, so it is refused and says so. And when `.kanban/board.json`
+is a file the repository *tracks*, the import refuses to write `"store": "local"` into it without `--force` —
+that key is every collaborator's next `git pull`, not just this checkout's. The key is written after the
+migration has landed, so a refusal leaves the board exactly where it was.
 
 ### Sharing a board
 
@@ -183,7 +192,10 @@ Anyone can `git clone` the repo and get the whole board with it: the branch is w
 no configuration is needed to read it (`.kanban/board.json` is tracked and comes along). Every verb that
 *writes* refuses on a host that is not the owner, with exit 2 naming it — the guard is on the invocation and
 not the verb, so `hkb up --status` (pid files and liveness) and `hkb dispatch --dry-run` (what a tick would
-decide) run on a clone, while `hkb up` and a real tick do not. The read side of the rest of that story is
+decide) run on a clone, while `hkb up`, a real tick and `hkb dispatch --loop --dry-run` (a loop stamps the
+branch whatever the flag says) do not. `hkb serve` is refused on a clone too, for now: the web board's
+drag-and-drop runs the same mutating verbs, so a read-only browser view is a UI it does not have yet — read a
+clone's board with `hkb list`, `hkb show`, `hkb graph` and `hkb watch`. The read side of the rest of that story is
 waiting on the verbs moving onto the store (track C). To move a board to another machine, push it, clone it, and run `hkb init --take-over` on the
 new host: it rewrites `board.host` on the branch, and refuses while the old host's dispatcher stamp is still
 fresh (`--force` overrides). Two hosts writing one branch is not supported — if it happens, `hkb sync` refuses

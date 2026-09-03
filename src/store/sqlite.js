@@ -28,9 +28,40 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
 import { storeGitDir, storeRoot, readPidFile, pidAlive } from '../board.js';
 import { EVENT_KINDS } from '../watch.js';
+
+/**
+ * `node:sqlite`, resolved on the first index open and never at import time.
+ *
+ * **The rule: importing this module must not require a node that has SQLite.** `src/store/index.js`
+ * imports the local store so `openStore(ctx)` can pick it, and `openStore` is on the path of every
+ * command — including `hkb hook pretool`, whose whole contract is to stand aside rather than throw
+ * onto a worker's tool call. A static `import ... from 'node:sqlite'` made that whole graph refuse to
+ * load with `ERR_UNKNOWN_BUILTIN_MODULE` on a node built `--without-sqlite`, on a *GitHub* board that
+ * never opens an index at all. Deferring the import to `openIndex` is the fix for every entry point
+ * at once, rather than for the two that were noticed: nothing here touches the builtin until
+ * somebody actually opens a local board's index, and then the refusal names the node it ran on.
+ *
+ * `process.getBuiltinModule` (node ≥ 22.3, and this package needs ≥ 22.13 for `node:sqlite` itself)
+ * is the synchronous form; `await import()` would make every caller of `openIndex` async for a
+ * module that is otherwise entirely synchronous.
+ */
+let SQLITE = null;
+function sqlite() {
+  if (SQLITE) return SQLITE;
+  let mod = null;
+  try { mod = process.getBuiltinModule('node:sqlite'); } catch { mod = null; }
+  if (!mod?.DatabaseSync) {
+    throw usage(
+      `this node (${process.version}) has no \`node:sqlite\`, and a local board keeps its index in one. `
+      + 'Use a node built with SQLite (>= 22.13 has it unflagged), or keep this board on the GitHub store '
+      + '(`"store": "github"` in .kanban/board.json).',
+    );
+  }
+  SQLITE = mod;
+  return SQLITE;
+}
 
 /** Bumped when the schema below changes shape. A mismatch rebuilds rather than migrates: every
  *  table here is either live state a restart can lose or a copy of the branch `load()` restores.
@@ -40,9 +71,21 @@ export const SCHEMA_VERSION = 2;
 
 /**
  * The kinds an event may carry: `hkb watch`'s vocabulary (so a stream reader learns nothing new)
- * plus the four the control plane adds (docs/local-first.md §3).
+ * plus the four the control plane adds (docs/local-first.md §3), plus the writes a local board can
+ * make that GitHub's poller never saw as events of their own.
+ *
+ * That last group is why the list is not just `EVENT_KINDS`. A body edit, a blocked-by edge, a label
+ * change, a settings write and a take-over were all filed as `status`, so `hkb watch --kinds status`
+ * rendered them `none → none` — a card transition that never happened — and the two board-wide ones
+ * carried `task_id: null`, which reads as card `#null`. A kind that names the write is legible even
+ * to a reader that has no case for it (`describeEvent` falls through to the kind itself); a wrong
+ * kind is not.
  */
-export const LOCAL_EVENT_KINDS = Object.freeze([...EVENT_KINDS, 'paused', 'resumed', 'stopped', 'suspended']);
+export const LOCAL_EVENT_KINDS = Object.freeze([
+  ...EVENT_KINDS,
+  'paused', 'resumed', 'stopped', 'suspended',
+  'body', 'blocked-by', 'unblocked-by', 'labels', 'board', 'take-over',
+]);
 
 /**
  * The live fields of an open attempt a caller may set. They are written here and nowhere else: a
@@ -303,7 +346,7 @@ export function openIndex(ctx, { timeout = 5000, file = null, root = null, gitDi
   const board = boardSlug(ctx, slug);
   const { dir, dbFile } = locate(ctx, { file, root, gitDir, slug: board });
   fs.mkdirSync(path.dirname(dbFile), { recursive: true });
-  const db = new DatabaseSync(dbFile, { timeout });
+  const db = new (sqlite().DatabaseSync)(dbFile, { timeout });
   try {
     db.exec(`PRAGMA busy_timeout = ${Number(timeout) || 0}`);
     ensureSchema(db, dbFile);
@@ -362,7 +405,7 @@ export function openIndexReadOnly(ctx, { file = null, root = null, gitDir = null
   if (!fs.existsSync(dbFile)) {
     throw usage(`no board index at ${dbFile} — start the board first (\`hkb up\`), or run \`hkb doctor\` to see why it is missing`);
   }
-  const db = new DatabaseSync(dbFile, { readOnly: true, timeout: 0 });
+  const db = new (sqlite().DatabaseSync)(dbFile, { readOnly: true, timeout: 0 });
   try {
     // The same two guards the writing connection runs. `hkb serve` reading an index another hkb
     // wrote is the case they exist for: it cannot create the schema, so it has to refuse instead.

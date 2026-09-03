@@ -24,8 +24,8 @@ import path from 'node:path';
 import { storeRoot, hostId, runGit, runGitAsync, gitSays, GIT_SHA_RE, readState, writeState, normalizeCardGrants } from '../board.js';
 import { RESULT_MARKER, RUN_MARKER, DEFAULT_KB, L, emptyRun, parseResultComment, isResultComment } from '../model.js';
 import { openGitTier, BOARD_BRANCH, BOARD_REF } from './git.js';
-import { openIndex } from './sqlite.js';
-import { openGithubStore, listComments, listLocks, release, listBeatChains, dropBeatChain, blockersOf, blockersKnown } from './github.js';
+import { openIndex, openIndexReadOnly } from './sqlite.js';
+import { openGithubStore, listComments, listLocks, lockBeatAt, release, listBeatChains, dropBeatChain, blockersOf, blockersKnown } from './github.js';
 import { rest } from '../gh.js';
 
 export { BOARD_BRANCH, BOARD_REF };
@@ -74,9 +74,11 @@ const KIND = {
 export class LocalStore {
   /**
    * @param {any} ctx  a context from `makeContext`/`makeContextAt`, or a path
-   * @param {{git?: any, index?: any, host?: string, ref?: string, remote?: string, now?: () => Date}} [opts]
+   * @param {{git?: any, index?: any, host?: string, ref?: string, remote?: string, now?: () => Date, readOnly?: boolean}} [opts]
+   *   `readOnly` opens the index through `openIndexReadOnly` — `hkb doctor`'s reader, which must
+   *   diagnose an index rather than create one.
    */
-  constructor(ctx, { git = null, index = null, host = null, ref = BOARD_REF, remote = null, now = null } = {}) {
+  constructor(ctx, { git = null, index = null, host = null, ref = BOARD_REF, remote = null, now = null, readOnly = false } = {}) {
     this.ctx = ctx;
     this.root = storeRoot(ctx);
     // The context's own identity, when it has one: `makeContext` sets `host` and every other verb
@@ -88,9 +90,32 @@ export class LocalStore {
     // `now` is forwarded only when the caller gave one — an injected clock is a test's, and
     // `gitTierFor` deliberately refuses to cache (or hand out) a tier built on one.
     this.git = git || gitTierFor(ctx, { ref, remote, host: this.host, ...(now ? { now } : {}) });
-    this.index = index || openIndex(ctx, { branch: this.git.branch });
+    this._index = index || null;
+    this._readOnlyIndex = !!readOnly;
     this.remote = this.git.remote;
   }
+
+  /**
+   * The index, opened on first use.
+   *
+   * **Opening a SQLite connection is not free and not every caller needs one.** The dispatcher's
+   * end-of-tick pass builds a store every tick to reach `markDispatcher()`, which touches git and
+   * nothing else on all but one tick in five minutes; at the interval floor that was a fresh
+   * `DatabaseSync`, `ensureSchema` and `assertSameBoard` every five seconds for an answer nobody
+   * read. Deferring the open to the first live method — or to the reindex a stamp that *did* land
+   * needs — costs a caller that uses the index nothing, and costs one that does not everything it
+   * was paying.
+   */
+  get index() {
+    if (!this._index) {
+      const opts = { branch: this.git.branch };
+      this._index = this._readOnlyIndex ? openIndexReadOnly(this.ctx, opts) : openIndex(this.ctx, opts);
+    }
+    return this._index;
+  }
+
+  /** Has the index been opened? `close()` and the doctor's probes ask before making one. */
+  get indexOpen() { return !!this._index; }
 
   /** The branch the durable tier writes — `kb-board` unless a test asked for another. */
   get branch() { return this.git.branch; }
@@ -114,8 +139,8 @@ export class LocalStore {
     return { loaded: true, tip, counts };
   }
 
-  /** Close the index's connection. The git tier holds nothing open. */
-  close() { this.index.close(); }
+  /** Close the index's connection, if one was ever opened. The git tier holds nothing open. */
+  close() { if (this._index) this._index.close(); }
 
   capabilities() { return { events: true, durable: true }; }
 
@@ -128,9 +153,9 @@ export class LocalStore {
    * verb that wrote the same bytes back lands no commit, and so appends no event and wakes nobody.
    * That is what keeps a reconcile pass — a tick re-asserting the state of twenty cards — free.
    *
-   * `number` may be a function of the verb's own return value: `createTask` is the card that only
-   * exists once the commit has landed, and an event that could not say which card appeared would be
-   * the one event nobody can act on.
+   * `number` and `payload` may each be a function of the verb's own return value: `createTask` is
+   * the card that only exists once the commit has landed, and an event that could not say which card
+   * appeared — or what status it appeared in — would be the one event nobody can act on.
    */
   _durable(kind, number, run, payload = {}) {
     const before = this.git.tip();
@@ -138,11 +163,22 @@ export class LocalStore {
     const after = this._landedTip();
     if (after === before) return value;
     const n = typeof number === 'function' ? number(value) : number;
+    const body = typeof payload === 'function' ? payload(value) : payload;
     this._reindex();
-    this.index.appendEvent({ kind, task_id: n ?? null, payload: { ...payload, tip: after } });
+    this.index.appendEvent({ kind, task_id: n ?? null, payload: { ...body, tip: after } });
     this.index.wake();
     return value;
   }
+
+  /**
+   * A card's status/agent before a write, off the memoized tree — for the event's `from`.
+   *
+   * Tolerant on purpose: `getTask` throws on a card the branch does not have, and this runs *before*
+   * the verb. Letting it throw would answer "no such card" with a read's message where the write's
+   * own — the authoritative one — belongs, and would do it for a lookup that is only ever
+   * best-effort decoration on an event.
+   */
+  _was(n) { try { return n ? this.git.getTask(n) : null; } catch { return null; } }
 
   /**
    * The tip after a write, without asking git again.
@@ -169,8 +205,23 @@ export class LocalStore {
 
   board() { return this.git.board(); }
 
+  /**
+   * **An event's kind names the write, and its payload carries what a reader renders.**
+   *
+   * Six different writes used to be filed as `status` with an `op` key nothing reads: a settings
+   * write, a body edit, a blocked-by edge in either direction, an ordinary label change and a
+   * take-over. `hkb watch --kinds status` rendered every one of them `none → none` — a card
+   * transition that did not happen — and the two board-wide ones said `task_id: null`, which renders
+   * as card `#null`. `needs-human` was worse than vague: adding and clearing the flag were the same
+   * kind with the same payload, so a raised flag read as a cleared one.
+   *
+   * So each op below has a kind of its own (`LOCAL_EVENT_KINDS`, src/store/sqlite.js) and every
+   * kind `describeEvent` (src/watch.js) has a case for carries the fields that case reads — `from`
+   * and `to` on a status or an agent change, `to` on `needs-human` and on a card appearing, the
+   * attempt on a run, the summary on a result.
+   */
   setBoard(patch = {}) {
-    return this._durable('status', null, () => this.git.setBoard(patch), { op: 'board' });
+    return this._durable('board', null, () => this.git.setBoard(patch), { op: 'settings', keys: Object.keys(patch || {}) });
   }
 
   listTasks(opts) { return this.git.listTasks(opts); }
@@ -178,27 +229,38 @@ export class LocalStore {
   getTask(n) { return this.git.getTask(n); }
 
   createTask(spec) {
-    return this._durable(KIND.createTask, (task) => task?.number ?? null, () => this.git.createTask(spec), { op: 'create' });
+    return this._durable(
+      KIND.createTask, (task) => task?.number ?? null, () => this.git.createTask(spec),
+      (task) => ({ to: task?.status ?? spec?.status ?? 'triage', agent: task?.agent ?? null }),
+    );
   }
 
   updateBody(n, body) {
-    return this._durable('status', Number(n), () => this.git.updateBody(n, body), { op: 'body' });
+    return this._durable('body', Number(n), () => this.git.updateBody(n, body), { bytes: String(body ?? '').length });
   }
 
   setStatus(task, status, opts) {
-    return this._durable(KIND.setStatus, numberOf(task), () => this.git.setStatus(task, status, opts), { status });
+    const n = numberOf(task);
+    const from = this._was(n)?.status ?? null;
+    return this._durable(KIND.setStatus, n, () => this.git.setStatus(task, status, opts), { from, to: status });
   }
 
   setAgent(task, agent) {
-    return this._durable(KIND.setAgent, numberOf(task), () => this.git.setAgent(task, agent), { agent });
+    const n = numberOf(task);
+    const from = this._was(n)?.agent ?? null;
+    return this._durable(KIND.setAgent, n, () => this.git.setAgent(task, agent), { from, to: agent });
   }
 
   addLabels(task, names) {
-    return this._durable(labelKind(names), numberOf(task), () => this.git.addLabels(task, names), { add: names });
+    const n = numberOf(task);
+    const human = [].concat(names || []).includes(L.needsHuman);
+    return this._durable(human ? 'needs-human' : 'labels', n, () => this.git.addLabels(task, names), human ? { to: true } : { add: [].concat(names || []) });
   }
 
   removeLabel(task, name) {
-    return this._durable(labelKind([name]), numberOf(task), () => this.git.removeLabel(task, name), { remove: [name] });
+    const n = numberOf(task);
+    const human = name === L.needsHuman;
+    return this._durable(human ? 'needs-human' : 'labels', n, () => this.git.removeLabel(task, name), human ? { to: false } : { remove: [name] });
   }
 
   closeTask(n, reason) {
@@ -210,17 +272,20 @@ export class LocalStore {
   }
 
   addBlockedBy(child, parent) {
-    return this._durable('status', Number(child), () => this.git.addBlockedBy(child, parent), { op: 'blocked-by', blocker: Number(parent) });
+    return this._durable('blocked-by', Number(child), () => this.git.addBlockedBy(child, parent), { blocker: Number(parent) });
   }
 
   removeBlockedBy(child, parent) {
-    return this._durable('status', Number(child), () => this.git.removeBlockedBy(child, parent), { op: 'unblocked-by', blocker: Number(parent) });
+    return this._durable('unblocked-by', Number(child), () => this.git.removeBlockedBy(child, parent), { blocker: Number(parent) });
   }
 
   loadRun(n) { return this.git.loadRun(n); }
 
   saveRun(n, rec) {
-    return this._durable(KIND.saveRun, Number(n), () => this.git.saveRun(n, rec), { op: 'run' });
+    const a = [].concat(rec?.attempts || []).slice(-1)[0] || null;
+    return this._durable(KIND.saveRun, Number(n), () => this.git.saveRun(n, rec), {
+      attempt: a?.attempt ?? null, profile: a?.profile ?? null, host: a?.host ?? null,
+    });
   }
 
   latestResult(n) { return this.git.latestResult(n); }
@@ -237,8 +302,11 @@ export class LocalStore {
    * one predicate now, in `src/model.js`, and both ask it.
    */
   addNote(n, text) {
-    const kind = isResultComment(text) ? 'result' : 'comment';
-    return this._durable(kind, Number(n), () => this.git.addNote(n, text), { op: kind });
+    const parsed = isResultComment(text) ? parseResultComment(text) : null;
+    return this._durable(
+      parsed ? 'result' : 'comment', Number(n), () => this.git.addNote(n, text),
+      parsed ? { attempt: parsed.attempt ?? null, summary: parsed.summary ?? null } : { text: String(text ?? '').slice(0, 200) },
+    );
   }
 
   listNotes(n) { return this.git.listNotes(n); }
@@ -300,7 +368,7 @@ export class LocalStore {
     }
     const r = this.git.takeOver(this.host);
     this.open();
-    this.index.appendEvent({ kind: 'status', task_id: null, payload: { op: 'take-over', from: owner, to: this.host } });
+    this.index.appendEvent({ kind: 'take-over', task_id: null, payload: { from: owner, to: this.host } });
     return { host: this.host, changed: r.changed, was: owner };
   }
 
@@ -312,7 +380,16 @@ export class LocalStore {
     const doc = this.git._read().board;
     const at = this.now();
     const last = Date.parse(doc?.dispatch?.at || '');
-    if (doc?.dispatch?.host === this.host && Number.isFinite(last) && at.getTime() - last < HOST_LIVE_MS / 3) {
+    // **The same clock, read by two comparisons, and each fails towards a live board.**
+    // `liveDispatcher` clamps a *future* stamp to "live", so another host's `--take-over` refuses
+    // rather than walking over a dispatcher whose clock runs fast. The throttle here has to fail the
+    // other way for the same reason: a stamp dated after `now` — a clock corrected backwards between
+    // two ticks — made `at - last` negative, `< HOST_LIVE_MS / 3` was true, and this host stopped
+    // re-stamping for as long as the skew lasted while its own liveness expired on every *other*
+    // host's clock. A negative delta is not freshness, it is a stamp that has to be rewritten, so it
+    // skips the throttle and stamps. Clamping it (`Math.max(0, …)`) would have kept the bug.
+    const delta = Number.isFinite(last) ? at.getTime() - last : null;
+    if (doc?.dispatch?.host === this.host && delta !== null && delta >= 0 && delta < HOST_LIVE_MS / 3) {
       return { stamped: false, tip: this._landedTip() };
     }
     const stamp = { host: this.host, pid, at: at.toISOString() };
@@ -323,10 +400,16 @@ export class LocalStore {
       if (!t.board) throw fail(`there is no ${this.branch} branch in ${this.root} — run \`hkb init\` to create the board`);
       t.board.dispatch = stamp;
     }, `hkb: dispatcher on host ${this.host} (pid ${pid})`);
-    // The index is loaded even though the stamp is not a decision (so: no event). Skipping it left
-    // `index.tip()` behind `git.tip()` from the very first stamp, which is exactly the shape
+    // The index's *tip* is moved even though the stamp is not a decision (so: no event). Skipping it
+    // left `index.tip()` behind `git.tip()` from the very first stamp, which is exactly the shape
     // `hkb doctor` reports as a broken index — a permanent warning on a healthy board.
-    if (r.changed) this._reindex();
+    //
+    // Only the tip: `load({tip})` with no `cards`/`runs` keys leaves both tables alone (§load's own
+    // "a key the tree does not carry is a question it did not answer"), which is the whole of what
+    // this commit changed. A full `_reindex()` here dropped and re-inserted every task, link, run and
+    // result on the board every five minutes, for a field the index's `board` table does not even
+    // hold.
+    if (r.changed) this.index.load({ tip: r.tip, branch: this.branch });
     return { stamped: r.changed, tip: r.tip };
   }
 
@@ -372,32 +455,20 @@ export class LocalStore {
       }
     }
 
-    // The refs are read here rather than through the tier: `tip()` falls back to the remote-tracking
-    // ref when there is no local branch, and this is the one place that must tell the two apart.
-    const here = this._rev(`refs/heads/${branch}`);
-    const there = this._rev(`refs/remotes/${remote}/${branch}`);
-
-    if (there && !here) {
-      // A clone that has read the board off `origin/kb-board` and now wants a local branch to write.
-      this._git(['update-ref', `refs/heads/${branch}`, there]);
-      this.git.forget();
-      this.open();
-      return answer({ fastForwarded: true, local: there, tracking: there, detail: `created ${branch} at ${there.slice(0, 7)}` });
-    }
-    if (here && there && here !== there) {
-      if (this._ancestor(here, there)) {
-        this._git(['update-ref', `refs/heads/${branch}`, there, here]);
-        this.git.forget();
-        this.open();
-        return answer({ fastForwarded: true, local: there, tracking: there, detail: `fast-forwarded to ${there.slice(0, 7)}` });
-      }
-      if (!this._ancestor(there, here)) {
-        throw fail(this._divergedMessage(here, there));
-      }
+    const moved = this._reconcileRefs();
+    if (moved) {
+      // A checkout that had no local branch now has one, so `storeKind` — which caches "this is a
+      // GitHub board" for the life of the process — is holding an answer that has just stopped being
+      // true. `hkb init` invalidates for exactly this reason and so must every other path that
+      // creates the branch, or a long-lived `hkb serve`/`hkb dispatch --loop` that started before
+      // the first sync goes on reading a local board as a GitHub one forever.
+      if (moved.created) { const { forgetStore } = await import('./index.js'); forgetStore(this.ctx); }
+      return answer({ fastForwarded: true, local: moved.local, tracking: moved.local, detail: moved.detail });
     }
     if (!push) return answer({ detail: 'fetch only' });
 
-    const from = here;
+    const from = this._rev(`refs/heads/${branch}`);
+    const there = this._tracking();
     if (!from) return answer({ skipped: 'no-branch', detail: `there is no ${branch} branch in ${this.root} and none on ${remote} — run \`hkb init\`` });
     if (this.pushDisabled()) return answer({ local: from, skipped: 'off', detail: `sync.push is false in ${branch}'s board.json` });
     if (from === there) return answer({ local: from, tracking: from, detail: 'up to date' });
@@ -408,9 +479,63 @@ export class LocalStore {
       if (/non-fast-forward|fetch first|rejected/i.test(r.out)) throw fail(this._divergedMessage(from, this._rev(`refs/remotes/${remote}/${branch}`)));
       throw fail(`\`git push ${remote} ${branch}\` failed: ${gitSays(r.out) || 'unknown error'}`);
     }
-    this._git(['update-ref', `refs/remotes/${remote}/${branch}`, from]);
-    return answer({ pushed: true, local: from, tracking: from, detail: `pushed ${from.slice(0, 7)} to ${remote}/${branch}` });
+    // The remote's copy is now `from`, and the tracking ref is told so under the same compare-and-swap
+    // as the rest: `there` is what this pass read. If somebody's `git fetch` moved it in between, the
+    // CAS loses and the ref is already right — so the answer reports what the ref *is*, re-read,
+    // rather than what this call meant to write.
+    const upd = this._setRef(`refs/remotes/${remote}/${branch}`, from, there);
+    return answer({ pushed: true, local: from, tracking: upd.status === 0 ? from : this._tracking(), detail: `pushed ${from.slice(0, 7)} to ${remote}/${branch}` });
   }
+
+  /**
+   * Bring `refs/heads/<branch>` up to the remote-tracking ref, or answer null when there is nothing
+   * to bring: no tracking ref, already equal, or a local branch that is *ahead* (the push publishes
+   * that one).
+   *
+   * **Every `update-ref` here is a compare-and-swap and its exit status is read.** Ignoring it
+   * reported `fastForwarded: true` with the remote's sha as `local` on a ref that had not moved at
+   * all — a lost race (another `hkb sync`, a `git fetch`, a worker's verb) exiting 0 and saying the
+   * board caught up. A lost CAS re-reads and tries again, because the refs it compared are stale by
+   * definition; three losses in a row is a checkout something else is driving, and that is a refusal.
+   * @returns {{local: string, detail: string, created: boolean}|null}
+   */
+  _reconcileRefs(tries = 3) {
+    const branch = this.branch;
+    for (let i = 0; i < tries; i++) {
+      // Read through git rather than the tier: `tip()` falls back to the remote-tracking ref when
+      // there is no local branch, and this is the one place that must tell the two apart.
+      const here = this._rev(`refs/heads/${branch}`);
+      const there = this._tracking();
+      if (!there || here === there) return null;
+      if (!here) {
+        // A clone that has read the board off `origin/kb-board` and now wants a local branch to
+        // write. `''` as the old value is git's "this ref must not exist" — the CAS for a create.
+        if (this._setRef(`refs/heads/${branch}`, there, '').status !== 0) continue;
+        this._afterRefMoved();
+        return { local: there, detail: `created ${branch} at ${short(there)}`, created: true };
+      }
+      if (this._ancestor(here, there)) {
+        if (this._setRef(`refs/heads/${branch}`, there, here).status !== 0) continue;
+        this._afterRefMoved();
+        return { local: there, detail: `fast-forwarded to ${short(there)}`, created: false };
+      }
+      if (!this._ancestor(there, here)) throw fail(this._divergedMessage(here, there));
+      return null; // local is ahead of the remote: the push below is what publishes it
+    }
+    throw fail(
+      `refs/heads/${branch} moved while \`hkb sync\` was fast-forwarding it, ${tries} times in a row — `
+      + `something else in this checkout is writing the branch. Look at \`git -C ${this.root} reflog ${branch}\`, `
+      + 'stop the other writer (`hkb down`), and run `hkb sync` again.',
+    );
+  }
+
+  /** One compare-and-swap on a ref. `from` may be `''` for "must not exist" and null for no check. */
+  _setRef(ref, to, from) {
+    return this._git(['update-ref', ref, to, ...(from === null || from === undefined ? [] : [from])]);
+  }
+
+  /** The branch moved under the tier's memo and the index's tip: both are rebuilt from what is there. */
+  _afterRefMoved() { this.git.forget(); this.open(); }
 
   /**
    * Has this board turned pushing off? False on a board with no branch yet — there is nothing to
@@ -454,11 +579,6 @@ export class LocalStore {
   _ancestor(a, b) { return this._git(['merge-base', '--is-ancestor', a, b]).status === 0; }
 
   _hasRemote() { return this._git(['remote', 'get-url', this.remote]).status === 0; }
-}
-
-/** A label change that is about `kb:needs-human` is its own event kind; the rest are card changes. */
-function labelKind(names = []) {
-  return [].concat(names || []).includes(L.needsHuman) ? 'needs-human' : 'status';
 }
 
 function numberOf(task) {
@@ -525,7 +645,7 @@ export function forgetGitTiers(ctx) {
  * `open()` runs here rather than in the constructor so a caller that wants the pieces without the
  * `rev-parse` (a test, `hkb doctor`'s probes) can build the class directly.
  * @param {any} ctx
- * @param {{git?: any, index?: any, host?: string, ref?: string, remote?: string, now?: () => Date, reconcile?: boolean}} [opts]
+ * @param {{git?: any, index?: any, host?: string, ref?: string, remote?: string, now?: () => Date, reconcile?: boolean, readOnly?: boolean}} [opts]
  */
 export function openLocalStore(ctx, { reconcile = true, ...opts } = {}) {
   const store = new LocalStore(ctx, opts);
@@ -590,7 +710,14 @@ export async function syncAfterTick(ctx, { store = null, log = () => {}, now = D
   const root = storeRoot(ctx);
   const state = readState(root);
   const last = Number(state.sync_at || 0);
-  if (!force && Number.isFinite(last) && now - last < SYNC_THROTTLE_MS) return { synced: false, why: 'throttled' };
+  // The third elapsed-time test on this file's list, and a *throttle* — so it resolves skew the way
+  // `markDispatcher` does and not the way `liveDispatcher` does. **The invariant is not "clamp every
+  // clock", it is "answer skew with the live board":** a liveness guard reads a future stamp as
+  // live and refuses (`liveDispatcher`, `lockIsLive`), a throttle reads one as broken and does the
+  // work (here and `markDispatcher`). Clamping this to zero would have throttled every push until
+  // real time caught up with a `sync_at` written by a clock since corrected backwards.
+  const since = Number.isFinite(last) ? now - last : null;
+  if (!force && since !== null && since >= 0 && since < SYNC_THROTTLE_MS) return { synced: false, why: 'throttled' };
   const s = store || openLocalStore(ctx);
   let result;
   try {
@@ -612,6 +739,9 @@ export async function syncAfterTick(ctx, { store = null, log = () => {}, now = D
 
 /** Cards closed longer ago than this are left on GitHub: history, not board state. */
 export const IMPORT_WINDOW_DAYS = 90;
+
+/** How fresh a lock's beat has to be for the migration to call the worker holding it alive. */
+export const LOCK_LIVE_S = 30 * 60;
 
 /** GitHub's page ceiling, and the whole of what `listClosedRecent` can answer in one query. */
 export const CLOSED_PAGE = 100;
@@ -782,6 +912,33 @@ export async function importGithubBoard(ctx, { store = null, from = null, days =
   }
 
   const keep = new Set(tasks.map((t) => Number(t.number)));
+
+  // **Nothing is written while a worker is still running against this board.**
+  // The migration's last step deletes the GitHub protocol's lock refs, and a worker whose lock ref
+  // disappears heartbeats into a missing ref and exits 3, LOCK_LOST — mid-task, having pushed
+  // nothing. So the locks are read *before* the first commit and a live one stops the whole thing:
+  // half a migration with two dead workers is not a state anybody can reason about, and the command
+  // that does it is the documented adoption path. `--force` is the human's override for a board
+  // whose workers are known to be gone.
+  /** @type {{n: number, k: number, at: string}[]} */ let held = [];
+  try {
+    held = await liveLocks(ctx, { keep, now, ...(leftovers.locks ? { list: leftovers.locks.list, beatAt: leftovers.locks.beatAt } : {}) });
+  } catch (e) {
+    // A listing this read cannot do is one `dropGithubLeftovers` cannot do either, and that half is
+    // already guarded: nothing is deleted, so nothing is lost. Said out loud rather than treated as
+    // "no locks", which is the answer that would justify deleting them.
+    log(`import: could not read the lock refs to check for running workers (${/** @type {Error} */ (e).message}) — no lock will be deleted below either. Make sure \`hkb up --status\` shows nothing running before you rely on this board`);
+  }
+  if (held.length && !force) {
+    throw fail(
+      `${held.length} card(s) on this board are claimed by a running worker (${held.map((l) => `#${l.n} attempt ${l.k}, beat ${l.at}`).join('; ')}) — `
+      + `\`hkb init --import\` deletes the lock refs those workers heartbeat on, and each one would exit LOCK_LOST mid-task. `
+      + `Stop the dispatcher (\`hkb down\`) and let them finish, or wait out their leases, then run the import again. `
+      + `\`hkb init --import --force\` migrates anyway, killing them.`,
+    );
+  }
+  if (held.length) log(`import: --force: migrating over ${held.length} live claim(s) (${held.map((l) => `#${l.n}/${l.k}`).join(', ')}); those workers will exit LOCK_LOST`);
+
   /** @type {{card: number, blocker: number}[]} */ const droppedEdges = [];
   for (const t of tasks) {
     for (const b of t.blockedBy || []) {
@@ -836,7 +993,7 @@ export async function importGithubBoard(ctx, { store = null, from = null, days =
 
   // The leftovers of the GitHub protocol. A lock ref on the forge means nothing to a local board —
   // the locks are rows in the index now — and a beat chain is a mirror of one.
-  const dropped = await dropGithubLeftovers(ctx, s.root, { log, ...leftovers });
+  const dropped = await dropGithubLeftovers(ctx, s.root, { log, keep, now, ...leftovers });
 
   const summary = {
     cards: tasks.length, open: open.length, closed: closed.length, runs: withRuns, results, notes,
@@ -923,6 +1080,43 @@ export async function adoptOpenIssues(ctx, { store = null, log = () => {}, now =
 }
 
 /**
+ * Is a worker still holding this lock? `{at, age}` when its last beat is inside `staleAfter`, null
+ * when it is older, unreadable or absent.
+ *
+ * A lock ref whose beat cannot be read is **not** treated as live: a ref with no commit behind it is
+ * litter, and the import's own refusal (`liveLocks`) is the guard that matters — this is the
+ * per-ref check that stops a deletion of something that was never verified dead.
+ * @param {any} ctx
+ * @param {{n: number, k: number, sha?: string}} lock
+ * @param {{beatAt?: Function, staleAfter?: number, now?: () => Date}} [opts]
+ */
+export async function lockIsLive(ctx, lock, { beatAt = lockBeatAt, staleAfter = LOCK_LIVE_S, now = () => new Date() } = {}) {
+  let at = null;
+  try { at = await beatAt(ctx, lock.sha); } catch { return null; }
+  const t = Date.parse(at || '');
+  if (!Number.isFinite(t)) return null;
+  // Clamped, like every other elapsed-time test here: a beat stamped a minute in the future by a
+  // host whose clock runs fast is as live as a beat stamped now, never "older than the window".
+  const age = Math.max(0, now().getTime() - t) / 1000;
+  return age <= staleAfter ? { at, age } : null;
+}
+
+/**
+ * The locks a migration must not walk over: held on a card it is about to move, and beating.
+ * @param {any} ctx
+ * @param {{keep?: Set<number>|null, list?: Function, beatAt?: Function, staleAfter?: number, now?: () => Date}} [opts]
+ */
+export async function liveLocks(ctx, { keep = null, list = listLocks, beatAt = lockBeatAt, staleAfter = LOCK_LIVE_S, now = () => new Date() } = {}) {
+  /** @type {{n: number, k: number, at: string}[]} */ const live = [];
+  for (const l of await list(ctx)) {
+    if (keep && !keep.has(Number(l.n))) continue;
+    const held = await lockIsLive(ctx, l, { beatAt, staleAfter, now });
+    if (held) live.push({ n: Number(l.n), k: Number(l.k), at: held.at });
+  }
+  return live;
+}
+
+/**
  * Delete what the GitHub protocol leaves behind: the lock refs on the forge and the local beat
  * chains that mirror them. A lock is a row in the index on a local board, and a beat is a column of
  * that row, so neither ref means anything once the board has moved.
@@ -936,17 +1130,34 @@ export async function adoptOpenIssues(ctx, { store = null, log = () => {}, now =
  *
  * @param {any} ctx
  * @param {string} root
- * @param {{log?: (s: string) => void, locks?: any, chains?: any}} [deps]
+ * @param {{log?: (s: string) => void, locks?: any, chains?: any, keep?: Set<number>|null, staleAfter?: number, now?: () => Date}} [deps]
  */
-export async function dropGithubLeftovers(ctx, root, { log = () => {}, locks = null, chains = null } = {}) {
-  const L2 = locks || { list: listLocks, release };
+export async function dropGithubLeftovers(ctx, root, { log = () => {}, locks = null, chains = null, keep = null, staleAfter = LOCK_LIVE_S, now = () => new Date() } = {}) {
+  const L2 = locks || { list: listLocks, release, beatAt: lockBeatAt };
   const C = chains || { list: listBeatChains, drop: dropBeatChain };
-  const dropped = { locks: 0, chains: 0 };
+  const dropped = { locks: 0, chains: 0, locks_kept: /** @type {any[]} */ ([]), locks_foreign: 0, chains_foreign: 0 };
+  // **Scoped to the cards this migration actually moved, and verified dead one by one.**
+  // `refs/kb/locks/<n>/<k>` has no board segment in it, so `listLocks(ctx)` enumerates the whole
+  // repository's namespace: migrating board `alpha` deleted board `beta`'s live locks and beta's
+  // workers lost their claims on their next heartbeat. A lock on a card this import did not touch is
+  // somebody else's, and so is a lock whose beat says a worker is still holding it — the import
+  // refuses outright when it finds one of those (`liveLocks`), and this is the second check, on the
+  // rule that a lock is never deleted unless it was *seen* to be dead.
   try {
-    for (const l of await L2.list(ctx)) { if (await L2.release(ctx, l.n, l.k)) dropped.locks++; }
+    for (const l of await L2.list(ctx)) {
+      if (keep && !keep.has(Number(l.n))) { dropped.locks_foreign++; continue; }
+      const live = await lockIsLive(ctx, l, { beatAt: L2.beatAt || lockBeatAt, staleAfter, now });
+      if (live) { dropped.locks_kept.push({ n: l.n, k: l.k, beat_at: live.at }); continue; }
+      if (await L2.release(ctx, l.n, l.k)) dropped.locks++;
+    }
+    if (dropped.locks_foreign) log(`import: ${dropped.locks_foreign} lock ref(s) belong to cards this import did not move (another board in this repository) and were left alone`);
+    for (const k of dropped.locks_kept) log(`import: lock #${k.n}/${k.k} was NOT deleted — it beat at ${k.beat_at}, so a worker is still holding it`);
   } catch (e) { log(`import: the lock refs on the remote were left alone (${/** @type {Error} */ (e).message}) — they mean nothing to a local board; delete them with \`git push origin --delete\` if they bother you`); }
   try {
-    for (const c of C.list(root)) { if (C.drop(root, c.n, c.k)) dropped.chains++; }
+    for (const c of C.list(root)) {
+      if (keep && !keep.has(Number(c.n))) { dropped.chains_foreign++; continue; }
+      if (C.drop(root, c.n, c.k)) dropped.chains++;
+    }
   // `refs/kb/locks/`, which is where `listBeatChains`/`dropBeatChain` actually read and write
   // (src/store/github.js): a beat chain is a *local* commit chain on the lock's own ref name, not a
   // ref namespace of its own. The message said `refs/kb/beats/`, and an operator following it found

@@ -13,12 +13,12 @@ covers:
   - path: src/board.js
     sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
   - path: src/dispatch.js
-    sha: 01386a289473b99acbaef34f259040271f3b9e61
+    sha: 34c6409e30bed2c1c5419f03fec2bacbc8ab5a06
   - path: src/serve.js
     sha: fe50acf9c37de567f1a90fd802e682ab746f6d50
   - path: src/doctor.js
-    sha: 7cbbeb3b764af3b555a8c9afcbb0612747b56dbe
-generated_at_commit: 90132a1
+    sha: e3c608a3d6da3efecc7b355d4245d88a31d6a918
+generated_at_commit: a5f1e60
 last_refreshed: 2026-09-03
 related: [architecture/overview, features/web-board, concepts/roles-and-seats, architecture/dispatcher-tick]
 ---
@@ -366,10 +366,20 @@ Two things ride the end of a tick when the board is on the local store
   throttled to a third of `HOST_LIVE_MS`. That stamp is the *only* thing that
   lets another machine's `hkb init --take-over` tell a board somebody is still
   ticking from one whose laptop is not coming back — and it is a commit, which
-  is why it is throttled and why it rides a tick rather than the beat. It
-  reloads the index behind itself: a commit the index has not seen is exactly
-  the shape `hkb doctor` reports as a broken index, and skipping it put a
-  permanent warning on a perfectly healthy board.
+  is why it is throttled and why it rides a tick rather than the beat. It moves
+  the index's *tip* behind itself — `index.load({tip, branch})`, with no `cards`
+  or `runs` keys, so both tables are left alone: a commit the index has not seen
+  is exactly the shape `hkb doctor` reports as a broken index, and skipping it
+  put a permanent warning on a perfectly healthy board, while a full reindex
+  here dropped and re-inserted every task, link, run and result on the board
+  every five minutes for a field the index does not even hold.
+
+  The store it rides opens its SQLite connection **lazily**
+  (`LocalStore.index`), so the common tick — a throttled stamp against a
+  memoized tree — costs a `rev-parse` and no database open at all. Building the
+  whole store every tick to reach a function that touches git meant a fresh
+  `DatabaseSync`, `ensureSchema` and `assertSameBoard` every five seconds at the
+  interval floor.
 
   **It is not gated on anything.** Unlike the push, the stamp runs before the
   `DURABLE_TICK_KEYS` question and outside the try that catches a failing tick,
@@ -378,10 +388,18 @@ Two things ride the end of a tick when the board is on the local store
   limit, are exactly the cases another host has to be able to see. When the
   stamp was gated, both stopped re-stamping, their liveness expired after
   `HOST_LIVE_MS`, and `--take-over` on the other machine walked into a board
-  that was ticking right now with no `--force` and no warning. `liveDispatcher`
-  clamps a *future* stamp to age zero for the same reason: the two clocks are on
-  different hosts, and ordinary skew read as "nobody is ticking" fails the guard
-  open in the one direction that matters.
+  that was ticking right now with no `--force` and no warning.
+
+  **Skew is answered with the live board, which is not the same as clamping
+  every clock.** `liveDispatcher` clamps a *future* stamp to age zero, so a
+  guard reads it as "somebody is ticking" and `--take-over` refuses; `lockIsLive`
+  does the same with a lock's beat, so a migration refuses rather than deleting
+  it. The two *throttles* — `markDispatcher`'s and `syncAfterTick`'s — resolve
+  the same skew in the opposite direction: a negative delta means the recorded
+  time is after now, which is not freshness but a value to rewrite, so they skip
+  the throttle and do the work. Clamping a throttle would have kept the bug it
+  was meant to fix: stamping stopped for twenty minutes after a backwards NTP
+  correction while every other host's copy of this host's liveness expired.
 
 `DURABLE_TICK_KEYS` is what "decided something" means — for the **push**, and
 only for the push. It is every key of
@@ -412,6 +430,19 @@ is careful about:
   that does not publish its copy still has to be able to read a co-worker's, and
   `--no-push` is the same switch as a flag, so the more restrictive spelling can
   never do more work than the default.
+- **Every `update-ref` it makes is a compare-and-swap whose exit status is
+  read** (`_reconcileRefs`, `_setRef`). Creating the local branch passes `''` as
+  the old value ("must not exist"), a fast-forward passes the sha it read, and
+  the push's tracking-ref update passes what the fetch saw. Ignoring the status
+  reported `fastForwarded: true` with the remote's sha as `local` on a ref that
+  had not moved — a lost race exiting 0 and saying the board caught up. A lost
+  CAS re-reads and retries (the refs it compared are stale by definition); three
+  losses is a checkout something else is driving, and that is a refusal.
+- Creating the branch invalidates `storeKind`'s cache (`forgetStore`), which
+  otherwise remembers "this is a GitHub board" for the life of the process — a
+  long-lived `hkb serve` or dispatcher that started before the first sync would
+  go on believing it, with no stamp and no owner guard, on a board that had
+  become local in another terminal.
 
 It refuses on a GitHub board naming the store the cards are actually on, because
 "sync" there would be a verb with nothing to do.

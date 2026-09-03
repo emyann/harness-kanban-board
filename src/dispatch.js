@@ -1234,6 +1234,10 @@ export async function syncPass(ctx, summary, log = () => {}) {
     const { storeKind } = await import('./store/index.js');
     if (storeKind(ctx) !== 'local') return;
     const { openLocalStore, syncAfterTick } = await import('./store/local.js');
+    // `reconcile: false`, and the store opens its SQLite connection lazily (`LocalStore.index`), so
+    // the common tick — throttled stamp, nothing durable decided — costs a `rev-parse` against a
+    // memoized tree and no database open at all. Building the whole store every tick meant a fresh
+    // `DatabaseSync`, `ensureSchema` and `assertSameBoard` every five seconds at the interval floor.
     const store = openLocalStore(ctx, { reconcile: false });
     try {
       // The stamp is unconditional, and the ordering is the whole fix. **Liveness must not depend
@@ -1256,7 +1260,7 @@ export async function syncPass(ctx, summary, log = () => {}) {
   }
 }
 
-export async function loop(ctx, { interval, max, profiles = null, log, sleeper = null, installStamp: stamp = installStamp }) {
+export async function loop(ctx, { interval, max, profiles = null, dryRun = false, log, sleeper = null, installStamp: stamp = installStamp }) {
   const dropLock = acquireLoopLock(ctx);
   log(`dispatcher pid ${process.pid} (singleton lock .kanban/dispatch.pid)`);
   const loaded = stamp();
@@ -1307,7 +1311,9 @@ export async function loop(ctx, { interval, max, profiles = null, log, sleeper =
     await versionNotice(ctx, log);
     let summary = null;
     try {
-      const s = await tick(ctx, { max, children, profiles, log });
+      // `dryRun` is threaded through rather than dropped here: `hkb dispatch --loop N --dry-run`
+      // promised a loop that decides nothing and ran a real claiming, spawning, stamping one.
+      const s = await tick(ctx, { max, children, profiles, dryRun, log });
       summary = s;
       const n = (k) => s[k].length;
       log(`tick: reconciled ${n('reconciled')} reclaimed ${n('reclaimed')} reaped ${n('reaped')} promoted ${n('promoted')} claimed ${n('claimed')} tracks ${s.tracks.filter((x) => x.ok).length} guarded ${n('guarded')} held ${n('held')} skipped ${n('skipped')}`);
@@ -1320,7 +1326,9 @@ export async function loop(ctx, { interval, max, profiles = null, log, sleeper =
     // holding this board, and leaving the stamp inside meant a run of failures — a rate limit, a
     // flaky network — expired this host's claim on the branch while it was very much still here.
     // `syncPass` catches its own failures, so it cannot turn a survivable tick into a dead loop.
-    await syncPass(ctx, summary || {}, log);
+    // …and skipped entirely on a dry run: the stamp is a commit on `kb-board` and the push publishes
+    // it, so a loop that promised to decide nothing must not write either.
+    if (!dryRun) await syncPass(ctx, summary || {}, log);
     if (summary?.fatal) { fatal = summary.fatal; break; }
     if (stopping) break;
     const current = stamp();

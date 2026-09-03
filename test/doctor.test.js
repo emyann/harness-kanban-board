@@ -1296,6 +1296,28 @@ test('doctor refuses an index on a 9p mount, and warns on a filesystem it does n
   assert.match(missing.detail, /could not read/);
 });
 
+test('doctor diagnoses the index without creating it', async () => {
+  // The check reported "empty — no verb has opened this board here yet" about a file it had just
+  // made itself: `openLocalStore` opened a *writing* connection, which mkdirs the directory, creates
+  // the database and runs the schema. A reader that writes is not a diagnosis, and the write also
+  // queued behind a dispatcher mid-`load()` for the full busy timeout.
+  const { ctx, root } = localBoard();
+  const { openGitTier } = await import('../src/store/git.js');
+  const { indexFileIn } = await import('../src/store/sqlite.js');
+  const { storeGitDir } = await import('../src/board.js');
+  openGitTier(ctx).init('default');
+  const file = indexFileIn(storeGitDir(ctx), 'default');
+  assert.equal(fs.existsSync(file), false, 'no verb has opened this board here');
+
+  const rows = probe(ctx, { mounts: '/dev/null' });
+  assert.equal(rows[INDEX_CHECK].ok, null);
+  assert.match(rows[INDEX_CHECK].detail, /empty — no verb has opened this board here yet/);
+  assert.equal(fs.existsSync(file), false, 'and doctor did not make one to say so');
+  // The store row still names where the index would live, computed rather than read off an open one.
+  assert.match(rows[STORE_CHECK].detail, /index \.git[/\\]hkb[/\\]index\.db/);
+  void root;
+});
+
 test('doctor: a branch with no board, an index that has fallen behind, and a foreign owner', async () => {
   const { ctx } = localBoard();
   const empty = probe(ctx, { mounts: '/dev/null' });

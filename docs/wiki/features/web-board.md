@@ -13,14 +13,14 @@ covers:
   - path: src/board.js
     sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
   - path: src/init.js
-    sha: d41dc9ecf44f892d994c175ebad8565cfc0da690
+    sha: c2fbe7003278359213e5ddb2f368e1d4106a780d
   - path: src/lifecycle.js
     sha: 3d8234ec94517fa40a1fdbef460486d3bf873068
   - path: src/track.js
     sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
   - path: src/model.js
     sha: a0ada59cd3061302ebe8ab640b50d690700803f7
-generated_at_commit: 90132a1
+generated_at_commit: a5f1e60
 last_refreshed: 2026-09-03
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
@@ -298,17 +298,27 @@ on any other with exit 2 naming `hkb init --take-over` (`assertOwningHost`,
 `src/cli.js`; `assertLocalOwner`, `src/store/local.js`).
 
 What a clone *can* do is more than "read the cards", because the guard is on the
-invocation rather than the verb (`invocationWritesBoard`, `src/cli.js`). `hkb
-serve` is not on the writing list at all, so a reader serves the page; `hkb up
+invocation rather than the verb (`invocationWritesBoard`, `src/cli.js`): `hkb up
 --status` reads pid files and liveness; `hkb dispatch --dry-run` says what a
-tick would decide. `hkb up --serve` is still refused, since it brings a
-dispatcher up beside the server — the reader's way to serve is `hkb serve`.
+tick would decide; `hkb list`, `hkb show`, `hkb graph` and `hkb watch` are reads
+and were never on the list. `hkb up --serve` is refused, since it brings a
+dispatcher up beside the server.
+
+**`hkb serve` is refused on a clone too**, and that is a correction rather than a
+detail. The page is not a viewer: dragging a card between lanes runs the same
+mutating verbs `hkb promote` does. Leaving `serve` off `WRITES_BOARD` gave a
+non-owning host a *writable* UI in which every drag died inside the git tier
+with a raw exit 2 — the guard refusing at the last possible moment instead of
+the first. A read-only rendering is a UI this server does not have yet; until it
+does, the honest answer is to refuse at start-up and name the read verbs. The
+rule the change is really about: **guard the verb that writes, and do not sell a
+writable surface as a read.**
 
 > **Not reachable yet.** `src/serve.js` reads the board through `fetchBoard`
 > (`src/tasks.js`, the GitHub driver's re-export), not through `openStore`, so
-> serving a local board — from a clone or from the owning host — is waiting on
-> the verb migration in track C of `docs/local-first.md`. The store underneath
-> is done and the refusals above are live; the page is not wired to it.
+> serving a local board — from the owning host — is waiting on the verb
+> migration in track C of `docs/local-first.md`. The store underneath is done
+> and the refusals above are live; the page is not wired to it.
 
 ## Related
 

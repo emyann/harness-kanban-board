@@ -311,6 +311,24 @@ export async function sweep(ctx, { yes = false, days = 14, memo = null, log = /*
   // GitHub, which is the one board that did not need it.
   const kind = storeKind(ctx);
   const store = openStore(ctx);
+  // The close is a `finally`, not a last line. The local driver holds a SQLite connection with a WAL
+  // and an shm handle behind it, and the dispatcher runs this sweep every `gc_every_ticks` — so a
+  // sweep that throws (a rate limit, a `gh` that is logged out, a worktree that will not go) leaked
+  // one handle per tick until the process hit its file-descriptor limit.
+  try {
+    return await sweepOpen(ctx, store, kind, { yes, days, memo, log });
+  } finally {
+    /** @type {any} */ (store).close?.(); // the GitHub driver holds nothing and has no `close`
+  }
+}
+
+/**
+ * The sweep itself, with the store already open — split out only so `sweep()` above can close that
+ * store in a `finally` without this whole body sitting inside a `try`.
+ * @param {any} ctx @param {any} store @param {string} kind
+ * @param {{yes: boolean, days: number, memo: any, log: (...a: any[]) => void}} opts
+ */
+async function sweepOpen(ctx, store, kind, { yes, days, memo, log }) {
   // `blockers: false` — no sweep here reads a dependency, and on a repo without the GraphQL field
   // filling them in is one REST call per card.
   const tasks = await store.listTasks({ states: ['OPEN', 'CLOSED'], blockers: false });
@@ -370,7 +388,6 @@ export async function sweep(ctx, { yes = false, days = 14, memo = null, log = /*
     try { stats.chains = await sweepBeatChains(ctx, { yes, log }); } catch (e) { log(`beat chains skipped: ${e.message}`); }
   }
   stats.files = sweepFiles(ctx, { days, yes, log });
-  /** @type {any} */ (store).close?.(); // the local driver holds a SQLite connection; the GitHub one holds nothing
   return stats;
 }
 

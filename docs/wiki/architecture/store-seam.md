@@ -18,7 +18,7 @@ covers:
     sha: cfb7eaf1a75003826cf610ee136a08dc0d4ff281
   - path: src/board.js
     sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
-generated_at_commit: 90132a1
+generated_at_commit: a5f1e60
 last_refreshed: 2026-09-03
 related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-and-leases, concepts/board-protocol]
 ---
@@ -89,6 +89,25 @@ Today it carries one flag, `events`: GitHub has no log hkb can tail, so its
 `events()` **refuses with exit 2** instead of answering an empty list. "Nothing
 happened" and "I cannot tell you what happened" are different answers, and
 `hkb serve` picks its feed on the difference.
+
+## Importing the seam must not require a node that has SQLite
+
+`src/store/index.js` imports the local store so `openStore(ctx)` can pick it,
+and `openStore` is on the path of every command — including `hkb hook pretool`,
+whose whole contract is to stand aside rather than throw onto a worker's tool
+call. A static `import { DatabaseSync } from 'node:sqlite'` in
+`src/store/sqlite.js` therefore made that entire graph fail to load with
+`ERR_UNKNOWN_BUILTIN_MODULE` on a node built `--without-sqlite`, on a **GitHub**
+board that never opens an index at all.
+
+The builtin is resolved on first use instead (`sqlite()`, via
+`process.getBuiltinModule` — the synchronous form, since `openIndex` and
+everything under it is synchronous), and a node without it gets a refusal that
+names the node and the way out. Fixing it at the seam's two known importers
+would have left the next one to rediscover it; fixing it at the builtin covers
+every entry point at once. A test asserts both halves: the source carries no
+static import, and a child process that loads `store/index.js`, `doctor.js` and
+`cli.js` has nothing matching `sqlite` in `process.moduleLoadList`.
 
 ## What is deliberately *not* in the store
 

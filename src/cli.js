@@ -73,6 +73,13 @@ export const WRITES_BOARD = new Set([
   'create', 'edit', 'link', 'unlink', 'promote', 'archive', 'adopt', 'comment', 'track',
   'claim', 'dispatch', 'heartbeat', 'complete', 'block', 'unblock', 'request-review',
   'request-changes', 'merge', 'up',
+  // `serve` is on the list because the web board is not a viewer: dragging a card between lanes runs
+  // the same mutating verbs `hkb promote` does (its own HELP line says so). Leaving it off gave a
+  // non-owning host a writable UI in which every drag died inside the tier with a raw exit 2 — the
+  // guard refusing at the last possible moment instead of the first. A clone still reads the board
+  // with `hkb list`, `hkb show`, `hkb graph` and `hkb watch`; a read-only web board is a UI this
+  // server does not have yet, and pretending otherwise is what this rule is against.
+  'serve',
 ]);
 
 /**
@@ -85,8 +92,7 @@ export const WRITES_BOARD = new Set([
  *
  * `hkb up --serve` stays refused, and that is not an oversight: it brings a *dispatcher* up
  * alongside the web server (`PROCESSES`, src/up.js), and a dispatcher on a host that does not own
- * the board is the two-writers case. Serving a clone read-only is `hkb serve`, which is not on the
- * list at all.
+ * the board is the two-writers case.
  * @param {string} cmd
  * @param {any} flags
  */
@@ -97,7 +103,13 @@ export function invocationWritesBoard(cmd, flags = {}) {
   // every write behind that flag, so it is the one honest way for somebody holding a clone to ask
   // what this board would do next. If a write ever escapes the flag, the tier still refuses it —
   // that is what the second layer is for, and why relaxing the first one here is safe.
-  if (cmd === 'dispatch' && flags['dry-run']) return false;
+  //
+  // **`--loop` is not that**, and the combination is what a guard must never let through: a
+  // long-running loop stamps this host onto the branch every few minutes and pushes it, which is a
+  // write no per-tick flag gates. `--dry-run` is now threaded into `loop()` as well (it was dropped
+  // outright, so the flag pair ran a real claiming, spawning loop), and it stays a *write* here
+  // regardless — the exemption is for the one-shot read, not for the daemon.
+  if (cmd === 'dispatch' && flags['dry-run'] && !flags.loop) return false;
   return true;
 }
 
@@ -844,8 +856,9 @@ export async function main(argv) {
       for (const p of profiles || []) if (!ctx.cfg.profiles[p]) throw usage(`--profiles: no profile "${p}" in board.json. Known: ${Object.keys(ctx.cfg.profiles).join(', ')}`);
       if (flags.loop) {
         const interval = flags.loop === true ? ctx.cfg.dispatch.interval : Number(flags.loop);
-        log(`hkb dispatch loop every ${interval}s on ${ctx.repo.nameWithOwner} board "${ctx.board}" (host ${ctx.host})${profiles ? `, profiles ${profiles.join(', ')}` : ''}. Ctrl-C to stop.`);
-        await loop(ctx, { interval, max, profiles, log: (s) => log(`${new Date().toISOString()} ${s}`) });
+        const dryRun = !!flags['dry-run'];
+        log(`hkb dispatch${dryRun ? ' [dry-run]' : ''} loop every ${interval}s on ${ctx.repo.nameWithOwner} board "${ctx.board}" (host ${ctx.host})${profiles ? `, profiles ${profiles.join(', ')}` : ''}. Ctrl-C to stop.`);
+        await loop(ctx, { interval, max, profiles, dryRun, log: (s) => log(`${new Date().toISOString()} ${s}`) });
         return 0;
       }
       const s = await tick(ctx, { max, dryRun: !!flags['dry-run'], profiles, log });

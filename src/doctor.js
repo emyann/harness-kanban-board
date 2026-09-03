@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
-import { boardFile, api, readState, writeState, processState, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches } from './board.js';
+import { boardFile, api, readState, writeState, processState, storeGitDir, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches } from './board.js';
 import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun, openPrsByHead, issueDatabaseId } from './tasks.js';
 import { L, STATUSES, SAFE_BUILTINS, capabilityGrants, effectiveTools, toolPosture, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren, branchTaskNumber, denialDisplayTool, DENIAL_KINDS, mcpVisibilityDiagnosis, mcpGrantedTo } from './model.js';
 import { resolvedIdentity } from './hook.js';
@@ -14,6 +14,7 @@ import { checkProject } from './projects.js';
 import { mcpServersFromTranscript } from './stats.js';
 import { storeKind } from './store/index.js';
 import { openLocalStore, mountFor, REFUSED_FS } from './store/local.js';
+import { indexFileIn } from './store/sqlite.js';
 // mcp.js is imported dynamically inside checkMcp, not here: it imports cli.js, which imports this
 // file, and a static import here would make that a cycle.
 
@@ -181,10 +182,19 @@ export function checkLocalStore(ctx, { ok, warn, bad }, { kind = null, mounts = 
   try { which = which || storeKind(ctx); } catch (e) { return bad(STORE_CHECK, /** @type {Error} */ (e).message, 'set "store" in .kanban/board.json to "local" or "github"'); }
   if (which !== 'local') return ok(STORE_CHECK, `github — the board is the kb:* issues on ${ctx.cfg?.repo || 'GitHub'}`);
 
-  const s = store || openLocalStore(ctx, { reconcile: false });
+  // **A diagnosis does not create what it is diagnosing.** `openLocalStore` used to open a *writing*
+  // connection here, which `mkdir`s the directory, creates the file and runs the schema — so doctor
+  // reported "board index: empty — no verb has opened this board here yet" about a file it had just
+  // made, and blocked for the full busy timeout against a dispatcher mid-`load()`. `readOnly: true`
+  // is `hkb serve`'s connection (`openIndexReadOnly`): timeout 0, refuses every write, and refuses
+  // to open a file that is not there — which is the answer this check wants, not a side effect.
+  const s = store || openLocalStore(ctx, { reconcile: false, readOnly: true });
   const close = () => { if (!store) try { s.close(); } catch { /* nothing open */ } };
   try {
-    ok(STORE_CHECK, `local — ${s.branch} in ${s.root}, index ${path.relative(s.root, s.index.file)}`);
+    // The path is computed rather than read off an open index, because on the commonest failure
+    // here — there is no index yet — there is no index to ask.
+    const indexPath = s.indexOpen ? s.index.file : indexFileIn(storeGitDir(ctx), ctx?.board || null);
+    ok(STORE_CHECK, `local — ${s.branch} in ${s.root}, index ${path.relative(s.root, indexPath)}`);
 
     // 1. the branch, and whether the remote's copy is still a fast-forward away in either direction
     const here = s._rev(`refs/heads/${s.branch}`);
@@ -204,15 +214,20 @@ export function checkLocalStore(ctx, { ok, warn, bad }, { kind = null, mounts = 
 
     // 2. the index: built from the commit the branch is at, or one the next verb will rebuild
     const tip = s.git.tip();
-    const indexed = s.index.tip();
+    let indexed = null;
+    /** @type {Error|null} */ let unreadable = null;
+    if (fs.existsSync(indexPath)) {
+      try { indexed = s.index.tip(); } catch (e) { unreadable = /** @type {Error} */ (e); }
+    }
     if (!tip) warn(INDEX_CHECK, 'nothing indexed — there is no branch to index', 'hkb init');
+    else if (unreadable) bad(INDEX_CHECK, `${path.relative(s.root, indexPath)} could not be opened: ${unreadable.message}`, 'hkb doctor after `hkb down`, or delete the file and let the next verb rebuild it');
     else if (!indexed) warn(INDEX_CHECK, `empty — no verb has opened this board here yet`, 'hkb list');
     else if (indexed === tip) ok(INDEX_CHECK, `at ${tip.slice(0, 7)}, matching the branch`);
     else warn(INDEX_CHECK, `built from ${indexed.slice(0, 7)}, the branch is at ${tip.slice(0, 7)} — the next verb rebuilds it`, 'hkb list');
 
     // 3. the mount. SQLite's WAL needs POSIX locking that a 9p or NFS mount does not give it: the
     //    failure is a corrupt index or a hang, neither of which says why.
-    const m = mountFor(path.dirname(s.index.file), { mounts });
+    const m = mountFor(path.dirname(indexPath), { mounts });
     if (!m) warn(MOUNT_CHECK, `could not read ${mounts} — hkb cannot tell what the index is on (fine on macOS; check by hand on a network mount)`);
     else if (REFUSED_FS.includes(m.type)) {
       bad(MOUNT_CHECK, `${m.mount} is ${m.type} — SQLite's locking does not work there, and the index will corrupt or hang`,

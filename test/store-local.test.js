@@ -166,15 +166,20 @@ test('the guard is on the invocation, not the noun: `hkb up --status` reads, so 
   // machine — a command documented as pid files and liveness, no board read and no network.
   assert.equal(invocationWritesBoard('up', { status: true }), false);
   assert.equal(invocationWritesBoard('up', {}), true, 'and starting one still needs the owning host');
-  // `--serve` is not the exception: it brings a dispatcher up alongside the web server. Serving a
-  // clone read-only is `hkb serve`, which is not on the list at all.
+  // `--serve` is not the exception: it brings a dispatcher up alongside the web server. Nor is
+  // `hkb serve` on its own — the web board's drag-and-drop runs the same mutating verbs, so a
+  // non-owning host got a writable UI whose every drag died inside the tier with a raw exit 2.
   assert.equal(invocationWritesBoard('up', { serve: true }), true);
-  assert.equal(invocationWritesBoard('serve', {}), false);
+  assert.equal(invocationWritesBoard('serve', {}), true);
   assert.equal(invocationWritesBoard('claim', { status: true }), true, 'and the flag is not a skeleton key for every verb');
   // the same rule swept onto its other instance: a dry run gates every write behind the flag, so it
   // is how somebody holding a clone asks what this board would do next.
   assert.equal(invocationWritesBoard('dispatch', { 'dry-run': true }), false);
   assert.equal(invocationWritesBoard('dispatch', {}), true);
+  // …but not when it is a *loop*: that stamps this host onto the branch and pushes it every few
+  // minutes, which no per-tick flag gates. The exemption is for the one-shot read, not the daemon.
+  assert.equal(invocationWritesBoard('dispatch', { 'dry-run': true, loop: 30 }), true);
+  assert.equal(invocationWritesBoard('dispatch', { 'dry-run': true, loop: true }), true);
 });
 
 test('a board with no branch is nobody\'s: both layers pass, and owner() does not throw', (t) => {
@@ -886,4 +891,295 @@ test('the one-writer guard and the verb behind it share one decoded tree', (t) =
   const withClock = gitTierFor(ctx, { host: ctx.host, now: () => new Date('2020-01-01T00:00:00Z') });
   assert.notEqual(withClock, store.git);
   assert.equal(gitTierFor(ctx, { host: ctx.host }), store.git, 'and the shared tier is still the shared tier');
+});
+
+// ---------- round 5: the three that destroy live state, and the invariants behind them ----------
+
+/** A lock listing/beat/release triple the migration can be pointed at, with a record of what it deleted. */
+function fakeLocks(refs, { beats = {} } = {}) {
+  const released = [];
+  return {
+    released,
+    locks: {
+      list: async () => refs.map((r) => ({ ref: `refs/kb/locks/${r.n}/${r.k}`, n: r.n, k: r.k, sha: `${r.n}-${r.k}` })),
+      beatAt: async (_ctx, sha) => beats[sha] ?? null,
+      release: async (_ctx, n, k) => { released.push(`${n}/${k}`); return true; },
+    },
+  };
+}
+
+test('a migration refuses while a worker still holds a claim, and writes nothing at all', async (t) => {
+  // The command in the README, run on a live board: the migration's last step deletes the lock refs
+  // the workers heartbeat on, so each one exits 3 (LOCK_LOST) mid-task having pushed nothing. The
+  // refusal is before the first commit, because half a migration and two dead workers is not a state
+  // anybody can reason about.
+  const s = scratch(t);
+  const ctx = ctxAt(s.root, { repo: 'o/r' });
+  const gh = seededGh();
+  t.after(gh.install());
+  ctx.repo = { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner };
+
+  const now = () => new Date('2026-09-03T00:00:00Z');
+  const beat = '2026-09-02T23:55:00Z'; // five minutes ago: a worker is very much here
+  const f = fakeLocks([{ n: 12, k: 3 }], { beats: { '12-3': beat } });
+  const store = openLocalStore(ctx, { reconcile: false });
+  t.after(() => store.close());
+
+  await assert.rejects(
+    () => importGithubBoard(ctx, { store, now, leftovers: f }),
+    (e) => {
+      assert.equal(e.exitCode, 2);
+      assert.match(e.message, /#12 attempt 3/);
+      assert.match(e.message, /hkb init --import --force/);
+      return true;
+    },
+  );
+  assert.equal(store.git.tip(), null, 'and not one commit landed on the branch');
+  assert.deepEqual(f.released, [], 'nor was a single lock deleted');
+
+  // `--force` is the way through, and it says what it is about to cost.
+  const lines = [];
+  const summary = await importGithubBoard(ctx, { store, now, force: true, log: (l) => lines.push(l), leftovers: f });
+  assert.equal(summary.cards, 3);
+  assert.ok(lines.some((l) => /LOCK_LOST/.test(l)), `--force names the price: ${lines.join(' | ')}`);
+});
+
+test('the lock sweep is scoped to the cards migrated, and never deletes one it did not see was dead', async (t) => {
+  // `refs/kb/locks/<n>/<k>` carries no board segment, so listing the namespace lists every board in
+  // the repository: migrating `alpha` deleted `beta`'s live locks and beta's workers lost their
+  // claims. And a lock whose beat says a worker is holding it is not litter, `--force` or not.
+  const s = scratch(t);
+  const ctx = ctxAt(s.root, { repo: 'o/r' });
+  const gh = seededGh();
+  t.after(gh.install());
+  ctx.repo = { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner };
+
+  const now = () => new Date('2026-09-03T00:00:00Z');
+  const f = fakeLocks(
+    [{ n: 12, k: 1 }, { n: 30, k: 2 }, { n: 4242, k: 1 }],
+    { beats: { '12-1': '2026-08-01T00:00:00Z', '30-2': '2026-09-02T23:59:00Z' } },
+  );
+  const chainsSeen = [];
+  const lines = [];
+  const store = openLocalStore(ctx, { reconcile: false });
+  t.after(() => store.close());
+  const summary = await importGithubBoard(ctx, {
+    store, now, force: true, log: (l) => lines.push(l),
+    leftovers: { ...f, chains: { list: () => [{ n: 12, k: 1 }, { n: 4242, k: 9 }], drop: (_r, n, k) => { chainsSeen.push(`${n}/${k}`); return true; } } },
+  });
+
+  assert.deepEqual(f.released, ['12/1'], 'only the dead lock, on a card this import moved');
+  assert.equal(summary.locks, 1);
+  assert.equal(summary.locks_foreign, 1, '#4242 is another board\'s and was left alone');
+  assert.deepEqual(summary.locks_kept.map((l) => l.n), [30], 'and #30 is still beating');
+  assert.ok(lines.some((l) => /lock #30\/2 was NOT deleted/.test(l)));
+  assert.deepEqual(chainsSeen, ['12/1'], 'the beat chains are scoped the same way');
+  assert.equal(summary.chains_foreign, 1);
+});
+
+test('init --import will not flip a board.json the repository tracks', async (t) => {
+  // Writing `"store": "local"` into a tracked file is a change to everybody's checkout: the next
+  // `git pull` moves every collaborator onto a board only one host can write.
+  const { boardFileTracked } = await import('../src/init.js');
+  const s = scratch(t);
+  const file = path.join(s.root, '.kanban', 'board.json');
+  fs.writeFileSync(file, JSON.stringify({ repo: 'o/r' }, null, 2) + '\n');
+  assert.equal(boardFileTracked(s.root), false, 'an untracked board.json is this checkout\'s own business');
+  git(s.root, 'add', '.kanban/board.json');
+  git(s.root, 'commit', '-qm', 'board');
+  assert.equal(boardFileTracked(s.root), true);
+});
+
+test('a dry-run loop is still a write: the guard holds and the flag reaches the tick', async () => {
+  // `--dry-run` removed the owner guard *and* was dropped on the floor by the `--loop` branch, so
+  // the one flag combination that promised to write nothing ran a real claiming, spawning loop.
+  const { loop } = await import('../src/dispatch.js');
+  assert.equal(invocationWritesBoard('dispatch', { 'dry-run': true, loop: 30 }), true);
+  const src = fs.readFileSync(new URL('../src/dispatch.js', import.meta.url), 'utf8');
+  assert.match(src, /await tick\(ctx, \{ max, children, profiles, dryRun, log \}\)/, 'the loop threads dryRun into the tick');
+  assert.match(src, /if \(!dryRun\) await syncPass/, 'and does not stamp or push on a dry run');
+  void loop;
+});
+
+test('sync reads the exit status of every update-ref: a lost compare-and-swap is not a success', async (t) => {
+  const { dir, origin, store } = board(t);
+  store.createTask({ title: 'the owner made this', status: 'ready' });
+  await store.sync();
+
+  const clone = path.join(dir, 'racer');
+  git(dir, 'clone', '-q', origin, clone);
+  fs.mkdirSync(path.join(clone, '.kanban'), { recursive: true });
+  const theirs = openLocalStore(ctxAt(clone), { reconcile: false });
+  t.after(() => theirs.close());
+
+  // Every CAS loses — somebody else is moving the ref between the read and the write.
+  const tried = [];
+  theirs._setRef = (ref, to, from) => { tried.push([ref, to, from]); return { status: 1, stdout: '', stderr: 'cannot lock ref' }; };
+  await assert.rejects(() => theirs.sync(), (e) => {
+    assert.equal(e.exitCode, 2);
+    assert.match(e.message, /moved while `hkb sync` was fast-forwarding it, 3 times in a row/);
+    return true;
+  });
+  assert.equal(tried.length, 3, 'a lost CAS is retried on a re-read, not reported as done');
+  assert.equal(spawnSync('git', ['rev-parse', '--verify', '--quiet', 'refs/heads/kb-board'], { cwd: clone }).status !== 0, true,
+    'and the ref really did not move, which is what the old code reported as `fastForwarded: true`');
+});
+
+test('a sync that creates the branch invalidates the cached store kind', async (t) => {
+  // `storeKind` remembers "this is a GitHub board" for the life of the process. A long-lived
+  // `hkb serve` or dispatcher that started before the first sync went on believing it forever:
+  // no stamp, no owner guard, on a board that had become local in another terminal.
+  const { dir, origin, store } = board(t);
+  store.createTask({ title: 'published', status: 'ready' });
+  await store.sync();
+
+  const clone = path.join(dir, 'late');
+  git(dir, 'clone', '-q', '--single-branch', '--branch', 'main', origin, clone);
+  fs.mkdirSync(path.join(clone, '.kanban'), { recursive: true });
+  const ctx = ctxAt(clone, { store: undefined });
+  delete ctx.cfg.store;
+  assert.equal(storeKind(ctx), 'github', 'nothing here says otherwise yet, and the answer is cached');
+
+  const theirs = openLocalStore(ctx, { reconcile: false });
+  t.after(() => theirs.close());
+  assert.equal((await theirs.sync()).fastForwarded, true);
+  assert.equal(storeKind(ctx), 'local', 'the branch is here now, and the cache was told');
+});
+
+test('the dispatcher stamp survives a clock corrected backwards, and moves only the tip', async (t) => {
+  // Two comparisons on the same clock, resolved in opposite directions on purpose: a liveness guard
+  // reads a future stamp as live and refuses (`liveDispatcher`), a throttle reads one as broken and
+  // does the work. Clamping the throttle to zero — the shape the guard uses — would have kept the
+  // bug: stamping stopped for twenty minutes while every other host's copy of this host's liveness
+  // expired.
+  const clock = { at: new Date('2026-09-03T12:00:00Z') };
+  const { root } = scratch(t, { name: 'skewed' });
+  const ctx = ctxAt(root);
+  openGitTier(ctx).init('default');
+  const store = openLocalStore(ctx, { now: () => clock.at });
+  t.after(() => store.close());
+  store.createTask({ title: 'a card that must survive every stamp', status: 'ready' });
+
+  assert.equal(store.markDispatcher(11).stamped, true);
+  clock.at = new Date('2026-09-03T12:01:00Z');
+  assert.equal(store.markDispatcher(11).stamped, false, 'a minute later is throttled: the stamp is a commit');
+  clock.at = new Date('2026-09-03T11:59:00Z'); // NTP stepped the clock back
+  assert.equal(store.markDispatcher(11).stamped, true, 'a stamp dated after now is not freshness, it is a stamp to rewrite');
+
+  // …and the stamp moves the index's tip and nothing else. A full reindex here dropped and
+  // re-inserted every task, link, run and result on the board every five minutes.
+  assert.equal(store.index.tip(), store.git.tip());
+  assert.deepEqual(store.listTasks().map((x) => x.title), ['a card that must survive every stamp']);
+  assert.equal(store.index.listTaskRows ? store.index.listTaskRows().length : 1, 1, 'the card is still indexed');
+});
+
+test('an event names the write it was, and carries what a reader renders', async (t) => {
+  // Six unrelated writes were filed as `status` with an `op` key nothing reads, so `hkb watch
+  // --kinds status` rendered each of them `none → none`; `needs-human` added and cleared were the
+  // same kind with the same payload, so a raised flag read as a cleared one.
+  const { store } = board(t);
+  const seen = () => store.events({ after: 0 }).map((e) => ({ kind: e.kind, n: e.number, p: e.payload }));
+
+  const card = store.createTask({ title: 'evented', status: 'triage' });
+  store.setStatus(card, 'ready');
+  store.setAgent(card, 'codex');
+  store.addLabels(card, ['kb:needs-human']);
+  store.removeLabel(card, 'kb:needs-human');
+  store.addLabels(card, ['bug']);
+  store.updateBody(card.number, 'a longer body');
+  const other = store.createTask({ title: 'a blocker', status: 'ready' });
+  store.addBlockedBy(card.number, other.number);
+  store.removeBlockedBy(card.number, other.number);
+  store.setBoard({ settings: { sync: { push: false } } });
+
+  const by = (kind) => seen().filter((e) => e.kind === kind);
+  assert.deepEqual(by('appeared').map((e) => e.p.to), ['triage', 'ready']);
+  assert.deepEqual(by('status').map((e) => [e.p.from, e.p.to]), [['triage', 'ready']], 'a status event is a transition, and says both ends');
+  assert.deepEqual(by('agent').map((e) => [e.p.from, e.p.to]), [[null, 'codex']], 'the card had no agent before, and the event says so rather than saying nothing');
+  assert.deepEqual(by('needs-human').map((e) => e.p.to), [true, false], 'raised and cleared are not the same event');
+  assert.deepEqual(by('labels').map((e) => e.p.add), [['bug']]);
+  assert.equal(by('body').length, 1);
+  assert.deepEqual(by('blocked-by').map((e) => e.p.blocker), [other.number]);
+  assert.deepEqual(by('unblocked-by').map((e) => e.p.blocker), [other.number]);
+  assert.deepEqual(by('board').map((e) => e.n), [null], 'a board-wide write is not a card event');
+  assert.equal(seen().some((e) => e.kind === 'status' && e.n === null), false, 'and nothing is filed as card #null');
+
+  // The take-over is its own kind too, and names both hosts.
+  store.git.takeOver('someone-elses-laptop');
+  store.git.forget();
+  const back = store.takeOver({ force: true });
+  assert.equal(back.was, 'someone-elses-laptop');
+  assert.deepEqual(by('take-over').map((e) => [e.p.from, e.p.to]), [['someone-elses-laptop', store.host]]);
+});
+
+test('gc closes the store even when a sweep throws', async (t) => {
+  // The dispatcher runs this sweep every `gc_every_ticks`, and the local driver holds a SQLite
+  // connection with a WAL and an shm handle behind it: a repeatedly failing sweep leaked one per
+  // tick until the process ran out of file descriptors.
+  const { LocalStore } = await import('../src/store/local.js');
+  const { sweep } = await import('../src/gc.js');
+  const { root, ctx } = (() => { const s = scratch(t, { name: 'gc' }); const c = ctxAt(s.root); openGitTier(c).init('default'); return { ...s, ctx: c }; })();
+
+  const realList = LocalStore.prototype.listTasks;
+  const realClose = LocalStore.prototype.close;
+  let closed = 0;
+  LocalStore.prototype.listTasks = () => { throw new Error('the board read blew up'); };
+  LocalStore.prototype.close = function close() { closed++; return realClose.call(this); };
+  t.after(() => { LocalStore.prototype.listTasks = realList; LocalStore.prototype.close = realClose; });
+
+  await assert.rejects(() => sweep(ctx, { yes: false, log: () => {} }), /the board read blew up/);
+  assert.equal(closed, 1, 'the close is a `finally`, not a last line');
+  void root;
+});
+
+test('nothing loads node:sqlite until a local board opens its index', async () => {
+  // `src/store/index.js` imports the local store so `openStore` can pick it, and `openStore` is on
+  // the path of every command — including `hkb hook pretool`, whose whole contract is to stand aside
+  // rather than throw onto a worker's tool call. A static `import ... from 'node:sqlite'` made that
+  // whole graph refuse to load on a node built without SQLite, on a GitHub board that never opens an
+  // index at all.
+  const src = fs.readFileSync(new URL('../src/store/sqlite.js', import.meta.url), 'utf8');
+  assert.equal(/^import .* from 'node:sqlite'/m.test(src), false, 'the builtin is resolved on first use, not at import time');
+
+  const probe = [
+    "const loaded = () => process.moduleLoadList.filter((s) => /sqlite/.test(s)).length;",
+    "await import('./src/store/index.js');",
+    "await import('./src/doctor.js');",
+    "await import('./src/cli.js');",
+    "if (loaded()) { console.log('LOADED'); process.exit(0); }",
+    "const { openIndex } = await import('./src/store/sqlite.js');",
+    "if (loaded()) { console.log('LOADED BY IMPORT'); process.exit(0); }",
+    "console.log(typeof openIndex === 'function' ? 'CLEAN' : 'BROKEN');",
+  ].join('\n');
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', probe], {
+    cwd: path.dirname(fileURLToPathish(new URL('../package.json', import.meta.url))), encoding: 'utf8',
+  });
+  assert.equal(r.stdout.trim(), 'CLEAN', `${r.stdout}${r.stderr}`);
+});
+
+/** `new URL(...).pathname` is not a path on Windows; this is `fileURLToPath` without the import. */
+function fileURLToPathish(url) {
+  return decodeURIComponent(url.pathname);
+}
+
+test('a throttled stamp opens no database at all', async (t) => {
+  // `syncPass` builds a store every tick to reach `markDispatcher`, which touches git and nothing
+  // else on all but one tick in five minutes. At the interval floor that was a fresh `DatabaseSync`,
+  // `ensureSchema` and `assertSameBoard` every five seconds, for an answer nobody read.
+  const clock = { at: new Date('2026-09-03T12:00:00Z') };
+  const { root } = scratch(t, { name: 'lazy' });
+  const ctx = ctxAt(root);
+  openGitTier(ctx).init('default');
+
+  const first = openLocalStore(ctx, { reconcile: false, now: () => clock.at });
+  assert.equal(first.indexOpen, false, 'nothing is opened by building the store');
+  assert.equal(first.markDispatcher(1).stamped, true);
+  assert.equal(first.indexOpen, true, 'a stamp that landed has to move the index tip');
+  first.close();
+
+  clock.at = new Date('2026-09-03T12:01:00Z');
+  const second = openLocalStore(ctx, { reconcile: false, now: () => clock.at });
+  t.after(() => second.close());
+  assert.equal(second.markDispatcher(1).stamped, false, 'throttled');
+  assert.equal(second.indexOpen, false, 'and it cost no connection');
 });

@@ -7,20 +7,20 @@ audience: [dev]
 read_when: "adding a store verb, debugging an index that disagrees with the branch, wondering why a verb is refused on this host, or working on hkb sync / init --import"
 covers:
   - path: src/store/local.js
-    sha: cf9ff6ab730eff06e7307938ed6ac88c41b8f1dc
+    sha: 5d439507e01358078ccceec163b09bcc1cb70c83
   - path: src/store/index.js
     sha: 918495a206540318480f3b0ce7cd0a8f559ae874
   - path: src/store/sqlite.js
-    sha: 097c56b38571a9d5cc954e4bb72126dc4a83328f
+    sha: 25cbf6557b3486148031236b8e4da313a95dc703
   - path: src/init.js
-    sha: d41dc9ecf44f892d994c175ebad8565cfc0da690
+    sha: c2fbe7003278359213e5ddb2f368e1d4106a780d
   - path: src/doctor.js
-    sha: 7cbbeb3b764af3b555a8c9afcbb0612747b56dbe
+    sha: e3c608a3d6da3efecc7b355d4245d88a31d6a918
   - path: src/gc.js
-    sha: 534f186975f37866642c551b23e83978b3c66ec2
+    sha: 707a961f4b31816273d77ab07ee1116cbb4aa319
   - path: src/cli.js
-    sha: 1886720ccbb31128516095a0c7aa5e5b06c707e8
-generated_at_commit: 90132a1
+    sha: c9c665acc7044ae2710d887424fa03f1cb63e3b3
+generated_at_commit: a5f1e60
 last_refreshed: 2026-09-03
 related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
@@ -84,6 +84,17 @@ back — a reconcile pass re-asserting the state of twenty cards — lands no
 commit, appends no event and wakes nobody. That is the same no-op check
 `_patch` makes one layer down, read from the other end.
 
+**The event's kind names the write, and its payload carries what a reader
+renders.** A status change is `status` with `from` and `to`; `needs-human`
+raised and cleared are one kind with `to: true`/`to: false`; a body edit, a
+blocked-by edge either way, an ordinary label change, a settings write and a
+take-over each have a kind of their own (`LOCAL_EVENT_KINDS`,
+`src/store/sqlite.js`). Filing all six as `status` with an `op` key nothing
+reads made `hkb watch --kinds status` render every one of them `none → none`,
+and the two board-wide ones carried `task_id: null`, which renders as card
+`#null`. `describeEvent` (`src/watch.js`) is the reader those payloads are
+written for.
+
 **3. A live write never touches git.** Claims, heartbeats and an open attempt's
 pid/job/worktree are the index's alone. A lock on a branch would be a commit per
 beat, and `git log kb-board` is meant to be a history of *decisions*.
@@ -96,6 +107,13 @@ sha, so a tick that asks about twelve cards decodes it once, and — the real
 reason — there is exactly one answer to "what does the board say" rather than
 two that can disagree. The index answers the live half (`listLocks`,
 `heartbeat`, `events`, the open attempts) and is what `hkb serve` reads.
+
+The index's connection is opened **lazily** (`LocalStore.index`, a getter), and
+`close()` is a no-op when nothing opened it. A caller that only wants the durable
+half — the dispatcher's end-of-tick stamp, `hkb doctor`'s branch probe — pays no
+`DatabaseSync`, no `ensureSchema` and no `assertSameBoard`. That matters at the
+interval floor, where the stamp is throttled on all but one tick in five
+minutes.
 
 This is a deliberate cost: the index has `tasks` and `runs` tables that no
 `Store` read currently consults. They are there for `hkb serve`'s SQL and for
@@ -121,16 +139,29 @@ which is the answer both layers already agreed on.
 
 The guard is on the **invocation**, not the verb (`invocationWritesBoard`).
 `up` is on `WRITES_BOARD` because it starts a dispatcher, but `hkb up --status`
-reads pid files and nothing else, and `hkb dispatch --dry-run` gates every write
-behind the flag — refusing those meant somebody holding a clone could not ask
-what was running on their own machine. `hkb up --serve` stays refused: it brings
-a dispatcher up alongside the web server. Serving a clone read-only is
-`hkb serve`, which is not on the list at all.
+reads pid files and nothing else, and a one-shot `hkb dispatch --dry-run` gates
+every write behind the flag — refusing those meant somebody holding a clone
+could not ask what was running on their own machine. `hkb up --serve` stays
+refused: it brings a dispatcher up alongside the web server.
+
+Two exceptions to that exception, both of the same shape — *a flag that promises
+a read must actually deliver one*:
+
+- **`hkb dispatch --loop --dry-run` is a write.** A loop stamps this host onto
+  the branch and pushes it every few minutes, which no per-tick flag gates; and
+  `--dry-run` was not even threaded into `loop()`, so the pair removed the guard
+  and then ran a real claiming, spawning, stamping loop. It is threaded now
+  (`tick(…, {dryRun})`, and `syncPass` is skipped), and the invocation counts as
+  a write regardless.
+- **`hkb serve` is a write.** The page's drag-and-drop calls the same mutating
+  verbs; leaving `serve` off the list gave a non-owning host a writable UI whose
+  every drag died inside the tier with a raw exit 2. A read-only rendering is a
+  UI the server does not have yet, so it refuses at start-up instead.
 
 A clone is therefore a **reader**: the store reads the whole board there with no
 setup, and a mutating verb exits 2 naming `hkb init --take-over`. (The reads
-that reach a human — `hkb list`, `hkb show`, `hkb serve` — get there when the
-verbs move onto the store; see the note at the top.) A clone that never made a
+that reach a human — `hkb list`, `hkb show`, `hkb graph`, `hkb watch` — get
+there when the verbs move onto the store; see the note at the top.) A clone that never made a
 local branch gets a second, more specific refusal from the tier: there is no
 local ref to compare-and-swap against, and the message says how to make one.
 
@@ -161,6 +192,16 @@ checkout that does not publish its copy still fetches and fast-forwards; that is
 how it reads what the owner published. `--no-push` is the same switch as a flag,
 so the more restrictive spelling can never do strictly more work than the
 default.
+
+**Every ref move is a compare-and-swap and its exit status is read.** Creating
+the local branch passes `''` as the old value (git's "must not exist"), a
+fast-forward passes the sha just read, the tracking-ref update after a push
+passes what the fetch saw (`_reconcileRefs`, `_setRef`). Ignoring the status
+reported `fastForwarded: true` with the remote's sha as `local` on a ref that had
+not moved — a lost race exiting 0 and saying the board caught up. A lost CAS
+re-reads and retries; three in a row is a refusal naming the reflog. And a sync
+that *creates* the branch calls `forgetStore(ctx)`, because `storeKind` caches
+"this is a GitHub board" for the life of the process.
 
 Offline is not a failure. A `fetch`/`push` that fails on a network error comes
 back `{offline: true}` and says nothing, because the remote copy is a backup and
@@ -258,12 +299,40 @@ lists the numbers). A ceiling that is not named reads as the whole thing.
 It is idempotent **by refusal**: a branch that already exists is left exactly as
 it is. A second import over a board that has since been worked would overwrite
 live state with GitHub's stale copy, so it says so and names the deliberate way
-to start over. Afterwards it deletes the `refs/kb/locks/*` on the remote and the
-local beat chains — a lock ref means nothing to a board whose locks are rows.
-Both of those sweeps are guarded (`dropGithubLeftovers`): they run *after* both
-commits and the index load have succeeded, so a single ref that will not delete
-must not exit a migration that landed non-zero and leave the human unable to
-tell whether to re-run — which "idempotent by refusal" would then refuse anyway.
+to start over.
+
+### It does not run over live state
+
+The migration's last step deletes the GitHub protocol's leftovers, and that step
+is where an adoption path turned into a data-loss path. Three rules now hold, and
+all three are about the same thing — *this command is run on a board that is
+still working*:
+
+- **A live claim stops it before the first commit.** `liveLocks()` reads each
+  lock ref's last beat; a beat inside `LOCK_LIVE_S` means a worker is holding
+  that card, and deleting its ref would make its next heartbeat come back
+  `LOCK_LOST` (exit 3) mid-task. The refusal names the cards and
+  `hkb init --import --force`, which migrates anyway and says what it costs.
+- **The sweep is scoped to the cards this import moved.** `refs/kb/locks/<n>/<k>`
+  carries no board segment, so `listLocks(ctx)` enumerates the whole
+  repository's namespace: migrating board `alpha` deleted board `beta`'s live
+  locks and beta's workers lost their claims. Same for the beat chains.
+- **A lock is never deleted unless it was seen to be dead.** `lockIsLive()` runs
+  again per ref inside `dropGithubLeftovers()`, and one that is still beating is
+  kept and reported in `locks_kept` rather than swept.
+
+Both sweeps stay guarded: they run *after* both commits and the index load have
+succeeded, so a single ref that will not delete must not exit a migration that
+landed non-zero and leave the human unable to tell whether to re-run — which
+"idempotent by refusal" would then refuse anyway. A lock *listing* that fails is
+said out loud rather than read as "no locks", which is the answer that would
+justify deleting them.
+
+And the store key is a decision about a shared file. `hkb init` writes
+`"store": "local"` into `.kanban/board.json` **after** the migration has landed,
+so a refusal leaves the board exactly where it was; and when that file is
+tracked by git it refuses to write the key at all without `--force`, because the
+key is every collaborator's next `git pull`, not just this checkout's.
 
 ## What doctor asks
 
@@ -279,6 +348,16 @@ they do not give it, and the failure mode is a corrupt index or a hang that says
 nothing about why. A host with no `/proc/mounts` (macOS) and a filesystem hkb
 does not recognise both warn — "I could not check" is a different answer from
 "this is wrong".
+
+**A diagnosis does not create what it is diagnosing.** The probe opens the index
+through `openIndexReadOnly` (`readOnly: true` on `openLocalStore`): timeout 0,
+every write refused, and no file created. Opening the writing connection meant
+doctor `mkdir`ed the directory, created the database and ran the schema — then
+reported "board index: empty — no verb has opened this board here yet" about a
+file it had just made, after waiting out the busy timeout against a dispatcher
+mid-`load()`. The path in the identity line is computed (`indexFileIn`) rather
+than read off an open index, because on the commonest failure here there is no
+index to ask.
 
 These probes run before `hkb doctor` talks to the forge, and — since the round-2
 sweep — they *survive* it: the GitHub half is one `githubChecks()` call inside a
