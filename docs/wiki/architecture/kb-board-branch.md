@@ -130,9 +130,15 @@ asking the owner question first would have put the same exit 2 one line up.
 
 `board.json` names the owning host. Every write checks it against `hostId()`
 and refuses on any other host with exit 2 naming `hkb init --take-over`
-(`docs/local-first.md` §6.2). Reads are unrestricted, which is what makes a
-clone useful: a friend who clones has no local `kb-board`, so the tier falls
-back to `refs/remotes/<remote>/kb-board` and they get a read-only board.
+(`docs/local-first.md` §6.2). That guard is a **safety** property for a single
+operator — it stops a second machine, a stale worktree or a second dispatcher
+from writing the branch concurrently — and not a collaboration feature;
+multi-player is out of scope by decision.
+
+Reads are unrestricted, which is what makes a *restore* work: a fresh checkout
+has no local `kb-board`, so the tier falls back to
+`refs/remotes/<remote>/kb-board` and the board is readable before `hkb sync`
+creates the local ref.
 
 Two hosts writing one branch is not supported in this version, and the reason
 is **not** that ids would collide: a CAS refusal re-reads and replays the

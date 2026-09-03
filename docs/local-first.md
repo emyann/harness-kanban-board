@@ -187,9 +187,19 @@ that made a durable write, throttled and offline-tolerant, when the repo has a r
 so in one line and `sync.push: false` in `board.json` turns it off. The remote copy is also the backup.
 
 **One writer.** `board.json` on the branch names the owning host. `hkb dispatch`, `hkb claim` and the
-verbs refuse on a host that is not it, naming the takeover flag (`hkb init --take-over`) as the fix. A
-friend who clones sees the board read-only in `hkb serve`. Two hosts writing the same branch is not
-supported in this version (integer ids would collide; hash ids are the later answer).
+verbs refuse on a host that is not it, naming the takeover flag (`hkb init --take-over`) as the fix.
+
+This is a **safety** property, not a collaboration feature. It is what stops *one* person's second
+machine, a stale worktree, or a second dispatcher from writing the same branch concurrently — integer
+ids would collide and the index would disagree with the tree. It is load-bearing single-player and stays.
+
+**Multi-player is explicitly out of scope** (decided 2026-09-03). An earlier draft of this plan justified
+`hkb sync` and the owning-host guard partly by "a friend clones the repo and has the board too". That
+requirement is withdrawn: collaboration — a second *person* reading or writing a board, concurrent hosts,
+conflict resolution, a shared read-only view — is its own epic, and the system has to work for one
+operator first. What survives that withdrawal is durability: the remote copy is a **backup**, so the board
+is not a single point of failure inside one laptop's `.git`, and restoring it onto a fresh checkout of
+your own repo is the case `hkb sync` must handle. Nothing here is designed for a second human.
 
 ### 6.3 The index
 
