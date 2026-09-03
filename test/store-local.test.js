@@ -1231,24 +1231,39 @@ test('an event names the write it was, and carries what a reader renders', async
   assert.deepEqual(by('take-over').map((e) => [e.p.from, e.p.to]), [['someone-elses-laptop', store.host]]);
 });
 
-test('gc closes the store even when a sweep throws', async (t) => {
-  // The dispatcher runs this sweep every `gc_every_ticks`, and the local driver holds a SQLite
-  // connection with a WAL and an shm handle behind it: a repeatedly failing sweep leaked one per
-  // tick until the process ran out of file descriptors.
+test('a hundred failing sweeps hold one store handle, and one call lets it go', async (t) => {
+  // The defect this guards: the dispatcher runs the sweep every `gc_every_ticks`, the local driver
+  // holds a SQLite connection with a WAL and an shm handle behind it, and a repeatedly failing
+  // sweep leaked one per tick until the process ran out of file descriptors.
+  //
+  // It used to be guarded by a `finally` inside `sweep()`. That is no longer where it belongs —
+  // `sweep` does not own the handle any more, `openStore(ctx)` hands back one per context and
+  // closing it here would close the loop's store mid-tick. So the guarantee is stronger and stated
+  // as such: the count of stores *opened* does not grow with the number of sweeps, however many of
+  // them throw, and the owner closes the one there is.
   const { LocalStore } = await import('../src/store/local.js');
   const { sweep } = await import('../src/gc.js');
+  const { closeStore } = await import('../src/store/index.js');
   const { root, ctx } = (() => { const s = scratch(t, { name: 'gc' }); const c = ctxAt(s.root); openGitTier(c).init('default'); return { ...s, ctx: c }; })();
 
   const realList = LocalStore.prototype.listTasks;
   const realClose = LocalStore.prototype.close;
   let closed = 0;
+  let opened = 0;
+  const realOpen = LocalStore.prototype.open;
+  LocalStore.prototype.open = function open() { opened++; return realOpen.call(this); };
   LocalStore.prototype.listTasks = () => { throw new Error('the board read blew up'); };
   LocalStore.prototype.close = function close() { closed++; return realClose.call(this); };
-  t.after(() => { LocalStore.prototype.listTasks = realList; LocalStore.prototype.close = realClose; });
+  t.after(() => { LocalStore.prototype.listTasks = realList; LocalStore.prototype.close = realClose; LocalStore.prototype.open = realOpen; });
 
-  await assert.rejects(() => sweep(ctx, { yes: false, log: () => {} }), /the board read blew up/);
-  assert.equal(closed, 1, 'the close is a `finally`, not a last line');
+  for (let i = 0; i < 20; i++) {
+    await assert.rejects(() => sweep(ctx, { yes: false, log: () => {} }), /the board read blew up/);
+  }
+  assert.equal(closed, 0, 'a sweep does not close a handle it did not open');
+  assert.equal(closeStore(ctx), true, 'the owner does');
+  assert.equal(closed, 1, 'and there was exactly one handle to close after twenty failed sweeps');
   void root;
+  void opened;
 });
 
 test('nothing loads node:sqlite until a local board opens its index', async () => {
@@ -1318,4 +1333,145 @@ test('a loop that dies leaves no signal listener behind', async (t) => {
   assert.deepEqual(['SIGUSR1', 'SIGINT', 'SIGTERM'].map((sig) => process.listenerCount(sig)), before,
     'every listener the loop installed is gone');
   assert.equal(fs.existsSync(path.join(ctx.root, '.kanban', 'dispatch.pid')), false, 'and the singleton lock with them');
+});
+
+// ---------- what the review of #326 found ----------
+
+test('every attempt event carries the attempt it is about', async (t) => {
+  // `saveRun` read `rec.attempts`, but a run record is `{run, id}` — `loadRun`'s shape, and what
+  // every caller hands straight back. So every attempt event on a local board went in as
+  // `{attempt: null, profile: null, host: null}`, and `hkb log` is what renders them.
+  const { ctx, store } = await board(t);
+  const card = await store.createTask({ title: 'a card', status: 'running', agent: 'claude' });
+  const rec = await store.loadRun(card.number);
+  rec.run.attempts.push({ attempt: 1, profile: 'claude', host: 'laptop-a', started_at: new Date().toISOString() });
+  await store.saveRun(card.number, rec);
+
+  const saved = store.index.events({ limit: 200 }).filter((e) => e.kind === 'attempt' && e.number === card.number);
+  const last = saved[saved.length - 1];
+  assert.ok(last, 'saving a run appends an attempt event');
+  assert.deepEqual(
+    [last.payload.attempt, last.payload.profile, last.payload.host],
+    [1, 'claude', 'laptop-a'],
+  );
+  void ctx;
+});
+
+test('hkb log reads a card\'s newest history, not the oldest page of the whole log', async (t) => {
+  // `taskEvents` was `events({limit: 5000})` filtered in JS. `events` is a forward cursor from id 0,
+  // so past the retention floor it read the *oldest* rows: `[]` for a recent card, pre-history for
+  // an old one, and nothing saying rows had been cut. Narrowing in SQL is correct and cheaper.
+  const { store } = await board(t);
+  const mine = await store.createTask({ title: 'the card we ask about', status: 'ready', agent: 'claude' });
+  const noise = await store.createTask({ title: 'somebody else', status: 'ready', agent: 'claude' });
+  for (let i = 0; i < 60; i++) await store.addNote(noise.number, `noise ${i}`);
+  await store.addNote(mine.number, 'the newest thing that happened to me');
+
+  const rows = await store.taskEvents(mine.number);
+  assert.ok(rows.length >= 2, `#${mine.number}'s own history survived 60 rows of somebody else's: ${rows.length}`);
+  assert.ok(rows.every((r) => typeof r.at === 'string' && typeof r.kind === 'string'));
+  const ats = rows.map((r) => r.at);
+  assert.deepEqual(ats, [...ats].sort(), 'oldest first, the order hkb log interleaves on');
+  // and it is not paying to parse the whole log to find them
+  const narrow = store.index.taskEvents(mine.number, { limit: 2 });
+  assert.equal(narrow.length, 2, 'the narrowing happens in SQL, so a limit is a limit');
+});
+
+test('a stale lease is lost even while the claim is held — the local beat mirror is not the claim', async (t) => {
+  // `beatToken` was an alias for `lockToken`, so `heartbeat`'s `WHERE token = ?` leased on the value
+  // it compared against: the compare-and-swap could not fail, and `hkb heartbeat`'s warm path could
+  // never report `lost`. The mirror is now its own table — the counterpart of the GitHub driver's
+  // local `refs/kb/locks/<n>/<k>` ref — and it deliberately outlives a released row.
+  const { store } = await board(t);
+  const card = await store.createTask({ title: 'a card', status: 'ready', agent: 'claude' });
+  const n = card.number;
+  const { token } = await store.claim(n, 1);
+  assert.equal(store.beatToken(n, 1), token, 'the claimer is where the chain starts');
+
+  const moved = await store.heartbeat(n, 1, token);
+  assert.equal(moved.result, 'ok');
+  assert.equal(store.beatToken(n, 1), moved.token, 'a beat advances this host\'s mirror with it');
+  assert.notEqual(moved.token, token, 'and rotates the token, which is what makes the CAS a CAS');
+
+  assert.equal((await store.heartbeat(n, 1, token)).result, 'lost', 'the superseded lease is rejected');
+  assert.equal(await store.lockToken(n, 1), moved.token, 'while the claim itself is very much alive');
+
+  // `resyncBeat` is how a worker recovers from that, and `dropBeat` is what a terminal verb leaves
+  // behind — nothing.
+  assert.equal(store.resyncBeat(n, 1, moved.token), true);
+  assert.equal(store.beatToken(n, 1), moved.token);
+  assert.equal(store.dropBeat(n, 1), true);
+  assert.equal(store.beatToken(n, 1), null, 'null means "this host has not beaten", never "the claim is gone"');
+  assert.notEqual(await store.lockToken(n, 1), null, 'which is a different question, with a different answer');
+});
+
+test('one context, one store handle — and closing it is one call', async (t) => {
+  // `gc.js` documents what the alternative costs: "leaked one handle per tick until the process hit
+  // its file-descriptor limit". A server reads four times for one request and a doctor twenty times
+  // in a run, so the fix is one handle per context rather than a `finally` at forty call sites.
+  const { ctx } = await board(t);
+  const { openStore, closeStore } = await import('../src/store/index.js');
+  const a = await openStore(ctx);
+  const b = await openStore(ctx);
+  assert.equal(a, b, 'the second verb of a process gets the handle the first one opened');
+  await a.createTask({ title: 'opens the index', status: 'ready', agent: 'claude' });
+  assert.equal(a.indexOpen, true);
+  assert.equal(closeStore(ctx), true, 'and one call lets it go');
+  assert.equal(closeStore(ctx), false, 'twice is a no-op, not an error');
+  const c = await openStore(ctx);
+  assert.notEqual(c, a, 'a store asked for after the close is a fresh one');
+  c.close();
+});
+
+test('a local board\'s heartbeat never names a git ref, and neither does LOCK_LOST', async (t) => {
+  // `hkb heartbeat` printed `refs/kb/locks/42/1` and, on its fallback, "the run comment". Neither
+  // exists on a local board — the claim is a row and the record is a file on the branch. The same
+  // wart was fixed two files over (`cli.js`'s `c.ref || \`attempt ${k}\``) and left standing here.
+  const { heartbeat } = await import('../src/lifecycle.js');
+  const { ctx, store } = await board(t);
+  const card = await store.createTask({ title: 'a claimed card', status: 'ready', agent: 'claude' });
+  const n = card.number;
+  const { token } = await store.claim(n, 1);
+  const rec = await store.loadRun(n);
+  rec.run.attempts.push({ attempt: 1, profile: 'claude', host: ctx.host, started_at: new Date().toISOString(), lock_sha: token });
+  await store.saveRun(n, rec);
+
+  const beat = await heartbeat(ctx, n, { attempt: 1 });
+  assert.equal(beat.ref, null, 'a store that keeps its claims in a table has no ref to name');
+  assert.equal(beat.attempt, 1);
+  assert.equal(store.lockRef(n, 1), null);
+
+  // and when the claim really is gone, the error says which attempt rather than which ref
+  await store.release(n, 1);
+  store.dropBeat(n, 1);
+  await assert.rejects(
+    () => heartbeat(ctx, n, { attempt: 1 }),
+    (e) => e.exitCode === 3 && /LOCK_LOST/.test(e.message) && !/refs\/kb\/locks/.test(e.message) && /attempt 1/.test(e.message),
+  );
+});
+
+test('hkb comment on a local board prints a line, not a JSON blob', async (t) => {
+  // `out(ctx, obj, c.url)` with `c.url === null` — which is always, on a store with no page for a
+  // note — fell through to `JSON.stringify`. CLAUDE.md: human output is a one-liner per item.
+  const { main } = await import('../src/cli.js');
+  const { ctx, store } = await board(t);
+  const card = await store.createTask({ title: 'a card', status: 'ready', agent: 'claude' });
+  // `main` builds its own context off the checkout, so the board has to be on disk for it. The
+  // `repo` is there because `ctx.requireBoard()` still insists on one even for a board that never
+  // reaches the forge — that is `docs/wiki/FINDINGS.md`'s open cleanup, not this test's subject.
+  fs.writeFileSync(path.join(ctx.root, '.kanban', 'board.json'), JSON.stringify({ ...ctx.cfg, repo: 'o/r' }, null, 2));
+  const written = [];
+  const realWrite = process.stdout.write.bind(process.stdout);
+  const cwd = process.cwd();
+  process.stdout.write = (s) => { written.push(String(s)); return true; };
+  process.chdir(ctx.root);
+  try {
+    await main(['comment', String(card.number), 'a note from a human']);
+  } finally { process.chdir(cwd); process.stdout.write = realWrite; }
+
+  const printed = written.join('');
+  assert.doesNotMatch(printed, /^\s*\{/, `a blob, not a line: ${printed}`);
+  assert.match(printed, new RegExp(`#${card.number}`), printed);
+  assert.equal(printed.trim().split('\n').length, 1, 'one line per item');
+  assert.deepEqual((await store.listNotes(card.number)).map((c) => c.text), ['a note from a human']);
 });

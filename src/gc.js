@@ -317,21 +317,20 @@ export async function sweep(ctx, { yes = false, days = 14, memo = null, log = /*
   // anything. The skip message was therefore only ever reachable on a board that was also on
   // GitHub, which is the one board that did not need it.
   const kind = storeKind(ctx);
+  // **This sweep no longer owns the handle, and must not close it.** The leak it used to guard
+  // against — the local driver's SQLite connection, its WAL and its shm, one per tick because the
+  // dispatcher runs this every `gc_every_ticks`, until the process hit its file-descriptor limit —
+  // is now fixed one level up: `openStore(ctx)` hands back a single handle per context, so a
+  // thousand ticks hold one. Closing it here would close the *loop's* store mid-tick and leave the
+  // slot pointing at a dead connection. The owner closes it: `loop()`'s `finally` for the
+  // dispatcher, `main()`'s for `hkb gc` run by hand.
   const store = await openStore(ctx);
-  // The close is a `finally`, not a last line. The local driver holds a SQLite connection with a WAL
-  // and an shm handle behind it, and the dispatcher runs this sweep every `gc_every_ticks` — so a
-  // sweep that throws (a rate limit, a `gh` that is logged out, a worktree that will not go) leaked
-  // one handle per tick until the process hit its file-descriptor limit.
-  try {
-    return await sweepOpen(ctx, store, kind, { yes, days, memo, log });
-  } finally {
-    /** @type {any} */ (store).close?.(); // the GitHub driver holds nothing and has no `close`
-  }
+  return sweepOpen(ctx, store, kind, { yes, days, memo, log });
 }
 
 /**
- * The sweep itself, with the store already open — split out only so `sweep()` above can close that
- * store in a `finally` without this whole body sitting inside a `try`.
+ * The sweep itself, with the store already open. Kept separate from `sweep()` so a caller that has
+ * a store in hand — the dispatcher's end-of-tick pass — can run it without opening a second one.
  * @param {any} ctx @param {any} store @param {string} kind
  * @param {{yes: boolean, days: number, memo: any, log: (...a: any[]) => void}} opts
  */

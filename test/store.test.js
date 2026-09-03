@@ -464,6 +464,66 @@ const SCENARIOS = [
     },
   },
   {
+    // The one that was aliased away. `beatToken` was `lockToken` on the local driver, so
+    // `heartbeat`'s `WHERE token = ?` leased on the value it compared against and the compare-and-
+    // swap could not fail — `hkb heartbeat`'s warm path could never report `lost`, and the only
+    // reason a reclaim was ever noticed is that `release()` happens to delete the row.
+    name: 'a beat leased on this host\'s stale copy is lost, even while the claim is still there',
+    async run(h) {
+      const n = (await card(h)).number;
+      const { token } = await h.store.claim(n, 1);
+      h.settleClaim(n, 1, token);
+      h.store.resyncBeat(n, 1, token);
+      const mine = h.store.beatToken(n, 1);
+      assert.equal(mine, token, 'this host beats on the token it claimed with');
+
+      // Somebody else beats: the claim is still held, but it has moved on from `mine`.
+      const theirs = await h.store.heartbeat(n, 1, token);
+      assert.equal(theirs.result, 'ok');
+      assert.notEqual(theirs.token, mine, 'a beat rotates the token, which is what makes the CAS a CAS');
+      h.store.resyncBeat(n, 1, theirs.token);
+
+      const stale = await h.store.heartbeat(n, 1, mine);
+      assert.equal(stale.result, 'lost', 'the stale lease is rejected while the claim itself is very much alive');
+      assert.notEqual(await h.store.lockToken(n, 1), null, 'and the claim is still there — `lost` is about the lease, not the row');
+    },
+  },
+  {
+    name: 'lockRef names where a claim lives, or answers null on a store with no name for one',
+    async run(h) {
+      const n = (await card(h)).number;
+      const where = h.store.lockRef(n, 1);
+      assert.ok(where === null || typeof where === 'string', 'a string or null, never undefined');
+      // `hkb heartbeat` and the LOCK_LOST error print this, and used to print `refs/kb/locks/<n>/<k>`
+      // on every board. A store that keeps its claims in a table has no such name, and says so.
+      const { token } = await h.store.claim(n, 1);
+      h.settleClaim(n, 1, token);
+      const listed = (await h.store.listLocks()).find((l) => l.n === n && l.k === 1);
+      assert.equal(listed.ref ?? null, where, '`lockRef` is the `ref` the listing already carries');
+      await h.store.release(n, 1);
+    },
+  },
+  {
+    // `taskEvents` was `events({limit: 5000})` filtered in JS — a forward cursor from id 0, so on a
+    // board past the retention floor `hkb log` read the *oldest* page and answered `[]` for a card
+    // whose whole history was newer than it.
+    name: 'taskEvents answers with a card\'s newest history, not the log\'s oldest page',
+    async run(h) {
+      const noisy = await card(h, { title: 'the other card' });
+      const t = await card(h, { title: 'the one we ask about' });
+      await h.store.setStatus(t, 'running');
+      // Bury it: a long run of events belonging to somebody else, ahead of the card in id order.
+      for (let i = 0; i < 40; i++) await h.store.addNote(noisy.number, `noise ${i}`);
+      const rows = await h.store.taskEvents(t.number);
+      // Only a driver with a log of its own can be buried; the GitHub driver reads the issue
+      // timeline, which is already per-card and cannot be crowded out by another card's rows.
+      if (h.store.capabilities().events) assert.ok(rows.length, `#${t.number} has a history under 40 rows of somebody else's`);
+      for (const e of rows) for (const key of ['at', 'kind', 'detail', 'actor']) assert.ok(key in e, `an entry is missing ${key}`);
+      const ats = rows.map((e) => e.at);
+      assert.deepEqual(ats, [...ats].sort(), 'oldest first, the order hkb log interleaves on');
+    },
+  },
+  {
     name: 'taskEvents is one card\'s history, in the four fields hkb log prints',
     async run(h) {
       const t = await card(h);

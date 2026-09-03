@@ -125,7 +125,10 @@ export const TOOLS = [
     description: 'Add a plain comment to the task\'s issue. For progress notes worth keeping; it does not end the attempt and it does not change status.',
     properties: { task: TASK, text: { type: 'string', minLength: 1, description: 'Markdown body of the comment.' } },
     required: ['text'],
-    run: async (ctx, n, a) => ({ number: n, url: (await (await openStore(ctx)).addNote(n, a.text)).url }),
+    // `url` is null on a store with no page for a note, and that is the answer, not a missing one —
+    // `?? null` rather than `undefined`, so the field is always in the JSON and a caller can tell
+    // "this store has no link" from "this tool forgot to say".
+    run: async (ctx, n, a) => ({ number: n, url: (await (await openStore(ctx)).addNote(n, a.text)).url ?? null }),
   },
   {
     name: 'kanban_create',
@@ -287,7 +290,11 @@ export async function callTool(ctx, name, rawArgs, env = process.env) {
     e.rpc = RPC.params;
     throw e;
   }
-  ctx._cache = {}; // a server outlives many calls; never answer from a previous call's comments
+  // A server outlives many calls; never answer from a previous call's comments — or from its
+  // open-PR listing. The *store handle* deliberately survives this: `openStore(ctx)` keeps one per
+  // context (`src/store/index.js`), and a server that dropped it per call would open one per tool
+  // call instead. It goes when the process does, which for a stdio server is when its client exits.
+  ctx._cache = {};
   try {
     const args = validateArgs(tool, rawArgs);
     const number = tool.properties.task ? resolveTask(args, env) : null;

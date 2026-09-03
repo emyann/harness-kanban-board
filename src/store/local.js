@@ -309,7 +309,11 @@ export class LocalStore {
   loadRun(n) { return this.git.loadRun(n); }
 
   saveRun(n, rec) {
-    const a = [].concat(rec?.attempts || []).slice(-1)[0] || null;
+    // A run record is `{run, id}` (`loadRun`'s shape, and what every caller passes straight back),
+    // so the attempts are `rec.run.attempts`. Reading `rec.attempts` made every attempt event on a
+    // local board carry `{attempt: null, profile: null, host: null}` — which is what `hkb log`
+    // renders. `rec.attempts` stays in the chain for a caller that hands the bare run in.
+    const a = [].concat(rec?.run?.attempts || rec?.attempts || []).slice(-1)[0] || null;
     return this._durable(KIND.saveRun, Number(n), () => this.git.saveRun(n, rec), {
       attempt: a?.attempt ?? null, profile: a?.profile ?? null, host: a?.host ?? null,
     });
@@ -364,13 +368,16 @@ export class LocalStore {
       detail: r.result === 'lost' ? 'the lease was rejected: this claim has been reclaimed' : '',
     };
   }
+  /** A claim here is a row in `locks`, not a ref, so it has no name a message could print (§6.4). */
+  lockRef() { return null; }
   lockToken(n, k) { return this.index.lockToken(n, k); }
-  // The index *is* this host's local state, so the token to lease on and the authoritative token are
-  // one read — and the two methods that exist to reconcile them on GitHub have nothing to reconcile.
-  // They answer `true` (done, nothing to move) rather than `false`, which would read as a failure.
-  beatToken(n, k) { return this.index.lockToken(n, k); }
-  resyncBeat() { return true; }
-  dropBeat() { return true; }
+  // Two reads, not one. `locks.token` is the claim; `beats.token` is where *this checkout* left the
+  // chain — the counterpart of the GitHub driver's local `refs/kb/locks/<n>/<k>` mirror. Aliasing
+  // them made `heartbeat`'s lease check its token against itself, so the warm path could never
+  // report `lost` and a reclaim went unnoticed until `release()` happened to delete the row.
+  beatToken(n, k) { return this.index.beatToken(n, k); }
+  resyncBeat(n, k, token) { return this.index.resyncBeat(n, k, token); }
+  dropBeat(n, k) { return this.index.dropBeat(n, k); }
   events(opts) { return this.index.events(opts); }
 
   /**
@@ -378,9 +385,7 @@ export class LocalStore {
    * narrowed to `n` and rendered in the four fields `hkb log` prints.
    */
   taskEvents(n) {
-    const want = Number(n);
-    return this.index.events({ limit: 5000 })
-      .filter((e) => e.number === want)
+    return this.index.taskEvents(n)
       .map((e) => ({ at: e.at, kind: e.kind, detail: detailOf(e.payload), actor: e.payload?.host ?? null }));
   }
   appendEvent(spec) { return this.index.appendEvent(spec); }

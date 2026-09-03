@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
-import { openStore } from './store/index.js';
+import { openStore, openStoreReadOnly, closeStore } from './store/index.js';
 import { promote as realPromote, unblock as realUnblock, block as realBlock, requestChanges as realRequestChanges, archive as realArchive } from './lifecycle.js';
 import {
   logsDir, loadUserBoards, userBoardsFile, contextForPath, pidFile, readPidFile, pidAlive, processState,
@@ -20,14 +20,24 @@ import { computeReady, blockerDone, formatSession, resumeCommand, parseRepoSpecs
 // because that shape *is* `startServer`'s `deps` contract: a test hands its own function under the
 // same name, and the server calls whichever it was given. Moving those fakes onto the store double
 // is #303's job; what matters here is that the *real* ones open a store like every other verb.
-const realFetchBoard = async (ctx, { includeClosed = false } = {}) => (await openStore(ctx)).listTasks({ states: includeClosed ? ['OPEN', 'CLOSED'] : ['OPEN'] });
-const realGetTask = async (ctx, n) => (await openStore(ctx)).getTask(n);
-const realLoadRun = async (ctx, n) => (await openStore(ctx)).loadRun(n);
-const realLatestResult = async (ctx, n) => (await openStore(ctx)).latestResult(n);
-const realParentResults = async (ctx, task) => (await openStore(ctx)).parentResults(task);
+//
+// `openStoreReadOnly`, not `openStore`, and it is the reason both exist. A server is long-lived and
+// reads several times per request — four for one `GET /task/42` — so it wants the connection
+// `sqlite.js` describes as *"`hkb serve`'s, the one that may not write"*: `{readOnly: true,
+// timeout: 0}`, which fails a busy lock fast instead of parking a request behind the dispatcher's
+// write. The handle is memoized on the board's context and closed with the server (`stop()`), so a
+// hundred requests still hold one. Writes are the lifecycle verbs below, and those open their own.
+const realFetchBoard = async (ctx, { includeClosed = false } = {}) => (await openStoreReadOnly(ctx)).listTasks({ states: includeClosed ? ['OPEN', 'CLOSED'] : ['OPEN'] });
+const realGetTask = async (ctx, n) => (await openStoreReadOnly(ctx)).getTask(n);
+const realLoadRun = async (ctx, n) => (await openStoreReadOnly(ctx)).loadRun(n);
+const realLatestResult = async (ctx, n) => (await openStoreReadOnly(ctx)).latestResult(n);
+const realParentResults = async (ctx, task) => (await openStoreReadOnly(ctx)).parentResults(task);
 // `html_url` is what the route below reads off it, and the interface answers with `url` — the
 // mapping is here rather than at the route, so a `deps.addComment` a test supplies keeps its shape.
-const realAddComment = async (ctx, n, text) => ({ html_url: (await (await openStore(ctx)).addNote(n, text)).url });
+// A comment is a write, so this one is `openStore`.
+// `?? null` for the same reason: a store with no page for a note answers null, and the drawer reads
+// a null `html_url` as "no link to offer" — an absent key would read as a bug in the route.
+const realAddComment = async (ctx, n, text) => ({ html_url: (await (await openStore(ctx)).addNote(n, text)).url ?? null });
 
 /** The columns of the web board. `archived` is a verb, not a column — archived tasks leave the board. */
 export const COLUMNS = ['triage', 'todo', 'ready', 'running', 'blocked', 'review', 'done'];
@@ -412,6 +422,9 @@ export async function startServer(ctx, flags = {}, log = /** @type {(...a: any[]
     const dropped = boards.filter((b) => !next.includes(b));
     boards = next;
     byKey = new Map(next.map((b) => [b.key, b]));
+    // A board the operator removed from `boards.json` takes its store handle with it. Without this
+    // a server that outlives a dozen edits of that file holds a dozen open index connections.
+    for (const b of dropped) closeStore(b.ctx);
     if (!added.length && !dropped.length) return; // a reorder is not a change worth a line
     const what = [added.map((b) => `+${b.key}`).join(' '), dropped.map((b) => `-${b.key}`).join(' ')].filter(Boolean).join(' ');
     log(`board list changed: ${what} — now ${boards.length} board${boards.length === 1 ? '' : 's'} (${userBoardsFile()})`);
@@ -428,6 +441,9 @@ export async function startServer(ctx, flags = {}, log = /** @type {(...a: any[]
       if (!force && cache && Date.now() - cache.at < ttlMs) return cache;
       if (inflight) return inflight;
       const g = generation;
+      // A poll is the freshest thing the server has; the memoized PR listing is a tick's worth of
+      // truth, so it expires with the poll rather than living for the server's whole run.
+      delete b.ctx._cache.prsByHead;
       inflight = (async () => {
         const prev = cache;
         let cards = [];
@@ -453,6 +469,9 @@ export async function startServer(ctx, flags = {}, log = /** @type {(...a: any[]
       cache = null;
       if (number) { details.delete(number); delete b.ctx._cache[`comments:${number}`]; }
       else details.clear();
+      // The open-PR listing behind `fillPrFallback` is memoized per context; a write that opened,
+      // merged or closed a PR must not be answered from the listing taken before it.
+      delete b.ctx._cache.prsByHead;
     }
 
     async function detail(number, force = false) {
@@ -627,6 +646,9 @@ export async function startServer(ctx, flags = {}, log = /** @type {(...a: any[]
     });
   });
   server.on('clientError', (_e, socket) => { if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\n\r\n'); });
+  // The store handles live as long as the server does, and no longer. `boards` is re-read here
+  // rather than captured, because `reloadBoards` replaces the binding.
+  server.once('close', () => { for (const b of boards) closeStore(b.ctx); });
 
   await new Promise((resolve, reject) => {
     const onError = (e) => reject(e.code === 'EADDRINUSE'

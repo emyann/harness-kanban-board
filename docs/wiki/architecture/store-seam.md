@@ -7,9 +7,9 @@ audience: [dev]
 read_when: "writing a verb that reads or writes board state, adding a store driver, or wondering why tasks.js and lock.js are two lines long"
 covers:
   - path: src/store/index.js
-    sha: 5f004d44f491f4907f68e2167040861d1db7bdfe
+    sha: d440f1432159b01433599dd285c26dceae2596a3
   - path: src/store/github.js
-    sha: 7bfbce21d6891866046f79dfd3a1eb6c27e29bce
+    sha: 7b384d0c64870f7b33c209325359b8e2630856ad
   - path: src/forge.js
     sha: 92bb85cf8c2730d347ad44c40a9b9e0e513261b4
   - path: src/tasks.js
@@ -21,18 +21,18 @@ covers:
   - path: src/store/git.js
     sha: ffcc9df59f85f18b58875350cffa057ef8d31681
   - path: src/store/local.js
-    sha: 64c0434f1a0345f2a8089b926c17bd5f3c6c23a0
+    sha: 74fc6228a29d959c65472b83ba99e6e343fc8099
   - path: src/cli.js
-    sha: 714c403fbed1f62cefdf1309b6eacd5891e5a9e7
+    sha: fc69279838602cde09a8e804e4c5456878b71eff
   - path: src/lifecycle.js
-    sha: f5e110c3df6217c577ebaec04af30a3ebae15689
+    sha: c1b743d8c3e6ef9dabd62ce11b5dbc18d6d9e4bf
   - path: src/dispatch.js
-    sha: 03a5343ec44b7c1b2e2f769203389eb91f108949
+    sha: db423b5e353e4257adeef46e9670148bf630acdb
   - path: src/gc.js
-    sha: 19c7fedf4449febda1674cead88483a4ed01916f
+    sha: 387c7e3da22fb00d1d070903abc12e7f64dfc7cf
   - path: src/init.js
-    sha: 400f1fbb633681554e35db504a4861d2be213e0a
-generated_at_commit: d18fb5d
+    sha: fb4b0eb97192e874591ed4940a1e2f32775c1429
+generated_at_commit: 0cd9e5c
 last_refreshed: 2026-09-03
 related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-and-leases, concepts/board-protocol]
 ---
@@ -156,6 +156,7 @@ for adding one at all:
 | `lockToken(n, k)` | `hkb heartbeat` — the authoritative "is this claim still ours", which used to be `lockSha`/`lockExists` |
 | `beatToken(n, k)` | the heartbeat's warm path: what this host's next beat leases on, read locally, never throwing |
 | `resyncBeat` / `dropBeat` | reconciling that local state after a rejected lease, and forgetting it when an attempt ends |
+| `lockRef(n, k)` | `hkb heartbeat` and the LOCK_LOST error — where the claim lives *in words*, or `null` on a store that keeps its claims in a table. The same `ref` `claim`/`listLocks` already carried, asked for a claim the caller did not just make |
 | `taskEvents(n)` | `hkb log` — one card's history. Unlike `events()` it is **never refused**: GitHub has no board log, but it does keep an issue timeline |
 
 `heartbeat` now answers `{result, token, expected, detail}`. `detail` is there
@@ -168,7 +169,43 @@ notes in a file has nothing to put in.
 
 `claim` and `listLocks` carry an **optional** `ref` — where the claim lives when
 the store has such a name. `hkb claim` and the dispatcher's orphan sweep print
-the attempt number instead when there is none.
+the attempt number instead when there is none, and `lockRef(n, k)` is the same
+answer for a caller that has no claim result in hand.
+
+**`lockToken` and `beatToken` must be two reads, not one.** The local driver
+answered both from `locks.token`, on the reasoning that one table cannot drift
+from itself — but `heartbeat`'s compare-and-swap is `UPDATE locks SET token = ?
+WHERE … AND token = ?`, so leasing on the value it compares against made the CAS
+one that can never fail. `hkb heartbeat`'s warm path could not report `lost`, and
+the only reason a reclaim was ever noticed is that `release()` happens to delete
+the row. The mirror is now its own table (`beats`, schema version 3,
+`src/store/sqlite.js`) — the exact counterpart of the GitHub driver's local
+`refs/kb/locks/<n>/<k>` ref, seeded by `claim`, advanced by a successful beat,
+moved by `resyncBeat`, forgotten by `dropBeat` — and it deliberately outlives a
+released row, because a claim released and re-taken by somebody else is the
+reclaim it exists to catch.
+
+### One handle per context
+
+`openStore(ctx)` memoizes on the context and `closeStore(ctx)` is what lets go
+(`src/store/index.js`). That is not an optimisation: `gc.js` documents what the
+alternative cost — *"leaked one handle per tick until the process hit its
+file-descriptor limit"* — and every verb reaches board state through this
+function, so "close it in a `finally`" would have to be written correctly at
+every one of forty call sites. `hkb serve` reads four times for one
+`GET /task/42`, `hkb doctor` twenty times in a run and the dispatcher three-plus
+times per tick. One handle means one thing to close, and the owners close it:
+`main()`'s `finally` in `src/cli.js`, `loop()`'s `finally` in `src/dispatch.js`,
+and the server's `close` event in `src/serve.js`. A local store is still
+**reconciled on every call** (one `rev-parse` when the tip has not moved), so a
+memoized handle sees exactly what a fresh one would.
+
+`openStoreReadOnly(ctx)` is the server's: `openIndexReadOnly` with `{readOnly:
+true, timeout: 0}`, the connection `src/store/sqlite.js` names as *"`hkb serve`'s
+… the one that may not write"*. It fails a busy lock fast rather than parking a
+request behind the dispatcher's write transaction, and it lives in its own slot
+so the lifecycle verbs a drag on the web board runs still get a writable store.
+On GitHub there is no such distinction and it is `openStore`.
 
 ### The driver disagreement it found
 

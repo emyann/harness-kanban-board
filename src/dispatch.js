@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { enableAutoMerge, branchProtection, openPrsByHead, prMergeStates, staleBaseSha, ensureTrackBranch } from './forge.js';
-import { openStore } from './store/index.js';
+import { openStore, closeStore } from './store/index.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, remoteName, pidFile, readPidFile, pidAlive, recordExit, clearExit, HOOK_SETTINGS_VAR } from './board.js';
 import { workerHookSettings, PKG_ROOT, packageVersion } from './init.js';
 import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, authPauseReason, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, effectiveTools, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, isTrackRoot, trackBranchConflict, buildDeniedTools, deniedToolsUpdate } from './model.js';
@@ -380,8 +380,9 @@ export async function autoMergePass(ctx, tasks, { dryRun = false, log = /** @typ
  */
 export async function trackConflictPass(ctx, tasks, { dryRun = false, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   const out = [];
-  const store = await openStore(ctx);
   const roots = tasks.filter((t) => t.status === 'running' && !t.needsHuman && isTrackRoot(t, ctx.cfg, { board: tasks }).track);
+  if (!roots.length) return out; // most ticks: no track root, so nothing here needs a store at all
+  const store = await openStore(ctx);
   for (const root of roots) {
     const runRec = await store.loadRun(root.number);
     const last = lastAttempt(runRec.run);
@@ -492,6 +493,10 @@ export function dropCaches(ctx) {
  */
 export function dropCommentCaches(ctx) {
   for (const key of Object.keys(ctx._cache)) if (key.startsWith('comments:')) delete ctx._cache[key];
+  // `prsByHead` is the same kind of thing: the open-PR listing behind `fillPrFallback`, memoized so
+  // a verb that reads several cards pays for one. It is a tick's worth of truth, never a loop's —
+  // a PR opened by a worker last tick must be visible to this one.
+  delete ctx._cache.prsByHead;
 }
 
 // ---------- tick ----------
@@ -626,7 +631,23 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   let locks = null;
   try { locks = await store.listLocks(); } catch (e) { log(`lock listing failed (reclaim falls back to the run comment): ${e.message}`); }
   // `token`, not `sha`: §6.4 calls it a token because a store that is not GitHub does not keep one.
-  const lockTokenOf = (n, k) => (locks || []).find((l) => l.n === n && l.k === k)?.token || null;
+  const lockRowOf = (n, k) => (locks || []).find((l) => l.n === n && l.k === k) || null;
+  /**
+   * When this attempt last beat, out of the listing above — and **never a request the listing has
+   * already paid for or made pointless**.
+   *
+   * No row means either the listing failed or this attempt holds no lock; either way there is
+   * nothing to read, and asking anyway is one extra REST call per running card per tick, on exactly
+   * the tick that already failed. A row that carries `beat_at` (the local store answers with it) is
+   * the answer. Only GitHub's row — a token and no date — is worth the commit read.
+   */
+  const beatAtOf = async (n, k) => {
+    const row = lockRowOf(n, k);
+    if (!row) return null;
+    if (row.beat_at) return row.beat_at;
+    if (!row.token) return null;
+    return store.lockBeatAt(n, k, row.token);
+  };
 
   // 1. reclaim stale / crashed / timed out / finished without a terminal verb
   // `idleNumbers` doubles as the path_overlap guard's liveness check (#185): a running task whose
@@ -700,7 +721,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       // A ref-CAS worker writes nothing to the run comment, so its real last signal is the commit
       // its lock ref points at. One commit read, and only for an attempt that already looks stale.
       let beat = null;
-      try { beat = await store.lockBeatAt(t.number, a.attempt, lockTokenOf(t.number, a.attempt)); } catch (e) { log(`#${t.number}: lock ref beat unreadable (${e.message}); using the run comment`); }
+      try { beat = await beatAtOf(t.number, a.attempt); } catch (e) { log(`#${t.number}: lock ref beat unreadable (${e.message}); using the run comment`); }
       lastSignal = lastSignalAt(a, beat);
       if (secondsSince(lastSignal) > d.stale_after) outcome = 'reclaimed';
       else log(`#${t.number}: attempt ${a.attempt} beat on ${lockRef(t.number, a.attempt)} ${Math.round(secondsSince(lastSignal))}s ago — alive`);
@@ -713,7 +734,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     const idleThreshold = Math.max(d.interval, 1200);
     if (!outcome && !job && !livePid && secondsSince(lastSignal) > idleThreshold && secondsSince(lastSignal) <= d.stale_after) {
       let beat = null;
-      try { beat = await store.lockBeatAt(t.number, a.attempt, lockTokenOf(t.number, a.attempt)); } catch (e) { log(`#${t.number}: lock ref beat unreadable for the idle check (${e.message}); using the run comment`); }
+      try { beat = await beatAtOf(t.number, a.attempt); } catch (e) { log(`#${t.number}: lock ref beat unreadable for the idle check (${e.message}); using the run comment`); }
       lastSignal = lastSignalAt(a, beat);
     }
     if (!outcome) {
@@ -1366,6 +1387,9 @@ export async function loop(ctx, { interval, max, profiles = null, dryRun = false
     }
   } finally {
     dropLock();
+    // The store the ticks shared. `openStore` hands one handle back per context — that is what
+    // keeps a loop designed to run forever from opening one per tick — so this is where it closes.
+    closeStore(ctx);
     process.off('SIGUSR1', nudge);
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);

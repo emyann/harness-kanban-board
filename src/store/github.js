@@ -157,10 +157,27 @@ export async function fetchBoard(ctx, { includeClosed = false, blockers = true }
  * The head-branch fallback (`branchFallbackPrs`), applied board-wide: one `openPrsByHead` read when
  * at least one task came back with no PR from GraphQL, none at all otherwise. One request per tick,
  * never one per card — the cost the fallback is allowed to spend (#234).
+ *
+ * The memo is what keeps that promise, because `getTask` calls this too: `hkb create "x"
+ * --blocked-by 1,2,3` reads four cards and the listing is up to ten paginated REST pages, so
+ * without it one create issued four of them. Memoized on `ctx._cache`, which the dispatcher clears
+ * at the top of every tick (`dropPrCaches`) — so a loop still never judges a card on a listing it
+ * fetched last tick, and a one-shot CLI process pays for one.
  */
 async function fillPrFallback(ctx, tasks) {
   if (!tasks.some((t) => !(t.prs || []).length)) return;
-  const openByHead = await openPrsByHead(ctx);
+  // The *promise* is memoized, not its value: `createTask` reads its blockers with `Promise.all`,
+  // so the calls overlap and a value memo would still issue one listing each. A failed one is
+  // forgotten rather than remembered, so the next read retries instead of replaying the error.
+  if (!ctx._cache.prsByHead) ctx._cache.prsByHead = openPrsByHead(ctx);
+  const pending = ctx._cache.prsByHead;
+  let openByHead;
+  try {
+    openByHead = await pending;
+  } catch (e) {
+    if (ctx._cache.prsByHead === pending) delete ctx._cache.prsByHead;
+    throw e;
+  }
   for (const t of tasks) t.prs = branchFallbackPrs(t, openByHead);
 }
 
@@ -712,6 +729,8 @@ export function openGithubStore(ctx) {
     },
     /** `token` is the sha `listLocks` already returned: pass it and this costs one read, not two. */
     lockBeatAt: async (n, k, token = null) => lockBeatAt(ctx, token || await lockSha(ctx, n, k)),
+    /** The claim is a git ref here, and it has a name every message can print. */
+    lockRef: (n, k) => lockRef(n, k),
     /** The worker side: one CAS on the lock ref, leased on the attempt's own `expected` sha. */
     heartbeat(n, k, expected, opts = {}) {
       // `{ result, token }`, never the bare result: the lease is on where this worker left the ref, so

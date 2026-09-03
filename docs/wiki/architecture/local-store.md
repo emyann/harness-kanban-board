@@ -7,20 +7,20 @@ audience: [dev]
 read_when: "adding a store verb, debugging an index that disagrees with the branch, wondering why a verb is refused on this host, or working on hkb sync / init --import"
 covers:
   - path: src/store/local.js
-    sha: 64c0434f1a0345f2a8089b926c17bd5f3c6c23a0
+    sha: 74fc6228a29d959c65472b83ba99e6e343fc8099
   - path: src/store/index.js
-    sha: 5f004d44f491f4907f68e2167040861d1db7bdfe
+    sha: d440f1432159b01433599dd285c26dceae2596a3
   - path: src/store/sqlite.js
-    sha: 23b55ec112e4c11ff80ee2e417d849eae003aae8
+    sha: ad2e80d73391c5e7c0602c1786ca645604616887
   - path: src/init.js
-    sha: 400f1fbb633681554e35db504a4861d2be213e0a
+    sha: fb4b0eb97192e874591ed4940a1e2f32775c1429
   - path: src/doctor.js
-    sha: 3b520a130b4376aac0e9b326adbdf9659ff38c97
+    sha: 1f944284e5e63b03d83e0ca43c17a115aaafd7bb
   - path: src/gc.js
-    sha: 19c7fedf4449febda1674cead88483a4ed01916f
+    sha: 387c7e3da22fb00d1d070903abc12e7f64dfc7cf
   - path: src/cli.js
-    sha: 714c403fbed1f62cefdf1309b6eacd5891e5a9e7
-generated_at_commit: d18fb5d
+    sha: fc69279838602cde09a8e804e4c5456878b71eff
+generated_at_commit: 0cd9e5c
 last_refreshed: 2026-09-03
 related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
@@ -104,6 +104,27 @@ written for.
 pid/job/worktree are the index's alone. A lock on a branch would be a commit per
 beat, and `git log kb-board` is meant to be a history of *decisions*.
 
+A durable verb's event carries what it decided, and `saveRun`'s is the attempt it
+just wrote: `rec.run.attempts`, not `rec.attempts` — a run record is `{run, id}`
+(`loadRun`'s shape, and what every caller hands straight back), and reading the
+outer object put `{attempt: null, profile: null, host: null}` on every attempt
+event a local board ever appended. `hkb log` is what renders those fields.
+
+### The two claim tokens
+
+`locks.token` is the claim; `beats.token` is where **this checkout** left the
+chain. They are separate tables on purpose, and the reason is the shape of
+`heartbeat`: `UPDATE locks SET token = ? WHERE task_id = ? AND k = ? AND token =
+?`. Answering `beatToken` from `locks` made every lease check its token against
+itself — a compare-and-swap that cannot fail, so `hkb heartbeat`'s warm path
+could never report `lost` and nothing detected a reclaim except `release()`
+deleting the row out from under it. `beats` is the counterpart of the GitHub
+driver's local `refs/kb/locks/<n>/<k>` ref: seeded by `claim`, advanced by a
+successful beat, moved by `resyncBeat`, dropped by `dropBeat`, never reloaded
+from the branch, and deliberately *not* cascaded off `locks` — a claim released
+and re-taken by somebody else is exactly the reclaim a stale mirror catches.
+Adding it bumped `SCHEMA_VERSION` to 3, which rebuilds rather than migrates.
+
 ## Which tier answers a read
 
 Durable reads (`listTasks`, `getTask`, `loadRun`, `latestResult`, `listNotes`)
@@ -112,6 +133,20 @@ sha, so a tick that asks about twelve cards decodes it once, and — the real
 reason — there is exactly one answer to "what does the board say" rather than
 two that can disagree. The index answers the live half (`listLocks`,
 `heartbeat`, `events`, the open attempts) and is what `hkb serve` reads.
+
+One process holds **one** of these connections, because `openStore(ctx)` memoizes
+the store on the context and `closeStore(ctx)` is what closes it (see
+[the store seam](store-seam.md)). `hkb serve` reads through
+`openStoreReadOnly(ctx)` instead — `openIndexReadOnly`, `{readOnly: true,
+timeout: 0}` — so a request fails a busy lock fast rather than parking behind the
+dispatcher's write transaction.
+
+`hkb log` narrows in SQL: `index.taskEvents(n, {limit})` is `WHERE task_id = ?
+ORDER BY id DESC LIMIT ?`, returned oldest-first. It used to be
+`events({limit: 5000})` filtered in JavaScript, and `events` is a forward cursor
+from id 0 — so on a board past the retention floor it read the log's *oldest*
+page: `[]` for a recent card, pre-history for an old one, and nothing saying rows
+had been cut.
 
 The index's connection is opened **lazily** (`LocalStore.index`, a getter), and
 `close()` is a no-op when nothing opened it. A caller that only wants the durable

@@ -11,12 +11,7 @@ import { boardFile, api, readState, writeState, processState, storeGitDir, remot
 // with it (docs/local-first.md §7). Each is already gated on the board's store where it matters.
 import { detectCaps, issueDatabaseId, casHeartbeat, dropBeatChain } from './store/github.js';
 import { branchProtection, openPrsByHead, classifyClaimError, listTrackBranches } from './forge.js';
-import { openStore, storeKind } from './store/index.js';
-
-/** The board, through the seam — the default `fetch` every check below takes as an injectable dep. */
-const fetchBoard = async (ctx, opts = {}) => (await openStore(ctx)).listTasks(opts);
-const fetchClosedRecent = async (ctx, opts = {}) => (await openStore(ctx)).listClosedRecent(opts);
-const loadRun = async (ctx, n) => (await openStore(ctx)).loadRun(n);
+import { openStore, closeStore, storeKind } from './store/index.js';
 import { L, STATUSES, SAFE_BUILTINS, capabilityGrants, effectiveTools, toolPosture, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren, branchTaskNumber, denialDisplayTool, DENIAL_KINDS, mcpVisibilityDiagnosis, mcpGrantedTo } from './model.js';
 import { resolvedIdentity } from './hook.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, harnessHookCommand, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
@@ -25,6 +20,22 @@ import { checkProject } from './projects.js';
 import { mcpServersFromTranscript } from './stats.js';
 // mcp.js is imported dynamically inside checkMcp, not here: it imports cli.js, which imports this
 // file, and a static import here would make that a cycle.
+
+// The board reads, through the seam — the default `fetch` every check below takes as an injectable
+// dep. They sat above the last import and worked by hoisting, which read as a bug; they are
+// declarations, so here is where they belong.
+//
+// `openStore` hands back one handle per context, so `hkb doctor` — twenty-odd of these calls in a
+// run, two `SESSION_SAMPLE` sweeps among them — opens one index, and `main()`'s `finally` in
+// `cli.js` closes it. (`checkLocalStore` twenty lines below still builds and closes its own, and
+// deliberately: it wants the read-only connection, and it is diagnosing the handle, not using it.)
+/** The board, through the seam. */
+const fetchBoard = async (ctx, opts = {}) => (await openStore(ctx)).listTasks(opts);
+const fetchClosedRecent = async (ctx, opts = {}) => (await openStore(ctx)).listClosedRecent(opts);
+const loadRun = async (ctx, n) => (await openStore(ctx)).loadRun(n);
+
+/** `storeKind`, but a board.json that names no store it understands is not this check's failure. */
+function storeKindOf(ctx) { try { return storeKind(ctx); } catch { return 'github'; } }
 
 function has(cmd) { return spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).status === 0; }
 function version(cmd, args = ['--version']) { const r = spawnSync(cmd, args, { encoding: 'utf8' }); return r.status === 0 ? (r.stdout || r.stderr).trim().split('\n')[0] : null; }
@@ -678,7 +689,15 @@ export const ORPHANED_PR_CHECK = 'orphaned PRs';
  * #227 and #228: closed as done, work unmerged, nothing left to chase it. One read for every open PR
  * on hkb's own branches, then one issue lookup per match (usually a handful) to see which are closed.
  */
-export async function checkOrphanedPrs(ctx, { ok, warn }, { openByHead = openPrsByHead, issue = issueDatabaseId } = {}) {
+export async function checkOrphanedPrs(ctx, { ok, warn }, { openByHead = openPrsByHead, issue = issueDatabaseId, kind = null } = {}) {
+  // Not on a local board, and `gc.js` gates the identical sweep the same way: this check reads a
+  // *card* by looking the branch's number up as a GitHub issue (`issueDatabaseId`), which on a local
+  // board is a different repository's numbering or nothing at all. So it spends up to ten paginated
+  // requests to answer a question it cannot answer, and reports `bad` when the forge is unreachable
+  // — on the store that exists to work with `gh` logged out.
+  if ((kind || storeKindOf(ctx)) === 'local') {
+    return ok(ORPHANED_PR_CHECK, 'not checked on a local board — this looks a branch up as an issue in the forge, and a local board does not number its cards there');
+  }
   const byHead = await openByHead(ctx);
   const candidates = [];
   for (const [head, pr] of byHead) {
@@ -716,7 +735,12 @@ export const TRACK_BRANCH_CHECK = 'track branches';
  * One `git/matching-refs` read for every track branch the repo has ever made, then one run-record
  * read per branch — there are rarely more than a handful of tracks alive on a board at once.
  */
-export async function checkTrackBranches(ctx, { ok, warn }, { branches = listTrackBranches, run = loadRun } = {}) {
+export async function checkTrackBranches(ctx, { ok, warn }, { branches = listTrackBranches, run = loadRun, kind = null } = {}) {
+  // Same gate, same reason, and the same sentence `gc.js` speaks when it skips its own sweep: a
+  // track branch is listed off the forge, and a local board keeps none there.
+  if ((kind || storeKindOf(ctx)) === 'local') {
+    return ok(TRACK_BRANCH_CHECK, 'not swept on a local board — a track branch lives on the forge and this board does not keep one');
+  }
   const rows = await branches(ctx);
   if (!rows.length) return ok(TRACK_BRANCH_CHECK, 'no track branches on the repo');
   const orphans = [];

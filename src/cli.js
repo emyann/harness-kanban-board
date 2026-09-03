@@ -13,7 +13,7 @@ import { stopHook, markSessionClaim } from './hook.js';
 import { init, packageVersion } from './init.js';
 import { doctor } from './doctor.js';
 import { gc } from './gc.js';
-import { assertOwningHost, storeKind, openStore } from './store/index.js';
+import { assertOwningHost, storeKind, openStore, closeStore } from './store/index.js';
 import { STATUSES, DEFAULT_KB, L, blockerDone, blockersOf, blockersKnown, parseBodyBlock, lastAttempt, formatSession, formatDenials, resumeCommand, activePrGuard, isTrackRoot, groomBoard, boardSummary, computeReady, pathOverlapGuard, GROOM_LEVELS, parsePriorityFlag, parseScheduledAtFlag } from './model.js';
 
 /** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
@@ -457,7 +457,25 @@ function trackLine(d, n) {
   return `no — ${d.why}`;
 }
 
+/**
+ * Every verb, and the one place a CLI process's store handle is let go of.
+ *
+ * `openStore(ctx)` hands back a single handle per context, so a verb that reads the board four times
+ * holds one connection and this `finally` is all it takes to close it. The context is reported back
+ * through `keep` rather than built here, because `hkb hook …` and `hkb help` return before there is
+ * one — and `closeStore(null)` is a no-op, so the wrapper does not have to know which.
+ */
 export async function main(argv) {
+  /** @type {any} */
+  let ctx = null;
+  try {
+    return await runVerb(argv, (c) => { ctx = c; });
+  } finally {
+    closeStore(ctx);
+  }
+}
+
+async function runVerb(argv, keep) {
   const { flags, pos } = parseArgs(argv);
   const [typed, ...rest] = pos;
   const cmd = VERB_ALIASES[typed] || typed;
@@ -468,12 +486,14 @@ export async function main(argv) {
     // are for a human who can read the error, `makeHookContext` is for a guard rail that must stand
     // aside instead when its own config is unreadable.
     const ctx = makeHookContext(flags);
+    keep(ctx); // a hook reaches the store too (`stopHook`, `preToolHook`), so its handle is closed as well
     if (rest[0] === 'stop') return stopHook(ctx);
     if (rest[0] === 'pretool') { const { preToolHook } = await import('./hook.js'); return preToolHook(ctx); }
     if (rest[0] === 'subagentstop') { const { subagentStopHook } = await import('./hook.js'); return subagentStopHook(ctx); }
     throw usage('hkb hook stop|pretool|subagentstop');
   }
   const ctx = makeContext(flags);
+  keep(ctx);
   const argvForOutbox = process.env.KB_NO_OUTBOX ? null : argv;
 
   switch (cmd) {
@@ -729,7 +749,10 @@ export async function main(argv) {
       const [n] = nums(rest);
       if (!n || !rest[1]) throw usage('hkb comment <n> "text"');
       const c = await (await openStore(ctx)).addNote(n, rest.slice(1).join(' '));
-      out(ctx, { number: n, url: c.url }, c.url);
+      // A note has a page to read it on where the store has one, and on a local board it has none —
+      // where `out(ctx, obj, null)` fell through to a JSON blob on a human's terminal. One line per
+      // item, always: the URL when there is one, and what landed where when there is not.
+      out(ctx, { number: n, url: c.url ?? null }, c.url || `#${n} ← comment added`);
       return 0;
     }
     case 'log': {
@@ -754,8 +777,12 @@ export async function main(argv) {
       const [n] = nums(rest);
       if (!n) throw usage('hkb heartbeat <n> [--note ..]');
       const r = await withOutbox(ctx, argvForOutbox, () => heartbeat(ctx, n, { note: flags.note, attempt: flags.attempt }));
+      // `r.ref` is null on a store that keeps its claims in a table rather than in a ref, and
+      // "lease held on null" is not a sentence. Same fallback as `claim` below: the claim, said in
+      // whatever terms this board has for one.
+      const on = r.ref ? ` on ${r.ref}` : '';
       const how = r.skipped ? `ok (recent heartbeat; next in ${r.next_in_s}s)`
-        : r.mode === 'ref' ? `#${n} attempt ${r.attempt}: lease held on ${r.ref} → ${String(r.sha).slice(0, 7)}${r.resynced ? ' (chain resynced)' : ''}`
+        : r.mode === 'ref' ? `#${n} attempt ${r.attempt}: lease held${on} → ${String(r.sha).slice(0, 7)}${r.resynced ? ' (chain resynced)' : ''}`
           : `heartbeat recorded for #${n} attempt ${r.attempt}`;
       out(ctx, r, how);
       return 0;
@@ -842,9 +869,9 @@ export async function main(argv) {
         await store.saveRun(n, runRec);
       }
       // `ref` is where the claim lives when the store has such a name — the lock ref on GitHub, and
-      // nothing on a store that keeps its claims in a table. The attempt is the portable answer.
-      const where = c.ref || `attempt ${k}`;
-      out(ctx, { number: n, attempt: k, ref: c.ref ?? null, pid }, `#${n} claimed (attempt ${k}, ${where})${pid ? ` pid ${pid}` : `\nexport KB_TASK=${n} KB_ATTEMPT=${k}   # then work, and finish with hkb complete|block|request-review`}`);
+      // nothing on a store that keeps its claims in a table, which is already saying "attempt k".
+      const where = c.ref ? `attempt ${k}, ${c.ref}` : `attempt ${k}`;
+      out(ctx, { number: n, attempt: k, ref: c.ref ?? null, pid }, `#${n} claimed (${where})${pid ? ` pid ${pid}` : `\nexport KB_TASK=${n} KB_ATTEMPT=${k}   # then work, and finish with hkb complete|block|request-review`}`);
       return 0;
     }
     case 'up': {

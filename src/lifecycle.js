@@ -8,7 +8,7 @@ import { openStore } from './store/index.js';
 import { sessionForAttempt } from './hook.js';
 import {
   openAttempt, computeReady, blockerDone, promoteDecision, serializeResultComment, hashReason,
-  heartbeatMode, lockRef, BLOCK_KINDS, DEFAULT_KB, L, mergePolicy, mergeDecision,
+  heartbeatMode, BLOCK_KINDS, DEFAULT_KB, L, mergePolicy, mergeDecision,
 } from './model.js';
 import { resolveTrack } from './track.js';
 
@@ -78,14 +78,24 @@ async function finishAttempt(ctx, store, task, rec, flags, outcome, extra = {}) 
 
 // ---------- heartbeat ----------
 
+/**
+ * Where a claim lives, in words a person on *this* board can act on.
+ *
+ * `refs/kb/locks/42/1` on GitHub; on a local board the claim is a row in a table and has no name, so
+ * the attempt number — which every store has — is the answer. This is `cli.js`'s `c.ref || \`attempt
+ * ${k}\`` under one name, because the heartbeat and the LOCK_LOST error were still naming a ref no
+ * local board has. A `store` is optional so the fallback needs no lookup.
+ */
+const claimWhere = (store, n, k) => store?.lockRef?.(n, k) || `attempt ${k} of #${n}`;
+
 /** The one error a worker must obey: the dispatcher took the task back. */
-function lockLost(n, k, why = 'is gone — the dispatcher reclaimed this task') {
-  const e = new Error(`LOCK_LOST: ${lockRef(n, k)} ${why}. Stop now: do not commit, do not call complete.`);
+function lockLost(n, k, why = 'is gone — the dispatcher reclaimed this task', store = null) {
+  const e = new Error(`LOCK_LOST: ${claimWhere(store, n, k)} ${why}. Stop now: do not commit, do not call complete.`);
   e.exitCode = 3;
   return e;
 }
 
-const refBeat = (n, k, cas, extra = {}) => ({ number: n, attempt: k, mode: 'ref', ref: lockRef(n, k), sha: cas.token, expected: cas.expected, ...extra });
+const refBeat = (store, n, k, cas, extra = {}) => ({ number: n, attempt: k, mode: 'ref', ref: store?.lockRef?.(n, k) ?? null, sha: cas.token, expected: cas.expected, ...extra });
 
 /**
  * A rejected lease is strong evidence but not proof: a push that lands while the local `update-ref`
@@ -96,14 +106,14 @@ const refBeat = (n, k, cas, extra = {}) => ({ number: n, attempt: k, mode: 'ref'
 async function resolveRejectedLease(store, n, k) {
   let token;
   try { token = await store.lockToken(n, k); } catch { return null; } // the store is unreachable: conclude nothing
-  if (!token) throw lockLost(n, k);
+  if (!token) throw lockLost(n, k, undefined, store);
   store.resyncBeat(n, k, token);
   const retry = await store.heartbeat(n, k, token);
-  if (retry.result === 'ok') return refBeat(n, k, retry, { resynced: true });
+  if (retry.result === 'ok') return refBeat(store, n, k, retry, { resynced: true });
   if (retry.result === 'unavailable') return null;
   let after;
   try { after = await store.lockToken(n, k); } catch { return null; }
-  if (!after) throw lockLost(n, k);
+  if (!after) throw lockLost(n, k, undefined, store);
   return null; // the claim is there and still refuses our lease — let the comment path have a say
 }
 
@@ -128,7 +138,7 @@ export async function heartbeat(ctx, number, { note, attempt } = {}) {
   if (envK && !note && heartbeatMode(ctx.cfg, process.env.KB_PROFILE) !== 'comment') {
     const chain = store.beatToken(number, envK);
     const cas = chain ? await store.heartbeat(number, envK, chain) : null;
-    if (cas?.result === 'ok') return refBeat(number, envK, cas);
+    if (cas?.result === 'ok') return refBeat(store, number, envK, cas);
     if (cas?.result === 'lost') {
       const beat = await resolveRejectedLease(store, number, envK);
       if (beat) return beat;
@@ -147,20 +157,20 @@ export async function heartbeat(ctx, number, { note, attempt } = {}) {
   if (mode !== 'comment' && !note) {
     // the chain starts at the sha the dispatcher created the ref with, recorded on the attempt
     const expected = store.beatToken(number, a.attempt) || a.lock_sha || (await store.lockToken(number, a.attempt));
-    if (!expected) throw lockLost(number, a.attempt);
+    if (!expected) throw lockLost(number, a.attempt, undefined, store);
     const cas = await store.heartbeat(number, a.attempt, expected);
-    if (cas.result === 'ok') return refBeat(number, a.attempt, cas);
+    if (cas.result === 'ok') return refBeat(store, number, a.attempt, cas);
     if (cas.result === 'lost') {
       const beat = await resolveRejectedLease(store, number, a.attempt);
       if (beat) return beat;
-      fallback = `the lease on ${lockRef(number, a.attempt)} was rejected but GitHub still shows the ref`;
+      fallback = `the lease on ${claimWhere(store, number, a.attempt)} was rejected but the store still shows the claim`;
     } else fallback = cas.detail;
     // a fallback is normal for `auto` and a misconfiguration for `ref`, but never silent either way
-    process.stderr.write(`hkb: no ref heartbeat (${fallback}) — recording it in the run comment instead\n`);
+    process.stderr.write(`hkb: no lease heartbeat (${fallback}) — recording it on the run record instead\n`);
   }
 
   const held = (await store.lockToken(number, a.attempt)) !== null;
-  if (!held) throw lockLost(number, a.attempt);
+  if (!held) throw lockLost(number, a.attempt, undefined, store);
   const last = a.heartbeat_at ? new Date(a.heartbeat_at).getTime() : 0;
   const floorMs = 10 * 60_000; // frugal: comment edits count as content writes; 10-min floor
   if (Date.now() - last < floorMs && !note) return { number, attempt: a.attempt, mode: 'comment', skipped: true, fallback, next_in_s: Math.ceil((floorMs - (Date.now() - last)) / 1000) };
@@ -520,8 +530,13 @@ export async function archive(ctx, number) {
   const store = await openStore(ctx);
   const task = await store.getTask(number);
   assertOnBoard(ctx, task);
+  // Read the status *before* archiving it: `setStatus` updates `task.status` in place (it is on the
+  // interface that way, so a caller can go on reading the task it passed in), so asking afterwards
+  // whether this card was done always answered "no" and every archived card closed NOT_PLANNED —
+  // which `blockerDone` rejects, leaving anything blocked by an archived card in `todo` forever.
+  const wasDone = task.status === 'done';
   await store.setStatus(task, 'archived');
-  if (task.state !== 'CLOSED') await store.closeTask(number, task.status === 'done' ? 'completed' : 'not_planned');
+  if (task.state !== 'CLOSED') await store.closeTask(number, wasDone ? 'completed' : 'not_planned');
   return { number, status: 'archived' };
 }
 

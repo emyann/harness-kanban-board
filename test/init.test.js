@@ -395,7 +395,10 @@ test('a second init changes nothing on disk and creates no labels', async () => 
 
   assert.deepEqual(snapshot(first.root), before, 'a re-run must be a no-op: no duplicate section, no re-copied skill, no churn');
   assert.equal(created(first.gh).length, posts, 'the labels already exist — creating them again is a write nobody asked for');
-  assert.ok(printed.includes('labels already present'));
+  // A new board is `local`, and there it is not that the labels are already there — there are none,
+  // and the board does not use any. "labels already present" was false in both halves; the line says
+  // what is actually true, and still says it (silence would read as a step that did not run).
+  assert.ok(printed.some((l) => l.startsWith('no kb:* labels to create')), printed);
   for (const rel of Object.values(HOOK_SETTINGS)) assert.equal(fs.existsSync(path.join(first.root, rel)), false, `${rel}: a re-run must not start writing one either`);
   assert.equal(lines(first.root).filter((l) => l.trim() === '.kanban/dispatch.pid').length, 1, 'no duplicate ignore line');
   assert.equal(read(first.root, 'CLAUDE.md').match(/<!-- hkb:start -->/g).length, 1, 'no second section');

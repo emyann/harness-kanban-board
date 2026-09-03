@@ -20,10 +20,33 @@ import { openGithubStore } from './github.js';
 /** Forget any per-context store state — `hkb init` has just created the branch under its own feet. */
 export async function forgetStore(ctx) {
   if (!ctx || typeof ctx !== 'object') return;
+  closeStore(ctx);
   // Loaded on demand, not at module scope: `store/index.js` is imported by every verb, including
   // `hkb hook pretool` on a plain GitHub board, and `local.js` pulls in `node:sqlite`.
   const { forgetGitTiers } = await import('./local.js');
   forgetGitTiers(ctx);
+}
+
+/**
+ * Close the store this context is holding, if it opened one. Safe to call twice, and safe on a
+ * context that never reached the seam.
+ *
+ * The long-lived processes call it where their context dies: `hkb serve` when the server closes,
+ * `hkb dispatch` when the loop leaves, `hkb doctor` and the one-shot CLI in the `finally` around
+ * `main()`. A verb that runs and exits need not — but nothing is *hurt* by it either, which is why
+ * the call sites that have a natural `finally` use one.
+ */
+export function closeStore(ctx) {
+  if (!ctx || typeof ctx !== 'object') return false;
+  let closed = false;
+  for (const slot of ['_store', '_storeRO']) {
+    const held = ctx[slot];
+    if (!held) continue;
+    ctx[slot] = null;
+    closed = true;
+    try { held.close?.(); } catch { /* a handle we are done with: nothing to report and nobody to tell */ }
+  }
+  return closed;
 }
 
 /**
@@ -83,14 +106,62 @@ export function storeKind(ctx) {
 export function localModule() { return import('./local.js'); }
 
 /**
- * The store for `ctx`.
+ * The store for `ctx` — **one handle per context, for the life of that context**.
+ *
+ * The memo is not an optimisation, it is the fix for a class of bug this repo has already paid for
+ * once: `gc.js` used to open a store per tick and *"leaked one handle per tick until the process hit
+ * its file-descriptor limit"*. Every verb reaches board state through this function, and the
+ * long-lived processes call several verbs per tick or per request — `hkb serve` alone opens four for
+ * one `GET /task/42`, `hkb doctor` twenty for one run — so "close it in a `finally`" has to be
+ * written correctly at every one of forty call sites or the leak comes back at the one that forgot.
+ * Handing back the same handle means there is one thing to close, and `closeStore(ctx)` closes it.
+ *
+ * A local store is still **reconciled on every call**, which is what `openLocalStore` does for a
+ * fresh one: one `rev-parse`, and nothing more when the branch tip has not moved. So a memoized
+ * handle sees exactly what a fresh one would, and a second process's commit is never missed.
+ *
  * @param {any} ctx  a context from `makeContext`/`makeContextAt` (src/board.js)
  * @returns {Promise<Store>}
  */
 export async function openStore(ctx) {
-  if (storeKind(ctx) !== 'local') return openGithubStore(ctx);
+  const cacheable = !!ctx && typeof ctx === 'object';
+  const held = cacheable ? ctx._store : null;
+  if (held) {
+    // Reconcile, the way a freshly opened local store does. The GitHub driver has no `open`.
+    try { held.open?.(); } catch { /* a reconcile that cannot run leaves the last good index in place */ }
+    return held;
+  }
+  const store = storeKind(ctx) !== 'local'
+    ? openGithubStore(ctx)
+    : (await localModule()).openLocalStore(ctx);
+  if (cacheable) ctx._store = store;
+  return store;
+}
+
+/**
+ * A store for a reader that must never write — `hkb serve`'s connection.
+ *
+ * On the local driver this is `openIndexReadOnly` (`{readOnly: true, timeout: 0}`), the connection
+ * `sqlite.js` and `doctor.js` both name as the server's: a read-write handle in a long-lived server
+ * can block on the dispatcher's write transaction in the middle of a request, and a server has no
+ * business reindexing the branch under the loop that owns it. It also does not reconcile, for the
+ * same reason — the dispatcher's own store is what keeps the index current.
+ *
+ * On GitHub there is no such distinction, and this is `openStore`.
+ * @param {any} ctx
+ * @returns {Promise<Store>}
+ */
+export async function openStoreReadOnly(ctx) {
+  if (storeKind(ctx) !== 'local') return openStore(ctx);
+  const cacheable = !!ctx && typeof ctx === 'object';
+  if (cacheable && ctx._storeRO) return ctx._storeRO;
   const { openLocalStore } = await localModule();
-  return openLocalStore(ctx);
+  const store = openLocalStore(ctx, { reconcile: false, readOnly: true });
+  // Its own slot, never `_store`. `hkb serve` reads through this one and *writes* through the
+  // lifecycle verbs, which call `openStore(ctx)` on the same context — parking a read-only handle
+  // where they look would make every drag on the web board fail as a refused write.
+  if (cacheable) ctx._storeRO = store;
+  return store;
 }
 
 /**
@@ -122,7 +193,7 @@ export const STORE_METHODS = Object.freeze([
   'setStatus', 'setAgent', 'addLabels', 'removeLabel', 'ensureLabels',
   'closeTask', 'reopenTask', 'addBlockedBy', 'removeBlockedBy',
   'loadRun', 'saveRun', 'latestResult', 'parentResults', 'addNote', 'listNotes',
-  'claim', 'release', 'listLocks', 'lockBeatAt', 'heartbeat',
+  'claim', 'release', 'listLocks', 'lockBeatAt', 'heartbeat', 'lockRef',
   'lockToken', 'beatToken', 'resyncBeat', 'dropBeat',
   'events', 'taskEvents',
 ]);
@@ -186,6 +257,12 @@ export const STORE_METHODS = Object.freeze([
  *   second beat lease on the first one's `expected` and read back as `lost`. `detail` says why an
  *   `unavailable` beat could not be made, because `hkb heartbeat` prints that sentence before it
  *   falls back to the run record.
+ * @property {(n: number, k: number) => string|null} lockRef
+ *   Where this claim lives, when the store has a name for it — `refs/kb/locks/<n>/<k>` on GitHub,
+ *   `null` on a store that keeps its claims in a table. The same optional `ref` `claim()` and
+ *   `listLocks()` carry, asked for a claim the caller did not just make: `hkb heartbeat` prints it,
+ *   and so does the LOCK_LOST error, which used to name a GitHub ref on every board. A caller
+ *   falls back to the attempt number, which every store has (`cli.js`'s `c.ref || \`attempt ${k}\``).
  * @property {(n: number, k: number) => string|null|Promise<string|null>} lockToken
  *   The claim's token as the *store* has it, or null when the claim is gone (= reclaimed). The
  *   authoritative read: a rejected lease is evidence, this is the answer.

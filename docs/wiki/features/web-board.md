@@ -7,20 +7,20 @@ audience: [dev]
 read_when: "touching hkb serve, the board page, the user-level board list, or anything that has to work across more than one checkout"
 covers:
   - path: src/serve.js
-    sha: db2d36ae3fec59b2cbf4d9f827f2594e55bfa9cc
+    sha: 478930327b4f3bcdb795677b677569e1ee1efc9a
   - path: web/index.html
     sha: 322aa96236ef37657a9a2326b83dc7b480672134
   - path: src/board.js
     sha: 53192b4670920a4ead1181c925075285dc8ee105
   - path: src/init.js
-    sha: 400f1fbb633681554e35db504a4861d2be213e0a
+    sha: fb4b0eb97192e874591ed4940a1e2f32775c1429
   - path: src/lifecycle.js
-    sha: f5e110c3df6217c577ebaec04af30a3ebae15689
+    sha: c1b743d8c3e6ef9dabd62ce11b5dbc18d6d9e4bf
   - path: src/track.js
     sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
   - path: src/model.js
     sha: d3729c517eb72a690f7248b5769ea03d22f6d794
-generated_at_commit: d18fb5d
+generated_at_commit: f70fc7a
 last_refreshed: 2026-09-03
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
@@ -165,6 +165,22 @@ snapshot TTL is derived from `--poll` (`ttlMs`), and the page's poll is a
 conditional GET: `boardEtag` hashes the boards payload with `fetched_at`
 deliberately left out (it changes every tick and would bust the ETag on an
 unchanged board), so a quiet board answers 304 with no body.
+
+The store handle is the same story one level down. A server is long-lived and
+reads several times per request — four for one `GET /task/42` — so the reads go
+through `openStoreReadOnly(ctx)`, which memoizes **one** handle per board context
+and closes it on the server's `close` event (a board the operator removes from
+`boards.json` takes its handle with it, in `reloadBoards`). On a local board that
+is `openIndexReadOnly`: `{readOnly: true, timeout: 0}`, the connection
+`src/store/sqlite.js` names as *"`hkb serve`'s … the one that may not write"* — so
+a request that meets the dispatcher mid-`load()` fails fast instead of holding up
+every request queued behind it. Writes are the lifecycle verbs below, and those
+open a writable store of their own; the read-only handle sits in its own slot so
+it can never be handed to one.
+
+The open-PR listing behind `fillPrFallback` is memoized per context too, and the
+server drops it at every poll and at every write — a tick's worth of truth, never
+a server's.
 
 A board whose read throws does not fail the page. Its snapshot keeps the last
 good cards, carries `error` (and `stale`), and is cached like a success so a

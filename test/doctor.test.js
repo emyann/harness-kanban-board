@@ -1357,6 +1357,13 @@ test('a forge that is not there costs one line, not the whole report', async (t)
   const { root, ctx } = localBoard();
   const { openGitTier } = await import('../src/store/git.js');
   openGitTier(ctx).init('default');
+  // One card that sets `kb.skills` and `kb.tools`, so all three board checks below have something
+  // to answer about: `task skills` and `card grants` say nothing on a board with no such card, and
+  // a silent check cannot demonstrate that it read the board rather than failed to.
+  const { openLocalStore } = await import('../src/store/local.js');
+  const seed = openLocalStore(ctx);
+  await seed.createTask({ title: 'a card with grants', kb: { skills: ['kanban'], tools: ['Read'] }, status: 'todo', agent: 'claude' });
+  seed.close();
   ctx.repo = { owner: 'o', repo: 'r', nameWithOwner: 'o/r' };
   ctx.cfg.repo = 'o/r';
   ctx.json = true;
@@ -1377,14 +1384,28 @@ test('a forge that is not there costs one line, not the whole report', async (t)
   // then printed "N problem(s)" as though every other question had been asked and answered. Now
   // each probe fails under its own name.
   assert.equal(by.labels.ok, false, 'the labels probe answered for itself');
-  assert.equal(by['track branches'].ok, false, `the checks after it still ran: ${Object.keys(by).join(', ')}`);
+  assert.notEqual(by['rate limit']?.ok, true, `the checks after it still ran and none of them passed against a forge that is not there: ${Object.keys(by).join(', ')}`);
+  // `track branches` and `orphaned PRs` are the two that no longer ask the forge anything here, and
+  // they are `ok` because they were skipped, not because they passed — so each says which in words,
+  // the way `gc.js` speaks its own line for the identical sweep. A skipped check that reported a
+  // bare `ok` would be exactly the shape this test exists to refuse.
+  for (const name of ['track branches', 'orphaned PRs']) {
+    assert.equal(by[name].ok, true, `${name} is not a question a local board can answer`);
+    assert.match(by[name].detail, /local board/, `${name} says it was skipped and why: ${by[name].detail}`);
+  }
   // And the checks that need the *board* rather than the forge now answer on a local board, because
   // doctor reads it through `openStore` like every other verb (#325). They used to be the "could not
   // read the board" rows here: `fetchBoard` was the GitHub driver's query, so a 404 from a forge
   // this board does not live on silenced three checks that had every answer on disk. The line this
   // test draws is unchanged — a forge failure costs one row, not the report — and one row fewer
   // falls on the wrong side of it.
-  assert.equal(by['task agent labels']?.ok, true, `task agent labels answered from the local board: ${Object.keys(by).join(', ')}`);
+  // All three, not one: the property under test is "a skipped check is distinguishable from a
+  // passing one", and it is only tested by the checks that could have been skipped. Asserting one
+  // of the three leaves the other two covered by nothing.
+  for (const name of ['task agent labels', 'task skills', 'card grants']) {
+    assert.equal(by[name]?.ok, true, `${name} answered from the local board: ${Object.keys(by).join(', ')}`);
+    assert.doesNotMatch(by[name].detail || '', /could not read the board/, `${name}: ${by[name].detail}`);
+  }
   assert.ok(by['rate limit'] && by.GraphQL, 'and the probes after the board read still ran');
   assert.equal(by.github, undefined, 'and the whole half is no longer collapsed into one line');
 
