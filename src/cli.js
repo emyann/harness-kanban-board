@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import { makeContext, makeHookContext, assertOnBoard } from './board.js';
 import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, createTask, linkTask, withOutbox, envAttempt, mergeCard } from './lifecycle.js';
+import { fillPrs } from './forge.js';
 import { tick, loop, spawnWorker } from './dispatch.js';
 import { serve } from './serve.js';
 import { up, down } from './up.js';
@@ -531,7 +532,7 @@ async function runVerb(argv, keep) {
       return 0;
     }
     case 'list': {
-      const tasks = await (await openStore(ctx)).listTasks({ states: flags.all ? ['OPEN', 'CLOSED'] : ['OPEN'] });
+      const tasks = await fillPrs(ctx, await (await openStore(ctx)).listTasks({ states: flags.all ? ['OPEN', 'CLOSED'] : ['OPEN'] }));
       // The board's shape without its bodies: one read, no per-card lines — what an opening report
       // needs (is anything in flight, what is waiting on a human) that scanning `hkb list`'s rows or
       // paying for `hkb stats`'s 7-day history cannot answer any cheaper.
@@ -568,7 +569,7 @@ async function runVerb(argv, keep) {
       const tasks = await (await openStore(ctx)).listTasks({ states: o.all ? ['OPEN', 'CLOSED'] : ['OPEN'], blockers: 'all' });
       const rep = filterGroomLevel(groomBoard(tasks, {
         now: new Date(),
-        caps: ctx.caps,
+        blockersSource: blockersOf(tasks).source,
         pairs: o.pairs,
         statuses: o.statuses,
         board: ctx.board,
@@ -585,7 +586,7 @@ async function runVerb(argv, keep) {
       const [n] = nums(rest);
       if (!n) throw usage('hkb show <n>');
       const store = await openStore(ctx);
-      const t = await store.getTask(n);
+      const t = await fillPrs(ctx, await store.getTask(n));
       const { run } = await store.loadRun(n);
       const result = await store.latestResult(n);
       const parents = await store.parentResults(t);
@@ -627,7 +628,7 @@ async function runVerb(argv, keep) {
       const [n] = nums(rest);
       if (!n) throw usage('hkb graph <n> [--mermaid] [--json]');
       // one board read, then the same walk the dispatcher does: the root plus what is still blocking it
-      const tasks = await (await openStore(ctx)).listTasks();
+      const tasks = await fillPrs(ctx, await (await openStore(ctx)).listTasks());
       const track = resolveTrack(n, new Map(tasks.map((t) => [t.number, t])));
       if (!track.root) throw usage(`no open task #${n} on board "${ctx.board}" — \`hkb list\` shows what is there`);
       const g = trackGraph(track);
@@ -642,8 +643,8 @@ async function runVerb(argv, keep) {
       const [n] = nums(rest);
       if (!n) throw usage('hkb track <n> [--off] [--on] [--json]');
       const store = await openStore(ctx);
-      const tasks = await store.listTasks();
-      const t = tasks.find((x) => x.number === n) || await store.getTask(n);
+      const tasks = await fillPrs(ctx, await store.listTasks());
+      const t = tasks.find((x) => x.number === n) || await fillPrs(ctx, await store.getTask(n));
       if (flags.off || flags.on) {
         if (flags.off && flags.on) throw usage('hkb track <n> takes --off or --on, not both');
         if (flags.off) { await store.ensureLabels([L.noTrack]); await store.addLabels(t, [L.noTrack]); }
@@ -782,7 +783,7 @@ async function runVerb(argv, keep) {
       // whatever terms this board has for one.
       const on = r.ref ? ` on ${r.ref}` : '';
       const how = r.skipped ? `ok (recent heartbeat; next in ${r.next_in_s}s)`
-        : r.mode === 'ref' ? `#${n} attempt ${r.attempt}: lease held${on} → ${String(r.sha).slice(0, 7)}${r.resynced ? ' (chain resynced)' : ''}`
+        : r.mode === 'claim' ? `#${n} attempt ${r.attempt}: lease held${on} → ${String(r.sha).slice(0, 7)}${r.resynced ? ' (chain resynced)' : ''}`
           : `heartbeat recorded for #${n} attempt ${r.attempt}`;
       out(ctx, r, how);
       return 0;
@@ -840,7 +841,7 @@ async function runVerb(argv, keep) {
       const [n] = nums(rest);
       if (!n) throw usage('hkb claim <n> [--profile p] [--spawn]');
       const store = await openStore(ctx);
-      const t = await store.getTask(n);
+      const t = await fillPrs(ctx, await store.getTask(n));
       assertOnBoard(ctx, t);
       const runRec = await store.loadRun(n);
       const k = runRec.run.attempts.length + 1;
@@ -852,7 +853,7 @@ async function runVerb(argv, keep) {
       const c = await store.claim(n, k);
       if (c.result !== 'claimed') { out(ctx, c, `#${n}: ${c.result}${c.error ? ' — ' + c.error.message : ''}`); return c.result === 'held' ? 2 : 1; }
       const profile = flags.profile || t.agent || Object.keys(ctx.cfg.profiles)[0];
-      runRec.run.attempts.push({ attempt: k, profile, host: ctx.host, started_at: new Date().toISOString(), heartbeat_at: new Date().toISOString(), lock_sha: c.token, manual: !flags.spawn, ...(continuePr ? { continues_pr: continuePr.number } : {}) });
+      runRec.run.attempts.push({ attempt: k, profile, host: ctx.host, started_at: new Date().toISOString(), heartbeat_at: new Date().toISOString(), manual: !flags.spawn, ...(continuePr ? { continues_pr: continuePr.number } : {}) });
       await store.saveRun(n, runRec);
       // Claimed by hand from inside another task's session — a track runner working a node. Leave
       // the marker that tells this session's Stop hook to stamp that node with the session id too.

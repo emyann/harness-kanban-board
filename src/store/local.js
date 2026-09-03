@@ -22,10 +22,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { storeRoot, storeGitDir, hostId, runGit, runGitAsync, gitSays, GIT_SHA_RE, readState, writeState, normalizeCardGrants } from '../board.js';
-import { RESULT_MARKER, RUN_MARKER, DEFAULT_KB, L, emptyRun, parseResultComment, isResultComment } from '../model.js';
+import { RESULT_MARKER, RUN_MARKER, DEFAULT_KB, L, emptyRun, parseResultComment, isResultComment, blockersOf, blockersKnown } from '../model.js';
 import { openGitTier, BOARD_BRANCH, BOARD_REF } from './git.js';
 import { openIndex, openIndexReadOnly, indexFileIn } from './sqlite.js';
-import { openGithubStore, listComments, listLocks, lockBeatAt, release, listBeatChains, dropBeatChain, blockersOf, blockersKnown } from './github.js';
+// The read half of the retired GitHub protocol, and the only thing that still speaks it: the
+// migration reads a board that is still on issues once, then deletes the lock refs it left behind.
+import { openGithubIssues, listComments, listLocks, lockBeatAt, release, listBeatChains, dropBeatChain } from '../bridge/github-issues.js';
 import { rest } from '../gh.js';
 
 export { BOARD_BRANCH, BOARD_REF };
@@ -978,7 +980,7 @@ export async function importGithubBoard(ctx, { store = null, from = null, days =
       + `\`git -C ${s.root()} branch -D ${s.branch} && rm -f ${file}*\`.`,
     );
   }
-  const gh = from || openGithubStore(ctx);
+  const gh = from || openGithubIssues(ctx);
   const at = now().toISOString();
   const cutoff = now().getTime() - Math.max(0, Number(days) || 0) * 86_400_000;
 

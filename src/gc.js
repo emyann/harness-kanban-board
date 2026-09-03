@@ -1,23 +1,21 @@
-// `hkb gc` — the cleanup sweeps: worktrees and branches of finished attempts, duplicate run
-// comments, dead local beat chains, old logs and nudges. Destructive steps need --yes.
+// `hkb gc` — the cleanup sweeps: worktrees and branches of finished attempts, track branches with
+// no live runner, old logs and nudges. Destructive steps need --yes.
 //
 // Every sweep is a callable function because the dispatcher runs the same ones (src/dispatch.js):
 // `sweepTask` the moment a task leaves the open board, and `sweep` — exactly what `hkb gc --yes`
 // runs — every `dispatch.gc_every_ticks`. Manual and automatic cleanup can never diverge.
+//
+// Two sweeps that used to live here are gone with the GitHub store (docs/local-first.md §7): a run
+// record is one file on the `kb-board` branch, so there is no second comment to be a duplicate of,
+// and a claim is a row in the index, so there is no beat chain to go stale. What remains is either
+// local git or the forge — and the forge half applies to every board, because a local board still
+// opens its work as pull requests and still cuts `kb/track-<root>` branches.
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-// Two of the sweeps below are about how the *GitHub* store keeps a board and mean nothing on any
-// other (`sweepOpen` skips them outright when `storeKind(ctx) !== 'github'`): a run record kept as a
-// comment can have duplicates, and a ref-CAS heartbeat leaves a local mirror behind. They call that
-// driver by name for exactly that reason — routing a GitHub-only sweep through `openStore` would put
-// a method on the interface that only one driver could ever mean anything by — and they go when it
-// does (docs/local-first.md §7, C2). The beat-chain refs are also swept unconditionally in
-// `sweepTask`, where they are simply refs this checkout may hold and finding none is the answer.
-import { loadRun, deleteComment, listLocks, listBeatChains, dropBeatChain } from './store/github.js';
-import { listTrackBranches, deleteTrackBranch } from './forge.js';
+import { listTrackBranches, deleteTrackBranch, fillPrs } from './forge.js';
 import { logsDir, kanbanDir } from './board.js';
-import { storeKind, openStore } from './store/index.js';
+import { openStore } from './store/index.js';
 
 const git = (root, args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
 const lastLine = (s) => String(s || '').trim().split('\n').pop() || '';
@@ -218,45 +216,6 @@ export async function sweepTrackBranches(ctx, { finished = /** @type {(n: number
   return stats;
 }
 
-/**
- * Older copies of the `<!-- kb-run -->` record, kept when two writers raced.
- * A task can only grow one while something writes to it, so a task whose issue has not been updated
- * since the last sweep is not read at all: `memo` is `{ "<n>": updatedAt }`, mutated in place, and
- * the caller decides where it lives. That is what makes this sweep affordable on every tick.
- */
-export async function sweepRunComments(ctx, tasks, { yes = false, memo = null, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
-  let deleted = 0;
-  for (const t of tasks) {
-    if (memo && t.updatedAt && memo[t.number] === t.updatedAt) continue;
-    const rec = await loadRun(ctx, t.number);
-    let clean = true;
-    for (const id of rec.duplicates || []) {
-      if (!yes) { clean = false; log(`would delete duplicate run comment ${id} on #${t.number} — pass --yes`); continue; }
-      if (await deleteComment(ctx, t.number, id)) { deleted++; log(`deleted duplicate run comment ${id} on #${t.number}`); }
-      else clean = false; // still there: look again next sweep
-    }
-    if (memo && clean && t.updatedAt) memo[t.number] = t.updatedAt;
-  }
-  if (memo) { const on = new Set(tasks.map((t) => String(t.number))); for (const k of Object.keys(memo)) if (!on.has(k)) delete memo[k]; }
-  return deleted;
-}
-
-/**
- * Local mirrors of lock refs GitHub no longer has: an attempt that ended without its worker
- * (reclaimed, crashed) leaves one behind, and every worktree shares this ref store.
- */
-export async function sweepBeatChains(ctx, { only = null, yes = false, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
-  const live = new Set((await listLocks(ctx)).map((l) => `${l.n}/${l.k}`));
-  let dropped = 0;
-  for (const c of listBeatChains(ctx.root)) {
-    if (only != null && c.n !== only) continue;
-    if (live.has(`${c.n}/${c.k}`)) continue;
-    if (!yes) { log(`would drop the local beat chain ${c.ref} (attempt #${c.n}/${c.k} is over) — pass --yes`); continue; }
-    if (dropBeatChain(ctx.root, c.n, c.k)) { dropped++; log(`dropped local ref ${c.ref}`); }
-  }
-  return dropped;
-}
-
 /** Logs and nudges older than the retention window. */
 export function sweepFiles(ctx, { days = 14, yes = false, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   let pruned = 0;
@@ -294,9 +253,7 @@ export function sweepTask(ctx, n, { keep = [], log = /** @type {(...a: any[]) =>
   // these carry no attempt number to keep.
   const aw = sweepAgentWorktrees(ctx, { prByBranch: () => ({ state: 'MERGED' }), only: n, yes: true, quiet: true, log });
   const br = sweepBranches(ctx, opts);
-  let chains = 0;
-  for (const c of listBeatChains(ctx.root)) if (c.n === n && !kept.has(c.k) && dropBeatChain(ctx.root, c.n, c.k)) chains++;
-  const out = { worktrees: wt.removed + aw.removed, branches: br.removed, chains, pending: wt.skipped + wt.failed + aw.skipped + aw.failed + br.skipped };
+  const out = { worktrees: wt.removed + aw.removed, branches: br.removed, chains: 0, pending: wt.skipped + wt.failed + aw.skipped + aw.failed + br.skipped };
   if (out.worktrees || out.branches) log(`#${n}: cleaned up ${out.worktrees} worktree(s), ${out.branches} branch(es)`);
   return out;
 }
@@ -304,19 +261,10 @@ export function sweepTask(ctx, n, { keep = [], log = /** @type {(...a: any[]) =>
 /**
  * The full sweep: one board read, then every sweep in order (worktrees first, so the branch sweep
  * only sees what is left). This is what both `hkb gc --yes` and the dispatcher tick run.
- * `memo` is the caller's `{ "<n>": updatedAt }` of tasks already scanned for duplicate run comments
- * — the dispatcher passes the one in `.kanban/state.json`, so a tick that sweeps a quiet board reads
- * no issue at all; a human running `hkb gc` passes none and gets the thorough pass.
  * @returns stats, for `--json` and for the tick summary
  */
-export async function sweep(ctx, { yes = false, days = 14, memo = null, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
+export async function sweep(ctx, { yes = false, days = 14, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   ctx.requireBoard();
-  // The store is chosen *before* the board is read, not after. `fetchBoard` is the GitHub driver's
-  // read, and calling it unconditionally meant a genuinely local board — one with no issues behind
-  // it at all — threw here, several sweeps before the `stats.store` branch below could skip
-  // anything. The skip message was therefore only ever reachable on a board that was also on
-  // GitHub, which is the one board that did not need it.
-  const kind = storeKind(ctx);
   // **This sweep no longer owns the handle, and must not close it.** The leak it used to guard
   // against — the local driver's SQLite connection, its WAL and its shm, one per tick because the
   // dispatcher runs this every `gc_every_ticks`, until the process hit its file-descriptor limit —
@@ -325,19 +273,24 @@ export async function sweep(ctx, { yes = false, days = 14, memo = null, log = /*
   // slot pointing at a dead connection. The owner closes it: `loop()`'s `finally` for the
   // dispatcher, `main()`'s for `hkb gc` run by hand.
   const store = await openStore(ctx);
-  return sweepOpen(ctx, store, kind, { yes, days, memo, log });
+  return sweepOpen(ctx, store, { yes, days, log });
 }
 
 /**
  * The sweep itself, with the store already open. Kept separate from `sweep()` so a caller that has
  * a store in hand — the dispatcher's end-of-tick pass — can run it without opening a second one.
- * @param {any} ctx @param {any} store @param {string} kind
- * @param {{yes: boolean, days: number, memo: any, log: (...a: any[]) => void}} opts
+ * @param {any} ctx @param {any} store
+ * @param {{yes: boolean, days: number, log: (...a: any[]) => void}} opts
  */
-async function sweepOpen(ctx, store, kind, { yes, days, memo, log }) {
+async function sweepOpen(ctx, store, { yes, days, log }) {
   // `blockers: false` — no sweep here reads a dependency, and on a repo without the GraphQL field
   // filling them in is one REST call per card.
   const tasks = await store.listTasks({ states: ['OPEN', 'CLOSED'], blockers: false });
+  // The agent-worktree sweep below asks whether a card's PR has merged, and that answer is the
+  // forge's on every board — one listing, joined to the cards by head branch (`fillPrs`).
+  // Before it, `prByBranch` was structurally null on a local board and `hkb gc --yes` reported
+  // `0 removed` on a checkout quietly accumulating worktrees forever.
+  if (tasks.length) await fillPrs(ctx, tasks);
   const byNumber = new Map(tasks.map((t) => [t.number, t]));
   // **A board that returned nothing is a board that could not be read, not a board where everything
   // is done.** Every sweep below decides from `byNumber`, and a card that is not in it counts as
@@ -360,36 +313,17 @@ async function sweepOpen(ctx, store, kind, { yes, days, memo, log }) {
   const finished = (n) => { const t = byNumber.get(n); return !t || settled(t); };
   const finishedHere = (n) => { const t = byNumber.get(n); return !!t && settled(t); };
   const label = (n) => `task #${n} ${byNumber.get(n)?.status || 'not on board'}`;
-  const stats = { worktrees: 0, branches: 0, track_branches: 0, comments: 0, chains: 0, files: 0, pending: 0, skipped: 0, days, applied: !!yes, store: kind, empty_board: empty };
+  const stats = { worktrees: 0, branches: 0, track_branches: 0, files: 0, pending: 0, skipped: 0, days, applied: !!yes, store: 'local', empty_board: empty };
 
   const none = () => ({ removed: 0, pending: 0, skipped: 0, failed: 0 });
   const wt = empty ? none() : sweepWorktrees(ctx, { finished, yes, label, log });
 
-  // The **rule** the two sweeps below share with the two at the bottom of this function: a sweep
-  // whose answer comes from GitHub is either skipped on a local board or it says why it found
-  // nothing. What is not allowed is running structurally empty and reporting `0` as a result.
-  //
-  // A track branch lives on the forge and is listed with a `gh api` call; a local board has none of
-  // its own, so that call is a request per gc — and per `gc_every_ticks` tick — for an answer that
-  // can only be empty, plus a "skipped" line from its own catch on a checkout with no repo behind it.
-  const tb = kind === 'local' || empty ? none() : await sweepTrackBranches(ctx, { finished: finishedHere, yes, log });
-  if (kind === 'local') log('track branches: not swept on a local board — a track branch lives on the forge and this board does not keep one');
-
-  // The agent worktrees are the harder half and the honest answer is to say so. This sweep removes
-  // an `agent-*` worktree once *its PR* is merged or closed, and on a local board `GitTier.toTask`
-  // hands back `prs: []` for every card — pull requests are the forge's and the forge is not the
-  // store (§6.4). So `prByBranch` was always null, every worktree was skipped, and `hkb gc --yes`
-  // reported `0 removed` on a checkout quietly accumulating them forever. Reporting nothing removed
-  // as though nothing needed removing is the shape this whole review is about.
+  // Both of these ask the forge, and both apply to every board: a track root cuts `kb/track-<root>`
+  // there whatever its cards are kept in, and an `agent-*` worktree is swept once *its PR* is merged
+  // or closed.
+  const tb = empty ? none() : await sweepTrackBranches(ctx, { finished: finishedHere, yes, log });
   const prByBranch = (n, branch) => (byNumber.get(n)?.prs || []).find((p) => p.headRefName === branch) || null;
-  const aw = kind === 'local' || empty ? none() : sweepAgentWorktrees(ctx, { prByBranch, yes, log });
-  if (kind === 'local') {
-    const waiting = listWorktrees(ctx.root).filter((w) => agentWorktreeNode(w)).length;
-    if (waiting) {
-      log(`agent worktrees: ${waiting} not swept on a local board — this sweep removes one when its pull request is merged or closed, and a local card carries no pull request `
-        + `(the forge is not the store). Remove them by hand with \`git -C ${ctx.root} worktree remove <path>\`, or track them on the forge and re-run gc there`);
-    }
-  }
+  const aw = empty ? none() : sweepAgentWorktrees(ctx, { prByBranch, yes, log });
   const br = empty ? none() : sweepBranches(ctx, { finished: finishedHere, yes, log });
   stats.worktrees = wt.removed + aw.removed;
   stats.branches = br.removed;
@@ -397,22 +331,6 @@ async function sweepOpen(ctx, store, kind, { yes, days, memo, log }) {
   stats.pending = wt.pending + aw.pending + br.pending + tb.pending;
   stats.skipped = wt.skipped + wt.failed + aw.skipped + aw.failed + br.skipped + tb.skipped;
 
-  // Two sweeps that exist because of how the GitHub store keeps a board, and mean nothing once it
-  // does not (docs/local-first.md §7): a run record is one file on the branch, so there is no second
-  // comment to be a duplicate of, and a heartbeat is a row in the index, so there is no beat chain
-  // to go stale. Skipped rather than run-and-find-nothing: both cost a listing per card.
-  // `empty` is on this test for the same reason it is on the four above: `sweepRunComments` walks the
-  // cards it was given, and a beat chain for a card the board did not return is exactly the "not on
-  // the board, therefore scrap" judgement that must not be made from a read that came back with
-  // nothing.
-  if (empty) {
-    log('duplicate run comments and beat chains: not swept — see above');
-  } else if (stats.store === 'local') {
-    log('duplicate run comments and beat chains: nothing to sweep on a local board — the run record is one file on the branch and a beat is a row in the index');
-  } else {
-    try { stats.comments = await sweepRunComments(ctx, tasks, { yes, memo: yes ? memo : null, log }); } catch (e) { log(`duplicate run comments skipped: ${e.message}`); }
-    try { stats.chains = await sweepBeatChains(ctx, { yes, log }); } catch (e) { log(`beat chains skipped: ${e.message}`); }
-  }
   stats.files = sweepFiles(ctx, { days, yes, log });
   return stats;
 }
@@ -428,7 +346,6 @@ export async function gc(ctx, flags, log) {
   const stats = await sweep(ctx, { yes: !!flags.yes, days, log });
   if (ctx.json) process.stdout.write(JSON.stringify(stats, null, 2) + '\n');
   else if (!stats.applied) log(`gc: nothing done — ${stats.pending} worktree/branch(es) and everything listed above would go. Re-run with --yes.`);
-  else if (stats.store === 'local') log(`gc: ${stats.worktrees} worktree(s) removed, ${stats.branches} branch(es) deleted, ${stats.track_branches} track branch(es) deleted, ${stats.files} old file(s) pruned (retention ${stats.days}d)`);
-  else log(`gc: ${stats.worktrees} worktree(s) removed, ${stats.branches} branch(es) deleted, ${stats.track_branches} track branch(es) deleted, ${stats.comments} duplicate run comment(s) deleted, ${stats.chains} local beat chain(s) dropped, ${stats.files} old file(s) pruned (retention ${stats.days}d)`);
+  else log(`gc: ${stats.worktrees} worktree(s) removed, ${stats.branches} branch(es) deleted, ${stats.track_branches} track branch(es) deleted, ${stats.files} old file(s) pruned (retention ${stats.days}d)`);
   return 0;
 }

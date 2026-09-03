@@ -1,14 +1,14 @@
 // Worker-facing verbs: heartbeat, complete, block, unblock, request-review, request-changes.
 // Every verb closes the open attempt in the run comment and releases the lock ref.
 import fs from 'node:fs';
-import { finishPr, prNodeId, prChecksState, mergePullRequest } from './forge.js';
+import { finishPr, prNodeId, prChecksState, mergePullRequest, fillPrs } from './forge.js';
 import { GhError, isOffline } from './gh.js';
 import { outboxFile, assertOnBoard } from './board.js';
 import { openStore } from './store/index.js';
 import { sessionForAttempt } from './hook.js';
 import {
   openAttempt, computeReady, blockerDone, promoteDecision, serializeResultComment, hashReason,
-  heartbeatMode, BLOCK_KINDS, DEFAULT_KB, L, mergePolicy, mergeDecision,
+  BLOCK_KINDS, DEFAULT_KB, L, mergePolicy, mergeDecision,
 } from './model.js';
 import { resolveTrack } from './track.js';
 
@@ -95,7 +95,7 @@ function lockLost(n, k, why = 'is gone — the dispatcher reclaimed this task', 
   return e;
 }
 
-const refBeat = (store, n, k, cas, extra = {}) => ({ number: n, attempt: k, mode: 'ref', ref: store?.lockRef?.(n, k) ?? null, sha: cas.token, expected: cas.expected, ...extra });
+const refBeat = (store, n, k, cas, extra = {}) => ({ number: n, attempt: k, mode: 'claim', ref: store?.lockRef?.(n, k) ?? null, sha: cas.token, expected: cas.expected, ...extra });
 
 /**
  * A rejected lease is strong evidence but not proof: a push that lands while the local `update-ref`
@@ -118,11 +118,16 @@ async function resolveRejectedLease(store, n, k) {
 }
 
 /**
- * Say "still alive". Two ways, chosen by the attempt's profile (`heartbeat` in board.json):
- *   ref (default) — a compare-and-swap on the lock ref: no API call at all, and a reclaim is
- *                   detected atomically by the rejected lease.
- *   comment       — a floored write to the run record, for workers that cannot push refs.
- * A `--note` is content, so it always takes the comment path.
+ * Say "still alive". One mechanism, with one fallback:
+ *   claim  — a compare-and-swap on the claim the store holds: a reclaim is detected atomically by
+ *            the rejected lease, and the lease *is* the check, so a beat costs the store nothing.
+ *   record — a floored write to the run record, when the store could not make the swap at all.
+ * A `--note` is content, so it always takes the record path.
+ *
+ * There is no profile switch any more. `heartbeat: "comment"` existed for a worker that could not
+ * push to a lock ref on GitHub, which was the only way a *GitHub* board could hold a lease; a local
+ * board's claim is a row in a table every verb on this host can write, so the mode that existed to
+ * work around the ref is gone with it (docs/local-first.md 6.1).
  */
 /**
  * @param {any} ctx
@@ -135,7 +140,7 @@ export async function heartbeat(ctx, number, { note, attempt } = {}) {
 
   // Warm path: the lease *is* the check, so a worker that has beaten before costs the store nothing —
   // no task read, no run-record read, no write.
-  if (envK && !note && heartbeatMode(ctx.cfg, process.env.KB_PROFILE) !== 'comment') {
+  if (envK && !note) {
     const chain = store.beatToken(number, envK);
     const cas = chain ? await store.heartbeat(number, envK, chain) : null;
     if (cas?.result === 'ok') return refBeat(store, number, envK, cas);
@@ -153,10 +158,9 @@ export async function heartbeat(ctx, number, { note, attempt } = {}) {
   if (!a) { const e = new Error(`#${number} has no active attempt (status: ${task.status})`); e.exitCode = 2; throw e; }
 
   let fallback = null;
-  const mode = heartbeatMode(ctx.cfg, a.profile || process.env.KB_PROFILE);
-  if (mode !== 'comment' && !note) {
-    // the chain starts at the sha the dispatcher created the ref with, recorded on the attempt
-    const expected = store.beatToken(number, a.attempt) || a.lock_sha || (await store.lockToken(number, a.attempt));
+  if (!note) {
+    // the chain starts at the token the dispatcher's claim handed back
+    const expected = store.beatToken(number, a.attempt) || (await store.lockToken(number, a.attempt));
     if (!expected) throw lockLost(number, a.attempt, undefined, store);
     const cas = await store.heartbeat(number, a.attempt, expected);
     if (cas.result === 'ok') return refBeat(store, number, a.attempt, cas);
@@ -165,19 +169,19 @@ export async function heartbeat(ctx, number, { note, attempt } = {}) {
       if (beat) return beat;
       fallback = `the lease on ${claimWhere(store, number, a.attempt)} was rejected but the store still shows the claim`;
     } else fallback = cas.detail;
-    // a fallback is normal for `auto` and a misconfiguration for `ref`, but never silent either way
+    // the store could not make the swap at all — say so rather than record a beat as if it had
     process.stderr.write(`hkb: no lease heartbeat (${fallback}) — recording it on the run record instead\n`);
   }
 
   const held = (await store.lockToken(number, a.attempt)) !== null;
   if (!held) throw lockLost(number, a.attempt, undefined, store);
   const last = a.heartbeat_at ? new Date(a.heartbeat_at).getTime() : 0;
-  const floorMs = 10 * 60_000; // frugal: comment edits count as content writes; 10-min floor
-  if (Date.now() - last < floorMs && !note) return { number, attempt: a.attempt, mode: 'comment', skipped: true, fallback, next_in_s: Math.ceil((floorMs - (Date.now() - last)) / 1000) };
+  const floorMs = 10 * 60_000; // frugal: a run-record write is a real write; 10-min floor
+  if (Date.now() - last < floorMs && !note) return { number, attempt: a.attempt, mode: 'record', skipped: true, fallback, next_in_s: Math.ceil((floorMs - (Date.now() - last)) / 1000) };
   a.heartbeat_at = nowIso();
   if (note) a.note = String(note).slice(0, 200);
   await store.saveRun(number, rec);
-  return { number, attempt: a.attempt, mode: 'comment', heartbeat_at: a.heartbeat_at, fallback };
+  return { number, attempt: a.attempt, mode: 'record', heartbeat_at: a.heartbeat_at, fallback };
 }
 
 const SUMMARY_HINT = 'pass it with --summary ".." / --summary-file <path>, or as {"summary": ".."} on stdin with --from-stdin';
@@ -251,6 +255,9 @@ export async function complete(ctx, number, { summary, metadata = {}, artifacts 
   const task = await store.getTask(number);
   assertOnBoard(ctx, task);
   const runRec = await store.loadRun(number);
+  // The card came from the store; its pull request comes from the forge, and the branch name is the
+  // join (`fillPrs`, src/forge.js). Nothing on GitHub's side links the two any more.
+  await fillPrs(ctx, task);
   const decision = prReadyDecision(task.prs);
   if (!decision.pr) {
     const noPrCheck = noPrDecision(number, { noPr, noPrReason });
@@ -340,6 +347,7 @@ export async function requestReview(ctx, number, { summary, metadata = {}, revie
   const task = await store.getTask(number);
   assertOnBoard(ctx, task);
   const runRec = await store.loadRun(number);
+  await fillPrs(ctx, task);
   const decision = prReadyDecision(task.prs);
   const a = await finishAttempt(ctx, store, task, runRec, { attempt }, 'review_requested', { summary: String(summary).slice(0, 400), ...prAttemptFields(decision) });
   const continued = !!(decision.pr && a.continues_pr === decision.pr.number);
@@ -379,6 +387,7 @@ export async function requestChanges(ctx, number, { reason } = {}) {
   if (task.state === 'CLOSED') await store.reopenTask(number);
   const target = computeReady(task) ? 'ready' : 'todo';
   await store.setStatus(task, target);
+  await fillPrs(ctx, task);
   const pr = (task.prs || []).find((p) => p && p.state === 'OPEN') || null;
   return {
     number,
@@ -408,6 +417,7 @@ export async function mergeCard(ctx, number, { summary } = {}) {
   assertOnBoard(ctx, task);
   const policy = mergePolicy(ctx.cfg);
   const runRec = await store.loadRun(number);
+  await fillPrs(ctx, task);
   const openPr = (task.prs || []).find((p) => p && p.state === 'OPEN') || null;
   let checksState = null;
   if (!policy.error && policy.mode === 'operator' && openPr) {
@@ -422,7 +432,13 @@ export async function mergeCard(ctx, number, { summary } = {}) {
   if (attempt) { attempt.merged_by = 'operator'; await store.saveRun(number, runRec); }
   const checksNote = policy.require.checks ? 'green' : 'not required';
   await store.addNote(number, `**Merged by the operator seat** — review: ${decision.reviewDetail || 'not required'}, checks: ${checksNote}, method: ${decision.method}`);
-  return { number, pr: decision.pr.number, method: decision.method, merged: true, merged_by: 'operator' };
+  // The merge is what finishes the card, and this call knows it happened — so it says so here rather
+  // than waiting for the reconcile pass to find the merged PR on the next tick. There is no
+  // `Closes #n` to close a card behind hkb's back any more (docs/local-first.md §6.4): a card is
+  // moved by a verb or by the tick, and this is the verb.
+  await store.setStatus(task, 'done', { remove: [L.needsHuman] });
+  if (task.state !== 'CLOSED') await store.closeTask(number, 'completed');
+  return { number, pr: decision.pr.number, method: decision.method, merged: true, merged_by: 'operator', status: 'done' };
 }
 
 // ---------- board verbs (create, link) ----------
@@ -505,9 +521,9 @@ export async function linkTask(ctx, parent, child, { unlink = false } = {}) {
 export async function promote(ctx, number, { triageOnly = false } = {}) {
   const n = Number(number);
   const store = await openStore(ctx);
-  const byNumber = new Map((await store.listTasks()).map((t) => [t.number, t]));
+  const byNumber = new Map((await fillPrs(ctx, await store.listTasks())).map((t) => [t.number, t]));
   let root = byNumber.get(n);
-  if (!root) { root = await store.getTask(n); byNumber.set(n, root); }
+  if (!root) { root = await fillPrs(ctx, await store.getTask(n)); byNumber.set(n, root); }
   assertOnBoard(ctx, root);
   if (triageOnly && root.status !== 'triage') {
     return [{ number: root.number, status: root.status, unchanged: true, skipped: true, reason: `not in triage — already ${root.status}` }];

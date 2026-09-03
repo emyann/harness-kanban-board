@@ -9,6 +9,7 @@ import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { openStore, openStoreReadOnly, closeStore } from './store/index.js';
+import { fillPrs } from './forge.js';
 import { promote as realPromote, unblock as realUnblock, block as realBlock, requestChanges as realRequestChanges, archive as realArchive } from './lifecycle.js';
 import {
   logsDir, loadUserBoards, userBoardsFile, contextForPath, pidFile, readPidFile, pidAlive, processState,
@@ -27,8 +28,11 @@ import { computeReady, blockerDone, formatSession, resumeCommand, parseRepoSpecs
 // timeout: 0}`, which fails a busy lock fast instead of parking a request behind the dispatcher's
 // write. The handle is memoized on the board's context and closed with the server (`stop()`), so a
 // hundred requests still hold one. Writes are the lifecycle verbs below, and those open their own.
-const realFetchBoard = async (ctx, { includeClosed = false } = {}) => (await openStoreReadOnly(ctx)).listTasks({ states: includeClosed ? ['OPEN', 'CLOSED'] : ['OPEN'] });
-const realGetTask = async (ctx, n) => (await openStoreReadOnly(ctx)).getTask(n);
+// A card's pull requests are the forge's answer, not the store's, and the web board renders them —
+// so every read here joins the two by head branch (`fillPrs`, src/forge.js). It is one listing per
+// request at worst, memoized on the board's context and dropped whenever a write moves a card.
+const realFetchBoard = async (ctx, { includeClosed = false } = {}) => fillPrs(ctx, await (await openStoreReadOnly(ctx)).listTasks({ states: includeClosed ? ['OPEN', 'CLOSED'] : ['OPEN'] }));
+const realGetTask = async (ctx, n) => fillPrs(ctx, await (await openStoreReadOnly(ctx)).getTask(n));
 const realLoadRun = async (ctx, n) => (await openStoreReadOnly(ctx)).loadRun(n);
 const realLatestResult = async (ctx, n) => (await openStoreReadOnly(ctx)).latestResult(n);
 const realParentResults = async (ctx, task) => (await openStoreReadOnly(ctx)).parentResults(task);

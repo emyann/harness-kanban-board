@@ -4,10 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot, hkbOnPath, registerUserBoard, userBoardsFile, mainWorktree, runGit } from './board.js';
-import { rest } from './gh.js';
 // `openStore` and not a driver: `hkb init` writes labels and imports issues through the same seam
 // every verb uses, so the board it has just created decides what those steps mean.
-import { openStore, storeKind } from './store/index.js';
+import { openStore } from './store/index.js';
 import { L, STATUSES, parseSkillVersion, stripFrontmatter, insideRepo, worktreePath, hookEntry, hookSettings, mcpSplitApprovals, toolPosture } from './model.js';
 
 export const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -642,41 +641,29 @@ export function removedInitFlag(flags = {}) {
 }
 
 /**
- * Which store this `init` sets the board up on. Pure, so the defaulting is a test rather than a
+ * Which store this `init` sets the board up on. Pure, so the answer is a test rather than a
  * paragraph in the README.
  *
- * A **new** board is local (docs/local-first.md §6.1): the cards live on the `kb-board` branch in
- * this repository and the index beside them, so the board works with `gh` logged out, on a plane,
- * and at no API cost. `--store github` keeps the old behaviour while the GitHub driver is still
- * here (it goes in track C).
- *
- * An **existing** board never changes store by being re-inited: a board.json that already says one
- * keeps it, and one written before the key existed is `github`, which is what `storeKind` answers at
- * runtime. The two must give the same answer from the same input, and the only input is the key —
- * a `kb-board` branch in the checkout is deliberately *not* consulted by either (see `storeKind`).
- * `hkb init --store local` is how a checkout that has the branch but not the key adopts it, and
- * `initHints` is where that gets said out loud.
+ * There is one: local (docs/local-first.md §6.1). The cards live on the `kb-board` branch in this
+ * repository and the index beside them, so the board works with `gh` logged out, on a plane, and at
+ * no API cost. `--store github` is gone with the driver it named (ADR-006) and says so rather than
+ * being ignored: a human who types it is asking for a board this hkb cannot make.
  * @param {{store?: any}} flags
- * @param {any} existing  the board's current config, or null for a fresh board
- * @returns {'local'|'github'}
+ * @returns {'local'}
  */
-export function resolveStore(flags = {}, existing = null) {
+export function resolveStore(flags = {}) {
   const asked = flags.store;
-  if (asked !== undefined && asked !== true) {
-    if (asked !== 'local' && asked !== 'github') {
-      const e = /** @type {any} */ (new Error(`--store takes "local" (the kb-board branch in this repo) or "github" (issues) — got "${asked}".`));
-      e.exitCode = 2;
-      throw e;
-    }
-    return asked;
-  }
-  if (asked === true) {
-    const e = /** @type {any} */ (new Error('--store needs a value: `--store local` or `--store github`.'));
+  if (asked === undefined || asked === 'local') return 'local';
+  if (asked === 'github') {
+    const e = /** @type {any} */ (new Error('--store github is gone: hkb keeps its board on the `kb-board` branch in this repository (ADR-006). `hkb init --import` migrates a board that is still on GitHub Issues onto it.'));
     e.exitCode = 2;
     throw e;
   }
-  if (existing) return existing.store === 'local' ? 'local' : 'github';
-  return 'local';
+  const e = /** @type {any} */ (new Error(asked === true
+    ? '--store needs a value, and the only one is `--store local` (the kb-board branch in this repo).'
+    : `--store takes "local" (the kb-board branch in this repo) — got "${asked}".`));
+  e.exitCode = 2;
+  throw e;
 }
 
 /**
@@ -967,53 +954,26 @@ export async function init(ctx, flags, log) {
     e.exitCode = 2;
     throw e;
   }
-  // `--no-labels` is the offline path (step 4). The other two steps that talk to GitHub cannot be
-  // done offline at all, so asking for both is a request that cannot be honoured — say so before
-  // anything is written rather than half-doing it.
-  for (const f of ['import', 'project']) {
-    if (flags['no-labels'] && flags[f]) {
-      const e = new Error(`--no-labels is the offline path, and --${f} needs the API. Run \`hkb init --repo owner/name --no-labels\` now, and \`hkb init --${f} ...\` once \`gh\` can reach the repo.`);
-      e.exitCode = 2;
-      throw e;
-    }
-  }
-  const { harnesses, profiles } = resolveProfiles(flags);
-  const existing = loadBoard(root);
-  const { localBoardExists, BOARD_BRANCH } = await import('./store/local.js');
-  let store = resolveStore(flags, existing);
-  // A checkout that has the branch but no `"store"` key is on the GitHub store — `storeKind` reads
-  // the key and nothing else, deliberately (see its docblock). That is worth **saying**, because the
-  // one thing a human in this situation cannot guess is that the branch under their feet is inert.
-  // A message, never a behaviour: this is the whole of what the removed inference is replaced by.
-  if (store === 'github' && flags.store === undefined && !flags.import && localBoardExists(ctx)) {
-    log(`note: this repository has a \`${BOARD_BRANCH}\` branch, and this board is on the GitHub store — nothing reads that branch. `
-      + `\`hkb init --store local\` puts this checkout on it; \`hkb init --import\` migrates the GitHub board onto a new one.`);
-  }
-  // `--import` is the migration onto the local store (docs/local-first.md §6.3), and it has to mean
-  // that on the board it exists to move: a GitHub board. Reading the resolved store first made it
-  // unreachable — a board pinned `github` routed `--import` to the old adopt loop and
-  // said nothing, so the documented migration could only be run as `--store local --import`, which
-  // nothing documents. The human's own `--store github` still wins, because that is a choice about
-  // this run rather than a value read off a file.
-  if (flags.import && store === 'github' && flags.store === undefined) {
-    store = 'local';
-    log(`--import: migrating this board onto the local store (the \`${BOARD_BRANCH}\` branch in this repo). \`hkb init --store github --import\` keeps the board on GitHub and adopts open issues into triage instead`);
-  }
-  // The migration changes what store this board is on, and on an existing board that answer is
-  // usually written in a file the repository tracks. Refused before anything is written rather than
-  // discovered by a collaborator on their next pull.
-  if (flags.import && existing && store === 'local' && existing.store !== 'local' && !flags.force && boardFileTracked(root)) {
-    const e = /** @type {any} */ (new Error(
-      `${path.relative(root, boardFile(root))} is tracked by git, and \`hkb init --import\` would write "store": "local" into it — `
-      + 'every collaborator who pulls that would switch to a board on the `kb-board` branch, which has one writing host. '
-      + 'Migrate deliberately: `hkb init --import --force` writes it, `hkb init --store github --import` leaves this board on '
-      + 'GitHub and adopts open issues into triage instead.',
-    ));
+  // `--no-labels` is the offline path (step 4). `--import` reads the GitHub board it is migrating
+  // *from*, so it cannot be done offline at all — say so before anything is written rather than
+  // half-doing it.
+  if (flags['no-labels'] && flags.import) {
+    const e = new Error('--no-labels is the offline path, and --import reads the GitHub board it migrates from. Run `hkb init --repo owner/name --no-labels` now, and `hkb init --import` once `gh` can reach the repo.');
     e.exitCode = 2;
     throw e;
   }
-  if (flags['take-over'] && store !== 'local') {
-    const e = /** @type {any} */ (new Error('--take-over moves the `kb-board` branch to this host, and this board is on the GitHub store — there is no owning host to move.'));
+  const { harnesses, profiles } = resolveProfiles(flags);
+  const existing = loadBoard(root);
+  const store = resolveStore(flags);
+  // The migration writes `"store": "local"` into a file the repository usually tracks, and that is a
+  // change to *everybody's* checkout — one whose branch has a single writing host. Refused before
+  // anything is written rather than discovered by a collaborator on their next pull.
+  if (flags.import && existing && existing.store !== 'local' && !flags.force && boardFileTracked(root)) {
+    const e = /** @type {any} */ (new Error(
+      `${path.relative(root, boardFile(root))} is tracked by git, and \`hkb init --import\` would write "store": "local" into it — `
+      + 'every collaborator who pulls that would switch to a board on the `kb-board` branch, which has one writing host. '
+      + 'Migrate deliberately: `hkb init --import --force` writes it.',
+    ));
     e.exitCode = 2;
     throw e;
   }
@@ -1057,18 +1017,16 @@ export async function init(ctx, flags, log) {
   cfg.default_branch = repo.defaultBranch;
   cfg.board = board;
   cfg.skill_version = skillVersion; // null when linked — a link cannot go stale
-  // The store key is written when it is a **decision**, never when it is an inference — and with the
-  // branch inference gone (`storeKind`) there are exactly four decisions: the human's own `--store`,
-  // a fresh board (whose default *is* the decision), a board that already carries the key, and
-  // `--import`, which is a human asking for the migration. A plain `hkb init` over an older board
-  // writes nothing: `|| store === 'local'` used to, which put `"store": "local"` into a git-tracked
-  // board.json as a side effect of a routine re-init — the very write `--import` refuses without
-  // `--force` three screens above, and the opposite of what this comment claimed.
+  // The store key is written when it is a **decision**, never as a side effect: the human's own
+  // `--store`, a fresh board (whose default *is* the decision), a board that already carries the
+  // key, and `--import`, which is a human asking for the migration. A plain `hkb init` over an older
+  // board writes nothing — putting `"store": "local"` into a git-tracked board.json is the very
+  // write `--import` refuses without `--force` three screens above.
   //
   // And it is written **after** the board itself exists, not before: `--import` can still refuse
   // (a card claimed by a running worker, a branch already there), and a board.json that says
   // `local` over a migration that did not happen points every verb at a branch with nothing on it.
-  const pinStore = flags.store !== undefined || !existing || existing.store !== undefined || (!!flags.import && store === 'local');
+  const pinStore = flags.store !== undefined || !existing || existing.store !== undefined || !!flags.import;
   const writeStoreKey = () => {
     if (!pinStore || cfg.store === store) return;
     cfg.store = store; // `openStore` reads this and nothing else decides (docs/local-first.md §6.4)
@@ -1094,23 +1052,13 @@ export async function init(ctx, flags, log) {
     : 'tools: curate (default) — a worker gets exactly its profile\'s allowed_tools, nothing else; set "tools": "inherit" on a profile in board.json for the opposite');
   ctx.cfg = cfg; ctx.repo = { owner: repo.nameWithOwner.split('/')[0], repo: repo.nameWithOwner.split('/')[1], nameWithOwner: repo.nameWithOwner }; ctx.board = board;
 
-  // 3c. the board itself. On the local store that is a branch in this repository and an index beside
-  //     it (§6.1); on the GitHub store the issues *are* the board and there is nothing to create.
-  //     Idempotent both ways: an existing branch is left exactly as it is, host included — moving
-  //     that is `--take-over`, which is a decision and not a side effect of running init again.
-  const migration = store === 'local' ? await setUpLocalBoard(ctx, flags, log) : null;
+  // 3c. the board itself: a branch in this repository and an index beside it (§6.1). Idempotent —
+  //     an existing branch is left exactly as it is, host included; moving that is `--take-over`,
+  //     which is a decision and not a side effect of running init again.
+  const migration = await setUpLocalBoard(ctx, flags, log);
   writeStoreKey();
   // The tiers memoize the tree per context, and this init has just created the branch under them.
-  if (store === 'local') { const { forgetStore } = await import('./store/index.js'); await forgetStore(ctx); }
-  if (store === 'github') log(`store: github — the board is the \`kb:*\` issues on ${repo.nameWithOwner} (\`hkb init --store local\` moves a new board onto the kb-board branch instead)`);
-
-  // 3b. optional Projects v2 mirror (opt-in, one-way). Everything above is already saved, so a
-  //     failure here — usually a token without the `project` scope — costs only the mirror.
-  if (flags.project) {
-    const { linkProject } = await import('./projects.js');
-    cfg.project = await linkProject(ctx, flags.project, log);
-    saveBoard(root, cfg);
-  }
+  { const { forgetStore } = await import('./store/index.js'); await forgetStore(ctx); }
 
   // 4. labels — with `--repo`, the only step here that needs the network. `--no-labels` skips it, so
   //    `hkb init --repo owner/name --no-labels` sets a repo up with `gh` logged out or absent: every
@@ -1124,12 +1072,11 @@ export async function init(ctx, flags, log) {
     // driver answers `[]` and this step costs nothing rather than writing kb:* labels onto a
     // repository the board does not live in.
     const created = await (await openStore(ctx)).ensureLabels(labels);
-    // Three answers, not two. `[]` means "nothing needed creating", and on the local driver that is
-    // because a card's status is a column and there are no labels to create — so "labels already
-    // present" was false in both halves on a board that has none and uses none.
+    // `[]` means "nothing needed creating", and on this store that is because a card's status is a
+    // column on the card and there are no labels to create at all — so "labels already present"
+    // would be false in both halves on a board that has none and uses none.
     if (created.length) log(`created labels: ${created.join(', ')}`);
-    else if (storeKind(ctx) === 'local') log(`no kb:* labels to create — on the local store a card's status is a field on the card, not a label on an issue`);
-    else log('labels already present');
+    else log('no kb:* labels to create — a card\'s status is a field on the card, not a label on an issue');
   }
 
   // 5. Claude hooks + harness files + gitignore + doc sections
@@ -1212,26 +1159,6 @@ export async function init(ctx, flags, log) {
   const section = fs.readFileSync(path.join(PKG_ROOT, 'templates', 'doc-section.md'), 'utf8');
   for (const f of ['CLAUDE.md', 'AGENTS.md']) { upsertSection(path.join(root, f), section); }
   log('upserted hkb section in CLAUDE.md and AGENTS.md');
-
-  // 6. optional import of existing open issues into triage. On the local store `--import` is the
-  //    migration instead (step 3c) — the whole GitHub board, ids and run records included — and it
-  //    has already run by the time we get here.
-  if (flags.import && store === 'github') {
-    const all = await rest('GET', `repos/${repo.nameWithOwner}/issues?state=open&per_page=100`);
-    const boardStore = await openStore(ctx);
-    const onBoard = new Set((await boardStore.listTasks()).map((t) => t.number));
-    let n = 0;
-    for (const issue of all || []) {
-      if (issue.pull_request || onBoard.has(issue.number)) continue;
-      await boardStore.addLabels({ number: issue.number, labels: (issue.labels || []).map((l) => l.name) }, [L.board(board), L.status('triage')]);
-      n++;
-    }
-    log(`imported ${n} open issue(s) into triage on board "${board}"`);
-    // One page, said out loud. "imported 100 open issues" over a repository with 300 of them reads
-    // as "all of them", and the human has no way to tell the two apart — the same shape as the
-    // local migration's closed-card cap, and the same answer: name the ceiling.
-    if ((all || []).length >= 100) log(`  that is one page of 100 open issues — this repository has more, so re-run \`hkb init --import\` until this line stops appearing`);
-  }
 
   // 7. the cross-repo board list. A local write, so the offline path (`--no-labels`) does it too.
   const registered = registerCheckout(root, log);

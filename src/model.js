@@ -400,7 +400,15 @@ export function boardOf(labels) {
   return l ? l.slice('kb:board:'.length) : null;
 }
 
-// ---------- run comment (Hermes "runs" table) ----------
+// ---------- run and result records ----------
+//
+// A run record is one `runs/<id>.json` document on the `kb-board` branch and a set of rows in the
+// index (docs/local-first.md §6.2). It used to be a *comment* on a GitHub issue, and the two markers
+// below are what is left of that: every store still recognises them so a card migrated off issues
+// keeps its history, `hkb watch` still parses one when it polls a repository's comments, and
+// `isHumanComment` (src/context.js) still uses them to keep hkb's own writing out of a worker's
+// brief. Nothing writes a run comment any more — `serializeRunComment` went with the driver that
+// did, along with `pickRunComment`, which existed to pick the newest of two a race had created.
 
 export const RUN_MARKER = '<!-- kb-run -->';
 export const RESULT_MARKER = '<!-- kb-result -->';
@@ -422,17 +430,6 @@ export function parseRunComment(body) {
   return { ...emptyRun(), ...parsed, attempts: Array.isArray(parsed.attempts) ? parsed.attempts : [] };
 }
 
-/**
- * Choose the authoritative run comment when an issue has several (a create that was
- * followed by another create instead of an update). Newest wins — it is the one written
- * last by the dispatcher; older ones are duplicates for `hkb gc` to delete.
- */
-export function pickRunComment(comments) {
-  const runs = (comments || []).filter((c) => c && typeof c.body === 'string' && c.body.startsWith(RUN_MARKER));
-  if (!runs.length) return { chosen: null, duplicates: [] };
-  return { chosen: runs[runs.length - 1], duplicates: runs.slice(0, -1) };
-}
-
 export function openAttempt(run) {
   if (!run) return null;
   return [...run.attempts].reverse().find((a) => !a.ended_at) || null;
@@ -441,27 +438,6 @@ export function openAttempt(run) {
 export function lastAttempt(run) {
   if (!run || !run.attempts.length) return null;
   return run.attempts[run.attempts.length - 1];
-}
-
-function fmt(ts) { return ts ? String(ts).replace('T', ' ').replace(/\.\d+Z$/, 'Z') : ''; }
-
-export function serializeRunComment(run) {
-  const rows = run.attempts.map((a) =>
-    `| ${a.attempt} | ${a.profile || ''} | ${a.host || ''} | ${fmt(a.started_at)} | ${fmt(a.ended_at) || '—'} | ${a.outcome || 'active'} | ${(a.summary || a.reason || '').split('\n')[0].slice(0, 120)} |`);
-  return [
-    RUN_MARKER,
-    '**hkb run record** — maintained by `hkb`; do not edit by hand.',
-    '',
-    `failures: ${run.failures} · attempts: ${run.attempts.length}${run.last_error ? ` · last error: ${String(run.last_error).slice(0, 200)}` : ''}`,
-    '',
-    '| # | profile | host | started | ended | outcome | note |',
-    '|---|---|---|---|---|---|---|',
-    ...(rows.length ? rows : ['| — | | | | | | |']),
-    '',
-    '```json',
-    JSON.stringify(run, null, 2),
-    '```',
-  ].join('\n');
 }
 
 // ---------- result comment (structured handoff) ----------
@@ -874,38 +850,12 @@ export function uniqueKeys(keys) {
   });
 }
 
-export function lockRef(n, k) { return `refs/kb/locks/${n}/${k}`; }
-/** Path form used by GET/PATCH/DELETE git/refs endpoints (no leading "refs/"). */
-export function lockRefPath(n, k) { return `kb/locks/${n}/${k}`; }
-
 // ---------- heartbeat ----------
-// A heartbeat says "the worker is alive". Two ways to say it:
-//   ref     — compare-and-swap on the lock ref (`git push --force-with-lease`). Free: the git
-//             transport is not the REST content budget, and a rejected lease *is* LOCK_LOST.
-//   comment — a write to the `<!-- kb-run -->` comment, floored at 10 min. For workers that
-//             cannot push to arbitrary refs (cloud tiers); the dispatcher owns their lock.
-
-export const HEARTBEAT_MODES = ['auto', 'ref', 'comment'];
-
-/** How a profile's workers heartbeat. Unknown or unset → `auto` (ref, falling back to comment). */
-export function heartbeatMode(cfg, profileName) {
-  const m = cfg?.profiles?.[profileName]?.heartbeat;
-  return HEARTBEAT_MODES.includes(m) ? m : 'auto';
-}
-
-/**
- * What a `git push --force-with-lease` on the lock ref means.
- *   ok          → the lease held: the ref was where we left it, and now carries a fresh commit
- *   lost        → the lease was rejected: the ref moved or is gone (verify, then LOCK_LOST)
- *   unavailable → git, network or auth trouble — says nothing about the lock
- * Only a rejected lease is ever `lost`: an unrecognised failure must never fabricate a LOCK_LOST,
- * because that kills a healthy worker. Ambiguity falls back to the authoritative ref read instead.
- * `git push --delete`d and never-existed refs both come back as "[rejected] ... (stale info)".
- */
-export function classifyLeasePush(status, output) {
-  if (status === 0) return 'ok';
-  return /stale info|\[rejected\]/i.test(String(output || '')) ? 'lost' : 'unavailable';
-}
+// A heartbeat says "the worker is alive", and there is one way to say it: a compare-and-swap on the
+// claim the store holds (`Store.heartbeat`, docs/local-first.md 6.1). A rejected lease *is*
+// LOCK_LOST. The per-profile `heartbeat: "ref" | "comment"` switch is gone with the GitHub store —
+// `comment` existed for a worker that could not push a lock ref to the forge, and a claim is a row
+// in this host's index now, which every verb on it can write.
 
 /**
  * The freshest evidence that an attempt is alive: its run-comment beat, when it started, and
@@ -1233,8 +1183,9 @@ export function boardSummary(tasks) {
  * @param tasks the board read, as `fetchBoard` returns it
  * @param {object} [opts]
  * @param opts.now injected clock — nothing here reads the real one
- * @param opts.caps `ctx.caps`; `blockedByGql` false and blockers unfilled means an empty
- *   `blockedBy` is *unknown*, never `no_blockers`
+ * @param opts.blockersSource where the blockers came from (`blockersOf(tasks).source`) — reported
+ *   as `blockers_source`; an unfilled read means an empty `blockedBy` is *unknown*, never
+ *   `no_blockers`
  * @param opts.pairs how many overlap pairs to list (default 10)
  * @param opts.statuses which lanes get a row (default triage, todo, ready)
  * @param opts.guard the effective `path_overlap` mode (`pathOverlapGuard(cfg)` or its `mode`) — the
@@ -1249,7 +1200,7 @@ export function groomBoard(tasks, opts = /** @type {any} */ ({})) {
   const all = Array.isArray(tasks) ? tasks : [];
   const {
     now = new Date(),
-    caps = {},
+    blockersSource: source = null,
     pairs: pairLimit = 10,
     statuses = ['triage', 'todo', 'ready'],
     board = null,
@@ -1268,8 +1219,8 @@ export function groomBoard(tasks, opts = /** @type {any} */ ({})) {
   const openNumbers = new Set(all.filter((t) => String(t.state || 'OPEN').toUpperCase() === 'OPEN').map((t) => t.number));
   const guardMode = typeof guard === 'string' ? guard : (guard?.mode ?? null);
   const guardOn = guardMode != null && guardMode !== 'off';
-  const blockersKnown = !!caps.blockedByGql || !!blockersFilled;
-  const blockersSource = caps.blockedByGql ? 'graphql' : (blockersFilled ? 'rest' : 'unknown');
+  const blockersKnown = !!blockersFilled;
+  const blockersSource = blockersFilled ? (source || 'store') : 'unknown';
 
   const lane = all.filter((t) => wanted.has(t.status));
 
@@ -1286,7 +1237,7 @@ export function groomBoard(tasks, opts = /** @type {any} */ ({})) {
     // --- the graph ---
     if (!blockedBy.length) {
       if (!blockersKnown) {
-        add('unknown_blockers', 'this repo has no GraphQL Issue.blockedBy and blockers were not filled — an empty list here means nothing', 'hkb groom --status triage on a read that fills blockers');
+        add('unknown_blockers', 'the board read did not fill blockers — an empty list here means nothing', 'hkb groom --status triage on a read that fills blockers');
       } else {
         add('no_blockers', 'nothing blocks it', null);
       }

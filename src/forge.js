@@ -162,9 +162,46 @@ export async function openPrsByHead(ctx) {
 }
 
 /**
- * A task with no PR from GraphQL, matched against a board-wide open-PR listing by head branch. Pure
- * given the listing: never overrides a PR GitHub already linked, and never looks two tasks up in one
+ * Every *merged* PR on the repo, keyed by head branch — the reconcile pass's input.
+ *
+ * One page of the closed-PR listing, newest-updated first: a PR that merged since the last tick is
+ * by definition freshly updated, so it sits at the top. One request per tick whatever the board's
+ * size, and the tick only asks when something is in flight (`shouldReconcile`, src/dispatch.js).
+ * A PR that merged and then sat untouched while a hundred others closed behind it falls off the
+ * page — the card is then moved by `hkb merge` or by hand, and `hkb doctor` still names it.
+ */
+export async function mergedPrsByHead(ctx) {
+  const out = new Map();
+  const batch = await rest('GET', api(ctx, '/pulls?state=closed&sort=updated&direction=desc&per_page=100'));
+  for (const p of batch || []) {
+    const head = p.head?.ref;
+    if (!head || !(p.merged_at || p.merged)) continue;
+    if (out.has(head)) continue; // newest-updated wins; an older PR on the same branch is history
+    out.set(head, {
+      number: p.number,
+      nodeId: p.node_id,
+      state: 'MERGED',
+      isDraft: false,
+      url: p.html_url,
+      headRefName: head,
+      baseRefName: p.base?.ref || null,
+      merged: true,
+      mergedAt: p.merged_at || null,
+      autoMergeEnabled: false,
+    });
+  }
+  return out;
+}
+
+/**
+ * A task with no PR of its own, matched against a board-wide PR listing by head branch. Pure given
+ * the listing: never overrides a PR the caller already has, and never looks two tasks up in one
  * call, so a card that legitimately has no PR still reports none.
+ *
+ * **The branch name is the link.** A local board has no issue for a PR to close, so `Closes #n` is
+ * not written any more and nothing on GitHub's side associates the two: `kb-<n>-<k>` (and the
+ * `worktree-` and `kb/<n>` spellings hkb also creates) is what ties a pull request to its card, here
+ * and in the reconcile pass. `taskBranchRe` is the one definition of that name.
  */
 export function branchFallbackPrs(task, openByHead) {
   if ((task.prs || []).length) return task.prs;
@@ -172,6 +209,40 @@ export function branchFallbackPrs(task, openByHead) {
   const found = [];
   for (const [head, pr] of openByHead) if (re.test(head)) found.push(pr);
   return found;
+}
+
+/**
+ * Fill `prs` on cards the **store** cannot answer for — one open-PR listing, board-wide, applied by
+ * head branch. Board state and pull requests are two different systems now (docs/local-first.md
+ * §6.4): the store knows the card, the forge knows the PR, and this is the join. Every read that
+ * goes on to judge a card by its PR — the tick's `active_pr` guard, the terminal verbs, `hkb show`,
+ * the web board — calls it on what the store handed back.
+ *
+ * One request per tick, never one per card (#234). The *promise* is memoized on `ctx._cache`, not
+ * its value, because `hkb create "x" --blocked-by 1,2,3` reads four cards with `Promise.all` and a
+ * value memo would still issue one listing each; a failed one is forgotten so the next read retries
+ * rather than replaying the error. The dispatcher drops the memo at the top of every tick
+ * (`dropPrCaches`), so a loop never judges a card on last tick's listing.
+ *
+ * @template {any} T
+ * @param {any} ctx
+ * @param {T} tasks  one task or an array of them — returned as given, filled in place
+ * @returns {Promise<T>}
+ */
+export async function fillPrs(ctx, tasks) {
+  const list = (Array.isArray(tasks) ? tasks : [tasks]).filter(Boolean);
+  if (!list.some((t) => !(t.prs || []).length)) return tasks;
+  if (!ctx._cache.prsByHead) ctx._cache.prsByHead = openPrsByHead(ctx);
+  const pending = ctx._cache.prsByHead;
+  let openByHead;
+  try {
+    openByHead = await pending;
+  } catch (e) {
+    if (ctx._cache.prsByHead === pending) delete ctx._cache.prsByHead;
+    throw e;
+  }
+  for (const t of list) t.prs = branchFallbackPrs(t, openByHead);
+  return tasks;
 }
 
 /**

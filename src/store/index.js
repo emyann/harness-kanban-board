@@ -1,28 +1,27 @@
 // The store seam. One interface over board state, one driver behind it.
 //
-// `openStore(ctx)` is the only way a command should reach board state, and the only place that
-// decides which driver answers: the GitHub one (`./github.js`) or the local store of
-// docs/local-first.md §6 (`./local.js` — the `kb-board` branch and the `.git/hkb/index.db` index as
-// one `Store`). The decision is `"store"` in `.kanban/board.json` and nothing else; see `storeKind`.
+// `openStore(ctx)` is the only way a command should reach board state. There is **one** store now —
+// the local one of docs/local-first.md §6 (`./local.js`: the `kb-board` branch and the
+// `.git/hkb/index.db` index, as one `Store`). The GitHub driver is gone: GitHub Issues was the
+// board until this release, and it comes back later as a *bridge* adapter, not as a second store
+// (ADR-006). The seam stays, because the seam is what let it be replaced at all.
 //
-// **The method names below are the contract.** They are §6.4 verbatim, and the local drivers are
-// written against them in parallel with this file. Do not rename one, and do not add one without
-// adding it to the conformance suite in `test/store.test.js` — the suite is what says a driver
-// implements the interface, and a method no scenario exercises is a method the next driver will
-// get wrong.
+// **The method names below are the contract.** They are §6.4 verbatim. Do not rename one, and do
+// not add one without adding it to the conformance suite in `test/store.test.js` — the suite is what
+// says a driver implements the interface, and a method no scenario exercises is a method the next
+// driver will get wrong.
 //
-// What is **not** in the store: pull requests. `openPrsByHead`, `prMergeStates`, `enableAutoMerge`,
-// `branchProtection`, `mergePullRequest`, `prChecksState` and `finishPr` live in `src/forge.js` and
-// go on calling `src/gh.js` whatever the board is kept in — a local board still opens its work on a
-// forge (§6.4).
-import { openGithubStore } from './github.js';
+// What is **not** in the store: pull requests. `openPrsByHead`, `mergedPrsByHead`, `fillPrs`,
+// `prMergeStates`, `enableAutoMerge`, `branchProtection`, `mergePullRequest`, `prChecksState` and
+// `finishPr` live in `src/forge.js` and go on calling `src/gh.js` — a local board still opens its
+// work on a forge (§6.4), and the branch name `kb-<n>-<k>` is what ties a pull request to a card.
 
 /** Forget any per-context store state — `hkb init` has just created the branch under its own feet. */
 export async function forgetStore(ctx) {
   if (!ctx || typeof ctx !== 'object') return;
   closeStore(ctx);
   // Loaded on demand, not at module scope: `store/index.js` is imported by every verb, including
-  // `hkb hook pretool` on a plain GitHub board, and `local.js` pulls in `node:sqlite`.
+  // `hkb hook pretool`, and `local.js` pulls in `node:sqlite`.
   const { forgetGitTiers } = await import('./local.js');
   forgetGitTiers(ctx);
 }
@@ -50,55 +49,42 @@ export function closeStore(ctx) {
 }
 
 /**
- * Which store a board uses, and **the only place that decides it** (the card's contract).
+ * Which store a board uses. There is one, and this is where a board.json that still names the other
+ * one is told so.
  *
- * **One answer: `store` in `.kanban/board.json`.** `"local"` is the `kb-board` branch, anything else
- * — including the key being absent — is GitHub. `hkb init` writes the key when it creates a local
- * board, and that write is the opt-in.
+ * `"store"` in `.kanban/board.json` is `"local"` or absent; `"github"` was the other answer until
+ * the GitHub store was retired (ADR-006, docs/local-first.md §1 item 9) and is now an error that
+ * names the migration rather than a mode that half-works. Absent means local: a `git clone` of a
+ * board needs no configuration, and there is nothing else it could mean.
  *
- * There used to be a second rule: *a repository with a `kb-board` (or `<remote>/kb-board`) ref is a
- * local board*. It was there so a `git clone` of a local board needed no config, and it is gone,
- * because a rule that infers the store from a **ref** can be reached by `git fetch` — by another
- * host's push, by a colleague's experiment — and it flips a checkout onto the local store while
- * `.kanban/board.json` still points every verb at GitHub. That half-migrated state produced a
- * destructive interaction in each of the last three reviews:
- *
- *   · `hkb init --import` inferred `local`, migrated, and deleted the lock refs of live workers;
- *   · `gc.sweep` read the board through the local store, got `[]` because the cards were still
- *     issues, concluded every card was finished and destroyed worker worktrees — uncommitted work
- *     included — unattended, from the dispatcher's own `gc_every_ticks`;
- *   · one host pushing `kb-board` converted every collaborator on their next fetch, and
- *     `assertOwningHost` then refused every write verb on a board whose cards they had always owned.
- *
- * Each was patched where it surfaced; the cause was this inference, so the inference is what is
- * fixed. An explicit key cannot arrive by fetch, cannot be written by another host, and cannot
- * disagree with what the verbs do. A clone still gets the board with no configuration — it reads
- * the key out of the tracked `.kanban/board.json`, which is *more* deterministic than inferring it
- * from whichever refs that clone happens to carry. A checkout that has the branch but not the key is
- * told so in words (`hkb init`, `hkb doctor`), which is a message and never a behaviour.
+ * The key is deliberately still read rather than assumed. A board on the old store is a real thing
+ * somebody may still have on disk, and "your board is on a store this hkb no longer has, here is
+ * how to move it" is the only honest thing to say to them.
  *
  * @param {any} ctx  a context from `makeContext`/`makeContextAt` (src/board.js)
- * @returns {string} 'local' | 'github'
+ * @returns {string} always 'local'
  */
 export function storeKind(ctx) {
   const declared = ctx?.cfg?.store;
-  if (declared === 'local' || declared === 'github') return declared;
-  if (declared) {
-    const e = /** @type {any} */ (new Error(`"store": "${declared}" in .kanban/board.json is not a store — hkb has "local" (the kb-board branch) and "github" (issues).`));
+  if (!declared || declared === 'local') return 'local';
+  if (declared === 'github') {
+    const e = /** @type {any} */ (new Error('this board is on the GitHub store, which hkb no longer has (ADR-006). Move it with `hkb init --store local --import`, which reads the kb:* issues once and writes them to the kb-board branch; then drop "store" from .kanban/board.json.'));
     e.exitCode = 2;
     throw e;
   }
-  return 'github';
+  const e = /** @type {any} */ (new Error(`"store": "${declared}" in .kanban/board.json is not a store — hkb has one, the local kb-board branch. Drop the key.`));
+  e.exitCode = 2;
+  throw e;
 }
 
 /**
- * `./local.js`, loaded the first time a local board actually needs it.
+ * `./local.js`, loaded the first time something actually needs board state.
  *
- * **A GitHub board must not load `node:sqlite`.** A static `import` of `local.js` here pulled
- * `sqlite.js` into every command that reaches the store seam, so on a node built without SQLite —
- * or one still gating it behind a flag — `hkb list`, `hkb show` and, worst, `hkb hook pretool` died
- * with `ERR_UNKNOWN_BUILTIN_MODULE` before `main()` ran, on a board that has nothing to do with it.
- * The hook's own contract is to stand aside rather than throw onto a worker's tool call.
+ * **Not a static import.** A static `import` of `local.js` here pulls `sqlite.js` into every command
+ * that so much as mentions the seam, so on a node built without SQLite — or one still gating it
+ * behind a flag — `hkb list`, `hkb show` and, worst, `hkb hook pretool` die with
+ * `ERR_UNKNOWN_BUILTIN_MODULE` before `main()` runs, rather than where the board is read. The hook's
+ * own contract is to stand aside rather than throw onto a worker's tool call.
  *
  * This is why `openStore` and `assertOwningHost` are async: `local.js` is reachable only through an
  * `await import`, the way `cli.js` and `init.js` already reach it.
@@ -155,18 +141,19 @@ export async function openStore(ctx) {
   const cacheable = !!ctx && typeof ctx === 'object';
   const held = cacheable ? ctx._store : null;
   if (held) {
-    // Reconcile, the way a freshly opened local store does. The GitHub driver has no `open`.
+    // Reconcile, the way a freshly opened local store does. A double need not offer `open`.
     try { held.open?.(); } catch { /* a reconcile that cannot run leaves the last good index in place */ }
     return held;
   }
   // The override answers *inside* the memo, not in front of it: a double handed back before the
   // cache never enters it, `closeStore(ctx)` finds nothing to close, and the handle lifecycle every
   // verb depends on is the one part of this seam no test could exercise through a double.
-  const store = storeOverride
-    ? storeOverride(ctx)
-    : (storeKind(ctx) !== 'local'
-      ? openGithubStore(ctx)
-      : (await localModule()).openLocalStore(ctx));
+  let store;
+  if (storeOverride) store = storeOverride(ctx);
+  else {
+    storeKind(ctx); // a board.json naming a store hkb does not have says so here, before any I/O
+    store = (await localModule()).openLocalStore(ctx);
+  }
   if (cacheable) ctx._store = store;
   return store;
 }
@@ -180,7 +167,6 @@ export async function openStore(ctx) {
  * business reindexing the branch under the loop that owns it. It also does not reconcile, for the
  * same reason — the dispatcher's own store is what keeps the index current.
  *
- * On GitHub there is no such distinction, and this is `openStore`.
  * @param {any} ctx
  * @returns {Promise<Store>}
  */
@@ -194,7 +180,7 @@ export async function openStoreReadOnly(ctx) {
     if (cacheable) ctx._storeRO = store;
     return store;
   }
-  if (storeKind(ctx) !== 'local') return openStore(ctx);
+  storeKind(ctx); // a board.json naming a store hkb does not have says so here too
   const { openLocalStore } = await localModule();
   const store = openLocalStore(ctx, { reconcile: false, readOnly: true });
   // Its own slot, never `_store`. `hkb serve` reads through this one and *writes* through the
@@ -207,14 +193,13 @@ export async function openStoreReadOnly(ctx) {
 /**
  * Refuse a verb that writes the board on a host that does not own it.
  *
- * A no-op on the GitHub store — its board is a repository, and every collaborator writes it. On the
- * local store the `kb-board` branch has exactly one writer (§6.2) and this is where every mutating
- * verb finds that out, before it spends anything.
+ * The `kb-board` branch has exactly one writer (§6.2) and this is where every mutating verb finds
+ * that out, before it spends anything.
  * @param {any} ctx
  * @param {string} verb
  */
 export async function assertOwningHost(ctx, verb = 'this') {
-  if (storeKind(ctx) !== 'local') return null;
+  storeKind(ctx);
   const { assertLocalOwner } = await localModule();
   return assertLocalOwner(ctx, verb);
 }
@@ -224,9 +209,9 @@ export async function assertOwningHost(ctx, verb = 'this') {
  * driver has all of them, so a driver that forgets one fails on the shape before any scenario runs.
  */
 export const STORE_METHODS = Object.freeze([
-  // `root()` is on the list because it was the one member the drivers disagreed about — a property
-  // on the local store, a function on the GitHub one — and the shape check could not say so about a
-  // name it was not given. Every member of the interface belongs here, including the dull ones.
+  // `root()` is on the list because it was the one member two drivers once disagreed about — a
+  // property on one, a function on the other — and the shape check could not say so about a name it
+  // was not given. Every member of the interface belongs here, including the dull ones.
   'root', 'capabilities',
   'board', 'setBoard',
   'listTasks', 'listClosedRecent', 'getTask', 'createTask', 'updateBody', 'setKb',
@@ -298,11 +283,11 @@ export const STORE_METHODS = Object.freeze([
  *   `unavailable` beat could not be made, because `hkb heartbeat` prints that sentence before it
  *   falls back to the run record.
  * @property {(n: number, k: number) => string|null} lockRef
- *   Where this claim lives, when the store has a name for it — `refs/kb/locks/<n>/<k>` on GitHub,
- *   `null` on a store that keeps its claims in a table. The same optional `ref` `claim()` and
+ *   Where this claim lives, when the store has a name for it. `null` on a store that keeps its
+ *   claims in a table, which is every store hkb ships. The same optional `ref` `claim()` and
  *   `listLocks()` carry, asked for a claim the caller did not just make: `hkb heartbeat` prints it,
- *   and so does the LOCK_LOST error, which used to name a GitHub ref on every board. A caller
- *   falls back to the attempt number, which every store has (`cli.js`'s `c.ref || \`attempt ${k}\``).
+ *   and so does the LOCK_LOST error. A caller falls back to the attempt number, which every store
+ *   has (`cli.js`'s `c.ref || \`attempt ${k}\``).
  * @property {(n: number, k: number) => string|null|Promise<string|null>} lockToken
  *   The claim's token as the *store* has it, or null when the claim is gone (= reclaimed). The
  *   authoritative read: a rejected lease is evidence, this is the answer.

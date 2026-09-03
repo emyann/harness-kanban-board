@@ -9,14 +9,12 @@ import { boardFile, api, readState, writeState, processState, storeGitDir, remot
 // this token create a lock ref, does a `--force-with-lease` push land — and there is no
 // store-neutral way to ask them. So they call the GitHub driver and the forge by name, and they go
 // with it (docs/local-first.md §7). Each is already gated on the board's store where it matters.
-import { detectCaps, issueDatabaseId, casHeartbeat, dropBeatChain } from './store/github.js';
 import { branchProtection, openPrsByHead, classifyClaimError, listTrackBranches } from './forge.js';
 import { openStore, closeStore, storeKind } from './store/index.js';
 import { L, STATUSES, SAFE_BUILTINS, capabilityGrants, effectiveTools, toolPosture, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren, branchTaskNumber, denialDisplayTool, DENIAL_KINDS, mcpVisibilityDiagnosis, mcpGrantedTo } from './model.js';
 import { resolvedIdentity } from './hook.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, harnessHookCommand, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
 import { latestVersion } from './registry.js';
-import { checkProject } from './projects.js';
 import { mcpServersFromTranscript } from './stats.js';
 // mcp.js is imported dynamically inside checkMcp, not here: it imports cli.js, which imports this
 // file, and a static import here would make that a cycle.
@@ -35,7 +33,7 @@ const fetchClosedRecent = async (ctx, opts = {}) => (await openStore(ctx)).listC
 const loadRun = async (ctx, n) => (await openStore(ctx)).loadRun(n);
 
 /** `storeKind`, but a board.json that names no store it understands is not this check's failure. */
-function storeKindOf(ctx) { try { return storeKind(ctx); } catch { return 'github'; } }
+function storeKindOf(ctx) { try { return storeKind(ctx); } catch { return 'local'; } }
 
 function has(cmd) { return spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).status === 0; }
 function version(cmd, args = ['--version']) { const r = spawnSync(cmd, args, { encoding: 'utf8' }); return r.status === 0 ? (r.stdout || r.stderr).trim().split('\n')[0] : null; }
@@ -198,20 +196,12 @@ export const MOUNT_CHECK = 'index filesystem';
  */
 export async function checkLocalStore(ctx, { ok, warn, bad }, { kind = null, mounts = '/proc/mounts', store = null } = {}) {
   let which = kind;
-  try { which = which || storeKind(ctx); } catch (e) { return bad(STORE_CHECK, /** @type {Error} */ (e).message, 'set "store" in .kanban/board.json to "local" or "github"'); }
-  if (which !== 'local') {
-    ok(STORE_CHECK, `github — the board is the kb:* issues on ${ctx.cfg?.repo || 'GitHub'}`);
-    // A branch nothing reads is worth one line, for the same reason `hkb init` says it: the store is
-    // the `"store"` key and nothing else, so a checkout carrying `kb-board` from a fetch is inert
-    // and there is no way to tell from the outside.
-    const { localBoardExists, BOARD_BRANCH } = await import('./store/local.js');
-    if (localBoardExists(ctx)) warn(STORE_CHECK, `this repository also has a \`${BOARD_BRANCH}\` branch, and nothing reads it while the board is on the GitHub store`, 'hkb init --store local (or ignore it)');
-    return;
-  }
+  try { which = which || storeKind(ctx); } catch (e) { return bad(STORE_CHECK, /** @type {Error} */ (e).message, 'remove "store" from .kanban/board.json — hkb has one store'); }
+  if (which !== 'local') return; // unreachable today: `storeKind` knows one store
 
-  // Imported here, not at the top of the file: `local.js` pulls in `node:sqlite`, and `hkb doctor`
-  // on a plain GitHub board — the board most likely to be run by somebody whose node was built
-  // without it — must not die on the import of a store it is not using. Same rule as `openStore`.
+  // Imported here, not at the top of the file: `local.js` pulls in `node:sqlite`, and every command
+  // that reaches this file must not die on that import before `main()` runs. Same rule as
+  // `openStore`.
   const { openLocalStore, mountFor, REFUSED_FS } = await import('./store/local.js');
   const { indexFileIn } = await import('./store/sqlite.js');
 
@@ -269,6 +259,52 @@ export async function checkLocalStore(ctx, { ok, warn, bad }, { kind = null, mou
       ok(MOUNT_CHECK, `${m.type} at ${m.mount}`);
     } else warn(MOUNT_CHECK, `${m.mount} is "${m.type}", which hkb does not recognise — make sure it is a local disk, not a network share`);
   } finally { close(); }
+}
+
+export const CLAIM_CHECK = 'claim lock';
+
+/**
+ * Can this host actually take the lock a claim needs? `hkb doctor --api`'s one probe.
+ *
+ * It replaces the probe that used to be here — create `refs/kb/locks/probe/<k>` on GitHub, create it
+ * again to see the 422, push a `--force-with-lease` over it, delete it — which asked whether the
+ * *forge* could hold a lease. A claim is now one `BEGIN IMMEDIATE` transaction on the board index
+ * (docs/local-first.md §6.1, `src/store/sqlite.js`), so this asks the three things that transaction
+ * needs: that the write lock can be taken and released at all, that the journal is WAL (a reader
+ * and the dispatcher's writer overlap constantly, and rollback-journal mode serialises them), and
+ * — via `checkLocalStore`'s mount check — that SQLite's locking works on the filesystem it is on.
+ *
+ * A busy lock is not a failure: the dispatcher taking a write lock while doctor asks is the system
+ * working. It is reported as such, with the pid file naming who has it.
+ *
+ * @param {any} ctx
+ * @param {{ok: Function, bad: Function, warn: Function}} report
+ * @param {{store?: any}} [deps]
+ */
+export async function checkClaimLock(ctx, { ok, bad, warn }, { store = null } = {}) {
+  const { openLocalStore } = await import('./store/local.js');
+  const s = store || openLocalStore(ctx, { reconcile: false });
+  try {
+    const db = s.index.db;
+    const where = path.relative(s.root(), s.index.file);
+    const mode = String(db.prepare('PRAGMA journal_mode').get()?.journal_mode || '').toLowerCase();
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      db.exec('ROLLBACK');
+    } catch (e) {
+      const msg = /** @type {Error} */ (e).message || '';
+      if (/busy|locked/i.test(msg)) {
+        return warn(CLAIM_CHECK, `${where} is write-locked right now — something else is mid-transaction (that is the lock working)`, 'run it again, or `hkb down` first if you want the probe to be conclusive');
+      }
+      return bad(CLAIM_CHECK, `the index would not give this process the write lock: ${msg}`, `check the filesystem ${where} is on — SQLite needs POSIX locking, which a 9p or NFS mount does not give it`);
+    }
+    if (mode !== 'wal') {
+      return warn(CLAIM_CHECK, `BEGIN IMMEDIATE works, but journal_mode is "${mode}", not WAL — a reader and the dispatcher's writer will block each other`, `delete the index and let the next verb rebuild it: rm ${s.index.file}*`);
+    }
+    ok(CLAIM_CHECK, `BEGIN IMMEDIATE taken and released on ${where} · journal_mode WAL`);
+  } finally {
+    if (!store) { try { s.close(); } catch { /* nothing open */ } }
+  }
 }
 
 export const PERMS_CHECK = 'worker permissions';
@@ -689,15 +725,8 @@ export const ORPHANED_PR_CHECK = 'orphaned PRs';
  * #227 and #228: closed as done, work unmerged, nothing left to chase it. One read for every open PR
  * on hkb's own branches, then one issue lookup per match (usually a handful) to see which are closed.
  */
-export async function checkOrphanedPrs(ctx, { ok, warn }, { openByHead = openPrsByHead, issue = issueDatabaseId, kind = null } = {}) {
-  // Not on a local board, and `gc.js` gates the identical sweep the same way: this check reads a
-  // *card* by looking the branch's number up as a GitHub issue (`issueDatabaseId`), which on a local
-  // board is a different repository's numbering or nothing at all. So it spends up to ten paginated
-  // requests to answer a question it cannot answer, and reports `bad` when the forge is unreachable
-  // — on the store that exists to work with `gh` logged out.
-  if ((kind || storeKindOf(ctx)) === 'local') {
-    return ok(ORPHANED_PR_CHECK, 'not checked on a local board — this looks a branch up as an issue in the forge, and a local board does not number its cards there');
-  }
+export async function checkOrphanedPrs(ctx, { ok, warn }, { openByHead = openPrsByHead, card = null } = {}) {
+  const read = card || (async (c, n) => (await openStore(c)).getTask(n));
   const byHead = await openByHead(ctx);
   const candidates = [];
   for (const [head, pr] of byHead) {
@@ -708,9 +737,10 @@ export async function checkOrphanedPrs(ctx, { ok, warn }, { openByHead = openPrs
   const orphans = [];
   for (const { n, pr } of candidates) {
     let row;
-    try { row = await issue(ctx, n); } catch { continue; } // unreadable — not this check's failure to report
-    if (String(row.state).toUpperCase() !== 'CLOSED') continue; // open: the live fallback already covers it
-    orphans.push({ n, pr: pr.number, reason: row.state_reason || 'closed', url: pr.url });
+    try { row = await read(ctx, n); } catch { continue; } // no such card, or unreadable — not this check's failure to report
+    const settled = String(row.state || 'OPEN').toUpperCase() === 'CLOSED' || ['done', 'archived'].includes(row.status);
+    if (!settled) continue; // still open: `fillPrs` puts this PR back on the card at every read
+    orphans.push({ n, pr: pr.number, reason: row.status || String(row.stateReason || 'closed').toLowerCase(), url: pr.url });
   }
   if (!orphans.length) return ok(ORPHANED_PR_CHECK, `${plural(candidates.length, 'open PR')} on hkb's own branches, all on cards still open`);
   const detail = orphans.map((o) => `#${o.n} (${o.reason}) ← PR #${o.pr}`).join(' · ');
@@ -735,12 +765,7 @@ export const TRACK_BRANCH_CHECK = 'track branches';
  * One `git/matching-refs` read for every track branch the repo has ever made, then one run-record
  * read per branch — there are rarely more than a handful of tracks alive on a board at once.
  */
-export async function checkTrackBranches(ctx, { ok, warn }, { branches = listTrackBranches, run = loadRun, kind = null } = {}) {
-  // Same gate, same reason, and the same sentence `gc.js` speaks when it skips its own sweep: a
-  // track branch is listed off the forge, and a local board keeps none there.
-  if ((kind || storeKindOf(ctx)) === 'local') {
-    return ok(TRACK_BRANCH_CHECK, 'not swept on a local board — a track branch lives on the forge and this board does not keep one');
-  }
+export async function checkTrackBranches(ctx, { ok, warn }, { branches = listTrackBranches, run = loadRun } = {}) {
   const rows = await branches(ctx);
   if (!rows.length) return ok(TRACK_BRANCH_CHECK, 'no track branches on the repo');
   const orphans = [];
@@ -790,27 +815,6 @@ export async function checkTrackProfile(ctx, { ok, warn }, { fetch = fetchBoard 
  */
 export async function boardOnce(ctx, fetch = fetchBoard) {
   try { return { tasks: await fetch(ctx, { blockers: false }) }; } catch (e) { return { error: e.message }; }
-}
-
-export const GROOM_BLOCKERS_CHECK = 'groom blockers';
-
-/**
- * What a groom costs on this repo. `hkb groom` reports on every open card, so it asks
- * `fetchBoard` for `blockers: 'all'` — and where GraphQL has no `Issue.blockedBy` that is one
- * REST call per open card rather than the tick's todo/blocked handful. Nobody should discover
- * that by running it on a board of two hundred; the price is named here, next to the capability.
- */
-/**
- * @param {any} ctx
- * @param {{ok: Function, warn: Function}} report
- * @param {{caps?: any, board?: any}} [opts]
- */
-export function checkGroomBlockers(ctx, { ok, warn }, { caps, board = null } = {}) {
-  if (caps?.blockedByGql) return ok(GROOM_BLOCKERS_CHECK, 'blockers ride the board query — hkb groom costs no extra request');
-  const open = board && !board.error ? board.tasks.length : null;
-  const cost = open === null ? 'one REST call per open card' : `${plural(open, 'REST call')} — one per open card`;
-  warn(GROOM_BLOCKERS_CHECK, `no GraphQL Issue.blockedBy, so hkb groom fills blockers itself: ${cost}`,
-    'nothing to fix — expect the run to be slower than a tick on a large board');
 }
 
 export const TASK_SKILLS_CHECK = 'task skills';
@@ -1624,47 +1628,11 @@ async function githubChecks(ctx, flags, { ok, warn, bad }) {
   // rate limit, token class, token expiry — one call
   await step('token', () => checkToken({ ok, warn, bad }));
 
-  // API capabilities
-  try {
-    const caps = await detectCaps(ctx, { force: true });
-    caps.blockedByGql ? ok('GraphQL Issue.blockedBy', 'available (one query per tick)') : warn('GraphQL Issue.blockedBy', 'not in schema — falling back to REST dependencies per task', 'check docs; run doctor again later');
-    caps.closedByPrs ? ok('GraphQL closedByPullRequestsReferences', 'available (active_pr guard)') : warn('GraphQL closedByPullRequestsReferences', 'not in schema — active_pr guard disabled');
-    checkGroomBlockers(ctx, { ok, warn }, { caps, board });
-  } catch (e) { bad('GraphQL', e.message); }
-
   // the last step — silent unless the board asked GitHub to take it (`merge.mode: "auto"`)
   await step('merge policy', () => checkMergePolicy(ctx, { ok, bad }));
 
-  // Projects v2 mirror — silent unless board.json links a project (the feature is off by default)
-  await step('project mirror', () => checkProject(ctx, { ok, bad, warn }));
-
-  if (flags.api) {
-    // dependencies REST endpoint
-    try {
-      const issues = await rest('GET', api(ctx, '/issues?state=all&per_page=1'));
-      if (issues?.length) {
-        await rest('GET', api(ctx, `/issues/${issues[0].number}/dependencies/blocked_by?per_page=1`));
-        ok('REST issue dependencies', `GET .../dependencies/blocked_by works (API version ${API_VERSION})`);
-      } else warn('REST issue dependencies', 'no issues to probe');
-    } catch (e) { bad('REST issue dependencies', `${e.kind} ${e.message}`, 'dependencies may need a newer API version or are unavailable for this repo'); }
-    // lock ref probe: create, duplicate-create, lease-push (the worker's heartbeat), delete
-    const k = Date.now();
-    const probe = `refs/kb/locks/probe/${k}`;
-    try {
-      const head = await rest('GET', api(ctx, `/git/ref/heads/${ctx.cfg.default_branch || 'main'}`));
-      await rest('POST', api(ctx, '/git/refs'), { body: { ref: probe, sha: head.object.sha } });
-      let dup = 'no error (!)';
-      try { await rest('POST', api(ctx, '/git/refs'), { body: { ref: probe, sha: head.object.sha } }); } catch (e) { dup = `${e.status} → ${classifyClaimError(e)}`; }
-      const beat = casHeartbeat(ctx.root, 'probe', k, head.object.sha, { remote: remoteName(ctx) });
-      dropBeatChain(ctx.root, 'probe', k);
-      await rest('DELETE', api(ctx, `/git/refs/${probe.replace(/^refs\//, '')}`));
-      dup.endsWith('held') ? ok('lock ref CAS', `create 201 · duplicate ${dup} · delete ok`) : bad('lock ref CAS', `duplicate create returned ${dup}`, 'report this: claim classification must be adjusted');
-      if (beat.result === 'ok') ok('heartbeat lease', `git push --force-with-lease on ${probe} → ${beat.sha.slice(0, 7)}`);
-      else warn('heartbeat lease', `${beat.result}: ${beat.detail}`, `workers on this host will heartbeat by writing the run comment instead — set "heartbeat": "comment" on the profile to make that the plan, or give ${remoteName(ctx)} push access to refs/kb/*`);
-    } catch (e) { bad('lock ref CAS', `${e.kind} ${e.message}`, 'token needs Contents: write'); }
-  } else {
-    warn('API probes', 'skipped', 'hkb doctor --api (creates and deletes one probe ref)');
-  }
+  if (flags.api) await step(CLAIM_CHECK, () => checkClaimLock(ctx, { ok, bad, warn }));
+  else warn('API probes', 'skipped', 'hkb doctor --api (takes and releases one write lock on the index)');
 }
 
 function report(results, ctx, log) {
