@@ -473,7 +473,7 @@ export async function startServer(ctx, flags = {}, log = /** @type {(...a: any[]
       cache = null;
       if (number) { details.delete(number); delete b.ctx._cache[`comments:${number}`]; }
       else details.clear();
-      // The open-PR listing behind `fillPrFallback` is memoized per context; a write that opened,
+      // The open-PR listing behind `fillPrs` is memoized per context; a write that opened,
       // merged or closed a PR must not be answered from the listing taken before it.
       delete b.ctx._cache.prsByHead;
     }

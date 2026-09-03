@@ -196,7 +196,7 @@ export function sweepBranches(ctx, { finished = /** @type {(n: number, k?: numbe
 /**
  * Track branches (`kb/track-<root>`) whose root is settled — done or archived. Unlike every other
  * sweep here, the branch lives on GitHub, not this checkout, because `ensureTrackBranch` creates it
- * through the API rather than a local push (`src/lock.js`); this is the one sweep in the file that
+ * through the API rather than a local push (`src/forge.js`); this is the one sweep in the file that
  * costs a request instead of a `git` call. A root that is still open is never touched here even if
  * its last track attempt already ended without merging — that is `hkb doctor`'s `checkTrackBranches`
  * to flag, not this sweep's to delete, because the branch may still hold work a human wants back.

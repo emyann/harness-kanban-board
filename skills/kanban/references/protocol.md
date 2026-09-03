@@ -35,7 +35,7 @@ the mistakes actually happen.
 | Word | Is | Is not |
 |---|---|---|
 | **operator** | the human who owns the repo, the token and the scope: files and sharpens cards, steers by comment, reviews and merges, answers `kb:needs-human`, restarts a dispatcher that exited 4. "you", in a worker prompt | a seat an agent owns. An agent session may drive these verbs; the approvals and the credentials stay with the human |
-| **dispatcher** | the tick (`hkb dispatch`): reconciles labels, locks and attempts against the graph already on the cards | an orchestrator. It holds no workflow and has no LLM in it; the graph lives on the cards as issue dependencies |
+| **dispatcher** | the tick (`hkb dispatch`): reconciles labels, locks and attempts against the graph already on the cards | an orchestrator. It holds no workflow and has no LLM in it; the graph lives on the cards as `blocked_by` edges |
 | **worker** | one session holding one attempt on one task — Claude Code, Copilot CLI, Codex, a harness you wrote a `launch` array for, or the operator running the verbs by hand | a person, and not a profile — the profile only says *how* to launch one |
 | *reviewer* | a **per-card gate**: `--reviewer` is **always a GitHub user**, requested on the PR — never a profile name | a seat. Nothing dispatches to a reviewer; the card sits in *review* until the PR merges |
 | *track runner* | a **worker mode**: one session executing a root and everything still blocking it, node by node (see *Tracks*) | a fourth seat, or a second protocol |
@@ -55,7 +55,7 @@ written in and a board migrated off GitHub Issues arrives carrying them.
 | Board | the branch's own `board.json` slug | one card belongs to one board; cross-board links are refused |
 | Profile (assignee) | `agent` | profile = launcher + model + caps in `.kanban/board.json` |
 | Needs a human | `needs_human` | orthogonal flag; set on gave_up, block loops, most block kinds |
-| Machine fields | `<!-- kb: {...} -->` block at the top of the card's body | `priority, workspace, max_runtime, max_retries, model, skills[], paths[], scheduled_at, idempotency_key, goal`. `priority` is a number, **higher wins**, default `0` (`--priority N`; the tick sorts *ready* by it, then oldest issue first). Band: `0` unfiled (default) · `1` normal · `2` next up · `3` urgent — see `README.md`. Malformed → defaults, never a crash |
+| Machine fields | `<!-- kb: {...} -->` block at the top of the card's body | `priority, workspace, max_runtime, max_retries, model, skills[], paths[], scheduled_at, idempotency_key, goal`. `priority` is a number, **higher wins**, default `0` (`--priority N`; the tick sorts *ready* by it, then oldest card first). Band: `0` unfiled (default) · `1` normal · `2` next up · `3` urgent — see `README.md`. Malformed → defaults, never a crash |
 | Dependencies | `blocked_by` on the card | Hermes parent→child. A blocker counts as done only when it is *done* (closed as completed) |
 | Attempts (Hermes `runs`) | `runs/<id>.json` on the branch, and the `attempts` table in the index | `attempts[] {attempt, profile, host, pid, started_at, heartbeat_at, ended_at, outcome, summary, reason, log, session_id, transcript_path, total_cost_usd, num_turns, duration_ms}`, `failures`, `block_loops`. The session fields are recorded once, by the Stop hook and the dispatcher: `hkb show <n>` prints them with a `claude --resume <id>` line. A track attempt also carries `track: true` and `track_nodes[]` — the subgraph it was handed, and the marker that says this root has had its one go at the fast engine. An attempt from `hkb claim <n>` with no `--spawn` carries `manual: true` (a row written before ADR-006 may carry a legacy `remote: true`, judged the same way) — the operator claimed it and is working it in their own terminal, so there is no pid the dispatcher ever knew, and it is judged by the heartbeat alone. An attempt the dispatcher started to **continue** a PR the reviewer sent back carries `continues_pr: <number>`, and `continues_branch: <head branch>` when the dispatcher managed to put the checkout on that branch, and `continues_branch_stale: <why>` when that checkout could not be fast-forwarded to the remote head (the brief then says how to catch it up) (without it, the brief is what tells the worker which PR to push to). `profile` is normally a board profile, but three values are **reserved and synthetic** (the row also carries `synthetic: true`, and opens and closes in the same instant): `dispatcher` — the tick wrote the row itself, out of retries (`gave_up`); `reviewer` — `hkb request-changes` sent the card back (`changes_requested`); `human` — the operator ran a terminal verb by hand on a task with no open attempt and no `kb:agent:*` label. Do not name a board profile after one of them |
 | Structured handoff | a `results[]` entry per completion / review request | `{summary, metadata{changed_files, verification, dependencies, residual_risk, retry_notes}, artifacts[]}` |
@@ -178,7 +178,7 @@ and the paths it collides with, not just `guarded: path_overlap` (#176).
 
 ## Decomposition, worked
 
-A goal issue is split by `/kanban:decompose` (a slash command that `hkb init` and the `kanban` plugin both register;
+A goal card is split by `/kanban:decompose` (a slash command that `hkb init` and the `kanban` plugin both register;
 its body sends you to the section of `SKILL.md` with the same name). It runs in a human's session — the dispatcher
 never decomposes anything, and there is no `hkb decompose`. The shape is Hermes': children carry the work, and the **root is blocked by its leaves**, so it
 becomes ready again for a final verify pass once the tree is done.
@@ -234,7 +234,7 @@ A materialized graph is valid when:
 
 `hkb graph <n> [--mermaid]` prints the **track** rooted at `<n>` — the root plus everything still blocking it,
 the same subgraph `resolveTrack` gives the dispatcher — as one fenced mermaid block. GitHub renders mermaid in
-issues, comments, PRs and markdown files, so the picture goes where the tasks already are; `--mermaid` is the
+pull requests, comments and markdown files, so the picture pastes straight into the PR or the doc that needs it; `--mermaid` is the
 explicit spelling of what the command does anyway. `--json` returns `{ root, nodes, edges, cycle, mermaid }`.
 
 For the board above, `hkb graph 12` emits (and this is that block, rendered):
@@ -267,7 +267,7 @@ flowchart TD
 ## Tracks — the second execution engine
 
 A **track** is a view, not a new object: a root task plus every task that is still blocking it, transitively. The same
-issues, the same labels, the same verbs. What changes is who runs them.
+cards, the same statuses, the same verbs. What changes is who runs them.
 
 | | node dispatch (default) | track runner |
 |---|---|---|
@@ -328,15 +328,16 @@ The dispatcher recognises a track root in step 5 of the tick, before it selects 
    is `running`, `blocked`, `review` or `triage` · a node wearing `kb:needs-human` · a node with an open PR · a node
    on a profile outside the runner's `track_agents` (**cross-harness tracks are out of scope**: one session is one
    harness) · a root that has already had one track attempt. Every refusal is reported, none is an error.
-3. claim the root's lock, append an attempt carrying `track: true` and `track_nodes: [...]`, label the root
-   `kb:status:running`, and spawn one session with the track prompt.
+3. claim the root's lock, append an attempt carrying `track: true` and `track_nodes: [...]`, set the root to
+   *running*, and spawn one session with the track prompt.
 4. while that attempt is open, the nodes are *covered*: the tick will not reclaim them (they have no pid of their
    own — the root's lease is their liveness), will not claim them, and does not count their slots.
 
 The runner's contract is in `SKILL.md` under *When you run a track*, and the node contract inside it is the ordinary
 worker one: `hkb context <n>` → `hkb claim <n>` → work on a branch of its own (`git switch -c kb/<n> <base>`, where
 `<base>` is the blocker's branch) → one draft PR from the `kb/<n>` branch → one terminal verb, per node, then
-the root last. One PR per node is what keeps a node a checkpoint: its issue closes when *its* PR merges. A single PR
+the root last. One PR per node is what keeps a node a checkpoint: its card goes *done* when *its* PR merges, matched
+by the branch name and nothing else. A single PR
 closing several nodes would park the unfinished ones in *review* behind it, where nothing could finish them.
 
 **When to prefer a track.** A track used to be the slower-but-cheaper engine: it saved a tick of latency per edge and

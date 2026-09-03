@@ -397,11 +397,17 @@ export class FakeStore {
         self.#touch(rec);
         return self.#task(rec);
       },
-      async setKb(task, kb, bodyText = task.bodyText) {
+      // `bodyText` defaults to *the record's* prose, not the passed task's. Defaulting to
+      // `task.bodyText` modelled the GitHub driver, where kb and prose shared one body field and a
+      // caller could only write both; the one driver left reads the card it is about to patch, so a
+      // `setKb` on a task read before someone else rewrote the prose does not put the old prose
+      // back. The conformance scenario pins the pairing.
+      async setKb(task, kb, bodyText = undefined) {
         const rec = self.#of(task);
-        rec.body = serializeBodyBlock(kb, bodyText);
+        const prose = bodyText === undefined ? parseBodyBlock(rec.body).rest : bodyText;
+        rec.body = serializeBodyBlock(kb, prose);
         self.#touch(rec);
-        task.kb = kb; task.body = rec.body; task.bodyText = bodyText;
+        task.kb = kb; task.body = rec.body; task.bodyText = prose;
         return task;
       },
       async setStatus(task, status, { add = [], remove = [] } = {}) {

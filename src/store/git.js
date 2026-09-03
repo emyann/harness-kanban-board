@@ -130,7 +130,7 @@ function labelsOf(card, slug) {
 }
 
 /**
- * A card as `src/model.js` reads it — `fetchBoard`'s shape (`toTask` in src/store/github.js), so a
+ * A card as `src/model.js` reads it — the shape every caller above the seam expects, so a
  * caller cannot tell which store answered. `url` is null and `prs` empty: a local board has neither,
  * and the forge half (`src/forge.js`) is what knows about pull requests.
  */

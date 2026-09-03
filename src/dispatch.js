@@ -499,7 +499,7 @@ export function dropCaches(ctx) {
  */
 export function dropCommentCaches(ctx) {
   for (const key of Object.keys(ctx._cache)) if (key.startsWith('comments:')) delete ctx._cache[key];
-  // `prsByHead` is the same kind of thing: the open-PR listing behind `fillPrFallback`, memoized so
+  // `prsByHead` is the same kind of thing: the open-PR listing behind `fillPrs`, memoized so
   // a verb that reads several cards pays for one. It is a tick's worth of truth, never a loop's —
   // a PR opened by a worker last tick must be visible to this one.
   delete ctx._cache.prsByHead;

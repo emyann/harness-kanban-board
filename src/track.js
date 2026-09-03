@@ -14,7 +14,7 @@
 // starts the node instead of the dispatcher paying for every node up front.
 //
 // Every node branches from the track's own integration branch, `kb/track-<root>`
-// (`trackBranchName`, `src/model.js`; created at claim time by `ensureTrackBranch`, `src/lock.js`,
+// (`trackBranchName`, `src/model.js`; created at claim time by `ensureTrackBranch`, `src/forge.js`,
 // and recorded on the root's attempt row as `track_branch`) — never from a sibling. A **dead
 // runner's** leftover nodes are a deliberate, documented gap: `src/context.js`'s ordinary cold
 // worker brief does not (yet) look up an ancestor track's branch, so node dispatch picking up what

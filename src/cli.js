@@ -265,8 +265,9 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
               track <n> [--off|--on] [--json]   whether #n runs as ONE orchestrated session and why.
                     A card with unfinished children is a track by default; --off (kb:no-track) runs
                     them as cold nodes instead, --on undoes it, --agent <a track profile> forces one
-              edit <n>... [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]
-                    sets exactly the kb keys named — every other key is left as read; the write half of
+              edit <n>... [--body-file p|--body ".."] [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]
+                    --body-file/--body rewrites one card's prose and keeps its kb block — what
+                    /kanban:specify applies. The rest set exactly the kb keys named — every other key is left as read; the write half of
                     what hkb groom's unblocked/no_paths/malformed_kb/broad_path/priority_inversion suggest.
                     --paths "" or --goal "" clears that field. --priority must be an integer (0 unfiled ·
                     1 normal · 2 next up · 3 urgent); --scheduled-at must be a valid ISO instant. Both are
@@ -434,7 +435,7 @@ function refuseIfWorker(cmd) {
 
 /**
  * One line per card. `known` says whether this task's `blockedBy` is a real answer (`blockersKnown`,
- * src/tasks.js) — the ` ⇡ unblocked` nudge is computed here in memory, from the same rule
+ * src/model.js) — the ` ⇡ unblocked` nudge is computed here in memory, from the same rule
  * `groomBoard` uses (≥ 1 blocker, all done, not parked by `scheduled_at`), and is never guessed: on a
  * read that did not fill blockers an empty list means "not looked up", not "nothing blocks it".
  * No new field, no write, no extra request — a triage card whose blockers are all done says so.
@@ -686,7 +687,7 @@ async function runVerb(argv, keep) {
     case 'edit': {
       const ns = nums(rest);
       if (!ns.length) {
-        throw usage('hkb edit <n>... [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]  ("" clears --paths or --goal)');
+        throw usage('hkb edit <n>... [--body-file p|--body ".."] [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]  ("" clears --paths or --goal)');
       }
       // Validate every flag before touching any card (#243): a bad flag must reject the whole
       // command, not edit the first of several numbers and then fail on the second.
@@ -705,19 +706,44 @@ async function runVerb(argv, keep) {
         if (!parsed.ok) throw usage(parsed.error);
         fields.priority = parsed.value;
       }
-      if (!Object.keys(fields).length) {
-        throw usage('hkb edit <n>... needs at least one of --paths/--goal/--scheduled-at/--priority');
+      // The prose, from a file or inline. `/kanban:specify` and `/kanban:decompose` rewrite a card's
+      // body, and while the board was GitHub Issues they did it with `gh api issues/<n> -X PATCH`.
+      // The board is a branch now, so that request edits an issue that is not the card — silently,
+      // and on a repository whose issues may be something else entirely. `updateBody` was already on
+      // the interface with nothing above it reaching the verb; this is the verb.
+      let body = null;
+      if (flags['body-file'] !== undefined) {
+        const p = str(flags['body-file']);
+        if (!p) throw usage('--body-file needs a path');
+        try { body = fs.readFileSync(p, 'utf8'); } catch (e) {
+          throw usage(`--body-file: cannot read ${p} (${e.code || e.message}) — write the file first, or pass the text with --body`);
+        }
+      } else if (flags.body !== undefined) {
+        body = str(flags.body);
+      }
+      if (body !== null && ns.length > 1) {
+        throw usage(`--body-file/--body writes one card's prose, and you named ${ns.length} — run it once per card`);
+      }
+      if (body === null && !Object.keys(fields).length) {
+        throw usage('hkb edit <n>... needs at least one of --body-file/--body/--paths/--goal/--scheduled-at/--priority');
       }
       for (const w of warnings) log(`warning: ${w}`);
       const res = [];
       const store = await openStore(ctx);
       for (const n of ns) {
         const t = await store.getTask(n);
+        // The prose first: `updateBody` keeps the machine block whatever the driver keeps it in, so
+        // a `--body` that repeats the `<!-- kb: … -->` line or leaves it out cannot lose the kb
+        // fields, and `setKb` below still wins on the keys it was given.
+        if (body !== null) await store.updateBody(n, body);
         const kb = { ...t.kb, ...fields };
-        await store.setKb(t, kb);
-        res.push({ number: n, kb });
+        if (Object.keys(fields).length) await store.setKb(t, kb);
+        res.push({ number: n, kb, body: body !== null });
       }
-      out(ctx, res, res.map((r) => `#${r.number} kb: ${Object.keys(fields).join(', ')} set`).join('\n'));
+      out(ctx, res, res.map((r) => {
+        const said = [r.body ? 'body' : null, Object.keys(fields).length ? `kb: ${Object.keys(fields).join(', ')}` : null].filter(Boolean);
+        return `#${r.number} ${said.join(', ')} set`;
+      }).join('\n'));
       return 0;
     }
     case 'archive': {

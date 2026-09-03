@@ -408,6 +408,18 @@ const SCENARIOS = [
       const after = await h.store.getTask(t.number);
       assert.match(after.bodyText, /rewritten prose/);
       assert.equal(after.kb.priority, 3, 'updateBody must not drop the kb block');
+
+      // And the two compose in either order on a task read before the body moved — which is what
+      // `hkb edit <n> --body-file … --priority 2` does: one `getTask`, then both writes. A driver
+      // that took the prose off the *passed task* instead of off the card put `the why, in prose`
+      // back over `rewritten prose` here, silently undoing the edit that had just landed.
+      await h.store.setKb(t, { ...t.kb, priority: 4 });
+      const both = await h.store.getTask(t.number);
+      assert.equal(both.kb.priority, 4);
+      assert.match(both.bodyText, /rewritten prose/, 'setKb with no bodyText leaves the prose where it is');
+      // stating it the other way round too: an explicit bodyText is still honoured
+      await h.store.setKb(t, { ...t.kb, priority: 5 }, 'prose the caller chose');
+      assert.match((await h.store.getTask(t.number)).bodyText, /prose the caller chose/);
     },
   },
   {

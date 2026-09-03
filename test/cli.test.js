@@ -268,6 +268,68 @@ test('hkb edit <n>... with no field flag is a usage error', async () => {
   await assert.rejects(() => main(['edit', '50']), (e) => e.exitCode === 2);
 });
 
+/**
+ * The verb `/kanban:specify` needs and did not have (#304).
+ *
+ * `updateBody` has been on the store interface all along with nothing above it reaching the verb,
+ * because while the board was GitHub Issues the skill wrote a card's prose with `gh api
+ * issues/<n> -X PATCH -F body=@…`. The board is a branch now, so that request edits an issue that
+ * is not the card — silently, on a repository whose issues may be something else entirely.
+ */
+test('hkb edit <n> --body-file rewrites the prose and keeps the kb block', async (t) => {
+  const { gh, store, restore } = installDoubles();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-edit-body-'));
+  fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
+  store.addIssue(kbIssue({
+    number: 60, title: 'a one-liner', status: 'triage', agent: 'claude', body: 'rate limit the API',
+    kb: { paths: ['src/old.js'], goal: 'old goal', priority: 1 },
+  }));
+  const cwd = process.cwd();
+  const write = process.stdout.write.bind(process.stdout);
+  let printed = '';
+  process.stdout.write = (s) => { printed += s; return true; };
+  process.chdir(dir);
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const run = async (...argv) => { printed = ''; await main(argv); return printed; };
+
+  const spec = path.join(dir, 'body.md');
+  fs.writeFileSync(spec, '## Why\nthe API has no limiter\n\n## What\na token bucket\n');
+  const said = await run('edit', '60', '--body-file', spec, '--paths', 'src/limit.js', '--priority', '2');
+  assert.match(said, /#60 body, kb: paths, priority set/);
+
+  const shown = JSON.parse(await run('show', '60', '--json'));
+  assert.match(shown.bodyText, /^## Why\nthe API has no limiter/);
+  assert.doesNotMatch(shown.bodyText, /kb:/, 'the machine block is hkb\'s, and never lands in the prose');
+  assert.deepEqual(shown.kb.paths, ['src/limit.js'], 'the kb block survived the body rewrite');
+  assert.equal(shown.kb.priority, 2);
+  assert.equal(shown.kb.goal, 'old goal', 'and so did the key neither flag named');
+
+  // --body inline is the same write
+  await run('edit', '60', '--body', 'shorter');
+  assert.equal(JSON.parse(await run('show', '60', '--json')).bodyText, 'shorter');
+});
+
+test('hkb edit --body-file: an unreadable path and a multi-card body write both say what to do', async (t) => {
+  const { gh, store, restore } = installDoubles();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-edit-body2-'));
+  fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
+  store.addIssue(kbIssue({ number: 61, status: 'triage', agent: 'claude', body: 'one' }));
+  store.addIssue(kbIssue({ number: 62, status: 'triage', agent: 'claude', body: 'two' }));
+  const cwd = process.cwd();
+  process.chdir(dir);
+  t.after(() => { process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+  await assert.rejects(() => main(['edit', '61', '--body-file', path.join(dir, 'nope.md')]),
+    (e) => e.exitCode === 2 && /cannot read/.test(e.message) && /--body/.test(e.message));
+  // one body, several cards is a typo, not a broadcast — and nothing is written before it is caught
+  await assert.rejects(() => main(['edit', '61', '62', '--body', 'same for both']),
+    (e) => e.exitCode === 2 && /once per card/.test(e.message));
+  assert.deepEqual(store.writesTo(61), [], 'the refusal wrote nothing');
+  assert.deepEqual(store.writesTo(62), []);
+});
+
 // ---------- hkb edit rejects a non-numeric --priority / unparseable --scheduled-at (#243) ----------
 
 function setupEditBoard(t, tasks) {

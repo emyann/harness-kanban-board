@@ -1911,7 +1911,7 @@ export function parseWorktreeName(name) {
  * task #n's PR whatever GitHub's own `closedByPullRequestsReferences` believes — the field only
  * answers "will merging this close #n", which needs the PR's base to be the default branch and
  * still went blank at least once for a PR that met that bar (#234). Used both to fall back to a PR
- * this task's own attempt opened (`src/tasks.js`) and to spot one doctor can see but the card can't.
+ * this task's own attempt opened (`fillPrs`, src/forge.js) and to spot one doctor can see but the card can't.
  */
 export function taskBranchRe(n) {
   const num = Number(n);
@@ -1938,7 +1938,7 @@ export function branchTaskNumber(branch) {
 
 /**
  * A track's own integration branch — created from the default branch when the track is claimed
- * (`ensureTrackBranch`, src/lock.js) and recorded as `track_branch` on the root's attempt row. Every
+ * (`ensureTrackBranch`, src/forge.js) and recorded as `track_branch` on the root's attempt row. Every
  * node of the track, whatever its blockers, branches from this one and PRs into it; the root's own
  * pass runs on it and opens the track's one PR into the default branch (`docs/wiki/features/tracks.md`).
  */
@@ -1954,7 +1954,7 @@ export function trackBranchRoot(branch) {
 
 /**
  * Do two or more children conflict on their way into the track branch? `states` is a
- * `Map<prNumber, {mergeable, mergeStateStatus}>` (`prMergeStates`, src/tasks.js) for every open PR
+ * `Map<prNumber, {mergeable, mergeStateStatus}>` (`prMergeStates`, src/forge.js) for every open PR
  * whose base is that branch. `mergeable === 'CONFLICTING'` is GitHub's own verdict, computed
  * asynchronously — `'UNKNOWN'` means "ask again next tick", never a false positive — and one PR
  * cannot conflict with itself, so fewer than two candidates is never a conflict.

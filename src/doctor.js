@@ -718,7 +718,7 @@ export const ORPHANED_PR_CHECK = 'orphaned PRs';
  * where the card no longer has any way to see it.
  *
  * `fetchBoard`/`getTask` now apply the same head-branch match as a live fallback for every *open*
- * card (`fillPrFallback`, src/tasks.js), so an orphan on a card still open self-heals the moment
+ * card (`branchFallbackPrs`, src/forge.js), so an orphan on a card still open self-heals the moment
  * anything reads it. What that fallback cannot reach is a card already closed — `fetchBoard`'s
  * default read is open issues only, so a card that went to *done* (or *archived*) with the bug this
  * task fixes never gets revisited, and its PR would sit there, unreferenced, forever. That is exactly

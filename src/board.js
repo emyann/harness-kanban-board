@@ -211,9 +211,10 @@ export function repoRoot(cwd = process.cwd()) {
 
 // ---------- running git ----------
 // One helper, used by everything in hkb that shells out to git: the `kb-board` branch
-// (`src/store/git.js`) and the lock-ref heartbeat (`src/store/github.js`). They had a copy each,
-// with an undocumented drift in `gitSays`'s "which line is the loud one" regex, which meant the same
-// failure printed differently depending on which store hit it.
+// (`src/store/git.js`) and, until ADR-006 retired it, the GitHub store's lock-ref heartbeat. They
+// had a copy each, with an undocumented drift in `gitSays`'s "which line is the loud one" regex,
+// which meant the same failure printed differently depending on which store hit it. One outlived
+// the other, which is rather the point of their having been made one.
 
 // Module-private: `gitEnv` below is its only reader, and everything that shells out to git goes
 // through `runGit`. Exporting it invited a second spawn path that set the identity by hand and

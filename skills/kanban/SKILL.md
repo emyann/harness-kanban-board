@@ -466,15 +466,15 @@ promotes it. It edits one issue and creates nothing; if the sentence is really s
    - `paths` — the narrowest scope that contains the work (it is also what the dispatcher's `path_overlap` guard
      uses) · `priority` · `goal` — the acceptance criteria; `hkb context` shows it to the worker under its own heading.
 3. **Show it and wait.** Print the body you propose and the `kb` fields you would change, and stop. Do not touch the
-   issue before a human says yes.
-4. **Apply.** Rewrite the body keeping the `<!-- kb: {...} -->` first line — `hkb` owns it: one line, valid JSON, only
-   the fields you named changed. Then promote.
+   card before a human says yes.
+4. **Apply.** `hkb edit <n> --body-file <p>` writes the prose and `hkb edit <n> --paths/--goal/--priority` the machine
+   fields; the `<!-- kb: {...} -->` block is hkb's own and you never write it by hand. Then promote.
 
 ```bash
-# write the new body with your file tool (or a quoted heredoc): the kb block, then the prose
-gh api repos/{owner}/{repo}/issues/12 -X PATCH \
-  -H "X-GitHub-Api-Version: 2026-03-10" -F body=@/tmp/kb-12-body.md
-hkb show 12 --json    # verify: kb._malformed means you broke the JSON — a bad block falls back to defaults, silently
+# write the new prose with your file tool — just the prose; hkb keeps the kb block for you
+hkb edit 12 --body-file /tmp/kb-12-body.md
+hkb edit 12 --paths src/limit.js,test/limit.test.js --goal "npm test covers burst and refill" --priority 2
+hkb show 12 --json    # verify the body and the kb fields read back the way you meant them
 hkb promote 12        # triage → todo; the dispatcher makes it ready once its blockers are closed as completed
 ```
 
@@ -524,7 +524,7 @@ What makes a graph work:
 
 ```bash
 # a. the root's body first — step 4's verify-and-synthesize brief, written the /kanban:specify way
-gh api repos/{owner}/{repo}/issues/12 -X PATCH -H "X-GitHub-Api-Version: 2026-03-10" -F body=@/tmp/kb-root.md
+hkb edit 12 --body-file /tmp/kb-root.md
 
 # b. children, parents first so the numbers exist for --blocked-by
 hkb create "Token bucket + tests" --priority 2 --paths src/limit.js,test/limit.test.js \
@@ -712,10 +712,9 @@ hkb create "Parser rejects a bare kb block" --triage --blocked-by 150 --body "$(
 # c. the links
 hkb link 150 133          # link <parent> <child>: #133 is blocked by #150
 
-# d. a body or kb rewrite — the /kanban:specify recipe, keeping the <!-- kb: {...} --> first line intact
-gh api repos/{owner}/{repo}/issues/117 -X PATCH \
-  -H "X-GitHub-Api-Version: 2026-03-10" -F body=@/tmp/kb-117-body.md
-hkb show 117 --json       # verify: kb._malformed means you broke the JSON, and a bad block falls back silently
+# d. a body or kb rewrite — the /kanban:specify recipe. The card's kb block is kept for you: write the prose only
+hkb edit 117 --body-file /tmp/kb-117-body.md --paths src/limit.js --priority 2
+hkb show 117 --json       # verify the body and the kb fields read back the way you meant them
 
 # e. ONE promote, last, of the cards approved for it — all of them in one command
 hkb promote 140 141 156 --triage-only

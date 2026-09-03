@@ -879,7 +879,7 @@ export const ISSUE_PAGES = 10;
  */
 export function cardRecord(task, { at = new Date().toISOString(), blockersKnown: known = true, keep = null, onUnknown = 'refuse' } = {}) {
   // An empty `blockedBy` on a card nobody looked up means "not asked", never "nothing blocks it"
-  // (`blockersKnown`, src/store/github.js) — and the branch has no third value for it. Writing the
+  // (`blockersKnown`, src/model.js) — and the branch has no third value for it. Writing the
   // guess would erase the board's dependency graph silently and permanently, on the one operation
   // nobody re-runs.
   //
@@ -1294,7 +1294,7 @@ export async function dropGithubLeftovers(ctx, root, { log = () => {}, locks = n
       if (C.drop(root, c.n, c.k)) dropped.chains++;
     }
   // `refs/kb/locks/`, which is where `listBeatChains`/`dropBeatChain` actually read and write
-  // (src/store/github.js): a beat chain is a *local* commit chain on the lock's own ref name, not a
+  // here: a beat chain is a *local* commit chain on the lock's own ref name, not a
   // ref namespace of its own. The message said `refs/kb/beats/`, and an operator following it found
   // nothing at all — advice that names a path that does not exist is worse than no advice.
   } catch (e) { log(`import: the local beat chains were left alone (${/** @type {Error} */ (e).message}) — they are local refs under refs/kb/locks/ (\`git -C ${root} for-each-ref refs/kb/locks/\`) and nothing reads them now`); }
