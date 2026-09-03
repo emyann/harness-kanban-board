@@ -9,9 +9,11 @@
 // here — it is `src/forge.js`, and a local store keeps using it unchanged.
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { rest, restRaw, graphql, GhError } from '../gh.js';
-import { api, kanbanDir, loadBoard, saveBoard, storeRoot } from '../board.js';
+import {
+  api, kanbanDir, loadBoard, saveBoard, storeRoot,
+  runGit, gitSays, GIT_SHA_RE, normalizeCardGrants,
+} from '../board.js';
 import {
   L, LABEL_COLORS, STATUSES, parseBodyBlock, serializeBodyBlock, statusOf, agentOf, boardOf,
   parseRunComment, serializeRunComment, parseResultComment, RESULT_MARKER, emptyRun, pickRunComment,
@@ -50,25 +52,13 @@ const ISSUE_FIELDS = (caps) => `
  *
  * `kb.tools` (tool patterns) and `kb.mcp` (MCP server names) are the two keys a card narrows its
  * profile's grant with — subsets only, enforced in `effectiveTools` (src/model.js) and nowhere else.
- * This is the path that feeds them in, so it is where their shape is settled: a list of non-empty
- * names, trimmed, deduplicated, order kept. Anything else in the list — a number, an object, a blank
- * string — is not a name any profile can grant, so it is removed here rather than travelling to the
- * launch to be dropped there with a confusing reason.
+ * The shape they are settled into is `normalizeCardGrants` (src/board.js), which lives there rather
+ * than here because the local store reads cards too: `src/store/git.js` had a private copy of this
+ * function, and two stores that normalized grants differently would be a permissions bug.
  *
- * A key that is not a list at all is left exactly as written. It narrows nothing (`effectiveTools`
- * only reads arrays), and coercing it would be a guess at what the author meant on the one axis
- * where guessing widens someone's permissions; `hkb doctor`'s `card grants` check reports it instead.
- * An empty list stays empty — "this task gets none of them" is a legitimate narrowing, and the
- * strictest one a card can ask for.
+ * Re-exported because `src/tasks.js` re-exports it from this module and `hkb doctor` reads it there.
  */
-export function normalizeCardGrants(kb) {
-  for (const key of ['tools', 'mcp']) {
-    if (!Array.isArray(kb?.[key])) continue;
-    const names = kb[key].filter((n) => typeof n === 'string' && n.trim()).map((n) => n.trim());
-    kb[key] = [...new Set(names)];
-  }
-  return kb;
-}
+export { normalizeCardGrants };
 
 function toTask(node) {
   const labels = (node.labels?.nodes || []).map((l) => l.name);
@@ -292,12 +282,27 @@ export async function deleteComment(ctx, number, commentId) {
   }
 }
 
+/**
+ * Is this comment one of hkb's own records rather than a note?
+ *
+ * The marker is the first thing hkb writes, so the test is `startsWith` everywhere it is asked —
+ * a person quoting a marker is writing a note, and `listNotes` used to swallow them.
+ */
+function isMarked(body, marker) {
+  return String(body || '').startsWith(marker);
+}
+
 export async function latestResult(ctx, number) {
   const comments = await listComments(ctx, number);
-  const results = comments.filter((x) => x.body && x.body.startsWith(RESULT_MARKER));
+  // Marked *and* parseable: a body that opens with the marker and carries no readable block is a
+  // half-written comment, and `{...null}` made it a result of `{at, url}` with no summary — which
+  // is what `parentResults` then handed the next worker as its parent's handoff.
+  const results = comments
+    .map((x) => ({ comment: x, parsed: isMarked(x.body, RESULT_MARKER) ? parseResultComment(x.body) : null }))
+    .filter((x) => x.parsed);
   if (!results.length) return null;
   const last = results[results.length - 1];
-  return { ...parseResultComment(last.body), at: last.created_at, url: last.html_url };
+  return { ...last.parsed, at: last.comment.created_at, url: last.comment.html_url };
 }
 
 export async function addComment(ctx, number, body) {
@@ -630,27 +635,12 @@ export async function release(ctx, n, k) {
 // The expected sha is *this worker's own record*, never a fresh read of the ref: leasing on what
 // the ref happens to say right now would happily stomp whoever holds it.
 
-const GIT_ENV = {
-  GIT_AUTHOR_NAME: 'hkb', GIT_AUTHOR_EMAIL: 'hkb@local',
-  GIT_COMMITTER_NAME: 'hkb', GIT_COMMITTER_EMAIL: 'hkb@local',
-  GIT_TERMINAL_PROMPT: '0', // a worker has nobody to answer a credential prompt
-};
-
-const SHA_RE = /^[0-9a-f]{40}$/;
-/** The two lines of git output worth putting in an error message. */
-function short(s) {
-  const lines = String(s || '').split('\n').map((l) => l.trim()).filter(Boolean);
-  const loud = lines.filter((l) => /^(fatal|error|remote|!)/i.test(l));
-  return (loud.length ? loud : lines).slice(0, 2).join(' ').slice(0, 200);
-}
-
-/** Run git in the worktree. Never throws — the caller classifies the output. */
-function git(root, args, { timeout = 30_000 } = {}) {
-  const res = spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout, env: { ...process.env, ...GIT_ENV } });
-  const out = `${res.stdout || ''}${res.stderr || ''}`;
-  if (res.error) return { status: null, out: `${out}${res.error.message}`, stdout: '' };
-  return { status: res.status, out, stdout: (res.stdout || '').trim() };
-}
+// `runGit`, `gitSays` and `GIT_SHA_RE` are `src/board.js`'s: the same three helpers were copied here
+// and into `src/store/git.js`, and the copies had drifted (the loud-line regex differed), so one
+// failure read differently depending on which store hit it.
+const git = runGit;
+const short = gitSays;
+const SHA_RE = GIT_SHA_RE;
 
 /** Where this worktree thinks its beat chain is: the local mirror of the lock ref. */
 export function localBeatSha(root, n, k) {
@@ -820,8 +810,13 @@ export function openGithubStore(ctx) {
       const comments = await listComments(ctx, n);
       // hkb's own run record and result comments live in the same list; every other reader here tells
       // them apart by their marker, and a note is what a *person* wrote.
+      //
+      // `startsWith`, not `includes`: hkb writes its marker as the first line, and a human quoting
+      // one — "the `<!-- hkb:result -->` block was empty" — is a note. Filtering on `includes` made
+      // that comment disappear from the board's notes with nothing to say it had, and made the two
+      // drivers disagree about what a note is (`src/store/git.js` addNote).
       return comments
-        .filter((c) => !String(c.body || '').includes(RUN_MARKER) && !String(c.body || '').includes(RESULT_MARKER))
+        .filter((c) => !isMarked(c.body, RUN_MARKER) && !isMarked(c.body, RESULT_MARKER))
         .map((c) => ({ id: c.id, at: c.created_at, actor: c.user?.login || null, text: c.body || '' }));
     },
 

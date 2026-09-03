@@ -202,9 +202,114 @@ export const DEFAULT_BOARD = {
 };
 
 export function repoRoot(cwd = process.cwd()) {
-  const res = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' });
-  if (res.status === 0) return res.stdout.trim();
+  // `runGit`, for its `GIT_UNSET`: an inherited `GIT_WORK_TREE` makes `--show-toplevel` answer with
+  // somebody else's checkout, and this is where every context's root comes from.
+  const res = runGit(cwd, ['rev-parse', '--show-toplevel']);
+  if (res.status === 0) return res.stdout;
   return cwd;
+}
+
+// ---------- running git ----------
+// One helper, used by everything in hkb that shells out to git: the `kb-board` branch
+// (`src/store/git.js`) and the lock-ref heartbeat (`src/store/github.js`). They had a copy each,
+// with an undocumented drift in `gitSays`'s "which line is the loud one" regex, which meant the same
+// failure printed differently depending on which store hit it.
+
+// Module-private: `gitEnv` below is its only reader, and everything that shells out to git goes
+// through `runGit`. Exporting it invited a second spawn path that set the identity by hand and
+// skipped `GIT_UNSET` — which is exactly what `gitCommonDir` had become.
+const GIT_ENV = {
+  GIT_AUTHOR_NAME: 'hkb', GIT_AUTHOR_EMAIL: 'hkb@local',
+  GIT_COMMITTER_NAME: 'hkb', GIT_COMMITTER_EMAIL: 'hkb@local',
+  GIT_TERMINAL_PROMPT: '0', // nobody is here to answer a credential prompt
+};
+
+export const GIT_SHA_RE = /^[0-9a-f]{40}$/;
+
+// Anything a hook, a `git` alias or a parent process may have exported that would silently point our
+// plumbing at another repository — or at somebody else's index. `hkb`'s own Stop hook runs inside
+// `git` sometimes; `GIT_INDEX_FILE` leaking in is how a store write ends up staging a worker's files.
+const GIT_UNSET = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_COMMON_DIR', 'GIT_NAMESPACE', 'GIT_ALTERNATE_OBJECT_DIRECTORIES'];
+
+function gitEnv(extra = {}) {
+  const env = { ...process.env, ...GIT_ENV, ...extra };
+  for (const k of GIT_UNSET) if (!(k in extra)) delete env[k];
+  return env;
+}
+
+/**
+ * The two lines of git output worth putting in an error message.
+ *
+ * The two copies this replaced disagreed on which lines count as loud, and merging them by *union*
+ * made things worse rather than better: a `--force-with-lease` push that prints
+ * `warning: redirecting to https://…` before `! [rejected] … (stale info)` would have reported the
+ * redirect and the rejection, losing the rejection's reason — the two lines a human actually reads
+ * when a heartbeat comes back `unavailable`. So the merge is a *ranking*: a failure outranks a
+ * warning, a warning outranks ordinary chatter, and ties keep git's own order.
+ */
+const GIT_LOUD = [/^(fatal|error|!)/i, /^remote:/i, /^warning/i];
+
+export function gitSays(s) {
+  const lines = String(s || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const rank = (l) => { const i = GIT_LOUD.findIndex((re) => re.test(l)); return i < 0 ? GIT_LOUD.length : i; };
+  return lines
+    .map((line, at) => ({ line, at, rank: rank(line) }))
+    .sort((a, b) => a.rank - b.rank || a.at - b.at)
+    .slice(0, 2)
+    .sort((a, b) => a.at - b.at)
+    .map((x) => x.line)
+    .join(' ')
+    .slice(0, 200);
+}
+
+/**
+ * Run git at `root`. Never throws — the caller reads `status` and classifies.
+ * @param {string} root
+ * @param {string[]} args
+ * @param {{input?: string|null, env?: Record<string, string>, timeout?: number, binary?: boolean}} [opts]
+ * @returns {{status: number|null, out: string, stdout: string, buffer: Buffer|null}}
+ */
+export function runGit(root, args, { input = null, env = {}, timeout = 30_000, binary = false } = {}) {
+  const res = spawnSync('git', args, {
+    cwd: root, input, timeout, env: gitEnv(env),
+    // `undefined` is spawnSync's own default, and the only way to get Buffers back while still
+    // handing it a string on stdin — the literal 'buffer' encodes the *input* too, and throws.
+    encoding: binary ? undefined : 'utf8',
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  const out = binary
+    ? `${res.stderr ? String(res.stderr) : ''}`
+    : `${res.stdout || ''}${res.stderr || ''}`;
+  if (res.error) return { status: null, out: `${out}${res.error.message}`, stdout: '', buffer: null };
+  return {
+    status: res.status,
+    out,
+    stdout: binary ? '' : String(res.stdout || '').trim(),
+    buffer: binary ? /** @type {any} */ (res.stdout) : null,
+  };
+}
+
+/**
+ * A card's grant lists (`kb.tools`, `kb.mcp`), deduped and trimmed — never a widening guess.
+ *
+ * An empty string is not a name any profile can grant, so it is removed here rather than travelling
+ * to the launch to be dropped there with a confusing reason. A key that is not a list at all is left
+ * exactly as written: it narrows nothing (`effectiveTools` only reads arrays), and coercing it would
+ * be a guess at what the author meant on the one axis where guessing widens someone's permissions;
+ * `hkb doctor`'s `card grants` check reports it instead. An empty list stays empty — "this task gets
+ * none of them" is a legitimate narrowing, and the strictest one a card can ask for.
+ *
+ * It lives here rather than in either store because both of them read cards: the GitHub driver
+ * parses the machine block out of an issue body, the local one reads `cards/<id>.json`, and a card
+ * that came back with different grants depending on which store answered would be a permissions bug.
+ */
+export function normalizeCardGrants(kb) {
+  for (const key of ['tools', 'mcp']) {
+    if (!Array.isArray(kb?.[key])) continue;
+    const names = kb[key].filter((n) => typeof n === 'string' && n.trim()).map((n) => n.trim());
+    kb[key] = [...new Set(names)];
+  }
+  return kb;
 }
 
 export function kanbanDir(root) { return path.join(root, '.kanban'); }
@@ -253,9 +358,25 @@ function readCmdline(pid, proc) {
  * from `os.uptime()` instead).
  */
 function readBtimeSec(proc) {
-  if (process.platform === 'darwin') {
-    try { return parseKernBoottimeSec(execFileSync('sysctl', ['-n', 'kern.boottime'], { encoding: 'utf8' })); } catch { return null; }
-  }
+  if (BTIME_CACHE.has(proc)) return BTIME_CACHE.get(proc) ?? null;
+  const found = process.platform === 'darwin' ? readBtimeDarwin() : readBtimeProc(proc);
+  BTIME_CACHE.set(proc, found);
+  return found;
+}
+
+/**
+ * Once per process, per `proc` root. The kernel's boot instant does not move while we are running,
+ * and reading it is a `sysctl` *fork* on darwin — which `wake()` calls on every store write that
+ * nudges the dispatcher, in a module whose contract is that nothing in it shells out.
+ * @type {Map<string, number|null>}
+ */
+const BTIME_CACHE = new Map();
+
+function readBtimeDarwin() {
+  try { return parseKernBoottimeSec(execFileSync('sysctl', ['-n', 'kern.boottime'], { encoding: 'utf8' })); } catch { return null; }
+}
+
+function readBtimeProc(proc) {
   try { return parseBtimeSec(fs.readFileSync(path.join(proc, 'stat'), 'utf8')); } catch { return null; }
 }
 
@@ -801,12 +922,49 @@ export function saveUserBoards(list, file = userBoardsFile()) {
  * Anything unexpected (no git, a bare repo, a path that is gone) keeps `root`.
  */
 export function mainWorktree(root) {
-  const r = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: root, encoding: 'utf8' });
-  if (r.status !== 0 || !r.stdout.trim()) return root;
-  const common = path.resolve(root, r.stdout.trim());
+  const common = gitCommonDir(root);
+  if (!common) return root;
   if (path.basename(common) !== '.git') return root;
   const main = path.dirname(common);
   return fs.existsSync(main) ? main : root;
+}
+
+/**
+ * The repository's **common** git directory — `.git` in an ordinary checkout, and the real thing in
+ * a linked worktree, a submodule (`.git` is a *file* there) or a `--separate-git-dir` clone. Null
+ * when `root` is not in a repository.
+ *
+ * `mainWorktree` answers with this directory's *parent* and only when it is literally named `.git`,
+ * which is right for "where does the board's checkout live" and wrong for "where do I put a file
+ * inside the git dir": joining `.git` onto the parent again is how `.git/hkb/index.db` became
+ * `<file>/hkb/index.db` — a raw `ENOTDIR` — in a submodule. Anything that wants a path *in* the git
+ * directory asks for it here (`storeGitDir`) instead of rebuilding it from the parent.
+ */
+export function gitCommonDir(root) {
+  // Through `runGit`, not a bare `spawnSync`, for the reason `GIT_UNSET` exists: an exported
+  // `GIT_DIR` — hkb's own Stop hook runs inside git sometimes — makes `--git-common-dir` answer
+  // with *that* repository, and this one call now decides where the board root and the index file
+  // are. With `GIT_DIR=/tmp/theirs/.git` in the environment, `storeGitDir({root: '/tmp/mine'})`
+  // answered `/tmp/theirs/.git` and the index landed in somebody else's repository.
+  const r = runGit(root, ['rev-parse', '--git-common-dir']);
+  if (r.status !== 0 || !r.stdout.trim()) return null;
+  return path.resolve(root, r.stdout.trim());
+}
+
+/**
+ * Where hkb's own files go inside git: the common git directory for `ctx`, or `<storeRoot>/.git`
+ * when there is no git to ask (a test root, a directory that is not a repository).
+ *
+ * Cached on the context beside `storeRoot`, for the same reason: the answer cannot change while this
+ * process runs, and `openIndex` is called on every verb.
+ */
+export function storeGitDir(ctx) {
+  const root = typeof ctx === 'string' ? ctx : (ctx?.root || process.cwd());
+  const cache = typeof ctx === 'object' && ctx?._cache ? ctx._cache : null;
+  if (cache?.storeGitDir) return cache.storeGitDir;
+  const dir = gitCommonDir(root) || path.join(storeRoot(ctx), '.git');
+  if (cache) cache.storeGitDir = dir;
+  return dir;
 }
 
 /**

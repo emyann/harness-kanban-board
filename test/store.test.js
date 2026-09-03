@@ -24,7 +24,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { openStore, STORE_METHODS } from '../src/store/index.js';
 import { DEFAULT_BOARD } from '../src/board.js';
-import { L, emptyRun, serializeResultComment } from '../src/model.js';
+import { L, emptyRun, serializeResultComment, RESULT_MARKER } from '../src/model.js';
 import { FakeGh, kbIssue } from './fake-gh.js';
 
 // ---------- the GitHub driver ----------
@@ -347,8 +347,14 @@ const SCENARIOS = [
       await h.store.saveRun(t.number, { run: { ...emptyRun(), attempts: [{ attempt: 1, profile: 'claude', host: 'h', started_at: new Date().toISOString() }] }, id: null });
       await h.store.addNote(t.number, 'a human said this');
 
+      // A person *quoting* a marker is still a person. Filtering on `includes` made this note
+      // disappear from the board with nothing to say it had — and the two drivers disagreed about
+      // it unseen, because the suite never asked.
+      const quoting = `the ${RESULT_MARKER} block was empty, so I am writing it out here`;
+      await h.store.addNote(t.number, quoting);
+
       const notes = await h.store.listNotes(t.number);
-      assert.deepEqual(notes.map((n) => n.text), ['a human said this']);
+      assert.deepEqual(notes.map((n) => n.text), ['a human said this', quoting]);
     },
   },
   {

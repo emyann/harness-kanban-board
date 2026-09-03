@@ -18,8 +18,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { GitTier, openGitTier, BOARD_BRANCH, BOARD_REF, fileJson } from '../src/store/git.js';
-import { L, emptyRun, serializeResultComment, serializeRunComment } from '../src/model.js';
+import { GitTier, openGitTier, BOARD_BRANCH, BOARD_REF, fileJson, DURABLE_METHODS, isOwned, classifyRefWrite } from '../src/store/git.js';
+import { gitSays } from '../src/board.js';
+import { L, emptyRun, serializeResultComment, serializeRunComment, RESULT_MARKER } from '../src/model.js';
 
 const ENV = {
   GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t',
@@ -247,12 +248,12 @@ test('git tier: a read is one cat-file --batch, and a no-op write is no commit a
   t.after(s.cleanup);
   for (let i = 0; i < 12; i++) card(s.tier, { title: `card ${i}` });
 
-  s.tier.trace.length = 0;
-  const read = s.tier.readTree();
+  const cold = tierAt(s.wt);
+  const read = cold.readTree();
   assert.equal(read.cards.size, 12);
-  const batches = s.tier.trace.filter((c) => c === 'cat-file');
+  const batches = cold.trace.filter((c) => c === 'cat-file');
   assert.equal(batches.length, 1, `one cat-file --batch for the whole tree, not ${batches.length}`);
-  assert.equal(s.tier.trace.filter((c) => c === 'ls-tree').length, 1);
+  assert.equal(cold.trace.filter((c) => c === 'ls-tree').length, 1);
 
   // a write that changes no bytes must not put a commit on the board's history
   const before = s.tier.tip();
@@ -260,6 +261,248 @@ test('git tier: a read is one cat-file --batch, and a no-op write is no commit a
   assert.equal(r.changed, false);
   assert.equal(r.tip, before);
   assert.equal(s.tier.tip(), before);
+});
+
+test('git tier: the tree is memoized on the tip, and a write leaves the new one behind it', (t) => {
+  const s = board();
+  t.after(s.cleanup);
+  const tier = tierAt(s.wt);
+  const one = card(tier, { title: 'one' });
+
+  // Reading twice at the same tip is one `rev-parse` and nothing else: before this, every read
+  // accessor cost three git processes and a `setStatus` cost eleven, so a tick that asked about
+  // each card in turn decoded the whole tree once per card.
+  tier.trace.length = 0;
+  tier.getTask(one.number);
+  tier.getTask(one.number);
+  tier.listTasks({ states: ['OPEN'] });
+  assert.deepEqual(tier.trace.filter((c) => c !== 'rev-parse'), [], 'a warm read spawns nothing but the tip check');
+
+  // and a write installs the tree it just built, so the getTask every verb does after its commit
+  // does not go back to git for it
+  tier.trace.length = 0;
+  tier.setStatus(one, 'running');
+  assert.equal(tier.trace.filter((c) => c === 'cat-file').length, 0, 'the write already had the tree');
+  assert.equal(tier.getTask(one.number).status, 'running');
+
+  // a writer this tier knows nothing about moves the branch: the tip check catches it
+  const other = tierAt(s.root);
+  other.createTask({ title: 'landed elsewhere' });
+  assert.equal(tier.listTasks({ states: ['OPEN'] }).length, 2, 'the memo is keyed on the sha, not on hope');
+});
+
+test('git tier: the trace keeps its last commands, not none of them', (t) => {
+  const s = board();
+  t.after(s.cleanup);
+  for (let i = 0; i < 60; i++) s.tier.tip();
+  assert.ok(s.tier.trace.length > 0 && s.tier.trace.length <= 500);
+  assert.equal(s.tier.trace.at(-1), 'rev-parse', 'the newest command is the one a failure needs');
+});
+
+test('git tier: a board write keeps every other file on the branch', (t) => {
+  const s = board();
+  t.after(s.cleanup);
+  const task = card(s.tier, { title: 'a card' });
+
+  // Somebody put files on the branch that are not the tier's: a README a human wrote, a nested
+  // directory, an executable, a symlink. A board write rebuilds the index from nothing, so anything
+  // it does not list is deleted — silently, and only noticed the next time somebody looks.
+  const index = path.join(s.dir, 'foreign-index');
+  const withIndex = (...args) => {
+    const r = spawnSync('git', args, { cwd: s.root, encoding: 'utf8', env: { ...process.env, ...ENV, GIT_INDEX_FILE: index } });
+    if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+    return r.stdout.trim();
+  };
+  // read the current board tree into a scratch index, add the foreign files, commit it on the branch
+  withIndex('read-tree', BOARD_BRANCH);
+  for (const [file, text, mode] of [['README.md', '# the board\n', '100644'], ['notes/one.md', 'hello\n', '100644'], ['bin/run.sh', '#!/bin/sh\n', '100755']]) {
+    const p = path.join(s.dir, 'blob');
+    fs.writeFileSync(p, text);
+    const sha = withIndex('hash-object', '-w', p);
+    withIndex('update-index', '--add', '--cacheinfo', `${mode},${sha},${file}`);
+  }
+  const tree = withIndex('write-tree');
+  const commit = withIndex('commit-tree', tree, '-p', git(s.root, 'rev-parse', BOARD_REF), '-m', 'a human put files here');
+  git(s.root, 'update-ref', BOARD_REF, commit);
+
+  const tier = tierAt(s.wt);
+  tier.setStatus({ number: task.number }, 'running');
+  tier.addNote(task.number, 'and a note');
+
+  const after = git(s.root, 'ls-tree', '-r', BOARD_BRANCH).split('\n').map((l) => l.split('\t')[1]).sort();
+  assert.ok(after.includes('README.md'), 'a README on the branch is not the tier\'s to delete');
+  assert.ok(after.includes('notes/one.md'));
+  assert.ok(after.includes('bin/run.sh'));
+  assert.equal(git(s.root, 'show', `${BOARD_BRANCH}:README.md`), '# the board');
+  assert.match(git(s.root, 'ls-tree', BOARD_BRANCH, 'bin/run.sh'), /^100755 /, 'and its mode survives');
+  assert.equal(tier.getTask(task.number).status, 'running');
+
+  // and the no-op guard has to see them too, or it reports "nothing changed" for a write that would
+  // have destroyed them
+  const before = tier.tip();
+  assert.equal(tier.commit(() => {}, 'hkb: nothing happened').changed, false);
+  assert.equal(tier.tip(), before);
+});
+
+test('git tier: createTask never overwrites a card, whatever next_id says', (t) => {
+  const s = board();
+  t.after(s.cleanup);
+  const one = card(s.tier, { title: 'the first card' });
+  const two = card(s.tier, { title: 'the second' });
+  assert.deepEqual([one.number, two.number], [1, 2]);
+
+  // `board.json` is a file the design invites a human to read, and a merge can touch: rewind
+  // `next_id` and the next create used to land straight on top of card 1, with no error.
+  const rewind = (value) => s.tier.commit((tree) => { tree.board.next_id = value; }, `hkb: next_id ${value}`);
+  rewind(1);
+  const third = card(s.tier, { title: 'after the rewind' });
+  assert.equal(third.number, 3, 'an id in use is not free');
+  assert.equal(s.tier.getTask(1).title, 'the first card');
+
+  rewind(0); // `Number(0) || nextFree(...)` was falsy-zero, so this one happened to work by accident
+  assert.equal(card(s.tier, { title: 'after zero' }).number, 4);
+  rewind('nonsense');
+  assert.equal(card(s.tier, { title: 'after nonsense' }).number, 5);
+  assert.equal(s.tier.listTasks({ states: ['OPEN'] }).length, 5, 'and every card is still there');
+});
+
+test('git tier: a branch with no board.json says what to run, not TypeError', (t) => {
+  const s = scratch();
+  t.after(s.cleanup);
+  // a `kb-board` branch that exists but carries no board document — a half-made board, or one
+  // somebody rewrote by hand
+  const p = path.join(s.dir, 'blob');
+  fs.writeFileSync(p, 'hello\n');
+  const sha = git(s.root, 'hash-object', '-w', p);
+  const index = path.join(s.dir, 'ix');
+  const withIndex = (...args) => spawnSync('git', args, { cwd: s.root, encoding: 'utf8', env: { ...process.env, ...ENV, GIT_INDEX_FILE: index } }).stdout.trim();
+  withIndex('update-index', '--add', '--cacheinfo', `100644,${sha},README.md`);
+  const commit = withIndex('commit-tree', withIndex('write-tree'), '-m', 'no board here');
+  git(s.root, 'update-ref', BOARD_REF, commit);
+
+  const tier = tierAt(s.wt);
+  for (const call of [
+    () => tier.createTask({ title: 'x' }),
+    () => tier.board(),
+    () => tier.setBoard({ paused_at: 'now' }),
+  ]) {
+    assert.throws(call, (e) => e.exitCode === 2 && /hkb init/.test(e.message));
+  }
+});
+
+test('git tier: a clone with no local branch is read-only, and says how to make it writable', (t) => {
+  const s = board({ host: 'test-host' });
+  t.after(s.cleanup);
+  card(s.tier, { title: 'made here' });
+  const clone = path.join(s.dir, 'clone');
+  git(s.dir, 'clone', '-q', s.root, clone);
+
+  // the same host as the board's owner, so the one-writer guard is not what answers here
+  const theirs = tierAt(clone, { host: 'test-host' });
+  assert.equal(theirs.listTasks({ states: ['OPEN'] }).length, 1, 'it still reads');
+  // Before: the CAS leased `refs/heads/kb-board` against a sha only `origin/kb-board` has, git said
+  // "cannot lock ref … unable to resolve reference", `isContended` matched "cannot lock ref", and
+  // the write retried five times before blaming a writer on another host that does not exist.
+  let threw = null;
+  try { theirs.createTask({ title: 'nope' }); } catch (e) { threw = e; }
+  assert.ok(threw, 'a write on a clone with no local branch fails');
+  assert.equal(threw.exitCode, 2);
+  assert.match(threw.message, /read-only copy/);
+  assert.match(threw.message, /git -C .* branch kb-board origin\/kb-board/, 'and the message is the recovery path');
+  assert.doesNotMatch(threw.message, /another hkb on host/, 'nobody else is writing this board');
+  assert.equal(theirs.trace.filter((c) => c === 'update-ref').length, 0, 'and it did not retry five times to find out');
+
+  // and once the branch is there, the same tier writes
+  git(clone, 'branch', BOARD_BRANCH, `origin/${BOARD_BRANCH}`);
+  theirs.forget();
+  assert.equal(theirs.createTask({ title: 'now it writes' }).number, 2);
+});
+
+test('git tier: a verb that decides nothing lands no commit', (t) => {
+  const s = board();
+  t.after(s.cleanup);
+  const task = card(s.tier, { title: 'a card', status: 'ready', agent: 'claude' });
+  s.tier.addLabels(task, [L.noTrack]);
+  const before = s.tier.tip();
+  const log = () => git(s.root, 'log', '--format=%s', BOARD_BRANCH).split('\n').length;
+  const commits = log();
+
+  // Each of these is the state the card is already in. `git log kb-board` is the board's history of
+  // decisions (§6.1), and `_patch` used to stamp `updated_at` before asking whether anything changed.
+  s.tier.setStatus(task, 'ready');
+  s.tier.setAgent(task, 'claude');
+  s.tier.addLabels(task, [L.noTrack]);
+  s.tier.removeLabel(task, 'kb:never-was-here');
+  s.tier.updateBody(task.number, s.tier.getTask(task.number).bodyText);
+  s.tier.removeBlockedBy(task.number, 999);
+
+  assert.equal(s.tier.tip(), before, 'not one of them moved the branch');
+  assert.equal(log(), commits);
+  assert.equal(s.tier.getTask(task.number).updatedAt, task.updatedAt, 'and updated_at is untouched');
+
+  // a real change still lands, and once
+  s.tier.setStatus(task, 'running');
+  assert.notEqual(s.tier.tip(), before);
+  assert.equal(log(), commits + 1);
+
+  // the same for a blocker that is already linked
+  const parent = card(s.tier, { title: 'the parent' });
+  s.tier.addBlockedBy(task.number, parent.number);
+  const linked = s.tier.tip();
+  s.tier.addBlockedBy(task.number, parent.number);
+  assert.equal(s.tier.tip(), linked, 'linking a blocker twice is one decision');
+});
+
+test('git tier: a note that quotes the result marker is still a note', (t) => {
+  const s = board();
+  t.after(s.cleanup);
+  const task = card(s.tier);
+  const quoting = `I read the ${RESULT_MARKER} block and it was empty — can you re-run it?`;
+
+  s.tier.addNote(task.number, quoting);
+  // Before: any body *containing* the marker was filed as a result. The note vanished from
+  // listNotes, and latestResult handed the next worker `{at, url: null}` as its parent's handoff,
+  // because parseResultComment had returned null and `{...null}` is `{}`.
+  assert.deepEqual(s.tier.listNotes(task.number).map((n) => n.text), [quoting]);
+  assert.equal(s.tier.latestResult(task.number), null, 'and it is not anybody\'s handoff');
+
+  // a real result still is one
+  s.tier.addNote(task.number, serializeResultComment({ attempt: 1, summary: 'landed', metadata: { ok: true } }));
+  assert.equal(s.tier.latestResult(task.number).summary, 'landed');
+  assert.deepEqual(s.tier.listNotes(task.number).map((n) => n.text), [quoting]);
+
+  // and a marker that starts the body but parses to nothing is not a result either
+  s.tier.addNote(task.number, `${RESULT_MARKER}\nnot the shape a result has`);
+  assert.equal(s.tier.latestResult(task.number).summary, 'landed', 'the last real result still stands');
+});
+
+test('git tier: a verb does not erase the forge fields on the caller\'s task', (t) => {
+  const s = board();
+  t.after(s.cleanup);
+  const task = card(s.tier, { status: 'ready' });
+  // what `src/forge.js` filled in — `requestChanges` calls setStatus and *then* reads `task.prs`
+  task.prs = [{ number: 42, state: 'OPEN', isDraft: true, headRefName: 'kb/1' }];
+  task.url = 'https://example.invalid/1';
+
+  s.tier.setStatus(task, 'running');
+  assert.equal(task.status, 'running', 'the card still moves');
+  assert.deepEqual(task.prs.map((p) => p.number), [42], 'the open PR is the continuation target');
+  assert.equal(task.url, 'https://example.invalid/1');
+
+  s.tier.addLabels(task, [L.noTrack]);
+  s.tier.setAgent(task, 'codex');
+  assert.deepEqual(task.prs.map((p) => p.number), [42]);
+});
+
+test('git tier: a Date in an attempt field persists as a timestamp, not as {}', (t) => {
+  const s = board();
+  t.after(s.cleanup);
+  const task = card(s.tier);
+  const at = new Date('2026-09-02T10:00:00.000Z');
+  s.tier.saveRun(task.number, { id: null, run: { ...emptyRun(), attempts: [{ attempt: 1, started_at: at }] } });
+  // `sortDeep` walked a Date's own enumerable keys — there are none — so it serialized as `{}`.
+  assert.equal(s.tier.loadRun(task.number).run.attempts[0].started_at, '2026-09-02T10:00:00.000Z');
+  assert.match(git(s.root, 'show', `${BOARD_BRANCH}:runs/${task.number}.json`), /"started_at": "2026-09-02T10:00:00.000Z"/);
 });
 
 test('git tier: the module never touches a working tree', () => {
@@ -280,13 +523,10 @@ const SCENARIOS = [
   {
     name: 'the tier has every durable method of the §6.4 interface',
     run(tier) {
-      const durable = [
-        'board', 'setBoard', 'listTasks', 'listClosedRecent', 'getTask', 'createTask', 'updateBody',
-        'setStatus', 'setAgent', 'addLabels', 'removeLabel', 'closeTask', 'reopenTask',
-        'addBlockedBy', 'removeBlockedBy', 'loadRun', 'saveRun', 'latestResult', 'parentResults',
-        'addNote', 'listNotes',
-      ];
-      for (const m of durable) assert.equal(typeof tier[m], 'function', `missing ${m}()`);
+      // `DURABLE_METHODS` is the module's own list rather than a copy of it here: a method added to
+      // one and not the other is exactly what a duplicated list hides.
+      assert.ok(DURABLE_METHODS.length >= 21);
+      for (const m of DURABLE_METHODS) assert.equal(typeof tier[m], 'function', `missing ${m}()`);
       // and none of A5's: a tier that grew a lock would be two stores writing one board
       for (const m of ['claim', 'release', 'listLocks', 'lockBeatAt', 'heartbeat', 'events']) {
         assert.equal(tier[m], undefined, `${m}() belongs to the index (A5), not the branch`);
@@ -527,4 +767,284 @@ test('git tier: storeRoot, not --show-toplevel — a worktree and the main check
   assert.equal(fs.realpathSync(fromWorktree.root), fs.realpathSync(s.root));
   const made = fromWorktree.createTask({ title: 'one board' });
   assert.equal(new GitTier(s.root, { host: 'test-host' }).getTask(made.number).title, 'one board');
+});
+
+// ---------- what the review of the review found: the class, not the instance ----------
+
+test('git tier: `cards/` is not the tier\'s — only `cards/<n>.json` is', (t) => {
+  const s = board();
+  t.after(s.cleanup);
+  const task = card(s.tier, { title: 'a card' });
+
+  // The previous fix carried foreign paths across but claimed the whole `cards/` and `runs/`
+  // *prefixes*, while `_parseFiles` only ever recognises `cards/<digits>.json`. So a file inside
+  // those directories was read by nobody and deleted by the first write — the very bug the fix was
+  // for, one directory down.
+  const index = path.join(s.dir, 'inside-index');
+  const withIndex = (...args) => {
+    const r = spawnSync('git', args, { cwd: s.root, encoding: 'utf8', env: { ...process.env, ...ENV, GIT_INDEX_FILE: index } });
+    if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+    return r.stdout.trim();
+  };
+  withIndex('read-tree', BOARD_BRANCH);
+  for (const [file, text] of [['cards/README.md', 'one card per file\n'], ['runs/.gitkeep', ''], ['cards/notes/design.md', 'why\n']]) {
+    const p = path.join(s.dir, 'blob');
+    fs.writeFileSync(p, text);
+    withIndex('update-index', '--add', '--cacheinfo', `100644,${withIndex('hash-object', '-w', p)},${file}`);
+  }
+  const commit = withIndex('commit-tree', withIndex('write-tree'), '-p', git(s.root, 'rev-parse', BOARD_REF), '-m', 'a human documented the directory');
+  git(s.root, 'update-ref', BOARD_REF, commit);
+
+  const tier = tierAt(s.wt);
+  tier.setStatus({ number: task.number }, 'running');
+  const after = git(s.root, 'ls-tree', '-r', BOARD_BRANCH).split('\n').map((l) => l.split('\t')[1]).sort();
+  assert.deepEqual(
+    after.filter((f) => !/^(board\.json|cards\/\d+\.json|runs\/\d+\.json)$/.test(f)),
+    ['cards/README.md', 'cards/notes/design.md', 'runs/.gitkeep'],
+    'a file in the directory is not a card',
+  );
+  assert.equal(git(s.root, 'show', `${BOARD_BRANCH}:cards/README.md`), 'one card per file');
+  assert.equal(tier.listTasks({ states: ['OPEN'] }).length, 1, 'and none of them read as a card');
+
+  // and the no-op guard counted them in `had` and never in `want`, so a write that decided nothing
+  // reported "changed" and landed a commit whose only effect was to delete them
+  const before = tier.tip();
+  assert.equal(tier.commit(() => {}, 'hkb: nothing happened').changed, false);
+  assert.equal(tier.tip(), before);
+});
+
+test('git tier: a foreign blob is carried by sha — never decoded, never pinned', (t) => {
+  const s = board();
+  t.after(s.cleanup);
+  card(s.tier, { title: 'a card' });
+  const index = path.join(s.dir, 'binary-index');
+  const withIndex = (...args) => {
+    const r = spawnSync('git', args, { cwd: s.root, encoding: 'utf8', env: { ...process.env, ...ENV, GIT_INDEX_FILE: index } });
+    if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+    return r.stdout.trim();
+  };
+  // Bytes that are not UTF-8: decoding them would replace them, and `_land` only ever needs the sha.
+  const bytes = Buffer.from([0x00, 0xff, 0xfe, 0x41, 0x00, 0x80]);
+  const p = path.join(s.dir, 'blob.bin');
+  fs.writeFileSync(p, bytes);
+  withIndex('read-tree', BOARD_BRANCH);
+  withIndex('update-index', '--add', '--cacheinfo', `100644,${withIndex('hash-object', '-w', p)},logo.png`);
+  const commit = withIndex('commit-tree', withIndex('write-tree'), '-p', git(s.root, 'rev-parse', BOARD_REF), '-m', 'a picture');
+  git(s.root, 'update-ref', BOARD_REF, commit);
+
+  const tier = tierAt(s.wt);
+  const snap = tier.readTree();
+  assert.equal(snap.files.get('logo.png')?.text, null, 'a path the tier does not own is not decoded');
+  assert.equal(snap.files.get('board.json')?.text?.startsWith('{'), true, 'its own still are');
+  tier.createTask({ title: 'a write over the top of it' });
+  const back = spawnSync('git', ['cat-file', 'blob', `${BOARD_BRANCH}:logo.png`], { cwd: s.root, maxBuffer: 1 << 20 }).stdout;
+  assert.deepEqual([...back], [...bytes], 'and it comes back byte for byte');
+});
+
+test('git tier: on a read-only clone a verb that decides nothing still decides nothing', (t) => {
+  const s = board({ host: 'test-host' });
+  t.after(s.cleanup);
+  const task = card(s.tier, { title: 'made here', status: 'ready', agent: 'claude' });
+  const clone = path.join(s.dir, 'clone');
+  git(s.dir, 'clone', '-q', s.root, clone);
+  // The clone's host is *not* the board's owner, which is the only host a real clone ever has: a
+  // tier constructed with `board.host` was the one configuration that cannot happen here, and it
+  // hid the fact that `_assertOwner` still ran before the no-op question and threw exit 2 first.
+  const theirs = tierAt(clone, { host: 'someone-elses-laptop' });
+
+  // Asking either write question — may this host write, is the ref writable — *before* asking
+  // whether anything changed turned every re-assertion of current state into exit 2 on a clone, and
+  // a reconcile pass that re-asserts current state is exactly what the early return makes free.
+  assert.equal(theirs.setStatus(task, 'ready').status, 'ready');
+  assert.equal(theirs.addLabels(task, []).number, task.number);
+  assert.equal(theirs.removeLabel(task, 'kb:never-was-here').number, task.number);
+  assert.equal(theirs.updateBody(task.number, task.bodyText).number, task.number);
+  assert.equal(theirs.commit(() => {}, 'hkb: nothing happened').changed, false);
+  assert.equal(theirs.trace.filter((c) => c === 'update-ref').length, 0, 'and nothing reached a ref');
+
+  // a write that really decides something is refused, and the one-writer rule is what refuses it
+  assert.throws(() => theirs.setStatus(task, 'running'), /belongs to host "test-host"/);
+  // and on a clone that *is* this host's board, the refusal is the read-only-copy one
+  const mine = tierAt(clone, { host: 'test-host' });
+  assert.throws(() => mine.setStatus(task, 'running'), /read-only copy/);
+});
+
+test('git tier: closeTask twice, and labels that were stored unsorted, are one decision each', (t) => {
+  const s = board();
+  t.after(s.cleanup);
+  const task = card(s.tier, { title: 'a card' });
+  const log = () => git(s.root, 'log', '--format=%s', BOARD_BRANCH).split('\n').length;
+
+  s.tier.closeTask(task.number, 'completed');
+  const closedAt = JSON.parse(git(s.root, 'show', `${BOARD_BRANCH}:cards/${task.number}.json`)).closed_at;
+  const after = s.tier.tip();
+  const commits = log();
+  s.tier.closeTask(task.number, 'completed');
+  assert.equal(s.tier.tip(), after, 'closing a closed card is not a decision');
+  assert.equal(log(), commits);
+  assert.equal(JSON.parse(git(s.root, 'show', `${BOARD_BRANCH}:cards/${task.number}.json`)).closed_at, closedAt);
+
+  // `applyLabels` re-sorted unconditionally, so `addLabels(task, [])` on a card whose stored labels
+  // are out of order was a byte change, and so a commit.
+  s.tier.reopenTask(task.number);
+  s.tier.commit((tree) => { tree.cards.get(task.number).labels = ['kb:zebra', 'kb:alpha']; }, 'hkb: labels by hand');
+  const unsorted = s.tier.tip();
+  s.tier.addLabels(task, []);
+  s.tier.removeLabel(task, 'kb:never-was-here');
+  assert.equal(s.tier.tip(), unsorted, 'adding nothing to an unsorted list decides nothing');
+  s.tier.addLabels(task, ['kb:middle']);
+  assert.deepEqual(
+    JSON.parse(git(s.root, 'show', `${BOARD_BRANCH}:cards/${task.number}.json`)).labels,
+    ['kb:alpha', 'kb:middle', 'kb:zebra'],
+    'and a real change sorts it',
+  );
+});
+
+test('git tier: a branch deleted under a write is not "this is a clone"', (t) => {
+  const s = board();
+  t.after(s.cleanup);
+  const task = card(s.tier, { title: 'a card' });
+
+  // git says "unable to resolve reference" for two different things, and the clone message
+  // prescribes `git branch kb-board origin/kb-board` — advice that fails with "not a valid object
+  // name" when there is no remote-tracking ref at all. The delete happens inside the mutation, which
+  // is precisely the window between the read and the compare-and-swap.
+  const tier = tierAt(s.wt);
+  let threw = null;
+  try {
+    tier.commit((tree) => {
+      tree.cards.get(task.number).title = 'a real change';
+      git(s.root, 'update-ref', '-d', BOARD_REF);
+    }, 'hkb: a write racing a delete');
+  } catch (e) { threw = e; }
+  assert.ok(threw, 'the CAS has nothing to lease on');
+  assert.equal(threw.exitCode, 2);
+  assert.match(threw.message, /went away while this write was landing/);
+  assert.doesNotMatch(threw.message, /read-only copy/, 'there is no remote here to fall back to');
+  assert.doesNotMatch(threw.message, /branch kb-board origin\/kb-board/, 'and that recovery path would itself fail');
+  assert.doesNotMatch(threw.message, /another hkb on host/);
+});
+
+test('git tier: a foreign path with a newline or a tab in it survives a write intact', (t) => {
+  const s = board();
+  t.after(s.cleanup);
+  const task = card(s.tier, { title: 'a card' });
+
+  // Git permits both in a path name and `ls-tree -z` hands them back raw — which is why the read
+  // uses `-z`. Carrying every foreign entry across verbatim is what made the *write* side reachable:
+  // one `\n` in a path split one `update-index --index-info` record into two and corrupted the rest
+  // of the payload. Only this tier's own three name patterns used to reach that line.
+  const odd = ['notes/two\nlines.md', 'notes/a\tcolumn.md', 'notes/plain.md'];
+  // put them on the branch with plumbing of the test's own, so the tier meets them on the next read
+  const tip = s.tier.tip();
+  const lines = odd.map((f) => {
+    const sha = spawnSync('git', ['hash-object', '-w', '-t', 'blob', '--stdin'], { cwd: s.root, input: `${f}\n`, encoding: 'utf8' }).stdout.trim();
+    return `100644 ${sha}\t${f}`;
+  });
+  const idxFile = path.join(s.dir, 'scratch-index');
+  const env = { ...process.env, ...ENV, GIT_INDEX_FILE: idxFile };
+  spawnSync('git', ['read-tree', tip], { cwd: s.root, env });
+  spawnSync('git', ['update-index', '-z', '--add', '--index-info'], { cwd: s.root, env, input: `${lines.join('\0')}\0` });
+  const tree = spawnSync('git', ['write-tree'], { cwd: s.root, env, encoding: 'utf8' }).stdout.trim();
+  const made = spawnSync('git', ['commit-tree', tree, '-p', tip, '-m', 'files with odd names'], { cwd: s.root, env, encoding: 'utf8' }).stdout.trim();
+  git(s.root, 'update-ref', BOARD_REF, made, tip);
+  s.tier.forget();
+
+  s.tier.setStatus(task, 'running');
+  const listed = git(s.root, 'ls-tree', '-r', '--name-only', '-z', BOARD_BRANCH).split('\0').filter(Boolean);
+  for (const f of odd) assert.ok(listed.includes(f), `${JSON.stringify(f)} survived the write`);
+  assert.equal(JSON.parse(git(s.root, 'show', `${BOARD_BRANCH}:cards/${task.number}.json`)).status, 'running');
+});
+
+test('git tier: a read hands out copies without deep-cloning the whole board', (t) => {
+  const s = board();
+  t.after(s.cleanup);
+  const a = card(s.tier, { title: 'one', kb: { paths: ['src/'] } });
+  const b = card(s.tier, { title: 'two' });
+  s.tier.saveRun(a.number, { run: { ...emptyRun(), failures: 1, attempts: [{ attempt: 1, profile: 'claude' }] }, id: null });
+
+  // The memo is the read cache; nothing a caller is handed may reach into it.
+  const read = s.tier.getTask(a.number);
+  read.kb.paths.push('poison/');
+  read.labels.push('kb:poison');
+  assert.deepEqual(s.tier.getTask(a.number).kb.paths, ['src/'], 'the card in the memo is untouched');
+
+  const run = s.tier.loadRun(a.number);
+  run.run.attempts.push({ attempt: 99 });
+  assert.equal(s.tier.loadRun(a.number).run.attempts.length, 1);
+
+  const settings = s.tier.board().settings;
+  settings.dispatch.interval = 999;
+  assert.equal(s.tier.board().settings.dispatch.interval, 60);
+
+  // and the whole-tree copy `readTree()` still hands out is a copy too
+  const whole = s.tier.readTree();
+  whole.cards.get(b.number).title = 'edited';
+  assert.equal(s.tier.getTask(b.number).title, 'two');
+});
+
+test('git tier: every message names this tier\'s branch, never kb-board by reflex', (t) => {
+  const s = scratch();
+  t.after(s.cleanup);
+  const ref = 'refs/heads/kb-board-staging';
+  const ctx = { root: s.wt, cfg: {}, board: 'default', json: false, _cache: {} };
+  const tier = openGitTier(ctx, { host: 'test-host', ref });
+  tier.init('default', 'test-host', { settings: {} });
+  const task = card(tier, { title: 'a card' });
+
+  // The constructor takes `ref` precisely so the name is not fixed, and half the error surface used
+  // to honour it while the other half told the operator to look at a branch that does not exist.
+  const messages = [];
+  for (const call of [
+    () => tier.getTask(999),
+    () => tier.addBlockedBy(task.number, 999),
+    () => tier.saveRun(999, { run: emptyRun(), id: null }),
+    () => tier.addNote(999, 'hello'),
+  ]) {
+    try { call(); assert.fail('expected a refusal'); } catch (e) { messages.push(e.message); }
+  }
+  for (const m of messages) {
+    assert.match(m, /kb-board-staging/);
+    assert.doesNotMatch(m, /(?<!-)\bkb-board board\b/, m);
+  }
+});
+
+// ---------- the pure helpers, without a temp repo ----------
+
+test('isOwned matches the files the parser reads, not the directories they are in', () => {
+  for (const file of ['board.json', 'cards/1.json', 'cards/1234.json', 'runs/7.json']) {
+    assert.equal(isOwned(file), true, file);
+  }
+  for (const file of ['README.md', 'cards/README.md', 'cards/notes/design.md', 'runs/.gitkeep', 'cards/1.json.bak', 'cards/one.json', 'notes/cards/1.json']) {
+    assert.equal(isOwned(file), false, file);
+  }
+});
+
+test('classifyRefWrite: an absent ref is not a contended one', () => {
+  // The two messages measured against git 2.43, kept as a table so a reword shows up here rather
+  // than as a five-times retry blaming a host nobody is running on.
+  assert.equal(classifyRefWrite("fatal: cannot lock ref 'refs/heads/kb-board': is at aaa but expected bbb"), 'contended');
+  assert.equal(classifyRefWrite("error: cannot lock ref 'refs/heads/kb-board': reference already exists"), 'contended');
+  assert.equal(classifyRefWrite("fatal: cannot lock ref 'refs/heads/kb-board': unable to resolve reference 'refs/heads/kb-board'"), 'absent');
+  assert.equal(classifyRefWrite("error: cannot lock ref 'refs/heads/kb-board': reference is missing but expected aaa"), 'absent');
+  assert.equal(classifyRefWrite('fatal: not a git repository'), 'error');
+  assert.equal(classifyRefWrite(''), 'error');
+});
+
+test('gitSays ranks the loud lines rather than taking the first two of them', () => {
+  // A `--force-with-lease` push that redirects: the rejection and its reason are the two lines a
+  // human reads, and a `warning:` printed before them must not push either off the end.
+  const push = [
+    'warning: redirecting to https://example.invalid/repo.git/',
+    'To https://example.invalid/repo.git',
+    ' ! [rejected]        aaa -> refs/kb/locks/9/1 (stale info)',
+    "error: failed to push some refs to 'https://example.invalid/repo.git'",
+  ].join('\n');
+  const said = gitSays(push);
+  assert.match(said, /\[rejected\]/);
+  assert.match(said, /stale info/);
+  assert.doesNotMatch(said, /redirecting/, 'a warning does not outrank a rejection');
+  // and with nothing loud at all, it is still the first two lines, in git's order
+  assert.equal(gitSays('one\ntwo\nthree'), 'one two');
+  assert.equal(gitSays('warning: a\nfatal: b'), 'warning: a fatal: b', 'ties keep git\'s own order');
 });
