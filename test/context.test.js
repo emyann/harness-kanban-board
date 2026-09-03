@@ -167,7 +167,7 @@ test('workerContext surfaces the thread and hides hkb\'s own records', async (t)
   say(h.gh, 42, serializeResultComment({ kind: 'result', attempt: 1, summary: 'half done' }), { login: 'hkb', minutesAgo: 198 });
   say(h.gh, 42, 'token is in the vault now', { login: 'bob', minutesAgo: 3 });
 
-  const before = h.gh.calls.length;
+  const before = h.gh.requests.length;
   const task = await getTask(h.ctx, 42);
   const out = await workerContext(h.ctx, task);
 
@@ -186,7 +186,7 @@ test('workerContext surfaces the thread and hides hkb\'s own records', async (t)
   assert.ok(out.indexOf('use the v2 endpoint') < out.indexOf('token is in the vault now'));
 
   // one thread read, shared with the run record and the result lookup
-  const reads = h.gh.calls.slice(before).filter((r) => String(r.path || '').includes('/comments'));
+  const reads = h.gh.requests.slice(before).filter((r) => String(r.path || '').includes('/comments'));
   assert.equal(reads.length, 1, `expected one comments read, got ${reads.length}`);
 });
 

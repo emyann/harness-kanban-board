@@ -23,7 +23,7 @@ export class FakeGh {
     this.issues = new Map(); // number -> issue record
     this.refs = new Map(); // full ref name -> sha
     this.repoLabels = new Set();
-    this.calls = []; // every request, in order
+    this.requests = []; // every request, in order
     this.failures = []; // injected errors, see fail()
     this.nextCommentId = 1000;
     this.commits = new Map(); // sha -> {date} — what a ref-CAS heartbeat leaves behind
@@ -153,14 +153,14 @@ export class FakeGh {
   }
   lockRefs() { return [...this.refs.keys()].filter((r) => r.startsWith('refs/kb/locks/')).sort(); }
   /** Every request whose method and path match — for "and nothing was written" assertions. */
-  callsMatching(method, path) {
-    return this.calls.filter((c) => (!method || c.method === method) && (!path || (path instanceof RegExp ? path.test(c.path || '') : String(c.path || '').includes(path))));
+  requestsMatching(method, path) {
+    return this.requests.filter((c) => (!method || c.method === method) && (!path || (path instanceof RegExp ? path.test(c.path || '') : String(c.path || '').includes(path))));
   }
 
   // ---------- transport ----------
 
   transport(req) {
-    this.calls.push({ kind: req.kind, method: req.method || null, path: req.path || null, body: req.body ?? null, query: req.query || null, variables: req.variables || null });
+    this.requests.push({ kind: req.kind, method: req.method || null, path: req.path || null, body: req.body ?? null, query: req.query || null, variables: req.variables || null });
     const injected = this.#takeFailure(req);
     if (injected) throw injected;
     return req.kind === 'graphql' ? this.#graphql(req) : this.#rest(req);

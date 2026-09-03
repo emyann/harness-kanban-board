@@ -643,11 +643,11 @@ test('hkb stats: one board query, the run comments of the window, and not one wr
   assert.match(text, /spawns {5}5 \/ 40 today · 35 left/);
   assert.match(text, /spend {6}\$0\.80/);
 
-  const boardQueries = h.gh.calls.filter((c) => c.kind === 'graphql' && /issues\(/.test(c.query || ''));
+  const boardQueries = h.gh.requests.filter((c) => c.kind === 'graphql' && /issues\(/.test(c.query || ''));
   assert.equal(boardQueries.length, 1, 'one board query per run');
-  const commentReads = h.gh.callsMatching('GET', /issues\/\d+\/comments/);
+  const commentReads = h.gh.requestsMatching('GET', /issues\/\d+\/comments/);
   assert.deepEqual(commentReads.map((c) => Number(/issues\/(\d+)\//.exec(c.path)[1])), [1, 2], '#3 has no news and is not running');
-  for (const method of ['POST', 'PATCH', 'DELETE']) assert.deepEqual(h.gh.callsMatching(method), [], `stats must not ${method}`);
+  for (const method of ['POST', 'PATCH', 'DELETE']) assert.deepEqual(h.gh.requestsMatching(method), [], `stats must not ${method}`);
 });
 
 test('hkb stats --json: the same object, and the local worker log fills a missing price', async (t) => {
@@ -700,7 +700,7 @@ test('hkb stats: a claude-bg board reports turns and tokens off the transcript, 
   assert.equal(await h.run(), 0);
   assert.match(h.out(), /spend {6}no cost reported on any of the 1 worker attempt/);
   assert.match(h.out(), /usage {6}2 turns · in 4 · out 2000 · cache 40k written \/ 40k read {2}\(1 transcript\)/);
-  for (const method of ['POST', 'PATCH', 'DELETE']) assert.deepEqual(h.gh.callsMatching(method), [], `stats must not ${method}`);
+  for (const method of ['POST', 'PATCH', 'DELETE']) assert.deepEqual(h.gh.requestsMatching(method), [], `stats must not ${method}`);
 });
 
 test('hkb stats: `stats.rates` in board.json turns those tokens into an estimate, marked as one', async (t) => {

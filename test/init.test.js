@@ -116,7 +116,7 @@ const read = (root, rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 const board = (root) => JSON.parse(read(root, BOARD_FILE));
 const snapshot = (root) => Object.fromEntries(FOOTPRINT.map((rel) => [rel, read(root, rel)]));
 /** The names of the labels init actually created, in the order it asked for them. */
-const created = (gh) => gh.callsMatching('POST', '/labels').map((c) => c.body.name);
+const created = (gh) => gh.requestsMatching('POST', '/labels').map((c) => c.body.name);
 
 /**
  * Run the real `init()` the way the CLI does — real arg parsing, real context, fake transport — in a
@@ -172,7 +172,7 @@ test('the label set that reaches GitHub is the board\'s, and nothing else is wri
   assert.deepEqual(created(gh).filter((l) => l.startsWith('kb:agent:')), ['kb:agent:claude'], 'no labels for harnesses this repo will never install');
   assert.ok(printed.some((l) => l.startsWith('created labels: ')));
 
-  const stray = gh.calls.filter((c) => !/\/labels(\?|$)/.test(c.path || ''));
+  const stray = gh.requests.filter((c) => !/\/labels(\?|$)/.test(c.path || ''));
   assert.deepEqual(stray, [], 'init reads and writes labels; anything else is a call an adopter did not ask for');
   assert.equal(board(root).repo, NWO);
   assert.equal(board(root).board, 'default');
@@ -472,7 +472,7 @@ test('a pin that only ever added --model/--effort is dropped, not repaired in pl
 test('--no-labels writes every local file and sends nothing', async () => {
   const { root, gh, printed } = await runInit(['--no-labels']);
 
-  assert.deepEqual(gh.calls, [], 'the offline path must not reach the transport at all');
+  assert.deepEqual(gh.requests, [], 'the offline path must not reach the transport at all');
   for (const rel of FOOTPRINT) assert.ok(fs.existsSync(path.join(root, rel)), `${rel} is local — --no-labels must still write it`);
   assert.ok(printed.some((l) => l.includes('--no-labels') && l.includes(NWO)), 'and say which labels it did not create, and where');
   assert.ok(printed.some((l) => l.includes('hkb init') && l.includes('without --no-labels')), 'and what to run to finish the job');
@@ -529,7 +529,7 @@ test('a checkout somebody listed by hand is not listed a second time', async () 
 test('the offline path registers too — the list is a local write (#98)', async () => {
   const { root, gh, boards, printed } = await runInit(['--no-labels']);
 
-  assert.deepEqual(gh.calls, [], 'registering sends nothing: --no-labels is still the offline path');
+  assert.deepEqual(gh.requests, [], 'registering sends nothing: --no-labels is still the offline path');
   assert.deepEqual(boardList(boards).boards, [root], 'the checkout is on the list with `gh` logged out');
   assert.ok(printed.some((l) => l.startsWith('registered this checkout in ')));
 });

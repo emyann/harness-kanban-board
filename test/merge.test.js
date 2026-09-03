@@ -53,9 +53,9 @@ function harness({ merge = null, board = 'default', allowAutoMerge = true } = {}
 }
 
 /** Every `enablePullRequestAutoMerge` the transport was asked to send, in order. */
-const enables = (gh) => gh.calls.filter((c) => c.kind === 'graphql' && /enablePullRequestAutoMerge/.test(c.query || ''));
+const enables = (gh) => gh.requests.filter((c) => c.kind === 'graphql' && /enablePullRequestAutoMerge/.test(c.query || ''));
 /** Every branch-protection or ruleset read — the gate's cost. */
-const gateReads = (gh) => gh.calls.filter((c) => /\/protection$|\/rules\/branches\//.test(c.path || ''));
+const gateReads = (gh) => gh.requests.filter((c) => /\/protection$|\/rules\/branches\//.test(c.path || ''));
 
 const openPr = (over = {}) => ({ number: 100, state: 'OPEN', isDraft: false, headRefName: 'kb/1', ...over });
 
@@ -507,7 +507,7 @@ test('doctor fails a policy it cannot read, whatever the branch looks like', asy
 
 // ---------- `hkb merge`, end to end against the fake ----------
 
-const mergeMutations = (gh) => gh.calls.filter((c) => c.kind === 'graphql' && /mergePullRequest/.test(c.query || ''));
+const mergeMutations = (gh) => gh.requests.filter((c) => c.kind === 'graphql' && /mergePullRequest/.test(c.query || ''));
 
 test('hkb merge refuses on a manual board, naming the mode — and merges nothing', async (t) => {
   const h = harness();

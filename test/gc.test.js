@@ -310,7 +310,7 @@ test('a sweep given a memo does not read a task again while its issue has not mo
   t.after(h.cleanup);
   h.gh.addIssue(kbIssue({ number: 1, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', run: runWith([]) }));
   h.gh.addIssue(kbIssue({ number: 2, status: 'ready' }));
-  const reads = () => h.gh.callsMatching('GET', /issues\/\d+\/comments/).length;
+  const reads = () => h.gh.requestsMatching('GET', /issues\/\d+\/comments/).length;
   const memo = {}; // what the dispatcher keeps in .kanban/state.json
 
   await sweep(h.ctx, { yes: true, memo, log: h.log });

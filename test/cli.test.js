@@ -98,11 +98,11 @@ function groomHarness(t) {
   const restore = gh.install();
   process.chdir(dir);
   t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
-  return { gh, run: async (...argv) => { printed = ''; gh.calls.length = 0; await main(argv); return printed; } };
+  return { gh, run: async (...argv) => { printed = ''; gh.requests.length = 0; await main(argv); return printed; } };
 }
 
-const boardQueries = (gh) => gh.calls.filter((c) => c.kind === 'graphql' && String(c.query || '').includes('issues(first: 100'));
-const writes = (gh) => gh.calls.filter((c) => c.kind !== 'graphql' && !['GET', null, undefined].includes(c.method));
+const boardQueries = (gh) => gh.requests.filter((c) => c.kind === 'graphql' && String(c.query || '').includes('issues(first: 100'));
+const writes = (gh) => gh.requests.filter((c) => c.kind !== 'graphql' && !['GET', null, undefined].includes(c.method));
 
 test('hkb groom --json: one board query, zero writes, and the frozen key set', async (t) => {
   const { gh, run } = groomHarness(t);

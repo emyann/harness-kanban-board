@@ -530,7 +530,7 @@ const attempt = (k, outcome, { profile = 'claude', session = false, ...rest } = 
 });
 
 /** Every run comment this board was asked for. */
-const runReads = (gh) => gh.callsMatching('GET', /issues\/\d+\/comments/).length;
+const runReads = (gh) => gh.requestsMatching('GET', /issues\/\d+\/comments/).length;
 
 // ---------- the tally, without a board ----------
 
@@ -736,7 +736,7 @@ test('a board with no background profile is not asked at all — no read, no fin
 
   assert.deepEqual(await checkSessions(h.ctx, s), []);
   assert.deepEqual(s.results, []);
-  assert.deepEqual(h.gh.calls, [], 'a check with nothing to check must cost nothing');
+  assert.deepEqual(h.gh.requests, [], 'a check with nothing to check must cost nothing');
 });
 
 test('a profile that has never ended an attempt here has nothing to be wrong about', async (t) => {
@@ -768,12 +768,12 @@ test('the two card checks share one board query rather than paying for one each'
   const h = boardHarness(t);
   h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', run: runWith([attempt(1, 'completed', { session: true })]) }));
   const board = await boardOnce(h.ctx);
-  const before = h.gh.calls.length;
+  const before = h.gh.requests.length;
 
   await checkAgentLabels(h.ctx, sink(), { board });
   await checkSessions(h.ctx, sink(), { board });
 
-  const openBoard = h.gh.calls.slice(before).filter((c) => c.kind === 'graphql' && /states: \[OPEN\]/.test(c.query || ''));
+  const openBoard = h.gh.requests.slice(before).filter((c) => c.kind === 'graphql' && /states: \[OPEN\]/.test(c.query || ''));
   assert.deepEqual(openBoard, [], 'neither check re-reads the board it was handed');
 });
 

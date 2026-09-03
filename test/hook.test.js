@@ -153,7 +153,7 @@ function leakHarness({ cwd = 'root', task = '7', attempt = '1', profile = 'claud
   process.stdout.write = (s) => { out.push(String(s)); return true; };
   return {
     gh, ctx, root, boardRoot: dir, err: () => err.join(''), out: () => out.join(''),
-    writes: () => gh.calls.filter((c) => ['POST', 'PATCH', 'DELETE'].includes(c.method)).length,
+    writes: () => gh.requests.filter((c) => ['POST', 'PATCH', 'DELETE'].includes(c.method)).length,
     attempt: async (n, k) => (await loadRun(ctx, n)).run.attempts.find((a) => a.attempt === k),
     cleanup: () => {
       process.stderr.write = write.err; process.stdout.write = write.out;

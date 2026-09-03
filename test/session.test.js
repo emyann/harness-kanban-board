@@ -303,7 +303,7 @@ test('formatSession: one line per attempt, only what is known', () => {
 
 const PAYLOAD = { session_id: 'sid-1', transcript_path: '/t/sid-1.jsonl', total_cost_usd: 1.25, num_turns: 210, duration_ms: 900_000 };
 const ended = (outcome = 'complete') => ({ started_at: '2026-08-27T09:00:00Z', ended_at: '2026-08-27T09:40:00Z', outcome });
-const writes = (gh) => gh.calls.filter((c) => ['POST', 'PATCH', 'DELETE'].includes(c.method)).length;
+const writes = (gh) => gh.requests.filter((c) => ['POST', 'PATCH', 'DELETE'].includes(c.method)).length;
 
 /** A track runner's worktree and its board: root #7, plus #8 and #9 as nodes it claimed. */
 function trackHarness({ rootStatus = 'review' } = {}) {

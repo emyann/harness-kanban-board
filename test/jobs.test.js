@@ -203,7 +203,7 @@ test('a live attempt is named one tick after the launch, and the row is written 
   t.after(h.cleanup);
   h.gh.addIssue(running());
 
-  const writes = () => h.gh.calls.filter((c) => ['POST', 'PATCH', 'DELETE'].includes(c.method)).length;
+  const writes = () => h.gh.requests.filter((c) => ['POST', 'PATCH', 'DELETE'].includes(c.method)).length;
   await h.tick();
 
   assert.deepEqual(h.gh.runOf(7).attempts[0].session_id, SID);

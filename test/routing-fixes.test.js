@@ -77,7 +77,7 @@ test('a card blocked by an archived-done card is ready; one blocked by an abando
 
 /** Every `GET /pulls?state=open…` the fake saw — the listing `fillPrFallback` spends. */
 function prListings(gh) {
-  return gh.calls.filter((c) => /\/pulls\?/.test(String(c.path || c.url || '')));
+  return gh.requests.filter((c) => /\/pulls\?/.test(String(c.path || c.url || '')));
 }
 
 test('one create is one open-PR listing, not one per card it names as a blocker', async () => {

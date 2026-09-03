@@ -196,7 +196,7 @@ test('a handshake and a tools/list over one chunk of stdin answer in order, and 
 
   assert.deepEqual(frames.map((f) => f.id), [1, 2], 'the notification is not answered');
   assert.equal(frames[1].result.tools.length, TOOLS.length);
-  assert.equal(h.gh.calls.length, 0, 'the handshake must not touch GitHub');
+  assert.equal(h.gh.requests.length, 0, 'the handshake must not touch GitHub');
 });
 
 test('a half-line is held until its newline arrives; junk gets a parse error and the stream survives', async (t) => {
@@ -252,11 +252,11 @@ test('a verb that refuses comes back as content the model can read, not a protoc
   const r = await call(h.ctx, 'kanban_block', { task: 7, reason: 'need the API token' , kind: 'needs_input' });
   assert.equal(payload(r).status, 'blocked');
 
-  const quiet = h.gh.calls.length;
+  const quiet = h.gh.requests.length;
   const missing = await call(h.ctx, 'kanban_complete', { task: 7 });
   assert.equal(missing.isError, true);
   assert.match(missing.content[0].text, /"summary" is required/);
-  assert.equal(h.gh.calls.length, quiet, 'a bad call is refused before it reaches GitHub at all');
+  assert.equal(h.gh.requests.length, quiet, 'a bad call is refused before it reaches GitHub at all');
 
   const nowhere = await call(h.ctx, 'kanban_show', {});
   assert.equal(nowhere.isError, true);

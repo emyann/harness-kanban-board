@@ -9,7 +9,7 @@
 //   assert.deepEqual(await store.locks(), ['7/1']);
 //   assert.deepEqual(store.writes(), []);            // "and nothing was written"
 //
-// Why it exists: 121 assertion sites read `gh.calls`, `gh.lockRefs()` and `gh.runOf()` — the shape
+// Why it exists: 121 assertion sites read `gh.requests`, `gh.lockRefs()` and `gh.runOf()` — the shape
 // of GitHub's REST API — to find out things the protocol states in its own words ("the lock was
 // released", "the run record was not rewritten", "a check with nothing to check costs nothing").
 // Every one of those sites pinned `src/store/github.js` in place (docs/local-first.md §10-§11).
@@ -76,6 +76,8 @@ export class FakeStore {
     this.nextToken = 1;
     this.repoLabels = new Set();
     this.eventLog = [];
+    /** number -> how many times the card actually changed — see `#touch` */
+    this.revisions = new Map();
     this.ctx = null;
     this.closed = 0;
   }
@@ -190,6 +192,8 @@ export class FakeStore {
   labelsOf(number) { return [...this.#rec(number).labels]; }
   statusOf(number) { return statusOf(this.#rec(number).labels); }
   bodyOf(number) { return this.#rec(number).body; }
+  /** How many times this card has actually changed. Equal before and after = nothing was written. */
+  revisionOf(number) { return this.revisions.get(Number(number)) || 0; }
   stateOf(number) { const r = this.#rec(number); return { state: r.state, stateReason: r.stateReason }; }
   /** The run record as hkb would read it back, or null. */
   runOf(number) {
@@ -225,7 +229,15 @@ export class FakeStore {
     return rec;
   }
 
-  #touch(rec) { rec.updatedAt = new Date().toISOString(); }
+  /**
+   * The card changed. `revisionOf` counts these, which is how a test says "nothing to change is
+   * nothing to write" without naming a REST call: a verb may reach the interface and still leave
+   * the card exactly as it found it, and that is the thing worth asserting.
+   */
+  #touch(rec) {
+    rec.updatedAt = new Date().toISOString();
+    this.revisions.set(rec.number, (this.revisions.get(rec.number) || 0) + 1);
+  }
 
   #blockers(rec) {
     return rec.blockedBy.map((b) => {
@@ -361,9 +373,14 @@ export class FakeStore {
         const rec = self.#of(task);
         const toRemove = new Set([...task.labels.filter((l) => l.startsWith('kb:status:') && l !== L.status(status)), ...remove]);
         const missing = [L.status(status), ...add].filter((l) => !task.labels.includes(l));
-        rec.labels = [...rec.labels.filter((l) => !toRemove.has(l)), ...missing.filter((l) => !rec.labels.includes(l))];
+        const kept = rec.labels.filter((l) => !toRemove.has(l));
+        const added = missing.filter((l) => !rec.labels.includes(l));
+        rec.labels = [...kept, ...added];
         for (const l of missing) self.repoLabels.add(l);
-        self.#touch(rec);
+        // A status that is already the card's status writes nothing — the drivers elide the call,
+        // and a double that recorded one anyway would make "nothing to change is nothing to write"
+        // unassertable through the interface.
+        if (kept.length !== rec.labels.length - added.length || added.length) self.#touch(rec);
         // The task the caller holds is updated in place, the way every driver's `setStatus` does.
         task.labels = [...task.labels.filter((l) => !toRemove.has(l)), ...missing];
         task.status = status;
@@ -373,9 +390,11 @@ export class FakeStore {
       async setAgent(task, agent) {
         const rec = self.#of(task);
         const want = L.agent(agent);
-        rec.labels = [...rec.labels.filter((l) => !l.startsWith('kb:agent:')), want];
+        const kept = rec.labels.filter((l) => !l.startsWith('kb:agent:'));
+        const changed = kept.length !== rec.labels.length - (rec.labels.includes(want) ? 1 : 0) || !rec.labels.includes(want);
+        rec.labels = [...kept, want];
         self.repoLabels.add(want);
-        self.#touch(rec);
+        if (changed) self.#touch(rec);
         task.labels = [...task.labels.filter((l) => !l.startsWith('kb:agent:')), want];
         task.agent = agent;
         return task;
