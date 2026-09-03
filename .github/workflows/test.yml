@@ -66,3 +66,25 @@ jobs:
           node-version: ${{ matrix.node-version }}
           package-manager-cache: false
       - run: node scripts/smoke-pack.mjs
+
+  # The two checks branch protection requires by name. A matrix cannot produce a single check — it
+  # reports one per leg (`test (node 22)`, `test (node 24)`) — so adding the matrix in #289 silently
+  # retired the `test` and `packed artifact` contexts `main` is protected on, and every PR after it
+  # would have sat at "Required statuses must pass" with nothing left to report them. These gates keep
+  # the contract stable whatever the matrix does next: they pass only if every leg passed, and
+  # `always()` is what makes a skipped or cancelled leg fail them instead of being read as success.
+  test-gate:
+    name: test
+    runs-on: ubuntu-latest
+    needs: test
+    if: always()
+    steps:
+      - run: '[ "${{ needs.test.result }}" = "success" ] || exit 1'
+
+  smoke-gate:
+    name: packed artifact
+    runs-on: ubuntu-latest
+    needs: smoke
+    if: always()
+    steps:
+      - run: '[ "${{ needs.smoke.result }}" = "success" ] || exit 1'
