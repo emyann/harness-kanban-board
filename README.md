@@ -33,7 +33,8 @@ Rather drive it yourself — or run the loop under systemd, cron or a terminal y
 starts both processes detached and the terminal comes back; see [Keeping the board running](#keeping-the-board-running).
 
 That is the whole free path. `npx hkb-cli init --import` also pulls your existing open issues onto the board as
-*triage*.
+*triage* — and on a repo that already has a `kb:*` board, the same flag [moves that whole board](#moving-a-github-board-onto-the-local-store)
+onto the local store instead. It dispatches on which of the two you have and says which one it ran.
 
 `init` writes **no Claude Code hooks into your settings files**. hkb's `Stop`, `PreToolUse` and
 `SubagentStop` hooks serve exactly one kind of session — the worker hkb launched — so they ride that worker's launch line
@@ -147,12 +148,21 @@ Full protocol: [skills/kanban/references/protocol.md](skills/kanban/references/p
 hkb init --import          # every open card, and everything closed in the last 90 days
 ```
 
-The issue number stays the card id, statuses and agents come across as they are, and each card's run record,
+`--import` is two operations and picks by what it finds. A repository that has a `kb:*` board is **migrated**:
+the issue number stays the card id, statuses and agents come across as they are, and each card's run record,
 results, human comments and blockers come with it — one paginated comments read per card, printed as it goes.
-Two things the import says out loud rather than leaving you to find: the closed cards are one page of 100, most
-recently updated first, so an older closed card stays on GitHub; and a card blocked by one that is not being
+A repository with no kb board is a new board, so the same flag **adopts** its open issues into *triage*, which
+is what `--import` has always meant there. The log says which one ran. `--import` means the migration whatever
+`"store"` in `board.json` says, since that is the board it exists to move; `--store github --import` keeps the
+board on GitHub and does the old adopt-in-place instead.
+
+Four things the import says out loud rather than leaving you to find: the closed cards are one page of 100, most
+recently updated first, so an older closed card stays on GitHub; a card blocked by one that is not being
 imported has that edge **dropped** and listed, because keeping it would leave the card blocked by an id that
-can never resolve and so never dispatchable again.
+can never resolve and so never dispatchable again; on a repository without GitHub's GraphQL `blockedBy` field
+nothing can read a *closed* card's blockers, so those cards are imported marked `"blockers_unknown": true` and
+named (a closed card is settled, so the missing edge gates nothing); and a card with more than 500 comments
+leaves its oldest notes behind, listed by number.
 The leftover `refs/kb/locks/*` on the remote and the local beat chains are deleted, since a local board keeps
 its locks in the index. Re-running `init` never touches a branch that already exists: a second import over a
 board that has since been worked would overwrite it with GitHub's stale copy, so it is refused and says so.
@@ -170,9 +180,11 @@ before the board was first pushed. It reads the refs first and fetches, so the c
 board is not the one that tells you there isn't one.
 
 Anyone can `git clone` the repo and get the whole board with it: the branch is what says the board is local, so
-no configuration is needed to read it (`.kanban/board.json` is tracked and comes along). Every *mutating* verb
-refuses on a host that is not the owner, with exit 2 naming it — the read side of that story is waiting on the
-verbs moving onto the store (track C). To move a board to another machine, push it, clone it, and run `hkb init --take-over` on the
+no configuration is needed to read it (`.kanban/board.json` is tracked and comes along). Every verb that
+*writes* refuses on a host that is not the owner, with exit 2 naming it — the guard is on the invocation and
+not the verb, so `hkb up --status` (pid files and liveness) and `hkb dispatch --dry-run` (what a tick would
+decide) run on a clone, while `hkb up` and a real tick do not. The read side of the rest of that story is
+waiting on the verbs moving onto the store (track C). To move a board to another machine, push it, clone it, and run `hkb init --take-over` on the
 new host: it rewrites `board.host` on the branch, and refuses while the old host's dispatcher stamp is still
 fresh (`--force` overrides). Two hosts writing one branch is not supported — if it happens, `hkb sync` refuses
 the non-fast-forward and tells you how to pick a side.

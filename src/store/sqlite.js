@@ -810,6 +810,10 @@ function makeIndex({ db, file, root, readOnly, branch = DEFAULT_BRANCH }) {
         // reboot. Re-reading the file by hand here skipped that check.
         const { pid, stale } = readPidFile(root, 'dispatch');
         if (!pid || stale || !pidAlive(pid)) return false;
+        // Never this process. The dispatcher writes the board through the store too, and a loop
+        // signalling itself would end its own sleep on its own write — a tick per write, which is
+        // the busy-wait the interval exists to avoid.
+        if (pid === process.pid) return false;
         process.kill(pid, 'SIGUSR1');
         return true;
       } catch { return false; }

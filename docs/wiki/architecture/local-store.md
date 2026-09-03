@@ -7,16 +7,20 @@ audience: [dev]
 read_when: "adding a store verb, debugging an index that disagrees with the branch, wondering why a verb is refused on this host, or working on hkb sync / init --import"
 covers:
   - path: src/store/local.js
-    sha: 5b9ec684225f90da1ae45374dfe07373c1a4f427
+    sha: cf9ff6ab730eff06e7307938ed6ac88c41b8f1dc
   - path: src/store/index.js
-    sha: 84551d05f93f745140a7322fed6ddedc9484850a
+    sha: 918495a206540318480f3b0ce7cd0a8f559ae874
   - path: src/store/sqlite.js
-    sha: 826f9c91a51e4f2d67a9b15736d221650661dcbd
+    sha: 097c56b38571a9d5cc954e4bb72126dc4a83328f
   - path: src/init.js
-    sha: 0522ad93936f58d35e90b67b046aefcc29730e18
+    sha: d41dc9ecf44f892d994c175ebad8565cfc0da690
   - path: src/doctor.js
-    sha: 2aa97ad82ea530151019ecacb89112607d9163c0
-generated_at_commit: 6af026a
+    sha: 7cbbeb3b764af3b555a8c9afcbb0612747b56dbe
+  - path: src/gc.js
+    sha: 534f186975f37866642c551b23e83978b3c66ec2
+  - path: src/cli.js
+    sha: 1886720ccbb31128516095a0c7aa5e5b06c707e8
+generated_at_commit: 90132a1
 last_refreshed: 2026-09-03
 related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
@@ -47,9 +51,15 @@ this repository have a `kb-board` branch, locally or as `<remote>/kb-board`.
 The second question is what makes a plain `git clone` of a local board work
 with no configuration at all: the branch is the declaration. It is also why a
 board written by an older hkb stays on GitHub — no key, no branch, no change.
-`hkb init` writes the key explicitly from then on (`resolveStore`,
-`src/init.js`): a **new** board is local, an **existing** one keeps what it has,
-and `--store github` is the escape hatch while the GitHub driver is still here.
+`resolveStore` (`src/init.js`) answers the same two questions in the same order:
+a **new** board is local, an **existing** one keeps what it has, and
+`--store github` is the escape hatch while the GitHub driver is still here.
+
+`hkb init` writes the key only when it is a **decision** — the human's
+`--store`, a fresh board, or a board that already carries it. An inference is
+left unwritten so question two goes on being asked; pinning it pinned `github`
+onto every legacy board that re-ran init, including ones whose `kb-board`
+branch was full of cards.
 
 ## The three rules
 
@@ -94,14 +104,28 @@ what keeps them true.
 
 ## One writer, and what a clone gets
 
-`board.json` on the branch names one owning host. Three layers enforce it, and
+`board.json` on the branch names one owning host. **Two** layers enforce it, and
 they are not redundant — each catches a different caller:
 
-- `assertOwningHost(ctx, verb)` in the CLI, in front of every verb in
-  `WRITES_BOARD` (`src/cli.js`) — before a dispatcher reads the board, picks a
-  card and spawns a session that could not record what it did.
-- `LocalStore.assertOwner()` for a caller that reached the store directly.
+- `assertOwningHost(ctx, verb)` in the CLI, in front of every invocation that
+  writes (`src/cli.js`) — before a dispatcher reads the board, picks a card and
+  spawns a session that could not record what it did.
 - The tier's own `_assertOwner`, which refuses the actual write.
+
+There was a third, `LocalStore.assertOwner()`, and nothing in `src/` ever called
+it: a copy of the sentence with no caller to keep it honest, and one that would
+have refused a branchless board both other layers deliberately pass (its
+`owner()` went through `git.board()`, which throws where `assertLocalOwner`
+returns null). It is gone; `owner()` answers `null` on a board with no branch,
+which is the answer both layers already agreed on.
+
+The guard is on the **invocation**, not the verb (`invocationWritesBoard`).
+`up` is on `WRITES_BOARD` because it starts a dispatcher, but `hkb up --status`
+reads pid files and nothing else, and `hkb dispatch --dry-run` gates every write
+behind the flag — refusing those meant somebody holding a clone could not ask
+what was running on their own machine. `hkb up --serve` stays refused: it brings
+a dispatcher up alongside the web server. Serving a clone read-only is
+`hkb serve`, which is not on the list at all.
 
 A clone is therefore a **reader**: the store reads the whole board there with no
 setup, and a mutating verb exits 2 naming `hkb init --take-over`. (The reads
@@ -151,7 +175,39 @@ decided something (`DURABLE_TICK_KEYS`, `src/dispatch.js`), throttled to once a
 minute against a stamp in `.kanban/state.json` — this host's network, not the
 board's state.
 
+**Liveness is about the process, not about the tick.** The dispatcher *stamp*
+(`markDispatcher`) goes on the same pass but is not gated on any of that: it
+runs every tick, before the `DURABLE_TICK_KEYS` question and outside the try
+that catches a failing tick. A loop idling on a quiet board, or one whose ticks
+are all failing on a rate limit, is still a loop holding this board — and when
+the stamp was gated, its liveness expired after `HOST_LIVE_MS` and another
+host's `hkb init --take-over` took a board that was ticking right now, no
+`--force` needed. `markDispatcher` throttles itself to one commit per
+`HOST_LIVE_MS / 3`, so running it every tick costs a read of a memoized tree.
+`liveDispatcher` clamps a *future* stamp to age zero for the same reason: the
+two clocks are on different hosts, and reading ordinary skew as "nobody is
+ticking" fails the guard open in the one direction it must not.
+
+The wake is a real signal with a real receiver: `hkb dispatch --loop` installs a
+`SIGUSR1` handler that ends the sleep (`src/dispatch.js`). Without one, node's
+default action for SIGUSR1 is to **start the inspector** — every board write
+opened a debugger on the dispatcher and woke nothing. `index.wake()` never
+signals its own process, so a dispatcher writing through the store does not
+tick per write.
+
 ## The migration off GitHub
+
+`--import` is **two operations**, and `importGithubBoard()` dispatches on which
+one this repository has. A board query that comes back empty means there is no
+kb board here to migrate, and the flag means the other thing: `adoptOpenIssues()`
+pulls the repository's open issues into *triage* as a new local board (one
+commit, pull requests skipped, its own page ceiling named). The summary's `mode`
+and the log both say which ran. Sharing one flag while only the migration could
+answer is what made a repository with three hundred unlabelled issues import
+zero cards, log `0 open card(s)` and create an empty board — the flag's own
+documented behaviour, unreachable. `--import` also means the migration whatever
+`"store"` in `board.json` says: reading the pinned value first made the
+documented migration reachable only as `--store local --import`.
 
 `importGithubBoard()` moves a GitHub board onto the branch: every open card and
 everything closed inside the 90-day window, with the **issue number as the card
@@ -172,6 +228,17 @@ nobody re-runs:
   with an empty list meaning "not asked". The branch has no third value for
   that, and `cardRecord` refuses rather than writing "nothing blocks it" over a
   board's whole dependency graph (`blockersKnown`, `src/store/github.js`).
+
+  The refusal has a **way through**, per card, or it is only a louder silent
+  failure. On a repo without the GraphQL field no read fills a *closed* card's
+  blockers in at all (`fetchClosedRecent` never calls the REST fill-in), so
+  refusing there dead-ended the whole migration on its first closed card. So:
+  an open card is a refusal (a better read exists, and its edges decide whether
+  it can ever dispatch); a closed card is imported with `blockers_unknown: true`
+  on the record and its number in the summary's `unknown_blockers` (it is
+  settled, and its own `blocked_by` gates nothing — what it *blocks* lives on
+  the other card and is untouched). Writing `[]` and calling it an answer is
+  what is never allowed.
 - **It drops an edge to a card it is not importing, and lists it.** #40 blocked
   by #11, closed 200 days ago: keeping the edge leaves #40 blocked by an id that
   reads back as an open issue nobody can close — `blockerDone()` false forever,
@@ -182,7 +249,11 @@ nobody re-runs:
 The closed cards are **one page of 100**, most recently updated first, by the
 GitHub driver's own design. A full page back sets `closed_capped` in the summary
 and prints a WARNING naming the oldest card that made it, because "100 closed in
-the last 90 days" over a truncated set reads as the whole window.
+the last 90 days" over a truncated set reads as the whole window. There are two
+more ceilings and both are named the same way: the adoption path's ten pages of
+open issues (`issues_capped`), and `listComments`'s five pages of 100 per card,
+which leaves a very talkative card's oldest notes behind (`comments_capped`
+lists the numbers). A ceiling that is not named reads as the whole thing.
 
 It is idempotent **by refusal**: a branch that already exists is left exactly as
 it is. A second import over a board that has since been worked would overwrite
@@ -216,6 +287,39 @@ try, so a 404 from a repo that was renamed or a `gh` that is logged out costs on
 itself, which meant that on a local board with nothing behind it the human saw a
 single 404 and none of the answers the probes had already computed.
 
+The line that split is where a check *lives*, not what it is about, so a check
+that reads only `ctx.cfg` belongs on the local side of it —
+`checkPathOverlapGuard` sat inside `githubChecks` after the labels call that
+throws first, so a malformed `dispatch.guards.path_overlap` went unreported on a
+board with a stale `repo`, on a check that needs no network at all. It has moved
+up. (`checkTrackProfile` is the one deliberate hybrid left: it answers from
+`ctx.cfg` when a profile declares `track: true` and otherwise reads the board,
+and it already degrades to a `warn` rather than throwing.)
+
+## What gc does not sweep here
+
+Four of `gc.sweep`'s passes are about how the *GitHub* store keeps a board, and
+mean nothing once it does not (`docs/local-first.md` §7). The rule is that such
+a sweep is either skipped with a line saying why, or it says why it found
+nothing — what is never allowed is running structurally empty and reporting `0`
+as a result:
+
+- **duplicate run comments** and **beat chains** are skipped: a run record is one
+  file on the branch, so there is no second comment to be a duplicate of, and a
+  beat is a row in the index.
+- **track branches** are skipped: a track branch lives on the forge, and listing
+  them is a `gh api` request per gc and per `gc_every_ticks` tick for an answer
+  that is structurally always empty.
+- **agent worktrees** cannot be swept at all, and the sweep says so with a count.
+  It removes an `agent-*` worktree once *its* pull request is merged or closed,
+  and `GitTier.toTask` hands back `prs: []` for every card — the forge is not the
+  store (§6.4). It reported `0 removed` on a checkout quietly accumulating them
+  forever; now it names them and says to remove them by hand.
+
+The store is chosen *before* the board is read (`storeKind` above `listTasks`),
+because opening with the GitHub driver's read meant a genuinely local board threw
+several sweeps before the skip message could be printed.
+
 ## Gotchas
 
 - **Two stores in one repository share the index file.** It is keyed by the
@@ -225,11 +329,19 @@ single 404 and none of the answers the probes had already computed.
 - **`claim()` sets `tasks.status = 'running'` in the index** while the card's
   status is the branch's. The index is briefly ahead; the next reconcile fixes
   it. Do not read a card's status off the index expecting the branch's answer.
-- **`storeKind` memoizes only `local`.** A branch that exists does not stop
-  existing while a process runs, so that answer cannot go stale — while `github`
-  is the answer `hkb init` turns into `local` under its own feet, which is why
-  the negative is never cached and why `resolveStore` is handed
-  `localBoardExists(ctx)` rather than deciding on its own.
+- **`storeKind` memoizes both answers**, invalidated by `forgetStore(ctx)` —
+  which `hkb init` calls, since it is the one thing that creates the branch
+  under its own feet. Leaving the negative uncached meant every board predating
+  the `store` key re-spawned two `git rev-parse` per writing verb, per
+  `gc.sweep` and per tick for an answer that could only be `github`.
+  `resolveStore` is handed `localBoardExists(ctx)` rather than deciding on its
+  own, so `hkb init` and `storeKind` cannot disagree.
+- **An inferred store is never written back.** `hkb init` writes `"store"` only
+  when the human chose it (`--store`), when the board is new, or when the key is
+  already there. Pinning what `resolveStore` merely worked out turned every
+  re-init of an older board into a permanent `"store": "github"` — including one
+  whose `kb-board` branch was full of cards, which detached the board from its
+  own branch for good.
 - **An imported card's `labels`** hold only what is *not* a column —
   `kb:board:*`, `kb:status:*`, `kb:agent:*` and `kb:needs-human` are rebuilt
   from the card, so carrying them would double them (`cardRecord`).

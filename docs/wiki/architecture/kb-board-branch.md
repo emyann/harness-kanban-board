@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "adding a durable store verb, debugging a board write that lost or refused, or wondering why a worker's worktree stays clean while the board moves"
 covers:
   - path: src/store/git.js
-    sha: ceb1bd38ddbb3421d2355b2f2a7f961d3ea50603
+    sha: a3a5f2ebb104f22bd196c78301036b61b1da2ac9
   - path: src/store/index.js
-    sha: c411c7f6f1c832c340b10f9c263b02adde998066
+    sha: 918495a206540318480f3b0ce7cd0a8f559ae874
   - path: src/board.js
-    sha: f69569a4ef1ba7e4dabb5af394dddac6ba8d4a1f
-generated_at_commit: 2ce39a7
+    sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
+generated_at_commit: 90132a1
 last_refreshed: 2026-09-03
 related: [architecture/store-seam, decisions/adr-006-local-store, decisions/adr-005-control-plane, concepts/claims-and-leases]
 ---

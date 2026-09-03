@@ -75,6 +75,32 @@ export const WRITES_BOARD = new Set([
   'request-changes', 'merge', 'up',
 ]);
 
+/**
+ * Does *this invocation* write the board? **Guard the verb that writes, not the noun.**
+ *
+ * A verb is on `WRITES_BOARD` because of what it usually does, and one of them has a flag that
+ * turns it into a read: `hkb up --status` reports pid files and liveness — no board read, no
+ * network, no write of any kind — and refusing it meant somebody who cloned a board owned by
+ * another host could not ask what was running on their own machine.
+ *
+ * `hkb up --serve` stays refused, and that is not an oversight: it brings a *dispatcher* up
+ * alongside the web server (`PROCESSES`, src/up.js), and a dispatcher on a host that does not own
+ * the board is the two-writers case. Serving a clone read-only is `hkb serve`, which is not on the
+ * list at all.
+ * @param {string} cmd
+ * @param {any} flags
+ */
+export function invocationWritesBoard(cmd, flags = {}) {
+  if (!WRITES_BOARD.has(cmd)) return false;
+  if (cmd === 'up' && flags.status) return false;
+  // The same rule, swept: `hkb dispatch --dry-run` reports what a tick *would* decide and gates
+  // every write behind that flag, so it is the one honest way for somebody holding a clone to ask
+  // what this board would do next. If a write ever escapes the flag, the tier still refuses it —
+  // that is what the second layer is for, and why relaxing the first one here is safe.
+  if (cmd === 'dispatch' && flags['dry-run']) return false;
+  return true;
+}
+
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const str = (v) => (typeof v === 'string' ? v : null);
 const list = (v, label) => {
@@ -448,7 +474,7 @@ export async function main(argv) {
   // One writer (docs/local-first.md §6.2). A verb that changes the board is refused on a host that
   // does not own it, here rather than three calls in — a clone is a *reader*, and the read verbs
   // (list, show, context, graph, log, stats, serve, watch, tail) are missing from this set on purpose.
-  if (WRITES_BOARD.has(cmd)) assertOwningHost(ctx, cmd);
+  if (invocationWritesBoard(cmd, flags)) assertOwningHost(ctx, cmd);
 
   switch (cmd) {
     case 'create': {

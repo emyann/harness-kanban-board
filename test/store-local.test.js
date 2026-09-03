@@ -11,12 +11,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { openStore, storeKind, assertOwningHost } from '../src/store/index.js';
+import { openStore, storeKind, assertOwningHost, forgetStore } from '../src/store/index.js';
 import { gitTierFor } from '../src/store/local.js';
-import { openLocalStore, importGithubBoard, mountFor, syncAfterTick, cardRecord, SYNC_THROTTLE_MS, OFFLINE } from '../src/store/local.js';
+import { openLocalStore, importGithubBoard, adoptOpenIssues, liveDispatcher, dropGithubLeftovers, mountFor, syncAfterTick, cardRecord, SYNC_THROTTLE_MS, OFFLINE } from '../src/store/local.js';
 import { openGitTier } from '../src/store/git.js';
+import { syncPass, DURABLE_TICK_KEYS } from '../src/dispatch.js';
+import { invocationWritesBoard } from '../src/cli.js';
 import { DEFAULT_BOARD, hostId, readState, runGitAsync } from '../src/board.js';
-import { emptyRun, serializeResultComment, serializeRunComment } from '../src/model.js';
+import { emptyRun, serializeResultComment, serializeRunComment, RESULT_MARKER } from '../src/model.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
 function git(cwd, ...args) {
@@ -72,7 +74,10 @@ test('openStore picks the local driver from board.json, and from the branch when
   assert.equal(storeKind(ctx), 'github', 'no branch and no declaration: the board is where it has always been');
 
   openGitTier(ctx).init('default');
-  ctx._cache = {};
+  assert.equal(storeKind(ctx), 'github', 'and that answer is remembered — two rev-parse per verb for a board that can only ever be on GitHub is the cost of not remembering it');
+  // `forgetStore` is the invalidation, and the only thing that creates the branch under a running
+  // process — `hkb init` — calls it. That is the contract the cached negative rests on.
+  forgetStore(ctx);
   assert.equal(storeKind(ctx), 'local', 'a kb-board branch is a local board, with no config at all');
 
   ctx.cfg.store = 'github';
@@ -139,7 +144,11 @@ test('a mutating verb on a host that is not the board\'s is refused, naming --ta
 
   assert.equal(foreign.owns(), false);
   assert.deepEqual(foreign.listTasks().map((x) => x.title), ['theirs'], 'a foreign host still reads the whole board');
-  assert.throws(() => foreign.assertOwner('dispatch'), (e) => e.exitCode === 2 && /hkb init --take-over/.test(e.message) && /one writer/.test(e.message));
+  // **Two** layers, and no third: `assertOwningHost` (below) in front of the verb, and the tier
+  // inside the write. There was a `LocalStore.assertOwner()` between them that nothing in `src/`
+  // ever called — a third copy of the sentence with no caller to keep it honest, and one that would
+  // have refused a branchless board both other layers deliberately pass.
+  assert.equal(typeof (/** @type {any} */ (foreign).assertOwner), 'undefined', 'no uncalled third guard');
   // A real write is refused too, by the tier, whether or not anything asked first.
   assert.throws(() => foreign.setStatus(foreign.getTask(foreign.listTasks()[0].number), 'done'), (e) => e.exitCode === 2 && /one writer/.test(e.message));
 
@@ -149,6 +158,36 @@ test('a mutating verb on a host that is not the board\'s is refused, naming --ta
     (e) => e.exitCode === 2 && /hkb claim/.test(e.message) && /hkb init --take-over/.test(e.message),
   );
   assert.equal(assertOwningHost(ctx, 'claim'), null, 'and says nothing on the host that owns it');
+});
+
+test('the guard is on the invocation, not the noun: `hkb up --status` reads, so a clone may run it', () => {
+  // `up` is on WRITES_BOARD because it starts a dispatcher, and refusing the whole verb meant
+  // somebody who cloned a board owned by another host could not ask what was running on their own
+  // machine — a command documented as pid files and liveness, no board read and no network.
+  assert.equal(invocationWritesBoard('up', { status: true }), false);
+  assert.equal(invocationWritesBoard('up', {}), true, 'and starting one still needs the owning host');
+  // `--serve` is not the exception: it brings a dispatcher up alongside the web server. Serving a
+  // clone read-only is `hkb serve`, which is not on the list at all.
+  assert.equal(invocationWritesBoard('up', { serve: true }), true);
+  assert.equal(invocationWritesBoard('serve', {}), false);
+  assert.equal(invocationWritesBoard('claim', { status: true }), true, 'and the flag is not a skeleton key for every verb');
+  // the same rule swept onto its other instance: a dry run gates every write behind the flag, so it
+  // is how somebody holding a clone asks what this board would do next.
+  assert.equal(invocationWritesBoard('dispatch', { 'dry-run': true }), false);
+  assert.equal(invocationWritesBoard('dispatch', {}), true);
+});
+
+test('a board with no branch is nobody\'s: both layers pass, and owner() does not throw', (t) => {
+  const s = scratch(t);
+  const ctx = ctxAt(s.root);
+  const store = openLocalStore(ctx, { host: 'someone-elses-laptop' });
+  t.after(() => store.close());
+  // `owner()` used to go through `git.board()`, which throws `there is no kb-board branch` — while
+  // `assertLocalOwner` returns null on the same checkout. The two guards must agree about a board
+  // that does not exist yet, or a `hkb init` in a fresh clone is refused by one and passed by the other.
+  assert.equal(store.owner(), null);
+  assert.equal(store.owns(), true);
+  assert.equal(assertOwningHost({ ...ctx, host: 'someone-elses-laptop' }, 'create'), null);
 });
 
 test('--take-over moves the owning host, and refuses while the old one is still ticking', (t) => {
@@ -170,6 +209,20 @@ test('--take-over moves the owning host, and refuses while the old one is still 
   store.git.forget();
   assert.equal(store.board().host, 'laptop-b', 'and the branch says so, for every clone');
   assert.throws(() => store.setStatus(store.listTasks()[0] || { number: 1 }, 'done'), (e) => e.exitCode === 2);
+});
+
+test('a stamp from the future is a live dispatcher, not an absent one', (t) => {
+  // The two clocks being compared are on different hosts, so ordinary skew — a laptop a minute
+  // ahead, an RTC that drifted — is the normal case. Reading a future stamp as "nobody is ticking"
+  // failed the guard open in the one direction it must not: `--take-over` walking in while the
+  // other host's loop is writing the branch.
+  const { ctx, store } = board(t);
+  const clock = { at: new Date('2026-09-03T12:00:00Z') };
+  store.git.setBoard({ dispatch: { host: store.host, pid: 7, at: '2026-09-03T12:00:30Z' } });
+  const foreign = openLocalStore(ctx, { host: 'laptop-b', now: () => clock.at });
+  t.after(() => foreign.close());
+  assert.throws(() => foreign.takeOver(), (e) => e.exitCode === 2 && /still running a dispatcher/.test(e.message));
+  assert.equal(liveDispatcher(foreign.git._read().board, 'laptop-b', clock.at).age, 0, 'a negative age is clamped, not treated as absent');
 });
 
 test('--take-over --force overrides a fresh stamp', (t) => {
@@ -297,6 +350,31 @@ function seededGh() {
   return gh;
 }
 
+test('an idle tick still stamps: liveness is about the process, not about what it decided', async (t) => {
+  // The rule the second review named, one level up from the instance. Gating the stamp on
+  // `DURABLE_TICK_KEYS` meant a dispatcher idling on a quiet board stopped re-stamping, its
+  // liveness expired after HOST_LIVE_MS, and another host's `hkb init --take-over` took a board it
+  // was actively ticking — no `--force`, no warning. The push is what a decision buys; the stamp is
+  // what being alive buys.
+  const { ctx, store } = board(t);
+  const empty = Object.fromEntries(DURABLE_TICK_KEYS.map((k) => [k, []]));
+  await syncPass(ctx, empty, () => {});
+  store.git.forget();
+  assert.equal(store.git._read().board.dispatch.host, store.host, 'a tick that decided nothing still says "I am here"');
+  assert.equal(store.git._read().board.dispatch.pid, process.pid);
+
+  // and the throttle still holds: the stamp is a commit, not a heartbeat, so a second pass a
+  // moment later writes nothing.
+  const tip = store.git.tip();
+  await syncPass(ctx, empty, () => {});
+  store.git.forget();
+  assert.equal(store.git.tip(), tip);
+
+  // A GitHub board gets none of this, and does not pay the two rev-parse to find that out twice.
+  const ghCtx = ctxAt(scratch(t, { name: 'gh' }).root, { store: 'github' });
+  await syncPass(ghCtx, empty, () => { assert.fail('a GitHub board has no branch to stamp'); });
+});
+
 test('init --import moves a GitHub board onto the branch: ids, statuses, blockers, run records', async (t) => {
   const { root, ctx } = (() => { const s = scratch(t); return { ...s, ctx: ctxAt(s.root, { repo: 'o/r' }) }; })();
   const gh = seededGh();
@@ -335,6 +413,55 @@ test('init --import moves a GitHub board onto the branch: ids, statuses, blocker
   assert.ok(lines.some((l) => /3 card\(s\)/.test(l)), `the import prints what it did: ${lines.join(' | ')}`);
   assert.ok(lines.some((l) => /run record 1\/3/.test(l)), 'and progress per card, since it is one read each');
   void root;
+});
+
+test('--import on a repo with no kb board adopts its open issues instead of importing nothing', async (t) => {
+  // Two operations have always shared this flag, and the migration answered for both: its board
+  // query filters on `kb:board:<slug>`, so a repository with unlabelled issues and no kb board
+  // imported ZERO cards, logged `0 open card(s)` and created an empty board — while the README
+  // promised the flag "pulls your existing open issues onto the board as triage".
+  const s = scratch(t);
+  const ctx = ctxAt(s.root, { repo: 'o/r' });
+  const gh = new FakeGh({ baseSha: '0'.repeat(40) });
+  gh.addIssue({ number: 4, title: 'a plain issue', body: 'no kb labels here', labels: ['bug'] });
+  gh.addIssue({ number: 9, title: 'another', body: '', labels: [] });
+  const restore = gh.install();
+  t.after(restore);
+  ctx.repo = { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner };
+  ctx.cfg.repo = gh.nameWithOwner;
+
+  const lines = [];
+  const store = openLocalStore(ctx, { reconcile: false });
+  t.after(() => store.close());
+  const summary = await importGithubBoard(ctx, { store, log: (l) => lines.push(l), now: () => new Date('2026-09-03T00:00:00Z') });
+
+  assert.equal(summary.mode, 'adopt', 'the summary says which of the two operations ran');
+  assert.equal(summary.cards, 2);
+  assert.ok(lines.some((l) => /no .*board on .* to migrate — adopting/.test(l)), `and so does the log: ${lines.join(' | ')}`);
+  assert.deepEqual(store.listTasks().map((x) => [x.number, x.status]), [[4, 'triage'], [9, 'triage']]);
+  assert.equal(store.getTask(4).title, 'a plain issue');
+  assert.deepEqual(store.getTask(4).blockedBy, [], 'an issue that has never been on a board has no graph to erase');
+  assert.equal(store.createTask({ title: 'the first real card' }).number, 10, 'and the ids carry on from the issues');
+});
+
+test('the adoption path skips pull requests and names its own page ceiling', async (t) => {
+  const s = scratch(t);
+  const ctx = ctxAt(s.root, { repo: 'o/r' });
+  const store = openLocalStore(ctx, { reconcile: false });
+  t.after(() => store.close());
+  const lines = [];
+  // Two full pages of the injected reader: the same shape as the migration's closed-card cap, and
+  // the same answer — a ceiling that is not named reads as the whole repository.
+  const page = (n) => Array.from({ length: 100 }, (_, i) => ({ number: n * 100 + i, title: `issue ${n}.${i}`, body: '', labels: [] }));
+  const summary = await adoptOpenIssues(ctx, {
+    store,
+    log: (l) => lines.push(l),
+    pages: 2,
+    issues: (p) => (p === 1 ? [...page(1).slice(0, 99), { number: 999, title: 'a pull request', pull_request: {} }] : page(2)),
+  });
+  assert.equal(summary.cards, 199, 'the pull request is not an issue and never becomes a card');
+  assert.equal(summary.issues_capped, true);
+  assert.ok(lines.some((l) => /WARNING stopped at 2 page\(s\)/.test(l)), lines.join(' | '));
 });
 
 test('a second import is refused rather than overwriting a board that has been worked', async (t) => {
@@ -408,6 +535,41 @@ test('create, claim, work and finish — the whole card, with nothing on GitHub'
 });
 
 // ---------- the mount probe (§6.3) ----------
+
+test('a malformed result body is a comment on both sides, not a result event nothing can read', (t) => {
+  const { store } = board(t);
+  const card = store.createTask({ title: 'handoff', status: 'running' });
+  const before = store.events({ after: 0, limit: 1000 }).length;
+
+  // The marker with no readable JSON block behind it. The tier files it as a note (the parse
+  // failed); deciding the *event kind* on the marker alone announced a `result` on `hkb watch
+  // --kinds result` and in serve's stream for a handoff `latestResult(n)` would never return.
+  store.addNote(card.number, `${RESULT_MARKER}\n### Result — attempt 1\n\nno json block here`);
+  const events = store.events({ after: 0, limit: 1000 });
+  assert.equal(events.length, before + 1);
+  assert.equal(events.at(-1).kind, 'comment', 'one predicate, and both sides asked it');
+  assert.equal(store.latestResult(card.number), null);
+  assert.equal(store.listNotes(card.number).length, 1, 'and the note is still a note');
+
+  // and a well-formed one is a result on both sides
+  store.addNote(card.number, serializeResultComment({ attempt: 1, summary: 'landed', kind: 'result' }));
+  assert.equal(store.events({ after: 0, limit: 1000 }).at(-1).kind, 'result');
+  assert.equal(store.latestResult(card.number).summary, 'landed');
+});
+
+test('the beat-chain advice names the refs the code actually reads', async (t) => {
+  const s = scratch(t);
+  const ctx = ctxAt(s.root, { repo: 'o/r' });
+  const lines = [];
+  await dropGithubLeftovers(ctx, s.root, {
+    log: (l) => lines.push(l),
+    locks: { list: async () => [], release: async () => false },
+    chains: { list: () => { throw new Error('for-each-ref refused'); }, drop: () => false },
+  });
+  const said = lines.join(' | ');
+  assert.ok(/refs\/kb\/locks\//.test(said), `a beat chain lives on the lock's own ref name: ${said}`);
+  assert.ok(!/refs\/kb\/beats\//.test(said), 'and never under a namespace that does not exist');
+});
 
 test('mountFor answers with the longest mount point that is a prefix of the path', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-mounts-'));
@@ -498,6 +660,40 @@ test('cardRecord refuses to write "no blockers" for a card nobody looked up', ()
     (e) => e.exitCode === 2 && /never looked up/.test(e.message) && /blockers: "all"/.test(e.message),
   );
   assert.deepEqual(cardRecord(task, { blockersKnown: true }).blocked_by, [], 'and writes it when it is a real answer');
+});
+
+test('a closed card whose blockers cannot be read is imported and reported, not a dead end', async (t) => {
+  // The refusal above needs a way through, or the migration dead-ends on the repo it is for. On a
+  // repository WITHOUT the GraphQL blockedBy field there is no read at all that fills a *closed*
+  // card's blockers in — `fetchClosedRecent` never calls the REST fill-in — so refusing there
+  // aborted `hkb init --import` on the first closed card, with a message telling the operator to
+  // re-read with `blockers: "all"`, which cannot fill a closed card's blockers either.
+  const s = scratch(t);
+  const ctx = ctxAt(s.root, { repo: 'o/r' });
+  const gh = new FakeGh({ baseSha: '0'.repeat(40), caps: { blockedByGql: false } });
+  gh.addIssue(kbIssue({ number: 3, title: 'open, and read properly', status: 'ready' }));
+  gh.addIssue(kbIssue({ number: 4, title: 'settled last week', status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', updatedAt: '2026-09-01T00:00:00Z' }));
+  const restore = gh.install();
+  t.after(restore);
+  ctx.repo = { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner };
+
+  const lines = [];
+  const store = openLocalStore(ctx, { reconcile: false });
+  t.after(() => store.close());
+  const summary = await importGithubBoard(ctx, { store, log: (l) => lines.push(l), now: () => new Date('2026-09-03T00:00:00Z') });
+
+  assert.deepEqual(summary.cards, 2, 'the migration completes');
+  assert.deepEqual(summary.unknown_blockers, [4], 'and the summary names every card it could not read');
+  assert.ok(lines.some((l) => /blockers UNKNOWN, not empty/.test(l) && /#4/.test(l)), `said out loud: ${lines.join(' | ')}`);
+  assert.equal(store.git._read().cards.get(4).blockers_unknown, true, 'the branch records that nobody looked, rather than "nothing blocks it"');
+  assert.equal(store.git._read().cards.get(3).blockers_unknown, undefined, 'an open card was read properly and is not marked');
+
+  // and an OPEN card is still a refusal: there a better read exists, and the edges decide whether
+  // the card can ever be dispatched again.
+  assert.throws(
+    () => cardRecord({ number: 9, title: 'x', status: 'ready', kb: {}, blockedBy: [], state: 'OPEN' }, { blockersKnown: false }),
+    (e) => e.exitCode === 2,
+  );
 });
 
 test('a blocker that is not imported is dropped, said out loud, and does not block the card forever', async (t) => {

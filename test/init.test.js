@@ -639,9 +639,36 @@ test('--store github keeps the old behaviour, and an existing board keeps the st
   fs.writeFileSync(path.join(legacy.root, BOARD_FILE), JSON.stringify(cfg, null, 2));
   spawnSync('git', ['branch', '-D', 'kb-board'], { cwd: legacy.root });
   const again = await runInit([], legacy);
-  assert.equal(board(legacy.root).store, 'github', 'a board with no `store` key is on GitHub, and stays there');
+  // The key is NOT written back. `resolveStore` *inferred* `github` here — it did not read it and
+  // nobody chose it — and writing an inference down turns it into a decision nothing can revise:
+  // rule 2 (`storeKind`, the kb-board branch) stops being consulted for good.
+  assert.equal(board(legacy.root).store, undefined, 'an inferred answer is not pinned into board.json');
   assert.equal(branchTip(legacy.root), '', 'nothing created a branch under it');
   assert.ok(again.printed.some((l) => /^store: github/.test(l)));
+
+  // and the case that made it a defect rather than a tidiness point: a legacy board whose branch is
+  // full of cards. Pinning `github` there detached the board from its own branch, permanently.
+  const { openGitTier } = await import('../src/store/git.js');
+  openGitTier(legacy.root).init('default');
+  const withBranch = await runInit([], legacy);
+  assert.equal(board(legacy.root).store, 'local', 'a branch full of cards is a local board, and init agrees with storeKind');
+  assert.ok(withBranch.printed.some((l) => /^store: local/.test(l)), withBranch.printed.join('\n'));
+});
+
+test('--import means the migration even on a board that says github, unless the human says otherwise', async () => {
+  const legacy = await runInit(['--store', 'github']);
+  assert.equal(board(legacy.root).store, 'github');
+  const migrated = await runInit(['--import'], legacy);
+  // `--import` is the migration onto the local store (§6.3). Reading the pinned store first made it
+  // unreachable: the flag silently ran the old GitHub adopt loop instead, and the documented
+  // migration could only be spelled `--store local --import`, which nothing documents.
+  assert.ok(migrated.printed.some((l) => /^--import: migrating this board onto the local store/.test(l)), migrated.printed.join('\n'));
+  assert.equal(board(legacy.root).store, 'local');
+  assert.notEqual(branchTip(legacy.root), '', 'the branch the migration writes');
+
+  // and the human's own flag still wins, because that is a choice about this run
+  const kept = await runInit(['--store', 'github', '--import'], await runInit(['--store', 'github']));
+  assert.ok(!kept.printed.some((l) => /migrating this board onto the local store/.test(l)));
 });
 
 test('--store takes local or github, and says so', async () => {

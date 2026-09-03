@@ -19,7 +19,7 @@ import {
   tallyDeniedTools, deniedToolsFinding, checkDeniedTools,
   CAPABILITIES_CHECK, checkCapabilityMap,
   TOOL_POSTURE_CHECK, checkToolPosture, CARD_GRANTS_CHECK, checkCardGrants, checkRemovedProfiles,
-  STORE_CHECK, BRANCH_CHECK, INDEX_CHECK, MOUNT_CHECK, checkLocalStore, doctor } from '../src/doctor.js';
+  STORE_CHECK, BRANCH_CHECK, INDEX_CHECK, MOUNT_CHECK, checkLocalStore, PATH_OVERLAP_CHECK, doctor } from '../src/doctor.js';
 import { CAPABILITIES, capabilityGrants, effectiveTools, toolPosture } from '../src/model.js';
 import { normalizeCardGrants } from '../src/tasks.js';
 import { setTransport, GhError } from '../src/gh.js';
@@ -1352,5 +1352,30 @@ test('a forge that is not there costs one line, not the whole report', async (t)
   assert.ok(by[MOUNT_CHECK], 'and the mount probe');
   assert.equal(by.github.ok, false, 'the forge half is one finding');
   assert.match(by.github.fix, /everything above was checked locally/);
+
+  // and the check that reads `ctx.cfg` and nothing else is on the local side of that line. It sat
+  // inside `githubChecks`, after the labels call that throws first, so the catch turned it into the
+  // one `bad('github', …)` above and a malformed `dispatch.guards.path_overlap` went unreported —
+  // on a check that needs no network at all. That split exists so a forge failure cannot swallow a
+  // local answer; a local check living on the wrong side of it defeats the split.
+  assert.equal(by[PATH_OVERLAP_CHECK]?.ok, true, `the path-overlap guard answered: ${Object.keys(by).join(', ')}`);
   void root;
+});
+
+test('a malformed path_overlap guard is reported even when the forge is unreachable', async (t) => {
+  const { ctx } = localBoard();
+  const { openGitTier } = await import('../src/store/git.js');
+  openGitTier(ctx).init('default');
+  ctx.repo = { owner: 'o', repo: 'r', nameWithOwner: 'o/r' };
+  ctx.cfg.repo = 'o/r';
+  ctx.cfg.dispatch = { ...ctx.cfg.dispatch, guards: { path_overlap: 'sometimes' } };
+  ctx.json = true;
+  const restore = setTransport(() => { throw new GhError('gh: Not Found (HTTP 404)', { status: 404, kind: 'notfound' }); });
+  t.after(restore);
+
+  let out = '';
+  await doctor(ctx, {}, (s2) => { out += s2; });
+  const by = Object.fromEntries(JSON.parse(out).map((r) => [r.name, r]));
+  assert.equal(by[PATH_OVERLAP_CHECK].ok, false);
+  assert.match(by[PATH_OVERLAP_CHECK].fix, /path_overlap/);
 });

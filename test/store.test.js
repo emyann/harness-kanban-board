@@ -393,8 +393,17 @@ const SCENARIOS = [
       const quoting = `the ${RESULT_MARKER} block was empty, so I am writing it out here`;
       await h.store.addNote(t.number, quoting);
 
+      // And the body that OPENS with the marker but carries no readable block: a half-written
+      // result is not a result — `latestResult` cannot return it, because there is nothing to
+      // parse — so if it is not a note either it is visible in no reader at all. The two drivers
+      // decided this differently until one predicate (`isResultComment`, src/model.js) answered for
+      // both: one kept it as a note, the other dropped it out of every listing.
+      const halfWritten = `${RESULT_MARKER}\n### Result — attempt 1\n\nno json block here`;
+      await h.store.addNote(t.number, halfWritten);
+
       const notes = await h.store.listNotes(t.number);
-      assert.deepEqual(notes.map((n) => n.text), ['a human said this', quoting]);
+      assert.deepEqual(notes.map((n) => n.text), ['a human said this', quoting, halfWritten]);
+      assert.equal(await h.store.latestResult(t.number), null, 'and it is not a result either — one predicate, both answers agreeing');
     },
   },
   {

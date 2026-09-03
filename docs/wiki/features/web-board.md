@@ -11,16 +11,16 @@ covers:
   - path: web/index.html
     sha: 322aa96236ef37657a9a2326b83dc7b480672134
   - path: src/board.js
-    sha: f69569a4ef1ba7e4dabb5af394dddac6ba8d4a1f
+    sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
   - path: src/init.js
-    sha: 70914a43959e7ac6d830fcc24d7e2704d4810293
+    sha: d41dc9ecf44f892d994c175ebad8565cfc0da690
   - path: src/lifecycle.js
     sha: 3d8234ec94517fa40a1fdbef460486d3bf873068
   - path: src/track.js
     sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
   - path: src/model.js
-    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
-generated_at_commit: fb4d64d
+    sha: a0ada59cd3061302ebe8ab640b50d690700803f7
+generated_at_commit: 90132a1
 last_refreshed: 2026-09-03
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
@@ -296,6 +296,13 @@ What a clone cannot do is write. The branch names one owning host, and every
 mutating verb — including the ones the page's drag-and-drop calls — is refused
 on any other with exit 2 naming `hkb init --take-over` (`assertOwningHost`,
 `src/cli.js`; `assertLocalOwner`, `src/store/local.js`).
+
+What a clone *can* do is more than "read the cards", because the guard is on the
+invocation rather than the verb (`invocationWritesBoard`, `src/cli.js`). `hkb
+serve` is not on the writing list at all, so a reader serves the page; `hkb up
+--status` reads pid files and liveness; `hkb dispatch --dry-run` says what a
+tick would decide. `hkb up --serve` is still refused, since it brings a
+dispatcher up beside the server — the reader's way to serve is `hkb serve`.
 
 > **Not reachable yet.** `src/serve.js` reads the board through `fetchBoard`
 > (`src/tasks.js`, the GitHub driver's re-export), not through `openStore`, so

@@ -214,6 +214,16 @@ export class FakeGh {
         return { name: body.name, color: body.color };
       }
     } else if (p === 'issues') {
+      // The repository's issues, board label or not — what `hkb init --import` adopts from, on both
+      // stores. Paginated like the real one, so a test can seed more than a page and assert what a
+      // caller says about the ceiling.
+      if (method === 'GET') {
+        const state = (q.get('state') || 'open').toLowerCase();
+        const all = [...this.issues.values()]
+          .filter((i) => state === 'all' || String(i.state).toLowerCase() === state)
+          .map((i) => ({ ...this.#issueRest(i), created_at: i.createdAt ?? i.updatedAt }));
+        return this.#page(all, q);
+      }
       if (method === 'POST') return this.#issueRest(this.addIssue({ title: body.title, body: body.body, labels: body.labels }));
     } else if (p === 'pulls') {
       // Every issue's seeded `prs` flattened into one list, the shape `openPrsByHead` (src/tasks.js)

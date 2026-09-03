@@ -1224,17 +1224,29 @@ export const DURABLE_TICK_KEYS = ['reconciled', 'reclaimed', 'reaped', 'promoted
  * on the same pass: it is what another host's `hkb init --take-over` reads to tell a board somebody
  * is still ticking from one whose laptop is not coming back.
  */
-async function syncPass(ctx, summary, log) {
+/**
+ * @param {any} ctx
+ * @param {any} summary  the tick's own summary; `{}` for a caller that only wants the stamp
+ * @param {(s: string) => void} [log]
+ */
+export async function syncPass(ctx, summary, log = () => {}) {
   try {
-    // The free question first: on a quiet tick there is nothing to push and nothing to stamp, and
-    // `storeKind` is two `git rev-parse` that buy nothing on a GitHub board.
-    if (!DURABLE_TICK_KEYS.some((k) => (summary?.[k] || []).length)) return;
     const { storeKind } = await import('./store/index.js');
     if (storeKind(ctx) !== 'local') return;
     const { openLocalStore, syncAfterTick } = await import('./store/local.js');
     const store = openLocalStore(ctx, { reconcile: false });
     try {
+      // The stamp is unconditional, and the ordering is the whole fix. **Liveness must not depend
+      // on whether the tick decided anything**: a dispatcher idling on a quiet board is precisely
+      // the case another host's `hkb init --take-over` has to be able to see, and gating the stamp
+      // on `DURABLE_TICK_KEYS` meant an idle loop stopped re-stamping, its liveness expired after
+      // `HOST_LIVE_MS`, and host B took a board host A was actively ticking — with no `--force` and
+      // no warning. `markDispatcher` throttles itself to one commit per `HOST_LIVE_MS / 3`, so
+      // running it every tick costs a `_read()` of a tree already in memo on all but a few ticks.
       store.markDispatcher();
+      // The push, on the other hand, is only worth making when something was decided: the remote
+      // copy is a backup of the branch, and a tick that moved no commit has nothing to back up.
+      if (!DURABLE_TICK_KEYS.some((k) => (summary?.[k] || []).length)) return;
       await syncAfterTick(ctx, { store, log });
     } finally { store.close(); }
   } catch (e) {
@@ -1269,6 +1281,22 @@ export async function loop(ctx, { interval, max, profiles = null, log, sleeper =
     if (wake) wake();
   };
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
+  // SIGUSR1 is the local store's nudge: `node:sqlite` has no change notification, so a verb that
+  // wrote the board signals the dispatcher instead (`index.wake()`, src/store/sqlite.js) and the
+  // loop ticks now rather than at the end of the interval.
+  //
+  // **Installing this handler is what makes the signal a nudge at all.** Node's default action for
+  // SIGUSR1 is to start the inspector, so before there was a listener here every `hkb finish` on a
+  // local board opened `Debugger listening on ws://127.0.0.1:9229/…` on the dispatcher — the one
+  // process that must not stop — and woke nothing. It only ends the *sleep*: a signal arriving
+  // during a tick is dropped on purpose, because that tick is already about to read the board.
+  const nudge = () => {
+    if (stopping || !wake) return;
+    log('woken by a board write');
+    if (timer) { clearTimeout(timer); timer = null; }
+    wake();
+  };
+  process.on('SIGUSR1', nudge);
   for (;;) {
     const started = Date.now();
     // Once a day, before the tick: the two things nobody tells the operator of a loop that has been
@@ -1277,16 +1305,23 @@ export async function loop(ctx, { interval, max, profiles = null, log, sleeper =
     // both are silent on a failed probe, so an offline loop runs exactly as it did without them.
     await tokenExpiryNotice(ctx, log);
     await versionNotice(ctx, log);
+    let summary = null;
     try {
       const s = await tick(ctx, { max, children, profiles, log });
+      summary = s;
       const n = (k) => s[k].length;
       log(`tick: reconciled ${n('reconciled')} reclaimed ${n('reclaimed')} reaped ${n('reaped')} promoted ${n('promoted')} claimed ${n('claimed')} tracks ${s.tracks.filter((x) => x.ok).length} guarded ${n('guarded')} held ${n('held')} skipped ${n('skipped')}`);
-      await syncPass(ctx, s, log);
-      if (s.fatal) { fatal = s.fatal; break; }
     } catch (e) {
       if (e instanceof GhError && e.kind === 'network') log('GitHub unreachable — reclaim clock paused, retrying next tick');
       else log(`tick failed: ${e.message}`);
     }
+    // Outside the try, and for the same reason the stamp is outside `DURABLE_TICK_KEYS`: **liveness
+    // is about the process, not about the tick**. A loop whose ticks are all failing is still a loop
+    // holding this board, and leaving the stamp inside meant a run of failures — a rate limit, a
+    // flaky network — expired this host's claim on the branch while it was very much still here.
+    // `syncPass` catches its own failures, so it cannot turn a survivable tick into a dead loop.
+    await syncPass(ctx, summary || {}, log);
+    if (summary?.fatal) { fatal = summary.fatal; break; }
     if (stopping) break;
     const current = stamp();
     if (current !== loaded) { upgrade = { loaded, current }; break; }
@@ -1296,6 +1331,9 @@ export async function loop(ctx, { interval, max, profiles = null, log, sleeper =
     if (stopping) break;
   }
   dropLock();
+  // The nudge outlives nothing: a loop that has stopped must not leave a SIGUSR1 listener behind,
+  // or the next thing that signals this process gets a handler with no sleep to end.
+  process.off('SIGUSR1', nudge);
   if (upgrade) {
     const e = new Error(`hkb: this loop is running ${upgrade.loaded}, the installed hkb is ${upgrade.current} — restarting. Running workers are untouched: the next dispatcher adopts or reclaims them.`);
     e.exitCode = 4;

@@ -55,13 +55,18 @@ export function storeKind(ctx) {
     e.exitCode = 2;
     throw e;
   }
-  if (ctx && typeof ctx === 'object' && KINDS.get(ctx) === 'local') return 'local';
+  const cached = ctx && typeof ctx === 'object' ? KINDS.get(ctx) : null;
+  if (cached) return cached;
   const kind = localBoardExists(ctx) ? 'local' : 'github';
-  // Only `local` is remembered, and deliberately: a branch that exists does not stop existing while
-  // a process runs, so that answer cannot go stale — while `github` is exactly the answer `hkb init`
-  // and `hkb init --import` turn into `local` under their own feet. Caching the negative made an
-  // init that had just created the branch go on believing the board was on GitHub.
-  if (kind === 'local' && ctx && typeof ctx === 'object') KINDS.set(ctx, kind);
+  // **Both** answers are remembered. `local` cannot go stale — a branch that exists does not stop
+  // existing while a process runs — and `github` was left uncached out of a worry that `hkb init`
+  // creates the branch under its own feet, which is real and is already handled: init calls
+  // `forgetStore(ctx)` the moment it does. Leaving the negative uncached meant every board that
+  // predates the `store` key — the common one, and this repository's own — re-spawned two `git
+  // rev-parse` per board-writing verb, per `gc.sweep` and per dispatcher tick, to reach an answer
+  // that could only ever come back `github`. Anything else that creates the branch mid-process
+  // invalidates the same way init does.
+  if (ctx && typeof ctx === 'object') KINDS.set(ctx, kind);
   return kind;
 }
 

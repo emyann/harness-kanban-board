@@ -7,9 +7,9 @@ audience: [dev]
 read_when: "writing a verb that reads or writes board state, adding a store driver, or wondering why tasks.js and lock.js are two lines long"
 covers:
   - path: src/store/index.js
-    sha: 84551d05f93f745140a7322fed6ddedc9484850a
+    sha: 918495a206540318480f3b0ce7cd0a8f559ae874
   - path: src/store/github.js
-    sha: c7868a5dfbf4188ade5bf135ad321c57f18e76e5
+    sha: 57a69a45c3a7998c74f53442a6756873f198f8af
   - path: src/forge.js
     sha: 6fb1fd64643a3762f54b9c68c3b51b03c199e017
   - path: src/tasks.js
@@ -18,7 +18,7 @@ covers:
     sha: cfb7eaf1a75003826cf610ee136a08dc0d4ff281
   - path: src/board.js
     sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
-generated_at_commit: 6af026a
+generated_at_commit: 90132a1
 last_refreshed: 2026-09-03
 related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-and-leases, concepts/board-protocol]
 ---
@@ -36,7 +36,21 @@ related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-
 back to "does this repository have a `kb-board` branch". Nothing else in hkb
 branches on the store; a caller that needs to force one — `hkb init --import`,
 which reads GitHub and writes local — passes `openStore(ctx, {kind})`. A new
-board is local as of A6; an existing board keeps what it has.
+board is local as of A6; an existing board keeps what it has. Both answers are
+memoized per context and dropped by `forgetStore(ctx)`, which `hkb init` calls
+because it is the one thing that creates the branch mid-process — `storeKind` is
+on the path of every writing verb, every `gc.sweep` and every tick, and the
+`github` answer is the one a board that predates the key gives forever.
+
+`hkb init` never writes back an answer it merely *inferred*: the `store` key
+appears when the human passed `--store`, when the board is new, or when it was
+already there. Pinning an inference detached a board with a live `kb-board`
+branch from that branch permanently, because rule 2 then stopped being asked.
+
+A verb that writes is refused on a host that is not `board.host`
+(`assertOwningHost`) — and the test is on the *invocation*, not the verb name:
+`invocationWritesBoard` (`src/cli.js`) lets `hkb up --status` and `hkb dispatch
+--dry-run` through on a clone, since neither writes anything.
 
 ## Why a seam and not a rewrite
 

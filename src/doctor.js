@@ -1497,6 +1497,12 @@ export async function doctor(ctx, flags, log) {
   checkCapabilityMap(ctx, { ok, warn });
   // and what the board decided about tools at all: the posture, the ceiling, the MCP answer
   checkToolPosture(ctx, { ok });
+  // the path-overlap guard's own config. It reads `ctx.cfg` and nothing else, and it belongs on this
+  // side of the line for exactly the reason the line exists: inside `githubChecks` a stale `repo` or
+  // a logged-out `gh` threw at the very first labels call, the catch turned the whole half into one
+  // `bad('github', …)`, and a malformed `dispatch.guards.path_overlap` went unreported on a check
+  // that needs no network at all.
+  checkPathOverlapGuard(ctx, { ok, bad });
   // and whether this shell is carrying a worker's identity it should not have (#150)
   checkEnvLeak(ctx, { warn });
 
@@ -1557,8 +1563,6 @@ async function githubChecks(ctx, flags, { ok, warn, bad }) {
 
   // the last step — silent unless the board asked GitHub to take it (`merge.mode: "auto"`)
   await checkMergePolicy(ctx, { ok, bad });
-
-  checkPathOverlapGuard(ctx, { ok, bad });
 
   // Projects v2 mirror — silent unless board.json links a project (the feature is off by default)
   await checkProject(ctx, { ok, bad, warn });

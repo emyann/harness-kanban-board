@@ -967,8 +967,18 @@ export async function init(ctx, flags, log) {
   }
   const { harnesses, profiles } = resolveProfiles(flags);
   const existing = loadBoard(root);
-  const { localBoardExists } = await import('./store/local.js');
-  const store = resolveStore(flags, existing, localBoardExists(ctx));
+  const { localBoardExists, BOARD_BRANCH } = await import('./store/local.js');
+  let store = resolveStore(flags, existing, localBoardExists(ctx));
+  // `--import` is the migration onto the local store (docs/local-first.md §6.3), and it has to mean
+  // that on the board it exists to move: a GitHub board. Reading the resolved store first made it
+  // unreachable — a board pinned (or inferred) `github` routed `--import` to the old adopt loop and
+  // said nothing, so the documented migration could only be run as `--store local --import`, which
+  // nothing documents. The human's own `--store github` still wins, because that is a choice about
+  // this run rather than a value read off a file.
+  if (flags.import && store === 'github' && flags.store === undefined) {
+    store = 'local';
+    log(`--import: migrating this board onto the local store (the \`${BOARD_BRANCH}\` branch in this repo). \`hkb init --store github --import\` keeps the board on GitHub and adopts open issues into triage instead`);
+  }
   if (flags['take-over'] && store !== 'local') {
     const e = /** @type {any} */ (new Error('--take-over moves the `kb-board` branch to this host, and this board is on the GitHub store — there is no owning host to move.'));
     e.exitCode = 2;
@@ -1014,7 +1024,19 @@ export async function init(ctx, flags, log) {
   cfg.default_branch = repo.defaultBranch;
   cfg.board = board;
   cfg.skill_version = skillVersion; // null when linked — a link cannot go stale
-  cfg.store = store; // `openStore` reads this and nothing else decides (docs/local-first.md §6.4)
+  // The store key is written when it is a **decision**, never when it is an inference. `hkb init`
+  // pinning what `resolveStore` merely worked out turned every re-init of an older board into a
+  // permanent `"store": "github"` — including one whose `kb-board` branch was full of cards, where
+  // `storeKind`'s rule 2 had been answering `local` and now never would again. So: the human's own
+  // `--store`, a fresh board (whose default *is* the decision), and a board that already carries the
+  // key stay accurate; a board that predates the key is left for rule 2 to keep answering.
+  if (flags.store !== undefined || !existing || existing.store !== undefined) {
+    cfg.store = store; // `openStore` reads this and nothing else decides (docs/local-first.md §6.4)
+  } else if (store === 'local') {
+    // Except here: `--import` has just decided to move this board, and the branch it creates would
+    // answer rule 2 on its own — but saying so in the file is what makes the move legible.
+    cfg.store = store;
+  }
   cfg.profiles = boardProfiles(existing?.profiles, profiles, (p) => log(`profile "${p}" has no built-in launch template — add one to ${path.relative(root, boardFile(root))}`));
   repairLaunchHooks(cfg, log);
   saveBoard(root, cfg);

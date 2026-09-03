@@ -24,7 +24,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { storeRoot, hostId, runGit, gitSays as short, GIT_SHA_RE as SHA_RE, normalizeCardGrants } from '../board.js';
 import {
-  DEFAULT_KB, L, STATUSES, emptyRun, parseResultComment, serializeBodyBlock,
+  DEFAULT_KB, L, STATUSES, emptyRun, parseResultComment, isResultComment, serializeBodyBlock,
   RESULT_MARKER, RUN_MARKER, statusOf, agentOf,
 } from '../model.js';
 
@@ -805,18 +805,20 @@ export class GitTier {
    * result through the same call the GitHub store posts a comment with — so a body carrying the
    * result marker is parsed and filed as a result instead, which is what `latestResult` reads.
    *
-   * The test is `startsWith`, and the parse has to succeed. `includes` filed *any* note quoting the
-   * marker — a human writing "the `<!-- hkb:result -->` block was empty" — as a result: the note
-   * vanished from `listNotes`, and `latestResult` handed the next worker `{at, url: null}` as its
-   * parent's handoff, because `parseResultComment` had returned null and the spread of null is `{}`.
-   * The GitHub store filters its comments with `startsWith` for the same reason.
+   * The test is `isResultComment` (src/model.js) — the marker *and* a parse that succeeds — and it
+   * is a shared predicate rather than a local one so that no caller can classify the same body
+   * differently. `includes` filed *any* note quoting the marker — a human writing "the
+   * `<!-- hkb:result -->` block was empty" — as a result: the note vanished from `listNotes`, and
+   * `latestResult` handed the next worker `{at, url: null}` as its parent's handoff, because
+   * `parseResultComment` had returned null and the spread of null is `{}`. The GitHub store filters
+   * its comments with `startsWith` for the same reason.
    */
   addNote(n, text) {
     const id = Number(n);
     const at = this.now().toISOString();
     const body = String(text ?? '');
     const note = { id: null, at, actor: null, text: body };
-    const parsed = body.startsWith(RESULT_MARKER) ? parseResultComment(body) : null;
+    const parsed = isResultComment(body) ? parseResultComment(body) : null;
     this.commit((t) => {
       need(t.cards, id, this.root, this.branch);
       const file = runFileOf(t.runs, id);

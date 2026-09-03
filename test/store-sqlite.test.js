@@ -876,7 +876,7 @@ test('trimEvents: keep 0 keeps none of them', (t) => {
   assert.deepEqual(idx.events({ limit: 0 }), [], 'and a caller asking for no rows gets no rows');
 });
 
-test('locate: an explicit file decides the root, so wake() looks where the index lives', (t) => {
+test('locate: an explicit file decides the root, so wake() looks where the index lives', async (t) => {
   const root = tmpRoot(t);
   // `openIndex(undefined, {file})` — no ctx object at all — used to fall through to `storeRoot()`
   // against `process.cwd()`, so `root()` and `wake()`'s pid file pointed at a different directory
@@ -884,13 +884,42 @@ test('locate: an explicit file decides the root, so wake() looks where the index
   const idx = openIndex(undefined, { file: indexFileIn(gitDirOf(root)) });
   OPEN.get(root).push(idx);
   assert.equal(idx.root(), root);
-  fs.writeFileSync(path.join(root, '.kanban', 'dispatch.pid'), `${process.pid}\n`);
-  const seen = [];
-  const on = () => seen.push(1);
-  process.on('SIGUSR1', on);
-  t.after(() => process.off('SIGUSR1', on));
+
+  // A *real* other process, not this one: the signal has to reach something. The child installs a
+  // SIGUSR1 handler and writes a marker, which is what proves the nudge arrived rather than merely
+  // being sent — before this, nothing in the tree listened for SIGUSR1 at all and node's default
+  // action for it is to start the inspector.
+  const ready = path.join(root, 'ready');
+  const marker = path.join(root, 'woken');
+  const child = spawn(process.execPath, [
+    '-e', `const fs = require("node:fs");
+      process.on("SIGUSR1", () => { fs.writeFileSync(process.argv[2], "woken"); process.exit(0); });
+      fs.writeFileSync(process.argv[1], "ready");
+      setTimeout(() => process.exit(1), 10000);`,
+    ready, marker,
+  ], { stdio: 'ignore' });
+  t.after(() => { try { child.kill('SIGKILL'); } catch { /* already gone */ } });
+  fs.writeFileSync(path.join(root, '.kanban', 'dispatch.pid'), `${child.pid}\n`);
+
+  // The handler has to be installed before the signal, or SIGUSR1's default action ends the child.
+  await until(() => fs.existsSync(ready));
   assert.equal(idx.wake(), true, 'the pid file is where the index is');
+  await until(() => fs.existsSync(marker));
+  assert.equal(fs.readFileSync(marker, 'utf8'), 'woken', 'and the signal reached the process it names');
+
+  fs.writeFileSync(path.join(root, '.kanban', 'dispatch.pid'), `${process.pid}\n`);
+  assert.equal(idx.wake(), false, 'and a store never signals its own process');
 });
+
+/** Spin until `f()`, or fail the test — a signal is delivered asynchronously. */
+async function until(f, ms = 10_000) {
+  const stop = Date.now() + ms;
+  while (Date.now() < stop) {
+    if (f()) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  assert.fail(`waited ${ms}ms for ${f}`);
+}
 
 test('storeGitDir ignores an inherited GIT_DIR — the index is this repo\'s, not the hook\'s', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-gitdir-'));

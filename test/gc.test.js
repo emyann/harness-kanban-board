@@ -496,6 +496,32 @@ test('gc on a local board sweeps worktrees, branches and files — and not comme
   assert.match(h.text(), /nothing to sweep on a local board/);
 });
 
+test('the sweeps that can only be empty on a local board say so instead of reporting a clean 0', async (t) => {
+  // The same rule as the two below, applied to the two above them. A sweep whose answer comes from
+  // GitHub is either skipped on a local board or it says why it found nothing; what is not allowed
+  // is running structurally empty and reporting `0` as though there had been nothing to do.
+  //   · agent worktrees: removed when *their PR* is merged or closed, and `GitTier.toTask` hands
+  //     back `prs: []` for every card, so `prByBranch` was always null, every worktree was skipped,
+  //     and the checkouts accumulated forever behind a `0 removed`.
+  //   · track branches: one `gh api` request per gc and per gc_every_ticks tick for an answer that
+  //     is structurally always empty, plus a noisy "skipped" line from its own catch.
+  const h = harness();
+  t.after(h.cleanup);
+  h.ctx.cfg.store = 'local';
+  const tier = openGitTier(h.ctx);
+  tier.init('default');
+  const kept = worktree(h.root, 'agent-abc123', 'kb/7');
+  const restore = setTransport(() => { throw new Error('gc reached GitHub on a local board'); });
+  t.after(restore);
+
+  const stats = await sweep(h.ctx, { yes: true, log: h.log });
+  assert.equal(stats.track_branches, 0);
+  assert.match(h.text(), /track branches: not swept on a local board/);
+  assert.match(h.text(), /agent worktrees: 1 not swept on a local board/);
+  assert.match(h.text(), /worktree remove/, 'and the message says what to do instead');
+  assert.equal(exists(kept), true, 'the worktree is still there, and the human now knows it');
+});
+
 test('gc on a genuinely local board never touches GitHub', async (t) => {
   // The defect this is for: `sweep` opened with an unconditional `fetchBoard` and only branched on
   // `storeKind` several sweeps later. On a board that is REALLY local — a kb-board branch and no

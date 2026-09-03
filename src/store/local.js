@@ -22,10 +22,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { storeRoot, hostId, runGit, runGitAsync, gitSays, GIT_SHA_RE, readState, writeState, normalizeCardGrants } from '../board.js';
-import { RESULT_MARKER, RUN_MARKER, DEFAULT_KB, L, emptyRun, parseResultComment } from '../model.js';
+import { RESULT_MARKER, RUN_MARKER, DEFAULT_KB, L, emptyRun, parseResultComment, isResultComment } from '../model.js';
 import { openGitTier, BOARD_BRANCH, BOARD_REF } from './git.js';
 import { openIndex } from './sqlite.js';
 import { openGithubStore, listComments, listLocks, release, listBeatChains, dropBeatChain, blockersOf, blockersKnown } from './github.js';
+import { rest } from '../gh.js';
 
 export { BOARD_BRANCH, BOARD_REF };
 
@@ -225,9 +226,18 @@ export class LocalStore {
   latestResult(n) { return this.git.latestResult(n); }
   parentResults(task) { return this.git.parentResults(task); }
 
-  /** A note is a comment; a worker's handoff arriving through the same call is a result (`git.js`). */
+  /**
+   * A note is a comment; a worker's handoff arriving through the same call is a result (`git.js`).
+   *
+   * The kind is decided with `isResultComment` — the marker *and* a parse that succeeds — because
+   * that is the predicate the tier files the body with. Deciding it here on the marker alone made a
+   * malformed result body a `result` event on `hkb watch --kinds result` and in serve's stream,
+   * announcing a handoff that the tier had stored as a note and `latestResult(n)` would never
+   * return. Two code paths answering "is this a result" differently is the whole defect; there is
+   * one predicate now, in `src/model.js`, and both ask it.
+   */
   addNote(n, text) {
-    const kind = String(text ?? '').startsWith(RESULT_MARKER) ? 'result' : 'comment';
+    const kind = isResultComment(text) ? 'result' : 'comment';
     return this._durable(kind, Number(n), () => this.git.addNote(n, text), { op: kind });
   }
 
@@ -250,28 +260,21 @@ export class LocalStore {
 
   /**
    * The host `board.json` names, or null on a board that has never been written.
+   *
+   * A checkout with no branch answers `null` rather than throwing: a board nobody has created is
+   * nobody's, which is the same answer `assertLocalOwner` gives, and the two guards must not
+   * disagree about a board one of them would pass and the other refuse.
+   *
+   * There is deliberately no `assertOwner()` method beside this. The refusal has **two** layers and
+   * naming a third that nothing called was worse than having two: `assertOwningHost` (src/cli.js,
+   * before the verb spends anything) and `GitTier._assertOwner` (inside the write, where the branch
+   * actually moves). A store method in between would have been a third copy of the sentence with no
+   * caller to keep it honest.
    */
-  owner() { return this.git.board().host ?? null; }
+  owner() { return this.git.tip() ? this.git.board().host ?? null : null; }
 
   /** Is this host the one the branch says writes this board? */
   owns() { const o = this.owner(); return !o || o === this.host; }
-
-  /**
-   * Refuse a mutating verb on a host that is not the board's.
-   *
-   * The tier already refuses the *write* (`_assertOwner`), and this is the same answer one step
-   * earlier, so a dispatcher spends no API call and spawns no worker before finding out. `verb` only
-   * shapes the sentence.
-   */
-  assertOwner(verb = 'this') {
-    const owner = this.owner();
-    if (!owner || owner === this.host) return;
-    throw fail(
-      `${verb === 'this' ? 'this board' : `\`hkb ${verb}\``} needs the host that owns the board: `
-      + `${this.branch} says "${owner}" and this is "${this.host}" — the branch has one writer (docs/local-first.md §6.2). `
-      + 'Read the board here with `hkb list`, or move it to this host with `hkb init --take-over`.',
-    );
-  }
 
   /**
    * Move `board.host` to this host.
@@ -468,6 +471,13 @@ const short = (sha) => (sha ? String(sha).slice(0, 7) : 'nothing');
 /**
  * Is another host's dispatcher stamp fresh enough to call it live? `null` when the stamp is this
  * host's, missing, unparseable or old.
+ *
+ * **A stamp in the future is live, not absent.** This guard decides whether `--take-over` may move a
+ * board out from under a running dispatcher, so the two clocks it compares are on *different hosts*
+ * and ordinary skew — a laptop a minute ahead, an RTC that drifted — is the normal case, not the
+ * pathological one. Reading a future stamp as "no live dispatcher" failed the guard open in exactly
+ * the direction it must not: two hosts writing one branch. A negative age is clamped to zero, so a
+ * stamp from next year reads as freshly written and the human is told to stop the other loop.
  * @returns {{host: string, at: string, age: number}|null}
  */
 export function liveDispatcher(board, host, now = new Date()) {
@@ -475,8 +485,8 @@ export function liveDispatcher(board, host, now = new Date()) {
   if (!d || !d.host || d.host === host) return null;
   const at = Date.parse(d.at || '');
   if (!Number.isFinite(at)) return null;
-  const age = now.getTime() - at;
-  if (age < 0 || age > HOST_LIVE_MS) return null;
+  const age = Math.max(0, now.getTime() - at);
+  if (age > HOST_LIVE_MS) return null;
   return { host: d.host, at: d.at, age };
 }
 
@@ -606,6 +616,10 @@ export const IMPORT_WINDOW_DAYS = 90;
 /** GitHub's page ceiling, and the whole of what `listClosedRecent` can answer in one query. */
 export const CLOSED_PAGE = 100;
 
+/** The REST page size and how many pages the adoption path will walk before it names the ceiling. */
+export const ISSUE_PAGE = 100;
+export const ISSUE_PAGES = 10;
+
 /**
  * A card record for the branch, from a task in `fetchBoard`'s shape.
  *
@@ -614,18 +628,30 @@ export const CLOSED_PAGE = 100;
  * `kb`, and the labels that are not columns in `labels`. A card imported here has to read back
  * through `getTask()` exactly like one `createTask()` made, which is what the import test asserts.
  */
-export function cardRecord(task, { at = new Date().toISOString(), blockersKnown: known = true, keep = null } = {}) {
+export function cardRecord(task, { at = new Date().toISOString(), blockersKnown: known = true, keep = null, onUnknown = 'refuse' } = {}) {
   // An empty `blockedBy` on a card nobody looked up means "not asked", never "nothing blocks it"
   // (`blockersKnown`, src/store/github.js) — and the branch has no third value for it. Writing the
   // guess would erase the board's dependency graph silently and permanently, on the one operation
-  // nobody re-runs, so this refuses instead.
+  // nobody re-runs.
+  //
+  // `onUnknown` is what makes that a rule rather than a dead end. A refusal with no way through is
+  // a different silent failure — louder and equally unusable — and the import hit exactly that on
+  // every repo without the GraphQL `blockedBy` field, where a *closed* card's blockers cannot be
+  // filled in by any read at all. So there are two answers, and the caller says which is honest for
+  // the card it is holding: `refuse` where a better read exists (an open card: read it again with
+  // `blockers: "all"`), `drop` where none does — and `drop` is only ever chosen where the edge
+  // cannot gate anything, with the import summary naming every card it was chosen for. What is
+  // never allowed is writing `[]` and calling it an answer.
   if (!known) {
-    throw fail(
-      `cannot import card #${task?.number}: its blockers were never looked up, and writing "no blockers" `
-      + 'would erase the dependency graph of a board that cannot be re-imported. Read the board with '
-      + '`listTasks({states: ["OPEN"], blockers: "all"})`, which fills them in on a repo without the '
-      + 'GraphQL blocked-by field, and import that.',
-    );
+    if (onUnknown !== 'drop') {
+      throw fail(
+        `cannot import card #${task?.number}: its blockers were never looked up, and writing "no blockers" `
+        + 'would erase the dependency graph of a board that cannot be re-imported. Read the board with '
+        + '`listTasks({states: ["OPEN"], blockers: "all"})`, which fills them in on a repo without the '
+        + 'GraphQL blocked-by field, and import that.',
+      );
+    }
+    return { ...cardRecord({ ...task, blockedBy: [] }, { at, keep }), blockers_unknown: true };
   }
   const kb = normalizeCardGrants({ ...DEFAULT_KB, ...(task.kb || {}) });
   /** @type {any} */ const rest = {};
@@ -676,10 +702,20 @@ export function cardRecord(task, { at = new Date().toISOString(), blockersKnown:
  * card's "re-running `init` never touches an existing branch or index"), because a second import
  * over a board that has since been worked would overwrite live state with GitHub's stale copy.
  *
+ * **`--import` is two operations, and this is where they part.** Migrating a kb board onto the local
+ * store and adopting a repository's issues onto a new one are different jobs that have always shared
+ * the flag, and the migration answered for both: its `listTasks` filters on `kb:board:<slug>`, so a
+ * repository with three hundred *unlabelled* issues and no kb board at all imported zero cards,
+ * logged `0 open card(s)` and created an empty board — while the README promised the command "pulls
+ * your existing open issues onto the board as triage". So the dispatch is on the thing that actually
+ * distinguishes them: whether there is a kb board here to migrate. No cards on the board query means
+ * there is nothing to migrate, and the adoption is what the operator asked for. The summary's `mode`
+ * says which ran, and so does the log.
+ *
  * @param {any} ctx
- * @param {{store?: any, from?: any, days?: number, log?: (s: string) => void, now?: () => Date, force?: boolean, leftovers?: any}} [opts]
+ * @param {{store?: any, from?: any, days?: number, log?: (s: string) => void, now?: () => Date, force?: boolean, leftovers?: any, issues?: any}} [opts]
  */
-export async function importGithubBoard(ctx, { store = null, from = null, days = IMPORT_WINDOW_DAYS, log = () => {}, now = () => new Date(), force = false, leftovers = {} } = {}) {
+export async function importGithubBoard(ctx, { store = null, from = null, days = IMPORT_WINDOW_DAYS, log = () => {}, now = () => new Date(), force = false, leftovers = {}, issues = null } = {}) {
   const s = store || openLocalStore(ctx, { reconcile: false });
   if (s.git.tip() && !force) {
     throw fail(
@@ -708,6 +744,11 @@ export async function importGithubBoard(ctx, { store = null, from = null, days =
   const tasks = [...open, ...closed]
     .filter((t, i, all) => all.findIndex((x) => x.number === t.number) === i)
     .sort((a, b) => a.number - b.number);
+  // Nothing on the board query is not "an empty migration": it is a repository that has no kb board
+  // to migrate, and `--import` there means the other operation. Decided before the first commit, so
+  // the two never half-run over each other.
+  if (!tasks.length) return adoptOpenIssues(ctx, { store: s, log, now, issues });
+  log(`import: migrating the \`${L.board(ctx?.board || 'default')}\` board on ${ctx?.cfg?.repo || 'GitHub'} onto ${s.branch}`);
   log(`import: ${open.length} open card(s) and ${closed.length} closed in the last ${days} day(s)`);
   if (capped) {
     log(`import: WARNING the closed cards are one page of ${CLOSED_PAGE}, most recently updated first — anything closed before `
@@ -717,8 +758,28 @@ export async function importGithubBoard(ctx, { store = null, from = null, days =
   // A card's blockers are a real answer only where somebody looked them up. `listTasks` says so for
   // the open cards; `listClosedRecent` fills nothing in of its own, so a closed card's list is real
   // only when it rode the board query (the GraphQL `blockedBy` field).
+  //
+  // On a repo *without* that field there is no read that fills a closed card's blockers in — the
+  // REST fill-in runs inside `fetchBoard` and `fetchClosedRecent` never calls it — so refusing the
+  // import there dead-ends the only migration path this card exists to provide. The two answers are
+  // not symmetric and that is why the policy is per card, not per board:
+  //   · an open card whose blockers are unknown is a **refusal**: a better read exists (that is
+  //     what `blockers: 'all'` above is), and its edges gate whether the card can ever dispatch.
+  //   · a closed card's are **dropped and reported**: a closed card is settled, nothing schedules
+  //     it, and its own `blocked_by` gates nothing on the migrated board. What it blocks is the
+  //     other direction and is unaffected — that edge lives on the *blocked* card.
   const closedFilled = blockersOf(closedPage).filled || !!ctx?.caps?.blockedByGql;
-  const knownFor = (t) => (String(t.state || 'OPEN').toUpperCase() === 'CLOSED' ? closedFilled : blockersKnown(open, t));
+  const isClosed = (t) => String(t.state || 'OPEN').toUpperCase() === 'CLOSED';
+  const knownFor = (t) => (isClosed(t) ? closedFilled : blockersKnown(open, t));
+  const policyFor = (t) => (isClosed(t) ? 'drop' : 'refuse');
+  /** Closed cards imported with their blockers marked unknown rather than guessed at. */
+  const unknownBlockers = tasks.filter((t) => !knownFor(t) && policyFor(t) === 'drop').map((t) => Number(t.number));
+  if (unknownBlockers.length) {
+    log(`import: ${unknownBlockers.length} closed card(s) imported with their blockers UNKNOWN, not empty — `
+      + `this repository has no GraphQL blockedBy field and no read fills a closed card's blockers in. `
+      + `They are recorded as \`"blockers_unknown": true\` on the card and gate nothing (a closed card is settled): `
+      + `${unknownBlockers.slice(0, 20).map((n) => `#${n}`).join(', ')}${unknownBlockers.length > 20 ? ` +${unknownBlockers.length - 20} more` : ''}`);
+  }
 
   const keep = new Set(tasks.map((t) => Number(t.number)));
   /** @type {{card: number, blocker: number}[]} */ const droppedEdges = [];
@@ -737,18 +798,25 @@ export async function importGithubBoard(ctx, { store = null, from = null, days =
   s.git.commit((t) => {
     t.board = t.board || { version: 1, slug, host: s.host, paused_at: null, paused_by: null, next_id: 1, settings: {} };
     t.board.next_id = Math.max(Number(t.board.next_id) || 1, next);
-    for (const task of tasks) t.cards.set(Number(task.number), cardRecord(task, { at, blockersKnown: knownFor(task), keep }));
+    for (const task of tasks) t.cards.set(Number(task.number), cardRecord(task, { at, blockersKnown: knownFor(task), onUnknown: policyFor(task), keep }));
   }, `hkb: import ${tasks.length} card(s) from ${ctx?.cfg?.repo || 'GitHub'}`, { allowMissing: true, allowForeignHost: true });
 
   // The run records, one paginated comments read per card. Read them all first, then land one commit:
   // an await inside a `commit()` mutation would run again on every CAS retry.
   /** @type {Map<number, any>} */ const runs = new Map();
+  /** @type {number[]} */ const truncatedComments = [];
   let withRuns = 0; let results = 0; let notes = 0;
   for (const [i, task] of tasks.entries()) {
     const n = Number(task.number);
     log(`import: run record ${i + 1}/${tasks.length} (#${n})`);
     const { run } = await gh.loadRun(n);
     const comments = await listComments(ctx, n);
+    // The third ceiling, found by sweeping for the shape rather than the instance: `listComments`
+    // stops after five pages of 100 and says nothing, so a long-running card's oldest notes would
+    // be missing from the branch with the summary calling the card imported. Named, not fixed here
+    // — paging further is `listComments`'s decision to change, and the operator can go and read
+    // the issue. What is not acceptable is the silence.
+    if (comments.length >= 500) truncatedComments.push(n);
     const file = { ...emptyRun(), ...run, results: [], notes: [] };
     for (const c of comments) {
       const body = String(c.body || '');
@@ -773,12 +841,85 @@ export async function importGithubBoard(ctx, { store = null, from = null, days =
   const summary = {
     cards: tasks.length, open: open.length, closed: closed.length, runs: withRuns, results, notes,
     next_id: Math.max(next, 1), tip: s.git.tip(), branch: s.branch, indexed: loaded.counts?.tasks ?? 0,
-    closed_capped: capped, closed_page: CLOSED_PAGE, dropped_blockers: droppedEdges, ...dropped,
+    closed_capped: capped, closed_page: CLOSED_PAGE, dropped_blockers: droppedEdges,
+    unknown_blockers: unknownBlockers, comments_capped: truncatedComments, mode: 'migrate', ...dropped,
   };
+  if (truncatedComments.length) {
+    log(`import: WARNING ${truncatedComments.length} card(s) had more comments than one read returns (500), so their oldest notes stayed on GitHub: `
+      + truncatedComments.map((n) => `#${n}`).join(', '));
+  }
   log(`import: ${summary.cards} card(s), ${summary.runs} run record(s), ${summary.results} result(s), ${summary.notes} note(s) on ${s.branch}`);
   if (droppedEdges.length) log(`import: ${droppedEdges.length} blocker edge(s) dropped because the blocking card was not imported (listed above)`);
   log(`import: deleted ${dropped.locks} lock ref(s) on the remote and ${dropped.chains} local beat chain(s)`);
   return summary;
+}
+
+/**
+ * The other half of `--import`: a repository's open issues onto a **new** local board, as triage.
+ *
+ * This is what the README has always promised the flag does ("pulls your existing open issues onto
+ * the board as triage"), and on the GitHub store it is a label write per issue. Here there are no
+ * labels to write: a card is a file on the branch, so adoption is one commit for the whole set.
+ *
+ * A pull request is not an issue and never becomes a card. Blockers are written as `[]` and that is
+ * a real answer rather than a guess — an issue that has never been on a kb board has no board
+ * dependency graph to erase, which is exactly what makes it different from the migration's closed
+ * cards; nothing was looked up because there was nothing to look up.
+ *
+ * @param {any} ctx
+ * @param {{store?: any, log?: (s: string) => void, now?: () => Date, issues?: any, pages?: number}} [opts]
+ */
+export async function adoptOpenIssues(ctx, { store = null, log = () => {}, now = () => new Date(), issues = null, pages = ISSUE_PAGES } = {}) {
+  const s = store || openLocalStore(ctx, { reconcile: false });
+  const at = now().toISOString();
+  const slug = ctx?.board || 'default';
+  const read = issues || ((page) => rest('GET', `repos/${ctx?.cfg?.repo}/issues?state=open&per_page=${ISSUE_PAGE}&page=${page}`));
+  log(`import: there is no \`${L.board(slug)}\` board on ${ctx?.cfg?.repo || 'GitHub'} to migrate — adopting this repository's open issues into triage instead`);
+
+  /** @type {any[]} */ const found = [];
+  let more = false;
+  for (let page = 1; page <= pages; page++) {
+    const batch = (await read(page)) || [];
+    for (const i of batch) if (!i.pull_request) found.push(i);
+    if (batch.length < ISSUE_PAGE) { more = false; break; }
+    more = page === pages;
+  }
+  // Said out loud rather than reported as the whole repository: the same shape as the migration's
+  // closed-card cap. `hkb init --import` is re-runnable *here* — the second run adopts nothing,
+  // because the branch already exists and the import refuses — so the ceiling has to name the fix.
+  if (more) log(`import: WARNING stopped at ${pages} page(s) of ${ISSUE_PAGE} open issues (${found.length} adopted) — this repository has more, and they are NOT on the board`);
+
+  const tasks = found.map((i) => ({
+    number: Number(i.number),
+    title: String(i.title || ''),
+    body: String(i.body || ''),
+    status: 'triage',
+    agent: null,
+    kb: {},
+    needsHuman: false,
+    blockedBy: [],
+    labels: (i.labels || []).map((l) => (typeof l === 'string' ? l : l?.name)).filter(Boolean),
+    state: 'OPEN',
+    stateReason: null,
+    createdAt: i.created_at ?? at,
+    updatedAt: i.updated_at ?? at,
+  })).sort((a, b) => a.number - b.number);
+
+  const next = tasks.reduce((m, t) => Math.max(m, t.number), 0) + 1;
+  s.git.commit((t) => {
+    t.board = t.board || { version: 1, slug, host: s.host, paused_at: null, paused_by: null, next_id: 1, settings: {} };
+    t.board.next_id = Math.max(Number(t.board.next_id) || 1, next);
+    for (const task of tasks) t.cards.set(task.number, cardRecord(task, { at }));
+  }, `hkb: adopt ${tasks.length} open issue(s) from ${ctx?.cfg?.repo || 'GitHub'} into triage`, { allowMissing: true, allowForeignHost: true });
+  const loaded = s.open();
+
+  log(`import: adopted ${tasks.length} open issue(s) into triage on ${s.branch}`);
+  return {
+    mode: 'adopt', cards: tasks.length, open: tasks.length, closed: 0, runs: 0, results: 0, notes: 0,
+    next_id: Math.max(next, 1), tip: s.git.tip(), branch: s.branch, indexed: loaded.counts?.tasks ?? 0,
+    issues_capped: more, issue_page: ISSUE_PAGE, closed_capped: false, closed_page: CLOSED_PAGE,
+    dropped_blockers: [], unknown_blockers: [], locks: 0, chains: 0,
+  };
 }
 
 /**
@@ -806,7 +947,11 @@ export async function dropGithubLeftovers(ctx, root, { log = () => {}, locks = n
   } catch (e) { log(`import: the lock refs on the remote were left alone (${/** @type {Error} */ (e).message}) — they mean nothing to a local board; delete them with \`git push origin --delete\` if they bother you`); }
   try {
     for (const c of C.list(root)) { if (C.drop(root, c.n, c.k)) dropped.chains++; }
-  } catch (e) { log(`import: the local beat chains were left alone (${/** @type {Error} */ (e).message}) — they are local refs under refs/kb/beats/ and nothing reads them now`); }
+  // `refs/kb/locks/`, which is where `listBeatChains`/`dropBeatChain` actually read and write
+  // (src/store/github.js): a beat chain is a *local* commit chain on the lock's own ref name, not a
+  // ref namespace of its own. The message said `refs/kb/beats/`, and an operator following it found
+  // nothing at all — advice that names a path that does not exist is worse than no advice.
+  } catch (e) { log(`import: the local beat chains were left alone (${/** @type {Error} */ (e).message}) — they are local refs under refs/kb/locks/ (\`git -C ${root} for-each-ref refs/kb/locks/\`) and nothing reads them now`); }
   return dropped;
 }
 

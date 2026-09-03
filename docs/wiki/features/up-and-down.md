@@ -9,16 +9,16 @@ covers:
   - path: src/up.js
     sha: 015e0ff4ffa48e110400065f3d496db7ebd4b730
   - path: src/model.js
-    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
+    sha: a0ada59cd3061302ebe8ab640b50d690700803f7
   - path: src/board.js
     sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
   - path: src/dispatch.js
-    sha: 4fbf0d410edd19916fb7ee27ed77648da12f994d
+    sha: 01386a289473b99acbaef34f259040271f3b9e61
   - path: src/serve.js
     sha: fe50acf9c37de567f1a90fd802e682ab746f6d50
   - path: src/doctor.js
-    sha: 2aa97ad82ea530151019ecacb89112607d9163c0
-generated_at_commit: b6b4cd7
+    sha: 7cbbeb3b764af3b555a8c9afcbb0612747b56dbe
+generated_at_commit: 90132a1
 last_refreshed: 2026-09-03
 related: [architecture/overview, features/web-board, concepts/roles-and-seats, architecture/dispatcher-tick]
 ---
@@ -185,7 +185,14 @@ The fix is in both halves, and both were needed:
   ends the loop *there* rather than buying it another full tick. A tick already in
   flight still finishes — that is deliberate, a half-written claim is worse than a
   slow stop — so the log distinguishes `stopping now` from `stopping after this
-  tick`.
+  tick`. The same resolver is what **SIGUSR1** ends: that is the local store's
+  nudge, sent by `index.wake()` when a verb writes the board, so the loop ticks
+  now rather than at the end of the interval. Installing that handler is not
+  optional politeness — node's default action for SIGUSR1 is to *start the
+  inspector*, so before the loop listened for it every `hkb finish` on a local
+  board opened a debugger on the dispatcher and woke nothing. A signal arriving
+  mid-tick is dropped (that tick is already about to read the board), the loop
+  removes its handler when it stops, and `wake()` never signals its own process.
 - **`down` does not lie, and does not delete.** Each process drops its own pid
   file on exit (`acquireLoopLock`, `src/dispatch.js:969-970`; `claimServePid`,
   `src/serve.js:132-134`); `down` waits, bounded by `stopWaitMs` (two of the
@@ -364,7 +371,20 @@ Two things ride the end of a tick when the board is on the local store
   the shape `hkb doctor` reports as a broken index, and skipping it put a
   permanent warning on a perfectly healthy board.
 
-`DURABLE_TICK_KEYS` is what "decided something" means, and it is every key of
+  **It is not gated on anything.** Unlike the push, the stamp runs before the
+  `DURABLE_TICK_KEYS` question and outside the try that catches a failing tick,
+  because *liveness is about the process, not about what it decided*. An idle
+  dispatcher on a quiet board, and one whose ticks are all failing on a rate
+  limit, are exactly the cases another host has to be able to see. When the
+  stamp was gated, both stopped re-stamping, their liveness expired after
+  `HOST_LIVE_MS`, and `--take-over` on the other machine walked into a board
+  that was ticking right now with no `--force` and no warning. `liveDispatcher`
+  clamps a *future* stamp to age zero for the same reason: the two clocks are on
+  different hosts, and ordinary skew read as "nobody is ticking" fails the guard
+  open in the one direction that matters.
+
+`DURABLE_TICK_KEYS` is what "decided something" means — for the **push**, and
+only for the push. It is every key of
 the tick's summary that is a list of decisions — `tracks` and `spawn_failed`
 and `track_conflicts` included. A track-root dispatch does `saveRun` and
 `setStatus(t, 'running')` and reports it under `tracks` alone, so a board driven

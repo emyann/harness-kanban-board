@@ -325,10 +325,34 @@ export async function sweep(ctx, { yes = false, days = 14, memo = null, log = /*
   const stats = { worktrees: 0, branches: 0, track_branches: 0, comments: 0, chains: 0, files: 0, pending: 0, skipped: 0, days, applied: !!yes, store: kind };
 
   const wt = sweepWorktrees(ctx, { finished, yes, label, log });
+  const none = () => ({ removed: 0, pending: 0, skipped: 0, failed: 0 });
+
+  // The **rule** the two sweeps below share with the two at the bottom of this function: a sweep
+  // whose answer comes from GitHub is either skipped on a local board or it says why it found
+  // nothing. What is not allowed is running structurally empty and reporting `0` as a result.
+  //
+  // A track branch lives on the forge and is listed with a `gh api` call; a local board has none of
+  // its own, so that call is a request per gc — and per `gc_every_ticks` tick — for an answer that
+  // can only be empty, plus a "skipped" line from its own catch on a checkout with no repo behind it.
+  const tb = kind === 'local' ? none() : await sweepTrackBranches(ctx, { finished: finishedHere, yes, log });
+  if (kind === 'local') log('track branches: not swept on a local board — a track branch lives on the forge and this board does not keep one');
+
+  // The agent worktrees are the harder half and the honest answer is to say so. This sweep removes
+  // an `agent-*` worktree once *its PR* is merged or closed, and on a local board `GitTier.toTask`
+  // hands back `prs: []` for every card — pull requests are the forge's and the forge is not the
+  // store (§6.4). So `prByBranch` was always null, every worktree was skipped, and `hkb gc --yes`
+  // reported `0 removed` on a checkout quietly accumulating them forever. Reporting nothing removed
+  // as though nothing needed removing is the shape this whole review is about.
   const prByBranch = (n, branch) => (byNumber.get(n)?.prs || []).find((p) => p.headRefName === branch) || null;
-  const aw = sweepAgentWorktrees(ctx, { prByBranch, yes, log });
+  const aw = kind === 'local' ? none() : sweepAgentWorktrees(ctx, { prByBranch, yes, log });
+  if (kind === 'local') {
+    const waiting = listWorktrees(ctx.root).filter((w) => agentWorktreeNode(w)).length;
+    if (waiting) {
+      log(`agent worktrees: ${waiting} not swept on a local board — this sweep removes one when its pull request is merged or closed, and a local card carries no pull request `
+        + `(the forge is not the store). Remove them by hand with \`git -C ${ctx.root} worktree remove <path>\`, or track them on the forge and re-run gc there`);
+    }
+  }
   const br = sweepBranches(ctx, { finished: finishedHere, yes, log });
-  const tb = await sweepTrackBranches(ctx, { finished: finishedHere, yes, log });
   stats.worktrees = wt.removed + aw.removed;
   stats.branches = br.removed;
   stats.track_branches = tb.removed;
