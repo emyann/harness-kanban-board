@@ -2002,8 +2002,7 @@ export function kbVarsIn(environ) {
  * a `workspace: "worktree"` launch is handed that directory as its cwd (`spawnWorker`). A
  * `mode: "process"` Claude profile also passes `--worktree`, but where its *hooks* run is the
  * harness's business, not ours — and its environment dies with the process, so it can never be the
- * source of a leak. A `trigger` profile's worker runs in an Actions checkout that is nobody's
- * worktree. Both are left exactly as they were.
+ * source of a leak. It is left exactly as it was.
  */
 export function worksInWorktree(profile) {
   return profile?.mode === 'claude-bg' || profile?.workspace === 'worktree';

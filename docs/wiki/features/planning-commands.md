@@ -7,11 +7,11 @@ audience: [dev]
 read_when: "adding or renaming a /kanban:* command, changing what hkb init writes into .claude/, or wondering why decomposition is not a CLI verb"
 covers:
   - path: src/init.js
-    sha: aee5eed4dcc544f9a6fe81c7273f96432aaf1048
+    sha: c905bab09d496c7b7fe2aaa0c92d2109fdd30432
   - path: src/doctor.js
-    sha: 4b49003dc44abe98a35f1c47b9472427e0ab6fba
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
   - path: skills/kanban/SKILL.md
-    sha: a6ffdcca307a58e568a02ff17cba8a00ef3e7caa
+    sha: 386f0eebb9da5374092734e492e109f8f9ceed4e
   - path: commands/specify.md
     sha: 4e307a13e4fd097f8581c312f9dca12868e1a62e
   - path: commands/decompose.md
@@ -20,8 +20,8 @@ covers:
     sha: 4fc2dc2db984033fe8801e8d28b50e8e68fefddc
   - path: scripts/smoke-pack.mjs
     sha: 2c56112698f348f50eb581891d91bc41ac2d8157
-generated_at_commit: bcd1dc5
-last_refreshed: 2026-09-01
+generated_at_commit: 2a3a7e3
+last_refreshed: 2026-09-02
 related: [features/backlog-grooming, features/operator-seat, architecture/overview, decisions/adr-004-roles-and-adoption, features/tracks]
 ---
 

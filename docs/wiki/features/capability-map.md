@@ -7,23 +7,23 @@ audience: [dev]
 read_when: "adding or binding a capability intent, or changing how a launch's tool list is derived"
 covers:
   - path: src/model.js
-    sha: 4e63d8cb11f662324cd2f2d4888b471e980db053
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/board.js
-    sha: 28238d1670e4c6c0807b0113adb47a8a40069b37
+    sha: 42bd1bb173651d9109208a702564cfc3e5e51410
   - path: src/context.js
-    sha: aa62c340280ec085020e25c9936c7806a2420a55
+    sha: 0eecc3f46fa4d71d3fa12598b474c76e0bc7733d
   - path: src/doctor.js
-    sha: 9625ca70f81eb363002a01afbe515b540ee81d9a
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
   - path: src/dispatch.js
-    sha: 18a622a26529bfb3b7a16cacc44f1079eee4cfb8
+    sha: 26a3197921f09d3ef2f4a21f1858c1cc6b5e7fd6
   - path: src/track.js
     sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
   - path: src/hook.js
-    sha: e47513833b60b70d069be5e9b768486e5bf3f9e9
+    sha: 97b9054fbe1769059b882e4779f8279deaf184d8
   - path: skills/kanban/SKILL.md
     sha: 386f0eebb9da5374092734e492e109f8f9ceed4e
-generated_at_commit: 1590a97
-last_refreshed: 2026-09-01
+generated_at_commit: 2a3a7e3
+last_refreshed: 2026-09-02
 related: [concepts/capability-portability, features/harness-profiles, features/operator-seat]
 ---
 

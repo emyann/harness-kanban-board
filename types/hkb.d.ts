@@ -39,8 +39,6 @@ declare global {
     pid?: number | null;
     /** launched as a background job rather than a foreground process */
     bg?: boolean;
-    /** launched on a runner that is not this host */
-    remote?: boolean;
     /** the worktree path this attempt was given */
     wt?: string;
     /** relative path of the attempt's log file */

@@ -7,13 +7,13 @@ audience: [dev]
 read_when: "touching kb.tools/kb.mcp on a card, a profile's tool posture or MCP list, or anything that decides what a worker may run"
 covers:
   - path: src/model.js
-    sha: 76768c101bd61f923359547dbf6f8a8dfd64732a
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/tasks.js
-    sha: 6cbae757123f219fc49887566f1f647936dcc88e
+    sha: 95ce07de549ce2c22222d43f36967006cdd372f8
   - path: src/doctor.js
-    sha: 5abc1e90778b7ac61fab595b66146c00e965927d
-generated_at_commit: 6c9f65f
-last_refreshed: 2026-09-01
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
+generated_at_commit: 2a3a7e3
+last_refreshed: 2026-09-02
 related: [concepts/capability-portability, features/denied-tools-ledger, features/harness-profiles]
 ---
 

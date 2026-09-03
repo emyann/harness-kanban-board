@@ -13,7 +13,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { parseYaml } from './yaml.js';
-import { actionsFiles } from '../src/init.js';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 const REL = path.join('.github', 'workflows', 'release.yml');
@@ -65,10 +64,6 @@ test('a release is a `v*` tag and nothing else — no cron, no manual publish', 
 test('two publishes of one tag never overlap, and one in flight is never cancelled', () => {
   assert.equal(DOC.concurrency['cancel-in-progress'], false);
   assert.match(DOC.concurrency.group, /github\.ref/);
-});
-
-test('`hkb init --with-actions` does not own this file — regenerating never touches a release', () => {
-  assert.ok(!actionsFiles().some((f) => f.rel === REL));
 });
 
 // ---------- the gates ----------

@@ -969,7 +969,6 @@ test("hkb's PreToolUse policy is inert on a claude-bg profile, and the line says
       claude: { mode: 'claude-bg', launch: ['claude', '--bg'] },
       'claude-track': { mode: 'claude-bg', launch: ['claude', '--bg'] },
       'claude-p': { mode: 'process', launch: ['claude', '-p'] },
-      'claude-action': { mode: 'trigger', launch: ['gh', 'workflow', 'run'] },
       codex: { mode: 'process', launch: ['codex', 'exec'] },
     },
   };
@@ -977,7 +976,6 @@ test("hkb's PreToolUse policy is inert on a claude-bg profile, and the line says
 
   assert.deepEqual(layers.filter((l) => l.live).map((l) => l.profile), ['claude-p']);
   assert.match(layers.find((l) => l.profile === 'claude').why, /never receives KB_TASK/);
-  assert.match(layers.find((l) => l.profile === 'claude-action').why, /triggered run/);
   assert.match(layers.find((l) => l.profile === 'codex').why, /not Claude Code/);
 
   const s = sink();

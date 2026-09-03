@@ -11,14 +11,14 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/tasks.js
-    sha: 6cbae757123f219fc49887566f1f647936dcc88e
+    sha: 95ce07de549ce2c22222d43f36967006cdd372f8
   - path: src/lock.js
-    sha: e9920df913b5e6cd8a648dad6e679cf4a41a6a1a
+    sha: 22fb690e6b201b74b4201bd67ad8ad950bdaeb2d
   - path: src/board.js
-    sha: 6255369a80ea8d77ca11a6e5e2e79d1ebffa6755
+    sha: 42bd1bb173651d9109208a702564cfc3e5e51410
   - path: package.json
-    sha: 615fdaa001b1621fb6eccddaf30e9830208d7e7b
-generated_at_commit: 7fd6cba
+    sha: efdedd05f3d4cbc3981999ac4a7a95bcd36904f7
+generated_at_commit: 2a3a7e3
 last_refreshed: 2026-09-02
 related: [decisions/adr-005-control-plane, decisions/adr-004-roles-and-adoption, architecture/overview, features/web-board, features/up-and-down]
 ---

@@ -7,26 +7,26 @@ audience: [dev]
 read_when: "touching src/track.js, isTrackRoot, the track branch of the dispatcher tick, the claude-track profile's allow-list, or the runner brief"
 covers:
   - path: src/model.js
-    sha: 4e63d8cb11f662324cd2f2d4888b471e980db053
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/track.js
     sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
   - path: src/dispatch.js
-    sha: 18a622a26529bfb3b7a16cacc44f1079eee4cfb8
+    sha: 26a3197921f09d3ef2f4a21f1858c1cc6b5e7fd6
   - path: src/init.js
-    sha: ef82ab4c5a872e8bfda06227c8ae1ae9812eeaa3
+    sha: c905bab09d496c7b7fe2aaa0c92d2109fdd30432
   - path: src/board.js
-    sha: 28238d1670e4c6c0807b0113adb47a8a40069b37
+    sha: 42bd1bb173651d9109208a702564cfc3e5e51410
   - path: src/gc.js
-    sha: 04d99352d5029211f2a3c9ae8d591bcbab4aa366
+    sha: 5c9f92377d47e7bca75c32fc675dfa50e617e7a5
   - path: src/tasks.js
-    sha: 8542b5c7d4905306e774b95db8b8dcd4390b2748
+    sha: 95ce07de549ce2c22222d43f36967006cdd372f8
   - path: src/doctor.js
-    sha: 9625ca70f81eb363002a01afbe515b540ee81d9a
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
   - path: src/lock.js
-    sha: e9920df913b5e6cd8a648dad6e679cf4a41a6a1a
+    sha: 22fb690e6b201b74b4201bd67ad8ad950bdaeb2d
 related: [architecture/overview, features/harness-profiles, features/review-loop, concepts/worker-identity, decisions/adr-004-roles-and-adoption]
-generated_at_commit: 1590a97
-last_refreshed: 2026-09-01
+generated_at_commit: 2a3a7e3
+last_refreshed: 2026-09-02
 ---
 
 # Tracks — the second engine, and why it became an orchestrator

@@ -529,28 +529,6 @@ test('a card sent back by the reviewer is claimed, not guarded, and the attempt 
   assert.match(h.log(), /#7: claimed attempt 3 .*continuing PR #42/);
 });
 
-test('a trigger-mode continuation records continues_pr only — no checkout, no continues_branch', async (t) => {
-  // trigger mode (claude-action) never runs the worker itself: the real checkout happens elsewhere,
-  // in a fresh `actions/checkout` this dispatcher never sees, so it must not claim one of its own (#162)
-  const h = harness({ profiles: { claude: { mode: 'trigger', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] } } });
-  t.after(h.cleanup);
-  const run = runWith([
-    { attempt: 1, ended_at: ago(600), outcome: 'review_requested', pr: 42 },
-    { attempt: 2, profile: 'reviewer', ended_at: ago(30), outcome: 'changes_requested', synthetic: true },
-  ]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
-
-  const s = await h.tick();
-
-  assert.deepEqual(s.claimed.map((c) => c.number), [7]);
-  assert.ok(!fs.existsSync(path.join(h.root, worktreePath('kb-7-3'))), 'no worktree was made for a trigger-mode continuation');
-  const last = h.gh.runOf(7).attempts.at(-1);
-  assert.equal(last.continues_pr, 42);
-  assert.equal(last.continues_branch, undefined, 'the real checkout happens elsewhere; this run record must not claim one');
-  assert.equal(last.wt, undefined);
-  assert.match(h.log(), /#7: claimed attempt 3 .*continuing PR #42/, 'the claim log line still names the PR it continues');
-});
-
 test('a claim that could not take the PR branch still runs, and says so', async (t) => {
   const h = harness(); // the board root is a plain temp directory: no git, so no checkout is possible
   t.after(h.cleanup);

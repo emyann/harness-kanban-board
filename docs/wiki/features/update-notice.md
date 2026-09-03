@@ -9,16 +9,16 @@ covers:
   - path: src/registry.js
     sha: a9bee54d56c6b9351bc4e6cab3d0a4d29d0c422f
   - path: src/doctor.js
-    sha: 4b49003dc44abe98a35f1c47b9472427e0ab6fba
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
   - path: src/dispatch.js
-    sha: 6ceade7f5440ab4194c477cc1bb2cc2900b52632
+    sha: 26a3197921f09d3ef2f4a21f1858c1cc6b5e7fd6
   - path: src/board.js
-    sha: 955f2c7cfc908fe46ebf264e0cb4c8e722c7a79c
+    sha: 42bd1bb173651d9109208a702564cfc3e5e51410
   - path: src/init.js
-    sha: aee5eed4dcc544f9a6fe81c7273f96432aaf1048
+    sha: c905bab09d496c7b7fe2aaa0c92d2109fdd30432
 related: [architecture/overview, features/auto-merge, gotchas/long-lived-process-rot]
-generated_at_commit: bcd1dc5
-last_refreshed: 2026-09-01
+generated_at_commit: 2a3a7e3
+last_refreshed: 2026-09-02
 ---
 
 # Telling an adopter their hkb is old
@@ -89,9 +89,8 @@ weeks is exactly the install most likely to be stale, and its operator is not
 running doctor. It is called outside `tick()` because it read-modify-writes
 `.kanban/state.json`, and it never throws, so a tick cannot be lost to it.
 
-An Actions dispatcher needs neither: the generated workflow installs
-`npm i -g hkb-cli` unpinned on every run (`actionsFiles`, `src/init.js`), so it
-is current by construction — and it runs a single tick, not the loop.
+A one-shot `hkb dispatch` (no `--loop`) needs neither: it runs a single tick and
+exits, and whoever schedules it is the one who keeps the install current.
 
 ## Why there is no `hkb update`
 

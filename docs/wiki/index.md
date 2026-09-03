@@ -47,7 +47,7 @@
 - decisions/adr-001-github-native-backend: GitHub Issues + native dependencies + ref locks won over MCP-first and repo-native designs; stacked PRs rejected for board sequencing.
 - decisions/adr-002-zero-npm-dependencies: The CLI ships with zero npm dependencies; presentation may use Node built-ins only. What would justify revisiting.
 - decisions/adr-003-npm-trusted-publishing: Releases publish via npm trusted publishing (OIDC) from release.yml only; no npm token exists anywhere.
-- features/harness-profiles: The shipped profiles (claude, claude-p, claude-track, claude-action, copilot-cli, codex): modes, permissions, models, and what each harness can and cannot do.
+- features/harness-profiles: The shipped profiles (claude, claude-p, claude-track, copilot-cli, codex): modes, permissions, models, and what each harness can and cannot do.
 - gotchas/github-api-quirks: 422 'already exists' means held, ref GETs prefix-match into arrays, 304s are free, GITHUB_ACTIONS env reroutes gh — the traps the code already survived.
 - gotchas/long-lived-process-rot: The #61 outage: a 90-minute-old loop 404ing on every claim while a fresh process succeeded — why caches are per-tick and the loop exits 4.
 

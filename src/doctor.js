@@ -8,7 +8,7 @@ import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun, o
 import { L, STATUSES, SAFE_BUILTINS, capabilityGrants, effectiveTools, toolPosture, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren, branchTaskNumber, denialDisplayTool, DENIAL_KINDS, mcpVisibilityDiagnosis, mcpGrantedTo } from './model.js';
 import { resolvedIdentity } from './hook.js';
 import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName, listTrackBranches } from './lock.js';
-import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, harnessHookCommand, actionsFiles, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
+import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, harnessHookCommand, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
 import { latestVersion } from './registry.js';
 import { checkProject } from './projects.js';
 import { mcpServersFromTranscript } from './stats.js';
@@ -156,37 +156,7 @@ export function checkServe(ctx, { ok, warn }) {
   warn('serve', 'no server running', 'hkb up --serve');
 }
 
-/**
- * A `trigger` profile is a launch that only asks Actions to do the work — so the workflow it names
- * has to exist, and it only ever runs from the default branch. Nothing here can check the secrets:
- * `gh secret list` needs admin, and their absence is reported by the workflow itself.
- */
-export function checkActions(ctx, { ok, warn }) {
-  const triggers = Object.entries(ctx.cfg?.profiles || {}).filter(([, p]) => p?.mode === 'trigger');
-  if (!triggers.length) return;
-  const files = actionsFiles().map((f) => f.rel);
-  const missing = files.filter((f) => !fs.existsSync(path.join(ctx.root, f)));
-  if (missing.length) return warn('actions workflows', `missing ${missing.join(', ')}`, 'hkb init --with-actions');
-  const tracked = spawnSync('git', ['ls-files', '--error-unmatch', ...files], { cwd: ctx.root, encoding: 'utf8' }).status === 0;
-  tracked
-    ? ok('actions workflows', `${files.join(' · ')} (profiles ${triggers.map(([n]) => n).join(', ')})`)
-    : warn('actions workflows', `${files.join(' · ')} are not committed — Actions only runs workflows on the default branch`, 'git add .github/workflows && commit, then push');
-}
-
 export const PERMS_CHECK = 'worker permissions';
-/**
- * The one generated file that freezes an allow-list, named by the generator so it cannot drift.
- * Rendered on first use, not at import: `actionsFiles()` fills both workflow templates, and every
- * `hkb` invocation — `list`, `show`, a hook firing on every tool call — paid for that.
- */
-let workerWorkflowFile = null;
-const WORKER_WORKFLOW_FILE = () => (workerWorkflowFile ??= actionsFiles().map((f) => f.rel).find((f) => /worker-claude/.test(f)));
-
-/** The `--allowedTools "…"` list baked into the generated worker workflow; null when it has none. */
-export function workflowAllowedTools(contents) {
-  const m = /--allowedTools\s+"([^"]*)"/.exec(String(contents || ''));
-  return m ? m[1].split(',').map((s) => s.trim()).filter(Boolean) : null;
-}
 
 const nameSome = (list, n = 4) => list.slice(0, n).join(', ') + (list.length > n ? ` +${list.length - n} more` : '');
 
@@ -195,14 +165,13 @@ const nameSome = (list, n = 4) => list.slice(0, n).join(', ') + (list.length > n
  * `--allowedTools` — and under `--permission-mode dontAsk` the launch DENIES rather than prompts, so
  * the stricter one wins outright. hkb ships a list that covers `SAFE_BUILTINS`; what this catches is
  * a *frozen copy* of an older one, which no default change can reach: a profile that pins
- * `allowed_tools` in board.json, and the `--allowedTools` line `hkb init --with-actions` bakes into
- * the generated worker workflow. Both keep denying `cd`, `export`, `command`, `env` — commands hkb's
- * own policy calls safe — until someone regenerates them (#138).
+ * `allowed_tools` in board.json. It keeps denying `cd`, `export`, `command`, `env` — commands hkb's
+ * own policy calls safe — until someone rewrites it (#138).
  *
  * Local files only, so it runs before the first API call. Silent on a board with no allow-list at
  * all (a Codex-only board: its sandbox is the whole policy, so there is nothing to fall behind).
  */
-export function checkWorkerPermissions(ctx, { ok, warn }, { read = (p) => fs.readFileSync(p, 'utf8'), exists = (p) => fs.existsSync(p) } = {}) {
+export function checkWorkerPermissions(ctx, { ok, warn }) {
   const lists = [];
   const board = path.relative(ctx.root, boardFile(ctx.root));
   for (const [name, p] of Object.entries(ctx.cfg?.profiles || {})) {
@@ -220,12 +189,6 @@ export function checkWorkerPermissions(ctx, { ok, warn }, { read = (p) => fs.rea
         ? `drop "allowed_tools" from the ${name} profile in ${board} to take hkb's own list`
         : `add ${nameSome(missing.map((c) => `Bash(${c} *)`), 3)} to "allowed_tools" on the ${name} profile in ${board} — it is not one of hkb's own profiles, so there is no default to fall back to`,
     });
-  }
-  const file = path.join(ctx.root, WORKER_WORKFLOW_FILE());
-  if (exists(file)) {
-    let baked = null;
-    try { baked = workflowAllowedTools(read(file)); } catch { /* unreadable: checkActions owns that */ }
-    if (baked) lists.push({ where: `the generated ${WORKER_WORKFLOW_FILE()}`, missing: uncoveredBuiltins(baked), fix: 'hkb init --with-actions' });
   }
   if (!lists.length) return null;
   const stale = lists.filter((l) => l.missing.length);
@@ -1030,8 +993,8 @@ export const POLICY_CHECK = 'permission policy';
  * hook files and enforce with their own flags), the launch is `claude --bg` (the session daemon was
  * started long before, with an environment of its own, so `KB_TASK` never arrives — the Stop hook
  * recovers by reading the `kb-<n>-<k>` checkout name, but a checkout says which *task* a session is,
- * never which profile, and hkb's policy with no profile would deny a worker `npm test`), or the
- * launch only triggers a run elsewhere, which configures itself. In all three the launch's own
+ * never which profile, and hkb's policy with no profile would deny a worker `npm test`), or no
+ * PreToolUse hook is configured here at all. In all three the launch's own
  * `--allowedTools`/`--allow-tool`/`--sandbox` flags are the whole policy — which is a real answer,
  * not a hole, and the point of saying it is that an operator debugging a denial knows where to look.
  *
@@ -1043,9 +1006,6 @@ export const POLICY_CHECK = 'permission policy';
  */
 export function policyLayers(cfg, { preTool = false } = {}) {
   return Object.entries(cfg?.profiles || {}).map(([name, p]) => {
-    // order matters: a `trigger` launch is `gh workflow run`, but what it starts may well be Claude
-    // Code — the reason its policy is elsewhere is the run, not the binary this host would spawn.
-    if (p?.mode === 'trigger') return { profile: name, live: false, why: 'the triggered run brings its own settings' };
     if (p?.mode === 'claude-bg') return { profile: name, live: false, why: 'a `claude --bg` session never receives KB_TASK' };
     if ((p?.launch || [])[0] !== 'claude') return { profile: name, live: false, why: 'not Claude Code' };
     if (!(preTool || (p.launch || []).includes(HOOK_SETTINGS_VAR))) return { profile: name, live: false, why: 'no PreToolUse hook is configured here' };
@@ -1063,8 +1023,7 @@ export const MODE_CHECK = 'permission mode';
  * background worker to answer one. The attempt does not fail — it hangs, silently, until
  * `max_runtime` reclaims it, which reads as a slow harness rather than a missing flag.
  *
- * Only launches that spawn Claude Code itself are asked: `claude-action` runs `gh workflow run`, and
- * the flags of the run it triggers live in the workflow file, not here.
+ * Only launches that spawn Claude Code itself are asked: another harness's flags are its own.
  *
  * `dontAsk` is not the only flag that turns a prompt into a policy: `--permission-mode
  * bypassPermissions` and the older `--dangerously-skip-permissions` both skip the prompt too (#159),
@@ -1437,7 +1396,6 @@ export async function doctor(ctx, flags, log) {
   }
   checkSkill(ctx, { ok, warn });
   checkHarnesses(ctx, { ok, warn, bad });
-  checkActions(ctx, { ok, warn });
   const claudeSkill = path.join(ctx.root, '.claude', 'skills', 'kanban');
   fs.existsSync(claudeSkill) ? ok('claude skill link', '.claude/skills/kanban') : warn('claude skill link', 'missing', 'hkb init');
   checkCommands(ctx, { ok, warn });

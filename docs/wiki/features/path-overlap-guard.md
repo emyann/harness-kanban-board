@@ -7,13 +7,13 @@ audience: [dev]
 read_when: "touching the path_overlap guard, dispatch.guards.path_overlap, attemptIdle, or why two cards did or did not run in parallel"
 covers:
   - path: src/model.js
-    sha: 022ed7b17c5debc59265f8a1627f82386864de00
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/dispatch.js
-    sha: 6ceade7f5440ab4194c477cc1bb2cc2900b52632
+    sha: 26a3197921f09d3ef2f4a21f1858c1cc6b5e7fd6
   - path: src/doctor.js
-    sha: 4b49003dc44abe98a35f1c47b9472427e0ab6fba
-generated_at_commit: bcd1dc5
-last_refreshed: 2026-09-01
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
+generated_at_commit: 2a3a7e3
+last_refreshed: 2026-09-02
 related: [features/tracks, features/review-loop, concepts/worker-identity]
 ---
 

@@ -18,7 +18,7 @@ import { gc } from './gc.js';
 import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, formatDenials, resumeCommand, activePrGuard, isTrackRoot, groomBoard, boardSummary, computeReady, pathOverlapGuard, GROOM_LEVELS, parsePriorityFlag, parseScheduledAtFlag } from './model.js';
 
 /** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
-const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'triage-only', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'with-actions', 'mermaid', 'serve', 'off', 'on', 'help']);
+const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'triage-only', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'mermaid', 'serve', 'off', 'on', 'help']);
 
 export function parseArgs(argv) {
   const flags = {};
@@ -182,7 +182,7 @@ export function terminalArgv(verb, number, p, { board, attempt } = {}) {
 
 const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issues
 
-  setup       init [--board slug] [--profiles a,b] [--harness copilot|codex] [--with-actions] [--mcp] [--import]
+  setup       init [--board slug] [--profiles a,b] [--harness copilot|codex] [--mcp] [--import]
                    [--no-hook] [--shared-hooks] [--no-labels] [--project <number|new>]
                    --no-labels + --repo owner/name writes every local file and sends nothing (no gh, no network)
                    the Stop/PreToolUse hooks ride the worker launch (claude --settings), so no settings file is
@@ -514,9 +514,8 @@ export async function main(argv) {
       if (run.attempts.length) {
         process.stdout.write(`\nattempts (failures ${run.failures}):\n`);
         for (const a of run.attempts) {
-          // `@host` is who *claimed* it; a `remote` attempt then ran somewhere else entirely (Actions),
-          // which is why it has no pid and why only its heartbeat says it is alive.
-          process.stdout.write(`  ${a.attempt}. ${a.profile}@${a.host || '-'}${a.remote ? ' → off-host' : ''} ${a.started_at} → ${a.ended_at || 'active'} ${a.outcome || ''}${a.summary ? ' — ' + a.summary : ''}${a.reason ? ' — ' + a.reason : ''}\n`);
+          // `@host` is the host that claimed it, which is the host its worker ran on.
+          process.stdout.write(`  ${a.attempt}. ${a.profile}@${a.host || '-'} ${a.started_at} → ${a.ended_at || 'active'} ${a.outcome || ''}${a.summary ? ' — ' + a.summary : ''}${a.reason ? ' — ' + a.reason : ''}\n`);
           if (a.job) process.stdout.write(`     job ${a.job}${a.ended_at ? '' : ' · claude attach ' + a.job}\n`);
           const session = formatSession(a);
           if (session) process.stdout.write(`     ${session}\n`);
@@ -785,8 +784,8 @@ export async function main(argv) {
     case 'dispatch': {
       refuseIfWorker(cmd);
       const max = flags.max ? Number(flags.max) : Infinity;
-      // `--profiles a,b`: claim only tasks on these profiles. The Actions dispatcher passes
-      // `--profiles claude-action` so an Actions runner never tries to launch a laptop-only harness.
+      // `--profiles a,b`: claim only tasks on these profiles — a host says which harnesses it can
+      // actually launch, so it never claims a card it would then fail to spawn.
       const profiles = flags.profiles ? list(str(flags.profiles), '--profiles') : null;
       for (const p of profiles || []) if (!ctx.cfg.profiles[p]) throw usage(`--profiles: no profile "${p}" in board.json. Known: ${Object.keys(ctx.cfg.profiles).join(', ')}`);
       if (flags.loop) {

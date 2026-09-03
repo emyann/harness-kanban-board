@@ -7,21 +7,21 @@ audience: [dev]
 read_when: "touching hkb serve, the board page, the user-level board list, or anything that has to work across more than one checkout"
 covers:
   - path: src/serve.js
-    sha: 83e21743007087c37dc114d32c7f6fce9fa61fab
+    sha: fe50acf9c37de567f1a90fd802e682ab746f6d50
   - path: web/index.html
     sha: 322aa96236ef37657a9a2326b83dc7b480672134
   - path: src/board.js
-    sha: 72e9c66eb079e09ad4f221c84874351d794ecdf4
+    sha: 42bd1bb173651d9109208a702564cfc3e5e51410
   - path: src/init.js
-    sha: aee5eed4dcc544f9a6fe81c7273f96432aaf1048
+    sha: c905bab09d496c7b7fe2aaa0c92d2109fdd30432
   - path: src/lifecycle.js
-    sha: 98cf380069697936e2b62fb17402bae7099cf06f
+    sha: 375fbf9240dd19c4ea89c63465546cf71182deac
   - path: src/track.js
-    sha: 286c5fff375e47a6f7ebf8d648671a9659872ab4
+    sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
   - path: src/model.js
-    sha: 1396e51d975eb47370284f457492711a4732a4bf
-generated_at_commit: f04038f
-last_refreshed: 2026-09-01
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
+generated_at_commit: 2a3a7e3
+last_refreshed: 2026-09-02
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
 

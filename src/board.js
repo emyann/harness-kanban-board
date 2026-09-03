@@ -109,17 +109,6 @@ export const DEFAULT_PROFILES = {
     allowed_tools: CLAUDE_TOOLS,
     launch: ['claude', '-p', '{prompt}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', ...CLAUDE_DENY, HOOK_SETTINGS_VAR, '--output-format', 'json', '--max-turns', '80', '--max-budget-usd', '5', '{model_args}'],
   },
-  'claude-action': {
-    description: 'Claude Code in GitHub Actions (`anthropics/claude-code-action@v1`), for a board that has to keep moving with the laptop closed. The launch does not run a worker here: it fires `kanban-worker-claude.yml` with `gh workflow run` and exits, so the attempt is `remote` — no pid, no job, and the heartbeat plus `max_runtime` are the whole liveness check. `hkb init --with-actions` writes that workflow and the event-driven `kanban-dispatch.yml` beside it. Needs a KB_TOKEN secret, and one of CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY. Honest latency with nothing but Actions: 15-75 minutes (see the README).',
-    mode: 'trigger',
-    // the runner has a full checkout and a token that can push, so the lease works like anywhere
-    // else; `auto` still falls back to the run comment if a repo refuses the ref push
-    heartbeat: 'auto',
-    max_in_progress: 2,
-    model: null, // per-task `model` is not plumbed through workflow inputs yet — set it in claude_args
-    allowed_tools: CLAUDE_TOOLS,
-    launch: ['gh', 'workflow', 'run', 'kanban-worker-claude.yml', '-R', '{repo}', '-f', 'task={n}', '-f', 'attempt={k}', '-f', 'board={board}'],
-  },
   'copilot-cli': {
     description: 'GitHub Copilot CLI on this machine (included in Copilot Free, draws on the plan\'s AI credits). Run `hkb init --harness copilot` first: it writes the `kanban-worker` custom agent and the agentStop hook that enforces the terminal verb. Copilot CLI has no worktree flag, so `workspace: "worktree"` asks the dispatcher to create one. No structured-output flag — the attempt is recorded by the `hkb` calls the worker makes. max_in_progress is 1 because the free credit pool is small.',
     mode: 'process',
@@ -505,17 +494,26 @@ export function loadBoard(root) {
       throw err;
     }
   }
+  // The GitHub Actions runner is gone (ADR-006: the store becomes local and single-host, and a
+  // dispatcher in Actions cannot read it). A board.json that still names the mode it ran under would
+  // otherwise claim tasks and then spawn `gh workflow run` as an ordinary process — refuse it here,
+  // at load, with the profile named, rather than let a tick discover it.
+  for (const [name, p] of Object.entries(cfg.profiles)) {
+    if (p.mode === 'trigger') {
+      const err = new Error(`profile "${name}" in ${file} has mode "trigger" — the GitHub Actions runner was removed in ADR-006 and hkb no longer has that mode. Delete the profile (and re-point any card carrying its \`kb:agent:${name}\` label at a local one), then keep the board moving with \`hkb up\`.`);
+      err.exitCode = 2;
+      throw err;
+    }
+  }
   // `{model_args}` renders `--effort <v>` on whatever launch carries it, but only Claude Code has a
   // verified `--effort` flag (#188 — measured: `codex exec --effort high` and `copilot ... --effort
   // high` both die on the CLI's own "unknown option" before the worker gets a turn). Refuse it at
   // load, the same as an unknown level above, rather than let the first spawn discover it. Every
   // built-in non-Claude profile has `launch[0]` name its harness (`codex`, `copilot`), so that is
-  // what the message points at; `claude-action` is the one exception — it only *triggers* a Claude
-  // Code Action run (`launch[0]` is `gh`), and `effort` there is accepted and ignored rather than
-  // refused (see docs/harnesses.md).
+  // what the message points at.
   for (const [name, p] of Object.entries(cfg.profiles)) {
     const harness = (p.launch || [])[0];
-    if (p.effort != null && harness !== 'claude' && name !== 'claude-action') {
+    if (p.effort != null && harness !== 'claude') {
       const err = new Error(`profile "${name}" sets effort, but its harness (${harness || name}) takes no --effort flag; remove it`);
       err.exitCode = 2;
       throw err;

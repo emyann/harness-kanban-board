@@ -7,31 +7,31 @@ audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: 13555690946205fd3e221a8c0b4dcb2b0a92c623
+    sha: 9d7fc11ad734643205e89668a176d4f29115805f
   - path: src/gh.js
-    sha: 97d4dbad5a1c30beb49360d68283e65dc5155e1c
+    sha: 8154ea477e52ed3f769238f1c1bda588fd767798
   - path: src/model.js
-    sha: 022ed7b17c5debc59265f8a1627f82386864de00
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/tasks.js
-    sha: e0c09e408b3328d5ca7a4d9f512e4bda73b0d0f0
+    sha: 95ce07de549ce2c22222d43f36967006cdd372f8
   - path: src/lock.js
-    sha: 680eae74c9955003c948a6df9750c25548ccaf86
+    sha: 22fb690e6b201b74b4201bd67ad8ad950bdaeb2d
   - path: src/lifecycle.js
-    sha: 98cf380069697936e2b62fb17402bae7099cf06f
+    sha: 375fbf9240dd19c4ea89c63465546cf71182deac
   - path: src/dispatch.js
-    sha: 6ceade7f5440ab4194c477cc1bb2cc2900b52632
+    sha: 26a3197921f09d3ef2f4a21f1858c1cc6b5e7fd6
   - path: src/context.js
-    sha: ab7afc4eb5158a879ea1700221892229329dce64
+    sha: 0eecc3f46fa4d71d3fa12598b474c76e0bc7733d
   - path: src/hook.js
-    sha: 9c279d75961f372331295d9783dde522e4e175b2
+    sha: 97b9054fbe1769059b882e4779f8279deaf184d8
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/board.js
-    sha: 955f2c7cfc908fe46ebf264e0cb4c8e722c7a79c
+    sha: 42bd1bb173651d9109208a702564cfc3e5e51410
   - path: src/doctor.js
-    sha: 4b49003dc44abe98a35f1c47b9472427e0ab6fba
-generated_at_commit: bcd1dc5
-last_refreshed: 2026-09-01
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
+generated_at_commit: 2a3a7e3
+last_refreshed: 2026-09-02
 related: [concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
 
@@ -40,7 +40,7 @@ related: [concepts/board-protocol, concepts/claims-and-leases, concepts/worker-i
 > hkb turns GitHub Issues into a Hermes-style kanban that coding agents work
 > autonomously. Every structural choice below follows from one rule: **the
 > board is the only durable state**. Processes hold caches, never truth — so
-> any process (dispatcher, worker, a human's laptop, an Actions runner) can
+> any process (dispatcher, worker, a human's laptop) can
 > crash at any moment and the system re-derives itself from GitHub.
 
 ## The state model
@@ -102,7 +102,8 @@ board where the loop is current pays nothing per tick for it.
 ## Workers are any harness
 
 A worker is whatever a profile in `src/board.js` can launch — Claude Code,
-Copilot CLI, Codex, or a GitHub Actions run — pointed at one card. Its
+Copilot CLI, Codex, or a harness someone wrote a `launch` array for — pointed
+at one card. Its
 contract is small: the verbs in `src/lifecycle.js` (complete / block /
 request-review), a prompt assembled from the card by `src/context.js`, and
 guard rails on the launch line itself. The protocol is what a worker follows;

@@ -150,19 +150,13 @@ export function withoutWorktreeFlag(argv) {
  * launch so there is one checkout, not two. When the branch cannot be had (still held by a live
  * session, no remote, gone) the attempt runs anyway, on an ordinary fresh worktree, and the brief
  * says which PR to continue and how: `continued` on the result records which of the two it was.
- *
- * A `trigger`-mode profile (`claude-action`) never makes this checkout: the launch only fires
- * something else (a workflow run) that makes its own, unrelated checkout elsewhere, so a worktree
- * made here would sit unused while the real worker runs on a fresh `actions/checkout`. Such an
- * attempt records `continues_pr` only — never `continues_branch` — so the run record does not claim
- * a checkout that was never made.
  */
 export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = false, keepRef = false, prompt: given = null, continuePr = null } = {}) {
   const profile = ctx.cfg.profiles[profileName];
   if (!profile?.launch) throw new Error(`profile "${profileName}" has no launch template in board.json`);
   const name = `kb-${task.number}-${attempt}`;
   /** @type {{ok: boolean, path?: string, branch?: string|null, freed?: string|null, stale?: string|null, dry?: boolean, why?: string}|null} */
-  const cont = !continuePr || profile.mode === 'trigger'
+  const cont = !continuePr
     ? null
     : dryRun
       ? { ok: !!continuePr.headRefName, branch: continuePr.headRefName || null, dry: true, why: 'the board query returned no head branch for the PR' } // a dry run creates nothing, and prints the command it would run
@@ -209,17 +203,6 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
   ensureLocalDirs(ctx.root);
   const cwd = wt ? ensureWorktree(ctx.root, wt) : ctx.root;
   const logFile = path.join(logsDir(ctx.root), `${task.number}-${attempt}.log`);
-  if (profile.mode === 'trigger') {
-    // The launch does not run the worker — it asks something else to (an Actions run, a cloud agent)
-    // and exits. Run it to completion so a refusal is a spawn failure the caller can report, then
-    // record the attempt as `remote`: there is no local pid or job, so the heartbeat and max_runtime
-    // are its whole liveness check.
-    const r = spawnSync(argv[0], argv.slice(1), { cwd, env, encoding: 'utf8', timeout: 120_000 });
-    const out = `${r.stdout || ''}${r.stderr || ''}`.trim();
-    fs.appendFileSync(logFile, `# ${nowIso()} trigger ${argv.join(' ')}\n${out}\n`);
-    if (r.error || r.status !== 0) throw new Error(`${argv[0]}: ${(r.error?.message || out || `exit ${r.status}`).split('\n').filter(Boolean).pop()}`);
-    return { argv, pid: null, remote: true, logFile, continued, tools_dropped: toolsDropped };
-  }
   if (profile.mode === 'claude-bg') {
     // Fire-and-forget: `claude --bg` prints "backgrounded · <id>" and exits, but a cold daemon
     // start can take a minute — never block the tick on it. Detach, log its output, and identify
@@ -552,9 +535,9 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   // The tick is the lifetime of every read the tick memoizes: the base sha is revalidated (304 when
   // the branch has not moved) the first time a claim needs it, never inherited from an older tick.
   staleBaseSha(ctx);
-  // A host claims only what it can launch. `--profiles` is how the Actions dispatcher takes the
-  // `claude-action` tasks and leaves the laptop's `claude` ones alone; everything else in the tick —
-  // reclaim, promote, reconcile, the orphan sweep — still covers the whole board.
+  // A host claims only what it can launch. `--profiles` is how one host takes the cards for the
+  // harnesses it has installed and leaves the rest alone; everything else in the tick — reclaim,
+  // promote, reconcile, the orphan sweep — still covers the whole board.
   const dispatchable = (name) => !profiles || profiles.includes(name);
   const state = readState(ctx.root);
   const today = nowIso().slice(0, 10);
@@ -657,14 +640,12 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     // edits to the row that are not an outcome (the job id, the session behind it): saved once,
     // below, and only when nothing else is about to save the record anyway.
     let dirty = false;
-    // Nothing local to inspect, for two reasons that answer the same way. `remote`: a `trigger`
-    // profile handed this attempt to something that is not a process on any host we can see (an
-    // Actions run). `manual`: a human claimed it by hand (`hkb claim <n>` with no `--spawn`) and is
-    // working it in their own terminal — there is no pid the dispatcher ever knew. Either way
-    // max_runtime and the heartbeat below are the whole check; the no-handle rules further down
-    // would call a perfectly live attempt crashed three minutes in.
+    // Nothing local to inspect: `manual` means a human claimed it by hand (`hkb claim <n>` with no
+    // `--spawn`) and is working it in their own terminal, so there is no pid the dispatcher ever
+    // knew. max_runtime and the heartbeat below are the whole check; the no-handle rules further
+    // down would call a perfectly live attempt crashed three minutes in.
     let job = null; // the matched background-agent job, when this attempt has one — the idle check below reuses it
-    if (a.remote || a.manual) { /* liveness is the heartbeat */ }
+    if (a.manual) { /* liveness is the heartbeat */ }
     else if (a.host === ctx.host && (a.job || a.bg)) {
       job = a.job ? (jobsById.get(a.job) || readJobState(a.job)) : null;
       if (!job && a.bg && a.log) {
@@ -707,7 +688,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       if (secondsSince(lastSignal) > d.stale_after) outcome = 'reclaimed';
       else log(`#${t.number}: attempt ${a.attempt} beat on ${lockRef(t.number, a.attempt)} ${Math.round(secondsSince(lastSignal))}s ago — alive`);
     }
-    // A no-job, no-pid attempt (manual, remote, or a bg job on another host) has nothing but its
+    // A no-job, no-pid attempt (manual, or a bg job on another host) has nothing but its
     // heartbeat to ask, and the ref-CAS default never touches the run comment until the reclaim
     // check above already thought it looked stale — which only fires past `stale_after`. Give the
     // idle threshold, well inside `stale_after`, the same fresher read: one lock-ref commit read,
@@ -918,7 +899,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
         keepRef: !!children,
         prompt: trackContext({ repo: ctx.repo.nameWithOwner, board: ctx.board, track: cand.track, attempt: k, waves: cand.waves, fanout: trackFanout(ctx.cfg, profileName, t), trackBranch, defaultBranch: ctx.cfg.default_branch || 'main' }),
       });
-      if (!spawned.pid && !spawned.bg && !spawned.remote) throw new Error('spawn returned neither a pid nor a background launch');
+      if (!spawned.pid && !spawned.bg) throw new Error('spawn returned neither a pid nor a background launch');
     } catch (e) {
       log(`#${t.number}: track spawn failed: ${e.message}`);
       // the runner never started, so the fast engine has not had its go: drop the marker that
@@ -935,7 +916,6 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     }
     attempt.pid = spawned.pid;
     if (spawned.bg) attempt.bg = true;
-    if (spawned.remote) attempt.remote = true;
     if (spawned.wt) attempt.wt = spawned.wt;
     attempt.log = path.relative(ctx.root, spawned.logFile);
     await saveRun(ctx, t.number, runRec);
@@ -1016,7 +996,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     let spawned;
     try {
       spawned = await spawnWorker(ctx, t, profileName, k, { keepRef: !!children, continuePr });
-      if (!spawned.pid && !spawned.bg && !spawned.remote) throw new Error('spawn returned neither a pid nor a background launch');
+      if (!spawned.pid && !spawned.bg) throw new Error('spawn returned neither a pid nor a background launch');
     } catch (e) {
       log(`#${t.number}: spawn failed: ${e.message}`);
       await failAttempt(ctx, t, runRec, 'spawn_failed', e.message, { kill: false });
@@ -1025,7 +1005,6 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     }
     attempt.pid = spawned.pid;
     if (spawned.bg) attempt.bg = true;
-    if (spawned.remote) attempt.remote = true;
     if (spawned.wt) attempt.wt = spawned.wt;
     // which of the two continuation paths this attempt took: the branch, when the dispatcher put the
     // checkout on the PR's own; nothing, when the brief is all that tells the worker to continue it
@@ -1039,19 +1018,15 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     perProfile[profileName] = (perProfile[profileName] || 0) + 1;
     claimedPaths.push({ number: t.number, paths: t.kb.paths || [] });
     budget--;
-    const handle = spawned.remote
-      ? `started elsewhere by \`${spawned.argv.slice(0, 4).join(' ')}\` — its heartbeat is the only liveness`
-      : spawned.bg
-        ? `background agent in ${spawned.wt} (job id on next tick; claude agents to watch)`
-        : `pid ${spawned.pid}${spawned.wt ? ` in ${worktreePath(spawned.wt)}` : ''}`;
+    const handle = spawned.bg
+      ? `background agent in ${spawned.wt} (job id on next tick; claude agents to watch)`
+      : `pid ${spawned.pid}${spawned.wt ? ` in ${worktreePath(spawned.wt)}` : ''}`;
     const continuing = !spawned.continued ? ''
-      : spawned.remote
-        ? `, continuing PR #${spawned.continued.pr} — the checkout happens in the trigger's own run, not here`
-        : spawned.continued.branch
-          ? spawned.continued.why
-            ? `, continuing PR #${spawned.continued.pr} on ${spawned.continued.branch} (${spawned.continued.why}) — the brief says how to catch it up`
-            : `, continuing PR #${spawned.continued.pr} on ${spawned.continued.branch}`
-          : `, continuing PR #${spawned.continued.pr} from a fresh worktree (${spawned.continued.why}) — the brief says which PR to push to`;
+      : spawned.continued.branch
+        ? spawned.continued.why
+          ? `, continuing PR #${spawned.continued.pr} on ${spawned.continued.branch} (${spawned.continued.why}) — the brief says how to catch it up`
+          : `, continuing PR #${spawned.continued.pr} on ${spawned.continued.branch}`
+        : `, continuing PR #${spawned.continued.pr} from a fresh worktree (${spawned.continued.why}) — the brief says which PR to push to`;
     summary.claimed.push({ number: t.number, attempt: k, profile: profileName, pid: spawned.pid, wt: spawned.wt || null, ...continues });
     log(`#${t.number}: claimed attempt ${k} → ${profileName} ${handle}${continuing} (log ${attempt.log})`);
     logDroppedTools(t, profileName, spawned, log);
