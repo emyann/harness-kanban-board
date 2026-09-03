@@ -433,10 +433,13 @@ const BIN = fileURLToPath(new URL('../bin/hkb.js', import.meta.url));
  * warning is delivered on the next tick: without the stub the process is gone before it prints.
  * stdout is ignored; only stderr is under test.
  */
-function warningsAfterLoadingBin(script) {
+function warningsAfterLoadingBin(script, { execArgv = [], env } = {}) {
   const code = `process.exit = () => {}; process.argv = [process.argv[0], 'hkb', 'version']; `
     + `await import(${JSON.stringify(BIN)}).catch(() => {}); ${script}`;
-  return spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8' }).stderr;
+  return spawnSync(process.execPath, [...execArgv, '--input-type=module', '-e', code], {
+    encoding: 'utf8',
+    env: env ? { ...process.env, ...env } : process.env,
+  }).stderr;
 }
 
 test('hkb version prints nothing on stderr — no warning rides along with an ordinary command', () => {
@@ -454,4 +457,27 @@ test('every other warning still reaches stderr — the filter is not --no-warnin
   const stderr = warningsAfterLoadingBin("process.emitWarning('boom', 'ExperimentalWarning'); process.emitWarning('old thing', 'DeprecationWarning');");
   assert.match(stderr, /ExperimentalWarning: boom/, 'a non-SQLite ExperimentalWarning must still print');
   assert.match(stderr, /DeprecationWarning: old thing/, 'other warning classes are untouched');
+});
+
+// The filter re-invokes Node's own listener rather than writing to stderr itself, so every flag that
+// listener honours keeps working. Reimplementing the printing silently broke all three of these: a
+// process that had *no* warning listener (warnings disabled) suddenly gained one.
+
+test('NODE_NO_WARNINGS=1 still suppresses everything — the filter does not resurrect warnings', () => {
+  const stderr = warningsAfterLoadingBin("process.emitWarning('boom', 'ExperimentalWarning');", {
+    env: { NODE_NO_WARNINGS: '1' },
+  });
+  assert.equal(stderr, '', `warnings are disabled, so nothing may print; got: ${stderr}`);
+});
+
+test('--no-deprecation is still honoured', () => {
+  const stderr = warningsAfterLoadingBin("process.emitWarning('old thing', 'DeprecationWarning');", {
+    execArgv: ['--no-deprecation'],
+  });
+  assert.ok(!/old thing/.test(stderr), `deprecations are off, got: ${stderr}`);
+});
+
+test('a warning code still rides along — the default listener does the printing', () => {
+  const stderr = warningsAfterLoadingBin("process.emitWarning('boom', { type: 'ExperimentalWarning', code: 'HKB001' });");
+  assert.match(stderr, /HKB001/, 'the code is part of what Node prints, and must not be lost');
 });

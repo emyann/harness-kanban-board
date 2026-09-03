@@ -70,8 +70,17 @@ test('two publishes of one tag never overlap, and one in flight is never cancell
 
 test('the publish job runs the same suite test.yml does, under both timezones', () => {
   const runs = DOC.jobs.publish.steps.filter((s) => s.run && !s.id);
-  assert.deepEqual(runs.map((s) => s.run), ['npm run lint', 'npm test', 'npm test', 'npm run smoke']);
-  assert.deepEqual(runs.slice(1, 3).map((s) => s.env.TZ), ['UTC', 'America/New_York']);
+  // The install comes first for the same reason it does in test.yml: `npm run lint` ends in `tsc`,
+  // there is no lock file to restore, and without it a tag push fails at the first step with
+  // `tsc: not found` — a release that cannot be published.
+  assert.deepEqual(runs.map((s) => s.run), [
+    'npm install --no-audit --no-fund',
+    'npm run lint',
+    'npm test',
+    'npm test',
+    'npm run smoke',
+  ]);
+  assert.deepEqual(runs.slice(2, 4).map((s) => s.env.TZ), ['UTC', 'America/New_York']);
 });
 
 test('the tarball is packed and run before it is published, not after', () => {
