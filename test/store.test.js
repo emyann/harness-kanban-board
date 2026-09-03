@@ -57,7 +57,9 @@ function openGithubDriver() {
   const base = git(root, 'rev-parse', 'HEAD');
 
   const gh = new FakeGh({ baseSha: base });
-  const cfg = { ...DEFAULT_BOARD, repo: gh.nameWithOwner };
+  // deep, as src/init.js does: a shallow spread shares `dispatch` and `profiles` with every other
+  // harness in the process, so one scenario mutating a nested key corrupts the rest.
+  const cfg = { ...JSON.parse(JSON.stringify(DEFAULT_BOARD)), repo: gh.nameWithOwner };
   const ctx = {
     root, cfg,
     repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
@@ -85,7 +87,6 @@ const DRIVERS = [
 
 // ---------- the scenarios ----------
 
-const nextNumber = (h) => Math.max(0, ...h.gh.issues.keys()) + 1;
 
 /** A card on the board, made through the interface. */
 async function card(h, { title = 'a card', status = 'ready', agent = 'claude', kb = {}, body = '' } = {}) {
@@ -241,17 +242,25 @@ const SCENARIOS = [
     },
   },
   {
-    name: 'updateBody rewrites the card body',
+    name: 'updateBody rewrites the prose and keeps every machine field',
     async run(h) {
-      const t = await card(h, { body: 'before' });
+      const kb = { priority: 5, paths: ['src/x.js'], max_runtime: 4242 };
+      const t = await card(h, { body: 'before', kb });
       await h.store.updateBody(t.number, 'after');
-      assert.equal((await h.store.getTask(t.number)).body, 'after');
+      const read = await h.store.getTask(t.number);
+      assert.match(read.bodyText ?? read.body, /after/);
+      assert.doesNotMatch(read.bodyText ?? read.body, /before/);
+      // the whole point: a body rewrite that drops the kb block silently resets priority, paths and
+      // every other dispatch field to the defaults on the next read.
+      assert.equal(read.kb.priority, 5);
+      assert.deepEqual(read.kb.paths, ['src/x.js']);
+      assert.equal(read.kb.max_runtime, 4242);
     },
   },
   {
     name: 'claim: the first wins with a token, the second is held, and a release frees it again',
     async run(h) {
-      const n = nextNumber(h);
+      const n = (await card(h)).number;
       const first = await h.store.claim(n, 1);
       assert.equal(first.result, 'claimed');
       assert.ok(first.token, 'a claim hands back the token its heartbeat leases on');
@@ -266,23 +275,24 @@ const SCENARIOS = [
   {
     name: 'listLocks reports every live claim, and nothing after they are released',
     async run(h) {
-      const n = nextNumber(h);
+      const n = (await card(h)).number;
+      const m = (await card(h)).number;
       const a = await h.store.claim(n, 1);
-      const b = await h.store.claim(n + 1, 2);
+      const b = await h.store.claim(m, 2);
       const rows = await h.store.listLocks();
       const seen = rows.map((r) => `${r.n}/${r.k}`).sort();
-      assert.deepEqual(seen, [`${n}/1`, `${n + 1}/2`].sort());
+      assert.deepEqual(seen, [`${n}/1`, `${m}/2`].sort());
       for (const r of rows) assert.ok('token' in r && 'beat_at' in r, 'a lock row carries its token and last beat');
       assert.ok(a.token && b.token);
       await h.store.release(n, 1);
-      await h.store.release(n + 1, 2);
+      await h.store.release(m, 2);
       assert.deepEqual(await h.store.listLocks(), []);
     },
   },
   {
     name: 'lockBeatAt is null until a beat lands, then it is when the beat landed',
     async run(h) {
-      const n = nextNumber(h);
+      const n = (await card(h)).number;
       await h.store.claim(n, 1);
       assert.equal(await h.store.lockBeatAt(n, 1), null, 'a fresh claim has no beat behind it');
       const at = '2026-09-02T12:34:56.000Z';
@@ -294,13 +304,51 @@ const SCENARIOS = [
   {
     name: 'heartbeat: ok while the claim is ours, lost once it has been reclaimed',
     async run(h) {
-      const n = nextNumber(h);
+      const n = (await card(h)).number;
       const { result, token } = await h.store.claim(n, 1);
       assert.equal(result, 'claimed');
       h.settleClaim(n, 1, token);
-      assert.equal(await h.store.heartbeat(n, 1, token), 'ok');
+      const first = await h.store.heartbeat(n, 1, token);
+      assert.equal(first.result, 'ok');
+      assert.ok(first.token, 'a beat hands back where it left the lease');
+      // the second beat is the one that matters: leasing on the FIRST beat's expected sha is what a
+      // worker does every ten minutes, and returning only the verdict made it read as LOCK_LOST.
+      const second = await h.store.heartbeat(n, 1, first.token);
+      assert.equal(second.result, 'ok', 'a worker beats for as long as it holds the claim');
       await h.reclaim(h.store, n, 1);
-      assert.equal(await h.store.heartbeat(n, 1, token), 'lost', 'a reclaimed lock stops the worker');
+      assert.equal((await h.store.heartbeat(n, 1, second.token)).result, 'lost', 'a reclaimed lock stops the worker');
+    },
+  },
+  {
+    name: 'listTasks: OPEN, CLOSED and both mean three different answers',
+    async run(h) {
+      const open = await card(h);
+      const closed = await card(h);
+      await h.store.closeTask(closed.number, 'completed');
+
+      const justOpen = (await h.store.listTasks({ states: ['OPEN'] })).map((t) => t.number);
+      assert.ok(justOpen.includes(open.number));
+      assert.ok(!justOpen.includes(closed.number));
+
+      const justClosed = (await h.store.listTasks({ states: ['CLOSED'] })).map((t) => t.number);
+      assert.ok(justClosed.includes(closed.number));
+      assert.ok(!justClosed.includes(open.number), 'asking for closed cards must not hand back the open board');
+
+      const both = (await h.store.listTasks({ states: ['OPEN', 'CLOSED'] })).map((t) => t.number);
+      assert.ok(both.includes(open.number) && both.includes(closed.number));
+
+      await assert.rejects(async () => h.store.listTasks({ states: ['MAYBE'] }), (e) => e.exitCode === 2);
+    },
+  },
+  {
+    name: 'listNotes returns what a person wrote, never hkb\'s own records',
+    async run(h) {
+      const t = await card(h);
+      await h.store.saveRun(t.number, { run: { ...emptyRun(), attempts: [{ attempt: 1, profile: 'claude', host: 'h', started_at: new Date().toISOString() }] }, id: null });
+      await h.store.addNote(t.number, 'a human said this');
+
+      const notes = await h.store.listNotes(t.number);
+      assert.deepEqual(notes.map((n) => n.text), ['a human said this']);
     },
   },
   {

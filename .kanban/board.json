@@ -9,7 +9,6 @@
       "effort": "medium",
       "max_in_progress": 4
     },
-    "claude-action": {},
     "claude-track": {
       "model": "claude-opus-5",
       "effort": "medium"

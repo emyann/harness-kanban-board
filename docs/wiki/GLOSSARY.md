@@ -163,7 +163,7 @@ deserves a `concepts/` page (link it).
   that session writes. A `claude --bg` worker's only local way to name itself,
   and the tick's only way to name it from outside (`src/jobs.js`).
 - **Worker** — the seat that codes: one session holding one attempt on one task
-  — any harness, an Actions job, or the operator running the verbs by hand
+  — any harness a profile has a `launch` array for, or the operator running the verbs by hand
   (`src/lifecycle.js`).
 - **Worker identity** — the answer to "which attempt is this session?": the
   launch environment (`KB_TASK`…), else the `kb-<n>-<k>` checkout — and, when the

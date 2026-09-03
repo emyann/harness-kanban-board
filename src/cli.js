@@ -253,7 +253,7 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
 
   Global: --board <slug> (or KB_BOARD), --json.
   Exit codes: 0 ok · 1 error · 2 usage/state · 3 LOCK_LOST (stop now) · 4 the dispatcher loop gave itself up
-              (a supervisor — cron, systemd, Actions — or hkb up starts a fresh one).
+              (a supervisor — cron, systemd, launchd — or hkb up starts a fresh one).
 `;
 
 // Single source of truth for the version: package.json, resolved relative to the package, not the

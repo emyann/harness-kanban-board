@@ -18,8 +18,7 @@ import {
   TRACK_PROFILE_CHECK, checkTrackProfile, checkDispatcher, checkServe,
   tallyDeniedTools, deniedToolsFinding, checkDeniedTools,
   CAPABILITIES_CHECK, checkCapabilityMap,
-  TOOL_POSTURE_CHECK, checkToolPosture, CARD_GRANTS_CHECK, checkCardGrants,
-} from '../src/doctor.js';
+  TOOL_POSTURE_CHECK, checkToolPosture, CARD_GRANTS_CHECK, checkCardGrants, checkRemovedProfiles } from '../src/doctor.js';
 import { CAPABILITIES, capabilityGrants, effectiveTools, toolPosture } from '../src/model.js';
 import { normalizeCardGrants } from '../src/tasks.js';
 import { setTransport, GhError } from '../src/gh.js';
@@ -1197,4 +1196,25 @@ test('a card grant key that is not a list is reported: it reads as a restriction
   assert.equal(warned.length, 1);
   assert.match(warned[0].detail, /kb\.tools on #42 is not a list of names, so it narrows nothing/);
   assert.match(warned[0].fix, /JSON list of tool patterns/);
+});
+
+// #290 follow-up: a profile this hkb no longer has is dropped at load, so doctor is the place that
+// says so — otherwise the board looks healthy while nothing claims that profile's cards.
+test('doctor warns about a profile hkb removed, naming both halves of the fix', () => {
+  const ctx = { root: '/tmp/none', cfg: { profiles: {}, removed_profiles: [{ name: 'claude-action', why: 'the GitHub Actions runner was removed in ADR-006' }] } };
+  const rows = [];
+  checkRemovedProfiles(ctx, { ok: (...a) => rows.push(['ok', ...a]), warn: (...a) => rows.push(['warn', ...a]) });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0][0], 'warn');
+  assert.equal(rows[0][1], 'profile claude-action');
+  assert.match(rows[0][2], /ADR-006/);
+  assert.match(rows[0][3], /hkb init/);
+  assert.match(rows[0][3], /hkb adopt/);
+});
+
+test('doctor says nothing about removed profiles on a board that names none', () => {
+  const rows = [];
+  checkRemovedProfiles({ cfg: { profiles: {} } }, { ok: () => rows.push('ok'), warn: () => rows.push('warn') });
+  checkRemovedProfiles({ cfg: { profiles: {}, removed_profiles: [] } }, { ok: () => rows.push('ok'), warn: () => rows.push('warn') });
+  assert.deepEqual(rows, []);
 });

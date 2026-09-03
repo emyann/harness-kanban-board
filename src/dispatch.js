@@ -11,7 +11,7 @@ import { workerHookSettings, PKG_ROOT, packageVersion } from './init.js';
 import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, authPauseReason, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, effectiveTools, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, isTrackRoot, trackBranchConflict, buildDeniedTools, deniedToolsUpdate } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted, trackFanout } from './track.js';
-import { GhError } from './forge.js';
+import { GhError } from './gh.js';
 import { listKbJobs, readJobState, stopJob, matchJobByWorktree, jobSessionUpdate } from './jobs.js';
 import { isMirrorConfigured, syncProject, projectError } from './projects.js';
 import { tokenExpiryNotice, versionNotice } from './doctor.js';
@@ -640,12 +640,14 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     // edits to the row that are not an outcome (the job id, the session behind it): saved once,
     // below, and only when nothing else is about to save the record anyway.
     let dirty = false;
-    // Nothing local to inspect: `manual` means a human claimed it by hand (`hkb claim <n>` with no
-    // `--spawn`) and is working it in their own terminal, so there is no pid the dispatcher ever
-    // knew. max_runtime and the heartbeat below are the whole check; the no-handle rules further
-    // down would call a perfectly live attempt crashed three minutes in.
+    // Nothing local to inspect, so the heartbeat and max_runtime are the whole check — the no-handle
+    // rules further down would call a perfectly live attempt crashed three minutes in. `manual` means
+    // a human claimed it by hand (`hkb claim <n>` with no `--spawn`) and is working it in their own
+    // terminal, so there is no pid the dispatcher ever knew. `remote` is the same shape written by an
+    // hkb that still had the Actions runner: the mode is gone but those rows live in run records this
+    // release inherits, so they are read here even though nothing writes them any more.
     let job = null; // the matched background-agent job, when this attempt has one — the idle check below reuses it
-    if (a.manual) { /* liveness is the heartbeat */ }
+    if (a.manual || a.remote) { /* liveness is the heartbeat */ }
     else if (a.host === ctx.host && (a.job || a.bg)) {
       job = a.job ? (jobsById.get(a.job) || readJobState(a.job)) : null;
       if (!job && a.bg && a.log) {
@@ -800,6 +802,16 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   // a card just claimed this same tick is pushed on below, always a holder, never idle.
   const claimedPaths = pathHolders(tasks, pog.mode, idleNumbers).map((t) => ({ number: t.number, paths: t.kb.paths || [] }));
 
+  // Why this card cannot be dispatched, or null. A profile hkb removed (ADR-006) names the re-point;
+  // an unknown one names the flag that adds it; a profile with no launch template would otherwise be
+  // claimed and then spawn-fail every tick until the retry budget is gone.
+  const undispatchable = (t, profileName, profile) => {
+    const removed = (ctx.cfg.removed_profiles || []).find((r) => r.name === profileName);
+    if (removed) return `profile ${profileName} was removed: ${removed.why} — \`hkb adopt ${t.number} --agent claude --status ${t.status}\` re-points this card`;
+    if (!profile) return `unknown profile ${profileName} — \`hkb init --profiles ${profileName}\` adds it to board.json`;
+    if (!(profile.launch || []).length) return `profile ${profileName} has no launch template in board.json — nothing to spawn`;
+    return null;
+  };
   // Claim health, per process and per task — see noteClaimResult. One verdict per task per tick, so
   // a root that is both a track candidate and its own frontier cannot count twice.
   const health = (ctx._health ||= new Map());
@@ -837,7 +849,8 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     // the label is what node dispatch reads if this ever falls back, so the decision never rewrites it.
     const profileName = cand.profile || t.agent;
     const profile = ctx.cfg.profiles[profileName];
-    if (!profile) { note(`unknown profile ${profileName} — \`hkb init --profiles ${profileName}\` adds it to board.json`); continue; }
+    const trackWhy = undispatchable(t, profileName, profile);
+    if (trackWhy) { note(trackWhy); continue; }
     if (!dispatchable(profileName)) { note(`profile ${profileName} is not dispatched from this host`); continue; }
     if ((perProfile[profileName] || 0) >= (profile.max_in_progress ?? Infinity)) { note(`profile ${profileName} at cap`); continue; }
     const pausedUntil = state.profile_paused_until[profileName];
@@ -959,7 +972,8 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     if ((state.spawned_today || 0) >= d.daily_spawn_cap) { summary.skipped.push({ number: t.number, why: `daily spawn cap ${d.daily_spawn_cap}` }); continue; }
     const profileName = t.agent || 'claude';
     const profile = ctx.cfg.profiles[profileName];
-    if (!profile) { summary.skipped.push({ number: t.number, why: `unknown profile ${profileName} — \`hkb init --profiles ${profileName}\` adds it to board.json` }); continue; }
+    const why = undispatchable(t, profileName, profile);
+    if (why) { summary.skipped.push({ number: t.number, why }); continue; }
     if (!dispatchable(profileName)) { summary.skipped.push({ number: t.number, why: `profile ${profileName} is not dispatched from this host` }); continue; }
     if ((perProfile[profileName] || 0) >= (profile.max_in_progress ?? Infinity)) { summary.skipped.push({ number: t.number, why: `profile ${profileName} at cap` }); continue; }
     // remaining guards (these read the run comment, so only for tasks that could actually be claimed)

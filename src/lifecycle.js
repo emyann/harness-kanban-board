@@ -1,7 +1,8 @@
 // Worker-facing verbs: heartbeat, complete, block, unblock, request-review, request-changes.
 // Every verb closes the open attempt in the run comment and releases the lock ref.
 import fs from 'node:fs';
-import { GhError, isOffline, finishPr, prNodeId, prChecksState, mergePullRequest } from './forge.js';
+import { finishPr, prNodeId, prChecksState, mergePullRequest } from './forge.js';
+import { GhError, isOffline } from './gh.js';
 import { outboxFile } from './board.js';
 import {
   getTask, assertOnBoard, loadRun, saveRun, setStatus, addLabels, removeLabel, addComment, closeIssue, reopenIssue,

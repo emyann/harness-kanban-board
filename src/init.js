@@ -629,15 +629,14 @@ export function harnessFiles(name, { command = 'hkb hook stop', root = '/path/to
  *
  * Pure and exported so the message is a test, not a promise. Returns null when nothing is wrong.
  */
+export const REMOVED_INIT_FLAGS = ['with-actions', 'actions', 'no-actions'];
+
 export function removedInitFlag(flags = {}) {
-  for (const key of Object.keys(flags)) {
-    // Any spelling of the Actions flag: the runner is gone as a whole, so `--actions`,
-    // `--with-actions` and `--no-actions` all get the same answer.
-    if (/actions/i.test(key)) {
-      return `--${key} is gone: hkb no longer generates a GitHub Actions runner. ADR-006 makes the board's store local and single-host, and a dispatcher inside Actions cannot read it. Run \`hkb up\` on the machine that owns the board — that is what keeps it moving now.`;
-    }
-  }
-  return null;
+  // Every spelling of the Actions flag gets the same answer, and only those spellings: a substring
+  // test would claim `--transactions` and any later flag whose name merely contains the word.
+  const key = REMOVED_INIT_FLAGS.find((k) => Object.hasOwn(flags, k));
+  if (!key) return null;
+  return `--${key} is gone: hkb no longer generates a GitHub Actions runner. ADR-006 makes the board's store local and single-host, and a dispatcher inside Actions cannot read it. Run \`hkb up\` on the machine that owns the board — that is what keeps it moving now.`;
 }
 
 /**
@@ -922,6 +921,12 @@ export async function init(ctx, flags, log) {
   saveBoard(root, cfg);
   ensureLocalDirs(root);
   log(`${existing ? 'updated' : 'wrote'} .kanban/board.json (board "${board}", profiles ${Object.keys(cfg.profiles).join(', ')})`);
+  // `loadBoard` dropped any profile this hkb no longer has, so saving the config it returned is the
+  // repair — say which, because the operator's cards may still carry that agent label.
+  for (const r of existing?.removed_profiles || []) {
+    log(`dropped profile "${r.name}" — ${r.why}. Any card still labelled \`kb:agent:${r.name}\` needs \`hkb adopt <n> --agent claude --status <lane>\``);
+  }
+
   // The tool posture (#256). Say it out loud, because defaulting it quietly is the bug this field
   // exists to fix — and read it back off the board rather than assuming, so an `init` over a board
   // that already set "tools": "inherit" is told what it actually has, not what a fresh board gets.

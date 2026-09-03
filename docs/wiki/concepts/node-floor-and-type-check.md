@@ -20,8 +20,7 @@ covers:
     sha: 66ac3edbc8dbc9b4bd3d155f788aef0e3c2fb3ca
 generated_at_commit: 447b51e
 last_refreshed: 2026-09-02
-related:
-  - decisions/adr-006-local-store.md
+related: [decisions/adr-006-local-store, decisions/adr-005-control-plane, architecture/store-seam]
 ---
 
 # The Node floor and the JSDoc type check

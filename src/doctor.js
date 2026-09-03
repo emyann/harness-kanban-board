@@ -1042,6 +1042,21 @@ export function promptingProfiles(cfg) {
 }
 
 /** Silent when every Claude launch says `dontAsk` — there is nothing an operator has to act on. */
+/**
+ * Profiles `loadBoard` dropped because this hkb no longer has them (`REMOVED_PROFILES`, src/board.js).
+ * Silent on every board that names none — which is every board written by this release. It warns
+ * rather than fails because the board still works: the cards on that profile are the thing that
+ * stopped, and the fix is one `hkb init` plus one `hkb adopt` per card.
+ */
+export function checkRemovedProfiles(ctx, { ok, warn }) {
+  const removed = ctx.cfg?.removed_profiles || [];
+  if (!removed.length) return;
+  for (const r of removed) {
+    warn(`profile ${r.name}`, `${r.why} — it is not loaded, so nothing claims its cards`, `hkb init drops it from board.json; \`hkb adopt <n> --agent claude --status <lane>\` re-points any card still labelled kb:agent:${r.name}`);
+  }
+  void ok;
+}
+
 export function checkPermissionMode(ctx, { warn }) {
   const prompting = promptingProfiles(ctx.cfg);
   if (!prompting.length) return null;

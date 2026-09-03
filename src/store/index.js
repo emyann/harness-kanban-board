@@ -74,7 +74,12 @@ export const STORE_METHODS = Object.freeze([
  * @property {(n: number, k: number) => Promise<{result: 'claimed'|'held'|'unknown', token: string|null}>} claim
  * @property {(n: number, k: number) => Promise<boolean>} release
  * @property {() => Promise<{n: number, k: number, token: string|null, beat_at: string|null}[]>} listLocks
- * @property {(n: number, k: number) => Promise<string|null>} lockBeatAt
- * @property {(n: number, k: number, expected: string) => 'ok'|'lost'|'unavailable'|Promise<'ok'|'lost'|'unavailable'>} heartbeat
+ * @property {(n: number, k: number, token?: string|null) => Promise<string|null>} lockBeatAt
+ *   When the attempt last beat. `token` is the sha `listLocks` already handed back: pass it and this
+ *   costs one read instead of two.
+ * @property {(n: number, k: number, expected: string) => {result: 'ok'|'lost'|'unavailable', token: string|null}|Promise<{result: 'ok'|'lost'|'unavailable', token: string|null}>} heartbeat
+ *   One compare-and-swap on the claim, leased on where this worker left it. Returns the verdict AND
+ *   the token the next beat leases on — a worker beats every ten minutes, so a bare verdict makes the
+ *   second beat lease on the first one's `expected` and read back as `lost`.
  * @property {(opts?: {after?: number, limit?: number}) => Promise<{id: number, at: string, kind: string, number: number|null, payload: any}[]>} events
  */

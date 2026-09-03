@@ -73,7 +73,7 @@ Three liveness sources, most to least authoritative:
 2. **A live pid** (`process`-mode attempts): `pidAlive(a.pid)`, just as
    authoritative for the same reason — a `process` attempt's heartbeat never
    touches the run comment between beats either.
-3. **Neither** (`manual`, `remote`, or a `claude-bg` job on another host):
+3. **Neither** (`manual`, a legacy `remote` row, or a `claude-bg` job on another host):
    falls back to timing `lastSignal` against an idle threshold
    (`Math.max(d.interval, 1200)` — well above the ~10-minute floor a
    `comment`-mode heartbeat beats on), refreshed by the same lock-ref

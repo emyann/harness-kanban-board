@@ -665,10 +665,15 @@ What that means if you had it:
 
 | you have | what happens now | what to do |
 | --- | --- | --- |
-| `hkb init --with-actions` in a script | exits 2, naming ADR-006 and `hkb up` | drop the flag |
-| a `claude-action` (or any `"mode": "trigger"`) profile in `board.json` | every command that loads the board exits 2, naming the profile | delete the profile from `.kanban/board.json` |
-| cards labelled `kb:agent:claude-action` | the dispatcher skips them: no such profile | re-label them `kb:agent:claude` (or whichever local profile you run) |
+| `hkb init --with-actions` (or `--actions`, `--no-actions`) in a script | exits 2, naming ADR-006 and `hkb up` | drop the flag |
+| a `claude-action` profile in `board.json`, in any shape — including the bare `"claude-action": {}` an override leaves behind | `loadBoard` **drops** it and records why; every other profile still loads and every command still runs | `hkb init` writes the file back without it and says so; `hkb doctor` names it until then |
+| any other profile with `"mode": "trigger"` | the same: dropped, not refused | as above |
+| cards labelled `kb:agent:claude-action` | the dispatcher skips them, and the skip names the card's own re-point | `hkb adopt <n> --agent claude --status <lane>` per card |
 | `.github/workflows/kanban-dispatch.yml` and `kanban-worker-claude.yml` | nothing regenerates or updates them | delete them; nothing else in hkb reads them |
+
+A removed profile is **dropped rather than refused** on purpose. `loadBoard` runs inside every command, so
+throwing there would take down `hkb init` and `hkb doctor` — the two verbs that repair a board — and a
+worker's own terminal verbs, stranding an attempt over a profile it never used.
 
 The replacement is `hkb up` on the machine that owns the board — the same dispatcher, at a 60-second cadence
 instead of Actions' 15-75 minutes.

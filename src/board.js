@@ -133,6 +133,32 @@ export const DEFAULT_PROFILES = {
   },
 };
 
+/**
+ * Profiles hkb used to ship and no longer does. A board.json written by an older hkb still names one
+ * — this repo's own did — and that file is the operator's, so hkb neither throws on it nor keeps a
+ * profile it cannot launch: `loadBoard` drops the entry and records it, the tick skips its cards
+ * naming the re-point, `hkb doctor` reports it, and `hkb init` deletes it from the file.
+ *
+ * Keyed by NAME as well as by the mode the profile ran under, because the shape an operator writes to
+ * tweak a built-in carries no mode at all: `"claude-action": {}` merged over a default that no longer
+ * exists is an empty object, and a `mode`-only check never fires on it.
+ */
+export const REMOVED_PROFILES = {
+  'claude-action': 'the GitHub Actions runner was removed in ADR-006 — the board\'s store is local and single-host, and a dispatcher inside Actions cannot read it',
+};
+
+/**
+ * Why this profile can no longer be loaded, or null. Pure: the name and the merged body, no I/O.
+ * @param {string} name
+ * @param {any} p the profile as merged over its default
+ * @returns {string|null}
+ */
+export function removedProfile(name, p) {
+  if (Object.hasOwn(REMOVED_PROFILES, name)) return REMOVED_PROFILES[name];
+  if (p && p.mode === 'trigger') return 'the "trigger" mode went with the GitHub Actions runner in ADR-006';
+  return null;
+}
+
 export const DEFAULT_BOARD = {
   version: 1,
   repo: null,
@@ -483,24 +509,36 @@ export function loadBoard(root) {
   const cfg = deepMerge(DEFAULT_BOARD, raw);
   // profiles: keep only what the user declared, each merged over the default of the same name
   cfg.profiles = {};
-  for (const [name, p] of Object.entries(raw.profiles || DEFAULT_PROFILES)) cfg.profiles[name] = deepMerge(DEFAULT_PROFILES[name] || {}, p);
+  for (const [name, p] of Object.entries(raw.profiles || DEFAULT_PROFILES)) {
+    // A `null` (or a string, or a list) here is how a human "removes" a profile in JSON; without this
+    // it reaches the validators below as a TypeError with no file and no fix in it.
+    if (p == null || typeof p !== 'object' || Array.isArray(p)) {
+      const err = new Error(`profile "${name}" in ${file} is ${Array.isArray(p) ? 'a list' : JSON.stringify(p)} — a profile must be an object. Remove the entry to drop the profile, or give it a body.`);
+      err.exitCode = 2;
+      throw err;
+    }
+    cfg.profiles[name] = deepMerge(DEFAULT_PROFILES[name] || {}, p);
+  }
+  // Profiles this hkb no longer has (see REMOVED_PROFILES). Dropped rather than refused: a throw here
+  // reaches every command through `makeContextAt`, including `hkb doctor` and `hkb init` — the two
+  // verbs that could repair the file — and a worker's terminal verbs, which would strand an attempt
+  // over a profile it never used. Recorded on the config so the tick, doctor and init can each say
+  // the same thing about it.
+  // Non-enumerable so it never reaches board.json: `hkb init` saves the config it loaded, and this
+  // is a fact about *this* load, not a field the operator owns.
+  Object.defineProperty(cfg, 'removed_profiles', { value: [], writable: true, enumerable: false });
+  for (const [name, p] of Object.entries(cfg.profiles)) {
+    const why = removedProfile(name, p);
+    if (!why) continue;
+    cfg.removed_profiles.push({ name, why });
+    delete cfg.profiles[name];
+  }
   // `effort` renders `--effort <v>` through `{model_args}` (#182) — the one other thing a launch used
   // to be pinned for. Validated here, once, so a typo fails loudly at load time rather than as a flag
   // value the harness itself rejects.
   for (const [name, p] of Object.entries(cfg.profiles)) {
     if (p.effort != null && !EFFORT_LEVELS.includes(p.effort)) {
       const err = new Error(`profile "${name}" has effort "${p.effort}" in ${file} — must be one of ${EFFORT_LEVELS.join(', ')}`);
-      err.exitCode = 2;
-      throw err;
-    }
-  }
-  // The GitHub Actions runner is gone (ADR-006: the store becomes local and single-host, and a
-  // dispatcher in Actions cannot read it). A board.json that still names the mode it ran under would
-  // otherwise claim tasks and then spawn `gh workflow run` as an ordinary process — refuse it here,
-  // at load, with the profile named, rather than let a tick discover it.
-  for (const [name, p] of Object.entries(cfg.profiles)) {
-    if (p.mode === 'trigger') {
-      const err = new Error(`profile "${name}" in ${file} has mode "trigger" — the GitHub Actions runner was removed in ADR-006 and hkb no longer has that mode. Delete the profile (and re-point any card carrying its \`kb:agent:${name}\` label at a local one), then keep the board moving with \`hkb up\`.`);
       err.exitCode = 2;
       throw err;
     }
@@ -784,7 +822,15 @@ export function mainWorktree(root) {
  * checkout a heartbeat pushes from. The local tiers (A4, A5) key everything off it.
  */
 export function storeRoot(ctx) {
-  return mainWorktree(typeof ctx === 'string' ? ctx : ctx?.root || process.cwd());
+  if (typeof ctx === 'string') return mainWorktree(ctx);
+  const root = ctx?.root || process.cwd();
+  // One `git rev-parse --git-common-dir` per process per ctx: the answer cannot change while this
+  // process runs, and `root()` is an accessor a caller will reasonably reach for in a loop.
+  if (ctx && ctx._cache) {
+    if (!ctx._cache.storeRoot) ctx._cache.storeRoot = mainWorktree(root);
+    return ctx._cache.storeRoot;
+  }
+  return mainWorktree(root);
 }
 
 /**

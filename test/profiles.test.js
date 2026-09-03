@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { DEFAULT_PROFILES, DEFAULT_BOARD, loadBoard, makeContext } from '../src/board.js';
+import { DEFAULT_PROFILES, DEFAULT_BOARD, loadBoard, removedProfile, makeContext } from '../src/board.js';
 import { SAFE_BUILTINS, EFFORT_LEVELS, TOOL_POSTURES, CAPABILITIES, toolPosture, capabilityCommand, modelArgs, allowedCommandsFrom, harnessCommands, uncoveredBuiltins } from '../src/model.js';
 import { init } from '../src/init.js';
 import { parseArgs } from '../src/cli.js';
@@ -244,16 +244,58 @@ test('loadBoard refuses effort on a harness with no --effort flag, naming the fi
 });
 
 // #290: the Actions runner is gone, and with it `mode: "trigger"`. A board.json that still names it
-// would otherwise claim a card and then run `gh workflow run` as an ordinary worker process.
-test('loadBoard refuses a profile that still names the removed trigger mode', (t) => {
+// would otherwise claim a card and then run `gh workflow run` as an ordinary worker process. It is
+// DROPPED rather than refused: a throw from loadBoard reaches every command through makeContextAt,
+// including the two that repair a board (`hkb init`, `hkb doctor`) and a worker's own terminal verbs.
+test('loadBoard drops a profile that still names the removed trigger mode, and records why', (t) => {
   const root = scratch(t);
   fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
-  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { 'claude-action': { mode: 'trigger', launch: ['gh', 'workflow', 'run'] } } }));
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { claude: {}, mine: { mode: 'trigger', launch: ['gh', 'workflow', 'run'] } } }));
+  const cfg = loadBoard(root);
+  assert.equal(cfg.profiles.mine, undefined, 'the profile is not loadable');
+  assert.ok(cfg.profiles.claude, 'every other profile still loads');
+  assert.deepEqual(cfg.removed_profiles.map((r) => r.name), ['mine']);
+  assert.match(cfg.removed_profiles[0].why, /ADR-006/);
+});
+
+// The shape an operator actually writes to tweak a built-in carries no `mode` at all — this repo's
+// own board.json said `"claude-action": {}` — so the sweep is keyed on the NAME as well.
+test('loadBoard drops a removed profile named as a bare override, which carries no mode to match on', (t) => {
+  const root = scratch(t);
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { claude: {}, 'claude-action': {} } }));
+  const cfg = loadBoard(root);
+  assert.equal(cfg.profiles['claude-action'], undefined);
+  assert.deepEqual(cfg.removed_profiles.map((r) => r.name), ['claude-action']);
+});
+
+test('removedProfile: by name, by mode, and null for everything else', () => {
+  assert.match(removedProfile('claude-action', {}), /ADR-006/);
+  assert.match(removedProfile('mine', { mode: 'trigger' }), /ADR-006/);
+  assert.equal(removedProfile('claude', DEFAULT_PROFILES.claude), null);
+  assert.equal(removedProfile('mine', null), null);
+});
+
+// The record is about this load, not a field the operator owns: `hkb init` writes back the config it
+// loaded, so a serialized `removed_profiles` would reappear in board.json as data nobody set.
+test('removed_profiles never reaches board.json', (t) => {
+  const root = scratch(t);
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { claude: {}, 'claude-action': {} } }));
+  const cfg = loadBoard(root);
+  assert.equal(JSON.parse(JSON.stringify(cfg)).removed_profiles, undefined);
+});
+
+// A `null` profile is how a human "removes" one in JSON; before this it reached the validators as a
+// TypeError with no file and no fix in it.
+test('loadBoard refuses a profile that is not an object, naming the file and the two ways out', (t) => {
+  const root = scratch(t);
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { claude: null } }));
   assert.throws(() => loadBoard(root), (e) => {
     assert.equal(e.exitCode, 2);
-    assert.match(e.message, /profile "claude-action"/);
-    assert.match(e.message, /ADR-006/);
-    assert.match(e.message, /hkb up/, 'the message names what keeps a board moving instead');
+    assert.match(e.message, /profile "claude"/);
+    assert.match(e.message, /must be an object/);
     return true;
   });
 });

@@ -155,6 +155,12 @@ test('init refuses the removed Actions flag, and the message says what replaces 
   assert.match(msg, /hkb up/, 'the error names the way a board keeps moving now');
   assert.equal(removedInitFlag(parseArgs(['init', '--harness', 'codex']).flags), null, 'a live flag is untouched');
   assert.equal(removedInitFlag({}), null);
+  // Exactly the three spellings of the Actions flag, matched as whole keys: a substring test claimed
+  // every future flag whose name merely contains the word.
+  assert.match(removedInitFlag(parseArgs(['init', '--actions']).flags), /--actions is gone/);
+  assert.match(removedInitFlag(parseArgs(['init', '--no-actions']).flags), /--no-actions is gone/);
+  assert.equal(removedInitFlag(parseArgs(['init', '--transactions']).flags), null, 'a flag that merely contains the word is not the removed one');
+  assert.equal(removedInitFlag(parseArgs(['init', '--board', 'actions-board']).flags), null, 'a value is never a flag key');
 });
 
 test('every harness brings a profile that exists as a built-in', () => {

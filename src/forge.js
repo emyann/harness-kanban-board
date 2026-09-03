@@ -10,10 +10,9 @@ import { GhError, isOffline, graphql, rest } from './gh.js';
 import { api } from './board.js';
 import { taskBranchRe } from './model.js';
 
-// `GhError` and `isOffline` are the transport's vocabulary, and the callers that classify a failure
-// (`src/lifecycle.js`'s outbox, `src/dispatch.js`'s reclaim clock) are not transport callers
-// themselves. They read them from here so `src/gh.js` keeps the short import list §11 counts.
-export { GhError, isOffline };
+// `GhError` and `isOffline` are the transport's vocabulary and stay in `src/gh.js`: a caller that
+// classifies a failure has nothing to do with pull requests, and a board whose store is local still
+// has to tell an offline write from a refused one.
 
 /**
  * Every open PR on the repo, keyed by head branch — one paginated REST read. `closedByPullRequestsReferences`

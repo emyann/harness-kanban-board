@@ -45,6 +45,8 @@ declare global {
     log?: string;
     /** claimed by a human rather than spawned by the tick */
     manual?: boolean;
+    /** Legacy: written by an hkb that still had the Actions runner (ADR-006). Read, never written. */
+    remote?: boolean;
     /** this attempt continues an existing PR / its branch */
     continues_pr?: number;
     continues_branch?: string;

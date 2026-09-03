@@ -15,7 +15,7 @@ import { api, kanbanDir, loadBoard, saveBoard, storeRoot } from '../board.js';
 import {
   L, LABEL_COLORS, STATUSES, parseBodyBlock, serializeBodyBlock, statusOf, agentOf, boardOf,
   parseRunComment, serializeRunComment, parseResultComment, RESULT_MARKER, emptyRun, pickRunComment,
-  lockRef, lockRefPath, classifyLeasePush, trackBranchName, trackBranchRoot,
+  lockRef, lockRefPath, classifyLeasePush, trackBranchName, trackBranchRoot, RUN_MARKER
 } from '../model.js';
 import { openPrsByHead, branchFallbackPrs } from '../forge.js';
 
@@ -744,7 +744,10 @@ export function openGithubStore(ctx) {
 
     // ---- board ----
     board() {
-      const cfg = ctx.cfg || loadBoard(storeRoot(ctx)) || {};
+      // `ctx.cfg` is whatever this process loaded, which inside a linked worktree is that worktree's
+      // file; `setBoard` writes the store's own. Read the same place both ways or a read-modify-write
+      // through the interface drops what the other file held.
+      const cfg = loadBoard(storeRoot(ctx)) || ctx.cfg || {};
       return {
         slug: ctx.board,
         host: cfg.host ?? null,
@@ -764,8 +767,18 @@ export function openGithubStore(ctx) {
     // ---- tasks ----
     /** @param {{states?: string[], blockers?: boolean|'all'}} [opts] */
     listTasks({ states = ['OPEN'], blockers = true } = {}) {
-      const includeClosed = states.map((s) => String(s).toUpperCase()).includes('CLOSED');
-      return fetchBoard(ctx, { includeClosed, blockers });
+      const want = states.map((x) => String(x).toUpperCase());
+      for (const x of want) {
+        if (x === 'OPEN' || x === 'CLOSED') continue;
+        const e = new Error(`listTasks: unknown state "${x}" — a store knows OPEN and CLOSED`);
+        e.exitCode = 2;
+        throw e;
+      }
+      // Closed-only is the reconcile question ("what did GitHub close behind us"), and GitHub answers
+      // it as a recent page rather than the whole history — collapsing it into the open board query
+      // would have returned every OPEN card to a caller that asked for none of them.
+      if (!want.includes('OPEN')) return fetchClosedRecent(ctx);
+      return fetchBoard(ctx, { includeClosed: want.includes('CLOSED'), blockers });
     },
     listClosedRecent: (opts = {}) => fetchClosedRecent(ctx, opts),
     getTask: (n) => getTask(ctx, n),
@@ -777,7 +790,17 @@ export function openGithubStore(ctx) {
       const issue = await createIssue(ctx, { title, body: serializeBodyBlock(kb, body), labels });
       return getTask(ctx, issue.number);
     },
-    updateBody: (n, body) => rest('PATCH', api(ctx, `/issues/${n}`), { body: { body } }),
+    /**
+     * Replace the prose, keep the machine block. A raw PATCH of the whole body drops the
+     * `<!-- kb: {...} -->` line, and every field in it — priority, paths, scheduled_at, max_retries —
+     * silently reverts to the defaults on the next read. The read is what makes that impossible.
+     */
+    async updateBody(n, body) {
+      const task = await getTask(ctx, n);
+      // the module-level writer, which serializes `kb` back in front of the prose
+      await updateBody(ctx, task, task.kb, body);
+      return task;
+    },
     setStatus: (task, status, opts = {}) => setStatus(ctx, task, status, opts),
     setAgent: (task, agent) => setAgent(ctx, task, agent),
     addLabels: (task, names) => addLabels(ctx, task, names),
@@ -795,7 +818,11 @@ export function openGithubStore(ctx) {
     addNote: (n, text) => addComment(ctx, n, text),
     async listNotes(n) {
       const comments = await listComments(ctx, n);
-      return comments.map((c) => ({ id: c.id, at: c.created_at, actor: c.user?.login || null, text: c.body || '' }));
+      // hkb's own run record and result comments live in the same list; every other reader here tells
+      // them apart by their marker, and a note is what a *person* wrote.
+      return comments
+        .filter((c) => !String(c.body || '').includes(RUN_MARKER) && !String(c.body || '').includes(RESULT_MARKER))
+        .map((c) => ({ id: c.id, at: c.created_at, actor: c.user?.login || null, text: c.body || '' }));
     },
 
     // ---- claims ----
@@ -806,16 +833,23 @@ export function openGithubStore(ctx) {
     release: (n, k) => release(ctx, n, k),
     async listLocks() {
       const rows = await listLocks(ctx);
+      // `beat_at` is one commit read per lock, and a tick only needs it for a lock that already looks
+      // stale — so the listing carries the token instead, and `lockBeatAt(n, k, token)` spends the read.
       return rows.map((r) => ({ n: r.n, k: r.k, token: r.sha ?? null, beat_at: null, ref: r.ref }));
     },
-    lockBeatAt: async (n, k) => lockBeatAt(ctx, await lockSha(ctx, n, k)),
+    /** `token` is the sha `listLocks` already returned: pass it and this costs one read, not two. */
+    lockBeatAt: async (n, k, token = null) => lockBeatAt(ctx, token || await lockSha(ctx, n, k)),
     /** The worker side: one CAS on the lock ref, leased on the attempt's own `expected` sha. */
     heartbeat(n, k, expected, opts = {}) {
-      return casHeartbeat(ctx.root, n, k, expected, { remote: remoteName(ctx), ...opts }).result;
+      // `{ result, token }`, never the bare result: the lease is on where this worker left the ref, so
+      // a caller that beats twice needs the sha this beat wrote. Returning only the verdict made the
+      // second beat lease on the first one's `expected` and read back as LOCK_LOST.
+      const r = casHeartbeat(ctx.root, n, k, expected, { remote: remoteName(ctx), ...opts });
+      return { result: r.result, token: r.sha ?? null };
     },
 
     // ---- events ----
-    events() {
+    async events() {
       const e = new Error('the GitHub store has no event log (capabilities().events is false). Move the board to the local store — see docs/local-first.md §6.');
       e.exitCode = 2;
       throw e;
