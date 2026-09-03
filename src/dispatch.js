@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { enableAutoMerge, branchProtection, openPrsByHead, mergedPrsByHead, prMergeStates, staleBaseSha, ensureTrackBranch, fillPrs } from './forge.js';
+import { enableAutoMerge, branchProtection, openPrsByHead, mergedPrsByHead, prMergeStates, staleBaseSha, ensureTrackBranch, fillPrs, dropPrCaches, prsUnavailable } from './forge.js';
 import { openStore, closeStore } from './store/index.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, remoteName, pidFile, readPidFile, pidAlive, recordExit, clearExit, HOOK_SETTINGS_VAR } from './board.js';
 import { workerHookSettings, PKG_ROOT, packageVersion } from './init.js';
@@ -240,12 +240,23 @@ export const RECONCILE_STATUSES = ['triage', 'todo', 'ready', 'running', 'blocke
  * one definition of "this card's branch" the `active_pr` guard and the terminal verbs use. A card
  * that is already `done` or `archived` is not in `RECONCILE_STATUSES` and is left alone, so the pass
  * is idempotent: the second tick after a merge finds nothing to do.
+ *
+ * **A card that moved after the merge is a decision, not a lag.** While the board was GitHub Issues
+ * this pass required the *issue* to be closed, so a human who reopened one was believed. Nothing
+ * closes a card behind hkb's back now, and without a second rule a card whose PR merged and which a
+ * reviewer then sent back with `hkb request-changes` — the fix line `checkOrphanedPrs` itself
+ * recommends — would be forced to `done` again by the very next tick, for as long as that PR stayed
+ * in the listing. So a card whose own `updatedAt` is newer than the merge is left exactly where the
+ * human put it: the merge is old news, and something has happened to this card since.
  */
 export function reconcileDecision(task, mergedByHead) {
   if (!task || !RECONCILE_STATUSES.includes(task.status)) return null;
   const re = taskBranchRe(task.number);
   for (const [head, pr] of mergedByHead || []) {
     if (!re.test(head)) continue;
+    if (task.updatedAt && pr.mergedAt && task.updatedAt > pr.mergedAt) {
+      return { status: null, reason: `PR #${pr.number} merged at ${pr.mergedAt}, but #${task.number} was moved to ${task.status} at ${task.updatedAt} — leaving it there`, pr, skip: 'moved_after_merge' };
+    }
     return { status: 'done', outcome: 'completed', reason: `PR #${pr.number} merged (${head})`, pr };
   }
   return null;
@@ -290,16 +301,31 @@ async function reconcileMerged(ctx, tasks, state, { dryRun = false, log = /** @t
   const gate = shouldReconcile(tasks, state.reconcile);
   if (!gate.run) return { skipped: gate.why, reconciled: [] };
   const store = await openStore(ctx);
-  // One request, whatever the board's size. `mergedPrsByHead` reads a page of closed PRs
-  // newest-updated first, which is where a PR that merged since the last tick is.
+  // One listing, whatever the board's size, and shared with `hkb gc`'s: `mergedPrsByHead` filters
+  // the memoized `state: 'all'` read rather than asking for the closed PRs a second time.
   const mergedByHead = await mergedPrsByHead(ctx);
   const reconciled = [];
+  const skipped = [];
   for (const t of tasks) {
     const d = reconcileDecision(t, mergedByHead);
     if (!d) continue;
+    if (d.skip) { skipped.push({ number: t.number, why: d.skip, reason: d.reason }); log(`#${t.number}: ${d.reason}`); continue; }
+    const runRec = await store.loadRun(t.number);
+    // **Never take a claim away from a worker that is still in it.** `running` is a reconcilable
+    // status — a worker can die while its PR lands — but a reviewer merging a worker's PR mid-task,
+    // or auto-merge landing a node onto its track branch, must not make the tick stamp `ended_at`,
+    // release the lock and close the card underneath it: the worker's next heartbeat is LOCK_LOST
+    // and it exits 3 with no terminal verb, which is the one thing the protocol cannot recover
+    // from. `keep` further down protects the *worktree*; this protects the claim. The worker files
+    // its own terminal verb, and the next tick reconciles what is left.
+    const live = openAttempt(runRec.run);
+    if (live && live.host === ctx.host && live.pid && pidAlive(live.pid)) {
+      skipped.push({ number: t.number, why: 'worker_alive', attempt: live.attempt, pid: live.pid });
+      log(`#${t.number}: ${d.reason}, but attempt ${live.attempt} is still running here (pid ${live.pid}) — leaving its claim alone`);
+      continue;
+    }
     if (dryRun) { reconciled.push({ number: t.number, from: t.status, status: d.status, dry: true }); log(`#${t.number}: [dry-run] ${t.status} → ${d.status} (${d.reason})`); continue; }
     const from = t.status;
-    const runRec = await store.loadRun(t.number);
     const a = closeAttemptForReconcile(runRec.run, d, nowIso());
     if (a) {
       await store.saveRun(t.number, runRec);
@@ -307,14 +333,15 @@ async function reconcileMerged(ctx, tasks, state, { dryRun = false, log = /** @t
     }
     await store.setStatus(t, d.status, { remove: t.needsHuman ? [L.needsHuman] : [] });
     if (t.state !== 'CLOSED') await store.closeTask(t.number, 'completed');
-    const entry = { number: t.number, from, status: d.status, outcome: d.outcome, attempt: a?.attempt ?? null, pr: d.pr?.number ?? null };
-    // The task is over, so its worktrees go — except one whose worker is somehow still alive here.
-    if (a && a.host === ctx.host && a.pid && pidAlive(a.pid)) entry.keep = [a.attempt];
-    reconciled.push(entry);
+    // No `keep`: a card whose open attempt is still running on this host never reaches here — the
+    // live-worker check above leaves it, claim and worktree both, for the worker to finish.
+    reconciled.push({ number: t.number, from, status: d.status, outcome: d.outcome, attempt: a?.attempt ?? null, pr: d.pr?.number ?? null });
     log(`#${t.number}: ${from} → ${d.status} (${d.reason}${a ? `, attempt ${a.attempt} → ${d.outcome}` : ''})`);
   }
+  // A card left alone (a live worker, a human who moved it after the merge) is not "found": caching
+  // it as found would only make the next tick look again, which is exactly what should happen.
   if (!dryRun) state.reconcile = { checked_at: nowIso(), signature: boardSignature(tasks), found: reconciled.length };
-  return { skipped: null, reconciled };
+  return { skipped: null, reconciled, left: skipped };
 }
 
 // ---------- the last step: GitHub's auto-merge ----------
@@ -502,8 +529,7 @@ export function dropCommentCaches(ctx) {
   // `prsByHead` is the same kind of thing: the open-PR listing behind `fillPrs`, memoized so
   // a verb that reads several cards pays for one. It is a tick's worth of truth, never a loop's —
   // a PR opened by a worker last tick must be visible to this one.
-  delete ctx._cache.prsByHead;
-  delete ctx._cache.prsByHeadAll;
+  dropPrCaches(ctx);
 }
 
 // ---------- tick ----------
@@ -574,6 +600,16 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   // head branch (`fillPrs`, src/forge.js). One listing per tick, for the `active_pr` guard, the
   // auto-merge pass and every card the tick renders.
   const tasks = await fillPrs(ctx, await store.listTasks());
+  // A forge this host cannot reach does not stop the tick: the cards are local, and the reclaim,
+  // the reap, the promote pass and the sweeps are all local too. What it does stop is *claiming* —
+  // the `active_pr` guard's whole job is to not start a second attempt on a card whose PR is open,
+  // and an empty `prs` here means "not known", not "none". Deciding from it would open a duplicate
+  // PR, so the tick says so and leaves those cards for the next one.
+  const forgeDown = prsUnavailable(ctx);
+  if (forgeDown) {
+    summary.forge_error = forgeDown;
+    log(`pull requests unreachable (${forgeDown}) — cards are read without them, and nothing is claimed this tick (the active_pr guard cannot be judged)`);
+  }
   // **Where else is absence a verdict?** Two sweeps below decide from a card *not being here* — the
   // reap (`reapDecision(j, null)` stops a background agent and sweeps its checkout) and the orphan
   // lock sweep (a lock whose card is missing is released, and a worker whose lock ref disappears
@@ -597,6 +633,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     const r = await reconcileMerged(ctx, tasks, state, { dryRun, log });
     summary.reconciled = r.reconciled;
     if (r.skipped) summary.reconcile_skipped = r.skipped;
+    if (r.left?.length) summary.reconcile_left = r.left;
   } catch (e) {
     // never let a half-finished reconcile leave a clean cache behind: the next tick must look again
     delete state.reconcile;
@@ -890,6 +927,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     const t = cand.root;
     const note = (why, extra = {}) => { summary.tracks.push({ root: t.number, nodes: cand.track.nodes.map((x) => x.number), ok: false, why, mode: cand.mode || 'none', ...extra }); };
     if (!cand.ok) { note(cand.why); continue; }
+    if (forgeDown) { note(`pull requests unreachable (${forgeDown}) — the active_pr guard cannot be judged`); continue; }
     if (touchedRecently(t.number)) { note('touched recently (stale-read guard)'); continue; }
     if (budget <= 0) { note('no slot'); continue; }
     if ((state.spawned_today || 0) >= d.daily_spawn_cap) { note(`daily spawn cap ${d.daily_spawn_cap}`); continue; }
@@ -996,6 +1034,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     if (summary.fatal) break; // the process is on its way out; claiming more would only orphan it
     if (t.status !== 'ready' || claimedTracks.has(t.number)) continue; // 3a took it: it is running its own track now
     if (coveredBy.has(t.number)) { summary.skipped.push({ number: t.number, why: `held for track #${coveredBy.get(t.number)}` }); continue; }
+    if (forgeDown) { summary.skipped.push({ number: t.number, why: `pull requests unreachable (${forgeDown}) — the active_pr guard cannot be judged` }); continue; }
     if (touchedRecently(t.number)) { summary.skipped.push({ number: t.number, why: 'touched recently (stale-read guard)' }); continue; }
     // active_pr guard first: it must apply even when there is no slot, and for a card with no PR it
     // costs nothing. The one exemption is the card `hkb request-changes` produced — its latest

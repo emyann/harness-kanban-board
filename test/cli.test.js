@@ -326,8 +326,19 @@ test('hkb edit --body-file: an unreadable path and a multi-card body write both 
   // one body, several cards is a typo, not a broadcast — and nothing is written before it is caught
   await assert.rejects(() => main(['edit', '61', '62', '--body', 'same for both']),
     (e) => e.exitCode === 2 && /once per card/.test(e.message));
+  // `--body` with nothing after it is `true`, and `str(true)` is null: the prose was silently
+  // dropped and the command reported success, as long as some *other* flag satisfied the "needs at
+  // least one of" guard. `--body-file` already refused that shape; so does this.
+  await assert.rejects(() => main(['edit', '61', '--body', '--priority', '2']),
+    (e) => e.exitCode === 2 && /--body needs the text after it/.test(e.message));
+  await assert.rejects(() => main(['edit', '61', '--body']),
+    (e) => e.exitCode === 2 && /--body needs the text after it/.test(e.message));
   assert.deepEqual(store.writesTo(61), [], 'the refusal wrote nothing');
   assert.deepEqual(store.writesTo(62), []);
+
+  // `--body ""` is a real value — a human emptying a card's prose — and is still honoured.
+  await main(['edit', '61', '--body', '']);
+  assert.match(store.bodyOf(61), /^<!-- kb: /, 'the machine block survives; the prose is gone');
 });
 
 // ---------- hkb edit rejects a non-numeric --priority / unparseable --scheduled-at (#243) ----------

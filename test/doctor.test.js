@@ -19,7 +19,7 @@ import {
   tallyDeniedTools, deniedToolsFinding, checkDeniedTools,
   CAPABILITIES_CHECK, checkCapabilityMap,
   TOOL_POSTURE_CHECK, checkToolPosture, CARD_GRANTS_CHECK, checkCardGrants, checkRemovedProfiles,
-  STORE_CHECK, BRANCH_CHECK, INDEX_CHECK, MOUNT_CHECK, checkLocalStore, PATH_OVERLAP_CHECK, doctor } from '../src/doctor.js';
+  STORE_CHECK, BRANCH_CHECK, INDEX_CHECK, MOUNT_CHECK, checkLocalStore, CLAIM_CHECK, checkClaimLock, PATH_OVERLAP_CHECK, doctor } from '../src/doctor.js';
 import { CAPABILITIES, capabilityGrants, effectiveTools, toolPosture } from '../src/model.js';
 import { normalizeCardGrants } from '../src/board.js';
 import { setTransport, GhError } from '../src/gh.js';
@@ -1434,4 +1434,63 @@ test('a malformed path_overlap guard is reported even when the forge is unreacha
   const by = Object.fromEntries(JSON.parse(out).map((r) => [r.name, r]));
   assert.equal(by[PATH_OVERLAP_CHECK].ok, false);
   assert.match(by[PATH_OVERLAP_CHECK].fix, /path_overlap/);
+});
+
+// ---------- `hkb doctor --api`'s claim probe (#304 review, items 7 and 8) ----------
+
+/**
+ * **A diagnosis does not create what it describes.** `s.index` is a lazy getter that opens a
+ * *writing* connection — it `mkdir`s the directory, creates the file and runs the schema — so on the
+ * board this check matters most for (one no verb has opened on this host yet, or one mid-migration)
+ * doctor was reporting on an index it had just made itself. `checkLocalStore` avoids that with
+ * `indexFileIn`; this check had not.
+ */
+test('the claim probe does not create the index it is diagnosing', async () => {
+  const { root, ctx } = localBoard();
+  const { indexFileIn } = await import('../src/store/sqlite.js');
+  const { storeGitDir } = await import('../src/board.js');
+  const file = indexFileIn(storeGitDir(ctx), 'default');
+  assert.equal(fs.existsSync(file), false, 'the fixture starts with no index, which is the case under test');
+  const rows = [];
+  const push = (ok) => (name, detail, fix) => rows.push({ name, ok, detail, fix });
+
+  await checkClaimLock(ctx, { ok: push(true), bad: push(false), warn: push(null) });
+
+  assert.equal(rows[0].name, CLAIM_CHECK);
+  assert.equal(rows[0].ok, null, 'a probe with nothing to probe is a warning, not a verdict');
+  assert.match(rows[0].detail, /is not there yet/);
+  assert.equal(fs.existsSync(file), false, 'and doctor did not conjure one to report on');
+  assert.ok(root);
+});
+
+test('the claim probe takes and releases the write lock on an index that is really there', async () => {
+  const { ctx } = localBoard();
+  // A verb opens the board, which is what builds the index — the state this probe is written for.
+  const { openLocalStore } = await import('../src/store/local.js');
+  const { openGitTier } = await import('../src/store/git.js');
+  openGitTier(ctx).init('default');
+  const store = openLocalStore(ctx);
+  store.createTask({ title: 'a card', status: 'ready' });
+  store.close();
+  const rows = [];
+  const push = (ok) => (name, detail, fix) => rows.push({ name, ok, detail, fix });
+
+  await checkClaimLock(ctx, { ok: push(true), bad: push(false), warn: push(null) });
+
+  assert.equal(rows[0].ok, true, rows[0].detail);
+  assert.match(rows[0].detail, /BEGIN IMMEDIATE taken and released/);
+  assert.match(rows[0].detail, /journal_mode WAL/);
+});
+
+/**
+ * Doctor's contract is that a skipped check is distinguishable from a passing one. `checkLocalStore`
+ * used to `return` bare when the store was not `local` — no `ok`, no `warn`, no `bad` — so the store
+ * check simply vanished from the report. `kind` is a caller-supplied override and the seam a second
+ * driver would arrive through.
+ */
+test('a store this check has nothing to say about still says so', async () => {
+  const rows = await probe({ root: '/tmp/none', cfg: { profiles: {} }, board: 'default', _cache: {} }, { kind: 'somebody-elses-driver' });
+  assert.equal(rows[STORE_CHECK].ok, null, 'a line, not a silence');
+  assert.match(rows[STORE_CHECK].detail, /nothing to say/);
+  assert.equal(rows[BRANCH_CHECK], undefined);
 });

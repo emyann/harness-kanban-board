@@ -61,3 +61,44 @@ test('an open PR on a branch that names no hkb task at all is silent', async () 
     assert.match(s.results[0].detail, /no open PR/);
   } finally { cleanup(); }
 });
+
+/**
+ * **A verdict is never derived from a read that failed** (#304 review, item 6).
+ *
+ * Every `getTask` throw used to be swallowed by `catch { continue; }`, so in exactly the window this
+ * card creates — a board mid-migration, where `getTask` throws — doctor printed "N open PRs, all on
+ * cards still open": a clean bill of health computed from nothing at all. The same swallow hid an
+ * offline or logged-out `gh`.
+ */
+test('a card the board could not answer for suppresses the ok, and is named', async () => {
+  const { gh, store, ctx, cleanup } = harness();
+  try {
+    store.addIssue(kbIssue({ number: 60, status: 'running' }));
+    gh.addPull({ number: 70, head: 'worktree-kb-60-1' });
+    gh.addPull({ number: 71, head: 'kb-61-1' }); // #61 is on no board this store can read
+    const s = sink();
+
+    await checkOrphanedPrs(ctx, s, { card: async (c, n) => { if (n === 61) throw new Error('no board here'); return store.raw().getTask(n); } });
+
+    assert.equal(s.results[0].ok, null, 'not an ok — this check could not see the whole picture');
+    assert.match(s.results[0].detail, /could not be read/);
+    assert.match(s.results[0].detail, /#61 — no board here/);
+    assert.match(s.results[0].fix, /fix the board read first/);
+  } finally { cleanup(); }
+});
+
+test('an unreadable card is named alongside the orphans, not instead of them', async () => {
+  const { gh, store, ctx, cleanup } = harness();
+  try {
+    store.addIssue(kbIssue({ number: 227, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED' }));
+    gh.addPull({ number: 232, head: 'kb/227' });
+    gh.addPull({ number: 233, head: 'kb-61-1' });
+    const s = sink();
+
+    const orphans = await checkOrphanedPrs(ctx, s, { card: async (c, n) => { if (n === 61) throw new Error('no board here'); return store.raw().getTask(n); } });
+
+    assert.equal(orphans.length, 1);
+    assert.match(s.results[0].detail, /#227 \(done\) ← PR #232/);
+    assert.match(s.results[0].detail, /1 card could not be read/);
+  } finally { cleanup(); }
+});

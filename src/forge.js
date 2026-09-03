@@ -180,32 +180,20 @@ export async function prsByHead(ctx, { state = 'open' } = {}) {
 /**
  * Every *merged* PR on the repo, keyed by head branch — the reconcile pass's input.
  *
- * One page of the closed-PR listing, newest-updated first: a PR that merged since the last tick is
- * by definition freshly updated, so it sits at the top. One request per tick whatever the board's
- * size, and the tick only asks when something is in flight (`shouldReconcile`, src/dispatch.js).
- * A PR that merged and then sat untouched while a hundred others closed behind it falls off the
- * page — the card is then moved by `hkb merge` or by hand, and `hkb doctor` still names it.
+ * **Not its own request.** This reads the memoized `state: 'all'` listing (`prsByHeadCached`) and
+ * filters it, because a separate closed-PR listing was a second read of the same rows: `hkb gc`
+ * already asks for `all`, and a tick that ran both paid twice for one answer. The tick's own
+ * `active_pr` guard still wants `open` — a merged PR must not read as an open one on a card — so a
+ * gc tick is two listings, both memoized, and an ordinary tick that reconciles is one plus one.
+ *
+ * The `all` listing is newest-updated first, so a PR that merged since the last tick is on its
+ * first page. A PR that merged and then sat untouched while a thousand others moved falls off it —
+ * the card is then moved by `hkb merge` or by hand, and `hkb doctor` still names it.
  */
 export async function mergedPrsByHead(ctx) {
+  const all = await prsByHeadCached(ctx, { state: 'all' });
   const out = new Map();
-  const batch = await rest('GET', api(ctx, '/pulls?state=closed&sort=updated&direction=desc&per_page=100'));
-  for (const p of batch || []) {
-    const head = p.head?.ref;
-    if (!head || !(p.merged_at || p.merged)) continue;
-    if (out.has(head)) continue; // newest-updated wins; an older PR on the same branch is history
-    out.set(head, {
-      number: p.number,
-      nodeId: p.node_id,
-      state: 'MERGED',
-      isDraft: false,
-      url: p.html_url,
-      headRefName: head,
-      baseRefName: p.base?.ref || null,
-      merged: true,
-      mergedAt: p.merged_at || null,
-      autoMergeEnabled: false,
-    });
-  }
+  for (const [head, pr] of all) if (pr.merged) out.set(head, pr);
   return out;
 }
 
@@ -241,30 +229,82 @@ export function branchFallbackPrs(task, openByHead) {
  * (`dropPrCaches`), so a loop never judges a card on last tick's listing.
  *
  * `state: 'all'` is for the caller that has to see a PR after it merged — `hkb gc`, deciding whether
- * a subagent's checkout is scrap. It is memoized in its own slot, so a tick that wants both pays for
- * one of each rather than one of whichever came first.
+ * a subagent's checkout is scrap, and the reconcile pass. It is memoized in its own slot, so a tick
+ * that wants both pays for one of each rather than one of whichever came first.
+ *
+ * **A forge that cannot be reached does not fail the board read.** The cards come from the local
+ * store, which needs no network at all — `hkb init` says out loud that the board "works with `gh`
+ * logged out, on a plane, and at no API cost", and that has to stay true now that this join is on
+ * the path of `hkb list`, `show`, `graph`, `track` and the tick itself. A pull request is an
+ * *enrichment* of a card, so a failed listing leaves `prs: []` and records why on the context
+ * (`prsUnavailable`), for the caller to print as a line rather than an exit code.
+ *
+ * `required: true` is the opposite contract, for the caller that cannot honestly act on "no PR":
+ * `hkb finish` would record a protocol violation for work that is sitting in a PR it could not see,
+ * and `hkb merge` would refuse a card whose PR is right there. Those throw.
  *
  * @template {any} T
  * @param {any} ctx
  * @param {T} tasks  one task or an array of them — returned as given, filled in place
- * @param {{state?: 'open'|'all'}} [opts]
+ * @param {{state?: 'open'|'all', required?: boolean}} [opts]
  * @returns {Promise<T>}
  */
-export async function fillPrs(ctx, tasks, { state = 'open' } = {}) {
+export async function fillPrs(ctx, tasks, { state = 'open', required = false } = {}) {
   const list = (Array.isArray(tasks) ? tasks : [tasks]).filter(Boolean);
   if (!list.some((t) => !(t.prs || []).length)) return tasks;
+  let openByHead;
+  try {
+    openByHead = await prsByHeadCached(ctx, { state });
+  } catch (e) {
+    if (required) throw e;
+    ctx._cache.prsUnavailable = /** @type {Error} */ (e).message || String(e);
+    for (const t of list) if (!Array.isArray(t.prs)) t.prs = [];
+    return tasks;
+  }
+  delete ctx._cache.prsUnavailable;
+  for (const t of list) t.prs = branchFallbackPrs(t, openByHead);
+  return tasks;
+}
+
+/**
+ * The memoized listing behind `fillPrs` and `mergedPrsByHead` — one slot per `state`, holding the
+ * *promise* so concurrent readers share one request, and forgetting a failed one so the next read
+ * retries rather than replaying the error.
+ * @param {any} ctx
+ * @param {{state?: 'open'|'all'}} [opts]
+ */
+export async function prsByHeadCached(ctx, { state = 'open' } = {}) {
   const slot = state === 'all' ? 'prsByHeadAll' : 'prsByHead';
   if (!ctx._cache[slot]) ctx._cache[slot] = prsByHead(ctx, { state });
   const pending = ctx._cache[slot];
-  let openByHead;
   try {
-    openByHead = await pending;
+    return await pending;
   } catch (e) {
     if (ctx._cache[slot] === pending) delete ctx._cache[slot];
     throw e;
   }
-  for (const t of list) t.prs = branchFallbackPrs(t, openByHead);
-  return tasks;
+}
+
+/**
+ * Why the last `fillPrs` on this context came back without pull requests, or `null` when the forge
+ * answered. A caller prints it as a line ("cards shown without their pull requests: …") and, where
+ * the decision depends on PR state — the dispatcher's `active_pr` guard — declines to decide rather
+ * than reading the empty list as "no PR".
+ * @param {any} ctx
+ * @returns {string|null}
+ */
+export function prsUnavailable(ctx) { return ctx?._cache?.prsUnavailable || null; }
+
+/**
+ * Forget both listings. The dispatcher calls it at the top of every tick and `hkb serve` after any
+ * write that could have opened, merged or closed a PR — a read answered from the listing taken
+ * before the write is the divergence both exist to prevent.
+ * @param {any} ctx
+ */
+export function dropPrCaches(ctx) {
+  delete ctx._cache.prsByHead;
+  delete ctx._cache.prsByHeadAll;
+  delete ctx._cache.prsUnavailable;
 }
 
 /**

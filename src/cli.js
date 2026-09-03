@@ -719,7 +719,12 @@ async function runVerb(argv, keep) {
           throw usage(`--body-file: cannot read ${p} (${e.code || e.message}) — write the file first, or pass the text with --body`);
         }
       } else if (flags.body !== undefined) {
+        // `--body` with nothing after it is `true`, and `str(true)` is null — which used to fall
+        // through the "needs at least one of" guard whenever another flag was set and report
+        // success having silently dropped the prose. `--body-file` two lines above already refuses
+        // that shape; so does this. `--body ""` is a real value (it empties the card) and is kept.
         body = str(flags.body);
+        if (body === null) throw usage('--body needs the text after it (--body "…"), or pass a path with --body-file');
       }
       if (body !== null && ns.length > 1) {
         throw usage(`--body-file/--body writes one card's prose, and you named ${ns.length} — run it once per card`);

@@ -519,6 +519,99 @@ test('a merged PR moves its card to done on the next tick, found by its head bra
   assert.equal(h.store.statusOf(7), 'done');
 });
 
+/**
+ * **A merge does not take a claim away from a worker that is still in it** (#304 review, item 3).
+ *
+ * `running` is a reconcilable status — a worker can die while its pull request lands — but a
+ * reviewer merging a worker's PR mid-task, or auto-merge landing a node onto its track branch, must
+ * not make the tick stamp `ended_at`, release the lock and close the card out from under it. The
+ * worker's next `hkb heartbeat` would be LOCK_LOST and it would exit 3 with no terminal verb, which
+ * is the one shape the protocol cannot recover from. `keep` protects the worktree; this is the
+ * claim.
+ */
+test('a merged PR leaves a live worker its claim, and reconciles the card once the worker is gone', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  // The one pid guaranteed to be alive here, and to be this host's: our own.
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(60), heartbeat_at: ago(10), pid: process.pid }]);
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.store.hold(7, 1);
+  h.gh.addPull({ number: 90, head: 'kb-7-1', state: 'closed', merged: true, mergedAt: ago(30) });
+
+  const s = await h.tick({ max: 0 });
+
+  assert.deepEqual(s.reconciled, [], 'nothing was reconciled while the worker was in it');
+  assert.deepEqual(s.reconcile_left, [{ number: 7, why: 'worker_alive', attempt: 1, pid: process.pid }]);
+  assert.equal(h.store.statusOf(7), 'running', 'the card stays where the worker left it');
+  assert.deepEqual(await h.store.locks(), ['7/1'], 'and it still holds its claim');
+  assert.equal(h.store.runOf(7).attempts[0].ended_at, undefined, 'no ended_at was stamped under it');
+  assert.match(h.log(), /still running here \(pid \d+\) — leaving its claim alone/);
+
+  // The worker is gone: the very next tick reconciles what the merge left behind.
+  h.store.runOf(7).attempts[0].pid = 4_000_000; // a pid no process on this host has
+  const again = await h.tick({ max: 0 });
+  assert.deepEqual(again.reconciled.map((r) => ({ number: r.number, status: r.status })), [{ number: 7, status: 'done' }]);
+});
+
+/**
+ * **A card a human moved after the merge stays where they put it** (#304 review, item 4).
+ *
+ * While the board was GitHub Issues this pass required the *issue* to be closed, so a reopened card
+ * was believed. Without a second rule, a card whose PR merged and which a reviewer then sent back
+ * with `hkb request-changes` — the fix line `checkOrphanedPrs` itself recommends — is forced back to
+ * `done` and closed again by the next tick, for as long as that PR stays in the listing.
+ */
+test('a card moved after its PR merged is left alone, not dragged back to done', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.store.addIssue(kbIssue({
+    number: 7, status: 'todo', agent: 'claude', updatedAt: ago(10),
+    run: runWith([{ attempt: 1, outcome: 'changes_requested', pr: 90, ended_at: ago(10) }]),
+  }));
+  h.gh.addPull({ number: 90, head: 'kb-7-1', state: 'closed', merged: true, mergedAt: ago(600) });
+
+  const s = await h.tick({ max: 0 });
+
+  assert.deepEqual(s.reconciled, [], 'the merge is older news than the card');
+  assert.equal(s.reconcile_left?.[0]?.why, 'moved_after_merge');
+  // `ready`, not `todo`: the promote pass ran after the reconcile pass and moved an unblocked card
+  // along, which is the ordinary board doing its job. What matters is that it is not `done`.
+  assert.equal(h.store.statusOf(7), 'ready');
+  assert.notEqual(h.store.stateOf(7).state, 'CLOSED', 'and it was not closed again');
+  assert.match(h.log(), /but #7 was moved to todo at/);
+
+  // The other side of the same rule: a card that has *not* moved since the merge still reconciles.
+  h.store.addIssue(kbIssue({ number: 8, status: 'review', agent: 'claude', updatedAt: ago(900) }));
+  h.gh.addPull({ number: 91, head: 'kb-8-1', state: 'closed', merged: true, mergedAt: ago(600) });
+  const again = await h.tick({ max: 0 });
+  assert.deepEqual(again.reconciled.map((r) => r.number), [8]);
+});
+
+/**
+ * **An unreachable forge does not fail the tick, and does not let it guess** (#304 review, item 1).
+ *
+ * The cards are local and need no network at all; a pull request is an *enrichment* of one. So a
+ * failed listing leaves `prs: []` and the tick goes on doing its local work — but it must not then
+ * read that empty list as "this card has no PR", because the `active_pr` guard's whole job is to not
+ * open a second pull request on a card that already has one. It declines to decide instead.
+ */
+test('a forge that cannot be reached degrades the tick rather than aborting it, and claims nothing', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'triage', agent: 'claude' }));
+  h.gh.fail({ method: 'GET', path: '/pulls?state=open' }, { status: 503, message: 'no route to host', times: 99 });
+
+  const s = await h.tick();
+
+  assert.match(s.forge_error, /no route to host/, 'the tick says why, rather than throwing');
+  assert.deepEqual(s.claimed, [], 'and claims nothing while the guard cannot be judged');
+  assert.deepEqual(await h.store.locks(), [], 'no lock was taken');
+  assert.equal(h.store.statusOf(7), 'ready', 'the card is left exactly where it was');
+  assert.match(s.skipped.find((x) => x.number === 7)?.why || '', /^pull requests unreachable \(.*no route to host\) — the active_pr guard cannot be judged$/);
+  assert.match(h.log(), /pull requests unreachable .* nothing is claimed this tick/);
+});
+
 // ---------- the active_pr guard and its one exemption (#153) ----------
 
 test('activePrGuard: only the reviewer\'s changes_requested row exempts an open PR', () => {

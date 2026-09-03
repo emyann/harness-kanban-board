@@ -6,6 +6,7 @@ import { GhError, isOffline } from './gh.js';
 import { outboxFile, assertOnBoard } from './board.js';
 import { openStore } from './store/index.js';
 import { sessionForAttempt } from './hook.js';
+import { sweepTask, pidAlive } from './gc.js';
 import {
   openAttempt, computeReady, blockerDone, promoteDecision, serializeResultComment, hashReason,
   BLOCK_KINDS, DEFAULT_KB, L, mergePolicy, mergeDecision,
@@ -255,7 +256,11 @@ export async function complete(ctx, number, { summary, metadata = {}, artifacts 
   const runRec = await store.loadRun(number);
   // The card came from the store; its pull request comes from the forge, and the branch name is the
   // join (`fillPrs`, src/forge.js). Nothing on GitHub's side links the two any more.
-  await fillPrs(ctx, task);
+  //
+  // `required`: an unreachable forge must not read here as "this card has no PR". That answer costs
+  // the worker its work — `noPrDecision` records a protocol violation and parks the card — for a
+  // pull request that is sitting there, unread. Fail with the forge's own error instead.
+  await fillPrs(ctx, task, { required: true });
   const decision = prReadyDecision(task.prs);
   if (!decision.pr) {
     const noPrCheck = noPrDecision(number, { noPr, noPrReason });
@@ -345,7 +350,9 @@ export async function requestReview(ctx, number, { summary, metadata = {}, revie
   const task = await store.getTask(number);
   assertOnBoard(ctx, task);
   const runRec = await store.loadRun(number);
-  await fillPrs(ctx, task);
+  // `required`: the attempt row names the PR this review is on, and `finishPr` below has to reach
+  // the forge anyway — a listing that failed must not record "reviewed, no PR".
+  await fillPrs(ctx, task, { required: true });
   const decision = prReadyDecision(task.prs);
   const a = await finishAttempt(ctx, store, task, runRec, { attempt }, 'review_requested', { summary: String(summary).slice(0, 400), ...prAttemptFields(decision) });
   const continued = !!(decision.pr && a.continues_pr === decision.pr.number);
@@ -415,7 +422,9 @@ export async function mergeCard(ctx, number, { summary } = {}) {
   assertOnBoard(ctx, task);
   const policy = mergePolicy(ctx.cfg);
   const runRec = await store.loadRun(number);
-  await fillPrs(ctx, task);
+  // `required`: `mergeDecision` refuses a card with no open PR, and "the listing failed" must not
+  // reach the operator wearing that refusal's wording.
+  await fillPrs(ctx, task, { required: true });
   const openPr = (task.prs || []).find((p) => p && p.state === 'OPEN') || null;
   let checksState = null;
   if (!policy.error && policy.mode === 'operator' && openPr) {
@@ -436,7 +445,19 @@ export async function mergeCard(ctx, number, { summary } = {}) {
   // tick, and this is the verb.
   await store.setStatus(task, 'done', { remove: [L.needsHuman] });
   if (task.state !== 'CLOSED') await store.closeTask(number, 'completed');
-  return { number, pr: decision.pr.number, method: decision.method, merged: true, merged_by: 'operator', status: 'done' };
+  // ...and because it does, the tick's reconcile pass never sees this card again — `done` is not a
+  // `RECONCILE_STATUSES` status, and `sweepFinished` is driven by what that pass reconciled
+  // (src/dispatch.js). Cleanup used to arrive that way, one tick later; now it has to happen here,
+  // or a merged card's worktree and branch survive until the periodic full sweep — for ever on a
+  // board whose dispatcher is not running. Same call the tick makes, with the same `keep`: a live
+  // worker on this host keeps the checkout it is sitting in.
+  const keep = runRec.run.attempts.filter((a) => !a.ended_at && a.host === ctx.host && a.pid && pidAlive(a.pid)).map((a) => a.attempt);
+  let cleaned = null;
+  try {
+    const r = sweepTask(ctx, number, { keep });
+    if (r.worktrees || r.branches) cleaned = r;
+  } catch { /* local git only, and the next `hkb gc`/tick sweep retries it — never fail a merge on cleanup */ }
+  return { number, pr: decision.pr.number, method: decision.method, merged: true, merged_by: 'operator', status: 'done', cleaned };
 }
 
 // ---------- board verbs (create, link) ----------

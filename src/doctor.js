@@ -2,14 +2,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
-import { boardFile, api, readState, writeState, processState, storeGitDir, remoteName, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches } from './board.js';
+import { ghAuthStatus, rest, restRaw, graphql, GhError } from './gh.js';
+import { boardFile, api, readState, writeState, processState, storeGitDir, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches } from './board.js';
 // The board reads go through the seam like every other verb's; the *probes* do not, and must not.
-// `hkb doctor --api` asks GitHub questions about GitHub — does this repo have `Issue.blockedBy`, can
-// this token create a lock ref, does a `--force-with-lease` push land — and there is no
-// store-neutral way to ask them. So they call the GitHub driver and the forge by name, and they go
-// with it (docs/local-first.md §7). Each is already gated on the board's store where it matters.
-import { branchProtection, openPrsByHead, classifyClaimError, listTrackBranches } from './forge.js';
+// `hkb doctor --api` asks the **forge** questions about the forge — is this repo reachable with
+// this token, what does its branch protection require, which of hkb's own branches carry an open
+// pull request — and there is no store-neutral way to ask them, so they call `src/forge.js` by
+// name. The probes that used to sit beside them are gone with the GitHub store (ADR-006): a claim
+// is no longer a `refs/kb/locks/*` ref to be created, force-pushed and deleted but a `BEGIN
+// IMMEDIATE` on the board index, which is what `checkClaimLock` asks now.
+import { branchProtection, openPrsByHead, listTrackBranches } from './forge.js';
 import { openStore, closeStore, storeKind } from './store/index.js';
 import { L, STATUSES, SAFE_BUILTINS, capabilityGrants, effectiveTools, toolPosture, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren, branchTaskNumber, denialDisplayTool, DENIAL_KINDS, mcpVisibilityDiagnosis, mcpGrantedTo } from './model.js';
 import { resolvedIdentity } from './hook.js';
@@ -31,9 +33,6 @@ import { mcpServersFromTranscript } from './stats.js';
 const fetchBoard = async (ctx, opts = {}) => (await openStore(ctx)).listTasks(opts);
 const fetchClosedRecent = async (ctx, opts = {}) => (await openStore(ctx)).listClosedRecent(opts);
 const loadRun = async (ctx, n) => (await openStore(ctx)).loadRun(n);
-
-/** `storeKind`, but a board.json that names no store it understands is not this check's failure. */
-function storeKindOf(ctx) { try { return storeKind(ctx); } catch { return 'local'; } }
 
 function has(cmd) { return spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).status === 0; }
 function version(cmd, args = ['--version']) { const r = spawnSync(cmd, args, { encoding: 'utf8' }); return r.status === 0 ? (r.stdout || r.stderr).trim().split('\n')[0] : null; }
@@ -197,7 +196,11 @@ export const MOUNT_CHECK = 'index filesystem';
 export async function checkLocalStore(ctx, { ok, warn, bad }, { kind = null, mounts = '/proc/mounts', store = null } = {}) {
   let which = kind;
   try { which = which || storeKind(ctx); } catch (e) { return bad(STORE_CHECK, /** @type {Error} */ (e).message, 'remove "store" from .kanban/board.json — hkb has one store'); }
-  if (which !== 'local') return; // unreachable today: `storeKind` knows one store
+  // A skipped check says so. Returning `undefined` here made the store check *vanish* from the
+  // report — indistinguishable from a passing one, which is the one thing doctor may never be.
+  // `kind` is a caller-supplied override and the seam a second driver would arrive through, so this
+  // is reachable the moment there is one.
+  if (which !== 'local') return warn(STORE_CHECK, `store "${which}" — hkb has no branch, index or mount to check for it, so this check has nothing to say`, 'nothing: hkb has one store, the local kb-board branch');
 
   // Imported here, not at the top of the file: `local.js` pulls in `node:sqlite`, and every command
   // that reaches this file must not die on that import before `main()` runs. Same rule as
@@ -283,20 +286,41 @@ export const CLAIM_CHECK = 'claim lock';
  */
 export async function checkClaimLock(ctx, { ok, bad, warn }, { store = null } = {}) {
   const { openLocalStore } = await import('./store/local.js');
+  const { indexFileIn } = await import('./store/sqlite.js');
+  // **A diagnosis does not create what it describes** — the same rule `checkLocalStore` follows
+  // twenty lines up, and this check had been breaking it. `s.index` is a lazy getter that opens a
+  // *writing* connection: it `mkdir`s the directory, creates the file and runs the schema. So on
+  // the board this check matters most for — one that no verb has opened on this host yet, or one
+  // mid-migration — doctor reported on an index it had just made itself. The path is computed, the
+  // file is looked at, and only an index that is already there is probed — so the getter is never
+  // reached on a board that has none. It is deliberately *not* a read-only handle: `BEGIN
+  // IMMEDIATE` is a write, and a connection that refuses writes would fail the probe for a reason
+  // that has nothing to do with the board.
   const s = store || openLocalStore(ctx, { reconcile: false });
   try {
+    const file = s.indexOpen ? s.index.file : indexFileIn(storeGitDir(ctx), ctx?.board || null);
+    const where = path.relative(s.root(), file);
+    if (!fs.existsSync(file)) {
+      return warn(CLAIM_CHECK, `${where} is not there yet, so there is no write lock to probe — no verb has opened this board on this host`, 'hkb list, then run this again');
+    }
     const db = s.index.db;
-    const where = path.relative(s.root(), s.index.file);
     const mode = String(db.prepare('PRAGMA journal_mode').get()?.journal_mode || '').toLowerCase();
+    // Two statements, two `try`s: sharing one made a throwing `ROLLBACK` report as "the index would
+    // not give this process the write lock" — which is false, it had just given it — and left the
+    // write transaction open on this handle for whatever ran next.
     try {
       db.exec('BEGIN IMMEDIATE');
-      db.exec('ROLLBACK');
     } catch (e) {
       const msg = /** @type {Error} */ (e).message || '';
       if (/busy|locked/i.test(msg)) {
         return warn(CLAIM_CHECK, `${where} is write-locked right now — something else is mid-transaction (that is the lock working)`, 'run it again, or `hkb down` first if you want the probe to be conclusive');
       }
       return bad(CLAIM_CHECK, `the index would not give this process the write lock: ${msg}`, `check the filesystem ${where} is on — SQLite needs POSIX locking, which a 9p or NFS mount does not give it`);
+    }
+    try {
+      db.exec('ROLLBACK');
+    } catch (e) {
+      return bad(CLAIM_CHECK, `BEGIN IMMEDIATE was taken on ${where} but would not roll back: ${/** @type {Error} */ (e).message} — this process is holding a write transaction open`, 'stop this process and run `hkb doctor` again; if it repeats, the index is damaged — delete it and let the next verb rebuild it');
     }
     if (mode !== 'wal') {
       return warn(CLAIM_CHECK, `BEGIN IMMEDIATE works, but journal_mode is "${mode}", not WAL — a reader and the dispatcher's writer will block each other`, `delete the index and let the next verb rebuild it: rm ${s.index.file}*`);
@@ -735,17 +759,32 @@ export async function checkOrphanedPrs(ctx, { ok, warn }, { openByHead = openPrs
   }
   if (!candidates.length) return ok(ORPHANED_PR_CHECK, 'no open PR sits on a branch hkb would have made for one of its own cards');
   const orphans = [];
+  // **A verdict is never derived from a read that failed.** Every `getTask` throw used to be
+  // swallowed, so in exactly the window this check is for — a board mid-migration, where `getTask`
+  // throws `noBoardHere` for every card — doctor printed "N open PRs, all on cards still open": a
+  // clean bill of health computed from nothing at all. The same swallow hid an offline or logged-out
+  // `gh`. Unreadable cards are counted and named, and they suppress the `ok`.
+  const unreadable = [];
   for (const { n, pr } of candidates) {
     let row;
-    try { row = await read(ctx, n); } catch { continue; } // no such card, or unreadable — not this check's failure to report
+    try { row = await read(ctx, n); } catch (e) { unreadable.push({ n, pr: pr.number, error: /** @type {Error} */ (e).message }); continue; }
     const settled = String(row.state || 'OPEN').toUpperCase() === 'CLOSED' || ['done', 'archived'].includes(row.status);
     if (!settled) continue; // still open: `fillPrs` puts this PR back on the card at every read
     orphans.push({ n, pr: pr.number, reason: row.status || String(row.stateReason || 'closed').toLowerCase(), url: pr.url });
   }
-  if (!orphans.length) return ok(ORPHANED_PR_CHECK, `${plural(candidates.length, 'open PR')} on hkb's own branches, all on cards still open`);
+  const unread = unreadable.length
+    ? ` (${plural(unreadable.length, 'card')} could not be read, so this verdict does not cover ${unreadable.length === 1 ? 'it' : 'them'}: ${unreadable.slice(0, 3).map((u) => `#${u.n} — ${u.error}`).join(' · ')})`
+    : '';
+  if (!orphans.length && !unreadable.length) return ok(ORPHANED_PR_CHECK, `${plural(candidates.length, 'open PR')} on hkb's own branches, all on cards still open`);
+  if (!orphans.length) {
+    warn(ORPHANED_PR_CHECK,
+      `${plural(candidates.length, 'open PR')} on hkb's own branches, and no orphan among the ones this could read${unread}`,
+      'hkb doctor reads the board through the store — fix the board read first (hkb list), then run this again');
+    return orphans;
+  }
   const detail = orphans.map((o) => `#${o.n} (${o.reason}) ← PR #${o.pr}`).join(' · ');
   warn(ORPHANED_PR_CHECK,
-    `${plural(orphans.length, 'card')} closed with an open PR still sitting on its branch, unreferenced: ${detail}`,
+    `${plural(orphans.length, 'card')} closed with an open PR still sitting on its branch, unreferenced: ${detail}${unread}`,
     'reopen the card (hkb request-changes "…", or hkb adopt + hkb unblock) so a worker picks the PR back up, or merge the PR by hand and leave the card closed');
   return orphans;
 }

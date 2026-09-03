@@ -663,6 +663,35 @@ test('a plain re-init writes no store key into a board.json the repository track
   assert.equal(/^\+.*"store"/m.test(diff), false, `no store key was added to the tracked file:\n${diff}`);
 });
 
+test('a plain `hkb init` over a board still on the GitHub store refuses, and abandons nothing', async () => {
+  // **The command that would have destroyed this repository's own board.** `resolveStore` answered
+  // `local` from the flags alone, `pinStore` was true because the key was *there*, and a plain
+  // `hkb init` rewrote a git-tracked `"store": "github"` to `"store": "local"` and created an empty
+  // `kb-board` branch beside it. The next `hkb list` reported an empty board while every real card
+  // sat on GitHub, unreachable and unmentioned. The `--import` guard never fired (it needs
+  // `flags.import`) and `storeKind`'s refusal was never reached (`init` never called it).
+  const legacy = await runInit();
+  const cfg = board(legacy.root);
+  cfg.store = 'github';
+  fs.writeFileSync(path.join(legacy.root, BOARD_FILE), JSON.stringify(cfg, null, 2));
+  const tip = branchTip(legacy.root);
+
+  await assert.rejects(
+    () => runInit([], legacy),
+    (e) => e.exitCode === 2 && /GitHub store/.test(e.message) && /hkb init --import/.test(e.message),
+    'it refuses, and the message is the migration',
+  );
+
+  // Nothing was written: not the key, not the branch. A refusal that had already half-run would be
+  // the same bug wearing an error message.
+  assert.equal(board(legacy.root).store, 'github', 'the key that says where the cards are survives');
+  assert.equal(branchTip(legacy.root), tip, 'and no empty board was created over them');
+
+  // `--import` is the same board and the opposite answer: that flag *is* the human asking.
+  const imported = await runInit(['--import', '--force'], legacy);
+  assert.equal(board(imported.root).store, 'local', '--import is the migration, and pins the key it moved to');
+});
+
 test('--store github is refused by name, and names the migration instead', async () => {
   await assert.rejects(() => runInit(['--store', 'github']), (e) => e.exitCode === 2 && /--store github is gone/.test(e.message));
   await assert.rejects(() => runInit(['--store', 'github']), (e) => /hkb init --import/.test(e.message));
@@ -698,6 +727,16 @@ test('resolveStore agrees with storeKind: one store, and a board.json cannot nam
   // `github` is refused on both sides rather than half-honoured, and both name the way out.
   assert.throws(() => resolveStore({ store: 'github' }), (e) => e.exitCode === 2 && /--store github is gone/.test(e.message));
   assert.throws(() => storeKind({ cfg: { store: 'github' } }), (e) => e.exitCode === 2 && /hkb init --import/.test(e.message));
+
+  // `existing` is the second half of the question, and the reason it is an argument: a board.json
+  // that still names the GitHub store is refused whatever the flags say, because the alternative is
+  // rewriting the key that points at every card on it. `--import` is the one way through.
+  assert.throws(() => resolveStore({}, { store: 'github' }), (e) => e.exitCode === 2 && /hkb init --import/.test(e.message));
+  assert.throws(() => resolveStore({ store: 'local' }, { store: 'github' }), (e) => e.exitCode === 2 && /hkb init --import/.test(e.message));
+  assert.throws(() => resolveStore({}, { store: 'sqlite' }), (e) => e.exitCode === 2 && /is not a store/.test(e.message));
+  assert.equal(resolveStore({ import: true }, { store: 'github' }), 'local', '--import is the migration off it');
+  assert.equal(resolveStore({}, { store: 'local' }), 'local');
+  assert.equal(resolveStore({}, {}), 'local', 'a board written before the key existed is local');
 
   assert.throws(() => resolveStore({ store: 'sqlite' }), (e) => e.exitCode === 2 && /--store takes/.test(e.message));
   assert.throws(() => resolveStore({ store: true }), (e) => e.exitCode === 2 && /--store needs a value/.test(e.message));

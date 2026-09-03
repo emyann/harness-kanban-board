@@ -528,3 +528,36 @@ test('a board that came back with no cards sweeps nothing: an empty read is not 
   assert.equal(branches(h.root).includes('worktree-kb-4-1'), true, 'and its branch');
   assert.match(h.text(), /no cards at all/);
 });
+
+// ---------- `hkb merge` sweeps its own card ----------
+
+/**
+ * **The verb that finishes a card cleans up after it** (#304 review, item 5).
+ *
+ * `mergeCard` sets `done` itself now, which takes the card straight out of `RECONCILE_STATUSES` —
+ * and `sweepFinished` on the tick is driven by what the reconcile pass reconciled (src/dispatch.js),
+ * so it never runs for a merged card. Before, the card sat in `review`, the next tick reconciled it
+ * and swept immediately. Without this, the worktree and branch survive until the periodic full
+ * sweep — for ever on a board whose dispatcher is not running.
+ */
+test('hkb merge sweeps the card it just finished, keeping any checkout still in use', async (t) => {
+  const { mergeCard } = await import('../src/lifecycle.js');
+  const h = harness({ dispatch: { merge: { mode: 'operator' } } });
+  t.after(h.cleanup);
+  const spent = worktree(h.root, 'kb-1-1', 'worktree-kb-1-1');
+  const other = worktree(h.root, 'kb-2-1', 'worktree-kb-2-1'); // another card's, untouched
+  h.store.addIssue(kbIssue({
+    number: 1, status: 'review', agent: 'claude',
+    run: runWith([{ attempt: 1, outcome: 'review_requested', reviewer: 'alice', pr: 100, ended_at: '2026-08-26T01:00:00Z' }]),
+  }));
+  h.gh.addPull({ number: 100, head: 'kb-1-1', state: 'open', checksState: 'SUCCESS' });
+
+  const r = await mergeCard(h.ctx, 1);
+
+  assert.equal(r.merged, true);
+  assert.equal(r.status, 'done');
+  assert.equal(exists(spent), false, 'the merged card\'s checkout is gone with it');
+  assert.equal(branches(h.root).includes('worktree-kb-1-1'), false, 'and so is its branch');
+  assert.equal(r.cleaned?.worktrees, 1, 'and the result says what it cleaned, for --json');
+  assert.equal(exists(other), true, 'another card\'s checkout is not this sweep\'s business');
+});

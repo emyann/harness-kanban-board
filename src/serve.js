@@ -9,7 +9,7 @@ import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { openStore, openStoreReadOnly, closeStore } from './store/index.js';
-import { fillPrs } from './forge.js';
+import { fillPrs, dropPrCaches } from './forge.js';
 import { promote as realPromote, unblock as realUnblock, block as realBlock, requestChanges as realRequestChanges, archive as realArchive } from './lifecycle.js';
 import {
   logsDir, loadUserBoards, userBoardsFile, contextForPath, pidFile, readPidFile, pidAlive, processState,
@@ -447,7 +447,7 @@ export async function startServer(ctx, flags = {}, log = /** @type {(...a: any[]
       const g = generation;
       // A poll is the freshest thing the server has; the memoized PR listing is a tick's worth of
       // truth, so it expires with the poll rather than living for the server's whole run.
-      delete b.ctx._cache.prsByHead;
+      dropPrCaches(b.ctx);
       inflight = (async () => {
         const prev = cache;
         let cards = [];
@@ -473,9 +473,10 @@ export async function startServer(ctx, flags = {}, log = /** @type {(...a: any[]
       cache = null;
       if (number) { details.delete(number); delete b.ctx._cache[`comments:${number}`]; }
       else details.clear();
-      // The open-PR listing behind `fillPrs` is memoized per context; a write that opened,
-      // merged or closed a PR must not be answered from the listing taken before it.
-      delete b.ctx._cache.prsByHead;
+      // The listings behind `fillPrs` are memoized per context; a write that opened, merged or
+      // closed a PR must not be answered from one taken before it. Both slots — `hkb serve` and the
+      // dispatcher share `b.ctx`, so a `state: 'all'` read left behind here is the same divergence.
+      dropPrCaches(b.ctx);
     }
 
     async function detail(number, force = false) {

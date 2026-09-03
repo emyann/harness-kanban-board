@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot, hkbOnPath, registerUserBoard, userBoardsFile, mainWorktree, runGit } from './board.js';
 // `openStore` and not a driver: `hkb init` writes labels and imports issues through the same seam
 // every verb uses, so the board it has just created decides what those steps mean.
-import { openStore } from './store/index.js';
+import { openStore, storeKind } from './store/index.js';
 import { L, STATUSES, parseSkillVersion, stripFrontmatter, insideRepo, worktreePath, hookEntry, hookSettings, mcpSplitApprovals, toolPosture } from './model.js';
 
 export const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -648,11 +648,24 @@ export function removedInitFlag(flags = {}) {
  * repository and the index beside them, so the board works with `gh` logged out, on a plane, and at
  * no API cost. `--store github` is gone with the driver it named (ADR-006) and says so rather than
  * being ignored: a human who types it is asking for a board this hkb cannot make.
- * @param {{store?: any}} flags
+ *
+ * **`existing` is not decoration.** A board.json that still says `"store": "github"` has its cards
+ * on GitHub Issues, and a plain `hkb init` over it would write `"store": "local"` into a git-tracked
+ * file and create an empty `kb-board` branch — the next `hkb list` reports a board with nothing on
+ * it while every real card sits, untouched and unreachable, on the forge. Silent data abandonment,
+ * from the command a human runs to *fix* things. So it refuses, and names the migration, which is
+ * the same answer `storeKind` gives the verbs. `--import` is that migration and is let through.
+ * @param {{store?: any, import?: any}} flags
+ * @param {{store?: any}|null} [existing]  the board.json already on disk, if there is one
  * @returns {'local'}
  */
-export function resolveStore(flags = {}) {
+export function resolveStore(flags = {}, existing = null) {
   const asked = flags.store;
+  if (!flags.import && existing?.store !== undefined && existing.store !== 'local') {
+    // One message for both bad values, and it is `storeKind`'s: what a board is kept in is decided
+    // in one place, and doctor, the verbs and init must not each have their own wording for it.
+    storeKind({ cfg: existing });
+  }
   if (asked === undefined || asked === 'local') return 'local';
   if (asked === 'github') {
     const e = /** @type {any} */ (new Error('--store github is gone: hkb keeps its board on the `kb-board` branch in this repository (ADR-006). `hkb init --import` migrates a board that is still on GitHub Issues onto it.'));
@@ -964,7 +977,7 @@ export async function init(ctx, flags, log) {
   }
   const { harnesses, profiles } = resolveProfiles(flags);
   const existing = loadBoard(root);
-  const store = resolveStore(flags);
+  const store = resolveStore(flags, existing);
   // The migration writes `"store": "local"` into a file the repository usually tracks, and that is a
   // change to *everybody's* checkout — one whose branch has a single writing host. Refused before
   // anything is written rather than discovered by a collaborator on their next pull.
@@ -1021,7 +1034,9 @@ export async function init(ctx, flags, log) {
   // `--store`, a fresh board (whose default *is* the decision), a board that already carries the
   // key, and `--import`, which is a human asking for the migration. A plain `hkb init` over an older
   // board writes nothing — putting `"store": "local"` into a git-tracked board.json is the very
-  // write `--import` refuses without `--force` three screens above.
+  // write `--import` refuses without `--force` three screens above. And a board that carries
+  // `"store": "github"` never reaches here at all: `resolveStore` refused it, because rewriting
+  // that key is not a pin but an abandonment of every card the old board holds.
   //
   // And it is written **after** the board itself exists, not before: `--import` can still refuse
   // (a card claimed by a running worker, a branch already there), and a board.json that says
