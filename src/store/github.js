@@ -282,12 +282,27 @@ export async function deleteComment(ctx, number, commentId) {
   }
 }
 
+/**
+ * Is this comment one of hkb's own records rather than a note?
+ *
+ * The marker is the first thing hkb writes, so the test is `startsWith` everywhere it is asked —
+ * a person quoting a marker is writing a note, and `listNotes` used to swallow them.
+ */
+function isMarked(body, marker) {
+  return String(body || '').startsWith(marker);
+}
+
 export async function latestResult(ctx, number) {
   const comments = await listComments(ctx, number);
-  const results = comments.filter((x) => x.body && x.body.startsWith(RESULT_MARKER));
+  // Marked *and* parseable: a body that opens with the marker and carries no readable block is a
+  // half-written comment, and `{...null}` made it a result of `{at, url}` with no summary — which
+  // is what `parentResults` then handed the next worker as its parent's handoff.
+  const results = comments
+    .map((x) => ({ comment: x, parsed: isMarked(x.body, RESULT_MARKER) ? parseResultComment(x.body) : null }))
+    .filter((x) => x.parsed);
   if (!results.length) return null;
   const last = results[results.length - 1];
-  return { ...parseResultComment(last.body), at: last.created_at, url: last.html_url };
+  return { ...last.parsed, at: last.comment.created_at, url: last.comment.html_url };
 }
 
 export async function addComment(ctx, number, body) {
@@ -795,8 +810,13 @@ export function openGithubStore(ctx) {
       const comments = await listComments(ctx, n);
       // hkb's own run record and result comments live in the same list; every other reader here tells
       // them apart by their marker, and a note is what a *person* wrote.
+      //
+      // `startsWith`, not `includes`: hkb writes its marker as the first line, and a human quoting
+      // one — "the `<!-- hkb:result -->` block was empty" — is a note. Filtering on `includes` made
+      // that comment disappear from the board's notes with nothing to say it had, and made the two
+      // drivers disagree about what a note is (`src/store/git.js` addNote).
       return comments
-        .filter((c) => !String(c.body || '').includes(RUN_MARKER) && !String(c.body || '').includes(RESULT_MARKER))
+        .filter((c) => !isMarked(c.body, RUN_MARKER) && !isMarked(c.body, RESULT_MARKER))
         .map((c) => ({ id: c.id, at: c.created_at, actor: c.user?.login || null, text: c.body || '' }));
     },
 

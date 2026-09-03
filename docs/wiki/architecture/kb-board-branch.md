@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "adding a durable store verb, debugging a board write that lost or refused, or wondering why a worker's worktree stays clean while the board moves"
 covers:
   - path: src/store/git.js
-    sha: 4aae850af6e4081c35af73976ea32eeca8391441
+    sha: ceb1bd38ddbb3421d2355b2f2a7f961d3ea50603
   - path: src/store/index.js
     sha: 8bbf72f8391d88be9ae35eec0c79501b657cc41d
   - path: src/board.js
-    sha: 74ccb250b19ad34485df8b8b4ef0388973aa3561
-generated_at_commit: a7a3ce3
+    sha: f69569a4ef1ba7e4dabb5af394dddac6ba8d4a1f
+generated_at_commit: dcc38b6
 last_refreshed: 2026-09-02
 related: [architecture/store-seam, decisions/adr-006-local-store, decisions/adr-005-control-plane, concepts/claims-and-leases]
 ---
@@ -84,7 +84,10 @@ is by file name and not by directory for the same reason at one level down: a
 `cards/README.md` is read by no parser, so claiming the whole `cards/` prefix
 would delete it just as silently. A foreign path is never even decoded — the
 write path only ever needs its sha and mode, and a blob on the branch may be
-binary.
+binary. Both directions are NUL-delimited for the same reason: git permits a
+newline or a tab in a path name, `ls-tree -z` hands one back raw, and
+`update-index -z --index-info` is what carries it back without one odd name
+splitting the payload and corrupting every entry after it.
 
 Reads are memoized on the tip sha, and a successful write leaves the tree it
 just built behind it, parsed back out of the bytes that landed. So a tick that
@@ -116,10 +119,12 @@ to the status a card already has would land a commit saying so. `closeTask` and
 `addLabels` hold the same line — a closing time is stamped only on a card that
 was open, and the label list is re-sorted only when the set actually moved.
 
-The question is asked *before* the ref is checked for writability, so a verb
-that decides nothing costs nothing even on a read-only clone. A reconcile pass
-re-asserting the state of twenty cards is exactly the caller this makes free,
-and a clone is exactly where one runs.
+The question is asked *before* either guard on writing — the one-writer check
+and the writable-ref check both — so a verb that decides nothing costs nothing
+even on a read-only clone. A reconcile pass re-asserting the state of twenty
+cards is exactly the caller this makes free, and a clone is exactly where one
+runs; a clone's host is also, by definition, not the host `board.json` names, so
+asking the owner question first would have put the same exit 2 one line up.
 
 ## One writer per board
 

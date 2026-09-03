@@ -358,9 +358,25 @@ function readCmdline(pid, proc) {
  * from `os.uptime()` instead).
  */
 function readBtimeSec(proc) {
-  if (process.platform === 'darwin') {
-    try { return parseKernBoottimeSec(execFileSync('sysctl', ['-n', 'kern.boottime'], { encoding: 'utf8' })); } catch { return null; }
-  }
+  if (BTIME_CACHE.has(proc)) return BTIME_CACHE.get(proc) ?? null;
+  const found = process.platform === 'darwin' ? readBtimeDarwin() : readBtimeProc(proc);
+  BTIME_CACHE.set(proc, found);
+  return found;
+}
+
+/**
+ * Once per process, per `proc` root. The kernel's boot instant does not move while we are running,
+ * and reading it is a `sysctl` *fork* on darwin — which `wake()` calls on every store write that
+ * nudges the dispatcher, in a module whose contract is that nothing in it shells out.
+ * @type {Map<string, number|null>}
+ */
+const BTIME_CACHE = new Map();
+
+function readBtimeDarwin() {
+  try { return parseKernBoottimeSec(execFileSync('sysctl', ['-n', 'kern.boottime'], { encoding: 'utf8' })); } catch { return null; }
+}
+
+function readBtimeProc(proc) {
   try { return parseBtimeSec(fs.readFileSync(path.join(proc, 'stat'), 'utf8')); } catch { return null; }
 }
 

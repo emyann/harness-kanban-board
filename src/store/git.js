@@ -176,8 +176,12 @@ function emptyRunFile() {
   return { ...emptyRun(), results: [], notes: [] };
 }
 
+/**
+ * One run record, as a copy. The read accessors hand its `attempts`, `results` and `notes` straight
+ * out, and the record they come from may be the memoized tree's, so the copy is the deep one.
+ */
 function runFileOf(runs, id) {
-  return { ...emptyRunFile(), ...(runs.get(id) || {}) };
+  return { ...emptyRunFile(), ...structuredClone(runs.get(id) || {}) };
 }
 
 /** `loadRun`'s half of the file: exactly `emptyRun()`'s keys, never the results or the notes. */
@@ -254,10 +258,22 @@ export class GitTier {
    *
    * @returns {{tip: string|null, local: boolean, board: any, cards: Map<number, any>, runs: Map<number, any>, files: Map<string, {sha: string, mode: string, text: string|null}>}}
    */
-  readTree() {
+  readTree() { return cloneTree(this._read()); }
+
+  /**
+   * The memoized tree itself — never handed out.
+   *
+   * `readTree()` copies it whole, which is what a mutation needs and what a *read* does not: a
+   * `getTask` on a 500-card board deep-cloned a thousand records to return one, twice per verb
+   * (once for the read, once for the `getTask` after the commit). The read accessors below go
+   * through here and copy only the record they are about to return; `commit()` is the one caller
+   * that still takes the whole tree, because it edits it.
+   * @returns {any}
+   */
+  _read() {
     const { sha: tip, local } = this._tip();
     if (!tip) return { tip: null, local: false, board: null, cards: new Map(), runs: new Map(), files: new Map() };
-    if (this._snap && this._snap.tip === tip && this._snap.local === local) return cloneTree(this._snap);
+    if (this._snap && this._snap.tip === tip && this._snap.local === local) return this._snap;
 
     const listed = this._git(['ls-tree', '-r', '-z', tip]);
     if (listed.status !== 0) throw fail(`cannot read ${this.ref} at ${tip.slice(0, 7)}: ${short(listed.out) || 'git ls-tree failed'} — check the branch with \`git log ${this.branch}\``);
@@ -293,7 +309,7 @@ export class GitTier {
     }
 
     this._snap = this._parseFiles(files, tip, local);
-    return cloneTree(this._snap);
+    return this._snap;
   }
 
   /** The board, the cards and the runs a set of file bytes holds. @returns {any} */
@@ -342,8 +358,6 @@ export class GitTier {
       if (!snap.tip && !allowMissing) {
         throw fail(`there is no ${this.branch} branch in ${this.root} — run \`hkb init\` to create the board`);
       }
-      if (!allowForeignHost) this._assertOwner(snap.board);
-
       const tree = { board: snap.board, cards: snap.cards, runs: snap.runs };
       const value = mutate(tree);
       const want = this._serialize(tree);
@@ -351,12 +365,15 @@ export class GitTier {
       // Nothing to say. A verb that writes the same bytes back must not put a commit on the board's
       // history — `git log kb-board` is the board's history of *decisions* (§6.1).
       //
-      // This is asked *before* the ref is checked for writability, because a write that isn't one
-      // needs no ref: on a read-only clone, `setStatus` to the status a card already has and
+      // This is asked *before* either guard on writing, because a write that isn't one needs
+      // neither: on a read-only clone, `setStatus` to the status a card already has and
       // `addLabels(task, [])` used to hard-fail with exit 2 where they had returned `{changed:
       // false}` before. A reconcile pass that re-asserts current state is exactly what the early
-      // return exists to make free, and a clone is exactly where one runs.
+      // return exists to make free, and a clone is exactly where one runs — and a clone's host is
+      // by definition not the board's owner, so asking the owner question first put the same exit 2
+      // back one line up.
       if (sameTree(want, snap.files)) return { tip: snap.tip, changed: false, value };
+      if (!allowForeignHost) this._assertOwner(snap.board);
       this._assertWritableRef(snap);
 
       const text = typeof message === 'function' ? message(value, tree) : message;
@@ -375,7 +392,7 @@ export class GitTier {
       this.forget(); // somebody else moved the ref: the memo is a tree that no longer exists
     }
     const at = this.tip();
-    const owner = this.readTree().board?.host || 'unknown';
+    const owner = this._read().board?.host || 'unknown';
     throw fail(
       `${this.branch} moved under this write ${MAX_CAS_RETRIES} times — another hkb on host "${owner}" is writing this board `
       + `(${this.ref} is at ${at ? at.slice(0, 7) : 'nothing'}${last ? `; git said: ${last}` : ''}). `
@@ -484,9 +501,15 @@ export class GitTier {
 
       // 2. the tree, built in a temporary index that no working tree is attached to. The index is
       //    rebuilt from nothing every time, so a deleted card is a card that is simply not listed.
+      //
+      //    `-z` terminates each record with a NUL instead of a newline. Git permits a newline in a
+      //    path name and `ls-tree -z` hands it back raw, so a foreign `notes/a\nb.md` carried across
+      //    verbatim would have split one record into two and corrupted every entry after it. Only
+      //    this tier's own three name patterns used to reach this line, which is what made the plain
+      //    form safe until foreign paths started travelling through it.
       const index = path.join(scratch, 'index');
-      const info = [...entries.keys()].sort().map((file) => `${entries.get(file)?.mode || BLOB_MODE} ${entries.get(file)?.sha}\t${file}`).join('\n');
-      const added = this._git(['update-index', '--add', '--index-info'], { input: `${info}\n`, env: { GIT_INDEX_FILE: index } });
+      const info = [...entries.keys()].sort().map((file) => `${entries.get(file)?.mode || BLOB_MODE} ${entries.get(file)?.sha}\t${file}`).join('\0');
+      const added = this._git(['update-index', '-z', '--add', '--index-info'], { input: `${info}\0`, env: { GIT_INDEX_FILE: index } });
       if (added.status !== 0) return no('error', short(added.out) || 'git update-index failed');
 
       const wrote = this._git(['write-tree'], { env: { GIT_INDEX_FILE: index } });
@@ -519,8 +542,8 @@ export class GitTier {
    * @returns {{created: boolean, tip: string|null, board: any}}
    */
   init(slug = 'default', host = this.host, { settings = {} } = {}) {
-    const snap = this.readTree();
-    if (snap.tip && snap.board) return { created: false, tip: snap.tip, board: snap.board };
+    const snap = this._read();
+    if (snap.tip && snap.board) return { created: false, tip: snap.tip, board: structuredClone(snap.board) };
     const doc = {
       version: 1,
       slug,
@@ -548,14 +571,14 @@ export class GitTier {
   capabilities() { return { events: false, durable: true }; }
 
   board() {
-    const b = this.readTree().board;
+    const b = this._read().board;
     if (!b) throw fail(`there is no ${this.branch} branch in ${this.root} — run \`hkb init\` to create the board`);
     return {
       slug: b.slug,
       host: b.host ?? null,
       paused_at: b.paused_at ?? null,
       paused_by: b.paused_by ?? null,
-      settings: b.settings || {},
+      settings: structuredClone(b.settings || {}),
     };
   }
 
@@ -579,11 +602,13 @@ export class GitTier {
     for (const x of want) {
       if (x !== 'OPEN' && x !== 'CLOSED') throw fail(`listTasks: unknown state "${x}" — a store knows OPEN and CLOSED`);
     }
-    const snap = this.readTree();
+    const snap = this._read();
     const slug = snap.board?.slug || 'default';
     return [...snap.cards.values()]
       .filter((c) => c && want.includes(String(c.state || 'OPEN').toUpperCase()))
-      .map((c) => toTask(c, slug, snap.cards))
+      // The copy is per *returned* card: `toTask` hoists `paths`, `kb` and `suspended` straight off
+      // the record, so handing them out uncopied would let a caller edit the memo.
+      .map((c) => toTask(structuredClone(c), slug, snap.cards))
       .sort((a, b) => a.number - b.number);
   }
 
@@ -594,10 +619,10 @@ export class GitTier {
   }
 
   getTask(n) {
-    const snap = this.readTree();
+    const snap = this._read();
     const card = snap.cards.get(Number(n));
     if (!card) throw fail(`card #${n} is not on the ${this.branch} board in ${this.root} — \`hkb list\` shows what is`);
-    return toTask(card, snap.board?.slug || 'default', snap.cards);
+    return toTask(structuredClone(card), snap.board?.slug || 'default', snap.cards);
   }
 
   /** @param {{title: string, body?: string, kb?: any, status?: string, agent?: string|null}} spec */
@@ -706,8 +731,8 @@ export class GitTier {
     const c = Number(child); const p = Number(parent);
     if (c === p) throw fail(`#${c} cannot block itself`);
     this.commit((t) => {
-      const card = need(t.cards, c, this.root);
-      need(t.cards, p, this.root);
+      const card = need(t.cards, c, this.root, this.branch);
+      need(t.cards, p, this.root, this.branch);
       const list = new Set(card.blocked_by || []);
       if (list.has(p)) return; // already linked — see `_patch` on why that is not a commit
       list.add(p);
@@ -727,7 +752,7 @@ export class GitTier {
 
   /** `{run, id}` — `id` is the card, the handle `saveRun` writes back through. */
   loadRun(n) {
-    const file = runFileOf(this.readTree().runs, Number(n));
+    const file = runFileOf(this._read().runs, Number(n));
     return { run: runOf(file), id: Number(n) };
   }
 
@@ -735,7 +760,7 @@ export class GitTier {
     const id = Number(n);
     const run = rec?.run || emptyRun();
     this.commit((t) => {
-      need(t.cards, id, this.root);
+      need(t.cards, id, this.root, this.branch);
       const file = runFileOf(t.runs, id);
       for (const k of Object.keys(emptyRun())) if (run[k] !== undefined) file[k] = run[k];
       t.runs.set(id, file);
@@ -746,7 +771,7 @@ export class GitTier {
 
   /** The last structured handoff a worker left, with when it landed. */
   latestResult(n) {
-    const file = runFileOf(this.readTree().runs, Number(n));
+    const file = runFileOf(this._read().runs, Number(n));
     const results = Array.isArray(file.results) ? file.results : [];
     if (!results.length) return null;
     const last = results[results.length - 1];
@@ -755,7 +780,7 @@ export class GitTier {
 
   /** `## Parent task results` — what the worker prompt puts in front of the next node. */
   parentResults(task) {
-    const snap = this.readTree();
+    const snap = this._read();
     const out = [];
     const blockers = Array.isArray(task?.blockedBy)
       ? task.blockedBy
@@ -793,7 +818,7 @@ export class GitTier {
     const note = { id: null, at, actor: null, text: body };
     const parsed = body.startsWith(RESULT_MARKER) ? parseResultComment(body) : null;
     this.commit((t) => {
-      need(t.cards, id, this.root);
+      need(t.cards, id, this.root, this.branch);
       const file = runFileOf(t.runs, id);
       if (parsed) {
         file.results = [...(file.results || []), { ...parsed, at }];
@@ -812,7 +837,7 @@ export class GitTier {
   }
 
   listNotes(n) {
-    const file = runFileOf(this.readTree().runs, Number(n));
+    const file = runFileOf(this._read().runs, Number(n));
     return (file.notes || []).map((x) => ({ id: x.id, at: x.at, actor: x.actor ?? null, text: x.text || '' }));
   }
 
@@ -830,7 +855,7 @@ export class GitTier {
   _patch(n, fn, message) {
     const id = Number(n);
     return this.commit((t) => {
-      const card = need(t.cards, id, this.root);
+      const card = need(t.cards, id, this.root, this.branch);
       const before = fileJson(card);
       fn(card);
       if (fileJson(card) === before) return; // nothing decided, so nothing to record
@@ -952,9 +977,10 @@ function nextId(board, cards) {
   return Number.isInteger(want) && want > 0 ? Math.max(want, free) : free;
 }
 
-function need(cards, id, root) {
+/** `branch` is the tier's own — the constructor takes `ref`, so no message here may name `kb-board`. */
+function need(cards, id, root, branch = BOARD_BRANCH) {
   const card = cards.get(id);
-  if (!card) throw fail(`card #${id} is not on the ${BOARD_BRANCH} board in ${root} — \`hkb list\` shows what is`);
+  if (!card) throw fail(`card #${id} is not on the ${branch} board in ${root} — \`hkb list\` shows what is`);
   return card;
 }
 

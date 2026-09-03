@@ -15,15 +15,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync, spawn } from 'node:child_process';
-import { openIndex, openIndexReadOnly, indexFile, indexDir, LOCAL_EVENT_KINDS, LIVE_ATTEMPT_FIELDS, SCHEMA_VERSION } from '../src/store/sqlite.js';
+import { openIndex, openIndexReadOnly, indexFileIn, indexDirIn, LOCAL_EVENT_KINDS, LIVE_ATTEMPT_FIELDS, SCHEMA_VERSION } from '../src/store/sqlite.js';
+import { DatabaseSync } from 'node:sqlite';
 import { GitTier } from '../src/store/git.js';
-import { storeGitDir, storeRoot } from '../src/board.js';
+import { storeGitDir, storeRoot, readPidFile, pidFile } from '../src/board.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.dirname(here);
 const SQLITE_SRC = path.join(repo, 'src', 'store', 'sqlite.js');
 
-/** The git dir of a temp root — the argument `indexFile` takes, and what `storeGitDir` answers. */
+/** The git dir of a temp root — the argument `indexFileIn` takes, and what `storeGitDir` answers. */
 const gitDirOf = (root) => path.join(root, '.git');
 
 /**
@@ -53,7 +54,7 @@ const OPEN = new Map();
 
 /** An index on a temp root. `root` and `file` are passed together so nothing asks git anything. */
 function open(t, root, opts = {}) {
-  const idx = openIndex(null, { root, file: indexFile(gitDirOf(root)), ...opts });
+  const idx = openIndex(null, { root, file: indexFileIn(gitDirOf(root)), ...opts });
   OPEN.get(root)?.push(idx);
   return idx;
 }
@@ -102,7 +103,7 @@ test('index: an index from a future schema version says so and names the fix, ra
   const idx = open(t, root);
   idx.db.prepare('UPDATE meta SET value = ? WHERE key = ?').run(String(SCHEMA_VERSION + 7), 'schema_version');
   idx.close();
-  assert.throws(() => openIndex(null, { root, file: indexFile(gitDirOf(root)) }), (e) => e.exitCode === 2 && /rm /.test(e.message));
+  assert.throws(() => openIndex(null, { root, file: indexFileIn(gitDirOf(root)) }), (e) => e.exitCode === 2 && /rm /.test(e.message));
 });
 
 test('index: journal_mode is WAL — four processes read while the loop writes', (t) => {
@@ -231,21 +232,54 @@ test('load: a card the tree names twice, and a field the schema cannot hold, say
   assert.equal(idx.db.prepare('SELECT count(*) c FROM tasks').get().c, 0, 'and neither load left half a board behind');
 });
 
-test('load: a lock whose attempt the branch closed, or whose card left it, is not a lock', (t) => {
+test('load: a lock on a card that left the branch is not a lock', (t) => {
   const idx = open(t, tmpRoot(t));
   idx.load(tree({ tip: 'aaa', cards: [card(1), card(2)] }));
   idx.claim(1, 1, { profile: 'claude' });
   idx.claim(2, 1, { profile: 'claude' });
   assert.equal(idx.listLocks().length, 2);
 
-  // #1's worker finished: the branch carries its attempt with an ended_at. #2 left the board.
-  idx.load(tree({
+  // #2 left the board; #1 is still there and its lock is still held.
+  idx.load(tree({ tip: 'bbb', cards: [card(1)] }));
+  assert.deepEqual(idx.listLocks().map((l) => l.n), [1], '§6.1 retires the tick\'s orphan sweep — this is where it happens instead');
+});
+
+test('load: the branch closing an attempt does not take the lock off the worker still running it', (t) => {
+  const root = tmpRoot(t);
+  const idx = open(t, root);
+  idx.load(tree({ tip: 'aaa', cards: [card(1)] }));
+  const { token } = idx.claim(1, 3, { profile: 'claude' });
+  idx.setAttempt(1, 3, { pid: 4242, job: 'j1', wt: '/tmp/wt' });
+
+  // This is `hkb finish`'s own window: the attempt is written closed to the branch *before*
+  // `release()` runs, and any tick reloading on the moved tip lands in it. Reading the tree's
+  // `ended_at` as permission to overwrite wiped the pid the loop was watching, and the sweep then
+  // dropped the lock — so the running worker's next heartbeat came back `lost`, exit 3.
+  const r = idx.load(tree({
     tip: 'bbb',
     cards: [card(1)],
-    runs: [{ id: 1, attempts: [{ attempt: 1, profile: 'claude', started_at: '2026-09-01T01:00:00Z', ended_at: '2026-09-01T02:00:00Z', outcome: 'done' }] }],
+    runs: [{ id: 1, attempts: [{ attempt: 3, ended_at: '2026-09-01T02:00:00Z', outcome: 'done', summary: 'from the branch' }] }],
   }));
-  assert.deepEqual(idx.listLocks(), [], '§6.1 retires the tick\'s orphan sweep — this is where it happens instead');
-  assert.equal(idx.getAttempt(1, 1).outcome, 'done');
+  assert.equal(r.attempts_held, 1, 'the branch\'s copy of a live attempt is held, not written');
+  assert.equal(r.locks_dropped, 0);
+  const live = idx.getAttempt(1, 3);
+  assert.equal(live.pid, 4242, 'the live fields are still here');
+  assert.equal(live.job, 'j1');
+  assert.equal(live.wt, '/tmp/wt');
+  assert.equal(live.ended_at, null, 'and the attempt is still open');
+  assert.deepEqual(idx.listLocks().map((l) => [l.n, l.k]), [[1, 3]]);
+  assert.equal(idx.heartbeat(1, 3, token).result, 'ok', 'the worker still holds its lease');
+
+  // The lock is what makes it self-clearing: once the worker releases, the branch is the source
+  // again and the next load indexes its copy.
+  assert.equal(idx.release(1, 3), true);
+  idx.load(tree({
+    tip: 'ccc',
+    cards: [card(1)],
+    runs: [{ id: 1, attempts: [{ attempt: 3, ended_at: '2026-09-01T02:00:00Z', outcome: 'done', summary: 'from the branch' }] }],
+  }));
+  assert.equal(idx.getAttempt(1, 3).outcome, 'done');
+  assert.equal(idx.getAttempt(1, 3).summary, 'from the branch');
 });
 
 test('load: an attempt record carrying a task_id of its own lands on its own card, not that one', (t) => {
@@ -328,9 +362,9 @@ test('claim: two processes racing for the same card — exactly one wins', (t) =
   const runner = path.join(root, 'claimer.mjs');
   fs.writeFileSync(runner, `
 import path from 'node:path';
-import { openIndex, indexFile } from ${JSON.stringify(pathToSrc())};
+import { openIndex, indexFileIn } from ${JSON.stringify(pathToSrc())};
 const [root, at] = process.argv.slice(2);
-const idx = openIndex(null, { root, file: indexFile(path.join(root, '.git')), timeout: 10000 });
+const idx = openIndex(null, { root, file: indexFileIn(path.join(root, '.git')), timeout: 10000 });
 while (Date.now() < Number(at)) { /* a barrier, so both are inside BEGIN IMMEDIATE at once */ }
 const r = idx.claim(9, 1, { profile: 'p' + process.pid });
 idx.close();
@@ -619,7 +653,7 @@ test('two boards in one repo are two indexes, and one index never answers for th
   OPEN.get(root).push(alpha, beta);
 
   assert.notEqual(alpha.file, beta.file, '`--repos` and the {path, board} entries are a documented shape');
-  assert.equal(path.dirname(alpha.file), indexDir(gitDirOf(root)));
+  assert.equal(path.dirname(alpha.file), indexDirIn(gitDirOf(root)));
   alpha.load(tree({ tip: 'a', cards: [card(1, { title: 'alpha card' })], board: { slug: 'alpha' } }));
   beta.load(tree({ tip: 'b', cards: [card(1, { title: 'beta card' })], board: { slug: 'beta' } }));
 
@@ -643,7 +677,7 @@ test('read-only: serve reads the board and every write refuses, naming who may w
   idx.load(tree({ cards: [card(8)] }));
   idx.claim(8, 1);
 
-  const ro = openIndexReadOnly(null, { root, file: indexFile(gitDirOf(root)) });
+  const ro = openIndexReadOnly(null, { root, file: indexFileIn(gitDirOf(root)) });
   t.after(() => ro.close());
   assert.equal(ro.getTaskRow(8).title, 'card 8');
   assert.equal(ro.listLocks().length, 1);
@@ -662,15 +696,15 @@ test('read-only: serve refuses an index another hkb wrote, exactly as the writin
   // `openIndex` has always checked this; `openIndexReadOnly` skipped it, so `hkb serve` happily read
   // an index whose columns it does not know — and it cannot create the schema to repair it either.
   assert.throws(
-    () => openIndexReadOnly(null, { root, file: indexFile(gitDirOf(root)) }),
+    () => openIndexReadOnly(null, { root, file: indexFileIn(gitDirOf(root)) }),
     (e) => e.exitCode === 2 && /schema version/.test(e.message) && /rm /.test(e.message),
   );
 });
 
 test('read-only: an index that is not there yet says so instead of creating one behind serve', (t) => {
   const root = tmpRoot(t);
-  assert.throws(() => openIndexReadOnly(null, { root, file: indexFile(gitDirOf(root)) }), (e) => e.exitCode === 2 && /hkb up/.test(e.message));
-  assert.equal(fs.existsSync(indexFile(gitDirOf(root))), false, 'and it did not create the file on the way past');
+  assert.throws(() => openIndexReadOnly(null, { root, file: indexFileIn(gitDirOf(root)) }), (e) => e.exitCode === 2 && /hkb up/.test(e.message));
+  assert.equal(fs.existsSync(indexFileIn(gitDirOf(root))), false, 'and it did not create the file on the way past');
 });
 
 // ---------- the two tiers agree on one tree shape ----------
@@ -847,7 +881,7 @@ test('locate: an explicit file decides the root, so wake() looks where the index
   // `openIndex(undefined, {file})` — no ctx object at all — used to fall through to `storeRoot()`
   // against `process.cwd()`, so `root()` and `wake()`'s pid file pointed at a different directory
   // than the index was in, and `wake()` swallowed the miss and returned false.
-  const idx = openIndex(undefined, { file: indexFile(gitDirOf(root)) });
+  const idx = openIndex(undefined, { file: indexFileIn(gitDirOf(root)) });
   OPEN.get(root).push(idx);
   assert.equal(idx.root(), root);
   fs.writeFileSync(path.join(root, '.kanban', 'dispatch.pid'), `${process.pid}\n`);
@@ -875,5 +909,107 @@ test('storeGitDir ignores an inherited GIT_DIR — the index is this repo\'s, no
   t.after(() => { if (before === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = before; });
   assert.equal(fs.realpathSync(storeGitDir({ root: mine, _cache: {} })), fs.realpathSync(path.join(mine, '.git')));
   assert.equal(fs.realpathSync(storeRoot({ root: mine, _cache: {} })), fs.realpathSync(mine));
-  assert.equal(indexFile(storeGitDir({ root: mine, _cache: {} })), path.join(fs.realpathSync(path.join(mine, '.git')), 'hkb', 'index.db'));
+  assert.equal(
+    fs.realpathSync(path.dirname(path.dirname(indexFileIn(storeGitDir({ root: mine, _cache: {} }))))),
+    fs.realpathSync(path.join(mine, '.git')),
+    'the index lands under this repo\'s git dir',
+  );
+  assert.equal(indexFileIn(storeGitDir({ root: mine, _cache: {} })).endsWith(path.join('hkb', 'index.db')), true);
+});
+
+test('load: a `board` that is not the document is refused, like `cards` and `runs`', (t) => {
+  const idx = open(t, tmpRoot(t));
+  idx.load(tree({ tip: 'aaa', cards: [card(1)], board: { paused_at: '2026-09-01T00:00:00Z', paused_by: 'ops' } }));
+  assert.equal(idx.board().paused_at, '2026-09-01T00:00:00Z');
+
+  // `{board: 'default'}` is the slug where the document goes. It used to fall through to the
+  // tip-only branch: `tip_sha` moved, host/paused_at/paused_by/settings were left alone, and the
+  // call reported success — the same silence `collection()` was made strict to end.
+  for (const bad of ['default', 42, ['default']]) {
+    assert.throws(
+      () => idx.load({ tip: 'bbb', board: bad, cards: new Map(), runs: new Map() }),
+      (e) => e.exitCode === 2 && /`board` is a/.test(e.message),
+      `load({board: ${JSON.stringify(bad)}})`,
+    );
+  }
+  assert.equal(idx.tip(), 'aaa', 'and nothing moved on the way past');
+  assert.equal(idx.board().paused_by, 'ops');
+});
+
+test('two board slugs that differ at all are two files', () => {
+  const gitDir = path.join(os.tmpdir(), 'hkb-slug-probe', '.git');
+  const file = (slug) => indexFileIn(gitDir, slug);
+  // `a/b` and `a-b` both squashed to `index.a-b.db`, as did `Alpha`/`alpha` on a case-insensitive
+  // filesystem and any two slugs sharing 64 characters — and the collision error then said to run
+  // `hkb --board a/b`, which resolves to the file the operator is already looking at.
+  const slugs = ['a/b', 'a-b', 'a b', 'Alpha', 'alpha', `x${'y'.repeat(80)}1`, `x${'y'.repeat(80)}2`];
+  assert.equal(new Set(slugs.map(file)).size, slugs.length, 'one file per slug');
+  assert.equal(file('default'), path.join(gitDir, 'hkb', 'index.db'), 'the default board keeps the bare name');
+  assert.equal(file('a/b'), file('a/b'), 'and the name is a function of the slug');
+  assert.equal(path.basename(file('a/b')).includes(path.sep), false);
+});
+
+test('read-only: an error that is not "no schema table" is not "delete your database"', (t) => {
+  const root = tmpRoot(t);
+  const file = indexFileIn(gitDirOf(root));
+  open(t, root).close();
+  // `meta` is there but unreadable — a `no such column`, standing in for the transient SQLITE_BUSY
+  // that used to read as "no schema version" and told `hkb serve`, the one connection that may not
+  // repair anything, to `rm` an index that was current and healthy.
+  const db = new DatabaseSync(file);
+  db.exec('DROP TABLE meta; CREATE TABLE meta (key TEXT PRIMARY KEY, v TEXT)');
+  db.close();
+  assert.throws(
+    () => openIndexReadOnly(null, { root, file }),
+    (e) => !/rm /.test(e.message) && /no such column/i.test(e.message),
+    'the driver error propagates instead of becoming rm advice',
+  );
+});
+
+test('every message names the branch this index was opened for, never kb-board by reflex', (t) => {
+  const root = tmpRoot(t);
+  const idx = open(t, root, { branch: 'kb-board-staging' });
+  assert.throws(
+    () => idx.load(tree({ tip: 'aaa', cards: [card(1, { title: { not: 'a string' } })] })),
+    (e) => e.exitCode === 2 && /kb-board-staging:cards\/1\.json/.test(e.message) && !/ kb-board:/.test(e.message),
+  );
+  assert.throws(
+    () => idx.load({ tip: 'aaa', cards: [card(1), card(1)], runs: new Map(), board: { slug: 'default' } }),
+    (e) => e.exitCode === 2 && /ls-tree -r kb-board-staging/.test(e.message),
+  );
+  // and the tree may say so itself, for a composed driver that knows better than the open did
+  assert.throws(
+    () => idx.load({ tip: 'aaa', branch: 'from-the-tree', cards: [card(1), card(1)], runs: new Map() }),
+    (e) => /ls-tree -r from-the-tree/.test(e.message),
+  );
+});
+
+test('listTaskRows: a filtered read groups only the links of the cards it returns', (t) => {
+  const idx = open(t, tmpRoot(t));
+  const cards = [];
+  for (let n = 1; n <= 40; n++) cards.push(card(n, { status: n <= 2 ? 'ready' : 'todo', blocked_by: n > 2 ? [1, 2] : [] }));
+  idx.load(tree({ tip: 'aaa', cards }));
+
+  const ready = idx.listTaskRows({ status: 'ready' });
+  assert.deepEqual(ready.map((r) => r.id), [1, 2]);
+  assert.deepEqual(ready.map((r) => r.blocked_by), [[], []], 'and their blockers are still right');
+  const one = idx.listTaskRows({ status: 'todo' })[0];
+  assert.deepEqual(one.blocked_by, [1, 2]);
+  assert.deepEqual(idx.listTaskRows().find((r) => r.id === 3).blocked_by, [1, 2], 'the whole board still answers');
+});
+
+test('the boot instant is read once per process, not on every wake()', (t) => {
+  const root = tmpRoot(t);
+  const proc = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-btime-'));
+  t.after(() => fs.rmSync(proc, { recursive: true, force: true }));
+  fs.writeFileSync(pidFile(root, 'dispatch'), `${process.pid}\n`);
+  fs.utimesSync(pidFile(root, 'dispatch'), new Date(0), new Date(0)); // written in 1970: after this "boot"
+  fs.writeFileSync(path.join(proc, 'stat'), `cpu 1 2 3\nbtime ${Math.floor(Date.now() / 1000) - 60}\n`);
+
+  assert.equal(readPidFile(root, 'dispatch', { proc }).stale, true, 'the claim predates this boot');
+  // On darwin this read is a `sysctl` fork, and `wake()` — which every store write that nudges the
+  // loop calls — went through it each time, in a module whose contract is that nothing here shells
+  // out. Deleting the source proves the second call never went back for it.
+  fs.rmSync(path.join(proc, 'stat'));
+  assert.equal(readPidFile(root, 'dispatch', { proc }).stale, true, 'the boot instant came from the cache');
 });

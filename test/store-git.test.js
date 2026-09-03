@@ -847,19 +847,26 @@ test('git tier: on a read-only clone a verb that decides nothing still decides n
   const task = card(s.tier, { title: 'made here', status: 'ready', agent: 'claude' });
   const clone = path.join(s.dir, 'clone');
   git(s.dir, 'clone', '-q', s.root, clone);
-  const theirs = tierAt(clone, { host: 'test-host' });
+  // The clone's host is *not* the board's owner, which is the only host a real clone ever has: a
+  // tier constructed with `board.host` was the one configuration that cannot happen here, and it
+  // hid the fact that `_assertOwner` still ran before the no-op question and threw exit 2 first.
+  const theirs = tierAt(clone, { host: 'someone-elses-laptop' });
 
-  // Asserting the ref is writable *before* asking whether anything changed turned every re-assertion
-  // of current state into exit 2 on a clone — and a reconcile pass that re-asserts current state is
-  // exactly what the early return was added to make free.
+  // Asking either write question — may this host write, is the ref writable — *before* asking
+  // whether anything changed turned every re-assertion of current state into exit 2 on a clone, and
+  // a reconcile pass that re-asserts current state is exactly what the early return makes free.
   assert.equal(theirs.setStatus(task, 'ready').status, 'ready');
   assert.equal(theirs.addLabels(task, []).number, task.number);
   assert.equal(theirs.removeLabel(task, 'kb:never-was-here').number, task.number);
+  assert.equal(theirs.updateBody(task.number, task.bodyText).number, task.number);
   assert.equal(theirs.commit(() => {}, 'hkb: nothing happened').changed, false);
   assert.equal(theirs.trace.filter((c) => c === 'update-ref').length, 0, 'and nothing reached a ref');
 
-  // a write that really decides something is still refused, with the recovery path
-  assert.throws(() => theirs.setStatus(task, 'running'), /read-only copy/);
+  // a write that really decides something is refused, and the one-writer rule is what refuses it
+  assert.throws(() => theirs.setStatus(task, 'running'), /belongs to host "test-host"/);
+  // and on a clone that *is* this host's board, the refusal is the read-only-copy one
+  const mine = tierAt(clone, { host: 'test-host' });
+  assert.throws(() => mine.setStatus(task, 'running'), /read-only copy/);
 });
 
 test('git tier: closeTask twice, and labels that were stored unsorted, are one decision each', (t) => {
@@ -916,6 +923,90 @@ test('git tier: a branch deleted under a write is not "this is a clone"', (t) =>
   assert.doesNotMatch(threw.message, /read-only copy/, 'there is no remote here to fall back to');
   assert.doesNotMatch(threw.message, /branch kb-board origin\/kb-board/, 'and that recovery path would itself fail');
   assert.doesNotMatch(threw.message, /another hkb on host/);
+});
+
+test('git tier: a foreign path with a newline or a tab in it survives a write intact', (t) => {
+  const s = board();
+  t.after(s.cleanup);
+  const task = card(s.tier, { title: 'a card' });
+
+  // Git permits both in a path name and `ls-tree -z` hands them back raw — which is why the read
+  // uses `-z`. Carrying every foreign entry across verbatim is what made the *write* side reachable:
+  // one `\n` in a path split one `update-index --index-info` record into two and corrupted the rest
+  // of the payload. Only this tier's own three name patterns used to reach that line.
+  const odd = ['notes/two\nlines.md', 'notes/a\tcolumn.md', 'notes/plain.md'];
+  // put them on the branch with plumbing of the test's own, so the tier meets them on the next read
+  const tip = s.tier.tip();
+  const lines = odd.map((f) => {
+    const sha = spawnSync('git', ['hash-object', '-w', '-t', 'blob', '--stdin'], { cwd: s.root, input: `${f}\n`, encoding: 'utf8' }).stdout.trim();
+    return `100644 ${sha}\t${f}`;
+  });
+  const idxFile = path.join(s.dir, 'scratch-index');
+  const env = { ...process.env, ...ENV, GIT_INDEX_FILE: idxFile };
+  spawnSync('git', ['read-tree', tip], { cwd: s.root, env });
+  spawnSync('git', ['update-index', '-z', '--add', '--index-info'], { cwd: s.root, env, input: `${lines.join('\0')}\0` });
+  const tree = spawnSync('git', ['write-tree'], { cwd: s.root, env, encoding: 'utf8' }).stdout.trim();
+  const made = spawnSync('git', ['commit-tree', tree, '-p', tip, '-m', 'files with odd names'], { cwd: s.root, env, encoding: 'utf8' }).stdout.trim();
+  git(s.root, 'update-ref', BOARD_REF, made, tip);
+  s.tier.forget();
+
+  s.tier.setStatus(task, 'running');
+  const listed = git(s.root, 'ls-tree', '-r', '--name-only', '-z', BOARD_BRANCH).split('\0').filter(Boolean);
+  for (const f of odd) assert.ok(listed.includes(f), `${JSON.stringify(f)} survived the write`);
+  assert.equal(JSON.parse(git(s.root, 'show', `${BOARD_BRANCH}:cards/${task.number}.json`)).status, 'running');
+});
+
+test('git tier: a read hands out copies without deep-cloning the whole board', (t) => {
+  const s = board();
+  t.after(s.cleanup);
+  const a = card(s.tier, { title: 'one', kb: { paths: ['src/'] } });
+  const b = card(s.tier, { title: 'two' });
+  s.tier.saveRun(a.number, { run: { ...emptyRun(), failures: 1, attempts: [{ attempt: 1, profile: 'claude' }] }, id: null });
+
+  // The memo is the read cache; nothing a caller is handed may reach into it.
+  const read = s.tier.getTask(a.number);
+  read.kb.paths.push('poison/');
+  read.labels.push('kb:poison');
+  assert.deepEqual(s.tier.getTask(a.number).kb.paths, ['src/'], 'the card in the memo is untouched');
+
+  const run = s.tier.loadRun(a.number);
+  run.run.attempts.push({ attempt: 99 });
+  assert.equal(s.tier.loadRun(a.number).run.attempts.length, 1);
+
+  const settings = s.tier.board().settings;
+  settings.dispatch.interval = 999;
+  assert.equal(s.tier.board().settings.dispatch.interval, 60);
+
+  // and the whole-tree copy `readTree()` still hands out is a copy too
+  const whole = s.tier.readTree();
+  whole.cards.get(b.number).title = 'edited';
+  assert.equal(s.tier.getTask(b.number).title, 'two');
+});
+
+test('git tier: every message names this tier\'s branch, never kb-board by reflex', (t) => {
+  const s = scratch();
+  t.after(s.cleanup);
+  const ref = 'refs/heads/kb-board-staging';
+  const ctx = { root: s.wt, cfg: {}, board: 'default', json: false, _cache: {} };
+  const tier = openGitTier(ctx, { host: 'test-host', ref });
+  tier.init('default', 'test-host', { settings: {} });
+  const task = card(tier, { title: 'a card' });
+
+  // The constructor takes `ref` precisely so the name is not fixed, and half the error surface used
+  // to honour it while the other half told the operator to look at a branch that does not exist.
+  const messages = [];
+  for (const call of [
+    () => tier.getTask(999),
+    () => tier.addBlockedBy(task.number, 999),
+    () => tier.saveRun(999, { run: emptyRun(), id: null }),
+    () => tier.addNote(999, 'hello'),
+  ]) {
+    try { call(); assert.fail('expected a refusal'); } catch (e) { messages.push(e.message); }
+  }
+  for (const m of messages) {
+    assert.match(m, /kb-board-staging/);
+    assert.doesNotMatch(m, /(?<!-)\bkb-board board\b/, m);
+  }
 });
 
 // ---------- the pure helpers, without a temp repo ----------

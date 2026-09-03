@@ -27,7 +27,7 @@
 // updated is `LOCK_LOST` (exit 3), exactly as the ref lease says it.
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { storeGitDir, storeRoot, readPidFile, pidAlive } from '../board.js';
 import { EVENT_KINDS } from '../watch.js';
@@ -57,11 +57,14 @@ export const LIVE_ATTEMPT_FIELDS = Object.freeze(['pid', 'job', 'wt', 'paused_at
 
 /** How many events the log keeps. A heartbeat is an event and a worker beats every ten minutes, so
  *  the table is the one thing here that grows without anyone deciding to write to it. */
-export const EVENT_RETENTION = 50_000;
+const EVENT_RETENTION = 50_000;
 /** Trim only now and then: the check is a row count on an AUTOINCREMENT id, not a scan. */
 const TRIM_EVERY = 1000;
 
 const usage = (msg) => { const e = new Error(msg); e.exitCode = 2; return e; };
+
+/** The durable tier's branch, when a caller did not say. Only error messages read it. */
+const DEFAULT_BRANCH = 'kb-board';
 
 const SQLITE_CONSTRAINT_UNIQUE = 2067;
 const SQLITE_CONSTRAINT_PRIMARYKEY = 1555;
@@ -90,16 +93,32 @@ const num = (v) => (v === null || v === undefined ? null : Number(v));
  * overwrite the slug and then read the wrong board anyway. The default board keeps the bare name so
  * nothing has to migrate.
  */
-export function indexFile(gitDir, slug = null) {
-  return path.join(indexDir(gitDir), slug && slug !== 'default' ? `index.${slugFile(slug)}.db` : 'index.db');
+export function indexFileIn(gitDir, slug = null) {
+  return path.join(indexDirIn(gitDir), slug && slug !== 'default' ? `index.${slugFile(slug)}.db` : 'index.db');
 }
 
-/** The directory the index lives in, for `hkb doctor` and `hkb init`'s ignore list. */
-export function indexDir(gitDir) { return path.join(gitDir, 'hkb'); }
+/**
+ * The directory the index lives in, for `hkb doctor` and `hkb init`'s ignore list.
+ *
+ * `In` because the argument is the **common git dir**, not a repository root — every other path
+ * helper in `src/board.js` (`kanbanDir`, `logsDir`, `pidFile`) takes a root, and a caller that
+ * reached for the old name with `ctx.root` got `<root>/hkb` with no error to say so.
+ */
+export function indexDirIn(gitDir) { return path.join(gitDir, 'hkb'); }
 
-/** A board slug as a filename component: anything that is not a word character becomes `-`. */
+/**
+ * A board slug as a filename component, and injectively.
+ *
+ * The readable part is only for a human reading `ls .git/hkb`; the hash is what makes the name a
+ * function of the slug alone. Squashing every non-word run to `-` collided `a/b` with `a-b`,
+ * `Alpha` with `alpha` on a case-insensitive filesystem, and any two slugs sharing 64 characters —
+ * and the collision error then told the operator to `hkb --board a/b`, which resolves to the file
+ * they were already looking at.
+ */
 function slugFile(slug) {
-  return String(slug).replace(/[^A-Za-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || 'board';
+  const text = String(slug);
+  const readable = text.replace(/[^A-Za-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'board';
+  return `${readable}-${createHash('sha256').update(text).digest('hex').slice(0, 12)}`;
 }
 
 // ---------- the schema (§6.3) ----------
@@ -245,11 +264,22 @@ function ensureSchema(db, file) {
   return true;
 }
 
+/**
+ * The `schema_version` row, or null when there is no `meta` table at all — an index written before
+ * it existed, which is a version mismatch and reads as one.
+ *
+ * Only *that* error is swallowed. Catching everything meant a transient `SQLITE_BUSY` also read as
+ * "no schema version", so `openIndexReadOnly` — `hkb serve`'s connection, the one that may not
+ * repair anything — told the operator to `rm` a database that was current and healthy.
+ */
 function readSchemaVersion(db) {
   try {
     const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version');
     return row ? Number(row.value) : null;
-  } catch { return null; } // no `meta` table at all: an index from before it existed
+  } catch (e) {
+    if (/no such table/i.test(/** @type {any} */ (e)?.message || '')) return null;
+    throw e;
+  }
 }
 
 function wrongSchema(file, found) {
@@ -262,13 +292,14 @@ function wrongSchema(file, found) {
  * The index for `ctx`, creating the file and the schema if they are not there.
  *
  * @param {any} ctx  a context from `makeContext`/`makeContextAt`, or a path
- * @param {{timeout?: number, file?: string, root?: string, gitDir?: string, slug?: string}} [opts]
+ * @param {{timeout?: number, file?: string, root?: string, gitDir?: string, slug?: string, branch?: string}} [opts]
  *   `timeout` is the busy timeout in ms for this writing connection (§6.3). `file`, `gitDir` and
  *   `root` override the location, for a test that wants an index outside a repository — pass `root`
  *   with either, since `root` is also where `wake()` looks for the dispatcher's pid file. `slug`
- *   names the board, and with it the file: one index per board (`indexFile`).
+ *   names the board, and with it the file: one index per board (`indexFileIn`). `branch` is the
+ *   durable tier's branch, and only so an error can name the right one to `git show`.
  */
-export function openIndex(ctx, { timeout = 5000, file = null, root = null, gitDir = null, slug = null } = {}) {
+export function openIndex(ctx, { timeout = 5000, file = null, root = null, gitDir = null, slug = null, branch = DEFAULT_BRANCH } = {}) {
   const board = boardSlug(ctx, slug);
   const { dir, dbFile } = locate(ctx, { file, root, gitDir, slug: board });
   fs.mkdirSync(path.dirname(dbFile), { recursive: true });
@@ -277,9 +308,11 @@ export function openIndex(ctx, { timeout = 5000, file = null, root = null, gitDi
     db.exec(`PRAGMA busy_timeout = ${Number(timeout) || 0}`);
     ensureSchema(db, dbFile);
     assertSameBoard(db, dbFile, board);
+    // Inside the try, like every other statement here: a busy timeout thrown on this one leaked the
+    // connection and its WAL/shm handles, which is the whole reason the rest is wrapped.
+    if (board) db.prepare('UPDATE board SET slug = ? WHERE id = 1 AND slug IS NULL').run(board);
   } catch (e) { try { db.close(); } catch { /* the open error is the one worth reporting */ } throw e; }
-  if (board) db.prepare('UPDATE board SET slug = ? WHERE id = 1 AND slug IS NULL').run(board);
-  return makeIndex({ db, file: dbFile, root: dir, readOnly: false });
+  return makeIndex({ db, file: dbFile, root: dir, readOnly: false, branch });
 }
 
 /** The board this open is for: an explicit slug beats the context's. */
@@ -313,7 +346,7 @@ function assertSameBoard(db, file, slug) {
  */
 function locate(ctx, { file, root, gitDir, slug }) {
   if (file) return { dir: root || path.dirname(path.dirname(path.dirname(file))), dbFile: file };
-  return { dir: root || storeRoot(ctx), dbFile: indexFile(gitDir || storeGitDir(ctx), slug) };
+  return { dir: root || storeRoot(ctx), dbFile: indexFileIn(gitDir || storeGitDir(ctx), slug) };
 }
 
 /**
@@ -323,7 +356,7 @@ function locate(ctx, { file, root, gitDir, slug }) {
  * waits on a writer's lock does not wait alone — it holds up every request queued behind it. Better
  * a `SQLITE_BUSY` the caller can retry on than a stalled server.
  */
-export function openIndexReadOnly(ctx, { file = null, root = null, gitDir = null, slug = null } = {}) {
+export function openIndexReadOnly(ctx, { file = null, root = null, gitDir = null, slug = null, branch = DEFAULT_BRANCH } = {}) {
   const board = boardSlug(ctx, slug);
   const { dir, dbFile } = locate(ctx, { file, root, gitDir, slug: board });
   if (!fs.existsSync(dbFile)) {
@@ -337,12 +370,12 @@ export function openIndexReadOnly(ctx, { file = null, root = null, gitDir = null
     if (found !== SCHEMA_VERSION) throw wrongSchema(dbFile, found);
     assertSameBoard(db, dbFile, board);
   } catch (e) { try { db.close(); } catch { /* the open error is the one worth reporting */ } throw e; }
-  return makeIndex({ db, file: dbFile, root: dir, readOnly: true });
+  return makeIndex({ db, file: dbFile, root: dir, readOnly: true, branch });
 }
 
 // ---------- the index ----------
 
-function makeIndex({ db, file, root, readOnly }) {
+function makeIndex({ db, file, root, readOnly, branch = DEFAULT_BRANCH }) {
   const refuseReadOnly = (what) => {
     throw usage(`${what}: this index is open read-only (\`hkb serve\`'s connection). Writes go through the dispatcher or a worker verb.`);
   };
@@ -416,10 +449,12 @@ function makeIndex({ db, file, root, readOnly }) {
      * A4 and A5 were written in parallel and this used to read four shapes at once, which meant a
      * disagreement lost a field silently instead of saying so.
      *
-     * @param {{tip?: string|null, board?: any, cards?: any, runs?: any}} tree
+     * @param {{tip?: string|null, branch?: string, board?: any, cards?: any, runs?: any}} tree
      */
     load(tree = {}) {
       if (readOnly) refuseReadOnly('load');
+      // The tree says which branch it came off when it knows; otherwise this index's own.
+      const from = tree.branch ? String(tree.branch) : branch;
       // A key the tree does not carry is a question it did not answer. `board` was already read that
       // way (a missing document must not null the board-wide pause); `cards` and `runs` are read the
       // same way now, because emptying their tables on a partial read is what made the lock sweep
@@ -429,7 +464,7 @@ function makeIndex({ db, file, root, readOnly }) {
       const hasRuns = tree.runs !== null && tree.runs !== undefined;
       const cards = collection(tree.cards, 'cards');
       const runs = collection(tree.runs, 'runs');
-      const counts = { tasks: 0, links: 0, runs: 0, attempts: 0, results: 0, locks_dropped: 0 };
+      const counts = { tasks: 0, links: 0, runs: 0, attempts: 0, attempts_held: 0, results: 0, locks_dropped: 0 };
       db.exec('BEGIN IMMEDIATE');
       try {
         if (hasCards) {
@@ -449,7 +484,13 @@ function makeIndex({ db, file, root, readOnly }) {
         // an index rather than filling it in, so it is refused here exactly as `assertSameBoard`
         // refuses it at open time.
         const b = tree.board;
-        if (b && typeof b === 'object') {
+        if (b !== null && b !== undefined && (typeof b !== 'object' || Array.isArray(b))) {
+          // The same strictness `collection()` applies to `cards` and `runs`. `load({board: 'default'})`
+          // — the slug where the document goes — used to fall through to the tip-only branch and
+          // report success while leaving host, paused_at, paused_by and settings untouched.
+          throw usage(`load: \`board\` is a ${b?.constructor?.name || typeof b}, and a tree carries it as the board.json document (what src/store/git.js readTree() returns)`);
+        }
+        if (b) {
           const held = db.prepare('SELECT slug FROM board WHERE id = 1').get()?.slug ?? null;
           const slug = b.slug ?? held;
           if (held !== null && slug !== null && slug !== held) {
@@ -474,7 +515,7 @@ function makeIndex({ db, file, root, readOnly }) {
         for (const card of cards) {
           const id = Number(card.id ?? card.number);
           if (!Number.isFinite(id)) continue;
-          if (seen.has(id)) throw usage(`load: the tree has two cards numbered ${id} — one card is one file, so check \`git ls-tree -r kb-board cards/\` for a duplicate`);
+          if (seen.has(id)) throw usage(`load: the tree has two cards numbered ${id} — one card is one file, so check \`git ls-tree -r ${from} cards/\` for a duplicate`);
           seen.add(id);
           try {
             insTask.run(
@@ -483,7 +524,7 @@ function makeIndex({ db, file, root, readOnly }) {
               card.scheduled_at ?? null, json(card.suspended ?? null),
               bool(card.needs_human), card.created_at ?? null, card.updated_at ?? null,
             );
-          } catch (e) { throw badRecord(`cards/${id}.json`, e); }
+          } catch (e) { throw badRecord(from, `cards/${id}.json`, e); }
           counts.tasks++;
           for (const blocker of [].concat(card.blocked_by ?? [])) {
             const p = Number(blocker);
@@ -495,6 +536,22 @@ function makeIndex({ db, file, root, readOnly }) {
 
         const insRun = db.prepare('INSERT OR REPLACE INTO runs (task_id, failures, block_loops_json, last_error) VALUES (?, ?, ?, ?)');
         const insResult = db.prepare('INSERT OR REPLACE INTO results (task_id, k, summary, metadata_json, artifacts_json) VALUES (?, ?, ?, ?, ?)');
+        // The attempts somebody on this host is still *running*: open here, and with the lock still
+        // held. That pair is the definition of live state, and it is what the guard below consults.
+        //
+        // Asking only whether the **tree's** row was closed let `hkb finish`'s own window through:
+        // the attempt is written closed to the branch before `release()` runs, so a tick reloading
+        // on the moved tip replaced the open row, wiped the pid/job/worktree the loop is watching,
+        // and the sweep at the bottom then dropped the lock out from under a running worker, whose
+        // next heartbeat came back `lost`. The lock is the half that makes this self-clearing:
+        // `release()` drops it, and the next load indexes the branch's copy as it should.
+        const live = new Set(
+          hasRuns
+            ? db.prepare(`SELECT a.task_id, a.k FROM attempts a
+                          JOIN locks l ON l.task_id = a.task_id AND l.k = a.k
+                          WHERE a.ended_at IS NULL`).all().map((r) => `${r.task_id}/${r.k}`)
+            : [],
+        );
         for (const rec of runs) {
           const id = Number(rec.id ?? rec.task_id ?? rec.number);
           if (!Number.isFinite(id)) continue;
@@ -502,9 +559,12 @@ function makeIndex({ db, file, root, readOnly }) {
             insRun.run(id, Number(rec.failures || 0), json(rec.block_loops ?? {}), rec.last_error ?? null);
             counts.runs++;
             for (const a of [].concat(rec.attempts || [])) {
-              // Only closed rows come off the branch; an open one is this host's, and it is already
-              // here. Writing it from the tree would clobber the pid the loop is watching.
+              // Only closed rows come off the branch, and only onto an attempt this host is not
+              // still running: an open row here is live state, and the branch is not its source.
+              // `release()` is what closes it, and the next load then indexes the branch's copy.
               if (!a || !a.ended_at) continue;
+              const k = Number(a.attempt ?? a.k ?? 0);
+              if (live.has(`${id}/${k}`)) { counts.attempts_held++; continue; }
               writeAttempt(db, id, a);
               counts.attempts++;
             }
@@ -513,7 +573,7 @@ function makeIndex({ db, file, root, readOnly }) {
               insResult.run(id, Number(r.attempt || 0), r.summary ?? null, json(r.metadata ?? {}), json(r.artifacts ?? []));
               counts.results++;
             }
-          } catch (e) { throw badRecord(`runs/${id}.json`, e); }
+          } catch (e) { throw badRecord(from, `runs/${id}.json`, e); }
         }
 
         // The orphan sweep, done where the answer is knowable: a lock with no open attempt behind it
@@ -568,7 +628,10 @@ function makeIndex({ db, file, root, readOnly }) {
       const rows = status
         ? db.prepare('SELECT * FROM tasks WHERE status = ? ORDER BY id').all(String(status))
         : db.prepare('SELECT * FROM tasks ORDER BY id').all();
-      const blockers = blockerMap(db);
+      // Grouped over the rows this query actually returned. Building the whole board's map for a
+      // narrow `{status}` read — the dispatcher's every-tick call — made it slower than the N+1 it
+      // replaced: 500 link rows grouped to answer about two cards.
+      const blockers = blockerMap(db, status ? rows.map((r) => r.id) : null);
       return rows.map((r) => taskRow(db, r, blockers));
     },
 
@@ -683,7 +746,7 @@ function makeIndex({ db, file, root, readOnly }) {
       const task = Number(n); const att = Number(k);
       const keys = Object.keys(patch);
       const bad = keys.filter((key) => !LIVE_ATTEMPT_FIELDS.includes(key));
-      if (bad.length) throw usage(`setAttempt: ${bad.join(', ')} ${bad.length > 1 ? 'are' : 'is'} not live state — the closed attempt fields live on the kb-board branch. Live: ${LIVE_ATTEMPT_FIELDS.join(', ')}`);
+      if (bad.length) throw usage(`setAttempt: ${bad.join(', ')} ${bad.length > 1 ? 'are' : 'is'} not live state — the closed attempt fields live on the ${branch} branch. Live: ${LIVE_ATTEMPT_FIELDS.join(', ')}`);
       if (!keys.length) return index.getAttempt(task, att);
       const kind = 'paused_at' in patch ? (patch.paused_at ? 'paused' : 'resumed') : 'attempt';
       db.exec('BEGIN IMMEDIATE');
@@ -805,10 +868,17 @@ function taskRow(db, row, blockers = null) {
   };
 }
 
-/** Every link on the board, grouped by the card it blocks — one query instead of one per card. */
-function blockerMap(db) {
+/**
+ * The links that block these cards, grouped by the card they block — one query instead of one per
+ * card. `ids` null means the whole board; a list restricts the scan to what the caller asked about.
+ */
+function blockerMap(db, ids = null) {
   /** @type {Map<number, number[]>} */ const out = new Map();
-  for (const l of db.prepare('SELECT blocker_id, blocked_id FROM links ORDER BY blocked_id, blocker_id').all()) {
+  if (ids && !ids.length) return out;
+  const rows = ids
+    ? db.prepare(`SELECT blocker_id, blocked_id FROM links WHERE blocked_id IN (${ids.map(() => '?').join(', ')}) ORDER BY blocked_id, blocker_id`).all(...ids)
+    : db.prepare('SELECT blocker_id, blocked_id FROM links ORDER BY blocked_id, blocker_id').all();
+  for (const l of rows) {
     const list = out.get(l.blocked_id) || [];
     list.push(l.blocker_id);
     out.set(l.blocked_id, list);
@@ -816,10 +886,14 @@ function blockerMap(db) {
   return out;
 }
 
-/** A row the branch wrote that this schema cannot hold, reported with the file to go and look at. */
-function badRecord(file, e) {
+/**
+ * A row the branch wrote that this schema cannot hold, reported with the file to go and look at.
+ * `branch` is the durable tier's own — a board on `kb-board-staging` must not be told to
+ * `git show kb-board:cards/7.json`.
+ */
+function badRecord(branch, file, e) {
   if (e?.exitCode) return e;
-  return usage(`load: ${file} on the kb-board branch does not fit the index (${e?.message || e}) — read it with \`git show kb-board:${file}\` and fix the field it names`);
+  return usage(`load: ${file} on the ${branch} branch does not fit the index (${e?.message || e}) — read it with \`git show ${branch}:${file}\` and fix the field it names`);
 }
 
 /**
