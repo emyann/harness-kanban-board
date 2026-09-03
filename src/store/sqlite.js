@@ -225,6 +225,11 @@ CREATE TABLE IF NOT EXISTS attempts (
   wt               TEXT,
   session_id       TEXT,
   transcript_path  TEXT,
+  -- Dead as live state and kept on purpose. It was the GitHub store's lock ref sha, which the
+  -- worker's first heartbeat compare-and-swapped against; a claim is an index row now and nothing
+  -- writes this (test/dispatch.test.js asserts a fresh attempt has no lock_sha). The column stays
+  -- because run records written before ADR-006 carry the field, and a load with nowhere to put it
+  -- would drop it -- the branch is the record, and the index does not get to edit what it indexes.
   lock_sha         TEXT,
   heartbeat_at     TEXT,
   total_cost_usd   REAL,
