@@ -203,7 +203,7 @@ test('a persistent unknown claim drops the caches at tick 3 and exits the loop a
   );
 
   const log = h.log();
-  assert.equal(h.gh.callsMatching('POST', 'git/refs').length, 6, 'it kept trying for six ticks, then stopped');
+  assert.equal(h.gh.requestsMatching('POST', 'git/refs').length, 6, 'it kept trying for six ticks, then stopped');
   assert.equal(waits, 5, 'and it did not sleep after the last one');
   assert.equal(log.split('self-heal: caches dropped').length - 1, 1, 'the caches are dropped once');
   assert.match(log, /#1: self-heal: caches dropped after 3 unknown claim results in a row \(notfound: /);

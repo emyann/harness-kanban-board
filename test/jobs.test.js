@@ -10,7 +10,7 @@ import { parseBackgroundedId, classifyJob, jobName, KB_JOB_NAME_RE } from '../sr
 import { matchJobByWorktree, jobSessionUpdate } from '../src/jobs.js';
 import { tick } from '../src/dispatch.js';
 import { DEFAULT_BOARD } from '../src/board.js';
-import { FakeGh, kbIssue, runWith } from './fake-gh.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const ago = (seconds) => new Date(Date.now() - seconds * 1000).toISOString();
 
@@ -137,27 +137,26 @@ function stubClaude(root, jobs) {
  * dispatcher looks for one.
  */
 function harness({ jobs = [], records = {} } = {}) {
-  const gh = new FakeGh();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-jobsession-'));
   const home = path.join(root, 'home');
   jobsRootWith(records, path.join(home, '.claude', 'jobs'));
-  const cfg = {
-    ...DEFAULT_BOARD,
-    repo: gh.nameWithOwner,
-    board: 'default',
-    profiles: { claude: { mode: 'claude-bg', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] } },
-  };
-  const ctx = {
-    root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+  const { gh, store, ctx, restore } = installDoubles((g) => ({
+    root,
+    cfg: {
+      ...DEFAULT_BOARD,
+      repo: g.nameWithOwner,
+      board: 'default',
+      profiles: { claude: { mode: 'claude-bg', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] } },
+    },
+    repo: { owner: g.owner, repo: g.repo, nameWithOwner: g.nameWithOwner },
     board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
-  };
-  const restore = gh.install();
+  }));
   const savedEnv = { PATH: process.env.PATH, HOME: process.env.HOME };
   process.env.HOME = home;
   stubClaude(root, jobs);
   const logs = [];
   return {
-    gh, ctx,
+    gh, store, ctx,
     log: () => logs.join('\n'),
     tick: (opts = {}) => tick(ctx, { max: 0, log: (m) => logs.push(m), ...opts }),
     cleanup: () => {
@@ -182,13 +181,15 @@ test('an attempt written off as protocol_violation still names its session and t
     records: { j7: { state: 'done', sessionId: SID, linkScanPath: TRANSCRIPT } },
   });
   t.after(h.cleanup);
-  h.gh.addIssue(running());
-  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+  h.store.addIssue(running());
+  h.store.hold(7, 1);
+  assert.deepEqual(await h.store.locks(), ['7/1'], 'precondition: there is a claim to take away');
 
   const s = await h.tick();
 
   assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'protocol_violation' }]);
-  const a = h.gh.runOf(7).attempts[0];
+  assert.deepEqual(await h.store.locks(), [], 'and the reclaim released it');
+  const a = h.store.runOf(7).attempts[0];
   assert.equal(a.outcome, 'protocol_violation');
   assert.equal(a.session_id, SID, 'the id `hkb show` reopens the post-mortem with');
   assert.equal(a.transcript_path, TRANSCRIPT, 'and the transcript `hkb stats` prices it from');
@@ -201,13 +202,13 @@ test('a live attempt is named one tick after the launch, and the row is written 
     records: { j7: { state: 'working', sessionId: SID, linkScanPath: TRANSCRIPT } },
   });
   t.after(h.cleanup);
-  h.gh.addIssue(running());
+  h.store.addIssue(running());
 
-  const writes = () => h.gh.calls.filter((c) => ['POST', 'PATCH', 'DELETE'].includes(c.method)).length;
+  const writes = () => h.store.writes().length;
   await h.tick();
 
-  assert.deepEqual(h.gh.runOf(7).attempts[0].session_id, SID);
-  assert.equal(h.gh.statusOf(7), 'running', 'a working job is not reclaimed for being named');
+  assert.deepEqual(h.store.runOf(7).attempts[0].session_id, SID);
+  assert.equal(h.store.statusOf(7), 'running', 'a working job is not reclaimed for being named');
   const after = writes();
   await h.tick();
   assert.equal(writes(), after, 'the second tick finds nothing left to record');
@@ -224,11 +225,11 @@ test("a row naming another session is corrected to the job's, and the tick says 
     records: { j7: { state: 'working', sessionId: SID, linkScanPath: TRANSCRIPT } },
   });
   t.after(h.cleanup);
-  h.gh.addIssue(running({ session_id: 'an-operator-session', transcript_path: '/t/operator.jsonl', total_cost_usd: 0.42 }));
+  h.store.addIssue(running({ session_id: 'an-operator-session', transcript_path: '/t/operator.jsonl', total_cost_usd: 0.42 }));
 
   await h.tick();
 
-  const a = h.gh.runOf(7).attempts[0];
+  const a = h.store.runOf(7).attempts[0];
   assert.equal(a.session_id, SID);
   assert.equal(a.transcript_path, TRANSCRIPT);
   assert.equal(a.total_cost_usd, undefined, "the replaced session's cost went with it — it was never this attempt's");
@@ -241,9 +242,9 @@ test('a dry run reads no job record and writes nothing', async (t) => {
     records: { j7: { state: 'working', sessionId: SID, linkScanPath: TRANSCRIPT } },
   });
   t.after(h.cleanup);
-  h.gh.addIssue(running());
+  h.store.addIssue(running());
 
   await h.tick({ dryRun: true });
 
-  assert.equal(h.gh.runOf(7).attempts[0].session_id, undefined);
+  assert.equal(h.store.runOf(7).attempts[0].session_id, undefined);
 });

@@ -8,9 +8,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { workerContext, selectComments, formatComments, isHumanComment, briefIntents, capabilityLine, mcpLine } from '../src/context.js';
-import { getTask } from '../src/tasks.js';
+import { openStore } from '../src/store/index.js';
 import { CAPABILITIES, RUN_MARKER, RESULT_MARKER, serializeResultComment, serializeRunComment } from '../src/model.js';
-import { FakeGh, kbIssue, runWith } from './fake-gh.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const NOW = new Date('2026-08-26T12:00:00Z');
 const at = (minutesAgo) => new Date(NOW.getTime() - minutesAgo * 60_000).toISOString();
@@ -129,24 +129,25 @@ test('rendering: one oversized comment is clipped, not dropped', () => {
 // ---------- the whole brief ----------
 
 function harness() {
-  const gh = new FakeGh();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-context-'));
-  const ctx = {
+  const { gh, store, ctx, restore } = installDoubles((g) => ({
     root,
-    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    repo: { owner: g.owner, repo: g.repo, nameWithOwner: g.nameWithOwner },
     board: 'default',
     host: 'test-host',
     json: false,
     caps: {},
     _cache: {},
-  };
-  const restore = gh.install();
-  return { gh, ctx, cleanup: () => { restore(); fs.rmSync(root, { recursive: true, force: true }); } };
+  }));
+  return { gh, store, ctx, cleanup: () => { restore(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 
-/** FakeGh stamps every comment with its own login and time; a real thread has neither. */
-function say(gh, number, body, { login = 'operator', minutesAgo = 0 } = {}) {
-  const comment = gh.addComment(number, body);
+/** The card, read the way every verb reads one. */
+const card = async (ctx, n) => (await openStore(ctx)).getTask(n);
+
+/** The double stamps every comment with hkb's own login and one fixed time; a real thread has neither. */
+function say(store, number, body, { login = 'operator', minutesAgo = 0 } = {}) {
+  const comment = store.addComment(number, body);
   comment.user = { login };
   comment.created_at = at(minutesAgo);
   return comment;
@@ -155,20 +156,20 @@ function say(gh, number, body, { login = 'operator', minutesAgo = 0 } = {}) {
 test('workerContext surfaces the thread and hides hkb\'s own records', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({
+  h.store.addIssue(kbIssue({
     number: 42,
     title: 'wire the client',
     status: 'ready',
     agent: 'claude',
     run: runWith([{ attempt: 1, started_at: at(300), ended_at: at(200), outcome: 'blocked', reason: 'no token' }]),
   }));
-  say(h.gh, 42, 'use the v2 endpoint', { login: 'alice', minutesAgo: 120 });
-  say(h.gh, 42, '**Blocked** (needs_input, attempt 1): no token', { login: 'hkb', minutesAgo: 199 });
-  say(h.gh, 42, serializeResultComment({ kind: 'result', attempt: 1, summary: 'half done' }), { login: 'hkb', minutesAgo: 198 });
-  say(h.gh, 42, 'token is in the vault now', { login: 'bob', minutesAgo: 3 });
+  say(h.store, 42, 'use the v2 endpoint', { login: 'alice', minutesAgo: 120 });
+  say(h.store, 42, '**Blocked** (needs_input, attempt 1): no token', { login: 'hkb', minutesAgo: 199 });
+  say(h.store, 42, serializeResultComment({ kind: 'result', attempt: 1, summary: 'half done' }), { login: 'hkb', minutesAgo: 198 });
+  say(h.store, 42, 'token is in the vault now', { login: 'bob', minutesAgo: 3 });
 
-  const before = h.gh.calls.length;
-  const task = await getTask(h.ctx, 42);
+  const before = h.store.calls.length;
+  const task = await card(h.ctx, 42);
   const out = await workerContext(h.ctx, task);
 
   assert.match(out, /## Comments/);
@@ -186,16 +187,16 @@ test('workerContext surfaces the thread and hides hkb\'s own records', async (t)
   assert.ok(out.indexOf('use the v2 endpoint') < out.indexOf('token is in the vault now'));
 
   // one thread read, shared with the run record and the result lookup
-  const reads = h.gh.calls.slice(before).filter((r) => String(r.path || '').includes('/comments'));
-  assert.equal(reads.length, 1, `expected one comments read, got ${reads.length}`);
+  const reads = h.store.calls.slice(before).filter((c) => c.name === 'listNotes');
+  assert.equal(reads.length, 1, `expected one thread read, got ${reads.length}`);
 });
 
 test('workerContext has no Comments section when nobody has said anything', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
-  say(h.gh, 7, serializeRunComment(runWith([{ attempt: 1, started_at: at(10) }])), { login: 'hkb', minutesAgo: 10 });
-  const out = await workerContext(h.ctx, await getTask(h.ctx, 7));
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+  say(h.store, 7, serializeRunComment(runWith([{ attempt: 1, started_at: at(10) }])), { login: 'hkb', minutesAgo: 10 });
+  const out = await workerContext(h.ctx, await card(h.ctx, 7));
   assert.ok(!out.includes('## Comments'));
   assert.match(out, /## Protocol \(hkb\)/);
 });
@@ -220,9 +221,9 @@ function sentBack({ number = 42, pr = 147, branch = 'worktree-kb-42-1', base = '
 test('the brief tells a continuing worker which PR to push to, and not to open a second', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(sentBack());
+  h.store.addIssue(sentBack());
 
-  const out = await workerContext(h.ctx, await getTask(h.ctx, 42), 3);
+  const out = await workerContext(h.ctx, await card(h.ctx, 42), 3);
 
   assert.match(out, /^## Continue PR #147 — do not open a second one$/m);
   assert.match(out, /PR #147 \(branch `worktree-kb-42-1`\) is open with \*\*changes requested\*\*/);
@@ -243,9 +244,9 @@ test('the brief tells a continuing worker which PR to push to, and not to open a
 test('a checkout the dispatcher already put on the PR branch is said so, once', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(sentBack());
+  h.store.addIssue(sentBack());
 
-  const out = await workerContext(h.ctx, await getTask(h.ctx, 42), 3, {
+  const out = await workerContext(h.ctx, await card(h.ctx, 42), 3, {
     continuePr: { number: 147, branch: 'worktree-kb-42-1', base: 'main', checkedOut: true },
   });
 
@@ -257,9 +258,9 @@ test('a checkout the dispatcher already put on the PR branch is said so, once', 
 test('a checkout that could not be fast-forwarded gets the catch-up recipe, not a false "already there"', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(sentBack());
+  h.store.addIssue(sentBack());
 
-  const out = await workerContext(h.ctx, await getTask(h.ctx, 42), 3, {
+  const out = await workerContext(h.ctx, await card(h.ctx, 42), 3, {
     continuePr: { number: 147, branch: 'worktree-kb-42-1', base: 'main', checkedOut: false, stale: 'could not fast-forward to origin/worktree-kb-42-1: exit 1' },
   });
 
@@ -273,7 +274,7 @@ test('a long reviewer note reaches the brief whole, not cut at 400 chars', async
   t.after(h.cleanup);
   const longReason = 'item 1: fix the retry loop. '.repeat(60).trim(); // > 1500 chars
   assert.ok(longReason.length > 1500);
-  h.gh.addIssue(kbIssue({
+  h.store.addIssue(kbIssue({
     number: 42,
     title: 'wire the client',
     status: 'ready',
@@ -285,7 +286,7 @@ test('a long reviewer note reaches the brief whole, not cut at 400 chars', async
     prs: [{ number: 147, state: 'OPEN', isDraft: true, headRefName: 'worktree-kb-42-1', baseRefName: 'main' }],
   }));
 
-  const out = await workerContext(h.ctx, await getTask(h.ctx, 42), 3);
+  const out = await workerContext(h.ctx, await card(h.ctx, 42), 3);
 
   assert.ok(out.includes(longReason), 'the full reviewer note must be in the brief, not truncated');
 });
@@ -294,17 +295,17 @@ test('an ordinary card gets no continuation block, open PR or not', async (t) =>
   const h = harness();
   t.after(h.cleanup);
   // an open PR with no reviewer row on top is the active_pr guard's business, not a continuation
-  h.gh.addIssue(kbIssue({
+  h.store.addIssue(kbIssue({
     number: 43,
     status: 'ready',
     agent: 'claude',
     run: runWith([{ attempt: 1, started_at: at(300), ended_at: at(200), outcome: 'review_requested' }]),
     prs: [{ number: 148, state: 'OPEN', isDraft: true, headRefName: 'worktree-kb-43-1' }],
   }));
-  h.gh.addIssue(kbIssue({ number: 44, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 44, status: 'ready', agent: 'claude' }));
 
   for (const n of [43, 44]) {
-    const out = await workerContext(h.ctx, await getTask(h.ctx, n));
+    const out = await workerContext(h.ctx, await card(h.ctx, n));
     assert.ok(!out.includes('do not open a second one'), `#${n}`);
     assert.match(out, /Work only in this worktree, on the current branch\./);
     assert.match(out, /Before finishing: rebase on the default branch/);
@@ -315,8 +316,8 @@ test('an ordinary card gets no continuation block, open PR or not', async (t) =>
 test('the protocol asks for a finishing command a shell-vetting harness will run (#125)', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
-  const out = await workerContext(h.ctx, await getTask(h.ctx, 7));
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+  const out = await workerContext(h.ctx, await card(h.ctx, 7));
   // `complete` is a bash builtin and a heredoc is refused outright in a worktree-isolated Claude Code
   // session, so neither may appear in the one command the worker is told to end with.
   assert.match(out, /hkb finish 7 --from-stdin < \/tmp\/kb-7\.json/);
@@ -355,10 +356,10 @@ test('capabilityLine names the board\'s own string, and is null for anything unb
 test('a card whose profile binds `goal` has the bound command named beside the acceptance criteria', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 9, status: 'ready', agent: 'claude', kb: { goal: 'the client speaks v2' } }));
+  h.store.addIssue(kbIssue({ number: 9, status: 'ready', agent: 'claude', kb: { goal: 'the client speaks v2' } }));
   withProfiles(h.ctx, { claude: { capabilities: { goal: '/goal' } } });
 
-  const out = await workerContext(h.ctx, await getTask(h.ctx, 9));
+  const out = await workerContext(h.ctx, await card(h.ctx, 9));
 
   assert.match(out, /## Acceptance criteria\nthe client speaks v2\nOn this harness that is `\/goal` — state the outcome/);
 });
@@ -366,13 +367,13 @@ test('a card whose profile binds `goal` has the bound command named beside the a
 test('an unmapped intent keeps today\'s prose, and a board with no capabilities gets a byte-identical brief', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 9, status: 'ready', agent: 'claude', kb: { goal: 'the client speaks v2' } }));
+  h.store.addIssue(kbIssue({ number: 9, status: 'ready', agent: 'claude', kb: { goal: 'the client speaks v2' } }));
 
-  const none = await workerContext(withProfiles(h.ctx, { claude: {} }), await getTask(h.ctx, 9));
-  const noCfg = await workerContext({ ...h.ctx, cfg: undefined }, await getTask(h.ctx, 9));
+  const none = await workerContext(withProfiles(h.ctx, { claude: {} }), await card(h.ctx, 9));
+  const noCfg = await workerContext({ ...h.ctx, cfg: undefined }, await card(h.ctx, 9));
   // a profile that binds a *different* intent must not leak into this card's brief either
-  const other = await workerContext(withProfiles(h.ctx, { claude: { capabilities: { specify: '/specify' } } }), await getTask(h.ctx, 9));
-  const bound = await workerContext(withProfiles(h.ctx, { claude: { capabilities: { goal: '/goal' } } }), await getTask(h.ctx, 9));
+  const other = await workerContext(withProfiles(h.ctx, { claude: { capabilities: { specify: '/specify' } } }), await card(h.ctx, 9));
+  const bound = await workerContext(withProfiles(h.ctx, { claude: { capabilities: { goal: '/goal' } } }), await card(h.ctx, 9));
 
   assert.equal(none, noCfg, 'declaring no capabilities is byte-identical to having no board config at all');
   assert.equal(other, noCfg, 'an unbound intent renders nothing — no error, no warning, no extra line');
@@ -384,10 +385,10 @@ test('an unmapped intent keeps today\'s prose, and a board with no capabilities 
 test('a continuation whose profile binds `review` is told what this harness calls it', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(sentBack());
+  h.store.addIssue(sentBack());
   withProfiles(h.ctx, { claude: { capabilities: { review: '::second-look' } } });
 
-  const out = await workerContext(h.ctx, await getTask(h.ctx, 42), 3);
+  const out = await workerContext(h.ctx, await card(h.ctx, 42), 3);
 
   // hkb echoes the board's own string: it has no idea what a review command is called here
   assert.match(out, /Read what is already there before you change it\. On this harness that is `::second-look` — a second pass over work that already exists/);
@@ -397,11 +398,11 @@ test('a continuation whose profile binds `review` is told what this harness call
 test('hkb names no harness command in a brief the board did not bind', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(sentBack());
-  h.gh.addIssue(kbIssue({ number: 9, status: 'ready', agent: 'claude', kb: { goal: 'the client speaks v2', skills: ['kanban'] } }));
+  h.store.addIssue(sentBack());
+  h.store.addIssue(kbIssue({ number: 9, status: 'ready', agent: 'claude', kb: { goal: 'the client speaks v2', skills: ['kanban'] } }));
 
   for (const n of [42, 9]) {
-    const out = await workerContext(withProfiles(h.ctx, { claude: {} }), await getTask(h.ctx, n), 3);
+    const out = await workerContext(withProfiles(h.ctx, { claude: {} }), await card(h.ctx, n), 3);
     for (const cmd of ['/code-review', '/goal', '/specify', '/review']) {
       assert.ok(!out.includes(cmd), `#${n}: the brief must not name ${cmd} — hkb knows intents, boards know commands`);
     }
@@ -438,11 +439,11 @@ test('mcpLine: a card\'s own narrowing is already in the line, not recomputed be
 test('the brief names the servers a curate board gave this worker, and stays silent otherwise', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 9, status: 'ready', agent: 'claude', kb: { goal: 'ship the panel' } }));
+  h.store.addIssue(kbIssue({ number: 9, status: 'ready', agent: 'claude', kb: { goal: 'ship the panel' } }));
 
-  const silent = await workerContext(withProfiles(h.ctx, { claude: { allowed_tools: ['Read'] } }), await getTask(h.ctx, 9));
-  const named = await workerContext(withProfiles(h.ctx, { claude: { mcp: ['react-aria'], allowed_tools: ['Read'] } }), await getTask(h.ctx, 9));
-  const withheld = await workerContext(withProfiles(h.ctx, { claude: { tools: 'inherit', mcp: ['supabase'], allowed_tools: ['Read'] } }), await getTask(h.ctx, 9));
+  const silent = await workerContext(withProfiles(h.ctx, { claude: { allowed_tools: ['Read'] } }), await card(h.ctx, 9));
+  const named = await workerContext(withProfiles(h.ctx, { claude: { mcp: ['react-aria'], allowed_tools: ['Read'] } }), await card(h.ctx, 9));
+  const withheld = await workerContext(withProfiles(h.ctx, { claude: { tools: 'inherit', mcp: ['supabase'], allowed_tools: ['Read'] } }), await card(h.ctx, 9));
 
   assert.ok(!silent.includes('MCP'), 'a board that declares no mcp and no posture gets the brief it got before');
   assert.match(named, /MCP servers available to you: `react-aria`\./);

@@ -41,7 +41,7 @@ function seed(gh) {
   return [10, 11, 12, 13, 14, 15];
 }
 
-const depCalls = (gh) => gh.callsMatching('GET', /dependencies\/blocked_by/).map((c) => Number(/issues\/(\d+)\//.exec(c.path)[1])).sort((a, b) => a - b);
+const depCalls = (gh) => gh.requestsMatching('GET', /dependencies\/blocked_by/).map((c) => Number(/issues\/(\d+)\//.exec(c.path)[1])).sort((a, b) => a - b);
 const withBlockers = (tasks) => tasks.filter((t) => t.blockedBy.length).map((t) => t.number).sort((a, b) => a - b);
 
 test("blockers: 'all' REST-fills every open card when GraphQL has no blockedBy", async () => {
@@ -74,7 +74,7 @@ test('blockers: true is the default, and blockers: false asks for nothing', asyn
     assert.deepEqual(depCalls(gh), [12, 13]);
     assert.equal(blockersOf(dflt).scope, 'waiting');
 
-    gh.calls.length = 0;
+    gh.requests.length = 0;
     const none = await fetchBoard(ctx, { blockers: false });
     assert.deepEqual(depCalls(gh), []);
     assert.deepEqual(withBlockers(none), []);
@@ -90,8 +90,8 @@ test("a repo with GraphQL blockedBy makes no extra request for 'all'", async () 
     assert.deepEqual(depCalls(gh), []);
     // the capability probe plus exactly one board query for blockers, and nothing else — the PR
     // head-branch fallback still costs its one board-wide read, since none of these cards have a PR
-    assert.equal(gh.calls.filter((c) => c.kind === 'graphql').length, 2);
-    assert.deepEqual(gh.calls.filter((c) => c.kind !== 'graphql').map((c) => c.path), ['repos/acme/board/pulls?state=open&per_page=100&page=1']);
+    assert.equal(gh.requests.filter((c) => c.kind === 'graphql').length, 2);
+    assert.deepEqual(gh.requests.filter((c) => c.kind !== 'graphql').map((c) => c.path), ['repos/acme/board/pulls?state=open&per_page=100&page=1']);
     assert.deepEqual(withBlockers(tasks), open);
     assert.deepEqual(blockersOf(tasks), { source: 'graphql', filled: true, scope: 'all' });
   } finally { cleanup(); }
@@ -267,7 +267,7 @@ test('fetchBoard applies the same fallback board-wide, in one extra request', as
     gh.addIssue(kbIssue({ number: 61, status: 'running' }));
     gh.addPull({ number: 70, head: 'kb-60-1', base: 'kb/191-wave1' });
     const tasks = await fetchBoard(ctx);
-    const pullCalls = gh.calls.filter((c) => c.kind === 'rest' && /\/pulls\?/.test(c.path || ''));
+    const pullCalls = gh.requests.filter((c) => c.kind === 'rest' && /\/pulls\?/.test(c.path || ''));
     assert.equal(pullCalls.length, 1, 'one board-wide read, not one per card');
     const t60 = tasks.find((t) => t.number === 60);
     const t61 = tasks.find((t) => t.number === 61);
@@ -281,7 +281,7 @@ test('fetchBoard skips the fallback request entirely when every card already has
   try {
     gh.addIssue(kbIssue({ number: 62, status: 'running', prs: [{ number: 63, state: 'OPEN', isDraft: false, headRefName: 'kb/62', baseRefName: gh.defaultBranch }] }));
     await fetchBoard(ctx);
-    assert.equal(gh.calls.filter((c) => c.kind === 'rest' && /\/pulls\?/.test(c.path || '')).length, 0);
+    assert.equal(gh.requests.filter((c) => c.kind === 'rest' && /\/pulls\?/.test(c.path || '')).length, 0);
   } finally { cleanup(); }
 });
 

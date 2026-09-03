@@ -9,7 +9,7 @@ covers:
   - path: src/store/local.js
     sha: 74fc6228a29d959c65472b83ba99e6e343fc8099
   - path: src/store/index.js
-    sha: d440f1432159b01433599dd285c26dceae2596a3
+    sha: 385621acfdf13c32e3477ef35325c763ee1bb6fd
   - path: src/store/sqlite.js
     sha: ad2e80d73391c5e7c0602c1786ca645604616887
   - path: src/init.js

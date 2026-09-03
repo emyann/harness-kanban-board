@@ -25,7 +25,7 @@ import { normalizeCardGrants } from '../src/tasks.js';
 import { setTransport, GhError } from '../src/gh.js';
 import { pidFile, writeServeUrl, DEFAULT_PROFILES, hostId } from '../src/board.js';
 import { spawnSync } from 'node:child_process';
-import { FakeGh, kbIssue, runWith } from './fake-gh.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
@@ -496,25 +496,24 @@ test('the day stamp is added to the state the dispatcher already keeps, not writ
  * and a `process` one that must never be asked about. Nothing here spawns anything.
  */
 function boardHarness(t, { profiles } = {}) {
-  const gh = new FakeGh({ caps: { blockedByGql: true, closedByPrs: true } });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-sessions-'));
   fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
-  const cfg = {
-    repo: gh.nameWithOwner,
-    default_branch: 'main',
-    profiles: profiles || {
-      claude: { mode: 'claude-bg', launch: ['claude', '--bg'] },
-      'claude-p': { mode: 'process', launch: ['claude', '-p'] },
+  const { gh, store, ctx, restore } = installDoubles((g) => ({
+    root,
+    cfg: {
+      repo: g.nameWithOwner,
+      default_branch: 'main',
+      profiles: profiles || {
+        claude: { mode: 'claude-bg', launch: ['claude', '--bg'] },
+        'claude-p': { mode: 'process', launch: ['claude', '-p'] },
+      },
     },
-  };
-  const ctx = {
-    root, cfg, board: 'default', host: 'test-host', json: false, caps: {}, _cache: {},
-    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    board: 'default', host: 'test-host', json: false, caps: {}, _cache: {},
+    repo: { owner: g.owner, repo: g.repo, nameWithOwner: g.nameWithOwner },
     requireBoard() { return this; },
-  };
-  const restore = gh.install();
+  }), { caps: { blockedByGql: true, closedByPrs: true } });
   t.after(() => { restore(); fs.rmSync(root, { recursive: true, force: true }); });
-  return { gh, ctx, root };
+  return { gh, store, ctx, root };
 }
 
 /** An ended attempt row, carrying a session only when asked for one. */
@@ -529,8 +528,8 @@ const attempt = (k, outcome, { profile = 'claude', session = false, ...rest } = 
   ...rest,
 });
 
-/** Every run comment this board was asked for. */
-const runReads = (gh) => gh.callsMatching('GET', /issues\/\d+\/comments/).length;
+/** Every run record this board was asked for. */
+const runReads = (store) => store.callsOf('loadRun').length;
 
 // ---------- the tally, without a board ----------
 
@@ -626,11 +625,11 @@ test('a board recording nothing at all is unchanged: one problem at a time', () 
 
 test('doctor warns on a board whose claude-bg attempts carry no session fields', async (t) => {
   const h = boardHarness(t);
-  h.gh.addIssue(kbIssue({
+  h.store.addIssue(kbIssue({
     number: 40, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude',
     updatedAt: '2026-08-27T09:00:00Z', run: runWith([attempt(1, 'completed'), attempt(2, 'completed')]),
   }));
-  h.gh.addIssue(kbIssue({
+  h.store.addIssue(kbIssue({
     number: 41, status: 'ready', agent: 'claude',
     updatedAt: '2026-08-27T08:00:00Z', run: runWith([attempt(1, 'timed_out')]),
   }));
@@ -646,10 +645,10 @@ test('doctor warns on a board whose claude-bg attempts carry no session fields',
 
 test('a board with roots but no track profile is told what it is paying for it', async (t) => {
   const h = boardHarness(t); // neither shipped profile here carries "track": true
-  h.gh.addIssue(kbIssue({ number: 41, status: 'ready', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 42, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 12, status: 'todo', agent: 'claude', blockedBy: [41] }));
-  h.gh.addIssue(kbIssue({ number: 13, status: 'todo', agent: 'claude', blockedBy: [42] })); // its child is done
+  h.store.addIssue(kbIssue({ number: 41, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 42, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 12, status: 'todo', agent: 'claude', blockedBy: [41] }));
+  h.store.addIssue(kbIssue({ number: 13, status: 'todo', agent: 'claude', blockedBy: [42] })); // its child is done
   const s = sink();
 
   await checkTrackProfile(h.ctx, s);
@@ -671,7 +670,7 @@ test('a board that has a track profile is a green line, and does not read the bo
 
 test('no track profile and no root either: nothing to fix, so nothing to warn about', async (t) => {
   const h = boardHarness(t);
-  h.gh.addIssue(kbIssue({ number: 41, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 41, status: 'ready', agent: 'claude' }));
   const s = sink();
 
   await checkTrackProfile(h.ctx, s);
@@ -682,7 +681,7 @@ test('no track profile and no root either: nothing to fix, so nothing to warn ab
 
 test('the completed attempts are on closed cards, so a closed card is read too', async (t) => {
   const h = boardHarness(t);
-  h.gh.addIssue(kbIssue({
+  h.store.addIssue(kbIssue({
     number: 40, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude',
     updatedAt: '2026-08-27T09:00:00Z', run: runWith([attempt(1, 'completed', { session: true })]),
   }));
@@ -697,7 +696,7 @@ test('the completed attempts are on closed cards, so a closed card is read too',
 test('the sample stops at the first card that answers', async (t) => {
   const h = boardHarness(t);
   for (let n = 1; n <= 20; n++) {
-    h.gh.addIssue(kbIssue({
+    h.store.addIssue(kbIssue({
       number: n, status: 'ready', agent: 'claude',
       updatedAt: `2026-08-27T${String(n).padStart(2, '0')}:00:00Z`,
       run: runWith([attempt(1, 'completed', { session: true })]),
@@ -708,13 +707,13 @@ test('the sample stops at the first card that answers', async (t) => {
   await checkSessions(h.ctx, s);
 
   assert.equal(s.results[0].ok, true);
-  assert.equal(runReads(h.gh), 1, 'the newest card answered; every further read could only repeat it');
+  assert.equal(runReads(h.store), 1, 'the newest card answered; every further read could only repeat it');
 });
 
 test('a board with nothing to answer with is bounded, not walked', async (t) => {
   const h = boardHarness(t);
   for (let n = 1; n <= 20; n++) {
-    h.gh.addIssue(kbIssue({
+    h.store.addIssue(kbIssue({
       number: n, status: 'ready', agent: 'claude',
       updatedAt: `2026-08-27T${String(n).padStart(2, '0')}:00:00Z`,
       run: runWith([attempt(1, 'crashed')]),
@@ -725,18 +724,18 @@ test('a board with nothing to answer with is bounded, not walked', async (t) => 
   await checkSessions(h.ctx, s);
 
   assert.equal(s.results[0].ok, null);
-  assert.equal(runReads(h.gh), SESSION_SAMPLE);
+  assert.equal(runReads(h.store), SESSION_SAMPLE);
   assert.match(s.results[0].detail, new RegExp(`\\(${SESSION_SAMPLE} run records read\\)`), 'and says how much it looked at, so "none" can be weighed');
 });
 
 test('a board with no background profile is not asked at all — no read, no finding', async (t) => {
   const h = boardHarness(t, { profiles: { codex: { mode: 'process', launch: ['codex', 'exec'] } } });
-  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'codex', run: runWith([attempt(1, 'completed', { profile: 'codex' })]) }));
+  h.store.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'codex', run: runWith([attempt(1, 'completed', { profile: 'codex' })]) }));
   const s = sink();
 
   assert.deepEqual(await checkSessions(h.ctx, s), []);
   assert.deepEqual(s.results, []);
-  assert.deepEqual(h.gh.calls, [], 'a check with nothing to check must cost nothing');
+  assert.deepEqual(h.store.calls, [], 'a check with nothing to check must cost nothing');
 });
 
 test('a profile that has never ended an attempt here has nothing to be wrong about', async (t) => {
@@ -746,7 +745,7 @@ test('a profile that has never ended an attempt here has nothing to be wrong abo
       'claude-track': { mode: 'claude-bg', launch: ['claude', '--bg'] },
     },
   });
-  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', run: runWith([attempt(1, 'completed', { session: true })]) }));
+  h.store.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', run: runWith([attempt(1, 'completed', { session: true })]) }));
   const s = sink();
 
   await checkSessions(h.ctx, s);
@@ -766,15 +765,15 @@ test('a board that will not read is a warning, not a crash — doctor has other 
 
 test('the two card checks share one board query rather than paying for one each', async (t) => {
   const h = boardHarness(t);
-  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', run: runWith([attempt(1, 'completed', { session: true })]) }));
+  h.store.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', run: runWith([attempt(1, 'completed', { session: true })]) }));
   const board = await boardOnce(h.ctx);
-  const before = h.gh.calls.length;
+  const before = h.store.calls.length;
 
   await checkAgentLabels(h.ctx, sink(), { board });
   await checkSessions(h.ctx, sink(), { board });
 
-  const openBoard = h.gh.calls.slice(before).filter((c) => c.kind === 'graphql' && /states: \[OPEN\]/.test(c.query || ''));
-  assert.deepEqual(openBoard, [], 'neither check re-reads the board it was handed');
+  const reReads = h.store.calls.slice(before).filter((c) => c.name === 'listTasks');
+  assert.deepEqual(reReads, [], 'neither check re-reads the board it was handed');
 });
 
 // ---------- #130: the denied-tools ledger, and whether an MCP server ever reached a worker ----------
@@ -824,7 +823,7 @@ test('checkDeniedTools: reports the most-denied tool on a board that has some, a
   fs.writeFileSync(file, JSON.stringify({
     type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: 'mcp__react-aria__Button', input: {} }] },
   }) + '\n');
-  h.gh.addIssue(kbIssue({
+  h.store.addIssue(kbIssue({
     number: 40, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude',
     updatedAt: '2026-08-27T09:00:00Z',
     run: runWith([attempt(1, 'completed', { session: true, transcript_path: file, denied_tools: [{ tool: 'mcp__react-aria__Button', kind: 'dontask-miss', count: 6, first_seen: 't1' }] })]),
@@ -850,7 +849,7 @@ test('checkDeniedTools: every configured server reached a worker — ok, and say
   fs.writeFileSync(file, JSON.stringify({
     type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: 'mcp__react-aria__Button', input: {} }] },
   }) + '\n');
-  h.gh.addIssue(kbIssue({
+  h.store.addIssue(kbIssue({
     number: 40, status: 'ready', agent: 'claude',
     run: runWith([attempt(1, 'completed', { session: true, transcript_path: file })]),
   }));
@@ -866,7 +865,7 @@ test('checkDeniedTools: every configured server reached a worker — ok, and say
 
 test('checkDeniedTools: no .mcp.json, or no claude-bg profile, asks nothing about visibility', async (t) => {
   const h = boardHarness(t, { profiles: { 'claude-p': { mode: 'process', launch: ['claude', '-p'] } } });
-  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude-p', run: runWith([attempt(1, 'completed', { profile: 'claude-p' })]) }));
+  h.store.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude-p', run: runWith([attempt(1, 'completed', { profile: 'claude-p' })]) }));
   fs.writeFileSync(path.join(h.root, '.mcp.json'), JSON.stringify({ mcpServers: { 'react-aria': {} } }));
   const s = sink();
 
@@ -877,7 +876,7 @@ test('checkDeniedTools: no .mcp.json, or no claude-bg profile, asks nothing abou
 
 test('checkDeniedTools: #254 — a server approved only in settings.local.json was never approved for a worktree, and the fix names the exact line and file', async (t) => {
   const h = boardHarness(t, { profiles: { claude: { mode: 'claude-bg', launch: ['claude', '--bg'], allowed_tools: ['mcp__react-aria__*'] } } });
-  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', run: runWith([attempt(1, 'completed')]) }));
+  h.store.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', run: runWith([attempt(1, 'completed')]) }));
   fs.writeFileSync(path.join(h.root, '.mcp.json'), JSON.stringify({ mcpServers: { 'react-aria': { command: 'npx', args: ['react-aria-mcp'] } } }));
   fs.mkdirSync(path.join(h.root, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(h.root, '.claude', 'settings.local.json'), JSON.stringify({ enabledMcpjsonServers: ['react-aria'] }));
@@ -895,7 +894,7 @@ test('checkDeniedTools: #254 — a server approved only in settings.local.json w
 
 test('checkDeniedTools: #254 — approved in the tracked settings.json, so it reached the worktree: reported as unused, not unapproved', async (t) => {
   const h = boardHarness(t, { profiles: { claude: { mode: 'claude-bg', launch: ['claude', '--bg'], allowed_tools: ['mcp__react-aria__*'] } } });
-  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', run: runWith([attempt(1, 'completed')]) }));
+  h.store.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', run: runWith([attempt(1, 'completed')]) }));
   fs.writeFileSync(path.join(h.root, '.mcp.json'), JSON.stringify({ mcpServers: { 'react-aria': { command: 'npx', args: ['react-aria-mcp'] } } }));
   fs.mkdirSync(path.join(h.root, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(h.root, '.claude', 'settings.json'), JSON.stringify({ enabledMcpjsonServers: ['react-aria'] }));
@@ -910,7 +909,7 @@ test('checkDeniedTools: #254 — approved in the tracked settings.json, so it re
 
 test('checkDeniedTools: a board with no ledger anywhere says nothing at all', async (t) => {
   const h = boardHarness(t);
-  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', run: runWith([attempt(1, 'completed')]) }));
+  h.store.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', run: runWith([attempt(1, 'completed')]) }));
   const s = sink();
 
   await checkDeniedTools(h.ctx, s);
@@ -922,7 +921,7 @@ test('checkDeniedTools: a board with no ledger anywhere says nothing at all', as
 
 test('a board that sets no kb.skills has nothing to check', async (t) => {
   const h = boardHarness(t);
-  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude' }));
   const s = sink();
 
   await checkTaskSkills(h.ctx, s);
@@ -932,7 +931,7 @@ test('a board that sets no kb.skills has nothing to check', async (t) => {
 
 test('kb.skills on a profile that allows Skill is fine', async (t) => {
   const h = boardHarness(t, { profiles: { claude: { mode: 'claude-bg', launch: ['claude', '--bg'], allowed_tools: ['Read', 'Skill'] } } });
-  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', kb: { skills: ['kanban'] } }));
+  h.store.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', kb: { skills: ['kanban'] } }));
   const s = sink();
 
   await checkTaskSkills(h.ctx, s);
@@ -942,7 +941,7 @@ test('kb.skills on a profile that allows Skill is fine', async (t) => {
 
 test('kb.skills on a profile whose allowed_tools omits Skill is a warning naming the card and the fix', async (t) => {
   const h = boardHarness(t, { profiles: { claude: { mode: 'claude-bg', launch: ['claude', '--bg'], allowed_tools: ['Read'] } } });
-  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', kb: { skills: ['kanban'] } }));
+  h.store.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', kb: { skills: ['kanban'] } }));
   const s = sink();
 
   await checkTaskSkills(h.ctx, s);
@@ -954,7 +953,7 @@ test('kb.skills on a profile whose allowed_tools omits Skill is a warning naming
 
 test('kb.skills is silent on a launch Skill has no meaning for (codex has no per-command allow-list)', async (t) => {
   const h = boardHarness(t, { profiles: { codex: { mode: 'process', launch: ['codex', 'exec'], allowed_tools: null } } });
-  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'codex', kb: { skills: ['kanban'] } }));
+  h.store.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'codex', kb: { skills: ['kanban'] } }));
   const s = sink();
 
   await checkTaskSkills(h.ctx, s);
@@ -1154,7 +1153,7 @@ test('under curate a declared mcp list is what a worker may reach, and it is pri
 
 test('doctor is silent about card grants on a board where no card asks for either key', async (t) => {
   const h = boardHarness(t);
-  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude' }));
   const s = sink();
 
   assert.equal(await checkCardGrants(h.ctx, s), null);
@@ -1163,7 +1162,7 @@ test('doctor is silent about card grants on a board where no card asks for eithe
 
 test('a card that narrows inside its profile grant passes, and doctor says how many narrow', async (t) => {
   const h = boardHarness(t, { profiles: { claude: { mode: 'claude-bg', launch: ['claude', '--bg'], allowed_tools: ['Read', 'Edit', 'mcp__react-aria__read'] } } });
-  h.gh.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', kb: { tools: ['Read'], mcp: ['react-aria'] } }));
+  h.store.addIssue(kbIssue({ number: 40, status: 'ready', agent: 'claude', kb: { tools: ['Read'], mcp: ['react-aria'] } }));
   const s = sink();
 
   await checkCardGrants(h.ctx, s);
@@ -1174,7 +1173,7 @@ test('a card that narrows inside its profile grant passes, and doctor says how m
 
 test('a card asking for what its profile lacks is flagged: dropped, never granted, and only board.json widens', async (t) => {
   const h = boardHarness(t, { profiles: { claude: { mode: 'claude-bg', launch: ['claude', '--bg'], allowed_tools: ['Read'] } } });
-  h.gh.addIssue(kbIssue({ number: 41, status: 'ready', agent: 'claude', kb: { tools: ['Read', 'Bash(rm -rf /)'], mcp: ['stripe'] } }));
+  h.store.addIssue(kbIssue({ number: 41, status: 'ready', agent: 'claude', kb: { tools: ['Read', 'Bash(rm -rf /)'], mcp: ['stripe'] } }));
   const s = sink();
 
   await checkCardGrants(h.ctx, s);
@@ -1189,7 +1188,7 @@ test('a card asking for what its profile lacks is flagged: dropped, never grante
 
 test('a card grant key that is not a list is reported: it reads as a restriction and is not one', async (t) => {
   const h = boardHarness(t, { profiles: { claude: { mode: 'claude-bg', launch: ['claude', '--bg'], allowed_tools: ['Read'] } } });
-  h.gh.addIssue(kbIssue({ number: 42, status: 'ready', agent: 'claude', kb: { tools: 'Read' } }));
+  h.store.addIssue(kbIssue({ number: 42, status: 'ready', agent: 'claude', kb: { tools: 'Read' } }));
   const s = sink();
 
   await checkCardGrants(h.ctx, s);

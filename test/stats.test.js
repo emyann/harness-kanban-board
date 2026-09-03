@@ -14,7 +14,7 @@ import {
   parseTranscriptUsage, ratesFor, estimateCost, usageFromTranscript,
   parseTranscriptDenials, deniedToolsFromTranscript, transcriptMcpServers, mcpServersFromTranscript, summarizeDeniedTools,
 } from '../src/stats.js';
-import { FakeGh, kbIssue, runWith } from './fake-gh.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const NOW = new Date('2026-08-26T12:00:00.000Z');
 const ago = (ms, from = NOW) => new Date(from.getTime() - ms).toISOString();
@@ -596,25 +596,23 @@ test('at the cap, the report says so where a human will see it', () => {
 // ---------- the command, end to end ----------
 
 function harness({ board = 'default', dispatch = {}, state = null, rates = null } = {}) {
-  const gh = new FakeGh();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-stats-'));
   fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
   if (state) fs.writeFileSync(path.join(root, '.kanban', 'state.json'), JSON.stringify(state));
-  const ctx = {
+  const { gh, store, ctx, restore } = installDoubles((g) => ({
     root,
-    cfg: { ...DEFAULT_BOARD, repo: gh.nameWithOwner, board, dispatch: { ...DEFAULT_BOARD.dispatch, ...dispatch }, ...(rates ? { stats: { rates } } : {}) },
-    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    cfg: { ...DEFAULT_BOARD, repo: g.nameWithOwner, board, dispatch: { ...DEFAULT_BOARD.dispatch, ...dispatch }, ...(rates ? { stats: { rates } } : {}) },
+    repo: { owner: g.owner, repo: g.repo, nameWithOwner: g.nameWithOwner },
     board,
     host: 'test-host',
     json: false,
     caps: {},
     _cache: {},
     requireBoard() { return this; },
-  };
-  const restore = gh.install();
+  }), { board });
   const lines = [];
   return {
-    gh,
+    gh, store,
     ctx,
     root,
     out: () => lines.join('\n'),
@@ -626,15 +624,15 @@ function harness({ board = 'default', dispatch = {}, state = null, rates = null 
 test('hkb stats: one board query, the run comments of the window, and not one write', async (t) => {
   const h = harness({ state: { spawn_day: '2026-08-26', spawned_today: 5 } });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({
+  h.store.addIssue(kbIssue({
     number: 1, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude', updatedAt: ago(hours(2)),
     run: runWith([{ attempt: 1, started_at: ago(hours(3)), ended_at: ago(hours(2)), outcome: 'completed', total_cost_usd: 0.8, num_turns: 15 }]),
   }));
-  h.gh.addIssue(kbIssue({
+  h.store.addIssue(kbIssue({
     number: 2, status: 'running', agent: 'claude', updatedAt: ago(days(40)),
     run: runWith([{ attempt: 1, started_at: ago(minutes(15)) }]),
   }));
-  h.gh.addIssue(kbIssue({ number: 3, status: 'ready', updatedAt: ago(days(40)) }));
+  h.store.addIssue(kbIssue({ number: 3, status: 'ready', updatedAt: ago(days(40)) }));
 
   assert.equal(await h.run({ since: '7d' }), 0);
   const text = h.out();
@@ -643,11 +641,11 @@ test('hkb stats: one board query, the run comments of the window, and not one wr
   assert.match(text, /spawns {5}5 \/ 40 today · 35 left/);
   assert.match(text, /spend {6}\$0\.80/);
 
-  const boardQueries = h.gh.calls.filter((c) => c.kind === 'graphql' && /issues\(/.test(c.query || ''));
-  assert.equal(boardQueries.length, 1, 'one board query per run');
-  const commentReads = h.gh.callsMatching('GET', /issues\/\d+\/comments/);
-  assert.deepEqual(commentReads.map((c) => Number(/issues\/(\d+)\//.exec(c.path)[1])), [1, 2], '#3 has no news and is not running');
-  for (const method of ['POST', 'PATCH', 'DELETE']) assert.deepEqual(h.gh.callsMatching(method), [], `stats must not ${method}`);
+  assert.equal(h.store.callsOf('listTasks').length, 1, 'one board read per run');
+  const runReads = h.store.callsOf('loadRun').map((c) => Number(c.args[0]));
+  assert.deepEqual(runReads, [1, 2], '#3 has no news and is not running');
+  assert.deepEqual(h.store.writes(), [], 'stats reads the board and writes nothing');
+  assert.deepEqual(h.gh.writeRequests(), [], 'and asks the forge for nothing it could write');
 });
 
 test('hkb stats --json: the same object, and the local worker log fills a missing price', async (t) => {
@@ -655,7 +653,7 @@ test('hkb stats --json: the same object, and the local worker log fills a missin
   t.after(h.cleanup);
   fs.mkdirSync(path.join(h.root, '.kanban/logs'), { recursive: true });
   fs.writeFileSync(path.join(h.root, '.kanban/logs/5-1.log'), JSON.stringify({ session_id: 's5', total_cost_usd: 0.37, num_turns: 11 }) + '\n');
-  h.gh.addIssue(kbIssue({
+  h.store.addIssue(kbIssue({
     number: 5, status: 'review', agent: 'claude', updatedAt: ago(minutes(5)),
     run: runWith([{ attempt: 1, started_at: ago(hours(1)), ended_at: ago(minutes(30)), outcome: 'review_requested', log: '.kanban/logs/5-1.log' }]),
   }));
@@ -692,7 +690,7 @@ test('hkb stats: a claude-bg board reports turns and tokens off the transcript, 
     asst('msg_1', 'claude-opus-5', tokensOf(2, 500, 40_000, 0)), // the same message, second block
     asst('msg_2', 'claude-opus-5', tokensOf(2, 1500, 0, 40_000)),
   ].join('\n') + '\n');
-  h.gh.addIssue(kbIssue({
+  h.store.addIssue(kbIssue({
     number: 9, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude', updatedAt: ago(minutes(5)),
     run: runWith([{ attempt: 1, started_at: ago(hours(1)), ended_at: ago(minutes(30)), outcome: 'completed', bg: true, log: '.kanban/logs/9-1.log', transcript_path: transcript }]),
   }));
@@ -700,7 +698,8 @@ test('hkb stats: a claude-bg board reports turns and tokens off the transcript, 
   assert.equal(await h.run(), 0);
   assert.match(h.out(), /spend {6}no cost reported on any of the 1 worker attempt/);
   assert.match(h.out(), /usage {6}2 turns · in 4 · out 2000 · cache 40k written \/ 40k read {2}\(1 transcript\)/);
-  for (const method of ['POST', 'PATCH', 'DELETE']) assert.deepEqual(h.gh.callsMatching(method), [], `stats must not ${method}`);
+  assert.deepEqual(h.store.writes(), [], 'stats reads the board and writes nothing');
+  assert.deepEqual(h.gh.writeRequests(), [], 'and asks the forge for nothing it could write');
 });
 
 test('hkb stats: `stats.rates` in board.json turns those tokens into an estimate, marked as one', async (t) => {
@@ -708,7 +707,7 @@ test('hkb stats: `stats.rates` in board.json turns those tokens into an estimate
   t.after(h.cleanup);
   const transcript = path.join(h.root, 'sess.jsonl');
   fs.writeFileSync(transcript, asst('msg_1', 'claude-opus-5', tokensOf(1000, 2000, 4000, 8000)) + '\n');
-  h.gh.addIssue(kbIssue({
+  h.store.addIssue(kbIssue({
     number: 9, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude', updatedAt: ago(minutes(5)),
     run: runWith([{ attempt: 1, started_at: ago(hours(1)), ended_at: ago(minutes(30)), outcome: 'completed', transcript_path: transcript }]),
   }));
@@ -731,7 +730,7 @@ test('hkb stats: a track of three nodes prices its one session once, off the fil
   fs.writeFileSync(transcript, asst('msg_1', 'claude-opus-5', tokensOf(1000, 2000, 4000, 8000)) + '\n');
   // the runner's session, stamped by the Stop hook onto the root's row and every node it claimed
   for (const number of [20, 21, 22]) {
-    h.gh.addIssue(kbIssue({
+    h.store.addIssue(kbIssue({
       number, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude-track', updatedAt: ago(minutes(5)),
       run: runWith([{ attempt: 1, profile: 'claude-track', started_at: ago(hours(1)), ended_at: ago(minutes(30)), outcome: 'completed', session_id: 's-track', transcript_path: transcript }]),
     }));
@@ -751,7 +750,7 @@ test('hkb stats: a track of three nodes prices its one session once, off the fil
 test('hkb stats: a transcript from another host degrades to the old message, never an error', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({
+  h.store.addIssue(kbIssue({
     number: 9, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude', updatedAt: ago(minutes(5)),
     run: runWith([{ attempt: 1, started_at: ago(hours(1)), ended_at: ago(minutes(30)), outcome: 'completed', transcript_path: '/home/someone-else/.claude/projects/board/sess.jsonl' }]),
   }));

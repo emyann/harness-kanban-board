@@ -16,7 +16,7 @@ import {
   trackAlreadyAttempted, isTrackProfile, trackAgents, trackGraph, trackMermaid, mermaidLabel, trackFanout,
 } from '../src/track.js';
 import { main } from '../src/cli.js';
-import { FakeGh, kbIssue, runWith } from './fake-gh.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const ago = (seconds) => new Date(Date.now() - seconds * 1000).toISOString();
 
@@ -274,15 +274,14 @@ test('a blocker closed as completed is finished work, so it is not in the pictur
 });
 
 test('`hkb track <n>` says which it is and why, and --off/--on is the switch', async (t) => {
-  const gh = new FakeGh();
+  const { gh, store, restore } = installDoubles();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-trackcmd-'));
   fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
-  gh.addIssue(kbIssue({ number: 41, status: 'ready', agent: 'claude' }));
-  gh.addIssue(kbIssue({ number: 42, status: 'todo', agent: 'claude', blockedBy: [41] }));
-  gh.addIssue(kbIssue({ number: 12, status: 'todo', agent: 'claude', blockedBy: [42] }));
+  store.addIssue(kbIssue({ number: 41, status: 'ready', agent: 'claude' }));
+  store.addIssue(kbIssue({ number: 42, status: 'todo', agent: 'claude', blockedBy: [41] }));
+  store.addIssue(kbIssue({ number: 12, status: 'todo', agent: 'claude', blockedBy: [42] }));
   const cwd = process.cwd();
-  const restore = gh.install();
   const write = process.stdout.write.bind(process.stdout);
   let printed = '';
   process.stdout.write = (s) => { printed += s; return true; };
@@ -295,25 +294,24 @@ test('`hkb track <n>` says which it is and why, and --off/--on is the switch', a
   assert.match(await run('track', '42'), /#12 is still blocked by it — it is a node of that track, not a root/);
 
   await run('track', '12', '--off');
-  assert.ok(gh.labelsOf(12).includes(L.noTrack));
+  assert.ok(store.labelsOf(12).includes(L.noTrack));
   const off = JSON.parse(await run('track', '12', '--json'));
   assert.deepEqual([off.mode, off.track, off.nodes], ['opted-out', false, []]);
   assert.match(await run('show', '12'), /^track: opted out — kb:no-track .* \(`hkb track 12 --on` puts it back\)$/m);
 
   await run('track', '12', '--on');
-  assert.ok(!gh.labelsOf(12).includes(L.noTrack));
+  assert.ok(!store.labelsOf(12).includes(L.noTrack));
   assert.equal(JSON.parse(await run('show', '12', '--json')).track.mode, 'inferred');
 });
 
 test('`hkb graph <n>` prints the block; --json carries nodes, edges and the very same mermaid', async (t) => {
-  const gh = new FakeGh();
+  const { gh, store, restore } = installDoubles();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-graph-'));
   fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
-  gh.addIssue(kbIssue({ number: 41, title: 'Token bucket + tests', status: 'ready', agent: 'claude' }));
-  gh.addIssue(kbIssue({ number: 12, title: 'Rate-limit the public API', status: 'todo', agent: 'claude', blockedBy: [41] }));
+  store.addIssue(kbIssue({ number: 41, title: 'Token bucket + tests', status: 'ready', agent: 'claude' }));
+  store.addIssue(kbIssue({ number: 12, title: 'Rate-limit the public API', status: 'todo', agent: 'claude', blockedBy: [41] }));
   const cwd = process.cwd();
-  const restore = gh.install();
   const write = process.stdout.write.bind(process.stdout);
   let printed = '';
   process.stdout.write = (s) => { printed += s; return true; };
@@ -492,14 +490,14 @@ test('the dispatcher hands the runner the brief its profile can actually execute
 
   const h = harness({ profiles: spawner(['Agent']) });
   t.after(h.cleanup);
-  seedChain(h.gh);
+  seedChain(h.store);
   await h.tick();
   assert.match(await readWhenWritten(out), /You are its ORCHESTRATOR/);
 
   fs.rmSync(out, { force: true });
   const plain = harness({ profiles: spawner([]) });
   t.after(plain.cleanup);
-  seedChain(plain.gh);
+  seedChain(plain.store);
   await plain.tick();
   const p = await readWhenWritten(out);
   assert.doesNotMatch(p, /ORCHESTRATOR/, 'a runner that cannot spawn is told to walk the nodes');
@@ -509,25 +507,24 @@ test('the dispatcher hands the runner the brief its profile can actually execute
 // ---------- the tick ----------
 
 function harness({ dispatch = {}, host = 'test-host', profiles = null } = {}) {
-  const gh = new FakeGh();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-track-'));
-  const cfg = {
-    ...DEFAULT_BOARD,
-    repo: gh.nameWithOwner,
-    dispatch: { ...DEFAULT_BOARD.dispatch, ...dispatch },
-    profiles: profiles || {
-      claude: { mode: 'process', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] },
-      'claude-track': { mode: 'process', track: true, track_agents: ['claude', 'claude-track'], max_in_progress: 1, model: null, allowed_tools: [], launch: ['true'] },
+  const { gh, store, ctx, restore } = installDoubles((g) => ({
+    root,
+    cfg: {
+      ...DEFAULT_BOARD,
+      repo: g.nameWithOwner,
+      dispatch: { ...DEFAULT_BOARD.dispatch, ...dispatch },
+      profiles: profiles || {
+        claude: { mode: 'process', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] },
+        'claude-track': { mode: 'process', track: true, track_agents: ['claude', 'claude-track'], max_in_progress: 1, model: null, allowed_tools: [], launch: ['true'] },
+      },
     },
-  };
-  const ctx = {
-    root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    repo: { owner: g.owner, repo: g.repo, nameWithOwner: g.nameWithOwner },
     board: 'default', host, json: false, caps: {}, _cache: {}, requireBoard() { return this; },
-  };
-  const restore = gh.install();
+  }), { host });
   const logs = [];
   return {
-    gh, ctx, root, logs,
+    gh, store, ctx, root, logs,
     log: () => logs.join('\n'),
     tick: (opts = {}) => tick(ctx, { log: (m) => logs.push(m), ...opts }),
     cleanup: () => { restore(); fs.rmSync(root, { recursive: true, force: true }); },
@@ -535,16 +532,16 @@ function harness({ dispatch = {}, host = 'test-host', profiles = null } = {}) {
 }
 
 /** #41 → #42 → #26(track root): the three-node chain from the task's "Done when". */
-function seedChain(gh, { root = {}, n41 = {}, n42 = {} } = {}) {
-  gh.addIssue(kbIssue({ number: 41, status: 'ready', agent: 'claude', kb: { paths: ['src/a.js'] }, ...n41 }));
-  gh.addIssue(kbIssue({ number: 42, status: 'todo', agent: 'claude', blockedBy: [41], kb: { paths: ['src/b.js'] }, ...n42 }));
-  gh.addIssue(kbIssue({ number: 26, status: 'todo', agent: 'claude-track', blockedBy: [42], kb: { paths: ['docs/'] }, ...root }));
+function seedChain(store, { root = {}, n41 = {}, n42 = {} } = {}) {
+  store.addIssue(kbIssue({ number: 41, status: 'ready', agent: 'claude', kb: { paths: ['src/a.js'] }, ...n41 }));
+  store.addIssue(kbIssue({ number: 42, status: 'todo', agent: 'claude', blockedBy: [41], kb: { paths: ['src/b.js'] }, ...n42 }));
+  store.addIssue(kbIssue({ number: 26, status: 'todo', agent: 'claude-track', blockedBy: [42], kb: { paths: ['docs/'] }, ...root }));
 }
 
 test('a track root is claimed as ONE session, and its nodes are left to the runner', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  seedChain(h.gh);
+  seedChain(h.store);
 
   const s = await h.tick();
 
@@ -553,10 +550,10 @@ test('a track root is claimed as ONE session, and its nodes are left to the runn
   assert.equal(s.tracks[0].profile, 'claude-track');
   assert.deepEqual(s.claimed, [], 'the ready leaf #41 is the runner\'s, not a worker\'s');
   assert.deepEqual(s.skipped, [{ number: 41, why: 'held for track #26' }]);
-  assert.equal(h.gh.statusOf(26), 'running');
-  assert.equal(h.gh.statusOf(41), 'ready', 'the runner claims it, when it gets there');
-  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/26/1'], 'one lock: the root');
-  const [a] = h.gh.runOf(26).attempts;
+  assert.equal(h.store.statusOf(26), 'running');
+  assert.equal(h.store.statusOf(41), 'ready', 'the runner claims it, when it gets there');
+  assert.deepEqual(await h.store.locks(), ['26/1'], 'one lock: the root');
+  const [a] = h.store.runOf(26).attempts;
   assert.equal(a.track, true);
   assert.deepEqual(a.track_nodes, [41, 42]);
   assert.equal(a.log, '.kanban/logs/26-1.log');
@@ -570,7 +567,7 @@ test('a track root is claimed as ONE session, and its nodes are left to the runn
 test('a track branch already there (a retry after a crashed first claim) is reused, never recreated', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  seedChain(h.gh);
+  seedChain(h.store);
   // seed the branch as if a previous, now-dead claim already made it, at some other sha —
   // ensureTrackBranch must not try to recreate it and must not lose the existing one
   h.gh.refs.set('refs/heads/kb/track-26', 'c'.repeat(40));
@@ -579,7 +576,7 @@ test('a track branch already there (a retry after a crashed first claim) is reus
 
   assert.equal(s.tracks[0].ok, true);
   assert.equal(h.gh.refs.get('refs/heads/kb/track-26'), 'c'.repeat(40), 'the existing branch survives untouched');
-  const [a] = h.gh.runOf(26).attempts;
+  const [a] = h.store.runOf(26).attempts;
   assert.equal(a.track_branch, 'kb/track-26');
 });
 
@@ -589,20 +586,20 @@ test('the whole track is one running slot, and its nodes are never reclaimed und
   // the runner is alive on the root and has claimed #42; #41 it already finished and closed
   const alive = runWith([{ attempt: 1, host: 'test-host', started_at: ago(120), heartbeat_at: ago(5), pid: process.pid, track: true, track_nodes: [41, 42] }]);
   const claimedByRunner = runWith([{ attempt: 1, host: 'test-host', started_at: ago(600), heartbeat_at: ago(600), manual: true }]);
-  h.gh.addIssue(kbIssue({ number: 41, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 42, status: 'running', agent: 'claude', kb: { paths: ['src/b.js'] }, run: claimedByRunner }));
-  h.gh.addIssue(kbIssue({ number: 26, status: 'running', agent: 'claude-track', kb: { max_runtime: 86_400, paths: ['docs/'] }, blockedBy: [42], run: alive }));
-  h.gh.addIssue(kbIssue({ number: 50, status: 'ready', agent: 'claude', kb: { paths: ['test/z.js'] } }));
-  h.gh.refs.set('refs/kb/locks/26/1', 'f'.repeat(40));
-  h.gh.refs.set('refs/kb/locks/42/1', 'e'.repeat(40));
+  h.store.addIssue(kbIssue({ number: 41, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 42, status: 'running', agent: 'claude', kb: { paths: ['src/b.js'] }, run: claimedByRunner }));
+  h.store.addIssue(kbIssue({ number: 26, status: 'running', agent: 'claude-track', kb: { max_runtime: 86_400, paths: ['docs/'] }, blockedBy: [42], run: alive }));
+  h.store.addIssue(kbIssue({ number: 50, status: 'ready', agent: 'claude', kb: { paths: ['test/z.js'] } }));
+  h.store.hold(26, 1);
+  h.store.hold(42, 1);
 
   const s = await h.tick();
 
   assert.deepEqual(s.reclaimed, [], 'a node with no pid of its own is not a crashed worker — it is a checkpoint');
-  assert.equal(h.gh.statusOf(42), 'running');
+  assert.equal(h.store.statusOf(42), 'running');
   // two tasks are `running`, but only one session: #50 still gets the second slot
   assert.deepEqual(s.claimed.map((c) => c.number), [50]);
-  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/26/1', 'refs/kb/locks/42/1', 'refs/kb/locks/50/1'], 'both track locks survive, and #50 got one of its own');
+  assert.deepEqual(await h.store.locks(), ['26/1', '42/1', '50/1'], 'both track locks survive, and #50 got one of its own');
   assert.match(h.log(), /#42: node of running track #26 — the root's heartbeat covers it/);
 });
 
@@ -611,16 +608,16 @@ test('the runner dies mid-track: the board keeps what it finished and the plain 
   t.after(h.cleanup);
   // #41 completed and closed before the runner died; the root attempt has gone quiet
   const deadRunner = runWith([{ attempt: 1, host: 'other-host', started_at: ago(9000), heartbeat_at: ago(9000), track: true, track_nodes: [41, 42] }]);
-  h.gh.addIssue(kbIssue({ number: 41, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 42, status: 'todo', agent: 'claude', blockedBy: [41], kb: { paths: ['src/b.js'] } }));
-  h.gh.addIssue(kbIssue({ number: 26, status: 'running', agent: 'claude-track', blockedBy: [42], kb: { max_runtime: 86_400, paths: ['docs/'] }, run: deadRunner }));
-  h.gh.refs.set('refs/kb/locks/26/1', 'f'.repeat(40));
+  h.store.addIssue(kbIssue({ number: 41, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 42, status: 'todo', agent: 'claude', blockedBy: [41], kb: { paths: ['src/b.js'] } }));
+  h.store.addIssue(kbIssue({ number: 26, status: 'running', agent: 'claude-track', blockedBy: [42], kb: { max_runtime: 86_400, paths: ['docs/'] }, run: deadRunner }));
+  h.store.hold(26, 1);
 
   const first = await h.tick();
 
   assert.deepEqual(first.reclaimed, [{ number: 26, outcome: 'reclaimed' }]);
-  assert.equal(h.gh.statusOf(26), 'todo', 'the root goes back behind its open blocker, not to ready');
-  assert.deepEqual(h.gh.lockRefs(), [], 'the root lock is released; the nodes never held one');
+  assert.equal(h.store.statusOf(26), 'todo', 'the root goes back behind its open blocker, not to ready');
+  assert.deepEqual(await h.store.locks(), [], 'the root lock is released; the nodes never held one');
   assert.deepEqual(first.promoted, [42], '#41 is closed, so #42 is ready now');
 
   // the next tick, once the 90-second stale-read guard on our own writes has expired: node dispatch
@@ -633,22 +630,22 @@ test('the runner dies mid-track: the board keeps what it finished and the plain 
   assert.deepEqual(second.claimed.map((c) => [c.number, c.profile]), [[42, 'claude']]);
   assert.deepEqual(second.tracks.map((x) => [x.root, x.ok]), [[26, false]]);
   assert.match(second.tracks[0].why, /a track attempt already ran — node dispatch takes it from here/);
-  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/42/1']);
+  assert.deepEqual(await h.store.locks(), ['42/1']);
 });
 
 test('a spawn failure does not burn the track\'s one go — the runner never started', async (t) => {
   const h = harness();
   t.after(h.cleanup);
   h.ctx.cfg.profiles['claude-track'].launch = ['/does/not/exist/claude'];
-  seedChain(h.gh);
+  seedChain(h.store);
 
   const first = await h.tick();
 
   assert.deepEqual(first.spawn_failed.map((x) => [x.number, x.track]), [[26, true]]);
-  assert.equal(h.gh.statusOf(26), 'todo', 'back behind its open blocker, not forced to ready');
-  assert.deepEqual(h.gh.lockRefs(), [], 'the root lock is released, and the nodes are held for the retry');
+  assert.equal(h.store.statusOf(26), 'todo', 'back behind its open blocker, not forced to ready');
+  assert.deepEqual(await h.store.locks(), [], 'the root lock is released, and the nodes are held for the retry');
   assert.deepEqual(first.skipped, [{ number: 41, why: 'held for track #26' }]);
-  const [a] = h.gh.runOf(26).attempts;
+  const [a] = h.store.runOf(26).attempts;
   assert.equal(a.track, undefined);
   assert.equal(a.track_spawn_failed, true);
   assert.equal(a.outcome, 'spawn_failed');
@@ -668,64 +665,64 @@ test('a blocked node parks only its branch: the sibling still runs, the track wa
   t.after(h.cleanup);
   //   41 (blocked, needs a human) → 42        43 (untouched sibling)
   //                                  └─ #26 ─┘
-  h.gh.addIssue(kbIssue({ number: 41, status: 'blocked', needsHuman: true, agent: 'claude', kb: { paths: ['src/a.js'] } }));
-  h.gh.addIssue(kbIssue({ number: 42, status: 'todo', agent: 'claude', blockedBy: [41], kb: { paths: ['src/b.js'] } }));
-  h.gh.addIssue(kbIssue({ number: 43, status: 'ready', agent: 'claude', kb: { paths: ['docs/x.md'] } }));
-  h.gh.addIssue(kbIssue({ number: 26, status: 'todo', agent: 'claude-track', blockedBy: [42, 43], kb: { paths: ['README.md'] } }));
+  h.store.addIssue(kbIssue({ number: 41, status: 'blocked', needsHuman: true, agent: 'claude', kb: { paths: ['src/a.js'] } }));
+  h.store.addIssue(kbIssue({ number: 42, status: 'todo', agent: 'claude', blockedBy: [41], kb: { paths: ['src/b.js'] } }));
+  h.store.addIssue(kbIssue({ number: 43, status: 'ready', agent: 'claude', kb: { paths: ['docs/x.md'] } }));
+  h.store.addIssue(kbIssue({ number: 26, status: 'todo', agent: 'claude-track', blockedBy: [42, 43], kb: { paths: ['README.md'] } }));
 
   const s = await h.tick();
 
   assert.deepEqual(s.tracks.map((x) => [x.root, x.ok]), [[26, false]]);
   assert.match(s.tracks[0].why, /#41 is blocked/);
   assert.deepEqual(s.claimed.map((c) => c.number), [43], 'the branch that is not parked keeps moving');
-  assert.equal(h.gh.statusOf(42), 'todo');
-  assert.equal(h.gh.statusOf(41), 'blocked');
-  assert.ok(h.gh.labelsOf(41).includes(L.needsHuman));
-  assert.equal(h.gh.statusOf(26), 'todo');
+  assert.equal(h.store.statusOf(42), 'todo');
+  assert.equal(h.store.statusOf(41), 'blocked');
+  assert.ok(h.store.labelsOf(41).includes(L.needsHuman));
+  assert.equal(h.store.statusOf(26), 'todo');
 });
 
 test('a track root whose subgraph is done is dispatched as an ordinary node — the verify pass', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 42, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 26, status: 'ready', agent: 'claude-track', blockedBy: [42] }));
+  h.store.addIssue(kbIssue({ number: 42, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 26, status: 'ready', agent: 'claude-track', blockedBy: [42] }));
 
   const s = await h.tick();
 
   assert.deepEqual(s.tracks.map((x) => [x.root, x.ok]), [[26, false]]);
   assert.match(s.tracks[0].why, /nothing is blocking it any more/);
   assert.deepEqual(s.claimed.map((c) => [c.number, c.profile]), [[26, 'claude-track']]);
-  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/26/1']);
+  assert.deepEqual(await h.store.locks(), ['26/1']);
 });
 
 test('the path_overlap guard sees the whole track, not just the root', async (t) => {
   const h = harness({ dispatch: { guards: { path_overlap: 'running' } } });
   t.after(h.cleanup);
   const live = runWith([{ attempt: 1, host: 'test-host', started_at: ago(30), heartbeat_at: ago(5), pid: process.pid }]);
-  h.gh.addIssue(kbIssue({ number: 9, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run: live }));
-  seedChain(h.gh); // #41 owns src/a.js — inside the running task's src/
-  h.gh.refs.set('refs/kb/locks/9/1', 'f'.repeat(40));
+  h.store.addIssue(kbIssue({ number: 9, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run: live }));
+  seedChain(h.store); // #41 owns src/a.js — inside the running task's src/
+  h.store.hold(9, 1);
 
   const s = await h.tick();
 
   assert.deepEqual(s.tracks.map((x) => [x.root, x.ok, x.why]), [[26, false, 'path_overlap']]);
-  assert.equal(h.gh.statusOf(26), 'todo');
-  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/9/1']);
+  assert.equal(h.store.statusOf(26), 'todo');
+  assert.deepEqual(await h.store.locks(), ['9/1']);
 });
 
 test('a dry run says which track it would take, and writes nothing', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  seedChain(h.gh);
+  seedChain(h.store);
 
   const s = await h.tick({ dryRun: true });
 
   assert.deepEqual(s.tracks, [{ root: 26, nodes: [41, 42], ok: true, attempt: 1, profile: 'claude-track', mode: 'forced', dry: true }]);
   assert.deepEqual(s.claimed, [], 'the leaf is the track\'s, so it is not offered to a node worker either');
-  assert.equal(h.gh.statusOf(26), 'todo');
-  assert.deepEqual(h.gh.lockRefs(), []);
-  assert.equal(h.gh.callsMatching('POST').length, 0);
-  assert.equal(h.gh.callsMatching('PATCH').length, 0);
+  assert.equal(h.store.statusOf(26), 'todo');
+  assert.deepEqual(await h.store.locks(), []);
+  assert.deepEqual(h.store.writes(), []);
+  assert.deepEqual(h.gh.writeRequests(), [], 'and nothing left through the forge either — a dry run touches no PR');
   assert.match(h.log(), /#26: \[dry-run\] would run track #41 → #42 → #26 as one claude-track session/);
 });
 
@@ -750,17 +747,17 @@ test('the skill teaches the loop the runner is actually given, by the names the 
 test('a root nobody adopted is a track anyway: inferred, on the board\'s track profile', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  seedChain(h.gh, { root: { agent: 'claude' } }); // exactly what /kanban:decompose leaves behind
+  seedChain(h.store, { root: { agent: 'claude' } }); // exactly what /kanban:decompose leaves behind
 
   const s = await h.tick();
 
   assert.deepEqual(s.tracks.map((x) => [x.root, x.ok, x.mode, x.profile]), [[26, true, 'inferred', 'claude-track']]);
   assert.deepEqual(s.claimed, [], 'the leaf is the track\'s: no cold session for it');
-  assert.equal(h.gh.statusOf(26), 'running');
-  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/26/1']);
-  assert.deepEqual(h.gh.labelsOf(26).filter((l) => l.startsWith('kb:agent:')), ['kb:agent:claude'],
+  assert.equal(h.store.statusOf(26), 'running');
+  assert.deepEqual(await h.store.locks(), ['26/1']);
+  assert.deepEqual(h.store.labelsOf(26).filter((l) => l.startsWith('kb:agent:')), ['kb:agent:claude'],
     'the decision never rewrites the label — that label is what node dispatch reads on a fallback');
-  const [a] = h.gh.runOf(26).attempts;
+  const [a] = h.store.runOf(26).attempts;
   assert.equal(a.profile, 'claude-track', 'the launch is the track profile\'s, whatever the card says');
   assert.equal(a.track_mode, 'inferred');
 });
@@ -768,20 +765,20 @@ test('a root nobody adopted is a track anyway: inferred, on the board\'s track p
 test('kb:no-track opts a goal out: its children run as cold nodes, one at a time', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  seedChain(h.gh, { root: { agent: 'claude', labels: [L.noTrack] } });
+  seedChain(h.store, { root: { agent: 'claude', labels: [L.noTrack] } });
 
   const s = await h.tick();
 
   assert.deepEqual(s.tracks, [], 'not even a candidate: it is not a root any more');
   assert.deepEqual(s.claimed.map((c) => [c.number, c.profile]), [[41, 'claude']]);
-  assert.equal(h.gh.statusOf(26), 'todo');
+  assert.equal(h.store.statusOf(26), 'todo');
 });
 
 test('a board with no track profile at all keeps node dispatch — inference has nothing to infer to', async (t) => {
   const h = harness();
   t.after(h.cleanup);
   delete h.ctx.cfg.profiles['claude-track'];
-  seedChain(h.gh, { root: { agent: 'claude' } });
+  seedChain(h.store, { root: { agent: 'claude' } });
 
   const s = await h.tick();
 
@@ -830,7 +827,7 @@ test('two children conflicting on the way into the track branch is flagged once,
   t.after(h.cleanup);
   const branch = 'kb/track-26';
   const live = runWith([{ attempt: 1, host: h.ctx.host, started_at: ago(60), heartbeat_at: ago(5), track: true, track_branch: branch, track_nodes: [41, 42] }]);
-  h.gh.addIssue(kbIssue({ number: 26, status: 'running', agent: 'claude-track', kb: { max_runtime: 86_400, paths: ['docs/'] }, run: live }));
+  h.store.addIssue(kbIssue({ number: 26, status: 'running', agent: 'claude-track', kb: { max_runtime: 86_400, paths: ['docs/'] }, run: live }));
   h.gh.refs.set(`refs/heads/${branch}`, 'f'.repeat(40));
   h.gh.addPull({ number: 100, head: 'kb/41', base: branch, mergeable: 'CONFLICTING' });
   h.gh.addPull({ number: 101, head: 'kb/42', base: branch, mergeable: 'MERGEABLE' });
@@ -838,15 +835,15 @@ test('two children conflicting on the way into the track branch is flagged once,
   const s = await h.tick();
 
   assert.deepEqual(s.track_conflicts.map((c) => [c.root, c.branch, c.conflicting]), [[26, branch, [100]]]);
-  assert.ok(h.gh.issues.get(26).labels.includes(L.needsHuman), 'the event: kb:needs-human lands on the root');
-  assert.ok(h.gh.issues.get(26).comments.some((c) => /track conflict/.test(c.body) && /#100/.test(c.body)));
+  assert.ok(h.store.issues.get(26).labels.includes(L.needsHuman), 'the event: kb:needs-human lands on the root');
+  assert.ok(h.store.issues.get(26).comments.some((c) => /track conflict/.test(c.body) && /#100/.test(c.body)));
 
   // a second tick must not re-notify: the attempt row remembers it already flagged this branch
-  const [a] = h.gh.runOf(26).attempts;
+  const [a] = h.store.runOf(26).attempts;
   assert.equal(a.track_conflict_notified, true);
-  const before = h.gh.issues.get(26).comments.length;
+  const before = h.store.issues.get(26).comments.length;
   await h.tick();
-  assert.equal(h.gh.issues.get(26).comments.length, before, 'no repeat comment once notified');
+  assert.equal(h.store.issues.get(26).comments.length, before, 'no repeat comment once notified');
 });
 
 test('trackBranchConflict: fewer than two PRs, or none CONFLICTING, is never a conflict', () => {

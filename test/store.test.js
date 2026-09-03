@@ -22,11 +22,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { openStore, STORE_METHODS } from '../src/store/index.js';
+import { openStore, closeStore, STORE_METHODS } from '../src/store/index.js';
 import { openGitTier } from '../src/store/git.js';
 import { DEFAULT_BOARD, hostId } from '../src/board.js';
 import { L, emptyRun, serializeResultComment, RESULT_MARKER, blockersOf, blockersKnown } from '../src/model.js';
 import { FakeGh, kbIssue } from './fake-gh.js';
+import { FakeStore } from './fake-store.js';
 
 // ---------- the GitHub driver ----------
 
@@ -120,9 +121,38 @@ async function openLocalDriver() {
   };
 }
 
+// ---------- the in-memory double ----------
+
+/**
+ * `test/fake-store.js`, run through the same scenarios as the two real drivers.
+ *
+ * It is a double, not a product driver — but the rest of the suite asserts *board behaviour*
+ * through it ("the lock was released", "nothing was written"), and a double that answers a method
+ * differently from the drivers turns every one of those assertions into a lie that passes. So it
+ * conforms or it is not usable, and this is where that is decided.
+ */
+async function openFakeDriver() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-store-fake-'));
+  const cfg = { ...JSON.parse(JSON.stringify(DEFAULT_BOARD)) };
+  const ctx = {
+    root: dir, cfg,
+    repo: { owner: 'acme', repo: 'board', nameWithOwner: 'acme/board' },
+    board: 'default', host: 'test-host', json: false, caps: {}, _cache: {},
+    requireBoard() { return this; },
+  };
+  const store = new FakeStore({ board: 'default', events: true });
+  const restore = store.install(ctx);
+  return {
+    store: await openStore(ctx),
+    recordBeat: (n, k, at) => store.beat(n, k, at),
+    cleanup: () => { restore(); fs.rmSync(dir, { recursive: true, force: true }); },
+  };
+}
+
 const DRIVERS = [
   { name: 'github', open: openGithubDriver },
   { name: 'local', open: openLocalDriver },
+  { name: 'fake', open: openFakeDriver },
 ];
 
 // ---------- the scenarios ----------
@@ -545,10 +575,31 @@ const SCENARIOS = [
       const note = blockersOf(tasks);
       assert.ok(note.filled, 'a board asked for its blockers comes back saying they were read');
       assert.ok(['all', 'open', 'waiting'].includes(note.scope), `scope was ${note.scope}`);
+      assert.ok(note.source, 'and it names where they came from — "filled by nobody" is not an answer');
       // and the reader agrees for the card that has one — an empty list nobody read is not "no blockers"
       const read = tasks.find((x) => x.number === child.number);
       assert.equal(blockersKnown(tasks, read), true);
       assert.deepEqual(read.blockedBy.map((b) => b.number), [parent.number]);
+
+      // `blockers: false` is the caller saying "spend nothing on dependencies". A driver may
+      // honour it or ignore it — `blocked_by` is a column on a local board and free — but whichever
+      // it does, the note has to describe what it actually did. The pairing is the point: a driver
+      // that answers "not filled" while handing back edges, or "filled" while handing back none,
+      // is the failure this scenario exists to catch, because every "an empty blockedBy nobody read
+      // is not 'no blockers'" assertion elsewhere in the suite reads exactly this note.
+      const cheap = await h.store.listTasks({ states: ['OPEN'], blockers: false });
+      const cheapNote = blockersOf(cheap);
+      const cheapRead = cheap.find((x) => x.number === child.number);
+      if (cheapNote.filled) {
+        assert.ok(['all', 'open', 'waiting'].includes(cheapNote.scope), `scope was ${cheapNote.scope}`);
+        assert.ok(cheapNote.source, 'a filled board names its source');
+        assert.equal(blockersKnown(cheap, cheapRead), true);
+        assert.deepEqual(cheapRead.blockedBy.map((b) => b.number), [parent.number], 'a driver that says it filled them, did');
+      } else {
+        assert.deepEqual(cheapNote, { source: null, filled: false, scope: 'none' }, 'an unfilled board says so in all three fields');
+        assert.equal(blockersKnown(cheap, cheapRead), false);
+        assert.deepEqual(cheapRead.blockedBy, [], 'and hands back no edges to be mistaken for "none"');
+      }
     },
   },
   {
@@ -591,6 +642,88 @@ for (const driver of DRIVERS) {
       await scenario.run(h);
     });
   }
+}
+
+// ---------- the double's own contract ----------
+//
+// The scenarios above say the double answers the *interface* like a driver. These three say its
+// **assertion helpers** mean what the rest of the suite reads them as meaning. They are here rather
+// than beside any one migrated test because every migrated test depends on them: a counter that
+// cannot see a removal, or a `writes()` that counts calls instead of effects, is a lie that passes
+// in every file at once.
+
+test('the double: revisionOf counts a label taken off, not only one added', async (t) => {
+  const store = new FakeStore();
+  const ctx = fakeCtx();
+  t.after(store.install(ctx));
+  store.addIssue(kbIssue({ number: 7, status: 'todo', agent: 'claude', labels: [L.needsHuman] }));
+  const s = await openStore(ctx);
+  const task = await s.getTask(7);
+  const before = store.revisionOf(7);
+
+  await s.setStatus(task, 'todo', { remove: [L.needsHuman] });
+
+  assert.ok(!store.labelsOf(7).includes(L.needsHuman), 'the label is off the card');
+  assert.equal(store.revisionOf(7), before + 1, 'and taking it off is a write — DELETE /issues/7/labels/… on the real driver');
+  assert.deepEqual(store.writes(), ['setStatus']);
+});
+
+test('the double: writes() counts effects, so a call that changed nothing is not one', async (t) => {
+  const store = new FakeStore();
+  const ctx = fakeCtx();
+  t.after(store.install(ctx));
+  store.addIssue(kbIssue({ number: 7, status: 'todo', agent: 'claude' }));
+  const s = await openStore(ctx);
+  const task = await s.getTask(7);
+
+  await s.setStatus(task, 'todo');            // already todo: no request on a real driver
+  await s.ensureLabels([L.status('todo')]);   // already exists: nothing to create
+  await s.addLabels(task, [L.status('todo')]);
+
+  assert.deepEqual(store.writes(), [], 'reaching the interface is not writing');
+  assert.equal(store.callsOf('setStatus').length, 1, 'the call is still recorded — writes() is about effect');
+  assert.equal(store.revisionOf(7), 0);
+});
+
+test('the double: reading an assertion is not a call — it neither logs nor eats an injected failure', async (t) => {
+  const store = new FakeStore();
+  const ctx = fakeCtx();
+  t.after(store.install(ctx));
+  const s = await openStore(ctx);
+  await s.claim(7, 1);
+  store.clearCalls();
+  store.fail('listLocks', { message: 'the tick\'s own listing is the one that must fail' });
+
+  assert.deepEqual(await store.locks(), ['7/1'], 'the assertion reads the rows themselves');
+  assert.deepEqual(store.calls, [], 'and leaves no trace in the log the next assertion reads');
+  let caught = null;
+  try { await s.listLocks(); } catch (e) { caught = e; }
+  assert.match(String(caught?.message), /the tick's own listing/, 'the injected failure is still waiting for the caller it was meant for');
+});
+
+test('the double: setStore hands its store through the same one-handle-per-context memo a driver gets', async (t) => {
+  const store = new FakeStore();
+  const ctx = fakeCtx();
+  t.after(store.install(ctx));
+
+  const a = await openStore(ctx);
+  const b = await openStore(ctx);
+
+  assert.equal(a, b, 'one handle per context');
+  assert.equal(ctx._store, a, 'and it is in the slot closeStore looks in');
+  assert.equal(closeStore(ctx), true);
+  assert.equal(store.closed, 1, 'the handle lifecycle every verb leans on, exercised through the double');
+  assert.equal(closeStore(ctx), false, 'twice is a no-op');
+});
+
+/** A bare context, the shape `makeContext` hands the seam. */
+function fakeCtx() {
+  return {
+    root: '/fake', cfg: { ...DEFAULT_BOARD },
+    repo: { owner: 'acme', repo: 'board', nameWithOwner: 'acme/board' },
+    board: 'default', host: 'test-host', json: false, caps: {}, _cache: {},
+    requireBoard() { return this; },
+  };
 }
 
 // One assertion that is *about* the GitHub driver rather than about the interface: the seam moved

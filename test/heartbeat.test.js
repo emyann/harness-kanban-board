@@ -75,8 +75,8 @@ test('a ref beat advances the lock ref by an empty commit and writes nothing to 
   assert.equal(git(h.root, 'rev-parse', `${r.sha}^{tree}`), git(h.root, 'rev-parse', `${h.base}^{tree}`), 'and changes nothing');
   assert.equal(localBeatSha(h.root, 7, 1), r.sha, 'the worktree remembers where its chain is');
   // the whole point: no content write, and the run record is untouched
-  assert.equal(h.gh.callsMatching('POST', /comments/).length, 0);
-  assert.equal(h.gh.callsMatching('PATCH').length, 0);
+  assert.equal(h.gh.requestsMatching('POST', /comments/).length, 0);
+  assert.equal(h.gh.requestsMatching('PATCH').length, 0);
   assert.ok(Date.now() - new Date(h.gh.runOf(7).attempts[0].heartbeat_at).getTime() > 600_000, 'heartbeat_at in the run record is left alone');
 });
 
@@ -85,10 +85,10 @@ test('a warm worker beats with zero GitHub calls at all', async (t) => {
   t.after(h.cleanup);
 
   const first = await heartbeat(h.ctx, 7); // bootstraps the chain (reads the task + run record)
-  const calls = h.gh.calls.length;
+  const calls = h.gh.requests.length;
   const second = await heartbeat(h.ctx, 7);
 
-  assert.equal(h.gh.calls.length, calls, 'the warm path talks to git, not to GitHub');
+  assert.equal(h.gh.requests.length, calls, 'the warm path talks to git, not to GitHub');
   assert.equal(second.expected, first.sha, 'and chains onto its own last beat');
   assert.equal(h.remoteSha(), second.sha);
 });
@@ -131,7 +131,7 @@ test('a lease rejected while GitHub still shows the ref resyncs the chain, it do
   assert.equal(r.resynced, true);
   assert.equal(r.expected, first.sha, 'it leased on what GitHub said, not on the stale local chain');
   assert.equal(h.remoteSha(), r.sha);
-  assert.equal(h.gh.callsMatching('POST', /comments/).length, 0);
+  assert.equal(h.gh.requestsMatching('POST', /comments/).length, 0);
 });
 
 test('profile heartbeat "comment": the run record is written and the lock ref never moves', async (t) => {
