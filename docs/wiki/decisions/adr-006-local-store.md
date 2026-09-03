@@ -17,8 +17,8 @@ covers:
   - path: src/board.js
     sha: 42bd1bb173651d9109208a702564cfc3e5e51410
   - path: package.json
-    sha: efdedd05f3d4cbc3981999ac4a7a95bcd36904f7
-generated_at_commit: 2a3a7e3
+    sha: 8c35f6e30651697f1b7f660124b5f78c051ccef3
+generated_at_commit: 0fabaeb
 last_refreshed: 2026-09-02
 related: [decisions/adr-005-control-plane, decisions/adr-004-roles-and-adoption, architecture/overview, features/web-board, features/up-and-down]
 ---

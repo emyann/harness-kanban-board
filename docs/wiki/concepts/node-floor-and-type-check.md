@@ -7,16 +7,18 @@ audience: [dev]
 read_when: "changing engines.node, adding a devDependency, editing bin/hkb.js, or making `npm run lint` fail on something that is not a syntax error"
 covers:
   - path: package.json
-    sha: efdedd05f3d4cbc3981999ac4a7a95bcd36904f7
+    sha: 8c35f6e30651697f1b7f660124b5f78c051ccef3
   - path: bin/hkb.js
-    sha: 46f698dc947f46392cfd0bdd592315269c3cd071
+    sha: 4ce96dc62bf6ff158f7cc5c3068946ace4badf79
   - path: tsconfig.json
     sha: 1cf5d8e7c742578ddfec7462f50de161ddf31bd2
   - path: types/hkb.d.ts
     sha: b9583e1ccba5a8c72390813b5563ace17d69e433
   - path: .github/workflows/test.yml
     sha: 52d8567c27bedbe1e8cb73e7f9ccfaecaeb72e99
-generated_at_commit: 2a3a7e3
+  - path: .github/workflows/release.yml
+    sha: 66ac3edbc8dbc9b4bd3d155f788aef0e3c2fb3ca
+generated_at_commit: 0fabaeb
 last_refreshed: 2026-09-02
 related:
   - decisions/adr-006-local-store.md
@@ -50,22 +52,28 @@ user cannot act on, and it would greet everyone on the floor version. `bin/hkb.j
 before it loads anything:
 
 ```js
+const defaultWarningListeners = process.listeners('warning');
 process.removeAllListeners('warning');
 process.on('warning', (w) => {
   if (w.name === 'ExperimentalWarning' && /SQLite/.test(w.message)) return;
-  process.stderr.write(`${w.name}: ${w.message}\n`);
+  for (const listener of defaultWarningListeners) listener.call(process, w);
 });
 ```
 
-Two details are load-bearing:
+Three details are load-bearing:
 
 - The entry point loads `src/cli.js` with a **dynamic** `await import(...)`, not a static one. Static
   imports are hoisted, so with a static import the filter would be installed *after* the module graph
   had already been evaluated — too late for a warning raised during it (`bin/hkb.js`).
-- It replaces the default listener rather than passing `--no-warnings`. A blanket silence would hide
-  a real deprecation; this one prints every warning that is not the SQLite line. `test/cli.test.js`
-  pins all three cases: an ordinary command writes nothing to stderr, the SQLite warning is dropped,
-  and any other warning still prints.
+- It filters the default listener rather than passing `--no-warnings`. A blanket silence would hide a
+  real deprecation; this one prints every warning that is not the SQLite line.
+- It **keeps Node's own listener and re-invokes it** instead of writing to stderr itself. That
+  listener is what honours `--no-deprecation`, `--throw-deprecation` and `--trace-warnings`, and what
+  prints `warning.code` and the `(node:pid)` prefix. It is also absent entirely when warnings are
+  disabled (`--no-warnings`, `NODE_NO_WARNINGS=1`), so an unconditional `process.on` would *resurrect*
+  warnings in a process that had asked for none. `test/cli.test.js` pins all six cases: a clean
+  command, the SQLite line dropped, other warnings still printed, `NODE_NO_WARNINGS=1` still silent,
+  `--no-deprecation` still honoured, and `warning.code` still in the output.
 
 ## `tsc --noEmit` checks the JSDoc; nothing is compiled
 
@@ -81,7 +89,18 @@ imports either one. `node bin/hkb.js version` in a fresh clone with no `npm inst
 
 There is no committed lock file, so CI runs a plain `npm install` before `npm run lint` and every
 `setup-node` keeps `package-manager-cache: false` (a cache restore *fails* the step when it finds no
-lock file).
+lock file). Two consequences follow, and both are wired:
+
+- **Every workflow that lints needs that install**, `release.yml` included — its gate is the same
+  `npm run lint`, and without the step a `v*` tag dies at `tsc: not found` before anything is
+  published. `test/release.test.js` pins the step order for exactly that reason.
+- **Both devDependencies are pinned exactly** (no `^`). With no lock file to reproduce from, a
+  floating `typescript` means a new 5.x minor can turn `npm run lint` red on an unrelated PR, with
+  nothing to roll back to.
+
+A checkout that has not run `npm install` — every fresh worker worktree — gets a one-line message from
+`npm run typecheck` naming the fix, rather than `sh: 1: tsc: not found`. Lint still passes there: the
+type check is a CI gate, and hkb itself runs with an empty `node_modules`.
 
 ### `types/hkb.d.ts` — the two shapes JavaScript cannot state
 
