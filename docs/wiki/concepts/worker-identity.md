@@ -7,19 +7,19 @@ audience: [dev, ops]
 read_when: "touching the launch environment, the Stop, PreToolUse or SubagentStop hooks, session_id/transcript_path on an attempt row, or anything that reads KB_TASK"
 covers:
   - path: src/hook.js
-    sha: 97b9054fbe1769059b882e4779f8279deaf184d8
+    sha: 464c411be61b06c8513fd248847bf0eeceb3eef0
   - path: src/model.js
-    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
+    sha: 35b0e9901257c7236ab59b93850b56cd711f8a4e
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/dispatch.js
-    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
+    sha: 492b6362444d3589e4fc0989cf89cd58aad93ccb
   - path: src/doctor.js
-    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
+    sha: ea334d91ff5b9b4411cfd213ac8fcf696fcb963d
   - path: src/lifecycle.js
-    sha: c3c49b90e80c7e68d44b4f8f999debcfa484de80
-generated_at_commit: 237bb61
-last_refreshed: 2026-09-02
+    sha: af197411d2798847fdc6707c39ae3b60989dc9ed
+generated_at_commit: e16f166
+last_refreshed: 2026-09-03
 related: [architecture/overview, features/harness-profiles, features/tracks, decisions/adr-004-roles-and-adoption]
 ---
 
@@ -36,7 +36,7 @@ related: [architecture/overview, features/harness-profiles, features/tracks, dec
 
 | Answer | Where it comes from | Whose it is |
 | --- | --- | --- |
-| the launch environment | `KB_TASK`/`KB_ATTEMPT`/`KB_BOARD`/`KB_REPO`/`KB_LOCK_REF`/`KB_ROOT`/`KB_PROFILE`, set by `spawnWorker` (`src/dispatch.js`) | every harness the dispatcher runs as a child process |
+| the launch environment | `KB_TASK`/`KB_ATTEMPT`/`KB_BOARD`/`KB_REPO`/`KB_ROOT`/`KB_PROFILE`, set by `spawnWorker` (`src/dispatch.js`) | every harness the dispatcher runs as a child process |
 | the checkout | the `kb-<n>-<k>` directory name (`parseWorktreeName`, `src/model.js`) | a `claude --bg` worker, and the tick matching a job (`matchJobByWorktree`, `src/jobs.js`) |
 | the job record | `~/.claude/jobs/<id>/state.json` — `sessionId`, `linkScanPath` (`sessionFromJobState`, `src/model.js`) | which *session* ran it, not which attempt |
 

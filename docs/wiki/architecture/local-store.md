@@ -7,20 +7,20 @@ audience: [dev]
 read_when: "adding a store verb, debugging an index that disagrees with the branch, wondering why a verb is refused on this host, or working on hkb sync / init --import"
 covers:
   - path: src/store/local.js
-    sha: 74fc6228a29d959c65472b83ba99e6e343fc8099
+    sha: 7fba92c37cf0d2fc398dc250a7737d52def0a87e
   - path: src/store/index.js
-    sha: 385621acfdf13c32e3477ef35325c763ee1bb6fd
+    sha: bf81d3c348f76a5146931ab57d1af34be05aef18
   - path: src/store/sqlite.js
     sha: ad2e80d73391c5e7c0602c1786ca645604616887
   - path: src/init.js
-    sha: fb4b0eb97192e874591ed4940a1e2f32775c1429
+    sha: 4028fb041f86af1a44b47ad6ad864fb8ab5dbdb0
   - path: src/doctor.js
-    sha: 1f944284e5e63b03d83e0ca43c17a115aaafd7bb
+    sha: ea334d91ff5b9b4411cfd213ac8fcf696fcb963d
   - path: src/gc.js
-    sha: 387c7e3da22fb00d1d070903abc12e7f64dfc7cf
+    sha: eaf0b4ec430504524772d5216a03664d1fcdd430
   - path: src/cli.js
-    sha: fc69279838602cde09a8e804e4c5456878b71eff
-generated_at_commit: 0cd9e5c
+    sha: 565b5ca72ec257acd2a350d8b465d302061199c3
+generated_at_commit: e16f166
 last_refreshed: 2026-09-03
 related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
@@ -310,7 +310,7 @@ nobody re-runs:
   `blockedBy` field every card in triage, ready, running or review would arrive
   with an empty list meaning "not asked". The branch has no third value for
   that, and `cardRecord` refuses rather than writing "nothing blocks it" over a
-  board's whole dependency graph (`blockersKnown`, `src/store/github.js`).
+  board's whole dependency graph (`blockersKnown`, `src/model.js`).
 
   The refusal has a **way through**, per card, or it is only a louder silent
   failure. On a repo without the GraphQL field no read fills a *closed* card's

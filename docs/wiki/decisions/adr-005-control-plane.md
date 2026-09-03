@@ -11,13 +11,13 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/dispatch.js
-    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
+    sha: 492b6362444d3589e4fc0989cf89cd58aad93ccb
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/cli.js
-    sha: 9d7fc11ad734643205e89668a176d4f29115805f
-generated_at_commit: 237bb61
-last_refreshed: 2026-09-02
+    sha: 565b5ca72ec257acd2a350d8b465d302061199c3
+generated_at_commit: e16f166
+last_refreshed: 2026-09-03
 related: [decisions/adr-004-roles-and-adoption, decisions/adr-006-local-store, architecture/overview, features/up-and-down, features/tracks]
 ---
 
@@ -37,7 +37,7 @@ every local attempt off as `timed_out` (`src/dispatch.js`, the reclaim loop).
 
 The analogy holds where it matters. hkb keeps desired state in a store it does not own, reconciles it
 with a dumb, level-triggered, idempotent loop (ADR-004), coordinates through leases renewed by
-compare-and-swap (`src/lock.js`), and models a card as a Job with a retry budget and a deadline
+compare-and-swap on the store's claim, and models a card as a Job with a retry budget and a deadline
 (`failure_limit`, `max_runtime`). It breaks in one place: a **board is not a node**. One board is
 dispatched by two hosts (the laptop loop beside the Actions tick) and one host serves several boards
 (`~/.config/hkb/boards.json`). A node is capacity; a board is a namespace holding Jobs.

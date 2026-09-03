@@ -7,20 +7,20 @@ audience: [dev]
 read_when: "touching hkb serve, the board page, the user-level board list, or anything that has to work across more than one checkout"
 covers:
   - path: src/serve.js
-    sha: 478930327b4f3bcdb795677b677569e1ee1efc9a
+    sha: f535602a1058cceae079f5134483cb96619e684e
   - path: web/index.html
     sha: 322aa96236ef37657a9a2326b83dc7b480672134
   - path: src/board.js
     sha: 53192b4670920a4ead1181c925075285dc8ee105
   - path: src/init.js
-    sha: fb4b0eb97192e874591ed4940a1e2f32775c1429
+    sha: 4028fb041f86af1a44b47ad6ad864fb8ab5dbdb0
   - path: src/lifecycle.js
-    sha: c1b743d8c3e6ef9dabd62ce11b5dbc18d6d9e4bf
+    sha: af197411d2798847fdc6707c39ae3b60989dc9ed
   - path: src/track.js
-    sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
+    sha: 59b3a4b352ea0d9c90184c347616ea2b766fc8b3
   - path: src/model.js
-    sha: d3729c517eb72a690f7248b5769ea03d22f6d794
-generated_at_commit: f70fc7a
+    sha: 35b0e9901257c7236ab59b93850b56cd711f8a4e
+generated_at_commit: e16f166
 last_refreshed: 2026-09-03
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
@@ -293,7 +293,7 @@ step. A module `<script>` is not an option either: a top-level `import` makes
 
 **The one place the picture can be wrong, and says so.** Without GitHub's GraphQL
 `blockedBy` field, `fetchBoard` REST-fills `todo`/`blocked` cards only
-(`fillBlockedByRest`, applied in `fetchBoard`, `src/store/github.js`) —
+(the board read's own blocker fill) —
 widening that would be a per-task
 REST call on every read, which Values 2 and 3 forbid. That leaves a fingerprint
 the page can read off the payload it already has: edges exist, and *none* of them

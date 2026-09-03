@@ -1,22 +1,20 @@
 ---
 title: The store — hkb's one piece of durable truth
-summary: "The concept underneath both drivers: a board is whatever openStore(ctx) answers, one of two tiers on the local driver does the writing and the other does the indexing, and a process holds a cache, never the truth."
+summary: "A board is whatever openStore(ctx) answers: one driver, two tiers — a git branch that records decisions and a local index that answers questions — and every other process holds a cache, never the truth."
 category: concepts
 kind: explanation
 audience: [dev]
 read_when: "orienting on where board state actually lives, before diving into architecture/store-seam or architecture/local-store for the mechanics"
 covers:
   - path: src/store/index.js
-    sha: 385621acfdf13c32e3477ef35325c763ee1bb6fd
+    sha: bf81d3c348f76a5146931ab57d1af34be05aef18
   - path: src/store/local.js
-    sha: 74fc6228a29d959c65472b83ba99e6e343fc8099
-  - path: src/store/github.js
-    sha: 7b384d0c64870f7b33c209325359b8e2630856ad
+    sha: 7fba92c37cf0d2fc398dc250a7737d52def0a87e
   - path: src/store/git.js
     sha: ffcc9df59f85f18b58875350cffa057ef8d31681
   - path: src/store/sqlite.js
     sha: ad2e80d73391c5e7c0602c1786ca645604616887
-generated_at_commit: 103ecf4
+generated_at_commit: e16f166
 last_refreshed: 2026-09-03
 related: [architecture/store-seam, architecture/local-store, architecture/kb-board-branch, architecture/overview, decisions/adr-006-local-store]
 ---
@@ -29,17 +27,24 @@ related: [architecture/store-seam, architecture/local-store, architecture/kb-boa
 > `openStore(ctx)` (`src/store/index.js`) is the single door to it; nothing in
 > `src/` reaches board state any other way (*architecture/store-seam*).
 
-## One interface, driven by `storeKind`
+## One interface, one driver
 
-A board is on exactly one driver, decided by one field: `store` in
-`.kanban/board.json` — `"local"` or `"github"`, absent means `github`
-(`storeKind`, `src/store/index.js`). Both drivers answer the same shape —
-tasks, blockers, runs, claims, notes — so a verb written against the interface
-never branches on which one it is talking to; only `hkb init --import`, which
-moves a board *from* one *to* the other, opens a driver by name on purpose.
-The GitHub driver is one thing: issues, labels and two structured comments,
-behind `src/store/github.js`. The local driver is a composition of two tiers,
-and that composition is the concept worth carrying in your head.
+There is one store, and it is local: the `kb-board` branch and the index beside
+it. `storeKind` (`src/store/index.js`) still *reads* `store` in
+`.kanban/board.json`, but only to answer `local` for `"local"` and for the key
+being absent, and to refuse `"github"` by name with the migration
+(`hkb init --store local --import`) rather than half-opening something that is
+no longer there. A board still on GitHub Issues is a real thing somebody may
+have on disk; telling them so is the whole reason the key is read at all.
+
+The interface survived the driver it was extracted from, which is the point of
+having had one: `src/store/github.js` was deleted rather than rewritten, and no
+verb changed, because every verb was already written against
+`STORE_METHODS`. What is left of GitHub Issues is `src/bridge/github-issues.js`
+— read-only, and reachable only from `importGithubBoard`.
+
+The local driver is a composition of two tiers, and that composition is the
+concept worth carrying in your head.
 
 ## The local store's two tiers, and why there are two
 
@@ -97,17 +102,27 @@ across a network.
 - **A crash loses at most one write.** There is no window where the store
   itself is wrong — only a window, closed by invariant 1, where the index is
   a commit behind the branch.
-- **The GitHub driver keeps working, unmodified, behind the same interface.**
-  This repository's own board still runs on it; retiring it is track C
-  (`docs/local-first.md` §10), not this change.
+- **One protocol to reason about.** Every verb was written twice while there
+  were two stores — once against issues and labels, once against the branch —
+  and the second one is now the only one. A claim is a `BEGIN IMMEDIATE`
+  transaction, a heartbeat is a compare-and-swap on its token, and neither has
+  a GitHub spelling any more.
 
 ## What is deliberately not the store
 
 Pull requests. A board kept locally still opens its work on a forge, so
-everything about a PR — reads, auto-merge, branch protection, the merge
+everything about a PR — the listings, auto-merge, branch protection, the merge
 mutation — lives in `src/forge.js`, calling `src/gh.js`, next to the store
-rather than inside it. A local card's `prs` field is `[]`: the store has
-nothing to say about where the code review happens.
+rather than inside it. A card comes out of the store with `prs: []`
+(`src/store/git.js`), and `fillPrs` (`src/forge.js`) is the **join**: one
+listing of the repository's pull requests, matched to cards by *head branch*.
+
+That match is the whole link. There is no issue for a pull request to
+reference, so `kb-<n>-<k>` — and the `worktree-kb-<n>-<k>`, `kb/<n>` and
+`kb/track-<n>` spellings hkb also creates (`taskBranchRe`, `src/model.js`) — is
+what says which card a PR belongs to. Two consequences worth keeping in mind:
+a caller that reads `task.prs` must have called `fillPrs` on that read, and a
+pull request on any other branch name is one hkb cannot see at all.
 
 ## Related
 

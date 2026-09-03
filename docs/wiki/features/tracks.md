@@ -7,26 +7,24 @@ audience: [dev]
 read_when: "touching src/track.js, isTrackRoot, the track branch of the dispatcher tick, the claude-track profile's allow-list, or the runner brief"
 covers:
   - path: src/model.js
-    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
+    sha: 35b0e9901257c7236ab59b93850b56cd711f8a4e
   - path: src/track.js
-    sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
+    sha: 59b3a4b352ea0d9c90184c347616ea2b766fc8b3
   - path: src/dispatch.js
-    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
+    sha: 492b6362444d3589e4fc0989cf89cd58aad93ccb
   - path: src/init.js
-    sha: c905bab09d496c7b7fe2aaa0c92d2109fdd30432
+    sha: 4028fb041f86af1a44b47ad6ad864fb8ab5dbdb0
   - path: src/board.js
-    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
+    sha: 53192b4670920a4ead1181c925075285dc8ee105
   - path: src/gc.js
-    sha: 5c9f92377d47e7bca75c32fc675dfa50e617e7a5
-  - path: src/store/github.js
-    sha: e2708642df0ef4599f450e643b9b67eeeb0b2ad5
+    sha: eaf0b4ec430504524772d5216a03664d1fcdd430
   - path: src/forge.js
-    sha: 20dd384386ca63bc98d103b2e7728f29a95bc87c
+    sha: 0e424d2844bee9b0fdd2f809f7e9ae4314d69e74
   - path: src/doctor.js
-    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
+    sha: ea334d91ff5b9b4411cfd213ac8fcf696fcb963d
 related: [architecture/overview, features/harness-profiles, features/review-loop, concepts/worker-identity, decisions/adr-004-roles-and-adoption]
-generated_at_commit: 237bb61
-last_refreshed: 2026-09-02
+generated_at_commit: e16f166
+last_refreshed: 2026-09-03
 ---
 
 # Tracks — the second engine, and why it became an orchestrator
@@ -210,7 +208,7 @@ sailed through, both children with blockers were lost.
 
 The fix replaces the chain with a hub. **A track claims its own integration
 branch, `kb/track-<root>` (`trackBranchName`, `src/model.js`), the moment it
-is claimed** — `ensureTrackBranch` (`src/store/github.js`) creates it from the default
+is claimed** — `ensureTrackBranch` (`src/forge.js`) creates it from the default
 branch, at the same claim sha the lock ref itself uses, and the dispatcher
 records it on the attempt row as `track_branch` (`src/dispatch.js`, the track
 claim) *before* anything is spawned. That is the whole reliability argument:
@@ -333,7 +331,7 @@ class of bug `checkOrphanedPrs` already covers for an unreferenced PR.
   that beat unless the node itself does, since `ScheduleWakeup` is not on the orchestrator's
   allow-list and it cannot wake itself to heartbeat. The per-node brief tells every subagent to run
   `hkb heartbeat <root>` (not its own number) every ~10 minutes for exactly this reason
-  (`casHeartbeat`, `src/store/github.js`). The beat defends only against `stale_after`: the tick checks the root's
+  (a compare-and-swap on the root's claim). The beat defends only against `stale_after`: the tick checks the root's
   `max_runtime` first (`src/dispatch.js`, default 3600 s) and times the root out regardless of beats, so a
   track root also needs `kb.max_runtime` larger than the whole track — heartbeat is necessary, not sufficient — but, like the verb check above, it is brief-level: a subagent
   that skips it leaves the whole track exposed to reclaim past the hour mark, uncovering every node

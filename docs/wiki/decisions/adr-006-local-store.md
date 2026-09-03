@@ -4,24 +4,24 @@ summary: "The board's state moves off GitHub into two local tiers (durable conte
 category: decisions
 kind: decision
 audience: [dev]
-read_when: "touching src/tasks.js, src/lock.js, the store seam, the board's location on disk, the Node floor, the release build, or proposing any sync with GitHub"
+read_when: "touching the store seam, the board's location on disk, the Node floor, the release build, or proposing any sync with GitHub"
 status: accepted
 date: 2026-09-02
 supersedes: ~
 superseded_by: ~
 covers:
   - path: src/store/index.js
-    sha: ff18b848824f2370c915b5417fd6fe51d5c36f2f
-  - path: src/store/github.js
-    sha: e2708642df0ef4599f450e643b9b67eeeb0b2ad5
+    sha: bf81d3c348f76a5146931ab57d1af34be05aef18
+  - path: src/bridge/github-issues.js
+    sha: 55b3b9a708e5d00bdc2cd02a221c0867b10aaea3
   - path: src/forge.js
-    sha: 20dd384386ca63bc98d103b2e7728f29a95bc87c
+    sha: 0e424d2844bee9b0fdd2f809f7e9ae4314d69e74
   - path: src/board.js
-    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
+    sha: 53192b4670920a4ead1181c925075285dc8ee105
   - path: package.json
-    sha: e0c6c8eeda7d091e841f1a764486ad9a57edd0f5
-generated_at_commit: 447b51e
-last_refreshed: 2026-09-02
+    sha: a69a02319ae1e2c0181b11ae544c3b646d98832d
+generated_at_commit: e16f166
+last_refreshed: 2026-09-03
 related: [decisions/adr-005-control-plane, decisions/adr-004-roles-and-adoption, architecture/overview, features/web-board, features/up-and-down]
 ---
 

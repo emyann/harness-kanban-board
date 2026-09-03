@@ -7,20 +7,20 @@ audience: [dev, ops]
 read_when: "touching dispatch.merge, the auto-merge pass in the tick, the doctor merge check, or anything about who lands an agent's PR"
 covers:
   - path: src/model.js
-    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
+    sha: 35b0e9901257c7236ab59b93850b56cd711f8a4e
   - path: src/dispatch.js
-    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
+    sha: 492b6362444d3589e4fc0989cf89cd58aad93ccb
   - path: src/doctor.js
-    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
-  - path: src/store/github.js
-    sha: e2708642df0ef4599f450e643b9b67eeeb0b2ad5
+    sha: ea334d91ff5b9b4411cfd213ac8fcf696fcb963d
+  - path: src/context.js
+    sha: be28b4843c2a09afc0c835c4fe195706af86bb15
   - path: src/forge.js
-    sha: 20dd384386ca63bc98d103b2e7728f29a95bc87c
+    sha: 0e424d2844bee9b0fdd2f809f7e9ae4314d69e74
   - path: src/board.js
-    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
+    sha: 53192b4670920a4ead1181c925075285dc8ee105
 related: [architecture/overview, decisions/adr-004-roles-and-adoption, architecture/dispatcher-tick]
-generated_at_commit: 237bb61
-last_refreshed: 2026-09-02
+generated_at_commit: e16f166
+last_refreshed: 2026-09-03
 ---
 
 # The last step — `dispatch.merge` and GitHub's auto-merge
@@ -52,16 +52,31 @@ doctor still fails on it. A policy that cannot be understood must not be able
 to take out every command that loads board.json, and must never be guessed
 *towards* merging.
 
+## Which PR, and how the tick knows it is this card's
+
+The board is a branch in this repository and nothing on GitHub's side links a
+pull request to a card, so the tick matches the repository's open PRs against
+each card's own branch name — `kb-<n>-<k>` and the other spellings hkb creates
+(`taskBranchRe`, `src/model.js`; `fillPrs`, `src/forge.js`; see
+*features/review-loop*). Everything below reads `task.prs` and is unaffected by
+where it came from, but the association is worth knowing when a PR is *not*
+picked up: it was opened from a branch hkb does not recognise as this card's.
+
+The same match closes the loop at the other end. When GitHub's auto-merge
+eventually lands the PR, nothing tells hkb — so the next tick lists the merged
+PRs once and moves the card whose branch is among them to *done*
+(`reconcileDecision`, `src/dispatch.js`).
+
 ## Why GitHub does the merging, not hkb
 
 The tick sends one `enablePullRequestAutoMerge` per PR
 (`enableAutoMerge`, `src/forge.js`) and nothing else. Three consequences, and
 each is a reason:
 
-- **Frugal.** One mutation at review time. No polling, no timer, no new query:
-  the PR node id and `autoMergeRequest` both ride the board query the tick
-  already runs (`ISSUE_FIELDS`, `src/store/github.js`), so "is it already enabled" is
-  free and enabling is once per PR, not once per tick.
+- **Frugal.** One mutation at review time. No polling, no timer, no new request:
+  the PR node id and its auto-merge state both ride the pull-request listing the
+  tick already reads to match PRs to cards (`fillPrs`, `src/forge.js`), so "is it
+  already enabled" is free and enabling is once per PR, not once per tick.
 - **GitHub enforces the gates.** Required checks, required reviews, up-to-date
   branches. hkb never has to answer "is this safe to merge" — a question a
   dispatcher with no LLM in it has no business answering.
