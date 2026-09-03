@@ -643,10 +643,13 @@ export function removedInitFlag(flags = {}) {
  * Which store this `init` sets the board up on. Pure, so the defaulting is a test rather than a
  * paragraph in the README.
  *
- * A **new** board is local (docs/local-first.md §6.1): the cards live on the `kb-board` branch in
- * this repository and the index beside them, so the board works with `gh` logged out, on a plane,
- * and at no API cost. `--store github` keeps the old behaviour while the GitHub driver is still
- * here (it goes in track C).
+ * A **new** board is `github` — for now, and deliberately against docs/local-first.md §6.1, which
+ * makes local the default. The local store is complete, but the *verbs* have not moved onto it yet:
+ * `hkb create`, `hkb list` and the rest still reach board state through the GitHub driver (#304, track
+ * C). Defaulting to local would therefore hand a new adopter a board `hkb create` cannot write — a
+ * loud failure, but a failure — so the default stays where the verbs are until #304 lands, and
+ * `--store local` is the opt-in for anyone who wants the branch today. **Flip this back the moment
+ * #304 merges**; the line below and this paragraph are the whole change.
  *
  * An **existing** board never changes store by being re-inited: a board.json that already says one
  * keeps it, and one written before the key existed is `github`, which is what `storeKind` answers at
@@ -674,7 +677,7 @@ export function resolveStore(flags = {}, existing = null) {
     throw e;
   }
   if (existing) return existing.store === 'local' ? 'local' : 'github';
-  return 'local';
+  return 'github';
 }
 
 /**

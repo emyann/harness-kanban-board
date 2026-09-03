@@ -117,15 +117,17 @@ loop, and what a tick would otherwise have done for you: [Driving a board by han
 ## How it works
 
 A board is kept in one of two stores, behind one interface — `openStore()` is the only thing that knows which
-([ADR-006](docs/wiki/decisions/adr-006-local-store.md)). `hkb init` makes a **local** one.
+([ADR-006](docs/wiki/decisions/adr-006-local-store.md)). `hkb init` makes a **GitHub** one today; the local
+store is built and is where this is going.
 
-> **Where this is, right now.** The local store is complete and is what `hkb init` creates, but the *verbs* have
-> not moved onto it yet: `hkb create`, `hkb list`, `hkb dispatch` and the rest still reach board state through
-> the GitHub driver, and that migration is track C of [the plan](docs/local-first.md#10-the-sequence--three-tracks).
-> Until it lands, a checkout with no GitHub board behind it wants `hkb init --store github`, and everything in
-> this section describes the store rather than a board you can drive end to end today.
+> **Where this is, right now.** The local store is complete — the `kb-board` branch, the index, `hkb sync`, the
+> migration — but the *verbs* have not moved onto it: `hkb create`, `hkb list`, `hkb dispatch` and the rest
+> still reach board state through the GitHub driver, and that migration is track C of
+> [the plan](docs/local-first.md#10-the-sequence--three-tracks). So `hkb init` defaults to `--store github`,
+> where the verbs are. `hkb init --store local` creates the branch today if you want to look at it, but it is
+> not a board you can drive end to end yet. The default flips back the moment the verbs land.
 
-**The local store — the default.** Nothing leaves the repository, nothing costs an API call, and the board
+**The local store — where this is going.** Nothing leaves the repository, nothing costs an API call, and the board
 works with `gh` logged out.
 
 - **A card is a file.** `cards/42.json` on the `kb-board` branch — title, body, status, agent, priority, paths,
