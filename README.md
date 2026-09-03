@@ -102,9 +102,14 @@ loop, and what a tick would otherwise have done for you: [Driving a board by han
 
 ## How it works
 
-A board is kept in one of two stores. `hkb init` makes a **local** one; everything above works the same either
-way, because every verb goes through one interface and `openStore()` is the only thing that knows which
-([ADR-006](docs/wiki/decisions/adr-006-local-store.md)).
+A board is kept in one of two stores, behind one interface — `openStore()` is the only thing that knows which
+([ADR-006](docs/wiki/decisions/adr-006-local-store.md)). `hkb init` makes a **local** one.
+
+> **Where this is, right now.** The local store is complete and is what `hkb init` creates, but the *verbs* have
+> not moved onto it yet: `hkb create`, `hkb list`, `hkb dispatch` and the rest still reach board state through
+> the GitHub driver, and that migration is track C of [the plan](docs/local-first.md#10-the-sequence--three-tracks).
+> Until it lands, a checkout with no GitHub board behind it wants `hkb init --store github`, and everything in
+> this section describes the store rather than a board you can drive end to end today.
 
 **The local store — the default.** Nothing leaves the repository, nothing costs an API call, and the board
 works with `gh` logged out.
@@ -154,9 +159,10 @@ The `kb-board` branch has **one writer** — the host `board.json` names. That h
 pushes the branch to the remote after a tick that wrote (at most once a minute, silently when the laptop is
 offline; `"sync": {"push": false}` in the branch's `board.json` turns it off).
 
-Anyone can `git clone` the repo and read the whole board — `hkb list`, `hkb show`, `hkb serve` — with no setup
-at all: the branch is what says the board is local. Every *mutating* verb refuses there with exit 2, naming the
-host that owns it. To move a board to another machine, push it, clone it, and run `hkb init --take-over` on the
+Anyone can `git clone` the repo and get the whole board with it: the branch is what says the board is local, so
+no configuration is needed to read it (`.kanban/board.json` is tracked and comes along). Every *mutating* verb
+refuses on a host that is not the owner, with exit 2 naming it — the read side of that story is waiting on the
+verbs moving onto the store (track C). To move a board to another machine, push it, clone it, and run `hkb init --take-over` on the
 new host: it rewrites `board.host` on the branch, and refuses while the old host's dispatcher stamp is still
 fresh (`--force` overrides). Two hosts writing one branch is not supported — if it happens, `hkb sync` refuses
 the non-fast-forward and tells you how to pick a side.

@@ -13,14 +13,14 @@ covers:
   - path: src/board.js
     sha: f69569a4ef1ba7e4dabb5af394dddac6ba8d4a1f
   - path: src/init.js
-    sha: e9da3dee1b67c4169bae70647d30012fba868f60
+    sha: 70914a43959e7ac6d830fcc24d7e2704d4810293
   - path: src/lifecycle.js
     sha: 3d8234ec94517fa40a1fdbef460486d3bf873068
   - path: src/track.js
     sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
   - path: src/model.js
     sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
-generated_at_commit: 2ce39a7
+generated_at_commit: fb4d64d
 last_refreshed: 2026-09-03
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
@@ -288,21 +288,20 @@ confidently wrong picture of what a track depended on.
 ## A clone is a reader, and the page is what a reader gets
 
 On a local board the whole board travels with the repository, so "share the
-board" is `git clone` — and what a clone gets is exactly this page. There is no
-setup: `.kanban/board.json` need not exist, because `openStore` reads the
-`kb-board` branch (or `origin/kb-board`) and calls the board local on that alone
-(`storeKind`, `src/store/index.js`).
+board" is `git clone` — and what a clone should get is exactly this page. Which
+store a clone is on needs no configuration: `storeKind` (`src/store/index.js`)
+calls the board local on the presence of `kb-board` or `origin/kb-board` alone.
 
 What a clone cannot do is write. The branch names one owning host, and every
 mutating verb — including the ones the page's drag-and-drop calls — is refused
 on any other with exit 2 naming `hkb init --take-over` (`assertOwningHost`,
-`src/cli.js`; `assertLocalOwner`, `src/store/local.js`). So a teammate's clone
-is a live, zero-cost, read-only view that goes as stale as their last
-`git fetch`, and the drawer, the graph and the lanes all work on it.
+`src/cli.js`; `assertLocalOwner`, `src/store/local.js`).
 
-> TODO-VERIFY: the page's drag-and-drop on a clone — the verb is refused with a
-> clear message, but whether `web/index.html` renders that refusal usefully or
-> only fails the request has not been checked.
+> **Not reachable yet.** `src/serve.js` reads the board through `fetchBoard`
+> (`src/tasks.js`, the GitHub driver's re-export), not through `openStore`, so
+> serving a local board — from a clone or from the owning host — is waiting on
+> the verb migration in track C of `docs/local-first.md`. The store underneath
+> is done and the refusals above are live; the page is not wired to it.
 
 ## Related
 

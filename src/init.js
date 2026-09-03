@@ -918,6 +918,17 @@ async function setUpLocalBoard(ctx, flags, log) {
     log(`store: host "${store.owner()}" owns this board, so hkb reads it here and refuses to write. \`hkb init --take-over\` moves it to "${store.host}"`);
   }
 
+  // What a local board can and cannot do *today*, said out loud rather than discovered as a 404.
+  // `openStore()` picks this store, and everything behind that seam works — but the verbs still
+  // reach board state through `src/tasks.js`/`src/lock.js`, which are the GitHub driver's
+  // re-exports (docs/local-first.md §10, track C: "tests onto the store double, retire the GitHub
+  // store"). Until those callers move, a local board is written by the store and read by nothing
+  // else, so a repo with no GitHub behind it wants `--store github` for now.
+  log('store: the board itself is here — the verbs are not, yet. `hkb create`, `hkb list` and the'
+    + ' rest still read and write through the GitHub driver (docs/local-first.md §10, track C moves'
+    + ' them), so on a repo with no GitHub board behind it they will fail with a 404 until then.'
+    + ' `hkb init --store github` sets this checkout up the way today\'s verbs expect.');
+
   const sync = store.board().settings?.sync?.push === false;
   log(sync
     ? `sync: off — settings.sync.push is false on the branch, so ${store.branch} is never pushed. Set it to true to back the board up on ${store.remote}`

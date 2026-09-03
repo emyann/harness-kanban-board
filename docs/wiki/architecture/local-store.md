@@ -13,10 +13,10 @@ covers:
   - path: src/store/sqlite.js
     sha: 826f9c91a51e4f2d67a9b15736d221650661dcbd
   - path: src/init.js
-    sha: e9da3dee1b67c4169bae70647d30012fba868f60
+    sha: 70914a43959e7ac6d830fcc24d7e2704d4810293
   - path: src/doctor.js
     sha: 4ed022c48ec21ba66b92f895fefa333b6c928133
-generated_at_commit: 2ce39a7
+generated_at_commit: fb4d64d
 last_refreshed: 2026-09-03
 related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
@@ -27,6 +27,15 @@ related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-0
 > `src/store/sqlite.js` has no cards it did not copy from somewhere. The board
 > is the composition, and `src/store/local.js` is where the rules that make it
 > one thing live.
+
+**What is not true yet.** The store is complete and `hkb init` creates one, but
+the *verbs* have not moved onto it: `src/cli.js`, `src/lifecycle.js`,
+`src/dispatch.js`, `src/serve.js` and `src/context.js` still reach board state
+through `src/tasks.js`/`src/lock.js`, which are the GitHub driver's re-exports.
+Track C of `docs/local-first.md` §10 is that migration, and until it lands a
+local board is written and read by the store, by `hkb sync`, by `hkb doctor` and
+by nothing else. A checkout with no GitHub board behind it wants
+`hkb init --store github` in the meantime, and `hkb init` says so.
 
 ## Which store a board is on
 
@@ -94,10 +103,12 @@ they are not redundant — each catches a different caller:
 - `LocalStore.assertOwner()` for a caller that reached the store directly.
 - The tier's own `_assertOwner`, which refuses the actual write.
 
-A clone is therefore a **reader**: `hkb list`, `hkb show` and `hkb serve` work
-with no setup, and a mutating verb exits 2 naming `hkb init --take-over`. A
-clone that never made a local branch gets a second, more specific refusal from
-the tier — there is no local ref to compare-and-swap against.
+A clone is therefore a **reader**: the store reads the whole board there with no
+setup, and a mutating verb exits 2 naming `hkb init --take-over`. (The reads
+that reach a human — `hkb list`, `hkb show`, `hkb serve` — get there when the
+verbs move onto the store; see the note at the top.) A clone that never made a
+local branch gets a second, more specific refusal from the tier: there is no
+local ref to compare-and-swap against, and the message says how to make one.
 
 `takeOver()` rewrites `board.host`. It is refused while the old host's
 dispatcher stamp on the branch is younger than `HOST_LIVE_MS`
