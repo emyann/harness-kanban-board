@@ -27,6 +27,7 @@ import { openGitTier } from '../src/store/git.js';
 import { DEFAULT_BOARD, hostId } from '../src/board.js';
 import { L, emptyRun, serializeResultComment, RESULT_MARKER, blockersOf, blockersKnown } from '../src/model.js';
 import { FakeGh, kbIssue } from './fake-gh.js';
+import { FakeStore } from './fake-store.js';
 
 // ---------- the GitHub driver ----------
 
@@ -120,9 +121,38 @@ async function openLocalDriver() {
   };
 }
 
+// ---------- the in-memory double ----------
+
+/**
+ * `test/fake-store.js`, run through the same scenarios as the two real drivers.
+ *
+ * It is a double, not a product driver — but the rest of the suite asserts *board behaviour*
+ * through it ("the lock was released", "nothing was written"), and a double that answers a method
+ * differently from the drivers turns every one of those assertions into a lie that passes. So it
+ * conforms or it is not usable, and this is where that is decided.
+ */
+async function openFakeDriver() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-store-fake-'));
+  const cfg = { ...JSON.parse(JSON.stringify(DEFAULT_BOARD)) };
+  const ctx = {
+    root: dir, cfg,
+    repo: { owner: 'acme', repo: 'board', nameWithOwner: 'acme/board' },
+    board: 'default', host: 'test-host', json: false, caps: {}, _cache: {},
+    requireBoard() { return this; },
+  };
+  const store = new FakeStore({ board: 'default', events: true });
+  const restore = store.install(ctx);
+  return {
+    store: await openStore(ctx),
+    recordBeat: (n, k, at) => store.beat(n, k, at),
+    cleanup: () => { restore(); fs.rmSync(dir, { recursive: true, force: true }); },
+  };
+}
+
 const DRIVERS = [
   { name: 'github', open: openGithubDriver },
   { name: 'local', open: openLocalDriver },
+  { name: 'fake', open: openFakeDriver },
 ];
 
 // ---------- the scenarios ----------

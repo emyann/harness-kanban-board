@@ -1,6 +1,12 @@
-// The dispatcher tick against an in-memory GitHub (test/fake-gh.js): promotion, claims,
+// The dispatcher tick against an in-memory board (test/fake-store.js): promotion, claims,
 // reclaim, the failure limit and the guards. No `gh`, no network, no worker — the profile's
 // launch template is `["true"]`, a process that exits immediately.
+//
+// The board is a `Store`, not a GitHub: `h.store` seeds the cards and answers every question the
+// assertions ask ("what status is #7", "which claims are live", "was anything written"), so a tick
+// is tested against the interface rather than against GitHub's REST log. `test/fake-gh.js` is still
+// installed underneath for the half that is genuinely a forge — pull requests — and a call that
+// reaches it unexpectedly fails loudly with a 501 rather than passing quietly.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -12,7 +18,8 @@ import { DEFAULT_BOARD } from '../src/board.js';
 import { claim, release, listLocks } from '../src/lock.js';
 import { complete, requestChanges } from '../src/lifecycle.js';
 import { activePrGuard, L, RESULT_MARKER, worktreePath } from '../src/model.js';
-import { FakeGh, kbIssue, runWith } from './fake-gh.js';
+import { FakeGh } from './fake-gh.js';
+import { FakeStore, kbIssue, runWith } from './fake-store.js';
 
 const ago = (seconds) => new Date(Date.now() - seconds * 1000).toISOString();
 
@@ -39,15 +46,18 @@ function harness({ dispatch = {}, board = 'default', host = 'test-host', root: g
     requireBoard() { return this; },
   };
   const restore = gh.install();
+  const store = new FakeStore({ board, host });
+  const restoreStore = store.install(ctx);
   const logs = [];
   return {
     gh,
+    store,
     ctx,
     root,
     logs,
     log: () => logs.join('\n'),
     tick: (opts = {}) => tick(ctx, { log: (m) => logs.push(m), ...opts }),
-    cleanup: () => { restore(); fs.rmSync(root, { recursive: true, force: true }); },
+    cleanup: () => { restoreStore(); restore(); fs.rmSync(root, { recursive: true, force: true }); },
   };
 }
 
@@ -102,37 +112,37 @@ function bgHarness({ jobs = [], records = {}, dispatch = {} } = {}) {
 test('todo → ready only when every blocker closed as completed', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, title: 'shipped', status: 'done', state: 'CLOSED', stateReason: 'COMPLETED' }));
-  h.gh.addIssue(kbIssue({ number: 2, title: 'dropped', status: 'archived', state: 'CLOSED', stateReason: 'NOT_PLANNED' }));
-  h.gh.addIssue(kbIssue({ number: 3, status: 'todo', blockedBy: [1] }));
-  h.gh.addIssue(kbIssue({ number: 4, status: 'todo', blockedBy: [1, 2] }));
-  h.gh.addIssue(kbIssue({ number: 5, status: 'todo', blockedBy: [{ number: 99, state: 'OPEN' }] }));
+  h.store.addIssue(kbIssue({ number: 1, title: 'shipped', status: 'done', state: 'CLOSED', stateReason: 'COMPLETED' }));
+  h.store.addIssue(kbIssue({ number: 2, title: 'dropped', status: 'archived', state: 'CLOSED', stateReason: 'NOT_PLANNED' }));
+  h.store.addIssue(kbIssue({ number: 3, status: 'todo', blockedBy: [1] }));
+  h.store.addIssue(kbIssue({ number: 4, status: 'todo', blockedBy: [1, 2] }));
+  h.store.addIssue(kbIssue({ number: 5, status: 'todo', blockedBy: [{ number: 99, state: 'OPEN' }] }));
 
   const s = await h.tick({ max: 0 }); // no slot: promotion must not depend on capacity
 
   assert.deepEqual(s.promoted, [3]);
-  assert.equal(h.gh.statusOf(3), 'ready');
-  assert.equal(h.gh.statusOf(4), 'todo'); // NOT_PLANNED is not "done"
-  assert.equal(h.gh.statusOf(5), 'todo');
+  assert.equal(h.store.statusOf(3), 'ready');
+  assert.equal(h.store.statusOf(4), 'todo'); // NOT_PLANNED is not "done"
+  assert.equal(h.store.statusOf(5), 'todo');
   assert.match(h.log(), /#3: todo → ready/);
 });
 
 test('a scheduled task is not promoted before its time', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'todo', kb: { scheduled_at: ago(-3600) } }));
-  h.gh.addIssue(kbIssue({ number: 2, status: 'todo', kb: { scheduled_at: ago(3600) } }));
+  h.store.addIssue(kbIssue({ number: 1, status: 'todo', kb: { scheduled_at: ago(-3600) } }));
+  h.store.addIssue(kbIssue({ number: 2, status: 'todo', kb: { scheduled_at: ago(3600) } }));
 
   const s = await h.tick({ max: 0 });
 
   assert.deepEqual(s.promoted, [2]);
-  assert.equal(h.gh.statusOf(1), 'todo');
+  assert.equal(h.store.statusOf(1), 'todo');
 });
 
 test('a ready task is claimed once: ref, run comment, running label, worker spawned', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
 
   const s = await h.tick();
 
@@ -140,9 +150,9 @@ test('a ready task is claimed once: ref, run comment, running label, worker spaw
   assert.equal(s.claimed[0].number, 7);
   assert.equal(s.claimed[0].attempt, 1);
   assert.ok(s.claimed[0].pid > 0, 'the stub worker got a pid');
-  assert.equal(h.gh.statusOf(7), 'running');
-  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/7/1']);
-  const run = h.gh.runOf(7);
+  assert.equal(h.store.statusOf(7), 'running');
+  assert.deepEqual(await h.store.locks(), ['7/1']);
+  const run = h.store.runOf(7);
   assert.equal(run.attempts.length, 1);
   assert.equal(run.attempts[0].host, 'test-host');
   assert.equal(run.attempts[0].profile, 'claude');
@@ -150,72 +160,70 @@ test('a ready task is claimed once: ref, run comment, running label, worker spaw
   assert.equal(run.attempts[0].log, '.kanban/logs/7-1.log');
   assert.ok(fs.existsSync(path.join(h.root, '.kanban', 'logs', '7-1.log')));
   // one run comment, created then updated — never a second create
-  assert.equal(h.gh.callsMatching('POST', /issues\/7\/comments$/).length, 1);
+  assert.equal(h.store.issues.get(7).comments.length, 1, 'one run record, updated in place — never a second create');
 });
 
 test('claim held elsewhere: skipped, and nothing on the issue is touched', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
   // another dispatcher won the ref between our board read and our POST
-  h.gh.fail({ method: 'POST', path: 'git/refs' }, { status: 422, message: 'Reference already exists' });
+  h.store.fail('claim', { result: 'held' });
 
   const s = await h.tick();
 
   assert.deepEqual(s.held, [7]);
   assert.equal(s.claimed.length, 0);
-  assert.equal(h.gh.statusOf(7), 'ready');
-  assert.equal(h.gh.callsMatching('POST', /issues\/7\/labels/).length, 0);
-  assert.equal(h.gh.issues.get(7).comments.length, 0);
+  assert.equal(h.store.statusOf(7), 'ready');
+  assert.deepEqual(h.store.writesTo(7), [], 'nothing on the card was touched');
   assert.match(h.log(), /#7: lock held elsewhere/);
 });
 
 test('claim result unknown (503): back off for this tick, no label change', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude' }));
-  h.gh.fail({ method: 'POST', path: 'git/refs' }, { status: 503, message: 'Server Error' });
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude' }));
+  h.store.fail('claim', { kind: 'server', message: 'the store could not say whether the claim was made' });
 
   const s = await h.tick();
 
   // #7 backs off; a 5xx is not fatal for the tick, so #8 is still claimed
   assert.equal(s.held.length, 0);
   assert.deepEqual(s.claimed.map((c) => c.number), [8]);
-  assert.equal(h.gh.statusOf(7), 'ready');
-  assert.equal(h.gh.callsMatching('POST', /issues\/7\/labels/).length, 0);
-  assert.equal(h.gh.issues.get(7).comments.length, 0);
-  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/8/1']);
+  assert.equal(h.store.statusOf(7), 'ready');
+  assert.deepEqual(h.store.writesTo(7), [], 'nothing on the card was touched');
+  assert.deepEqual(await h.store.locks(), ['8/1']);
   assert.match(h.log(), /#7: claim result unknown \(server:/);
 });
 
 test('an auth failure on claim stops the tick instead of burning the rest of the board', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude' }));
-  h.gh.fail({ method: 'POST', path: 'git/refs' }, { status: 401, message: 'Bad credentials', times: 2 });
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude' }));
+  h.store.fail('claim', { kind: 'auth', message: 'Bad credentials', times: 2 });
 
   const s = await h.tick();
 
   assert.equal(s.claimed.length, 0);
-  assert.deepEqual(h.gh.lockRefs(), []);
-  assert.equal(h.gh.statusOf(8), 'ready');
+  assert.deepEqual(await h.store.locks(), []);
+  assert.equal(h.store.statusOf(8), 'ready');
 });
 
 test('a stale heartbeat is reclaimed: lock released, attempt closed, back to ready', async (t) => {
   const h = harness({ dispatch: { stale_after: 60 } });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'other-host', started_at: ago(600), heartbeat_at: ago(600), pid: 4_000_000 }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
-  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.store.hold(7, 1);
 
   const s = await h.tick({ max: 0 }); // no slot, so the freed task is not immediately re-claimed
 
   assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'reclaimed' }]);
-  assert.equal(h.gh.statusOf(7), 'ready');
-  assert.deepEqual(h.gh.lockRefs(), []);
-  const saved = h.gh.runOf(7);
+  assert.equal(h.store.statusOf(7), 'ready');
+  assert.deepEqual(await h.store.locks(), []);
+  const saved = h.store.runOf(7);
   assert.equal(saved.failures, 1);
   assert.equal(saved.attempts[0].outcome, 'reclaimed');
   assert.match(saved.attempts[0].reason, /^reclaimed after \d+s$/);
@@ -228,15 +236,15 @@ test('a ref-CAS beat keeps a worker alive: the run comment is stale, the lock re
   t.after(h.cleanup);
   // a CAS heartbeat writes nothing to the run comment, so heartbeat_at is as old as the claim
   const run = runWith([{ attempt: 1, host: 'other-host', started_at: ago(3600), heartbeat_at: ago(3600), lock_sha: 'a'.repeat(40) }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
-  h.gh.beat(7, 1, ago(20));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.store.beat(7, 1, ago(20));
 
   const s = await h.tick({ max: 0 });
 
   assert.deepEqual(s.reclaimed, []);
-  assert.equal(h.gh.statusOf(7), 'running');
-  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/7/1'], 'the lock is left alone');
-  assert.equal(h.gh.callsMatching('PATCH', /issues\/comments/).length, 0, 'and the run record is not rewritten');
+  assert.equal(h.store.statusOf(7), 'running');
+  assert.deepEqual(await h.store.locks(), ['7/1'], 'the lock is left alone');
+  assert.deepEqual(h.store.writes('saveRun'), [], 'and the run record is not rewritten');
   assert.match(h.log(), /#7: attempt 1 beat on refs\/kb\/locks\/7\/1 \d+s ago — alive/);
 });
 
@@ -244,22 +252,22 @@ test('a ref-CAS worker whose last beat is old is reclaimed like any other', asyn
   const h = harness({ dispatch: { stale_after: 60 } });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'other-host', started_at: ago(3600), heartbeat_at: ago(3600), lock_sha: 'a'.repeat(40) }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
-  h.gh.beat(7, 1, ago(900));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.store.beat(7, 1, ago(900));
 
   const s = await h.tick({ max: 0 });
 
   assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'reclaimed' }]);
-  assert.equal(h.gh.statusOf(7), 'ready');
-  assert.deepEqual(h.gh.lockRefs(), []);
+  assert.equal(h.store.statusOf(7), 'ready');
+  assert.deepEqual(await h.store.locks(), []);
 });
 
 test('a fresh lock ref does not save a worker whose process is gone', async (t) => {
   const h = harness({ dispatch: { stale_after: 60 } });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(600), heartbeat_at: ago(5), pid: 4_000_000 }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
-  h.gh.beat(7, 1, ago(1));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.store.beat(7, 1, ago(1));
 
   const s = await h.tick({ max: 0 });
 
@@ -272,17 +280,17 @@ test('a hand-claimed attempt is not a crashed spawn: it has no pid and never wil
   // `hkb claim 7` with no --spawn: this host, no pid, no job — a human (or an agent they started)
   // is working it in their own terminal, and the CAS heartbeat leaves the run comment untouched
   const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(7200), heartbeat_at: ago(7200), lock_sha: 'a'.repeat(40), manual: true }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
-  h.gh.beat(7, 1, ago(120));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.store.beat(7, 1, ago(120));
 
   const first = await h.tick({ max: 0 });
   const second = await h.tick({ max: 0 }); // the 180s rule used to fire on every tick, forever
 
   assert.deepEqual(first.reclaimed, []);
   assert.deepEqual(second.reclaimed, []);
-  assert.equal(h.gh.statusOf(7), 'running');
-  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/7/1'], 'the lock the worker beats on survives');
-  assert.equal(h.gh.callsMatching('PATCH', /issues\/comments/).length, 0, 'and its run record is not rewritten');
+  assert.equal(h.store.statusOf(7), 'running');
+  assert.deepEqual(await h.store.locks(), ['7/1'], 'the lock the worker beats on survives');
+  assert.deepEqual(h.store.writes('saveRun'), [], 'and its run record is not rewritten');
   assert.match(h.log(), /#7: attempt 1 beat on refs\/kb\/locks\/7\/1 \d+s ago — alive/);
 });
 
@@ -290,37 +298,39 @@ test('a hand-claimed attempt that stops beating is reclaimed after stale_after',
   const h = harness({ dispatch: { stale_after: 3600 } });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(9000), heartbeat_at: ago(9000), lock_sha: 'a'.repeat(40), manual: true }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
-  h.gh.beat(7, 1, ago(5400)); // last beat 90 minutes ago: past stale_after, whoever it was is gone
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.store.beat(7, 1, ago(5400)); // last beat 90 minutes ago: past stale_after, whoever it was is gone
 
   const s = await h.tick({ max: 0 });
 
   assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'reclaimed' }], 'stale_after, not the no-handle rule');
-  assert.equal(h.gh.statusOf(7), 'ready');
-  assert.deepEqual(h.gh.lockRefs(), []);
+  assert.equal(h.store.statusOf(7), 'ready');
+  assert.deepEqual(await h.store.locks(), []);
 });
 
-test('a claim records the sha that starts the worker\'s beat chain', async (t) => {
+test('a claim records the token that starts the worker\'s beat chain', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
 
   await h.tick();
 
-  assert.equal(h.gh.runOf(7).attempts[0].lock_sha, h.gh.refs.get('refs/heads/main'));
-  assert.equal(h.gh.refs.get('refs/kb/locks/7/1'), h.gh.runOf(7).attempts[0].lock_sha);
+  // The row records what the store's own claim handed back — the value the first heartbeat leases
+  // on. It is a sha on GitHub and a row token on a store that keeps its claims in a table; what the
+  // dispatcher must not do is invent one of its own.
+  assert.equal(h.store.runOf(7).attempts[0].lock_sha, h.store.lockOf(7, 1).token);
 });
 
 test('a task past max_runtime is timed_out, not merely reclaimed', async (t) => {
   const h = harness({ dispatch: { stale_after: 60 } });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'other-host', started_at: ago(600), heartbeat_at: ago(1) }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 120 }, run }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 120 }, run }));
 
   const s = await h.tick({ max: 0 });
 
   assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'timed_out' }]);
-  assert.equal(h.gh.runOf(7).attempts[0].outcome, 'timed_out');
+  assert.equal(h.store.runOf(7).attempts[0].outcome, 'timed_out');
 });
 
 // #155: a pid-mode attempt the tick writes off as crashed/timed_out has a log of its own, so it
@@ -335,13 +345,13 @@ test('a crashed pid-mode attempt gets session and terminal_reason backfilled fro
     terminal_reason: 'max_turns',
   }) + '\n');
   const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(600), heartbeat_at: ago(5), pid: 4_000_000, log: logRel }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
-  h.gh.beat(7, 1, ago(1));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.store.beat(7, 1, ago(1));
 
   const s = await h.tick({ max: 0 });
 
   assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'crashed' }]);
-  const a = h.gh.runOf(7).attempts[0];
+  const a = h.store.runOf(7).attempts[0];
   assert.equal(a.session_id, 'sid-crashed');
   assert.equal(a.terminal_reason, 'max_turns');
   assert.equal(a.total_cost_usd, 0.12);
@@ -365,13 +375,13 @@ test('a crashed pid-mode attempt gets denied_tools backfilled from its log AND i
     permission_denials: [{ tool_name: 'WebFetch' }],
   }) + '\n');
   const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(600), heartbeat_at: ago(5), pid: 4_000_000, log: logRel }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
-  h.gh.beat(7, 1, ago(1));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.store.beat(7, 1, ago(1));
 
   const s = await h.tick({ max: 0 });
 
   assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'crashed' }]);
-  const a = h.gh.runOf(7).attempts[0];
+  const a = h.store.runOf(7).attempts[0];
   assert.deepEqual(a.denied_tools, [
     { tool: 'WebFetch', kind: 'permission-rule', count: 1, first_seen: null },
     { tool: 'Bash', kind: 'worktree-guard', count: 1, first_seen: '2026-08-28T09:10:00Z' },
@@ -389,16 +399,16 @@ test('failures past max_retries give up: blocked + kb:needs-human, no retry', as
     ],
     { failures: 2 },
   );
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_retries: 2, max_runtime: 86_400 }, run }));
-  h.gh.refs.set('refs/kb/locks/7/3', 'f'.repeat(40));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_retries: 2, max_runtime: 86_400 }, run }));
+  h.store.hold(7, 3);
 
   const s = await h.tick();
 
   assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'gave_up' }]);
-  assert.equal(h.gh.statusOf(7), 'blocked');
-  assert.ok(h.gh.labelsOf(7).includes(L.needsHuman));
-  assert.deepEqual(h.gh.lockRefs(), []);
-  const saved = h.gh.runOf(7);
+  assert.equal(h.store.statusOf(7), 'blocked');
+  assert.ok(h.store.labelsOf(7).includes(L.needsHuman));
+  assert.deepEqual(await h.store.locks(), []);
+  const saved = h.store.runOf(7);
   assert.equal(saved.failures, 3);
   assert.equal(saved.attempts[2].outcome, 'reclaimed');
   const last = saved.attempts[3];
@@ -415,20 +425,20 @@ test('protocol_violation with an open PR: the work landed, so the reason is reco
   });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'test-host', bg: true, job: 'j7', wt: 'kb-7-1', started_at: ago(120), heartbeat_at: ago(5) }]);
-  h.gh.addIssue(kbIssue({
+  h.store.addIssue(kbIssue({
     number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run,
     prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }],
   }));
-  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+  h.store.hold(7, 1);
 
   const s = await h.tick();
 
   assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'protocol_violation' }]);
-  const saved = h.gh.runOf(7);
+  const saved = h.store.runOf(7);
   assert.equal(saved.attempts[0].outcome, 'protocol_violation');
   assert.equal(saved.attempts[0].pr, 42, 'the row names the PR the work landed on');
   assert.equal(saved.failures, 0, 'no verb but an open PR is not a failure — nothing went wrong twice');
-  assert.equal(h.gh.statusOf(7), 'ready'); // the active_pr guard sends it to review on the next tick
+  assert.equal(h.store.statusOf(7), 'ready'); // the active_pr guard sends it to review on the next tick
 });
 
 test('protocol_violation with no PR: nothing to show, so it counts against the retry budget', async (t) => {
@@ -437,13 +447,13 @@ test('protocol_violation with no PR: nothing to show, so it counts against the r
   });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'test-host', bg: true, job: 'j7', wt: 'kb-7-1', started_at: ago(120), heartbeat_at: ago(5) }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
-  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.store.hold(7, 1);
 
   const s = await h.tick();
 
   assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'protocol_violation' }]);
-  const saved = h.gh.runOf(7);
+  const saved = h.store.runOf(7);
   assert.equal(saved.attempts[0].outcome, 'protocol_violation');
   assert.equal(saved.attempts[0].pr, undefined, 'no PR to name');
   assert.equal(saved.failures, 1);
@@ -452,15 +462,15 @@ test('protocol_violation with no PR: nothing to show, so it counts against the r
 test('active_pr guard: an open PR sends a ready task to review, even with no slot', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', prs: [{ number: 42, state: 'OPEN', isDraft: true }] }));
-  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', prs: [{ number: 41, state: 'MERGED', merged: true }] }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', prs: [{ number: 42, state: 'OPEN', isDraft: true }] }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', prs: [{ number: 41, state: 'MERGED', merged: true }] }));
 
   const s = await h.tick({ max: 0 });
 
   assert.deepEqual(s.guarded, [{ number: 7, guard: 'active_pr', pr: 42 }]);
-  assert.equal(h.gh.statusOf(7), 'review');
-  assert.equal(h.gh.statusOf(8), 'ready'); // a merged PR is not a reason to wait
-  assert.deepEqual(h.gh.lockRefs(), []);
+  assert.equal(h.store.statusOf(7), 'review');
+  assert.equal(h.store.statusOf(8), 'ready'); // a merged PR is not a reason to wait
+  assert.deepEqual(await h.store.locks(), []);
   assert.match(h.log(), /#7: open PR #42 → review \(active_pr guard\)/);
 });
 
@@ -512,18 +522,18 @@ test('a card sent back by the reviewer is claimed, not guarded, and the attempt 
     { attempt: 1, started_at: ago(900), ended_at: ago(600), outcome: 'review_requested', summary: 'done', pr: 42 },
     { attempt: 2, profile: 'reviewer', started_at: ago(30), ended_at: ago(30), outcome: 'changes_requested', reason: 'rename the flag', synthetic: true },
   ]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', isDraft: true, headRefName: 'worktree-kb-7-1' }] }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', isDraft: true, headRefName: 'worktree-kb-7-1' }] }));
   // the ordinary case, side by side: an open PR with no reviewer row is still parked in review
-  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', prs: [{ number: 43, state: 'OPEN', isDraft: true }] }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', prs: [{ number: 43, state: 'OPEN', isDraft: true }] }));
 
   const s = await h.tick();
 
   assert.deepEqual(s.guarded, [{ number: 8, guard: 'active_pr', pr: 43 }]);
-  assert.equal(h.gh.statusOf(8), 'review');
+  assert.equal(h.store.statusOf(8), 'review');
   assert.deepEqual(s.claimed.map((c) => c.number), [7]);
   assert.equal(s.claimed[0].continues_pr, 42);
-  assert.equal(h.gh.statusOf(7), 'running');
-  const last = h.gh.runOf(7).attempts.at(-1);
+  assert.equal(h.store.statusOf(7), 'running');
+  const last = h.store.runOf(7).attempts.at(-1);
   assert.equal(last.attempt, 3);
   assert.equal(last.continues_pr, 42, 'the run record says which PR this attempt continues');
   assert.match(h.log(), /#7: claimed attempt 3 .*continuing PR #42/);
@@ -536,12 +546,12 @@ test('a claim that could not take the PR branch still runs, and says so', async 
     { attempt: 1, ended_at: ago(600), outcome: 'review_requested' },
     { attempt: 2, profile: 'reviewer', ended_at: ago(30), outcome: 'changes_requested', synthetic: true },
   ]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
 
   const s = await h.tick();
 
   assert.deepEqual(s.claimed.map((c) => c.number), [7]);
-  const last = h.gh.runOf(7).attempts.at(-1);
+  const last = h.store.runOf(7).attempts.at(-1);
   assert.equal(last.continues_pr, 42);
   assert.equal(last.continues_branch, undefined, 'no branch was checked out, so the row does not claim one');
   assert.match(h.log(), /continuing PR #42 from a fresh worktree \(.*\) — the brief says which PR to push to/);
@@ -566,7 +576,7 @@ test('the continuation runs in a worktree on the PR\'s own branch', async (t) =>
     { attempt: 1, ended_at: ago(600), outcome: 'review_requested', pr: 42 },
     { attempt: 2, profile: 'reviewer', ended_at: ago(30), outcome: 'changes_requested', synthetic: true },
   ]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
 
   const s = await h.tick();
 
@@ -575,7 +585,7 @@ test('the continuation runs in a worktree on the PR\'s own branch', async (t) =>
   assert.ok(fs.existsSync(path.join(dir, '.git')), 'attempt 3 got a checkout of its own');
   assert.equal(spawnSync('git', ['branch', '--show-current'], { cwd: dir, encoding: 'utf8' }).stdout.trim(), 'worktree-kb-7-1');
   assert.ok(!fs.existsSync(path.join(root, worktreePath('kb-7-1'), '.git')), 'the ended attempt\'s checkout was freed to release the branch');
-  const last = h.gh.runOf(7).attempts.at(-1);
+  const last = h.store.runOf(7).attempts.at(-1);
   assert.equal(last.continues_pr, 42);
   assert.equal(last.continues_branch, 'worktree-kb-7-1');
   assert.equal(last.wt, 'kb-7-3');
@@ -620,14 +630,14 @@ test('a continued checkout is fast-forwarded to a branch a human pushed to since
     { attempt: 1, ended_at: ago(600), outcome: 'review_requested', pr: 42 },
     { attempt: 2, profile: 'reviewer', ended_at: ago(30), outcome: 'changes_requested', synthetic: true },
   ]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
 
   const s = await h.tick();
 
   assert.deepEqual(s.claimed.map((c) => c.number), [7]);
   const dir = path.join(root, worktreePath('kb-7-3'));
   assert.equal(git(dir, 'rev-parse', 'HEAD'), humanHead, 'the checkout was fast-forwarded to the branch\'s remote head');
-  const last = h.gh.runOf(7).attempts.at(-1);
+  const last = h.store.runOf(7).attempts.at(-1);
   assert.equal(last.continues_branch, 'worktree-kb-7-1');
   assert.equal(last.continues_branch_stale, undefined, 'a clean fast-forward has nothing to report');
   // an ordinary push from here must succeed — nothing to push, since the checkout is already at the head
@@ -655,12 +665,12 @@ test('a branch this host has never fetched is reported as nothing to catch up to
     { attempt: 1, ended_at: ago(600), outcome: 'review_requested', pr: 42 },
     { attempt: 2, profile: 'reviewer', ended_at: ago(30), outcome: 'changes_requested', synthetic: true },
   ]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
 
   const s = await h.tick();
 
   assert.deepEqual(s.claimed.map((c) => c.number), [7]);
-  const last = h.gh.runOf(7).attempts.at(-1);
+  const last = h.store.runOf(7).attempts.at(-1);
   assert.equal(last.continues_branch, 'worktree-kb-7-1');
   assert.match(last.continues_branch_stale, /no origin\/worktree-kb-7-1 ref to catch up to/);
 });
@@ -701,14 +711,14 @@ test('a checkout reused from a dead spawn is still caught up to the remote head'
     { attempt: 1, ended_at: ago(600), outcome: 'review_requested', pr: 42 },
     { attempt: 2, profile: 'reviewer', ended_at: ago(30), outcome: 'changes_requested', synthetic: true },
   ]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
 
   const s = await h.tick();
 
   assert.deepEqual(s.claimed.map((c) => c.number), [7]);
   const dir = path.join(root, worktreePath('kb-7-3'));
   assert.equal(git(dir, 'rev-parse', 'HEAD'), humanHead, 'the reused checkout was fetched and fast-forwarded too');
-  const last = h.gh.runOf(7).attempts.at(-1);
+  const last = h.store.runOf(7).attempts.at(-1);
   assert.equal(last.continues_branch_stale, undefined, 'a clean fast-forward has nothing to report');
 });
 
@@ -716,7 +726,7 @@ test('the review loop turns: request-changes → claim → finish, all on one PR
   const h = harness();
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, started_at: ago(900), ended_at: ago(600), outcome: 'review_requested', summary: 'ready', pr: 42 }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'review', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', isDraft: false, headRefName: 'worktree-kb-7-1' }] }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'review', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', isDraft: false, headRefName: 'worktree-kb-7-1' }] }));
 
   const sentBack = await requestChanges(h.ctx, 7, { reason: 'rename the flag' });
   assert.deepEqual(sentBack, { number: 7, status: 'ready', pr: 42, note: 'PR #42 stays open; the next attempt continues it' });
@@ -731,9 +741,9 @@ test('the review loop turns: request-changes → claim → finish, all on one PR
   assert.match(done.note, /^continued PR #42 —/);
 
   // one PR, three rows, and the result comment says the PR was continued rather than opened
-  assert.deepEqual(h.gh.runOf(7).attempts.map((a) => a.outcome), ['review_requested', 'changes_requested', 'completed']);
-  assert.equal(h.gh.issues.get(7).prs.length, 1);
-  const result = h.gh.issues.get(7).comments.map((c) => c.body).find((b) => b.startsWith(RESULT_MARKER));
+  assert.deepEqual(h.store.runOf(7).attempts.map((a) => a.outcome), ['review_requested', 'changes_requested', 'completed']);
+  assert.equal(h.store.issues.get(7).prs.length, 1);
+  const result = h.store.issues.get(7).comments.map((c) => c.body).find((b) => b.startsWith(RESULT_MARKER));
   assert.match(result, /\*\*PR:\*\* #42 — continued after changes requested, not reopened/);
 });
 
@@ -741,13 +751,13 @@ test('request-changes keeps the reviewer\'s note in full, unlike the other termi
   const h = harness();
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, started_at: ago(900), ended_at: ago(600), outcome: 'review_requested', summary: 'ready', pr: 42 }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'review', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', isDraft: false, headRefName: 'worktree-kb-7-1' }] }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'review', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', isDraft: false, headRefName: 'worktree-kb-7-1' }] }));
   const longReason = 'item 1: fix the retry loop. '.repeat(60).trim();
   assert.ok(longReason.length > 1500);
 
   await requestChanges(h.ctx, 7, { reason: longReason });
 
-  assert.equal(h.gh.runOf(7).attempts.at(-1).reason, longReason, 'the attempt row must not be truncated to 400 chars');
+  assert.equal(h.store.runOf(7).attempts.at(-1).reason, longReason, 'the attempt row must not be truncated to 400 chars');
 });
 
 // ---------- #195: a long-lived loop must not judge a card on a comments cache from an earlier tick ----------
@@ -756,13 +766,13 @@ test('a request-changes from another process between ticks is honoured, not boun
   const h = harness();
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, started_at: ago(900), ended_at: ago(600), outcome: 'review_requested', summary: 'ready', pr: 42 }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', isDraft: true, headRefName: 'worktree-kb-7-1' }] }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', isDraft: true, headRefName: 'worktree-kb-7-1' }] }));
 
   // tick 1: no changes_requested row yet, so the active_pr guard bounces #7 to review — and the
   // loop's ctx now has #7's comments (only the review_requested row) memoized.
   const s1 = await h.tick();
   assert.deepEqual(s1.guarded, [{ number: 7, guard: 'active_pr', pr: 42 }]);
-  assert.equal(h.gh.statusOf(7), 'review');
+  assert.equal(h.store.statusOf(7), 'review');
 
   // another process — a reviewer's own `hkb request-changes`, its own ctx and cache — sends it back.
   const otherCtx = { ...h.ctx, _cache: {}, caps: {} };
@@ -777,7 +787,7 @@ test('a request-changes from another process between ticks is honoured, not boun
   assert.deepEqual(s2.guarded, [], 'the changes_requested row written by another process must be seen');
   assert.deepEqual(s2.claimed.map((c) => c.number), [7]);
   assert.equal(s2.claimed[0].continues_pr, 42);
-  assert.equal(h.gh.statusOf(7), 'running');
+  assert.equal(h.store.statusOf(7), 'running');
 });
 
 test('withoutWorktreeFlag drops the harness\'s own checkout flag and nothing else', () => {
@@ -796,26 +806,26 @@ test('path_overlap guard: a ready task waits for the running task that owns its 
   const h = harness({ dispatch: { guards: { path_overlap: 'running' } } });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(30), heartbeat_at: ago(5), pid: process.pid }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
-  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
-  h.gh.addIssue(kbIssue({ number: 9, status: 'ready', agent: 'claude', kb: { paths: ['docs/readme.md'] } }));
-  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+  h.store.addIssue(kbIssue({ number: 9, status: 'ready', agent: 'claude', kb: { paths: ['docs/readme.md'] } }));
+  h.store.hold(7, 1);
 
   const s = await h.tick();
 
   assert.deepEqual(s.reclaimed, []); // the live worker is left alone
   assert.deepEqual(s.guarded, [{ number: 8, guard: 'path_overlap', collides_with: [{ number: 7, paths: ['src/'] }] }]);
-  assert.equal(h.gh.statusOf(8), 'ready');
+  assert.equal(h.store.statusOf(8), 'ready');
   assert.deepEqual(s.claimed.map((c) => c.number), [9]); // a disjoint path still goes
-  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/7/1', 'refs/kb/locks/9/1']);
+  assert.deepEqual(await h.store.locks(), ['7/1', '9/1']);
 });
 
 test('path_overlap guard: off by default on a manual board — both overlapping cards run', async (t) => {
   const h = harness(); // dispatch.merge.mode defaults to "manual"
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(30), heartbeat_at: ago(5), pid: process.pid }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
-  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
 
   const s = await h.tick();
 
@@ -826,8 +836,8 @@ test('path_overlap guard: off by default on a manual board — both overlapping 
 test('path_overlap guard: "unmerged" on an auto-merge board keys on review, not just running', async (t) => {
   const h = harness({ dispatch: { merge: { mode: 'auto' } } });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'review', agent: 'claude', kb: { paths: ['src/'] }, prs: [{ number: 42, state: 'OPEN', isDraft: false }] }));
-  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'review', agent: 'claude', kb: { paths: ['src/'] }, prs: [{ number: 42, state: 'OPEN', isDraft: false }] }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
 
   const s = await h.tick();
 
@@ -839,12 +849,12 @@ test('recent_success guard: a task that just completed is not immediately re-run
   const h = harness({ dispatch: { recent_success_window: 600 } });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(400), ended_at: ago(60), outcome: 'completed' }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run }));
 
   const s = await h.tick();
 
   assert.deepEqual(s.guarded, [{ number: 7, guard: 'recent_success' }]);
-  assert.deepEqual(h.gh.lockRefs(), []);
+  assert.deepEqual(await h.store.locks(), []);
 });
 
 test('claims are create-if-absent, and releasing twice is not an error', async (t) => {
@@ -898,8 +908,8 @@ test('a claude --bg launch gets no KB_* at all; a child-process launch keeps its
     },
   });
   t.after(() => { process.env.PATH = savedPath; h.cleanup(); fs.rmSync(dir, { recursive: true, force: true }); });
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude-p' }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude-p' }));
 
   await h.tick();
 
@@ -925,9 +935,9 @@ test('path_overlap guard: an idle no-job, no-pid attempt never holds its paths, 
   const h = harness({ dispatch: { guards: { path_overlap: 'running' } } });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(1800), heartbeat_at: ago(1800), lock_sha: 'a'.repeat(40), manual: true }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
-  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
-  h.gh.beat(7, 1, ago(1800));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+  h.store.beat(7, 1, ago(1800));
 
   const s = await h.tick();
 
@@ -944,9 +954,9 @@ test('path_overlap guard: a fresh lock-ref beat keeps a no-job, no-pid attempt h
   const h = harness({ dispatch: { guards: { path_overlap: 'running' } } });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(1800), heartbeat_at: ago(1800), lock_sha: 'a'.repeat(40), manual: true }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
-  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
-  h.gh.beat(7, 1, ago(30));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+  h.store.beat(7, 1, ago(30));
 
   const s = await h.tick();
 
@@ -963,9 +973,9 @@ test('path_overlap guard: a live pid holds its paths no matter how old its heart
   const h = harness({ dispatch: { guards: { path_overlap: 'running' } } });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(1800), heartbeat_at: ago(1800), pid: process.pid }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
-  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
-  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+  h.store.hold(7, 1);
 
   const s = await h.tick();
 
@@ -981,8 +991,8 @@ test('path_overlap guard: a dry run never silences the real loop\'s idle log lin
   const h = harness({ dispatch: { guards: { path_overlap: 'running' } } });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(1800), heartbeat_at: ago(1800), lock_sha: 'a'.repeat(40), manual: true }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
-  h.gh.beat(7, 1, ago(1800));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
+  h.store.beat(7, 1, ago(1800));
 
   await h.tick({ dryRun: true });
   const before = h.logs.length;
@@ -1005,9 +1015,9 @@ test('path_overlap guard: a live bg job holds its paths no matter how old its he
   });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'test-host', bg: true, job: 'j7', wt: 'kb-7-1', started_at: ago(1800), heartbeat_at: ago(1800) }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'], max_runtime: 86_400 }, run }));
-  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
-  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'], max_runtime: 86_400 }, run }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+  h.store.hold(7, 1);
 
   const s = await h.tick();
 
@@ -1023,9 +1033,9 @@ test('path_overlap guard: a bg job whose turn ended never holds its paths, even 
   });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'test-host', bg: true, job: 'j7', wt: 'kb-7-1', started_at: ago(120), heartbeat_at: ago(5) }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'], max_runtime: 86_400 }, run }));
-  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
-  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'], max_runtime: 86_400 }, run }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+  h.store.hold(7, 1);
 
   const s = await h.tick();
 
@@ -1039,8 +1049,8 @@ test('path_overlap guard: a bg job whose turn ended never holds its paths, even 
 test('path_overlap guard: "unmerged" stops guarding once the holder\'s PR is merged', async (t) => {
   const h = harness({ dispatch: { merge: { mode: 'auto' } } });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', kb: { paths: ['src/'] } }));
-  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', kb: { paths: ['src/'] } }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
 
   const s = await h.tick();
 
@@ -1051,8 +1061,8 @@ test('path_overlap guard: "unmerged" stops guarding once the holder\'s PR is mer
 test('path_overlap guard: two overlapping ready cards are both claimed in one tick on a manual board', async (t) => {
   const h = harness(); // manual is the default merge.mode, so path_overlap defaults to "off"
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', kb: { paths: ['src/model.js'] } }));
-  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/model.js', 'src/dispatch.js'] } }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', kb: { paths: ['src/model.js'] } }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/model.js', 'src/dispatch.js'] } }));
 
   const s = await h.tick();
 
@@ -1064,8 +1074,8 @@ test('dry-run names the card and paths a guarded candidate collides with', async
   const h = harness({ dispatch: { guards: { path_overlap: 'running' } } });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(30), heartbeat_at: ago(5), pid: process.pid }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
-  h.gh.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { paths: ['src/'] }, run }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'ready', agent: 'claude', kb: { paths: ['src/gh.js'] } }));
 
   const s = await h.tick({ dryRun: true });
 
@@ -1115,31 +1125,31 @@ const withTrack = () => ({
 test('a root nobody adopted is dispatched as one track, and its children are left to it', async (t) => {
   const h = harness({ profiles: withTrack() });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 2, status: 'ready', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 3, status: 'todo', agent: 'claude', blockedBy: [1, 2] }));
+  h.store.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 2, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 3, status: 'todo', agent: 'claude', blockedBy: [1, 2] }));
 
   const s = await h.tick();
 
   assert.deepEqual(s.tracks.map((x) => [x.root, x.ok, x.mode, x.profile, x.nodes]), [[3, true, 'inferred', 'claude-track', [1, 2]]]);
   assert.deepEqual(s.claimed, [], 'both leaves belong to the track: no cold session for either');
   assert.deepEqual(s.skipped.map((x) => x.why), ['held for track #3', 'held for track #3']);
-  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/3/1'], 'one lock: the root');
-  assert.equal(h.gh.statusOf(3), 'running');
+  assert.deepEqual(await h.store.locks(), ['3/1'], 'one lock: the root');
+  assert.equal(h.store.statusOf(3), 'running');
 });
 
 test('kb:no-track sends the same graph back to node dispatch, one cold session per leaf', async (t) => {
   const h = harness({ profiles: withTrack() });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 2, status: 'ready', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 3, status: 'todo', agent: 'claude', labels: [L.noTrack], blockedBy: [1, 2] }));
+  h.store.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 2, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 3, status: 'todo', agent: 'claude', labels: [L.noTrack], blockedBy: [1, 2] }));
 
   const s = await h.tick();
 
   assert.deepEqual(s.tracks, []);
   assert.deepEqual(s.claimed.map((c) => [c.number, c.profile]), [[1, 'claude'], [2, 'claude']]);
-  assert.equal(h.gh.statusOf(3), 'todo');
+  assert.equal(h.store.statusOf(3), 'todo');
 });
 
 test('a running track counts against the track profile\'s cap, not against its card\'s label', async (t) => {
@@ -1147,37 +1157,35 @@ test('a running track counts against the track profile\'s cap, not against its c
   t.after(h.cleanup);
   // #3 is already running its inferred track over #1; #6 is a second root that would like one too
   const alive = runWith([{ attempt: 1, profile: 'claude-track', host: 'test-host', started_at: ago(60), heartbeat_at: ago(5), pid: process.pid, track: true, track_mode: 'inferred', track_nodes: [1] }]);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 3, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, blockedBy: [1], run: alive }));
-  h.gh.refs.set('refs/kb/locks/3/1', 'a'.repeat(40));
-  h.gh.addIssue(kbIssue({ number: 5, status: 'ready', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 6, status: 'todo', agent: 'claude', blockedBy: [5] }));
+  h.store.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 3, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, blockedBy: [1], run: alive }));
+  h.store.hold(3, 1);
+  h.store.addIssue(kbIssue({ number: 5, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 6, status: 'todo', agent: 'claude', blockedBy: [5] }));
 
   const s = await h.tick();
 
   assert.deepEqual(s.tracks.map((x) => [x.root, x.ok, x.why]), [[6, false, 'profile claude-track at cap']]);
   // and the refusal is the ordinary fallback: #5 goes out as a cold node rather than waiting
   assert.deepEqual(s.claimed.map((c) => [c.number, c.profile]), [[5, 'claude']]);
-  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/3/1', 'refs/kb/locks/5/1']);
+  assert.deepEqual(await h.store.locks(), ['3/1', '5/1']);
 });
 
 test('a dry run reports what it would do and writes nothing', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED' }));
-  h.gh.addIssue(kbIssue({ number: 2, status: 'todo', blockedBy: [1] }));
-  h.gh.addIssue(kbIssue({ number: 3, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 1, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED' }));
+  h.store.addIssue(kbIssue({ number: 2, status: 'todo', blockedBy: [1] }));
+  h.store.addIssue(kbIssue({ number: 3, status: 'ready', agent: 'claude' }));
 
   const s = await h.tick({ dryRun: true });
 
   assert.deepEqual(s.promoted, [2]);
   assert.deepEqual(s.claimed, [{ number: 3, attempt: 1, profile: 'claude', dry: true }]);
-  assert.equal(h.gh.statusOf(2), 'todo');
-  assert.equal(h.gh.statusOf(3), 'ready');
-  assert.deepEqual(h.gh.lockRefs(), []);
-  assert.equal(h.gh.callsMatching('POST').length, 0);
-  assert.equal(h.gh.callsMatching('PATCH').length, 0);
-  assert.equal(h.gh.callsMatching('DELETE').length, 0);
+  assert.equal(h.store.statusOf(2), 'todo');
+  assert.equal(h.store.statusOf(3), 'ready');
+  assert.deepEqual(await h.store.locks(), []);
+  assert.deepEqual(h.store.writes(), []);
 });
 
 // ---------- what a host will and will not launch ----------
@@ -1193,10 +1201,10 @@ test('--profiles claims only what this host launches, and sweeps the whole board
     },
   });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, title: 'shipped', status: 'done', state: 'CLOSED', stateReason: 'COMPLETED' }));
-  h.gh.addIssue(kbIssue({ number: 5, status: 'ready', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 6, status: 'ready', agent: 'claude-p' }));
-  h.gh.addIssue(kbIssue({ number: 7, status: 'todo', agent: 'claude-p', blockedBy: [1] }));
+  h.store.addIssue(kbIssue({ number: 1, title: 'shipped', status: 'done', state: 'CLOSED', stateReason: 'COMPLETED' }));
+  h.store.addIssue(kbIssue({ number: 5, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 6, status: 'ready', agent: 'claude-p' }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'todo', agent: 'claude-p', blockedBy: [1] }));
 
   const s = await h.tick({ profiles: ['claude'] });
 
@@ -1208,21 +1216,21 @@ test('--profiles claims only what this host launches, and sweeps the whole board
 test('a spawn that never starts a process fails the attempt and hands the card back to ready', async (t) => {
   const h = harness({ profiles: { claude: { mode: 'process', max_in_progress: 2, allowed_tools: [], launch: ['hkb-no-such-binary-38fa1c'] } } });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 5, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 5, status: 'ready', agent: 'claude' }));
 
   const s = await h.tick();
 
   assert.deepEqual(s.spawn_failed.map((x) => x.number), [5]);
-  assert.equal(h.gh.statusOf(5), 'ready', 'the card comes straight back, it was never worked');
-  assert.equal(h.gh.runOf(5).attempts[0].outcome, 'spawn_failed');
-  assert.deepEqual(await listLocks(h.ctx), [], 'and the claim is released');
+  assert.equal(h.store.statusOf(5), 'ready', 'the card comes straight back, it was never worked');
+  assert.equal(h.store.runOf(5).attempts[0].outcome, 'spawn_failed');
+  assert.deepEqual(await h.store.locks(), [], 'and the claim is released');
 });
 
 test('a card on a profile hkb removed is skipped, and the note names the re-point', async (t) => {
   const h = harness();
   t.after(h.cleanup);
   h.ctx.cfg.removed_profiles = [{ name: 'claude-action', why: 'the GitHub Actions runner was removed in ADR-006' }];
-  h.gh.addIssue(kbIssue({ number: 5, status: 'ready', agent: 'claude-action' }));
+  h.store.addIssue(kbIssue({ number: 5, status: 'ready', agent: 'claude-action' }));
 
   const s = await h.tick();
 
@@ -1236,13 +1244,13 @@ test('a card on a profile hkb removed is skipped, and the note names the re-poin
 test('a profile with no launch template is skipped, not claimed', async (t) => {
   const h = harness({ profiles: { claude: { mode: 'process', max_in_progress: 2, allowed_tools: [], launch: null } } });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 5, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 5, status: 'ready', agent: 'claude' }));
 
   const s = await h.tick();
 
   assert.deepEqual(s.claimed, []);
   assert.match(s.skipped.find((x) => x.number === 5).why, /no launch template/);
-  assert.equal(h.gh.statusOf(5), 'ready');
+  assert.equal(h.store.statusOf(5), 'ready');
 });
 
 test('a legacy remote attempt keeps its heartbeat-only liveness — no pid to look for', async (t) => {
@@ -1251,14 +1259,14 @@ test('a legacy remote attempt keeps its heartbeat-only liveness — no pid to lo
   // Written by an hkb that still had the Actions runner: this host claimed it, and there never was a
   // local process. The no-handle rule would call it crashed 180s in.
   const run = runWith([{ attempt: 1, profile: 'claude-action', host: 'test-host', remote: true, pid: null, started_at: ago(7200), heartbeat_at: ago(7200), lock_sha: 'a'.repeat(40) }]);
-  h.gh.addIssue(kbIssue({ number: 5, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
-  h.gh.beat(5, 1, ago(120));
+  h.store.addIssue(kbIssue({ number: 5, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.store.beat(5, 1, ago(120));
 
   const s = await h.tick({ max: 0 });
 
   assert.deepEqual(s.reclaimed, [], 'a fresh heartbeat is the whole check for a row with no local handle');
-  assert.equal(h.gh.statusOf(5), 'running');
-  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/5/1'], 'and its lock is left alone');
+  assert.equal(h.store.statusOf(5), 'running');
+  assert.deepEqual(await h.store.locks(), ['5/1'], 'and its lock is left alone');
 });
 
 // ---------- what the loop calls a tick worth pushing (docs/local-first.md §6.2) ----------
@@ -1289,14 +1297,13 @@ test('a tick whose lock listing failed spends no per-card ref read to make up fo
   const h = harness({ dispatch: { stale_after: 60 } });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'other-host', started_at: ago(3600), heartbeat_at: ago(3600), lock_sha: 'a'.repeat(40) }]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
-  h.gh.beat(7, 1, ago(900));
-  h.gh.fail({ path: '/git/matching-refs/kb/locks/' }, { status: 500, message: 'the lock listing is down' });
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.store.beat(7, 1, ago(900));
+  h.store.fail('listLocks', { message: 'the lock listing is down' });
 
-  const before = h.gh.callsMatching('GET', '/git/ref/').length;
   await h.tick({ max: 0 });
 
-  assert.equal(h.gh.callsMatching('GET', '/git/ref/').length, before,
+  assert.deepEqual(h.store.callsOf('lockBeatAt'), [],
     'no row in the listing means no token and nothing to read — not a lookup per running card');
   assert.match(h.log(), /lock listing failed/, 'and the tick says so out loud rather than quietly paying for it');
 });

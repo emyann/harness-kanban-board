@@ -106,6 +106,34 @@ export function storeKind(ctx) {
 export function localModule() { return import('./local.js'); }
 
 /**
+ * The store the seam hands out, when something has replaced it — `setTransport`'s counterpart for
+ * board state, and the only reason it exists is the test suite (`test/fake-store.js`).
+ *
+ * A test that asserts on *board behaviour* — "the lock was released", "nothing was written", "the
+ * run record says three attempts" — should not have to know which driver answered, and until this
+ * hook existed the only way to see those facts was to read the in-memory GitHub's REST log. That
+ * made 121 assertion sites depend on `src/store/github.js` staying alive (docs/local-first.md §11).
+ * With the override in place a test installs a `Store` and asserts on the interface instead.
+ *
+ * Production never sets it. It is deliberately *not* consulted by `storeKind`: what a board is kept
+ * in is still `.kanban/board.json` and nothing else, so a test that overrides the store does not
+ * also silently change what `hkb doctor`, `hkb gc` and `hkb init` say the board is.
+ * @type {((ctx: any) => any)|null}
+ */
+let storeOverride = null;
+
+/**
+ * Install `fn` as the store `openStore`/`openStoreReadOnly` return. Returns the restore function,
+ * the way `setTransport` (src/gh.js) does, so a test can `t.after(restore)`.
+ * @param {((ctx: any) => any)|null} fn
+ */
+export function setStore(fn) {
+  const previous = storeOverride;
+  storeOverride = fn || null;
+  return () => { storeOverride = previous; };
+}
+
+/**
  * The store for `ctx` — **one handle per context, for the life of that context**.
  *
  * The memo is not an optimisation, it is the fix for a class of bug this repo has already paid for
@@ -124,6 +152,7 @@ export function localModule() { return import('./local.js'); }
  * @returns {Promise<Store>}
  */
 export async function openStore(ctx) {
+  if (storeOverride) return storeOverride(ctx);
   const cacheable = !!ctx && typeof ctx === 'object';
   const held = cacheable ? ctx._store : null;
   if (held) {
@@ -152,6 +181,7 @@ export async function openStore(ctx) {
  * @returns {Promise<Store>}
  */
 export async function openStoreReadOnly(ctx) {
+  if (storeOverride) return storeOverride(ctx);
   if (storeKind(ctx) !== 'local') return openStore(ctx);
   const cacheable = !!ctx && typeof ctx === 'object';
   if (cacheable && ctx._storeRO) return ctx._storeRO;
