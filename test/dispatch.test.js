@@ -482,6 +482,43 @@ test('active_pr guard: an open PR sends a ready task to review, even with no slo
   assert.match(h.log(), /#7: open PR #42 → review \(active_pr guard\)/);
 });
 
+/**
+ * The whole join, end to end (#304's second Done-when).
+ *
+ * `reconcileDecision` is unit-tested against a hand-built listing in test/reconcile.test.js; this is
+ * the same claim made of the *tick*, through the forge double, so the listing is one the tick asked
+ * GitHub for rather than one a test wrote. It is what "a PR merged on a scratch repo moves its card
+ * to done on the next tick" means now that there is no issue for the PR to close: the merge is
+ * matched to the card by head branch (`kb-7-1`) and by nothing else.
+ */
+test('a merged PR moves its card to done on the next tick, found by its head branch alone', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.store.addIssue(kbIssue({
+    number: 7, status: 'review', agent: 'claude',
+    run: runWith([{ attempt: 1, outcome: 'review_requested', pr: 90, ended_at: ago(600) }]),
+  }));
+  // a card whose branch nobody merged, and a merged PR belonging to no card at all: neither moves
+  h.store.addIssue(kbIssue({ number: 8, status: 'review', agent: 'claude' }));
+  h.gh.addPull({ number: 90, head: 'kb-7-1', state: 'closed', merged: true, mergedAt: ago(60) });
+  h.gh.addPull({ number: 91, head: 'release/2.0', state: 'closed', merged: true, mergedAt: ago(60) });
+
+  const s = await h.tick({ max: 0 });
+
+  assert.deepEqual(s.reconciled.map((r) => ({ number: r.number, status: r.status })), [{ number: 7, status: 'done' }]);
+  assert.equal(h.store.statusOf(7), 'done');
+  assert.equal(h.store.stateOf(7).state, 'CLOSED');
+  assert.equal(h.store.runOf(7).attempts[0].outcome, 'review_requested', 'a closed attempt keeps its own outcome');
+  assert.equal(h.store.statusOf(8), 'review', 'a card with no merged branch is left where it is');
+  assert.match(h.log(), /#7: review → done \(PR #90 merged \(kb-7-1\)\)/);
+
+  // and it is idempotent: the second tick finds the same merged PR and has nothing to do with it
+  h.logs.length = 0;
+  const again = await h.tick({ max: 0 });
+  assert.deepEqual(again.reconciled, []);
+  assert.equal(h.store.statusOf(7), 'done');
+});
+
 // ---------- the active_pr guard and its one exemption (#153) ----------
 
 test('activePrGuard: only the reviewer\'s changes_requested row exempts an open PR', () => {
