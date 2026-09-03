@@ -497,6 +497,50 @@ export function serializeResultComment(res) {
   return lines.join('\n');
 }
 
+// ---------- blocker provenance ----------
+
+/**
+ * What a board's `blockedBy` lists actually mean, recorded on the array `fetchBoard` returns.
+ *
+ *   source  'graphql' (they rode the board query), 'rest' (one call per card), or null
+ *   filled  were they looked up at all
+ *   scope   'all' every card · 'open' every open card · 'waiting' only todo/blocked · 'none'
+ *
+ * A caller that cannot tell these apart reports "no blockers" for a card nobody asked about —
+ * a silently wrong answer, which is the one failure mode the values forbid.
+ */
+export function tagBlockers(tasks, meta) {
+  // non-enumerable: JSON.stringify, Object.keys and every spread of the board stay an array of tasks
+  Object.defineProperty(tasks, 'blockers', { value: Object.freeze(meta), enumerable: false, configurable: true });
+  return tasks;
+}
+
+
+
+/**
+ * How much of this board's `blockedBy` was actually looked up.
+ *
+ * `listTasks` hangs a `blockers` note on the array it returns — every driver does, and they mean the
+ * same thing: `source` is how the edges were read, `scope` is which cards were asked about. These two
+ * readers are pure, so they live here rather than beside a driver: an answer about *provenance* has to
+ * read the same whichever store produced the array.
+ */
+export function blockersOf(board) {
+  return board?.blockers || { source: null, filled: false, scope: 'none' };
+}
+
+/**
+ * Is this task's `blockedBy` a real answer, or was it simply never looked up? An empty list on a
+ * card outside the fill-in's scope means "unknown", never "no blockers".
+ */
+export function blockersKnown(board, task) {
+  const { scope } = blockersOf(board);
+  if (scope === 'all') return true;
+  if (scope === 'open') return String(task?.state || 'OPEN').toUpperCase() === 'OPEN';
+  if (scope === 'waiting') return task?.status === 'todo' || task?.status === 'blocked';
+  return false;
+}
+
 // ---------- readiness & guards ----------
 
 /** A blocker counts as done only when it is closed as completed (Hermes: parents `done`). */

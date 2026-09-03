@@ -4,8 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot, hkbOnPath, registerUserBoard, userBoardsFile, mainWorktree, runGit } from './board.js';
-import { ensureLabels, fetchBoard, addLabels } from './tasks.js';
 import { rest } from './gh.js';
+// `openStore` and not a driver: `hkb init` writes labels and imports issues through the same seam
+// every verb uses, so the board it has just created decides what those steps mean.
+import { openStore } from './store/index.js';
 import { L, STATUSES, parseSkillVersion, stripFrontmatter, insideRepo, worktreePath, hookEntry, hookSettings, mcpSplitApprovals, toolPosture } from './model.js';
 
 export const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -643,13 +645,10 @@ export function removedInitFlag(flags = {}) {
  * Which store this `init` sets the board up on. Pure, so the defaulting is a test rather than a
  * paragraph in the README.
  *
- * A **new** board is `github` — for now, and deliberately against docs/local-first.md §6.1, which
- * makes local the default. The local store is complete, but the *verbs* have not moved onto it yet:
- * `hkb create`, `hkb list` and the rest still reach board state through the GitHub driver (#304, track
- * C). Defaulting to local would therefore hand a new adopter a board `hkb create` cannot write — a
- * loud failure, but a failure — so the default stays where the verbs are until #304 lands, and
- * `--store local` is the opt-in for anyone who wants the branch today. **Flip this back the moment
- * #304 merges**; the line below and this paragraph are the whole change.
+ * A **new** board is local (docs/local-first.md §6.1): the cards live on the `kb-board` branch in
+ * this repository and the index beside them, so the board works with `gh` logged out, on a plane,
+ * and at no API cost. `--store github` keeps the old behaviour while the GitHub driver is still
+ * here (it goes in track C).
  *
  * An **existing** board never changes store by being re-inited: a board.json that already says one
  * keeps it, and one written before the key existed is `github`, which is what `storeKind` answers at
@@ -677,7 +676,7 @@ export function resolveStore(flags = {}, existing = null) {
     throw e;
   }
   if (existing) return existing.store === 'local' ? 'local' : 'github';
-  return 'github';
+  return 'local';
 }
 
 /**
@@ -1124,7 +1123,10 @@ export async function init(ctx, flags, log) {
   if (flags['no-labels']) {
     log(`skipped the ${labels.length} kb:* labels (--no-labels) — nothing was sent to ${repo.nameWithOwner}`);
   } else {
-    const created = await ensureLabels(ctx, labels);
+    // Through the seam, so a board whose labels are columns is not asked to create any: the local
+    // driver answers `[]` and this step costs nothing rather than writing kb:* labels onto a
+    // repository the board does not live in.
+    const created = await (await openStore(ctx)).ensureLabels(labels);
     log(created.length ? `created labels: ${created.join(', ')}` : 'labels already present');
   }
 
@@ -1214,11 +1216,12 @@ export async function init(ctx, flags, log) {
   //    has already run by the time we get here.
   if (flags.import && store === 'github') {
     const all = await rest('GET', `repos/${repo.nameWithOwner}/issues?state=open&per_page=100`);
-    const onBoard = new Set((await fetchBoard(ctx)).map((t) => t.number));
+    const boardStore = await openStore(ctx);
+    const onBoard = new Set((await boardStore.listTasks()).map((t) => t.number));
     let n = 0;
     for (const issue of all || []) {
       if (issue.pull_request || onBoard.has(issue.number)) continue;
-      await addLabels(ctx, { number: issue.number, labels: (issue.labels || []).map((l) => l.name) }, [L.board(board), L.status('triage')]);
+      await boardStore.addLabels({ number: issue.number, labels: (issue.labels || []).map((l) => l.name) }, [L.board(board), L.status('triage')]);
       n++;
     }
     log(`imported ${n} open issue(s) into triage on board "${board}"`);

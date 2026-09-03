@@ -248,6 +248,12 @@ export class LocalStore {
     return this._durable('body', Number(n), () => this.git.updateBody(n, body), { bytes: String(body ?? '').length });
   }
 
+  /** The machine block, kept as columns here — the write `hkb edit` and `hkb adopt` make. */
+  setKb(task, kb, bodyText = undefined) {
+    const n = numberOf(task);
+    return this._durable('body', n, () => this.git.setKb(task, kb, bodyText), { kb: Object.keys(kb || {}).sort() });
+  }
+
   setStatus(task, status, opts) {
     const n = numberOf(task);
     const from = this._was(n)?.status ?? null;
@@ -332,14 +338,51 @@ export class LocalStore {
 
   listNotes(n) { return this.git.listNotes(n); }
 
+  /**
+   * Labels are columns on a card here, so there is nothing to create before one can be applied and
+   * this answers with the empty list. The call stays the caller's: on GitHub a label that does not
+   * exist makes `addLabels` fail, and a verb must not have to know which store it is talking to.
+   */
+  ensureLabels() { return []; }
+
   // ---------- the live half ----------
 
   claim(n, k, opts = {}) { return this.index.claim(n, k, { host: this.host, ...opts }); }
   release(n, k) { return this.index.release(n, k); }
   listLocks() { return this.index.listLocks(); }
   lockBeatAt(n, k) { return this.index.lockBeatAt(n, k); }
-  heartbeat(n, k, expected) { return this.index.heartbeat(n, k, expected); }
+  /**
+   * The index's beat, widened to the §6.4 shape: `expected` and `detail` ride along so a caller can
+   * say *why* a beat could not be made before it falls back to the run record. The tier itself keeps
+   * the narrow `{result, token}` — the interface is this class's contract, not the index's.
+   */
+  heartbeat(n, k, expected) {
+    const r = this.index.heartbeat(n, k, expected);
+    return {
+      ...r,
+      expected: String(expected ?? ''),
+      detail: r.result === 'lost' ? 'the lease was rejected: this claim has been reclaimed' : '',
+    };
+  }
+  lockToken(n, k) { return this.index.lockToken(n, k); }
+  // The index *is* this host's local state, so the token to lease on and the authoritative token are
+  // one read — and the two methods that exist to reconcile them on GitHub have nothing to reconcile.
+  // They answer `true` (done, nothing to move) rather than `false`, which would read as a failure.
+  beatToken(n, k) { return this.index.lockToken(n, k); }
+  resyncBeat() { return true; }
+  dropBeat() { return true; }
   events(opts) { return this.index.events(opts); }
+
+  /**
+   * One card's history, out of the event log this store keeps — the same rows `events()` streams,
+   * narrowed to `n` and rendered in the four fields `hkb log` prints.
+   */
+  taskEvents(n) {
+    const want = Number(n);
+    return this.index.events({ limit: 5000 })
+      .filter((e) => e.number === want)
+      .map((e) => ({ at: e.at, kind: e.kind, detail: detailOf(e.payload), actor: e.payload?.host ?? null }));
+  }
   appendEvent(spec) { return this.index.appendEvent(spec); }
   getAttempt(n, k) { return this.index.getAttempt(n, k); }
   openAttempts() { return this.index.openAttempts(); }
@@ -693,6 +736,24 @@ export function gitTierFor(ctx, opts = {}) {
 /** Drop the memoized tiers for a context — `hkb init` creates the branch under its own feet. */
 export function forgetGitTiers(ctx) {
   if (ctx && typeof ctx === 'object') TIERS.delete(ctx);
+}
+
+/**
+ * A one-line rendering of an event's payload, for `taskEvents`. The log's payloads are small and
+ * differ per kind, so this says what happened without pretending every kind has the same fields.
+ * @param {any} payload
+ */
+function detailOf(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+  const p = /** @type {any} */ (payload);
+  if (p.to !== undefined) return p.from !== undefined && p.from !== null ? `${p.from} \u2192 ${p.to}` : String(p.to ?? '');
+  if (p.summary) return String(p.summary);
+  if (p.text) return String(p.text);
+  if (p.op) return p.k !== undefined ? `${p.op} attempt ${p.k}` : String(p.op);
+  // Only the keys that carry something: a payload whose fields are all null says nothing, and
+  // printing `attempt=null profile=null host=null` says it at length.
+  const keys = Object.keys(p).filter((k) => p[k] !== null && p[k] !== undefined);
+  return keys.length ? keys.map((k) => `${k}=${JSON.stringify(p[k])}`).join(' ').slice(0, 200) : '';
 }
 
 /**

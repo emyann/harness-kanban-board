@@ -364,6 +364,24 @@ export function normalizeCardGrants(kb) {
   return kb;
 }
 
+/**
+ * Refuse a card that belongs to another board. Pure — the card already carries the board it is on
+ * (every driver fills `task.board`), so this is a comparison and never a read, and it lives here
+ * rather than beside a driver because a verb asks it before it knows which store answered.
+ * @param {any} ctx
+ * @param {any} task
+ */
+export function assertOnBoard(ctx, task) {
+  if (task.board !== ctx.board) {
+    const e = /** @type {any} */ (new Error(`issue #${task.number} is not on board "${ctx.board}" (labels: ${task.labels.join(', ') || 'none'}). Use --board or \`hkb adopt ${task.number}\`.`));
+    e.exitCode = 2;
+    throw e;
+  }
+}
+
+/** The git remote this board pushes its refs to. One place, so a driver and a verb cannot disagree. */
+export function remoteName(ctx) { return ctx?.cfg?.remote || 'origin'; }
+
 export function kanbanDir(root) { return path.join(root, '.kanban'); }
 export function boardFile(root) { return path.join(kanbanDir(root), 'board.json'); }
 export function logsDir(root) { return path.join(kanbanDir(root), 'logs'); }

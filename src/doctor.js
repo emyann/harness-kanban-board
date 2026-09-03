@@ -3,16 +3,26 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ghAuthStatus, rest, restRaw, graphql, GhError, API_VERSION } from './gh.js';
-import { boardFile, api, readState, writeState, processState, storeGitDir, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches } from './board.js';
-import { detectCaps, branchProtection, fetchBoard, fetchClosedRecent, loadRun, openPrsByHead, issueDatabaseId } from './tasks.js';
+import { boardFile, api, readState, writeState, processState, storeGitDir, remoteName, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches } from './board.js';
+// The board reads go through the seam like every other verb's; the *probes* do not, and must not.
+// `hkb doctor --api` asks GitHub questions about GitHub — does this repo have `Issue.blockedBy`, can
+// this token create a lock ref, does a `--force-with-lease` push land — and there is no
+// store-neutral way to ask them. So they call the GitHub driver and the forge by name, and they go
+// with it (docs/local-first.md §7). Each is already gated on the board's store where it matters.
+import { detectCaps, issueDatabaseId, casHeartbeat, dropBeatChain } from './store/github.js';
+import { branchProtection, openPrsByHead, classifyClaimError, listTrackBranches } from './forge.js';
+import { openStore, storeKind } from './store/index.js';
+
+/** The board, through the seam — the default `fetch` every check below takes as an injectable dep. */
+const fetchBoard = async (ctx, opts = {}) => (await openStore(ctx)).listTasks(opts);
+const fetchClosedRecent = async (ctx, opts = {}) => (await openStore(ctx)).listClosedRecent(opts);
+const loadRun = async (ctx, n) => (await openStore(ctx)).loadRun(n);
 import { L, STATUSES, SAFE_BUILTINS, capabilityGrants, effectiveTools, toolPosture, agentsOf, compareVersions, mergePolicy, mergeGate, mergeGateFix, uncoveredBuiltins, kbVarsIn, pathOverlapGuard, unfinishedChildren, branchTaskNumber, denialDisplayTool, DENIAL_KINDS, mcpVisibilityDiagnosis, mcpGrantedTo } from './model.js';
 import { resolvedIdentity } from './hook.js';
-import { classifyClaimError, casHeartbeat, dropBeatChain, remoteName, listTrackBranches } from './lock.js';
 import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, commandFiles, commandNames, harnessFiles, harnessHookCommand, HARNESS_PROFILE, findClaudeHooks, hookCommandNeeds, hkbCommandForHook, isEphemeralPath, projectBinRel, resolveHookPath, PROJECT_DIR, HOOK_SETTINGS, PKG_ROOT } from './init.js';
 import { latestVersion } from './registry.js';
 import { checkProject } from './projects.js';
 import { mcpServersFromTranscript } from './stats.js';
-import { storeKind } from './store/index.js';
 // mcp.js is imported dynamically inside checkMcp, not here: it imports cli.js, which imports this
 // file, and a static import here would make that a cycle.
 

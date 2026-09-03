@@ -1375,14 +1375,16 @@ test('a forge that is not there costs one line, not the whole report', async (t)
   // **A skipped check must be distinguishable from a passing one.** The GitHub half used to be one
   // sequence of bare `await`s: the first throw unwound to a single `bad('github', …)` and doctor
   // then printed "N problem(s)" as though every other question had been asked and answered. Now
-  // each probe fails under its own name, and the five that need the board — which could not be read
-  // — say they were *not checked* rather than saying nothing.
+  // each probe fails under its own name.
   assert.equal(by.labels.ok, false, 'the labels probe answered for itself');
   assert.equal(by['track branches'].ok, false, `the checks after it still ran: ${Object.keys(by).join(', ')}`);
-  for (const name of ['task agent labels', 'task skills', 'card grants']) {
-    assert.equal(by[name]?.ok, null, `${name} answered "could not read the board", rather than not answering: ${Object.keys(by).join(', ')}`);
-    assert.match(by[name].detail, /could not read the board/);
-  }
+  // And the checks that need the *board* rather than the forge now answer on a local board, because
+  // doctor reads it through `openStore` like every other verb (#325). They used to be the "could not
+  // read the board" rows here: `fetchBoard` was the GitHub driver's query, so a 404 from a forge
+  // this board does not live on silenced three checks that had every answer on disk. The line this
+  // test draws is unchanged — a forge failure costs one row, not the report — and one row fewer
+  // falls on the wrong side of it.
+  assert.equal(by['task agent labels']?.ok, true, `task agent labels answered from the local board: ${Object.keys(by).join(', ')}`);
   assert.ok(by['rate limit'] && by.GraphQL, 'and the probes after the board read still ran');
   assert.equal(by.github, undefined, 'and the whole half is no longer collapsed into one line');
 

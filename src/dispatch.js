@@ -4,9 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { fetchBoard, fetchClosedRecent, loadRun, saveRun, setStatus, addLabels, addComment, getTask, enableAutoMerge, branchProtection, openPrsByHead, prMergeStates } from './tasks.js';
-import { claim, release, listLocks, lockBeatAt, staleBaseSha, remoteName, ensureTrackBranch } from './lock.js';
-import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, pidFile, readPidFile, pidAlive, recordExit, clearExit, HOOK_SETTINGS_VAR } from './board.js';
+import { enableAutoMerge, branchProtection, openPrsByHead, prMergeStates, staleBaseSha, ensureTrackBranch } from './forge.js';
+import { openStore } from './store/index.js';
+import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, remoteName, pidFile, readPidFile, pidAlive, recordExit, clearExit, HOOK_SETTINGS_VAR } from './board.js';
 import { workerHookSettings, PKG_ROOT, packageVersion } from './init.js';
 import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, authPauseReason, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, effectiveTools, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, isTrackRoot, trackBranchConflict, buildDeniedTools, deniedToolsUpdate } from './model.js';
 import { workerContext } from './context.js';
@@ -286,20 +286,21 @@ async function reconcileClosed(ctx, tasks, state, { dryRun = false, log = /** @t
   if (!gate.run) return { skipped: gate.why, reconciled: [] };
   // Capped at one page: a backlog larger than that drains a page per tick, because a tick
   // that found something always makes the next one look again.
-  const closed = await fetchClosedRecent(ctx);
+  const store = await openStore(ctx);
+  const closed = await store.listClosedRecent();
   const reconciled = [];
   for (const t of closed) {
     const d = reconcileDecision(t);
     if (!d) continue;
     if (dryRun) { reconciled.push({ number: t.number, from: t.status, status: d.status, dry: true }); log(`#${t.number}: [dry-run] ${t.status} → ${d.status} (${d.reason})`); continue; }
     const from = t.status;
-    const runRec = await loadRun(ctx, t.number);
+    const runRec = await store.loadRun(t.number);
     const a = closeAttemptForReconcile(runRec.run, d, nowIso());
     if (a) {
-      await saveRun(ctx, t.number, runRec);
-      await release(ctx, t.number, a.attempt);
+      await store.saveRun(t.number, runRec);
+      await store.release(t.number, a.attempt);
     }
-    await setStatus(ctx, t, d.status, { remove: t.needsHuman ? [L.needsHuman] : [] });
+    await store.setStatus(t, d.status, { remove: t.needsHuman ? [L.needsHuman] : [] });
     const entry = { number: t.number, from, status: d.status, outcome: d.outcome, attempt: a?.attempt ?? null };
     // The task is over, so its worktrees go — except one whose worker is somehow still alive here.
     if (a && a.host === ctx.host && a.pid && pidAlive(a.pid)) entry.keep = [a.attempt];
@@ -379,9 +380,10 @@ export async function autoMergePass(ctx, tasks, { dryRun = false, log = /** @typ
  */
 export async function trackConflictPass(ctx, tasks, { dryRun = false, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   const out = [];
+  const store = await openStore(ctx);
   const roots = tasks.filter((t) => t.status === 'running' && !t.needsHuman && isTrackRoot(t, ctx.cfg, { board: tasks }).track);
   for (const root of roots) {
-    const runRec = await loadRun(ctx, root.number);
+    const runRec = await store.loadRun(root.number);
     const last = lastAttempt(runRec.run);
     if (!last?.track || last.ended_at || !last.track_branch || last.track_conflict_notified) continue;
     const branch = last.track_branch;
@@ -393,11 +395,11 @@ export async function trackConflictPass(ctx, tasks, { dryRun = false, log = /** 
     if (!conflicting) continue;
     const detail = `${conflicting.map((n) => `#${n}`).join(' and ')} conflict merging into \`${branch}\` — a human needs to reconcile them before more children land.`;
     if (dryRun) { out.push({ root: root.number, branch, conflicting, dry: true }); log(`#${root.number}: [dry-run] would flag a track conflict on ${branch}: ${conflicting.join(', ')}`); continue; }
-    await addComment(ctx, root.number, `track conflict: ${detail}`);
-    await addLabels(ctx, root, [L.needsHuman]);
+    await store.addNote(root.number, `track conflict: ${detail}`);
+    await store.addLabels(root, [L.needsHuman]);
     root.needsHuman = true;
     last.track_conflict_notified = true;
-    await saveRun(ctx, root.number, runRec);
+    await store.saveRun(root.number, runRec);
     out.push({ root: root.number, branch, conflicting });
     log(`#${root.number}: track conflict flagged on ${branch}: ${conflicting.join(', ')}`);
   }
@@ -494,7 +496,7 @@ export function dropCommentCaches(ctx) {
 
 // ---------- tick ----------
 
-async function failAttempt(ctx, task, runRec, outcome, note, { kill = true } = {}) {
+async function failAttempt(ctx, store, task, runRec, outcome, note, { kill = true } = {}) {
   const a = openAttempt(runRec.run);
   // `protocol_violation` means "no terminal verb landed" — but a worker that pushed and opened a
   // PR before losing its verb did the work; only the report failed. Stamping the PR onto the row
@@ -507,21 +509,21 @@ async function failAttempt(ctx, task, runRec, outcome, note, { kill = true } = {
     a.outcome = outcome;
     if (note) a.reason = String(note).slice(0, 300);
     if (openPr) a.pr = openPr.number;
-    await release(ctx, task.number, a.attempt);
+    await store.release(task.number, a.attempt);
   }
   if (!openPr) runRec.run.failures = (runRec.run.failures || 0) + 1;
   runRec.run.last_error = note || outcome;
   const limit = task.kb.max_retries ?? ctx.cfg.dispatch.failure_limit;
   if (runRec.run.failures > limit) {
     runRec.run.attempts.push({ attempt: runRec.run.attempts.length + 1, profile: 'dispatcher', host: ctx.host, started_at: nowIso(), ended_at: nowIso(), outcome: 'gave_up', reason: `${runRec.run.failures} consecutive failures (limit ${limit})`, synthetic: true });
-    await saveRun(ctx, task.number, runRec);
-    await setStatus(ctx, task, 'blocked', { add: [L.needsHuman] });
+    await store.saveRun(task.number, runRec);
+    await store.setStatus(task, 'blocked', { add: [L.needsHuman] });
     return 'gave_up';
   }
-  await saveRun(ctx, task.number, runRec);
+  await store.saveRun(task.number, runRec);
   // back where readiness says it belongs, not blindly to `ready`: a track root is claimed while its
   // nodes are still open, and a failed track attempt must leave it in *todo* behind them.
-  await setStatus(ctx, task, computeReady(task) ? 'ready' : 'todo');
+  await store.setStatus(task, computeReady(task) ? 'ready' : 'todo');
   return outcome;
 }
 
@@ -555,7 +557,8 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
 
   if (!dryRun) replayOutbox(ctx, log);
 
-  const tasks = await fetchBoard(ctx);
+  const store = await openStore(ctx);
+  const tasks = await store.listTasks();
   // **Where else is absence a verdict?** Two sweeps below decide from a card *not being here* — the
   // reap (`reapDecision(j, null)` stops a background agent and sweeps its checkout) and the orphan
   // lock sweep (a lock whose card is missing is released, and a worker whose lock ref disappears
@@ -621,8 +624,9 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   // the ref a stale-looking attempt holds (a ref-CAS heartbeat leaves no trace in the run comment),
   // and the orphan sweep walks the same list.
   let locks = null;
-  try { locks = await listLocks(ctx); } catch (e) { log(`lock listing failed (reclaim falls back to the run comment): ${e.message}`); }
-  const lockShaOf = (n, k) => (locks || []).find((l) => l.n === n && l.k === k)?.sha || null;
+  try { locks = await store.listLocks(); } catch (e) { log(`lock listing failed (reclaim falls back to the run comment): ${e.message}`); }
+  // `token`, not `sha`: §6.4 calls it a token because a store that is not GitHub does not keep one.
+  const lockTokenOf = (n, k) => (locks || []).find((l) => l.n === n && l.k === k)?.token || null;
 
   // 1. reclaim stale / crashed / timed out / finished without a terminal verb
   // `idleNumbers` doubles as the path_overlap guard's liveness check (#185): a running task whose
@@ -637,11 +641,11 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     // a node inside a live track: its session is the root's, and the root's lock is what says
     // "alive". It has no pid and no job of its own, so every check below would call it crashed.
     if (coveredBy.has(t.number)) { log(`#${t.number}: node of running track #${coveredBy.get(t.number)} — the root's heartbeat covers it`); continue; }
-    const runRec = await loadRun(ctx, t.number);
+    const runRec = await store.loadRun(t.number);
     const a = openAttempt(runRec.run);
     if (!a) {
       // running label but no open attempt: orphaned card → reconcile
-      if (!dryRun) await setStatus(ctx, t, computeReady(t) ? 'ready' : 'todo');
+      if (!dryRun) await store.setStatus(t, computeReady(t) ? 'ready' : 'todo');
       summary.reclaimed.push({ number: t.number, outcome: 'reconciled' });
       continue;
     }
@@ -696,7 +700,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       // A ref-CAS worker writes nothing to the run comment, so its real last signal is the commit
       // its lock ref points at. One commit read, and only for an attempt that already looks stale.
       let beat = null;
-      try { beat = await lockBeatAt(ctx, lockShaOf(t.number, a.attempt)); } catch (e) { log(`#${t.number}: lock ref beat unreadable (${e.message}); using the run comment`); }
+      try { beat = await store.lockBeatAt(t.number, a.attempt, lockTokenOf(t.number, a.attempt)); } catch (e) { log(`#${t.number}: lock ref beat unreadable (${e.message}); using the run comment`); }
       lastSignal = lastSignalAt(a, beat);
       if (secondsSince(lastSignal) > d.stale_after) outcome = 'reclaimed';
       else log(`#${t.number}: attempt ${a.attempt} beat on ${lockRef(t.number, a.attempt)} ${Math.round(secondsSince(lastSignal))}s ago — alive`);
@@ -709,7 +713,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     const idleThreshold = Math.max(d.interval, 1200);
     if (!outcome && !job && !livePid && secondsSince(lastSignal) > idleThreshold && secondsSince(lastSignal) <= d.stale_after) {
       let beat = null;
-      try { beat = await lockBeatAt(ctx, lockShaOf(t.number, a.attempt)); } catch (e) { log(`#${t.number}: lock ref beat unreadable for the idle check (${e.message}); using the run comment`); }
+      try { beat = await store.lockBeatAt(t.number, a.attempt, lockTokenOf(t.number, a.attempt)); } catch (e) { log(`#${t.number}: lock ref beat unreadable for the idle check (${e.message}); using the run comment`); }
       lastSignal = lastSignalAt(a, beat);
     }
     if (!outcome) {
@@ -728,7 +732,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       } else if (!dryRun) {
         delete state.idle_logged[`${t.number}/${a.attempt}`];
       }
-      if (dirty) await saveRun(ctx, t.number, runRec);
+      if (dirty) await store.saveRun(t.number, runRec);
       continue;
     }
     if (dryRun) { summary.reclaimed.push({ number: t.number, outcome, dry: true }); continue; }
@@ -743,7 +747,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     }
     // failAttempt saves the same record, so a row written off in the tick that named its session
     // costs one write, not two — and goes to its post-mortem carrying the session.
-    const result = await failAttempt(ctx, t, runRec, outcome, `${outcome} after ${Math.round(secondsSince(a.started_at))}s`);
+    const result = await failAttempt(ctx, store, t, runRec, outcome, `${outcome} after ${Math.round(secondsSince(a.started_at))}s`);
     touch(t.number);
     summary.reclaimed.push({ number: t.number, outcome: result });
     log(`#${t.number}: ${outcome}${result === 'gave_up' ? ' → gave_up (needs human)' : ' → ready'}`);
@@ -776,17 +780,19 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       if (claimedAt && Date.now() - new Date(claimedAt).getTime() < 900_000) continue;
       if (touchedRecently(l.n)) continue;
       const t = tasks.find((x) => x.number === l.n);
-      const runRec = t ? await loadRun(ctx, l.n) : null;
+      const runRec = t ? await store.loadRun(l.n) : null;
       const a = runRec ? runRec.run.attempts.find((x) => x.attempt === l.k) : null;
       const stale = !a || (a.ended_at && secondsSince(a.ended_at) > 600) || (!t && true);
-      if (stale && !dryRun) { await release(ctx, l.n, l.k); log(`orphan lock ${l.ref} released`); }
+      // `ref` names where the claim lived on a store that has such a name; the attempt is the answer
+      // every store can give, so the line reads the same on a board that keeps its locks in a table.
+      if (stale && !dryRun) { await store.release(l.n, l.k); log(`orphan lock ${l.ref || `#${l.n} attempt ${l.k}`} released`); }
     }
   } catch (e) { log(`lock sweep skipped: ${e.message}`); }
 
   // 2. promote todo → ready when all blockers are done
   for (const t of tasks.filter((x) => x.status === 'todo')) {
     if (!computeReady(t)) continue;
-    if (!dryRun) await setStatus(ctx, t, 'ready');
+    if (!dryRun) await store.setStatus(t, 'ready');
     summary.promoted.push(t.number);
     log(`#${t.number}: todo → ready`);
   }
@@ -866,7 +872,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     if ((perProfile[profileName] || 0) >= (profile.max_in_progress ?? Infinity)) { note(`profile ${profileName} at cap`); continue; }
     const pausedUntil = state.profile_paused_until[profileName];
     if (pausedUntil && new Date(pausedUntil) > new Date()) { note('blocker_auth pause', { until: pausedUntil }); continue; }
-    const runRec = await loadRun(ctx, t.number);
+    const runRec = await store.loadRun(t.number);
     // one go per root: a track attempt that ended without finishing the track hands the remaining
     // nodes back to the durable engine, which is the whole point of checkpointing every node.
     if (trackAlreadyAttempted(runRec.run)) { note('a track attempt already ran — node dispatch takes it from here'); continue; }
@@ -890,7 +896,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       budget--;
       continue;
     }
-    const c = await claim(ctx, t.number, k);
+    const c = await store.claim(t.number, k);
     if (selfHeal(t.number, c)) { note(`claim unknown: ${c.error?.kind}`); break; }
     if (c.result === 'claimed') { state.claims[`${t.number}/${k}`] = nowIso(); touch(t.number); }
     if (c.result === 'held') { summary.held.push(t.number); note('lock held elsewhere'); log(`#${t.number}: track lock held elsewhere, skipping`); continue; }
@@ -909,14 +915,14 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       trackBranch = await ensureTrackBranch(ctx, t.number);
     } catch (e) {
       log(`#${t.number}: track branch could not be created: ${e.message}`);
-      await release(ctx, t.number, k);
+      await store.release(t.number, k);
       note(`track branch: ${e.message}`);
       continue;
     }
-    const attempt = /** @type {HkbAttempt} */ ({ attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.sha, pid: null, track: true, track_mode: cand.mode, track_nodes: nodes, track_branch: trackBranch });
+    const attempt = /** @type {HkbAttempt} */ ({ attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.token, pid: null, track: true, track_mode: cand.mode, track_nodes: nodes, track_branch: trackBranch });
     runRec.run.attempts.push(attempt);
-    await saveRun(ctx, t.number, runRec);
-    await setStatus(ctx, t, 'running', { remove: [L.needsHuman] });
+    await store.saveRun(t.number, runRec);
+    await store.setStatus(t, 'running', { remove: [L.needsHuman] });
     let spawned;
     try {
       spawned = await spawnWorker(ctx, t, profileName, k, {
@@ -930,7 +936,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       // would otherwise hand the whole subgraph to node dispatch over a missing binary.
       delete attempt.track;
       attempt.track_spawn_failed = true;
-      await failAttempt(ctx, t, runRec, 'spawn_failed', e.message, { kill: false });
+      await failAttempt(ctx, store, t, runRec, 'spawn_failed', e.message, { kill: false });
       summary.spawn_failed.push({ number: t.number, error: e.message, track: true });
       // hold the nodes for one tick so the retry still has a track to run. A launch this host
       // cannot start eventually exhausts max_retries, parks the root for a human, and *then* the
@@ -942,7 +948,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     if (spawned.bg) attempt.bg = true;
     if (spawned.wt) attempt.wt = spawned.wt;
     attempt.log = path.relative(ctx.root, spawned.logFile);
-    await saveRun(ctx, t.number, runRec);
+    await store.saveRun(t.number, runRec);
     state.spawned_today = (state.spawned_today || 0) + 1;
     perProfile[profileName] = (perProfile[profileName] || 0) + 1;
     claimedPaths.push({ number: t.number, paths });
@@ -969,10 +975,10 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     let runRec = null;
     let continuePr = null;
     if ((t.prs || []).some((p) => p.state === 'OPEN')) {
-      runRec = await loadRun(ctx, t.number);
+      runRec = await store.loadRun(t.number);
       const g = activePrGuard(runRec.run.attempts, t.prs);
       if (g.guard) {
-        if (!dryRun) await setStatus(ctx, t, 'review');
+        if (!dryRun) await store.setStatus(t, 'review');
         summary.guarded.push({ number: t.number, guard: 'active_pr', pr: g.pr.number });
         log(`#${t.number}: open PR #${g.pr.number} → review (active_pr guard)`);
         continue;
@@ -990,7 +996,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     // remaining guards (these read the run comment, so only for tasks that could actually be claimed)
     const pausedUntil = state.profile_paused_until[profileName];
     if (pausedUntil && new Date(pausedUntil) > new Date()) { summary.guarded.push({ number: t.number, guard: 'blocker_auth', until: pausedUntil }); continue; }
-    runRec = runRec || await loadRun(ctx, t.number);
+    runRec = runRec || await store.loadRun(t.number);
     const last = lastAttempt(runRec.run);
     if (last?.outcome === 'completed' && secondsSince(last.ended_at) < d.recent_success_window) { summary.guarded.push({ number: t.number, guard: 'recent_success' }); continue; }
     const pathCollides = pog.mode !== 'off' && (t.kb.paths || []).length ? pathCollisions(t.kb.paths, claimedPaths) : [];
@@ -1004,7 +1010,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     const k = runRec.run.attempts.length + 1;
     const continues = continuePr ? { continues_pr: continuePr.number } : {};
     if (dryRun) { summary.claimed.push({ number: t.number, attempt: k, profile: profileName, dry: true, ...continues }); budget--; continue; }
-    const c = await claim(ctx, t.number, k);
+    const c = await store.claim(t.number, k);
     if (selfHeal(t.number, c)) break;
     if (c.result === 'claimed') { state.claims[`${t.number}/${k}`] = nowIso(); touch(t.number); }
     if (c.result === 'held') { summary.held.push(t.number); log(`#${t.number}: lock held elsewhere, skipping`); continue; }
@@ -1014,17 +1020,17 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       continue;
     }
     // lock_sha starts the worker's heartbeat chain: the first `hkb heartbeat` leases on it
-    const attempt = /** @type {HkbAttempt} */ ({ attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.sha, pid: null, ...continues });
+    const attempt = /** @type {HkbAttempt} */ ({ attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.token, pid: null, ...continues });
     runRec.run.attempts.push(attempt);
-    await saveRun(ctx, t.number, runRec);
-    await setStatus(ctx, t, 'running', { add: t.agent ? [] : [L.agent(profileName)], remove: [L.needsHuman] });
+    await store.saveRun(t.number, runRec);
+    await store.setStatus(t, 'running', { add: t.agent ? [] : [L.agent(profileName)], remove: [L.needsHuman] });
     let spawned;
     try {
       spawned = await spawnWorker(ctx, t, profileName, k, { keepRef: !!children, continuePr });
       if (!spawned.pid && !spawned.bg) throw new Error('spawn returned neither a pid nor a background launch');
     } catch (e) {
       log(`#${t.number}: spawn failed: ${e.message}`);
-      await failAttempt(ctx, t, runRec, 'spawn_failed', e.message, { kill: false });
+      await failAttempt(ctx, store, t, runRec, 'spawn_failed', e.message, { kill: false });
       summary.spawn_failed.push({ number: t.number, error: e.message });
       continue;
     }
@@ -1038,7 +1044,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     // brief falls back to the recipe block, and the row says why rather than claiming a clean continue
     if (spawned.continued?.branch && spawned.continued.why) attempt.continues_branch_stale = spawned.continued.why;
     attempt.log = path.relative(ctx.root, spawned.logFile);
-    await saveRun(ctx, t.number, runRec);
+    await store.saveRun(t.number, runRec);
     state.spawned_today = (state.spawned_today || 0) + 1;
     perProfile[profileName] = (perProfile[profileName] || 0) + 1;
     claimedPaths.push({ number: t.number, paths: t.kb.paths || [] });
@@ -1125,7 +1131,8 @@ function watchChild(ctx, number, k, child, children, state, profileName, log) {
   child.on('exit', async (code) => {
     children.delete(`${number}/${k}`);
     try {
-      const runRec = await loadRun(ctx, number);
+      const store = await openStore(ctx);
+      const runRec = await store.loadRun(number);
       const a = runRec.run.attempts.find((x) => x.attempt === k);
       if (!a) return;
       // `claude -p --output-format json` signs off with the session id, what the run cost, and —
@@ -1147,12 +1154,12 @@ function watchChild(ctx, number, k, child, children, state, profileName, log) {
         log(`#${number}: profile ${profileName} paused (${pauseReason})`);
       }
       if (a.ended_at) { // the worker finished properly — only the session numbers are new
-        if (session || deniedDirty) { await saveRun(ctx, number, runRec); log(`#${number}: attempt ${k} ${formatSession(a)}`); }
+        if (session || deniedDirty) { await store.saveRun(number, runRec); log(`#${number}: attempt ${k} ${formatSession(a)}`); }
         return;
       }
       a.exit_code = code;
-      const t = await getTask(ctx, number);
-      const r = await failAttempt(ctx, t, runRec, 'protocol_violation', `worker exited (${code}) without a terminal verb`, { kill: false });
+      const t = await store.getTask(number);
+      const r = await failAttempt(ctx, store, t, runRec, 'protocol_violation', `worker exited (${code}) without a terminal verb`, { kill: false });
       log(`#${number}: attempt ${k} exited ${code} without complete/block → ${r}${session ? ` (${formatSession(a)})` : ''}`);
     } catch (e) { log(`#${number}: post-exit handling failed: ${e.message}`); }
   });
@@ -1382,4 +1389,3 @@ export async function loop(ctx, { interval, max, profiles = null, dryRun = false
   }
 }
 
-export { addLabels };

@@ -7,20 +7,20 @@ audience: [dev]
 read_when: "adding a store verb, debugging an index that disagrees with the branch, wondering why a verb is refused on this host, or working on hkb sync / init --import"
 covers:
   - path: src/store/local.js
-    sha: 627afeabe05f6161d395c204c26f547ff50e15fb
+    sha: 64c0434f1a0345f2a8089b926c17bd5f3c6c23a0
   - path: src/store/index.js
-    sha: 6f80ab71e9efca230d89d25f1b6d9186576ef522
+    sha: 5f004d44f491f4907f68e2167040861d1db7bdfe
   - path: src/store/sqlite.js
-    sha: 297383540eb4a0861fd0fa48842d59c82a6f4cc4
+    sha: 23b55ec112e4c11ff80ee2e417d849eae003aae8
   - path: src/init.js
-    sha: 44cb5f767e8f7905b0f5bdefe1d44fbf70169709
+    sha: 400f1fbb633681554e35db504a4861d2be213e0a
   - path: src/doctor.js
-    sha: d16d15584b792786a6b9c068b330d98e4a60e2b6
+    sha: 3b520a130b4376aac0e9b326adbdf9659ff38c97
   - path: src/gc.js
-    sha: 2e150ac72e587c4c09ee3cbfde18cdd575fc2ce5
+    sha: 19c7fedf4449febda1674cead88483a4ed01916f
   - path: src/cli.js
-    sha: 66ad7f1abd1fa4dd9f4cfbc56e0e3978f94bb09b
-generated_at_commit: 29d0d25
+    sha: 714c403fbed1f62cefdf1309b6eacd5891e5a9e7
+generated_at_commit: d18fb5d
 last_refreshed: 2026-09-03
 related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
@@ -32,34 +32,39 @@ related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-0
 > is the composition, and `src/store/local.js` is where the rules that make it
 > one thing live.
 
-**What is not true yet.** The store is complete and `hkb init` creates one, but
-the *verbs* have not moved onto it: `src/cli.js`, `src/lifecycle.js`,
-`src/dispatch.js`, `src/serve.js` and `src/context.js` still reach board state
-through `src/tasks.js`/`src/lock.js`, which are the GitHub driver's re-exports.
-Track C of `docs/local-first.md` §10 is that migration, and until it lands a
-local board is written and read by the store, by `hkb sync`, by `hkb doctor` and
-by nothing else. A checkout with no GitHub board behind it wants
-`hkb init --store github` in the meantime, and `hkb init` says so.
+**The verbs are on it.** `src/cli.js`, `src/lifecycle.js`, `src/dispatch.js`,
+`src/serve.js`, `src/context.js` and the rest reach board state through
+`openStore(ctx)` — `grep -rn "from './tasks.js'\|from './lock.js'" src` is empty
+outside `src/store/` — so `hkb create` → `hkb list` → `hkb claim` → `hkb finish`
+runs end to end on a local board, and `hkb init` makes one by default again
+(*architecture/store-seam*, "Routing the verbs").
+
+**What is still not true.** Pull requests are not board state and never will be
+(`src/forge.js`, §6.4), so a local card carries `prs: []` and every check that
+reads one — the `active_pr` guard, the agent-worktree sweep, `hkb merge` — has
+nothing to read on a local board. The GitHub driver is still here and is still
+what this repository's own board runs on; retiring it is track C.
 
 ## Which store a board is on
 
-`openStore(ctx)` (`src/store/index.js`) is the **only** place that decides, and
-it asks two questions in order: `store` in `.kanban/board.json` (`"local"` or
-`"github"`, and anything else is exit 2), then — when the key is absent — does
-this repository have a `kb-board` branch, locally or as `<remote>/kb-board`.
+`storeKind(ctx)` (`src/store/index.js`) is the **only** place that decides, and
+it asks exactly one question: `store` in `.kanban/board.json` — `"local"` or
+`"github"`, absent means `github`, anything else is exit 2.
 
-The second question is what makes a plain `git clone` of a local board work
-with no configuration at all: the branch is the declaration. It is also why a
-board written by an older hkb stays on GitHub — no key, no branch, no change.
-`resolveStore` (`src/init.js`) answers the same two questions in the same order:
-a **new** board is local, an **existing** one keeps what it has, and
-`--store github` is the escape hatch while the GitHub driver is still here.
+There *was* a second question — does this repository have a `kb-board` branch,
+locally or as `<remote>/kb-board` — so that a plain `git clone` needed no
+configuration. It was removed in A6's last review round, because a rule that
+reads the store off a **ref** can be reached by `git fetch`, which put a
+checkout on the local store while board.json still pointed every verb at GitHub;
+*architecture/store-seam* has the three destructive interactions that followed.
+A clone still needs no configuration: the key rides in the tracked board.json.
+`resolveStore` (`src/init.js`) answers for a new board — local — and an existing
+one keeps what it has; `--store github` is the escape hatch while the GitHub
+driver is still here.
 
 `hkb init` writes the key only when it is a **decision** — the human's
-`--store`, a fresh board, or a board that already carries it. An inference is
-left unwritten so question two goes on being asked; pinning it pinned `github`
-onto every legacy board that re-ran init, including ones whose `kb-board`
-branch was full of cards.
+`--store`, a fresh board (the default *is* the decision), a board that already
+carries it, or an `--import` that migrates. A plain re-init writes nothing.
 
 ## The three rules
 

@@ -8,16 +8,26 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
-import {
-  fetchBoard as realFetchBoard, getTask as realGetTask, loadRun as realLoadRun,
-  latestResult as realLatestResult, parentResults as realParentResults, addComment as realAddComment,
-} from './tasks.js';
+import { openStore } from './store/index.js';
 import { promote as realPromote, unblock as realUnblock, block as realBlock, requestChanges as realRequestChanges, archive as realArchive } from './lifecycle.js';
 import {
   logsDir, loadUserBoards, userBoardsFile, contextForPath, pidFile, readPidFile, pidAlive, processState,
   writeServeUrl, dropServeUrl,
 } from './board.js';
 import { computeReady, blockerDone, formatSession, resumeCommand, parseRepoSpecs, boardKey, uniqueKeys } from './model.js';
+
+// The board reads, through the seam. They keep the `(ctx, ...)` shape rather than taking a store,
+// because that shape *is* `startServer`'s `deps` contract: a test hands its own function under the
+// same name, and the server calls whichever it was given. Moving those fakes onto the store double
+// is #303's job; what matters here is that the *real* ones open a store like every other verb.
+const realFetchBoard = async (ctx, { includeClosed = false } = {}) => (await openStore(ctx)).listTasks({ states: includeClosed ? ['OPEN', 'CLOSED'] : ['OPEN'] });
+const realGetTask = async (ctx, n) => (await openStore(ctx)).getTask(n);
+const realLoadRun = async (ctx, n) => (await openStore(ctx)).loadRun(n);
+const realLatestResult = async (ctx, n) => (await openStore(ctx)).latestResult(n);
+const realParentResults = async (ctx, task) => (await openStore(ctx)).parentResults(task);
+// `html_url` is what the route below reads off it, and the interface answers with `url` — the
+// mapping is here rather than at the route, so a `deps.addComment` a test supplies keeps its shape.
+const realAddComment = async (ctx, n, text) => ({ html_url: (await (await openStore(ctx)).addNote(n, text)).url });
 
 /** The columns of the web board. `archived` is a verb, not a column — archived tasks leave the board. */
 export const COLUMNS = ['triage', 'todo', 'ready', 'running', 'blocked', 'review', 'done'];

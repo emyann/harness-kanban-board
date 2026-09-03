@@ -7,20 +7,20 @@ audience: [dev]
 read_when: "touching hkb serve, the board page, the user-level board list, or anything that has to work across more than one checkout"
 covers:
   - path: src/serve.js
-    sha: fe50acf9c37de567f1a90fd802e682ab746f6d50
+    sha: db2d36ae3fec59b2cbf4d9f827f2594e55bfa9cc
   - path: web/index.html
     sha: 322aa96236ef37657a9a2326b83dc7b480672134
   - path: src/board.js
-    sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
+    sha: 53192b4670920a4ead1181c925075285dc8ee105
   - path: src/init.js
-    sha: 44cb5f767e8f7905b0f5bdefe1d44fbf70169709
+    sha: 400f1fbb633681554e35db504a4861d2be213e0a
   - path: src/lifecycle.js
-    sha: 3d8234ec94517fa40a1fdbef460486d3bf873068
+    sha: f5e110c3df6217c577ebaec04af30a3ebae15689
   - path: src/track.js
     sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
   - path: src/model.js
-    sha: a0ada59cd3061302ebe8ab640b50d690700803f7
-generated_at_commit: 29d0d25
+    sha: d3729c517eb72a690f7248b5769ea03d22f6d794
+generated_at_commit: d18fb5d
 last_refreshed: 2026-09-03
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
@@ -318,11 +318,15 @@ does, the honest answer is to refuse at start-up and name the read verbs. The
 rule the change is really about: **guard the verb that writes, and do not sell a
 writable surface as a read.**
 
-> **Not reachable yet.** `src/serve.js` reads the board through `fetchBoard`
-> (`src/tasks.js`, the GitHub driver's re-export), not through `openStore`, so
-> serving a local board — from the owning host — is waiting on the verb
-> migration in track C of `docs/local-first.md`. The store underneath is done
-> and the refusals above are live; the page is not wired to it.
+> **Now wired to the seam.** `src/serve.js`'s board reads go through
+> `openStore(ctx)`. They keep their `(ctx, …)` shape because that shape *is*
+> `startServer`'s `deps` contract — a test hands its own function under the same
+> name — so what changed is which store the *defaults* open, not the seam the
+> server is tested through. Moving those fakes onto a store double is #303.
+>
+> What a local board still cannot show is anything that comes from a pull
+> request: `prs` is empty on a local card by design (`src/forge.js`, §6.4), so
+> the PR column of a card renders as none.
 
 ## Related
 

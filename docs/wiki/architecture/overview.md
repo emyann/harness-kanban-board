@@ -7,33 +7,33 @@ audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: 9d7fc11ad734643205e89668a176d4f29115805f
+    sha: 714c403fbed1f62cefdf1309b6eacd5891e5a9e7
   - path: src/gh.js
     sha: 8154ea477e52ed3f769238f1c1bda588fd767798
   - path: src/model.js
-    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
+    sha: d3729c517eb72a690f7248b5769ea03d22f6d794
   - path: src/store/index.js
-    sha: ff18b848824f2370c915b5417fd6fe51d5c36f2f
+    sha: 5f004d44f491f4907f68e2167040861d1db7bdfe
   - path: src/store/github.js
-    sha: e2708642df0ef4599f450e643b9b67eeeb0b2ad5
+    sha: 7bfbce21d6891866046f79dfd3a1eb6c27e29bce
   - path: src/forge.js
-    sha: 20dd384386ca63bc98d103b2e7728f29a95bc87c
+    sha: 92bb85cf8c2730d347ad44c40a9b9e0e513261b4
   - path: src/lifecycle.js
-    sha: c3c49b90e80c7e68d44b4f8f999debcfa484de80
+    sha: f5e110c3df6217c577ebaec04af30a3ebae15689
   - path: src/dispatch.js
-    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
+    sha: 03a5343ec44b7c1b2e2f769203389eb91f108949
   - path: src/context.js
-    sha: 0eecc3f46fa4d71d3fa12598b474c76e0bc7733d
+    sha: dd52c78fc489f76891c2124f7842d543d580546d
   - path: src/hook.js
-    sha: 97b9054fbe1769059b882e4779f8279deaf184d8
+    sha: 464c411be61b06c8513fd248847bf0eeceb3eef0
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/board.js
-    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
+    sha: 53192b4670920a4ead1181c925075285dc8ee105
   - path: src/doctor.js
-    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
-generated_at_commit: 237bb61
-last_refreshed: 2026-09-02
+    sha: 3b520a130b4376aac0e9b326adbdf9659ff38c97
+generated_at_commit: d18fb5d
+last_refreshed: 2026-09-03
 related: [concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
 
@@ -54,7 +54,11 @@ a run record (attempts) and a result record (the handoff) — parsed and
 serialized by pure functions in `src/model.js`. Issue⇄task translation and
 every board read/write live in `src/store/github.js`, behind the `Store`
 interface (`src/store/index.js`) — `src/tasks.js` and `src/lock.js` are now
-re-export shims over it. Dependencies use GitHub's native `blocked_by` issue
+re-export shims over it that nothing in `src/` imports, because every verb
+reaches board state through `openStore(ctx)` (*architecture/store-seam*). All of
+this paragraph describes the **GitHub** store; on the local one a card is a file
+on the `kb-board` branch and the same verbs read it unchanged
+(*architecture/local-store*). Dependencies use GitHub's native `blocked_by` issue
 relations, which makes the board a DAG, not a list.
 
 ## The one atomic primitive

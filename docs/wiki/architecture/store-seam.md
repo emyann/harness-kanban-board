@@ -1,42 +1,64 @@
 ---
 title: The store seam
-summary: "One named interface over board state — openStore(ctx) with the GitHub bodies behind it — plus src/forge.js for the pull-request half that is deliberately not part of it, and a driver-parametrised conformance suite that says when a new driver is done."
+summary: "One named interface over board state — openStore(ctx), which every verb in src/ now goes through — plus src/forge.js for the pull-request half that is deliberately not part of it, and a driver-parametrised conformance suite that says when a new driver is done."
 category: architecture
 kind: explanation
 audience: [dev]
 read_when: "writing a verb that reads or writes board state, adding a store driver, or wondering why tasks.js and lock.js are two lines long"
 covers:
   - path: src/store/index.js
-    sha: 6f80ab71e9efca230d89d25f1b6d9186576ef522
+    sha: 5f004d44f491f4907f68e2167040861d1db7bdfe
   - path: src/store/github.js
-    sha: 57a69a45c3a7998c74f53442a6756873f198f8af
+    sha: 7bfbce21d6891866046f79dfd3a1eb6c27e29bce
   - path: src/forge.js
-    sha: 6fb1fd64643a3762f54b9c68c3b51b03c199e017
+    sha: 92bb85cf8c2730d347ad44c40a9b9e0e513261b4
   - path: src/tasks.js
     sha: a135544bc265b07a25bd5ea2cd5d2235687bac2f
   - path: src/lock.js
-    sha: cfb7eaf1a75003826cf610ee136a08dc0d4ff281
+    sha: 09b174cdbf77c62984549b3d0df4ab3e67e98be5
   - path: src/board.js
-    sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
-generated_at_commit: 29d0d25
+    sha: 53192b4670920a4ead1181c925075285dc8ee105
+  - path: src/store/git.js
+    sha: ffcc9df59f85f18b58875350cffa057ef8d31681
+  - path: src/store/local.js
+    sha: 64c0434f1a0345f2a8089b926c17bd5f3c6c23a0
+  - path: src/cli.js
+    sha: 714c403fbed1f62cefdf1309b6eacd5891e5a9e7
+  - path: src/lifecycle.js
+    sha: f5e110c3df6217c577ebaec04af30a3ebae15689
+  - path: src/dispatch.js
+    sha: 03a5343ec44b7c1b2e2f769203389eb91f108949
+  - path: src/gc.js
+    sha: 19c7fedf4449febda1674cead88483a4ed01916f
+  - path: src/init.js
+    sha: 400f1fbb633681554e35db504a4861d2be213e0a
+generated_at_commit: d18fb5d
 last_refreshed: 2026-09-03
 related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-and-leases, concepts/board-protocol]
 ---
 
 # The store seam
 
-> `openStore(ctx)` is the only way board state should be reached. Behind it are
-> two drivers: the GitHub one, and the local one — a `kb-board` git branch plus
-> a `node:sqlite` index, composed in `src/store/local.js`
-> (`architecture/local-store`, `decisions/adr-006-local-store`). The seam exists
-> so that the verbs written between them are written **once**.
+> `openStore(ctx)` is the only way board state is reached — not a rule the code
+> aspires to, a fact you can grep for: `from './tasks.js'` and `from './lock.js'`
+> appear nowhere in `src/` outside `src/store/`. Behind it are two drivers: the
+> GitHub one, and the local one — a `kb-board` git branch plus a `node:sqlite`
+> index, composed in `src/store/local.js` (`architecture/local-store`,
+> `decisions/adr-006-local-store`). The seam exists so that the verbs written
+> between them are written **once**.
 
 **Which driver, and where that is decided.** `storeKind(ctx)` reads `store` in
 `.kanban/board.json` (`"local"` | `"github"`) and **nothing else**. An absent
 key is `github`. Nothing in hkb branches on the store anywhere else, and there
 is no way to force a driver at the call site: `hkb init --import`, which reads
 GitHub and writes local, opens each driver by name for exactly that reason. A
-new board is local as of A6; an existing board keeps what it has.
+new board is local; an existing board keeps what it has.
+
+That default is what routing the verbs bought back. It was flipped to `github`
+for one commit (`96c4892`) with a note on `resolveStore` saying to flip it back,
+because a `local` board the verbs cannot write is a board `hkb create` fails on
+— and at that point the verbs still read GitHub through the shims. They no
+longer do, so the default is `local` again (`resolveStore`, `src/init.js`).
 
 There used to be a second rule — *a repository with a `kb-board` (or
 `<remote>/kb-board`) ref is a local board* — so that a clone needed no
@@ -87,6 +109,83 @@ So the bodies **moved, and were not rewritten**. `src/store/github.js` is
 `src/tasks.js` and `src/lock.js` are re-export shims, which is why this landed
 with no test edited and no caller changed beyond import lines. A shim is
 deleted when its last importer is, not before.
+
+## Routing the verbs, and the three kinds of caller it sorted out
+
+The seam landing did not by itself move a single call site — every verb still
+reached the GitHub bodies through the shims, which is what made C1 (moving the
+tests onto a store double) impossible and C2 (deleting the driver) premature.
+Doing it split `src/`'s callers into three, and that split is the thing to know
+before writing a verb:
+
+1. **Board state → `openStore(ctx)`.** `src/cli.js`, `src/lifecycle.js`,
+   `src/dispatch.js`, `src/context.js`, `src/stats.js`, `src/hook.js`,
+   `src/init.js`, `src/mcp.js` and `src/serve.js` open a store and call methods
+   on it. Nothing in `src/` imports a driver to read or write a card.
+2. **The forge → `src/forge.js`.** Pull requests were always here; the
+   repository's *own branches* joined them — `baseSha`/`staleBaseSha` (the head
+   every claim and every track branch is cut at), `classifyClaimError`, and the
+   four `kb/track-<root>` functions. A board kept in a branch on your laptop
+   still cuts its work from a forge, so these are not store methods and a second
+   driver never has to implement them.
+3. **The GitHub store, by name.** Two `hkb gc` sweeps (duplicate run comments,
+   dead local beat chains) and the `hkb doctor --api` probes import
+   `src/store/github.js` directly. They are *about* that driver — a run record
+   kept as a comment can have duplicates; "can this token create a lock ref" has
+   no store-neutral spelling — and `gc.sweepOpen` already skips the sweeps when
+   `storeKind(ctx) !== 'github'`. Routing them through the interface would put
+   methods on it that only one driver could ever mean anything by. They are
+   deleted with the driver (C2).
+
+Five things that read nothing moved out of `src/store/github.js` on the way,
+because a caller that needs them must not have to import a driver: `blockersOf`,
+`blockersKnown` and `tagBlockers` to `src/model.js`, `assertOnBoard` and
+`remoteName` to `src/board.js`. The driver re-exports all five, so the shims
+still resolve.
+
+### What the routing added to the interface
+
+Six methods and two widened returns, each because a verb needed a shape §6.4 did
+not have — and each with a scenario in `test/store.test.js`, which is the rule
+for adding one at all:
+
+| method | the verb that needed it |
+|---|---|
+| `setKb(task, kb, bodyText?)` | `hkb edit`, `hkb adopt` — `updateBody` replaces the *prose*, so the machine block was unreachable through the interface |
+| `ensureLabels(names)` | `hkb track --off`, `hkb init` — on GitHub a label must exist before `addLabels` can apply it; where labels are columns the driver answers `[]` |
+| `lockToken(n, k)` | `hkb heartbeat` — the authoritative "is this claim still ours", which used to be `lockSha`/`lockExists` |
+| `beatToken(n, k)` | the heartbeat's warm path: what this host's next beat leases on, read locally, never throwing |
+| `resyncBeat` / `dropBeat` | reconciling that local state after a rejected lease, and forgetting it when an attempt ends |
+| `taskEvents(n)` | `hkb log` — one card's history. Unlike `events()` it is **never refused**: GitHub has no board log, but it does keep an issue timeline |
+
+`heartbeat` now answers `{result, token, expected, detail}`. `detail` is there
+because `hkb heartbeat` prints *why* a beat could not be made before it falls
+back to the run record, and a caller cannot see inside a driver to write that
+sentence — a silent fallback is the failure the values forbid. `addNote` answers
+the note (`{id, at, actor, text, url}`) rather than a raw GitHub comment: its
+three readers all reached for `html_url`, which is a field a store that keeps
+notes in a file has nothing to put in.
+
+`claim` and `listLocks` carry an **optional** `ref` — where the claim lives when
+the store has such a name. `hkb claim` and the dispatcher's orphan sweep print
+the attempt number instead when there is none.
+
+### The driver disagreement it found
+
+§6.4 says nothing about the `blockers` note `listTasks` hangs on the array it
+returns, so the git tier hung none — and `blockersKnown` therefore answered
+`false` for every card on a local board, so `hkb list` marked settled cards as
+"blockers unread". `blocked_by` is a column on the card there, so every card
+that comes back comes back with its real edges: the tier now tags
+`{source: 'local', filled: true, scope: 'all'}`, and a scenario asserts the note
+on both drivers. Same class as #315's `blocked_by`/`needsHuman` mismatch — a
+shape the contract does not pin is a shape two drivers differ on silently.
+
+One caller-visible consequence, worth knowing because it looks like a bug from
+the outside: `hkb doctor` on a **local** board with an unreachable forge now
+answers its board-backed checks instead of reporting "could not read the board".
+Those checks used to call the GitHub driver's query, so a 404 from a repository
+the board does not live in silenced three checks whose answers were on disk.
 
 ## The interface is the contract
 
@@ -183,6 +282,11 @@ The invariant the local drivers exist to satisfy — *every mutating call append
 an event* — is in the array already, guarded by `capabilities().events`. For
 GitHub it asserts the refusal; for a driver with a log it asserts one event per
 mutation, id-ordered, with an exclusive `after` cursor.
+
+A scenario asserts the **interface's** shape, never a tier's. The local store
+widens what `src/store/sqlite.js`'s `heartbeat` returns to the §6.4 four fields
+in `LocalStore.heartbeat` rather than in the index, because the index is a tier
+with tests of its own and the interface is the composed class's contract.
 
 ## Related
 

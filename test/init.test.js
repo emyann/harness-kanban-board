@@ -159,8 +159,12 @@ test('a fresh board is seeded with exactly the profiles asked for (#72)', async 
   assert.ok(fs.existsSync(path.join(harness.root, '.codex', 'hooks.json')), 'and its generated files');
 });
 
+// `--store github`: the labels *are* the board on that store, so creating them is a board write and
+// goes through `openStore` like every other one (#325). A local board's labels are columns on a
+// card, so its driver creates none — which is why this test names the store it is about rather than
+// leaning on the default.
 test('the label set that reaches GitHub is the board\'s, and nothing else is written (#72)', async () => {
-  const { root, gh, printed } = await runInit();
+  const { root, gh, printed } = await runInit(['--store', 'github']);
   const want = [...STATUSES.map(L.status), L.board('default'), L.needsHuman, L.noTrack, L.agent('claude')];
 
   assert.deepEqual(created(gh).sort(), [...want].sort());
@@ -398,7 +402,7 @@ test('a second init changes nothing on disk and creates no labels', async () => 
 });
 
 test('a re-run is additive: a profile added by hand survives and gets its label', async () => {
-  const first = await runInit();
+  const first = await runInit(['--store', 'github']); // the kb:agent label below is a GitHub-store label
   const cfg = board(first.root);
   cfg.profiles.codex = { ...DEFAULT_PROFILES.codex, max_in_progress: 3 }; // the operator's own edit
   fs.writeFileSync(path.join(first.root, BOARD_FILE), JSON.stringify(cfg, null, 2) + '\n');
@@ -604,9 +608,7 @@ test('--no-labels says no to the flags that cannot be done offline, before writi
 const branchTip = (root) => spawnSync('git', ['rev-parse', '--verify', '--quiet', 'refs/heads/kb-board'], { cwd: root, encoding: 'utf8' }).stdout.trim();
 
 test('a fresh init creates a local board: the branch, the index, and board.json says so', async () => {
-  // `--store local` because the default is `github` until #304 routes the verbs; the local path
-  // itself is unchanged and is what this test is about.
-  const { root, printed } = await runInit(['--store', 'local']);
+  const { root, printed } = await runInit();
   assert.equal(board(root).store, 'local');
   assert.match(branchTip(root), /^[0-9a-f]{40}$/, 'the kb-board branch is there');
   assert.equal(fs.existsSync(path.join(root, '.git', 'hkb', 'index.db')), true, 'and the index beside it');
@@ -621,7 +623,7 @@ test('a fresh init creates a local board: the branch, the index, and board.json 
 });
 
 test('a second init leaves the branch and the index exactly as they were', async () => {
-  const first = await runInit(['--store', 'local']);
+  const first = await runInit();
   const tip = branchTip(first.root);
   const { printed } = await runInit([], first);
   assert.equal(branchTip(first.root), tip, 'an existing board is adopted, never recreated');
@@ -717,7 +719,7 @@ test('--take-over on a GitHub board is refused: there is no owning host to move'
 });
 
 test('--take-over moves the branch to this host, and init says whose it was', async () => {
-  const first = await runInit(['--store', 'local']);
+  const first = await runInit();
   // Somebody else's board: rewrite the owner on the branch the way another laptop's init would have.
   const { openGitTier } = await import('../src/store/git.js');
   openGitTier(first.root, { host: 'someone-elses-laptop' }).takeOver('someone-elses-laptop');
@@ -732,12 +734,8 @@ test('--take-over moves the branch to this host, and init says whose it was', as
 // ---------- which store an init sets a board up on ----------
 
 test('resolveStore agrees with storeKind, and neither of them looks at a branch', () => {
-  // A fresh board is `github` while the verbs still drive GitHub (#304, track C). docs/local-first.md
-  // §6.1 makes local the default, and this deliberately departs from it until a local board can be
-  // driven end to end — defaulting to local today hands a new adopter a board `hkb create` cannot
-  // write. Flip both this and `resolveStore` back when #304 lands.
-  assert.equal(resolveStore({}, null), 'github');
-  assert.equal(resolveStore({ store: 'local' }, null), 'local', '--store local is the opt-in meanwhile');
+  // A fresh board is local by default (docs/local-first.md §6.1).
+  assert.equal(resolveStore({}, null), 'local');
   assert.equal(resolveStore({ store: 'github' }, null), 'github');
 
   // An existing board keeps what it declares.

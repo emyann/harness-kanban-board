@@ -741,6 +741,16 @@ function makeIndex({ db, file, root, readOnly, branch = DEFAULT_BRANCH }) {
     },
 
     /**
+     * The claim's current token, or null when the claim is gone. The GitHub driver has two answers
+     * to this question — the ref as GitHub has it, and the local chain the worktree mirrors it with
+     * — and they can disagree; here there is one table, so `lockToken` and `beatToken` are the same
+     * read and nothing can drift between them.
+     */
+    lockToken(n, k) {
+      return db.prepare('SELECT token FROM locks WHERE task_id = ? AND k = ?').get(Number(n), Number(k))?.token ?? null;
+    },
+
+    /**
      * The worker side, as one `UPDATE … WHERE token = ?`.
      *
      * The token rotates on every beat, the way the lock ref's sha advances on every CAS: the caller

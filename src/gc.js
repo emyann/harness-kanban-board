@@ -7,8 +7,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { loadRun, deleteComment } from './tasks.js';
-import { listLocks, listBeatChains, dropBeatChain, listTrackBranches, deleteTrackBranch } from './lock.js';
+// Two of the sweeps below are about how the *GitHub* store keeps a board and mean nothing on any
+// other (`sweepOpen` skips them outright when `storeKind(ctx) !== 'github'`): a run record kept as a
+// comment can have duplicates, and a ref-CAS heartbeat leaves a local mirror behind. They call that
+// driver by name for exactly that reason — routing a GitHub-only sweep through `openStore` would put
+// a method on the interface that only one driver could ever mean anything by — and they go when it
+// does (docs/local-first.md §7, C2). The beat-chain refs are also swept unconditionally in
+// `sweepTask`, where they are simply refs this checkout may hold and finding none is the answer.
+import { loadRun, deleteComment, listLocks, listBeatChains, dropBeatChain } from './store/github.js';
+import { listTrackBranches, deleteTrackBranch } from './forge.js';
 import { logsDir, kanbanDir } from './board.js';
 import { storeKind, openStore } from './store/index.js';
 

@@ -25,7 +25,7 @@ import path from 'node:path';
 import { storeRoot, hostId, runGit, gitSays as short, GIT_SHA_RE as SHA_RE, normalizeCardGrants } from '../board.js';
 import {
   DEFAULT_KB, L, STATUSES, emptyRun, parseResultComment, isResultComment, serializeBodyBlock,
-  RUN_MARKER, statusOf, agentOf,
+  RUN_MARKER, statusOf, agentOf, tagBlockers,
 } from '../model.js';
 
 export const BOARD_BRANCH = 'kb-board';
@@ -47,7 +47,7 @@ const TRACE_CAP = 500;
  */
 export const DURABLE_METHODS = Object.freeze([
   'board', 'setBoard',
-  'listTasks', 'listClosedRecent', 'getTask', 'createTask', 'updateBody',
+  'listTasks', 'listClosedRecent', 'getTask', 'createTask', 'updateBody', 'setKb',
   'setStatus', 'setAgent', 'addLabels', 'removeLabel',
   'closeTask', 'reopenTask', 'addBlockedBy', 'removeBlockedBy',
   'loadRun', 'saveRun', 'latestResult', 'parentResults', 'addNote', 'listNotes',
@@ -604,12 +604,19 @@ export class GitTier {
     }
     const snap = this._read();
     const slug = snap.board?.slug || 'default';
-    return [...snap.cards.values()]
+    const out = [...snap.cards.values()]
       .filter((c) => c && want.includes(String(c.state || 'OPEN').toUpperCase()))
       // The copy is per *returned* card: `toTask` hoists `paths`, `kb` and `suspended` straight off
       // the record, so handing them out uncopied would let a caller edit the memo.
       .map((c) => toTask(structuredClone(c), slug, snap.cards))
       .sort((a, b) => a.number - b.number);
+    // The provenance note every driver hangs on the board it returns (`blockersOf`/`blockersKnown`,
+    // src/model.js). Here it is always `all`: `blocked_by` is a column on the card, so every card
+    // that came back came back with its real edges — there is no "cheap query that skipped some" to
+    // tell apart. Without the note `blockersKnown` answered `false` for every card on a local board
+    // and `hkb list` marked settled cards as "blockers unread", which is the silently-wrong answer
+    // the note exists to prevent.
+    return tagBlockers(out, { source: 'local', filled: true, scope: 'all' });
   }
 
   listClosedRecent({ first = 50 } = {}) {
@@ -667,6 +674,26 @@ export class GitTier {
   updateBody(n, body) {
     this._patch(n, (card) => { card.body = String(body ?? ''); }, `hkb: #${n} body`);
     return this.getTask(n);
+  }
+
+  /**
+   * The other half: replace the machine block, keep the prose. Here that is a write to the hoisted
+   * columns plus `kb`, where on GitHub it is one body PATCH — which is the whole reason the caller
+   * asks for it by name instead of assembling a body itself.
+   * @param {any} task  the card, or its number; a card object is updated in place like `setStatus`
+   * @param {any} kb
+   * @param {string} [bodyText]
+   */
+  setKb(task, kb, bodyText = undefined) {
+    const n = numberOf(task);
+    this._patch(n, (card) => {
+      const { rest, priority, paths, goal, scheduled_at } = splitKb(kb);
+      Object.assign(card, { kb: rest, priority, paths, goal, scheduled_at });
+      if (bodyText !== undefined) card.body = String(bodyText ?? '');
+    }, `hkb: #${n} kb`);
+    const read = this.getTask(n);
+    if (task && typeof task === 'object') syncTask(task, read);
+    return task && typeof task === 'object' ? task : read;
   }
 
   setStatus(task, status, { add = [], remove = [] } = {}) {
@@ -817,7 +844,9 @@ export class GitTier {
     const id = Number(n);
     const at = this.now().toISOString();
     const body = String(text ?? '');
-    const note = { id: null, at, actor: null, text: body };
+    // `url` is part of the note shape the interface answers with; a note on this store has no web
+    // page, and null is the honest answer rather than a field the caller finds missing.
+    const note = { id: null, at, actor: null, text: body, url: null };
     const parsed = isResultComment(body) ? parseResultComment(body) : null;
     this.commit((t) => {
       need(t.cards, id, this.root, this.branch);

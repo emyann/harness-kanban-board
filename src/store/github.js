@@ -9,17 +9,18 @@
 // here — it is `src/forge.js`, and a local store keeps using it unchanged.
 import fs from 'node:fs';
 import path from 'node:path';
-import { rest, restRaw, graphql, GhError } from '../gh.js';
+import { rest, graphql, GhError } from '../gh.js';
 import {
   api, kanbanDir, loadBoard, saveBoard, storeRoot,
-  runGit, gitSays, GIT_SHA_RE, normalizeCardGrants,
+  runGit, gitSays, GIT_SHA_RE, normalizeCardGrants, assertOnBoard, remoteName,
 } from '../board.js';
 import {
   L, LABEL_COLORS, STATUSES, parseBodyBlock, serializeBodyBlock, statusOf, agentOf, boardOf,
   parseRunComment, serializeRunComment, parseResultComment, isResultComment, RESULT_MARKER, emptyRun, pickRunComment,
-  lockRef, lockRefPath, classifyLeasePush, trackBranchName, trackBranchRoot, RUN_MARKER
+  lockRef, lockRefPath, classifyLeasePush, RUN_MARKER,
+  blockersOf, blockersKnown, tagBlockers,
 } from '../model.js';
-import { openPrsByHead, branchFallbackPrs } from '../forge.js';
+import { openPrsByHead, branchFallbackPrs, baseSha, classifyClaimError } from '../forge.js';
 
 // ---------- capability detection (cached per repo in .kanban/cache.json) ----------
 
@@ -60,6 +61,10 @@ const ISSUE_FIELDS = (caps) => `
  */
 export { normalizeCardGrants };
 
+// Moved to `src/board.js` for the same reason: neither reads GitHub, and a caller that needs them
+// must not have to import a driver. Re-exported so `src/tasks.js`/`src/lock.js` still resolve.
+export { assertOnBoard, remoteName };
+
 function toTask(node) {
   const labels = (node.labels?.nodes || []).map((l) => l.name);
   const { kb, rest: bodyText } = parseBodyBlock(node.body);
@@ -98,38 +103,10 @@ async function fillBlockedByRest(ctx, task) {
   }
 }
 
-/**
- * What a board's `blockedBy` lists actually mean, recorded on the array `fetchBoard` returns.
- *
- *   source  'graphql' (they rode the board query), 'rest' (one call per card), or null
- *   filled  were they looked up at all
- *   scope   'all' every card · 'open' every open card · 'waiting' only todo/blocked · 'none'
- *
- * A caller that cannot tell these apart reports "no blockers" for a card nobody asked about —
- * a silently wrong answer, which is the one failure mode the values forbid.
- */
-function tagBlockers(tasks, meta) {
-  // non-enumerable: JSON.stringify, Object.keys and every spread of the board stay an array of tasks
-  Object.defineProperty(tasks, 'blockers', { value: Object.freeze(meta), enumerable: false, configurable: true });
-  return tasks;
-}
-
-/** The blocker provenance of a board `fetchBoard` returned. Safe on any array. */
-export function blockersOf(board) {
-  return board?.blockers || { source: null, filled: false, scope: 'none' };
-}
-
-/**
- * Is this task's `blockedBy` a real answer, or was it simply never looked up? An empty list on a
- * card outside the fill-in's scope means "unknown", never "no blockers".
- */
-export function blockersKnown(board, task) {
-  const { scope } = blockersOf(board);
-  if (scope === 'all') return true;
-  if (scope === 'open') return String(task?.state || 'OPEN').toUpperCase() === 'OPEN';
-  if (scope === 'waiting') return task?.status === 'todo' || task?.status === 'blocked';
-  return false;
-}
+// `tagBlockers` and its two readers `blockersOf`/`blockersKnown` moved to `src/model.js`: every
+// driver hangs the same note on the board it returns, so the writer and the readers have to be one
+// pair. Re-exported here so `src/tasks.js` still resolves.
+export { blockersOf, blockersKnown };
 
 /**
  * Every task on the board, one query per page.
@@ -229,13 +206,6 @@ export async function getTask(ctx, number) {
   return task;
 }
 
-export function assertOnBoard(ctx, task) {
-  if (task.board !== ctx.board) {
-    const e = new Error(`issue #${task.number} is not on board "${ctx.board}" (labels: ${task.labels.join(', ') || 'none'}). Use --board or \`hkb adopt ${task.number}\`.`);
-    e.exitCode = 2;
-    throw e;
-  }
-}
 
 // ---------- comments ----------
 
@@ -451,56 +421,6 @@ export async function issueEvents(ctx, number) {
 //   beat    = git push <new>:<ref> --force-with-lease=<ref>:<expected>  → rejected means LOCK_LOST
 //   release = DELETE git/refs/kb/locks/<n>/<k>
 
-/** One conditional read of a branch head. A 304 means "still `known`" and costs no rate limit. */
-async function readHead(ctx, branch, known) {
-  const etag = known && known.branch === branch ? known.etag : null;
-  const r = await restRaw('GET', api(ctx, `/git/ref/heads/${branch}`), { headers: etag ? { 'If-None-Match': etag } : {} });
-  if (r.status === 304) {
-    if (known?.sha) return { branch, sha: known.sha, etag: known.etag };
-    throw new GhError(`GET git/ref/heads/${branch} answered 304 with nothing cached`, { status: 304, kind: 'unknown' });
-  }
-  // a prefix match returns an array (the branch itself does not exist) — same fix as a 404
-  const sha = Array.isArray(r.data) ? null : r.data?.object?.sha;
-  if (!sha) throw new GhError(`GET git/ref/heads/${branch} returned no sha`, { status: r.status || 404, kind: 'notfound' });
-  return { branch, sha, etag: r.headers?.etag || null };
-}
-
-/**
- * The default branch head every claim is created at — **not** a process-lifetime cache.
- * `staleBaseSha(ctx)` marks the cached value for revalidation (the dispatcher does it once per
- * tick), and the next call re-reads the ref with `If-None-Match`: a quiet repo answers 304, which
- * is free, and a moved branch is picked up within the tick. A sha can never outlive one tick, so a
- * process cannot go on POSTing claims at a sha GitHub has forgotten (the #61 outage).
- */
-export async function baseSha(ctx) {
-  const known = ctx._cache.base || null;
-  if (known?.sha && known.fresh) return known.sha;
-  const branch = ctx.cfg?.default_branch || 'main';
-  let head;
-  try {
-    head = await readHead(ctx, branch, known);
-  } catch (e) {
-    if (!(e instanceof GhError && e.kind === 'notfound')) throw e;
-    const repo = await rest('GET', api(ctx));
-    head = await readHead(ctx, repo.default_branch, known);
-  }
-  ctx._cache.base = { ...head, fresh: true };
-  return head.sha;
-}
-
-/** Mark the cached base sha for revalidation. The etag survives, so the re-read is usually a 304. */
-export function staleBaseSha(ctx) {
-  if (ctx?._cache?.base) ctx._cache.base.fresh = false;
-}
-
-/** Classify a failed ref-create. Exported for tests. */
-export function classifyClaimError(err) {
-  if (!(err instanceof GhError)) return 'unknown';
-  if (err.status === 409) return 'held';
-  if (err.status === 422 && /already exists/i.test(err.message + err.body)) return 'held';
-  return 'unknown'; // 422 (spam/validation), 403, 429, 5xx, network: never conclude "held"
-}
-
 /**
  * @returns {Promise<{result: 'claimed'|'held'|'unknown', ref: string, sha: string|null, error?: Error|null}>}
  *   `result` is the outcome, with `error` carried only for 'unknown'. `sha` starts the beat chain.
@@ -522,64 +442,6 @@ export async function claim(ctx, n, k) {
     const result = classifyClaimError(e);
     return { result, ref: lockRef(n, k), sha: null, error: result === 'unknown' ? e : null };
   }
-}
-
-/**
- * Create a track's integration branch from the default branch, idempotently, and return its name.
- * A track root can be claimed more than once for the same subgraph — a runner that crashed before
- * its attempt ever recorded `ended_at` leaves `trackAlreadyAttempted` false, so the next claim tries
- * again — and the branch must be *reused*, not recreated: children already based work on it. Reusing
- * on "already exists" is exactly the claim protocol's own "held" outcome, just for a ref nothing
- * locks — so the classifier is shared. Any other failure (auth, rate limit, network) is left to
- * throw: the caller treats it the same as a spawn that never started.
- */
-export async function ensureTrackBranch(ctx, rootNumber) {
-  const name = trackBranchName(rootNumber);
-  const sha = await baseSha(ctx);
-  try {
-    await rest('POST', api(ctx, '/git/refs'), { body: { ref: `refs/heads/${name}`, sha } });
-  } catch (e) {
-    if (!(e instanceof GhError) || classifyClaimError(e) !== 'held') throw e;
-  }
-  return name;
-}
-
-/** Does this track branch still exist? Doctor's own read — never cached, never assumed. */
-export async function trackBranchSha(ctx, rootNumber) {
-  try {
-    const r = await rest('GET', api(ctx, `/git/ref/heads/${trackBranchName(rootNumber)}`));
-    return Array.isArray(r) ? null : r?.object?.sha || null;
-  } catch (e) {
-    if (e instanceof GhError && e.kind === 'notfound') return null;
-    throw e;
-  }
-}
-
-/** Delete a track's integration branch. Never throws on "already gone" — deletion is idempotent too. */
-export async function deleteTrackBranch(ctx, rootNumber) {
-  try {
-    await rest('DELETE', api(ctx, `/git/refs/heads/${trackBranchName(rootNumber)}`));
-    return true;
-  } catch (e) {
-    if (e instanceof GhError && (e.kind === 'notfound' || (e.kind === 'validation' && /does not exist/i.test(e.message)))) return false;
-    throw e;
-  }
-}
-
-/**
- * Every track branch on the repo (`kb/track-<root>`), by root number — one paginated read via
- * `git/matching-refs`, however many tracks the board has ever run. What `hkb doctor` cross-checks
- * against the board to find one with no live runner (`checkTrackBranches`, src/doctor.js).
- */
-export async function listTrackBranches(ctx) {
-  const rows = await rest('GET', api(ctx, '/git/matching-refs/heads/kb/track-'));
-  const out = [];
-  for (const row of rows || []) {
-    const name = String(row.ref || '').replace(/^refs\/heads\//, '');
-    const root = trackBranchRoot(name);
-    if (root) out.push({ branch: name, root, sha: row.object?.sha || null });
-  }
-  return out;
 }
 
 export async function lockExists(ctx, n, k) {
@@ -648,7 +510,6 @@ export function localBeatSha(root, n, k) {
   return r.status === 0 && SHA_RE.test(r.stdout) ? r.stdout : null;
 }
 
-export function remoteName(ctx) { return ctx?.cfg?.remote || 'origin'; }
 
 /**
  * Advance the lock ref by one empty commit, leasing on `expected`.
@@ -791,10 +652,13 @@ export function openGithubStore(ctx) {
       await updateBody(ctx, task, task.kb, body);
       return task;
     },
+    /** Replace the machine block, keep the prose — the mirror image of `updateBody`. */
+    setKb: (task, kb, bodyText = task.bodyText) => updateBody(ctx, task, kb, bodyText),
     setStatus: (task, status, opts = {}) => setStatus(ctx, task, status, opts),
     setAgent: (task, agent) => setAgent(ctx, task, agent),
     addLabels: (task, names) => addLabels(ctx, task, names),
     removeLabel: (task, name) => removeLabel(ctx, task, name),
+    ensureLabels: (names) => ensureLabels(ctx, names),
     closeTask: (n, reason = 'completed') => closeIssue(ctx, n, reason),
     reopenTask: (n) => reopenIssue(ctx, n),
     addBlockedBy: (child, parent) => addBlockedBy(ctx, child, parent),
@@ -805,7 +669,16 @@ export function openGithubStore(ctx) {
     saveRun: (n, runRec) => saveRun(ctx, n, runRec),
     latestResult: (n) => latestResult(ctx, n),
     parentResults: (task) => parentResults(ctx, task),
-    addNote: (n, text) => addComment(ctx, n, text),
+    /**
+     * A note, in the shape the interface answers with: `{id, at, actor, text, url}`. The raw REST
+     * comment used to travel out of here, and its three readers all reached for `html_url` — a field
+     * a store that keeps its notes in a file has nothing to put in. The mapping is here so a caller
+     * never has to know which store answered (`url` is null on one that has no web page for a note).
+     */
+    async addNote(n, text) {
+      const c = await addComment(ctx, n, text);
+      return { id: c?.id ?? null, at: c?.created_at ?? null, actor: c?.user?.login ?? null, text: c?.body ?? String(text ?? ''), url: c?.html_url ?? null };
+    },
     async listNotes(n) {
       const comments = await listComments(ctx, n);
       // hkb's own run record and result comments live in the same list; every other reader here tells
@@ -845,14 +718,33 @@ export function openGithubStore(ctx) {
       // a caller that beats twice needs the sha this beat wrote. Returning only the verdict made the
       // second beat lease on the first one's `expected` and read back as LOCK_LOST.
       const r = casHeartbeat(ctx.root, n, k, expected, { remote: remoteName(ctx), ...opts });
-      return { result: r.result, token: r.sha ?? null };
+      // `detail` and `expected` ride along because `hkb heartbeat` prints why a beat could not be
+      // made before it falls back to the run record — a silent fallback is the failure the values
+      // forbid, and the caller cannot see inside the driver to say it.
+      return { result: r.result, token: r.sha ?? null, expected: r.expected, detail: r.detail };
     },
+    lockToken: (n, k) => lockSha(ctx, n, k),
+    beatToken: (n, k) => localBeatSha(ctx.root, n, k),
+    resyncBeat: (n, k, token) => resyncBeatChain(ctx.root, n, k, token),
+    dropBeat: (n, k) => dropBeatChain(ctx.root, n, k),
 
     // ---- events ----
     async events() {
       const e = new Error('the GitHub store has no event log (capabilities().events is false). Move the board to the local store — see docs/local-first.md §6.');
       e.exitCode = 2;
       throw e;
+    },
+    /**
+     * One card's history: the issue timeline, in the four fields every driver answers with. Not
+     * refused the way `events()` is — GitHub has no *board* log, but it does keep this.
+     */
+    async taskEvents(n) {
+      return (await issueEvents(ctx, n)).map((e) => ({
+        at: e.created_at,
+        kind: e.event,
+        detail: e.label?.name || e.assignee?.login || e.state_reason || '',
+        actor: e.actor?.login || null,
+      }));
     },
   };
   return store;
