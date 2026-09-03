@@ -268,6 +268,22 @@ const SCENARIOS = [
     },
   },
   {
+    name: 'closed-recent: `since` is a window every driver honours, and `first` a total ceiling',
+    async run(h) {
+      // The migration reads the closed cards *by window* — the 90 days it is scoped to — and the
+      // drivers must mean the same thing by it, or the one that pages and the one that does not
+      // migrate different boards. `first` is the runaway stop above the window, never a page size.
+      const t = await card(h, { status: 'done' });
+      await h.store.closeTask(t.number, 'completed');
+      const inWindow = await h.store.listClosedRecent({ since: '2000-01-01T00:00:00Z' });
+      assert.ok(inWindow.some((x) => x.number === t.number), 'a card closed now is inside a window that opened in 2000');
+      const after = await h.store.listClosedRecent({ since: '2999-01-01T00:00:00Z' });
+      assert.ok(!after.some((x) => x.number === t.number), 'and outside one that has not opened yet');
+      assert.equal((await h.store.listClosedRecent({ first: 0 })).length, 0, '`first` bounds the answer');
+      assert.equal(!!(/** @type {any} */ (inWindow).capped), false, 'a read that was not cut short does not say it was');
+    },
+  },
+  {
     name: 'updateBody rewrites the prose and keeps every machine field',
     async run(h) {
       const kb = { priority: 5, paths: ['src/x.js'], max_runtime: 4242 };

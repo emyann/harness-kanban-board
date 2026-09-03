@@ -494,6 +494,25 @@ export function tagBlockers(tasks, meta) {
 
 
 /**
+ * Did this listing stop because the caller's ceiling ran out, with more still to read?
+ *
+ * The same shape as `tagBlockers` and for the same reason: a *count* of what came back cannot say
+ * whether it is the whole answer, and a caller that guesses ("the page came back full, so there may
+ * be more") reports a ceiling that was never reached. Only the driver that did the reading knows,
+ * so it says so on the array, non-enumerably — `JSON.stringify` and every spread stay a list of
+ * cards. Absent means "no ceiling was hit", which is what a driver with nothing to page answers.
+ */
+export function tagCapped(list, capped) {
+  Object.defineProperty(list, 'capped', { value: !!capped, enumerable: false, configurable: true });
+  return list;
+}
+
+/** Was this listing cut short by a real ceiling? `false` for any list nobody tagged. */
+export function wasCapped(list) {
+  return !!(/** @type {any} */ (list)?.capped);
+}
+
+/**
  * How much of this board's `blockedBy` was actually looked up.
  *
  * `listTasks` hangs a `blockers` note on the array it returns — every driver does, and they mean the

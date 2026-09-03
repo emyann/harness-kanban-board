@@ -374,9 +374,15 @@ export class FakeStore {
         }
         return tagBlockers(tasks, { source: 'fake', filled: true, scope: 'all' });
       },
-      async listClosedRecent({ first = 50 } = {}) {
+      async listClosedRecent({ first = 50, since = null } = {}) {
+        const cut = since ? Date.parse(since) : NaN;
+        const inWindow = (r) => {
+          if (!Number.isFinite(cut)) return true;
+          const d = Date.parse(r.updatedAt || '');
+          return !Number.isFinite(d) || d >= cut;
+        };
         return [...self.issues.values()]
-          .filter((r) => r.state === 'CLOSED' && r.labels.includes(L.board(self.boardSlug)))
+          .filter((r) => r.state === 'CLOSED' && r.labels.includes(L.board(self.boardSlug)) && inWindow(r))
           .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : b.number - a.number))
           .slice(0, first)
           .map((r) => self.#task(r));

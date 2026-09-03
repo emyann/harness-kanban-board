@@ -237,7 +237,12 @@ export const STORE_METHODS = Object.freeze([
  * @property {(opts?: {states?: string[], blockers?: boolean|'all'}) => Promise<any[]>} listTasks
  *   Today's `fetchBoard` shape: number, title, body, kb, status, agent, needsHuman, blockedBy[],
  *   prs[], state, stateReason, createdAt, updatedAt, url. `src/model.js` reads it unchanged.
- * @property {(opts?: {first?: number}) => Promise<any[]>} listClosedRecent
+ * @property {(opts?: {first?: number, since?: string|null}) => Promise<any[]>} listClosedRecent
+ *   The closed cards, most recently updated first. `first` is a **total ceiling**, not a page size —
+ *   a driver that pages walks as many as it takes — and `since` is a window (an ISO date): a card
+ *   updated before it is history the caller did not ask for. A driver that stops early because
+ *   `first` ran out with more still inside the window says so with `tagCapped` (src/model.js); a
+ *   list nobody tagged was not cut short.
  * @property {(n: number) => Promise<any>} getTask
  * @property {(spec: {title: string, body?: string, kb?: any, status?: string, agent?: string|null}) => Promise<any>} createTask
  * @property {(n: number, body: string) => Promise<any>} updateBody

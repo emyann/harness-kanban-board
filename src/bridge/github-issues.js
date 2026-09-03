@@ -16,7 +16,7 @@ import { api, kanbanDir, runGit, normalizeCardGrants } from '../board.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  L, parseBodyBlock, statusOf, agentOf, boardOf, tagBlockers,
+  L, parseBodyBlock, statusOf, agentOf, boardOf, tagBlockers, tagCapped,
   RUN_MARKER, parseRunComment, emptyRun,
 } from '../model.js';
 
@@ -133,23 +133,71 @@ export async function fetchBoard(ctx, { includeClosed = false, blockers = true }
   return tagBlockers(tasks, { source: 'rest', filled: true, scope: blockers === 'all' ? 'open' : 'waiting' });
 }
 
+/** GitHub's per-query ceiling, and the size of one page of this read. */
+export const CLOSED_QUERY_PAGE = 100;
+
 /**
- * The most recently updated *closed* cards on the board. One query, no paging: the migration takes
- * a window, not a history, and names its own ceiling when the page comes back full.
+ * The most recently updated *closed* cards on the board, paged until the caller's **window** runs
+ * out rather than until a page does.
+ *
+ * `first` is a total ceiling, not a page size — the same meaning the other two drivers have always
+ * given it (`.slice(0, first)`) — and `since` is the window: the read is ordered by `UPDATED_AT`
+ * descending, so the first card older than `since` ends it and every card behind that one is older
+ * still. It was one query before, which quietly made the page size the ceiling: a migration of a
+ * board with 131 cards closed inside a 90-day window imported 100 of them and called the other 31
+ * "may be more".
+ *
+ * The array carries `capped` (`tagCapped`) when a **real** ceiling was hit — `first` reached with a card still
+ * inside the window behind it, checked by one extra one-node read rather than inferred from a full
+ * page, which is the false positive this read used to report.
  * @param {any} ctx
- * @param {{first?: number}} [opts]
+ * @param {{first?: number, since?: string|null}} [opts]
  */
-export async function fetchClosedRecent(ctx, { first = 50 } = {}) {
+export async function fetchClosedRecent(ctx, { first = 50, since = null } = {}) {
   await detectCaps(ctx);
-  const q = `query($owner: String!, $repo: String!, $labels: [String!], $first: Int!) {
+  const q = `query($owner: String!, $repo: String!, $labels: [String!], $first: Int!, $cursor: String) {
     repository(owner: $owner, name: $repo) {
-      issues(first: $first, states: [CLOSED], labels: $labels, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      issues(first: $first, states: [CLOSED], labels: $labels, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {
+        pageInfo { hasNextPage endCursor }
         nodes { ${ISSUE_FIELDS(ctx.caps)} }
       }
     }
   }`;
-  const data = await graphql(q, { owner: ctx.repo.owner, repo: ctx.repo.repo, labels: [L.board(ctx.board)], first });
-  return (data.repository.issues.nodes || []).map(toTask);
+  const cut = since ? Date.parse(since) : NaN;
+  /** A card with no readable `updatedAt` is kept: the window cannot rule out what it cannot date. */
+  const inWindow = (t) => {
+    if (!Number.isFinite(cut)) return true;
+    const d = Date.parse(t?.updatedAt || '');
+    return !Number.isFinite(d) || d >= cut;
+  };
+  const page = (cursor, want) => graphql(q, { owner: ctx.repo.owner, repo: ctx.repo.repo, labels: [L.board(ctx.board)], first: want, cursor });
+
+  /** @type {any[]} */ const out = [];
+  // A ceiling of nothing is answered without a request, and without claiming a cap: nobody was cut
+  // short by a read that never happened.
+  if (!(first > 0)) return tagCapped(out, false);
+  let cursor = null;
+  let capped = false;
+  for (;;) {
+    const want = Math.max(1, Math.min(CLOSED_QUERY_PAGE, first - out.length));
+    const conn = (await page(cursor, want)).repository.issues;
+    const nodes = (conn.nodes || []).map(toTask);
+    let past = false;
+    for (const t of nodes) {
+      if (!inWindow(t)) { past = true; break; }
+      out.push(t);
+    }
+    if (past || !conn.pageInfo?.hasNextPage) break;
+    cursor = conn.pageInfo.endCursor;
+    if (out.length >= first) {
+      // The ceiling, and one read to find out whether it is a real one. `hasNextPage` says there is
+      // another card; only this says whether that card is inside the window the caller asked for.
+      const after = ((await page(cursor, 1)).repository.issues.nodes || []).map(toTask);
+      capped = after.some(inWindow);
+      break;
+    }
+  }
+  return tagCapped(out, capped);
 }
 
 /**
@@ -224,6 +272,12 @@ export function openGithubIssues(ctx) {
 
 /** One page is all this probe asks for. A board with more than this is still "a board". */
 export const BOARD_PROBE_PAGE = 100;
+
+// **Deliberately one page — do not "fix" this into a paginated read.** `fetchClosedRecent` above
+// pages because its answer is the *set of cards a migration writes*, where a missing page is a card
+// that never lands. This one answers yes/no: `hkb init` asks it only to find out whether creating
+// the `kb-board` branch would strand cards, and the first page settles that for any board that has
+// any. It runs on the init path with the operator waiting, so the extra requests would buy nothing.
 
 /**
  * Does this repository still hold a board on GitHub Issues?

@@ -625,8 +625,19 @@ export class GitTier {
     return tagBlockers(out, { source: 'local', filled: true, scope: 'all' });
   }
 
-  listClosedRecent({ first = 50 } = {}) {
+  /**
+   * `first` is a ceiling and `since` a window, the same two the interface gives every driver. A
+   * branch has no pages to walk, so nothing here is ever `capped`: the whole board was read.
+   * @param {{first?: number, since?: string|null}} [opts]
+   */
+  listClosedRecent({ first = 50, since = null } = {}) {
+    const cut = since ? Date.parse(since) : NaN;
     return this.listTasks({ states: ['CLOSED'] })
+      .filter((t) => {
+        if (!Number.isFinite(cut)) return true;
+        const d = Date.parse(t.updatedAt || '');
+        return !Number.isFinite(d) || d >= cut;
+      })
       .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
       .slice(0, first);
   }

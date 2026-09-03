@@ -22,7 +22,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { storeRoot, storeGitDir, hostId, runGit, runGitAsync, gitSays, GIT_SHA_RE, readState, writeState, normalizeCardGrants } from '../board.js';
-import { RESULT_MARKER, RUN_MARKER, DEFAULT_KB, L, emptyRun, parseResultComment, isResultComment, blockersOf, blockersKnown } from '../model.js';
+import { RESULT_MARKER, RUN_MARKER, DEFAULT_KB, L, emptyRun, parseResultComment, isResultComment, blockersOf, blockersKnown, wasCapped } from '../model.js';
 import { openGitTier, BOARD_BRANCH, BOARD_REF } from './git.js';
 import { openIndex, openIndexReadOnly, indexFileIn } from './sqlite.js';
 // The read half of the retired GitHub protocol, and the only thing that still speaks it: the
@@ -862,8 +862,19 @@ export const IMPORT_WINDOW_DAYS = 90;
 /** How fresh a lock's beat has to be for the migration to call the worker holding it alive. */
 export const LOCK_LIVE_S = 30 * 60;
 
-/** GitHub's page ceiling, and the whole of what `listClosedRecent` can answer in one query. */
+/** GitHub's page ceiling, and the size of one page of the migration's closed-card read. */
 export const CLOSED_PAGE = 100;
+
+/**
+ * How many closed cards the migration will take, at most.
+ *
+ * The window (`IMPORT_WINDOW_DAYS`) is the real scope; this is the runaway stop behind it, and it is
+ * set far above any board a migration will meet — the board this was measured on has 131 closed
+ * cards inside the window. It used to be 100, by accident: `listClosedRecent` was one query, so the
+ * page size *was* the ceiling and 31 of those cards would have stayed on GitHub while the local
+ * board became the source of truth without them.
+ */
+export const CLOSED_MAX = 5000;
 
 /** The REST page size and how many pages the adoption path will walk before it names the ceiling. */
 export const ISSUE_PAGE = 100;
@@ -962,9 +973,9 @@ export function cardRecord(task, { at = new Date().toISOString(), blockersKnown:
  * says which ran, and so does the log.
  *
  * @param {any} ctx
- * @param {{store?: any, from?: any, days?: number, log?: (s: string) => void, now?: () => Date, force?: boolean, leftovers?: any, issues?: any}} [opts]
+ * @param {{store?: any, from?: any, days?: number, log?: (s: string) => void, now?: () => Date, force?: boolean, leftovers?: any, issues?: any, closedMax?: number}} [opts]
  */
-export async function importGithubBoard(ctx, { store = null, from = null, days = IMPORT_WINDOW_DAYS, log = () => {}, now = () => new Date(), force = false, leftovers = {}, issues = null } = {}) {
+export async function importGithubBoard(ctx, { store = null, from = null, days = IMPORT_WINDOW_DAYS, log = () => {}, now = () => new Date(), force = false, leftovers = {}, issues = null, closedMax = CLOSED_MAX } = {}) {
   const s = store || openLocalStore(ctx, { reconcile: false });
   if (s.git.tip() && !force) {
     // **A diagnosis does not create what it describes**, and neither does a refusal. `s.index.file`
@@ -989,11 +1000,14 @@ export async function importGithubBoard(ctx, { store = null, from = null, days =
   // running or review would arrive with an empty list that means "not asked". §6.2's branch has no
   // way to say that, and `cardRecord` refuses to guess.
   const open = await gh.listTasks({ states: ['OPEN'], blockers: 'all' });
-  const closedPage = await gh.listClosedRecent({ first: CLOSED_PAGE });
-  // One page, by the GitHub driver's own design ("One query, no paging", `fetchClosedRecent`). A
-  // full page back means there may be more, and a summary that said "N closed in the last 90 days"
-  // over a truncated set would read as the whole window.
-  const capped = closedPage.length >= CLOSED_PAGE;
+  // The window is what bounds this read, and the driver pages until the window runs out — a page
+  // that comes back full is not an answer about anything (`fetchClosedRecent`). `CLOSED_MAX` is the
+  // runaway stop above it, and the driver reports it as `capped` only when it was really reached,
+  // with a card still inside the window behind it.
+  const closedPage = await gh.listClosedRecent({ first: closedMax, since: new Date(cutoff).toISOString() });
+  const capped = wasCapped(closedPage);
+  // The window again, locally: `since` is what the driver was asked for, and a `from` double or a
+  // driver that ignores it must not widen the migration's scope by accident.
   const closed = closedPage
     .filter((t) => { const d = Date.parse(t.updatedAt || ''); return !Number.isFinite(d) || d >= cutoff; });
   const tasks = [...open, ...closed]
@@ -1006,12 +1020,11 @@ export async function importGithubBoard(ctx, { store = null, from = null, days =
   log(`import: migrating the \`${L.board(ctx?.board || 'default')}\` board on ${ctx?.cfg?.repo || 'GitHub'} onto ${s.branch}`);
   log(`import: ${open.length} open card(s) and ${closed.length} closed in the last ${days} day(s)`);
   if (capped) {
-    // "May be": a page that comes back exactly full says nothing about whether a next one exists,
-    // and `listClosedRecent` is one query by the GitHub driver's own design (`fetchClosedRecent`),
-    // so unlike the adoption path there is no page after it to ask. The same rule either way — a
-    // ceiling is only reported as reached when it is known to be — and here that means saying "may".
-    log(`import: WARNING the closed cards came back as one full page of ${CLOSED_PAGE}, most recently updated first — there may be more, `
-      + `and anything closed before #${closedPage[closedPage.length - 1]?.number} would stay on GitHub rather than move to the local board`);
+    // Said flatly, because it is now known rather than suspected: the driver reached `CLOSED_MAX`
+    // and read one card past it that is still inside the window. A ceiling is only ever reported as
+    // reached when it is known to be — the same rule the adoption path's `more` follows.
+    log(`import: WARNING stopped at ${closedMax} closed card(s), most recently updated first — this board has more inside the `
+      + `${days}-day window and they are NOT on the local board; anything closed before #${closedPage[closedPage.length - 1]?.number} stayed on GitHub`);
   }
 
   // A card's blockers are a real answer only where somebody looked them up. `listTasks` says so for
@@ -1127,7 +1140,7 @@ export async function importGithubBoard(ctx, { store = null, from = null, days =
   const summary = {
     cards: tasks.length, open: open.length, closed: closed.length, runs: withRuns, results, notes,
     next_id: Math.max(next, 1), tip: s.git.tip(), branch: s.branch, indexed: loaded.counts?.tasks ?? 0,
-    closed_capped: capped, closed_page: CLOSED_PAGE, dropped_blockers: droppedEdges,
+    closed_capped: capped, closed_page: CLOSED_PAGE, closed_max: closedMax, dropped_blockers: droppedEdges,
     unknown_blockers: unknownBlockers, comments_capped: truncatedComments, mode: 'migrate', ...dropped,
   };
   if (truncatedComments.length) {
@@ -1209,7 +1222,7 @@ export async function adoptOpenIssues(ctx, { store = null, log = () => {}, now =
   return {
     mode: 'adopt', cards: tasks.length, open: tasks.length, closed: 0, runs: 0, results: 0, notes: 0,
     next_id: Math.max(next, 1), tip: s.git.tip(), branch: s.branch, indexed: loaded.counts?.tasks ?? 0,
-    issues_capped: more, issue_page: ISSUE_PAGE, closed_capped: false, closed_page: CLOSED_PAGE,
+    issues_capped: more, issue_page: ISSUE_PAGE, closed_capped: false, closed_page: CLOSED_PAGE, closed_max: CLOSED_MAX,
     dropped_blockers: [], unknown_blockers: [], locks: 0, chains: 0,
   };
 }

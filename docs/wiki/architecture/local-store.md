@@ -7,9 +7,9 @@ audience: [dev]
 read_when: "adding a store verb, debugging an index that disagrees with the branch, wondering why a verb is refused on this host, or working on hkb sync / init --import"
 covers:
   - path: src/store/local.js
-    sha: c519ac05bf312c1ac65e1ebd95a2b1858302d163
+    sha: 32b68ad027f4ded44074909cda42bf93b7235f75
   - path: src/store/index.js
-    sha: 38e2b0bd8634a9dacd68f419dfa25b3d7127894b
+    sha: b67a89674aea78c2540b86c7868607dd4bb92863
   - path: src/store/sqlite.js
     sha: ab60bab80331ff0a2ac66141062eb3518a0b4fee
   - path: src/init.js
@@ -20,7 +20,7 @@ covers:
     sha: cc129d307e845211036472a76ed7e0f456be1329
   - path: src/cli.js
     sha: a4d80e1fb0fdf6e8e3c0e57494423720775af950
-generated_at_commit: 457f943
+generated_at_commit: 0c4e2e6
 last_refreshed: 2026-09-03
 related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
@@ -355,14 +355,24 @@ nobody re-runs:
   edge is dropped, printed per card, and returned in the summary's
   `dropped_blockers`.
 
-The closed cards are **one page of 100**, most recently updated first, by the
-GitHub driver's own design. A full page back sets `closed_capped` in the summary
-and prints a WARNING naming the oldest card that made it, because "100 closed in
-the last 90 days" over a truncated set reads as the whole window. There are two
-more ceilings and both are named the same way: the adoption path's ten pages of
-open issues (`issues_capped`), and `listComments`'s five pages of 100 per card,
-which leaves a very talkative card's oldest notes behind (`comments_capped`
-lists the numbers). A ceiling that is not named reads as the whole thing.
+The closed cards are read **to the window, not to a page**: `fetchClosedRecent`
+pages on `pageInfo.hasNextPage` ordered by `updatedAt` descending and stops at
+the first card older than the 90 days, which is the scope the migration was
+given. It was one query of 100 before, which made the page size the ceiling by
+accident — measured on this repository's own board, 131 cards were closed inside
+the window and 31 of them would have stayed on GitHub while the local board
+became the source of truth without them (and `next_id` was computed from the
+truncated set). `CLOSED_MAX` (5000) is the runaway stop behind the window, far
+above any board a migration will meet.
+
+`closed_capped` therefore means **a real ceiling was hit**: `CLOSED_MAX` reached
+*and* one more read showing a card behind it that is still inside the window. A
+full page proves nothing about what follows it, which is why the adoption path's
+`issues_capped` reads the page after its last full one too. The third ceiling is
+`listComments`'s five pages of 100 per card, which leaves a very talkative card's
+oldest notes behind (`comments_capped` lists the numbers). A ceiling that is not
+named reads as the whole thing; one that is named when it was not reached trains
+the reader to ignore it.
 
 It is idempotent **by refusal**: a branch that already exists is left exactly as
 it is. A second import over a board that has since been worked would overwrite

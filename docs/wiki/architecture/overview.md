@@ -11,9 +11,9 @@ covers:
   - path: src/gh.js
     sha: 8154ea477e52ed3f769238f1c1bda588fd767798
   - path: src/model.js
-    sha: 9eceb576d8a0d25f07f89fc26aae3635d072bbc0
+    sha: 01c6ed0b0af060e050ce6387de55f4d1b6b2605d
   - path: src/store/index.js
-    sha: 38e2b0bd8634a9dacd68f419dfa25b3d7127894b
+    sha: b67a89674aea78c2540b86c7868607dd4bb92863
   - path: src/forge.js
     sha: 1d9e17cd8fad3500b512ef10843d541cda2c65a4
   - path: src/lifecycle.js
@@ -30,7 +30,7 @@ covers:
     sha: 543224fb76022abd64b56d834ae0da17b64cb066
   - path: src/doctor.js
     sha: d9df9b7620a2be2d04e0ca59597cfc075381ac60
-generated_at_commit: b0acc52
+generated_at_commit: 0c4e2e6
 last_refreshed: 2026-09-03
 related: [concepts/store, concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---

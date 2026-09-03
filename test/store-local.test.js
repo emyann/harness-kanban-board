@@ -796,26 +796,68 @@ test('a blocker that is not imported is dropped, said out loud, and does not blo
   assert.deepEqual(store.getTask(40).blockedBy, [], 'and #40 is not held back by a card that is not there');
 });
 
-test('the closed-card page is a cap, and the import says so rather than reading as the whole window', async (t) => {
+// ---------- the closed-card read pages to the window, not to a page ----------
+
+/** A board with `n` cards closed inside the window, plus whatever else the caller adds. */
+function closedBoard(t, { inWindow = 0, older = 0 } = {}) {
   const s = scratch(t);
   const ctx = ctxAt(s.root, { repo: 'o/r' });
   const gh = new FakeGh({ baseSha: '0'.repeat(40) });
   gh.addIssue(kbIssue({ number: 1, title: 'open', status: 'ready' }));
-  for (let i = 0; i < 100; i++) {
-    gh.addIssue(kbIssue({ number: 200 + i, title: `closed ${i}`, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', updatedAt: '2026-09-01T00:00:00Z' }));
+  for (let i = 0; i < inWindow; i++) {
+    gh.addIssue(kbIssue({ number: 200 + i, title: `closed ${i}`, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', updatedAt: `2026-09-01T00:00:${String(i % 60).padStart(2, '0')}Z` }));
   }
-  const restore = gh.install();
-  t.after(restore);
+  for (let i = 0; i < older; i++) {
+    gh.addIssue(kbIssue({ number: 100 + i, title: `ancient ${i}`, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', updatedAt: '2025-06-01T00:00:00Z' }));
+  }
+  t.after(gh.install());
   ctx.repo = { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner };
-
-  const lines = [];
   const store = openLocalStore(ctx, { reconcile: false });
   t.after(() => store.close());
+  return { ctx, gh, store };
+}
+
+test('every card closed inside the window is imported, however many pages that takes', async (t) => {
+  // The read was one query of 100 and the page size was the ceiling by accident. Measured on the
+  // board this migration was written for: 131 cards closed inside the 90-day window, of which 31
+  // would not have moved — their run records, results and handoffs left on GitHub while the local
+  // board became the source of truth without them, and `next_id` computed from the truncated set.
+  const { ctx, store } = closedBoard(t, { inWindow: 250, older: 3 });
+  const lines = [];
   const summary = await importGithubBoard(ctx, { store, log: (l) => lines.push(l), now: () => new Date('2026-09-03T00:00:00Z') });
+
+  assert.equal(summary.closed, 250, 'two and a half pages, all of them');
+  assert.equal(summary.cards, 251, 'and the open card');
+  assert.equal(summary.closed_capped, false, 'nothing was cut short, so nothing says it was');
+  assert.equal(lines.some((l) => /WARNING stopped at/.test(l)), false, lines.join(' | '));
+  assert.equal(store.listTasks({ states: ['CLOSED'] }).length, 250, 'and they are on the branch, not just in the summary');
+  assert.equal(store.git._read().cards.has(100), false, 'the 90-day window is still a window: what is outside it stays on GitHub');
+  assert.equal(summary.next_id, 450, 'computed after the whole read — 449 is the highest id imported');
+});
+
+test('closed_capped means a real ceiling was hit, with cards still inside the window behind it', async (t) => {
+  const { ctx, store } = closedBoard(t, { inWindow: 8 });
+  const lines = [];
+  const summary = await importGithubBoard(ctx, { store, closedMax: 5, log: (l) => lines.push(l), now: () => new Date('2026-09-03T00:00:00Z') });
+
+  assert.equal(summary.closed, 5, 'the ceiling holds');
   assert.equal(summary.closed_capped, true);
-  assert.equal(summary.closed_page, 100);
-  assert.ok(lines.some((l) => /WARNING/.test(l) && /one full page of 100/.test(l) && /there may be more/.test(l)),
-    `the cap is named, and named as a maybe — a full page says nothing about whether a next one exists: ${lines.join(' | ')}`);
+  assert.equal(summary.closed_max, 5);
+  assert.ok(lines.some((l) => /WARNING stopped at 5 closed card\(s\)/.test(l) && /NOT on the local board/.test(l)),
+    `and it is named flatly, because it is known rather than suspected: ${lines.join(' | ')}`);
+});
+
+test('a ceiling with nothing but history behind it is not a cap', async (t) => {
+  // The false positive the old read reported every time: a full page says nothing about what comes
+  // after it. Here the ceiling is reached exactly and every card past it is outside the window —
+  // which is the migration's scope, not a truncation of it — so nothing was left off.
+  const { ctx, store } = closedBoard(t, { inWindow: 5, older: 4 });
+  const lines = [];
+  const summary = await importGithubBoard(ctx, { store, closedMax: 5, log: (l) => lines.push(l), now: () => new Date('2026-09-03T00:00:00Z') });
+
+  assert.equal(summary.closed, 5);
+  assert.equal(summary.closed_capped, false, 'the cards behind the ceiling are history the window excluded, not cards that were dropped');
+  assert.equal(lines.some((l) => /WARNING stopped at/.test(l)), false, lines.join(' | '));
 });
 
 test('a lock ref that will not delete does not fail a migration that landed', async (t) => {

@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "touching the active_pr guard, the claim loop's worktree creation, hkb request-changes, or the worker brief"
 covers:
   - path: src/model.js
-    sha: 9eceb576d8a0d25f07f89fc26aae3635d072bbc0
+    sha: 01c6ed0b0af060e050ce6387de55f4d1b6b2605d
   - path: src/dispatch.js
     sha: 507787986768d696dc9897002d91317612e5ce0b
   - path: src/board.js
@@ -23,7 +23,7 @@ covers:
   - path: src/forge.js
     sha: 1d9e17cd8fad3500b512ef10843d541cda2c65a4
 related: [features/auto-merge, features/tracks, architecture/overview, architecture/dispatcher-tick]
-generated_at_commit: b0acc52
+generated_at_commit: 0c4e2e6
 last_refreshed: 2026-09-03
 ---
 
