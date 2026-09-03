@@ -649,17 +649,16 @@ export function removedInitFlag(flags = {}) {
  * here (it goes in track C).
  *
  * An **existing** board never changes store by being re-inited: a board.json that already says one
- * keeps it, and one written before the key existed is answered exactly the way `storeKind` answers
- * it at runtime — by whether this repository has a `kb-board` branch. That agreement is the point:
- * when the two disagreed, an `init` in a checkout with a branch full of cards wrote `"store":
- * "github"` into board.json and detached the board from its own branch, permanently and silently.
+ * keeps it, and one written before the key existed is `github`, which is what `storeKind` answers at
+ * runtime. The two must give the same answer from the same input, and the only input is the key —
+ * a `kb-board` branch in the checkout is deliberately *not* consulted by either (see `storeKind`).
+ * `hkb init --store local` is how a checkout that has the branch but not the key adopts it, and
+ * `initHints` is where that gets said out loud.
  * @param {{store?: any}} flags
  * @param {any} existing  the board's current config, or null for a fresh board
- * @param {boolean} [hasLocalBranch]  does this repo have a `kb-board` (or `<remote>/kb-board`)?
- *   `localBoardExists(ctx)` — `storeKind`'s rule 2, passed in so this stays pure.
  * @returns {'local'|'github'}
  */
-export function resolveStore(flags = {}, existing = null, hasLocalBranch = false) {
+export function resolveStore(flags = {}, existing = null) {
   const asked = flags.store;
   if (asked !== undefined && asked !== true) {
     if (asked !== 'local' && asked !== 'github') {
@@ -674,10 +673,7 @@ export function resolveStore(flags = {}, existing = null, hasLocalBranch = false
     e.exitCode = 2;
     throw e;
   }
-  if (existing) {
-    if (existing.store === 'local' || existing.store === 'github') return existing.store;
-    return hasLocalBranch ? 'local' : 'github';
-  }
+  if (existing) return existing.store === 'local' ? 'local' : 'github';
   return 'local';
 }
 
@@ -933,7 +929,7 @@ async function setUpLocalBoard(ctx, flags, log) {
   const made = store.git.init(ctx.board, store.host, { settings: {} });
   const loaded = store.open();
   log(made.created
-    ? `store: local — created the ${store.branch} branch (host "${store.host}") and ${path.relative(store.root, store.index.file)}`
+    ? `store: local — created the ${store.branch} branch (host "${store.host}") and ${path.relative(store.root(), store.index.file)}`
     : `store: local — ${store.branch} at ${String(store.git.tip()).slice(0, 7)}, owned by host "${made.board?.host ?? 'nobody'}"${loaded.loaded ? ` (indexed ${loaded.counts?.tasks ?? 0} card(s))` : ''}`);
 
   if (flags['take-over']) {
@@ -985,10 +981,18 @@ export async function init(ctx, flags, log) {
   const { harnesses, profiles } = resolveProfiles(flags);
   const existing = loadBoard(root);
   const { localBoardExists, BOARD_BRANCH } = await import('./store/local.js');
-  let store = resolveStore(flags, existing, localBoardExists(ctx));
+  let store = resolveStore(flags, existing);
+  // A checkout that has the branch but no `"store"` key is on the GitHub store — `storeKind` reads
+  // the key and nothing else, deliberately (see its docblock). That is worth **saying**, because the
+  // one thing a human in this situation cannot guess is that the branch under their feet is inert.
+  // A message, never a behaviour: this is the whole of what the removed inference is replaced by.
+  if (store === 'github' && flags.store === undefined && !flags.import && localBoardExists(ctx)) {
+    log(`note: this repository has a \`${BOARD_BRANCH}\` branch, and this board is on the GitHub store — nothing reads that branch. `
+      + `\`hkb init --store local\` puts this checkout on it; \`hkb init --import\` migrates the GitHub board onto a new one.`);
+  }
   // `--import` is the migration onto the local store (docs/local-first.md §6.3), and it has to mean
   // that on the board it exists to move: a GitHub board. Reading the resolved store first made it
-  // unreachable — a board pinned (or inferred) `github` routed `--import` to the old adopt loop and
+  // unreachable — a board pinned `github` routed `--import` to the old adopt loop and
   // said nothing, so the documented migration could only be run as `--store local --import`, which
   // nothing documents. The human's own `--store github` still wins, because that is a choice about
   // this run rather than a value read off a file.
@@ -1054,17 +1058,18 @@ export async function init(ctx, flags, log) {
   cfg.default_branch = repo.defaultBranch;
   cfg.board = board;
   cfg.skill_version = skillVersion; // null when linked — a link cannot go stale
-  // The store key is written when it is a **decision**, never when it is an inference. `hkb init`
-  // pinning what `resolveStore` merely worked out turned every re-init of an older board into a
-  // permanent `"store": "github"` — including one whose `kb-board` branch was full of cards, where
-  // `storeKind`'s rule 2 had been answering `local` and now never would again. So: the human's own
-  // `--store`, a fresh board (whose default *is* the decision), and a board that already carries the
-  // key stay accurate; a board that predates the key is left for rule 2 to keep answering.
+  // The store key is written when it is a **decision**, never when it is an inference — and with the
+  // branch inference gone (`storeKind`) there are exactly four decisions: the human's own `--store`,
+  // a fresh board (whose default *is* the decision), a board that already carries the key, and
+  // `--import`, which is a human asking for the migration. A plain `hkb init` over an older board
+  // writes nothing: `|| store === 'local'` used to, which put `"store": "local"` into a git-tracked
+  // board.json as a side effect of a routine re-init — the very write `--import` refuses without
+  // `--force` three screens above, and the opposite of what this comment claimed.
   //
   // And it is written **after** the board itself exists, not before: `--import` can still refuse
   // (a card claimed by a running worker, a branch already there), and a board.json that says
   // `local` over a migration that did not happen points every verb at a branch with nothing on it.
-  const pinStore = flags.store !== undefined || !existing || existing.store !== undefined || store === 'local';
+  const pinStore = flags.store !== undefined || !existing || existing.store !== undefined || (!!flags.import && store === 'local');
   const writeStoreKey = () => {
     if (!pinStore || cfg.store === store) return;
     cfg.store = store; // `openStore` reads this and nothing else decides (docs/local-first.md §6.4)
@@ -1096,8 +1101,8 @@ export async function init(ctx, flags, log) {
   //     that is `--take-over`, which is a decision and not a side effect of running init again.
   const migration = store === 'local' ? await setUpLocalBoard(ctx, flags, log) : null;
   writeStoreKey();
-  // `storeKind` memoizes per context, and this init has just created the branch that answers it.
-  if (store === 'local') { const { forgetStore } = await import('./store/index.js'); forgetStore(ctx); }
+  // The tiers memoize the tree per context, and this init has just created the branch under them.
+  if (store === 'local') { const { forgetStore } = await import('./store/index.js'); await forgetStore(ctx); }
   if (store === 'github') log(`store: github — the board is the \`kb:*\` issues on ${repo.nameWithOwner} (\`hkb init --store local\` moves a new board onto the kb-board branch instead)`);
 
   // 3b. optional Projects v2 mirror (opt-in, one-way). Everything above is already saved, so a

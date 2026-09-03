@@ -13,14 +13,14 @@ covers:
   - path: src/board.js
     sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
   - path: src/init.js
-    sha: c2fbe7003278359213e5ddb2f368e1d4106a780d
+    sha: 44cb5f767e8f7905b0f5bdefe1d44fbf70169709
   - path: src/lifecycle.js
     sha: 3d8234ec94517fa40a1fdbef460486d3bf873068
   - path: src/track.js
     sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
   - path: src/model.js
     sha: a0ada59cd3061302ebe8ab640b50d690700803f7
-generated_at_commit: a5f1e60
+generated_at_commit: 29d0d25
 last_refreshed: 2026-09-03
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
@@ -288,9 +288,13 @@ confidently wrong picture of what a track depended on.
 ## A clone is a reader, and the page is what a reader gets
 
 On a local board the whole board travels with the repository, so "share the
-board" is `git clone` — and what a clone should get is exactly this page. Which
-store a clone is on needs no configuration: `storeKind` (`src/store/index.js`)
-calls the board local on the presence of `kb-board` or `origin/kb-board` alone.
+board" is `git clone` — and what a clone should get is exactly this page. A
+clone needs no configuration because `.kanban/board.json` is a tracked file and
+its `"store": "local"` comes along with it; that key is the whole of what
+`storeKind` (`src/store/index.js`) reads. It deliberately does *not* infer the
+store from a `kb-board` ref: a store that a `git fetch` can change is one the
+verbs can disagree with, and every way that went wrong is in
+`architecture/store-seam`.
 
 What a clone cannot do is write. The branch names one owning host, and every
 mutating verb — including the ones the page's drag-and-drop calls — is refused

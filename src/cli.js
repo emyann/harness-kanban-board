@@ -485,8 +485,10 @@ export async function main(argv) {
   ctx.requireBoard();
   // One writer (docs/local-first.md §6.2). A verb that changes the board is refused on a host that
   // does not own it, here rather than three calls in — a clone is a *reader*, and the read verbs
-  // (list, show, context, graph, log, stats, serve, watch, tail) are missing from this set on purpose.
-  if (invocationWritesBoard(cmd, flags)) assertOwningHost(ctx, cmd);
+  // (list, show, context, graph, log, stats, watch, tail) are missing from this set on purpose.
+  // `serve` is **not** one of them — the web board drags cards between lanes, which is the same
+  // mutating verb `hkb promote` runs — and `WRITES_BOARD` says so where it lists it.
+  if (invocationWritesBoard(cmd, flags)) await assertOwningHost(ctx, cmd);
 
   switch (cmd) {
     case 'create': {

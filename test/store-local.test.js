@@ -15,9 +15,10 @@ import { openStore, storeKind, assertOwningHost, forgetStore } from '../src/stor
 import { gitTierFor } from '../src/store/local.js';
 import { openLocalStore, importGithubBoard, adoptOpenIssues, liveDispatcher, dropGithubLeftovers, mountFor, syncAfterTick, cardRecord, SYNC_THROTTLE_MS, OFFLINE } from '../src/store/local.js';
 import { openGitTier } from '../src/store/git.js';
-import { syncPass, DURABLE_TICK_KEYS } from '../src/dispatch.js';
+import { syncPass, loop, DURABLE_TICK_KEYS } from '../src/dispatch.js';
 import { invocationWritesBoard } from '../src/cli.js';
-import { DEFAULT_BOARD, hostId, readState, runGitAsync } from '../src/board.js';
+import { DEFAULT_BOARD, hostId, readState, writeState, runGitAsync, storeGitDir } from '../src/board.js';
+import { indexFileIn } from '../src/store/sqlite.js';
 import { emptyRun, serializeResultComment, serializeRunComment, RESULT_MARKER } from '../src/model.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
@@ -56,39 +57,70 @@ function scratch(t, { name = 'work' } = {}) {
 }
 
 /** A board on the local store in a scratch repo, opened through the seam. */
-function board(t, opts = {}) {
+async function board(t, opts = {}) {
   const s = scratch(t, opts);
   const ctx = ctxAt(s.root, opts);
   openGitTier(ctx).init(ctx.board);
-  const store = openStore(ctx);
+  const store = await openStore(ctx);
   t.after(() => { try { store.close(); } catch { /* already closed */ } });
   return { ...s, ctx, store };
 }
 
 // ---------- the seam ----------
 
-test('openStore picks the local driver from board.json, and from the branch when nothing says', (t) => {
+test('the store is what board.json says, and a kb-board branch never decides it', async (t) => {
+  // **The rule this file exists to hold now.** `storeKind` used to have a second rule — a repository
+  // with a `kb-board` (or `origin/kb-board`) ref is a local board — so that a clone needed no
+  // config. It is gone, because a rule that reads the store off a *ref* is reachable by `git fetch`:
+  // another host's push, a colleague's experiment, a branch pulled in by accident, and the checkout
+  // flips onto the local store while `.kanban/board.json` still points every verb at GitHub. Three
+  // successive reviews found a different destructive interaction in that half-migrated state (an
+  // import that deleted live workers' lock refs; a gc that read `[]` and destroyed worker worktrees;
+  // collaborators refused every write verb on a board of issues they own). One cause, one fix.
   const s = scratch(t);
   const ctx = ctxAt(s.root, { store: undefined });
   delete ctx.cfg.store;
-  assert.equal(storeKind(ctx), 'github', 'no branch and no declaration: the board is where it has always been');
+  assert.equal(storeKind(ctx), 'github', 'no declaration: the board is where it has always been');
 
   openGitTier(ctx).init('default');
-  assert.equal(storeKind(ctx), 'github', 'and that answer is remembered — two rev-parse per verb for a board that can only ever be on GitHub is the cost of not remembering it');
-  // `forgetStore` is the invalidation, and the only thing that creates the branch under a running
-  // process — `hkb init` — calls it. That is the contract the cached negative rests on.
-  forgetStore(ctx);
-  assert.equal(storeKind(ctx), 'local', 'a kb-board branch is a local board, with no config at all');
+  assert.equal(storeKind(ctx), 'github', 'and a branch appearing under the checkout does not move it');
+  // The invalidation that remains is about the memoized *tree*, not about a cached answer: there is
+  // no cached answer any more, because there is nothing to work out.
+  await forgetStore(ctx);
+  assert.equal(storeKind(ctx), 'github', 'still — only the key decides');
 
+  ctx.cfg.store = 'local';
+  assert.equal(storeKind(ctx), 'local', 'the key, and nothing else');
   ctx.cfg.store = 'github';
-  assert.equal(storeKind(ctx), 'github', 'and a declaration beats the branch');
+  assert.equal(storeKind(ctx), 'github');
 
   ctx.cfg.store = 'sqlite';
   assert.throws(() => storeKind(ctx), (e) => e.exitCode === 2 && /not a store/.test(e.message));
 });
 
-test('the local store composes both tiers: the branch is durable, the index is live', (t) => {
-  const { store } = board(t);
+test('a fetched kb-board branch cannot convert a collaborator, and cannot make gc destructive', async (t) => {
+  // The end-to-end shape of the finding above, on the two verbs it reached: one host publishes the
+  // branch, everybody else fetches it, and on their checkouts nothing at all changes.
+  const s = scratch(t);
+  const ctx = ctxAt(s.root, { store: undefined });
+  delete ctx.cfg.store;
+  // The branch arrives the way it really would: on the remote-tracking ref, from a fetch.
+  const publisher = ctxAt(s.root, {});
+  openGitTier(publisher).init('default');
+  git(s.root, 'push', '-q', 'origin', 'kb-board');
+  git(s.root, 'update-ref', 'refs/remotes/origin/kb-board', git(s.root, 'rev-parse', 'kb-board'));
+  git(s.root, 'branch', '-D', 'kb-board');
+
+  assert.equal(storeKind(ctx), 'github', 'a branch on the remote is not a store');
+  const store = await openStore(ctx);
+  assert.equal(store.kind, 'github', 'and openStore hands back the driver the verbs are using');
+  // The write guard follows: a collaborator is not refused `hkb create` on a board of issues they
+  // have always been able to write.
+  assert.equal(await assertOwningHost({ ...ctx, host: 'someone-elses-laptop' }, 'create'), null);
+});
+
+test('the local store composes both tiers: the branch is durable, the index is live', async (t) => {
+  const { store } = await board(t);
   const card = store.createTask({ title: 'ship it', status: 'ready', agent: 'claude', kb: { priority: 2 } });
   assert.equal(store.git.getTask(card.number).title, 'ship it', 'the card is on the branch');
   assert.equal(store.index.getTaskRow(card.number).title, 'ship it', 'and indexed');
@@ -102,8 +134,8 @@ test('the local store composes both tiers: the branch is durable, the index is l
   assert.equal(store.git.tip(), tip, 'a beat never moves the branch');
 });
 
-test('open() rebuilds the index when the branch moved behind it', (t) => {
-  const { ctx, store } = board(t);
+test('open() rebuilds the index when the branch moved behind it', async (t) => {
+  const { ctx, store } = await board(t);
   const card = store.createTask({ title: 'written elsewhere', status: 'ready' });
   // The branch moves with the index untouched — a crash between the commit and the index write,
   // which is the case §6.1 says `open()` exists to repair. (Two *stores* in one repo share the
@@ -119,8 +151,8 @@ test('open() rebuilds the index when the branch moved behind it', (t) => {
   assert.equal(store.open().loaded, false, 'and a second open on an unmoved branch reads one row and stops');
 });
 
-test('a durable write commits, then indexes, then appends exactly one event', (t) => {
-  const { store } = board(t);
+test('a durable write commits, then indexes, then appends exactly one event', async (t) => {
+  const { store } = await board(t);
   const before = store.events({ after: 0, limit: 1000 }).length;
   const card = store.createTask({ title: 'one', status: 'ready' });
   const after = store.events({ after: 0, limit: 1000 });
@@ -136,8 +168,8 @@ test('a durable write commits, then indexes, then appends exactly one event', (t
 
 // ---------- one writer (§6.2) ----------
 
-test('a mutating verb on a host that is not the board\'s is refused, naming --take-over', (t) => {
-  const { ctx, store } = board(t);
+test('a mutating verb on a host that is not the board\'s is refused, naming --take-over', async (t) => {
+  const { ctx, store } = await board(t);
   store.createTask({ title: 'theirs', status: 'ready' });
   const foreign = openLocalStore(ctx, { host: 'someone-elses-laptop' });
   t.after(() => foreign.close());
@@ -153,11 +185,11 @@ test('a mutating verb on a host that is not the board\'s is refused, naming --ta
   assert.throws(() => foreign.setStatus(foreign.getTask(foreign.listTasks()[0].number), 'done'), (e) => e.exitCode === 2 && /one writer/.test(e.message));
 
   // and the guard the CLI puts in front of every mutating verb says the same thing, one step earlier
-  assert.throws(
+  await assert.rejects(
     () => assertOwningHost({ ...ctx, host: 'someone-elses-laptop', _cache: {} }, 'claim'),
     (e) => e.exitCode === 2 && /hkb claim/.test(e.message) && /hkb init --take-over/.test(e.message),
   );
-  assert.equal(assertOwningHost(ctx, 'claim'), null, 'and says nothing on the host that owns it');
+  assert.equal(await assertOwningHost(ctx, 'claim'), null, 'and says nothing on the host that owns it');
 });
 
 test('the guard is on the invocation, not the noun: `hkb up --status` reads, so a clone may run it', () => {
@@ -182,7 +214,7 @@ test('the guard is on the invocation, not the noun: `hkb up --status` reads, so 
   assert.equal(invocationWritesBoard('dispatch', { 'dry-run': true, loop: true }), true);
 });
 
-test('a board with no branch is nobody\'s: both layers pass, and owner() does not throw', (t) => {
+test('a board with no branch is nobody\'s: both layers pass, and owner() does not throw', async (t) => {
   const s = scratch(t);
   const ctx = ctxAt(s.root);
   const store = openLocalStore(ctx, { host: 'someone-elses-laptop' });
@@ -192,11 +224,11 @@ test('a board with no branch is nobody\'s: both layers pass, and owner() does no
   // that does not exist yet, or a `hkb init` in a fresh clone is refused by one and passed by the other.
   assert.equal(store.owner(), null);
   assert.equal(store.owns(), true);
-  assert.equal(assertOwningHost({ ...ctx, host: 'someone-elses-laptop' }, 'create'), null);
+  assert.equal(await assertOwningHost({ ...ctx, host: 'someone-elses-laptop' }, 'create'), null);
 });
 
-test('--take-over moves the owning host, and refuses while the old one is still ticking', (t) => {
-  const { ctx, store } = board(t);
+test('--take-over moves the owning host, and refuses while the old one is still ticking', async (t) => {
+  const { ctx, store } = await board(t);
   const clock = { at: new Date('2026-09-03T12:00:00Z') };
   const foreign = openLocalStore(ctx, { host: 'laptop-b', now: () => clock.at });
   t.after(() => foreign.close());
@@ -216,12 +248,12 @@ test('--take-over moves the owning host, and refuses while the old one is still 
   assert.throws(() => store.setStatus(store.listTasks()[0] || { number: 1 }, 'done'), (e) => e.exitCode === 2);
 });
 
-test('a stamp from the future is a live dispatcher, not an absent one', (t) => {
+test('a stamp from the future is a live dispatcher, not an absent one', async (t) => {
   // The two clocks being compared are on different hosts, so ordinary skew — a laptop a minute
   // ahead, an RTC that drifted — is the normal case. Reading a future stamp as "nobody is ticking"
   // failed the guard open in the one direction it must not: `--take-over` walking in while the
   // other host's loop is writing the branch.
-  const { ctx, store } = board(t);
+  const { ctx, store } = await board(t);
   const clock = { at: new Date('2026-09-03T12:00:00Z') };
   store.git.setBoard({ dispatch: { host: store.host, pid: 7, at: '2026-09-03T12:00:30Z' } });
   const foreign = openLocalStore(ctx, { host: 'laptop-b', now: () => clock.at });
@@ -230,16 +262,16 @@ test('a stamp from the future is a live dispatcher, not an absent one', (t) => {
   assert.equal(liveDispatcher(foreign.git._read().board, 'laptop-b', clock.at).age, 0, 'a negative age is clamped, not treated as absent');
 });
 
-test('--take-over --force overrides a fresh stamp', (t) => {
-  const { ctx, store } = board(t);
+test('--take-over --force overrides a fresh stamp', async (t) => {
+  const { ctx, store } = await board(t);
   store.git.setBoard({ dispatch: { host: store.host, pid: 1, at: new Date().toISOString() } });
   const foreign = openLocalStore(ctx, { host: 'laptop-b' });
   t.after(() => foreign.close());
   assert.equal(foreign.takeOver({ force: true }).changed, true);
 });
 
-test('markDispatcher stamps once, then holds off — it is a commit, not a heartbeat', (t) => {
-  const { store } = board(t);
+test('markDispatcher stamps once, then holds off — it is a commit, not a heartbeat', async (t) => {
+  const { store } = await board(t);
   const clock = { at: new Date('2026-09-03T12:00:00Z') };
   store.now = () => clock.at;
   assert.equal(store.markDispatcher(99).stamped, true);
@@ -254,7 +286,7 @@ test('markDispatcher stamps once, then holds off — it is a commit, not a heart
 // ---------- sync (§6.2) ----------
 
 test('sync pushes the branch, and a clone reads the same cards read-only', async (t) => {
-  const { dir, origin, ctx, store } = board(t);
+  const { dir, origin, ctx, store } = await board(t);
   const a = store.createTask({ title: 'first', status: 'ready', agent: 'claude' });
   store.createTask({ title: 'second', status: 'todo' });
 
@@ -266,10 +298,14 @@ test('sync pushes the branch, and a clone reads the same cards read-only', async
   // A friend clones. No .kanban/board.json of their own, no local kb-board — just the remote copy.
   const clone = path.join(dir, 'clone');
   git(dir, 'clone', '-q', origin, clone);
-  const theirCtx = ctxAt(clone, { store: undefined });
-  delete theirCtx.cfg.store;
-  assert.equal(storeKind(theirCtx), 'local', 'the branch alone says which store this is');
-  const theirs = openStore(theirCtx);
+  // Their `.kanban/board.json` is the repository's own — it is a tracked file, and the `"store"`
+  // key rode in with the clone. **That** is what makes "a friend clones the repo and has the board"
+  // work, and it is more deterministic than the rule it replaced: the store no longer depends on
+  // which refs a particular clone happens to carry (`--single-branch`, a stale fetch, a mirror).
+  const theirCtx = ctxAt(clone);
+  assert.equal(theirCtx.cfg.store, 'local');
+  assert.equal(storeKind(theirCtx), 'local', 'the tracked key says which store this is');
+  const theirs = await openStore(theirCtx);
   t.after(() => theirs.close());
   assert.deepEqual(theirs.listTasks().map((x) => x.title).sort(), ['first', 'second']);
   assert.equal(theirs.getTask(a.number).agent, 'claude');
@@ -280,7 +316,7 @@ test('sync pushes the branch, and a clone reads the same cards read-only', async
 });
 
 test('sync fast-forwards a clone that has a local branch, and refuses a divergence', async (t) => {
-  const { dir, origin, store } = board(t);
+  const { dir, origin, store } = await board(t);
   store.createTask({ title: 'first', status: 'ready' });
   await store.sync();
 
@@ -313,7 +349,7 @@ test('sync is a no-op with no remote, and off when the board says so', async (t)
   git(dir, 'add', 'a.txt'); git(dir, 'commit', '-qm', 'init');
   const ctx = ctxAt(dir);
   openGitTier(ctx).init('default');
-  const store = openStore(ctx);
+  const store = await openStore(ctx);
   t.after(() => store.close());
   assert.equal((await store.sync()).skipped, 'no-remote');
 
@@ -322,12 +358,12 @@ test('sync is a no-op with no remote, and off when the board says so', async (t)
 });
 
 test('the loop syncs after a tick that wrote, at most once a minute', async (t) => {
-  const { ctx, origin, store } = board(t);
+  const { ctx, origin, store } = await board(t);
   store.createTask({ title: 'first', status: 'ready' });
   const first = await syncAfterTick(ctx, { store });
   assert.equal(first.synced, true);
   assert.equal(first.result.pushed, true);
-  assert.equal(Number.isFinite(readState(store.root).sync_at), true, 'the stamp is this host\'s, in .kanban/state.json');
+  assert.equal(Number.isFinite(readState(store.root()).sync_at), true, 'the stamp is this host\'s, in .kanban/state.json');
 
   store.createTask({ title: 'second', status: 'ready' });
   assert.equal((await syncAfterTick(ctx, { store })).why, 'throttled');
@@ -361,7 +397,7 @@ test('an idle tick still stamps: liveness is about the process, not about what i
   // liveness expired after HOST_LIVE_MS, and another host's `hkb init --take-over` took a board it
   // was actively ticking — no `--force`, no warning. The push is what a decision buys; the stamp is
   // what being alive buys.
-  const { ctx, store } = board(t);
+  const { ctx, store } = await board(t);
   const empty = Object.fromEntries(DURABLE_TICK_KEYS.map((k) => [k, []]));
   await syncPass(ctx, empty, () => {});
   store.git.forget();
@@ -469,8 +505,32 @@ test('the adoption path skips pull requests and names its own page ceiling', asy
   assert.ok(lines.some((l) => /WARNING stopped at 2 page\(s\)/.test(l)), lines.join(' | '));
 });
 
+test('a repository with exactly a whole number of pages is not told cards were left off', async (t) => {
+  // **A ceiling is only real if there is something above it.** `more = page === pages` called the
+  // last *full* page a truncation, so a repository with exactly `pages × 100` open issues — every
+  // one of them adopted — was warned that it had more that were not on the board. A full page says
+  // nothing about whether a next one exists, so the next one is read, and that is the answer.
+  const s = scratch(t);
+  const ctx = ctxAt(s.root, { repo: 'o/r' });
+  const store = openLocalStore(ctx, { reconcile: false });
+  t.after(() => store.close());
+  const lines = [];
+  const page = (n) => Array.from({ length: 100 }, (_, i) => ({ number: n * 100 + i, title: `issue ${n}.${i}`, body: '', labels: [] }));
+  const asked = [];
+  const summary = await adoptOpenIssues(ctx, {
+    store,
+    log: (l) => lines.push(l),
+    pages: 2,
+    issues: (p) => { asked.push(p); return p <= 2 ? page(p) : []; },
+  });
+  assert.equal(summary.cards, 200, 'both pages adopted');
+  assert.equal(summary.issues_capped, false, 'and nothing was left off, so nothing is claimed to be');
+  assert.deepEqual(asked, [1, 2, 3], 'the page after the last full one is what settles it');
+  assert.equal(lines.some((l) => /WARNING stopped at/.test(l)), false);
+});
+
 test('a second import is refused rather than overwriting a board that has been worked', async (t) => {
-  const { ctx, store } = board(t, { repo: 'o/r' });
+  const { ctx, store } = await board(t, { repo: 'o/r' });
   const gh = seededGh();
   const restore = gh.install();
   t.after(restore);
@@ -479,6 +539,30 @@ test('a second import is refused rather than overwriting a board that has been w
     () => importGithubBoard(ctx, { store }),
     (e) => e.exitCode === 2 && /already exists/.test(e.message) && /branch -D kb-board/.test(e.message),
   );
+});
+
+test('the import\'s refusal does not create the index it names', async (t) => {
+  // **A diagnosis does not create what it describes**, and neither does a refusal. The message
+  // reads `rm -f <index.db>*`, and it used to reach that path through the store's lazy `index`
+  // getter — which `mkdir`s the directory, creates the file and runs the schema. So a refusal whose
+  // whole point is to leave the board untouched created a database, leaked its connection, and on a
+  // node without `node:sqlite` threw a different error in place of this sentence. Same shape as the
+  // one `hkb doctor` had.
+  const sc = scratch(t);
+  const ctx = ctxAt(sc.root, { repo: 'o/r' });
+  openGitTier(ctx).init('default'); // the branch the refusal is about
+  const gh = seededGh();
+  const restore = gh.install();
+  t.after(restore);
+  ctx.repo = { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner };
+  const store = openLocalStore(ctx, { reconcile: false });
+  t.after(() => store.close());
+  const file = indexFileIn(storeGitDir(ctx), 'default');
+  assert.equal(fs.existsSync(file), false, 'no verb has opened this board here yet');
+
+  await assert.rejects(() => importGithubBoard(ctx, { store }), (e) => e.exitCode === 2 && /already exists/.test(e.message));
+  assert.equal(fs.existsSync(file), false, 'the refusal created no database');
+  assert.equal(store.indexOpen, false, 'and opened no connection to leak');
 });
 
 test('the import deletes the lock refs on the remote and the local beat chains', async (t) => {
@@ -502,7 +586,7 @@ test('the import deletes the lock refs on the remote and the local beat chains',
 // ---------- a card's whole life on a local board ----------
 
 test('create, claim, work and finish — the whole card, with nothing on GitHub', async (t) => {
-  const { origin, store } = board(t);
+  const { origin, store } = await board(t);
   const card = store.createTask({ title: 'do the thing', status: 'ready', agent: 'claude' });
 
   // claim: the lock and the open attempt are the index's, the status is the branch's
@@ -541,8 +625,8 @@ test('create, claim, work and finish — the whole card, with nothing on GitHub'
 
 // ---------- the mount probe (§6.3) ----------
 
-test('a malformed result body is a comment on both sides, not a result event nothing can read', (t) => {
-  const { store } = board(t);
+test('a malformed result body is a comment on both sides, not a result event nothing can read', async (t) => {
+  const { store } = await board(t);
   const card = store.createTask({ title: 'handoff', status: 'running' });
   const before = store.events({ after: 0, limit: 1000 }).length;
 
@@ -596,8 +680,8 @@ test('mountFor answers with the longest mount point that is a prefix of the path
 
 // ---------- what the record on the branch has to look like ----------
 
-test('cardRecord round-trips through the branch: hoisted columns, kb, labels, blockers', (t) => {
-  const { store } = board(t);
+test('cardRecord round-trips through the branch: hoisted columns, kb, labels, blockers', async (t) => {
+  const { store } = await board(t);
   const task = {
     number: 42, title: 'imported', bodyText: 'the why', status: 'review', agent: 'codex',
     kb: { priority: 3, paths: ['src/x.js'], goal: 'ship', max_runtime: 4242, model: 'opus' },
@@ -620,8 +704,8 @@ test('cardRecord round-trips through the branch: hoisted columns, kb, labels, bl
   assert.equal(read.labels.filter((l) => l === 'kb:status:review').length, 1, 'and the ones that are columns are not doubled');
 });
 
-test('a run record written by the store is the same file the index reads back', (t) => {
-  const { store } = board(t);
+test('a run record written by the store is the same file the index reads back', async (t) => {
+  const { store } = await board(t);
   const card = store.createTask({ title: 'a card', status: 'ready' });
   const rec = { run: { ...emptyRun(), failures: 2, attempts: [{ attempt: 1, profile: 'claude', host: 'h', started_at: '2026-09-01T00:00:00Z', ended_at: '2026-09-01T01:00:00Z', outcome: 'blocked', reason: 'needs_input' }] }, id: null };
   store.saveRun(card.number, rec);
@@ -742,7 +826,8 @@ test('the closed-card page is a cap, and the import says so rather than reading 
   const summary = await importGithubBoard(ctx, { store, log: (l) => lines.push(l), now: () => new Date('2026-09-03T00:00:00Z') });
   assert.equal(summary.closed_capped, true);
   assert.equal(summary.closed_page, 100);
-  assert.ok(lines.some((l) => /WARNING/.test(l) && /one page of 100/.test(l)), `the cap is named: ${lines.join(' | ')}`);
+  assert.ok(lines.some((l) => /WARNING/.test(l) && /one full page of 100/.test(l) && /there may be more/.test(l)),
+    `the cap is named, and named as a maybe — a full page says nothing about whether a next one exists: ${lines.join(' | ')}`);
 });
 
 test('a lock ref that will not delete does not fail a migration that landed', async (t) => {
@@ -774,7 +859,7 @@ test('sync fetches a board this checkout does not have a branch for yet', async 
   // The friend's clone: `git clone --single-branch`, so `origin/kb-board` is not even here. Reading
   // the board document first threw "there is no kb-board branch" at the exact person who ran the
   // command to go and get one — and `hkb init` there then made a second, empty board.
-  const { dir, origin, store } = board(t);
+  const { dir, origin, store } = await board(t);
   store.createTask({ title: 'the owner made this', status: 'ready' });
   await store.sync();
 
@@ -791,7 +876,7 @@ test('sync fetches a board this checkout does not have a branch for yet', async 
 });
 
 test('sync.push false turns off the push and nothing else, and --no-push cannot do more than the default', async (t) => {
-  const { dir, origin, root, store } = board(t);
+  const { dir, origin, root, store } = await board(t);
   store.setBoard({ settings: { sync: { push: false } } });
   store.createTask({ title: 'first', status: 'ready' });
 
@@ -874,15 +959,15 @@ test('the network git runs off the event loop, and a git that never answers read
   assert.equal(OFFLINE.test(r.out), true, `a git that never answered is offline, not a broken remote: ${r.out}`);
 });
 
-test('the one-writer guard and the verb behind it share one decoded tree', (t) => {
+test('the one-writer guard and the verb behind it share one decoded tree', async (t) => {
   // `assertOwningHost` opened a tier to read one string out of board.json and threw the memo away;
   // the verb behind it then opened the store and decoded the whole board again. Two `ls-tree -r`
   // plus two `cat-file --batch` per `hkb create`, on every card of the board.
-  const { ctx, store } = board(t);
+  const { ctx, store } = await board(t);
   store.createTask({ title: 'a card', status: 'ready' });
 
-  assert.equal(assertOwningHost(ctx, 'create'), null, 'this host owns it');
-  const second = openStore(ctx);
+  assert.equal(await assertOwningHost(ctx, 'create'), null, 'this host owns it');
+  const second = await openStore(ctx);
   t.after(() => { try { second.close(); } catch { /* already closed */ } });
   assert.equal(second.git, store.git, 'one tier per context, so one decode');
   assert.equal(gitTierFor(ctx, { host: ctx.host }), store.git);
@@ -1002,7 +1087,7 @@ test('a dry-run loop is still a write: the guard holds and the flag reaches the 
 });
 
 test('sync reads the exit status of every update-ref: a lost compare-and-swap is not a success', async (t) => {
-  const { dir, origin, store } = board(t);
+  const { dir, origin, store } = await board(t);
   store.createTask({ title: 'the owner made this', status: 'ready' });
   await store.sync();
 
@@ -1025,11 +1110,13 @@ test('sync reads the exit status of every update-ref: a lost compare-and-swap is
     'and the ref really did not move, which is what the old code reported as `fastForwarded: true`');
 });
 
-test('a sync that creates the branch invalidates the cached store kind', async (t) => {
-  // `storeKind` remembers "this is a GitHub board" for the life of the process. A long-lived
-  // `hkb serve` or dispatcher that started before the first sync went on believing it forever:
-  // no stamp, no owner guard, on a board that had become local in another terminal.
-  const { dir, origin, store } = board(t);
+test('a sync that creates the branch changes nothing about which store this is', async (t) => {
+  // The old shape of this test asserted the opposite — that `hkb sync` creating `kb-board` under a
+  // running process flipped it onto the local store, and that `forgetStore` was what made that
+  // safe. It is not safe, and it is no longer possible: `storeKind` reads `"store"` in board.json
+  // and nothing else, so a branch arriving (a sync, a fetch, another host's push) leaves every verb
+  // exactly where it was. That inference is the one this round removed.
+  const { dir, origin, store } = await board(t);
   store.createTask({ title: 'published', status: 'ready' });
   await store.sync();
 
@@ -1038,20 +1125,27 @@ test('a sync that creates the branch invalidates the cached store kind', async (
   fs.mkdirSync(path.join(clone, '.kanban'), { recursive: true });
   const ctx = ctxAt(clone, { store: undefined });
   delete ctx.cfg.store;
-  assert.equal(storeKind(ctx), 'github', 'nothing here says otherwise yet, and the answer is cached');
+  assert.equal(storeKind(ctx), 'github', 'no key, no local board');
 
   const theirs = openLocalStore(ctx, { reconcile: false });
   t.after(() => theirs.close());
-  assert.equal((await theirs.sync()).fastForwarded, true);
-  assert.equal(storeKind(ctx), 'local', 'the branch is here now, and the cache was told');
+  assert.equal((await theirs.sync()).fastForwarded, true, 'the branch is fetched and created all the same');
+  assert.equal(storeKind(ctx), 'github', 'and the store did not move under the running process');
+  assert.equal((await openStore(ctx)).kind, 'github');
 });
 
-test('the dispatcher stamp survives a clock corrected backwards, and moves only the tip', async (t) => {
-  // Two comparisons on the same clock, resolved in opposite directions on purpose: a liveness guard
-  // reads a future stamp as live and refuses (`liveDispatcher`), a throttle reads one as broken and
-  // does the work. Clamping the throttle to zero — the shape the guard uses — would have kept the
-  // bug: stamping stopped for twenty minutes while every other host's copy of this host's liveness
-  // expired.
+test('a clock corrected backwards throttles, and does not commit a stamp every tick', async (t) => {
+  // **One rule for every throttle, and this is the round it was got right.** The previous round put
+  // a clamp on `liveDispatcher` (a *liveness* guard: a future stamp is somebody who is there) and
+  // then made the throttle two functions away resolve the same skew the opposite way — `delta >= 0`,
+  // so any negative delta was "due". A single backward step (NTP, a VM or WSL resync, a laptop
+  // waking) then made the dispatcher commit a stamp and push it on every tick, on a branch that is
+  // meant to read as the board's decisions; it was also a live flaky test in this file.
+  //
+  // `throttled()` is now the one answer for all three sites: fresh means *inside the window on
+  // either side of now*. Nothing is lost by holding off on a future stamp — every reader of it
+  // already treats it as live — and a stamp further ahead than the window is not skew but a broken
+  // record, so it is rewritten once and throttles normally afterwards.
   const clock = { at: new Date('2026-09-03T12:00:00Z') };
   const { root } = scratch(t, { name: 'skewed' });
   const ctx = ctxAt(root);
@@ -1061,10 +1155,26 @@ test('the dispatcher stamp survives a clock corrected backwards, and moves only 
   store.createTask({ title: 'a card that must survive every stamp', status: 'ready' });
 
   assert.equal(store.markDispatcher(11).stamped, true);
+  const tip = store.git.tip();
   clock.at = new Date('2026-09-03T12:01:00Z');
   assert.equal(store.markDispatcher(11).stamped, false, 'a minute later is throttled: the stamp is a commit');
-  clock.at = new Date('2026-09-03T11:59:00Z'); // NTP stepped the clock back
-  assert.equal(store.markDispatcher(11).stamped, true, 'a stamp dated after now is not freshness, it is a stamp to rewrite');
+  // The injected backward step, ten times: a clock that has moved back inside the window is a
+  // throttle that holds, not one commit per tick.
+  for (let i = 0; i < 10; i++) {
+    clock.at = new Date('2026-09-03T11:59:00Z');
+    assert.equal(store.markDispatcher(11).stamped, false, 'a stamp dated after now is still a fresh stamp');
+  }
+  assert.equal(store.git.tip(), tip, 'and the branch has one stamp commit on it, not eleven');
+
+  // The same injection through `syncAfterTick`'s own throttle, which is the one that pushes.
+  writeState(root, { ...readState(root), sync_at: Date.now() + 30_000 });
+  assert.equal((await syncAfterTick(ctx, { store, now: Date.now() })).why, 'throttled', 'a sync stamp from the future throttles too');
+
+  // A stamp that is not skew at all — further ahead than the whole window — is rewritten once, so
+  // one broken record cannot freeze this host's liveness for ever.
+  clock.at = new Date('2026-09-03T11:00:00Z');
+  assert.equal(store.markDispatcher(11).stamped, true, 'an hour in the future is a broken record, not a clock');
+  assert.equal(store.markDispatcher(11).stamped, false, 'and the rewrite settles it');
 
   // …and the stamp moves the index's tip and nothing else. A full reindex here dropped and
   // re-inserted every task, link, run and result on the board every five minutes.
@@ -1077,7 +1187,7 @@ test('an event names the write it was, and carries what a reader renders', async
   // Six unrelated writes were filed as `status` with an `op` key nothing reads, so `hkb watch
   // --kinds status` rendered each of them `none → none`; `needs-human` added and cleared were the
   // same kind with the same payload, so a raised flag read as a cleared one.
-  const { store } = board(t);
+  const { store } = await board(t);
   const seen = () => store.events({ after: 0 }).map((e) => ({ kind: e.kind, n: e.number, p: e.payload }));
 
   const card = store.createTask({ title: 'evented', status: 'triage' });
@@ -1103,6 +1213,15 @@ test('an event names the write it was, and carries what a reader renders', async
   assert.deepEqual(by('unblocked-by').map((e) => e.p.blocker), [other.number]);
   assert.deepEqual(by('board').map((e) => e.n), [null], 'a board-wide write is not a card event');
   assert.equal(seen().some((e) => e.kind === 'status' && e.n === null), false, 'and nothing is filed as card #null');
+
+  // **A mixed label batch reports every label in it.** `[needs-human, urgent, triage-me]` was one
+  // `needs-human` event carrying `{to: true}` and nothing else, so `hkb watch --kinds labels` showed
+  // nothing at all for a write that changed three labels — the same fidelity defect one level down.
+  store.addLabels(card, ['kb:needs-human', 'urgent', 'triage-me']);
+  const mixed = by('labels').slice(-1)[0];
+  assert.deepEqual(mixed.p.add, ['kb:needs-human', 'urgent', 'triage-me'], 'no label is dropped from the payload');
+  assert.equal(mixed.p.to, true, 'and the flag it also raised is still visible');
+  assert.equal(by('needs-human').length, 2, 'the dedicated kind stays for the write that is only the flag');
 
   // The take-over is its own kind too, and names both hosts.
   store.git.takeOver('someone-elses-laptop');
@@ -1182,4 +1301,21 @@ test('a throttled stamp opens no database at all', async (t) => {
   t.after(() => second.close());
   assert.equal(second.markDispatcher(1).stamped, false, 'throttled');
   assert.equal(second.indexOpen, false, 'and it cost no connection');
+});
+
+test('a loop that dies leaves no signal listener behind', async (t) => {
+  // The teardown used to be two statements after the `for(;;)`, so anything that unwound past the
+  // loop — a throw from `tokenExpiryNotice`/`versionNotice`, which are awaited at the top of a tick
+  // and outside the tick's own try — skipped `dropLock()` and `process.off('SIGUSR1', nudge)`. A
+  // later `wake()` then reached a handler with no sleep to end instead of falling through to node's
+  // default. The SIGINT/SIGTERM pair was never removed at all. One `finally` for all four.
+  const { ctx } = await board(t);
+  const before = ['SIGUSR1', 'SIGINT', 'SIGTERM'].map((sig) => process.listenerCount(sig));
+  const boom = new Error('the loop dies here');
+  // A throw from between the ticks: the same unwind as the two notices above.
+  const sleeper = async () => { throw boom; };
+  await assert.rejects(() => loop(ctx, { interval: 60, max: Infinity, log: () => {}, sleeper }), (e) => e === boom);
+  assert.deepEqual(['SIGUSR1', 'SIGINT', 'SIGTERM'].map((sig) => process.listenerCount(sig)), before,
+    'every listener the loop installed is gone');
+  assert.equal(fs.existsSync(path.join(ctx.root, '.kanban', 'dispatch.pid')), false, 'and the singleton lock with them');
 });

@@ -310,7 +310,7 @@ export async function sweep(ctx, { yes = false, days = 14, memo = null, log = /*
   // anything. The skip message was therefore only ever reachable on a board that was also on
   // GitHub, which is the one board that did not need it.
   const kind = storeKind(ctx);
-  const store = openStore(ctx);
+  const store = await openStore(ctx);
   // The close is a `finally`, not a last line. The local driver holds a SQLite connection with a WAL
   // and an shm handle behind it, and the dispatcher runs this sweep every `gc_every_ticks` — so a
   // sweep that throws (a rate limit, a `gh` that is logged out, a worktree that will not go) leaked
@@ -333,6 +333,20 @@ async function sweepOpen(ctx, store, kind, { yes, days, memo, log }) {
   // filling them in is one REST call per card.
   const tasks = await store.listTasks({ states: ['OPEN', 'CLOSED'], blockers: false });
   const byNumber = new Map(tasks.map((t) => [t.number, t]));
+  // **A board that returned nothing is a board that could not be read, not a board where everything
+  // is done.** Every sweep below decides from `byNumber`, and a card that is not in it counts as
+  // finished — which is right for one missing card and catastrophic for all of them: an empty read
+  // made `finished(n)` true for every worker's worktree, and `sweep(ctx, {yes: true})` runs
+  // unattended from the dispatcher every `gc_every_ticks`, so `git worktree remove --force` plus
+  // `git branch -D` took uncommitted work with nobody typing `--yes`. It was reachable through a
+  // store that read the wrong place, and it stays reachable through a `gh` that answers `[]`, a
+  // board slug typo, or a branch a fetch has not brought in yet. So: no cards, no sweep. A board
+  // that is genuinely empty has no worktrees to remove either, which is why this costs nothing.
+  const empty = !tasks.length;
+  if (empty) {
+    log('gc: the board came back with no cards at all — nothing is swept. A board that returned nothing is a board that could not be read, '
+      + 'not one where every card is done; `hkb list --all` and `hkb doctor` say which.');
+  }
   const settled = (t) => ['done', 'archived'].includes(t.status) || t.state === 'CLOSED';
   // A worktree named after a task this board has never heard of is scrap either way. A *branch* of
   // one is not: another board in the same repo names its attempts the same, so that one has to
@@ -340,10 +354,10 @@ async function sweepOpen(ctx, store, kind, { yes, days, memo, log }) {
   const finished = (n) => { const t = byNumber.get(n); return !t || settled(t); };
   const finishedHere = (n) => { const t = byNumber.get(n); return !!t && settled(t); };
   const label = (n) => `task #${n} ${byNumber.get(n)?.status || 'not on board'}`;
-  const stats = { worktrees: 0, branches: 0, track_branches: 0, comments: 0, chains: 0, files: 0, pending: 0, skipped: 0, days, applied: !!yes, store: kind };
+  const stats = { worktrees: 0, branches: 0, track_branches: 0, comments: 0, chains: 0, files: 0, pending: 0, skipped: 0, days, applied: !!yes, store: kind, empty_board: empty };
 
-  const wt = sweepWorktrees(ctx, { finished, yes, label, log });
   const none = () => ({ removed: 0, pending: 0, skipped: 0, failed: 0 });
+  const wt = empty ? none() : sweepWorktrees(ctx, { finished, yes, label, log });
 
   // The **rule** the two sweeps below share with the two at the bottom of this function: a sweep
   // whose answer comes from GitHub is either skipped on a local board or it says why it found
@@ -352,7 +366,7 @@ async function sweepOpen(ctx, store, kind, { yes, days, memo, log }) {
   // A track branch lives on the forge and is listed with a `gh api` call; a local board has none of
   // its own, so that call is a request per gc — and per `gc_every_ticks` tick — for an answer that
   // can only be empty, plus a "skipped" line from its own catch on a checkout with no repo behind it.
-  const tb = kind === 'local' ? none() : await sweepTrackBranches(ctx, { finished: finishedHere, yes, log });
+  const tb = kind === 'local' || empty ? none() : await sweepTrackBranches(ctx, { finished: finishedHere, yes, log });
   if (kind === 'local') log('track branches: not swept on a local board — a track branch lives on the forge and this board does not keep one');
 
   // The agent worktrees are the harder half and the honest answer is to say so. This sweep removes
@@ -362,7 +376,7 @@ async function sweepOpen(ctx, store, kind, { yes, days, memo, log }) {
   // reported `0 removed` on a checkout quietly accumulating them forever. Reporting nothing removed
   // as though nothing needed removing is the shape this whole review is about.
   const prByBranch = (n, branch) => (byNumber.get(n)?.prs || []).find((p) => p.headRefName === branch) || null;
-  const aw = kind === 'local' ? none() : sweepAgentWorktrees(ctx, { prByBranch, yes, log });
+  const aw = kind === 'local' || empty ? none() : sweepAgentWorktrees(ctx, { prByBranch, yes, log });
   if (kind === 'local') {
     const waiting = listWorktrees(ctx.root).filter((w) => agentWorktreeNode(w)).length;
     if (waiting) {
@@ -370,7 +384,7 @@ async function sweepOpen(ctx, store, kind, { yes, days, memo, log }) {
         + `(the forge is not the store). Remove them by hand with \`git -C ${ctx.root} worktree remove <path>\`, or track them on the forge and re-run gc there`);
     }
   }
-  const br = sweepBranches(ctx, { finished: finishedHere, yes, log });
+  const br = empty ? none() : sweepBranches(ctx, { finished: finishedHere, yes, log });
   stats.worktrees = wt.removed + aw.removed;
   stats.branches = br.removed;
   stats.track_branches = tb.removed;
@@ -381,7 +395,13 @@ async function sweepOpen(ctx, store, kind, { yes, days, memo, log }) {
   // does not (docs/local-first.md §7): a run record is one file on the branch, so there is no second
   // comment to be a duplicate of, and a heartbeat is a row in the index, so there is no beat chain
   // to go stale. Skipped rather than run-and-find-nothing: both cost a listing per card.
-  if (stats.store === 'local') {
+  // `empty` is on this test for the same reason it is on the four above: `sweepRunComments` walks the
+  // cards it was given, and a beat chain for a card the board did not return is exactly the "not on
+  // the board, therefore scrap" judgement that must not be made from a read that came back with
+  // nothing.
+  if (empty) {
+    log('duplicate run comments and beat chains: not swept — see above');
+  } else if (stats.store === 'local') {
     log('duplicate run comments and beat chains: nothing to sweep on a local board — the run record is one file on the branch and a beat is a row in the index');
   } else {
     try { stats.comments = await sweepRunComments(ctx, tasks, { yes, memo: yes ? memo : null, log }); } catch (e) { log(`duplicate run comments skipped: ${e.message}`); }

@@ -188,8 +188,12 @@ published).
 before the board was first pushed. It reads the refs first and fetches, so the command you run to *get* the
 board is not the one that tells you there isn't one.
 
-Anyone can `git clone` the repo and get the whole board with it: the branch is what says the board is local, so
-no configuration is needed to read it (`.kanban/board.json` is tracked and comes along). Every verb that
+Anyone can `git clone` the repo and get the whole board with it: `.kanban/board.json` is tracked, its
+`"store": "local"` comes along with the clone, and the branch carries the cards. **That key is the only thing
+that decides which store a board is on** — a `kb-board` branch appearing in a checkout (a fetch, another host's
+push) never moves a board onto the local store on its own, because a store that could be changed by a ref
+arriving over the network is one the verbs can disagree with. `hkb init` and `hkb doctor` say when a checkout
+has the branch but not the key, and `hkb init --store local` is how it adopts it. Every verb that
 *writes* refuses on a host that is not the owner, with exit 2 naming it — the guard is on the invocation and
 not the verb, so `hkb up --status` (pid files and liveness) and `hkb dispatch --dry-run` (what a tick would
 decide) run on a clone, while `hkb up`, a real tick and `hkb dispatch --loop --dry-run` (a loop stamps the

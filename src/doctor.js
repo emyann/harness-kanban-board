@@ -13,8 +13,6 @@ import { latestVersion } from './registry.js';
 import { checkProject } from './projects.js';
 import { mcpServersFromTranscript } from './stats.js';
 import { storeKind } from './store/index.js';
-import { openLocalStore, mountFor, REFUSED_FS } from './store/local.js';
-import { indexFileIn } from './store/sqlite.js';
 // mcp.js is imported dynamically inside checkMcp, not here: it imports cli.js, which imports this
 // file, and a static import here would make that a cycle.
 
@@ -177,10 +175,24 @@ export const MOUNT_CHECK = 'index filesystem';
  * @param {{ok: Function, warn: Function, bad: Function}} report
  * @param {{kind?: string|null, mounts?: string, store?: any}} [deps]
  */
-export function checkLocalStore(ctx, { ok, warn, bad }, { kind = null, mounts = '/proc/mounts', store = null } = {}) {
+export async function checkLocalStore(ctx, { ok, warn, bad }, { kind = null, mounts = '/proc/mounts', store = null } = {}) {
   let which = kind;
   try { which = which || storeKind(ctx); } catch (e) { return bad(STORE_CHECK, /** @type {Error} */ (e).message, 'set "store" in .kanban/board.json to "local" or "github"'); }
-  if (which !== 'local') return ok(STORE_CHECK, `github — the board is the kb:* issues on ${ctx.cfg?.repo || 'GitHub'}`);
+  if (which !== 'local') {
+    ok(STORE_CHECK, `github — the board is the kb:* issues on ${ctx.cfg?.repo || 'GitHub'}`);
+    // A branch nothing reads is worth one line, for the same reason `hkb init` says it: the store is
+    // the `"store"` key and nothing else, so a checkout carrying `kb-board` from a fetch is inert
+    // and there is no way to tell from the outside.
+    const { localBoardExists, BOARD_BRANCH } = await import('./store/local.js');
+    if (localBoardExists(ctx)) warn(STORE_CHECK, `this repository also has a \`${BOARD_BRANCH}\` branch, and nothing reads it while the board is on the GitHub store`, 'hkb init --store local (or ignore it)');
+    return;
+  }
+
+  // Imported here, not at the top of the file: `local.js` pulls in `node:sqlite`, and `hkb doctor`
+  // on a plain GitHub board — the board most likely to be run by somebody whose node was built
+  // without it — must not die on the import of a store it is not using. Same rule as `openStore`.
+  const { openLocalStore, mountFor, REFUSED_FS } = await import('./store/local.js');
+  const { indexFileIn } = await import('./store/sqlite.js');
 
   // **A diagnosis does not create what it is diagnosing.** `openLocalStore` used to open a *writing*
   // connection here, which `mkdir`s the directory, creates the file and runs the schema — so doctor
@@ -194,13 +206,13 @@ export function checkLocalStore(ctx, { ok, warn, bad }, { kind = null, mounts = 
     // The path is computed rather than read off an open index, because on the commonest failure
     // here — there is no index yet — there is no index to ask.
     const indexPath = s.indexOpen ? s.index.file : indexFileIn(storeGitDir(ctx), ctx?.board || null);
-    ok(STORE_CHECK, `local — ${s.branch} in ${s.root}, index ${path.relative(s.root, indexPath)}`);
+    ok(STORE_CHECK, `local — ${s.branch} in ${s.root()}, index ${path.relative(s.root(), indexPath)}`);
 
     // 1. the branch, and whether the remote's copy is still a fast-forward away in either direction
     const here = s._rev(`refs/heads/${s.branch}`);
     const there = s._tracking();
-    if (!here && !there) bad(BRANCH_CHECK, `no ${s.branch} branch in ${s.root} — the board has nowhere to live`, 'hkb init');
-    else if (!here) warn(BRANCH_CHECK, `only ${s.remote}/${s.branch} is here (${String(there).slice(0, 7)}) — this checkout is a read-only copy of somebody else's board`, `git -C ${s.root} branch ${s.branch} ${s.remote}/${s.branch} && hkb init --take-over`);
+    if (!here && !there) bad(BRANCH_CHECK, `no ${s.branch} branch in ${s.root()} — the board has nowhere to live`, 'hkb init');
+    else if (!here) warn(BRANCH_CHECK, `only ${s.remote}/${s.branch} is here (${String(there).slice(0, 7)}) — this checkout is a read-only copy of somebody else's board`, `git -C ${s.root()} branch ${s.branch} ${s.remote}/${s.branch} && hkb init --take-over`);
     else {
       const owner = s.owner();
       const mine = !owner || owner === s.host;
@@ -208,7 +220,7 @@ export function checkLocalStore(ctx, { ok, warn, bad }, { kind = null, mounts = 
       if (!there || here === there) ok(BRANCH_CHECK, `${at}${there ? ' · in sync with ' + s.remote : ` · never pushed to ${s.remote}`}`);
       else if (s._ancestor(here, there)) warn(BRANCH_CHECK, `${at} · behind ${s.remote}/${s.branch} (${there.slice(0, 7)}) as of the last fetch`, 'hkb sync');
       else if (s._ancestor(there, here)) ok(BRANCH_CHECK, `${at} · ahead of ${s.remote}/${s.branch}, fast-forwardable`);
-      else bad(BRANCH_CHECK, `${at} · diverged from ${s.remote}/${s.branch} (${there.slice(0, 7)}) — the branch has one writer and two have written it`, `git -C ${s.root} log --oneline ${s.branch} ${s.remote}/${s.branch}, keep one, then hkb sync`);
+      else bad(BRANCH_CHECK, `${at} · diverged from ${s.remote}/${s.branch} (${there.slice(0, 7)}) — the branch has one writer and two have written it`, `git -C ${s.root()} log --oneline ${s.branch} ${s.remote}/${s.branch}, keep one, then hkb sync`);
       if (!mine) warn(STORE_CHECK, `host "${owner}" owns this board, so every mutating verb refuses here`, 'hkb init --take-over');
     }
 
@@ -220,7 +232,7 @@ export function checkLocalStore(ctx, { ok, warn, bad }, { kind = null, mounts = 
       try { indexed = s.index.tip(); } catch (e) { unreadable = /** @type {Error} */ (e); }
     }
     if (!tip) warn(INDEX_CHECK, 'nothing indexed — there is no branch to index', 'hkb init');
-    else if (unreadable) bad(INDEX_CHECK, `${path.relative(s.root, indexPath)} could not be opened: ${unreadable.message}`, 'hkb doctor after `hkb down`, or delete the file and let the next verb rebuild it');
+    else if (unreadable) bad(INDEX_CHECK, `${path.relative(s.root(), indexPath)} could not be opened: ${unreadable.message}`, 'hkb doctor after `hkb down`, or delete the file and let the next verb rebuild it');
     else if (!indexed) warn(INDEX_CHECK, `empty — no verb has opened this board here yet`, 'hkb list');
     else if (indexed === tip) ok(INDEX_CHECK, `at ${tip.slice(0, 7)}, matching the branch`);
     else warn(INDEX_CHECK, `built from ${indexed.slice(0, 7)}, the branch is at ${tip.slice(0, 7)} — the next verb rebuilds it`, 'hkb list');
@@ -1502,7 +1514,7 @@ export async function doctor(ctx, flags, log) {
   checkServe(ctx, { ok, warn });
   // where this board's state actually is, and — on the local store — whether the branch, the index
   // and the filesystem under it are in a state a verb can write
-  try { checkLocalStore(ctx, { ok, warn, bad }); } catch (e) { bad(STORE_CHECK, /** @type {Error} */ (e).message); }
+  try { await checkLocalStore(ctx, { ok, warn, bad }); } catch (e) { bad(STORE_CHECK, /** @type {Error} */ (e).message); }
   // which layer answers a denial, and whether a frozen copy of that layer has fallen behind:
   // local files only, so both run on a checkout with no repo behind it
   checkPolicyLayer(ctx, { ok });
@@ -1552,21 +1564,31 @@ async function githubChecks(ctx, flags, { ok, warn, bad }) {
     missing.length ? bad('labels', `missing ${missing.join(', ')}`, 'hkb init') : ok('labels', `${[...labels].filter((l) => l.startsWith('kb:')).length} kb:* labels`);
   } catch (e) { bad('labels', e.message); }
 
+  // **A skipped check is not a passing one, and doctor's whole contract is that the report is
+  // complete.** Every probe below used to be a bare `await` in one sequence: the first throw — a
+  // renamed repo, a rate limit, a `gh` that is logged out — unwound to the caller, which printed one
+  // `bad('github', …)` and then "N problem(s)" as though everything else had been looked at. So each
+  // one runs in its own `step`, which reports its failure under its own name and lets the rest run.
+  const step = async (name, fn) => {
+    try { return await fn(); } catch (e) { bad(name, /** @type {Error} */ (e).message); return null; }
+  };
   // the cards: a card on two profiles dispatches as neither the one you set nor the one you see,
   // and a background profile that has stopped recording sessions is a board nothing can price
+  // The board read is the one shared input, and it answers `{error}` rather than throwing — every
+  // check that takes it already says "could not read the board" under its own name, which is what
+  // makes a skipped check distinguishable from a passing one there.
   const board = await boardOnce(ctx);
-  await checkAgentLabels(ctx, { ok, warn }, { board });
-  await checkTrackProfile(ctx, { ok, warn });
-  await checkTaskSkills(ctx, { ok, warn }, { board });
-  // a card asking for what its profile does not grant: dropped at the launch unless someone says so
-  await checkCardGrants(ctx, { ok, warn }, { board });
-  await checkSessions(ctx, { ok, warn }, { board });
-  await checkDeniedTools(ctx, { ok, warn }, { board });
-  await checkOrphanedPrs(ctx, { ok, warn });
-  await checkTrackBranches(ctx, { ok, warn });
+  await step('agent labels', () => checkAgentLabels(ctx, { ok, warn }, { board }));
+  await step('task skills', () => checkTaskSkills(ctx, { ok, warn }, { board }));
+  await step('card grants', () => checkCardGrants(ctx, { ok, warn }, { board }));
+  await step('sessions', () => checkSessions(ctx, { ok, warn }, { board }));
+  await step('denied tools', () => checkDeniedTools(ctx, { ok, warn }, { board }));
+  await step('track profile', () => checkTrackProfile(ctx, { ok, warn }));
+  await step('orphaned PRs', () => checkOrphanedPrs(ctx, { ok, warn }));
+  await step('track branches', () => checkTrackBranches(ctx, { ok, warn }));
 
   // rate limit, token class, token expiry — one call
-  await checkToken({ ok, warn, bad });
+  await step('token', () => checkToken({ ok, warn, bad }));
 
   // API capabilities
   try {
@@ -1577,10 +1599,10 @@ async function githubChecks(ctx, flags, { ok, warn, bad }) {
   } catch (e) { bad('GraphQL', e.message); }
 
   // the last step — silent unless the board asked GitHub to take it (`merge.mode: "auto"`)
-  await checkMergePolicy(ctx, { ok, bad });
+  await step('merge policy', () => checkMergePolicy(ctx, { ok, bad }));
 
   // Projects v2 mirror — silent unless board.json links a project (the feature is off by default)
-  await checkProject(ctx, { ok, bad, warn });
+  await step('project mirror', () => checkProject(ctx, { ok, bad, warn }));
 
   if (flags.api) {
     // dependencies REST endpoint

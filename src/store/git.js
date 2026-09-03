@@ -25,7 +25,7 @@ import path from 'node:path';
 import { storeRoot, hostId, runGit, gitSays as short, GIT_SHA_RE as SHA_RE, normalizeCardGrants } from '../board.js';
 import {
   DEFAULT_KB, L, STATUSES, emptyRun, parseResultComment, isResultComment, serializeBodyBlock,
-  RESULT_MARKER, RUN_MARKER, statusOf, agentOf,
+  RUN_MARKER, statusOf, agentOf,
 } from '../model.js';
 
 export const BOARD_BRANCH = 'kb-board';

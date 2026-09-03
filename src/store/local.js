@@ -21,10 +21,10 @@
 // the board say" rather than two that can disagree. The index answers the live half.
 import fs from 'node:fs';
 import path from 'node:path';
-import { storeRoot, hostId, runGit, runGitAsync, gitSays, GIT_SHA_RE, readState, writeState, normalizeCardGrants } from '../board.js';
+import { storeRoot, storeGitDir, hostId, runGit, runGitAsync, gitSays, GIT_SHA_RE, readState, writeState, normalizeCardGrants } from '../board.js';
 import { RESULT_MARKER, RUN_MARKER, DEFAULT_KB, L, emptyRun, parseResultComment, isResultComment } from '../model.js';
 import { openGitTier, BOARD_BRANCH, BOARD_REF } from './git.js';
-import { openIndex, openIndexReadOnly } from './sqlite.js';
+import { openIndex, openIndexReadOnly, indexFileIn } from './sqlite.js';
 import { openGithubStore, listComments, listLocks, lockBeatAt, release, listBeatChains, dropBeatChain, blockersOf, blockersKnown } from './github.js';
 import { rest } from '../gh.js';
 
@@ -80,7 +80,7 @@ export class LocalStore {
    */
   constructor(ctx, { git = null, index = null, host = null, ref = BOARD_REF, remote = null, now = null, readOnly = false } = {}) {
     this.ctx = ctx;
-    this.root = storeRoot(ctx);
+    this._root = storeRoot(ctx);
     // The context's own identity, when it has one: `makeContext` sets `host` and every other verb
     // reads it from there, so the store must not answer to a different name than the process does.
     this.host = host || (ctx && typeof ctx === 'object' ? ctx.host : null) || hostId();
@@ -116,6 +116,15 @@ export class LocalStore {
 
   /** Has the index been opened? `close()` and the doctor's probes ask before making one. */
   get indexOpen() { return !!this._index; }
+
+  /**
+   * The store's root — the common git dir's parent, never a linked worktree.
+   *
+   * **A method, because that is what the interface says** (`STORE_METHODS`). This was a property
+   * here and a function on the GitHub driver, which is precisely the disagreement `STORE_METHODS`
+   * exists to catch and could not, because `root` was not on the list. It is now.
+   */
+  root() { return this._root; }
 
   /** The branch the durable tier writes — `kb-board` unless a test asked for another. */
   get branch() { return this.git.branch; }
@@ -251,10 +260,22 @@ export class LocalStore {
     return this._durable(KIND.setAgent, n, () => this.git.setAgent(task, agent), { from, to: agent });
   }
 
+  /**
+   * **A label write reports every label it wrote.**
+   *
+   * `[L.needsHuman, 'urgent', 'triage-me']` used to be filed as one `needs-human` event carrying
+   * `{to: true}` and nothing else, so `hkb watch --kinds labels` showed *nothing at all* for a write
+   * that changed three labels — the same event-fidelity defect as the six writes that were once all
+   * `status`. The kind is `needs-human` only when the flag is the whole of the write; anything mixed
+   * is a `labels` event, and either way the payload carries the full list.
+   */
   addLabels(task, names) {
     const n = numberOf(task);
-    const human = [].concat(names || []).includes(L.needsHuman);
-    return this._durable(human ? 'needs-human' : 'labels', n, () => this.git.addLabels(task, names), human ? { to: true } : { add: [].concat(names || []) });
+    const add = [].concat(names || []);
+    const human = add.includes(L.needsHuman);
+    const only = human && add.length === 1;
+    return this._durable(only ? 'needs-human' : 'labels', n, () => this.git.addLabels(task, names),
+      only ? { to: true } : { add, ...(human ? { to: true } : {}) });
   }
 
   removeLabel(task, name) {
@@ -380,16 +401,7 @@ export class LocalStore {
     const doc = this.git._read().board;
     const at = this.now();
     const last = Date.parse(doc?.dispatch?.at || '');
-    // **The same clock, read by two comparisons, and each fails towards a live board.**
-    // `liveDispatcher` clamps a *future* stamp to "live", so another host's `--take-over` refuses
-    // rather than walking over a dispatcher whose clock runs fast. The throttle here has to fail the
-    // other way for the same reason: a stamp dated after `now` — a clock corrected backwards between
-    // two ticks — made `at - last` negative, `< HOST_LIVE_MS / 3` was true, and this host stopped
-    // re-stamping for as long as the skew lasted while its own liveness expired on every *other*
-    // host's clock. A negative delta is not freshness, it is a stamp that has to be rewritten, so it
-    // skips the throttle and stamps. Clamping it (`Math.max(0, …)`) would have kept the bug.
-    const delta = Number.isFinite(last) ? at.getTime() - last : null;
-    if (doc?.dispatch?.host === this.host && delta !== null && delta >= 0 && delta < HOST_LIVE_MS / 3) {
+    if (doc?.dispatch?.host === this.host && throttled(at.getTime(), last, HOST_LIVE_MS / 3)) {
       return { stamped: false, tip: this._landedTip() };
     }
     const stamp = { host: this.host, pid, at: at.toISOString() };
@@ -397,7 +409,7 @@ export class LocalStore {
     // kb-board` is meant to read as the board's decisions, and "hkb: board settings" every few
     // minutes reads as a decision nobody made.
     const r = this.git.commit((t) => {
-      if (!t.board) throw fail(`there is no ${this.branch} branch in ${this.root} — run \`hkb init\` to create the board`);
+      if (!t.board) throw fail(`there is no ${this.branch} branch in ${this.root()} — run \`hkb init\` to create the board`);
       t.board.dispatch = stamp;
     }, `hkb: dispatcher on host ${this.host} (pid ${pid})`);
     // The index's *tip* is moved even though the stamp is not a decision (so: no event). Skipping it
@@ -440,42 +452,49 @@ export class LocalStore {
   async sync({ push = true, fetch = true } = {}) {
     const remote = this.remote;
     const branch = this.branch;
+    // **The refs are read once.** `answer()` used to re-`rev-parse` both of them on every return
+    // path — including `no-remote` and `offline`, which do no work at all — so the sync the loop
+    // runs after every decisive tick spawned five git processes to report that it had done nothing.
+    // Every path that *moves* a ref passes what it moved it to, which it already knows.
+    let here = this._rev(`refs/heads/${branch}`);
+    let there = this._tracking();
     const answer = (over = {}) => ({
       ok: true, pushed: false, fastForwarded: false, offline: false, skipped: null,
-      remote, branch, local: this._rev(`refs/heads/${branch}`), tracking: this._tracking(), detail: '', ...over,
+      remote, branch, local: here, tracking: there, detail: '', ...over,
     });
-    if (!this._hasRemote()) return answer({ skipped: 'no-remote', detail: `no git remote "${remote}" in ${this.root}` });
+    if (!this._hasRemote()) return answer({ skipped: 'no-remote', detail: `no git remote "${remote}" in ${this.root()}` });
 
     if (fetch) {
       const r = await this._netGit(['fetch', '--quiet', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
       // A remote that simply has no such branch is not an error: this host is the first to push it.
       if (r.status !== 0 && !/couldn't find remote ref|not found in upstream/i.test(r.out)) {
         if (OFFLINE.test(r.out)) return answer({ offline: true, detail: gitSays(r.out) || 'offline' });
-        throw fail(`\`git fetch ${remote} ${branch}\` failed: ${gitSays(r.out) || 'unknown error'} — check the remote with \`git -C ${this.root} remote -v\`.`);
+        throw fail(`\`git fetch ${remote} ${branch}\` failed: ${gitSays(r.out) || 'unknown error'} — check the remote with \`git -C ${this.root()} remote -v\`.`);
       }
     }
 
+    // The fetch may have moved the tracking ref, and only that one.
+    if (fetch) there = this._tracking();
     const moved = this._reconcileRefs();
     if (moved) {
-      // A checkout that had no local branch now has one, so `storeKind` — which caches "this is a
-      // GitHub board" for the life of the process — is holding an answer that has just stopped being
-      // true. `hkb init` invalidates for exactly this reason and so must every other path that
-      // creates the branch, or a long-lived `hkb serve`/`hkb dispatch --loop` that started before
-      // the first sync goes on reading a local board as a GitHub one forever.
-      if (moved.created) { const { forgetStore } = await import('./index.js'); forgetStore(this.ctx); }
-      return answer({ fastForwarded: true, local: moved.local, tracking: moved.local, detail: moved.detail });
+      // A checkout that had no local branch now has one. That does **not** change which store this
+      // board is on — `storeKind` reads `"store"` in board.json and nothing else, precisely so a ref
+      // arriving over the network can never flip a checkout onto a store its verbs are not using —
+      // but the tier's memo and the index's tip are both built on a ref that just moved, and
+      // `_afterRefMoved` is what rebuilds them.
+      here = moved.local; there = this._tracking();
+      return answer({ fastForwarded: true, detail: moved.detail });
     }
     if (!push) return answer({ detail: 'fetch only' });
 
-    const from = this._rev(`refs/heads/${branch}`);
-    const there = this._tracking();
-    if (!from) return answer({ skipped: 'no-branch', detail: `there is no ${branch} branch in ${this.root} and none on ${remote} — run \`hkb init\`` });
-    if (this.pushDisabled()) return answer({ local: from, skipped: 'off', detail: `sync.push is false in ${branch}'s board.json` });
-    if (from === there) return answer({ local: from, tracking: from, detail: 'up to date' });
+    const from = here;
+    if (!from) return answer({ skipped: 'no-branch', detail: `there is no ${branch} branch in ${this.root()} and none on ${remote} — run \`hkb init\`` });
+    if (this.pushDisabled({ exists: true })) return answer({ skipped: 'off', detail: `sync.push is false in ${branch}'s board.json` });
+    if (from === there) return answer({ detail: 'up to date' });
 
     const r = await this._netGit(['push', remote, `refs/heads/${branch}:refs/heads/${branch}`]);
     if (r.status !== 0) {
-      if (OFFLINE.test(r.out)) return answer({ offline: true, local: from, detail: gitSays(r.out) || 'offline' });
+      if (OFFLINE.test(r.out)) return answer({ offline: true, detail: gitSays(r.out) || 'offline' });
       if (/non-fast-forward|fetch first|rejected/i.test(r.out)) throw fail(this._divergedMessage(from, this._rev(`refs/remotes/${remote}/${branch}`)));
       throw fail(`\`git push ${remote} ${branch}\` failed: ${gitSays(r.out) || 'unknown error'}`);
     }
@@ -484,7 +503,8 @@ export class LocalStore {
     // CAS loses and the ref is already right — so the answer reports what the ref *is*, re-read,
     // rather than what this call meant to write.
     const upd = this._setRef(`refs/remotes/${remote}/${branch}`, from, there);
-    return answer({ pushed: true, local: from, tracking: upd.status === 0 ? from : this._tracking(), detail: `pushed ${from.slice(0, 7)} to ${remote}/${branch}` });
+    there = upd.status === 0 ? from : this._tracking();
+    return answer({ pushed: true, detail: `pushed ${from.slice(0, 7)} to ${remote}/${branch}` });
   }
 
   /**
@@ -524,7 +544,7 @@ export class LocalStore {
     }
     throw fail(
       `refs/heads/${branch} moved while \`hkb sync\` was fast-forwarding it, ${tries} times in a row — `
-      + `something else in this checkout is writing the branch. Look at \`git -C ${this.root} reflog ${branch}\`, `
+      + `something else in this checkout is writing the branch. Look at \`git -C ${this.root()} reflog ${branch}\`, `
       + 'stop the other writer (`hkb down`), and run `hkb sync` again.',
     );
   }
@@ -540,9 +560,11 @@ export class LocalStore {
   /**
    * Has this board turned pushing off? False on a board with no branch yet — there is nothing to
    * have said so on, and the caller is about to find that out with a better sentence.
+   * @param {{exists?: boolean}} [opts]  `exists: true` from a caller that has already read the refs
+   *   and knows there is a branch, so this does not read them a second time.
    */
-  pushDisabled() {
-    if (!this._rev(`refs/heads/${this.branch}`) && !this._tracking()) return false;
+  pushDisabled({ exists = false } = {}) {
+    if (!exists && !this._rev(`refs/heads/${this.branch}`) && !this._tracking()) return false;
     return this.git._read().board?.settings?.sync?.push === false;
   }
 
@@ -553,13 +575,13 @@ export class LocalStore {
       `${this.branch} and ${this.remote}/${this.branch} have diverged (${short(here)} vs ${short(there)}) — `
       + `the board has one writer (docs/local-first.md §6.2) and two hosts have written this one. `
       + `hkb will not merge them. Look at what each side decided with `
-      + `\`git -C ${this.root} log --oneline ${this.branch} ${this.remote}/${this.branch}\`, keep one `
-      + `(\`git -C ${this.root} update-ref refs/heads/${this.branch} <sha>\`), and make sure only host `
+      + `\`git -C ${this.root()} log --oneline ${this.branch} ${this.remote}/${this.branch}\`, keep one `
+      + `(\`git -C ${this.root()} update-ref refs/heads/${this.branch} <sha>\`), and make sure only host `
       + `"${owner}" writes it — \`hkb init --take-over\` on the host that should.`
     );
   }
 
-  _git(args) { return runGit(this.root, args); }
+  _git(args) { return runGit(this.root(), args); }
 
   /**
    * The two git calls that touch the network, off the event loop and on a short leash.
@@ -567,7 +589,7 @@ export class LocalStore {
    * `spawnSync` would hold the dispatcher's loop for the whole timeout, and the loop is the thing
    * that has to stay responsive: a worker's exit, a wake, a SIGTERM from `hkb down`.
    */
-  _netGit(args) { return runGitAsync(this.root, args, { timeout: SYNC_NET_TIMEOUT_MS }); }
+  _netGit(args) { return runGitAsync(this.root(), args, { timeout: SYNC_NET_TIMEOUT_MS }); }
 
   _rev(ref) {
     const r = this._git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
@@ -587,6 +609,40 @@ function numberOf(task) {
 }
 
 const short = (sha) => (sha ? String(sha).slice(0, 7) : 'nothing');
+
+/**
+ * **Every throttle in hkb, and the one rule they share: a stamp is fresh if it is inside the window
+ * *on either side of now*.**
+ *
+ * There are two families of elapsed-time test on a board two hosts can see, and they are not the
+ * same question:
+ *
+ *   · a **liveness** guard (`liveDispatcher`, `lockIsLive`) asks "is somebody there?" and answers a
+ *     stamp from the future with *yes*, because saying no walks over a running dispatcher;
+ *   · a **throttle** (here, `markDispatcher`, `syncAfterTick`) asks "did I just do this?" and must
+ *     answer a stamp from the future with *yes* as well — for a different reason, and this is the
+ *     one that was wrong. A clock corrected backwards (NTP, a VM or WSL resync, a laptop waking)
+ *     makes `now - last` negative, and `delta >= 0 && delta < window` then read that as **due**: the
+ *     dispatcher committed a stamp on `kb-board` and pushed it on *every* tick until real time
+ *     caught up, on a branch documented as a history of decisions. It also made a live flaky test.
+ *
+ * The clamp the previous round put on `liveDispatcher` was the same fix applied to one side of the
+ * thing it was about; this is the other side, and it is a shared function so a third site cannot
+ * disagree with the first two. Nothing is lost by throttling a future stamp: a stamp in the future
+ * is exactly what every *reader* of it already treats as live.
+ *
+ * The tolerance is the window itself, in both directions. A stamp further ahead than that is not
+ * skew, it is a broken record, and rewriting it once (with `now`, which then throttles normally) is
+ * the only thing that repairs it.
+ *
+ * @param {number} now  ms since the epoch
+ * @param {number} last `Date.parse` of the stamp, or NaN when there is none
+ * @param {number} window  how long the stamp stays fresh
+ */
+export function throttled(now, last, window) {
+  if (!Number.isFinite(last)) return false;
+  return Math.abs(now - last) < window;
+}
 
 /**
  * Is another host's dispatcher stamp fresh enough to call it live? `null` when the stamp is this
@@ -710,14 +766,9 @@ export async function syncAfterTick(ctx, { store = null, log = () => {}, now = D
   const root = storeRoot(ctx);
   const state = readState(root);
   const last = Number(state.sync_at || 0);
-  // The third elapsed-time test on this file's list, and a *throttle* — so it resolves skew the way
-  // `markDispatcher` does and not the way `liveDispatcher` does. **The invariant is not "clamp every
-  // clock", it is "answer skew with the live board":** a liveness guard reads a future stamp as
-  // live and refuses (`liveDispatcher`, `lockIsLive`), a throttle reads one as broken and does the
-  // work (here and `markDispatcher`). Clamping this to zero would have throttled every push until
-  // real time caught up with a `sync_at` written by a clock since corrected backwards.
-  const since = Number.isFinite(last) ? now - last : null;
-  if (!force && since !== null && since >= 0 && since < SYNC_THROTTLE_MS) return { synced: false, why: 'throttled' };
+  // The third elapsed-time test on this file's list, and a *throttle* — so it answers a clock that
+  // moved the same way `markDispatcher` does. One function, so the three cannot disagree.
+  if (!force && throttled(now, last || NaN, SYNC_THROTTLE_MS)) return { synced: false, why: 'throttled' };
   const s = store || openLocalStore(ctx);
   let result;
   try {
@@ -848,11 +899,17 @@ export function cardRecord(task, { at = new Date().toISOString(), blockersKnown:
 export async function importGithubBoard(ctx, { store = null, from = null, days = IMPORT_WINDOW_DAYS, log = () => {}, now = () => new Date(), force = false, leftovers = {}, issues = null } = {}) {
   const s = store || openLocalStore(ctx, { reconcile: false });
   if (s.git.tip() && !force) {
+    // **A diagnosis does not create what it describes**, and neither does a refusal. `s.index.file`
+    // reads through the lazy `index` getter, which `mkdir`s the directory, creates `index.db` and
+    // runs the schema — so a refusal that exists to leave the board untouched created a file,
+    // leaked its connection, and on a node without `node:sqlite` threw a different error in place of
+    // this sentence. The path is computed instead; that is what `indexFileIn` is for.
+    const file = indexFileIn(storeGitDir(ctx), ctx?.board || null);
     throw fail(
-      `${s.branch} already exists in ${s.root} — \`hkb init --import\` migrates a GitHub board onto a *new* local board, `
+      `${s.branch} already exists in ${s.root()} — \`hkb init --import\` migrates a GitHub board onto a *new* local board, `
       + `and re-importing over one that has been worked would overwrite it with GitHub's copy. `
       + `Look at what is there (\`git log --oneline ${s.branch}\`), and delete it deliberately if the import is what you want: `
-      + `\`git -C ${s.root} branch -D ${s.branch} && rm -f ${s.index.file}*\`.`,
+      + `\`git -C ${s.root()} branch -D ${s.branch} && rm -f ${file}*\`.`,
     );
   }
   const gh = from || openGithubStore(ctx);
@@ -881,8 +938,12 @@ export async function importGithubBoard(ctx, { store = null, from = null, days =
   log(`import: migrating the \`${L.board(ctx?.board || 'default')}\` board on ${ctx?.cfg?.repo || 'GitHub'} onto ${s.branch}`);
   log(`import: ${open.length} open card(s) and ${closed.length} closed in the last ${days} day(s)`);
   if (capped) {
-    log(`import: WARNING the closed cards are one page of ${CLOSED_PAGE}, most recently updated first — anything closed before `
-      + `#${closedPage[closedPage.length - 1]?.number} stays on GitHub and is not on the local board`);
+    // "May be": a page that comes back exactly full says nothing about whether a next one exists,
+    // and `listClosedRecent` is one query by the GitHub driver's own design (`fetchClosedRecent`),
+    // so unlike the adoption path there is no page after it to ask. The same rule either way — a
+    // ceiling is only reported as reached when it is known to be — and here that means saying "may".
+    log(`import: WARNING the closed cards came back as one full page of ${CLOSED_PAGE}, most recently updated first — there may be more, `
+      + `and anything closed before #${closedPage[closedPage.length - 1]?.number} would stay on GitHub rather than move to the local board`);
   }
 
   // A card's blockers are a real answer only where somebody looked them up. `listTasks` says so for
@@ -993,7 +1054,7 @@ export async function importGithubBoard(ctx, { store = null, from = null, days =
 
   // The leftovers of the GitHub protocol. A lock ref on the forge means nothing to a local board —
   // the locks are rows in the index now — and a beat chain is a mirror of one.
-  const dropped = await dropGithubLeftovers(ctx, s.root, { log, keep, now, ...leftovers });
+  const dropped = await dropGithubLeftovers(ctx, s.root(), { log, keep, now, ...leftovers });
 
   const summary = {
     cards: tasks.length, open: open.length, closed: closed.length, runs: withRuns, results, notes,
@@ -1038,13 +1099,19 @@ export async function adoptOpenIssues(ctx, { store = null, log = () => {}, now =
   for (let page = 1; page <= pages; page++) {
     const batch = (await read(page)) || [];
     for (const i of batch) if (!i.pull_request) found.push(i);
-    if (batch.length < ISSUE_PAGE) { more = false; break; }
-    more = page === pages;
+    if (batch.length < ISSUE_PAGE) break;
+    // **A ceiling is only real if there is something above it.** `more = page === pages` called a
+    // repository with exactly `pages × ISSUE_PAGE` open issues truncated — the last allowed page
+    // came back full, which says nothing about whether a next one exists — and told the operator
+    // that issues they had all adopted were left off. So the last full page is followed by one
+    // read of the page after it, and *that* is the answer. One extra request, in the one case
+    // where the honest answer cannot be worked out from what has already been read.
+    if (page === pages) more = ((await read(page + 1)) || []).length > 0;
   }
   // Said out loud rather than reported as the whole repository: the same shape as the migration's
-  // closed-card cap. `hkb init --import` is re-runnable *here* — the second run adopts nothing,
-  // because the branch already exists and the import refuses — so the ceiling has to name the fix.
-  if (more) log(`import: WARNING stopped at ${pages} page(s) of ${ISSUE_PAGE} open issues (${found.length} adopted) — this repository has more, and they are NOT on the board`);
+  // closed-card cap. There is no "run it again" to offer — the second run finds the branch and the
+  // import refuses — so the ceiling names what is missing and leaves the cards to `hkb create`.
+  if (more) log(`import: WARNING stopped at ${pages} page(s) of ${ISSUE_PAGE} open issues (${found.length} adopted) — this repository has more open issues and they are NOT on the board; add the ones you want with \`hkb create\``);
 
   const tasks = found.map((i) => ({
     number: Number(i.number),

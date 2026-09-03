@@ -13,12 +13,12 @@ covers:
   - path: src/board.js
     sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
   - path: src/dispatch.js
-    sha: 34c6409e30bed2c1c5419f03fec2bacbc8ab5a06
+    sha: 5777f653d14f84685d19cf9db18bc7bcccddabfa
   - path: src/serve.js
     sha: fe50acf9c37de567f1a90fd802e682ab746f6d50
   - path: src/doctor.js
-    sha: e3c608a3d6da3efecc7b355d4245d88a31d6a918
-generated_at_commit: a5f1e60
+    sha: d16d15584b792786a6b9c068b330d98e4a60e2b6
+generated_at_commit: 29d0d25
 last_refreshed: 2026-09-03
 related: [architecture/overview, features/web-board, concepts/roles-and-seats, architecture/dispatcher-tick]
 ---
@@ -438,11 +438,13 @@ is careful about:
   had not moved — a lost race exiting 0 and saying the board caught up. A lost
   CAS re-reads and retries (the refs it compared are stale by definition); three
   losses is a checkout something else is driving, and that is a refusal.
-- Creating the branch invalidates `storeKind`'s cache (`forgetStore`), which
-  otherwise remembers "this is a GitHub board" for the life of the process — a
-  long-lived `hkb serve` or dispatcher that started before the first sync would
-  go on believing it, with no stamp and no owner guard, on a board that had
-  become local in another terminal.
+- Creating the branch changes **nothing** about which store the checkout is on.
+  `storeKind` reads `"store"` in board.json and only that (see
+  `architecture/store-seam`), precisely so that a ref arriving over the network —
+  a sync, a fetch, another host's push — cannot move a running `hkb serve` or
+  dispatcher onto a store its verbs are not using. What the sync does rebuild is
+  the tier's memoized tree and the index's tip, which are built on the ref that
+  moved (`_afterRefMoved`).
 
 It refuses on a GitHub board naming the store the cards are actually on, because
 "sync" there would be a verb with nothing to do.

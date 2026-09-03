@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "writing a verb that reads or writes board state, adding a store driver, or wondering why tasks.js and lock.js are two lines long"
 covers:
   - path: src/store/index.js
-    sha: 918495a206540318480f3b0ce7cd0a8f559ae874
+    sha: 6f80ab71e9efca230d89d25f1b6d9186576ef522
   - path: src/store/github.js
     sha: 57a69a45c3a7998c74f53442a6756873f198f8af
   - path: src/forge.js
@@ -18,7 +18,7 @@ covers:
     sha: cfb7eaf1a75003826cf610ee136a08dc0d4ff281
   - path: src/board.js
     sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
-generated_at_commit: a5f1e60
+generated_at_commit: 29d0d25
 last_refreshed: 2026-09-03
 related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-and-leases, concepts/board-protocol]
 ---
@@ -32,20 +32,40 @@ related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-
 > so that the verbs written between them are written **once**.
 
 **Which driver, and where that is decided.** `storeKind(ctx)` reads `store` in
-`.kanban/board.json` (`"local"` | `"github"`) and, when the key is absent, falls
-back to "does this repository have a `kb-board` branch". Nothing else in hkb
-branches on the store; a caller that needs to force one — `hkb init --import`,
-which reads GitHub and writes local — passes `openStore(ctx, {kind})`. A new
-board is local as of A6; an existing board keeps what it has. Both answers are
-memoized per context and dropped by `forgetStore(ctx)`, which `hkb init` calls
-because it is the one thing that creates the branch mid-process — `storeKind` is
-on the path of every writing verb, every `gc.sweep` and every tick, and the
-`github` answer is the one a board that predates the key gives forever.
+`.kanban/board.json` (`"local"` | `"github"`) and **nothing else**. An absent
+key is `github`. Nothing in hkb branches on the store anywhere else, and there
+is no way to force a driver at the call site: `hkb init --import`, which reads
+GitHub and writes local, opens each driver by name for exactly that reason. A
+new board is local as of A6; an existing board keeps what it has.
 
-`hkb init` never writes back an answer it merely *inferred*: the `store` key
-appears when the human passed `--store`, when the board is new, or when it was
-already there. Pinning an inference detached a board with a live `kb-board`
-branch from that branch permanently, because rule 2 then stopped being asked.
+There used to be a second rule — *a repository with a `kb-board` (or
+`<remote>/kb-board`) ref is a local board* — so that a clone needed no
+configuration. It was removed in A6's sixth review round, because a rule that
+reads the store off a **ref** can be reached by `git fetch`, and the checkout
+then runs on the local store while board.json still points every verb at
+GitHub. That half-migrated state produced a different destructive interaction in
+three successive rounds: an `--import` that deleted live workers' lock refs; a
+`gc.sweep` that read `[]` from the wrong store, concluded every card was
+finished and destroyed worker worktrees with uncommitted work in them,
+unattended, from the dispatcher's own `gc_every_ticks`; and one host's push
+converting every collaborator's checkout on their next fetch, after which every
+mutating verb was refused on a board of issues they had always owned. The key
+cannot arrive over the network, cannot be written by another host, and cannot
+disagree with what the verbs do. A clone still needs no configuration — the key
+rides in the tracked `board.json` — and a checkout that has the branch but not
+the key is told so in words by `hkb init` and `hkb doctor`, which is a message
+and never a behaviour.
+
+There is no cache: the answer is a property read. `forgetStore(ctx)` remains,
+and drops the memoized git *tiers* for a context — `hkb init` calls it because
+it creates the branch under its own feet.
+
+`hkb init` never writes back an answer nobody asked for: the `store` key appears
+when the human passed `--store`, when the board is new (the default *is* the
+decision), when it was already there, or when `--import` migrates. A plain
+re-init writes nothing — it used to write `"store": "local"` into a git-tracked
+board.json as a side effect, which is the same change `--import` refuses to make
+without `--force`.
 
 A verb that writes is refused on a host that is not `board.host`
 (`assertOwningHost`) — and the test is on the *invocation*, not the verb name:

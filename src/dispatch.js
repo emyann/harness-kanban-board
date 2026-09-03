@@ -556,6 +556,17 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   if (!dryRun) replayOutbox(ctx, log);
 
   const tasks = await fetchBoard(ctx);
+  // **Where else is absence a verdict?** Two sweeps below decide from a card *not being here* — the
+  // reap (`reapDecision(j, null)` stops a background agent and sweeps its checkout) and the orphan
+  // lock sweep (a lock whose card is missing is released, and a worker whose lock ref disappears
+  // exits LOCK_LOST). That is the shape that made `gc.sweep` destructive on an empty read, and it
+  // was audited here rather than waiting for a report. It is deliberately **not** guarded the same
+  // way, because the precondition differs: `fetchBoard` returns the *open* board, so "no cards" is
+  // an ordinary, correct state — a board whose last card just closed — and gating on it would stop
+  // reaping exactly the agent that closing card left behind. `gc.sweep` reads OPEN *and* CLOSED,
+  // where empty really is anomalous. What makes absence safe here is that `fetchBoard` throws on a
+  // read it could not make rather than answering `[]`, and (since this round) no inference can point
+  // this tick at a store the cards are not on.
   const running = tasks.filter((t) => t.status === 'running');
   // Tracks, from the board read we already have. `covered` is every node a live runner owns: the
   // reclaim below leaves them alone (the root's own heartbeat is their liveness), they cost no
@@ -1301,47 +1312,58 @@ export async function loop(ctx, { interval, max, profiles = null, dryRun = false
     wake();
   };
   process.on('SIGUSR1', nudge);
-  for (;;) {
-    const started = Date.now();
-    // Once a day, before the tick: the two things nobody tells the operator of a loop that has been
-    // up for weeks — a KB_TOKEN about to lapse, and an hkb that npm has moved on from. Both
-    // read-modify-write `.kanban/state.json`, which is why they are here and not inside `tick()`;
-    // both are silent on a failed probe, so an offline loop runs exactly as it did without them.
-    await tokenExpiryNotice(ctx, log);
-    await versionNotice(ctx, log);
-    let summary = null;
-    try {
-      // `dryRun` is threaded through rather than dropped here: `hkb dispatch --loop N --dry-run`
-      // promised a loop that decides nothing and ran a real claiming, spawning, stamping one.
-      const s = await tick(ctx, { max, children, profiles, dryRun, log });
-      summary = s;
-      const n = (k) => s[k].length;
-      log(`tick: reconciled ${n('reconciled')} reclaimed ${n('reclaimed')} reaped ${n('reaped')} promoted ${n('promoted')} claimed ${n('claimed')} tracks ${s.tracks.filter((x) => x.ok).length} guarded ${n('guarded')} held ${n('held')} skipped ${n('skipped')}`);
-    } catch (e) {
-      if (e instanceof GhError && e.kind === 'network') log('GitHub unreachable — reclaim clock paused, retrying next tick');
-      else log(`tick failed: ${e.message}`);
+  // **The teardown is a `finally`, and it takes every listener this loop installed.**
+  // `tokenExpiryNotice`/`versionNotice` are awaited at the top of the tick and outside its own try,
+  // so a throw from either unwound straight past `dropLock()` and past `process.off('SIGUSR1', …)`:
+  // the pid file stayed, and a later `wake()` reached a listener with no sleep to end instead of
+  // falling through to node's default. The same held for the SIGINT/SIGTERM pair, which nothing ever
+  // removed at all — the invariant is that a loop that has stopped leaves no listener behind, and it
+  // is one `finally` for all four rather than a line per exit.
+  try {
+    for (;;) {
+      const started = Date.now();
+      // Once a day, before the tick: the two things nobody tells the operator of a loop that has been
+      // up for weeks — a KB_TOKEN about to lapse, and an hkb that npm has moved on from. Both
+      // read-modify-write `.kanban/state.json`, which is why they are here and not inside `tick()`;
+      // both are silent on a failed probe, so an offline loop runs exactly as it did without them.
+      await tokenExpiryNotice(ctx, log);
+      await versionNotice(ctx, log);
+      let summary = null;
+      try {
+        // `dryRun` is threaded through rather than dropped here: `hkb dispatch --loop N --dry-run`
+        // promised a loop that decides nothing and ran a real claiming, spawning, stamping one.
+        const s = await tick(ctx, { max, children, profiles, dryRun, log });
+        summary = s;
+        const n = (k) => s[k].length;
+        log(`tick: reconciled ${n('reconciled')} reclaimed ${n('reclaimed')} reaped ${n('reaped')} promoted ${n('promoted')} claimed ${n('claimed')} tracks ${s.tracks.filter((x) => x.ok).length} guarded ${n('guarded')} held ${n('held')} skipped ${n('skipped')}`);
+      } catch (e) {
+        if (e instanceof GhError && e.kind === 'network') log('GitHub unreachable — reclaim clock paused, retrying next tick');
+        else log(`tick failed: ${e.message}`);
+      }
+      // Outside the try, and for the same reason the stamp is outside `DURABLE_TICK_KEYS`: **liveness
+      // is about the process, not about the tick**. A loop whose ticks are all failing is still a loop
+      // holding this board, and leaving the stamp inside meant a run of failures — a rate limit, a
+      // flaky network — expired this host's claim on the branch while it was very much still here.
+      // `syncPass` catches its own failures, so it cannot turn a survivable tick into a dead loop.
+      // …and skipped entirely on a dry run: the stamp is a commit on `kb-board` and the push publishes
+      // it, so a loop that promised to decide nothing must not write either.
+      if (!dryRun) await syncPass(ctx, summary || {}, log);
+      if (summary?.fatal) { fatal = summary.fatal; break; }
+      if (stopping) break;
+      const current = stamp();
+      if (current !== loaded) { upgrade = { loaded, current }; break; }
+      const wait = Math.max(5_000, interval * 1000 - (Date.now() - started));
+      await Promise.race([nap(wait), new Promise((resolve) => { wake = resolve; })]);
+      wake = null; timer = null; // the race is over: a signal from here on waits for the next tick
+      if (stopping) break;
     }
-    // Outside the try, and for the same reason the stamp is outside `DURABLE_TICK_KEYS`: **liveness
-    // is about the process, not about the tick**. A loop whose ticks are all failing is still a loop
-    // holding this board, and leaving the stamp inside meant a run of failures — a rate limit, a
-    // flaky network — expired this host's claim on the branch while it was very much still here.
-    // `syncPass` catches its own failures, so it cannot turn a survivable tick into a dead loop.
-    // …and skipped entirely on a dry run: the stamp is a commit on `kb-board` and the push publishes
-    // it, so a loop that promised to decide nothing must not write either.
-    if (!dryRun) await syncPass(ctx, summary || {}, log);
-    if (summary?.fatal) { fatal = summary.fatal; break; }
-    if (stopping) break;
-    const current = stamp();
-    if (current !== loaded) { upgrade = { loaded, current }; break; }
-    const wait = Math.max(5_000, interval * 1000 - (Date.now() - started));
-    await Promise.race([nap(wait), new Promise((resolve) => { wake = resolve; })]);
-    wake = null; timer = null; // the race is over: a signal from here on waits for the next tick
-    if (stopping) break;
+  } finally {
+    dropLock();
+    process.off('SIGUSR1', nudge);
+    process.off('SIGINT', stop);
+    process.off('SIGTERM', stop);
+    if (timer) { clearTimeout(timer); timer = null; }
   }
-  dropLock();
-  // The nudge outlives nothing: a loop that has stopped must not leave a SIGUSR1 listener behind,
-  // or the next thing that signals this process gets a handler with no sleep to end.
-  process.off('SIGUSR1', nudge);
   if (upgrade) {
     const e = new Error(`hkb: this loop is running ${upgrade.loaded}, the installed hkb is ${upgrade.current} — restarting. Running workers are untouched: the next dispatcher adopts or reclaims them.`);
     e.exitCode = 4;

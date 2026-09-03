@@ -44,7 +44,7 @@ function git(cwd, ...args) {
  * and `settleClaim` pushes the lock ref the claim created into the real remote — which is exactly
  * what the dispatcher's claim does today (`POST git/refs` at the default branch head).
  */
-function openGithubDriver() {
+async function openGithubDriver() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-store-'));
   const origin = path.join(dir, 'origin.git');
   const root = path.join(dir, 'work');
@@ -70,7 +70,7 @@ function openGithubDriver() {
   const restore = gh.install();
   const ref = (n, k) => `refs/kb/locks/${n}/${k}`;
   return {
-    store: openStore(ctx),
+    store: await openStore(ctx),
     gh,
     settleClaim: (n, k, token) => { git(root, 'push', '-q', 'origin', `${token}:${ref(n, k)}`); },
     reclaim: async (store, n, k) => {
@@ -93,7 +93,7 @@ function openGithubDriver() {
  * The board is created with the tier's own host, which is this machine's, so the store that opens it
  * is its owner: the one-writer refusal has tests of its own in `test/store-local.test.js`.
  */
-function openLocalDriver() {
+async function openLocalDriver() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-store-local-'));
   const root = path.join(dir, 'work');
   git(dir, 'init', '-q', '-b', 'main', root);
@@ -110,7 +110,7 @@ function openLocalDriver() {
     requireBoard() { return this; },
   };
   openGitTier(ctx).init('default');
-  const store = openStore(ctx);
+  const store = await openStore(ctx);
   return {
     store,
     // A beat somebody else recorded. The interface's own `heartbeat` rotates the token, and a
@@ -438,7 +438,7 @@ const SCENARIOS = [
 for (const driver of DRIVERS) {
   for (const scenario of SCENARIOS) {
     test(`store[${driver.name}]: ${scenario.name}`, async (t) => {
-      const h = driver.open();
+      const h = await driver.open();
       h.reclaim = h.reclaim || ((store, n, k) => store.release(n, k));
       h.settleClaim = h.settleClaim || (() => {});
       h.recordBeat = h.recordBeat || (() => {});
@@ -451,7 +451,7 @@ for (const driver of DRIVERS) {
 // One assertion that is *about* the GitHub driver rather than about the interface: the seam moved
 // the bodies, it did not rewrite them, so a card seeded the old way still reads the old way.
 test('store[github]: a card seeded as an issue reads back through the interface', async (t) => {
-  const h = openGithubDriver();
+  const h = await openGithubDriver();
   t.after(h.cleanup);
   h.gh.addIssue(kbIssue({ number: 42, title: 'seeded', status: 'review', agent: 'claude', kb: { priority: 1 } }));
   const task = await h.store.getTask(42);

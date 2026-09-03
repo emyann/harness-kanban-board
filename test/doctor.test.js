@@ -1236,15 +1236,15 @@ function localBoard() {
 }
 
 /** The three findings, keyed by name — a probe is about one thing, and the rest are noise. */
-function probe(ctx, opts = {}) {
+async function probe(ctx, opts = {}) {
   const rows = [];
   const push = (ok) => (name, detail, fix) => rows.push({ name, ok, detail, fix });
-  checkLocalStore(ctx, { ok: push(true), warn: push(null), bad: push(false) }, opts);
+  await checkLocalStore(ctx, { ok: push(true), warn: push(null), bad: push(false) }, opts);
   return Object.fromEntries(rows.map((r) => [r.name, r]));
 }
 
-test('doctor on a GitHub board says which store it is and probes nothing else', () => {
-  const rows = probe({ root: '/tmp/none', cfg: { store: 'github', repo: 'o/r' }, board: 'default', _cache: {} });
+test('doctor on a GitHub board says which store it is and probes nothing else', async () => {
+  const rows = await probe({ root: '/tmp/none', cfg: { store: 'github', repo: 'o/r' }, board: 'default', _cache: {} });
   assert.equal(rows[STORE_CHECK].ok, true);
   assert.match(rows[STORE_CHECK].detail, /github — the board is the kb:\* issues on o\/r/);
   assert.equal(rows[BRANCH_CHECK], undefined, 'there is no branch to be wrong about');
@@ -1262,7 +1262,7 @@ test('doctor: the branch, the index tip and the mount, on a healthy local board'
 
   const mounts = path.join(root, 'mounts');
   fs.writeFileSync(mounts, `/dev/sda1 ${root} ext4 rw 0 0\n`);
-  const rows = probe(ctx, { mounts });
+  const rows = await probe(ctx, { mounts });
   assert.equal(rows[STORE_CHECK].ok, true);
   assert.match(rows[STORE_CHECK].detail, /^local — kb-board in /);
   assert.equal(rows[BRANCH_CHECK].ok, true);
@@ -1280,18 +1280,18 @@ test('doctor refuses an index on a 9p mount, and warns on a filesystem it does n
 
   const nine = path.join(root, 'mounts-9p');
   fs.writeFileSync(nine, `C:\\ / 9p rw 0 0\n`);
-  const bad = probe(ctx, { mounts: nine })[MOUNT_CHECK];
+  const bad = (await probe(ctx, { mounts: nine }))[MOUNT_CHECK];
   assert.equal(bad.ok, false);
   assert.match(bad.detail, /is 9p — SQLite's locking does not work there/);
   assert.match(bad.fix, /local disk/);
 
   const odd = path.join(root, 'mounts-odd');
   fs.writeFileSync(odd, `thing / weirdfs rw 0 0\n`);
-  const unknown = probe(ctx, { mounts: odd })[MOUNT_CHECK];
+  const unknown = (await probe(ctx, { mounts: odd }))[MOUNT_CHECK];
   assert.equal(unknown.ok, null, 'unknown is a warning, not a refusal');
   assert.match(unknown.detail, /"weirdfs", which hkb does not recognise/);
 
-  const missing = probe(ctx, { mounts: path.join(root, 'nope') })[MOUNT_CHECK];
+  const missing = (await probe(ctx, { mounts: path.join(root, 'nope') }))[MOUNT_CHECK];
   assert.equal(missing.ok, null);
   assert.match(missing.detail, /could not read/);
 });
@@ -1309,7 +1309,7 @@ test('doctor diagnoses the index without creating it', async () => {
   const file = indexFileIn(storeGitDir(ctx), 'default');
   assert.equal(fs.existsSync(file), false, 'no verb has opened this board here');
 
-  const rows = probe(ctx, { mounts: '/dev/null' });
+  const rows = await probe(ctx, { mounts: '/dev/null' });
   assert.equal(rows[INDEX_CHECK].ok, null);
   assert.match(rows[INDEX_CHECK].detail, /empty — no verb has opened this board here yet/);
   assert.equal(fs.existsSync(file), false, 'and doctor did not make one to say so');
@@ -1320,7 +1320,7 @@ test('doctor diagnoses the index without creating it', async () => {
 
 test('doctor: a branch with no board, an index that has fallen behind, and a foreign owner', async () => {
   const { ctx } = localBoard();
-  const empty = probe(ctx, { mounts: '/dev/null' });
+  const empty = await probe(ctx, { mounts: '/dev/null' });
   assert.equal(empty[BRANCH_CHECK].ok, false);
   assert.match(empty[BRANCH_CHECK].detail, /no kb-board branch/);
   assert.equal(empty[BRANCH_CHECK].fix, 'hkb init');
@@ -1333,7 +1333,7 @@ test('doctor: a branch with no board, an index that has fallen behind, and a for
   store.close();
   // The branch moves with nothing telling the index — the crash `open()` repairs.
   openGitTier(ctx).createTask({ title: 'and another', status: 'ready' });
-  const behind = probe(ctx, { mounts: '/dev/null' })[INDEX_CHECK];
+  const behind = (await probe(ctx, { mounts: '/dev/null' }))[INDEX_CHECK];
   assert.equal(behind.ok, null);
   assert.match(behind.detail, /the branch is at .* — the next verb rebuilds it/);
 
@@ -1342,7 +1342,7 @@ test('doctor: a branch with no board, an index that has fallen behind, and a for
   openGitTier(ctx).takeOver('someone-elses-laptop');
   const rows = [];
   const push = (ok) => (name, detail, fix) => rows.push({ name, ok, detail, fix });
-  checkLocalStore({ ...ctx, _cache: {} }, { ok: push(true), warn: push(null), bad: push(false) }, { mounts: '/dev/null' });
+  await checkLocalStore({ ...ctx, _cache: {} }, { ok: push(true), warn: push(null), bad: push(false) }, { mounts: '/dev/null' });
   assert.ok(rows.some((r) => r.name === BRANCH_CHECK && /host "someone-elses-laptop"/.test(r.detail)));
   const refused = rows.find((r) => r.name === STORE_CHECK && r.ok === null);
   assert.match(refused.detail, /owns this board, so every mutating verb refuses here/);
@@ -1372,8 +1372,19 @@ test('a forge that is not there costs one line, not the whole report', async (t)
   assert.equal(by[BRANCH_CHECK].ok, true);
   assert.ok(by[INDEX_CHECK], 'and the index probe');
   assert.ok(by[MOUNT_CHECK], 'and the mount probe');
-  assert.equal(by.github.ok, false, 'the forge half is one finding');
-  assert.match(by.github.fix, /everything above was checked locally/);
+  // **A skipped check must be distinguishable from a passing one.** The GitHub half used to be one
+  // sequence of bare `await`s: the first throw unwound to a single `bad('github', …)` and doctor
+  // then printed "N problem(s)" as though every other question had been asked and answered. Now
+  // each probe fails under its own name, and the five that need the board — which could not be read
+  // — say they were *not checked* rather than saying nothing.
+  assert.equal(by.labels.ok, false, 'the labels probe answered for itself');
+  assert.equal(by['track branches'].ok, false, `the checks after it still ran: ${Object.keys(by).join(', ')}`);
+  for (const name of ['task agent labels', 'task skills', 'card grants']) {
+    assert.equal(by[name]?.ok, null, `${name} answered "could not read the board", rather than not answering: ${Object.keys(by).join(', ')}`);
+    assert.match(by[name].detail, /could not read the board/);
+  }
+  assert.ok(by['rate limit'] && by.GraphQL, 'and the probes after the board read still ran');
+  assert.equal(by.github, undefined, 'and the whole half is no longer collapsed into one line');
 
   // and the check that reads `ctx.cfg` and nothing else is on the local side of that line. It sat
   // inside `githubChecks`, after the labels call that throws first, so the catch turned it into the

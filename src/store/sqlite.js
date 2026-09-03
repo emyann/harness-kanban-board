@@ -34,10 +34,13 @@ import { EVENT_KINDS } from '../watch.js';
 /**
  * `node:sqlite`, resolved on the first index open and never at import time.
  *
- * **The rule: importing this module must not require a node that has SQLite.** `src/store/index.js`
- * imports the local store so `openStore(ctx)` can pick it, and `openStore` is on the path of every
- * command — including `hkb hook pretool`, whose whole contract is to stand aside rather than throw
- * onto a worker's tool call. A static `import ... from 'node:sqlite'` made that whole graph refuse to
+ * **The rule: importing this module must not require a node that has SQLite.** It is now two layers:
+ * `src/store/index.js` reaches `local.js` through an `await import` so a GitHub board never loads
+ * this module at all, *and* this module never touches the builtin at import time. Either one alone
+ * would have been enough for the case that was reported (`hkb hook pretool`, whose whole contract is
+ * to stand aside rather than throw onto a worker's tool call, dying with
+ * `ERR_UNKNOWN_BUILTIN_MODULE` before `main()` ran) — but a static `import` anywhere on the graph
+ * takes the whole graph down, and the graph has more entry points than the two that were noticed. A static `import ... from 'node:sqlite'` made that whole graph refuse to
  * load with `ERR_UNKNOWN_BUILTIN_MODULE` on a node built `--without-sqlite`, on a *GitHub* board that
  * never opens an index at all. Deferring the import to `openIndex` is the fix for every entry point
  * at once, rather than for the two that were noticed: nothing here touches the builtin until

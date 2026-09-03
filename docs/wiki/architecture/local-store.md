@@ -7,20 +7,20 @@ audience: [dev]
 read_when: "adding a store verb, debugging an index that disagrees with the branch, wondering why a verb is refused on this host, or working on hkb sync / init --import"
 covers:
   - path: src/store/local.js
-    sha: 7116b59c96131e54b6a52a70d28353ecdd216155
+    sha: 627afeabe05f6161d395c204c26f547ff50e15fb
   - path: src/store/index.js
-    sha: 918495a206540318480f3b0ce7cd0a8f559ae874
+    sha: 6f80ab71e9efca230d89d25f1b6d9186576ef522
   - path: src/store/sqlite.js
-    sha: 25cbf6557b3486148031236b8e4da313a95dc703
+    sha: 297383540eb4a0861fd0fa48842d59c82a6f4cc4
   - path: src/init.js
-    sha: c2fbe7003278359213e5ddb2f368e1d4106a780d
+    sha: 44cb5f767e8f7905b0f5bdefe1d44fbf70169709
   - path: src/doctor.js
-    sha: e3c608a3d6da3efecc7b355d4245d88a31d6a918
+    sha: d16d15584b792786a6b9c068b330d98e4a60e2b6
   - path: src/gc.js
-    sha: 707a961f4b31816273d77ab07ee1116cbb4aa319
+    sha: 2e150ac72e587c4c09ee3cbfde18cdd575fc2ce5
   - path: src/cli.js
-    sha: c9c665acc7044ae2710d887424fa03f1cb63e3b3
-generated_at_commit: 8781a1e
+    sha: 66ad7f1abd1fa4dd9f4cfbc56e0e3978f94bb09b
+generated_at_commit: 29d0d25
 last_refreshed: 2026-09-03
 related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
@@ -199,9 +199,11 @@ fast-forward passes the sha just read, the tracking-ref update after a push
 passes what the fetch saw (`_reconcileRefs`, `_setRef`). Ignoring the status
 reported `fastForwarded: true` with the remote's sha as `local` on a ref that had
 not moved — a lost race exiting 0 and saying the board caught up. A lost CAS
-re-reads and retries; three in a row is a refusal naming the reflog. And a sync
-that *creates* the branch calls `forgetStore(ctx)`, because `storeKind` caches
-"this is a GitHub board" for the life of the process.
+re-reads and retries; three in a row is a refusal naming the reflog. A sync that
+*creates* the branch rebuilds the tier's memo and the index's tip
+(`_afterRefMoved`) and changes nothing else: which store the checkout is on is
+`"store"` in board.json, never a ref that arrived over the network
+(`architecture/store-seam`).
 
 Offline is not a failure. A `fetch`/`push` that fails on a network error comes
 back `{offline: true}` and says nothing, because the remote copy is a backup and
@@ -408,19 +410,16 @@ several sweeps before the skip message could be printed.
 - **`claim()` sets `tasks.status = 'running'` in the index** while the card's
   status is the branch's. The index is briefly ahead; the next reconcile fixes
   it. Do not read a card's status off the index expecting the branch's answer.
-- **`storeKind` memoizes both answers**, invalidated by `forgetStore(ctx)` —
-  which `hkb init` calls, since it is the one thing that creates the branch
-  under its own feet. Leaving the negative uncached meant every board predating
-  the `store` key re-spawned two `git rev-parse` per writing verb, per
-  `gc.sweep` and per tick for an answer that could only be `github`.
-  `resolveStore` is handed `localBoardExists(ctx)` rather than deciding on its
-  own, so `hkb init` and `storeKind` cannot disagree.
-- **An inferred store is never written back.** `hkb init` writes `"store"` only
-  when the human chose it (`--store`), when the board is new, or when the key is
-  already there. Pinning what `resolveStore` merely worked out turned every
-  re-init of an older board into a permanent `"store": "github"` — including one
-  whose `kb-board` branch was full of cards, which detached the board from its
-  own branch for good.
+- **`storeKind` reads one key and caches nothing** — there is nothing to work
+  out. `forgetStore(ctx)` remains and drops the memoized git *tiers*, which
+  `hkb init` calls because it creates the branch under its own feet.
+  `resolveStore` (`src/init.js`) takes the same single input, so `hkb init` and
+  `storeKind` cannot disagree about a checkout.
+- **A store nobody chose is never written back.** `hkb init` writes `"store"`
+  only when the human chose it (`--store`), when the board is new, when the key
+  is already there, or when `--import` migrates. A plain re-init used to write
+  `"store": "local"` into a git-tracked board.json as a side effect — the same
+  change `--import` refuses to make without `--force`.
 - **An imported card's `labels`** hold only what is *not* a column —
   `kb:board:*`, `kb:status:*`, `kb:agent:*` and `kb:needs-human` are rebuilt
   from the card, so carrying them would double them (`cardRecord`).
