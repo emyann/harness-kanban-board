@@ -11,8 +11,9 @@
 //     `.git/hkb/index.db` index) in a scratch repository.
 //
 // One temp repo per scenario, which is what keeps this readable; the whole file is a couple of
-// seconds. What it buys: the day `src/store/github.js` is deleted (docs/local-first.md §10, track C)
-// these sentences about the dispatcher are already known to be true of a store that is not GitHub.
+// seconds. What it bought: the day `src/store/github.js` was deleted (docs/local-first.md §10,
+// track C) these sentences about the dispatcher were already known to be true of a store that is
+// not GitHub.
 //
 // Not here: anything a *forge* answers. A pull request is `src/forge.js` on every board, and
 // `test/merge.test.js` is where that lives.
@@ -28,6 +29,7 @@ import { openStore, closeStore } from '../src/store/index.js';
 import { openGitTier } from '../src/store/git.js';
 import { DEFAULT_BOARD, hostId } from '../src/board.js';
 import { locksOf, FakeStore, runWith } from './fake-store.js';
+import { FakeGh } from './fake-gh.js';
 
 const ago = (seconds) => new Date(Date.now() - seconds * 1000).toISOString();
 
@@ -66,7 +68,10 @@ async function openFake({ dispatch = {} } = {}) {
   const ctx = context(root, { dispatch });
   const double = new FakeStore({ board: 'default', host: 'test-host' });
   const restore = double.install(ctx);
-  return { ctx, root, store: await openStore(ctx), cleanup: () => { restore(); fs.rmSync(root, { recursive: true, force: true }); } };
+  // The forge double too: the tick joins a card to its pull request by head branch (`fillPrs`,
+  // src/forge.js) on every board, so a scenario with no forge behind it would reach a real `gh`.
+  const restoreGh = new FakeGh().install();
+  return { ctx, root, store: await openStore(ctx), cleanup: () => { restore(); restoreGh(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 
 /**
@@ -83,7 +88,8 @@ async function openLocal({ dispatch = {} } = {}) {
   git(root, 'commit', '-qm', 'init');
   const ctx = context(root, { store: 'local', host: hostId(), dispatch });
   openGitTier(ctx).init('default');
-  return { ctx, root, store: await openStore(ctx), cleanup: () => { closeStore(ctx); fs.rmSync(dir, { recursive: true, force: true }); } };
+  const restoreGh = new FakeGh().install();
+  return { ctx, root, store: await openStore(ctx), cleanup: () => { restoreGh(); closeStore(ctx); fs.rmSync(dir, { recursive: true, force: true }); } };
 }
 
 const DRIVERS = [{ name: 'fake', open: openFake }, { name: 'local', open: openLocal }];
@@ -109,7 +115,7 @@ async function running(h, n, { attempt = 1, host = 'other-host', startedAgo = 60
   await h.store.setStatus(t, 'running');
   const { token } = await h.store.claim(n, attempt);
   const rec = await h.store.loadRun(n);
-  rec.run = runWith([{ attempt, host, started_at: ago(startedAgo), heartbeat_at: ago(beatAgo), lock_sha: token, ...extra }]);
+  rec.run = runWith([{ attempt, host, started_at: ago(startedAgo), heartbeat_at: ago(beatAgo), ...extra }]);
   await h.store.saveRun(n, rec);
   return token;
 }
@@ -153,9 +159,10 @@ const SCENARIOS = [
       assert.equal(run.attempts[0].host, h.ctx.host, 'the row names the host that made the claim');
       assert.equal(run.attempts[0].profile, 'claude');
       assert.equal(run.attempts[0].ended_at, undefined, 'the attempt is open');
-      // The row leases on what the store's own claim handed back, never on a value the dispatcher
-      // invented — and it is a sha on GitHub, a row token on a store with a table.
-      assert.equal(run.attempts[0].lock_sha, await h.store.lockToken(t.number, 1));
+      // The claim itself seeds this host's beat chain, so the worker's first heartbeat has
+      // something to lease on without the row carrying a copy of the token.
+      assert.equal(run.attempts[0].lock_sha, undefined, 'the row carries no copy of the claim');
+      assert.equal(h.store.beatToken(t.number, 1), await h.store.lockToken(t.number, 1));
     },
   },
   {
