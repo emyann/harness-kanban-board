@@ -12,6 +12,8 @@ import { agentsSkillDir, packageSkillDir, packageVersion, readSkillVersion, comm
 import { latestVersion } from './registry.js';
 import { checkProject } from './projects.js';
 import { mcpServersFromTranscript } from './stats.js';
+import { storeKind } from './store/index.js';
+import { openLocalStore, mountFor, REFUSED_FS } from './store/local.js';
 // mcp.js is imported dynamically inside checkMcp, not here: it imports cli.js, which imports this
 // file, and a static import here would make that a cycle.
 
@@ -154,6 +156,71 @@ export function checkServe(ctx, { ok, warn }) {
   if (st.stale) return warn('serve', 'no server running — .kanban/serve.pid predates this boot and names nothing of ours', 'hkb up --serve');
   if (st.exit !== null) return warn('serve', `no server running — the last one exited (${st.exit}) at ${st.exited_at}`, 'hkb up --serve');
   warn('serve', 'no server running', 'hkb up --serve');
+}
+
+export const STORE_CHECK = 'store';
+export const BRANCH_CHECK = 'kb-board branch';
+export const INDEX_CHECK = 'board index';
+export const MOUNT_CHECK = 'index filesystem';
+
+/**
+ * The local store's three questions (docs/local-first.md §6.3): is the branch there and can it still
+ * fast-forward, is the index built from the tip the branch is actually at, and is the index on a
+ * filesystem where SQLite's locking works.
+ *
+ * Silent on a GitHub board — there is no branch, no index and no mount to be wrong about. Reads
+ * only local refs: doctor does not fetch, so "behind" here means behind what the last `hkb sync` or
+ * `git fetch` brought in, and it says so.
+ *
+ * @param {any} ctx
+ * @param {{ok: Function, warn: Function, bad: Function}} report
+ * @param {{kind?: string|null, mounts?: string, store?: any}} [deps]
+ */
+export function checkLocalStore(ctx, { ok, warn, bad }, { kind = null, mounts = '/proc/mounts', store = null } = {}) {
+  let which = kind;
+  try { which = which || storeKind(ctx); } catch (e) { return bad(STORE_CHECK, /** @type {Error} */ (e).message, 'set "store" in .kanban/board.json to "local" or "github"'); }
+  if (which !== 'local') return ok(STORE_CHECK, `github — the board is the kb:* issues on ${ctx.cfg?.repo || 'GitHub'}`);
+
+  const s = store || openLocalStore(ctx, { reconcile: false });
+  const close = () => { if (!store) try { s.close(); } catch { /* nothing open */ } };
+  try {
+    ok(STORE_CHECK, `local — ${s.branch} in ${s.root}, index ${path.relative(s.root, s.index.file)}`);
+
+    // 1. the branch, and whether the remote's copy is still a fast-forward away in either direction
+    const here = s._rev(`refs/heads/${s.branch}`);
+    const there = s._tracking();
+    if (!here && !there) bad(BRANCH_CHECK, `no ${s.branch} branch in ${s.root} — the board has nowhere to live`, 'hkb init');
+    else if (!here) warn(BRANCH_CHECK, `only ${s.remote}/${s.branch} is here (${String(there).slice(0, 7)}) — this checkout is a read-only copy of somebody else's board`, `git -C ${s.root} branch ${s.branch} ${s.remote}/${s.branch} && hkb init --take-over`);
+    else {
+      const owner = s.owner();
+      const mine = !owner || owner === s.host;
+      const at = `${s.branch} at ${here.slice(0, 7)} · host "${owner ?? 'nobody'}"${mine ? '' : ` (this is "${s.host}")`}`;
+      if (!there || here === there) ok(BRANCH_CHECK, `${at}${there ? ' · in sync with ' + s.remote : ` · never pushed to ${s.remote}`}`);
+      else if (s._ancestor(here, there)) warn(BRANCH_CHECK, `${at} · behind ${s.remote}/${s.branch} (${there.slice(0, 7)}) as of the last fetch`, 'hkb sync');
+      else if (s._ancestor(there, here)) ok(BRANCH_CHECK, `${at} · ahead of ${s.remote}/${s.branch}, fast-forwardable`);
+      else bad(BRANCH_CHECK, `${at} · diverged from ${s.remote}/${s.branch} (${there.slice(0, 7)}) — the branch has one writer and two have written it`, `git -C ${s.root} log --oneline ${s.branch} ${s.remote}/${s.branch}, keep one, then hkb sync`);
+      if (!mine) warn(STORE_CHECK, `host "${owner}" owns this board, so every mutating verb refuses here`, 'hkb init --take-over');
+    }
+
+    // 2. the index: built from the commit the branch is at, or one the next verb will rebuild
+    const tip = s.git.tip();
+    const indexed = s.index.tip();
+    if (!tip) warn(INDEX_CHECK, 'nothing indexed — there is no branch to index', 'hkb init');
+    else if (!indexed) warn(INDEX_CHECK, `empty — no verb has opened this board here yet`, 'hkb list');
+    else if (indexed === tip) ok(INDEX_CHECK, `at ${tip.slice(0, 7)}, matching the branch`);
+    else warn(INDEX_CHECK, `built from ${indexed.slice(0, 7)}, the branch is at ${tip.slice(0, 7)} — the next verb rebuilds it`, 'hkb list');
+
+    // 3. the mount. SQLite's WAL needs POSIX locking that a 9p or NFS mount does not give it: the
+    //    failure is a corrupt index or a hang, neither of which says why.
+    const m = mountFor(path.dirname(s.index.file), { mounts });
+    if (!m) warn(MOUNT_CHECK, `could not read ${mounts} — hkb cannot tell what the index is on (fine on macOS; check by hand on a network mount)`);
+    else if (REFUSED_FS.includes(m.type)) {
+      bad(MOUNT_CHECK, `${m.mount} is ${m.type} — SQLite's locking does not work there, and the index will corrupt or hang`,
+        `move the repository onto a local disk (on WSL, a path under ~ rather than /mnt/c)`);
+    } else if (/^(ext[234]|xfs|btrfs|zfs|apfs|f2fs|overlay|tmpfs|ntfs3?|exfat|vfat|msdos|jfs|reiserfs|bcachefs)$/.test(m.type)) {
+      ok(MOUNT_CHECK, `${m.type} at ${m.mount}`);
+    } else warn(MOUNT_CHECK, `${m.mount} is "${m.type}", which hkb does not recognise — make sure it is a local disk, not a network share`);
+  } finally { close(); }
 }
 
 export const PERMS_CHECK = 'worker permissions';
@@ -1418,6 +1485,9 @@ export async function doctor(ctx, flags, log) {
   await checkMcp(ctx, { ok, warn, bad });
   checkDispatcher(ctx, { ok, warn });
   checkServe(ctx, { ok, warn });
+  // where this board's state actually is, and — on the local store — whether the branch, the index
+  // and the filesystem under it are in a state a verb can write
+  try { checkLocalStore(ctx, { ok, warn, bad }); } catch (e) { bad(STORE_CHECK, /** @type {Error} */ (e).message); }
   // which layer answers a denial, and whether a frozen copy of that layer has fallen behind:
   // local files only, so both run on a checkout with no repo behind it
   checkPolicyLayer(ctx, { ok });

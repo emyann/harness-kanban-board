@@ -594,3 +594,75 @@ test('--no-labels says no to the flags that cannot be done offline, before writi
     assert.equal(fs.existsSync(path.join(root, BOARD_FILE)), false, 'nothing was written on the way out');
   }
 });
+
+// ---------- the store (docs/local-first.md §6, ADR-006) ----------
+// A new board is local: the cards live on the `kb-board` branch in the repo init just ran in, and
+// the index beside it. The three things that must hold are that a *fresh* board gets that store, an
+// *existing* board never changes store by being re-inited, and `--store github` still works while
+// the GitHub driver is here.
+
+const branchTip = (root) => spawnSync('git', ['rev-parse', '--verify', '--quiet', 'refs/heads/kb-board'], { cwd: root, encoding: 'utf8' }).stdout.trim();
+
+test('a fresh init creates a local board: the branch, the index, and board.json says so', async () => {
+  const { root, printed } = await runInit();
+  assert.equal(board(root).store, 'local');
+  assert.match(branchTip(root), /^[0-9a-f]{40}$/, 'the kb-board branch is there');
+  assert.equal(fs.existsSync(path.join(root, '.git', 'hkb', 'index.db')), true, 'and the index beside it');
+  assert.ok(printed.some((l) => /^store: local — created the kb-board branch/.test(l)), printed.join('\n'));
+  // §6.2: the branch is pushed, and init is where a human is told so.
+  assert.ok(printed.some((l) => /^sync: `hkb sync` pushes kb-board/.test(l)), printed.join('\n'));
+
+  const doc = JSON.parse(spawnSync('git', ['show', 'kb-board:board.json'], { cwd: root, encoding: 'utf8' }).stdout);
+  assert.equal(doc.slug, 'default');
+  assert.equal(doc.next_id, 1);
+  assert.equal(typeof doc.host, 'string', 'the branch names its one writer');
+});
+
+test('a second init leaves the branch and the index exactly as they were', async () => {
+  const first = await runInit();
+  const tip = branchTip(first.root);
+  const { printed } = await runInit([], first);
+  assert.equal(branchTip(first.root), tip, 'an existing board is adopted, never recreated');
+  assert.ok(printed.some((l) => /^store: local — kb-board at/.test(l)), printed.join('\n'));
+});
+
+test('--store github keeps the old behaviour, and an existing board keeps the store it has', async () => {
+  const gh = await runInit(['--store', 'github']);
+  assert.equal(board(gh.root).store, 'github');
+  assert.equal(branchTip(gh.root), '', 'no branch: the issues are the board');
+  assert.ok(gh.printed.some((l) => /^store: github/.test(l)));
+
+  // and a board that was set up before the local store existed is not moved by a re-run
+  const legacy = await runInit();
+  const cfg = board(legacy.root);
+  delete cfg.store;
+  fs.writeFileSync(path.join(legacy.root, BOARD_FILE), JSON.stringify(cfg, null, 2));
+  spawnSync('git', ['branch', '-D', 'kb-board'], { cwd: legacy.root });
+  const again = await runInit([], legacy);
+  assert.equal(board(legacy.root).store, 'github', 'a board with no `store` key is on GitHub, and stays there');
+  assert.equal(branchTip(legacy.root), '', 'nothing created a branch under it');
+  assert.ok(again.printed.some((l) => /^store: github/.test(l)));
+});
+
+test('--store takes local or github, and says so', async () => {
+  await assert.rejects(() => runInit(['--store', 'sqlite']), (e) => e.exitCode === 2 && /--store takes "local"/.test(e.message));
+  await assert.rejects(() => runInit(['--store']), (e) => e.exitCode === 2 && /--store needs a value/.test(e.message));
+});
+
+test('--take-over on a GitHub board is refused: there is no owning host to move', async () => {
+  const gh = await runInit(['--store', 'github']);
+  await assert.rejects(() => runInit(['--take-over'], gh), (e) => e.exitCode === 2 && /no owning host/.test(e.message));
+});
+
+test('--take-over moves the branch to this host, and init says whose it was', async () => {
+  const first = await runInit();
+  // Somebody else's board: rewrite the owner on the branch the way another laptop's init would have.
+  const { openGitTier } = await import('../src/store/git.js');
+  openGitTier(first.root, { host: 'someone-elses-laptop' }).takeOver('someone-elses-laptop');
+
+  const seen = await runInit([], first);
+  assert.ok(seen.printed.some((l) => /owns this board, so hkb reads it here and refuses to write/.test(l)), seen.printed.join('\n'));
+
+  const taken = await runInit(['--take-over'], first);
+  assert.ok(taken.printed.some((l) => /now owns the board — it was "someone-elses-laptop"/.test(l)), taken.printed.join('\n'));
+});

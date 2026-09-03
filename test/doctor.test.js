@@ -18,11 +18,13 @@ import {
   TRACK_PROFILE_CHECK, checkTrackProfile, checkDispatcher, checkServe,
   tallyDeniedTools, deniedToolsFinding, checkDeniedTools,
   CAPABILITIES_CHECK, checkCapabilityMap,
-  TOOL_POSTURE_CHECK, checkToolPosture, CARD_GRANTS_CHECK, checkCardGrants, checkRemovedProfiles } from '../src/doctor.js';
+  TOOL_POSTURE_CHECK, checkToolPosture, CARD_GRANTS_CHECK, checkCardGrants, checkRemovedProfiles,
+  STORE_CHECK, BRANCH_CHECK, INDEX_CHECK, MOUNT_CHECK, checkLocalStore } from '../src/doctor.js';
 import { CAPABILITIES, capabilityGrants, effectiveTools, toolPosture } from '../src/model.js';
 import { normalizeCardGrants } from '../src/tasks.js';
 import { setTransport, GhError } from '../src/gh.js';
-import { pidFile, writeServeUrl, DEFAULT_PROFILES } from '../src/board.js';
+import { pidFile, writeServeUrl, DEFAULT_PROFILES, hostId } from '../src/board.js';
+import { spawnSync } from 'node:child_process';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
 const HOUR = 3_600_000;
@@ -1217,4 +1219,110 @@ test('doctor says nothing about removed profiles on a board that names none', ()
   checkRemovedProfiles({ cfg: { profiles: {} } }, { ok: () => rows.push('ok'), warn: () => rows.push('warn') });
   checkRemovedProfiles({ cfg: { profiles: {}, removed_profiles: [] } }, { ok: () => rows.push('ok'), warn: () => rows.push('warn') });
   assert.deepEqual(rows, []);
+});
+
+// ---------- the local store's three probes (docs/local-first.md §6.3) ----------
+
+/** A scratch repository with a local board on it, and a context of `makeContext`'s shape. */
+function localBoard() {
+  const root = tmpRoot();
+  const run = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+  run('init', '-q', '-b', 'main', '.');
+  fs.writeFileSync(path.join(root, 'a.txt'), 'hi\n');
+  run('add', 'a.txt'); run('commit', '-qm', 'init');
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  const ctx = { root, cfg: { store: 'local', profiles: {} }, board: 'default', host: hostId(), _cache: {} };
+  return { root, ctx, run };
+}
+
+/** The three findings, keyed by name — a probe is about one thing, and the rest are noise. */
+function probe(ctx, opts = {}) {
+  const rows = [];
+  const push = (ok) => (name, detail, fix) => rows.push({ name, ok, detail, fix });
+  checkLocalStore(ctx, { ok: push(true), warn: push(null), bad: push(false) }, opts);
+  return Object.fromEntries(rows.map((r) => [r.name, r]));
+}
+
+test('doctor on a GitHub board says which store it is and probes nothing else', () => {
+  const rows = probe({ root: '/tmp/none', cfg: { store: 'github', repo: 'o/r' }, board: 'default', _cache: {} });
+  assert.equal(rows[STORE_CHECK].ok, true);
+  assert.match(rows[STORE_CHECK].detail, /github — the board is the kb:\* issues on o\/r/);
+  assert.equal(rows[BRANCH_CHECK], undefined, 'there is no branch to be wrong about');
+  assert.equal(rows[MOUNT_CHECK], undefined);
+});
+
+test('doctor: the branch, the index tip and the mount, on a healthy local board', async () => {
+  const { root, ctx } = localBoard();
+  const { openLocalStore } = await import('../src/store/local.js');
+  const { openGitTier } = await import('../src/store/git.js');
+  openGitTier(ctx).init('default');
+  const store = openLocalStore(ctx);
+  store.createTask({ title: 'a card', status: 'ready' });
+  store.close();
+
+  const mounts = path.join(root, 'mounts');
+  fs.writeFileSync(mounts, `/dev/sda1 ${root} ext4 rw 0 0\n`);
+  const rows = probe(ctx, { mounts });
+  assert.equal(rows[STORE_CHECK].ok, true);
+  assert.match(rows[STORE_CHECK].detail, /^local — kb-board in /);
+  assert.equal(rows[BRANCH_CHECK].ok, true);
+  assert.match(rows[BRANCH_CHECK].detail, /never pushed to origin/);
+  assert.equal(rows[INDEX_CHECK].ok, true, JSON.stringify(rows[INDEX_CHECK]));
+  assert.match(rows[INDEX_CHECK].detail, /matching the branch/);
+  assert.equal(rows[MOUNT_CHECK].ok, true);
+  assert.match(rows[MOUNT_CHECK].detail, /^ext4 at /);
+});
+
+test('doctor refuses an index on a 9p mount, and warns on a filesystem it does not know', async () => {
+  const { root, ctx } = localBoard();
+  const { openGitTier } = await import('../src/store/git.js');
+  openGitTier(ctx).init('default');
+
+  const nine = path.join(root, 'mounts-9p');
+  fs.writeFileSync(nine, `C:\\ / 9p rw 0 0\n`);
+  const bad = probe(ctx, { mounts: nine })[MOUNT_CHECK];
+  assert.equal(bad.ok, false);
+  assert.match(bad.detail, /is 9p — SQLite's locking does not work there/);
+  assert.match(bad.fix, /local disk/);
+
+  const odd = path.join(root, 'mounts-odd');
+  fs.writeFileSync(odd, `thing / weirdfs rw 0 0\n`);
+  const unknown = probe(ctx, { mounts: odd })[MOUNT_CHECK];
+  assert.equal(unknown.ok, null, 'unknown is a warning, not a refusal');
+  assert.match(unknown.detail, /"weirdfs", which hkb does not recognise/);
+
+  const missing = probe(ctx, { mounts: path.join(root, 'nope') })[MOUNT_CHECK];
+  assert.equal(missing.ok, null);
+  assert.match(missing.detail, /could not read/);
+});
+
+test('doctor: a branch with no board, an index that has fallen behind, and a foreign owner', async () => {
+  const { ctx } = localBoard();
+  const empty = probe(ctx, { mounts: '/dev/null' });
+  assert.equal(empty[BRANCH_CHECK].ok, false);
+  assert.match(empty[BRANCH_CHECK].detail, /no kb-board branch/);
+  assert.equal(empty[BRANCH_CHECK].fix, 'hkb init');
+
+  const { openLocalStore } = await import('../src/store/local.js');
+  const { openGitTier } = await import('../src/store/git.js');
+  openGitTier(ctx).init('default');
+  const store = openLocalStore(ctx);
+  store.createTask({ title: 'a card', status: 'ready' });
+  store.close();
+  // The branch moves with nothing telling the index — the crash `open()` repairs.
+  openGitTier(ctx).createTask({ title: 'and another', status: 'ready' });
+  const behind = probe(ctx, { mounts: '/dev/null' })[INDEX_CHECK];
+  assert.equal(behind.ok, null);
+  assert.match(behind.detail, /the branch is at .* — the next verb rebuilds it/);
+
+  // and a board this host does not own is read-only, which doctor says twice: on the branch row
+  // (whose host it is) and on the store row (that every mutating verb refuses)
+  openGitTier(ctx).takeOver('someone-elses-laptop');
+  const rows = [];
+  const push = (ok) => (name, detail, fix) => rows.push({ name, ok, detail, fix });
+  checkLocalStore({ ...ctx, _cache: {} }, { ok: push(true), warn: push(null), bad: push(false) }, { mounts: '/dev/null' });
+  assert.ok(rows.some((r) => r.name === BRANCH_CHECK && /host "someone-elses-laptop"/.test(r.detail)));
+  const refused = rows.find((r) => r.name === STORE_CHECK && r.ok === null);
+  assert.match(refused.detail, /owns this board, so every mutating verb refuses here/);
+  assert.equal(refused.fix, 'hkb init --take-over');
 });

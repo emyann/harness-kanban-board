@@ -1200,6 +1200,35 @@ export function installStamp() {
  * ladder ran out — or when the code on disk has moved past what this process loaded: either way the
  * honest thing left is to die with a reason a supervisor and a human can both read.
  */
+/** Did this tick decide anything the branch has to record? Only then is there something to push. */
+export const DURABLE_TICK_KEYS = ['reconciled', 'reclaimed', 'reaped', 'promoted', 'claimed', 'guarded', 'auto_merge', 'self_heal'];
+
+/**
+ * The loop's end-of-tick sync (docs/local-first.md §6.2, "Sync is git").
+ *
+ * Only on a local board, only after a tick that wrote something durable, at most once a minute
+ * (`syncAfterTick`'s own throttle) and silent when the laptop is offline. The dispatcher stamp goes
+ * on the same pass: it is what another host's `hkb init --take-over` reads to tell a board somebody
+ * is still ticking from one whose laptop is not coming back.
+ */
+async function syncPass(ctx, summary, log) {
+  try {
+    const { storeKind } = await import('./store/index.js');
+    if (storeKind(ctx) !== 'local') return;
+    const { openLocalStore, syncAfterTick } = await import('./store/local.js');
+    if (!DURABLE_TICK_KEYS.some((k) => (summary?.[k] || []).length)) return;
+    const store = openLocalStore(ctx, { reconcile: false });
+    try {
+      store.markDispatcher();
+      syncAfterTick(ctx, { store, log });
+    } finally { store.close(); }
+  } catch (e) {
+    // A tick that decided something has already landed on the branch; the copy on the remote is a
+    // backup, and failing to make one is never a reason to stop dispatching.
+    log(`sync skipped: ${/** @type {Error} */ (e).message}`);
+  }
+}
+
 export async function loop(ctx, { interval, max, profiles = null, log, sleeper = null, installStamp: stamp = installStamp }) {
   const dropLock = acquireLoopLock(ctx);
   log(`dispatcher pid ${process.pid} (singleton lock .kanban/dispatch.pid)`);
@@ -1237,6 +1266,7 @@ export async function loop(ctx, { interval, max, profiles = null, log, sleeper =
       const s = await tick(ctx, { max, children, profiles, log });
       const n = (k) => s[k].length;
       log(`tick: reconciled ${n('reconciled')} reclaimed ${n('reclaimed')} reaped ${n('reaped')} promoted ${n('promoted')} claimed ${n('claimed')} tracks ${s.tracks.filter((x) => x.ok).length} guarded ${n('guarded')} held ${n('held')} skipped ${n('skipped')}`);
+      await syncPass(ctx, s, log);
       if (s.fatal) { fatal = s.fatal; break; }
     } catch (e) {
       if (e instanceof GhError && e.kind === 'network') log('GitHub unreachable — reclaim clock paused, retrying next tick');

@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { fetchBoard, loadRun, deleteComment } from './tasks.js';
 import { listLocks, listBeatChains, dropBeatChain, listTrackBranches, deleteTrackBranch } from './lock.js';
 import { logsDir, kanbanDir } from './board.js';
+import { storeKind } from './store/index.js';
 
 const git = (root, args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
 const lastLine = (s) => String(s || '').trim().split('\n').pop() || '';
@@ -312,7 +313,7 @@ export async function sweep(ctx, { yes = false, days = 14, memo = null, log = /*
   const finished = (n) => { const t = byNumber.get(n); return !t || settled(t); };
   const finishedHere = (n) => { const t = byNumber.get(n); return !!t && settled(t); };
   const label = (n) => `task #${n} ${byNumber.get(n)?.status || 'not on board'}`;
-  const stats = { worktrees: 0, branches: 0, track_branches: 0, comments: 0, chains: 0, files: 0, pending: 0, skipped: 0, days, applied: !!yes };
+  const stats = { worktrees: 0, branches: 0, track_branches: 0, comments: 0, chains: 0, files: 0, pending: 0, skipped: 0, days, applied: !!yes, store: storeKind(ctx) };
 
   const wt = sweepWorktrees(ctx, { finished, yes, label, log });
   const prByBranch = (n, branch) => (byNumber.get(n)?.prs || []).find((p) => p.headRefName === branch) || null;
@@ -325,8 +326,16 @@ export async function sweep(ctx, { yes = false, days = 14, memo = null, log = /*
   stats.pending = wt.pending + aw.pending + br.pending + tb.pending;
   stats.skipped = wt.skipped + wt.failed + aw.skipped + aw.failed + br.skipped + tb.skipped;
 
-  try { stats.comments = await sweepRunComments(ctx, tasks, { yes, memo: yes ? memo : null, log }); } catch (e) { log(`duplicate run comments skipped: ${e.message}`); }
-  try { stats.chains = await sweepBeatChains(ctx, { yes, log }); } catch (e) { log(`beat chains skipped: ${e.message}`); }
+  // Two sweeps that exist because of how the GitHub store keeps a board, and mean nothing once it
+  // does not (docs/local-first.md §7): a run record is one file on the branch, so there is no second
+  // comment to be a duplicate of, and a heartbeat is a row in the index, so there is no beat chain
+  // to go stale. Skipped rather than run-and-find-nothing: both cost a listing per card.
+  if (stats.store === 'local') {
+    log('duplicate run comments and beat chains: nothing to sweep on a local board — the run record is one file on the branch and a beat is a row in the index');
+  } else {
+    try { stats.comments = await sweepRunComments(ctx, tasks, { yes, memo: yes ? memo : null, log }); } catch (e) { log(`duplicate run comments skipped: ${e.message}`); }
+    try { stats.chains = await sweepBeatChains(ctx, { yes, log }); } catch (e) { log(`beat chains skipped: ${e.message}`); }
+  }
   stats.files = sweepFiles(ctx, { days, yes, log });
   return stats;
 }
@@ -342,6 +351,7 @@ export async function gc(ctx, flags, log) {
   const stats = await sweep(ctx, { yes: !!flags.yes, days, log });
   if (ctx.json) process.stdout.write(JSON.stringify(stats, null, 2) + '\n');
   else if (!stats.applied) log(`gc: nothing done — ${stats.pending} worktree/branch(es) and everything listed above would go. Re-run with --yes.`);
+  else if (stats.store === 'local') log(`gc: ${stats.worktrees} worktree(s) removed, ${stats.branches} branch(es) deleted, ${stats.track_branches} track branch(es) deleted, ${stats.files} old file(s) pruned (retention ${stats.days}d)`);
   else log(`gc: ${stats.worktrees} worktree(s) removed, ${stats.branches} branch(es) deleted, ${stats.track_branches} track branch(es) deleted, ${stats.comments} duplicate run comment(s) deleted, ${stats.chains} local beat chain(s) dropped, ${stats.files} old file(s) pruned (retention ${stats.days}d)`);
   return 0;
 }

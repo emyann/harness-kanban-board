@@ -23,7 +23,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { openStore, STORE_METHODS } from '../src/store/index.js';
-import { DEFAULT_BOARD } from '../src/board.js';
+import { openGitTier } from '../src/store/git.js';
+import { DEFAULT_BOARD, hostId } from '../src/board.js';
 import { L, emptyRun, serializeResultComment, RESULT_MARKER } from '../src/model.js';
 import { FakeGh, kbIssue } from './fake-gh.js';
 
@@ -81,8 +82,47 @@ function openGithubDriver() {
   };
 }
 
+// ---------- the local driver ----------
+
+/**
+ * The composed local store (`src/store/local.js`) in a scratch repository: the `kb-board` branch for
+ * the durable half and `.git/hkb/index.db` for the live one.
+ *
+ * `openStore(ctx)` is what builds it, from a `.kanban/board.json` that says `"store": "local"` —
+ * the seam is what the suite is here to exercise, so nothing reaches for `openLocalStore` directly.
+ * The board is created with the tier's own host, which is this machine's, so the store that opens it
+ * is its owner: the one-writer refusal has tests of its own in `test/store-local.test.js`.
+ */
+function openLocalDriver() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-store-local-'));
+  const root = path.join(dir, 'work');
+  git(dir, 'init', '-q', '-b', 'main', root);
+  fs.writeFileSync(path.join(root, 'a.txt'), 'hi\n');
+  git(root, 'add', 'a.txt');
+  git(root, 'commit', '-qm', 'init');
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+
+  const cfg = { ...JSON.parse(JSON.stringify(DEFAULT_BOARD)), store: 'local' };
+  const ctx = {
+    root, cfg,
+    repo: null,
+    board: 'default', host: hostId(), json: false, caps: {}, _cache: {},
+    requireBoard() { return this; },
+  };
+  openGitTier(ctx).init('default');
+  const store = openStore(ctx);
+  return {
+    store,
+    // A beat somebody else recorded. The interface's own `heartbeat` rotates the token, and a
+    // scenario that wants a beat *at a given instant* has nowhere else to put it.
+    recordBeat: (n, k, at) => { store.index.db.prepare('UPDATE locks SET beat_at = ? WHERE task_id = ? AND k = ?').run(at, Number(n), Number(k)); },
+    cleanup: () => { store.close(); fs.rmSync(dir, { recursive: true, force: true }); },
+  };
+}
+
 const DRIVERS = [
   { name: 'github', open: openGithubDriver },
+  { name: 'local', open: openLocalDriver },
 ];
 
 // ---------- the scenarios ----------

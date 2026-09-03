@@ -460,3 +460,37 @@ test('a failing sweep never fails the tick', async (t) => {
   assert.deepEqual(s.promoted, []); // the tick itself finished normally
   assert.match(h.text(), /gc sweep skipped \(retried in 1 ticks\)/);
 });
+
+// ---------- the local store (docs/local-first.md §7) ----------
+// Two of these sweeps are about how the GitHub store keeps a board, and mean nothing once it does
+// not: a run record is one file on the branch (so there is no second comment to be a duplicate of)
+// and a beat is a row in the index (so there is no chain to go stale). Both cost a listing per card,
+// which is why they are skipped rather than run and found empty.
+
+test('gc on a local board sweeps worktrees, branches and files — and not comments or beat chains', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.ctx.cfg.store = 'local';
+  h.gh.addIssue(kbIssue({ number: 1, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', run: runWith([{ attempt: 1, ended_at: '2026-08-26T10:00:00Z', outcome: 'completed' }]) }));
+  // the two things the skipped sweeps would have found
+  h.gh.addComment(1, serializeRunComment(runWith([{ attempt: 1, ended_at: '2026-08-26T09:00:00Z', outcome: 'completed' }])));
+  git(h.root, 'update-ref', 'refs/kb/locks/1/1', git(h.root, 'rev-parse', 'HEAD'));
+  const gone = worktree(h.root, 'kb-1-1', 'worktree-kb-1-1');
+  const old = path.join(h.root, '.kanban', 'logs', '1-1.log');
+  fs.mkdirSync(path.dirname(old), { recursive: true });
+  fs.writeFileSync(old, 'old\n');
+  const longAgo = Date.now() - 30 * 86400_000;
+  fs.utimesSync(old, longAgo / 1000, longAgo / 1000);
+
+  const stats = await sweep(h.ctx, { yes: true, log: h.log });
+
+  assert.equal(stats.store, 'local');
+  assert.equal(stats.worktrees, 1, 'the sweeps that are about this host still run');
+  assert.equal(stats.files, 1);
+  assert.equal(exists(gone), false);
+  assert.equal(stats.comments, 0);
+  assert.equal(stats.chains, 0);
+  assert.equal(h.gh.issues.get(1).comments.length, 2, 'the duplicate run comment was left where it is');
+  assert.equal(git(h.root, 'for-each-ref', '--format=%(refname)', 'refs/kb/locks/'), 'refs/kb/locks/1/1', 'and the beat chain too');
+  assert.match(h.text(), /nothing to sweep on a local board/);
+});

@@ -16,14 +16,55 @@
 // go on calling `src/gh.js` whatever the board is kept in — a local board still opens its work on a
 // forge (§6.4).
 import { openGithubStore } from './github.js';
+import { openLocalStore, localBoardExists, assertLocalOwner } from './local.js';
 
 /**
- * The store for `ctx`. Today: always the GitHub one.
+ * Which store a board uses, and **the only place that decides it** (the card's contract).
+ *
+ * Two answers, in this order:
+ *   1. `store` in `.kanban/board.json` — `"local"` or `"github"`. `hkb init` writes `"local"` on a
+ *      new board and `hkb init --store github` writes the other; an existing board that has never
+ *      heard of the key is left to (2), so no board changes store by being read by a newer hkb.
+ *   2. the `kb-board` branch: if this repository has one (or a `<remote>/kb-board` to read), the
+ *      board is local. That is what makes a `git clone` of a local board work with no config at all.
+ *
  * @param {any} ctx  a context from `makeContext`/`makeContextAt` (src/board.js)
+ * @returns {string} 'local' | 'github'
+ */
+export function storeKind(ctx) {
+  const declared = ctx?.cfg?.store;
+  if (declared === 'local' || declared === 'github') return declared;
+  if (declared) {
+    const e = /** @type {any} */ (new Error(`"store": "${declared}" in .kanban/board.json is not a store — hkb has "local" (the kb-board branch) and "github" (issues).`));
+    e.exitCode = 2;
+    throw e;
+  }
+  return localBoardExists(ctx) ? 'local' : 'github';
+}
+
+/**
+ * The store for `ctx`.
+ * @param {any} ctx  a context from `makeContext`/`makeContextAt` (src/board.js)
+ * @param {{kind?: string}} [opts]  `kind` forces a driver — `hkb init --import`, which reads one
+ *   store and writes the other, is the caller that needs it.
  * @returns {Store}
  */
-export function openStore(ctx) {
-  return openGithubStore(ctx);
+export function openStore(ctx, { kind = null } = {}) {
+  return (kind || storeKind(ctx)) === 'local' ? openLocalStore(ctx) : openGithubStore(ctx);
+}
+
+/**
+ * Refuse a verb that writes the board on a host that does not own it.
+ *
+ * A no-op on the GitHub store — its board is a repository, and every collaborator writes it. On the
+ * local store the `kb-board` branch has exactly one writer (§6.2) and this is where every mutating
+ * verb finds that out, before it spends anything.
+ * @param {any} ctx
+ * @param {string} verb
+ */
+export function assertOwningHost(ctx, verb = 'this') {
+  if (storeKind(ctx) !== 'local') return null;
+  return assertLocalOwner(ctx, verb);
 }
 
 /**
