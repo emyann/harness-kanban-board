@@ -1293,7 +1293,7 @@ test('doctor names the missing fetch refspec, and stops warning once it is there
 
   const missing = (await probe({ ...ctx, _cache: {} }, { mounts: '/dev/null' }))[REFSPEC_CHECK];
   assert.equal(missing.ok, null, 'a warning, not a refusal: the board still works, it just is not fetched');
-  assert.match(missing.detail, /does not carry \+refs\/kb\/boards\/\*:refs\/remotes\/origin\/kb\/boards\/\*/);
+  assert.match(missing.detail, /does not carry \+refs\/kb\/boards\/\*:refs\/kb\/remotes\/origin\/boards\/\*/);
   assert.match(missing.fix, /hkb sync/, 'and the fix is a command the operator already has');
   assert.match(missing.fix, /config --add remote\.origin\.fetch/);
 
@@ -1346,6 +1346,31 @@ test('doctor diagnoses the index without creating it', async () => {
   // The store row still names where the index would live, computed rather than read off an open one.
   assert.match(rows[STORE_CHECK].detail, /index \.git[/\\]hkb[/\\]index\.db/);
   void root;
+});
+
+test('doctor names a board still on refs/heads/kb-board instead of reporting none', async () => {
+  // Without this row the board is *right there* and doctor says "no board at refs/kb/boards/default",
+  // then prescribes an `hkb init` that creates a second, empty board beside the real one. Nothing is
+  // on the old ref in this repository — measured — but that measurement covered this repository, and
+  // a checkout made between #326 and the move has a whole board there.
+  const { ctx } = localBoard();
+  const { openGitTier, LEGACY_BOARD_REF } = await import('../src/store/git.js');
+  openGitTier(ctx, { ref: LEGACY_BOARD_REF }).init('default');
+
+  const rows = await probe({ ...ctx, _cache: {} }, { mounts: '/dev/null' });
+  assert.equal(rows[BRANCH_CHECK].ok, false);
+  assert.match(rows[BRANCH_CHECK].detail, /refs\/heads\/kb-board/, 'the board is named, not silently missed');
+  assert.doesNotMatch(rows[BRANCH_CHECK].detail, /^no board at/);
+  assert.match(rows[BRANCH_CHECK].fix, /update-ref refs\/kb\/boards\/default refs\/heads\/kb-board/);
+  assert.notEqual(rows[BRANCH_CHECK].fix, 'hkb init', 'which is the one fix that would lose the board');
+});
+
+test('doctor on a GitHub board whose name is not a ref path still reports it healthy', async () => {
+  // `slugFile` hashes a board name, so `--board "my board"` is a perfectly good GitHub board.
+  // Building its ref from `localBoardExists` turned that into a `bad` row about a board that is fine.
+  const rows = await probe({ root: '/tmp/none', cfg: { store: 'github', repo: 'o/r' }, board: 'my board', _cache: {} });
+  assert.equal(rows[STORE_CHECK].ok, true);
+  assert.match(rows[STORE_CHECK].detail, /github/);
 });
 
 test('doctor: a checkout with no board, an index that has fallen behind, and a foreign owner', async () => {

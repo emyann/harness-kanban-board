@@ -923,7 +923,7 @@ async function setUpLocalBoard(ctx, flags, log) {
   const existed = !!store.git.tip();
   let migration = null;
   if (flags.import) {
-    if (existed) log(`--import skipped: ${store.ref} already exists here, and a second import would overwrite a board that has since been worked. \`git log --oneline ${store.branch}\` shows what is on it`);
+    if (existed) log(`--import skipped: ${store.ref} already exists here, and a second import would overwrite a board that has since been worked. \`git log --oneline ${store.ref}\` shows what is on it`);
     // `--force` carries through: it is the human's "I know, do it anyway" for both refusals this
     // command can raise — a board with a live claim on it, and a host that still looks alive.
     else migration = await importGithubBoard(ctx, { store, log, force: !!flags.force });
@@ -988,15 +988,20 @@ export async function init(ctx, flags, log) {
   }
   const { harnesses, profiles } = resolveProfiles(flags);
   const existing = loadBoard(root);
-  const { localBoardExists, boardRef } = await import('./store/local.js');
-  const boardRefName = boardRef(board);
+  // **`findLocalBoardRef`, and only after the store is resolved.** `boardRef(board)` was called
+  // here, before `resolveStore` — so `hkb init --board "my board" --store github`, which has always
+  // worked because a GitHub board's name is a label that `slugFile` *hashes* rather than a ref path,
+  // now exited 2 on a name the store it was choosing does not care about. A ref name is validated
+  // where a ref is built, which is `setUpLocalBoard`.
+  const { findLocalBoardRef, boardRef } = await import('./store/local.js');
   let store = resolveStore(flags, existing);
+  const found = findLocalBoardRef(ctx);
   // A checkout that has the branch but no `"store"` key is on the GitHub store — `storeKind` reads
   // the key and nothing else, deliberately (see its docblock). That is worth **saying**, because the
   // one thing a human in this situation cannot guess is that the branch under their feet is inert.
   // A message, never a behaviour: this is the whole of what the removed inference is replaced by.
-  if (store === 'github' && flags.store === undefined && !flags.import && localBoardExists(ctx)) {
-    log(`note: this repository has a board at \`${boardRefName}\`, and this board is on the GitHub store — nothing reads that ref. `
+  if (store === 'github' && flags.store === undefined && !flags.import && found) {
+    log(`note: this repository has a board at \`${found.ref}\`, and this board is on the GitHub store — nothing reads that ref. `
       + `\`hkb init --store local\` puts this checkout on it; \`hkb init --import\` migrates the GitHub board onto a new one.`);
   }
   // `--import` is the migration onto the local store (docs/local-first.md §6.3), and it has to mean
@@ -1007,7 +1012,7 @@ export async function init(ctx, flags, log) {
   // this run rather than a value read off a file.
   if (flags.import && store === 'github' && flags.store === undefined) {
     store = 'local';
-    log(`--import: migrating this board onto the local store (\`${boardRefName}\` in this repo). \`hkb init --store github --import\` keeps the board on GitHub and adopts open issues into triage instead`);
+    log(`--import: migrating this board onto the local store (\`${found?.ref || boardRef(board)}\` in this repo). \`hkb init --store github --import\` keeps the board on GitHub and adopts open issues into triage instead`);
   }
   // The migration changes what store this board is on, and on an existing board that answer is
   // usually written in a file the repository tracks. Refused before anything is written rather than

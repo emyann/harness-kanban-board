@@ -54,7 +54,7 @@ branch and one board silently became the other.
 default `git clone` and is not visible in GitHub's web UI. Three things pay it
 back, and all three are the operator's ordinary commands:
 
-- `hkb init` **appends** `+refs/kb/boards/*:refs/remotes/<remote>/kb/boards/*` to
+- `hkb init` **appends** `+refs/kb/boards/*:refs/kb/remotes/<remote>/boards/*` to
   `remote.<name>.fetch` (`ensureFetchRefspec`, `src/store/local.js`) — appended,
   never replacing the `+refs/heads/*` line, which is what makes the remote a
   remote for everything that is not hkb. Idempotent.
@@ -66,10 +66,26 @@ back, and all three are the operator's ordinary commands:
   exactly the case sync exists for — so restoring a board onto a new machine is
   still `git clone` then `hkb sync`, and nothing else.
 
-The refspec maps into `refs/remotes/` deliberately. `+refs/kb/*:refs/kb/*` would
-be shorter and would be a bug: the local ref is the one the one-writer
-compare-and-swap leases, so a fetch writing it would replace whatever this host
-had decided with the remote's older copy, silently, on every fetch.
+The destination is `refs/kb/remotes/<remote>/boards/*`, and both halves of that
+were learned the hard way.
+
+Not `+refs/kb/*:refs/kb/*`, which would be shorter and would be a bug: the local
+ref is the one the one-writer compare-and-swap leases, so a fetch writing it
+would replace whatever this host had decided with the remote's older copy,
+silently, on every fetch. (`hasFetchRefspec` therefore matches a config line on
+its **destination**, not its source — matching the source called exactly that
+line "present", so `hkb doctor` printed a green row about the one config that
+destroys the board.)
+
+And not `refs/remotes/<remote>/kb/boards/*`, which is where this landed first.
+Git forbids a ref being both a file and a directory prefix, and
+`refs/remotes/<remote>/` is full of refs named after other people's branches: on
+a repository whose origin has a branch called `kb`, `refs/remotes/origin/kb`
+exists, so `refs/remotes/origin/kb/boards/default` cannot — and every ordinary
+`git fetch origin` in that repository then exits 1 with `cannot lock ref`,
+because of a line hkb put in the operator's `.git/config`. That is the same
+sin as replacing the `+refs/heads/*` line, one step removed. `refs/kb/remotes/`
+is hkb's own namespace all the way down, so no branch name can reach it.
 
 The consequence worth internalising: **a board write moves a ref and nothing
 else.** A worker committing a card from `.claude/worktrees/kb-99-1` leaves
@@ -158,6 +174,19 @@ to the status a card already has would land a commit saying so. `closeTask` and
 `addLabels` hold the same line — a closing time is stamped only on a card that
 was open, and the label list is re-sorted only when the set actually moved.
 
+### The reflog is asked for, not assumed
+
+`git update-ref` here passes `--create-reflog`. `core.logAllRefUpdates` at its
+default logs `refs/heads`, `refs/remotes`, `refs/notes` and HEAD — and nothing
+else — so moving the board out of `refs/heads` would otherwise have taken its
+reflog with it: `git reflog refs/kb/boards/default` empty, `.git/logs/refs`
+holding only `heads`. Two messages in the tier prescribe `git reflog <ref>`
+(`_absentRefMessage`, and `_reconcileRefs` after three lost compare-and-swaps),
+and more to the point a bad `update-ref`, a racing `hkb down` or a clobbering
+fetch would stop being recoverable on the tier the design calls *durable*.
+`hkb sync`'s own `update-ref` (`_setRef`) passes it for the same reason.
+Tested by reading the reflog back (`test/store-git.test.js`).
+
 The question is asked *before* either guard on writing — the one-writer check
 and the writable-ref check both — so a verb that decides nothing costs nothing
 even on a read-only clone. A reconcile pass re-asserting the state of twenty
@@ -176,7 +205,7 @@ multi-player is out of scope by decision.
 
 Reads are unrestricted, which is what makes a *restore* work: a checkout that
 has fetched but not synced has no local `refs/kb/boards/<slug>`, so the tier
-falls back to `refs/remotes/<remote>/kb/boards/<slug>` (`trackingRefFor`) and the
+falls back to `refs/kb/remotes/<remote>/boards/<slug>` (`trackingRefFor`) and the
 board is readable before `hkb sync` creates the local ref.
 
 Two hosts writing one board is not supported in this version, and the reason
@@ -195,7 +224,7 @@ justification for a right rule.
 
 ### A clone can read, and cannot write
 
-A clone that has fetched the namespace has `refs/remotes/origin/kb/boards/<slug>`
+A clone that has fetched the namespace has `refs/kb/remotes/origin/boards/<slug>`
 and no local ref. Reads fall back to it; a **write refuses with the
 `update-ref` command that fixes it**, because the compare-and-swap is on
 `refs/kb/boards/<slug>` and there is nothing there to swap. (A clone that has
@@ -206,6 +235,19 @@ is one word away from what it says for real contention (`is at X but expected
 Y`) — telling them apart is `classifyRefWrite` (`src/store/git.js`), and getting
 it wrong turned "there is no board here" into five retries and a message
 blaming a writer on another host.
+
+### A board still on the old ref is named, not missed
+
+Nothing was ever written to `refs/heads/kb-board` in this repository — measured
+on the remote too, before the move — but that measurement covered *this*
+repository. A checkout made between #326 (when local became the default store)
+and the move has a whole board sitting there. So `findLocalBoardRef`
+(`src/store/local.js`) probes three refs — the board's own, the remote's copy,
+and `refs/heads/kb-board` — and `hkb doctor` reports the third by name with the
+one-line `update-ref` that moves it. This is a safety net, not a migration:
+nothing writes the old ref and nothing reads a board off it. Without the net,
+the board reads as absent and doctor's own `hkb init` fix creates a *second,
+empty* board beside the real one.
 
 ## What is *not* on the board's ref
 

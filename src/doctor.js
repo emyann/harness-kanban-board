@@ -206,15 +206,20 @@ export async function checkLocalStore(ctx, { ok, warn, bad }, { kind = null, mou
     // A branch nothing reads is worth one line, for the same reason `hkb init` says it: the store is
     // the `"store"` key and nothing else, so a checkout carrying a board ref from a fetch is inert
     // and there is no way to tell from the outside.
-    const { localBoardExists, boardRef } = await import('./store/local.js');
-    if (localBoardExists(ctx)) warn(STORE_CHECK, `this repository also has a board at \`${boardRef(ctx?.board)}\`, and nothing reads it while the board is on the GitHub store`, 'hkb init --store local (or ignore it)');
+    // `findLocalBoardRef`, not `boardRef(ctx.board)`: a GitHub board's name is a label, not a ref
+    // path (`slugFile` hashes it), so `--board "my board"` must not throw its way out of a
+    // *diagnosis* of a board that is perfectly healthy. It answers null for that, and names the ref
+    // it actually found otherwise — including the one the board used to live on.
+    const { findLocalBoardRef } = await import('./store/local.js');
+    const found = findLocalBoardRef(ctx);
+    if (found) warn(STORE_CHECK, `this repository also has a board at \`${found.ref}\`, and nothing reads it while the board is on the GitHub store`, 'hkb init --store local (or ignore it)');
     return;
   }
 
   // Imported here, not at the top of the file: `local.js` pulls in `node:sqlite`, and `hkb doctor`
   // on a plain GitHub board — the board most likely to be run by somebody whose node was built
   // without it — must not die on the import of a store it is not using. Same rule as `openStore`.
-  const { openLocalStore, mountFor, REFUSED_FS, hasFetchRefspec, boardFetchRefspec } = await import('./store/local.js');
+  const { openLocalStore, mountFor, REFUSED_FS, hasFetchRefspec, boardFetchRefspec, findLocalBoardRef, legacyBoardFix, LEGACY_BOARD_REF } = await import('./store/local.js');
   const { indexFileIn } = await import('./store/sqlite.js');
 
   // **A diagnosis does not create what it is diagnosing.** `openLocalStore` used to open a *writing*
@@ -234,7 +239,14 @@ export async function checkLocalStore(ctx, { ok, warn, bad }, { kind = null, mou
     // 1. the ref, and whether the remote's copy is still a fast-forward away in either direction
     const here = s._rev(s.ref);
     const there = s._tracking();
-    if (!here && !there) bad(BRANCH_CHECK, `no board at ${s.ref} in ${s.root()} — the board has nowhere to live`, 'hkb init');
+    // A board on `refs/heads/kb-board` is the one case where "no board at ${s.ref}" is true and
+    // useless: the board is *right there*, on the ref it lived on before it moved out of
+    // `refs/heads`, and `hkb init` would create a second empty one beside it. Name it and name the
+    // one-line move instead.
+    const legacy = !here && !there ? findLocalBoardRef(ctx) : null;
+    if (legacy?.legacy) {
+      bad(BRANCH_CHECK, `this board is still on ${LEGACY_BOARD_REF}, the ref boards lived on before they moved out of refs/heads — nothing reads it there, and \`hkb init\` would create a second, empty board beside it`, legacyBoardFix(ctx));
+    } else if (!here && !there) bad(BRANCH_CHECK, `no board at ${s.ref} in ${s.root()} — the board has nowhere to live`, 'hkb init');
     else if (!here) warn(BRANCH_CHECK, `only ${s.trackingRef} is here (${String(there).slice(0, 7)}) — this checkout is a read-only copy of somebody else's board`, `git -C ${s.root()} update-ref ${s.ref} ${s.trackingRef} && hkb init --take-over`);
     else {
       const owner = s.owner();

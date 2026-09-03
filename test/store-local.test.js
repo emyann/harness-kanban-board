@@ -14,8 +14,8 @@ import { spawnSync } from 'node:child_process';
 import { openStore, storeKind, assertOwningHost, forgetStore } from '../src/store/index.js';
 import { gitTierFor } from '../src/store/local.js';
 import { openLocalStore, importGithubBoard, adoptOpenIssues, liveDispatcher, dropGithubLeftovers, mountFor, syncAfterTick, cardRecord, SYNC_THROTTLE_MS, OFFLINE } from '../src/store/local.js';
-import { openGitTier, BOARD_REF, boardRef, trackingRefFor, boardFetchRefspec } from '../src/store/git.js';
-import { ensureFetchRefspec, hasFetchRefspec } from '../src/store/local.js';
+import { openGitTier, BOARD_REF, LEGACY_BOARD_REF, boardRef, trackingRefFor, boardFetchRefspec, isBoardFetchRefspec } from '../src/store/git.js';
+import { ensureFetchRefspec, hasFetchRefspec, findLocalBoardRef, localBoardExists, legacyBoardFix } from '../src/store/local.js';
 import { syncPass, loop, DURABLE_TICK_KEYS } from '../src/dispatch.js';
 import { invocationWritesBoard } from '../src/cli.js';
 import { DEFAULT_BOARD, hostId, readState, writeState, runGitAsync, storeGitDir } from '../src/board.js';
@@ -360,8 +360,8 @@ test('sync fast-forwards a clone that has a local branch, and refuses a divergen
   await assert.rejects(() => theirs.sync(), (e) => e.exitCode === 2 && /diverged/.test(e.message) && /one writer/.test(e.message));
 });
 
-test('the fetch refspec maps into refs/remotes and cannot clobber a local board that is ahead', async (t) => {
-  // **Why the refspec is `+refs/kb/boards/*:refs/remotes/<remote>/kb/boards/*` and not
+test('the fetch refspec lands outside the board namespace and cannot clobber a local board that is ahead', async (t) => {
+  // **Why the refspec is `+refs/kb/boards/*:refs/kb/remotes/<remote>/boards/*` and not
   // `+refs/kb/*:refs/kb/*`.** The local ref is the thing the one-writer compare-and-swap leases, so
   // a fetch that wrote it would overwrite this host's board with the remote's copy — silently, on
   // every `git fetch`, losing whatever this host had decided since the last push.
@@ -409,6 +409,97 @@ test('hkb init writes the fetch refspec once, beside the +refs/heads/* line it m
   // A remote that does not exist is not a place to invent a `[remote]` section with no URL.
   assert.equal(ensureFetchRefspec(root, 'upstream').why, 'no-remote');
   assert.equal(hasFetchRefspec(root, 'upstream'), false);
+});
+
+for (const branch of ['kb', 'kb/boards']) {
+  test(`the refspec hkb writes does not break \`git fetch\` on a repo whose origin has a branch "${branch}"`, async (t) => {
+    // **The line hkb adds to somebody's `.git/config` must never break their fetch.** The first
+    // version of this pointed at `refs/remotes/<remote>/kb/boards/*`, and git forbids a ref being
+    // both a file and a directory prefix: on a repository with a branch called `kb`,
+    // `refs/remotes/origin/kb` exists, so `refs/remotes/origin/kb/boards/default` cannot be created
+    // and **every ordinary `git fetch origin` exits 1** — CI included. `refs/kb/remotes/...` is
+    // hkb's own namespace all the way down, so no branch name can reach it.
+    const { origin, root, store } = await board(t);
+    git(root, 'branch', branch, 'main');
+    git(root, 'push', '-q', 'origin', `${branch}:refs/heads/${branch}`);
+    assert.equal(ensureFetchRefspec(root, 'origin').added, true, 'the line `hkb init` writes');
+
+    store.createTask({ title: 'a card', status: 'ready' });
+    await store.sync();
+
+    // The whole point: exit 0, on the plain command, in a repository hkb has configured.
+    const fetched = spawnSync('git', ['fetch', 'origin'], { cwd: root, encoding: 'utf8' });
+    assert.equal(fetched.status, 0, `${fetched.stdout}${fetched.stderr}`);
+    assert.doesNotMatch(`${fetched.stdout}${fetched.stderr}`, /cannot lock ref/);
+    assert.equal(git(root, 'rev-parse', trackingRefFor(BOARD_REF, 'origin')), git(origin, 'rev-parse', BOARD_REF));
+    assert.equal(git(root, 'rev-parse', `refs/remotes/origin/${branch}`), git(root, 'rev-parse', branch));
+
+    // …and `hkb sync` itself, which names the refspec on the command line, is fine too.
+    store.createTask({ title: 'another', status: 'ready' });
+    assert.equal((await store.sync()).pushed, true);
+  });
+}
+
+test('the refspec is recognised by its destination, so `+refs/kb/*:refs/kb/*` never reads as present', async (t) => {
+  // That line is the one whose docblock says it destroys the board: its *destination* is the ref the
+  // one-writer CAS leases, so a plain `git fetch` force-rewinds the local board to the remote's
+  // older sha. Matching the source called it "present" — `hkb doctor` printed a green `board
+  // refspec` row about it, and neither `init` nor `sync` ever added the safe line.
+  const { root } = await board(t);
+  git(root, 'config', '--add', 'remote.origin.fetch', '+refs/kb/*:refs/kb/*');
+  assert.equal(hasFetchRefspec(root, 'origin'), false, 'the source matches, the destination does not — and only the destination counts');
+
+  // So `hkb init`/`hkb sync` add the safe line beside it rather than trusting what is there.
+  assert.equal(ensureFetchRefspec(root, 'origin').added, true);
+  assert.equal(hasFetchRefspec(root, 'origin'), true);
+  // The near-misses on the destination are not it either.
+  for (const line of ['+refs/kb/boards/*:refs/remotes/origin/kb/boards/*', '+refs/kb/boards/*:refs/kb/remotes/upstream/boards/*']) {
+    assert.equal(isBoardFetchRefspec(line, 'origin'), false, line);
+  }
+  assert.equal(isBoardFetchRefspec(boardFetchRefspec('origin'), 'origin'), true);
+  assert.equal(isBoardFetchRefspec(boardFetchRefspec('origin').slice(1), 'origin'), true, 'with or without the force flag');
+});
+
+test('a board left on refs/heads/kb-board is named, not silently missed', async (t) => {
+  // There is nothing on the old ref *in this repository* — measured before the move — but that
+  // measurement covered this repository. A checkout made between #326 (local became the default
+  // store) and the move has a whole board there, and without this it reads as "no board": `hkb list`
+  // prints nothing, and the `hkb init` doctor prescribes creates a *second, empty* board beside the
+  // real one. One `rev-parse` is the cost of not doing that.
+  const s = scratch(t);
+  const ctx = ctxAt(s.root);
+  assert.equal(findLocalBoardRef(ctx), null, 'a checkout with no board at all still says so');
+
+  // A board on the ref boards used to live on, built the way the tier builds one.
+  const tier = openGitTier(ctx, { ref: LEGACY_BOARD_REF });
+  tier.init('default');
+  tier.createTask({ title: 'written before the move', status: 'ready' });
+
+  const found = findLocalBoardRef(ctx);
+  assert.equal(found?.ref, LEGACY_BOARD_REF);
+  assert.equal(found.legacy, true);
+  assert.equal(localBoardExists(ctx), true);
+
+  // And the fix is a command that runs and lands the board where hkb now reads it.
+  const fix = legacyBoardFix(ctx);
+  assert.match(fix, /update-ref refs\/kb\/boards\/default refs\/heads\/kb-board/);
+  git(s.root, ...fix.split(' && ')[0].replace(`git -C ${s.root} `, '').split(' '));
+  assert.equal(git(s.root, 'rev-parse', BOARD_REF), git(s.root, 'rev-parse', LEGACY_BOARD_REF));
+  assert.equal(findLocalBoardRef(ctx).legacy, false, 'and once moved, the board is where it belongs');
+});
+
+test('a board name a ref cannot hold is rejected where a ref is built, and nowhere else', async (t) => {
+  // `slugFile` *hashes* a board name, so `--board "my board"` has always been a usable GitHub board.
+  // Validating the ref name from a caller that then picks the GitHub store turned that into an exit
+  // 2 — and reached `hkb doctor` on a healthy GitHub board through `localBoardExists`.
+  const s = scratch(t);
+  const github = ctxAt(s.root, { store: 'github', repo: 'o/r', board: 'my board' });
+  assert.equal(findLocalBoardRef(github), null, 'no ref, no throw');
+  assert.equal(localBoardExists(github), false);
+
+  // A local board does need a ref, and that is where the refusal belongs — naming a fix that runs.
+  assert.throws(() => boardRef('my board'), (e) => e.exitCode === 2 && /hkb init --board my-board --store local/.test(e.message));
+  assert.throws(() => boardRef('foo.'), (e) => e.exitCode === 2, 'a trailing dot is a ref name git refuses');
 });
 
 test('two boards in one repository get two refs and do not collide', async (t) => {

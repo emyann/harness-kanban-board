@@ -214,7 +214,7 @@ it is a commit, not a heartbeat.
 
 ## Sync is git
 
-`sync()` fetches `+refs/kb/boards/*:refs/remotes/<remote>/kb/boards/*` — named on
+`sync()` fetches `+refs/kb/boards/*:refs/kb/remotes/<remote>/boards/*` — named on
 the command line, not read from config, because a fresh clone has no such line —
 and writes that line into `.git/config` while it is there
 (`ensureFetchRefspec`). Then it fast-forwards the local ref if it is

@@ -30,7 +30,7 @@ const ENV = {
 /**
  * The name every `git log`/`git show` below reads the board by. The board is at
  * `refs/kb/boards/default` and deliberately not on a branch, so the ref *is* the name — there is no
- * shorter one, which is what `GitTier.branch` answers with too.
+ * shorter one, which is why `GitTier` has no `branch` any more: one object, one vocabulary.
  */
 const BOARD_BRANCH = BOARD_REF;
 
@@ -420,7 +420,7 @@ test('git tier: a clone with no local ref is read-only, and says how to make it 
   assert.ok(threw, 'a write on a clone with no local ref fails');
   assert.equal(threw.exitCode, 2);
   assert.match(threw.message, /read-only copy/);
-  assert.match(threw.message, /git -C .* update-ref refs\/kb\/boards\/default refs\/remotes\/origin\/kb\/boards\/default/, 'and the message is the recovery path');
+  assert.match(threw.message, /git -C .* update-ref refs\/kb\/boards\/default refs\/kb\/remotes\/origin\/boards\/default/, 'and the message is the recovery path');
   assert.doesNotMatch(threw.message, /another hkb on host/, 'nobody else is writing this board');
   assert.equal(theirs.trace.filter((c) => c === 'update-ref').length, 0, 'and it did not retry five times to find out');
 
@@ -1024,6 +1024,36 @@ test('git tier: every message names this tier\'s own ref, never the default boar
 
 // ---------- the pure helpers, without a temp repo ----------
 
+test('the board keeps a reflog on a ref core.logAllRefUpdates does not cover', (t) => {
+  // `core.logAllRefUpdates` at its default logs `refs/heads`, `refs/remotes`, `refs/notes` and HEAD.
+  // Moving the board out of `refs/heads` therefore took its reflog with it: `git reflog
+  // refs/kb/boards/default` came back empty and `.git/logs/refs` held only `heads`, so a bad
+  // `update-ref`, a racing `hkb down` or a clobbering fetch stopped being recoverable — on the tier
+  // the design calls durable, and while two messages here still prescribe `git reflog <ref>`.
+  const s = board();
+  t.after(s.cleanup);
+  const first = s.tier.tip();
+  card(s.tier, { title: 'one' });
+  const second = s.tier.tip();
+  card(s.tier, { title: 'two' });
+
+  const log = git(s.root, 'reflog', '--format=%H %gs', s.tier.ref).split('\n').filter(Boolean);
+  assert.ok(log.length >= 3, `the reflog is readable and records every move: ${log.join(' | ')}`);
+  assert.equal(log.at(-1).split(' ')[0], first, 'down to the commit that created the board');
+  assert.ok(log.some((l) => /hkb: /.test(l)), `and carries the message the write landed with: ${log.join(' | ')}`);
+
+  // Which is what makes the advice in `_absentRefMessage` and `_reconcileRefs` true: a board rewound
+  // by anything at all — a bad `update-ref`, a racing `hkb down`, a clobbering fetch — can be put
+  // back from what the reflog says it was a moment ago.
+  const clobbered = git(s.root, 'rev-parse', s.tier.ref);
+  git(s.root, 'update-ref', s.tier.ref, first);
+  assert.equal(git(s.root, 'rev-parse', `${s.tier.ref}@{1}`), clobbered, '@{1} is the value the rewind threw away');
+  git(s.root, 'update-ref', s.tier.ref, clobbered);
+  s.tier.forget();
+  assert.equal(s.tier.tip(), clobbered);
+  void second;
+});
+
 test('the board lives at refs/kb/boards/<slug>, invisible to git branch', (t) => {
   const s = board();
   t.after(s.cleanup);
@@ -1040,18 +1070,33 @@ test('the board lives at refs/kb/boards/<slug>, invisible to git branch', (t) =>
   assert.equal(boardRef('alpha'), 'refs/kb/boards/alpha');
   assert.equal(boardRef(), BOARD_REF);
   assert.notEqual(boardRef('alpha'), boardRef('beta'));
-  for (const bad of ['a/b', '.hidden', 'x.lock', 'a..b', 'a b', '']) {
+  for (const bad of ['a/b', '.hidden', 'x.lock', 'a..b', 'a b', 'foo.', 'a.b.', '']) {
     if (bad === '') { assert.equal(boardRef(bad), BOARD_REF, 'empty falls back to the default'); continue; }
     assert.throws(() => boardRef(bad), (e) => e.exitCode === 2 && /not a usable board name/.test(e.message), bad);
   }
 
   // `refs/kb/board` with `refs/kb/board/<slug>` beside it could never exist: git forbids a ref that
   // is both a file and a directory prefix. `boards/<slug>` is the shape that has no such collision.
-  assert.equal(trackingRefFor(BOARD_REF, 'origin'), 'refs/remotes/origin/kb/boards/default');
-  assert.equal(trackingRefFor(boardRef('beta'), 'upstream'), 'refs/remotes/upstream/kb/boards/beta');
-  assert.equal(boardFetchRefspec('origin'), '+refs/kb/boards/*:refs/remotes/origin/kb/boards/*');
+  assert.equal(trackingRefFor(BOARD_REF, 'origin'), 'refs/kb/remotes/origin/boards/default');
+  assert.equal(trackingRefFor(boardRef('beta'), 'upstream'), 'refs/kb/remotes/upstream/boards/beta');
+  assert.equal(boardFetchRefspec('origin'), '+refs/kb/boards/*:refs/kb/remotes/origin/boards/*');
   // NOT `+refs/kb/*:refs/kb/*` — that would let a fetch overwrite the ref the CAS leases.
-  assert.doesNotMatch(boardFetchRefspec('origin'), /:refs\/kb\//);
+  assert.doesNotMatch(boardFetchRefspec('origin'), /:refs\/kb\/boards\//);
+  // And NOT into `refs/remotes/<remote>/`, where a real branch named `kb` collides with the
+  // directory the destination needs. `test/store-local.test.js` fetches in such a repository.
+  assert.doesNotMatch(boardFetchRefspec('origin'), /:refs\/remotes\//);
+
+  // Every name this accepts is a name `git check-ref-format` accepts — the whole contract of the
+  // slug rule, and what `foo.` broke: it passed, then died inside `_land` with a raw git fatal.
+  for (const good of ['default', 'alpha', 'a-b_c.d', 'x1']) {
+    assert.equal(git(s.root, 'check-ref-format', boardRef(good)), '', good);
+  }
+  assert.throws(() => boardRef('foo.'), (e) => e.exitCode === 2);
+  // and the fix in the message is a command that runs, not the one that just failed
+  assert.match(
+    (() => { try { boardRef('my board'); return ''; } catch (e) { return e.message; } })(),
+    /hkb init --board my-board --store local/,
+  );
 });
 
 test('isOwned matches the files the parser reads, not the directories they are in', () => {

@@ -631,6 +631,22 @@ test('a fresh init creates a local board: the ref, the index, and board.json say
   assert.equal(typeof doc.host, 'string', 'the board names its one writer');
 });
 
+test('a GitHub board may be named anything: a ref name is validated where a ref is built', async () => {
+  // `slugFile` *hashes* a board name rather than rejecting it, so `--board "my board"` has always
+  // been a usable GitHub board. Building `boardRef(board)` before the store was resolved turned that
+  // into an exit 2 on a name the store being chosen does not care about — and the fix the error
+  // named, `hkb init --board <name>`, was the command that had just failed.
+  const ok = await runInit(['--store', 'github', '--board', 'my board']);
+  assert.equal(ok.code, 0, ok.printed.join('\n'));
+  assert.equal(board(ok.root).store, 'github');
+
+  // The local store does need a ref, so there the name is refused — with a fix that runs.
+  const bad = await runInit(['--store', 'local', '--board', 'my board']).catch((e) => e);
+  assert.equal(bad.exitCode, 2);
+  assert.match(bad.message, /not a usable board name for the local store/);
+  assert.match(bad.message, /hkb init --board my-board --store local/);
+});
+
 test('a second init leaves the ref and the index exactly as they were', async () => {
   const first = await runInit();
   const tip = branchTip(first.root);

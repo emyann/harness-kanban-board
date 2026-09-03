@@ -24,7 +24,7 @@ moves the board to that host.
 The board is a git **ref**, not a branch: it never appears in `git branch`, in
 a branch picker or in GitHub's branch list. The cost of that is that a default
 `git clone` does not carry it, so `hkb init` appends
-`+refs/kb/boards/*:refs/remotes/<remote>/kb/boards/*` to `remote.<name>.fetch`
+`+refs/kb/boards/*:refs/kb/remotes/<remote>/boards/*` to `remote.<name>.fetch`
 (never replacing the `+refs/heads/*` line), `hkb doctor` reports the refspec
 when it is missing, and `hkb sync` names it on the command line so restoring a
 board onto a new machine stays `git clone` then `hkb sync`. Two boards in one

@@ -172,12 +172,14 @@ already keeps claims outside `refs/heads` at `refs/kb/locks/<n>/<k>`.
 nobody ever checks out into `git branch`, into every branch picker and into GitHub's branch list.
 Nothing about the design needed `refs/heads`. What the move costs is that a hidden ref is not carried
 by a default `git clone` and is not visible in GitHub's UI, so `hkb init` writes
-`+refs/kb/boards/*:refs/remotes/<remote>/kb/boards/*` into `remote.<name>.fetch` (appended, never
+`+refs/kb/boards/*:refs/kb/remotes/<remote>/boards/*` into `remote.<name>.fetch` (appended, never
 replacing `+refs/heads/*`), `hkb doctor` reports it missing, and `hkb sync` passes that refspec on the
-command line so a restore onto a fresh clone stays `git clone` + `hkb sync`. The refspec maps into
-`refs/remotes/` on purpose: `+refs/kb/*:refs/kb/*` would let a fetch overwrite the very ref the
-one-writer CAS leases. Measured 2026-09-03 against a real GitHub remote: a push to
-`refs/kb/boards/*` is accepted, the fetch lands at `refs/remotes/origin/kb/boards/*`, and neither
+command line so a restore onto a fresh clone stays `git clone` + `hkb sync`. The destination is
+hkb's own namespace on purpose: `+refs/kb/*:refs/kb/*` would let a fetch overwrite the very ref the
+one-writer CAS leases, and `refs/remotes/<remote>/kb/boards/*` collides with a real branch named
+`kb` — git forbids a ref that is both a file and a directory prefix, so that line makes every plain
+`git fetch` in such a repository exit 1. Measured 2026-09-03 against a real GitHub remote: a push to
+`refs/kb/boards/*` is accepted, the fetch lands at `refs/kb/remotes/origin/boards/*`, and neither
 `git show-ref` nor `git ls-remote --heads` shows the board. Layout of the tree:
 
 ```
@@ -425,7 +427,7 @@ B5 and B6 run side by side.
   remote; its JSONL is "an export for viewers and interchange, not the source of truth".
 - The git plumbing of §6.2, from a linked worktree, in a scratch repository: worktree clean, CAS refused
   on mismatch, and (2026-09-03, against a real remote) `refs/kb/boards/*` pushed, fetched into
-  `refs/remotes/origin/kb/boards/*`, and invisible to `git ls-remote --heads`.
+  `refs/kb/remotes/origin/boards/*`, and invisible to `git ls-remote --heads`.
 - GitHub coupling at `7fd6cba`: `src/tasks.js` 36 exports, `src/lock.js` 19, 29 direct transport call
   sites in 6 other files (`projects.js` 11, `doctor.js` 11, `lifecycle.js` 4, `init.js` 1, `watch.js` 1,
   `board.js` 1); 121 test assertion sites read fake-gh internals (`gh.calls` 52, `lockRefs()` 26,

@@ -24,12 +24,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { storeRoot, storeGitDir, hostId, runGit, runGitAsync, gitSays, GIT_SHA_RE, readState, writeState, normalizeCardGrants } from '../board.js';
 import { RESULT_MARKER, RUN_MARKER, DEFAULT_KB, L, emptyRun, parseResultComment, isResultComment } from '../model.js';
-import { openGitTier, BOARD_REF, BOARD_REF_PREFIX, boardRef, trackingRefFor, boardFetchRefspec } from './git.js';
+import {
+  openGitTier, BOARD_REF, BOARD_REF_PREFIX, DEFAULT_BOARD_SLUG, LEGACY_BOARD_REF,
+  boardRef, isBoardSlug, trackingRefFor, trackingPrefix, boardFetchRefspec, isBoardFetchRefspec, remoteFor,
+} from './git.js';
 import { openIndex, openIndexReadOnly, indexFileIn } from './sqlite.js';
 import { openGithubStore, listComments, listLocks, lockBeatAt, release, listBeatChains, dropBeatChain, blockersOf, blockersKnown } from './github.js';
 import { rest } from '../gh.js';
 
-export { BOARD_REF, BOARD_REF_PREFIX, boardRef, trackingRefFor, boardFetchRefspec };
+export {
+  BOARD_REF, BOARD_REF_PREFIX, DEFAULT_BOARD_SLUG, LEGACY_BOARD_REF,
+  boardRef, isBoardSlug, trackingRefFor, trackingPrefix, boardFetchRefspec, isBoardFetchRefspec, remoteFor,
+};
 
 /** How often the loop may push, at most (§6.2: "throttled and offline-tolerant"). */
 export const SYNC_THROTTLE_MS = 60_000;
@@ -109,7 +115,7 @@ export class LocalStore {
    */
   get index() {
     if (!this._index) {
-      const opts = { branch: this.git.branch };
+      const opts = { ref: this.ref };
       this._index = this._readOnlyIndex ? openIndexReadOnly(this.ctx, opts) : openIndex(this.ctx, opts);
     }
     return this._index;
@@ -126,9 +132,6 @@ export class LocalStore {
    * exists to catch and could not, because `root` was not on the list. It is now.
    */
   root() { return this._root; }
-
-  /** The name the durable tier's ref goes by — `refs/kb/boards/<slug>` unless a test asked for another. */
-  get branch() { return this.git.branch; }
 
   /** The ref the durable tier compare-and-swaps, and where a fetch puts the remote's copy of it. */
   get ref() { return this.git.ref; }
@@ -149,7 +152,7 @@ export class LocalStore {
     if (!tip) return { loaded: false, tip: null, counts: null };
     if (!this.index.needsLoad(tip)) return { loaded: false, tip, counts: null };
     const tree = this.git.readTree();
-    const counts = this.index.load({ ...tree, branch: this.branch });
+    const counts = this.index.load({ ...tree, ref: this.ref });
     return { loaded: true, tip, counts };
   }
 
@@ -214,7 +217,7 @@ export class LocalStore {
    * reader something it never mutates is the one cost this composition can drop outright.
    */
   _reindex() {
-    return this.index.load({ ...this.git._read(), branch: this.branch });
+    return this.index.load({ ...this.git._read(), ref: this.ref });
   }
 
   board() { return this.git.board(); }
@@ -435,7 +438,7 @@ export class LocalStore {
     const live = liveDispatcher(doc, this.host, this.now());
     if (live && !force) {
       throw fail(
-        `${this.branch} says host "${owner}" is still running a dispatcher (it stamped ${live.at}, `
+        `${this.ref} says host "${owner}" is still running a dispatcher (it stamped ${live.at}, `
         + `${Math.round(live.age / 1000)}s ago) — two hosts writing one board is what the one-writer rule exists to stop. `
         + `Stop it there with \`hkb down\`, or take the board anyway with \`hkb init --take-over --force\`.`,
       );
@@ -462,7 +465,7 @@ export class LocalStore {
     // log is meant to read as the board's decisions, and "hkb: board settings" every few
     // minutes reads as a decision nobody made.
     const r = this.git.commit((t) => {
-      if (!t.board) throw fail(`there is no ${this.branch} branch in ${this.root()} — run \`hkb init\` to create the board`);
+      if (!t.board) throw fail(`there is no board at ${this.ref} in ${this.root()} — run \`hkb init\` to create the board`);
       t.board.dispatch = stamp;
     }, `hkb: dispatcher on host ${this.host} (pid ${pid})`);
     // The index's *tip* is moved even though the stamp is not a decision (so: no event). Skipping it
@@ -474,7 +477,7 @@ export class LocalStore {
     // this commit changed. A full `_reindex()` here dropped and re-inserted every task, link, run and
     // result on the board every five minutes, for a field the index's `board` table does not even
     // hold.
-    if (r.changed) this.index.load({ tip: r.tip, branch: this.branch });
+    if (r.changed) this.index.load({ tip: r.tip, ref: this.ref });
     return { stamped: r.changed, tip: r.tip };
   }
 
@@ -509,35 +512,45 @@ export class LocalStore {
    * same switch as a flag, so the two cannot disagree about what "push" means.
    *
    * @param {{push?: boolean, fetch?: boolean}} [opts]
-   * @returns {Promise<{ok: boolean, pushed: boolean, fastForwarded: boolean, offline: boolean, skipped: string|null, remote: string, branch: string, local: string|null, tracking: string|null, detail: string}>}
+   * @returns {Promise<{ok: boolean, pushed: boolean, fastForwarded: boolean, offline: boolean, skipped: string|null, remote: string, ref: string, local: string|null, tracking: string|null, detail: string}>}
    */
   async sync({ push = true, fetch = true } = {}) {
     const remote = this.remote;
-    const branch = this.branch;
     // **The refs are read once.** `answer()` used to re-`rev-parse` both of them on every return
     // path — including `no-remote` and `offline`, which do no work at all — so the sync the loop
     // runs after every decisive tick spawned five git processes to report that it had done nothing.
     // Every path that *moves* a ref passes what it moved it to, which it already knows.
     let here = this._rev(this.ref);
     let there = this._tracking();
+    // `ref` and nothing beside it. This carried a `branch` key holding a byte-identical string, and
+    // the messages built from it read "sync.push is false in refs/kb/boards/default's board.json" —
+    // derivable duplicate state in an object CLAUDE.md calls stable.
     const answer = (over = {}) => ({
       ok: true, pushed: false, fastForwarded: false, offline: false, skipped: null,
-      remote, branch, ref: this.ref, local: here, tracking: there, detail: '', ...over,
+      remote, ref: this.ref, local: here, tracking: there, detail: '', ...over,
     });
     if (!this._hasRemote()) return answer({ skipped: 'no-remote', detail: `no git remote "${remote}" in ${this.root()}` });
 
     if (fetch) {
+      // Read *before* the fetch, and only now — after the no-remote return, where a `config
+      // --get-all` was previously spent on a checkout with nothing to fetch from. This is what
+      // decides whether the config write below runs at all.
+      const configured = hasFetchRefspec(this.root(), remote);
       const r = await this._netGit(['fetch', '--quiet', remote, boardFetchRefspec(remote)]);
       // A remote that simply has nothing under the namespace is not an error: this host is the first
-      // to push a board there. A wildcard refspec that matches nothing exits 0 anyway; the two
-      // messages are kept for a git that names them.
-      if (r.status !== 0 && !/couldn't find remote ref|not found in upstream/i.test(r.out)) {
+      // to push a board there — and a wildcard refspec that matches nothing exits 0, so there is no
+      // "couldn't find remote ref" to whitelist here. There was one, and by this comment's own
+      // reasoning it could only ever have swallowed a *real* non-zero failure whose text happened to
+      // contain those words, reporting it as a successful sync.
+      if (r.status !== 0) {
         if (OFFLINE.test(r.out)) return answer({ offline: true, detail: gitSays(r.out) || 'offline' });
         throw fail(`\`git fetch ${remote} ${boardFetchRefspec(remote)}\` failed: ${gitSays(r.out) || 'unknown error'} — check the remote with \`git -C ${this.root()} remote -v\`.`);
       }
-      // The clone that just fetched should not have to name the refspec again. Idempotent, and never
-      // over the `+refs/heads/*` line a clone already has (`ensureFetchRefspec`).
-      ensureFetchRefspec(this.root(), remote);
+      // The clone that just fetched should not have to name the refspec again. Guarded on the read
+      // above rather than run unconditionally: `ensureFetchRefspec` is two more git subprocesses, on
+      // the dispatcher's post-tick path, to re-confirm a line written once and never removed — the
+      // same waste the comment twenty lines up says `answer()` was rewritten to stop.
+      if (!configured) ensureFetchRefspec(this.root(), remote);
     }
 
     // The fetch may have moved the tracking ref, and only that one.
@@ -556,7 +569,7 @@ export class LocalStore {
 
     const from = here;
     if (!from) return answer({ skipped: 'no-branch', detail: `there is no board at ${this.ref} in ${this.root()} and none on ${remote} — run \`hkb init\`` });
-    if (this.pushDisabled({ exists: true })) return answer({ skipped: 'off', detail: `sync.push is false in ${branch}'s board.json` });
+    if (this.pushDisabled({ exists: true })) return answer({ skipped: 'off', detail: `sync.push is false in board.json on ${this.ref}` });
     if (from === there) return answer({ detail: 'up to date' });
 
     const r = await this._netGit(['push', remote, `${this.ref}:${this.ref}`]);
@@ -587,7 +600,6 @@ export class LocalStore {
    * @returns {{local: string, detail: string, created: boolean}|null}
    */
   _reconcileRefs(tries = 3) {
-    const branch = this.branch;
     for (let i = 0; i < tries; i++) {
       // Read through git rather than the tier: `tip()` falls back to the remote-tracking ref when
       // there is no local branch, and this is the one place that must tell the two apart.
@@ -599,7 +611,7 @@ export class LocalStore {
         // write. `''` as the old value is git's "this ref must not exist" — the CAS for a create.
         if (this._setRef(this.ref, there, '').status !== 0) continue;
         this._afterRefMoved();
-        return { local: there, detail: `created ${branch} at ${short(there)}`, created: true };
+        return { local: there, detail: `created ${this.ref} at ${short(there)}`, created: true };
       }
       if (this._ancestor(here, there)) {
         if (this._setRef(this.ref, there, here).status !== 0) continue;
@@ -611,14 +623,21 @@ export class LocalStore {
     }
     throw fail(
       `${this.ref} moved while \`hkb sync\` was fast-forwarding it, ${tries} times in a row — `
-      + `something else in this checkout is writing the board. Look at \`git -C ${this.root()} reflog ${branch}\`, `
+      + `something else in this checkout is writing the board. Look at \`git -C ${this.root()} reflog ${this.ref}\`, `
       + 'stop the other writer (`hkb down`), and run `hkb sync` again.',
     );
   }
 
-  /** One compare-and-swap on a ref. `from` may be `''` for "must not exist" and null for no check. */
+  /**
+   * One compare-and-swap on a ref. `from` may be `''` for "must not exist" and null for no check.
+   *
+   * `--create-reflog` for the same reason `_land` passes it: `core.logAllRefUpdates` at its default
+   * logs `refs/heads`, `refs/remotes`, `refs/notes` and HEAD, so a board outside `refs/heads` gets
+   * no reflog unless it is asked for — and a fast-forward that turns out to have been wrong is then
+   * unrecoverable.
+   */
   _setRef(ref, to, from) {
-    return this._git(['update-ref', ref, to, ...(from === null || from === undefined ? [] : [from])]);
+    return this._git(['update-ref', '--create-reflog', ref, to, ...(from === null || from === undefined ? [] : [from])]);
   }
 
   /** The branch moved under the tier's memo and the index's tip: both are rebuilt from what is there. */
@@ -795,21 +814,63 @@ export function openLocalStore(ctx, { reconcile = true, ...opts } = {}) {
 }
 
 /**
- * Does this checkout have a local board at all? One `rev-parse`, and the question `openStore` asks
- * when nothing in `.kanban/board.json` says which store to use.
+ * Which ref in this checkout has a board on it, if any — `null` when none does.
+ *
+ * Three refs, in the order a caller should believe them: the board's own, the remote's copy of it,
+ * and **`refs/heads/kb-board`, where the board lived before it moved out of `refs/heads`**.
+ *
+ * That last one is not a migration; it is the net under one. There is nothing on the old ref *in
+ * this repository* — measured — but that measurement covered this repository, and a checkout created
+ * between #326 (when local became the default store) and this change has a whole board sitting
+ * there. Without this row `hkb list` prints nothing on it, `hkb doctor` says "no board at
+ * refs/kb/boards/default", and the `hkb init` it prescribes creates a *second, empty* board beside
+ * the real one. Silent data loss is not an acceptable answer to an unmeasured case, and one
+ * `rev-parse` is the whole cost of not giving it.
+ *
+ * A board on the GitHub store has no ref at all and its name need not be a ref path (`slugFile`
+ * hashes it), so an unusable slug is "no local board" here rather than an exit 2 — this is called
+ * from `hkb doctor` and `hkb init` on healthy GitHub boards.
+ *
+ * @returns {{ref: string, legacy: boolean, tracking: boolean}|null}
  */
-export function localBoardExists(ctx, { ref = null } = {}) {
+export function findLocalBoardRef(ctx, { ref = null } = {}) {
   const root = storeRoot(ctx);
-  const remote = (typeof ctx === 'object' && ctx?.cfg?.remote) || 'origin';
-  const board = ref || boardRef(ctx && typeof ctx === 'object' ? ctx.board : undefined);
-  for (const r of [board, trackingRefFor(board, remote)]) {
-    if (runGit(root, ['rev-parse', '--verify', '--quiet', `${r}^{commit}`]).status === 0) return true;
+  const remote = remoteFor(ctx);
+  const slug = ctx && typeof ctx === 'object' ? ctx.board : undefined;
+  let board = ref;
+  if (!board) {
+    if (slug !== undefined && slug !== null && slug !== '' && !isBoardSlug(slug)) return null;
+    board = boardRef(slug);
   }
-  return false;
+  const candidates = [
+    { ref: board, legacy: false, tracking: false },
+    { ref: trackingRefFor(board, remote), legacy: false, tracking: true },
+    { ref: LEGACY_BOARD_REF, legacy: true, tracking: false },
+  ];
+  for (const c of candidates) {
+    if (runGit(root, ['rev-parse', '--verify', '--quiet', `${c.ref}^{commit}`]).status === 0) return c;
+  }
+  return null;
 }
 
 /**
- * Put `+refs/kb/boards/*:refs/remotes/<remote>/kb/boards/*` in `.git/config`, once.
+ * Does this checkout have a local board at all? The question `openStore` asks when nothing in
+ * `.kanban/board.json` says which store to use.
+ */
+export function localBoardExists(ctx, opts = {}) {
+  return !!findLocalBoardRef(ctx, opts);
+}
+
+/** What to tell an operator whose board is still on the ref it used to live on. */
+export function legacyBoardFix(ctx, { ref = null } = {}) {
+  const root = storeRoot(ctx);
+  const slug = ctx && typeof ctx === 'object' ? ctx.board : undefined;
+  const board = ref || (isBoardSlug(slug ?? DEFAULT_BOARD_SLUG) ? boardRef(slug) : BOARD_REF);
+  return `git -C ${root} update-ref ${board} ${LEGACY_BOARD_REF} && git -C ${root} branch -D ${LEGACY_BOARD_REF.replace('refs/heads/', '')}`;
+}
+
+/**
+ * Put `+refs/kb/boards/*:refs/kb/remotes/<remote>/boards/*` in `.git/config`, once.
  *
  * A board outside `refs/heads` is not carried by a default clone or fetch — that is the whole cost
  * of keeping it out of `git branch` — and this is what buys it back for every `git fetch` after the
@@ -829,20 +890,28 @@ export function ensureFetchRefspec(root, remote = 'origin') {
   // `[remote "origin"]` section with a fetch refspec and no URL, which git then reports as a broken
   // remote. `hkb sync` says "no git remote" for that case and this stays out of its way.
   if (runGit(root, ['remote', 'get-url', remote]).status !== 0) return { added: false, refspec, why: 'no-remote' };
-  const lines = got.status === 0 ? got.stdout.split('\n').map((l) => l.trim()).filter(Boolean) : [];
-  // `+refs/kb/boards/*:...` and `refs/kb/boards/*:...` are the same refspec with and without the
-  // force flag, and a `refs/kb/*` line somebody wrote by hand already covers the namespace: none of
-  // them is worth a second line.
-  if (lines.some((l) => l.includes(`${BOARD_REF_PREFIX}/*:`) || l.includes('refs/kb/*:'))) return { added: false, refspec, why: 'present' };
+  // **One predicate, not two.** This test and `hasFetchRefspec` were the same line written twice
+  // with different plumbing around each, so a fix to one and not the other gives a doctor that
+  // reports the line present while `init` keeps appending copies of it.
+  if (hasFetchRefspec(root, remote, got)) return { added: false, refspec, why: 'present' };
   const r = runGit(root, ['config', '--add', key, refspec]);
   return { added: r.status === 0, refspec, why: r.status === 0 ? 'added' : gitSays(r.out) || 'git config failed' };
 }
 
-/** Does `.git/config` carry the refspec that makes a plain `git fetch` bring the board back? */
-export function hasFetchRefspec(root, remote = 'origin') {
-  const got = runGit(root, ['config', '--get-all', `remote.${remote}.fetch`]);
-  if (got.status !== 0) return false;
-  return got.stdout.split('\n').some((l) => l.includes(`${BOARD_REF_PREFIX}/*:`) || l.includes('refs/kb/*:'));
+/**
+ * Does `.git/config` carry the refspec that makes a plain `git fetch` bring the board back?
+ *
+ * **Matched on the destination** (`isBoardFetchRefspec`), because matching the source called
+ * `+refs/kb/*:refs/kb/*` "present" — the one line that force-rewinds the local board to the remote's
+ * older sha on every fetch. `hkb doctor` printed a green row about it and neither `init` nor `sync`
+ * ever added the safe line.
+ *
+ * @param {any} [got]  a `config --get-all` result the caller already has, so the read is not repeated.
+ */
+export function hasFetchRefspec(root, remote = 'origin', got = null) {
+  const r = got || runGit(root, ['config', '--get-all', `remote.${remote}.fetch`]);
+  if (r.status !== 0) return false;
+  return r.stdout.split('\n').map((l) => l.trim()).filter(Boolean).some((l) => isBoardFetchRefspec(l, remote));
 }
 
 /**
@@ -869,7 +938,7 @@ export function assertLocalOwner(ctx, verb = 'this', { tier = null, host = null 
   if (!owner || owner === me) return null;
   throw fail(
     `\`hkb ${verb}\` writes the board, and this board belongs to host "${owner}" — this is "${me}". `
-    + `The ${t.branch} branch has one writer (docs/local-first.md §6.2): read the board here `
+    + `The board at ${t.ref} has one writer (docs/local-first.md §6.2): read the board here `
     + '(`hkb list`, `hkb show <n>`, `hkb serve`), or move it to this host with `hkb init --take-over`.',
   );
 }
@@ -1029,9 +1098,9 @@ export async function importGithubBoard(ctx, { store = null, from = null, days =
     // this sentence. The path is computed instead; that is what `indexFileIn` is for.
     const file = indexFileIn(storeGitDir(ctx), ctx?.board || null);
     throw fail(
-      `${s.branch} already exists in ${s.root()} — \`hkb init --import\` migrates a GitHub board onto a *new* local board, `
+      `${s.ref} already exists in ${s.root()} — \`hkb init --import\` migrates a GitHub board onto a *new* local board, `
       + `and re-importing over one that has been worked would overwrite it with GitHub's copy. `
-      + `Look at what is there (\`git log --oneline ${s.branch}\`), and delete it deliberately if the import is what you want: `
+      + `Look at what is there (\`git log --oneline ${s.ref}\`), and delete it deliberately if the import is what you want: `
       + `\`git -C ${s.root()} update-ref -d ${s.ref} && rm -f ${file}*\`.`,
     );
   }
@@ -1058,7 +1127,7 @@ export async function importGithubBoard(ctx, { store = null, from = null, days =
   // to migrate, and `--import` there means the other operation. Decided before the first commit, so
   // the two never half-run over each other.
   if (!tasks.length) return adoptOpenIssues(ctx, { store: s, log, now, issues });
-  log(`import: migrating the \`${L.board(ctx?.board || 'default')}\` board on ${ctx?.cfg?.repo || 'GitHub'} onto ${s.branch}`);
+  log(`import: migrating the \`${L.board(ctx?.board || 'default')}\` board on ${ctx?.cfg?.repo || 'GitHub'} onto ${s.ref}`);
   log(`import: ${open.length} open card(s) and ${closed.length} closed in the last ${days} day(s)`);
   if (capped) {
     // "May be": a page that comes back exactly full says nothing about whether a next one exists,
@@ -1181,7 +1250,7 @@ export async function importGithubBoard(ctx, { store = null, from = null, days =
 
   const summary = {
     cards: tasks.length, open: open.length, closed: closed.length, runs: withRuns, results, notes,
-    next_id: Math.max(next, 1), tip: s.git.tip(), branch: s.branch, indexed: loaded.counts?.tasks ?? 0,
+    next_id: Math.max(next, 1), tip: s.git.tip(), ref: s.ref, indexed: loaded.counts?.tasks ?? 0,
     closed_capped: capped, closed_page: CLOSED_PAGE, dropped_blockers: droppedEdges,
     unknown_blockers: unknownBlockers, comments_capped: truncatedComments, mode: 'migrate', ...dropped,
   };
@@ -1189,7 +1258,7 @@ export async function importGithubBoard(ctx, { store = null, from = null, days =
     log(`import: WARNING ${truncatedComments.length} card(s) had more comments than one read returns (500), so their oldest notes stayed on GitHub: `
       + truncatedComments.map((n) => `#${n}`).join(', '));
   }
-  log(`import: ${summary.cards} card(s), ${summary.runs} run record(s), ${summary.results} result(s), ${summary.notes} note(s) on ${s.branch}`);
+  log(`import: ${summary.cards} card(s), ${summary.runs} run record(s), ${summary.results} result(s), ${summary.notes} note(s) on ${s.ref}`);
   if (droppedEdges.length) log(`import: ${droppedEdges.length} blocker edge(s) dropped because the blocking card was not imported (listed above)`);
   log(`import: deleted ${dropped.locks} lock ref(s) on the remote and ${dropped.chains} local beat chain(s)`);
   return summary;
@@ -1260,10 +1329,10 @@ export async function adoptOpenIssues(ctx, { store = null, log = () => {}, now =
   }, `hkb: adopt ${tasks.length} open issue(s) from ${ctx?.cfg?.repo || 'GitHub'} into triage`, { allowMissing: true, allowForeignHost: true });
   const loaded = s.open();
 
-  log(`import: adopted ${tasks.length} open issue(s) into triage on ${s.branch}`);
+  log(`import: adopted ${tasks.length} open issue(s) into triage on ${s.ref}`);
   return {
     mode: 'adopt', cards: tasks.length, open: tasks.length, closed: 0, runs: 0, results: 0, notes: 0,
-    next_id: Math.max(next, 1), tip: s.git.tip(), branch: s.branch, indexed: loaded.counts?.tasks ?? 0,
+    next_id: Math.max(next, 1), tip: s.git.tip(), ref: s.ref, indexed: loaded.counts?.tasks ?? 0,
     issues_capped: more, issue_page: ISSUE_PAGE, closed_capped: false, closed_page: CLOSED_PAGE,
     dropped_blockers: [], unknown_blockers: [], locks: 0, chains: 0,
   };

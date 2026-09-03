@@ -997,7 +997,7 @@ test('read-only: an error that is not "no schema table" is not "delete your data
 
 test('every message names the ref this index was opened for, never the default board by reflex', (t) => {
   const root = tmpRoot(t);
-  const idx = open(t, root, { branch: 'refs/kb/boards/staging' });
+  const idx = open(t, root, { ref: 'refs/kb/boards/staging' });
   assert.throws(
     () => idx.load(tree({ tip: 'aaa', cards: [card(1, { title: { not: 'a string' } })] })),
     (e) => e.exitCode === 2 && /refs\/kb\/boards\/staging:cards\/1\.json/.test(e.message) && !/boards\/default/.test(e.message),
@@ -1008,7 +1008,7 @@ test('every message names the ref this index was opened for, never the default b
   );
   // and the tree may say so itself, for a composed driver that knows better than the open did
   assert.throws(
-    () => idx.load({ tip: 'aaa', branch: 'from-the-tree', cards: [card(1), card(1)], runs: new Map() }),
+    () => idx.load({ tip: 'aaa', ref: 'from-the-tree', cards: [card(1), card(1)], runs: new Map() }),
     (e) => /ls-tree -r from-the-tree/.test(e.message),
   );
 });

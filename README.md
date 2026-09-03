@@ -205,15 +205,16 @@ has no business sitting among the branches that mean something. hkb already keep
 **The trade, said out loud.** A hidden ref is not fetched by a default `git clone` and is not visible in
 GitHub's web UI. So:
 
-- `hkb init` writes `+refs/kb/boards/*:refs/remotes/<remote>/kb/boards/*` into `.git/config`
+- `hkb init` writes `+refs/kb/boards/*:refs/kb/remotes/<remote>/boards/*` into `.git/config`
   (`remote.<name>.fetch`, **appended** — it never replaces the `+refs/heads/*` line), and after that an
   ordinary `git fetch` carries the board. `hkb doctor` reports the line when it is missing and names the fix.
 - `hkb sync` passes that refspec on the command line rather than trusting config, and writes the config line
   while it is there. So **restoring a board onto a new machine is still two commands**: `git clone`, then
   `hkb sync`.
-- The refspec maps into `refs/remotes/`, deliberately. `+refs/kb/*:refs/kb/*` would let a fetch overwrite the
+- The destination is hkb's own namespace, deliberately. `+refs/kb/*:refs/kb/*` would let a fetch overwrite the
   local ref the one-writer compare-and-swap leases — the remote's copy silently replacing whatever this host
-  had decided.
+  had decided — and `refs/remotes/<remote>/kb/boards/*` breaks `git fetch` outright in a repository that has a
+  branch called `kb`, because git forbids a ref that is both a file and a directory prefix.
 - Two boards in one repository (`--board alpha`, `--board beta`) get `refs/kb/boards/alpha` and
   `refs/kb/boards/beta`, and an index file each.
 
