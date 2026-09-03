@@ -71,6 +71,8 @@ const nowIso = () => new Date().toISOString();
 const json = (v) => (v === undefined || v === null ? null : JSON.stringify(v));
 const unjson = (s, fallback = null) => { if (s === null || s === undefined) return fallback; try { return JSON.parse(s); } catch { return fallback; } };
 const bool = (v) => (v ? 1 : 0);
+/** A caller's count, with zero meaning zero. `Number(v) || fallback` reads `0` as "unset". */
+const count = (v, fallback) => { const n = Number(v); return Number.isInteger(n) && n >= 0 ? n : fallback; };
 const num = (v) => (v === null || v === undefined ? null : Number(v));
 
 /**
@@ -299,11 +301,19 @@ function assertSameBoard(db, file, slug) {
   throw usage(`index ${file} holds board "${found}", not "${slug}" — one index per board. Open the other board's index (\`hkb --board ${found}\`), or delete this one and let the next tick rebuild it: rm ${file}*`);
 }
 
-/** Where the file is and which root `wake()` looks in, from whatever the caller passed. */
+/**
+ * Where the file is and which root `wake()` looks in, from whatever the caller passed.
+ *
+ * An explicit `file` decides the root too, unless `root` says otherwise: the index lives at
+ * `<root>/.git/hkb/index.db`, so its grandparent's parent is the root, and asking `storeRoot()` for
+ * it instead would answer with `process.cwd()` — a *different* directory from the one the index is
+ * in. `index.root()` and `wake()`'s pid file both come from here, and `wake()` swallows a miss and
+ * returns false, so the dispatcher simply never got nudged. (Gating that on `ctx === null` meant
+ * `openIndex(undefined, {file})` — the shape every test that passes a `file` uses — fell through.)
+ */
 function locate(ctx, { file, root, gitDir, slug }) {
-  const dir = root || (ctx === null && file ? path.dirname(path.dirname(path.dirname(file))) : storeRoot(ctx));
-  const git = gitDir || (file ? path.dirname(path.dirname(file)) : storeGitDir(ctx));
-  return { dir, dbFile: file || indexFile(git, slug) };
+  if (file) return { dir: root || path.dirname(path.dirname(path.dirname(file))), dbFile: file };
+  return { dir: root || storeRoot(ctx), dbFile: indexFile(gitDir || storeGitDir(ctx), slug) };
 }
 
 /**
@@ -410,33 +420,53 @@ function makeIndex({ db, file, root, readOnly }) {
      */
     load(tree = {}) {
       if (readOnly) refuseReadOnly('load');
+      // A key the tree does not carry is a question it did not answer. `board` was already read that
+      // way (a missing document must not null the board-wide pause); `cards` and `runs` are read the
+      // same way now, because emptying their tables on a partial read is what made the lock sweep
+      // below drop every live lock — `NOT IN (SELECT id FROM tasks)` is true for *every* row once
+      // `tasks` is empty, so the running worker's next heartbeat came back `lost`.
+      const hasCards = tree.cards !== null && tree.cards !== undefined;
+      const hasRuns = tree.runs !== null && tree.runs !== undefined;
       const cards = collection(tree.cards, 'cards');
       const runs = collection(tree.runs, 'runs');
       const counts = { tasks: 0, links: 0, runs: 0, attempts: 0, results: 0, locks_dropped: 0 };
       db.exec('BEGIN IMMEDIATE');
       try {
-        db.exec('DELETE FROM tasks');
-        db.exec('DELETE FROM links');
-        db.exec('DELETE FROM runs');
-        db.exec('DELETE FROM results');
-        db.exec('DELETE FROM attempts WHERE ended_at IS NOT NULL');
+        if (hasCards) {
+          db.exec('DELETE FROM tasks');
+          db.exec('DELETE FROM links');
+        }
+        if (hasRuns) {
+          db.exec('DELETE FROM runs');
+          db.exec('DELETE FROM results');
+          db.exec('DELETE FROM attempts WHERE ended_at IS NOT NULL');
+        }
 
         // A tree with no `board` key is a partial read, not a board that lost its host: keeping only
         // the slug and nulling the rest is how a board-wide pause disappeared and the next tick read
-        // the board as running. When the document *is* there, it is authoritative, nulls included.
+        // the board as running. When the document *is* there, it is authoritative, nulls included —
+        // except the slug, which says *which board this is*: a tree carrying another one repurposes
+        // an index rather than filling it in, so it is refused here exactly as `assertSameBoard`
+        // refuses it at open time.
         const b = tree.board;
         if (b && typeof b === 'object') {
+          const held = db.prepare('SELECT slug FROM board WHERE id = 1').get()?.slug ?? null;
+          const slug = b.slug ?? held;
+          if (held !== null && slug !== null && slug !== held) {
+            throw usage(`load: this index holds board "${held}" and the tree says "${slug}" — one index per board. Open the other board's index (\`hkb --board ${slug}\`), or delete this one and let the next tick rebuild it: rm ${file}*`);
+          }
           db.prepare('UPDATE board SET slug = ?, host = ?, paused_at = ?, paused_by = ?, settings_json = ?, tip_sha = ? WHERE id = 1')
             .run(
-              b.slug ?? db.prepare('SELECT slug FROM board WHERE id = 1').get()?.slug ?? null,
-              b.host ?? null, b.paused_at ?? null, b.paused_by ?? null,
+              slug, b.host ?? null, b.paused_at ?? null, b.paused_by ?? null,
               json(b.settings ?? null), tree.tip ?? null,
             );
         } else {
           db.prepare('UPDATE board SET tip_sha = ? WHERE id = 1').run(tree.tip ?? null);
         }
 
-        const insTask = db.prepare(`INSERT OR REPLACE INTO tasks
+        // Plain `INSERT`: `tasks` was emptied three lines up and the `seen` guard three lines down
+        // calls a duplicate an error, so `OR REPLACE` was dead code that said the opposite.
+        const insTask = db.prepare(`INSERT INTO tasks
           (id, title, body, status, agent, priority, rank, paths_json, goal, scheduled_at, suspended_json, needs_human, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
         const insLink = db.prepare('INSERT OR IGNORE INTO links (blocker_id, blocked_id) VALUES (?, ?)');
@@ -488,9 +518,16 @@ function makeIndex({ db, file, root, readOnly }) {
 
         // The orphan sweep, done where the answer is knowable: a lock with no open attempt behind it
         // (the branch closed that attempt) or on a card the branch no longer has.
-        counts.locks_dropped = Number(db.prepare(`DELETE FROM locks WHERE
-             task_id NOT IN (SELECT id FROM tasks)
-          OR NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id = locks.task_id AND a.k = locks.k AND a.ended_at IS NULL)`).run().changes);
+        //
+        // Each half runs only against a tree that answered its half. A tree that carried no `cards`
+        // says nothing about which cards left the branch, and reading its silence as "none of them
+        // are there" is how a partial load handed a running worker's card to the next tick.
+        const orphaned = [];
+        if (hasCards) orphaned.push('task_id NOT IN (SELECT id FROM tasks)');
+        if (hasRuns) orphaned.push('NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id = locks.task_id AND a.k = locks.k AND a.ended_at IS NULL)');
+        if (orphaned.length) {
+          counts.locks_dropped = Number(db.prepare(`DELETE FROM locks WHERE ${orphaned.join(' OR ')}`).run().changes);
+        }
         db.exec('COMMIT');
       } catch (e) {
         try { db.exec('ROLLBACK'); } catch { /* the original error is the one to report */ }
@@ -673,7 +710,7 @@ function makeIndex({ db, file, root, readOnly }) {
      *  `after` is exclusive, so a reader stores the last id it saw and passes it back. */
     events({ after = 0, limit = 500 } = {}) {
       const rows = db.prepare('SELECT id, at, kind, task_id, payload_json FROM events WHERE id > ? ORDER BY id LIMIT ?')
-        .all(Number(after) || 0, Number(limit) || 500);
+        .all(count(after, 0), count(limit, 500));
       return rows.map((r) => ({ id: r.id, at: r.at, kind: r.kind, number: r.task_id ?? null, payload: unjson(r.payload_json, {}) }));
     },
 
@@ -689,7 +726,9 @@ function makeIndex({ db, file, root, readOnly }) {
      *  rows; this is the handle for `hkb gc` and for a caller that wants a smaller log now. */
     trimEvents({ keep = EVENT_RETENTION } = {}) {
       if (readOnly) refuseReadOnly('trimEvents');
-      return trim(null, Number(keep) || EVENT_RETENTION);
+      // `Number(keep) || EVENT_RETENTION` is falsy on zero, so `hkb gc --keep 0` — "drop the whole
+      // log" — kept fifty thousand rows instead. The same shape `nextId` was fixed for.
+      return trim(null, count(keep, EVENT_RETENTION));
     },
 
     /**
@@ -728,11 +767,14 @@ function makeIndex({ db, file, root, readOnly }) {
  */
 function collection(v, what) {
   if (v === null || v === undefined) return [];
-  // The key *is* the id: `cards/<id>.json` carries its own `id` field, `runs/<id>.json` does not
-  // (§6.2 names neither an `id` nor a `task_id` in it), so the map key is where a run record's
-  // number comes from and the record itself is left alone.
+  // The key *is* the id, for a card as much as for a run: `cards/<id>.json` also carries an `id`
+  // field, and preferring it meant a hand edit or a bad merge that left `cards/7.json` saying
+  // `"id": 3` indexed card 7 as card 3 — `getTaskRow(7)` null, `claim(7, k)` matching no row, the
+  // card on the branch and invisible to every index read. The file's name is its identity (the same
+  // rule `ATTEMPT_IDENTITY` applies to an attempt's `task_id`), so the key wins and a record that
+  // disagrees is simply overridden.
   if (v instanceof Map) {
-    return [...v.entries()].filter(([, rec]) => rec).map(([id, rec]) => (rec.id === undefined || rec.id === null ? { ...rec, id: Number(id) } : rec));
+    return [...v.entries()].filter(([, rec]) => rec).map(([id, rec]) => ({ ...rec, id: Number(id) }));
   }
   if (Array.isArray(v)) return v.filter(Boolean);
   throw usage(`load: \`${what}\` is a ${v?.constructor?.name || typeof v}, and a tree carries it as a Map keyed by id (what src/store/git.js readTree() returns) or as an array of the same records`);

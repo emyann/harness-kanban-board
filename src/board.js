@@ -202,8 +202,10 @@ export const DEFAULT_BOARD = {
 };
 
 export function repoRoot(cwd = process.cwd()) {
-  const res = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' });
-  if (res.status === 0) return res.stdout.trim();
+  // `runGit`, for its `GIT_UNSET`: an inherited `GIT_WORK_TREE` makes `--show-toplevel` answer with
+  // somebody else's checkout, and this is where every context's root comes from.
+  const res = runGit(cwd, ['rev-parse', '--show-toplevel']);
+  if (res.status === 0) return res.stdout;
   return cwd;
 }
 
@@ -213,7 +215,10 @@ export function repoRoot(cwd = process.cwd()) {
 // with an undocumented drift in `gitSays`'s "which line is the loud one" regex, which meant the same
 // failure printed differently depending on which store hit it.
 
-export const GIT_ENV = {
+// Module-private: `gitEnv` below is its only reader, and everything that shells out to git goes
+// through `runGit`. Exporting it invited a second spawn path that set the identity by hand and
+// skipped `GIT_UNSET` — which is exactly what `gitCommonDir` had become.
+const GIT_ENV = {
   GIT_AUTHOR_NAME: 'hkb', GIT_AUTHOR_EMAIL: 'hkb@local',
   GIT_COMMITTER_NAME: 'hkb', GIT_COMMITTER_EMAIL: 'hkb@local',
   GIT_TERMINAL_PROMPT: '0', // nobody is here to answer a credential prompt
@@ -232,11 +237,29 @@ function gitEnv(extra = {}) {
   return env;
 }
 
-/** The two lines of git output worth putting in an error message. */
+/**
+ * The two lines of git output worth putting in an error message.
+ *
+ * The two copies this replaced disagreed on which lines count as loud, and merging them by *union*
+ * made things worse rather than better: a `--force-with-lease` push that prints
+ * `warning: redirecting to https://…` before `! [rejected] … (stale info)` would have reported the
+ * redirect and the rejection, losing the rejection's reason — the two lines a human actually reads
+ * when a heartbeat comes back `unavailable`. So the merge is a *ranking*: a failure outranks a
+ * warning, a warning outranks ordinary chatter, and ties keep git's own order.
+ */
+const GIT_LOUD = [/^(fatal|error|!)/i, /^remote:/i, /^warning/i];
+
 export function gitSays(s) {
   const lines = String(s || '').split('\n').map((l) => l.trim()).filter(Boolean);
-  const loud = lines.filter((l) => /^(fatal|error|warning|remote|!)/i.test(l));
-  return (loud.length ? loud : lines).slice(0, 2).join(' ').slice(0, 200);
+  const rank = (l) => { const i = GIT_LOUD.findIndex((re) => re.test(l)); return i < 0 ? GIT_LOUD.length : i; };
+  return lines
+    .map((line, at) => ({ line, at, rank: rank(line) }))
+    .sort((a, b) => a.rank - b.rank || a.at - b.at)
+    .slice(0, 2)
+    .sort((a, b) => a.at - b.at)
+    .map((x) => x.line)
+    .join(' ')
+    .slice(0, 200);
 }
 
 /**
@@ -902,7 +925,12 @@ export function mainWorktree(root) {
  * directory asks for it here (`storeGitDir`) instead of rebuilding it from the parent.
  */
 export function gitCommonDir(root) {
-  const r = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: root, encoding: 'utf8' });
+  // Through `runGit`, not a bare `spawnSync`, for the reason `GIT_UNSET` exists: an exported
+  // `GIT_DIR` — hkb's own Stop hook runs inside git sometimes — makes `--git-common-dir` answer
+  // with *that* repository, and this one call now decides where the board root and the index file
+  // are. With `GIT_DIR=/tmp/theirs/.git` in the environment, `storeGitDir({root: '/tmp/mine'})`
+  // answered `/tmp/theirs/.git` and the index landed in somebody else's repository.
+  const r = runGit(root, ['rev-parse', '--git-common-dir']);
   if (r.status !== 0 || !r.stdout.trim()) return null;
   return path.resolve(root, r.stdout.trim());
 }

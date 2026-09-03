@@ -32,6 +32,10 @@ export const BOARD_BRANCH = 'kb-board';
 export const BOARD_REF = `refs/heads/${BOARD_BRANCH}`;
 const ZERO_OID = '0'.repeat(40);
 const BLOB_MODE = '100644';
+/** The two file names this tier writes and reads. `isOwned` and `_parseFiles` share them on
+ *  purpose: a path the parser skips but the writer claims is a path the writer deletes. */
+const CARD_FILE = /^cards\/(\d+)\.json$/;
+const RUN_FILE = /^runs\/(\d+)\.json$/;
 const MAX_CAS_RETRIES = 5;
 /** How many git sub-commands `trace` keeps. The *last* 500 — the ones that just failed. */
 const TRACE_CAP = 500;
@@ -270,9 +274,12 @@ export class GitTier {
 
     /** @type {Map<string, {sha: string, mode: string, text: string|null}>} */
     const files = new Map();
-    // Only blobs are decoded — a gitlink (mode 160000) has no bytes to read, and it is still an
-    // entry the write path has to put back or it would disappear from the branch.
-    const blobs = entries.filter((e) => e.type === 'blob');
+    // Only this tier's own blobs are decoded. A gitlink (mode 160000) has no bytes to read, and a
+    // foreign path — a README, somebody's notes directory, an image — is carried across by `{sha,
+    // mode}` alone: `_land` and `sameTree` never look at its text, so decoding it as UTF-8 would
+    // both mangle a binary file and pin every byte of it in `_snap` for the life of the process.
+    // Every entry is still in `files`, which is what keeps it on the branch.
+    const blobs = entries.filter((e) => e.type === 'blob' && isOwned(e.file));
     let texts = [];
     if (blobs.length) {
       const batch = this._git(['cat-file', '--batch'], { input: `${blobs.map((e) => e.sha).join('\n')}\n`, binary: true });
@@ -281,7 +288,8 @@ export class GitTier {
     }
     let blob = 0;
     for (const e of entries) {
-      files.set(e.file, { sha: e.sha, mode: e.mode, text: e.type === 'blob' ? (texts[blob++] ?? '') : null });
+      const owned = e.type === 'blob' && isOwned(e.file);
+      files.set(e.file, { sha: e.sha, mode: e.mode, text: owned ? (texts[blob++] ?? '') : null });
     }
 
     this._snap = this._parseFiles(files, tip, local);
@@ -301,9 +309,9 @@ export class GitTier {
     const cards = new Map();
     const runs = new Map();
     for (const file of files.keys()) {
-      const card = /^cards\/(\d+)\.json$/.exec(file);
+      const card = CARD_FILE.exec(file);
       if (card) { cards.set(Number(card[1]), parse(file)); continue; }
-      const run = /^runs\/(\d+)\.json$/.exec(file);
+      const run = RUN_FILE.exec(file);
       if (run) runs.set(Number(run[1]), parse(file));
     }
     return { tip, local, board, cards, runs, files };
@@ -335,7 +343,6 @@ export class GitTier {
         throw fail(`there is no ${this.branch} branch in ${this.root} — run \`hkb init\` to create the board`);
       }
       if (!allowForeignHost) this._assertOwner(snap.board);
-      this._assertWritableRef(snap);
 
       const tree = { board: snap.board, cards: snap.cards, runs: snap.runs };
       const value = mutate(tree);
@@ -343,7 +350,14 @@ export class GitTier {
 
       // Nothing to say. A verb that writes the same bytes back must not put a commit on the board's
       // history — `git log kb-board` is the board's history of *decisions* (§6.1).
+      //
+      // This is asked *before* the ref is checked for writability, because a write that isn't one
+      // needs no ref: on a read-only clone, `setStatus` to the status a card already has and
+      // `addLabels(task, [])` used to hard-fail with exit 2 where they had returned `{changed:
+      // false}` before. A reconcile pass that re-asserts current state is exactly what the early
+      // return exists to make free, and a clone is exactly where one runs.
       if (sameTree(want, snap.files)) return { tip: snap.tip, changed: false, value };
+      this._assertWritableRef(snap);
 
       const text = typeof message === 'function' ? message(value, tree) : message;
       const landed = this._land(want, snap, text);
@@ -381,11 +395,27 @@ export class GitTier {
     throw fail(this._absentRefMessage());
   }
 
+  /**
+   * Why there was no ref to compare-and-swap against.
+   *
+   * Git says "unable to resolve reference" for two different things: this clone never had the local
+   * branch, and somebody deleted it between the read and the CAS (`git branch -D kb-board`, an
+   * `hkb down` racing a verb). Only the first is the read-only-clone story, and prescribing
+   * `git branch kb-board origin/kb-board` for the second is advice that fails on its own terms —
+   * "not a valid object name" — when there is no remote-tracking ref either. So the clone message
+   * is reached only after re-reading the ref and finding it really is only the remote's.
+   */
   _absentRefMessage(detail = '') {
-    return `the board here is a read-only copy: ${this.remote}/${this.branch} exists but ${this.ref} does not, `
-      + `so there is nothing to compare-and-swap against. Create the local branch with `
-      + `\`git -C ${this.root} branch ${this.branch} ${this.remote}/${this.branch}\`, then take the board over `
-      + `with \`hkb init --take-over\` if this host should be the one writing it${detail ? ` (git said: ${detail})` : ''}.`;
+    const { sha, local } = this._tip();
+    if (sha && !local) {
+      return `the board here is a read-only copy: ${this.remote}/${this.branch} exists but ${this.ref} does not, `
+        + `so there is nothing to compare-and-swap against. Create the local branch with `
+        + `\`git -C ${this.root} branch ${this.branch} ${this.remote}/${this.branch}\`, then take the board over `
+        + `with \`hkb init --take-over\` if this host should be the one writing it${detail ? ` (git said: ${detail})` : ''}.`;
+    }
+    return `${this.ref} went away while this write was landing — something deleted the ${this.branch} branch in `
+      + `${this.root} under it${detail ? ` (git said: ${detail})` : ''}. Check \`git reflog ${this.branch}\` for what `
+      + 'moved it, then run this again; `hkb init` recreates the board if it is really gone.';
   }
 
   /** `board.json` names one owning host; every other host reads (§6.2, "One writer"). */
@@ -653,9 +683,12 @@ export class GitTier {
   closeTask(n, reason = 'completed') {
     const at = this.now().toISOString();
     this._patch(n, (card) => {
+      // Only a card that was open gets a closing time: re-stamping it made closing an already-closed
+      // card a byte change, so `_patch` saw a decision where there was none and committed. Same hole
+      // as `updated_at`, one method further along.
+      if (card.state !== 'CLOSED') card.closed_at = at;
       card.state = 'CLOSED';
       card.state_reason = String(reason || 'completed').toUpperCase();
-      card.closed_at = at;
     }, `hkb: close #${n} (${reason})`);
     return this.getTask(n);
   }
@@ -838,9 +871,15 @@ function parseBatch(buf, expected) {
 /**
  * The paths this tier owns and rewrites. Everything else on the branch is somebody's — a README, a
  * `.gitattributes`, a directory of notes — and the write path carries it across untouched.
+ *
+ * It matches the *files*, not the directories: `_parseFiles` only ever recognises `cards/<digits>
+ * .json`, so claiming the whole `cards/` prefix meant a `cards/README.md` was read by nobody and
+ * deleted by the first write. It also fooled the no-op guard — `sameTree` counted that file in
+ * `had` and never in `want`, so a verb that decided nothing landed a commit whose only effect was
+ * to remove it.
  */
-function isOwned(file) {
-  return file === 'board.json' || file.startsWith('cards/') || file.startsWith('runs/');
+export function isOwned(file) {
+  return file === 'board.json' || CARD_FILE.test(file) || RUN_FILE.test(file);
 }
 
 /** Did the mutation actually change any bytes? Only the tier's own paths can have. */
@@ -885,7 +924,7 @@ function isEmptyRunFile(run) {
  * A missing ref is a fact about this clone, and retrying cannot change it.
  * @returns {'contended'|'absent'|'error'}
  */
-function classifyRefWrite(out) {
+export function classifyRefWrite(out) {
   const text = String(out || '');
   if (/unable to resolve reference|reference is missing but/i.test(text)) return 'absent';
   if (/cannot lock ref|unable to lock|is at [0-9a-f]+ but expected|reference already exists|ref .* is at/i.test(text)) return 'contended';
@@ -946,7 +985,12 @@ function applyLabels(card, { add = [], remove = [] } = {}) {
     if (l.startsWith('kb:board:')) continue;
     extra.add(l);
   }
-  card.labels = [...extra].sort();
+  // Sorted, but only written back when the set actually moved: re-sorting unconditionally turned
+  // `addLabels(task, [])` on a card whose stored `labels` happen to be out of order into a byte
+  // change, and so into a commit that decided nothing.
+  const next = [...extra].sort();
+  const prev = [...(card.labels || [])].sort();
+  if (prev.length !== next.length || next.some((l, i) => l !== prev[i])) card.labels = next;
 }
 
 /**

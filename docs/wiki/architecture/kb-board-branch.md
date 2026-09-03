@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "adding a durable store verb, debugging a board write that lost or refused, or wondering why a worker's worktree stays clean while the board moves"
 covers:
   - path: src/store/git.js
-    sha: 5974220967c8ae52be092e744fe8e75f0e9772a5
+    sha: 4aae850af6e4081c35af73976ea32eeca8391441
   - path: src/store/index.js
     sha: 8bbf72f8391d88be9ae35eec0c79501b657cc41d
   - path: src/board.js
-    sha: 2b79935a23669a802b9be2bb2bccdb878d5f425a
-generated_at_commit: 627805d
+    sha: 74ccb250b19ad34485df8b8b4ef0388973aa3561
+generated_at_commit: a7a3ce3
 last_refreshed: 2026-09-02
 related: [architecture/store-seam, decisions/adr-006-local-store, decisions/adr-005-control-plane, concepts/claims-and-leases]
 ---
@@ -74,11 +74,17 @@ spawned:
 The temporary index is rebuilt from nothing on every write, so a deleted card
 is simply a card that is not listed — there is no delete path to get wrong.
 That cuts both ways, and it is the branch's sharpest edge: **a path the write
-does not list is a path deleted.** The tier owns `board.json`, `cards/` and
-`runs/` and carries every other entry across at the sha and mode it already had
-(`isOwned` / `_land`, `src/store/git.js`) — without that, a `README.md` somebody
+does not list is a path deleted.** The tier owns exactly three file *names* —
+`board.json`, `cards/<n>.json` and `runs/<n>.json`, the same patterns the read
+parses — and carries every other entry across at the sha and mode it already had
+(`isOwned` / `_land`, `src/store/git.js`). Without that, a `README.md` somebody
 put on the branch disappeared on the first `setStatus`, and the no-op guard
-(which compares only owned paths) reported that nothing had changed.
+(which compares only owned paths) reported that nothing had changed. Ownership
+is by file name and not by directory for the same reason at one level down: a
+`cards/README.md` is read by no parser, so claiming the whole `cards/` prefix
+would delete it just as silently. A foreign path is never even decoded — the
+write path only ever needs its sha and mode, and a blob on the branch may be
+binary.
 
 Reads are memoized on the tip sha, and a successful write leaves the tree it
 just built behind it, parsed back out of the bytes that landed. So a tick that
@@ -106,7 +112,14 @@ The branch's history is a history of decisions, and a verb that decided nothing
 should not appear in it. That holds only because `_patch` compares the card
 before and after the mutation and leaves `updated_at` alone when nothing moved:
 a timestamp stamped unconditionally makes every verb "a change", so `setStatus`
-to the status a card already has would land a commit saying so.
+to the status a card already has would land a commit saying so. `closeTask` and
+`addLabels` hold the same line — a closing time is stamped only on a card that
+was open, and the label list is re-sorted only when the set actually moved.
+
+The question is asked *before* the ref is checked for writability, so a verb
+that decides nothing costs nothing even on a read-only clone. A reconcile pass
+re-asserting the state of twenty cards is exactly the caller this makes free,
+and a clone is exactly where one runs.
 
 ## One writer per board
 

@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync, spawn } from 'node:child_process';
 import { openIndex, openIndexReadOnly, indexFile, indexDir, LOCAL_EVENT_KINDS, LIVE_ATTEMPT_FIELDS, SCHEMA_VERSION } from '../src/store/sqlite.js';
 import { GitTier } from '../src/store/git.js';
+import { storeGitDir, storeRoot } from '../src/board.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.dirname(here);
@@ -765,4 +766,114 @@ test('node:sqlite prints nothing on stderr through bin/hkb.js\'s warning filter'
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.stderr, '', 'a warning a user cannot act on is noise on every command');
   } finally { fs.rmSync(probe, { force: true }); }
+});
+
+// ---------- what the review of the review found ----------
+
+test('load: a tree that carried no cards says nothing about which locks are orphans', (t) => {
+  const root = tmpRoot(t);
+  const idx = open(t, root);
+  idx.load(tree({ tip: 'aaa', cards: [card(1)] }));
+  const { token } = idx.claim(1, 1, { profile: 'claude' });
+  assert.equal(idx.listLocks().length, 1);
+
+  // A partial tree — the shape `board` is already read this way for — used to empty `tasks` and then
+  // ask `task_id NOT IN (SELECT id FROM tasks)`, which SQL answers `true` for every row against an
+  // empty set. Every live lock went, the worker's next beat came back `lost`, and the card was
+  // handed to the next tick: exactly what the split between the durable and the live half exists to
+  // prevent.
+  const partial = idx.load({ tip: 'bbb' });
+  assert.equal(partial.locks_dropped, 0);
+  assert.equal(idx.listLocks().length, 1, 'the running worker still holds its card');
+  assert.equal(idx.heartbeat(1, 1, token).result, 'ok', 'and its beat is still its own');
+  assert.equal(idx.tip(), 'bbb', 'the tip still moved');
+  assert.equal(idx.getTaskRow(1).title, 'card 1', 'and a question the tree did not answer changed nothing');
+
+  // a tree that *does* carry cards still reconciles
+  assert.equal(idx.load(tree({ tip: 'ccc', cards: [] })).locks_dropped, 1);
+  assert.deepEqual(idx.listLocks(), []);
+});
+
+test('load: a card\'s identity is its file name, not a field inside it', (t) => {
+  const idx = open(t, tmpRoot(t));
+  // `cards/7.json` saying `"id": 3` after a hand edit or a bad merge indexed as card 3: `getTaskRow(7)`
+  // null, `claim(7, k)` matching no row, and card 7 on the branch and invisible to every index read.
+  const tree7 = tree({ tip: 'aaa', cards: [card(7, { title: 'seven' })] });
+  tree7.cards.get(7).id = 3;
+  idx.load(tree7);
+  assert.equal(idx.getTaskRow(7)?.title, 'seven', 'the key is the id');
+  assert.equal(idx.getTaskRow(3), null);
+  assert.equal(idx.claim(7, 1, { profile: 'claude' }).result, 'claimed');
+  assert.deepEqual(idx.listTaskRows().map((r) => r.id), [7]);
+
+  // and when the id it claims really is another card's, the duplicate guard names the file it is in
+  const both = tree({ tip: 'bbb', cards: [card(3), card(7)] });
+  both.cards.get(7).id = 3;
+  assert.doesNotThrow(() => idx.load(both), 'two files, two cards — the field is simply overridden');
+  assert.deepEqual(idx.listTaskRows().map((r) => r.id), [3, 7]);
+});
+
+test('load: a tree carrying another board\'s slug is refused, not indexed over this one', (t) => {
+  const idx = open(t, tmpRoot(t), { slug: 'alpha' });
+  idx.load(tree({ tip: 'aaa', cards: [card(1, { title: 'alpha card' })], board: { slug: 'alpha' } }));
+  // `openIndex` clears this at open time; writing the slug unconditionally in `load` moved the same
+  // bug — two boards sharing one index — from open time to load time.
+  assert.throws(
+    () => idx.load(tree({ tip: 'bbb', cards: [card(1, { title: 'beta card' })], board: { slug: 'beta' } })),
+    (e) => e.exitCode === 2 && /holds board "alpha"/.test(e.message),
+  );
+  assert.equal(idx.board().slug, 'alpha');
+  assert.equal(idx.getTaskRow(1).title, 'alpha card', 'and the refusal rolled the whole load back');
+  // a tree with no slug of its own still loads, and keeps the index's
+  idx.load(tree({ tip: 'ccc', cards: [card(1)], board: { slug: undefined } }));
+  assert.equal(idx.board().slug, 'alpha');
+});
+
+test('trimEvents: keep 0 keeps none of them', (t) => {
+  const idx = open(t, tmpRoot(t));
+  idx.load(tree({ tip: 'aaa', cards: [card(1)] }));
+  for (let i = 0; i < 5; i++) idx.appendEvent({ kind: 'comment', task_id: 1, payload: { i } });
+  assert.equal(idx.events({ limit: 100 }).length, 5);
+  assert.equal(idx.trimEvents({ keep: 2 }), 3);
+  // `Number(keep) || EVENT_RETENTION` read `0` as "unset" and kept fifty thousand rows — the same
+  // falsy-zero shape `nextId` was fixed for on the branch side.
+  assert.equal(idx.trimEvents({ keep: 0 }), 2);
+  assert.deepEqual(idx.events({ limit: 100 }), []);
+  assert.deepEqual(idx.events({ limit: 0 }), [], 'and a caller asking for no rows gets no rows');
+});
+
+test('locate: an explicit file decides the root, so wake() looks where the index lives', (t) => {
+  const root = tmpRoot(t);
+  // `openIndex(undefined, {file})` — no ctx object at all — used to fall through to `storeRoot()`
+  // against `process.cwd()`, so `root()` and `wake()`'s pid file pointed at a different directory
+  // than the index was in, and `wake()` swallowed the miss and returned false.
+  const idx = openIndex(undefined, { file: indexFile(gitDirOf(root)) });
+  OPEN.get(root).push(idx);
+  assert.equal(idx.root(), root);
+  fs.writeFileSync(path.join(root, '.kanban', 'dispatch.pid'), `${process.pid}\n`);
+  const seen = [];
+  const on = () => seen.push(1);
+  process.on('SIGUSR1', on);
+  t.after(() => process.off('SIGUSR1', on));
+  assert.equal(idx.wake(), true, 'the pid file is where the index is');
+});
+
+test('storeGitDir ignores an inherited GIT_DIR — the index is this repo\'s, not the hook\'s', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-gitdir-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const mine = path.join(dir, 'mine');
+  const theirs = path.join(dir, 'theirs');
+  for (const d of [mine, theirs]) {
+    fs.mkdirSync(d, { recursive: true });
+    assert.equal(spawnSync('git', ['init', '-q', d], { encoding: 'utf8' }).status, 0);
+  }
+  // hkb's own Stop hook runs inside git sometimes, and `gitCommonDir` is now the sole decider of
+  // where the board root and the index file are — it went through a bare `spawnSync`, so it never
+  // unset this and the index landed in somebody else's repository.
+  const before = process.env.GIT_DIR;
+  process.env.GIT_DIR = path.join(theirs, '.git');
+  t.after(() => { if (before === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = before; });
+  assert.equal(fs.realpathSync(storeGitDir({ root: mine, _cache: {} })), fs.realpathSync(path.join(mine, '.git')));
+  assert.equal(fs.realpathSync(storeRoot({ root: mine, _cache: {} })), fs.realpathSync(mine));
+  assert.equal(indexFile(storeGitDir({ root: mine, _cache: {} })), path.join(fs.realpathSync(path.join(mine, '.git')), 'hkb', 'index.db'));
 });
