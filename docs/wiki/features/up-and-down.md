@@ -7,19 +7,19 @@ audience: [dev, ops]
 read_when: "touching hkb up/down, the dispatcher's singleton lock, the serve pid file, or anything that has to know whether a board is running"
 covers:
   - path: src/up.js
-    sha: d071ce334a8166b27957bb2ad6c07dd683c306cb
+    sha: 015e0ff4ffa48e110400065f3d496db7ebd4b730
   - path: src/model.js
-    sha: 1396e51d975eb47370284f457492711a4732a4bf
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/board.js
-    sha: 72e9c66eb079e09ad4f221c84874351d794ecdf4
+    sha: 42bd1bb173651d9109208a702564cfc3e5e51410
   - path: src/dispatch.js
-    sha: 91ca65eadb9e1b66fa8b8c9756dda334668edd74
+    sha: 26a3197921f09d3ef2f4a21f1858c1cc6b5e7fd6
   - path: src/serve.js
-    sha: 83e21743007087c37dc114d32c7f6fce9fa61fab
+    sha: fe50acf9c37de567f1a90fd802e682ab746f6d50
   - path: src/doctor.js
-    sha: 5969652bdbc10eb76cf20a3e682f8ac1b43c818e
-generated_at_commit: f04038f
-last_refreshed: 2026-09-01
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
+generated_at_commit: 2a3a7e3
+last_refreshed: 2026-09-02
 related: [architecture/overview, features/web-board, concepts/roles-and-seats, architecture/dispatcher-tick]
 ---
 
@@ -139,7 +139,7 @@ identity: dropping it would send a test's or a smoke run's server at the real
 
 Exit code 4 is the dispatcher loop deliberately giving itself up: the self-heal
 ladder ran out and a *fresh process* is what fixes it, so the loop dies with a
-reason for a supervisor — cron, systemd, Actions, or a human — to act on
+reason for a supervisor — cron, systemd, launchd, or a human — to act on
 (`src/dispatch.js:1027-1035`). `hkb up` is not that supervisor and must not become
 one: it never restarts, never polls, never forks a watchdog. Everything it does
 happens once, and then it exits.

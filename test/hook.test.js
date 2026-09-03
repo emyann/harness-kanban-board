@@ -34,7 +34,6 @@ import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 const PROFILES = {
   claude: DEFAULT_PROFILES.claude,               // mode: claude-bg — its worker is in kb-<n>-<k>
   'claude-p': DEFAULT_PROFILES['claude-p'],      // mode: process — its environment dies with it
-  'claude-action': DEFAULT_PROFILES['claude-action'], // mode: trigger — the worker is an Actions checkout
   codex: DEFAULT_PROFILES.codex,                 // workspace: worktree — the dispatcher makes the checkout
 };
 const ROOT = '/repo';
@@ -97,8 +96,6 @@ test('attemptIdentity: a same-named checkout under the wrong KB_ROOT is a leak t
 
 test('attemptIdentity: judged only where hkb knows where the worker sits', () => {
   const at = (profile, extra = {}) => attemptIdentity({ ...bg, profile, here: 'somewhere-else', herePath: `${ROOT}/somewhere-else`, ...extra });
-  // an Actions worker: KB_TASK set by the workflow, cwd the runner's checkout, no KB_ROOT to compare
-  assert.deepEqual(at(PROFILES['claude-action']), { n: '146', k: '1', source: 'env' });
   // `claude -p`: a child process whose environment dies with it, so it can never be a leak source
   assert.deepEqual(at(PROFILES['claude-p']), { n: '146', k: '1', source: 'env' });
   assert.deepEqual(at(null), { n: '146', k: '1', source: 'env' }, 'an unknown profile is never second-guessed');
@@ -110,7 +107,6 @@ test('attemptIdentity: judged only where hkb knows where the worker sits', () =>
   assert.equal(worksInWorktree(PROFILES.claude), true);
   assert.equal(worksInWorktree(PROFILES.codex), true, 'the dispatcher hands it the checkout as its cwd');
   assert.equal(worksInWorktree(PROFILES['claude-p']), false);
-  assert.equal(worksInWorktree(PROFILES['claude-action']), false);
   assert.equal(worksInWorktree(null), false);
 });
 
@@ -571,8 +567,8 @@ test('doctor: an ordinary shell and a real worker both have nothing to report', 
     cwd: '/repo/.claude/worktrees/kb-146-1', daemons: nope,
   }), null, 'the worker itself is exactly where it says it is');
   assert.equal(checkEnvLeak(doctorCtx, f, {
-    env: { KB_TASK: '146', KB_ATTEMPT: '1', KB_PROFILE: 'claude-action' }, cwd: '/runner/work/repo', daemons: nope,
-  }), null, 'an Actions worker is nobody\'s worktree and never was');
+    env: { KB_TASK: '146', KB_ATTEMPT: '1', KB_PROFILE: 'claude-p' }, cwd: '/repo', daemons: nope,
+  }), null, 'a `claude -p` worker is nobody\'s worktree and never was');
   assert.deepEqual(f.out, []);
 });
 

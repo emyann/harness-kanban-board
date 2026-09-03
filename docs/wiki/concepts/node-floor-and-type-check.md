@@ -13,10 +13,10 @@ covers:
   - path: tsconfig.json
     sha: 1cf5d8e7c742578ddfec7462f50de161ddf31bd2
   - path: types/hkb.d.ts
-    sha: 8399e17ba5e22f80a2526fd080126fadc7d1ab42
+    sha: b9583e1ccba5a8c72390813b5563ace17d69e433
   - path: .github/workflows/test.yml
     sha: 52d8567c27bedbe1e8cb73e7f9ccfaecaeb72e99
-generated_at_commit: e367021
+generated_at_commit: 2a3a7e3
 last_refreshed: 2026-09-02
 related:
   - decisions/adr-006-local-store.md

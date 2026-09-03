@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_BOARD, DEFAULT_PROFILES, CLAUDE_DENY, HOOK_SETTINGS_VAR, staleHookLaunches, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot, hkbOnPath, registerUserBoard, userBoardsFile, mainWorktree } from './board.js';
+import { DEFAULT_BOARD, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot, hkbOnPath, registerUserBoard, userBoardsFile, mainWorktree } from './board.js';
 import { ensureLabels, fetchBoard, addLabels } from './tasks.js';
 import { rest } from './gh.js';
 import { L, STATUSES, parseSkillVersion, stripFrontmatter, insideRepo, worktreePath, hookEntry, hookSettings, mcpSplitApprovals, toolPosture } from './model.js';
@@ -622,70 +622,22 @@ export function harnessFiles(name, { command = 'hkb hook stop', root = '/path/to
   return build({ command, root });
 }
 
-// ---------- GitHub Actions (`hkb init --with-actions`) ----------
-// Two workflows, generated the same way harness files are: the dispatcher (events, with a 15-minute
-// cron as a sweeper) and one worker per attempt (claude-code-action, started by `gh workflow run`).
-// Neither contains a secret — only `${{ secrets.* }}` references — and re-running init overwrites
-// both, so the templates stay the single source.
-
-export const ACTIONS_PROFILE = 'claude-action';
-export const WORKER_WORKFLOW = 'kanban worker (claude)';
-const ACTIONS_DIR = path.join('.github', 'workflows');
-const NODE_VERSION = '22';
-
 /**
- * How Actions gets `hkb` on PATH. Every repo installs the published package; hkb's own repo installs
- * the checkout it is running, so a change to the CLI is exercised by the workflow that ships it.
+ * Flags `hkb init` used to take and no longer does. A removed flag is not a typo — the user is
+ * asking for something that was deliberately taken away — so the error says what happened and what
+ * replaces it, rather than listing the flags that remain and leaving them to guess (#290).
+ *
+ * Pure and exported so the message is a test, not a promise. Returns null when nothing is wrong.
  */
-export function hkbInstallForActions(root) {
-  return isPackageRepo(root) ? 'npm link' : 'npm i -g hkb-cli';
-}
-
-/**
- * The two workflow files, as `[{ rel, contents }]`. Pure, like `harnessFiles`.
- * @param board board slug the dispatcher ticks and the worker defaults to
- * @param install shell command that puts `hkb` on PATH in the runner
- * @param profiles profile names the Actions dispatcher may claim — never the laptop-only ones
- * @param timeoutMinutes the worker job's `timeout-minutes`; keep it <= the board's max_runtime
- */
-export function actionsFiles({ board = 'default', install = 'npm i -g hkb-cli', profiles = [ACTIONS_PROFILE], timeoutMinutes = 60, maxTurns = 80 } = {}) {
-  const vars = {
-    board,
-    install,
-    profiles: profiles.join(','),
-    profile: ACTIONS_PROFILE,
-    worker_workflow: WORKER_WORKFLOW,
-    node_version: NODE_VERSION,
-    timeout_minutes: String(timeoutMinutes),
-    max_turns: String(maxTurns),
-    allowed_tools: (DEFAULT_PROFILES[ACTIONS_PROFILE].allowed_tools || []).join(','),
-    // the same deny list the local Claude launches carry, so a runner refuses what a laptop refuses
-    disallowed_tools: CLAUDE_DENY.join(','),
-    // the same hooks a local Claude launch carries, on the same flag. `binRel: null` is what keeps
-    // this file the same on every machine: the runner puts `hkb` on PATH itself (`{{install}}`), so
-    // the portable form is both correct there and identical in everyone's diff. The workflow sets
-    // KB_TASK and KB_PROFILE as job env, so unlike `claude --bg` all three hooks are live in a run.
-    hook_settings: hookSettings(CLAUDE_HOOKS, (verb) => hkbCommandForHook(verb, { shared: true, binRel: null })),
-  };
-  return ['kanban-dispatch.yml', 'kanban-worker-claude.yml'].map((name) => ({
-    rel: path.join(ACTIONS_DIR, name),
-    contents: fill(template('actions', name), vars),
-  }));
-}
-
-/** Write the workflows. Returns the relative paths that actually changed. */
-export function installActions(root, opts = {}) {
-  return writeAll(root, actionsFiles({ install: hkbInstallForActions(root), ...opts }));
-}
-
-/**
- * The profiles the Actions dispatcher is allowed to claim — the ones whose launch only *triggers*
- * work somewhere else. Anything a runner cannot start (a local `claude`, `copilot`, `codex`) has to
- * stay off that list, or the tick claims a task and then fails to spawn it.
- */
-export function triggerProfiles(cfg) {
-  const names = Object.entries(cfg?.profiles || {}).filter(([, p]) => p?.mode === 'trigger').map(([n]) => n);
-  return names.length ? names : [ACTIONS_PROFILE];
+export function removedInitFlag(flags = {}) {
+  for (const key of Object.keys(flags)) {
+    // Any spelling of the Actions flag: the runner is gone as a whole, so `--actions`,
+    // `--with-actions` and `--no-actions` all get the same answer.
+    if (/actions/i.test(key)) {
+      return `--${key} is gone: hkb no longer generates a GitHub Actions runner. ADR-006 makes the board's store local and single-host, and a dispatcher inside Actions cannot read it. Run \`hkb up\` on the machine that owns the board — that is what keeps it moving now.`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -706,9 +658,6 @@ export function resolveProfiles(flags = {}) {
   const implied = harnesses.map((h) => HARNESS_PROFILE[h]);
   const profiles = flags.profiles ? list(flags.profiles) : (implied.length ? [...implied] : ['claude']);
   for (const p of implied) if (!profiles.includes(p)) profiles.push(p);
-  // `--with-actions` *adds*: the point is a board that runs on this machine and keeps going when it
-  // closes, so the local profile stays whatever it was.
-  if (flags['with-actions'] && !profiles.includes(ACTIONS_PROFILE)) profiles.push(ACTIONS_PROFILE);
   return { harnesses, profiles };
 }
 
@@ -908,6 +857,14 @@ export function registerCheckout(root, log) {
 export async function init(ctx, flags, log) {
   const root = repoRoot();
   const board = flags.board || 'default';
+  // Before anything is written: a flag that no longer exists is a request that cannot be honoured,
+  // and half an init is worse than none.
+  const removed = removedInitFlag(flags);
+  if (removed) {
+    const e = new Error(removed);
+    e.exitCode = 2;
+    throw e;
+  }
   // `--no-labels` is the offline path (step 4). The other two steps that talk to GitHub cannot be
   // done offline at all, so asking for both is a request that cannot be honoured — say so before
   // anything is written rather than half-doing it.
@@ -1035,17 +992,7 @@ export async function init(ctx, flags, log) {
       log(`  the command runs this repo's own ${binRel} from the project root the ${h} hook already runs in${installed ? ' — a teammate needs \`npm install\` too' : ''}`);
     }
   }
-  // 5a. optional GitHub Actions dispatcher + worker. The files are all init writes; the two secrets
-  //     and the push to the default branch are the user's, and Actions runs nothing until both.
-  if (flags['with-actions']) {
-    const written = installActions(root, { board, profiles: triggerProfiles(cfg), timeoutMinutes: Math.round((cfg.dispatch?.max_runtime_default || 3600) / 60) });
-    log(written.length ? `actions: wrote ${written.join(', ')}` : 'actions: workflows already up to date');
-    log('  then, once — no secret of yours is ever written into a template:');
-    log('    gh secret set KB_TOKEN                   # fine-grained PAT, this repo: Issues, Contents, Pull requests, Actions RW');
-    log('    claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN    # or: gh secret set ANTHROPIC_API_KEY');
-    log('  and commit both workflows to the default branch — Actions only ever runs the copy that is there.');
-  }
-  // 5b. optional MCP server config. Only .mcp.json is ours to write — Claude Code and Copilot CLI
+  // 5a. optional MCP server config. Only .mcp.json is ours to write — Claude Code and Copilot CLI
   //     read it verbatim; Codex's is user-level and VS Code's belongs to the editor, so those are printed.
   if (flags.mcp) {
     const { installMcp, mcpLaunch } = await import('./mcp.js');
