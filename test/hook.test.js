@@ -28,8 +28,8 @@ import { attemptIdentity, worksInWorktree, scrubKbEnv, kbVarsIn, KB_ENV_VARS, wo
 import { whichAttempt, stopHook, preToolHook, subagentStopHook, sessionForAttempt } from '../src/hook.js';
 import { checkEnvLeak, daemonsWithKbEnv, ENV_LEAK_CHECK } from '../src/doctor.js';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, makeHookContext } from '../src/board.js';
-import { loadRun } from '../src/tasks.js';
-import { FakeGh, kbIssue, runWith } from './fake-gh.js';
+import { FakeGh } from './fake-gh.js';
+import { FakeStore, kbIssue, runWith } from './fake-store.js';
 
 const PROFILES = {
   claude: DEFAULT_PROFILES.claude,               // mode: claude-bg — its worker is in kb-<n>-<k>
@@ -134,14 +134,16 @@ test('kbVarsIn: the KB_* names in a /proc environ dump', () => {
  */
 function leakHarness({ cwd = 'root', task = '7', attempt = '1', profile = 'claude' } = {}) {
   const gh = new FakeGh();
+  const store = new FakeStore();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-leak-'));
   const root = cwd === 'root' ? dir : path.join(dir, '.claude', 'worktrees', cwd);
   fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
-  gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', run: runWith([{ attempt: 1, host: 'h', bg: true, wt: 'kb-7-1', started_at: '2026-08-28T09:00:00Z' }]) }));
+  store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', run: runWith([{ attempt: 1, host: 'h', bg: true, wt: 'kb-7-1', started_at: '2026-08-28T09:00:00Z' }]) }));
 
   const cfg = { ...DEFAULT_BOARD, repo: gh.nameWithOwner, profiles: PROFILES };
   const ctx = { root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner }, board: 'default', host: 'h', json: false, caps: {}, _cache: {}, requireBoard() { return this; } };
   const restore = gh.install();
+  const restoreStore = store.install(ctx);
   const saved = { ...process.env };
   for (const k of KB_ENV_VARS) delete process.env[k];
   delete process.env.CLAUDE_PROJECT_DIR; // an ambient one would name a real checkout, not this fixture's tmpdir
@@ -153,11 +155,11 @@ function leakHarness({ cwd = 'root', task = '7', attempt = '1', profile = 'claud
   process.stdout.write = (s) => { out.push(String(s)); return true; };
   return {
     gh, ctx, root, boardRoot: dir, err: () => err.join(''), out: () => out.join(''),
-    writes: () => gh.requests.filter((c) => ['POST', 'PATCH', 'DELETE'].includes(c.method)).length,
-    attempt: async (n, k) => (await loadRun(ctx, n)).run.attempts.find((a) => a.attempt === k),
+    writes: () => store.writes().length,
+    attempt: async (n, k) => store.runOf(n).attempts.find((a) => a.attempt === k),
     cleanup: () => {
       process.stderr.write = write.err; process.stdout.write = write.out;
-      restore();
+      restoreStore(); restore();
       for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
       Object.assign(process.env, saved);
       fs.rmSync(dir, { recursive: true, force: true });
@@ -332,16 +334,18 @@ test('subagentStopHook: a leaked environment records nothing (not this session\'
 // back to it, `ended` is never recorded and a root that ever spawns a subagent is never nudged again.
 test('subagentStopHook: fired from the child agent worktree resolves the root via CLAUDE_PROJECT_DIR', async () => {
   const gh = new FakeGh();
+  const store = new FakeStore();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-child-'));
   const root = path.join(dir, '.claude', 'worktrees', 'kb-9-1');
   const child = path.join(dir, '.claude', 'worktrees', 'agent-aff2ce');
   fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
   fs.mkdirSync(child, { recursive: true });
-  gh.addIssue(kbIssue({ number: 9, status: 'running', agent: 'claude', run: runWith([{ attempt: 1, host: 'h', bg: true, wt: 'kb-9-1', started_at: '2026-08-28T23:00:00Z' }]) }));
+  store.addIssue(kbIssue({ number: 9, status: 'running', agent: 'claude', run: runWith([{ attempt: 1, host: 'h', bg: true, wt: 'kb-9-1', started_at: '2026-08-28T23:00:00Z' }]) }));
   const cfg = { ...DEFAULT_BOARD, repo: gh.nameWithOwner, profiles: PROFILES };
   const rootCtx = { root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner }, board: 'default', host: 'h', json: false, caps: {}, _cache: {}, requireBoard() { return this; } };
   const childCtx = { ...rootCtx, root: child };
   const restore = gh.install();
+  const restoreStore = store.install(rootCtx);
   const saved = { ...process.env };
   for (const k of KB_ENV_VARS) delete process.env[k]; // a claude --bg root has none of these either
   process.env.CLAUDE_PROJECT_DIR = root; // what the child's SubagentStop carries, per the spike
@@ -364,7 +368,7 @@ test('subagentStopHook: fired from the child agent worktree resolves the root vi
     assert.equal(JSON.parse(out.join('')).decision, 'block', 'the child\'s SubagentStop reached the root\'s own bookkeeping');
   } finally {
     process.stderr.write = write;
-    restore();
+    restoreStore(); restore();
     for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
     Object.assign(process.env, saved);
     fs.rmSync(dir, { recursive: true, force: true });
@@ -381,16 +385,18 @@ test('subagentStopHook: fired from the child agent worktree resolves the root vi
 // nowhere) instead of the root's — the original #163 edge this env-first order exists to close (#187).
 test('subagentStopHook: a child checkout with inherited KB_* and no board.json still resolves via the env, no leak line', async () => {
   const gh = new FakeGh();
+  const store = new FakeStore();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-child-env-'));
   const root = path.join(dir, '.claude', 'worktrees', 'kb-9-1');
   const child = path.join(dir, '.claude', 'worktrees', 'agent-aff2ce'); // no .kanban/ here at all
   fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
   fs.mkdirSync(child, { recursive: true });
-  gh.addIssue(kbIssue({ number: 9, status: 'running', agent: 'claude', run: runWith([{ attempt: 1, host: 'h', bg: true, wt: 'kb-9-1', started_at: '2026-08-28T23:00:00Z' }]) }));
+  store.addIssue(kbIssue({ number: 9, status: 'running', agent: 'claude', run: runWith([{ attempt: 1, host: 'h', bg: true, wt: 'kb-9-1', started_at: '2026-08-28T23:00:00Z' }]) }));
   const cfg = { ...DEFAULT_BOARD, repo: gh.nameWithOwner, profiles: PROFILES };
   const rootCtx = { root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner }, board: 'default', host: 'h', json: false, caps: {}, _cache: {}, requireBoard() { return this; } };
   const childCtx = { ...rootCtx, root: child };
   const restore = gh.install();
+  const restoreStore = store.install(rootCtx);
   const saved = { ...process.env };
   // the root's KB_* env, inherited into the child's process as-is — the ordinary case, unlike the
   // scrubbed-env test above
@@ -414,7 +420,7 @@ test('subagentStopHook: a child checkout with inherited KB_* and no board.json s
     assert.equal(fs.existsSync(path.join(child, '.kanban')), false, 'and nothing was ever recorded into the child checkout');
   } finally {
     process.stderr.write = write;
-    restore();
+    restoreStore(); restore();
     for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
     Object.assign(process.env, saved);
     fs.rmSync(dir, { recursive: true, force: true });

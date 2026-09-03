@@ -15,7 +15,8 @@ import {
 } from '../src/mcp.js';
 import { main } from '../src/cli.js';
 import { DEFAULT_BOARD } from '../src/board.js';
-import { FakeGh, kbIssue, runWith } from './fake-gh.js';
+import { FakeGh } from './fake-gh.js';
+import { FakeStore, kbIssue, runWith } from './fake-store.js';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-mcp-'));
@@ -24,15 +25,17 @@ const byName = (n) => TOOLS.find((t) => t.name === n);
 /** A board with one running task, and a ctx pointing at it. */
 function harness({ issues = [kbIssue({ number: 7, status: 'running', agent: 'claude', run: runWith([{ attempt: 1, started_at: '2026-08-26T01:00:00Z', lock_sha: 'a'.repeat(40) }]) })] } = {}) {
   const gh = new FakeGh();
+  const store = new FakeStore();
   const root = scratch();
-  for (const i of issues) gh.addIssue(i);
+  for (const i of issues) store.addIssue(i);
   const cfg = { ...DEFAULT_BOARD, repo: gh.nameWithOwner };
   const ctx = {
     root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
     board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
   };
   const restore = gh.install();
-  return { gh, ctx, root, cleanup: () => { restore(); fs.rmSync(root, { recursive: true, force: true }); } };
+  const restoreStore = store.install(ctx);
+  return { gh, store, ctx, root, cleanup: () => { restoreStore(); restore(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 
 /** Call a tool the way a client would, and hand back the parsed structuredContent. */
@@ -196,7 +199,8 @@ test('a handshake and a tools/list over one chunk of stdin answer in order, and 
 
   assert.deepEqual(frames.map((f) => f.id), [1, 2], 'the notification is not answered');
   assert.equal(frames[1].result.tools.length, TOOLS.length);
-  assert.equal(h.gh.requests.length, 0, 'the handshake must not touch GitHub');
+  assert.deepEqual(h.store.calls, [], 'the handshake must not touch the board');
+  assert.deepEqual(h.gh.requests, [], 'nor the forge');
 });
 
 test('a half-line is held until its newline arrives; junk gets a parse error and the stream survives', async (t) => {
@@ -238,9 +242,9 @@ test('kanban_complete closes the attempt, exactly as the CLI verb does', async (
   const r = payload(await call(h.ctx, 'kanban_complete', { summary: 'wired the MCP server', metadata: { changed_files: ['src/mcp.js'] }, no_pr: 'no PR needed for this test' }, { KB_TASK: '7', KB_ATTEMPT: '1' }));
 
   assert.deepEqual({ number: r.number, attempt: r.attempt, status: r.status }, { number: 7, attempt: 1, status: 'done' });
-  assert.equal(h.gh.statusOf(7), 'done');
-  assert.equal(h.gh.runOf(7).attempts[0].outcome, 'completed');
-  const result = h.gh.issues.get(7).comments.find((c) => c.body.startsWith('<!-- kb-result -->'));
+  assert.equal(h.store.statusOf(7), 'done');
+  assert.equal(h.store.runOf(7).attempts[0].outcome, 'completed');
+  const result = h.store.issues.get(7).comments.find((c) => c.body.startsWith('<!-- kb-result -->'));
   assert.match(result.body, /wired the MCP server/);
   assert.match(result.body, /src\/mcp\.js/);
 });
@@ -252,11 +256,11 @@ test('a verb that refuses comes back as content the model can read, not a protoc
   const r = await call(h.ctx, 'kanban_block', { task: 7, reason: 'need the API token' , kind: 'needs_input' });
   assert.equal(payload(r).status, 'blocked');
 
-  const quiet = h.gh.requests.length;
+  const quiet = h.store.calls.length;
   const missing = await call(h.ctx, 'kanban_complete', { task: 7 });
   assert.equal(missing.isError, true);
   assert.match(missing.content[0].text, /"summary" is required/);
-  assert.equal(h.gh.requests.length, quiet, 'a bad call is refused before it reaches GitHub at all');
+  assert.equal(h.store.calls.length, quiet, 'a bad call is refused before it reaches the board at all');
 
   const nowhere = await call(h.ctx, 'kanban_show', {});
   assert.equal(nowhere.isError, true);
@@ -274,19 +278,19 @@ test('kanban_create, kanban_link and kanban_unblock drive the board the way the 
   const made = payload(await call(h.ctx, 'kanban_create', { title: 'ship it', body: 'the spec', blocked_by: [3], paths: ['src/mcp.js'], priority: 2 }));
   assert.equal(made.status, 'todo', 'an open blocker means todo');
   assert.deepEqual(made.blocked_by, [3]);
-  assert.equal(h.gh.statusOf(made.number), 'todo');
-  assert.match(h.gh.issues.get(made.number).body, /"paths":\["src\/mcp\.js"\]/);
-  assert.match(h.gh.issues.get(made.number).body, /"priority":2/);
+  assert.equal(h.store.statusOf(made.number), 'todo');
+  assert.match(h.store.issues.get(made.number).body, /"paths":\["src\/mcp\.js"\]/);
+  assert.match(h.store.issues.get(made.number).body, /"priority":2/);
 
   const alone = payload(await call(h.ctx, 'kanban_create', { title: 'no blockers' }));
   assert.equal(alone.status, 'ready');
 
   assert.equal(payload(await call(h.ctx, 'kanban_link', { parent: 3, child: alone.number })).status, 'todo');
-  assert.equal(h.gh.issues.get(alone.number).blockedBy.length, 1);
+  assert.equal(h.store.issues.get(alone.number).blockedBy.length, 1);
 
   await call(h.ctx, 'kanban_block', { task: alone.number, reason: 'waiting', kind: 'needs_input' });
   assert.equal(payload(await call(h.ctx, 'kanban_unblock', { task: alone.number })).status, 'todo');
-  assert.ok(!h.gh.labelsOf(alone.number).includes('kb:needs-human'), 'unblock clears needs-human');
+  assert.ok(!h.store.labelsOf(alone.number).includes('kb:needs-human'), 'unblock clears needs-human');
 });
 
 test('kanban_comment adds a comment and answers with its url', async (t) => {
@@ -297,7 +301,7 @@ test('kanban_comment adds a comment and answers with its url', async (t) => {
 
   assert.equal(r.number, 7);
   assert.match(r.url, /issuecomment-/);
-  assert.ok(h.gh.issues.get(7).comments.some((c) => c.body === 'halfway through'));
+  assert.ok(h.store.issues.get(7).comments.some((c) => c.body === 'halfway through'));
 });
 
 test('a call clears the per-command cache, so a long-lived server never answers from a stale read', async (t) => {
@@ -305,7 +309,7 @@ test('a call clears the per-command cache, so a long-lived server never answers 
   t.after(h.cleanup);
 
   await call(h.ctx, 'kanban_show', { task: 7 });
-  h.gh.addComment(7, 'someone commented while the server was up');
+  h.store.addComment(7, 'someone commented while the server was up');
   const seen = payload(await call(h.ctx, 'kanban_comment', { task: 7, text: 'x' }));
 
   assert.ok(seen.url);
