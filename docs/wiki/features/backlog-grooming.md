@@ -11,9 +11,9 @@ covers:
   - path: src/cli.js
     sha: 9d7fc11ad734643205e89668a176d4f29115805f
   - path: src/lifecycle.js
-    sha: 375fbf9240dd19c4ea89c63465546cf71182deac
-  - path: src/tasks.js
-    sha: 95ce07de549ce2c22222d43f36967006cdd372f8
+    sha: c3c49b90e80c7e68d44b4f8f999debcfa484de80
+  - path: src/store/github.js
+    sha: e2708642df0ef4599f450e643b9b67eeeb0b2ad5
   - path: src/doctor.js
     sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
   - path: skills/kanban/SKILL.md
@@ -22,7 +22,7 @@ covers:
     sha: 4fc2dc2db984033fe8801e8d28b50e8e68fefddc
   - path: skills/kanban/references/protocol.md
     sha: f17d592ac42cb294d688bf3b00470d02dccac121
-generated_at_commit: 2a3a7e3
+generated_at_commit: 237bb61
 last_refreshed: 2026-09-02
 related: [features/planning-commands, features/operator-seat, features/path-overlap-guard, features/tracks]
 ---
@@ -88,9 +88,9 @@ These are the ones a later change is most likely to break:
   merge-conflict risk and nothing more.
 - **Unknown ≠ empty.** An empty `blockedBy` on a card nobody looked up is not "no blockers"; reporting it
   as such would be the silent wrong answer the values forbid. `fetchBoard(ctx, { blockers: 'all' })`
-  (`src/tasks.js:140-144`) REST-fills every open card on a repo without the GraphQL `Issue.blockedBy` field,
+  (`src/store/github.js`) REST-fills every open card on a repo without the GraphQL `Issue.blockedBy` field,
   and the fill's provenance travels with the board and is read back through `blockersOf` / `blockersKnown`
-  (`src/tasks.js:91-100`). `unknown_blockers` is what a card outside the fill's scope gets. The same gate
+  (`src/store/github.js`). `unknown_blockers` is what a card outside the fill's scope gets. The same gate
   gets the ` ⇡ unblocked` nudge in `hkb list` right (`src/cli.js:359`): the marker is computed in memory
   from the same rule, and suppressed entirely when blockers were never filled.
 
@@ -131,7 +131,7 @@ is what makes the promotion theirs rather than the agent's.
 `hkb edit <n>... [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]`
 (`src/cli.js`, `case 'edit'`) sets exactly the kb keys a flag names, spreading
 them over the task's existing `kb` object and leaving every other key as read,
-then writes the block back with `updateBody` (`src/tasks.js:330`) — the same
+then writes the block back with `updateBody` (`src/store/github.js`) — the same
 PATCH-the-body-block path `/kanban:specify` uses by hand. It takes multiple
 task numbers, like `promote`/`archive`, because `priority_inversion`'s
 suggestion can name more than one blocker at once

@@ -11,12 +11,12 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/dispatch.js
-    sha: 26a3197921f09d3ef2f4a21f1858c1cc6b5e7fd6
+    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/cli.js
     sha: 9d7fc11ad734643205e89668a176d4f29115805f
-generated_at_commit: 2a3a7e3
+generated_at_commit: 237bb61
 last_refreshed: 2026-09-02
 related: [decisions/adr-004-roles-and-adoption, decisions/adr-006-local-store, architecture/overview, features/up-and-down, features/tracks]
 ---

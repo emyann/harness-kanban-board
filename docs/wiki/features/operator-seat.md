@@ -17,7 +17,7 @@ covers:
   - path: src/cli.js
     sha: 9d7fc11ad734643205e89668a176d4f29115805f
   - path: src/lifecycle.js
-    sha: 375fbf9240dd19c4ea89c63465546cf71182deac
+    sha: c3c49b90e80c7e68d44b4f8f999debcfa484de80
   - path: src/init.js
     sha: c905bab09d496c7b7fe2aaa0c92d2109fdd30432
   - path: src/stats.js
@@ -26,7 +26,7 @@ covers:
     sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
   - path: src/up.js
     sha: 015e0ff4ffa48e110400065f3d496db7ebd4b730
-generated_at_commit: 2a3a7e3
+generated_at_commit: 237bb61
 last_refreshed: 2026-09-02
 related: [features/planning-commands, decisions/adr-004-roles-and-adoption, features/up-and-down, features/review-loop, concepts/roles-and-seats]
 ---

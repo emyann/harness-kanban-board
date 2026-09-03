@@ -1,11 +1,11 @@
 // Worker-facing verbs: heartbeat, complete, block, unblock, request-review, request-changes.
 // Every verb closes the open attempt in the run comment and releases the lock ref.
 import fs from 'node:fs';
-import { GhError, isOffline, graphql, rest } from './gh.js';
-import { outboxFile, api } from './board.js';
+import { GhError, isOffline, finishPr, prNodeId, prChecksState, mergePullRequest } from './forge.js';
+import { outboxFile } from './board.js';
 import {
   getTask, assertOnBoard, loadRun, saveRun, setStatus, addLabels, removeLabel, addComment, closeIssue, reopenIssue,
-  fetchBoard, createIssue, ensureLabels, issueDatabaseId, addBlockedBy, removeBlockedBy, prChecksState, mergePullRequest,
+  fetchBoard, createIssue, ensureLabels, issueDatabaseId, addBlockedBy, removeBlockedBy,
 } from './tasks.js';
 import { release, lockExists, lockSha, localBeatSha, casHeartbeat, resyncBeatChain, dropBeatChain, remoteName } from './lock.js';
 import { sessionForAttempt } from './hook.js';
@@ -200,66 +200,8 @@ export function prReadyDecision(prs) {
   return { pr, markReady: true, reason: `PR #${pr.number} is a draft and cannot merge` };
 }
 
-/** The PR's node id: from the board read when the GraphQL field is there, else one REST lookup. */
-async function prNodeId(ctx, pr) {
-  if (pr.nodeId) return pr.nodeId;
-  const p = await rest('GET', api(ctx, `/pulls/${pr.number}`));
-  return p?.node_id || null;
-}
-
-/** True when the profile name is also a GitHub user login — profiles like `claude` are not. */
-async function isGithubUser(ctx, login) {
-  try {
-    const u = await rest('GET', `users/${encodeURIComponent(login)}`);
-    return u?.type === 'User';
-  } catch (e) {
-    if (e instanceof GhError && e.kind === 'notfound') return false;
-    throw e;
-  }
-}
-
-/**
- * Leave the PR mergeable: take it out of draft, and (request-review) put the reviewer on it.
- * Never throws — the attempt is already closed by the time this runs, so trouble here is
- * reported on the result object and on stderr, not raised.
- */
-/**
- * @param {any} ctx
- * @param {any} decision
- * @param {{reviewer?: string}} [opts]
- */
-async function finishPr(ctx, decision, { reviewer } = {}) {
-  const pr = decision.pr;
-  const out = { pr: pr?.number ?? null, pr_head: pr?.headRefName ?? null, pr_ready: pr ? !pr.isDraft : null };
-  if (!pr) return out;
-  if (decision.markReady) {
-    try {
-      const id = await prNodeId(ctx, pr);
-      if (!id) throw new Error('could not resolve its node id');
-      await graphql('mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { number isDraft } } }', { id });
-      pr.isDraft = false;
-      out.pr_ready = true;
-    } catch (e) {
-      out.pr_ready = false;
-      out.pr_error = `PR #${pr.number} is still a draft: ${e.message}. Run \`gh pr ready ${pr.number}\` before merging.`;
-      process.stderr.write(`hkb: ${out.pr_error}\n`);
-    }
-  }
-  if (reviewer) {
-    try {
-      if (await isGithubUser(ctx, reviewer)) {
-        await rest('POST', api(ctx, `/pulls/${pr.number}/requested_reviewers`), { body: { reviewers: [String(reviewer)] } });
-        out.reviewer_requested = String(reviewer);
-      } else {
-        out.reviewer_note = `"${reviewer}" is not a GitHub user — no reviewer requested on PR #${pr.number}`;
-      }
-    } catch (e) {
-      out.reviewer_note = `could not request ${reviewer} on PR #${pr.number}: ${e.message}`;
-      process.stderr.write(`hkb: ${out.reviewer_note}\n`);
-    }
-  }
-  return out;
-}
+// `prNodeId`, `isGithubUser` and `finishPr` moved to `src/forge.js` with the rest of the
+// pull-request half; they are imported at the top of this file and called exactly as before.
 
 /** `pr` / `pr_head` for the attempt row, so the run record says which PR the attempt produced. */
 export const prAttemptFields = (decision) => (decision.pr ? { pr: decision.pr.number, pr_head: decision.pr.headRefName || null } : {});

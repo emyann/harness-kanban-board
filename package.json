@@ -20,7 +20,7 @@
   ],
   "scripts": {
     "test": "node --test",
-    "lint": "for f in bin/hkb.js src/*.js scripts/*.mjs; do node --check \"$f\" || exit 1; done && npm run typecheck",
+    "lint": "for f in bin/hkb.js src/*.js src/*/*.js scripts/*.mjs; do node --check \"$f\" || exit 1; done && npm run typecheck",
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke-pack.mjs"
   },

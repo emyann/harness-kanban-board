@@ -772,6 +772,22 @@ export function mainWorktree(root) {
 }
 
 /**
+ * Where the board itself lives — the one directory every store driver agrees on.
+ *
+ * The `kb-board` branch and the `.git/hkb/index.db` index are per *repository*, not per worktree:
+ * a worker beating from `.claude/worktrees/kb-99-1` and the loop ticking in the main checkout must
+ * open the same store or they are two boards that happen to share a name. So this is the common
+ * git directory's parent — `mainWorktree` — and never `git rev-parse --show-toplevel`, which in a
+ * linked worktree answers with the throwaway directory (docs/local-first.md §6.2).
+ *
+ * The GitHub store ignores it: its board is the repo on GitHub, and `ctx.root` still names the
+ * checkout a heartbeat pushes from. The local tiers (A4, A5) key everything off it.
+ */
+export function storeRoot(ctx) {
+  return mainWorktree(typeof ctx === 'string' ? ctx : ctx?.root || process.cwd());
+}
+
+/**
  * Put a checkout on the user-level list, once. Idempotent by resolved path plus board slug, so
  * registering `/home/you/code/web` when `~/code/web` is already listed changes nothing, and a
  * worker's worktree registers its main checkout instead of itself.

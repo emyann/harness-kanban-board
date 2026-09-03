@@ -11,21 +11,21 @@ covers:
   - path: src/track.js
     sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
   - path: src/dispatch.js
-    sha: 26a3197921f09d3ef2f4a21f1858c1cc6b5e7fd6
+    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
   - path: src/init.js
     sha: c905bab09d496c7b7fe2aaa0c92d2109fdd30432
   - path: src/board.js
-    sha: 42bd1bb173651d9109208a702564cfc3e5e51410
+    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
   - path: src/gc.js
     sha: 5c9f92377d47e7bca75c32fc675dfa50e617e7a5
-  - path: src/tasks.js
-    sha: 95ce07de549ce2c22222d43f36967006cdd372f8
+  - path: src/store/github.js
+    sha: e2708642df0ef4599f450e643b9b67eeeb0b2ad5
+  - path: src/forge.js
+    sha: 20dd384386ca63bc98d103b2e7728f29a95bc87c
   - path: src/doctor.js
     sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
-  - path: src/lock.js
-    sha: 22fb690e6b201b74b4201bd67ad8ad950bdaeb2d
 related: [architecture/overview, features/harness-profiles, features/review-loop, concepts/worker-identity, decisions/adr-004-roles-and-adoption]
-generated_at_commit: 2a3a7e3
+generated_at_commit: 237bb61
 last_refreshed: 2026-09-02
 ---
 
@@ -210,7 +210,7 @@ sailed through, both children with blockers were lost.
 
 The fix replaces the chain with a hub. **A track claims its own integration
 branch, `kb/track-<root>` (`trackBranchName`, `src/model.js`), the moment it
-is claimed** — `ensureTrackBranch` (`src/lock.js`) creates it from the default
+is claimed** — `ensureTrackBranch` (`src/store/github.js`) creates it from the default
 branch, at the same claim sha the lock ref itself uses, and the dispatcher
 records it on the attempt row as `track_branch` (`src/dispatch.js`, the track
 claim) *before* anything is spawned. That is the whole reliability argument:
@@ -240,7 +240,7 @@ still what `taskBranchRe` matches — only what it is cut *from* moved.
 Every node's PR still targets that branch, not the default one, so
 `closedByPullRequestsReferences` still never links it — this is exactly the
 rung that **requires #234**: the head-branch fallback (`taskBranchRe`/
-`openPrsByHead`/`branchFallbackPrs`, `src/tasks.js`) matches a PR by its
+`openPrsByHead`/`branchFallbackPrs`, `src/forge.js`) matches a PR by its
 **head** (`kb/<n>`) whatever its `base` is, so `hkb finish` still finds the
 node's PR through the fallback with a track-branch base exactly as it did with
 a sibling's. `hkb finish` still refuses to land a card in *done* with no PR
@@ -333,7 +333,7 @@ class of bug `checkOrphanedPrs` already covers for an unreferenced PR.
   that beat unless the node itself does, since `ScheduleWakeup` is not on the orchestrator's
   allow-list and it cannot wake itself to heartbeat. The per-node brief tells every subagent to run
   `hkb heartbeat <root>` (not its own number) every ~10 minutes for exactly this reason
-  (`casHeartbeat`, `src/lock.js`). The beat defends only against `stale_after`: the tick checks the root's
+  (`casHeartbeat`, `src/store/github.js`). The beat defends only against `stale_after`: the tick checks the root's
   `max_runtime` first (`src/dispatch.js`, default 3600 s) and times the root out regardless of beats, so a
   track root also needs `kb.max_runtime` larger than the whole track — heartbeat is necessary, not sufficient — but, like the verb check above, it is brief-level: a subagent
   that skips it leaves the whole track exposed to reclaim past the hour mark, uncovering every node

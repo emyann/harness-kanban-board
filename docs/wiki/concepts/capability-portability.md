@@ -9,10 +9,10 @@ covers:
   - path: src/model.js
     sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/board.js
-    sha: 42bd1bb173651d9109208a702564cfc3e5e51410
+    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
   - path: src/doctor.js
     sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
-generated_at_commit: 2a3a7e3
+generated_at_commit: 237bb61
 last_refreshed: 2026-09-02
 related: [features/harness-profiles, concepts/worker-identity]
 ---
