@@ -7,19 +7,19 @@ audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: 565b5ca72ec257acd2a350d8b465d302061199c3
+    sha: 2c842b6079cd6057056eef2a926edb85a8259d9d
   - path: src/gh.js
     sha: 8154ea477e52ed3f769238f1c1bda588fd767798
   - path: src/model.js
-    sha: 35b0e9901257c7236ab59b93850b56cd711f8a4e
+    sha: 9eceb576d8a0d25f07f89fc26aae3635d072bbc0
   - path: src/store/index.js
-    sha: bf81d3c348f76a5146931ab57d1af34be05aef18
+    sha: 38e2b0bd8634a9dacd68f419dfa25b3d7127894b
   - path: src/forge.js
     sha: 0e424d2844bee9b0fdd2f809f7e9ae4314d69e74
   - path: src/lifecycle.js
     sha: af197411d2798847fdc6707c39ae3b60989dc9ed
   - path: src/dispatch.js
-    sha: 492b6362444d3589e4fc0989cf89cd58aad93ccb
+    sha: 3ef9a36eb027a8e916e18713f1614600857ead52
   - path: src/context.js
     sha: be28b4843c2a09afc0c835c4fe195706af86bb15
   - path: src/hook.js
@@ -27,10 +27,10 @@ covers:
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/board.js
-    sha: 53192b4670920a4ead1181c925075285dc8ee105
+    sha: 64b0e3dc2c9f0290d8b33e4ba30223363abc58bf
   - path: src/doctor.js
-    sha: ea334d91ff5b9b4411cfd213ac8fcf696fcb963d
-generated_at_commit: e16f166
+    sha: 98a643807b3c0024e8a71313662af7b2f77578ca
+generated_at_commit: 8aaffbf
 last_refreshed: 2026-09-03
 related: [concepts/store, concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
@@ -62,6 +62,17 @@ made that a deletion rather than a rewrite — no verb branches on the store, so
 removed with no caller changed (*architecture/store-seam*). What remains of it
 is `src/bridge/github-issues.js`, read-only, reachable only from
 `hkb init --import`.
+
+**A repository that has not crossed over says so.** Two refusals, because there
+are two ways to still be on the old store. A `.kanban/board.json` that names
+`"store": "github"` is told by `storeKind` (`src/store/index.js`) that the store
+is gone and how to migrate; a board.json with no `store` key resolves to *local*
+and then finds no `kb-board` branch, which the store's own read path answers
+with `noBoardHere` (`src/model.js`) — one sentence naming `hkb init`,
+`hkb init --import` and the fetch. Reads refuse as loudly as writes here on
+purpose: while `listTasks` answered `[]` for a board that was never created,
+`hkb list` printed "(no tasks)" and exited 0 and the dispatcher ticked over
+nothing indefinitely. An empty board and a missing one are different facts.
 
 ## The one atomic primitive
 

@@ -7,28 +7,28 @@ audience: [dev]
 read_when: "writing a verb that reads or writes board state, adding a store driver, or working out where a card's pull request comes from"
 covers:
   - path: src/store/index.js
-    sha: bf81d3c348f76a5146931ab57d1af34be05aef18
+    sha: 38e2b0bd8634a9dacd68f419dfa25b3d7127894b
   - path: src/forge.js
     sha: 0e424d2844bee9b0fdd2f809f7e9ae4314d69e74
   - path: src/bridge/github-issues.js
     sha: 55b3b9a708e5d00bdc2cd02a221c0867b10aaea3
   - path: src/board.js
-    sha: 53192b4670920a4ead1181c925075285dc8ee105
+    sha: 64b0e3dc2c9f0290d8b33e4ba30223363abc58bf
   - path: src/store/git.js
-    sha: ffcc9df59f85f18b58875350cffa057ef8d31681
+    sha: a42bfffbc1d7cd3197051e7593135d11ab84d48b
   - path: src/store/local.js
-    sha: 7fba92c37cf0d2fc398dc250a7737d52def0a87e
+    sha: c519ac05bf312c1ac65e1ebd95a2b1858302d163
   - path: src/cli.js
-    sha: 565b5ca72ec257acd2a350d8b465d302061199c3
+    sha: 2c842b6079cd6057056eef2a926edb85a8259d9d
   - path: src/lifecycle.js
     sha: af197411d2798847fdc6707c39ae3b60989dc9ed
   - path: src/dispatch.js
-    sha: 492b6362444d3589e4fc0989cf89cd58aad93ccb
+    sha: 3ef9a36eb027a8e916e18713f1614600857ead52
   - path: src/gc.js
-    sha: eaf0b4ec430504524772d5216a03664d1fcdd430
+    sha: cc129d307e845211036472a76ed7e0f456be1329
   - path: src/init.js
     sha: 4028fb041f86af1a44b47ad6ad864fb8ab5dbdb0
-generated_at_commit: e16f166
+generated_at_commit: 8aaffbf
 last_refreshed: 2026-09-03
 related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-and-leases, concepts/board-protocol]
 ---
@@ -52,7 +52,7 @@ seam for the same reason it existed: the *bridge* comes back through it.
 **Which driver, and where that is decided.** `storeKind(ctx)` reads `store` in
 `.kanban/board.json` and **nothing else**. `"local"` and an absent key both mean
 the local store; `"github"` is refused **by name**, with the migration
-(`hkb init --store local --import`) in the message, because a board still on
+(`hkb init --import`) in the message, because a board still on
 issues is a real thing somebody may have on disk and "silently open something
 else" is the one answer that helps nobody. Anything else is a usage error.
 

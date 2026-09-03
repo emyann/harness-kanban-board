@@ -7,23 +7,23 @@ audience: [dev]
 read_when: "touching the active_pr guard, the claim loop's worktree creation, hkb request-changes, or the worker brief"
 covers:
   - path: src/model.js
-    sha: 35b0e9901257c7236ab59b93850b56cd711f8a4e
+    sha: 9eceb576d8a0d25f07f89fc26aae3635d072bbc0
   - path: src/dispatch.js
-    sha: 492b6362444d3589e4fc0989cf89cd58aad93ccb
+    sha: 3ef9a36eb027a8e916e18713f1614600857ead52
   - path: src/board.js
-    sha: 53192b4670920a4ead1181c925075285dc8ee105
+    sha: 64b0e3dc2c9f0290d8b33e4ba30223363abc58bf
   - path: src/context.js
     sha: be28b4843c2a09afc0c835c4fe195706af86bb15
   - path: src/lifecycle.js
     sha: af197411d2798847fdc6707c39ae3b60989dc9ed
   - path: src/gc.js
-    sha: eaf0b4ec430504524772d5216a03664d1fcdd430
+    sha: cc129d307e845211036472a76ed7e0f456be1329
   - path: src/cli.js
-    sha: 565b5ca72ec257acd2a350d8b465d302061199c3
+    sha: 2c842b6079cd6057056eef2a926edb85a8259d9d
   - path: src/forge.js
     sha: 0e424d2844bee9b0fdd2f809f7e9ae4314d69e74
 related: [features/auto-merge, features/tracks, architecture/overview, architecture/dispatcher-tick]
-generated_at_commit: e16f166
+generated_at_commit: 8aaffbf
 last_refreshed: 2026-09-03
 ---
 

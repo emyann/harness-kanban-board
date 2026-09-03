@@ -7,14 +7,14 @@ audience: [dev]
 read_when: "orienting on where board state actually lives, before diving into architecture/store-seam or architecture/local-store for the mechanics"
 covers:
   - path: src/store/index.js
-    sha: bf81d3c348f76a5146931ab57d1af34be05aef18
+    sha: 38e2b0bd8634a9dacd68f419dfa25b3d7127894b
   - path: src/store/local.js
-    sha: 7fba92c37cf0d2fc398dc250a7737d52def0a87e
+    sha: c519ac05bf312c1ac65e1ebd95a2b1858302d163
   - path: src/store/git.js
-    sha: ffcc9df59f85f18b58875350cffa057ef8d31681
+    sha: a42bfffbc1d7cd3197051e7593135d11ab84d48b
   - path: src/store/sqlite.js
     sha: ad2e80d73391c5e7c0602c1786ca645604616887
-generated_at_commit: e16f166
+generated_at_commit: 8aaffbf
 last_refreshed: 2026-09-03
 related: [architecture/store-seam, architecture/local-store, architecture/kb-board-branch, architecture/overview, decisions/adr-006-local-store]
 ---
@@ -33,9 +33,18 @@ There is one store, and it is local: the `kb-board` branch and the index beside
 it. `storeKind` (`src/store/index.js`) still *reads* `store` in
 `.kanban/board.json`, but only to answer `local` for `"local"` and for the key
 being absent, and to refuse `"github"` by name with the migration
-(`hkb init --store local --import`) rather than half-opening something that is
-no longer there. A board still on GitHub Issues is a real thing somebody may
-have on disk; telling them so is the whole reason the key is read at all.
+(`hkb init --import`) rather than half-opening something that is no longer
+there. A board still on GitHub Issues is a real thing somebody may have on
+disk; telling them so is the whole reason the key is read at all.
+
+The key being *absent* is the harder half, and the driver answers it rather
+than `storeKind`: an unmigrated board.json has no `store` key, so it resolves
+to *local* and then finds no `kb-board` branch. The read path refuses there
+too — `listTasks` and `getTask` (`src/store/git.js`) throw `noBoardHere`
+(`src/model.js`), naming `hkb init`, `hkb init --import` and the fetch, because
+the three ways to be boardless have three different fixes. Reads used to
+answer `[]`, which made a board that was never created indistinguishable from
+an empty one to `hkb list` and to the dispatcher.
 
 The interface survived the driver it was extracted from, which is the point of
 having had one: `src/store/github.js` was deleted rather than rewritten, and no

@@ -7,20 +7,20 @@ audience: [dev]
 read_when: "adding a groom finding or action, changing the frozen groom --json shape, touching how blockers are filled, or wondering why hkb groom never promotes anything"
 covers:
   - path: src/model.js
-    sha: 35b0e9901257c7236ab59b93850b56cd711f8a4e
+    sha: 9eceb576d8a0d25f07f89fc26aae3635d072bbc0
   - path: src/cli.js
-    sha: 565b5ca72ec257acd2a350d8b465d302061199c3
+    sha: 2c842b6079cd6057056eef2a926edb85a8259d9d
   - path: src/lifecycle.js
     sha: af197411d2798847fdc6707c39ae3b60989dc9ed
   - path: src/doctor.js
-    sha: ea334d91ff5b9b4411cfd213ac8fcf696fcb963d
+    sha: 98a643807b3c0024e8a71313662af7b2f77578ca
   - path: skills/kanban/SKILL.md
-    sha: 50ba68f5c856d5e3aa63ed8b748d6994b2a223be
+    sha: 19903b2bb06dee7ff7a606ff6878d77fe685c566
   - path: commands/groom.md
     sha: 4fc2dc2db984033fe8801e8d28b50e8e68fefddc
   - path: skills/kanban/references/protocol.md
-    sha: 25bf4b80214708f13084989d62ab229ed30ba9e4
-generated_at_commit: e16f166
+    sha: 39ab6883a3e7d36b655feb0d79c0fea78a29ecfd
+generated_at_commit: 8aaffbf
 last_refreshed: 2026-09-03
 related: [features/planning-commands, features/operator-seat, features/path-overlap-guard, features/tracks]
 ---
@@ -115,22 +115,31 @@ token argument for the shape is `bodyText`, which is attached only to cards that
 then stops. Nothing is applied until a human says yes per row. What the approved batch may execute is
 deliberately short — `hkb comment`, `hkb create --triage --blocked-by`, `hkb link`, and one
 `hkb promote --triage-only` of cards that are already in triage, which skips and reports (rather than
-writes) a card that has moved on before the flag was applied. `hkb edit` now exists (below) but the
-procedure does not yet route `specify`-flagged findings through it — a body/`kb` rewrite still goes
-through the `/kanban:specify` PATCH recipe. Archive, supersede and close-as-duplicate stay **handed back
+writes) a card that has moved on before the flag was applied. `hkb edit` now covers the whole of a
+`specify`-flagged rewrite — `--body-file` for the prose as well as the kb flags — though the groom
+procedure still hands those rows to `/kanban:specify` rather than executing them itself.
+Archive, supersede and close-as-duplicate stay **handed back
 as pre-staged commands** rather than run, because the verbs that would make them safe do not exist yet
 (see the gaps below).
 
 This is also the one sanctioned exception to the operator's "never promote" rule: the human's per-row yes
 is what makes the promotion theirs rather than the agent's.
 
-## `hkb edit` — the write half of the kb block
+## `hkb edit` — the write half of a card
 
-`hkb edit <n>... [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]`
+`hkb edit <n>... [--body-file p|--body ".."] [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]`
 (`src/cli.js`, `case 'edit'`) sets exactly the kb keys a flag names, spreading
 them over the task's existing `kb` object and leaving every other key as read,
-then writes the block back with `setKb` (the `Store` interface) — the same
-PATCH-the-body-block path `/kanban:specify` uses by hand. It takes multiple
+then writes the block back with `setKb` (the `Store` interface).
+
+`--body-file`/`--body` is the other half, and it arrived with #304 for a
+reason: `/kanban:specify` and `/kanban:decompose` used to rewrite a card's prose
+with `gh api repos/{o}/{r}/issues/<n> -X PATCH -F body=@…`, which was right
+while the board *was* GitHub Issues and edits the wrong object entirely now
+that the board is a branch. It goes through `updateBody`, which keeps the
+machine block whatever the driver keeps it in, so a body written by hand cannot
+lose the card's `kb` fields. It writes one card — naming several numbers with a
+body is refused rather than broadcast. It takes multiple
 task numbers, like `promote`/`archive`, because `priority_inversion`'s
 suggestion can name more than one blocker at once
 (`src/model.js:901`). `test/cli.test.js` pins it two ways: one test asserts a

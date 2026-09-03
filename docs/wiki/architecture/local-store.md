@@ -7,20 +7,20 @@ audience: [dev]
 read_when: "adding a store verb, debugging an index that disagrees with the branch, wondering why a verb is refused on this host, or working on hkb sync / init --import"
 covers:
   - path: src/store/local.js
-    sha: 7fba92c37cf0d2fc398dc250a7737d52def0a87e
+    sha: c519ac05bf312c1ac65e1ebd95a2b1858302d163
   - path: src/store/index.js
-    sha: bf81d3c348f76a5146931ab57d1af34be05aef18
+    sha: 38e2b0bd8634a9dacd68f419dfa25b3d7127894b
   - path: src/store/sqlite.js
     sha: ad2e80d73391c5e7c0602c1786ca645604616887
   - path: src/init.js
     sha: 4028fb041f86af1a44b47ad6ad864fb8ab5dbdb0
   - path: src/doctor.js
-    sha: ea334d91ff5b9b4411cfd213ac8fcf696fcb963d
+    sha: 98a643807b3c0024e8a71313662af7b2f77578ca
   - path: src/gc.js
-    sha: eaf0b4ec430504524772d5216a03664d1fcdd430
+    sha: cc129d307e845211036472a76ed7e0f456be1329
   - path: src/cli.js
-    sha: 565b5ca72ec257acd2a350d8b465d302061199c3
-generated_at_commit: e16f166
+    sha: 2c842b6079cd6057056eef2a926edb85a8259d9d
+generated_at_commit: 8aaffbf
 last_refreshed: 2026-09-03
 related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
@@ -42,14 +42,18 @@ runs end to end on a local board, and `hkb init` makes one by default again
 **What is still not true.** Pull requests are not board state and never will be
 (`src/forge.js`, §6.4), so a local card carries `prs: []` and every check that
 reads one — the `active_pr` guard, the agent-worktree sweep, `hkb merge` — has
-nothing to read on a local board. The GitHub driver is still here and is still
-what this repository's own board runs on; retiring it is track C.
+nothing to read on a local board. The GitHub driver is gone (ADR-006); what a
+card's pull request is now comes from the head-branch join in `src/forge.js`.
 
 ## Which store a board is on
 
 `storeKind(ctx)` (`src/store/index.js`) is the **only** place that decides, and
 it asks exactly one question: `store` in `.kanban/board.json` — `"local"` or
-`"github"`, absent means `github`, anything else is exit 2.
+absent both mean the local store, `"github"` is refused by name with
+`hkb init --import` in the message, anything else is exit 2. A board.json with
+no key that turns out to have no `kb-board` branch either is the unmigrated
+case, and the driver's own read path says so (`noBoardHere`, `src/model.js`;
+see *concepts/store*).
 
 There *was* a second question — does this repository have a `kb-board` branch,
 locally or as `<remote>/kb-board` — so that a plain `git clone` needed no
@@ -59,8 +63,9 @@ checkout on the local store while board.json still pointed every verb at GitHub;
 *architecture/store-seam* has the three destructive interactions that followed.
 A clone still needs no configuration: the key rides in the tracked board.json.
 `resolveStore` (`src/init.js`) answers for a new board — local — and an existing
-one keeps what it has; `--store github` is the escape hatch while the GitHub
-driver is still here.
+one keeps what it has; `--store github` is refused there too, by name, so a
+human who types the flag the old README taught them is told what happened to it
+rather than being handed a board hkb cannot make.
 
 `hkb init` writes the key only when it is a **decision** — the human's
 `--store`, a fresh board (the default *is* the decision), a board that already
@@ -157,7 +162,7 @@ minutes.
 
 This is a deliberate cost: the index has `tasks` and `runs` tables that no
 `Store` read currently consults. They are there for `hkb serve`'s SQL and for
-the reads that move onto the index in track C, and the reconcile in rule 1 is
+the reads that may yet move onto the index, and the reconcile in rule 1 is
 what keeps them true.
 
 ## One writer, and what a clone gets
@@ -290,7 +295,7 @@ answer is what made a repository with three hundred unlabelled issues import
 zero cards, log `0 open card(s)` and create an empty board — the flag's own
 documented behaviour, unreachable. `--import` also means the migration whatever
 `"store"` in `board.json` says: reading the pinned value first made the
-documented migration reachable only as `--store local --import`.
+documented migration reachable only by naming the store as well as the flag.
 
 `importGithubBoard()` moves a GitHub board onto the branch: every open card and
 everything closed inside the 90-day window, with the **issue number as the card

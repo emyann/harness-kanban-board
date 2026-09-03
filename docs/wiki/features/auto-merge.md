@@ -7,19 +7,19 @@ audience: [dev, ops]
 read_when: "touching dispatch.merge, the auto-merge pass in the tick, the doctor merge check, or anything about who lands an agent's PR"
 covers:
   - path: src/model.js
-    sha: 35b0e9901257c7236ab59b93850b56cd711f8a4e
+    sha: 9eceb576d8a0d25f07f89fc26aae3635d072bbc0
   - path: src/dispatch.js
-    sha: 492b6362444d3589e4fc0989cf89cd58aad93ccb
+    sha: 3ef9a36eb027a8e916e18713f1614600857ead52
   - path: src/doctor.js
-    sha: ea334d91ff5b9b4411cfd213ac8fcf696fcb963d
+    sha: 98a643807b3c0024e8a71313662af7b2f77578ca
   - path: src/context.js
     sha: be28b4843c2a09afc0c835c4fe195706af86bb15
   - path: src/forge.js
     sha: 0e424d2844bee9b0fdd2f809f7e9ae4314d69e74
   - path: src/board.js
-    sha: 53192b4670920a4ead1181c925075285dc8ee105
+    sha: 64b0e3dc2c9f0290d8b33e4ba30223363abc58bf
 related: [architecture/overview, decisions/adr-004-roles-and-adoption, architecture/dispatcher-tick]
-generated_at_commit: e16f166
+generated_at_commit: 8aaffbf
 last_refreshed: 2026-09-03
 ---
 

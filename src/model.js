@@ -2383,7 +2383,7 @@ export function hashReason(reason) {
 export const PROCESSES = ['dispatch', 'serve'];
 
 /**
- * `KB_*` names a *worker*: KB_TASK/KB_ATTEMPT/KB_LOCK_REF/KB_PROFILE/KB_ROOT are what the dispatcher
+ * `KB_*` names a *worker*: KB_TASK/KB_ATTEMPT/KB_BOARD/KB_REPO/KB_PROFILE/KB_ROOT are what the dispatcher
  * exports onto a worker's launch, and a process that carries them believes it is one. `hkb up` may be
  * run from such a session (or from one that wrongly believes it is), and the daemons it starts outlive
  * it — a dispatcher loop that thinks it is worker #148 would refuse to run and a `hook stop` inside it
