@@ -4,6 +4,19 @@ Turn a GitHub repo's issues into a kanban board that coding agents can work on t
 alternative to [Hermes kanban](https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban) that needs
 no server, no database and no npm dependencies.
 
+> ### ⚠️ Experimental — expect breaking changes
+>
+> hkb is under active development and is **not stable**. It is `0.x` and it means it: the board format, the
+> labels, the CLI's verbs and flags, and the protocol between the dispatcher and a worker all still change
+> without notice and without a migration path. A release can break a board the release before it created.
+>
+> It is also built *with itself* — hkb's own features are filed as cards on an hkb board and written by
+> workers hkb dispatches — so the parts under construction move fast and land in large pieces.
+>
+> Practically: pin an exact version if you depend on one, keep the work on a board you could re-create, and
+> read the release notes before upgrading. Issues and questions are welcome; treat anything here as subject
+> to change until this notice is gone.
+
 ## Quickstart
 
 **Before you start**, three things have to be on the machine:
