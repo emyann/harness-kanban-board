@@ -12,7 +12,7 @@ covers:
     sha: 8bbf72f8391d88be9ae35eec0c79501b657cc41d
   - path: src/board.js
     sha: f69569a4ef1ba7e4dabb5af394dddac6ba8d4a1f
-generated_at_commit: dcc38b6
+generated_at_commit: dd39851
 last_refreshed: 2026-09-02
 related: [architecture/store-seam, decisions/adr-006-local-store, decisions/adr-005-control-plane, concepts/claims-and-leases]
 ---

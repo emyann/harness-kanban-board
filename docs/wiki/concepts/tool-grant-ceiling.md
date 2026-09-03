@@ -12,7 +12,7 @@ covers:
     sha: c7868a5dfbf4188ade5bf135ad321c57f18e76e5
   - path: src/doctor.js
     sha: c9213fba679ea76bc7ac12b613a21de09bf4afe8
-generated_at_commit: dcc38b6
+generated_at_commit: dd39851
 last_refreshed: 2026-09-02
 related: [concepts/capability-portability, features/denied-tools-ledger, features/harness-profiles]
 ---
