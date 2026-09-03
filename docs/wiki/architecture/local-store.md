@@ -11,7 +11,7 @@ covers:
   - path: src/store/index.js
     sha: 38e2b0bd8634a9dacd68f419dfa25b3d7127894b
   - path: src/store/sqlite.js
-    sha: ad2e80d73391c5e7c0602c1786ca645604616887
+    sha: ab60bab80331ff0a2ac66141062eb3518a0b4fee
   - path: src/init.js
     sha: 4028fb041f86af1a44b47ad6ad864fb8ab5dbdb0
   - path: src/doctor.js
@@ -20,7 +20,7 @@ covers:
     sha: cc129d307e845211036472a76ed7e0f456be1329
   - path: src/cli.js
     sha: 2c842b6079cd6057056eef2a926edb85a8259d9d
-generated_at_commit: 8aaffbf
+generated_at_commit: ef69244
 last_refreshed: 2026-09-03
 related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---

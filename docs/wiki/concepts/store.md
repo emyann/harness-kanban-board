@@ -13,8 +13,8 @@ covers:
   - path: src/store/git.js
     sha: a42bfffbc1d7cd3197051e7593135d11ab84d48b
   - path: src/store/sqlite.js
-    sha: ad2e80d73391c5e7c0602c1786ca645604616887
-generated_at_commit: 8aaffbf
+    sha: ab60bab80331ff0a2ac66141062eb3518a0b4fee
+generated_at_commit: ef69244
 last_refreshed: 2026-09-03
 related: [architecture/store-seam, architecture/local-store, architecture/kb-board-branch, architecture/overview, decisions/adr-006-local-store]
 ---
