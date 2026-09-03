@@ -10,8 +10,7 @@ import path from 'node:path';
 import { workerContext, selectComments, formatComments, isHumanComment, briefIntents, capabilityLine, mcpLine } from '../src/context.js';
 import { openStore } from '../src/store/index.js';
 import { CAPABILITIES, RUN_MARKER, RESULT_MARKER, serializeResultComment, serializeRunComment } from '../src/model.js';
-import { FakeGh } from './fake-gh.js';
-import { FakeStore, kbIssue, runWith } from './fake-store.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const NOW = new Date('2026-08-26T12:00:00Z');
 const at = (minutesAgo) => new Date(NOW.getTime() - minutesAgo * 60_000).toISOString();
@@ -130,27 +129,23 @@ test('rendering: one oversized comment is clipped, not dropped', () => {
 // ---------- the whole brief ----------
 
 function harness() {
-  const gh = new FakeGh();
-  const store = new FakeStore();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-context-'));
-  const ctx = {
+  const { gh, store, ctx, restore } = installDoubles((g) => ({
     root,
-    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    repo: { owner: g.owner, repo: g.repo, nameWithOwner: g.nameWithOwner },
     board: 'default',
     host: 'test-host',
     json: false,
     caps: {},
     _cache: {},
-  };
-  const restore = gh.install();
-  const restoreStore = store.install(ctx);
-  return { gh, store, ctx, cleanup: () => { restoreStore(); restore(); fs.rmSync(root, { recursive: true, force: true }); } };
+  }));
+  return { gh, store, ctx, cleanup: () => { restore(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 
-/** FakeGh stamps every comment with its own login and time; a real thread has neither. */
 /** The card, read the way every verb reads one. */
 const card = async (ctx, n) => (await openStore(ctx)).getTask(n);
 
+/** The double stamps every comment with hkb's own login and one fixed time; a real thread has neither. */
 function say(store, number, body, { login = 'operator', minutesAgo = 0 } = {}) {
   const comment = store.addComment(number, body);
   comment.user = { login };

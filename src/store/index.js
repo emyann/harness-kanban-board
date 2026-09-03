@@ -152,7 +152,6 @@ export function setStore(fn) {
  * @returns {Promise<Store>}
  */
 export async function openStore(ctx) {
-  if (storeOverride) return storeOverride(ctx);
   const cacheable = !!ctx && typeof ctx === 'object';
   const held = cacheable ? ctx._store : null;
   if (held) {
@@ -160,9 +159,14 @@ export async function openStore(ctx) {
     try { held.open?.(); } catch { /* a reconcile that cannot run leaves the last good index in place */ }
     return held;
   }
-  const store = storeKind(ctx) !== 'local'
-    ? openGithubStore(ctx)
-    : (await localModule()).openLocalStore(ctx);
+  // The override answers *inside* the memo, not in front of it: a double handed back before the
+  // cache never enters it, `closeStore(ctx)` finds nothing to close, and the handle lifecycle every
+  // verb depends on is the one part of this seam no test could exercise through a double.
+  const store = storeOverride
+    ? storeOverride(ctx)
+    : (storeKind(ctx) !== 'local'
+      ? openGithubStore(ctx)
+      : (await localModule()).openLocalStore(ctx));
   if (cacheable) ctx._store = store;
   return store;
 }
@@ -181,10 +185,16 @@ export async function openStore(ctx) {
  * @returns {Promise<Store>}
  */
 export async function openStoreReadOnly(ctx) {
-  if (storeOverride) return storeOverride(ctx);
-  if (storeKind(ctx) !== 'local') return openStore(ctx);
   const cacheable = !!ctx && typeof ctx === 'object';
   if (cacheable && ctx._storeRO) return ctx._storeRO;
+  // Same rule as `openStore`: the override lands in the memo, so the reader's handle is closed
+  // through `closeStore` like a real one.
+  if (storeOverride) {
+    const store = storeOverride(ctx);
+    if (cacheable) ctx._storeRO = store;
+    return store;
+  }
+  if (storeKind(ctx) !== 'local') return openStore(ctx);
   const { openLocalStore } = await localModule();
   const store = openLocalStore(ctx, { reconcile: false, readOnly: true });
   // Its own slot, never `_store`. `hkb serve` reads through this one and *writes* through the

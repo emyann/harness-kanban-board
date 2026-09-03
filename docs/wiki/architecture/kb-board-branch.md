@@ -9,7 +9,7 @@ covers:
   - path: src/store/git.js
     sha: a3a5f2ebb104f22bd196c78301036b61b1da2ac9
   - path: src/store/index.js
-    sha: 918495a206540318480f3b0ce7cd0a8f559ae874
+    sha: 385621acfdf13c32e3477ef35325c763ee1bb6fd
   - path: src/board.js
     sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
 generated_at_commit: 90132a1

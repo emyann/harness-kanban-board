@@ -28,6 +28,7 @@ import {
   statusOf, agentOf, boardOf, tagBlockers,
 } from '../src/model.js';
 import { normalizeCardGrants, loadBoard, saveBoard } from '../src/board.js';
+import { FakeGh, issueRecord, commentRecord } from './fake-gh.js';
 
 /** Every method of the interface that changes the board — what `writes()` counts. */
 export const WRITE_METHODS = Object.freeze([
@@ -36,6 +37,26 @@ export const WRITE_METHODS = Object.freeze([
   'addBlockedBy', 'removeBlockedBy', 'saveRun', 'addNote',
   'claim', 'release', 'heartbeat', 'resyncBeat', 'dropBeat',
 ]);
+
+/**
+ * Both doubles, installed together, with one restore that undoes them in the order they went on.
+ *
+ * Eleven harnesses used to copy the same four lines and re-derive the LIFO teardown by hand; the
+ * ordering hazard is worth removing once rather than being correct eleven times. `makeCtx` is a
+ * function because most harnesses build their context out of the fake GitHub's `nameWithOwner`,
+ * and the store's `install(ctx)` needs the context that comes out of it.
+ *
+ * @param {((gh: FakeGh) => any)|any} [makeCtx]  the context, or a function from the fake GitHub to it
+ * @param {{caps?: any, board?: string, host?: string|null, events?: boolean}} [opts]
+ */
+export function installDoubles(makeCtx = null, { caps = {}, board = 'default', host = null, events = false } = {}) {
+  const gh = new FakeGh({ caps });
+  const store = new FakeStore({ board, host, events });
+  const ctx = typeof makeCtx === 'function' ? makeCtx(gh) : makeCtx;
+  const restoreGh = gh.install();
+  const restoreStore = store.install(ctx);
+  return { gh, store, ctx, restore: () => { restoreStore(); restoreGh(); } };
+}
 
 /**
  * The live claims, as `"<n>/<k>"` strings, sorted — the portable form of what
@@ -103,11 +124,12 @@ export class FakeStore {
    */
   asStore() {
     if (this._store) return this._store;
-    const raw = this.#methods();
+    const raw = this.raw();
     const store = /** @type {any} */ ({ kind: 'fake', get ctx() { return this.ctxOf; }, ctxOf: null, index: null });
     for (const [name, fn] of Object.entries(raw)) {
       store[name] = (...args) => {
-        this.calls.push({ name, args });
+        const entry = { name, args, changed: false };
+        this.calls.push(entry);
         // `claim` is the one method that reports a failure rather than throwing it (a claim whose
         // outcome cannot be classified is `unknown`, which is what the dispatcher backs off on), so
         // it takes its own from the queue.
@@ -115,7 +137,12 @@ export class FakeStore {
           const injected = this.#takeFailure(name);
           if (injected) throw injected;
         }
-        return fn(...args);
+        // The frame is what `#wrote()` marks. Every method here mutates in its synchronous
+        // segment — `async` or not, none of them awaits before writing — so the frame covers
+        // exactly the call that did it, and `writes()` can count effects rather than calls.
+        const outer = this._frame;
+        this._frame = entry;
+        try { return fn(...args); } finally { this._frame = outer; }
       };
     }
     // Not part of the interface, but `closeStore` calls it and the seam's own tests count it.
@@ -132,23 +159,7 @@ export class FakeStore {
    */
   addIssue(spec = {}) {
     const number = spec.number ?? (Math.max(0, ...this.issues.keys()) + 1);
-    const rec = {
-      number,
-      nodeId: spec.id || `I_kwFake${number}`,
-      databaseId: spec.databaseId ?? 5_000_000 + number,
-      title: spec.title || `issue ${number}`,
-      body: spec.body || '',
-      state: String(spec.state || 'OPEN').toUpperCase(),
-      stateReason: spec.stateReason ? String(spec.stateReason).toUpperCase() : null,
-      labels: [...(spec.labels || [])],
-      comments: [],
-      blockedBy: [...(spec.blockedBy || [])],
-      prs: [...(spec.prs || [])],
-      events: [...(spec.events || [])],
-      createdAt: spec.createdAt || `2026-08-26T00:00:${String(number % 60).padStart(2, '0')}Z`,
-      updatedAt: spec.updatedAt || spec.createdAt || '2026-08-26T01:00:00Z',
-      url: spec.url || this.urlOf(number),
-    };
+    const rec = issueRecord(spec, { number, url: spec.url || this.urlOf(number) });
     for (const l of rec.labels) this.repoLabels.add(l);
     this.issues.set(number, rec);
     for (const body of spec.comments || []) this.addComment(number, body);
@@ -157,13 +168,7 @@ export class FakeStore {
 
   addComment(number, body) {
     const rec = this.#rec(number);
-    const c = {
-      id: this.nextCommentId++,
-      body,
-      user: { login: 'hkb' },
-      created_at: '2026-08-26T01:00:00Z',
-      html_url: `${rec.url}#issuecomment-${this.nextCommentId}`,
-    };
+    const c = commentRecord({ id: this.nextCommentId++, body, url: rec.url });
     rec.comments.push(c);
     return c;
   }
@@ -200,20 +205,31 @@ export class FakeStore {
     const picked = pickRunComment(this.#rec(number).comments);
     return picked.chosen ? parseRunComment(picked.chosen.body) : null;
   }
-  /** The live claims as `"<n>/<k>"`, sorted. Async on purpose: `locksOf` reads any driver. */
-  locks() { return locksOf(this.asStore()); }
+  /**
+   * The live claims as `"<n>/<k>"`, sorted. Async on purpose: `locksOf` reads any driver.
+   *
+   * Through `raw()`, never through the recording store: reading an assertion must not append to
+   * the log another assertion reads, and with `fail('listLocks')` armed the *assertion* would
+   * otherwise be the caller that consumes the injected error.
+   */
+  locks() { return locksOf(this.raw()); }
   /** One claim as the store keeps it — `{token, beat_at}` — or null. */
   lockOf(n, k) { return this.lockRows.get(key(n, k)) || null; }
-  /** Every mutating call, as method names — `[]` is "and nothing was written". */
+  /**
+   * Every mutating call that actually changed something, as method names — `[]` is "and nothing
+   * was written". Effects, not calls: `ensureLabels` with nothing to create and `setStatus` to the
+   * status the card already has both reach the interface and make no request on a real driver, so
+   * counting them here would make `[]` mean less than it says.
+   */
   writes(name = null) {
     return this.calls
-      .filter((c) => (name ? c.name === name : WRITE_METHODS.includes(c.name)))
+      .filter((c) => c.changed && (name ? c.name === name : WRITE_METHODS.includes(c.name)))
       .map((c) => c.name);
   }
   /** The same, narrowed to one card: "#7 was not touched" without naming a REST path. */
   writesTo(number) {
     return this.calls
-      .filter((c) => CARD_WRITE_METHODS.includes(c.name) && numberOf(c.args) === Number(number))
+      .filter((c) => c.changed && CARD_WRITE_METHODS.includes(c.name) && numberOf(c.args) === Number(number))
       .map((c) => c.name);
   }
   /** Every call to `name`, with its arguments. */
@@ -237,7 +253,11 @@ export class FakeStore {
   #touch(rec) {
     rec.updatedAt = new Date().toISOString();
     this.revisions.set(rec.number, (this.revisions.get(rec.number) || 0) + 1);
+    this.#wrote();
   }
+
+  /** Something changed. The call in flight is what `writes()` counts. */
+  #wrote() { if (this._frame) this._frame.changed = true; }
 
   #blockers(rec) {
     return rec.blockedBy.map((b) => {
@@ -254,7 +274,7 @@ export class FakeStore {
     normalizeCardGrants(kb);
     return {
       number: rec.number,
-      nodeId: rec.nodeId,
+      nodeId: rec.id,
       databaseId: rec.databaseId,
       title: rec.title,
       body: rec.body || '',
@@ -294,9 +314,16 @@ export class FakeStore {
 
   #comments(n) { return this.#rec(n).comments.map((c) => ({ ...c })); }
 
-  #methods() {
+  /**
+   * The interface, unrecorded. `asStore()` wraps these; the double's own internals and its
+   * assertion helpers call them directly, so an assertion never lands in the call log and a
+   * method that leans on another (`setBoard` → `board`, `listTasks` → `listClosedRecent`) does not
+   * record two calls where a driver makes one.
+   */
+  raw() {
+    if (this._raw) return this._raw;
     const self = this;
-    return {
+    this._raw = {
       root: () => (self.ctx?.root ?? '/fake'),
       capabilities: () => ({ ...self.caps }),
 
@@ -316,7 +343,8 @@ export class FakeStore {
         const cfg = { ...(loadBoard(self.ctx.root) || {}), ...patch };
         saveBoard(self.ctx.root, cfg);
         self.ctx.cfg = cfg;
-        return self.asStore().board();
+        self.#wrote();
+        return self.raw().board();
       },
 
       // ---- tasks ----
@@ -329,15 +357,22 @@ export class FakeStore {
           throw e;
         }
         // Closed-only is the reconcile question, and every driver answers it with a recent page.
-        if (!want.includes('OPEN')) return self.asStore().listClosedRecent();
+        if (!want.includes('OPEN')) return self.raw().listClosedRecent();
         const tasks = [...self.issues.values()]
           .filter((r) => want.includes(r.state) && r.labels.includes(L.board(self.boardSlug)))
           .sort((a, b) => a.number - b.number)
           .map((r) => self.#task(r));
-        // The store answers with the blockers it has; `blockers` is a cost knob on a driver that
-        // pays per list, and this one does not.
-        void blockers;
-        return tagBlockers(tasks, { source: 'store', filled: true, scope: 'all' });
+        // `blockers: false` is a caller saying "do not spend anything on dependencies", and the
+        // double answers it the way the driver that *can* refuse does (src/store/github.js:148):
+        // no edges, and a note saying they were never read. Filling them anyway — as a store with
+        // the edges in hand could — would make `blockersKnown` true here and false on GitHub, and
+        // every migrated assertion about "an empty blockedBy nobody read is not 'no blockers'"
+        // would be true only of the double.
+        if (blockers === false) {
+          for (const t of tasks) t.blockedBy = [];
+          return tagBlockers(tasks, { source: null, filled: false, scope: 'none' });
+        }
+        return tagBlockers(tasks, { source: 'fake', filled: true, scope: 'all' });
       },
       async listClosedRecent({ first = 50 } = {}) {
         return [...self.issues.values()]
@@ -351,6 +386,7 @@ export class FakeStore {
         const labels = [L.board(self.boardSlug), L.status(status)];
         if (agent) labels.push(L.agent(agent));
         const rec = self.addIssue({ title, body: serializeBodyBlock({ ...DEFAULT_KB, ...kb }, body), labels });
+        self.#wrote();
         self.#event('created', rec.number, { title });
         return self.#task(rec);
       },
@@ -373,14 +409,17 @@ export class FakeStore {
         const rec = self.#of(task);
         const toRemove = new Set([...task.labels.filter((l) => l.startsWith('kb:status:') && l !== L.status(status)), ...remove]);
         const missing = [L.status(status), ...add].filter((l) => !task.labels.includes(l));
-        const kept = rec.labels.filter((l) => !toRemove.has(l));
-        const added = missing.filter((l) => !rec.labels.includes(l));
+        const before = rec.labels;
+        const kept = before.filter((l) => !toRemove.has(l));
+        const added = missing.filter((l) => !before.includes(l));
         rec.labels = [...kept, ...added];
         for (const l of missing) self.repoLabels.add(l);
         // A status that is already the card's status writes nothing — the drivers elide the call,
         // and a double that recorded one anyway would make "nothing to change is nothing to write"
-        // unassertable through the interface.
-        if (kept.length !== rec.labels.length - added.length || added.length) self.#touch(rec);
+        // unassertable through the interface. Both halves count: a label *taken off* is a
+        // `DELETE /issues/<n>/labels/<name>` on the real driver, and comparing against `rec.labels`
+        // after it was reassigned could only ever see the additions.
+        if (kept.length !== before.length || added.length) self.#touch(rec);
         // The task the caller holds is updated in place, the way every driver's `setStatus` does.
         task.labels = [...task.labels.filter((l) => !toRemove.has(l)), ...missing];
         task.status = status;
@@ -391,7 +430,7 @@ export class FakeStore {
         const rec = self.#of(task);
         const want = L.agent(agent);
         const kept = rec.labels.filter((l) => !l.startsWith('kb:agent:'));
-        const changed = kept.length !== rec.labels.length - (rec.labels.includes(want) ? 1 : 0) || !rec.labels.includes(want);
+        const changed = !rec.labels.includes(want) || rec.labels.some((l) => l.startsWith('kb:agent:') && l !== want);
         rec.labels = [...kept, want];
         self.repoLabels.add(want);
         if (changed) self.#touch(rec);
@@ -423,6 +462,7 @@ export class FakeStore {
           self.repoLabels.add(name);
           created.push(name);
         }
+        if (created.length) self.#wrote(); // a label that already exists costs a real driver no request
         return created;
       },
       async closeTask(n, reason = 'completed') {
@@ -481,7 +521,7 @@ export class FakeStore {
       async parentResults(task) {
         const out = [];
         for (const b of task.blockedBy || []) {
-          out.push({ number: b.number, title: b.title, state: b.state, result: await self.asStore().latestResult(b.number) });
+          out.push({ number: b.number, title: b.title, state: b.state, result: await self.raw().latestResult(b.number) });
         }
         return out;
       },
@@ -512,13 +552,14 @@ export class FakeStore {
         const token = `tok${self.nextToken++}`;
         self.lockRows.set(at, { token, beat_at: null });
         self.beats.set(at, token);
+        self.#wrote();
         self.#event('claimed', Number(n), { attempt: Number(k) });
         return { result: 'claimed', token, ref: null, error: null };
       },
       async release(n, k) {
         const at = key(n, k);
         const had = self.lockRows.delete(at);
-        if (had) self.#event('released', Number(n), { attempt: Number(k) });
+        if (had) { self.#wrote(); self.#event('released', Number(n), { attempt: Number(k) }); }
         return had;
       },
       async listLocks() {
@@ -538,12 +579,13 @@ export class FakeStore {
         row.token = `tok${self.nextToken++}`;
         row.beat_at = new Date().toISOString();
         self.beats.set(at, row.token);
+        self.#wrote();
         return { result: 'ok', token: row.token, expected, detail: '' };
       },
       async lockToken(n, k) { return self.lockRows.get(key(n, k))?.token ?? null; },
       beatToken: (n, k) => self.beats.get(key(n, k)) ?? null,
-      resyncBeat: (n, k, token) => { self.beats.set(key(n, k), token); return true; },
-      dropBeat: (n, k) => self.beats.delete(key(n, k)),
+      resyncBeat: (n, k, token) => { self.beats.set(key(n, k), token); self.#wrote(); return true; },
+      dropBeat: (n, k) => { const had = self.beats.delete(key(n, k)); if (had) self.#wrote(); return had; },
 
       // ---- events ----
       async events({ after = 0, limit = 100 } = {}) {
@@ -568,6 +610,7 @@ export class FakeStore {
         return [...seeded, ...logged].slice(-limit);
       },
     };
+    return this._raw;
   }
 
   // ---------- injected failures ----------
@@ -613,7 +656,7 @@ function numberOf(args = []) {
 }
 
 /** An event payload as the one line `hkb log` prints for it. */
-const detailOf = (payload = {}) => String(payload.status ?? payload.reason ?? payload.title ?? payload.text ?? (payload.attempt != null ? `attempt ${payload.attempt}` : '') ?? '');
+const detailOf = (payload = {}) => String(payload.status ?? payload.reason ?? payload.title ?? payload.text ?? (payload.attempt != null ? `attempt ${payload.attempt}` : ''));
 
 // The two fixture helpers are `test/fake-gh.js`'s, and there is deliberately one copy: a card spec
 // that meant different labels depending on which double read it would make the two suites disagree

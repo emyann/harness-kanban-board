@@ -15,8 +15,7 @@ import {
 } from '../src/mcp.js';
 import { main } from '../src/cli.js';
 import { DEFAULT_BOARD } from '../src/board.js';
-import { FakeGh } from './fake-gh.js';
-import { FakeStore, kbIssue, runWith } from './fake-store.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-mcp-'));
@@ -24,18 +23,15 @@ const byName = (n) => TOOLS.find((t) => t.name === n);
 
 /** A board with one running task, and a ctx pointing at it. */
 function harness({ issues = [kbIssue({ number: 7, status: 'running', agent: 'claude', run: runWith([{ attempt: 1, started_at: '2026-08-26T01:00:00Z', lock_sha: 'a'.repeat(40) }]) })] } = {}) {
-  const gh = new FakeGh();
-  const store = new FakeStore();
   const root = scratch();
-  for (const i of issues) store.addIssue(i);
-  const cfg = { ...DEFAULT_BOARD, repo: gh.nameWithOwner };
-  const ctx = {
-    root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+  const { gh, store, ctx, restore } = installDoubles((g) => ({
+    root,
+    cfg: { ...DEFAULT_BOARD, repo: g.nameWithOwner },
+    repo: { owner: g.owner, repo: g.repo, nameWithOwner: g.nameWithOwner },
     board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
-  };
-  const restore = gh.install();
-  const restoreStore = store.install(ctx);
-  return { gh, store, ctx, root, cleanup: () => { restoreStore(); restore(); fs.rmSync(root, { recursive: true, force: true }); } };
+  }));
+  for (const i of issues) store.addIssue(i);
+  return { gh, store, ctx, root, cleanup: () => { restore(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 
 /** Call a tool the way a client would, and hand back the parsed structuredContent. */

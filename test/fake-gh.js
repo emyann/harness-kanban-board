@@ -12,6 +12,50 @@
 import { GhError, classify, setTransport } from '../src/gh.js';
 import { DEFAULT_KB, L, emptyRun, parseRunComment, pickRunComment, serializeBodyBlock, serializeRunComment, statusOf } from '../src/model.js';
 
+/**
+ * The card record both in-memory boards keep, from one `kbIssue({...})` spec.
+ *
+ * One copy on purpose. `test/fake-store.js` began as a transcription of these two builders and had
+ * already drifted — a dropped `updated_at`, and an `html_url` off by one because the template read
+ * `nextCommentId` after the `++`. A double that answers a seeded card differently from the other
+ * double makes the two suites disagree about what a board looks like, which is the whole failure
+ * mode both of them exist to prevent.
+ *
+ * @param {any} spec         a `kbIssue()` spec
+ * @param {{number: number, url: string}} at  the number the caller allocated, and the card's URL
+ */
+export function issueRecord(spec = {}, { number, url }) {
+  return {
+    number,
+    id: spec.id || `I_kwFake${number}`,
+    databaseId: spec.databaseId ?? 5_000_000 + number,
+    title: spec.title || `issue ${number}`,
+    body: spec.body || '',
+    state: String(spec.state || 'OPEN').toUpperCase(),
+    stateReason: spec.stateReason ? String(spec.stateReason).toUpperCase() : null,
+    labels: [...(spec.labels || [])],
+    comments: [],
+    blockedBy: [...(spec.blockedBy || [])], // issue numbers, or literal {number,state,...}
+    prs: [...(spec.prs || [])],
+    events: [...(spec.events || [])],
+    createdAt: spec.createdAt || `2026-08-26T00:00:${String(number % 60).padStart(2, '0')}Z`,
+    updatedAt: spec.updatedAt || spec.createdAt || '2026-08-26T01:00:00Z',
+    url,
+  };
+}
+
+/** One comment on `url`, with the id the caller allocated — the same shape on both doubles. */
+export function commentRecord({ id, body, url }) {
+  return {
+    id,
+    body,
+    user: { login: 'hkb' },
+    created_at: '2026-08-26T01:00:00Z',
+    updated_at: '2026-08-26T01:00:00Z',
+    html_url: `${url}#issuecomment-${id}`,
+  };
+}
+
 export class FakeGh {
   constructor({ owner = 'acme', repo = 'board', defaultBranch = 'main', baseSha = 'f'.repeat(40), caps = {}, allowAutoMerge = true } = {}) {
     this.owner = owner;
@@ -45,23 +89,7 @@ export class FakeGh {
 
   addIssue(spec = {}) {
     const number = spec.number ?? (Math.max(0, ...this.issues.keys()) + 1);
-    const issue = {
-      number,
-      id: spec.id || `I_kwFake${number}`,
-      databaseId: spec.databaseId ?? 5_000_000 + number,
-      title: spec.title || `issue ${number}`,
-      body: spec.body || '',
-      state: String(spec.state || 'OPEN').toUpperCase(),
-      stateReason: spec.stateReason ? String(spec.stateReason).toUpperCase() : null,
-      labels: [...(spec.labels || [])],
-      comments: [],
-      blockedBy: [...(spec.blockedBy || [])], // issue numbers, or literal {number,state,...}
-      prs: [...(spec.prs || [])],
-      events: [...(spec.events || [])],
-      createdAt: spec.createdAt || `2026-08-26T00:00:${String(number % 60).padStart(2, '0')}Z`,
-      updatedAt: spec.updatedAt || spec.createdAt || '2026-08-26T01:00:00Z',
-      url: `https://github.com/${this.nameWithOwner}/issues/${number}`,
-    };
+    const issue = issueRecord(spec, { number, url: `https://github.com/${this.nameWithOwner}/issues/${number}` });
     for (const l of issue.labels) this.repoLabels.add(l);
     this.issues.set(number, issue);
     for (const body of spec.comments || []) this.addComment(number, body);
@@ -79,14 +107,7 @@ export class FakeGh {
 
   addComment(number, body) {
     const issue = this.#issue(number);
-    const c = {
-      id: this.nextCommentId++,
-      body,
-      user: { login: 'hkb' },
-      created_at: '2026-08-26T01:00:00Z',
-      updated_at: '2026-08-26T01:00:00Z',
-      html_url: `${issue.url}#issuecomment-${this.nextCommentId}`,
-    };
+    const c = commentRecord({ id: this.nextCommentId++, body, url: issue.url });
     issue.comments.push(c);
     return c;
   }
@@ -155,6 +176,19 @@ export class FakeGh {
   /** Every request whose method and path match — for "and nothing was written" assertions. */
   requestsMatching(method, path) {
     return this.requests.filter((c) => (!method || c.method === method) && (!path || (path instanceof RegExp ? path.test(c.path || '') : String(c.path || '').includes(path))));
+  }
+
+  /**
+   * Every request that could have changed something on the forge, as `"<method> <path>"` — the half
+   * of "and nothing was written" the *store* cannot see. Pull requests are `src/forge.js`, they go
+   * through `src/gh.js` whatever the board is kept in, so a read-only path that started PATCHing a
+   * PR would leave `store.writes()` empty and still be a write. Assert both.
+   */
+  writeRequests() {
+    return this.requests
+      .filter((c) => ['POST', 'PATCH', 'PUT', 'DELETE'].includes(String(c.method))
+        || (c.kind === 'graphql' && /^\s*mutation\b/.test(String(c.query || ''))))
+      .map((c) => (c.kind === 'graphql' ? `mutation ${String(c.query).match(/\b(\w+)\(input:/)?.[1] || ''}`.trim() : `${c.method} ${c.path}`));
   }
 
   // ---------- transport ----------

@@ -10,8 +10,7 @@ import { parseBackgroundedId, classifyJob, jobName, KB_JOB_NAME_RE } from '../sr
 import { matchJobByWorktree, jobSessionUpdate } from '../src/jobs.js';
 import { tick } from '../src/dispatch.js';
 import { DEFAULT_BOARD } from '../src/board.js';
-import { FakeGh } from './fake-gh.js';
-import { FakeStore, kbIssue, runWith } from './fake-store.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const ago = (seconds) => new Date(Date.now() - seconds * 1000).toISOString();
 
@@ -138,23 +137,20 @@ function stubClaude(root, jobs) {
  * dispatcher looks for one.
  */
 function harness({ jobs = [], records = {} } = {}) {
-  const gh = new FakeGh();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-jobsession-'));
   const home = path.join(root, 'home');
   jobsRootWith(records, path.join(home, '.claude', 'jobs'));
-  const cfg = {
-    ...DEFAULT_BOARD,
-    repo: gh.nameWithOwner,
-    board: 'default',
-    profiles: { claude: { mode: 'claude-bg', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] } },
-  };
-  const ctx = {
-    root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+  const { gh, store, ctx, restore } = installDoubles((g) => ({
+    root,
+    cfg: {
+      ...DEFAULT_BOARD,
+      repo: g.nameWithOwner,
+      board: 'default',
+      profiles: { claude: { mode: 'claude-bg', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] } },
+    },
+    repo: { owner: g.owner, repo: g.repo, nameWithOwner: g.nameWithOwner },
     board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
-  };
-  const restore = gh.install();
-  const store = new FakeStore();
-  const restoreStore = store.install(ctx);
+  }));
   const savedEnv = { PATH: process.env.PATH, HOME: process.env.HOME };
   process.env.HOME = home;
   stubClaude(root, jobs);
@@ -164,7 +160,7 @@ function harness({ jobs = [], records = {} } = {}) {
     log: () => logs.join('\n'),
     tick: (opts = {}) => tick(ctx, { max: 0, log: (m) => logs.push(m), ...opts }),
     cleanup: () => {
-      restoreStore(); restore();
+      restore();
       Object.assign(process.env, savedEnv);
       fs.rmSync(root, { recursive: true, force: true });
     },
@@ -186,11 +182,13 @@ test('an attempt written off as protocol_violation still names its session and t
   });
   t.after(h.cleanup);
   h.store.addIssue(running());
-  h.gh.refs.set('refs/kb/locks/7/1', 'f'.repeat(40));
+  h.store.hold(7, 1);
+  assert.deepEqual(await h.store.locks(), ['7/1'], 'precondition: there is a claim to take away');
 
   const s = await h.tick();
 
   assert.deepEqual(s.reclaimed, [{ number: 7, outcome: 'protocol_violation' }]);
+  assert.deepEqual(await h.store.locks(), [], 'and the reclaim released it');
   const a = h.store.runOf(7).attempts[0];
   assert.equal(a.outcome, 'protocol_violation');
   assert.equal(a.session_id, SID, 'the id `hkb show` reopens the post-mortem with');

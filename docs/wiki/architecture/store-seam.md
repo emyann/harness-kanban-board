@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "writing a verb that reads or writes board state, adding a store driver, or wondering why tasks.js and lock.js are two lines long"
 covers:
   - path: src/store/index.js
-    sha: 04921bfad186d789e2fe70ab53620867abed5e40
+    sha: 385621acfdf13c32e3477ef35325c763ee1bb6fd
   - path: src/store/github.js
     sha: 7b384d0c64870f7b33c209325359b8e2630856ad
   - path: src/forge.js
@@ -345,6 +345,14 @@ costs nothing* — by reading the in-memory GitHub's REST log (`gh.calls`,
 nothing under it could be deleted (§10, track C). Through the interface the same
 sentences are `store.writes()`, `await store.locks()` and
 `store.callsOf('listTasks')`, and they are true of any driver.
+
+The override answers **inside** the handle memo, not in front of it: `openStore`
+looks in `ctx._store` first, and only then asks the override, so the double it
+hands back is memoized on the context and `closeStore(ctx)` closes it like any
+driver's handle (`openStoreReadOnly` does the same into `ctx._storeRO`). Put the
+other way round — as it first was — an overridden store never enters the cache,
+`closeStore` finds nothing, and the handle lifecycle the seam was rewritten for
+(#326) is the one part of it no test can exercise through the double.
 
 Two deliberate limits. The override is **not** consulted by `storeKind`: what a
 board is kept in is still `"store"` in `.kanban/board.json` and nothing else, so

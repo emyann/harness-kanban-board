@@ -25,8 +25,7 @@ import { normalizeCardGrants } from '../src/tasks.js';
 import { setTransport, GhError } from '../src/gh.js';
 import { pidFile, writeServeUrl, DEFAULT_PROFILES, hostId } from '../src/board.js';
 import { spawnSync } from 'node:child_process';
-import { FakeGh } from './fake-gh.js';
-import { FakeStore, kbIssue, runWith } from './fake-store.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
@@ -497,26 +496,23 @@ test('the day stamp is added to the state the dispatcher already keeps, not writ
  * and a `process` one that must never be asked about. Nothing here spawns anything.
  */
 function boardHarness(t, { profiles } = {}) {
-  const gh = new FakeGh({ caps: { blockedByGql: true, closedByPrs: true } });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-sessions-'));
   fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
-  const cfg = {
-    repo: gh.nameWithOwner,
-    default_branch: 'main',
-    profiles: profiles || {
-      claude: { mode: 'claude-bg', launch: ['claude', '--bg'] },
-      'claude-p': { mode: 'process', launch: ['claude', '-p'] },
+  const { gh, store, ctx, restore } = installDoubles((g) => ({
+    root,
+    cfg: {
+      repo: g.nameWithOwner,
+      default_branch: 'main',
+      profiles: profiles || {
+        claude: { mode: 'claude-bg', launch: ['claude', '--bg'] },
+        'claude-p': { mode: 'process', launch: ['claude', '-p'] },
+      },
     },
-  };
-  const ctx = {
-    root, cfg, board: 'default', host: 'test-host', json: false, caps: {}, _cache: {},
-    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    board: 'default', host: 'test-host', json: false, caps: {}, _cache: {},
+    repo: { owner: g.owner, repo: g.repo, nameWithOwner: g.nameWithOwner },
     requireBoard() { return this; },
-  };
-  const restore = gh.install();
-  const store = new FakeStore();
-  const restoreStore = store.install(ctx);
-  t.after(() => { restoreStore(); restore(); fs.rmSync(root, { recursive: true, force: true }); });
+  }), { caps: { blockedByGql: true, closedByPrs: true } });
+  t.after(() => { restore(); fs.rmSync(root, { recursive: true, force: true }); });
   return { gh, store, ctx, root };
 }
 

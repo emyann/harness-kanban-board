@@ -13,7 +13,7 @@ covers:
   - path: src/model.js
     sha: d3729c517eb72a690f7248b5769ea03d22f6d794
   - path: src/store/index.js
-    sha: d440f1432159b01433599dd285c26dceae2596a3
+    sha: 385621acfdf13c32e3477ef35325c763ee1bb6fd
   - path: src/store/github.js
     sha: 7b384d0c64870f7b33c209325359b8e2630856ad
   - path: src/forge.js

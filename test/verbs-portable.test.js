@@ -150,7 +150,7 @@ const SCENARIOS = [
       assert.deepEqual(await locksOf(h.store), [`${t.number}/1`]);
       const run = await runOf(h, t.number);
       assert.equal(run.attempts.length, 1);
-      assert.equal(run.attempts[0].host, 'test-host' === h.ctx.host ? 'test-host' : h.ctx.host);
+      assert.equal(run.attempts[0].host, h.ctx.host, 'the row names the host that made the claim');
       assert.equal(run.attempts[0].profile, 'claude');
       assert.equal(run.attempts[0].ended_at, undefined, 'the attempt is open');
       // The row leases on what the store's own claim handed back, never on a value the dispatcher

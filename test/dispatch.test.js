@@ -18,36 +18,30 @@ import { DEFAULT_BOARD } from '../src/board.js';
 import { claim, release, listLocks } from '../src/lock.js';
 import { complete, requestChanges } from '../src/lifecycle.js';
 import { activePrGuard, L, RESULT_MARKER, worktreePath } from '../src/model.js';
-import { FakeGh } from './fake-gh.js';
-import { FakeStore, kbIssue, runWith } from './fake-store.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const ago = (seconds) => new Date(Date.now() - seconds * 1000).toISOString();
 
 function harness({ dispatch = {}, board = 'default', host = 'test-host', root: given = null, profiles = null } = {}) {
-  const gh = new FakeGh();
   const root = given || fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-dispatch-'));
-  const cfg = {
-    ...DEFAULT_BOARD,
-    repo: gh.nameWithOwner,
-    board,
-    dispatch: { ...DEFAULT_BOARD.dispatch, ...dispatch },
-    // the spawn stub: `true` exits immediately, so no worker ever runs
-    profiles: profiles || { claude: { mode: 'process', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] } },
-  };
-  const ctx = {
+  const { gh, store, ctx, restore } = installDoubles((g) => ({
     root,
-    cfg,
-    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    cfg: {
+      ...DEFAULT_BOARD,
+      repo: g.nameWithOwner,
+      board,
+      dispatch: { ...DEFAULT_BOARD.dispatch, ...dispatch },
+      // the spawn stub: `true` exits immediately, so no worker ever runs
+      profiles: profiles || { claude: { mode: 'process', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] } },
+    },
+    repo: { owner: g.owner, repo: g.repo, nameWithOwner: g.nameWithOwner },
     board,
     host,
     json: false,
     caps: {},
     _cache: {},
     requireBoard() { return this; },
-  };
-  const restore = gh.install();
-  const store = new FakeStore({ board, host });
-  const restoreStore = store.install(ctx);
+  }), { board, host });
   const logs = [];
   return {
     gh,
@@ -57,7 +51,7 @@ function harness({ dispatch = {}, board = 'default', host = 'test-host', root: g
     logs,
     log: () => logs.join('\n'),
     tick: (opts = {}) => tick(ctx, { log: (m) => logs.push(m), ...opts }),
-    cleanup: () => { restoreStore(); restore(); fs.rmSync(root, { recursive: true, force: true }); },
+    cleanup: () => { restore(); fs.rmSync(root, { recursive: true, force: true }); },
   };
 }
 
@@ -245,7 +239,11 @@ test('a ref-CAS beat keeps a worker alive: the run comment is stale, the lock re
   assert.equal(h.store.statusOf(7), 'running');
   assert.deepEqual(await h.store.locks(), ['7/1'], 'the lock is left alone');
   assert.deepEqual(h.store.writes('saveRun'), [], 'and the run record is not rewritten');
-  assert.match(h.log(), /#7: attempt 1 beat on refs\/kb\/locks\/7\/1 \d+s ago — alive/);
+  // The name in that line is `src/model.js`'s `lockRef`, not the store's — the GitHub-ism this
+  // branch filed in docs/wiki/FINDINGS.md ("the tick names refs/kb/locks/<n>/<k> on every board").
+  // Assert the sentence and not the name, so fixing that finding does not break a test that was
+  // never about it.
+  assert.match(h.log(), /#7: attempt 1 beat on \S+ \d+s ago — alive/);
 });
 
 test('a ref-CAS worker whose last beat is old is reclaimed like any other', async (t) => {
@@ -291,7 +289,11 @@ test('a hand-claimed attempt is not a crashed spawn: it has no pid and never wil
   assert.equal(h.store.statusOf(7), 'running');
   assert.deepEqual(await h.store.locks(), ['7/1'], 'the lock the worker beats on survives');
   assert.deepEqual(h.store.writes('saveRun'), [], 'and its run record is not rewritten');
-  assert.match(h.log(), /#7: attempt 1 beat on refs\/kb\/locks\/7\/1 \d+s ago — alive/);
+  // The name in that line is `src/model.js`'s `lockRef`, not the store's — the GitHub-ism this
+  // branch filed in docs/wiki/FINDINGS.md ("the tick names refs/kb/locks/<n>/<k> on every board").
+  // Assert the sentence and not the name, so fixing that finding does not break a test that was
+  // never about it.
+  assert.match(h.log(), /#7: attempt 1 beat on \S+ \d+s ago — alive/);
 });
 
 test('a hand-claimed attempt that stops beating is reclaimed after stale_after', async (t) => {
@@ -1186,6 +1188,10 @@ test('a dry run reports what it would do and writes nothing', async (t) => {
   assert.equal(h.store.statusOf(3), 'ready');
   assert.deepEqual(await h.store.locks(), []);
   assert.deepEqual(h.store.writes(), []);
+  // Both halves. The store sees the board; a write that leaves through `src/forge.js` — a PR
+  // PATCHed, an auto-merge enabled — never reaches the interface at all, so "writes nothing" is
+  // only half-said until the forge says it too.
+  assert.deepEqual(h.gh.writeRequests(), []);
 });
 
 // ---------- what a host will and will not launch ----------

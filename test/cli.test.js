@@ -8,8 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs, formatPromote, main, groomOptions, filterGroomLevel, formatGroom } from '../src/cli.js';
 import { DEFAULT_BOARD } from '../src/board.js';
 import { GROOM_LEVELS } from '../src/model.js';
-import { FakeGh } from './fake-gh.js';
-import { FakeStore, kbIssue } from './fake-store.js';
+import { installDoubles, kbIssue } from './fake-store.js';
 
 test('parseArgs: positionals, --k v, --k=v, booleans, --', () => {
   const { flags, pos } = parseArgs(['create', 'Add auth', '--blocked-by', '12,13', '--priority=2', '--triage', '--json', '--', '--not-a-flag']);
@@ -46,8 +45,7 @@ test('formatPromote: a forced leaf and a blocker skipped for a human read differ
 });
 
 test('hkb promote --triage-only: a card that moved on is skipped, nothing forced (#238)', async (t) => {
-  const gh = new FakeGh();
-  const store = new FakeStore();
+  const { gh, store, restore } = installDoubles();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-promote-'));
   fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
@@ -58,10 +56,8 @@ test('hkb promote --triage-only: a card that moved on is skipped, nothing forced
   const write = process.stdout.write.bind(process.stdout);
   let printed = '';
   process.stdout.write = (s) => { printed += s; return true; };
-  const restore = gh.install();
-  const restoreStore = store.install();
   process.chdir(dir);
-  t.after(() => { process.stdout.write = write; process.chdir(cwd); restoreStore(); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
 
   await main(['promote', '70', '71', '--triage-only', '--json']);
   const res = JSON.parse(printed);
@@ -81,8 +77,7 @@ const SPEC = `## Why\n${'why '.repeat(60)}\n\n## What\n${'what '.repeat(60)}\n\n
 
 /** A board with one of each interesting row, and a chdir'd checkout `main()` can run against. */
 function groomHarness(t) {
-  const gh = new FakeGh();
-  const store = new FakeStore();
+  const { gh, store, restore } = installDoubles();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-groom-'));
   fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
@@ -99,10 +94,8 @@ function groomHarness(t) {
   const write = process.stdout.write.bind(process.stdout);
   let printed = '';
   process.stdout.write = (s) => { printed += s; return true; };
-  const restore = gh.install();
-  const restoreStore = store.install();
   process.chdir(dir);
-  t.after(() => { process.stdout.write = write; process.chdir(cwd); restoreStore(); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
   return { gh, store, run: async (...argv) => { printed = ''; store.clearCalls(); await main(argv); return printed; } };
 }
 
@@ -197,8 +190,7 @@ test('hkb list --summary prints lanes with their priority spread, and needs-huma
 });
 
 test('hkb list --summary names needs-human cards on their own line', async (t) => {
-  const gh = new FakeGh();
-  const store = new FakeStore();
+  const { gh, store, restore } = installDoubles();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-list-summary-'));
   fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
@@ -209,10 +201,8 @@ test('hkb list --summary names needs-human cards on their own line', async (t) =
   const write = process.stdout.write.bind(process.stdout);
   let printed = '';
   process.stdout.write = (s) => { printed += s; return true; };
-  const restore = gh.install();
-  const restoreStore = store.install();
   process.chdir(dir);
-  t.after(() => { process.stdout.write = write; process.chdir(cwd); restoreStore(); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
   const run = async (...argv) => { printed = ''; await main(argv); return printed; };
 
   const text = await run('list', '--summary');
@@ -239,8 +229,7 @@ test('groomOptions: unknown --level and --bodies exit 2 naming the list', () => 
 // ---------- hkb edit (#237): the write half of the kb block ----------
 
 test('hkb edit <n> --paths/--goal/--scheduled-at/--priority sets exactly those keys', async (t) => {
-  const gh = new FakeGh();
-  const store = new FakeStore();
+  const { gh, store, restore } = installDoubles();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-edit-'));
   fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
@@ -252,10 +241,8 @@ test('hkb edit <n> --paths/--goal/--scheduled-at/--priority sets exactly those k
   const write = process.stdout.write.bind(process.stdout);
   let printed = '';
   process.stdout.write = (s) => { printed += s; return true; };
-  const restore = gh.install();
-  const restoreStore = store.install();
   process.chdir(dir);
-  t.after(() => { process.stdout.write = write; process.chdir(cwd); restoreStore(); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
   const run = async (...argv) => { printed = ''; await main(argv); return printed; };
 
   await run('edit', '50', '--paths', 'src/new.js,src/other.js', '--goal', 'new goal', '--scheduled-at', '2026-09-02T00:00:00Z', '--priority', '3');
@@ -286,8 +273,7 @@ test('hkb edit <n>... with no field flag is a usage error', async () => {
 // ---------- hkb edit rejects a non-numeric --priority / unparseable --scheduled-at (#243) ----------
 
 function setupEditBoard(t, tasks) {
-  const gh = new FakeGh();
-  const store = new FakeStore();
+  const { gh, store, restore } = installDoubles();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-edit-validate-'));
   fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
@@ -296,10 +282,8 @@ function setupEditBoard(t, tasks) {
   const write = process.stdout.write.bind(process.stdout);
   let printed = '';
   process.stdout.write = (s) => { printed += s; return true; };
-  const restore = gh.install();
-  const restoreStore = store.install();
   process.chdir(dir);
-  t.after(() => { process.stdout.write = write; process.chdir(cwd); restoreStore(); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
   const run = async (...argv) => { printed = ''; await main(argv); return printed; };
   return { gh, run };
 }
@@ -362,8 +346,7 @@ function tokenize(cmd) {
 }
 
 test('hkb groom: every hkb edit line it suggests is a command hkb edit actually runs', async (t) => {
-  const gh = new FakeGh();
-  const store = new FakeStore();
+  const { gh, store, restore } = installDoubles();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-edit-suggest-'));
   fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
@@ -390,10 +373,8 @@ test('hkb groom: every hkb edit line it suggests is a command hkb edit actually 
   const write = process.stdout.write.bind(process.stdout);
   let printed = '';
   process.stdout.write = (s) => { printed += s; return true; };
-  const restore = gh.install();
-  const restoreStore = store.install();
   process.chdir(dir);
-  t.after(() => { process.stdout.write = write; process.chdir(cwd); restoreStore(); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
   const run = async (...argv) => { printed = ''; await main(argv); return printed; };
 
   const rep = JSON.parse(await run('groom', '--json', '--status', 'triage,todo,ready'));

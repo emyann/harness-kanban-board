@@ -14,8 +14,7 @@ import {
   parseTranscriptUsage, ratesFor, estimateCost, usageFromTranscript,
   parseTranscriptDenials, deniedToolsFromTranscript, transcriptMcpServers, mcpServersFromTranscript, summarizeDeniedTools,
 } from '../src/stats.js';
-import { FakeGh } from './fake-gh.js';
-import { FakeStore, kbIssue, runWith } from './fake-store.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const NOW = new Date('2026-08-26T12:00:00.000Z');
 const ago = (ms, from = NOW) => new Date(from.getTime() - ms).toISOString();
@@ -597,24 +596,20 @@ test('at the cap, the report says so where a human will see it', () => {
 // ---------- the command, end to end ----------
 
 function harness({ board = 'default', dispatch = {}, state = null, rates = null } = {}) {
-  const gh = new FakeGh();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-stats-'));
   fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
   if (state) fs.writeFileSync(path.join(root, '.kanban', 'state.json'), JSON.stringify(state));
-  const ctx = {
+  const { gh, store, ctx, restore } = installDoubles((g) => ({
     root,
-    cfg: { ...DEFAULT_BOARD, repo: gh.nameWithOwner, board, dispatch: { ...DEFAULT_BOARD.dispatch, ...dispatch }, ...(rates ? { stats: { rates } } : {}) },
-    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    cfg: { ...DEFAULT_BOARD, repo: g.nameWithOwner, board, dispatch: { ...DEFAULT_BOARD.dispatch, ...dispatch }, ...(rates ? { stats: { rates } } : {}) },
+    repo: { owner: g.owner, repo: g.repo, nameWithOwner: g.nameWithOwner },
     board,
     host: 'test-host',
     json: false,
     caps: {},
     _cache: {},
     requireBoard() { return this; },
-  };
-  const restore = gh.install();
-  const store = new FakeStore();
-  const restoreStore = store.install(ctx);
+  }), { board });
   const lines = [];
   return {
     gh, store,
@@ -622,7 +617,7 @@ function harness({ board = 'default', dispatch = {}, state = null, rates = null 
     root,
     out: () => lines.join('\n'),
     run: (flags = {}) => stats(ctx, { since: 'all', ...flags }, { now: NOW, write: (s) => lines.push(s) }),
-    cleanup: () => { restoreStore(); restore(); fs.rmSync(root, { recursive: true, force: true }); },
+    cleanup: () => { restore(); fs.rmSync(root, { recursive: true, force: true }); },
   };
 }
 
@@ -650,6 +645,7 @@ test('hkb stats: one board query, the run comments of the window, and not one wr
   const runReads = h.store.callsOf('loadRun').map((c) => Number(c.args[0]));
   assert.deepEqual(runReads, [1, 2], '#3 has no news and is not running');
   assert.deepEqual(h.store.writes(), [], 'stats reads the board and writes nothing');
+  assert.deepEqual(h.gh.writeRequests(), [], 'and asks the forge for nothing it could write');
 });
 
 test('hkb stats --json: the same object, and the local worker log fills a missing price', async (t) => {
@@ -703,6 +699,7 @@ test('hkb stats: a claude-bg board reports turns and tokens off the transcript, 
   assert.match(h.out(), /spend {6}no cost reported on any of the 1 worker attempt/);
   assert.match(h.out(), /usage {6}2 turns · in 4 · out 2000 · cache 40k written \/ 40k read {2}\(1 transcript\)/);
   assert.deepEqual(h.store.writes(), [], 'stats reads the board and writes nothing');
+  assert.deepEqual(h.gh.writeRequests(), [], 'and asks the forge for nothing it could write');
 });
 
 test('hkb stats: `stats.rates` in board.json turns those tokens into an estimate, marked as one', async (t) => {

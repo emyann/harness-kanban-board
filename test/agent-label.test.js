@@ -17,8 +17,7 @@ import { DEFAULT_BOARD } from '../src/board.js';
 import { agentOf, agentsOf } from '../src/model.js';
 import { setAgent } from '../src/tasks.js';
 import { checkAgentLabels, AGENT_LABEL_CHECK } from '../src/doctor.js';
-import { FakeGh } from './fake-gh.js';
-import { FakeStore, kbIssue, runWith } from './fake-store.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const agentLabels = (store, n) => store.labelsOf(n).filter((l) => l.startsWith('kb:agent:'));
 
@@ -28,33 +27,31 @@ const agentLabels = (store, n) => store.labelsOf(n).filter((l) => l.startsWith('
  * launch template that matters here; nothing in these tests spawns a worker.
  */
 function harness(t, { caps = {} } = {}) {
-  const gh = new FakeGh({ caps });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-agent-'));
   fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
-  const cfg = {
-    ...DEFAULT_BOARD,
-    repo: gh.nameWithOwner,
-    profiles: {
-      claude: { mode: 'process', max_in_progress: 2, launch: ['true'] },
-      codex: { mode: 'process', max_in_progress: 1, launch: ['true'] },
-      'claude-track': { mode: 'process', track: true, track_agents: ['claude', 'claude-track'], max_in_progress: 1, launch: ['true'] },
-    },
-  };
-  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify(cfg));
-  const ctx = {
-    root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
-    board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
-  };
-  const restore = gh.install();
-  const store = new FakeStore();
-  const restoreStore = store.install(ctx);
+  const { gh, store, ctx, restore } = installDoubles((g) => {
+    const cfg = {
+      ...DEFAULT_BOARD,
+      repo: g.nameWithOwner,
+      profiles: {
+        claude: { mode: 'process', max_in_progress: 2, launch: ['true'] },
+        codex: { mode: 'process', max_in_progress: 1, launch: ['true'] },
+        'claude-track': { mode: 'process', track: true, track_agents: ['claude', 'claude-track'], max_in_progress: 1, launch: ['true'] },
+      },
+    };
+    fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify(cfg));
+    return {
+      root, cfg, repo: { owner: g.owner, repo: g.repo, nameWithOwner: g.nameWithOwner },
+      board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
+    };
+  }, { caps });
   const cwd = process.cwd();
   const write = process.stdout.write.bind(process.stdout);
   let printed = '';
   process.stdout.write = (s) => { printed += s; return true; };
   process.chdir(root);
   const logs = [];
-  t.after(() => { process.stdout.write = write; process.chdir(cwd); restoreStore(); restore(); fs.rmSync(root, { recursive: true, force: true }); });
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(root, { recursive: true, force: true }); });
   return {
     gh, store, ctx, root,
     printed: () => printed,
@@ -215,8 +212,8 @@ test('doctor is quiet on a clean board, and says how much it looked at', async (
   assert.match(results[0].detail, /2 open tasks, at most one kb:agent:\* each/);
 });
 
-test('the check reads labels only: no per-task dependency call, even without GraphQL blockedBy', async (t) => {
-  const h = harness(t, { caps: { blockedByGql: false } });
+test('the check reads labels only: one board read, and it asks for no blockers at all', async (t) => {
+  const h = harness(t);
   h.store.addIssue(kbIssue({ number: 41, status: 'ready', agent: 'claude' }));
   h.store.addIssue(kbIssue({ number: 42, status: 'todo', agent: 'claude', blockedBy: [41] }));
   h.store.addIssue(kbIssue({ number: 12, status: 'blocked', agent: 'claude', blockedBy: [42] }));
@@ -225,7 +222,15 @@ test('the check reads labels only: no per-task dependency call, even without Gra
   await checkAgentLabels(h.ctx, { ok: (name, detail) => results.push({ name, detail }), warn: (name, detail) => results.push({ name, detail }) });
 
   assert.equal(results.length, 1);
-  assert.deepEqual(h.store.callsOf('getTask'), [], 'a check about labels reads the board once and asks nothing per card');
+  // The property, stated portably. What it used to assert was "no REST dependency call per card
+  // on a repo without GraphQL `Issue.blockedBy`" — a sentence about one driver's cost model. What
+  // makes that true is the *request*: `blockers: false`. A regression that asked for
+  // `blockers: 'all'` here is one dependency call per open card on such a repo, and it is this
+  // argument, not a REST path, that says so on any board.
+  const reads = h.store.callsOf('listTasks');
+  assert.equal(reads.length, 1, 'one board read');
+  assert.equal(reads[0].args[0]?.blockers, false, 'and it pays nothing for dependencies it does not read');
+  assert.deepEqual(h.store.callsOf('getTask'), [], 'nothing per card either');
 });
 
 test('a board that will not read is a warning, not a crash — doctor has other checks to run', async (t) => {

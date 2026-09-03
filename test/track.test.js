@@ -16,8 +16,7 @@ import {
   trackAlreadyAttempted, isTrackProfile, trackAgents, trackGraph, trackMermaid, mermaidLabel, trackFanout,
 } from '../src/track.js';
 import { main } from '../src/cli.js';
-import { FakeGh } from './fake-gh.js';
-import { FakeStore, kbIssue, runWith } from './fake-store.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const ago = (seconds) => new Date(Date.now() - seconds * 1000).toISOString();
 
@@ -275,8 +274,7 @@ test('a blocker closed as completed is finished work, so it is not in the pictur
 });
 
 test('`hkb track <n>` says which it is and why, and --off/--on is the switch', async (t) => {
-  const gh = new FakeGh();
-  const store = new FakeStore();
+  const { gh, store, restore } = installDoubles();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-trackcmd-'));
   fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
@@ -284,13 +282,11 @@ test('`hkb track <n>` says which it is and why, and --off/--on is the switch', a
   store.addIssue(kbIssue({ number: 42, status: 'todo', agent: 'claude', blockedBy: [41] }));
   store.addIssue(kbIssue({ number: 12, status: 'todo', agent: 'claude', blockedBy: [42] }));
   const cwd = process.cwd();
-  const restore = gh.install();
-  const restoreStore = store.install();
   const write = process.stdout.write.bind(process.stdout);
   let printed = '';
   process.stdout.write = (s) => { printed += s; return true; };
   process.chdir(dir);
-  t.after(() => { process.stdout.write = write; process.chdir(cwd); restoreStore(); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
   const run = async (...argv) => { printed = ''; await main(argv); return printed; };
 
   assert.match(await run('track', '12'), /#12 track: inferred — 1 unfinished child; one claude-track session runs the subgraph/);
@@ -309,21 +305,18 @@ test('`hkb track <n>` says which it is and why, and --off/--on is the switch', a
 });
 
 test('`hkb graph <n>` prints the block; --json carries nodes, edges and the very same mermaid', async (t) => {
-  const gh = new FakeGh();
-  const store = new FakeStore();
+  const { gh, store, restore } = installDoubles();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-graph-'));
   fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
   store.addIssue(kbIssue({ number: 41, title: 'Token bucket + tests', status: 'ready', agent: 'claude' }));
   store.addIssue(kbIssue({ number: 12, title: 'Rate-limit the public API', status: 'todo', agent: 'claude', blockedBy: [41] }));
   const cwd = process.cwd();
-  const restore = gh.install();
-  const restoreStore = store.install();
   const write = process.stdout.write.bind(process.stdout);
   let printed = '';
   process.stdout.write = (s) => { printed += s; return true; };
   process.chdir(dir);
-  t.after(() => { process.stdout.write = write; process.chdir(cwd); restoreStore(); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
 
   await main(['graph', '12']);
   const text = printed;
@@ -514,30 +507,27 @@ test('the dispatcher hands the runner the brief its profile can actually execute
 // ---------- the tick ----------
 
 function harness({ dispatch = {}, host = 'test-host', profiles = null } = {}) {
-  const gh = new FakeGh();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-track-'));
-  const cfg = {
-    ...DEFAULT_BOARD,
-    repo: gh.nameWithOwner,
-    dispatch: { ...DEFAULT_BOARD.dispatch, ...dispatch },
-    profiles: profiles || {
-      claude: { mode: 'process', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] },
-      'claude-track': { mode: 'process', track: true, track_agents: ['claude', 'claude-track'], max_in_progress: 1, model: null, allowed_tools: [], launch: ['true'] },
+  const { gh, store, ctx, restore } = installDoubles((g) => ({
+    root,
+    cfg: {
+      ...DEFAULT_BOARD,
+      repo: g.nameWithOwner,
+      dispatch: { ...DEFAULT_BOARD.dispatch, ...dispatch },
+      profiles: profiles || {
+        claude: { mode: 'process', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] },
+        'claude-track': { mode: 'process', track: true, track_agents: ['claude', 'claude-track'], max_in_progress: 1, model: null, allowed_tools: [], launch: ['true'] },
+      },
     },
-  };
-  const ctx = {
-    root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    repo: { owner: g.owner, repo: g.repo, nameWithOwner: g.nameWithOwner },
     board: 'default', host, json: false, caps: {}, _cache: {}, requireBoard() { return this; },
-  };
-  const restore = gh.install();
-  const store = new FakeStore({ host });
-  const restoreStore = store.install(ctx);
+  }), { host });
   const logs = [];
   return {
     gh, store, ctx, root, logs,
     log: () => logs.join('\n'),
     tick: (opts = {}) => tick(ctx, { log: (m) => logs.push(m), ...opts }),
-    cleanup: () => { restoreStore(); restore(); fs.rmSync(root, { recursive: true, force: true }); },
+    cleanup: () => { restore(); fs.rmSync(root, { recursive: true, force: true }); },
   };
 }
 
@@ -732,6 +722,7 @@ test('a dry run says which track it would take, and writes nothing', async (t) =
   assert.equal(h.store.statusOf(26), 'todo');
   assert.deepEqual(await h.store.locks(), []);
   assert.deepEqual(h.store.writes(), []);
+  assert.deepEqual(h.gh.writeRequests(), [], 'and nothing left through the forge either — a dry run touches no PR');
   assert.match(h.log(), /#26: \[dry-run\] would run track #41 → #42 → #26 as one claude-track session/);
 });
 

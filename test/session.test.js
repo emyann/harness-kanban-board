@@ -8,8 +8,7 @@ import { stopHook, markSessionClaim, whichAttempt, sessionForAttempt } from '../
 import { currentSession } from '../src/jobs.js';
 import { complete } from '../src/lifecycle.js';
 import { DEFAULT_BOARD } from '../src/board.js';
-import { FakeGh } from './fake-gh.js';
-import { FakeStore, kbIssue, runWith } from './fake-store.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const RESULT = {
   type: 'result',
@@ -307,11 +306,15 @@ const writes = (store) => store.writes().length;
 
 /** A track runner's worktree and its board: root #7, plus #8 and #9 as nodes it claimed. */
 function trackHarness({ rootStatus = 'review' } = {}) {
-  const gh = new FakeGh();
-  const store = new FakeStore();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-hook-'));
   const root = path.join(dir, 'kb-7-1'); // `claude --worktree kb-<n>-<k>`: where the one session runs
   fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  const { gh, store, ctx, restore } = installDoubles((g) => ({
+    root,
+    cfg: { ...DEFAULT_BOARD, repo: g.nameWithOwner },
+    repo: { owner: g.owner, repo: g.repo, nameWithOwner: g.nameWithOwner },
+    board: 'default', host: 'h', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
+  }), { host: 'h' });
   store.addIssue(kbIssue({ number: 7, status: rootStatus, agent: 'claude-track', run: runWith([{ attempt: 1, host: 'h', wt: 'kb-7-1', track: true, ...ended() }]) }));
   store.addIssue(kbIssue({ number: 8, status: 'review', agent: 'claude', run: runWith([{ attempt: 1, host: 'h', manual: true, ...ended() }]) }));
   // #9's claimed attempt is its second, and both of its attempts have ended: only the exact
@@ -320,10 +323,6 @@ function trackHarness({ rootStatus = 'review' } = {}) {
   // a node with a live attempt that is somebody else's — a reclaim, or a worker the tick dispatched
   store.addIssue(kbIssue({ number: 10, status: 'running', agent: 'claude', run: runWith([{ attempt: 1, host: 'other', started_at: '2026-08-27T10:00:00Z' }]) }));
 
-  const cfg = { ...DEFAULT_BOARD, repo: gh.nameWithOwner };
-  const ctx = { root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner }, board: 'default', host: 'h', json: false, caps: {}, _cache: {}, requireBoard() { return this; } };
-  const restore = gh.install();
-  const restoreStore = store.install(ctx);
   const saved = { ...process.env };
   Object.assign(process.env, { KB_TASK: '7', KB_ATTEMPT: '1', KB_PROFILE: 'claude-track' });
   const markerFile = (n, k) => path.join(root, '.kanban', 'sessions', `${n}-${k}`);
@@ -333,7 +332,7 @@ function trackHarness({ rootStatus = 'review' } = {}) {
     attempt: async (n, k) => store.runOf(n).attempts.find((a) => a.attempt === k),
     stop: (payload = PAYLOAD) => stopHook(ctx, { readStdin: () => JSON.stringify(payload) }),
     cleanup: () => {
-      restoreStore(); restore();
+      restore();
       for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
       Object.assign(process.env, saved);
       fs.rmSync(dir, { recursive: true, force: true });
@@ -528,20 +527,20 @@ test('currentSession: an unreadable or missing job record is never an error', ()
  * the way a track runner does.
  */
 function bgHarness({ job = true } = {}) {
-  const gh = new FakeGh();
-  const store = new FakeStore();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-bg-'));
   const root = path.join(dir, 'kb-30-1');
   fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  const { gh, store, ctx, restore } = installDoubles((g) => ({
+    root,
+    cfg: { ...DEFAULT_BOARD, repo: g.nameWithOwner },
+    repo: { owner: g.owner, repo: g.repo, nameWithOwner: g.nameWithOwner },
+    board: 'default', host: 'h', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
+  }), { host: 'h' });
   const jobDir = jobDirWith({ ...JOB_STATE, worktreePath: root });
   const open = (attempt, extra = {}) => ({ attempt, host: 'h', started_at: '2026-08-27T09:00:00Z', ...extra });
   store.addIssue(kbIssue({ number: 30, status: 'running', agent: 'claude', run: runWith([open(1, { bg: true, wt: 'kb-30-1' })]) }));
   store.addIssue(kbIssue({ number: 31, status: 'running', agent: 'claude', run: runWith([open(1, { ...ended('failed') }), open(2, { manual: true })]) }));
 
-  const cfg = { ...DEFAULT_BOARD, repo: gh.nameWithOwner };
-  const ctx = { root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner }, board: 'default', host: 'h', json: false, caps: {}, _cache: {}, requireBoard() { return this; } };
-  const restore = gh.install();
-  const restoreStore = store.install(ctx);
   const saved = { ...process.env };
   for (const k of ['KB_TASK', 'KB_ATTEMPT', 'KB_PROFILE', 'CLAUDE_JOB_DIR', 'CLAUDE_CODE_SESSION_ID']) delete process.env[k];
   process.env.CLAUDE_CODE_SESSION_ID = SID;
@@ -550,7 +549,7 @@ function bgHarness({ job = true } = {}) {
     gh, store, ctx, root, outside: dir,
     attempt: async (n, k) => store.runOf(n).attempts.find((a) => a.attempt === k),
     cleanup: () => {
-      restoreStore(); restore();
+      restore();
       for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
       Object.assign(process.env, saved);
       fs.rmSync(dir, { recursive: true, force: true });
