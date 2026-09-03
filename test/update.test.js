@@ -21,7 +21,7 @@ import { packageVersion, packageSkillDir } from '../src/init.js';
 import { DEFAULT_BOARD } from '../src/board.js';
 import { loop } from '../src/dispatch.js';
 import { main } from '../src/cli.js';
-import { FakeGh, kbIssue } from './fake-gh.js';
+import { installDoubles, kbIssue } from './fake-store.js';
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -294,17 +294,17 @@ test('a loop on a current install, offline, or pinned never says a word', async 
 });
 
 test('a dispatcher loop says it on its first tick of the day and on no other tick', async (t) => {
-  const gh = new FakeGh();
-  gh.addIssue(kbIssue({ number: 1, title: 'a card nobody claims', status: 'todo' }));
-  t.after(gh.install());
   const r = withRegistry(t, { latest: NEWER });
   const root = tmpRoot();
   const ctx = {
     root,
-    cfg: { ...DEFAULT_BOARD, repo: gh.nameWithOwner, profiles: {} },
-    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    cfg: { ...DEFAULT_BOARD, repo: 'acme/board', profiles: {} },
+    repo: { owner: 'acme', repo: 'board', nameWithOwner: 'acme/board' },
     board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
   };
+  const { store, restore } = installDoubles(ctx);
+  t.after(restore);
+  store.addIssue(kbIssue({ number: 1, title: 'a card nobody claims', status: 'todo' }));
 
   const lines = [];
   const enough = new Error('two ticks is the test');
@@ -322,11 +322,11 @@ test('a dispatcher loop says it on its first tick of the day and on no other tic
 // ---------- never on the hot path ----------
 
 test('an ordinary command asks npm nothing: `hkb list` makes no registry call', async (t) => {
-  const gh = new FakeGh();
-  gh.addIssue(kbIssue({ number: 1, title: 'ready to go', status: 'ready', agent: 'claude' }));
-  t.after(gh.install());
   const r = withRegistry(t, { latest: NEWER });
   const root = tmpRoot();
+  const { store, restore } = installDoubles({ root, board: 'default', _cache: {} });
+  t.after(restore);
+  store.addIssue(kbIssue({ number: 1, title: 'ready to go', status: 'ready', agent: 'claude' }));
   const cwd = process.cwd();
   const write = process.stdout.write.bind(process.stdout);
   let printed = '';

@@ -1242,11 +1242,12 @@ async function probe(ctx, opts = {}) {
   return Object.fromEntries(rows.map((r) => [r.name, r]));
 }
 
-test('doctor on a GitHub board says which store it is and probes nothing else', async () => {
+test('a board.json still pinned to the retired GitHub store is told so, and named the migration', async () => {
   const rows = await probe({ root: '/tmp/none', cfg: { store: 'github', repo: 'o/r' }, board: 'default', _cache: {} });
-  assert.equal(rows[STORE_CHECK].ok, true);
-  assert.match(rows[STORE_CHECK].detail, /github — the board is the kb:\* issues on o\/r/);
-  assert.equal(rows[BRANCH_CHECK], undefined, 'there is no branch to be wrong about');
+  assert.equal(rows[STORE_CHECK].ok, false);
+  assert.match(rows[STORE_CHECK].detail, /GitHub store, which hkb no longer has/);
+  assert.match(rows[STORE_CHECK].detail, /hkb init --store local --import/);
+  assert.equal(rows[BRANCH_CHECK], undefined, 'nothing else is probed against a store hkb cannot open');
   assert.equal(rows[MOUNT_CHECK], undefined);
 });
 
@@ -1384,13 +1385,11 @@ test('a forge that is not there costs one line, not the whole report', async (t)
   // each probe fails under its own name.
   assert.equal(by.labels.ok, false, 'the labels probe answered for itself');
   assert.notEqual(by['rate limit']?.ok, true, `the checks after it still ran and none of them passed against a forge that is not there: ${Object.keys(by).join(', ')}`);
-  // `track branches` and `orphaned PRs` are the two that no longer ask the forge anything here, and
-  // they are `ok` because they were skipped, not because they passed — so each says which in words,
-  // the way `gc.js` speaks its own line for the identical sweep. A skipped check that reported a
-  // bare `ok` would be exactly the shape this test exists to refuse.
+  // `track branches` and `orphaned PRs` ask the forge on every board now — a track branch and a pull
+  // request live there whatever the cards live in — so with the forge unreachable they fail under
+  // their own names rather than being skipped with a reassuring `ok`.
   for (const name of ['track branches', 'orphaned PRs']) {
-    assert.equal(by[name].ok, true, `${name} is not a question a local board can answer`);
-    assert.match(by[name].detail, /local board/, `${name} says it was skipped and why: ${by[name].detail}`);
+    assert.equal(by[name].ok, false, `${name} asks the forge, and the forge is not there`);
   }
   // And the checks that need the *board* rather than the forge now answer on a local board, because
   // doctor reads it through `openStore` like every other verb (#325). They used to be the "could not
@@ -1405,7 +1404,9 @@ test('a forge that is not there costs one line, not the whole report', async (t)
     assert.equal(by[name]?.ok, true, `${name} answered from the local board: ${Object.keys(by).join(', ')}`);
     assert.doesNotMatch(by[name].detail || '', /could not read the board/, `${name}: ${by[name].detail}`);
   }
-  assert.ok(by['rate limit'] && by.GraphQL, 'and the probes after the board read still ran');
+  // `GraphQL` was here too: the capability probe went with the store that needed it (a card's
+  // blockers are a column now, not a schema question about `Issue.blockedBy`).
+  assert.ok(by['rate limit'], `and the probes after the board read still ran: ${Object.keys(by).join(', ')}`);
   assert.equal(by.github, undefined, 'and the whole half is no longer collapsed into one line');
 
   // and the check that reads `ctx.cfg` and nothing else is on the local side of that line. It sat

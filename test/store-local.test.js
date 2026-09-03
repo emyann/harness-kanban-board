@@ -69,55 +69,45 @@ async function board(t, opts = {}) {
 
 // ---------- the seam ----------
 
-test('the store is what board.json says, and a kb-board branch never decides it', async (t) => {
-  // **The rule this file exists to hold now.** `storeKind` used to have a second rule — a repository
+test('there is one store, and a board.json that names the retired one says so', async (t) => {
+  // **The rule this file exists to hold.** `storeKind` used to have a second rule — a repository
   // with a `kb-board` (or `origin/kb-board`) ref is a local board — so that a clone needed no
-  // config. It is gone, because a rule that reads the store off a *ref* is reachable by `git fetch`:
-  // another host's push, a colleague's experiment, a branch pulled in by accident, and the checkout
-  // flips onto the local store while `.kanban/board.json` still points every verb at GitHub. Three
-  // successive reviews found a different destructive interaction in that half-migrated state (an
-  // import that deleted live workers' lock refs; a gc that read `[]` and destroyed worker worktrees;
-  // collaborators refused every write verb on a board of issues they own). One cause, one fix.
-  const s = scratch(t);
-  const ctx = ctxAt(s.root, { store: undefined });
+  // config. It went first, because a rule that reads the store off a *ref* is reachable by `git
+  // fetch`; then the other store went too (ADR-006), so the key has one valid value and its absence
+  // means that value. What is left to hold is that a board.json still pinned to the GitHub store is
+  // *told*, by name and with the migration, rather than quietly opening something else.
+  const s2 = scratch(t);
+  const ctx = ctxAt(s2.root, { store: undefined });
   delete ctx.cfg.store;
-  assert.equal(storeKind(ctx), 'github', 'no declaration: the board is where it has always been');
+  assert.equal(storeKind(ctx), 'local', 'no declaration: there is one store');
 
   openGitTier(ctx).init('default');
-  assert.equal(storeKind(ctx), 'github', 'and a branch appearing under the checkout does not move it');
-  // The invalidation that remains is about the memoized *tree*, not about a cached answer: there is
-  // no cached answer any more, because there is nothing to work out.
+  assert.equal(storeKind(ctx), 'local');
   await forgetStore(ctx);
-  assert.equal(storeKind(ctx), 'github', 'still — only the key decides');
+  assert.equal(storeKind(ctx), 'local');
 
   ctx.cfg.store = 'local';
-  assert.equal(storeKind(ctx), 'local', 'the key, and nothing else');
-  ctx.cfg.store = 'github';
-  assert.equal(storeKind(ctx), 'github');
+  assert.equal(storeKind(ctx), 'local', 'the key, when it is there, says the same thing');
 
+  ctx.cfg.store = 'github';
+  assert.throws(() => storeKind(ctx), (e) => e.exitCode === 2 && /no longer has/.test(e.message) && /--import/.test(e.message));
   ctx.cfg.store = 'sqlite';
   assert.throws(() => storeKind(ctx), (e) => e.exitCode === 2 && /not a store/.test(e.message));
 });
 
-test('a fetched kb-board branch cannot convert a collaborator, and cannot make gc destructive', async (t) => {
-  // The end-to-end shape of the finding above, on the two verbs it reached: one host publishes the
-  // branch, everybody else fetches it, and on their checkouts nothing at all changes.
-  const s = scratch(t);
-  const ctx = ctxAt(s.root, { store: undefined });
+test('a clone needs no configuration: the branch is the board, wherever it was fetched from', async (t) => {
+  // One host publishes the branch, everybody else fetches it, and every checkout reads the same
+  // board with nothing written into `.kanban/board.json` at all.
+  const s2 = scratch(t);
+  const ctx = ctxAt(s2.root, { store: undefined });
   delete ctx.cfg.store;
-  // The branch arrives the way it really would: on the remote-tracking ref, from a fetch.
-  const publisher = ctxAt(s.root, {});
+  const publisher = ctxAt(s2.root, {});
   openGitTier(publisher).init('default');
-  git(s.root, 'push', '-q', 'origin', 'kb-board');
-  git(s.root, 'update-ref', 'refs/remotes/origin/kb-board', git(s.root, 'rev-parse', 'kb-board'));
-  git(s.root, 'branch', '-D', 'kb-board');
 
-  assert.equal(storeKind(ctx), 'github', 'a branch on the remote is not a store');
+  assert.equal(storeKind(ctx), 'local');
   const store = await openStore(ctx);
-  assert.equal(store.kind, 'github', 'and openStore hands back the driver the verbs are using');
-  // The write guard follows: a collaborator is not refused `hkb create` on a board of issues they
-  // have always been able to write.
-  assert.equal(await assertOwningHost({ ...ctx, host: 'someone-elses-laptop' }, 'create'), null);
+  assert.equal(store.branch, 'kb-board', 'the composed local store, opened with no key at all');
+  t.after(() => { try { store.close(); } catch { /* already closed */ } });
 });
 
 test('the local store composes both tiers: the branch is durable, the index is live', async (t) => {
@@ -412,9 +402,6 @@ test('an idle tick still stamps: liveness is about the process, not about what i
   store.git.forget();
   assert.equal(store.git.tip(), tip);
 
-  // A GitHub board gets none of this, and does not pay the two rev-parse to find that out twice.
-  const ghCtx = ctxAt(scratch(t, { name: 'gh' }).root, { store: 'github' });
-  await syncPass(ghCtx, empty, () => { assert.fail('a GitHub board has no branch to stamp'); });
 });
 
 test('init --import moves a GitHub board onto the branch: ids, statuses, blockers, run records', async (t) => {
@@ -1112,11 +1099,11 @@ test('sync reads the exit status of every update-ref: a lost compare-and-swap is
 });
 
 test('a sync that creates the branch changes nothing about which store this is', async (t) => {
-  // The old shape of this test asserted the opposite — that `hkb sync` creating `kb-board` under a
-  // running process flipped it onto the local store, and that `forgetStore` was what made that
-  // safe. It is not safe, and it is no longer possible: `storeKind` reads `"store"` in board.json
-  // and nothing else, so a branch arriving (a sync, a fetch, another host's push) leaves every verb
-  // exactly where it was. That inference is the one this round removed.
+  // The oldest shape of this test asserted that `hkb sync` creating `kb-board` under a running
+  // process *flipped* it onto the local store, and that `forgetStore` was what made that safe. It
+  // was not safe: a branch arriving over the network decided nothing about where a verb writes.
+  // With one store the question cannot even be posed, and a branch arriving is just the board's
+  // cards showing up.
   const { dir, origin, store } = await board(t);
   store.createTask({ title: 'published', status: 'ready' });
   await store.sync();
@@ -1126,13 +1113,12 @@ test('a sync that creates the branch changes nothing about which store this is',
   fs.mkdirSync(path.join(clone, '.kanban'), { recursive: true });
   const ctx = ctxAt(clone, { store: undefined });
   delete ctx.cfg.store;
-  assert.equal(storeKind(ctx), 'github', 'no key, no local board');
+  assert.equal(storeKind(ctx), 'local', 'no key is the one store, before the branch is even here');
 
   const theirs = openLocalStore(ctx, { reconcile: false });
   t.after(() => theirs.close());
-  assert.equal((await theirs.sync()).fastForwarded, true, 'the branch is fetched and created all the same');
-  assert.equal(storeKind(ctx), 'github', 'and the store did not move under the running process');
-  assert.equal((await openStore(ctx)).kind, 'github');
+  assert.equal((await theirs.sync()).fastForwarded, true, 'the branch is fetched and created');
+  assert.equal(storeKind(ctx), 'local', 'and nothing about the answer moved under the running process');
 });
 
 test('a clock corrected backwards throttles, and does not commit a stamp every tick', async (t) => {

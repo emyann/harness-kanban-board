@@ -110,12 +110,10 @@ test('hkb groom --json: one board query, zero writes, and the frozen key set', a
   assert.deepEqual(writes(store), [], 'groom is a read, exactly like dispatch --dry-run');
   assert.deepEqual(Object.keys(rep), REPORT_KEYS);
   assert.equal(rep.board, 'default');
-  // NOT the provenance the board came back with. `groomBoard` derives this from
-  // `caps.blockedByGql` — GitHub's own capability probe — rather than from the `blockers` note
-  // `listTasks` hangs on the array (`blockersOf`), so on any store that is not GitHub it reports
-  // "rest" for a board that never made a REST call. Asserted as it behaves, and filed:
-  // docs/wiki/FINDINGS.md, "groom reports blockers_source from caps".
-  assert.equal(rep.blockers_source, 'rest');
+  // The provenance the board actually came back with (`blockersOf`), not a capability probe's
+  // guess: `groomBoard` used to derive this from `caps.blockedByGql` and reported "rest" for a
+  // board that never made a REST call in its life. The store that answered names itself.
+  assert.equal(rep.blockers_source, 'fake');
   assert.deepEqual(Object.keys(rep.summary).sort(), ['by_status', 'hubs', 'lane', 'levels', 'one_slot', 'path_overlap']);
   assert.deepEqual(rep.cards.map((c) => c.number), [10, 11, 12], 'triage/todo/ready by default — #13 is running');
   for (const c of rep.cards) assert.deepEqual(Object.keys(c).filter((k) => k !== 'bodyText'), CARD_KEYS);

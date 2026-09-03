@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { TRACK_BRANCH_CHECK, checkTrackBranches } from '../src/doctor.js';
 import { sweepTrackBranches } from '../src/gc.js';
-import { FakeGh, kbIssue, runWith } from './fake-gh.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 function sink() {
   const results = [];
@@ -18,10 +18,9 @@ function sink() {
 }
 
 function harness() {
-  const gh = new FakeGh();
-  const ctx = { repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner }, board: 'default', caps: {}, _cache: {} };
-  const restore = gh.install();
-  return { gh, ctx, cleanup: restore };
+  const ctx = { root: '/tmp/nonexistent', repo: { owner: 'acme', repo: 'board', nameWithOwner: 'acme/board' }, board: 'default', caps: {}, _cache: {} };
+  const { gh, store, restore } = installDoubles(ctx);
+  return { gh, store, ctx, cleanup: restore };
 }
 
 test('no track branches on the repo: a clean ok, no reads wasted', async () => {
@@ -35,10 +34,10 @@ test('no track branches on the repo: a clean ok, no reads wasted', async () => {
 });
 
 test('a track branch whose root is still running, attempt open: ok — a live runner', async () => {
-  const { gh, ctx, cleanup } = harness();
+  const { gh, store, ctx, cleanup } = harness();
   try {
     const live = runWith([{ attempt: 1, host: 'h', started_at: new Date().toISOString(), track: true, track_branch: 'kb/track-26' }]);
-    gh.addIssue(kbIssue({ number: 26, status: 'running', agent: 'claude-track', run: live }));
+    store.addIssue(kbIssue({ number: 26, status: 'running', agent: 'claude-track', run: live }));
     gh.refs.set('refs/heads/kb/track-26', 'f'.repeat(40));
     const s = sink();
     await checkTrackBranches(ctx, s);
@@ -48,10 +47,10 @@ test('a track branch whose root is still running, attempt open: ok — a live ru
 });
 
 test('a track branch whose root already finished (done) its track attempt: flagged, no live runner', async () => {
-  const { gh, ctx, cleanup } = harness();
+  const { gh, store, ctx, cleanup } = harness();
   try {
     const ended = runWith([{ attempt: 1, host: 'h', started_at: new Date().toISOString(), ended_at: new Date().toISOString(), outcome: 'completed', track: true, track_branch: 'kb/track-26' }]);
-    gh.addIssue(kbIssue({ number: 26, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', run: ended }));
+    store.addIssue(kbIssue({ number: 26, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', run: ended }));
     gh.refs.set('refs/heads/kb/track-26', 'f'.repeat(40));
     const s = sink();
     const orphans = await checkTrackBranches(ctx, s);
@@ -63,7 +62,7 @@ test('a track branch whose root already finished (done) its track attempt: flagg
 });
 
 test('a track branch whose root is not on the board at all: flagged, not silently skipped', async () => {
-  const { gh, ctx, cleanup } = harness();
+  const { gh, store, ctx, cleanup } = harness();
   try {
     gh.refs.set('refs/heads/kb/track-99', 'f'.repeat(40)); // no issue #99
     const s = sink();
@@ -76,7 +75,7 @@ test('a track branch whose root is not on the board at all: flagged, not silentl
 // ---------- gc: deleting a settled root's track branch ----------
 
 test('sweepTrackBranches deletes a settled root\'s branch only with --yes, and leaves an open root alone', async () => {
-  const { gh, ctx, cleanup } = harness();
+  const { gh, store, ctx, cleanup } = harness();
   try {
     gh.refs.set('refs/heads/kb/track-26', 'f'.repeat(40)); // #26 done
     gh.refs.set('refs/heads/kb/track-27', 'e'.repeat(40)); // #27 still running

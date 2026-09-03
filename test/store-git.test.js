@@ -20,7 +20,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { GitTier, openGitTier, BOARD_BRANCH, BOARD_REF, fileJson, DURABLE_METHODS, isOwned, classifyRefWrite } from '../src/store/git.js';
 import { gitSays } from '../src/board.js';
-import { L, emptyRun, serializeResultComment, serializeRunComment, RESULT_MARKER } from '../src/model.js';
+import { L, emptyRun, serializeResultComment, RESULT_MARKER } from '../src/model.js';
+import { runComment as serializeRunComment } from './fake-gh.js';
 
 const ENV = {
   GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t',
