@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "adding a store verb, debugging an index that disagrees with the branch, wondering why a verb is refused on this host, or working on hkb sync / init --import"
 covers:
   - path: src/store/local.js
-    sha: 5d439507e01358078ccceec163b09bcc1cb70c83
+    sha: 7116b59c96131e54b6a52a70d28353ecdd216155
   - path: src/store/index.js
     sha: 918495a206540318480f3b0ce7cd0a8f559ae874
   - path: src/store/sqlite.js
@@ -20,7 +20,7 @@ covers:
     sha: 707a961f4b31816273d77ab07ee1116cbb4aa319
   - path: src/cli.js
     sha: c9c665acc7044ae2710d887424fa03f1cb63e3b3
-generated_at_commit: a5f1e60
+generated_at_commit: 8781a1e
 last_refreshed: 2026-09-03
 related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
