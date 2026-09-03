@@ -11,17 +11,17 @@ covers:
   - path: web/index.html
     sha: 322aa96236ef37657a9a2326b83dc7b480672134
   - path: src/board.js
-    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
+    sha: f69569a4ef1ba7e4dabb5af394dddac6ba8d4a1f
   - path: src/init.js
-    sha: c905bab09d496c7b7fe2aaa0c92d2109fdd30432
+    sha: e9da3dee1b67c4169bae70647d30012fba868f60
   - path: src/lifecycle.js
-    sha: c3c49b90e80c7e68d44b4f8f999debcfa484de80
+    sha: 3d8234ec94517fa40a1fdbef460486d3bf873068
   - path: src/track.js
     sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
   - path: src/model.js
     sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
-generated_at_commit: 237bb61
-last_refreshed: 2026-09-02
+generated_at_commit: 2ce39a7
+last_refreshed: 2026-09-03
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
 
@@ -285,6 +285,26 @@ hang off a card that is neither todo nor blocked. `edgesMayBeMissing` looks for
 exactly that and the graph carries a one-line note, rather than drawing a
 confidently wrong picture of what a track depended on.
 
+## A clone is a reader, and the page is what a reader gets
+
+On a local board the whole board travels with the repository, so "share the
+board" is `git clone` — and what a clone gets is exactly this page. There is no
+setup: `.kanban/board.json` need not exist, because `openStore` reads the
+`kb-board` branch (or `origin/kb-board`) and calls the board local on that alone
+(`storeKind`, `src/store/index.js`).
+
+What a clone cannot do is write. The branch names one owning host, and every
+mutating verb — including the ones the page's drag-and-drop calls — is refused
+on any other with exit 2 naming `hkb init --take-over` (`assertOwningHost`,
+`src/cli.js`; `assertLocalOwner`, `src/store/local.js`). So a teammate's clone
+is a live, zero-cost, read-only view that goes as stale as their last
+`git fetch`, and the drawer, the graph and the lanes all work on it.
+
+> TODO-VERIFY: the page's drag-and-drop on a clone — the verb is refused with a
+> clear message, but whether `web/index.html` renders that refusal usefully or
+> only fails the request has not been checked.
+
 ## Related
 
 - [hkb at a glance](../architecture/overview.md)
+- [architecture/local-store](../architecture/local-store.md)

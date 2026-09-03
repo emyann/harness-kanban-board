@@ -7,28 +7,36 @@ audience: [dev]
 read_when: "writing a verb that reads or writes board state, adding a store driver, or wondering why tasks.js and lock.js are two lines long"
 covers:
   - path: src/store/index.js
-    sha: ff18b848824f2370c915b5417fd6fe51d5c36f2f
+    sha: c411c7f6f1c832c340b10f9c263b02adde998066
   - path: src/store/github.js
-    sha: e2708642df0ef4599f450e643b9b67eeeb0b2ad5
+    sha: c7868a5dfbf4188ade5bf135ad321c57f18e76e5
   - path: src/forge.js
-    sha: 20dd384386ca63bc98d103b2e7728f29a95bc87c
+    sha: 6fb1fd64643a3762f54b9c68c3b51b03c199e017
   - path: src/tasks.js
     sha: a135544bc265b07a25bd5ea2cd5d2235687bac2f
   - path: src/lock.js
     sha: cfb7eaf1a75003826cf610ee136a08dc0d4ff281
   - path: src/board.js
-    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
-generated_at_commit: 237bb61
-last_refreshed: 2026-09-02
+    sha: f69569a4ef1ba7e4dabb5af394dddac6ba8d4a1f
+generated_at_commit: 2ce39a7
+last_refreshed: 2026-09-03
 related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-and-leases, concepts/board-protocol]
 ---
 
 # The store seam
 
-> `openStore(ctx)` is the only way board state should be reached. What is
-> behind it today is GitHub; what is behind it next is a `kb-board` git branch
-> and a `node:sqlite` index (`decisions/adr-006-local-store`). The seam exists
-> so that the verbs written between now and then are written **once**.
+> `openStore(ctx)` is the only way board state should be reached. Behind it are
+> two drivers: the GitHub one, and the local one — a `kb-board` git branch plus
+> a `node:sqlite` index, composed in `src/store/local.js`
+> (`architecture/local-store`, `decisions/adr-006-local-store`). The seam exists
+> so that the verbs written between them are written **once**.
+
+**Which driver, and where that is decided.** `storeKind(ctx)` reads `store` in
+`.kanban/board.json` (`"local"` | `"github"`) and, when the key is absent, falls
+back to "does this repository have a `kb-board` branch". Nothing else in hkb
+branches on the store; a caller that needs to force one — `hkb init --import`,
+which reads GitHub and writes local — passes `openStore(ctx, {kind})`. A new
+board is local as of A6; an existing board keeps what it has.
 
 ## Why a seam and not a rewrite
 
@@ -100,10 +108,13 @@ tiers cannot get it wrong independently.
 ## The conformance suite is what says a driver is done
 
 `test/store.test.js` is one `SCENARIOS` array run against every entry in
-`DRIVERS`. Today `DRIVERS` holds the GitHub driver backed by `test/fake-gh.js`;
-the branch tier and the index tier append theirs, and a driver is finished when
-this file is green for it. A scenario may only touch the interface — that is
-what keeps it portable.
+`DRIVERS`, and a driver is finished when this file is green for it. `DRIVERS`
+holds two: the GitHub driver backed by `test/fake-gh.js`, and the **composed
+local** driver — a scratch repository whose `.kanban/board.json` says
+`"store": "local"`, opened through `openStore` so the seam itself is under test.
+Neither local *tier* is registered on its own, and that is deliberate: a tier
+has half the interface, so it would fail fifteen scenarios that are not about
+it. A scenario may only touch the interface — that is what keeps it portable.
 
 Three things a scenario legitimately needs but the interface does not offer are
 asked of the *harness* instead, as optional hooks: `settleClaim` (make a claim

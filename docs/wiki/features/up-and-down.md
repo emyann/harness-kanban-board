@@ -11,15 +11,15 @@ covers:
   - path: src/model.js
     sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/board.js
-    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
+    sha: f69569a4ef1ba7e4dabb5af394dddac6ba8d4a1f
   - path: src/dispatch.js
-    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
+    sha: a75cb673ec4521836113ba1b8358f4cb5bd175e8
   - path: src/serve.js
     sha: fe50acf9c37de567f1a90fd802e682ab746f6d50
   - path: src/doctor.js
-    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
-generated_at_commit: 237bb61
-last_refreshed: 2026-09-02
+    sha: 4ed022c48ec21ba66b92f895fefa333b6c928133
+generated_at_commit: 2ce39a7
+last_refreshed: 2026-09-03
 related: [architecture/overview, features/web-board, concepts/roles-and-seats, architecture/dispatcher-tick]
 ---
 
@@ -343,7 +343,34 @@ it.
   against it says `removed` instead, because that run is the one that dropped
   it — nothing needs deleting by hand either way.
 
+## On a local board the loop also syncs, and stamps whose it is
+
+Two things ride the end of a tick when the board is on the local store
+(`syncPass`, `src/dispatch.js`), and neither runs on a GitHub board:
+
+- **`syncAfterTick`** pushes `kb-board` to the remote and fast-forwards from it
+  — but only after a tick that decided something (`DURABLE_TICK_KEYS`), at most
+  once a minute (a stamp in `.kanban/state.json`, this host's network rather
+  than the board's state), and silently when the laptop is offline. A tick that
+  reclaimed nothing and claimed nothing has nothing to push, and a board that
+  cannot reach its remote is not a board that stops dispatching. A divergence is
+  logged once and never merged: the branch has one writer.
+- **`markDispatcher`** writes `{host, pid, at}` into the branch's `board.json`,
+  throttled to a third of `HOST_LIVE_MS`. That stamp is the *only* thing that
+  lets another machine's `hkb init --take-over` tell a board somebody is still
+  ticking from one whose laptop is not coming back — and it is a commit, which
+  is why it is throttled and why it rides a tick rather than the beat.
+
+Both are wrapped: a failure here logs `sync skipped: …` and the loop carries
+on. The decision has already landed on the branch; the copy on the remote is a
+backup.
+
+`hkb sync` is the same push and fast-forward, by hand, on demand. It refuses on
+a GitHub board naming the store the cards are actually on, because "sync" there
+would be a verb with nothing to do.
+
 ## Related
 
 - [architecture/overview](../architecture/overview.md)
+- [architecture/local-store](../architecture/local-store.md)
 - [features/web-board](web-board.md)
