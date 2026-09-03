@@ -116,44 +116,28 @@ loop, and what a tick would otherwise have done for you: [Driving a board by han
 
 ## How it works
 
-A board is kept in one of two stores, behind one interface — `openStore()` is the only thing that knows which
-([ADR-006](docs/wiki/decisions/adr-006-local-store.md)). `hkb init` makes a **local** one.
-
-> **Where this is, right now.** The verbs run on the store you chose: `hkb create`, `hkb list`, `hkb claim`,
-> `hkb finish` and the dispatcher all reach board state through `openStore()`, so a local board is one you drive
-> end to end with `gh` logged out. What is still ahead is retiring the GitHub driver for boards that have been
-> imported, and the control-plane verbs — track B and track C of
-> [the plan](docs/local-first.md#10-the-sequence--three-tracks). Pull requests are deliberately *not* part of
-> the store: a local board still opens its work on a forge.
-
-**The local store — the default.** Nothing leaves the repository, nothing costs an API call, and the board
-works with `gh` logged out.
+**The board lives in your repository** ([ADR-006](docs/wiki/decisions/adr-006-local-store.md)). Nothing about it
+leaves the repo, nothing costs an API call, and every verb works with `gh` logged out — on a plane, on a laptop,
+in a tunnel. `hkb init` creates it; a `git clone` brings it with you.
 
 - **A card is a file.** `cards/42.json` on the `kb-board` branch — title, body, status, agent, priority, paths,
   blockers — one card per file, sorted keys, written with git plumbing from any worktree. `git log kb-board` is
   the board's history of decisions, and `git show kb-board:cards/42.json` is the card.
 - **An edge is a field.** `blocked_by: [41]`, and a card turns *ready* the moment its last blocker is done.
-- **A lock is a row.** `.git/hkb/index.db` (SQLite, `node:sqlite`, no dependency) holds the claims, the open
-  attempts' pid/worktree/heartbeat and the event log. A claim is one transaction; a heartbeat is one `UPDATE`.
-  It is host-local and rebuilt from the branch whenever the branch has moved, so losing it costs nothing.
+- **A claim is a row.** `.git/hkb/index.db` (SQLite, `node:sqlite`, no dependency) holds the claims, the open
+  attempts' pid/worktree/heartbeat and the event log. A claim is one `BEGIN IMMEDIATE` transaction; a heartbeat is
+  one compare-and-swap `UPDATE`. It is host-local and rebuilt from the branch whenever the branch has moved, so
+  losing it costs nothing.
 - **A handoff is a record.** The attempts and the structured results live in `runs/42.json` beside the card, and
   the next worker — on that card or on one blocked by it — is handed the last one as part of its brief.
-- **Sync is git.** [`hkb sync`](#sharing-a-board) pushes `kb-board` to the remote and fast-forwards from it.
+- **Sync is git.** [`hkb sync`](#sharing-a-board) pushes `kb-board` to the remote and fast-forwards from it. The
+  branch has **one writing host**; the remote copy is the backup and every other clone reads it.
 
-**The GitHub store — `hkb init --store github`.** The board *is* the issues, which is what you want when people
-who are not running hkb work the same cards. It is still the store this repo's own board runs on, and it goes
-away once every live board has been imported (track C).
+**GitHub is the forge, not the board.** Pull requests, reviews, merges and branch protection are still GitHub's on
+every board, and hkb ties a pull request to its card by **the name of its head branch** — `kb-<n>-<k>` — because
+there is no issue for it to reference. Merging that PR is what moves the card to *done*.
 
-- **A card is an issue.** Status, agent and board live in `kb:*` labels; the task's settings live in a
-  `<!-- kb: {...} -->` block in the body. Nothing is stored outside the repo.
-- **An edge is a dependency.** "Blocked by" is GitHub's own issue-dependency link, so the graph is visible in
-  GitHub's UI and a task turns *ready* the moment its last blocker closes.
-- **A lock is a git ref.** Claiming task #42 creates `refs/kb/locks/42/1`. Creating a ref that exists fails, so
-  the claim is atomic; the heartbeat is a `--force-with-lease` push on the same ref, which costs nothing.
-- **A handoff is a comment.** Each attempt ends with a structured result on the card, and the next worker is
-  handed it as part of its brief.
-
-Either way it is files, refs and plain records, so any harness — or a shell script — can drive the same board.
+It is files, refs and plain records, so any harness — or a shell script — can drive the same board.
 Full protocol: [skills/kanban/references/protocol.md](skills/kanban/references/protocol.md).
 
 ### Moving a GitHub board onto the local store
@@ -166,9 +150,7 @@ hkb init --import          # every open card, and everything closed in the last 
 the issue number stays the card id, statuses and agents come across as they are, and each card's run record,
 results, human comments and blockers come with it — one paginated comments read per card, printed as it goes.
 A repository with no kb board is a new board, so the same flag **adopts** its open issues into *triage*, which
-is what `--import` has always meant there. The log says which one ran. `--import` means the migration whatever
-`"store"` in `board.json` says, since that is the board it exists to move; `--store github --import` keeps the
-board on GitHub and does the old adopt-in-place instead.
+is what `--import` has always meant there. The log says which one ran.
 
 Four things the import says out loud rather than leaving you to find: the closed cards are one page of 100, most
 recently updated first, so an older closed card stays on GitHub; a card blocked by one that is not being
@@ -237,7 +219,7 @@ not a role.
   dumbness is the point — deterministic code, one GraphQL query per board per tick.
 - **A worker is any harness.** Claude Code, Copilot CLI and Codex CLI ship as profiles; a harness you write a
   `launch` array for, a shell script, or you in your own terminal are workers too. A worker reads its brief with `hkb context <n>`, works in a
-  worktree, opens a draft PR that says `Closes #42`, and ends with exactly one of `hkb finish` / `hkb block` /
+  worktree, opens a draft PR on its `kb-42-<k>` branch, and ends with exactly one of `hkb finish` / `hkb block` /
   `hkb request-review`.
 
 Which of them a machine fills is a setting, not a fork of the protocol, so adoption is a ladder rather than a
@@ -263,7 +245,7 @@ hkb groom                      # the backlog lane as a proposal table — also a
 ```
 
 A worker — spawned by the dispatcher, or you by hand with `hkb claim 42` and `export KB_TASK=42 KB_ATTEMPT=1` —
-reads `hkb context 42`, works in a worktree, opens a draft PR that `Closes #42`, and finishes with exactly one of:
+reads `hkb context 42`, works in a worktree, opens a draft PR on its `kb-42-<k>` branch, and finishes with exactly one of:
 
 ```bash
 hkb finish 42 --from-stdin < /tmp/kb-42.json    # {"summary": "...", "metadata": {"changed_files": [...]}}
@@ -786,24 +768,28 @@ air-gapped machine behaves exactly as it did before the check existed. Running a
 choice rather than a mistake, so `"version_check": false` in `.kanban/board.json` turns the daily ask off, and
 doctor then names the installed version once with nothing to do about it.
 
-## How it maps to GitHub
+## How it maps
+
+hkb is Hermes' kanban with the SQLite file swapped for two tiers you already have: a git branch for what must
+survive, and a local index for what is live. The right-hand column is where each Hermes concept actually lives.
 
 | Hermes | hkb |
 |---|---|
-| SQLite row | Issue with `kb:status:*`, `kb:agent:*`, `kb:board:*` labels and a `<!-- kb: {...} -->` body block |
-| parent → child | child **blocked by** parent (native issue dependencies) |
-| `todo → ready` when all parents done | dispatcher tick, from `blockedBy { state stateReason }` |
-| atomic claim | `POST git/refs refs/kb/locks/<n>/<attempt>` — 201 claimed; 422 "Reference already exists" (observed) or 409 held; anything else back off |
-| heartbeat | CAS on the same ref: `git push <empty commit>:<ref> --force-with-lease=<ref>:<expected>` — free, and a rejected lease is `LOCK_LOST` (exit 3). Profiles that cannot push refs use `"heartbeat": "comment"` |
-| runs table | one `<!-- kb-run -->` comment (attempts, failures, block loops) |
-| `kanban_complete(summary, metadata)` | `<!-- kb-result -->` comment; open PR → *review*, else issue closed |
+| SQLite row | `cards/<n>.json` on the `kb-board` branch: title, body, status, agent, priority, paths, `blocked_by`, and a `<!-- kb: {...} -->` block for the task's own settings |
+| parent → child | `blocked_by: [41]` on the card |
+| `todo → ready` when all parents done | dispatcher tick, from the blockers' own status |
+| atomic claim | one `BEGIN IMMEDIATE` transaction on `.git/hkb/index.db`: insert the claim under `UNIQUE(task_id, k)`, insert the attempt, set the status. A claim already there is `held`; back off |
+| heartbeat | compare-and-swap on that claim's token — free, no card write, and zero rows updated is `LOCK_LOST` (exit 3) |
+| runs table | `runs/<n>.json` beside the card (attempts, failures, block loops) and the `attempts` table in the index |
+| `kanban_complete(summary, metadata)` | a structured result on the card; an open PR → *review*, else *done* |
+| the forge | pull requests, reviews, merges and `kb/track-<root>` branches, on GitHub. A PR belongs to the card whose branch name it is on (`kb-<n>-<k>`, `worktree-kb-<n>-<k>`, `kb/<n>`, `kb/track-<n>`); merging it moves the card to *done* on the next tick, and `hkb merge <n>` does it at once |
 | worker tools | `hkb show/heartbeat/complete/block/request-review/comment/create/link`, or the same nine as MCP tools (`hkb mcp`) |
 | stop nudge | Claude Code / Codex `Stop`, Copilot CLI `agentStop` hook (`hkb hook stop`, 2 nudges, inert unless the session is a worker's — `KB_TASK`, or the `kb-<n>-<k>` checkout it runs in, which is all a background agent has). Claude Code's pair rides the **worker launch** as `--settings '{"hooks":…}'`, so no other session in the repo runs them and the command may name whichever `hkb` *this* machine has; `hkb init --shared-hooks` puts them in the tracked `.claude/settings.json` instead, for a team that wants them in every session, where the command is a plain `hkb` every teammate needs on PATH (`hkb doctor` says so when it is not there) |
 | worker permissions | **the launch line**, on every profile: `--permission-mode dontAsk` (deny, never a prompt — nobody is there to answer one) with an `--allowedTools` list covering the shell builtins hkb's own guard calls safe, and `--disallowedTools "Bash(hkb dispatch*),Bash(git push --force*),Bash(git push -f*)"`. On top of it, where it runs, the Claude Code `PreToolUse` hook (`hkb hook pretool`, inert unless `KB_TASK` is set — so **not** on the `claude --bg` profiles): it may **deny or say nothing, never allow**, so it can only subtract from the launch's list — `kill`/`sudo`/`rm -rf <abs>` and file tools outside the worktree on top of the profile's allowlist. A denial tells the worker to `hkb block <n> "needs …" --kind capability` rather than work around it. `hkb doctor` prints which layer enforces on each profile, warns about a frozen allow-list or a launch that lost `dontAsk`, and [docs/harnesses.md](docs/harnesses.md#which-layer-is-actually-enforcing) has the table. The launch carries this hook beside the Stop hook |
 | kanban dashboard | `hkb serve` — local page over the live board; drag-drop calls the same verbs |
-| live event stream | `hkb watch` / `hkb tail <n>` — conditional `GET` with `If-None-Match`; an unchanged board answers 304 and is not charged |
-| runs/spend report | `hkb stats` — the same labels and run comments, rolled up: outcomes, duration, spawns vs the daily cap, and spend per profile — `total_cost_usd` where the harness reported one, else the session transcript's tokens, priced at the board's `stats.rates` and labelled an estimate ([what each profile gives you](docs/harnesses.md#what-a-profile-can-tell-you-it-spent)) |
-| crash / stale / timeout | pid check on the claiming host, `stale_after` (against the lock ref's commit date, then the run comment), `max_runtime` → `ready` or `gave_up` |
+| live event stream | `hkb watch` / `hkb tail <n>` |
+| runs/spend report | `hkb stats` — the same cards and run records, rolled up: outcomes, duration, spawns vs the daily cap, and spend per profile — `total_cost_usd` where the harness reported one, else the session transcript's tokens, priced at the board's `stats.rates` and labelled an estimate ([what each profile gives you](docs/harnesses.md#what-a-profile-can-tell-you-it-spent)) |
+| crash / stale / timeout | pid check on the claiming host, `stale_after` (against the claim's own `beat_at`), `max_runtime` → `ready` or `gave_up` |
 
 ## Local state (gitignored)
 
@@ -815,7 +801,7 @@ never pushed; delete it and the next verb rebuilds it from the branch. `hkb doct
 NFS mount (WSL's `/mnt/c`, a network share), where SQLite's locking does not work.
 
 `.kanban/logs/` worker logs · `.kanban/state.json` spawn counters, auth pauses and the day stamps that keep the
-token-expiry and version checks to one probe a day · `.kanban/outbox.jsonl` writes queued while GitHub was unreachable (replayed on the next tick) · `.kanban/cache.json` GraphQL capability cache · `.kanban/dispatch.pid` the loop's singleton lock and `.kanban/serve.pid` the board server's, both [what `hkb up`/`hkb down` read](#keeping-the-board-running) · `.kanban/nudges/` and `.kanban/sessions/` stop-hook bookkeeping · `.claude/settings.local.json` is still ignored, because an older `hkb init` put the two hooks there and the next one takes them back out.
+token-expiry and version checks to one probe a day · `.kanban/outbox.jsonl` writes queued while the forge was unreachable (replayed on the next tick) · `.kanban/dispatch.pid` the loop's singleton lock and `.kanban/serve.pid` the board server's, both [what `hkb up`/`hkb down` read](#keeping-the-board-running) · `.kanban/nudges/` and `.kanban/sessions/` stop-hook bookkeeping · `.claude/settings.local.json` is still ignored, because an older `hkb init` put the two hooks there and the next one takes them back out.
 
 `hkb init` adds all of them to `.gitignore`, one line at a time — your own entries are left alone. `.kanban/board.json` is the exception: it is the board's configuration and belongs in the repo.
 

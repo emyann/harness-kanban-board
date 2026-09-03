@@ -81,9 +81,11 @@ with: the body, the acceptance criteria, the scope in `kb.paths`, **every parent
 attempts on this card, the comments left since the last attempt ended, and the protocol reminder. Read it
 yourself or hand it to an agent; it is the same text either way.
 
-Work on a branch and open a PR whose body says `Closes #42` — the same convention every dispatched worker
-follows, and what turns a merge into a closed card. Nobody makes a worktree for you here: by hand you are in your
-own checkout, and `git worktree add` is yours to run if you want the isolation.
+Work on a branch **named for the card** — `kb/42`, or `kb-42-<attempt>` — and open a PR from it. The branch name
+is the only thing that ties a pull request to its card: hkb matches the repository's open PRs by head branch,
+because there is no issue for the PR to reference. A PR on `fix-the-thing` is one hkb cannot see. Nobody makes a
+worktree for you here: by hand you are in your own checkout, and `git worktree add` is yours to run if you want
+the isolation.
 
 Then finish with **exactly one** terminal verb:
 
@@ -96,9 +98,9 @@ hkb block 42 "the Stripe key is not in the repo" --kind needs_input
 hkb request-review 42 --summary "..." --reviewer <github-user>
 ```
 
-`complete` on a card with an open PR that says `Closes #42` moves it to *review*, not *done* — merging the PR is
-what closes the issue. `block` sends it to *blocked* (or back to *todo* for `--kind dependency`) and flags most
-kinds `kb:needs-human`, which is a note to yourself when you are the human.
+`complete` on a card with an open PR on its branch moves it to *review*, not *done* — merging the PR is what
+finishes it. `block` sends it to *blocked* (or back to *todo* for `--kind dependency`) and flags most kinds
+`needs-human`, which is a note to yourself when you are the human.
 
 The summary is not paperwork. It is what the next card's worker reads under `## Parent task results`: every agent
 run leaves a summary the next run reads — even when you launch the agent yourself.
@@ -153,10 +155,11 @@ as `(forced: blockers not done)` rather than doing quietly. Nothing promotes its
 is the lever that keeps `hkb list --status ready` an honest queue. (`hkb claim` never checks the status, so you
 *can* claim straight out of *todo* — the statuses are for you and for whatever picks the board up next.)
 
-## Reconcile what GitHub closed behind you
+## Reconcile what merged behind you
 
-Merging a PR that says `Closes #42` closes the issue — GitHub does that, not hkb — so until something looks, the
-card still wears `kb:status:review`. One command does the looking:
+Merging #42's PR finishes the card, and nothing tells hkb: the merge happened on the forge, and the board is a
+branch in your repository. Until something looks, the card is still in *review*. One command does the looking —
+it lists the repository's merged PRs once and moves every card whose branch is among them:
 
 ```bash
 hkb dispatch --max 0             # reconcile + promote + reclaim + sweep; claims nothing, launches nothing

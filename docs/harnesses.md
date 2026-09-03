@@ -14,7 +14,7 @@ disk) whatever `hkb init --harness <name>` generates. This page is the per-harne
 | `codex` | OpenAI Codex CLI | dispatcher (`git worktree add`) | `Stop` hook in `.codex/hooks.json` | `--output-schema` | none | `codex` |
 
 Whatever the harness, the protocol is the same: claim the lock ref, work in the worktree, open a draft PR that
-says `Closes #<n>`, finish with exactly one terminal verb. The `hkb` verb the worker runs is always the source of
+opens a draft PR on the card's own branch (`kb-<n>-<k>`), finish with exactly one terminal verb. The `hkb` verb the worker runs is always the source of
 truth — structured output and stop nudges are safety nets, not the record. What differs is what each one can
 tell you it *spent*, which is a real reason to pick one over another:
 [the spend column, expanded](#what-a-profile-can-tell-you-it-spent).
@@ -25,7 +25,6 @@ tell you it *spent*, which is a real reason to pick one over another:
 "codex": {
   "mode": "process",              // "process" (exits when done) · "claude-bg" (background agent daemon)
   "workspace": "worktree",        // the dispatcher makes .claude/worktrees/kb-<n>-<k>; omit if the CLI does it
-  "heartbeat": "auto",            // "ref" (CAS on the lock ref) · "comment" · "auto"
   "max_in_progress": 1,
   "model": null,                  // per-profile default; a task's `model` wins
   "effort": null,                 // "low" | "medium" | "high" | "xhigh" — Claude Code's --effort
