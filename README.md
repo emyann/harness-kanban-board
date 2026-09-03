@@ -180,7 +180,7 @@ the irreversible half, and "could not check" is not "there is nothing there". `h
 board anyway and says what it is walking away from. A repository with no board.json is never asked about, so
 `hkb init --repo owner/name --no-labels` still adopts a fresh repo with `gh` logged out.
 
-### Sharing a board
+### Backing up and moving a board
 
 The `kb-board` branch has **one writer** — the host `board.json` names. That host runs the loop; `hkb sync`
 pushes the branch to the remote after a tick that wrote (at most once a minute, silently when the laptop is
@@ -192,22 +192,31 @@ published).
 before the board was first pushed. It reads the refs first and fetches, so the command you run to *get* the
 board is not the one that tells you there isn't one.
 
-Anyone can `git clone` the repo and get the whole board with it: `.kanban/board.json` is tracked, its
-`"store": "local"` comes along with the clone, and the branch carries the cards. **That key is the only thing
-that decides which store a board is on** — a `kb-board` branch appearing in a checkout (a fetch, another host's
-push) never moves a board onto the local store on its own, because a store that could be changed by a ref
-arriving over the network is one the verbs can disagree with. `hkb init` and `hkb doctor` say when a checkout
-has the branch but not the key, and `hkb init --store local` is how it adopts it. Every verb that
-*writes* refuses on a host that is not the owner, with exit 2 naming it — the guard is on the invocation and
-not the verb, so `hkb up --status` (pid files and liveness) and `hkb dispatch --dry-run` (what a tick would
-decide) run on a clone, while `hkb up`, a real tick and `hkb dispatch --loop --dry-run` (a loop stamps the
-branch whatever the flag says) do not. `hkb serve` is refused on a clone too, for now: the web board's
-drag-and-drop runs the same mutating verbs, so a read-only browser view is a UI it does not have yet — read a
-clone's board with `hkb list`, `hkb show`, `hkb graph` and `hkb watch`. The read side of the rest of that story is
-waiting on the verbs moving onto the store (track C). To move a board to another machine, push it, clone it, and run `hkb init --take-over` on the
-new host: it rewrites `board.host` on the branch, and refuses while the old host's dispatcher stamp is still
-fresh (`--force` overrides). Two hosts writing one branch is not supported — if it happens, `hkb sync` refuses
-the non-fast-forward and tells you how to pick a side.
+A checkout carries the board with it: `.kanban/board.json` is tracked, its `"store": "local"` comes along,
+and the branch carries the cards — which is what makes a restore work on a new machine, or on the same one
+after a lost disk. **That key is the only thing that decides which store a board is on** — a `kb-board`
+branch appearing in a checkout (a fetch, a push from your other machine) never moves a board onto the local
+store on its own, because a store that could be changed by a ref arriving over the network is one the verbs
+can disagree with. `hkb init` and `hkb doctor` say when a checkout has the branch but not the key, and
+`hkb init --store local` is how it adopts it.
+
+Every verb that *writes* refuses on a host that is not the owner, with exit 2 naming it. **That guard is a
+safety property, not a collaboration feature**: it stops your second machine, a stale worktree or a second
+dispatcher from writing the branch at the same time, which integer card ids cannot survive. The guard is on
+the invocation and not the verb, so `hkb up --status` (pid files and liveness) and `hkb dispatch --dry-run`
+(what a tick would decide) run on a non-owning checkout, while `hkb up`, a real tick and
+`hkb dispatch --loop --dry-run` (a loop stamps the branch whatever the flag says) do not. `hkb serve` is
+refused there too, because the web board's drag-and-drop runs the same mutating verbs — read a non-owning
+checkout with `hkb list`, `hkb show`, `hkb graph` and `hkb watch`.
+
+To move a board to another machine: push it, clone it, and run `hkb init --take-over` on the new host. It
+rewrites `board.host` on the branch and refuses while the old host's dispatcher stamp is still fresh
+(`--force` overrides). Two hosts writing one branch is not supported — if it happens, `hkb sync` refuses the
+non-fast-forward and tells you how to pick a side.
+
+> **Multi-player is not a feature yet.** Everything above is one operator, one board, and durability. A
+> second *person* on the same board — concurrent hosts, conflict resolution, a shared read-only view — is
+> deliberately out of scope until the single-operator system is finished.
 
 ## Who runs a board: the seats
 

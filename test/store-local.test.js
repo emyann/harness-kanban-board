@@ -286,13 +286,18 @@ test('sync pushes the branch, and a clone reads the same cards read-only', async
   assert.equal(pushed.local, git(origin, 'rev-parse', 'refs/heads/kb-board'), 'origin has the board');
   assert.equal((await store.sync()).pushed, false, 'a second sync has nothing to push');
 
-  // A friend clones. No .kanban/board.json of their own, no local kb-board — just the remote copy.
+  // Restore onto a fresh checkout: a new machine, or the same one after a lost disk. No local
+  // kb-board yet — just the remote copy this board pushed above.
   const clone = path.join(dir, 'clone');
   git(dir, 'clone', '-q', origin, clone);
-  // Their `.kanban/board.json` is the repository's own — it is a tracked file, and the `"store"`
-  // key rode in with the clone. **That** is what makes "a friend clones the repo and has the board"
-  // work, and it is more deterministic than the rule it replaced: the store no longer depends on
-  // which refs a particular clone happens to carry (`--single-branch`, a stale fetch, a mirror).
+  // `.kanban/board.json` is a tracked file, so the `"store"` key rides in with the checkout and the
+  // restored board knows which store it is on without any configuration. That is more deterministic
+  // than the rule it replaced: the store no longer depends on which refs a particular clone happens
+  // to carry (`--single-branch`, a stale fetch, a mirror).
+  //
+  // This asserts durability, not collaboration. A second *person* on this board is out of scope by
+  // decision (`docs/local-first.md` §6.2); what is being pinned here is that the board survives the
+  // machine, and that a non-owning checkout cannot write it.
   const theirCtx = ctxAt(clone);
   assert.equal(theirCtx.cfg.store, 'local');
   assert.equal(storeKind(theirCtx), 'local', 'the tracked key says which store this is');

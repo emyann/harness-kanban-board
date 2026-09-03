@@ -487,14 +487,17 @@ export class LocalStore {
    *
    * **Nothing here reads the board document before the fetch.** A `--single-branch` clone, or one
    * taken before the branch was first pushed, has no `kb-board` at all — and that checkout is the
-   * whole point of `hkb sync`: "if a friend clones the repo, I want them to have the board as
-   * well". Asking `board()` first threw `there is no kb-board branch` at exactly the person who ran
-   * the command to get one. The ref state comes first, the fetch second, and the board document is
-   * only read once there is one to read.
+   * case `hkb sync` exists for: **restoring the board onto a fresh checkout of your own repo**, on a
+   * new machine or after a lost disk. Asking `board()` first threw `there is no kb-board branch` at
+   * exactly the person who ran the command to get one. The ref state comes first, the fetch second,
+   * and the board document is only read once there is one to read.
+   *
+   * (This is a durability path, not a collaboration one. Multi-player — a second person on the same
+   * board — is out of scope by decision, `docs/local-first.md` §6.2.)
    *
    * `settings.sync.push: false` turns off **pushing**, and nothing else: a host that does not
-   * publish its copy still has to be able to read a co-worker's. `--no-push` is the same switch as
-   * a flag, so the two cannot disagree about what "push" means.
+   * publish its copy still has to be able to fetch the copy it published earlier. `--no-push` is the
+   * same switch as a flag, so the two cannot disagree about what "push" means.
    *
    * @param {{push?: boolean, fetch?: boolean}} [opts]
    * @returns {Promise<{ok: boolean, pushed: boolean, fastForwarded: boolean, offline: boolean, skipped: string|null, remote: string, branch: string, local: string|null, tracking: string|null, detail: string}>}
