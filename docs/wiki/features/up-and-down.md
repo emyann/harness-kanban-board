@@ -17,8 +17,8 @@ covers:
   - path: src/serve.js
     sha: fe50acf9c37de567f1a90fd802e682ab746f6d50
   - path: src/doctor.js
-    sha: 4ed022c48ec21ba66b92f895fefa333b6c928133
-generated_at_commit: 6af026a
+    sha: 2aa97ad82ea530151019ecacb89112607d9163c0
+generated_at_commit: b6b4cd7
 last_refreshed: 2026-09-03
 related: [architecture/overview, features/web-board, concepts/roles-and-seats, architecture/dispatcher-tick]
 ---
