@@ -23,7 +23,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { openStore, STORE_METHODS } from '../src/store/index.js';
-import { DEFAULT_BOARD } from '../src/board.js';
+import { openGitTier } from '../src/store/git.js';
+import { DEFAULT_BOARD, hostId } from '../src/board.js';
 import { L, emptyRun, serializeResultComment, RESULT_MARKER } from '../src/model.js';
 import { FakeGh, kbIssue } from './fake-gh.js';
 
@@ -43,7 +44,7 @@ function git(cwd, ...args) {
  * and `settleClaim` pushes the lock ref the claim created into the real remote — which is exactly
  * what the dispatcher's claim does today (`POST git/refs` at the default branch head).
  */
-function openGithubDriver() {
+async function openGithubDriver() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-store-'));
   const origin = path.join(dir, 'origin.git');
   const root = path.join(dir, 'work');
@@ -69,7 +70,7 @@ function openGithubDriver() {
   const restore = gh.install();
   const ref = (n, k) => `refs/kb/locks/${n}/${k}`;
   return {
-    store: openStore(ctx),
+    store: await openStore(ctx),
     gh,
     settleClaim: (n, k, token) => { git(root, 'push', '-q', 'origin', `${token}:${ref(n, k)}`); },
     reclaim: async (store, n, k) => {
@@ -81,8 +82,47 @@ function openGithubDriver() {
   };
 }
 
+// ---------- the local driver ----------
+
+/**
+ * The composed local store (`src/store/local.js`) in a scratch repository: the `kb-board` branch for
+ * the durable half and `.git/hkb/index.db` for the live one.
+ *
+ * `openStore(ctx)` is what builds it, from a `.kanban/board.json` that says `"store": "local"` —
+ * the seam is what the suite is here to exercise, so nothing reaches for `openLocalStore` directly.
+ * The board is created with the tier's own host, which is this machine's, so the store that opens it
+ * is its owner: the one-writer refusal has tests of its own in `test/store-local.test.js`.
+ */
+async function openLocalDriver() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-store-local-'));
+  const root = path.join(dir, 'work');
+  git(dir, 'init', '-q', '-b', 'main', root);
+  fs.writeFileSync(path.join(root, 'a.txt'), 'hi\n');
+  git(root, 'add', 'a.txt');
+  git(root, 'commit', '-qm', 'init');
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+
+  const cfg = { ...JSON.parse(JSON.stringify(DEFAULT_BOARD)), store: 'local' };
+  const ctx = {
+    root, cfg,
+    repo: null,
+    board: 'default', host: hostId(), json: false, caps: {}, _cache: {},
+    requireBoard() { return this; },
+  };
+  openGitTier(ctx).init('default');
+  const store = await openStore(ctx);
+  return {
+    store,
+    // A beat somebody else recorded. The interface's own `heartbeat` rotates the token, and a
+    // scenario that wants a beat *at a given instant* has nowhere else to put it.
+    recordBeat: (n, k, at) => { store.index.db.prepare('UPDATE locks SET beat_at = ? WHERE task_id = ? AND k = ?').run(at, Number(n), Number(k)); },
+    cleanup: () => { store.close(); fs.rmSync(dir, { recursive: true, force: true }); },
+  };
+}
+
 const DRIVERS = [
   { name: 'github', open: openGithubDriver },
+  { name: 'local', open: openLocalDriver },
 ];
 
 // ---------- the scenarios ----------
@@ -353,8 +393,17 @@ const SCENARIOS = [
       const quoting = `the ${RESULT_MARKER} block was empty, so I am writing it out here`;
       await h.store.addNote(t.number, quoting);
 
+      // And the body that OPENS with the marker but carries no readable block: a half-written
+      // result is not a result — `latestResult` cannot return it, because there is nothing to
+      // parse — so if it is not a note either it is visible in no reader at all. The two drivers
+      // decided this differently until one predicate (`isResultComment`, src/model.js) answered for
+      // both: one kept it as a note, the other dropped it out of every listing.
+      const halfWritten = `${RESULT_MARKER}\n### Result — attempt 1\n\nno json block here`;
+      await h.store.addNote(t.number, halfWritten);
+
       const notes = await h.store.listNotes(t.number);
-      assert.deepEqual(notes.map((n) => n.text), ['a human said this', quoting]);
+      assert.deepEqual(notes.map((n) => n.text), ['a human said this', quoting, halfWritten]);
+      assert.equal(await h.store.latestResult(t.number), null, 'and it is not a result either — one predicate, both answers agreeing');
     },
   },
   {
@@ -389,7 +438,7 @@ const SCENARIOS = [
 for (const driver of DRIVERS) {
   for (const scenario of SCENARIOS) {
     test(`store[${driver.name}]: ${scenario.name}`, async (t) => {
-      const h = driver.open();
+      const h = await driver.open();
       h.reclaim = h.reclaim || ((store, n, k) => store.release(n, k));
       h.settleClaim = h.settleClaim || (() => {});
       h.recordBeat = h.recordBeat || (() => {});
@@ -402,7 +451,7 @@ for (const driver of DRIVERS) {
 // One assertion that is *about* the GitHub driver rather than about the interface: the seam moved
 // the bodies, it did not rewrite them, so a card seeded the old way still reads the old way.
 test('store[github]: a card seeded as an issue reads back through the interface', async (t) => {
-  const h = openGithubDriver();
+  const h = await openGithubDriver();
   t.after(h.cleanup);
   h.gh.addIssue(kbIssue({ number: 42, title: 'seeded', status: 'review', agent: 'claude', kb: { priority: 1 } }));
   const task = await h.store.getTask(42);

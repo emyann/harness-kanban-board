@@ -15,6 +15,7 @@ import { stopHook, markSessionClaim } from './hook.js';
 import { init, packageVersion } from './init.js';
 import { doctor } from './doctor.js';
 import { gc } from './gc.js';
+import { assertOwningHost, storeKind } from './store/index.js';
 import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, formatDenials, resumeCommand, activePrGuard, isTrackRoot, groomBoard, boardSummary, computeReady, pathOverlapGuard, GROOM_LEVELS, parsePriorityFlag, parseScheduledAtFlag } from './model.js';
 
 /** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
@@ -59,6 +60,58 @@ const TERMINAL_VERBS = ['complete', 'block', 'request-review'];
  * replay (`terminalArgv`) and the board all still say `complete`.
  */
 export const VERB_ALIASES = { finish: 'complete' };
+
+/**
+ * The verbs that change board state, and so need the host that owns the board (§6.2).
+ *
+ * Listed rather than derived from "everything that is not a read": a verb added later is refused by
+ * neither this set nor the tier's own guard *only* if it writes through something other than the
+ * store, and the store guard is the backstop. `sync` and `gc` are absent deliberately — one is how a
+ * clone catches up, the other prunes this host's own worktrees and logs.
+ */
+export const WRITES_BOARD = new Set([
+  'create', 'edit', 'link', 'unlink', 'promote', 'archive', 'adopt', 'comment', 'track',
+  'claim', 'dispatch', 'heartbeat', 'complete', 'block', 'unblock', 'request-review',
+  'request-changes', 'merge', 'up',
+  // `serve` is on the list because the web board is not a viewer: dragging a card between lanes runs
+  // the same mutating verbs `hkb promote` does (its own HELP line says so). Leaving it off gave a
+  // non-owning host a writable UI in which every drag died inside the tier with a raw exit 2 — the
+  // guard refusing at the last possible moment instead of the first. A clone still reads the board
+  // with `hkb list`, `hkb show`, `hkb graph` and `hkb watch`; a read-only web board is a UI this
+  // server does not have yet, and pretending otherwise is what this rule is against.
+  'serve',
+]);
+
+/**
+ * Does *this invocation* write the board? **Guard the verb that writes, not the noun.**
+ *
+ * A verb is on `WRITES_BOARD` because of what it usually does, and one of them has a flag that
+ * turns it into a read: `hkb up --status` reports pid files and liveness — no board read, no
+ * network, no write of any kind — and refusing it meant somebody who cloned a board owned by
+ * another host could not ask what was running on their own machine.
+ *
+ * `hkb up --serve` stays refused, and that is not an oversight: it brings a *dispatcher* up
+ * alongside the web server (`PROCESSES`, src/up.js), and a dispatcher on a host that does not own
+ * the board is the two-writers case.
+ * @param {string} cmd
+ * @param {any} flags
+ */
+export function invocationWritesBoard(cmd, flags = {}) {
+  if (!WRITES_BOARD.has(cmd)) return false;
+  if (cmd === 'up' && flags.status) return false;
+  // The same rule, swept: `hkb dispatch --dry-run` reports what a tick *would* decide and gates
+  // every write behind that flag, so it is the one honest way for somebody holding a clone to ask
+  // what this board would do next. If a write ever escapes the flag, the tier still refuses it —
+  // that is what the second layer is for, and why relaxing the first one here is safe.
+  //
+  // **`--loop` is not that**, and the combination is what a guard must never let through: a
+  // long-running loop stamps this host onto the branch every few minutes and pushes it, which is a
+  // write no per-tick flag gates. `--dry-run` is now threaded into `loop()` as well (it was dropped
+  // outright, so the flag pair ran a real claiming, spawning loop), and it stays a *write* here
+  // regardless — the exemption is for the one-shot read, not for the daemon.
+  if (cmd === 'dispatch' && flags['dry-run'] && !flags.loop) return false;
+  return true;
+}
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const str = (v) => (typeof v === 'string' ? v : null);
@@ -183,7 +236,12 @@ export function terminalArgv(verb, number, p, { board, attempt } = {}) {
 const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issues
 
   setup       init [--board slug] [--profiles a,b] [--harness copilot|codex] [--mcp] [--import]
+                   [--store local|github] [--take-over [--force]]
                    [--no-hook] [--shared-hooks] [--no-labels] [--project <number|new>]
+                   a new board is LOCAL: the cards live on the kb-board branch in this repo and the
+                   index beside it, so the board costs no API call and works offline. --store github
+                   keeps the old issues-are-the-board behaviour; --import migrates one onto the local
+                   store (ids, statuses and run records kept); --take-over moves the owning host
                    --no-labels + --repo owner/name writes every local file and sends nothing (no gh, no network)
                    the Stop/PreToolUse hooks ride the worker launch (claude --settings), so no settings file is
                    written; --shared-hooks puts them in the tracked .claude/settings.json for every session too
@@ -239,6 +297,10 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
                     code is non-zero for a signal that failed or a process that outlived the wait
               dispatch [--loop S] [--max N] [--profiles a,b] [--dry-run]     claim <n> [--profile p] [--spawn]
               gc [--yes]
+              sync [--no-push] [--json]   local board only: push kb-board to the remote and
+                    fast-forward from it. The branch has one writer, so a non-fast-forward is
+                    refused rather than merged; the loop runs it after a tick that wrote, at most
+                    once a minute and silently when offline ("sync": {"push": false} turns it off)
   board       serve [--port 4666] [--host 127.0.0.1] [--poll 30]   local web board; drag-drop runs the same verbs
                     [--repos ../other,../third#release]   several checkouts on one page, one server, one port;
                     without the flag, the boards in ~/.config/hkb/boards.json join this one — hkb init keeps that
@@ -421,6 +483,12 @@ export async function main(argv) {
     case 'doctor': return doctor(ctx, flags, (s) => process.stdout.write(s + '\n'));
   }
   ctx.requireBoard();
+  // One writer (docs/local-first.md §6.2). A verb that changes the board is refused on a host that
+  // does not own it, here rather than three calls in — a clone is a *reader*, and the read verbs
+  // (list, show, context, graph, log, stats, watch, tail) are missing from this set on purpose.
+  // `serve` is **not** one of them — the web board drags cards between lanes, which is the same
+  // mutating verb `hkb promote` runs — and `WRITES_BOARD` says so where it lists it.
+  if (invocationWritesBoard(cmd, flags)) await assertOwningHost(ctx, cmd);
 
   switch (cmd) {
     case 'create': {
@@ -790,8 +858,9 @@ export async function main(argv) {
       for (const p of profiles || []) if (!ctx.cfg.profiles[p]) throw usage(`--profiles: no profile "${p}" in board.json. Known: ${Object.keys(ctx.cfg.profiles).join(', ')}`);
       if (flags.loop) {
         const interval = flags.loop === true ? ctx.cfg.dispatch.interval : Number(flags.loop);
-        log(`hkb dispatch loop every ${interval}s on ${ctx.repo.nameWithOwner} board "${ctx.board}" (host ${ctx.host})${profiles ? `, profiles ${profiles.join(', ')}` : ''}. Ctrl-C to stop.`);
-        await loop(ctx, { interval, max, profiles, log: (s) => log(`${new Date().toISOString()} ${s}`) });
+        const dryRun = !!flags['dry-run'];
+        log(`hkb dispatch${dryRun ? ' [dry-run]' : ''} loop every ${interval}s on ${ctx.repo.nameWithOwner} board "${ctx.board}" (host ${ctx.host})${profiles ? `, profiles ${profiles.join(', ')}` : ''}. Ctrl-C to stop.`);
+        await loop(ctx, { interval, max, profiles, dryRun, log: (s) => log(`${new Date().toISOString()} ${s}`) });
         return 0;
       }
       const s = await tick(ctx, { max, dryRun: !!flags['dry-run'], profiles, log });
@@ -820,6 +889,24 @@ export async function main(argv) {
     // imported here, not at the top: mcp.js imports this module back for the version and the outbox argv
     case 'mcp': { const { mcp } = await import('./mcp.js'); return mcp(ctx, flags); }
     case 'gc': return gc(ctx, flags, log);
+    case 'sync': {
+      // Sync is git (docs/local-first.md §6.2), so there is nothing to sync on a board whose store
+      // *is* the network. Say which store this board is on rather than "unknown command".
+      if (storeKind(ctx) !== 'local') {
+        throw usage(`\`hkb sync\` is for a local board — the cards on this one are issues on ${ctx.cfg?.repo || 'GitHub'}, which is already the shared copy. \`hkb init --store local --import\` moves a board onto the kb-board branch.`);
+      }
+      const { openLocalStore } = await import('./store/local.js');
+      const store = openLocalStore(ctx, { reconcile: false });
+      try {
+        const r = await store.sync({ push: !flags['no-push'] });
+        store.open();
+        const said = r.offline ? `offline — ${r.detail}`
+          : r.skipped ? `nothing to do: ${r.detail}`
+            : r.detail || 'up to date';
+        out(ctx, r, `sync: ${said}`);
+        return 0;
+      } finally { store.close(); }
+    }
     default:
       throw usage(`unknown command "${cmd}". Run \`hkb help\`.`);
   }

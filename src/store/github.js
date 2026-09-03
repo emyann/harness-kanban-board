@@ -16,7 +16,7 @@ import {
 } from '../board.js';
 import {
   L, LABEL_COLORS, STATUSES, parseBodyBlock, serializeBodyBlock, statusOf, agentOf, boardOf,
-  parseRunComment, serializeRunComment, parseResultComment, RESULT_MARKER, emptyRun, pickRunComment,
+  parseRunComment, serializeRunComment, parseResultComment, isResultComment, RESULT_MARKER, emptyRun, pickRunComment,
   lockRef, lockRefPath, classifyLeasePush, trackBranchName, trackBranchRoot, RUN_MARKER
 } from '../model.js';
 import { openPrsByHead, branchFallbackPrs } from '../forge.js';
@@ -815,8 +815,13 @@ export function openGithubStore(ctx) {
       // one — "the `<!-- hkb:result -->` block was empty" — is a note. Filtering on `includes` made
       // that comment disappear from the board's notes with nothing to say it had, and made the two
       // drivers disagree about what a note is (`src/store/git.js` addNote).
+      //
+      // And a result is `isResultComment` — the marker AND a parse that succeeds, the same predicate
+      // both other readers use. On `startsWith` alone a half-written result was excluded here *and*
+      // returned by nothing (`latestResult` needs the parse), so it was visible in no reader at all,
+      // while the local driver kept it as a note. Three answers to one question; there is one now.
       return comments
-        .filter((c) => !isMarked(c.body, RUN_MARKER) && !isMarked(c.body, RESULT_MARKER))
+        .filter((c) => !isMarked(c.body, RUN_MARKER) && !isResultComment(c.body))
         .map((c) => ({ id: c.id, at: c.created_at, actor: c.user?.login || null, text: c.body || '' }));
     },
 

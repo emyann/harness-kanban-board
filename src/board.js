@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync, execFileSync } from 'node:child_process';
+import { spawnSync, execFileSync, spawn } from 'node:child_process';
 import { ghCmd } from './gh.js';
 import {
   worktreePath, parseRepoSpecs, mergeBoardEntry, stripNodeModulesBin, pidClaimStale,
@@ -287,6 +287,58 @@ export function runGit(root, args, { input = null, env = {}, timeout = 30_000, b
     stdout: binary ? '' : String(res.stdout || '').trim(),
     buffer: binary ? /** @type {any} */ (res.stdout) : null,
   };
+}
+
+/**
+ * `runGit`, without blocking the event loop.
+ *
+ * Every other git call in hkb is local plumbing that returns in milliseconds, and `spawnSync` is the
+ * right tool for those. The two that reach the *network* — `git fetch` and `git push` in
+ * `src/store/local.js` — are not: the dispatcher runs them at the end of a tick, and a 30-second
+ * `spawnSync` there is 30 seconds in which a finished worker's exit handler cannot fire, the
+ * sleeper cannot be woken and `hkb down`'s SIGTERM is not handled. Same shape of answer as
+ * `runGit`, so a caller reads `status`/`out` the same way and never has to catch.
+ * @param {string} root
+ * @param {string[]} args
+ * @param {{env?: Record<string, string>, timeout?: number}} [opts]
+ * @returns {Promise<{status: number|null, out: string, stdout: string, buffer: null}>}
+ */
+export function runGitAsync(root, args, { env = {}, timeout = 30_000 } = {}) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn('git', args, { cwd: root, env: gitEnv(env), stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e) {
+      resolve({ status: null, out: String(/** @type {Error} */ (e).message), stdout: '', buffer: null });
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    let done = false;
+    // On a timeout the answer is given straight away rather than waited for: `git fetch` over HTTPS
+    // runs a `git-remote-https` helper of its own, which inherits the pipes, so killing git alone
+    // may never close them — and a `close` that never comes is a promise that never settles, which
+    // is a worse hang than the one the timeout exists to end.
+    const timer = timeout
+      ? setTimeout(() => {
+        try { child.kill('SIGKILL'); child.stdout.destroy(); child.stderr.destroy(); child.unref(); } catch { /* already gone */ }
+        finish(null, `\nspawn git ETIMEDOUT after ${timeout}ms`);
+      }, timeout)
+      : null;
+    const finish = (status, extra = '') => {
+      if (done) return;
+      done = true;
+      if (timer) clearTimeout(timer);
+      const out = `${stdout}${stderr}${extra}`;
+      resolve({ status, out, stdout: stdout.trim(), buffer: null });
+    };
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('error', (e) => finish(null, e.message));
+    child.on('close', (code) => finish(code));
+  });
 }
 
 /**

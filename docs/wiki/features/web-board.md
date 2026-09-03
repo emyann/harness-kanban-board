@@ -11,17 +11,17 @@ covers:
   - path: web/index.html
     sha: 322aa96236ef37657a9a2326b83dc7b480672134
   - path: src/board.js
-    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
+    sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
   - path: src/init.js
-    sha: c905bab09d496c7b7fe2aaa0c92d2109fdd30432
+    sha: 44cb5f767e8f7905b0f5bdefe1d44fbf70169709
   - path: src/lifecycle.js
-    sha: c3c49b90e80c7e68d44b4f8f999debcfa484de80
+    sha: 3d8234ec94517fa40a1fdbef460486d3bf873068
   - path: src/track.js
     sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
   - path: src/model.js
-    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
-generated_at_commit: 237bb61
-last_refreshed: 2026-09-02
+    sha: a0ada59cd3061302ebe8ab640b50d690700803f7
+generated_at_commit: 29d0d25
+last_refreshed: 2026-09-03
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
 
@@ -285,6 +285,46 @@ hang off a card that is neither todo nor blocked. `edgesMayBeMissing` looks for
 exactly that and the graph carries a one-line note, rather than drawing a
 confidently wrong picture of what a track depended on.
 
+## A clone is a reader, and the page is what a reader gets
+
+On a local board the whole board travels with the repository, so "share the
+board" is `git clone` — and what a clone should get is exactly this page. A
+clone needs no configuration because `.kanban/board.json` is a tracked file and
+its `"store": "local"` comes along with it; that key is the whole of what
+`storeKind` (`src/store/index.js`) reads. It deliberately does *not* infer the
+store from a `kb-board` ref: a store that a `git fetch` can change is one the
+verbs can disagree with, and every way that went wrong is in
+`architecture/store-seam`.
+
+What a clone cannot do is write. The branch names one owning host, and every
+mutating verb — including the ones the page's drag-and-drop calls — is refused
+on any other with exit 2 naming `hkb init --take-over` (`assertOwningHost`,
+`src/cli.js`; `assertLocalOwner`, `src/store/local.js`).
+
+What a clone *can* do is more than "read the cards", because the guard is on the
+invocation rather than the verb (`invocationWritesBoard`, `src/cli.js`): `hkb up
+--status` reads pid files and liveness; `hkb dispatch --dry-run` says what a
+tick would decide; `hkb list`, `hkb show`, `hkb graph` and `hkb watch` are reads
+and were never on the list. `hkb up --serve` is refused, since it brings a
+dispatcher up beside the server.
+
+**`hkb serve` is refused on a clone too**, and that is a correction rather than a
+detail. The page is not a viewer: dragging a card between lanes runs the same
+mutating verbs `hkb promote` does. Leaving `serve` off `WRITES_BOARD` gave a
+non-owning host a *writable* UI in which every drag died inside the git tier
+with a raw exit 2 — the guard refusing at the last possible moment instead of
+the first. A read-only rendering is a UI this server does not have yet; until it
+does, the honest answer is to refuse at start-up and name the read verbs. The
+rule the change is really about: **guard the verb that writes, and do not sell a
+writable surface as a read.**
+
+> **Not reachable yet.** `src/serve.js` reads the board through `fetchBoard`
+> (`src/tasks.js`, the GitHub driver's re-export), not through `openStore`, so
+> serving a local board — from the owning host — is waiting on the verb
+> migration in track C of `docs/local-first.md`. The store underneath is done
+> and the refusals above are live; the page is not wired to it.
+
 ## Related
 
 - [hkb at a glance](../architecture/overview.md)
+- [architecture/local-store](../architecture/local-store.md)

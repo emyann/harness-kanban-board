@@ -556,6 +556,17 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   if (!dryRun) replayOutbox(ctx, log);
 
   const tasks = await fetchBoard(ctx);
+  // **Where else is absence a verdict?** Two sweeps below decide from a card *not being here* — the
+  // reap (`reapDecision(j, null)` stops a background agent and sweeps its checkout) and the orphan
+  // lock sweep (a lock whose card is missing is released, and a worker whose lock ref disappears
+  // exits LOCK_LOST). That is the shape that made `gc.sweep` destructive on an empty read, and it
+  // was audited here rather than waiting for a report. It is deliberately **not** guarded the same
+  // way, because the precondition differs: `fetchBoard` returns the *open* board, so "no cards" is
+  // an ordinary, correct state — a board whose last card just closed — and gating on it would stop
+  // reaping exactly the agent that closing card left behind. `gc.sweep` reads OPEN *and* CLOSED,
+  // where empty really is anomalous. What makes absence safe here is that `fetchBoard` throws on a
+  // read it could not make rather than answering `[]`, and (since this round) no inference can point
+  // this tick at a store the cards are not on.
   const running = tasks.filter((t) => t.status === 'running');
   // Tracks, from the board read we already have. `covered` is every node a live runner owns: the
   // reclaim below leaves them alone (the root's own heartbeat is their liveness), they cost no
@@ -1200,7 +1211,67 @@ export function installStamp() {
  * ladder ran out — or when the code on disk has moved past what this process loaded: either way the
  * honest thing left is to die with a reason a supervisor and a human can both read.
  */
-export async function loop(ctx, { interval, max, profiles = null, log, sleeper = null, installStamp: stamp = installStamp }) {
+/**
+ * Did this tick decide anything the branch has to record? Only then is there something to push.
+ *
+ * `tracks` and `spawn_failed` are on the list for the same reason as `claimed`: a track-root
+ * dispatch does `saveRun` and `setStatus(t, 'running')`, and a spawn that failed writes the card
+ * back — both durable, both reported nowhere else. Leaving them off meant a board driven entirely by
+ * track dispatch never pushed and, worse, never re-stamped: after `HOST_LIVE_MS` another host's
+ * `hkb init --take-over` sees no live dispatcher and takes a board that is ticking right now, which
+ * is the two-writers case the one-writer rule exists to prevent, reached from the inside.
+ * `track_conflicts` is the same shape, found by the test below: it comments, labels and saves a run.
+ *
+ * The test asserts this list against a real tick's summary rather than a copy of it, so a new key
+ * that reports a decision has to be classified here rather than defaulting to "not durable".
+ */
+export const DURABLE_TICK_KEYS = ['reconciled', 'reclaimed', 'reaped', 'promoted', 'claimed', 'guarded', 'auto_merge', 'self_heal', 'tracks', 'spawn_failed', 'track_conflicts'];
+
+/**
+ * The loop's end-of-tick sync (docs/local-first.md §6.2, "Sync is git").
+ *
+ * Only on a local board, only after a tick that wrote something durable, at most once a minute
+ * (`syncAfterTick`'s own throttle) and silent when the laptop is offline. The dispatcher stamp goes
+ * on the same pass: it is what another host's `hkb init --take-over` reads to tell a board somebody
+ * is still ticking from one whose laptop is not coming back.
+ */
+/**
+ * @param {any} ctx
+ * @param {any} summary  the tick's own summary; `{}` for a caller that only wants the stamp
+ * @param {(s: string) => void} [log]
+ */
+export async function syncPass(ctx, summary, log = () => {}) {
+  try {
+    const { storeKind } = await import('./store/index.js');
+    if (storeKind(ctx) !== 'local') return;
+    const { openLocalStore, syncAfterTick } = await import('./store/local.js');
+    // `reconcile: false`, and the store opens its SQLite connection lazily (`LocalStore.index`), so
+    // the common tick — throttled stamp, nothing durable decided — costs a `rev-parse` against a
+    // memoized tree and no database open at all. Building the whole store every tick meant a fresh
+    // `DatabaseSync`, `ensureSchema` and `assertSameBoard` every five seconds at the interval floor.
+    const store = openLocalStore(ctx, { reconcile: false });
+    try {
+      // The stamp is unconditional, and the ordering is the whole fix. **Liveness must not depend
+      // on whether the tick decided anything**: a dispatcher idling on a quiet board is precisely
+      // the case another host's `hkb init --take-over` has to be able to see, and gating the stamp
+      // on `DURABLE_TICK_KEYS` meant an idle loop stopped re-stamping, its liveness expired after
+      // `HOST_LIVE_MS`, and host B took a board host A was actively ticking — with no `--force` and
+      // no warning. `markDispatcher` throttles itself to one commit per `HOST_LIVE_MS / 3`, so
+      // running it every tick costs a `_read()` of a tree already in memo on all but a few ticks.
+      store.markDispatcher();
+      // The push, on the other hand, is only worth making when something was decided: the remote
+      // copy is a backup of the branch, and a tick that moved no commit has nothing to back up.
+      if (!DURABLE_TICK_KEYS.some((k) => (summary?.[k] || []).length)) return;
+      await syncAfterTick(ctx, { store, log });
+    } finally { store.close(); }
+  } catch (e) {
+    // A tick that decided something has already landed on the branch; the copy on the remote is a
+    // backup, and failing to make one is never a reason to stop dispatching.
+    log(`sync skipped: ${/** @type {Error} */ (e).message}`);
+  }
+}
+
+export async function loop(ctx, { interval, max, profiles = null, dryRun = false, log, sleeper = null, installStamp: stamp = installStamp }) {
   const dropLock = acquireLoopLock(ctx);
   log(`dispatcher pid ${process.pid} (singleton lock .kanban/dispatch.pid)`);
   const loaded = stamp();
@@ -1225,32 +1296,74 @@ export async function loop(ctx, { interval, max, profiles = null, log, sleeper =
     if (wake) wake();
   };
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
-  for (;;) {
-    const started = Date.now();
-    // Once a day, before the tick: the two things nobody tells the operator of a loop that has been
-    // up for weeks — a KB_TOKEN about to lapse, and an hkb that npm has moved on from. Both
-    // read-modify-write `.kanban/state.json`, which is why they are here and not inside `tick()`;
-    // both are silent on a failed probe, so an offline loop runs exactly as it did without them.
-    await tokenExpiryNotice(ctx, log);
-    await versionNotice(ctx, log);
-    try {
-      const s = await tick(ctx, { max, children, profiles, log });
-      const n = (k) => s[k].length;
-      log(`tick: reconciled ${n('reconciled')} reclaimed ${n('reclaimed')} reaped ${n('reaped')} promoted ${n('promoted')} claimed ${n('claimed')} tracks ${s.tracks.filter((x) => x.ok).length} guarded ${n('guarded')} held ${n('held')} skipped ${n('skipped')}`);
-      if (s.fatal) { fatal = s.fatal; break; }
-    } catch (e) {
-      if (e instanceof GhError && e.kind === 'network') log('GitHub unreachable — reclaim clock paused, retrying next tick');
-      else log(`tick failed: ${e.message}`);
+  // SIGUSR1 is the local store's nudge: `node:sqlite` has no change notification, so a verb that
+  // wrote the board signals the dispatcher instead (`index.wake()`, src/store/sqlite.js) and the
+  // loop ticks now rather than at the end of the interval.
+  //
+  // **Installing this handler is what makes the signal a nudge at all.** Node's default action for
+  // SIGUSR1 is to start the inspector, so before there was a listener here every `hkb finish` on a
+  // local board opened `Debugger listening on ws://127.0.0.1:9229/…` on the dispatcher — the one
+  // process that must not stop — and woke nothing. It only ends the *sleep*: a signal arriving
+  // during a tick is dropped on purpose, because that tick is already about to read the board.
+  const nudge = () => {
+    if (stopping || !wake) return;
+    log('woken by a board write');
+    if (timer) { clearTimeout(timer); timer = null; }
+    wake();
+  };
+  process.on('SIGUSR1', nudge);
+  // **The teardown is a `finally`, and it takes every listener this loop installed.**
+  // `tokenExpiryNotice`/`versionNotice` are awaited at the top of the tick and outside its own try,
+  // so a throw from either unwound straight past `dropLock()` and past `process.off('SIGUSR1', …)`:
+  // the pid file stayed, and a later `wake()` reached a listener with no sleep to end instead of
+  // falling through to node's default. The same held for the SIGINT/SIGTERM pair, which nothing ever
+  // removed at all — the invariant is that a loop that has stopped leaves no listener behind, and it
+  // is one `finally` for all four rather than a line per exit.
+  try {
+    for (;;) {
+      const started = Date.now();
+      // Once a day, before the tick: the two things nobody tells the operator of a loop that has been
+      // up for weeks — a KB_TOKEN about to lapse, and an hkb that npm has moved on from. Both
+      // read-modify-write `.kanban/state.json`, which is why they are here and not inside `tick()`;
+      // both are silent on a failed probe, so an offline loop runs exactly as it did without them.
+      await tokenExpiryNotice(ctx, log);
+      await versionNotice(ctx, log);
+      let summary = null;
+      try {
+        // `dryRun` is threaded through rather than dropped here: `hkb dispatch --loop N --dry-run`
+        // promised a loop that decides nothing and ran a real claiming, spawning, stamping one.
+        const s = await tick(ctx, { max, children, profiles, dryRun, log });
+        summary = s;
+        const n = (k) => s[k].length;
+        log(`tick: reconciled ${n('reconciled')} reclaimed ${n('reclaimed')} reaped ${n('reaped')} promoted ${n('promoted')} claimed ${n('claimed')} tracks ${s.tracks.filter((x) => x.ok).length} guarded ${n('guarded')} held ${n('held')} skipped ${n('skipped')}`);
+      } catch (e) {
+        if (e instanceof GhError && e.kind === 'network') log('GitHub unreachable — reclaim clock paused, retrying next tick');
+        else log(`tick failed: ${e.message}`);
+      }
+      // Outside the try, and for the same reason the stamp is outside `DURABLE_TICK_KEYS`: **liveness
+      // is about the process, not about the tick**. A loop whose ticks are all failing is still a loop
+      // holding this board, and leaving the stamp inside meant a run of failures — a rate limit, a
+      // flaky network — expired this host's claim on the branch while it was very much still here.
+      // `syncPass` catches its own failures, so it cannot turn a survivable tick into a dead loop.
+      // …and skipped entirely on a dry run: the stamp is a commit on `kb-board` and the push publishes
+      // it, so a loop that promised to decide nothing must not write either.
+      if (!dryRun) await syncPass(ctx, summary || {}, log);
+      if (summary?.fatal) { fatal = summary.fatal; break; }
+      if (stopping) break;
+      const current = stamp();
+      if (current !== loaded) { upgrade = { loaded, current }; break; }
+      const wait = Math.max(5_000, interval * 1000 - (Date.now() - started));
+      await Promise.race([nap(wait), new Promise((resolve) => { wake = resolve; })]);
+      wake = null; timer = null; // the race is over: a signal from here on waits for the next tick
+      if (stopping) break;
     }
-    if (stopping) break;
-    const current = stamp();
-    if (current !== loaded) { upgrade = { loaded, current }; break; }
-    const wait = Math.max(5_000, interval * 1000 - (Date.now() - started));
-    await Promise.race([nap(wait), new Promise((resolve) => { wake = resolve; })]);
-    wake = null; timer = null; // the race is over: a signal from here on waits for the next tick
-    if (stopping) break;
+  } finally {
+    dropLock();
+    process.off('SIGUSR1', nudge);
+    process.off('SIGINT', stop);
+    process.off('SIGTERM', stop);
+    if (timer) { clearTimeout(timer); timer = null; }
   }
-  dropLock();
   if (upgrade) {
     const e = new Error(`hkb: this loop is running ${upgrade.loaded}, the installed hkb is ${upgrade.current} — restarting. Running workers are untouched: the next dispatcher adopts or reclaims them.`);
     e.exitCode = 4;

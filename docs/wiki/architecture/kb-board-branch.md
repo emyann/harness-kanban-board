@@ -7,13 +7,13 @@ audience: [dev]
 read_when: "adding a durable store verb, debugging a board write that lost or refused, or wondering why a worker's worktree stays clean while the board moves"
 covers:
   - path: src/store/git.js
-    sha: ceb1bd38ddbb3421d2355b2f2a7f961d3ea50603
+    sha: a3a5f2ebb104f22bd196c78301036b61b1da2ac9
   - path: src/store/index.js
-    sha: 8bbf72f8391d88be9ae35eec0c79501b657cc41d
+    sha: 918495a206540318480f3b0ce7cd0a8f559ae874
   - path: src/board.js
-    sha: f69569a4ef1ba7e4dabb5af394dddac6ba8d4a1f
-generated_at_commit: dd39851
-last_refreshed: 2026-09-02
+    sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
+generated_at_commit: 90132a1
+last_refreshed: 2026-09-03
 related: [architecture/store-seam, decisions/adr-006-local-store, decisions/adr-005-control-plane, concepts/claims-and-leases]
 ---
 
@@ -167,8 +167,11 @@ are host-local and live in the `.git/hkb/index.db` index
 none of it means anything on another machine. So `src/store/git.js` is a
 **tier**, not a `Store` — it implements the durable methods of the §6.4
 interface and deliberately has no `claim`, `release`, `listLocks`,
-`lockBeatAt`, `heartbeat` or `events`. `openStore(ctx)`
-(`architecture/store-seam`) is what composes the two into one driver.
+`lockBeatAt`, `heartbeat` or `events`. `src/store/local.js` is what composes the
+two into one driver, and `openStore(ctx)` (`architecture/store-seam`) is what
+picks it; the rules that hold the halves together — reconcile on open, commit
+then index then wake, live writes never touching git — are
+`architecture/local-store`.
 
 ## Where the card's machine block went
 

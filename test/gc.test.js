@@ -11,6 +11,7 @@ import { agentWorktreeNode, attemptOf, gc, isMerged, listBranches, listWorktrees
 import { tick } from '../src/dispatch.js';
 import { DEFAULT_BOARD, readState, writeState } from '../src/board.js';
 import { GhError, setTransport } from '../src/gh.js';
+import { openGitTier } from '../src/store/git.js';
 import { serializeRunComment } from '../src/model.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
@@ -459,4 +460,127 @@ test('a failing sweep never fails the tick', async (t) => {
   assert.equal(s.gc.error, 'GitHub is unreachable');
   assert.deepEqual(s.promoted, []); // the tick itself finished normally
   assert.match(h.text(), /gc sweep skipped \(retried in 1 ticks\)/);
+});
+
+// ---------- the local store (docs/local-first.md §7) ----------
+// Two of these sweeps are about how the GitHub store keeps a board, and mean nothing once it does
+// not: a run record is one file on the branch (so there is no second comment to be a duplicate of)
+// and a beat is a row in the index (so there is no chain to go stale). Both cost a listing per card,
+// which is why they are skipped rather than run and found empty.
+
+test('gc on a local board sweeps worktrees, branches and files — and not comments or beat chains', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.ctx.cfg.store = 'local';
+  // A card on the *branch*, not an issue: the store is what `sweep` reads, and a board that is
+  // configured local while its cards are still issues is precisely the half-migrated state that
+  // used to make this sweep destructive (see the empty-board test below). It cannot be reached any
+  // more — `storeKind` reads the key and nothing infers it — and a test must not stage it either.
+  const tier = openGitTier(h.ctx);
+  tier.init('default');
+  const card = tier.createTask({ title: 'settled', status: 'done' });
+  tier.closeTask(card.number, 'completed');
+  h.gh.addIssue(kbIssue({ number: 1, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', run: runWith([{ attempt: 1, ended_at: '2026-08-26T10:00:00Z', outcome: 'completed' }]) }));
+  // the two things the skipped sweeps would have found
+  h.gh.addComment(1, serializeRunComment(runWith([{ attempt: 1, ended_at: '2026-08-26T09:00:00Z', outcome: 'completed' }])));
+  git(h.root, 'update-ref', 'refs/kb/locks/1/1', git(h.root, 'rev-parse', 'HEAD'));
+  const gone = worktree(h.root, `kb-${card.number}-1`, `worktree-kb-${card.number}-1`);
+  const old = path.join(h.root, '.kanban', 'logs', '1-1.log');
+  fs.mkdirSync(path.dirname(old), { recursive: true });
+  fs.writeFileSync(old, 'old\n');
+  const longAgo = Date.now() - 30 * 86400_000;
+  fs.utimesSync(old, longAgo / 1000, longAgo / 1000);
+
+  const stats = await sweep(h.ctx, { yes: true, log: h.log });
+
+  assert.equal(stats.store, 'local');
+  assert.equal(stats.worktrees, 1, 'the sweeps that are about this host still run');
+  assert.equal(stats.files, 1);
+  assert.equal(exists(gone), false);
+  assert.equal(stats.comments, 0);
+  assert.equal(stats.chains, 0);
+  assert.equal(h.gh.issues.get(1).comments.length, 2, 'the duplicate run comment was left where it is');
+  assert.equal(git(h.root, 'for-each-ref', '--format=%(refname)', 'refs/kb/locks/'), 'refs/kb/locks/1/1', 'and the beat chain too');
+  assert.match(h.text(), /nothing to sweep on a local board/);
+});
+
+test('the sweeps that can only be empty on a local board say so instead of reporting a clean 0', async (t) => {
+  // The same rule as the two below, applied to the two above them. A sweep whose answer comes from
+  // GitHub is either skipped on a local board or it says why it found nothing; what is not allowed
+  // is running structurally empty and reporting `0` as though there had been nothing to do.
+  //   · agent worktrees: removed when *their PR* is merged or closed, and `GitTier.toTask` hands
+  //     back `prs: []` for every card, so `prByBranch` was always null, every worktree was skipped,
+  //     and the checkouts accumulated forever behind a `0 removed`.
+  //   · track branches: one `gh api` request per gc and per gc_every_ticks tick for an answer that
+  //     is structurally always empty, plus a noisy "skipped" line from its own catch.
+  const h = harness();
+  t.after(h.cleanup);
+  h.ctx.cfg.store = 'local';
+  const tier = openGitTier(h.ctx);
+  tier.init('default');
+  const kept = worktree(h.root, 'agent-abc123', 'kb/7');
+  const restore = setTransport(() => { throw new Error('gc reached GitHub on a local board'); });
+  t.after(restore);
+
+  const stats = await sweep(h.ctx, { yes: true, log: h.log });
+  assert.equal(stats.track_branches, 0);
+  assert.match(h.text(), /track branches: not swept on a local board/);
+  assert.match(h.text(), /agent worktrees: 1 not swept on a local board/);
+  assert.match(h.text(), /worktree remove/, 'and the message says what to do instead');
+  assert.equal(exists(kept), true, 'the worktree is still there, and the human now knows it');
+});
+
+test('gc on a genuinely local board never touches GitHub', async (t) => {
+  // The defect this is for: `sweep` opened with an unconditional `fetchBoard` and only branched on
+  // `storeKind` several sweeps later. On a board that is REALLY local — a kb-board branch and no
+  // issues behind it — it threw before `stats.store` was ever read, so the "nothing to sweep on a
+  // local board" message could only be seen by a board that was also on GitHub.
+  const h = harness();
+  t.after(h.cleanup);
+  h.ctx.cfg.store = 'local';
+  const tier = openGitTier(h.ctx);
+  tier.init('default');
+  const card = tier.createTask({ title: 'settled', status: 'done' });
+  tier.closeTask(card.number, 'completed');
+
+  // Any call to the forge is now a test failure, not a 404 the sweep swallows.
+  const restore = setTransport(() => { throw new Error('gc reached GitHub on a local board'); });
+  t.after(restore);
+
+  const gone = worktree(h.root, `kb-${card.number}-1`, `worktree-kb-${card.number}-1`);
+  const stats = await sweep(h.ctx, { yes: true, log: h.log });
+
+  assert.equal(stats.store, 'local');
+  assert.equal(stats.worktrees, 1, 'the sweeps that are about this host still run');
+  assert.equal(exists(gone), false);
+  assert.equal(stats.comments, 0);
+  assert.equal(stats.chains, 0);
+  assert.match(h.text(), /nothing to sweep on a local board/);
+});
+
+test('a board that came back with no cards sweeps nothing: an empty read is not "everything is done"', async (t) => {
+  // The finding this exists for, reproduced end to end before it was fixed: every sweep decides
+  // from the board it just read, and a card that is not on it counts as finished. That is right for
+  // one missing card and catastrophic for all of them — `finished(n)` was true for *every* worker's
+  // worktree, and `sweep(ctx, {yes: true})` runs unattended from the dispatcher every
+  // `gc_every_ticks`, so `git worktree remove --force` and `git branch -D` took uncommitted work
+  // with nobody typing `--yes`. It was reached through a store that read the wrong place; it stays
+  // reachable through a `gh` that answers `[]`, a board slug typo, or a branch not fetched yet.
+  const h = harness();
+  t.after(h.cleanup);
+  // A worker's checkout, with work in it that only exists here.
+  const live = worktree(h.root, 'kb-4-1', 'worktree-kb-4-1');
+  fs.writeFileSync(path.join(live, 'in-progress.txt'), 'not committed anywhere\n');
+
+  // The board answers with nothing at all. No issue was seeded, so this is what an unreadable board
+  // looks like from `sweep`'s side.
+  const stats = await sweep(h.ctx, { yes: true, log: h.log });
+
+  assert.equal(stats.empty_board, true, 'the sweep says which case it was in');
+  assert.equal(stats.worktrees, 0);
+  assert.equal(stats.branches, 0);
+  assert.equal(exists(live), true, 'the worker keeps its checkout');
+  assert.equal(fs.readFileSync(path.join(live, 'in-progress.txt'), 'utf8'), 'not committed anywhere\n');
+  assert.equal(branches(h.root).includes('worktree-kb-4-1'), true, 'and its branch');
+  assert.match(h.text(), /no cards at all/);
 });

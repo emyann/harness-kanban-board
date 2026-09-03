@@ -60,6 +60,9 @@ pages:
   - slug: architecture/kb-board-branch
     summary: "The durable half of a local board lives on a dedicated git branch written with plumbing only — no checkout, no staging, no working-tree write — with update-ref as the compare-and-swap and a retry that replays the mutation."
     status: seeded
+  - slug: architecture/local-store
+    summary: "How the kb-board branch and the .git/hkb index compose into one Store: what open() reconciles, the commit-index-wake order every durable verb follows, which reads go to which tier, and the one-writer rule that makes a clone a reader."
+    status: seeded
   - slug: concepts/board-protocol
     summary: "Statuses, kb:* labels, the body block, run/result comments, terminal verbs — the backend-neutral contract every harness drives through gh."
     status: planned

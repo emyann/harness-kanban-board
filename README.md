@@ -46,7 +46,8 @@ Rather drive it yourself — or run the loop under systemd, cron or a terminal y
 starts both processes detached and the terminal comes back; see [Keeping the board running](#keeping-the-board-running).
 
 That is the whole free path. `npx hkb-cli init --import` also pulls your existing open issues onto the board as
-*triage*.
+*triage* — and on a repo that already has a `kb:*` board, the same flag [moves that whole board](#moving-a-github-board-onto-the-local-store)
+onto the local store instead. It dispatches on which of the two you have and says which one it ran.
 
 `init` writes **no Claude Code hooks into your settings files**. hkb's `Stop`, `PreToolUse` and
 `SubagentStop` hooks serve exactly one kind of session — the worker hkb launched — so they ride that worker's launch line
@@ -115,17 +116,107 @@ loop, and what a tick would otherwise have done for you: [Driving a board by han
 
 ## How it works
 
+A board is kept in one of two stores, behind one interface — `openStore()` is the only thing that knows which
+([ADR-006](docs/wiki/decisions/adr-006-local-store.md)). `hkb init` makes a **local** one.
+
+> **Where this is, right now.** The local store is complete and is what `hkb init` creates, but the *verbs* have
+> not moved onto it yet: `hkb create`, `hkb list`, `hkb dispatch` and the rest still reach board state through
+> the GitHub driver, and that migration is track C of [the plan](docs/local-first.md#10-the-sequence--three-tracks).
+> Until it lands, a checkout with no GitHub board behind it wants `hkb init --store github`, and everything in
+> this section describes the store rather than a board you can drive end to end today.
+
+**The local store — the default.** Nothing leaves the repository, nothing costs an API call, and the board
+works with `gh` logged out.
+
+- **A card is a file.** `cards/42.json` on the `kb-board` branch — title, body, status, agent, priority, paths,
+  blockers — one card per file, sorted keys, written with git plumbing from any worktree. `git log kb-board` is
+  the board's history of decisions, and `git show kb-board:cards/42.json` is the card.
+- **An edge is a field.** `blocked_by: [41]`, and a card turns *ready* the moment its last blocker is done.
+- **A lock is a row.** `.git/hkb/index.db` (SQLite, `node:sqlite`, no dependency) holds the claims, the open
+  attempts' pid/worktree/heartbeat and the event log. A claim is one transaction; a heartbeat is one `UPDATE`.
+  It is host-local and rebuilt from the branch whenever the branch has moved, so losing it costs nothing.
+- **A handoff is a record.** The attempts and the structured results live in `runs/42.json` beside the card, and
+  the next worker — on that card or on one blocked by it — is handed the last one as part of its brief.
+- **Sync is git.** [`hkb sync`](#sharing-a-board) pushes `kb-board` to the remote and fast-forwards from it.
+
+**The GitHub store — `hkb init --store github`.** The board *is* the issues, which is what you want when people
+who are not running hkb work the same cards. It is still the store this repo's own board runs on, and it goes
+away once every live board has been imported (track C).
+
 - **A card is an issue.** Status, agent and board live in `kb:*` labels; the task's settings live in a
   `<!-- kb: {...} -->` block in the body. Nothing is stored outside the repo.
 - **An edge is a dependency.** "Blocked by" is GitHub's own issue-dependency link, so the graph is visible in
   GitHub's UI and a task turns *ready* the moment its last blocker closes.
 - **A lock is a git ref.** Claiming task #42 creates `refs/kb/locks/42/1`. Creating a ref that exists fails, so
   the claim is atomic; the heartbeat is a `--force-with-lease` push on the same ref, which costs nothing.
-- **A handoff is a comment.** Each attempt ends with a structured result on the card, and the next worker —
-  on that card or on one blocked by it — is handed it as part of its brief.
+- **A handoff is a comment.** Each attempt ends with a structured result on the card, and the next worker is
+  handed it as part of its brief.
 
-Because all of that is labels, dependencies, refs and comments, any harness — or a shell script — can drive the
-same board. Full protocol: [skills/kanban/references/protocol.md](skills/kanban/references/protocol.md).
+Either way it is files, refs and plain records, so any harness — or a shell script — can drive the same board.
+Full protocol: [skills/kanban/references/protocol.md](skills/kanban/references/protocol.md).
+
+### Moving a GitHub board onto the local store
+
+```bash
+hkb init --import          # every open card, and everything closed in the last 90 days
+```
+
+`--import` is two operations and picks by what it finds. A repository that has a `kb:*` board is **migrated**:
+the issue number stays the card id, statuses and agents come across as they are, and each card's run record,
+results, human comments and blockers come with it — one paginated comments read per card, printed as it goes.
+A repository with no kb board is a new board, so the same flag **adopts** its open issues into *triage*, which
+is what `--import` has always meant there. The log says which one ran. `--import` means the migration whatever
+`"store"` in `board.json` says, since that is the board it exists to move; `--store github --import` keeps the
+board on GitHub and does the old adopt-in-place instead.
+
+Four things the import says out loud rather than leaving you to find: the closed cards are one page of 100, most
+recently updated first, so an older closed card stays on GitHub; a card blocked by one that is not being
+imported has that edge **dropped** and listed, because keeping it would leave the card blocked by an id that
+can never resolve and so never dispatchable again; on a repository without GitHub's GraphQL `blockedBy` field
+nothing can read a *closed* card's blockers, so those cards are imported marked `"blockers_unknown": true` and
+named (a closed card is settled, so the missing edge gates nothing); and a card with more than 500 comments
+leaves its oldest notes behind, listed by number.
+The leftover `refs/kb/locks/*` on the remote and the local beat chains are deleted, since a local board keeps
+its locks in the index — but only the ones on cards this import moved (a lock ref carries no board name, so the
+namespace holds every board in the repository), and only after reading each one's last beat. A lock somebody is
+still beating on stops the whole migration **before the first commit**: deleting it would leave that worker
+heartbeating into a missing ref, exiting `LOCK_LOST` mid-task. Stop the dispatcher and let the workers finish,
+or run `hkb init --import --force` to migrate anyway and lose them.
+
+Re-running `init` never touches a branch that already exists: a second import over a board that has since been
+worked would overwrite it with GitHub's stale copy, so it is refused and says so. And when `.kanban/board.json`
+is a file the repository *tracks*, the import refuses to write `"store": "local"` into it without `--force` —
+that key is every collaborator's next `git pull`, not just this checkout's. The key is written after the
+migration has landed, so a refusal leaves the board exactly where it was.
+
+### Sharing a board
+
+The `kb-board` branch has **one writer** — the host `board.json` names. That host runs the loop; `hkb sync`
+pushes the branch to the remote after a tick that wrote (at most once a minute, silently when the laptop is
+offline; `"sync": {"push": false}` in the branch's `board.json` turns the **push** off and nothing else — a
+checkout that does not publish its copy still fetches and fast-forwards, which is how it reads what the owner
+published).
+
+`hkb sync` also works in a checkout that has no `kb-board` yet — a `git clone --single-branch`, or one taken
+before the board was first pushed. It reads the refs first and fetches, so the command you run to *get* the
+board is not the one that tells you there isn't one.
+
+Anyone can `git clone` the repo and get the whole board with it: `.kanban/board.json` is tracked, its
+`"store": "local"` comes along with the clone, and the branch carries the cards. **That key is the only thing
+that decides which store a board is on** — a `kb-board` branch appearing in a checkout (a fetch, another host's
+push) never moves a board onto the local store on its own, because a store that could be changed by a ref
+arriving over the network is one the verbs can disagree with. `hkb init` and `hkb doctor` say when a checkout
+has the branch but not the key, and `hkb init --store local` is how it adopts it. Every verb that
+*writes* refuses on a host that is not the owner, with exit 2 naming it — the guard is on the invocation and
+not the verb, so `hkb up --status` (pid files and liveness) and `hkb dispatch --dry-run` (what a tick would
+decide) run on a clone, while `hkb up`, a real tick and `hkb dispatch --loop --dry-run` (a loop stamps the
+branch whatever the flag says) do not. `hkb serve` is refused on a clone too, for now: the web board's
+drag-and-drop runs the same mutating verbs, so a read-only browser view is a UI it does not have yet — read a
+clone's board with `hkb list`, `hkb show`, `hkb graph` and `hkb watch`. The read side of the rest of that story is
+waiting on the verbs moving onto the store (track C). To move a board to another machine, push it, clone it, and run `hkb init --take-over` on the
+new host: it rewrites `board.host` on the branch, and refuses while the old host's dispatcher stamp is still
+fresh (`--force` overrides). Two hosts writing one branch is not supported — if it happens, `hkb sync` refuses
+the non-fast-forward and tells you how to pick a side.
 
 ## Who runs a board: the seats
 
@@ -612,6 +703,9 @@ Details, flags and troubleshooting for all of them: [docs/harnesses.md](docs/har
 `--serve`, the web board) and keeps ticking until you stop it. A machine that stays on gives you the 60-second
 cadence; a laptop gives you a board that moves while it is open.
 
+On a local board "the machine that owns it" is literal: `board.json` on the `kb-board` branch names one host,
+every mutating verb refuses on any other, and [`hkb init --take-over`](#sharing-a-board) is how that moves.
+
 hkb used to also generate a GitHub Actions dispatcher, so a board could keep moving with the laptop closed.
 That is **gone** as of [ADR-006](docs/wiki/decisions/adr-006-local-store.md): the board's store becomes local
 and single-host, and a dispatcher inside Actions cannot read it. `hkb init --with-actions` now exits 2 saying
@@ -711,6 +805,13 @@ doctor then names the installed version once with nothing to do about it.
 | crash / stale / timeout | pid check on the claiming host, `stale_after` (against the lock ref's commit date, then the run comment), `max_runtime` → `ready` or `gave_up` |
 
 ## Local state (gitignored)
+
+**The board itself, on the local store.** `refs/heads/kb-board` is the board — a branch, not a file, so it is
+not in `.gitignore` and not in your working tree: nothing checks it out, and `git status` never mentions it.
+`.git/hkb/index.db` (plus its `-wal`/`-shm`) is this host's index of it: locks, the open attempts' pid,
+worktree and heartbeat, and the event log `hkb serve` tails. It is inside `.git`, so it is never committed and
+never pushed; delete it and the next verb rebuilds it from the branch. `hkb doctor` refuses an index on a 9p or
+NFS mount (WSL's `/mnt/c`, a network share), where SQLite's locking does not work.
 
 `.kanban/logs/` worker logs · `.kanban/state.json` spawn counters, auth pauses and the day stamps that keep the
 token-expiry and version checks to one probe a day · `.kanban/outbox.jsonl` writes queued while GitHub was unreachable (replayed on the next tick) · `.kanban/cache.json` GraphQL capability cache · `.kanban/dispatch.pid` the loop's singleton lock and `.kanban/serve.pid` the board server's, both [what `hkb up`/`hkb down` read](#keeping-the-board-running) · `.kanban/nudges/` and `.kanban/sessions/` stop-hook bookkeeping · `.claude/settings.local.json` is still ignored, because an older `hkb init` put the two hooks there and the next one takes them back out.

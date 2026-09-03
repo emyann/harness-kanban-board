@@ -722,6 +722,57 @@ test('SIGTERM lands in the sleep, and the loop leaves from there — not through
   assert.equal(fs.existsSync(pidFile(root, 'dispatch')), false, 'and it dropped its own claim on the way out, which is what down waits for');
 });
 
+/**
+ * The local store's nudge (docs/local-first.md §6.2). `node:sqlite` has no change notification, so a
+ * verb that wrote the board signals the dispatcher — `index.wake()` sends SIGUSR1 — and the loop
+ * ticks now rather than at the end of the interval.
+ *
+ * Before this handler existed, nothing in `src/` listened for SIGUSR1 at all, and node's default
+ * action for it is to START THE INSPECTOR: every `hkb finish` on a local board opened `Debugger
+ * listening on ws://127.0.0.1:9229/…` on the one process that must not stop, and woke nothing.
+ */
+test('SIGUSR1 ends the sleep and buys a tick — that is what a board write nudges', async (t) => {
+  const gh = new FakeGh();
+  gh.addIssue(kbIssue({ number: 1, title: 'a card nobody claims', status: 'todo' }));
+  t.after(gh.install());
+  const root = tmpRoot();
+  const mine = { term: new Set(process.listeners('SIGTERM')), usr: new Set(process.listeners('SIGUSR1')) };
+  t.after(() => {
+    for (const l of process.listeners('SIGTERM')) if (!mine.term.has(l)) process.removeListener('SIGTERM', l);
+    for (const l of process.listeners('SIGUSR1')) if (!mine.usr.has(l)) process.removeListener('SIGUSR1', l);
+  });
+
+  const ctx = {
+    root,
+    cfg: { ...DEFAULT_BOARD, repo: gh.nameWithOwner, version_check: false, profiles: {} },
+    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
+  };
+
+  const lines = [];
+  let sleeps = 0;
+  const sleeper = () => new Promise(() => { sleeps++; });
+  const running = loop(ctx, { interval: 60, max: Infinity, log: (s) => lines.push(s), sleeper });
+  const settle = async (n) => {
+    const deadline = Date.now() + 20_000;
+    while (sleeps < n && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+    assert.equal(sleeps, n, `the loop is in wait ${n}`);
+  };
+
+  await settle(1);
+  assert.equal(process.listeners('SIGUSR1').length > mine.usr.size, true, 'the loop installed a handler, so the signal is a nudge and not the inspector');
+  process.emit('SIGUSR1');
+  await settle(2);
+  assert.equal(lines.filter((l) => l.startsWith('tick:')).length, 2, 'the nudge bought a tick');
+  assert.ok(lines.some((l) => /woken by a board write/.test(l)), lines.join(' | '));
+
+  process.emit('SIGTERM');
+  await running;
+  // and it takes its handler with it: a stopped loop must not leave one behind for the next thing
+  // that signals this process.
+  assert.equal(process.listeners('SIGUSR1').length, mine.usr.size);
+});
+
 // ---------- the one real spawn ----------
 
 /**

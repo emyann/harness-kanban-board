@@ -9,17 +9,17 @@ covers:
   - path: src/up.js
     sha: 015e0ff4ffa48e110400065f3d496db7ebd4b730
   - path: src/model.js
-    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
+    sha: a0ada59cd3061302ebe8ab640b50d690700803f7
   - path: src/board.js
-    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
+    sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
   - path: src/dispatch.js
-    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
+    sha: 5777f653d14f84685d19cf9db18bc7bcccddabfa
   - path: src/serve.js
     sha: fe50acf9c37de567f1a90fd802e682ab746f6d50
   - path: src/doctor.js
-    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
-generated_at_commit: 237bb61
-last_refreshed: 2026-09-02
+    sha: d16d15584b792786a6b9c068b330d98e4a60e2b6
+generated_at_commit: 29d0d25
+last_refreshed: 2026-09-03
 related: [architecture/overview, features/web-board, concepts/roles-and-seats, architecture/dispatcher-tick]
 ---
 
@@ -185,7 +185,14 @@ The fix is in both halves, and both were needed:
   ends the loop *there* rather than buying it another full tick. A tick already in
   flight still finishes — that is deliberate, a half-written claim is worse than a
   slow stop — so the log distinguishes `stopping now` from `stopping after this
-  tick`.
+  tick`. The same resolver is what **SIGUSR1** ends: that is the local store's
+  nudge, sent by `index.wake()` when a verb writes the board, so the loop ticks
+  now rather than at the end of the interval. Installing that handler is not
+  optional politeness — node's default action for SIGUSR1 is to *start the
+  inspector*, so before the loop listened for it every `hkb finish` on a local
+  board opened a debugger on the dispatcher and woke nothing. A signal arriving
+  mid-tick is dropped (that tick is already about to read the board), the loop
+  removes its handler when it stops, and `wake()` never signals its own process.
 - **`down` does not lie, and does not delete.** Each process drops its own pid
   file on exit (`acquireLoopLock`, `src/dispatch.js:969-970`; `claimServePid`,
   `src/serve.js:132-134`); `down` waits, bounded by `stopWaitMs` (two of the
@@ -343,7 +350,107 @@ it.
   against it says `removed` instead, because that run is the one that dropped
   it — nothing needs deleting by hand either way.
 
+## On a local board the loop also syncs, and stamps whose it is
+
+Two things ride the end of a tick when the board is on the local store
+(`syncPass`, `src/dispatch.js`), and neither runs on a GitHub board:
+
+- **`syncAfterTick`** pushes `kb-board` to the remote and fast-forwards from it
+  — but only after a tick that decided something (`DURABLE_TICK_KEYS`), at most
+  once a minute (a stamp in `.kanban/state.json`, this host's network rather
+  than the board's state), and silently when the laptop is offline. A tick that
+  reclaimed nothing and claimed nothing has nothing to push, and a board that
+  cannot reach its remote is not a board that stops dispatching. A divergence is
+  logged once and never merged: the branch has one writer.
+- **`markDispatcher`** writes `{host, pid, at}` into the branch's `board.json`,
+  throttled to a third of `HOST_LIVE_MS`. That stamp is the *only* thing that
+  lets another machine's `hkb init --take-over` tell a board somebody is still
+  ticking from one whose laptop is not coming back — and it is a commit, which
+  is why it is throttled and why it rides a tick rather than the beat. It moves
+  the index's *tip* behind itself — `index.load({tip, branch})`, with no `cards`
+  or `runs` keys, so both tables are left alone: a commit the index has not seen
+  is exactly the shape `hkb doctor` reports as a broken index, and skipping it
+  put a permanent warning on a perfectly healthy board, while a full reindex
+  here dropped and re-inserted every task, link, run and result on the board
+  every five minutes for a field the index does not even hold.
+
+  The store it rides opens its SQLite connection **lazily**
+  (`LocalStore.index`), so the common tick — a throttled stamp against a
+  memoized tree — costs a `rev-parse` and no database open at all. Building the
+  whole store every tick to reach a function that touches git meant a fresh
+  `DatabaseSync`, `ensureSchema` and `assertSameBoard` every five seconds at the
+  interval floor.
+
+  **It is not gated on anything.** Unlike the push, the stamp runs before the
+  `DURABLE_TICK_KEYS` question and outside the try that catches a failing tick,
+  because *liveness is about the process, not about what it decided*. An idle
+  dispatcher on a quiet board, and one whose ticks are all failing on a rate
+  limit, are exactly the cases another host has to be able to see. When the
+  stamp was gated, both stopped re-stamping, their liveness expired after
+  `HOST_LIVE_MS`, and `--take-over` on the other machine walked into a board
+  that was ticking right now with no `--force` and no warning.
+
+  **Skew is answered with the live board, which is not the same as clamping
+  every clock.** `liveDispatcher` clamps a *future* stamp to age zero, so a
+  guard reads it as "somebody is ticking" and `--take-over` refuses; `lockIsLive`
+  does the same with a lock's beat, so a migration refuses rather than deleting
+  it. The two *throttles* — `markDispatcher`'s and `syncAfterTick`'s — resolve
+  the same skew in the opposite direction: a negative delta means the recorded
+  time is after now, which is not freshness but a value to rewrite, so they skip
+  the throttle and do the work. Clamping a throttle would have kept the bug it
+  was meant to fix: stamping stopped for twenty minutes after a backwards NTP
+  correction while every other host's copy of this host's liveness expired.
+
+`DURABLE_TICK_KEYS` is what "decided something" means — for the **push**, and
+only for the push. It is every key of
+the tick's summary that is a list of decisions — `tracks` and `spawn_failed`
+and `track_conflicts` included. A track-root dispatch does `saveRun` and
+`setStatus(t, 'running')` and reports it under `tracks` alone, so a board driven
+by track dispatch that left those keys off never pushed and never re-stamped:
+after `HOST_LIVE_MS` another host's `--take-over` sees no live dispatcher and
+takes a board that is ticking right now. A test asserts the list against a real
+tick's summary rather than a copy of it.
+
+Both are wrapped: a failure here logs `sync skipped: …` and the loop carries
+on. The decision has already landed on the branch; the copy on the remote is a
+backup. The two git calls that reach the network run through `runGitAsync`
+(`src/board.js`) with a 15-second leash rather than `spawnSync`: while a fetch
+or a push is out, the loop still has to be able to reap a finished worker, wake
+on an event and handle `hkb down`'s SIGTERM.
+
+`hkb sync` is the same push and fast-forward, by hand, on demand. Two things it
+is careful about:
+
+- It reads the refs and fetches **before** it reads the board document, so it
+  works in a checkout that has no `kb-board` yet — a `--single-branch` clone, or
+  one taken before the branch was first pushed. That checkout is the whole
+  reason the verb exists, and asking `board()` first threw "there is no kb-board
+  branch" at exactly the person running the command to go and get one.
+- `settings.sync.push: false` turns off the **push** and nothing else. A host
+  that does not publish its copy still has to be able to read a co-worker's, and
+  `--no-push` is the same switch as a flag, so the more restrictive spelling can
+  never do more work than the default.
+- **Every `update-ref` it makes is a compare-and-swap whose exit status is
+  read** (`_reconcileRefs`, `_setRef`). Creating the local branch passes `''` as
+  the old value ("must not exist"), a fast-forward passes the sha it read, and
+  the push's tracking-ref update passes what the fetch saw. Ignoring the status
+  reported `fastForwarded: true` with the remote's sha as `local` on a ref that
+  had not moved — a lost race exiting 0 and saying the board caught up. A lost
+  CAS re-reads and retries (the refs it compared are stale by definition); three
+  losses is a checkout something else is driving, and that is a refusal.
+- Creating the branch changes **nothing** about which store the checkout is on.
+  `storeKind` reads `"store"` in board.json and only that (see
+  `architecture/store-seam`), precisely so that a ref arriving over the network —
+  a sync, a fetch, another host's push — cannot move a running `hkb serve` or
+  dispatcher onto a store its verbs are not using. What the sync does rebuild is
+  the tier's memoized tree and the index's tip, which are built on the ref that
+  moved (`_afterRefMoved`).
+
+It refuses on a GitHub board naming the store the cards are actually on, because
+"sync" there would be a verb with nothing to do.
+
 ## Related
 
 - [architecture/overview](../architecture/overview.md)
+- [architecture/local-store](../architecture/local-store.md)
 - [features/web-board](web-board.md)

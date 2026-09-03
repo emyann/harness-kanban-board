@@ -470,6 +470,19 @@ export function parseResultComment(body) {
   return extractFencedJson(body, RESULT_MARKER);
 }
 
+/**
+ * Is this comment body a worker's structured handoff? **The one predicate**, and the reason it is
+ * one: a body that carries the marker but no readable JSON block is not a result, and a caller that
+ * decided on the marker alone while the store decided on the parse filed the same body two different
+ * ways — announced as a `result` event, stored as a note, and never returned by `latestResult`. Both
+ * sides of that split (`src/store/git.js`'s `addNote`, `src/store/local.js`'s event kind) ask here.
+ * @param {any} body
+ */
+export function isResultComment(body) {
+  const text = String(body ?? '');
+  return text.startsWith(RESULT_MARKER) && !!parseResultComment(text);
+}
+
 export function serializeResultComment(res) {
   const meta = res.metadata || {};
   const lines = [RESULT_MARKER, `### ${res.kind === 'review' ? 'Review requested' : 'Result'} — attempt ${res.attempt ?? '—'}`, '', res.summary || '(no summary)', ''];
