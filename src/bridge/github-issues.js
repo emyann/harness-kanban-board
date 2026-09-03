@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   L, parseBodyBlock, statusOf, agentOf, boardOf, tagBlockers,
+  RUN_MARKER, parseRunComment, emptyRun,
 } from '../model.js';
 
 /** Where a claim lived under the GitHub protocol. Defined here and nowhere else: no live code path
@@ -171,6 +172,30 @@ export async function listComments(ctx, number) {
 }
 
 /**
+ * The authoritative run comment when an issue has several — a create that raced another create.
+ * Newest wins: it is the one the dispatcher wrote last. Here rather than in `src/model.js` because
+ * a run record is a *file* on the branch now and cannot have duplicates; only a board still on
+ * issues can, and this is the only thing that reads one.
+ */
+function pickRunComment(comments) {
+  const runs = (comments || []).filter((c) => c && typeof c.body === 'string' && c.body.startsWith(RUN_MARKER));
+  if (!runs.length) return { chosen: null, duplicates: [] };
+  return { chosen: runs[runs.length - 1], duplicates: runs.slice(0, -1) };
+}
+
+/**
+ * One card's run record as the GitHub protocol kept it: the `<!-- kb-run -->` comment.
+ * `{run, id, duplicates}`, the shape the migration reads.
+ * @param {any} ctx
+ * @param {number} number
+ */
+export async function loadRun(ctx, number) {
+  const picked = pickRunComment(await listComments(ctx, number));
+  if (!picked.chosen) return { id: null, run: emptyRun(), duplicates: [] };
+  return { id: picked.chosen.id, run: parseRunComment(picked.chosen.body) || emptyRun(), duplicates: picked.duplicates.map((c) => c.id) };
+}
+
+/**
  * The board as a read-only `Store`-shaped object, for a caller that wants `listTasks`/
  * `listClosedRecent` and nothing else. Everything a store can *write* is deliberately absent: a
  * migration reads GitHub and writes the branch, never the other way round.
@@ -193,6 +218,7 @@ export function openGithubIssues(ctx) {
       return fetchBoard(ctx, { includeClosed: want.includes('CLOSED'), blockers });
     },
     listClosedRecent: (opts = {}) => fetchClosedRecent(ctx, opts),
+    loadRun: (n) => loadRun(ctx, n),
   };
 }
 

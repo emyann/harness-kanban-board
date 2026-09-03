@@ -503,6 +503,7 @@ export function dropCommentCaches(ctx) {
   // a verb that reads several cards pays for one. It is a tick's worth of truth, never a loop's —
   // a PR opened by a worker last tick must be visible to this one.
   delete ctx._cache.prsByHead;
+  delete ctx._cache.prsByHeadAll;
 }
 
 // ---------- tick ----------

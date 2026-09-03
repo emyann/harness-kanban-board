@@ -9,7 +9,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { workerContext, selectComments, formatComments, isHumanComment, briefIntents, capabilityLine, mcpLine } from '../src/context.js';
 import { openStore } from '../src/store/index.js';
-import { CAPABILITIES, RUN_MARKER, RESULT_MARKER, serializeResultComment, serializeRunComment } from '../src/model.js';
+import { CAPABILITIES, RUN_MARKER, RESULT_MARKER, serializeResultComment } from '../src/model.js';
+import { runComment as serializeRunComment } from './fake-gh.js';
 import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const NOW = new Date('2026-08-26T12:00:00Z');
@@ -232,7 +233,7 @@ test('the brief tells a continuing worker which PR to push to, and not to open a
   // and the standing "rebase before you finish" line, which would need the force-push it forbids
   assert.match(out, /Before finishing: merge `origin\/main` in \(never rebase: this branch is already pushed\)/);
   // and the two protocol lines that would otherwise send it to a fresh branch and a new PR
-  assert.match(out, /PR #147 already exists and already closes #42 — push to its branch \(`worktree-kb-42-1`\)/);
+  assert.match(out, /PR #147 already exists and is already this card's PR — push to its branch \(`worktree-kb-42-1`\)/);
   assert.doesNotMatch(out, /gh pr create --draft --fill/);
   // the block is near the top: above the attempts it refers to, and above the protocol
   assert.ok(out.indexOf('## Continue PR #147') < out.indexOf('## Prior attempts on this task'));

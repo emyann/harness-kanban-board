@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loop, tick, noteClaimResult, dropCaches, installStamp, SELF_HEAL } from '../src/dispatch.js';
-import { baseSha, staleBaseSha } from '../src/lock.js';
+import { baseSha, staleBaseSha } from '../src/forge.js';
 import { DEFAULT_BOARD } from '../src/board.js';
 import { GhError, setTransport } from '../src/gh.js';
 import { FakeGh, kbIssue } from './fake-gh.js';

@@ -1,16 +1,23 @@
 // An in-memory GitHub, installed as the `src/gh.js` transport so a test never spawns `gh`.
-// It models exactly what the protocol needs: issues (labels, comments, dependencies, closing
-// PRs), git refs with create-if-absent semantics, and a GraphQL resolver for the queries
-// `src/tasks.js` sends. Anything hkb asks for that is not modelled fails loudly with 501 —
-// a silent 404 would be swallowed by the callers that treat "not found" as "already gone".
+//
+// **It is not a board any more.** The board is `test/fake-store.js` (the `Store` interface), and
+// what is left here is the two things hkb still asks GitHub for:
+//
+//   1. **The forge** (`src/forge.js`) — pull requests, branch protection, rulesets, auto-merge,
+//      merges, the repository's own branches. Every board opens its work here, whatever its cards
+//      are kept in, and a PR is tied to its card by *head branch* (`kb-<n>-<k>`), never by an issue.
+//   2. **The bridge's read half** (`src/bridge/github-issues.js`) — the issue queries, comments and
+//      `refs/kb/locks/*` refs `hkb init --import` reads once when it migrates a board that is still
+//      on GitHub Issues onto the `kb-board` branch. Read-only, and only that migration uses it.
+//
+// Anything hkb asks for that is not modelled fails loudly with 501 — a silent 404 would be swallowed
+// by the callers that treat "not found" as "already gone".
 //
 //   const gh = new FakeGh();
-//   gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+//   gh.addPull({ number: 3, head: 'kb-7-1' });
 //   const restore = gh.install();
-//
-// Doubles as the conformance suite for a future non-GitHub backend.
 import { GhError, classify, setTransport } from '../src/gh.js';
-import { DEFAULT_KB, L, emptyRun, parseRunComment, pickRunComment, serializeBodyBlock, serializeRunComment, statusOf } from '../src/model.js';
+import { DEFAULT_KB, L, RUN_MARKER, emptyRun, serializeBodyBlock } from '../src/model.js';
 
 /**
  * The card record both in-memory boards keep, from one `kbIssue({...})` spec.
@@ -38,6 +45,7 @@ export function issueRecord(spec = {}, { number, url }) {
     blockedBy: [...(spec.blockedBy || [])], // issue numbers, or literal {number,state,...}
     prs: [...(spec.prs || [])],
     events: [...(spec.events || [])],
+    run: spec.run ?? null,
     createdAt: spec.createdAt || `2026-08-26T00:00:${String(number % 60).padStart(2, '0')}Z`,
     updatedAt: spec.updatedAt || spec.createdAt || '2026-08-26T01:00:00Z',
     url,
@@ -56,6 +64,34 @@ export function commentRecord({ id, body, url }) {
   };
 }
 
+const fmt = (ts) => (ts ? String(ts).replace('T', ' ').replace(/\.\d+Z$/, 'Z') : '');
+
+/**
+ * A run record rendered as the `<!-- kb-run -->` comment the GitHub protocol kept it in.
+ *
+ * A **fixture builder**, and the only thing in the repository that writes one: nothing in `src/`
+ * does any more (docs/local-first.md §7). It lives here so the migration's tests — and `hkb watch`,
+ * which still parses a comment it polls — have a way to seed the shape they read.
+ */
+export function runComment(run) {
+  const rows = (run.attempts || []).map((a) =>
+    `| ${a.attempt} | ${a.profile || ''} | ${a.host || ''} | ${fmt(a.started_at)} | ${fmt(a.ended_at) || '—'} | ${a.outcome || 'active'} | ${(a.summary || a.reason || '').split('\n')[0].slice(0, 120)} |`);
+  return [
+    RUN_MARKER,
+    '**hkb run record** — maintained by `hkb`; do not edit by hand.',
+    '',
+    `failures: ${run.failures} · attempts: ${(run.attempts || []).length}${run.last_error ? ` · last error: ${String(run.last_error).slice(0, 200)}` : ''}`,
+    '',
+    '| # | profile | host | started | ended | outcome | note |',
+    '|---|---|---|---|---|---|---|',
+    ...(rows.length ? rows : ['| — | | | | | | |']),
+    '',
+    '```json',
+    JSON.stringify(run, null, 2),
+    '```',
+  ].join('\n');
+}
+
 export class FakeGh {
   constructor({ owner = 'acme', repo = 'board', defaultBranch = 'main', baseSha = 'f'.repeat(40), caps = {}, allowAutoMerge = true } = {}) {
     this.owner = owner;
@@ -63,20 +99,21 @@ export class FakeGh {
     this.nameWithOwner = `${owner}/${repo}`;
     this.defaultBranch = defaultBranch;
     this.allowAutoMerge = allowAutoMerge; // the repo setting `enablePullRequestAutoMerge` needs
-    this.caps = { blockedByGql: true, closedByPrs: true, ...caps };
-    this.issues = new Map(); // number -> issue record
+    this.caps = { blockedByGql: true, ...caps };
+    this.issues = new Map(); // number -> issue record (the bridge's read half only)
     this.refs = new Map(); // full ref name -> sha
-    this.repoLabels = new Set();
     this.requests = []; // every request, in order
     this.failures = []; // injected errors, see fail()
     this.nextCommentId = 1000;
-    this.commits = new Map(); // sha -> {date} — what a ref-CAS heartbeat leaves behind
+    this.commits = new Map(); // sha -> {date} — what a ref-CAS heartbeat left behind
     this.protection = new Map(); // branch -> classic protection payload, or the string 'forbidden'
-    // PRs GitHub's own linking declines to associate with any issue — visible only through the REST
-    // `GET /pulls` listing `openPrsByHead` reads, never through an issue's closedByPullRequestsReferences
-    // (#234's whole bug). Seeded separately from `issue.prs` on purpose: a PR added there would flow
-    // into both, which is exactly the case this store exists to NOT model.
-    this.openPulls = [];
+    /**
+     * Every pull request on the repo, in one list — which is how the forge sees them and how hkb
+     * now finds a card's PR: `openPrsByHead`/`mergedPrsByHead` read `GET /pulls` and match the head
+     * branch against `kb-<n>-<k>`. There is deliberately no per-issue list: an issue does not own a
+     * pull request any more, and a double that kept one would model a link hkb no longer uses.
+     */
+    this.pulls = [];
     this.rules = new Map(); // branch -> the ruleset rules `GET /rules/branches/<b>` returns
     this.refs.set(`refs/heads/${defaultBranch}`, baseSha);
     this.transport = this.transport.bind(this);
@@ -87,22 +124,58 @@ export class FakeGh {
 
   // ---------- seeding ----------
 
-  addIssue(spec = {}) {
-    const number = spec.number ?? (Math.max(0, ...this.issues.keys()) + 1);
-    const issue = issueRecord(spec, { number, url: `https://github.com/${this.nameWithOwner}/issues/${number}` });
-    for (const l of issue.labels) this.repoLabels.add(l);
-    this.issues.set(number, issue);
-    for (const body of spec.comments || []) this.addComment(number, body);
-    return issue;
+  /**
+   * A pull request. `head` is normally one of hkb's own branch names (`kb/<n>`, `kb-<n>-<k>`,
+   * `worktree-kb-<n>-<k>`), because that name is the *only* thing that ties it to a card.
+   */
+  addPull({ number, head, base = this.defaultBranch, draft = false, state = 'open', merged = false, mergedAt = null, nodeId = null, autoMerge = null, mergeable = null, mergeStateStatus = null, checksState = undefined } = {}) {
+    const pr = {
+      number,
+      nodeId: nodeId || `PR_kwFake${number}`,
+      head,
+      base,
+      draft: !!draft,
+      state: String(state).toUpperCase() === 'MERGED' ? 'MERGED' : String(state).toUpperCase(),
+      merged: !!merged || String(state).toUpperCase() === 'MERGED',
+      mergedAt,
+      autoMerge,
+      mergeable,
+      mergeStateStatus,
+      checksState,
+      url: `https://github.com/${this.nameWithOwner}/pull/${number}`,
+    };
+    if (pr.merged && !pr.mergedAt) pr.mergedAt = '2026-08-26T03:00:00Z';
+    this.pulls.push(pr);
+    return pr;
   }
 
   /**
-   * A PR GitHub's own `closedByPullRequestsReferences` will never surface — the exact shape #234
-   * fixes: `head` is normally one of hkb's own branch names (`kb/<n>`, `kb-<n>-<k>`,
-   * `worktree-kb-<n>-<k>`) so the head-branch fallback finds it, whatever `base` is.
+   * An issue, for the bridge's read half only (`hkb init --import`). A `prs: [...]` on the spec is
+   * flattened into the repository's pull requests, defaulting the head branch to `kb/<n>` — the
+   * shape those fixtures always meant.
    */
-  addPull({ number, head, base = this.defaultBranch, draft = false, state = 'open', nodeId = null, mergeable = null, mergeStateStatus = null } = {}) {
-    this.openPulls.push({ number, node_id: nodeId || `PR_kwFakeUnlinked${number}`, head: { ref: head }, base: { ref: base }, draft, state, html_url: `https://github.com/${this.nameWithOwner}/pull/${number}`, mergeable, mergeStateStatus });
+  addIssue(spec = {}) {
+    const number = spec.number ?? (Math.max(0, ...this.issues.keys()) + 1);
+    const issue = issueRecord(spec, { number, url: `https://github.com/${this.nameWithOwner}/issues/${number}` });
+    this.issues.set(number, issue);
+    if (issue.run) this.addComment(number, runComment(issue.run));
+    for (const body of spec.comments || []) this.addComment(number, body);
+    for (const pr of issue.prs) {
+      this.addPull({
+        number: pr.number,
+        head: pr.headRefName || `kb/${number}`,
+        base: pr.baseRefName || this.defaultBranch,
+        draft: !!pr.isDraft,
+        state: pr.state || 'OPEN',
+        merged: !!pr.merged,
+        nodeId: pr.nodeId || null,
+        autoMerge: pr.autoMerge || null,
+        mergeable: pr.mergeable ?? null,
+        mergeStateStatus: pr.mergeStateStatus ?? null,
+        checksState: pr.checksState,
+      });
+    }
+    return issue;
   }
 
   addComment(number, body) {
@@ -113,9 +186,8 @@ export class FakeGh {
   }
 
   /**
-   * A worker's CAS heartbeat: point the lock ref at a commit dated `at`. The dispatcher reads that
-   * date back through `GET git/commits/<sha>`; a ref whose commit was never added has no date,
-   * which is exactly how a lock created by `POST git/refs` at the branch head behaves.
+   * A claim the retired protocol left on the forge: a lock ref pointing at a commit dated `at`.
+   * What `hkb init --import` finds and sweeps up (`dropGithubLeftovers`, src/store/local.js).
    */
   beat(n, k, at, sha = null) {
     const commit = sha || `beat${n}${k}${new Date(at).getTime().toString(16)}`.padEnd(40, '0').slice(0, 40);
@@ -148,12 +220,6 @@ export class FakeGh {
     return this;
   }
 
-  /** The auto-merge request on a PR, as the board query would report it: null until enabled. */
-  autoMergeOf(prNumber) {
-    for (const issue of this.issues.values()) for (const pr of issue.prs) if (pr.number === prNumber) return pr.autoMerge || null;
-    return null;
-  }
-
   /**
    * Make matching calls fail. `where` is `{ method, path }`; `path` may be a substring
    * or a RegExp, `method` may be omitted to match any. Consumed `times` times (default 1).
@@ -165,13 +231,10 @@ export class FakeGh {
 
   // ---------- assertions ----------
 
-  labelsOf(number) { return [...this.#issue(number).labels]; }
-  statusOf(number) { return statusOf(this.#issue(number).labels); }
-  /** The run record hkb would read back from the issue, or null. */
-  runOf(number) {
-    const picked = pickRunComment(this.#issue(number).comments);
-    return picked.chosen ? parseRunComment(picked.chosen.body) : null;
-  }
+  /** One pull request as the double keeps it, or null. */
+  prOf(number) { return this.pulls.find((p) => p.number === Number(number)) || null; }
+  /** The auto-merge request on a PR, as the board query would report it: null until enabled. */
+  autoMergeOf(prNumber) { return this.prOf(prNumber)?.autoMerge || null; }
   lockRefs() { return [...this.refs.keys()].filter((r) => r.startsWith('refs/kb/locks/')).sort(); }
   /** Every request whose method and path match — for "and nothing was written" assertions. */
   requestsMatching(method, path) {
@@ -227,12 +290,21 @@ export class FakeGh {
     return issue;
   }
 
-  #touch(issue) { issue.updatedAt = new Date().toISOString(); }
-
   // ---------- REST ----------
 
   #rest({ method, path, body }) {
     const base = `repos/${this.owner}/${this.repo}`;
+    // The one route outside the repository: `isGithubUser` (src/forge.js) asks whether a reviewer
+    // name is a login before it requests a review with it.
+    let u;
+    if ((u = /^users\/(.+)$/.exec(path))) {
+      if (method === 'GET') {
+        const login = decodeURIComponent(u[1]);
+        // Every profile name that is not a login answers 404, the way GitHub does.
+        if (/^(claude|codex|copilot)(-|$)/.test(login)) throw this.#error(404, `GET ${path} failed (404): Not Found`);
+        return { login, type: 'User' };
+      }
+    }
     if (path !== base && !path.startsWith(`${base}/`)) throw this.#error(501, `fake-gh: no route for ${method} ${path}`);
     const [p, qs] = path.slice(base.length).replace(/^\//, '').split('?');
     const q = new URLSearchParams(qs || '');
@@ -240,143 +312,31 @@ export class FakeGh {
 
     if (p === '') {
       if (method === 'GET') return { name: this.repo, full_name: this.nameWithOwner, default_branch: this.defaultBranch, allow_auto_merge: this.allowAutoMerge };
-    } else if (p === 'labels') {
-      if (method === 'GET') return this.#page([...this.repoLabels].map((name) => ({ name })), q);
-      if (method === 'POST') {
-        if (this.repoLabels.has(body.name)) throw this.#error(422, `POST ${path} failed (422): Validation Failed: already_exists`);
-        this.repoLabels.add(body.name);
-        return { name: body.name, color: body.color };
-      }
-    } else if (p === 'issues') {
-      // The repository's issues, board label or not — what `hkb init --import` adopts from, on both
-      // stores. Paginated like the real one, so a test can seed more than a page and assert what a
-      // caller says about the ceiling.
-      if (method === 'GET') {
-        const state = (q.get('state') || 'open').toLowerCase();
-        const all = [...this.issues.values()]
-          .filter((i) => state === 'all' || String(i.state).toLowerCase() === state)
-          .map((i) => ({ ...this.#issueRest(i), created_at: i.createdAt ?? i.updatedAt }));
-        return this.#page(all, q);
-      }
-      if (method === 'POST') return this.#issueRest(this.addIssue({ title: body.title, body: body.body, labels: body.labels }));
+
+      // ---------- the forge ----------
     } else if (p === 'pulls') {
-      // Every issue's seeded `prs` flattened into one list, the shape `openPrsByHead` (src/tasks.js)
-      // reads — the head-branch fallback's board-wide read, so a test seeds a PR once, on the issue,
-      // and it is visible both ways: via closedByPullRequestsReferences and via this listing.
+      // What `openPrsByHead` and `mergedPrsByHead` (src/forge.js) read: the repository's pull
+      // requests, filtered by state. `sort`/`direction` are accepted and ignored — the double keeps
+      // insertion order, and a test that cares seeds the order it wants.
       if (method === 'GET') {
         const state = (q.get('state') || 'open').toLowerCase();
-        const all = [];
-        const seen = new Set();
-        for (const issue of this.issues.values()) {
-          for (const pr of issue.prs || []) {
-            if (state !== 'all' && String(pr.state).toLowerCase() !== state) continue;
-            seen.add(pr.number);
-            all.push({
-              number: pr.number,
-              node_id: pr.nodeId || pr.node_id || `PR_kwFake${pr.number}`,
-              draft: !!pr.isDraft,
-              html_url: pr.url || `https://github.com/${this.nameWithOwner}/pull/${pr.number}`,
-              head: { ref: pr.headRefName || null },
-              base: { ref: pr.baseRefName || this.defaultBranch },
-              auto_merge: pr.autoMergeEnabled ? {} : null,
-            });
-          }
-        }
-        for (const pr of this.openPulls) {
-          if (seen.has(pr.number)) continue; // an issue already carries this one — do not duplicate it
-          if (state !== 'all' && String(pr.state).toLowerCase() !== state) continue;
-          all.push({ ...pr, auto_merge: null });
-        }
+        const all = this.pulls
+          .filter((pr) => state === 'all' || (state === 'closed' ? pr.state !== 'OPEN' : pr.state === 'OPEN'))
+          .map((pr) => this.#pullRest(pr));
         return this.#page(all, q);
       }
-    } else if ((m = /^issues\/(\d+)$/.exec(p))) {
-      const issue = this.#issue(m[1]);
-      if (method === 'GET') return this.#issueRest(issue);
-      if (method === 'PATCH') {
-        if (body.state) issue.state = String(body.state).toUpperCase();
-        if ('state_reason' in body) issue.stateReason = body.state_reason ? String(body.state_reason).toUpperCase() : null;
-        if ('body' in body) issue.body = body.body;
-        if ('title' in body) issue.title = body.title;
-        this.#touch(issue);
-        return this.#issueRest(issue);
-      }
-    } else if ((m = /^issues\/(\d+)\/labels$/.exec(p))) {
-      const issue = this.#issue(m[1]);
-      if (method === 'POST') {
-        for (const l of body.labels || []) { if (!issue.labels.includes(l)) issue.labels.push(l); this.repoLabels.add(l); }
-        this.#touch(issue);
-        return issue.labels.map((name) => ({ name }));
-      }
-    } else if ((m = /^issues\/(\d+)\/labels\/(.+)$/.exec(p))) {
-      const issue = this.#issue(m[1]);
-      const name = decodeURIComponent(m[2]);
-      if (method === 'DELETE') {
-        if (!issue.labels.includes(name)) throw this.#error(404, `DELETE ${path} failed (404): Label does not exist`);
-        issue.labels = issue.labels.filter((l) => l !== name);
-        this.#touch(issue);
-        return issue.labels.map((n) => ({ name: n }));
-      }
-    } else if ((m = /^issues\/(\d+)\/comments$/.exec(p))) {
-      const issue = this.#issue(m[1]);
-      // A snapshot, not a live reference: real GitHub hands back a fresh JSON blob per call, so a
-      // PATCH after this read must never be visible through an array a caller is still holding — the
-      // exact thing a comments cache has to get wrong to reproduce #195.
-      if (method === 'GET') return this.#page(issue.comments, q).map((c) => ({ ...c }));
-      if (method === 'POST') { this.#touch(issue); return this.addComment(issue.number, body.body); }
-    } else if ((m = /^issues\/comments\/(\d+)$/.exec(p))) {
-      const id = Number(m[1]);
-      const issue = [...this.issues.values()].find((i) => i.comments.some((c) => c.id === id));
-      if (!issue) throw this.#error(404, `${method} ${path} failed (404): Not Found`);
-      const comment = issue.comments.find((c) => c.id === id);
-      if (method === 'GET') return comment;
-      if (method === 'PATCH') { comment.body = body.body; this.#touch(issue); return comment; }
-      if (method === 'DELETE') { issue.comments = issue.comments.filter((c) => c.id !== id); this.#touch(issue); return null; }
-    } else if ((m = /^issues\/(\d+)\/dependencies\/blocked_by$/.exec(p))) {
-      const issue = this.#issue(m[1]);
-      if (method === 'GET') return this.#blockers(issue).map((b) => ({ number: b.number, title: b.title, state: b.state.toLowerCase(), state_reason: b.stateReason ? b.stateReason.toLowerCase() : null }));
-      if (method === 'POST') {
-        const parent = [...this.issues.values()].find((i) => i.databaseId === body.issue_id);
-        if (!parent) throw this.#error(404, `POST ${path} failed (404): Not Found`);
-        if (issue.blockedBy.includes(parent.number)) throw this.#error(422, `POST ${path} failed (422): Validation Failed: dependency already exists`);
-        issue.blockedBy.push(parent.number);
-        this.#touch(issue);
-        return { number: parent.number };
-      }
-    } else if ((m = /^issues\/(\d+)\/dependencies\/blocked_by\/(\d+)$/.exec(p))) {
-      const issue = this.#issue(m[1]);
-      const parent = [...this.issues.values()].find((i) => i.databaseId === Number(m[2]));
-      if (method === 'DELETE') {
-        if (!parent || !issue.blockedBy.includes(parent.number)) throw this.#error(404, `DELETE ${path} failed (404): Not Found`);
-        issue.blockedBy = issue.blockedBy.filter((b) => b !== parent.number);
-        return null;
-      }
-    } else if ((m = /^issues\/(\d+)\/events$/.exec(p))) {
-      if (method === 'GET') return this.#page(this.#issue(m[1]).events, q);
-    } else if (p === 'git/refs') {
-      // the only atomic create-if-absent primitive GitHub offers — the whole claim protocol
-      if (method === 'POST') {
-        if (!/^refs\/.+/.test(body.ref || '')) throw this.#error(422, `POST ${path} failed (422): Validation Failed: ref must start with "refs/"`);
-        if (this.refs.has(body.ref)) throw this.#error(422, `POST ${path} failed (422): Reference already exists`);
-        this.refs.set(body.ref, body.sha);
-        return { ref: body.ref, object: { sha: body.sha, type: 'commit' } };
-      }
-    } else if ((m = /^git\/commits\/([0-9a-z]+)$/.exec(p))) {
-      const commit = this.commits.get(m[1]);
+    } else if ((m = /^pulls\/(\d+)$/.exec(p))) {
+      const pr = this.prOf(m[1]);
       if (method === 'GET') {
-        if (!commit) throw this.#error(404, `GET ${path} failed (404): No commit found for SHA: ${m[1]}`);
-        return { sha: m[1], author: { date: commit.date }, committer: { date: commit.date }, message: commit.message || 'hkb heartbeat' };
+        if (!pr) throw this.#error(404, `GET ${path} failed (404): Not Found`);
+        return this.#pullRest(pr);
       }
-    } else if ((m = /^git\/ref\/(.+)$/.exec(p))) {
-      const ref = `refs/${m[1]}`;
-      if (method === 'GET') {
-        if (!this.refs.has(ref)) throw this.#error(404, `GET ${path} failed (404): Not Found`);
-        return { ref, object: { sha: this.refs.get(ref), type: 'commit' } };
-      }
-    } else if ((m = /^git\/refs\/(.+)$/.exec(p))) {
-      const ref = `refs/${m[1]}`;
-      if (method === 'DELETE') {
-        if (!this.refs.delete(ref)) throw this.#error(422, `DELETE ${path} failed (422): Reference does not exist`);
-        return null;
+    } else if ((m = /^pulls\/(\d+)\/requested_reviewers$/.exec(p))) {
+      const pr = this.prOf(m[1]);
+      if (method === 'POST') {
+        if (!pr) throw this.#error(404, `POST ${path} failed (404): Not Found`);
+        pr.reviewers = [...(pr.reviewers || []), ...(body.reviewers || [])];
+        return this.#pullRest(pr);
       }
     } else if ((m = /^branches\/([^/]+)\/protection$/.exec(p))) {
       // classic branch protection: 404 when there is none, 403 without repo admin
@@ -390,9 +350,55 @@ export class FakeGh {
     } else if ((m = /^rules\/branches\/(.+)$/.exec(p))) {
       // rulesets: readable without admin, and empty rather than 404 when nothing covers the branch
       if (method === 'GET') return this.rules.get(decodeURIComponent(m[1])) || [];
+
+      // ---------- the repository's own branches (base sha, kb/track-<root>) ----------
+    } else if (p === 'git/refs') {
+      if (method === 'POST') {
+        if (!/^refs\/.+/.test(body.ref || '')) throw this.#error(422, `POST ${path} failed (422): Validation Failed: ref must start with "refs/"`);
+        if (this.refs.has(body.ref)) throw this.#error(422, `POST ${path} failed (422): Reference already exists`);
+        this.refs.set(body.ref, body.sha);
+        return { ref: body.ref, object: { sha: body.sha, type: 'commit' } };
+      }
+    } else if ((m = /^git\/ref\/(.+)$/.exec(p))) {
+      const ref = `refs/${m[1]}`;
+      if (method === 'GET') {
+        if (!this.refs.has(ref)) throw this.#error(404, `GET ${path} failed (404): Not Found`);
+        return { ref, object: { sha: this.refs.get(ref), type: 'commit' } };
+      }
+    } else if ((m = /^git\/refs\/(.+)$/.exec(p))) {
+      const ref = `refs/${m[1]}`;
+      if (method === 'DELETE') {
+        if (!this.refs.delete(ref)) throw this.#error(422, `DELETE ${path} failed (422): Reference does not exist`);
+        return null;
+      }
     } else if ((m = /^git\/matching-refs\/(.*)$/.exec(p))) {
       const prefix = `refs/${m[1]}`;
       if (method === 'GET') return [...this.refs.entries()].filter(([ref]) => ref.startsWith(prefix)).map(([ref, sha]) => ({ ref, object: { sha, type: 'commit' } }));
+    } else if ((m = /^git\/commits\/([0-9a-z]+)$/.exec(p))) {
+      const commit = this.commits.get(m[1]);
+      if (method === 'GET') {
+        if (!commit) throw this.#error(404, `GET ${path} failed (404): No commit found for SHA: ${m[1]}`);
+        return { sha: m[1], author: { date: commit.date }, committer: { date: commit.date }, message: commit.message || 'hkb heartbeat' };
+      }
+
+      // ---------- the bridge's read half (hkb init --import) ----------
+    } else if (p === 'issues') {
+      if (method === 'GET') {
+        const state = (q.get('state') || 'open').toLowerCase();
+        const all = [...this.issues.values()]
+          .filter((i) => state === 'all' || String(i.state).toLowerCase() === state)
+          .map((i) => ({ ...this.#issueRest(i), created_at: i.createdAt ?? i.updatedAt }));
+        return this.#page(all, q);
+      }
+    } else if ((m = /^issues\/(\d+)$/.exec(p))) {
+      if (method === 'GET') return this.#issueRest(this.#issue(m[1]));
+    } else if ((m = /^issues\/(\d+)\/comments$/.exec(p))) {
+      const issue = this.#issue(m[1]);
+      // A snapshot, not a live reference: real GitHub hands back a fresh JSON blob per call.
+      if (method === 'GET') return this.#page(issue.comments, q).map((c) => ({ ...c }));
+    } else if ((m = /^issues\/(\d+)\/dependencies\/blocked_by$/.exec(p))) {
+      const issue = this.#issue(m[1]);
+      if (method === 'GET') return this.#blockers(issue).map((b) => ({ number: b.number, title: b.title, state: b.state.toLowerCase(), state_reason: b.stateReason ? b.stateReason.toLowerCase() : null }));
     }
     throw this.#error(501, `fake-gh: no route for ${method} ${path}`);
   }
@@ -401,6 +407,21 @@ export class FakeGh {
     const per = Number(q.get('per_page') || 30);
     const page = Number(q.get('page') || 1);
     return items.slice((page - 1) * per, page * per);
+  }
+
+  #pullRest(pr) {
+    return {
+      number: pr.number,
+      node_id: pr.nodeId,
+      draft: !!pr.draft,
+      state: pr.state === 'OPEN' ? 'open' : 'closed',
+      merged: !!pr.merged,
+      merged_at: pr.merged ? pr.mergedAt : null,
+      html_url: pr.url,
+      head: { ref: pr.head || null },
+      base: { ref: pr.base || this.defaultBranch },
+      auto_merge: pr.autoMerge ? {} : null,
+    };
   }
 
   #issueRest(issue) {
@@ -447,38 +468,7 @@ export class FakeGh {
       const nodes = this.#blockers(issue);
       node.blockedBy = { totalCount: nodes.length, nodes };
     }
-    if (this.caps.closedByPrs) {
-      node.closedByPullRequestsReferences = {
-        nodes: issue.prs.map((pr) => ({
-          id: pr.nodeId || `PR_kwFake${pr.number}`,
-          number: pr.number,
-          state: pr.state,
-          isDraft: !!pr.isDraft,
-          url: pr.url || `https://github.com/${this.nameWithOwner}/pull/${pr.number}`,
-          headRefName: pr.headRefName || `kb/${issue.number}`,
-          baseRefName: pr.baseRefName || this.defaultBranch,
-          merged: !!pr.merged,
-          autoMergeRequest: pr.autoMerge ? { enabledAt: pr.autoMerge.enabledAt || '2026-08-26T02:00:00Z', mergeMethod: pr.autoMerge.mergeMethod } : null,
-        })),
-      };
-    }
     return node;
-  }
-
-  /** Find a PR (and its issue) by GraphQL node id, across every issue. */
-  #findPr(nodeId) {
-    for (const issue of this.issues.values()) {
-      for (const pr of issue.prs) if ((pr.nodeId || `PR_kwFake${pr.number}`) === nodeId) return { issue, pr };
-    }
-    return null;
-  }
-
-  /** Find a PR by number, across every issue's own `prs` AND the board-wide `openPulls` — the same
-   * two places `openPrsByHead`'s REST listing draws from, since a track child's PR (base ≠ default
-   * branch) is deliberately seeded there and never on an issue. */
-  #findPrByNumber(number) {
-    for (const issue of this.issues.values()) for (const pr of issue.prs) if (pr.number === number) return pr;
-    return this.openPulls.find((pr) => pr.number === number) || null;
   }
 
   #graphql({ query, variables = {} }) {
@@ -486,50 +476,46 @@ export class FakeGh {
       const repository = {};
       for (const m of query.matchAll(/pr(\d+):\s*pullRequest\(number:\s*\1\)/g)) {
         const n = Number(m[1]);
-        const pr = this.#findPrByNumber(n);
+        const pr = this.prOf(n);
         repository[`pr${n}`] = pr ? { number: n, mergeable: pr.mergeable || 'UNKNOWN', mergeStateStatus: pr.mergeStateStatus || null } : null;
       }
       return { repository };
     }
     if (/mergePullRequest/.test(query)) {
-      const found = this.#findPr(variables.id);
-      if (!found) throw this.#error(404, `GraphQL failed (404): Could not resolve to a node with the id ${variables.id}`);
-      const { pr } = found;
+      const pr = this.pulls.find((x) => x.nodeId === variables.id);
+      if (!pr) throw this.#error(404, `GraphQL failed (404): Could not resolve to a node with the id ${variables.id}`);
       if (pr.state !== 'OPEN') throw this.#error(422, `GraphQL failed (422): Pull request is ${String(pr.state).toLowerCase()}`);
       pr.state = 'MERGED';
       pr.merged = true;
+      pr.mergedAt = pr.mergedAt || '2026-08-26T03:00:00Z';
       return { mergePullRequest: { pullRequest: { number: pr.number, merged: true } } };
     }
+    if (/markPullRequestReadyForReview/.test(query)) {
+      const pr = this.pulls.find((x) => x.nodeId === variables.id);
+      if (!pr) throw this.#error(404, `GraphQL failed (404): Could not resolve to a node with the id ${variables.id}`);
+      pr.draft = false;
+      return { markPullRequestReadyForReview: { pullRequest: { number: pr.number, isDraft: false } } };
+    }
     if (/statusCheckRollup/.test(query)) {
-      const issue = [...this.issues.values()].find((i) => i.prs.some((p) => p.number === Number(variables.n)));
-      const pr = issue?.prs.find((p) => p.number === Number(variables.n));
+      const pr = this.prOf(variables.n);
       const state = pr && pr.checksState !== undefined ? pr.checksState : null;
       return { repository: { pullRequest: pr ? { commits: { nodes: [{ commit: { statusCheckRollup: state ? { state } : null } }] } } : null } };
     }
     if (/enablePullRequestAutoMerge/.test(query)) {
-      for (const issue of this.issues.values()) {
-        for (const pr of issue.prs) {
-          if ((pr.nodeId || `PR_kwFake${pr.number}`) !== variables.id) continue;
-          // GitHub refuses both of these, and hkb must never ask: a draft cannot auto-merge, and a
-          // merged PR has nothing left to enable.
-          if (!this.allowAutoMerge) throw this.#error(422, 'GraphQL failed (422): Auto merge is not allowed for this repository');
-          if (pr.isDraft) throw this.#error(422, 'GraphQL failed (422): Pull request is in draft state');
-          if (pr.state !== 'OPEN') throw this.#error(422, `GraphQL failed (422): Pull request is ${pr.state.toLowerCase()}`);
-          pr.autoMerge = { enabledAt: '2026-08-26T02:00:00Z', mergeMethod: variables.method };
-          return { enablePullRequestAutoMerge: { pullRequest: { number: pr.number, autoMergeRequest: pr.autoMerge } } };
-        }
-      }
-      throw this.#error(404, `GraphQL failed (404): Could not resolve to a node with the id ${variables.id}`);
+      const pr = this.pulls.find((x) => x.nodeId === variables.id);
+      if (!pr) throw this.#error(404, `GraphQL failed (404): Could not resolve to a node with the id ${variables.id}`);
+      // GitHub refuses both of these, and hkb must never ask: a draft cannot auto-merge, and a
+      // merged PR has nothing left to enable.
+      if (!this.allowAutoMerge) throw this.#error(422, 'GraphQL failed (422): Auto merge is not allowed for this repository');
+      if (pr.draft) throw this.#error(422, 'GraphQL failed (422): Pull request is in draft state');
+      if (pr.state !== 'OPEN') throw this.#error(422, `GraphQL failed (422): Pull request is ${pr.state.toLowerCase()}`);
+      pr.autoMerge = { enabledAt: '2026-08-26T02:00:00Z', mergeMethod: variables.method };
+      return { enablePullRequestAutoMerge: { pullRequest: { number: pr.number, autoMergeRequest: pr.autoMerge } } };
     }
     if (/__type\(name:\s*"Issue"\)/.test(query)) {
       const fields = [{ name: 'number' }, { name: 'title' }, { name: 'labels' }];
       if (this.caps.blockedByGql) fields.push({ name: 'blockedBy' });
-      if (this.caps.closedByPrs) fields.push({ name: 'closedByPullRequestsReferences' });
       return { __type: { fields } };
-    }
-    if (/issue\(number:/.test(query)) {
-      const issue = this.issues.get(Number(variables.n));
-      return { repository: { issue: issue ? this.#node(issue) : null } };
     }
     if (/issues\(/.test(query)) {
       const states = (/states:\s*\[([^\]]*)\]/.exec(query)?.[1] || 'OPEN').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
@@ -554,8 +540,9 @@ export class FakeGh {
 }
 
 /**
- * Fixture helper: an issue spec in hkb terms (status/agent/board/kb block/run record)
- * rendered into the labels and comments a real board issue carries.
+ * Fixture helper: a card spec in hkb terms (status/agent/board/kb block/run record) rendered into
+ * the labels and comments a board issue carries. Both doubles read it — `test/fake-store.js` keeps
+ * the run record as a record, `FakeGh` renders it as the comment the GitHub protocol kept it in.
  */
 export function kbIssue({ number, title, body = 'do the thing', status = 'ready', agent = null, board = 'default', needsHuman = false, kb = {}, run = null, labels = [], comments = [], ...spec } = {}) {
   const all = [...labels, L.board(board)];
@@ -567,7 +554,8 @@ export function kbIssue({ number, title, body = 'do the thing', status = 'ready'
     title: title || `task ${number}`,
     body: serializeBodyBlock({ ...DEFAULT_KB, ...kb }, body),
     labels: all,
-    comments: [...(run ? [serializeRunComment(run)] : []), ...comments],
+    run,
+    comments: [...comments],
     ...spec,
   };
 }

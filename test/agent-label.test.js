@@ -15,7 +15,6 @@ import { main } from '../src/cli.js';
 import { tick } from '../src/dispatch.js';
 import { DEFAULT_BOARD } from '../src/board.js';
 import { agentOf, agentsOf } from '../src/model.js';
-import { setAgent } from '../src/tasks.js';
 import { checkAgentLabels, AGENT_LABEL_CHECK } from '../src/doctor.js';
 import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
@@ -137,16 +136,11 @@ test('setAgent adds the label to a card that has none — a task adopted onto a 
   assert.equal(h.store.statusOf(9), 'triage', 'the default status is where triage-only adoption leaves it');
 });
 
-test('setAgent adds before it removes, so a half-applied set never leaves a card with no profile', async (t) => {
-  const h = harness(t);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'todo', agent: 'claude' }));
-  h.gh.fail({ method: 'DELETE', path: 'issues/7/labels/' }, { status: 500, message: 'the label DELETE never lands' });
-  const task = { number: 7, labels: h.gh.labelsOf(7), agent: 'claude' };
-
-  await assert.rejects(() => setAgent(h.ctx, task, 'codex'));
-
-  assert.deepEqual(agentLabels(h.gh, 7).sort(), ['kb:agent:claude', 'kb:agent:codex'], 'two profiles — the state doctor names — never zero');
-});
+// `setAgent adds before it removes, so a half-applied set never leaves a card with no profile` was
+// here. It pinned the *order of two REST calls* in the GitHub driver — POST the new label, then
+// DELETE the old one — so that a failed DELETE left a card with two profiles rather than none. A
+// card's agent is one column now (`src/store/git.js`), written in one commit that either lands or
+// does not, so there is no half-applied state left to have an ordering rule about.
 
 // ---------- claim ----------
 

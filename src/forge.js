@@ -138,21 +138,38 @@ export async function listTrackBranches(ctx) {
  * request whatever the board's size rather than one per unlinked card.
  */
 export async function openPrsByHead(ctx) {
+  return prsByHead(ctx, { state: 'open' });
+}
+
+/**
+ * The listing itself. `state` is GitHub's: `open` (the guard's question) or `all` — the sweep's,
+ * because "is this checkout's work landed" is answered by a PR that is *closed*, and a listing of
+ * open ones can only say "not here", which is also what a card with no PR at all looks like.
+ *
+ * An `all` listing is ordered newest-updated first so a head branch that has carried more than one
+ * pull request resolves to the one that moved last.
+ * @param {any} ctx
+ * @param {{state?: 'open'|'all'}} [opts]
+ */
+export async function prsByHead(ctx, { state = 'open' } = {}) {
   const out = new Map();
+  const sort = state === 'all' ? '&sort=updated&direction=desc' : '';
   for (let page = 1; page <= 10; page++) {
-    const batch = await rest('GET', api(ctx, `/pulls?state=open&per_page=100&page=${page}`));
+    const batch = await rest('GET', api(ctx, `/pulls?state=${state}&per_page=100&page=${page}${sort}`));
     for (const p of batch || []) {
       const head = p.head?.ref;
-      if (!head) continue;
+      if (!head || out.has(head)) continue;
+      const merged = !!(p.merged_at || p.merged);
       out.set(head, {
         number: p.number,
         nodeId: p.node_id,
-        state: 'OPEN',
+        state: p.state === 'open' ? 'OPEN' : merged ? 'MERGED' : 'CLOSED',
         isDraft: !!p.draft,
         url: p.html_url,
         headRefName: head,
         baseRefName: p.base?.ref || null,
-        merged: false,
+        merged,
+        mergedAt: p.merged_at || null,
         autoMergeEnabled: !!p.auto_merge,
       });
     }
@@ -224,21 +241,27 @@ export function branchFallbackPrs(task, openByHead) {
  * rather than replaying the error. The dispatcher drops the memo at the top of every tick
  * (`dropPrCaches`), so a loop never judges a card on last tick's listing.
  *
+ * `state: 'all'` is for the caller that has to see a PR after it merged — `hkb gc`, deciding whether
+ * a subagent's checkout is scrap. It is memoized in its own slot, so a tick that wants both pays for
+ * one of each rather than one of whichever came first.
+ *
  * @template {any} T
  * @param {any} ctx
  * @param {T} tasks  one task or an array of them — returned as given, filled in place
+ * @param {{state?: 'open'|'all'}} [opts]
  * @returns {Promise<T>}
  */
-export async function fillPrs(ctx, tasks) {
+export async function fillPrs(ctx, tasks, { state = 'open' } = {}) {
   const list = (Array.isArray(tasks) ? tasks : [tasks]).filter(Boolean);
   if (!list.some((t) => !(t.prs || []).length)) return tasks;
-  if (!ctx._cache.prsByHead) ctx._cache.prsByHead = openPrsByHead(ctx);
-  const pending = ctx._cache.prsByHead;
+  const slot = state === 'all' ? 'prsByHeadAll' : 'prsByHead';
+  if (!ctx._cache[slot]) ctx._cache[slot] = prsByHead(ctx, { state });
+  const pending = ctx._cache[slot];
   let openByHead;
   try {
     openByHead = await pending;
   } catch (e) {
-    if (ctx._cache.prsByHead === pending) delete ctx._cache.prsByHead;
+    if (ctx._cache[slot] === pending) delete ctx._cache[slot];
     throw e;
   }
   for (const t of list) t.prs = branchFallbackPrs(t, openByHead);

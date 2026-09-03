@@ -11,8 +11,8 @@ import {
   logPathFor, tailFile, missingFields, startServer, keyBoards, serveContexts,
 } from '../src/serve.js';
 import { promote } from '../src/lifecycle.js';
-import { getTask, fetchBoard } from '../src/tasks.js';
-import { FakeGh, kbIssue } from './fake-gh.js';
+import { installDoubles, kbIssue } from './fake-store.js';
+import { openStore } from '../src/store/index.js';
 
 const task = (over = {}) => ({
   number: 20, title: 'hkb serve', status: 'ready', agent: 'claude', board: 'default',
@@ -801,15 +801,16 @@ test('triage → ready promotes twice, the way two `hkb promote` calls would', a
 });
 
 test('dragging a root into todo sweeps its open triage blockers along, through the real promote (#209)', async () => {
-  const gh = new FakeGh();
-  const restoreGh = gh.install();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-serve-real-'));
+  fs.mkdirSync(path.join(root, '.kanban', 'logs'), { recursive: true });
+  const ctx = { root, repo: { owner: 'acme', repo: 'board', nameWithOwner: 'acme/board' }, board: 'default', host: 'testhost', _cache: {}, cfg: {} };
+  const { store, restore: restoreGh } = installDoubles(ctx);
   try {
-    gh.addIssue(kbIssue({ number: 154, status: 'triage', agent: 'claude' }));
-    gh.addIssue(kbIssue({ number: 155, status: 'triage', agent: 'claude' }));
-    gh.addIssue(kbIssue({ number: 158, status: 'triage', agent: 'claude', blockedBy: [154, 155] }));
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-serve-real-'));
-    fs.mkdirSync(path.join(root, '.kanban', 'logs'), { recursive: true });
-    const ctx = { root, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner }, board: 'default', host: 'testhost', _cache: {}, cfg: {} };
+    store.addIssue(kbIssue({ number: 154, status: 'triage', agent: 'claude' }));
+    store.addIssue(kbIssue({ number: 155, status: 'triage', agent: 'claude' }));
+    store.addIssue(kbIssue({ number: 158, status: 'triage', agent: 'claude', blockedBy: [154, 155] }));
+    const fetchBoard = async (c) => (await openStore(c)).listTasks();
+    const getTask = async (c, n) => (await openStore(c)).getTask(n);
     const deps = {
       fetchBoard, getTask, promote, contexts: [ctx],
       loadRun: async () => ({ run: { failures: 0, attempts: [] } }),
@@ -829,8 +830,8 @@ test('dragging a root into todo sweeps its open triage blockers along, through t
       assert.equal(body.landed, null);
       // every swept-up blocker rides along under `moved`
       assert.deepEqual(body.moved.map((r) => [r.number, r.status]).sort(), [[154, 'todo'], [155, 'todo'], [158, 'todo']]);
-      assert.equal(gh.issues.get(154).labels.includes('kb:status:todo'), true);
-      assert.equal(gh.issues.get(155).labels.includes('kb:status:todo'), true);
+      assert.equal(store.statusOf(154), 'todo');
+      assert.equal(store.statusOf(155), 'todo');
     } finally { await new Promise((r) => s.server.close(r)); }
   } finally { restoreGh(); }
 });

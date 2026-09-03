@@ -20,7 +20,9 @@ import { expandLaunch, spawnWorker, tick } from '../src/dispatch.js';
 import { checkHarnesses, checkHooks, checkMcp, staleHookLaunches, STALE_HOOK_CHECK, LAUNCH_HOOK_CHECK } from '../src/doctor.js';
 import { stripFrontmatter, worktreePath, insideRepo, stripNodeModulesBin, hookSettings, hookEntry } from '../src/model.js';
 import { mcpLaunch, installMcp, MCP_FILE, MCP_KEY } from '../src/mcp.js';
-import { FakeGh, kbIssue } from './fake-gh.js';
+import { FakeGh } from './fake-gh.js';
+import { installDoubles, kbIssue } from './fake-store.js';
+import { openStore } from '../src/store/index.js';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 const AGENT = path.join('.github', 'agents', 'kanban-worker.agent.md');
@@ -299,16 +301,16 @@ test('the tick runs a workspace:worktree profile in the worktree it just created
     root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
     board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
   };
-  const restore = gh.install();
+  const { store, restore } = installDoubles(ctx);
   t.after(() => { restore(); fs.rmSync(root, { recursive: true, force: true }); });
-  gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'copilot-cli' }));
+  store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'copilot-cli' }));
 
   const s = await tick(ctx, {});
 
   assert.deepEqual(s.claimed.map((c) => c.number), [7]);
   assert.equal(s.claimed[0].wt, 'kb-7-1');
   assert.ok(fs.existsSync(path.join(root, worktreePath('kb-7-1'), '.git')), 'the worker got a checkout of its own');
-  const [attempt] = gh.runOf(7).attempts;
+  const [attempt] = store.runOf(7).attempts;
   assert.equal(attempt.wt, 'kb-7-1', 'the attempt row records the worktree, for gc and post-mortems');
   assert.equal(attempt.bg, undefined);
 });
@@ -428,11 +430,10 @@ test('the dispatcher hands codex the worktree it is about to create, as an absol
     repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
     board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
   };
-  const restore = gh.install();
+  const { store, restore } = installDoubles(ctx);
   t.after(() => { restore(); fs.rmSync(root, { recursive: true, force: true }); });
-  gh.addIssue(kbIssue({ number: 12, status: 'ready', agent: 'codex' }));
-  const { fetchBoard } = await import('../src/tasks.js');
-  const [task] = await fetchBoard(ctx);
+  store.addIssue(kbIssue({ number: 12, status: 'ready', agent: 'codex' }));
+  const [task] = await (await openStore(ctx)).listTasks();
 
   const { argv } = await spawnWorker(ctx, task, 'codex', 3, { dryRun: true });
 
@@ -454,11 +455,10 @@ test('spawnWorker renders a profile\'s effort onto argv through {model_args}', a
     repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
     board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
   };
-  const restore = gh.install();
+  const { store, restore } = installDoubles(ctx);
   t.after(() => { restore(); fs.rmSync(root, { recursive: true, force: true }); });
-  gh.addIssue(kbIssue({ number: 13, status: 'ready', agent: 'claude' }));
-  const { fetchBoard } = await import('../src/tasks.js');
-  const [task] = await fetchBoard(ctx);
+  store.addIssue(kbIssue({ number: 13, status: 'ready', agent: 'claude' }));
+  const [task] = await (await openStore(ctx)).listTasks();
 
   const { argv } = await spawnWorker(ctx, task, 'claude', 1, { dryRun: true });
 

@@ -19,7 +19,8 @@ import { syncPass, loop, DURABLE_TICK_KEYS } from '../src/dispatch.js';
 import { invocationWritesBoard } from '../src/cli.js';
 import { DEFAULT_BOARD, hostId, readState, writeState, runGitAsync, storeGitDir } from '../src/board.js';
 import { indexFileIn } from '../src/store/sqlite.js';
-import { emptyRun, serializeResultComment, serializeRunComment, RESULT_MARKER } from '../src/model.js';
+import { emptyRun, serializeResultComment, RESULT_MARKER } from '../src/model.js';
+import { runComment as serializeRunComment } from './fake-gh.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
 function git(cwd, ...args) {

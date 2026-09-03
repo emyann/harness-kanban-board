@@ -1,6 +1,7 @@
-// The cleanup sweeps against a real git checkout and the in-memory GitHub (test/fake-gh.js):
-// what `hkb gc --yes` removes, what it refuses to touch, and the dispatcher running the very same
-// sweeps inside the tick — incrementally when a task leaves the board, in full every N ticks.
+// The cleanup sweeps against a real git checkout, the board double (test/fake-store.js) and the
+// forge double (test/fake-gh.js): what `hkb gc --yes` removes, what it refuses to touch, and the
+// dispatcher running the very same sweeps inside the tick — incrementally when a task leaves the
+// board, in full every N ticks.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -12,8 +13,7 @@ import { tick } from '../src/dispatch.js';
 import { DEFAULT_BOARD, readState, writeState } from '../src/board.js';
 import { GhError, setTransport } from '../src/gh.js';
 import { openGitTier } from '../src/store/git.js';
-import { serializeRunComment } from '../src/model.js';
-import { FakeGh, kbIssue, runWith } from './fake-gh.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const DEAD_PID = 999_999_999; // out of range on every platform we run on: never alive
 
@@ -37,11 +37,10 @@ function makeRepo() {
 }
 
 function harness({ board = 'default', dispatch = {}, host = 'test-host' } = {}) {
-  const gh = new FakeGh();
   const root = makeRepo();
   const cfg = {
     ...DEFAULT_BOARD,
-    repo: gh.nameWithOwner,
+    repo: 'acme/board',
     board,
     default_branch: 'main',
     dispatch: { ...DEFAULT_BOARD.dispatch, ...dispatch },
@@ -49,14 +48,14 @@ function harness({ board = 'default', dispatch = {}, host = 'test-host' } = {}) 
   };
   const ctx = {
     root, cfg, board, host,
-    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    repo: { owner: 'acme', repo: 'board', nameWithOwner: 'acme/board' },
     json: false, caps: {}, _cache: {},
     requireBoard() { return this; },
   };
-  const restore = gh.install();
+  const { gh, store, restore } = installDoubles(ctx, { board });
   const logs = [];
   return {
-    gh, ctx, root, logs,
+    gh, store, ctx, root, logs,
     log: (m) => logs.push(m),
     text: () => logs.join('\n'),
     tick: (opts = {}) => tick(ctx, { log: (m) => logs.push(m), ...opts }),
@@ -258,12 +257,12 @@ test('sweepTask cleans one task, keeps the attempts it is told to keep, and touc
 
 // ---------- the full sweep ----------
 
-test('the full sweep is what `hkb gc --yes` runs: worktrees, branches, duplicate run comments, old files', async (t) => {
+test('the full sweep is what `hkb gc --yes` runs: worktrees, branches, old files', async (t) => {
   const h = harness();
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'test-host', started_at: '2026-08-26T01:00:00Z', ended_at: '2026-08-26T02:00:00Z', outcome: 'completed' }]);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', run, comments: [serializeRunComment(run)] }));
-  h.gh.addIssue(kbIssue({ number: 2, status: 'running' }));
+  h.store.addIssue(kbIssue({ number: 1, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', run }));
+  h.store.addIssue(kbIssue({ number: 2, status: 'running' }));
   const merged = worktree(h.root, 'kb-1-1', 'worktree-kb-1-1');
   const running = worktree(h.root, 'kb-2-1', 'worktree-kb-2-1');
   unmergedBranch(h.root, 'kb-1-2');
@@ -279,22 +278,20 @@ test('the full sweep is what `hkb gc --yes` runs: worktrees, branches, duplicate
 
   assert.equal(stats.worktrees, 1);
   assert.equal(stats.branches, 1); // the leftover branch of attempt 2, task finished
-  assert.equal(stats.comments, 1); // the older copy of the run record
   assert.equal(stats.files, 1);
   assert.equal(exists(merged), false);
   assert.equal(exists(running), true);
   assert.deepEqual(branches(h.root), ['main', 'worktree-kb-2-1']);
   assert.equal(exists(old), false);
   assert.equal(exists(fresh), true);
-  assert.equal(h.gh.runOf(1).attempts.length, 1);
-  assert.equal(h.gh.issues.get(1).comments.length, 1);
+  assert.equal(h.store.runOf(1).attempts.length, 1);
 });
 
 test('the full sweep learns agent-<id> worktrees: gone once #41\'s PR merges, kept while it is still open', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 41, status: 'running', prs: [{ number: 900, state: 'MERGED', headRefName: 'kb/41' }] }));
-  h.gh.addIssue(kbIssue({ number: 42, status: 'running', prs: [{ number: 901, state: 'OPEN', headRefName: 'kb/42' }] }));
+  h.store.addIssue(kbIssue({ number: 41, status: 'running', prs: [{ number: 900, state: 'MERGED', headRefName: 'kb/41' }] }));
+  h.store.addIssue(kbIssue({ number: 42, status: 'running', prs: [{ number: 901, state: 'OPEN', headRefName: 'kb/42' }] }));
   const merged = worktree(h.root, 'agent-abc', 'kb/41');
   const open = worktree(h.root, 'agent-def', 'kb/42');
 
@@ -305,38 +302,15 @@ test('the full sweep learns agent-<id> worktrees: gone once #41\'s PR merges, ke
   assert.equal(exists(open), true);
 });
 
-test('a sweep given a memo does not read a task again while its issue has not moved', async (t) => {
-  const h = harness();
-  t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', run: runWith([]) }));
-  h.gh.addIssue(kbIssue({ number: 2, status: 'ready' }));
-  const reads = () => h.gh.requestsMatching('GET', /issues\/\d+\/comments/).length;
-  const memo = {}; // what the dispatcher keeps in .kanban/state.json
-
-  await sweep(h.ctx, { yes: true, memo, log: h.log });
-  assert.equal(reads(), 2); // both tasks, once
-  assert.deepEqual(Object.keys(memo).sort(), ['1', '2']);
-
-  h.ctx._cache = {}; // a fresh tick, same board
-  await sweep(h.ctx, { yes: true, memo, log: h.log });
-  assert.equal(reads(), 2); // nothing moved: this sweep reads no comment at all
-
-  // a duplicate run comment can only appear through a write, and a write bumps the issue's updatedAt
-  h.gh.addComment(2, 'a human says something');
-  h.gh.issues.get(2).updatedAt = '2026-08-27T09:00:00Z';
-  h.ctx._cache = {};
-  await sweep(h.ctx, { yes: true, memo, log: h.log });
-  assert.equal(reads(), 3); // only #2 read again
-
-  h.ctx._cache = {}; // `hkb gc` passes no memo: a human asking for a sweep gets the thorough one
-  await sweep(h.ctx, { yes: true, log: h.log });
-  assert.equal(reads(), 5);
-});
+// `a sweep given a memo does not read a task again while its issue has not moved` was here. The memo
+// existed for one sweep — the duplicate run-comment one — which cost a comments read per card and is
+// gone with the store that could have duplicates. `sweep()` takes no memo any more, and reads the
+// board once.
 
 test('`hkb gc` reports, `hkb gc --yes` removes', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED' }));
+  h.store.addIssue(kbIssue({ number: 1, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED' }));
   const dir = worktree(h.root, 'kb-1-1', 'worktree-kb-1-1');
 
   assert.equal(await gc(h.ctx, {}, h.log), 0);
@@ -361,11 +335,12 @@ test('a retention window that is not a number is refused, never read as "delete 
 
 // ---------- inside the tick ----------
 
-test('the tick cleans up after a task GitHub closed behind its back', async (t) => {
+test('the tick cleans up after a card whose PR merged on the forge', async (t) => {
   const h = harness({ dispatch: { gc_every_ticks: 0 } });
   t.after(h.cleanup);
   const run = runWith([{ attempt: 1, host: 'test-host', started_at: '2026-08-26T01:00:00Z' }]);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'review', state: 'CLOSED', stateReason: 'COMPLETED', run }));
+  h.store.addIssue(kbIssue({ number: 1, status: 'review', run }));
+  h.gh.addPull({ number: 90, head: 'worktree-kb-1-1', state: 'MERGED' });
   const dir = worktree(h.root, 'kb-1-1', 'worktree-kb-1-1');
   unmergedBranch(h.root, 'kb-1-2');
 
@@ -381,7 +356,8 @@ test('the tick cleans up after a task GitHub closed behind its back', async (t) 
 test('what a live session held is retried by the next tick, not forgotten', async (t) => {
   const h = harness({ dispatch: { gc_every_ticks: 0 } });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'review', state: 'CLOSED', stateReason: 'COMPLETED', run: runWith([{ attempt: 1, host: 'test-host', started_at: '2026-08-26T01:00:00Z' }]) }));
+  h.store.addIssue(kbIssue({ number: 1, status: 'review', run: runWith([{ attempt: 1, host: 'test-host', started_at: '2026-08-26T01:00:00Z' }]) }));
+  h.gh.addPull({ number: 90, head: 'worktree-kb-1-1', state: 'MERGED' });
   const dir = worktree(h.root, 'kb-1-1', 'worktree-kb-1-1');
   git(h.root, 'worktree', 'lock', '--reason', `claude session kb-1-1 (pid ${process.pid})`, dir);
 
@@ -401,7 +377,7 @@ test('what a live session held is retried by the next tick, not forgotten', asyn
 test('a pending cleanup is dropped when the task is back in flight', async (t) => {
   const h = harness({ dispatch: { gc_every_ticks: 0 } });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'ready' })); // reopened, or retried after a failure
+  h.store.addIssue(kbIssue({ number: 1, status: 'ready' })); // reopened, or retried after a failure
   const dir = worktree(h.root, 'kb-1-1', 'worktree-kb-1-1');
   writeState(h.root, { gc_pending: [1] });
 
@@ -415,7 +391,8 @@ test('a pending cleanup is dropped when the task is back in flight', async (t) =
 test('a dry-run tick removes nothing from the host', async (t) => {
   const h = harness({ dispatch: { gc_every_ticks: 1 } });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'review', state: 'CLOSED', stateReason: 'COMPLETED', run: runWith([{ attempt: 1, host: 'test-host', started_at: '2026-08-26T01:00:00Z' }]) }));
+  h.store.addIssue(kbIssue({ number: 1, status: 'review', run: runWith([{ attempt: 1, host: 'test-host', started_at: '2026-08-26T01:00:00Z' }]) }));
+  h.gh.addPull({ number: 90, head: 'worktree-kb-1-1', state: 'MERGED' });
   const dir = worktree(h.root, 'kb-1-1', 'worktree-kb-1-1');
 
   const s = await h.tick({ dryRun: true });
@@ -428,7 +405,7 @@ test('a dry-run tick removes nothing from the host', async (t) => {
 test('the tick runs the full sweep every gc_every_ticks', async (t) => {
   const h = harness({ dispatch: { gc_every_ticks: 2 } });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'done' })); // settled, still open: never reconciled
+  h.store.addIssue(kbIssue({ number: 1, status: 'done' })); // settled, still open: never reconciled
   const dir = worktree(h.root, 'kb-1-1', 'worktree-kb-1-1');
 
   const first = await h.tick();
@@ -439,7 +416,6 @@ test('the tick runs the full sweep every gc_every_ticks', async (t) => {
   assert.equal(second.gc.worktrees, 1);
   assert.equal(exists(dir), false);
   assert.match(h.text(), /gc: 1 worktree\(s\), 0 branch\(es\)/);
-  assert.deepEqual(Object.keys(readState(h.root).gc_scanned), ['1']); // the memo rides in the state file
 
   const third = await h.tick(); // the counter restarts
   assert.equal(third.gc, undefined);
@@ -447,44 +423,33 @@ test('the tick runs the full sweep every gc_every_ticks', async (t) => {
 
 test('a failing sweep never fails the tick', async (t) => {
   const h = harness({ dispatch: { gc_every_ticks: 1 } });
-  // only the sweep's board read (the one that includes closed issues) fails
-  const unwrap = setTransport((req) => {
-    if (req.kind === 'graphql' && /states:\s*\[OPEN, CLOSED\]/.test(req.query || '')) throw new GhError('GitHub is unreachable', { status: 502, kind: 'server' });
-    return h.gh.transport(req);
-  });
-  t.after(() => { unwrap(); h.cleanup(); });
-  h.gh.addIssue(kbIssue({ number: 1, status: 'ready' }));
+  t.after(h.cleanup);
+  h.store.addIssue(kbIssue({ number: 1, status: 'ready' }));
+  // The tick reads the board once for itself and once for the sweep (OPEN *and* CLOSED); only the
+  // second one fails here, which is the sweep's own read.
+  h.store.fail('listTasks', { message: 'the board is unreadable', times: 1, when: (opts) => (opts?.states || []).includes('CLOSED') });
 
   const s = await h.tick({ max: 0 });
 
-  assert.equal(s.gc.error, 'GitHub is unreachable');
+  assert.equal(s.gc.error, 'the board is unreadable');
   assert.deepEqual(s.promoted, []); // the tick itself finished normally
   assert.match(h.text(), /gc sweep skipped \(retried in 1 ticks\)/);
 });
 
-// ---------- the local store (docs/local-first.md §7) ----------
-// Two of these sweeps are about how the GitHub store keeps a board, and mean nothing once it does
-// not: a run record is one file on the branch (so there is no second comment to be a duplicate of)
-// and a beat is a row in the index (so there is no chain to go stale). Both cost a listing per card,
-// which is why they are skipped rather than run and found empty.
+// ---------- what the sweep asks the forge (docs/local-first.md §7) ----------
+// Two sweeps that used to live here are gone with the GitHub store: a run record is one document,
+// so there is no second comment to be a duplicate of, and a claim is a row in the index, so there
+// is no beat chain to go stale. The two that remain ask the *forge*, and they apply to every board
+// — a card's pull request and a track's integration branch live there whatever the cards live in.
 
-test('gc on a local board sweeps worktrees, branches and files — and not comments or beat chains', async (t) => {
+test('the sweep asks the forge for a card\'s PR and leaves the retired protocol\'s refs alone', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.ctx.cfg.store = 'local';
-  // A card on the *branch*, not an issue: the store is what `sweep` reads, and a board that is
-  // configured local while its cards are still issues is precisely the half-migrated state that
-  // used to make this sweep destructive (see the empty-board test below). It cannot be reached any
-  // more — `storeKind` reads the key and nothing infers it — and a test must not stage it either.
-  const tier = openGitTier(h.ctx);
-  tier.init('default');
-  const card = tier.createTask({ title: 'settled', status: 'done' });
-  tier.closeTask(card.number, 'completed');
-  h.gh.addIssue(kbIssue({ number: 1, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', run: runWith([{ attempt: 1, ended_at: '2026-08-26T10:00:00Z', outcome: 'completed' }]) }));
-  // the two things the skipped sweeps would have found
-  h.gh.addComment(1, serializeRunComment(runWith([{ attempt: 1, ended_at: '2026-08-26T09:00:00Z', outcome: 'completed' }])));
+  h.store.addIssue(kbIssue({ number: 1, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', run: runWith([{ attempt: 1, ended_at: '2026-08-26T10:00:00Z', outcome: 'completed' }]) }));
+  // A lock ref left over from a board that used to be on GitHub. `hkb init --import` sweeps those
+  // up once; gc has no business touching them, and it no longer looks.
   git(h.root, 'update-ref', 'refs/kb/locks/1/1', git(h.root, 'rev-parse', 'HEAD'));
-  const gone = worktree(h.root, `kb-${card.number}-1`, `worktree-kb-${card.number}-1`);
+  const gone = worktree(h.root, 'kb-1-1', 'worktree-kb-1-1');
   const old = path.join(h.root, '.kanban', 'logs', '1-1.log');
   fs.mkdirSync(path.dirname(old), { recursive: true });
   fs.writeFileSync(old, 'old\n');
@@ -494,68 +459,47 @@ test('gc on a local board sweeps worktrees, branches and files — and not comme
   const stats = await sweep(h.ctx, { yes: true, log: h.log });
 
   assert.equal(stats.store, 'local');
-  assert.equal(stats.worktrees, 1, 'the sweeps that are about this host still run');
+  assert.equal(stats.worktrees, 1);
   assert.equal(stats.files, 1);
   assert.equal(exists(gone), false);
-  assert.equal(stats.comments, 0);
-  assert.equal(stats.chains, 0);
-  assert.equal(h.gh.issues.get(1).comments.length, 2, 'the duplicate run comment was left where it is');
-  assert.equal(git(h.root, 'for-each-ref', '--format=%(refname)', 'refs/kb/locks/'), 'refs/kb/locks/1/1', 'and the beat chain too');
-  assert.match(h.text(), /nothing to sweep on a local board/);
+  assert.equal(stats.comments, undefined, 'there is no duplicate-comment sweep to report on');
+  assert.equal(stats.chains, undefined, 'nor a beat-chain one');
+  assert.equal(git(h.root, 'for-each-ref', '--format=%(refname)', 'refs/kb/locks/'), 'refs/kb/locks/1/1');
 });
 
-test('the sweeps that can only be empty on a local board say so instead of reporting a clean 0', async (t) => {
-  // The same rule as the two below, applied to the two above them. A sweep whose answer comes from
-  // GitHub is either skipped on a local board or it says why it found nothing; what is not allowed
-  // is running structurally empty and reporting `0` as though there had been nothing to do.
-  //   · agent worktrees: removed when *their PR* is merged or closed, and `GitTier.toTask` hands
-  //     back `prs: []` for every card, so `prByBranch` was always null, every worktree was skipped,
-  //     and the checkouts accumulated forever behind a `0 removed`.
-  //   · track branches: one `gh api` request per gc and per gc_every_ticks tick for an answer that
-  //     is structurally always empty, plus a noisy "skipped" line from its own catch.
+test('an agent-<id> worktree is swept once its PR merges — on every board, because the PR is the forge\'s', async (t) => {
+  // The defect this is for: the agent-worktree sweep asks whether a card's PR is merged, and a local
+  // board's cards carry `prs: []` because a pull request is not board state. `prByBranch` was
+  // therefore structurally null, every worktree was skipped, and `hkb gc --yes` reported `0 removed`
+  // on a checkout quietly accumulating them forever. `fillPrs` (src/forge.js) is the join that fixes
+  // it: the store answers with the card, the forge answers with the PR, matched by head branch.
   const h = harness();
   t.after(h.cleanup);
-  h.ctx.cfg.store = 'local';
-  const tier = openGitTier(h.ctx);
-  tier.init('default');
-  const kept = worktree(h.root, 'agent-abc123', 'kb/7');
-  const restore = setTransport(() => { throw new Error('gc reached GitHub on a local board'); });
-  t.after(restore);
+  h.store.addIssue(kbIssue({ number: 41, status: 'running' }));
+  h.store.addIssue(kbIssue({ number: 42, status: 'running' }));
+  h.gh.addPull({ number: 900, head: 'kb/41', state: 'MERGED' });
+  h.gh.addPull({ number: 901, head: 'kb/42', state: 'open' });
+  const merged = worktree(h.root, 'agent-abc', 'kb/41');
+  const open = worktree(h.root, 'agent-def', 'kb/42');
 
   const stats = await sweep(h.ctx, { yes: true, log: h.log });
-  assert.equal(stats.track_branches, 0);
-  assert.match(h.text(), /track branches: not swept on a local board/);
-  assert.match(h.text(), /agent worktrees: 1 not swept on a local board/);
-  assert.match(h.text(), /worktree remove/, 'and the message says what to do instead');
-  assert.equal(exists(kept), true, 'the worktree is still there, and the human now knows it');
+
+  assert.equal(exists(merged), false, 'its PR merged: the checkout is scrap');
+  assert.equal(exists(open), true, 'its PR is still open: leave the work alone');
+  assert.equal(stats.worktrees, 1);
 });
 
-test('gc on a genuinely local board never touches GitHub', async (t) => {
-  // The defect this is for: `sweep` opened with an unconditional `fetchBoard` and only branched on
-  // `storeKind` several sweeps later. On a board that is REALLY local — a kb-board branch and no
-  // issues behind it — it threw before `stats.store` was ever read, so the "nothing to sweep on a
-  // local board" message could only be seen by a board that was also on GitHub.
+test('the sweep\'s forge half is reads only — it never writes to the forge', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.ctx.cfg.store = 'local';
-  const tier = openGitTier(h.ctx);
-  tier.init('default');
-  const card = tier.createTask({ title: 'settled', status: 'done' });
-  tier.closeTask(card.number, 'completed');
+  h.store.addIssue(kbIssue({ number: 1, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED' }));
+  const gone = worktree(h.root, 'kb-1-1', 'worktree-kb-1-1');
 
-  // Any call to the forge is now a test failure, not a 404 the sweep swallows.
-  const restore = setTransport(() => { throw new Error('gc reached GitHub on a local board'); });
-  t.after(restore);
-
-  const gone = worktree(h.root, `kb-${card.number}-1`, `worktree-kb-${card.number}-1`);
   const stats = await sweep(h.ctx, { yes: true, log: h.log });
 
-  assert.equal(stats.store, 'local');
-  assert.equal(stats.worktrees, 1, 'the sweeps that are about this host still run');
+  assert.equal(stats.worktrees, 1);
   assert.equal(exists(gone), false);
-  assert.equal(stats.comments, 0);
-  assert.equal(stats.chains, 0);
-  assert.match(h.text(), /nothing to sweep on a local board/);
+  assert.deepEqual(h.gh.writeRequests(), [], 'a sweep that deletes a track branch is the only write, and there is none here');
 });
 
 test('a board that came back with no cards sweeps nothing: an empty read is not "everything is done"', async (t) => {

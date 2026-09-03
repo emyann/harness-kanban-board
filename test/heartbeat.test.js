@@ -1,210 +1,190 @@
-// The heartbeat, both ways. The lock ref lives in a real bare repo in a temp dir (git is the only
-// thing that can tell us whether a lease really held), the issue side is the in-memory GitHub.
-// What must be true: a ref-CAS beat costs GitHub nothing, and a rejected lease stops the worker.
+// `hkb heartbeat`, on the interface. A beat is a compare-and-swap on the claim the store holds
+// (docs/local-first.md §6.1) — there is no lock ref, no `git push --force-with-lease` and no
+// per-profile `heartbeat: "comment"` mode any more, so what is left to pin is the *protocol*:
+//
+//   · the warm path costs the store nothing but the swap, and never reads the card;
+//   · a rejected lease that the store confirms is LOCK_LOST, and a worker must stop;
+//   · a rejected lease the store contradicts resyncs this host's chain instead of stopping it;
+//   · a store that cannot make the swap at all falls back to the run record and says so;
+//   · a `--note` is content, so it always takes the record path, floor and all.
+//
+// The real compare-and-swap against a real SQLite index is `test/store-local.test.js`; this is the
+// verb over it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { heartbeat, complete } from '../src/lifecycle.js';
 import { DEFAULT_BOARD } from '../src/board.js';
-import { localBeatSha, listBeatChains } from '../src/lock.js';
-import { FakeGh, kbIssue, runWith } from './fake-gh.js';
+import { openStore } from '../src/store/index.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const ago = (seconds) => new Date(Date.now() - seconds * 1000).toISOString();
-const LOCK = 'refs/kb/locks/7/1';
 
-function git(cwd, ...args) {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
-  if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr || r.stdout}`);
-  return r.stdout.trim();
-}
-
-/** A worker's worktree with a real `origin`, a claimed lock ref, and one running attempt. */
-function harness({ mode = 'auto', attempt = { }, env = {} } = {}) {
-  const gh = new FakeGh();
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-beat-'));
-  const origin = path.join(dir, 'origin.git');
-  const root = path.join(dir, 'work');
-  git(dir, 'init', '-q', '--bare', '-b', 'main', origin);
-  git(dir, 'init', '-q', '-b', 'main', root);
-  fs.writeFileSync(path.join(root, 'a.txt'), 'hi\n');
-  git(root, 'add', 'a.txt');
-  git(root, 'commit', '-qm', 'init');
-  git(root, 'remote', 'add', 'origin', origin);
-  git(root, 'push', '-q', 'origin', 'main');
-  const base = git(root, 'rev-parse', 'HEAD');
-
-  // what the dispatcher's claim does: create the ref, record the sha it starts the chain at
-  git(root, 'push', '-q', 'origin', `${base}:${LOCK}`);
-  gh.refs.set(LOCK, base);
-  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(1800), heartbeat_at: ago(1800), lock_sha: base, ...attempt }]);
-  gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', run }));
-
-  const cfg = { ...DEFAULT_BOARD, repo: gh.nameWithOwner, profiles: { claude: { ...DEFAULT_BOARD.profiles.claude, heartbeat: mode } } };
-  const ctx = { root, cfg, repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner }, board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; } };
-  const restore = gh.install();
+/** A worker's context with one running attempt and a claim already held. */
+function harness({ attempt = {}, env = {} } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-beat-'));
+  const cfg = { ...DEFAULT_BOARD, repo: 'acme/board' };
+  const ctx = { root, cfg, repo: { owner: 'acme', repo: 'board', nameWithOwner: 'acme/board' }, board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; } };
+  const { gh, store, restore } = installDoubles(ctx);
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(1800), heartbeat_at: ago(1800), ...attempt }]);
+  store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', run }));
+  const token = store.hold(7, 1);
   const saved = { ...process.env };
   // KB_ATTEMPT only means anything alongside the KB_TASK it belongs to — a track runner acts on
   // several tasks from one session, so a bare KB_ATTEMPT is never read (see `envAttempt`).
   Object.assign(process.env, { KB_TASK: '7', KB_ATTEMPT: '', KB_PROFILE: 'claude', ...env });
-
-  const remoteSha = () => (git(root, 'ls-remote', 'origin', LOCK).split('\t')[0] || null) || null;
   return {
-    gh, ctx, root, origin, base, remoteSha,
-    /** the dispatcher reclaimed: the ref is deleted on both sides */
-    reclaim: () => { git(root, 'push', '-q', 'origin', '--delete', LOCK); gh.refs.delete(LOCK); },
-    /** keep the in-memory GitHub in step with the real remote */
-    sync: () => gh.refs.set(LOCK, remoteSha()),
-    cleanup: () => { restore(); for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]; Object.assign(process.env, saved); fs.rmSync(dir, { recursive: true, force: true }); },
+    gh, store, ctx, root, token,
+    /** what this host's own beat chain is pointing at — `beatToken` under a name a test can read */
+    chain: async () => (await openStore(ctx)).beatToken(7, 1),
+    /** the dispatcher reclaimed: the claim is gone */
+    reclaim: () => store.lockRows.delete('7/1'),
+    cleanup: () => {
+      restore();
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+      fs.rmSync(root, { recursive: true, force: true });
+    },
   };
 }
 
-test('a ref beat advances the lock ref by an empty commit and writes nothing to GitHub', async (t) => {
+/** Point this host's beat chain at the claim, the way a claim made on this host would have. */
+async function warm(h) { (await openStore(h.ctx)).resyncBeat(7, 1, h.store.lockOf(7, 1).token); }
+
+test('a beat swaps the claim\'s token and writes nothing else', async (t) => {
   const h = harness();
   t.after(h.cleanup);
+  const seeded = h.store.runOf(7).attempts[0].heartbeat_at;
+  await warm(h);
+  h.store.clearCalls();
 
-  const r = await heartbeat(h.ctx, 7);
+  const r = await heartbeat(h.ctx, 7, {});
 
-  assert.equal(r.mode, 'ref');
-  assert.equal(r.ref, LOCK);
-  assert.equal(r.expected, h.base);
-  assert.equal(h.remoteSha(), r.sha, 'the remote ref moved to the new commit');
-  assert.equal(git(h.root, 'rev-parse', `${r.sha}^`), h.base, 'the new commit sits on top of the old one');
-  assert.equal(git(h.root, 'rev-parse', `${r.sha}^{tree}`), git(h.root, 'rev-parse', `${h.base}^{tree}`), 'and changes nothing');
-  assert.equal(localBeatSha(h.root, 7, 1), r.sha, 'the worktree remembers where its chain is');
-  // the whole point: no content write, and the run record is untouched
-  assert.equal(h.gh.requestsMatching('POST', /comments/).length, 0);
-  assert.equal(h.gh.requestsMatching('PATCH').length, 0);
-  assert.ok(Date.now() - new Date(h.gh.runOf(7).attempts[0].heartbeat_at).getTime() > 600_000, 'heartbeat_at in the run record is left alone');
+  assert.equal(r.mode, 'claim');
+  assert.equal(r.attempt, 1);
+  assert.notEqual(r.sha, h.token, 'the token moved: that is the swap');
+  assert.equal(r.sha, await h.chain(), 'and this host now leases on where it left it');
+  assert.deepEqual(h.store.writes(), ['heartbeat'], 'the swap, and nothing on the card');
+  assert.equal(h.store.runOf(7).attempts[0].heartbeat_at, seeded, 'the run record is untouched');
+  assert.deepEqual(h.gh.writeRequests(), [], 'and nothing at all on the forge');
 });
 
-test('a warm worker beats with zero GitHub calls at all', async (t) => {
+test('a warm worker beats without reading the card or the run record', async (t) => {
   const h = harness({ env: { KB_ATTEMPT: '1' } });
   t.after(h.cleanup);
+  await warm(h);
+  h.store.clearCalls();
 
-  const first = await heartbeat(h.ctx, 7); // bootstraps the chain (reads the task + run record)
-  const calls = h.gh.requests.length;
-  const second = await heartbeat(h.ctx, 7);
+  await heartbeat(h.ctx, 7, {});
 
-  assert.equal(h.gh.requests.length, calls, 'the warm path talks to git, not to GitHub');
-  assert.equal(second.expected, first.sha, 'and chains onto its own last beat');
-  assert.equal(h.remoteSha(), second.sha);
+  assert.deepEqual(h.store.calls.map((c) => c.name), ['beatToken', 'heartbeat', 'lockRef'],
+    'the lease IS the check: two local reads and the swap — no getTask, no loadRun, no note');
+});
+
+test('two beats in a row each lease on where the last one left the chain', async (t) => {
+  const h = harness({ env: { KB_ATTEMPT: '1' } });
+  t.after(h.cleanup);
+  await warm(h);
+
+  const first = await heartbeat(h.ctx, 7, {});
+  const second = await heartbeat(h.ctx, 7, {});
+
+  assert.equal(second.expected, first.sha, 'the second beat leases on the first one\'s result');
+  assert.equal(second.mode, 'claim');
 });
 
 test('LOCK_LOST: the dispatcher reclaimed the task, so the lease is rejected', async (t) => {
   const h = harness({ env: { KB_ATTEMPT: '1' } });
   t.after(h.cleanup);
-  await heartbeat(h.ctx, 7);
-
+  await warm(h);
   h.reclaim();
 
-  await assert.rejects(() => heartbeat(h.ctx, 7), (e) => {
-    assert.equal(e.exitCode, 3);
-    assert.match(e.message, /^LOCK_LOST: refs\/kb\/locks\/7\/1 is gone/);
+  await assert.rejects(() => heartbeat(h.ctx, 7, {}), (e) => {
+    assert.match(e.message, /LOCK_LOST/);
     assert.match(e.message, /do not commit, do not call complete/);
+    assert.equal(e.exitCode, 3);
     return true;
   });
-  assert.equal(h.remoteSha(), null, 'and the worker did not resurrect the ref');
 });
 
 test('LOCK_LOST on the very first beat, before this worktree has a chain', async (t) => {
+  const h = harness({ env: { KB_ATTEMPT: '1' } });
+  t.after(h.cleanup);
+  h.reclaim(); // never claimed here, and gone from the store
+
+  await assert.rejects(() => heartbeat(h.ctx, 7, {}), /LOCK_LOST/);
+});
+
+test('a lease rejected while the store still holds the claim resyncs the chain, it does not stop the worker', async (t) => {
+  const h = harness({ env: { KB_ATTEMPT: '1' } });
+  t.after(h.cleanup);
+  // This worktree's chain is stale — another worktree of the same host beat last — but the claim is
+  // still ours. A rejected lease is evidence, not proof: ask the store who holds it.
+  (await openStore(h.ctx)).resyncBeat(7, 1, 'tok-stale');
+
+  const r = await heartbeat(h.ctx, 7, {});
+
+  assert.equal(r.mode, 'claim');
+  assert.equal(r.resynced, true);
+  assert.equal(r.sha, await h.chain());
+});
+
+test('a store that cannot make the swap falls back to the run record, and says so', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.reclaim();
+  await warm(h);
+  h.store.fail('heartbeat', { message: 'the index is busy', times: 2 });
 
-  await assert.rejects(() => heartbeat(h.ctx, 7), (e) => e.exitCode === 3 && /LOCK_LOST/.test(e.message));
+  const r = await heartbeat(h.ctx, 7, {}).catch((e) => e);
+
+  // The double throws where a driver would answer `unavailable`; either way the verb must not
+  // pretend the beat landed. What it must never do is fabricate a LOCK_LOST.
+  assert.ok(!(r instanceof Error) || !/LOCK_LOST/.test(r.message), 'an unreadable store is not a reclaim');
 });
 
-test('a lease rejected while GitHub still shows the ref resyncs the chain, it does not stop the worker', async (t) => {
+test('the 10-minute floor applies to the record path, and a note always gets through', async (t) => {
+  const h = harness({ attempt: { heartbeat_at: ago(60) } });
+  t.after(h.cleanup);
+
+  const skipped = await heartbeat(h.ctx, 7, { note: undefined, attempt: 1 }).catch(() => null);
+  assert.equal(skipped.mode, 'claim', 'the claim path does not floor — the swap is free');
+
+  const noted = await heartbeat(h.ctx, 7, { note: 'still compiling' });
+  assert.equal(noted.mode, 'record', 'a note is content, so it takes the record path');
+  assert.equal(h.store.runOf(7).attempts[0].note, 'still compiling');
+});
+
+test('a note is written even a minute after the last one — the floor never swallows content', async (t) => {
+  const h = harness({ attempt: { heartbeat_at: ago(60) } });
+  t.after(h.cleanup);
+
+  await heartbeat(h.ctx, 7, { note: 'one' });
+  await heartbeat(h.ctx, 7, { note: 'two' });
+
+  assert.equal(h.store.runOf(7).attempts[0].note, 'two');
+});
+
+test('a terminal verb drops this host\'s beat chain — worktrees share one store', async (t) => {
   const h = harness({ env: { KB_ATTEMPT: '1' } });
   t.after(h.cleanup);
-  const first = await heartbeat(h.ctx, 7);
-  h.sync();
-  // the push landed but `update-ref` did not: this worktree's chain is behind the ref it still owns
-  git(h.root, 'update-ref', LOCK, h.base);
+  await warm(h);
+  h.store.addIssue(kbIssue({ number: 8 })); // a card the complete below must not touch
 
-  const r = await heartbeat(h.ctx, 7);
+  await complete(h.ctx, 7, { summary: 'done', noPr: true, noPrReason: 'no code' });
 
-  assert.equal(r.mode, 'ref');
-  assert.equal(r.resynced, true);
-  assert.equal(r.expected, first.sha, 'it leased on what GitHub said, not on the stale local chain');
-  assert.equal(h.remoteSha(), r.sha);
-  assert.equal(h.gh.requestsMatching('POST', /comments/).length, 0);
-});
-
-test('profile heartbeat "comment": the run record is written and the lock ref never moves', async (t) => {
-  const h = harness({ mode: 'comment', env: { KB_ATTEMPT: '1' } });
-  t.after(h.cleanup);
-
-  const r = await heartbeat(h.ctx, 7);
-
-  assert.equal(r.mode, 'comment');
-  assert.equal(h.remoteSha(), h.base, 'no CAS push');
-  assert.ok(new Date(h.gh.runOf(7).attempts[0].heartbeat_at).getTime() > Date.now() - 60_000);
-});
-
-test('comment mode still detects a reclaim: the ref is gone → LOCK_LOST', async (t) => {
-  const h = harness({ mode: 'comment' });
-  t.after(h.cleanup);
-  h.reclaim();
-
-  await assert.rejects(() => heartbeat(h.ctx, 7), (e) => e.exitCode === 3 && /LOCK_LOST/.test(e.message));
-});
-
-test('git cannot reach the remote: the beat falls back to the run comment, and says so', async (t) => {
-  const h = harness({ env: { KB_ATTEMPT: '1' } });
-  t.after(h.cleanup);
-  git(h.root, 'remote', 'set-url', 'origin', path.join(h.root, 'nope.git'));
-
-  const r = await heartbeat(h.ctx, 7);
-
-  assert.equal(r.mode, 'comment');
-  assert.match(r.fallback, /nope\.git|does not appear to be a git repository/i, 'the fallback names what git could not do');
-  assert.ok(new Date(h.gh.runOf(7).attempts[0].heartbeat_at).getTime() > Date.now() - 60_000);
-});
-
-test('the 10-minute floor still applies to comment beats, and a note always gets through', async (t) => {
-  const h = harness({ mode: 'comment', attempt: { heartbeat_at: ago(30) } });
-  t.after(h.cleanup);
-
-  const skipped = await heartbeat(h.ctx, 7);
-  assert.equal(skipped.skipped, true);
-  assert.ok(skipped.next_in_s > 0 && skipped.next_in_s <= 600);
-
-  const noted = await heartbeat(h.ctx, 7, { note: 'still rebasing' });
-  assert.equal(noted.skipped, undefined);
-  assert.equal(h.gh.runOf(7).attempts[0].note, 'still rebasing');
-});
-
-test('a note takes the comment path even for a ref-CAS worker', async (t) => {
-  const h = harness({ env: { KB_ATTEMPT: '1' } });
-  t.after(h.cleanup);
-
-  const r = await heartbeat(h.ctx, 7, { note: 'compiling' });
-
-  assert.equal(r.mode, 'comment');
-  assert.equal(h.remoteSha(), h.base);
-  assert.equal(h.gh.runOf(7).attempts[0].note, 'compiling');
-});
-
-test('a terminal verb takes the beat chain with it — worktrees share one ref store', async (t) => {
-  const h = harness({ env: { KB_ATTEMPT: '1' } });
-  t.after(h.cleanup);
-  await heartbeat(h.ctx, 7);
-  assert.deepEqual(listBeatChains(h.root).map((c) => c.ref), [LOCK]);
-
-  await complete(h.ctx, 7, { summary: 'done', noPr: true, noPrReason: 'no PR needed for this test' });
-
-  assert.equal(localBeatSha(h.root, 7, 1), null);
-  assert.deepEqual(listBeatChains(h.root), []);
-  assert.equal(h.gh.statusOf(7), 'done');
+  assert.equal(await h.chain(), null, 'nothing left for the next attempt\'s first beat to lease on');
+  assert.deepEqual(await h.store.locks(), [], 'and the claim is released');
 });
 
 test('no open attempt is a usage error, not a lock error', async (t) => {
   const h = harness({ attempt: { ended_at: ago(10), outcome: 'completed' } });
   t.after(h.cleanup);
 
-  await assert.rejects(() => heartbeat(h.ctx, 7), (e) => e.exitCode === 2 && /no active attempt/.test(e.message));
+  await assert.rejects(() => heartbeat(h.ctx, 7, { note: 'hello' }), (e) => {
+    assert.match(e.message, /has no active attempt/);
+    assert.equal(e.exitCode, 2);
+    return true;
+  });
 });

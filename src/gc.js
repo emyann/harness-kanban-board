@@ -290,7 +290,7 @@ async function sweepOpen(ctx, store, { yes, days, log }) {
   // forge's on every board — one listing, joined to the cards by head branch (`fillPrs`).
   // Before it, `prByBranch` was structurally null on a local board and `hkb gc --yes` reported
   // `0 removed` on a checkout quietly accumulating worktrees forever.
-  if (tasks.length) await fillPrs(ctx, tasks);
+  if (tasks.length) await fillPrs(ctx, tasks, { state: 'all' });
   const byNumber = new Map(tasks.map((t) => [t.number, t]));
   // **A board that returned nothing is a board that could not be read, not a board where everything
   // is done.** Every sweep below decides from `byNumber`, and a card that is not in it counts as

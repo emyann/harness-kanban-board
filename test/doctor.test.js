@@ -21,7 +21,7 @@ import {
   TOOL_POSTURE_CHECK, checkToolPosture, CARD_GRANTS_CHECK, checkCardGrants, checkRemovedProfiles,
   STORE_CHECK, BRANCH_CHECK, INDEX_CHECK, MOUNT_CHECK, checkLocalStore, PATH_OVERLAP_CHECK, doctor } from '../src/doctor.js';
 import { CAPABILITIES, capabilityGrants, effectiveTools, toolPosture } from '../src/model.js';
-import { normalizeCardGrants } from '../src/tasks.js';
+import { normalizeCardGrants } from '../src/board.js';
 import { setTransport, GhError } from '../src/gh.js';
 import { pidFile, writeServeUrl, DEFAULT_PROFILES, hostId } from '../src/board.js';
 import { spawnSync } from 'node:child_process';

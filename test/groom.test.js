@@ -35,7 +35,7 @@ function card(number, over = {}) {
 const blocker = (number, state = 'OPEN', stateReason = null) => ({ number, state, stateReason, title: `b${number}` });
 const done = (n) => blocker(n, 'CLOSED', 'COMPLETED');
 
-const report = (tasks, opts = {}) => groomBoard(tasks, { now: NOW, caps: { blockedByGql: true }, ...opts });
+const report = (tasks, opts = {}) => groomBoard(tasks, { now: NOW, blockersFilled: true, blockersSource: 'local', ...opts });
 const row = (rep, n) => rep.cards.find((c) => c.number === n);
 const kinds = (rep, n) => row(rep, n).findings.map((f) => f.kind);
 const finding = (rep, n, kind) => row(rep, n).findings.find((f) => f.kind === kind);
@@ -146,14 +146,14 @@ test('dead_blocker: a NOT_PLANNED blocker is never unblocked, and the report nev
 
 test('no_blockers / unknown_blockers: an empty list means nothing without the GraphQL field', () => {
   assert.ok(kinds(report([card(1)]), 1).includes('no_blockers'));
-  const rest = groomBoard([card(1)], { now: NOW, caps: { blockedByGql: false } });
+  const rest = groomBoard([card(1)], { now: NOW });
   assert.ok(kinds(rest, 1).includes('unknown_blockers'));
   assert.ok(!kinds(rest, 1).includes('no_blockers'));
   assert.equal(rest.blockers_source, 'unknown');
   // filled by REST: the list is trustworthy again
-  const filled = groomBoard([card(1)], { now: NOW, caps: { blockedByGql: false }, blockersFilled: true });
+  const filled = groomBoard([card(1)], { now: NOW, blockersFilled: true, blockersSource: 'local' });
   assert.ok(kinds(filled, 1).includes('no_blockers'));
-  assert.equal(filled.blockers_source, 'rest');
+  assert.equal(filled.blockers_source, 'local');
 });
 
 test('blocker_in_triage and priority_inversion', () => {
@@ -337,7 +337,7 @@ test('GROOM_ACTIONS is the closed vocabulary, judge and none included', () => {
 test('groomBoard: pure — one plain array, an injected clock, no ctx and no I/O', () => {
   const tasks = [card(1), card(2, { blockedBy: [done(3)] })];
   const frozen = JSON.parse(JSON.stringify(tasks));
-  const rep = groomBoard(tasks, { now: NOW, caps: { blockedByGql: true }, board: 'default' });
+  const rep = groomBoard(tasks, { now: NOW, blockersFilled: true, blockersSource: 'local', board: 'default' });
   assert.equal(rep.read_at, NOW.toISOString());
   assert.equal(rep.board, 'default');
   assert.equal(rep.cards_read, 2);

@@ -15,10 +15,10 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { tick, withoutWorktreeFlag, DURABLE_TICK_KEYS } from '../src/dispatch.js';
 import { DEFAULT_BOARD } from '../src/board.js';
-import { claim, release, listLocks } from '../src/lock.js';
 import { complete, requestChanges } from '../src/lifecycle.js';
 import { activePrGuard, L, RESULT_MARKER, worktreePath } from '../src/model.js';
 import { installDoubles, kbIssue, runWith } from './fake-store.js';
+import { openStore } from '../src/store/index.js';
 
 const ago = (seconds) => new Date(Date.now() - seconds * 1000).toISOString();
 
@@ -153,8 +153,11 @@ test('a ready task is claimed once: ref, run comment, running label, worker spaw
   assert.equal(run.attempts[0].ended_at, undefined);
   assert.equal(run.attempts[0].log, '.kanban/logs/7-1.log');
   assert.ok(fs.existsSync(path.join(h.root, '.kanban', 'logs', '7-1.log')));
-  // one run comment, created then updated — never a second create
-  assert.equal(h.store.issues.get(7).comments.length, 1, 'one run record, updated in place — never a second create');
+  // One run record per card, updated in place. The tick writes it twice — once when it opens the
+  // attempt, once when the spawn hands back a pid — and both land on the *same* document, which is
+  // what the GitHub store needed a "never a second create" rule to guarantee about its comment.
+  assert.deepEqual(h.store.writes('saveRun'), ['saveRun', 'saveRun']);
+  assert.equal(h.store.runOf(7).attempts.length, 1, 'one attempt row, not one per write');
 });
 
 test('claim held elsewhere: skipped, and nothing on the issue is touched', async (t) => {
@@ -243,7 +246,7 @@ test('a ref-CAS beat keeps a worker alive: the run comment is stale, the lock re
   // branch filed in docs/wiki/FINDINGS.md ("the tick names refs/kb/locks/<n>/<k> on every board").
   // Assert the sentence and not the name, so fixing that finding does not break a test that was
   // never about it.
-  assert.match(h.log(), /#7: attempt 1 beat on \S+ \d+s ago — alive/);
+  assert.match(h.log(), /#7: attempt 1 beat on .+ \d+s ago — alive/);
 });
 
 test('a ref-CAS worker whose last beat is old is reclaimed like any other', async (t) => {
@@ -293,7 +296,7 @@ test('a hand-claimed attempt is not a crashed spawn: it has no pid and never wil
   // branch filed in docs/wiki/FINDINGS.md ("the tick names refs/kb/locks/<n>/<k> on every board").
   // Assert the sentence and not the name, so fixing that finding does not break a test that was
   // never about it.
-  assert.match(h.log(), /#7: attempt 1 beat on \S+ \d+s ago — alive/);
+  assert.match(h.log(), /#7: attempt 1 beat on .+ \d+s ago — alive/);
 });
 
 test('a hand-claimed attempt that stops beating is reclaimed after stale_after', async (t) => {
@@ -310,17 +313,20 @@ test('a hand-claimed attempt that stops beating is reclaimed after stale_after',
   assert.deepEqual(await h.store.locks(), []);
 });
 
-test('a claim records the token that starts the worker\'s beat chain', async (t) => {
+test('a claim seeds this host\'s beat chain — the attempt row carries no token of its own', async (t) => {
   const h = harness();
   t.after(h.cleanup);
   h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
 
   await h.tick();
 
-  // The row records what the store's own claim handed back — the value the first heartbeat leases
-  // on. It is a sha on GitHub and a row token on a store that keeps its claims in a table; what the
-  // dispatcher must not do is invent one of its own.
-  assert.equal(h.store.runOf(7).attempts[0].lock_sha, h.store.lockOf(7, 1).token);
+  // `lock_sha` used to ride on the attempt row so the worker's first heartbeat had something to
+  // lease on. The claim itself seeds this host's beat chain (`beatToken`), and the store is the
+  // authority for the rest, so the row records nothing about the claim at all — a copy of a token
+  // is a second place for it to be wrong.
+  const store = await openStore(h.ctx);
+  assert.equal(h.store.runOf(7).attempts[0].lock_sha, undefined);
+  assert.equal(store.beatToken(7, 1), h.store.lockOf(7, 1).token);
 });
 
 test('a task past max_runtime is timed_out, not merely reclaimed', async (t) => {
@@ -863,14 +869,15 @@ test('claims are create-if-absent, and releasing twice is not an error', async (
   const h = harness();
   t.after(h.cleanup);
 
-  assert.equal((await claim(h.ctx, 4, 1)).result, 'claimed');
-  const second = await claim(h.ctx, 4, 1);
+  const store = await openStore(h.ctx);
+  assert.equal((await store.claim(4, 1)).result, 'claimed');
+  const second = await store.claim(4, 1);
   assert.equal(second.result, 'held');
   assert.equal(second.error, null);
-  assert.deepEqual((await listLocks(h.ctx)).map((l) => `${l.n}/${l.k}`), ['4/1']);
-  assert.equal(await release(h.ctx, 4, 1), true);
-  assert.equal(await release(h.ctx, 4, 1), false);
-  assert.deepEqual(await listLocks(h.ctx), []);
+  assert.deepEqual(await h.store.locks(), ['4/1']);
+  assert.equal(await store.release(4, 1), true);
+  assert.equal(await store.release(4, 1), false);
+  assert.deepEqual(await h.store.locks(), []);
 });
 
 // ---------- what the launch hands the harness ----------
@@ -925,7 +932,10 @@ test('a claude --bg launch gets no KB_* at all; a child-process launch keeps its
   assert.equal(proc.KB_ATTEMPT, '1');
   assert.equal(proc.KB_PROFILE, 'claude-p');
   assert.equal(proc.KB_ROOT, h.root);
-  assert.equal(proc.KB_LOCK_REF, 'refs/kb/locks/8/1');
+  // `KB_LOCK_REF` was here. A claim has no ref to name any more (docs/local-first.md §6.1), and a
+  // worker that never needed the name — `hkb heartbeat` reads the claim through the store — is one
+  // less GitHub-ism in every worker's environment.
+  assert.equal(proc.KB_LOCK_REF, undefined);
 });
 
 test('path_overlap guard: an idle no-job, no-pid attempt never holds its paths, in any mode', async (t) => {
