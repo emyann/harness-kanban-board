@@ -398,7 +398,7 @@ export function trackContext({ repo, board, track, attempt, waves = null, fanout
     L.push('## The wave loop — repeat until the nodes are gone');
     L.push('');
     L.push('1. **Claim the wave.** `hkb claim <n>` once per node in it — one command per Bash call. Each claim creates');
-    L.push(`   \`refs/kb/locks/<n>/<attempt>\` and moves the node to *running*. If one answers \`held\`, another worker`);
+    L.push('   a claim on that node and moves it to *running*. If one answers `held`, another worker');
     L.push('   owns that node: drop it, drop everything it blocks, and carry on with the rest of the wave. Ignore the');
     L.push(`   \`export KB_TASK=…\` line a claim prints — this session's KB_TASK is the root, #${n}, and it must stay that way.`);
     L.push('2. **Spawn one subagent per claimed node, all in one message**, so they actually run at the same time:');
@@ -445,11 +445,11 @@ export function trackContext({ repo, board, track, attempt, waves = null, fanout
     L.push('4. Commit AND push before you return. This worktree is only removed automatically when you leave it');
     L.push('   unchanged — once you commit, it can stick around until a later `hkb gc`; anything you did not push');
     L.push('   is not safe just because the worktree survives.');
-    L.push(`5. Open a **draft** PR based on \`${branch}\` whose body contains exactly one \`Closes #<n>\`:`);
-    L.push(`   \`gh pr create --draft --base ${branch} --title "…" --body "Closes #<n>\\n\\n<what/why/how verified>"\``);
-    L.push('   GitHub only auto-links `Closes #` for a PR into the default branch, so this one will not close the');
-    L.push('   issue itself — `hkb finish` still finds it through the head-branch fallback (`kb/<n>` matches whatever');
-    L.push('   its base is), and it is the *track branch\'s* own PR into the default branch that actually lands it.');
+    L.push(`5. Open a **draft** PR based on \`${branch}\`, on a branch named \`kb/<n>\`:`);
+    L.push(`   \`gh pr create --draft --base ${branch} --title "…" --body "<what/why/how verified>"\``);
+    L.push('   **The branch name is what ties the PR to its card** — `kb/<n>` and nothing else. There is no issue');
+    L.push('   for a closing keyword to close: `hkb finish` finds this PR by matching the head branch, whatever its');
+    L.push('   base is, and it is the *track branch\'s* own PR into the default branch that actually lands the work.');
     L.push('6. Finish with EXACTLY ONE terminal verb, on #<n> and no other number:');
     L.push('   write /tmp/kb-<n>.json with your editor tool, then');
     L.push('   `hkb finish <n> --from-stdin < /tmp/kb-<n>.json`');
@@ -475,21 +475,21 @@ export function trackContext({ repo, board, track, attempt, waves = null, fanout
     L.push('');
     L.push(`1. \`hkb context <n>\` — the exact brief that node's own worker would get: body, \`kb\` settings, parent`);
     L.push('   results, prior attempts. Read it before you touch anything; it is where the decisions live.');
-    L.push(`2. \`hkb claim <n>\` — creates \`refs/kb/locks/<n>/<attempt>\` and moves the node to *running*. If it`);
+    L.push('2. `hkb claim <n>` — takes the claim on that node and moves it to *running*. If it');
     L.push('   answers `held`, another worker owns that node: leave it alone, skip everything blocked by it, and');
     L.push(`   carry on with the rest. Ignore the \`export KB_TASK=…\` line it prints — this session's KB_TASK is`);
     L.push(`   the root, #${n}, and it must stay that way.`);
     L.push(`3. Do the work on a branch of its own: \`git fetch origin ${branch} && git switch -c kb/<n> origin/${branch}\`.`);
     L.push(`   Every node's base is the track branch, \`${branch}\` — the same one whatever the node's blockers are,`);
     L.push('   because those blockers already merged into it before this node started.');
-    L.push(`4. Push and open a **draft** PR whose body contains \`Closes #<n>\`, based on \`${branch}\`:`);
-    L.push(`   \`gh pr create --draft --base ${branch} --title "…" --body "Closes #<n>\\n\\n<what/why/how verified>"\`.`);
-    L.push('   One PR per node, and exactly one `Closes #` in it. GitHub only auto-links `Closes #` for a PR into');
-    L.push('   the default branch, so this one will not close the issue by merging — `hkb finish` still finds it');
-    L.push('   through the head-branch fallback (`kb/<n>` matches whatever its base is); it is the track branch\'s');
-    L.push('   own PR into the default branch, at the end, that actually lands the work. A PR that closed several');
-    L.push('   nodes would drag the unfinished ones into *review* behind it, and the dispatcher could never finish');
-    L.push('   them for you — so still exactly one `Closes #` each.');
+    L.push(`4. Push and open a **draft** PR based on \`${branch}\`, from the \`kb/<n>\` branch of step 3:`);
+    L.push(`   \`gh pr create --draft --base ${branch} --title "…" --body "<what/why/how verified>"\`.`);
+    L.push('   **One PR per node, on that node\'s own `kb/<n>` branch.** The branch name is what ties a pull');
+    L.push('   request to its card, and it is the only thing that does. There is no issue for a');
+    L.push('   closing keyword to close — `hkb finish` finds this PR by matching the head branch `kb/<n>`, whatever');
+    L.push('   its base is; it is the track branch\'s own PR into the default branch, at the end, that lands the');
+    L.push('   work. One PR carrying several nodes would leave hkb able to match only one of them, and the others');
+    L.push('   would sit in *review* with nothing to finish them — so one branch, one node, one PR.');
     L.push('5. Finish the node with EXACTLY ONE terminal verb — the same three any worker has:');
     L.push('```bash');
     L.push('# write /tmp/kb-<n>.json with your editor tool:');
@@ -527,9 +527,9 @@ export function trackContext({ repo, board, track, attempt, waves = null, fanout
     L.push('- **`kb.paths` are what make a wave safe.** They are disjoint by construction (`/kanban:decompose` enforces');
     L.push('  it), which is why these nodes can run at once at all. Each subagent stays inside its own; you stay out of');
     L.push('  all of them until the root\'s own pass.');
-    L.push('- **One PR per node, and exactly one `Closes #` in it.** That is what makes a node a checkpoint: its issue');
-    L.push('  closes when *its* PR merges. Do not let a wave collapse into one PR — it would drag the unfinished nodes');
-    L.push('  into *review* behind it, where neither you nor the dispatcher could finish them.');
+    L.push('- **One PR per node, on that node\'s own `kb/<n>` branch.** That is what makes a node a checkpoint: the');
+    L.push('  card is finished by *its* PR merging, matched by head branch. Do not let a wave collapse into one PR —');
+    L.push('  hkb could match it to one node only, and the rest would sit in *review* with nothing to finish them.');
     L.push('- **You are the only spawner.** Subagents do not spawn subagents, and nothing about a track puts a second');
     L.push('  dispatcher on the board: `hkb dispatch` is what started you, and running it again double-claims work.');
   } else {
@@ -538,7 +538,7 @@ export function trackContext({ repo, board, track, attempt, waves = null, fanout
   }
   L.push('- **One command per Bash call.** No `;`, no `&&`, no `$VAR` — the worktree guard refuses a command it');
   L.push('  cannot verify stays inside the checkout, and a refusal is final. `printenv NAME` reads the environment.');
-  L.push('- **Never `git push --force`.** Never push a lock ref yourself.');
+  L.push('- **Never `git push --force`.**');
   L.push('');
 
   L.push('## Finishing the track');
@@ -552,8 +552,8 @@ export function trackContext({ repo, board, track, attempt, waves = null, fanout
     L.push('only one who has read every subagent\'s report.');
   }
   L.push(`Then open the track's one PR into \`${defaultBranch}\`: \`gh pr create --draft --base ${defaultBranch} --head`);
-  L.push(`${branch} --title "…" --body "Closes #${n}\\n\\n<what the track landed>"\`. This is the PR GitHub *does*`);
-  L.push(`auto-link, so \`Closes #${n}\` closes the root the ordinary way once it merges. Finish #${n} itself with`);
+  L.push(`${branch} --title "…" --body "<what the track landed>"\`. Its head branch is \`${branch}\`, which names`);
+  L.push(`root #${n}, so merging it moves the root to *done* on the next tick. Finish #${n} itself with`);
   L.push('exactly one terminal verb, the same way as any node, and stop. Its summary is the track\'s: what each');
   L.push('node landed, what merged, what is still open.');
   L.push('');

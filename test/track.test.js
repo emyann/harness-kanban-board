@@ -366,7 +366,7 @@ test('the runner prompt names the graph in waves, the per-node loop, and the roo
   assert.doesNotMatch(p, /<<'EOF'/);
   assert.match(p, /hkb block <n> "why" --kind/);
   assert.match(p, /hkb request-review <n> --summary/);
-  assert.match(p, /One PR per node, and exactly one `Closes #` in it\./);
+  assert.match(p, /One PR per node, on that node's own `kb\/<n>` branch\./);
   // the three things a track does differently
   assert.match(p, /\*\*Heartbeat the root, not the nodes\.\*\* `hkb heartbeat 26`/);
   assert.match(p, /\*\*Claim as you go, never up front\.\*\*/);
@@ -472,7 +472,8 @@ test('fan-out or not, the per-node protocol and the track rules are the same', (
     assert.match(p, /Never `git push --force`/);
     assert.match(p, /hkb block <n> "why" --kind/);
     assert.ok(p.includes('kb.paths'), 'scope is a rule in both');
-    assert.ok(p.includes('exactly one `Closes #'), 'one PR per node is what makes a node a checkpoint');
+    assert.ok(p.includes('One PR per node'), 'one PR per node is what makes a node a checkpoint');
+    assert.ok(p.includes('branch name is what ties'), 'and the branch name is what ties it to the card');
   }
   // and the sequential brief never mentions a tool it is not allowed to call
   assert.doesNotMatch(seq, /ORCHESTRATOR|isolation: "worktree"|## The wave loop/);

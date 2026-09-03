@@ -81,10 +81,9 @@ async function finishAttempt(ctx, store, task, rec, flags, outcome, extra = {}) 
 /**
  * Where a claim lives, in words a person on *this* board can act on.
  *
- * `refs/kb/locks/42/1` on GitHub; on a local board the claim is a row in a table and has no name, so
- * the attempt number — which every store has — is the answer. This is `cli.js`'s `c.ref || \`attempt
- * ${k}\`` under one name, because the heartbeat and the LOCK_LOST error were still naming a ref no
- * local board has. A `store` is optional so the fallback needs no lookup.
+ * A claim is a row in a table and has no name, so the attempt number — which every store has — is
+ * the answer, and `lockRef` is on the interface for a store that does have one. This is `cli.js`'s
+ * `c.ref || \`attempt ${k}\`` under one name. A `store` is optional so the fallback needs no lookup.
  */
 const claimWhere = (store, n, k) => store?.lockRef?.(n, k) || `attempt ${k} of #${n}`;
 
@@ -220,13 +219,13 @@ export const prAttemptFields = (decision) => (decision.pr ? { pr: decision.pr.nu
 /**
  * What a missing PR does to `complete`: naming the fix, never a silent `done`. Pure.
  *
- * A worker's brief says "open a draft PR that says Closes #n" — so a card `complete` reaches with no
- * PR (not even via the head-branch fallback `getTask` already tried) is either a protocol violation
- * or a card that genuinely needed no PR, and hkb cannot tell those apart from here (#234). Silently
- * picking "done" is the failure the values forbid — the two cases above shipped as *done* with the
- * work sitting in an unreferenced open PR. So without an explicit `noPr` override this refuses to
- * land in done: it records the attempt as `protocol_violation` and leaves the card where a human
- * (or the next attempt) will see it, instead of closing the issue out from under the missing work.
+ * A worker's brief says "open a draft PR on the `kb-<n>-<k>` branch" — so a card `complete` reaches
+ * with no PR (not even through the head-branch match `fillPrs` already tried) is either a protocol
+ * violation or a card that genuinely needed no PR, and hkb cannot tell those apart from here (#234).
+ * Silently picking "done" is the failure the values forbid — the two cases above shipped as *done*
+ * with the work sitting in an unreferenced open PR. So without an explicit `noPr` override this
+ * refuses to land in done: it records the attempt as `protocol_violation` and leaves the card where
+ * a human (or the next attempt) will see it, instead of closing it out from under the missing work.
  */
 /**
  * @param {number} number
@@ -236,11 +235,10 @@ export function noPrDecision(number, { noPr, noPrReason } = {}) {
   if (noPr) return { ok: true, no_pr_reason: noPrReason ? String(noPrReason).slice(0, 300) : null };
   return {
     ok: false,
-    reason: `no PR found for #${number} — closedByPullRequestsReferences and the head-branch fallback ` +
-      `(kb/${number}, kb-${number}-*, worktree-kb-${number}-*) both came up empty. A worker's brief says ` +
-      `"open a draft PR that says Closes #${number}". Open it (or retarget an existing one onto this task's ` +
-      `own branch or the default branch) and finish again, or if this card genuinely needed no PR, ` +
-      `finish again with --no-pr "<why>".`,
+    reason: `no PR found for #${number} — no open pull request on this card's own branch ` +
+      `(kb-${number}-*, worktree-kb-${number}-*, kb/${number}), which is the only thing that ties one to a ` +
+      `card. Open it, or rename an existing PR's head branch onto one of those, and finish again; or if ` +
+      `this card genuinely needed no PR, finish again with --no-pr "<why>".`,
   };
 }
 
@@ -433,9 +431,9 @@ export async function mergeCard(ctx, number, { summary } = {}) {
   const checksNote = policy.require.checks ? 'green' : 'not required';
   await store.addNote(number, `**Merged by the operator seat** — review: ${decision.reviewDetail || 'not required'}, checks: ${checksNote}, method: ${decision.method}`);
   // The merge is what finishes the card, and this call knows it happened — so it says so here rather
-  // than waiting for the reconcile pass to find the merged PR on the next tick. There is no
-  // `Closes #n` to close a card behind hkb's back any more (docs/local-first.md §6.4): a card is
-  // moved by a verb or by the tick, and this is the verb.
+  // than waiting for the reconcile pass to find the merged PR on the next tick. Nothing closes a
+  // card behind hkb's back any more (docs/local-first.md §6.4): a card is moved by a verb or by the
+  // tick, and this is the verb.
   await store.setStatus(task, 'done', { remove: [L.needsHuman] });
   if (task.state !== 'CLOSED') await store.closeTask(number, 'completed');
   return { number, pr: decision.pr.number, method: decision.method, merged: true, merged_by: 'operator', status: 'done' };

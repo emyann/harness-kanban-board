@@ -1915,13 +1915,22 @@ export function parseWorktreeName(name) {
  */
 export function taskBranchRe(n) {
   const num = Number(n);
-  return new RegExp(`^(?:worktree-)?kb-${num}-\\d+$|^kb/${num}$`);
+  return new RegExp(`^(?:worktree-)?kb-${num}-\\d+$|^kb/${num}$|^kb/track-${num}$`);
 }
 
-/** The inverse of `taskBranchRe`: which task number, if any, a branch name belongs to. */
+/**
+ * The inverse of `taskBranchRe`: which task number, if any, a branch name belongs to.
+ *
+ * `kb/track-<n>` is on the list because it is the branch a *track root's* own pull request is
+ * opened from (`trackBranchName`, src/track.js's brief), and the branch name is the only thing that
+ * ties a pull request to its card — there is no issue for a closing keyword to close. Without it a
+ * merged track PR moved nothing, which is the whole subgraph's root.
+ */
 export function branchTaskNumber(branch) {
   const b = String(branch ?? '').trim();
   let m = /^(?:worktree-)?kb-(\d+)-\d+$/.exec(b);
+  if (m) return Number(m[1]);
+  m = /^kb\/track-(\d+)$/.exec(b);
   if (m) return Number(m[1]);
   m = /^kb\/(\d+)$/.exec(b);
   return m ? Number(m[1]) : null;
@@ -1965,7 +1974,7 @@ export function trackBranchConflict(states) {
  * worker's whole identity and the hook's gate. Named here because two places have to agree on the
  * list — `spawnWorker` sets them, and a `claude --bg` launch scrubs them (src/dispatch.js).
  */
-export const KB_ENV_VARS = ['KB_TASK', 'KB_ATTEMPT', 'KB_BOARD', 'KB_REPO', 'KB_LOCK_REF', 'KB_ROOT', 'KB_PROFILE'];
+export const KB_ENV_VARS = ['KB_TASK', 'KB_ATTEMPT', 'KB_BOARD', 'KB_REPO', 'KB_ROOT', 'KB_PROFILE'];
 
 /**
  * A copy of `env` with every `KB_*` key removed — the environment a `claude --bg` launch gets.

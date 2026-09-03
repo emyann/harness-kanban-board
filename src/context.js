@@ -247,13 +247,13 @@ export async function workerContext(ctx, task, attempt, { continuePr = null, pro
   // a continued branch is already pushed, so rebasing it would need the force-push the protocol forbids
   const upToDate = cont ? `merge \`origin/${base}\` in (never rebase: this branch is already pushed)` : 'rebase on the default branch';
   lines.push(`3. Commit with clear, plain messages (no Co-Authored-By trailers, no "Generated with" lines — in commits or PR bodies). Never \`git push --force\`. Before finishing: ${upToDate} and run the project's lint/tests.`);
-  // The branch name is the link. hkb's board is local (docs/local-first.md §6): there is no issue
-  // for `Closes #n` to close and nothing on GitHub's side associates a PR with a card, so the tick
-  // and every terminal verb find this card's PR by matching the open-PR listing against
-  // `kb-<n>-<k>` (`taskBranchRe`, src/model.js). A PR on any other branch is invisible to hkb.
+  // The branch name is the link. hkb's board is local (docs/local-first.md §6): nothing on the
+  // forge's side associates a pull request with a card, so the tick and every terminal verb find
+  // this card's PR by matching the open-PR listing against `kb-<n>-<k>` (`taskBranchRe`,
+  // src/model.js). A PR on any other branch is invisible to hkb.
   lines.push(cont
     ? `4. PR #${cont.number} already exists and is already this card's PR — push to its branch${cont.branch ? ` (\`${cont.branch}\`)` : ''} instead of opening one, and never \`--force\`.`
-    : `4. Push and open a draft PR: \`gh pr create --draft --fill\` (add a real description). **The branch name is what ties the PR to this card** — keep it \`kb-${n}-${k}\` (\`worktree-kb-${n}-${k}\` and \`kb/${n}\` are also recognised). hkb has no issue to close, so a \`Closes #\` line is not what links them, and a PR on any other branch is one hkb cannot see.`);
+    : `4. Push and open a draft PR: \`gh pr create --draft --fill\` (add a real description). **The branch name is what ties the PR to this card** — keep it \`kb-${n}-${k}\` (\`worktree-kb-${n}-${k}\` and \`kb/${n}\` are also recognised). That name is the *only* link: hkb has no issue for the PR to reference, and a PR on any other branch is one hkb cannot see.`);
   lines.push('5. Finish with EXACTLY ONE terminal verb, then stop. Send the payload as one JSON object on stdin — no JSON goes through shell quoting. Write the file, then redirect it:');
   lines.push('```bash');
   lines.push(`# write /tmp/kb-${n}.json with your editor tool:`);

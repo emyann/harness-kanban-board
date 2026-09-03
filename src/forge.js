@@ -1,11 +1,11 @@
 // The forge: pull requests, branch protection, merges — everything hkb asks GitHub that is *not*
-// board state. The board half lives behind `src/store/` (`openStore`), and a non-GitHub store
-// (docs/local-first.md §6) replaces it wholesale; this file is deliberately left out of that seam
-// because a local board still opens its pull requests on a forge (§6.4, "The pull-request half is
-// **not** the store").
+// board state. The board lives behind `src/store/` (`openStore`) and is a branch in this repository
+// (docs/local-first.md §6); this file is deliberately outside that seam, because a local board still
+// opens its work as pull requests on a forge (§6.4, "The pull-request half is **not** the store").
 //
-// Every body here was moved as it was — from `src/tasks.js` (the PR reads and mutations) and from
-// `src/lifecycle.js` (`prNodeId`, `isGithubUser`, `finishPr`) — and still calls `src/gh.js`.
+// **The two are joined by the head branch name and nothing else.** `fillPrs` is that join: the store
+// answers with the card, this file answers with the pull request, and `taskBranchRe` (src/model.js)
+// is the one definition of "this card's branch".
 import { GhError, isOffline, graphql, rest, restRaw } from './gh.js';
 import { api } from './board.js';
 import { taskBranchRe, trackBranchName, trackBranchRoot } from './model.js';
@@ -15,10 +15,9 @@ import { taskBranchRe, trackBranchName, trackBranchRoot } from './model.js';
 // has to tell an offline write from a refused one.
 
 // ---------- the repository's own branches ----------
-// Not board state either: `baseSha` is the head every claim and every track branch is created at,
-// and `kb/track-<root>` is a branch on the forge. They moved here from `src/lock.js` with the rest
-// of what a store must not own, so `src/dispatch.js`, `src/doctor.js` and `src/gc.js` reach them
-// without importing a driver. `src/store/github.js` calls `baseSha`/`classifyClaimError` from here.
+// Not board state either: `baseSha` is the head every track branch is created at, and
+// `kb/track-<root>` is a branch on the forge. They live here rather than in a store, so
+// `src/dispatch.js`, `src/doctor.js` and `src/gc.js` reach them without importing a driver.
 
 /** One conditional read of a branch head. A 304 means "still `known`" and costs no rate limit. */
 async function readHead(ctx, branch, known) {
@@ -215,10 +214,10 @@ export async function mergedPrsByHead(ctx) {
  * the listing: never overrides a PR the caller already has, and never looks two tasks up in one
  * call, so a card that legitimately has no PR still reports none.
  *
- * **The branch name is the link.** A local board has no issue for a PR to close, so `Closes #n` is
- * not written any more and nothing on GitHub's side associates the two: `kb-<n>-<k>` (and the
- * `worktree-` and `kb/<n>` spellings hkb also creates) is what ties a pull request to its card, here
- * and in the reconcile pass. `taskBranchRe` is the one definition of that name.
+ * **The branch name is the link.** hkb's board has no issue for a pull request to be linked to, so
+ * `kb-<n>-<k>` (and the `worktree-`, `kb/<n>` and `kb/track-<n>` spellings hkb also creates) is what
+ * ties one to its card, here and in the reconcile pass. `taskBranchRe` is the one definition of that
+ * name.
  */
 export function branchFallbackPrs(task, openByHead) {
   if ((task.prs || []).length) return task.prs;

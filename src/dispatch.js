@@ -224,11 +224,11 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
 }
 
 // ---------- reconcile merged pull requests ----------
-// A merged PR is what finishes a card, and nothing tells hkb about it: the board is local, there is
-// no issue for `Closes #n` to close, and the merge happens on the forge — by `hkb merge`, by
-// GitHub's auto-merge, or by a person pressing the button. So the tick looks: one listing of merged
-// PRs, matched to cards by head branch, and a card still in a live status whose branch merged
-// becomes `done` here.
+// A merged PR is what finishes a card, and nothing tells hkb about it: the board is local, no issue
+// is linked to the pull request, and the merge happens on the forge — by `hkb merge`, by GitHub's
+// auto-merge, or by a person pressing the button. So the tick looks: one listing of merged PRs,
+// matched to cards by head branch, and a card still in a live status whose branch merged becomes
+// `done` here.
 
 /** Live statuses — a card wearing one of these whose PR has merged is behind the forge. */
 export const RECONCILE_STATUSES = ['triage', 'todo', 'ready', 'running', 'blocked', 'review'];
@@ -592,7 +592,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   const plan = planTracks(tasks, ctx.cfg, { board: ctx.board });
   const coveredBy = plan.covered;
 
-  // 0. reconcile issues GitHub closed behind our back (merged `Closes #n`). One extra query, gated.
+  // 0. reconcile the cards whose pull request merged on the forge. One extra request, gated.
   try {
     const r = await reconcileMerged(ctx, tasks, state, { dryRun, log });
     summary.reconciled = r.reconciled;
