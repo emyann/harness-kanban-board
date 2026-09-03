@@ -20,10 +20,33 @@ import { openGithubStore } from './github.js';
 /** Forget any per-context store state — `hkb init` has just created the branch under its own feet. */
 export async function forgetStore(ctx) {
   if (!ctx || typeof ctx !== 'object') return;
+  closeStore(ctx);
   // Loaded on demand, not at module scope: `store/index.js` is imported by every verb, including
   // `hkb hook pretool` on a plain GitHub board, and `local.js` pulls in `node:sqlite`.
   const { forgetGitTiers } = await import('./local.js');
   forgetGitTiers(ctx);
+}
+
+/**
+ * Close the store this context is holding, if it opened one. Safe to call twice, and safe on a
+ * context that never reached the seam.
+ *
+ * The long-lived processes call it where their context dies: `hkb serve` when the server closes,
+ * `hkb dispatch` when the loop leaves, `hkb doctor` and the one-shot CLI in the `finally` around
+ * `main()`. A verb that runs and exits need not — but nothing is *hurt* by it either, which is why
+ * the call sites that have a natural `finally` use one.
+ */
+export function closeStore(ctx) {
+  if (!ctx || typeof ctx !== 'object') return false;
+  let closed = false;
+  for (const slot of ['_store', '_storeRO']) {
+    const held = ctx[slot];
+    if (!held) continue;
+    ctx[slot] = null;
+    closed = true;
+    try { held.close?.(); } catch { /* a handle we are done with: nothing to report and nobody to tell */ }
+  }
+  return closed;
 }
 
 /**
@@ -83,14 +106,62 @@ export function storeKind(ctx) {
 export function localModule() { return import('./local.js'); }
 
 /**
- * The store for `ctx`.
+ * The store for `ctx` — **one handle per context, for the life of that context**.
+ *
+ * The memo is not an optimisation, it is the fix for a class of bug this repo has already paid for
+ * once: `gc.js` used to open a store per tick and *"leaked one handle per tick until the process hit
+ * its file-descriptor limit"*. Every verb reaches board state through this function, and the
+ * long-lived processes call several verbs per tick or per request — `hkb serve` alone opens four for
+ * one `GET /task/42`, `hkb doctor` twenty for one run — so "close it in a `finally`" has to be
+ * written correctly at every one of forty call sites or the leak comes back at the one that forgot.
+ * Handing back the same handle means there is one thing to close, and `closeStore(ctx)` closes it.
+ *
+ * A local store is still **reconciled on every call**, which is what `openLocalStore` does for a
+ * fresh one: one `rev-parse`, and nothing more when the branch tip has not moved. So a memoized
+ * handle sees exactly what a fresh one would, and a second process's commit is never missed.
+ *
  * @param {any} ctx  a context from `makeContext`/`makeContextAt` (src/board.js)
  * @returns {Promise<Store>}
  */
 export async function openStore(ctx) {
-  if (storeKind(ctx) !== 'local') return openGithubStore(ctx);
+  const cacheable = !!ctx && typeof ctx === 'object';
+  const held = cacheable ? ctx._store : null;
+  if (held) {
+    // Reconcile, the way a freshly opened local store does. The GitHub driver has no `open`.
+    try { held.open?.(); } catch { /* a reconcile that cannot run leaves the last good index in place */ }
+    return held;
+  }
+  const store = storeKind(ctx) !== 'local'
+    ? openGithubStore(ctx)
+    : (await localModule()).openLocalStore(ctx);
+  if (cacheable) ctx._store = store;
+  return store;
+}
+
+/**
+ * A store for a reader that must never write — `hkb serve`'s connection.
+ *
+ * On the local driver this is `openIndexReadOnly` (`{readOnly: true, timeout: 0}`), the connection
+ * `sqlite.js` and `doctor.js` both name as the server's: a read-write handle in a long-lived server
+ * can block on the dispatcher's write transaction in the middle of a request, and a server has no
+ * business reindexing the branch under the loop that owns it. It also does not reconcile, for the
+ * same reason — the dispatcher's own store is what keeps the index current.
+ *
+ * On GitHub there is no such distinction, and this is `openStore`.
+ * @param {any} ctx
+ * @returns {Promise<Store>}
+ */
+export async function openStoreReadOnly(ctx) {
+  if (storeKind(ctx) !== 'local') return openStore(ctx);
+  const cacheable = !!ctx && typeof ctx === 'object';
+  if (cacheable && ctx._storeRO) return ctx._storeRO;
   const { openLocalStore } = await localModule();
-  return openLocalStore(ctx);
+  const store = openLocalStore(ctx, { reconcile: false, readOnly: true });
+  // Its own slot, never `_store`. `hkb serve` reads through this one and *writes* through the
+  // lifecycle verbs, which call `openStore(ctx)` on the same context — parking a read-only handle
+  // where they look would make every drag on the web board fail as a refused write.
+  if (cacheable) ctx._storeRO = store;
+  return store;
 }
 
 /**
@@ -118,12 +189,13 @@ export const STORE_METHODS = Object.freeze([
   // name it was not given. Every member of the interface belongs here, including the dull ones.
   'root', 'capabilities',
   'board', 'setBoard',
-  'listTasks', 'listClosedRecent', 'getTask', 'createTask', 'updateBody',
-  'setStatus', 'setAgent', 'addLabels', 'removeLabel',
+  'listTasks', 'listClosedRecent', 'getTask', 'createTask', 'updateBody', 'setKb',
+  'setStatus', 'setAgent', 'addLabels', 'removeLabel', 'ensureLabels',
   'closeTask', 'reopenTask', 'addBlockedBy', 'removeBlockedBy',
   'loadRun', 'saveRun', 'latestResult', 'parentResults', 'addNote', 'listNotes',
-  'claim', 'release', 'listLocks', 'lockBeatAt', 'heartbeat',
-  'events',
+  'claim', 'release', 'listLocks', 'lockBeatAt', 'heartbeat', 'lockRef',
+  'lockToken', 'beatToken', 'resyncBeat', 'dropBeat',
+  'events', 'taskEvents',
 ]);
 
 /**
@@ -144,10 +216,19 @@ export const STORE_METHODS = Object.freeze([
  * @property {(n: number) => Promise<any>} getTask
  * @property {(spec: {title: string, body?: string, kb?: any, status?: string, agent?: string|null}) => Promise<any>} createTask
  * @property {(n: number, body: string) => Promise<any>} updateBody
+ * @property {(task: any, kb: any, bodyText?: string) => Promise<any>} setKb
+ *   The other half of `updateBody`: replace the machine block, keep the prose. `hkb edit` and
+ *   `hkb adopt` write the kb block and nothing else, and on GitHub the two travel in one field —
+ *   so a driver that only offered "replace the prose" made the kb block unreachable through the
+ *   interface. The task passed in is updated in place, the way `setStatus` updates it.
  * @property {(task: any, status: string, opts?: {add?: string[], remove?: string[]}) => Promise<any>} setStatus
  * @property {(task: any, agent: string) => Promise<any>} setAgent
  * @property {(task: any, names: string[]) => Promise<any>} addLabels
  * @property {(task: any, name: string) => Promise<any>} removeLabel
+ * @property {(names: string[]) => string[]|Promise<string[]>} ensureLabels
+ *   Make these label names applicable, and answer with the ones that had to be created. A driver
+ *   whose labels are columns on a card has nothing to create and answers `[]` — the call is still
+ *   the caller's, because on GitHub a label must exist before `addLabels` can put it on an issue.
  * @property {(n: number, reason?: string) => Promise<any>} closeTask
  * @property {(n: number) => Promise<any>} reopenTask
  * @property {(child: number, parent: number) => Promise<any>} addBlockedBy
@@ -156,17 +237,46 @@ export const STORE_METHODS = Object.freeze([
  * @property {(n: number, runRec: any) => Promise<any>} saveRun
  * @property {(n: number) => Promise<any>} latestResult
  * @property {(task: any) => Promise<any[]>} parentResults
- * @property {(n: number, text: string) => Promise<any>} addNote
+ * @property {(n: number, text: string) => Promise<{id: any, at: string|null, actor: string|null, text: string, url: string|null}>} addNote
+ *   The note as it landed. `url` is where a person can read it, or null on a store that has no page
+ *   for one — `hkb comment` and the MCP tool both answer with it.
  * @property {(n: number) => Promise<{id: any, at: string, actor: string|null, text: string}[]>} listNotes
- * @property {(n: number, k: number) => Promise<{result: 'claimed'|'held'|'unknown', token: string|null}>} claim
+ * @property {(n: number, k: number) => Promise<{result: 'claimed'|'held'|'unknown', token: string|null, ref?: string|null, error?: any}>} claim
+ *   `token` is what the first heartbeat leases on. `ref` is optional and names *where* the claim
+ *   lives when the store has such a name (the lock ref on GitHub); a store that keeps its claims in
+ *   a table has none, so a caller that prints it falls back to the attempt number.
  * @property {(n: number, k: number) => Promise<boolean>} release
- * @property {() => Promise<{n: number, k: number, token: string|null, beat_at: string|null}[]>} listLocks
+ * @property {() => Promise<{n: number, k: number, token: string|null, beat_at: string|null, ref?: string|null}[]>} listLocks
+ *   One row per live claim. `ref` is optional for the same reason it is on `claim`.
  * @property {(n: number, k: number, token?: string|null) => Promise<string|null>} lockBeatAt
  *   When the attempt last beat. `token` is the sha `listLocks` already handed back: pass it and this
  *   costs one read instead of two.
- * @property {(n: number, k: number, expected: string) => {result: 'ok'|'lost'|'unavailable', token: string|null}|Promise<{result: 'ok'|'lost'|'unavailable', token: string|null}>} heartbeat
+ * @property {(n: number, k: number, expected: string) => {result: 'ok'|'lost'|'unavailable', token: string|null, expected: string, detail: string}|Promise<{result: 'ok'|'lost'|'unavailable', token: string|null, expected: string, detail: string}>} heartbeat
  *   One compare-and-swap on the claim, leased on where this worker left it. Returns the verdict AND
  *   the token the next beat leases on — a worker beats every ten minutes, so a bare verdict makes the
- *   second beat lease on the first one's `expected` and read back as `lost`.
+ *   second beat lease on the first one's `expected` and read back as `lost`. `detail` says why an
+ *   `unavailable` beat could not be made, because `hkb heartbeat` prints that sentence before it
+ *   falls back to the run record.
+ * @property {(n: number, k: number) => string|null} lockRef
+ *   Where this claim lives, when the store has a name for it — `refs/kb/locks/<n>/<k>` on GitHub,
+ *   `null` on a store that keeps its claims in a table. The same optional `ref` `claim()` and
+ *   `listLocks()` carry, asked for a claim the caller did not just make: `hkb heartbeat` prints it,
+ *   and so does the LOCK_LOST error, which used to name a GitHub ref on every board. A caller
+ *   falls back to the attempt number, which every store has (`cli.js`'s `c.ref || \`attempt ${k}\``).
+ * @property {(n: number, k: number) => string|null|Promise<string|null>} lockToken
+ *   The claim's token as the *store* has it, or null when the claim is gone (= reclaimed). The
+ *   authoritative read: a rejected lease is evidence, this is the answer.
+ * @property {(n: number, k: number) => string|null} beatToken
+ *   The token this host's next beat should lease on, from local state only — no network, no
+ *   throw. `null` means "this host has not beaten on this claim", never "the claim is gone".
+ * @property {(n: number, k: number, token: string) => boolean} resyncBeat
+ *   Point this host's local beat state at `token`, after `lockToken` said the claim moved without us.
+ * @property {(n: number, k: number) => boolean} dropBeat
+ *   Forget this host's local beat state for a finished attempt. Worktrees share one ref store, so a
+ *   terminal verb that leaves one behind makes the next attempt's first beat lease on a dead chain.
  * @property {(opts?: {after?: number, limit?: number}) => Promise<{id: number, at: string, kind: string, number: number|null, payload: any}[]>} events
+ * @property {(n: number) => Promise<{at: string, kind: string, detail: string, actor: string|null}[]>} taskEvents
+ *   One card's history as the store kept it, oldest first — what `hkb log` interleaves with the run
+ *   record's attempts. Unlike `events()` this is never refused: a driver with no log answers with
+ *   whatever it does have, which for GitHub is the issue timeline.
  */

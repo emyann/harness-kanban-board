@@ -7,20 +7,20 @@ audience: [dev]
 read_when: "touching hkb serve, the board page, the user-level board list, or anything that has to work across more than one checkout"
 covers:
   - path: src/serve.js
-    sha: fe50acf9c37de567f1a90fd802e682ab746f6d50
+    sha: 478930327b4f3bcdb795677b677569e1ee1efc9a
   - path: web/index.html
     sha: 322aa96236ef37657a9a2326b83dc7b480672134
   - path: src/board.js
-    sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
+    sha: 53192b4670920a4ead1181c925075285dc8ee105
   - path: src/init.js
-    sha: 44cb5f767e8f7905b0f5bdefe1d44fbf70169709
+    sha: fb4b0eb97192e874591ed4940a1e2f32775c1429
   - path: src/lifecycle.js
-    sha: 3d8234ec94517fa40a1fdbef460486d3bf873068
+    sha: c1b743d8c3e6ef9dabd62ce11b5dbc18d6d9e4bf
   - path: src/track.js
     sha: 054947b027ccb0313f31e5170b67b065aa9d99ed
   - path: src/model.js
-    sha: a0ada59cd3061302ebe8ab640b50d690700803f7
-generated_at_commit: 29d0d25
+    sha: d3729c517eb72a690f7248b5769ea03d22f6d794
+generated_at_commit: f70fc7a
 last_refreshed: 2026-09-03
 related: [architecture/overview, concepts/board-protocol, architecture/dispatcher-tick, features/up-and-down]
 ---
@@ -165,6 +165,22 @@ snapshot TTL is derived from `--poll` (`ttlMs`), and the page's poll is a
 conditional GET: `boardEtag` hashes the boards payload with `fetched_at`
 deliberately left out (it changes every tick and would bust the ETag on an
 unchanged board), so a quiet board answers 304 with no body.
+
+The store handle is the same story one level down. A server is long-lived and
+reads several times per request — four for one `GET /task/42` — so the reads go
+through `openStoreReadOnly(ctx)`, which memoizes **one** handle per board context
+and closes it on the server's `close` event (a board the operator removes from
+`boards.json` takes its handle with it, in `reloadBoards`). On a local board that
+is `openIndexReadOnly`: `{readOnly: true, timeout: 0}`, the connection
+`src/store/sqlite.js` names as *"`hkb serve`'s … the one that may not write"* — so
+a request that meets the dispatcher mid-`load()` fails fast instead of holding up
+every request queued behind it. Writes are the lifecycle verbs below, and those
+open a writable store of their own; the read-only handle sits in its own slot so
+it can never be handed to one.
+
+The open-PR listing behind `fillPrFallback` is memoized per context too, and the
+server drops it at every poll and at every write — a tick's worth of truth, never
+a server's.
 
 A board whose read throws does not fail the page. Its snapshot keeps the last
 good cards, carries `error` (and `stale`), and is cached like a success so a
@@ -318,11 +334,15 @@ does, the honest answer is to refuse at start-up and name the read verbs. The
 rule the change is really about: **guard the verb that writes, and do not sell a
 writable surface as a read.**
 
-> **Not reachable yet.** `src/serve.js` reads the board through `fetchBoard`
-> (`src/tasks.js`, the GitHub driver's re-export), not through `openStore`, so
-> serving a local board — from the owning host — is waiting on the verb
-> migration in track C of `docs/local-first.md`. The store underneath is done
-> and the refusals above are live; the page is not wired to it.
+> **Now wired to the seam.** `src/serve.js`'s board reads go through
+> `openStore(ctx)`. They keep their `(ctx, …)` shape because that shape *is*
+> `startServer`'s `deps` contract — a test hands its own function under the same
+> name — so what changed is which store the *defaults* open, not the seam the
+> server is tested through. Moving those fakes onto a store double is #303.
+>
+> What a local board still cannot show is anything that comes from a pull
+> request: `prs` is empty on a local card by design (`src/forge.js`, §6.4), so
+> the PR column of a card renders as none.
 
 ## Related
 

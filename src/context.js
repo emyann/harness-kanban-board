@@ -1,5 +1,5 @@
 // `hkb context <n>` — exactly what a worker sees (Hermes `kanban_show` + protocol reminder).
-import { getTask, loadRun, parentResults, latestResult, listComments } from './tasks.js';
+import { openStore } from './store/index.js';
 import { activePrGuard, openAttempt, capabilityCommand, CAPABILITIES, RUN_MARKER, RESULT_MARKER, effectiveTools } from './model.js';
 
 // ---------- the comment thread as steering input (pure; tested in test/context.test.js) ----------
@@ -170,11 +170,19 @@ export function capabilityLine(profile, intent) {
 }
 
 export async function workerContext(ctx, task, attempt, { continuePr = null, profile = null } = {}) {
-  const { run } = await loadRun(ctx, task.number);
-  const comments = formatComments(selectComments(await listComments(ctx, task.number), run)); // cached read — loadRun already fetched the thread
-  const parents = await parentResults(ctx, task);
+  const store = await openStore(ctx);
+  const { run } = await store.loadRun(task.number);
+  // `listNotes` is the interface's name for the thread a person wrote on, and it has already dropped
+  // hkb's own run and result records. `isHumanComment` still runs over what is left — it also hides
+  // the dispatcher's own **Blocked**/**Changes requested** lines, which are notes by any store's
+  // reckoning — and the two pure functions below keep reading a comment's own shape, so the rows are
+  // handed to them in it.
+  const notes = (await store.listNotes(task.number))
+    .map((c) => ({ id: c.id, body: c.text, created_at: c.at, user: { login: c.actor } }));
+  const comments = formatComments(selectComments(notes, run)); // cached read — loadRun already fetched the thread
+  const parents = await store.parentResults(task);
   const prior = run.attempts.filter((a) => a.ended_at).slice(-5);
-  const prev = await latestResult(ctx, task.number);
+  const prev = await store.latestResult(task.number);
   const n = task.number;
   const k = attempt ?? openAttempt(run)?.attempt ?? run.attempts.length + 1;
   const lines = [];
@@ -259,6 +267,6 @@ export async function workerContext(ctx, task, attempt, { continuePr = null, pro
 }
 
 export async function contextCommand(ctx, number) {
-  const task = await getTask(ctx, number);
+  const task = await (await openStore(ctx)).getTask(number);
   return workerContext(ctx, task);
 }

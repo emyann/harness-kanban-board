@@ -7,20 +7,20 @@ audience: [dev]
 read_when: "adding a store verb, debugging an index that disagrees with the branch, wondering why a verb is refused on this host, or working on hkb sync / init --import"
 covers:
   - path: src/store/local.js
-    sha: 627afeabe05f6161d395c204c26f547ff50e15fb
+    sha: 74fc6228a29d959c65472b83ba99e6e343fc8099
   - path: src/store/index.js
-    sha: 6f80ab71e9efca230d89d25f1b6d9186576ef522
+    sha: d440f1432159b01433599dd285c26dceae2596a3
   - path: src/store/sqlite.js
-    sha: 297383540eb4a0861fd0fa48842d59c82a6f4cc4
+    sha: ad2e80d73391c5e7c0602c1786ca645604616887
   - path: src/init.js
-    sha: 44cb5f767e8f7905b0f5bdefe1d44fbf70169709
+    sha: fb4b0eb97192e874591ed4940a1e2f32775c1429
   - path: src/doctor.js
-    sha: d16d15584b792786a6b9c068b330d98e4a60e2b6
+    sha: 1f944284e5e63b03d83e0ca43c17a115aaafd7bb
   - path: src/gc.js
-    sha: 2e150ac72e587c4c09ee3cbfde18cdd575fc2ce5
+    sha: 387c7e3da22fb00d1d070903abc12e7f64dfc7cf
   - path: src/cli.js
-    sha: 66ad7f1abd1fa4dd9f4cfbc56e0e3978f94bb09b
-generated_at_commit: 29d0d25
+    sha: fc69279838602cde09a8e804e4c5456878b71eff
+generated_at_commit: 0cd9e5c
 last_refreshed: 2026-09-03
 related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
@@ -32,34 +32,39 @@ related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-0
 > is the composition, and `src/store/local.js` is where the rules that make it
 > one thing live.
 
-**What is not true yet.** The store is complete and `hkb init` creates one, but
-the *verbs* have not moved onto it: `src/cli.js`, `src/lifecycle.js`,
-`src/dispatch.js`, `src/serve.js` and `src/context.js` still reach board state
-through `src/tasks.js`/`src/lock.js`, which are the GitHub driver's re-exports.
-Track C of `docs/local-first.md` §10 is that migration, and until it lands a
-local board is written and read by the store, by `hkb sync`, by `hkb doctor` and
-by nothing else. A checkout with no GitHub board behind it wants
-`hkb init --store github` in the meantime, and `hkb init` says so.
+**The verbs are on it.** `src/cli.js`, `src/lifecycle.js`, `src/dispatch.js`,
+`src/serve.js`, `src/context.js` and the rest reach board state through
+`openStore(ctx)` — `grep -rn "from './tasks.js'\|from './lock.js'" src` is empty
+outside `src/store/` — so `hkb create` → `hkb list` → `hkb claim` → `hkb finish`
+runs end to end on a local board, and `hkb init` makes one by default again
+(*architecture/store-seam*, "Routing the verbs").
+
+**What is still not true.** Pull requests are not board state and never will be
+(`src/forge.js`, §6.4), so a local card carries `prs: []` and every check that
+reads one — the `active_pr` guard, the agent-worktree sweep, `hkb merge` — has
+nothing to read on a local board. The GitHub driver is still here and is still
+what this repository's own board runs on; retiring it is track C.
 
 ## Which store a board is on
 
-`openStore(ctx)` (`src/store/index.js`) is the **only** place that decides, and
-it asks two questions in order: `store` in `.kanban/board.json` (`"local"` or
-`"github"`, and anything else is exit 2), then — when the key is absent — does
-this repository have a `kb-board` branch, locally or as `<remote>/kb-board`.
+`storeKind(ctx)` (`src/store/index.js`) is the **only** place that decides, and
+it asks exactly one question: `store` in `.kanban/board.json` — `"local"` or
+`"github"`, absent means `github`, anything else is exit 2.
 
-The second question is what makes a plain `git clone` of a local board work
-with no configuration at all: the branch is the declaration. It is also why a
-board written by an older hkb stays on GitHub — no key, no branch, no change.
-`resolveStore` (`src/init.js`) answers the same two questions in the same order:
-a **new** board is local, an **existing** one keeps what it has, and
-`--store github` is the escape hatch while the GitHub driver is still here.
+There *was* a second question — does this repository have a `kb-board` branch,
+locally or as `<remote>/kb-board` — so that a plain `git clone` needed no
+configuration. It was removed in A6's last review round, because a rule that
+reads the store off a **ref** can be reached by `git fetch`, which put a
+checkout on the local store while board.json still pointed every verb at GitHub;
+*architecture/store-seam* has the three destructive interactions that followed.
+A clone still needs no configuration: the key rides in the tracked board.json.
+`resolveStore` (`src/init.js`) answers for a new board — local — and an existing
+one keeps what it has; `--store github` is the escape hatch while the GitHub
+driver is still here.
 
 `hkb init` writes the key only when it is a **decision** — the human's
-`--store`, a fresh board, or a board that already carries it. An inference is
-left unwritten so question two goes on being asked; pinning it pinned `github`
-onto every legacy board that re-ran init, including ones whose `kb-board`
-branch was full of cards.
+`--store`, a fresh board (the default *is* the decision), a board that already
+carries it, or an `--import` that migrates. A plain re-init writes nothing.
 
 ## The three rules
 
@@ -99,6 +104,27 @@ written for.
 pid/job/worktree are the index's alone. A lock on a branch would be a commit per
 beat, and `git log kb-board` is meant to be a history of *decisions*.
 
+A durable verb's event carries what it decided, and `saveRun`'s is the attempt it
+just wrote: `rec.run.attempts`, not `rec.attempts` — a run record is `{run, id}`
+(`loadRun`'s shape, and what every caller hands straight back), and reading the
+outer object put `{attempt: null, profile: null, host: null}` on every attempt
+event a local board ever appended. `hkb log` is what renders those fields.
+
+### The two claim tokens
+
+`locks.token` is the claim; `beats.token` is where **this checkout** left the
+chain. They are separate tables on purpose, and the reason is the shape of
+`heartbeat`: `UPDATE locks SET token = ? WHERE task_id = ? AND k = ? AND token =
+?`. Answering `beatToken` from `locks` made every lease check its token against
+itself — a compare-and-swap that cannot fail, so `hkb heartbeat`'s warm path
+could never report `lost` and nothing detected a reclaim except `release()`
+deleting the row out from under it. `beats` is the counterpart of the GitHub
+driver's local `refs/kb/locks/<n>/<k>` ref: seeded by `claim`, advanced by a
+successful beat, moved by `resyncBeat`, dropped by `dropBeat`, never reloaded
+from the branch, and deliberately *not* cascaded off `locks` — a claim released
+and re-taken by somebody else is exactly the reclaim a stale mirror catches.
+Adding it bumped `SCHEMA_VERSION` to 3, which rebuilds rather than migrates.
+
 ## Which tier answers a read
 
 Durable reads (`listTasks`, `getTask`, `loadRun`, `latestResult`, `listNotes`)
@@ -107,6 +133,20 @@ sha, so a tick that asks about twelve cards decodes it once, and — the real
 reason — there is exactly one answer to "what does the board say" rather than
 two that can disagree. The index answers the live half (`listLocks`,
 `heartbeat`, `events`, the open attempts) and is what `hkb serve` reads.
+
+One process holds **one** of these connections, because `openStore(ctx)` memoizes
+the store on the context and `closeStore(ctx)` is what closes it (see
+[the store seam](store-seam.md)). `hkb serve` reads through
+`openStoreReadOnly(ctx)` instead — `openIndexReadOnly`, `{readOnly: true,
+timeout: 0}` — so a request fails a busy lock fast rather than parking behind the
+dispatcher's write transaction.
+
+`hkb log` narrows in SQL: `index.taskEvents(n, {limit})` is `WHERE task_id = ?
+ORDER BY id DESC LIMIT ?`, returned oldest-first. It used to be
+`events({limit: 5000})` filtered in JavaScript, and `events` is a forward cursor
+from id 0 — so on a board past the retention floor it read the log's *oldest*
+page: `[]` for a recent card, pre-history for an old one, and nothing saying rows
+had been cut.
 
 The index's connection is opened **lazily** (`LocalStore.index`, a getter), and
 `close()` is a no-op when nothing opened it. A caller that only wants the durable

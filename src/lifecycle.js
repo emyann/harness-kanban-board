@@ -3,16 +3,12 @@
 import fs from 'node:fs';
 import { finishPr, prNodeId, prChecksState, mergePullRequest } from './forge.js';
 import { GhError, isOffline } from './gh.js';
-import { outboxFile } from './board.js';
-import {
-  getTask, assertOnBoard, loadRun, saveRun, setStatus, addLabels, removeLabel, addComment, closeIssue, reopenIssue,
-  fetchBoard, createIssue, ensureLabels, issueDatabaseId, addBlockedBy, removeBlockedBy,
-} from './tasks.js';
-import { release, lockExists, lockSha, localBeatSha, casHeartbeat, resyncBeatChain, dropBeatChain, remoteName } from './lock.js';
+import { outboxFile, assertOnBoard } from './board.js';
+import { openStore } from './store/index.js';
 import { sessionForAttempt } from './hook.js';
 import {
-  openAttempt, computeReady, blockerDone, promoteDecision, serializeResultComment, serializeBodyBlock, hashReason,
-  heartbeatMode, lockRef, BLOCK_KINDS, DEFAULT_KB, L, mergePolicy, mergeDecision,
+  openAttempt, computeReady, blockerDone, promoteDecision, serializeResultComment, hashReason,
+  heartbeatMode, BLOCK_KINDS, DEFAULT_KB, L, mergePolicy, mergeDecision,
 } from './model.js';
 import { resolveTrack } from './track.js';
 
@@ -56,7 +52,7 @@ function pickAttempt(run, flags, number) {
 }
 
 /** Close the current attempt (or synthesize a zero-duration one, like Hermes) and release its lock. */
-async function finishAttempt(ctx, task, rec, flags, outcome, extra = {}) {
+async function finishAttempt(ctx, store, task, rec, flags, outcome, extra = {}) {
   const { run } = rec;
   let a = pickAttempt(run, flags, task.number);
   if (!a) {
@@ -74,22 +70,32 @@ async function finishAttempt(ctx, task, rec, flags, outcome, extra = {}) {
   // the profiles ride along so a `KB_TASK` this checkout contradicts is recognised as the leak it is
   // and stamps nothing (src/hook.js `whichAttempt`, #150)
   try { Object.assign(a, sessionForAttempt(ctx.root, task.number, a.attempt, a, { profiles: ctx.cfg?.profiles }) || {}); } catch { /* a session id is a bonus, never a reason a verb fails */ }
-  await saveRun(ctx, task.number, rec); // rec.id is set on first create, so later saves update in place
-  await release(ctx, task.number, a.attempt);
-  dropBeatChain(ctx.root, task.number, a.attempt); // worktrees share one ref store: leave nothing behind
+  await store.saveRun(task.number, rec); // rec.id is set on first create, so later saves update in place
+  await store.release(task.number, a.attempt);
+  store.dropBeat(task.number, a.attempt); // worktrees share one ref store: leave nothing behind
   return a;
 }
 
 // ---------- heartbeat ----------
 
+/**
+ * Where a claim lives, in words a person on *this* board can act on.
+ *
+ * `refs/kb/locks/42/1` on GitHub; on a local board the claim is a row in a table and has no name, so
+ * the attempt number — which every store has — is the answer. This is `cli.js`'s `c.ref || \`attempt
+ * ${k}\`` under one name, because the heartbeat and the LOCK_LOST error were still naming a ref no
+ * local board has. A `store` is optional so the fallback needs no lookup.
+ */
+const claimWhere = (store, n, k) => store?.lockRef?.(n, k) || `attempt ${k} of #${n}`;
+
 /** The one error a worker must obey: the dispatcher took the task back. */
-function lockLost(n, k, why = 'is gone — the dispatcher reclaimed this task') {
-  const e = new Error(`LOCK_LOST: ${lockRef(n, k)} ${why}. Stop now: do not commit, do not call complete.`);
+function lockLost(n, k, why = 'is gone — the dispatcher reclaimed this task', store = null) {
+  const e = new Error(`LOCK_LOST: ${claimWhere(store, n, k)} ${why}. Stop now: do not commit, do not call complete.`);
   e.exitCode = 3;
   return e;
 }
 
-const refBeat = (n, k, cas, extra = {}) => ({ number: n, attempt: k, mode: 'ref', ref: lockRef(n, k), sha: cas.sha, expected: cas.expected, ...extra });
+const refBeat = (store, n, k, cas, extra = {}) => ({ number: n, attempt: k, mode: 'ref', ref: store?.lockRef?.(n, k) ?? null, sha: cas.token, expected: cas.expected, ...extra });
 
 /**
  * A rejected lease is strong evidence but not proof: a push that lands while the local `update-ref`
@@ -97,18 +103,18 @@ const refBeat = (n, k, cas, extra = {}) => ({ number: n, attempt: k, mode: 'ref'
  * hold. So ask GitHub who holds the ref — gone means LOCK_LOST, still ours means resync and beat once
  * more. Returns the beat, throws LOCK_LOST, or returns null when it stayed ambiguous (caller falls back).
  */
-async function resolveRejectedLease(ctx, n, k, opts) {
-  let sha;
-  try { sha = await lockSha(ctx, n, k); } catch { return null; } // GitHub unreachable: conclude nothing
-  if (!sha) throw lockLost(n, k);
-  resyncBeatChain(ctx.root, n, k, sha);
-  const retry = casHeartbeat(ctx.root, n, k, sha, opts);
-  if (retry.result === 'ok') return refBeat(n, k, retry, { resynced: true });
+async function resolveRejectedLease(store, n, k) {
+  let token;
+  try { token = await store.lockToken(n, k); } catch { return null; } // the store is unreachable: conclude nothing
+  if (!token) throw lockLost(n, k, undefined, store);
+  store.resyncBeat(n, k, token);
+  const retry = await store.heartbeat(n, k, token);
+  if (retry.result === 'ok') return refBeat(store, n, k, retry, { resynced: true });
   if (retry.result === 'unavailable') return null;
   let after;
-  try { after = await lockSha(ctx, n, k); } catch { return null; }
-  if (!after) throw lockLost(n, k);
-  return null; // the ref is there and still refuses our lease — let the comment path have a say
+  try { after = await store.lockToken(n, k); } catch { return null; }
+  if (!after) throw lockLost(n, k, undefined, store);
+  return null; // the claim is there and still refuses our lease — let the comment path have a say
 }
 
 /**
@@ -124,24 +130,24 @@ async function resolveRejectedLease(ctx, n, k, opts) {
  * @param {{note?: string, attempt?: number}} [opts]
  */
 export async function heartbeat(ctx, number, { note, attempt } = {}) {
-  const opts = { remote: remoteName(ctx) };
+  const store = await openStore(ctx);
   const envK = Number(attempt || envAttempt(number) || 0);
 
-  // Warm path: the lease *is* the check, so a worker that has beaten before costs GitHub nothing —
+  // Warm path: the lease *is* the check, so a worker that has beaten before costs the store nothing —
   // no task read, no run-record read, no write.
   if (envK && !note && heartbeatMode(ctx.cfg, process.env.KB_PROFILE) !== 'comment') {
-    const chain = localBeatSha(ctx.root, number, envK);
-    const cas = chain ? casHeartbeat(ctx.root, number, envK, chain, opts) : null;
-    if (cas?.result === 'ok') return refBeat(number, envK, cas);
+    const chain = store.beatToken(number, envK);
+    const cas = chain ? await store.heartbeat(number, envK, chain) : null;
+    if (cas?.result === 'ok') return refBeat(store, number, envK, cas);
     if (cas?.result === 'lost') {
-      const beat = await resolveRejectedLease(ctx, number, envK, opts);
+      const beat = await resolveRejectedLease(store, number, envK);
       if (beat) return beat;
     }
   }
 
-  const task = await getTask(ctx, number);
+  const task = await store.getTask(number);
   assertOnBoard(ctx, task);
-  const rec = await loadRun(ctx, number);
+  const rec = await store.loadRun(number);
   const { run } = rec;
   const a = openAttempt(run);
   if (!a) { const e = new Error(`#${number} has no active attempt (status: ${task.status})`); e.exitCode = 2; throw e; }
@@ -150,27 +156,27 @@ export async function heartbeat(ctx, number, { note, attempt } = {}) {
   const mode = heartbeatMode(ctx.cfg, a.profile || process.env.KB_PROFILE);
   if (mode !== 'comment' && !note) {
     // the chain starts at the sha the dispatcher created the ref with, recorded on the attempt
-    const expected = localBeatSha(ctx.root, number, a.attempt) || a.lock_sha || (await lockSha(ctx, number, a.attempt));
-    if (!expected) throw lockLost(number, a.attempt);
-    const cas = casHeartbeat(ctx.root, number, a.attempt, expected, opts);
-    if (cas.result === 'ok') return refBeat(number, a.attempt, cas);
+    const expected = store.beatToken(number, a.attempt) || a.lock_sha || (await store.lockToken(number, a.attempt));
+    if (!expected) throw lockLost(number, a.attempt, undefined, store);
+    const cas = await store.heartbeat(number, a.attempt, expected);
+    if (cas.result === 'ok') return refBeat(store, number, a.attempt, cas);
     if (cas.result === 'lost') {
-      const beat = await resolveRejectedLease(ctx, number, a.attempt, opts);
+      const beat = await resolveRejectedLease(store, number, a.attempt);
       if (beat) return beat;
-      fallback = `the lease on ${lockRef(number, a.attempt)} was rejected but GitHub still shows the ref`;
+      fallback = `the lease on ${claimWhere(store, number, a.attempt)} was rejected but the store still shows the claim`;
     } else fallback = cas.detail;
     // a fallback is normal for `auto` and a misconfiguration for `ref`, but never silent either way
-    process.stderr.write(`hkb: no ref heartbeat (${fallback}) — recording it in the run comment instead\n`);
+    process.stderr.write(`hkb: no lease heartbeat (${fallback}) — recording it on the run record instead\n`);
   }
 
-  const held = await lockExists(ctx, number, a.attempt);
-  if (!held) throw lockLost(number, a.attempt);
+  const held = (await store.lockToken(number, a.attempt)) !== null;
+  if (!held) throw lockLost(number, a.attempt, undefined, store);
   const last = a.heartbeat_at ? new Date(a.heartbeat_at).getTime() : 0;
   const floorMs = 10 * 60_000; // frugal: comment edits count as content writes; 10-min floor
   if (Date.now() - last < floorMs && !note) return { number, attempt: a.attempt, mode: 'comment', skipped: true, fallback, next_in_s: Math.ceil((floorMs - (Date.now() - last)) / 1000) };
   a.heartbeat_at = nowIso();
   if (note) a.note = String(note).slice(0, 200);
-  await saveRun(ctx, number, rec);
+  await store.saveRun(number, rec);
   return { number, attempt: a.attempt, mode: 'comment', heartbeat_at: a.heartbeat_at, fallback };
 }
 
@@ -241,39 +247,40 @@ export function noPrDecision(number, { noPr, noPrReason } = {}) {
  */
 export async function complete(ctx, number, { summary, metadata = {}, artifacts = [], attempt, noPr, noPrReason } = {}) {
   assertPayload({ summary, metadata, artifacts }, 'what changed, for the next worker');
-  const task = await getTask(ctx, number);
+  const store = await openStore(ctx);
+  const task = await store.getTask(number);
   assertOnBoard(ctx, task);
-  const runRec = await loadRun(ctx, number);
+  const runRec = await store.loadRun(number);
   const decision = prReadyDecision(task.prs);
   if (!decision.pr) {
     const noPrCheck = noPrDecision(number, { noPr, noPrReason });
     if (!noPrCheck.ok) {
-      const a = await finishAttempt(ctx, task, runRec, { attempt }, 'protocol_violation', { reason: noPrCheck.reason.slice(0, 400) });
-      await saveRun(ctx, number, runRec);
-      await addComment(ctx, number, `**Protocol violation** (attempt ${a.attempt}): ${noPrCheck.reason}`);
-      await setStatus(ctx, task, 'blocked', { add: [L.needsHuman] });
+      const a = await finishAttempt(ctx, store, task, runRec, { attempt }, 'protocol_violation', { reason: noPrCheck.reason.slice(0, 400) });
+      await store.saveRun(number, runRec);
+      await store.addNote(number, `**Protocol violation** (attempt ${a.attempt}): ${noPrCheck.reason}`);
+      await store.setStatus(task, 'blocked', { add: [L.needsHuman] });
       return { number, attempt: a.attempt, status: 'blocked', protocol_violation: true, reason: noPrCheck.reason };
     }
     metadata = { ...metadata, no_pr: true, ...(noPrCheck.no_pr_reason ? { no_pr_reason: noPrCheck.no_pr_reason } : {}) };
   }
-  const a = await finishAttempt(ctx, task, runRec, { attempt }, 'completed', { summary: String(summary).slice(0, 400), ...prAttemptFields(decision) });
+  const a = await finishAttempt(ctx, store, task, runRec, { attempt }, 'completed', { summary: String(summary).slice(0, 400), ...prAttemptFields(decision) });
   runRec.run.failures = 0;
-  await saveRun(ctx, number, runRec);
+  await store.saveRun(number, runRec);
   // An attempt the dispatcher started to continue a PR the reviewer sent back carries `continues_pr`
   // (src/dispatch.js): the result comment names that PR and says it was continued, not opened, so a
   // reader of the thread can see one PR carrying two rounds of review rather than wonder (#153).
   const continued = !!(decision.pr && a.continues_pr === decision.pr.number);
-  await addComment(ctx, number, serializeResultComment({ kind: 'result', attempt: a.attempt, summary, metadata, artifacts, pr: decision.pr?.number ?? null, pr_continued: continued, at: nowIso() }));
+  await store.addNote(number, serializeResultComment({ kind: 'result', attempt: a.attempt, summary, metadata, artifacts, pr: decision.pr?.number ?? null, pr_continued: continued, at: nowIso() }));
   if (decision.pr) {
     const pr = await finishPr(ctx, decision);
-    await setStatus(ctx, task, 'review', { remove: [L.needsHuman] });
+    await store.setStatus(task, 'review', { remove: [L.needsHuman] });
     const note = continued
       ? `continued PR #${decision.pr.number} — task waits in review until it merges`
       : 'open PR found — task waits in review until the PR merges';
     return { number, attempt: a.attempt, status: 'review', ...pr, pr_continued: continued, note };
   }
-  await setStatus(ctx, task, 'done', { remove: [L.needsHuman] });
-  await closeIssue(ctx, number, 'completed');
+  await store.setStatus(task, 'done', { remove: [L.needsHuman] });
+  await store.closeTask(number, 'completed');
   return { number, attempt: a.attempt, status: 'done' };
 }
 
@@ -285,38 +292,40 @@ export async function complete(ctx, number, { summary, metadata = {}, artifacts 
 export async function block(ctx, number, { reason, kind = 'generic', attempt } = {}) {
   if (!reason) { const e = new Error('a reason is required: hkb block <n> "why" [--kind dependency|needs_input|capability|transient], or --reason-file <path>, or {"reason": "..", "kind": ".."} on stdin with --from-stdin'); e.exitCode = 2; throw e; }
   if (!BLOCK_KINDS.includes(kind)) { const e = new Error(`--kind must be one of ${BLOCK_KINDS.join('|')}`); e.exitCode = 2; throw e; }
-  const task = await getTask(ctx, number);
+  const store = await openStore(ctx);
+  const task = await store.getTask(number);
   assertOnBoard(ctx, task);
-  const runRec = await loadRun(ctx, number);
+  const runRec = await store.loadRun(number);
   const limit = ctx.cfg?.dispatch?.block_recurrence_limit ?? 3;
   const h = hashReason(reason);
   runRec.run.block_loops[h] = (runRec.run.block_loops[h] || 0) + 1;
   const loops = runRec.run.block_loops[h];
-  const a = await finishAttempt(ctx, task, runRec, { attempt }, 'blocked', { reason: String(reason).slice(0, 400), kind });
-  await saveRun(ctx, number, runRec);
-  await addComment(ctx, number, `**Blocked** (${kind}, attempt ${a.attempt}): ${reason}`);
+  const a = await finishAttempt(ctx, store, task, runRec, { attempt }, 'blocked', { reason: String(reason).slice(0, 400), kind });
+  await store.saveRun(number, runRec);
+  await store.addNote(number, `**Blocked** (${kind}, attempt ${a.attempt}): ${reason}`);
   if (loops >= limit) {
-    await setStatus(ctx, task, 'triage', { add: [L.needsHuman] });
+    await store.setStatus(task, 'triage', { add: [L.needsHuman] });
     return { number, attempt: a.attempt, status: 'triage', block_loop_detected: true, recurrences: loops };
   }
   if (kind === 'dependency') {
-    await setStatus(ctx, task, 'todo');
+    await store.setStatus(task, 'todo');
     return { number, attempt: a.attempt, status: 'todo', kind };
   }
-  await setStatus(ctx, task, 'blocked', { add: kind === 'transient' ? [] : [L.needsHuman] });
+  await store.setStatus(task, 'blocked', { add: kind === 'transient' ? [] : [L.needsHuman] });
   return { number, attempt: a.attempt, status: 'blocked', kind, recurrences: loops };
 }
 
 export async function unblock(ctx, number) {
-  const task = await getTask(ctx, number);
+  const store = await openStore(ctx);
+  const task = await store.getTask(number);
   assertOnBoard(ctx, task);
   if (!['blocked', 'triage', 'todo'].includes(task.status)) { const e = new Error(`#${number} is ${task.status}, nothing to unblock`); e.exitCode = 2; throw e; }
-  const runRec = await loadRun(ctx, number);
+  const runRec = await store.loadRun(number);
   runRec.run.failures = 0; // Hermes: unblock resets consecutive failures, keeps block_loops
-  if (runRec.id) await saveRun(ctx, number, runRec);
+  if (runRec.id) await store.saveRun(number, runRec);
   const last = runRec.run.attempts[runRec.run.attempts.length - 1];
   const target = last?.outcome === 'review_requested' || last?.outcome === 'changes_requested' ? 'review' : computeReady(task) ? 'ready' : 'todo';
-  await setStatus(ctx, task, target, { remove: [L.needsHuman] });
+  await store.setStatus(task, target, { remove: [L.needsHuman] });
   return { number, status: target };
 }
 
@@ -327,15 +336,16 @@ export async function unblock(ctx, number) {
  */
 export async function requestReview(ctx, number, { summary, metadata = {}, reviewer, attempt } = {}) {
   assertPayload({ summary, metadata }, 'what the reviewer should look at');
-  const task = await getTask(ctx, number);
+  const store = await openStore(ctx);
+  const task = await store.getTask(number);
   assertOnBoard(ctx, task);
-  const runRec = await loadRun(ctx, number);
+  const runRec = await store.loadRun(number);
   const decision = prReadyDecision(task.prs);
-  const a = await finishAttempt(ctx, task, runRec, { attempt }, 'review_requested', { summary: String(summary).slice(0, 400), ...prAttemptFields(decision) });
+  const a = await finishAttempt(ctx, store, task, runRec, { attempt }, 'review_requested', { summary: String(summary).slice(0, 400), ...prAttemptFields(decision) });
   const continued = !!(decision.pr && a.continues_pr === decision.pr.number);
-  await addComment(ctx, number, serializeResultComment({ kind: 'review', attempt: a.attempt, summary, metadata, reviewer: reviewer || null, pr: decision.pr?.number ?? null, pr_continued: continued, at: nowIso() }));
+  await store.addNote(number, serializeResultComment({ kind: 'review', attempt: a.attempt, summary, metadata, reviewer: reviewer || null, pr: decision.pr?.number ?? null, pr_continued: continued, at: nowIso() }));
   const pr = await finishPr(ctx, decision, { reviewer });
-  await setStatus(ctx, task, 'review', { remove: [L.needsHuman] });
+  await store.setStatus(task, 'review', { remove: [L.needsHuman] });
   return { number, attempt: a.attempt, status: 'review', reviewer: reviewer || null, ...pr, pr_continued: continued };
 }
 
@@ -355,19 +365,20 @@ export async function requestReview(ctx, number, { summary, metadata = {}, revie
  */
 export async function requestChanges(ctx, number, { reason } = {}) {
   if (!reason) { const e = new Error('a reason is required: hkb request-changes <n> "what must change"'); e.exitCode = 2; throw e; }
-  const task = await getTask(ctx, number);
+  const store = await openStore(ctx);
+  const task = await store.getTask(number);
   assertOnBoard(ctx, task);
-  const runRec = await loadRun(ctx, number);
+  const runRec = await store.loadRun(number);
   const a = pickAttempt(runRec.run, {}, number) || { attempt: runRec.run.attempts.length };
   // record as its own zero-duration attempt so history reads review_requested → changes_requested.
   // Unlike the other terminal verbs, this reason is never truncated: it is the reviewer's note, and a
   // relaunched worker must see it in full rather than cut mid-sentence (#162).
   runRec.run.attempts.push({ attempt: runRec.run.attempts.length + 1, profile: 'reviewer', host: ctx.host, started_at: nowIso(), ended_at: nowIso(), outcome: 'changes_requested', reason: String(reason), synthetic: true });
-  await saveRun(ctx, number, runRec);
-  await addComment(ctx, number, `**Changes requested** (after attempt ${a.attempt}): ${reason}`);
-  if (task.state === 'CLOSED') await reopenIssue(ctx, number);
+  await store.saveRun(number, runRec);
+  await store.addNote(number, `**Changes requested** (after attempt ${a.attempt}): ${reason}`);
+  if (task.state === 'CLOSED') await store.reopenTask(number);
   const target = computeReady(task) ? 'ready' : 'todo';
-  await setStatus(ctx, task, target);
+  await store.setStatus(task, target);
   const pr = (task.prs || []).find((p) => p && p.state === 'OPEN') || null;
   return {
     number,
@@ -392,10 +403,11 @@ export async function requestChanges(ctx, number, { reason } = {}) {
  * @param {{summary?: string}} [opts]
  */
 export async function mergeCard(ctx, number, { summary } = {}) {
-  const task = await getTask(ctx, number);
+  const store = await openStore(ctx);
+  const task = await store.getTask(number);
   assertOnBoard(ctx, task);
   const policy = mergePolicy(ctx.cfg);
-  const runRec = await loadRun(ctx, number);
+  const runRec = await store.loadRun(number);
   const openPr = (task.prs || []).find((p) => p && p.state === 'OPEN') || null;
   let checksState = null;
   if (!policy.error && policy.mode === 'operator' && openPr) {
@@ -407,9 +419,9 @@ export async function mergeCard(ctx, number, { summary } = {}) {
   if (!nodeId) { const e = new Error(`PR #${decision.pr.number} came back without a node id — merge refused`); e.exitCode = 2; throw e; }
   await mergePullRequest(ctx, { nodeId }, decision.mergeMethod);
   const attempt = [...runRec.run.attempts].reverse().find((a) => a.pr === decision.pr.number);
-  if (attempt) { attempt.merged_by = 'operator'; await saveRun(ctx, number, runRec); }
+  if (attempt) { attempt.merged_by = 'operator'; await store.saveRun(number, runRec); }
   const checksNote = policy.require.checks ? 'green' : 'not required';
-  await addComment(ctx, number, `**Merged by the operator seat** — review: ${decision.reviewDetail || 'not required'}, checks: ${checksNote}, method: ${decision.method}`);
+  await store.addNote(number, `**Merged by the operator seat** — review: ${decision.reviewDetail || 'not required'}, checks: ${checksNote}, method: ${decision.method}`);
   return { number, pr: decision.pr.number, method: decision.method, merged: true, merged_by: 'operator' };
 }
 
@@ -434,8 +446,9 @@ export async function createTask(ctx, { title = '', body = '', kb = {}, agent = 
   }
   const blockers = (parents || []).map((p) => Number(String(p).replace('#', ''))).filter(Boolean);
 
+  const store = await openStore(ctx);
   if (spec.idempotency_key) {
-    const dupe = (await fetchBoard(ctx, { includeClosed: true })).find((t) => t.kb.idempotency_key === spec.idempotency_key);
+    const dupe = (await store.listTasks({ states: ['OPEN', 'CLOSED'] })).find((t) => t.kb.idempotency_key === spec.idempotency_key);
     if (dupe) return { number: dupe.number, status: dupe.status, agent: dupe.agent, blocked_by: blockers, url: dupe.url, duplicate: true };
   }
 
@@ -444,17 +457,18 @@ export async function createTask(ctx, { title = '', body = '', kb = {}, agent = 
   if (!triage) {
     if (!blockers.length) status = 'ready';
     else {
-      const ps = await Promise.all(blockers.map((n) => issueDatabaseId(ctx, n)));
-      for (const p of ps) if (!p.labels.includes(L.board(ctx.board))) { const e = new Error(`#${p.number} is not on board "${ctx.board}" — cross-board links are refused`); e.exitCode = 2; throw e; }
-      status = ps.every((p) => blockerDone({ state: p.state, stateReason: p.state_reason })) ? 'ready' : 'todo';
+      // The blockers are read as *cards*, not as issues: `getTask` is what every store answers with,
+      // and it already carries the board the card is on and the state a `blockerDone` reads.
+      const ps = await Promise.all(blockers.map((n) => store.getTask(n)));
+      for (const p of ps) if (p.board !== ctx.board) { const e = new Error(`#${p.number} is not on board "${ctx.board}" — cross-board links are refused`); e.exitCode = 2; throw e; }
+      status = ps.every(blockerDone) ? 'ready' : 'todo';
     }
   }
   if (spec.scheduled_at && new Date(spec.scheduled_at) > new Date() && status === 'ready') status = 'todo';
 
-  await ensureLabels(ctx, [L.agent(profile)]);
-  const issue = await createIssue(ctx, { title, body: serializeBodyBlock(spec, body || ''), labels: [L.board(ctx.board), L.status(status), L.agent(profile)] });
-  for (const p of blockers) await addBlockedBy(ctx, issue.number, p);
-  return { number: issue.number, status, agent: profile, blocked_by: blockers, url: issue.html_url };
+  const card = await store.createTask({ title, body: body || '', kb: spec, status, agent: profile });
+  for (const p of blockers) await store.addBlockedBy(card.number, p);
+  return { number: card.number, status, agent: profile, blocked_by: blockers, url: card.url };
 }
 
 /**
@@ -462,13 +476,14 @@ export async function createTask(ctx, { title = '', body = '', kb = {}, agent = 
  * ready task that gains an open blocker drops to todo, and one that loses its last blocker is ready.
  */
 export async function linkTask(ctx, parent, child, { unlink = false } = {}) {
-  const [p, c] = await Promise.all([getTask(ctx, parent), getTask(ctx, child)]);
+  const store = await openStore(ctx);
+  const [p, c] = await Promise.all([store.getTask(parent), store.getTask(child)]);
   assertOnBoard(ctx, p); assertOnBoard(ctx, c);
-  if (unlink) await removeBlockedBy(ctx, child, parent);
-  else await addBlockedBy(ctx, child, parent);
-  const fresh = await getTask(ctx, child);
-  if (!unlink && fresh.status === 'ready' && !computeReady(fresh)) await setStatus(ctx, fresh, 'todo');
-  if (unlink && fresh.status === 'todo' && computeReady(fresh)) await setStatus(ctx, fresh, 'ready');
+  if (unlink) await store.removeBlockedBy(child, parent);
+  else await store.addBlockedBy(child, parent);
+  const fresh = await store.getTask(child);
+  if (!unlink && fresh.status === 'ready' && !computeReady(fresh)) await store.setStatus(fresh, 'todo');
+  if (unlink && fresh.status === 'todo' && computeReady(fresh)) await store.setStatus(fresh, 'ready');
   return { parent, child, status: fresh.status, linked: !unlink };
 }
 
@@ -489,9 +504,10 @@ export async function linkTask(ctx, parent, child, { unlink = false } = {}) {
  */
 export async function promote(ctx, number, { triageOnly = false } = {}) {
   const n = Number(number);
-  const byNumber = new Map((await fetchBoard(ctx)).map((t) => [t.number, t]));
+  const store = await openStore(ctx);
+  const byNumber = new Map((await store.listTasks()).map((t) => [t.number, t]));
   let root = byNumber.get(n);
-  if (!root) { root = await getTask(ctx, n); byNumber.set(n, root); }
+  if (!root) { root = await store.getTask(n); byNumber.set(n, root); }
   assertOnBoard(ctx, root);
   if (triageOnly && root.status !== 'triage') {
     return [{ number: root.number, status: root.status, unchanged: true, skipped: true, reason: `not in triage — already ${root.status}` }];
@@ -503,19 +519,26 @@ export async function promote(ctx, number, { triageOnly = false } = {}) {
     const decision = promoteDecision(t, { allowForce });
     const from = t.status;
     if (decision.to === from) { results.push({ number: t.number, status: from, unchanged: true, skipped: !!decision.skipped, reason: decision.reason }); continue; }
-    if (decision.to === 'ready') await removeLabel(ctx, t, L.needsHuman);
-    await setStatus(ctx, t, decision.to);
+    if (decision.to === 'ready') await store.removeLabel(t, L.needsHuman);
+    await store.setStatus(t, decision.to);
     results.push({ number: t.number, status: decision.to, from, forced: !!decision.forced });
   }
   return results;
 }
 
 export async function archive(ctx, number) {
-  const task = await getTask(ctx, number);
+  const store = await openStore(ctx);
+  const task = await store.getTask(number);
   assertOnBoard(ctx, task);
-  await setStatus(ctx, task, 'archived');
-  if (task.state !== 'CLOSED') await closeIssue(ctx, number, task.status === 'done' ? 'completed' : 'not_planned');
+  // Read the status *before* archiving it: `setStatus` updates `task.status` in place (it is on the
+  // interface that way, so a caller can go on reading the task it passed in), so asking afterwards
+  // whether this card was done always answered "no" and every archived card closed NOT_PLANNED —
+  // which `blockerDone` rejects, leaving anything blocked by an archived card in `todo` forever.
+  const wasDone = task.status === 'done';
+  await store.setStatus(task, 'archived');
+  if (task.state !== 'CLOSED') await store.closeTask(number, wasDone ? 'completed' : 'not_planned');
   return { number, status: 'archived' };
 }
 
-export { addLabels, GhError };
+// Nothing imports `addLabels` from here; `GhError` stays because `withOutbox`'s callers classify on it.
+export { GhError };

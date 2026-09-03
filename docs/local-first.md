@@ -236,9 +236,11 @@ listTasks({ states })                      → Task[]      (today's fetchBoard s
 listClosedRecent()                         → Task[]
 getTask(n)                                 → Task
 createTask({ title, body, kb, status, agent }) → Task
-updateBody(n, body)
+updateBody(n, body)                        (the prose; the machine block is kept)
+setKb(task, kb, bodyText?)                 (the machine block; the prose is kept)
 setStatus(task, status, { add, remove })   (labels on GitHub; columns locally: status, agent, needs_human)
 setAgent(task, agent)   addLabels(task, names)   removeLabel(task, name)
+ensureLabels(names)                        → the names that had to be created ([] where labels are columns)
 closeTask(n, reason)    reopenTask(n)
 addBlockedBy(child, parent)   removeBlockedBy(child, parent)
 
@@ -246,15 +248,24 @@ loadRun(n)                                 → { run, id }   (today's shape)
 saveRun(n, runRec)
 latestResult(n)   parentResults(task)
 addNote(n, text)   listNotes(n)            (today's addComment / listComments for human text)
+                                           addNote answers { id, at, actor, text, url }; url is null
+                                           on a store with no web page for a note
 
 claim(n, k)                                → { result: 'claimed'|'held'|'unknown', token }
 release(n, k)
 listLocks()                                → [{ n, k, token, beat_at }]
 lockBeatAt(n, k, token?)                   → ISO | null   (token: the sha listLocks returned)
-heartbeat(n, k, expected)                  → { result: 'ok'|'lost'|'unavailable', token }  (the worker
-                                             side; the token is what the NEXT beat leases on)
+heartbeat(n, k, expected)                  → { result: 'ok'|'lost'|'unavailable', token, expected, detail }
+                                             (the worker side; the token is what the NEXT beat leases on,
+                                             and `detail` is why an unavailable beat could not be made —
+                                             `hkb heartbeat` prints it before it falls back)
+lockToken(n, k)                            → the claim's token as the STORE has it, null when reclaimed
+beatToken(n, k)                            → the token this host's next beat leases on (local read, never throws)
+resyncBeat(n, k, token)   dropBeat(n, k)   (point this host's local beat state at a token / forget it)
 
 events({ after, limit })                   → [{ id, at, kind, number, payload }]   (only when capabilities().events)
+taskEvents(n)                              → [{ at, kind, detail, actor }]   one card's history, never refused;
+                                             what `hkb log` interleaves with the run record's attempts
 ```
 
 The pull-request half is **not** the store. `openPrsByHead`, `prMergeStates`, `enableAutoMerge`,
@@ -337,6 +348,17 @@ the table says they run side by side, and side-by-side nodes have disjoint `path
 
 A4 and A5 run side by side. Their contract is §6.4 and §6.1–6.3; A3 lands the interface and the
 conformance suite (`test/store.test.js`, driver-parametrised) they both run against.
+
+**A7 — routing the verbs (#325).** A6 landed the store and said plainly that the verbs were out of
+scope; C1 then found that *none* of its 121 assertion sites could move, because `src/cli.js`,
+`src/dispatch.js`, `src/lifecycle.js`, `src/context.js`, `src/stats.js` and `src/hook.js` still
+imported the GitHub bodies through the `src/tasks.js`/`src/lock.js` shims. No node owned that step,
+and C2 opens by *deleting* what they re-export. So it is one: every board read and write in `src/`
+now goes through `openStore(ctx)`, `grep -rn "from './tasks.js'\|from './lock.js'" src` is empty
+outside `src/store/`, and `hkb init` defaults to `local` again. The shims and the GitHub driver stay
+until C2. What did *not* move, on purpose: the forge (`src/forge.js` — pull requests, the base sha
+every claim is cut at, the `kb/track-<root>` branches), and the two `hkb gc` sweeps and the
+`hkb doctor --api` probes that are about the GitHub store itself and go when it does.
 
 ### Track B — the control plane verbs on the store
 

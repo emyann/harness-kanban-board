@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hkbOnPath } from './board.js';
 import { projectBinRel } from './init.js';
-import { getTask, loadRun, latestResult, parentResults, addComment } from './tasks.js';
+import { openStore } from './store/index.js';
 import { heartbeat, complete, block, unblock, requestReview, createTask, linkTask, withOutbox } from './lifecycle.js';
 import { readVersion, terminalArgv } from './cli.js';
 import { BLOCK_KINDS, isTrackRoot } from './model.js';
@@ -69,10 +69,11 @@ export const TOOLS = [
     description: 'Everything about one task: its spec, the kb block, status, blockers, pull requests, every attempt in the run record, the latest result and the parent tasks\' results. The same object as `hkb show <n> --json`. Read this before doing any work.',
     properties: { task: TASK },
     run: async (ctx, n) => {
-      const t = await getTask(ctx, n);
-      const { run } = await loadRun(ctx, n);
-      const result = await latestResult(ctx, n);
-      const parents = await parentResults(ctx, t);
+      const store = await openStore(ctx);
+      const t = await store.getTask(n);
+      const { run } = await store.loadRun(n);
+      const result = await store.latestResult(n);
+      const parents = await store.parentResults(t);
       return { ...t, run, result, parents, track: isTrackRoot(t, ctx.cfg) };
     },
   },
@@ -124,7 +125,10 @@ export const TOOLS = [
     description: 'Add a plain comment to the task\'s issue. For progress notes worth keeping; it does not end the attempt and it does not change status.',
     properties: { task: TASK, text: { type: 'string', minLength: 1, description: 'Markdown body of the comment.' } },
     required: ['text'],
-    run: async (ctx, n, a) => ({ number: n, url: (await addComment(ctx, n, a.text)).html_url }),
+    // `url` is null on a store with no page for a note, and that is the answer, not a missing one —
+    // `?? null` rather than `undefined`, so the field is always in the JSON and a caller can tell
+    // "this store has no link" from "this tool forgot to say".
+    run: async (ctx, n, a) => ({ number: n, url: (await (await openStore(ctx)).addNote(n, a.text)).url ?? null }),
   },
   {
     name: 'kanban_create',
@@ -286,7 +290,11 @@ export async function callTool(ctx, name, rawArgs, env = process.env) {
     e.rpc = RPC.params;
     throw e;
   }
-  ctx._cache = {}; // a server outlives many calls; never answer from a previous call's comments
+  // A server outlives many calls; never answer from a previous call's comments — or from its
+  // open-PR listing. The *store handle* deliberately survives this: `openStore(ctx)` keeps one per
+  // context (`src/store/index.js`), and a server that dropped it per call would open one per tool
+  // call instead. It goes when the process does, which for a stdio server is when its client exits.
+  ctx._cache = {};
   try {
     const args = validateArgs(tool, rawArgs);
     const number = tool.properties.task ? resolveTask(args, env) : null;

@@ -31,7 +31,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { spawnSync } from 'node:child_process';
-import { fetchBoard, loadRun } from './tasks.js';
+import { openStore } from './store/index.js';
 import { readState, stateFile } from './board.js';
 import { STATUSES, OUTCOMES, parseSessionLog, denialDisplayTool } from './model.js';
 
@@ -804,10 +804,11 @@ export async function stats(ctx, flags = {}, deps = {}) {
   const write = deps.write || ((s) => process.stdout.write(s + '\n'));
   const local = deps.localRoot || dispatcherRoot(ctx.root);
 
-  const tasks = await fetchBoard(ctx, { includeClosed: true });
+  const store = await openStore(ctx);
+  const tasks = await store.listTasks({ states: ['OPEN', 'CLOSED'] });
   const runs = new Map();
   // every read is counted, empty or not: `reads.run_comments` is what this command cost
-  for (const t of tasksInWindow(tasks, since)) runs.set(t.number, (await loadRun(ctx, t.number)).run);
+  for (const t of tasksInWindow(tasks, since)) runs.set(t.number, (await store.loadRun(t.number)).run);
 
   const report = computeStats({
     board: ctx.board,

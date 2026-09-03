@@ -1280,3 +1280,23 @@ test('DURABLE_TICK_KEYS names every summary key a tick writes the branch for', a
   const expected = Object.keys(s).filter((k) => Array.isArray(s[k]) && !notDecisions.has(k)).sort();
   assert.deepEqual([...DURABLE_TICK_KEYS].sort(), expected);
 });
+
+test('a tick whose lock listing failed spends no per-card ref read to make up for it', async (t) => {
+  // Routing `lockBeatAt` through the store made the *driver* fall back to `lockSha(n, k)` when the
+  // caller passed no token. The old call site passed the sha straight in, so `lockBeatAt(ctx, null)`
+  // answered null and asked for nothing. That fallback fires exactly when `listLocks()` threw — one
+  // extra REST call per running card, on the tick that already failed to list them.
+  const h = harness({ dispatch: { stale_after: 60 } });
+  t.after(h.cleanup);
+  const run = runWith([{ attempt: 1, host: 'other-host', started_at: ago(3600), heartbeat_at: ago(3600), lock_sha: 'a'.repeat(40) }]);
+  h.gh.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.gh.beat(7, 1, ago(900));
+  h.gh.fail({ path: '/git/matching-refs/kb/locks/' }, { status: 500, message: 'the lock listing is down' });
+
+  const before = h.gh.callsMatching('GET', '/git/ref/').length;
+  await h.tick({ max: 0 });
+
+  assert.equal(h.gh.callsMatching('GET', '/git/ref/').length, before,
+    'no row in the listing means no token and nothing to read — not a lookup per running card');
+  assert.match(h.log(), /lock listing failed/, 'and the tick says so out loud rather than quietly paying for it');
+});

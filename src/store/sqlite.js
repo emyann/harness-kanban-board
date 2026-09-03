@@ -69,8 +69,10 @@ function sqlite() {
 /** Bumped when the schema below changes shape. A mismatch rebuilds rather than migrates: every
  *  table here is either live state a restart can lose or a copy of the branch `load()` restores.
  *  2: `links_blocked` replaces `events_kind` (the blocker lookup is by `blocked_id`; nothing ever
- *  queried an event by kind). */
-export const SCHEMA_VERSION = 2;
+ *  queried an event by kind).
+ *  3: `beats`, this checkout's mirror of where it left each beat chain — `beatToken` was an alias
+ *  for `lockToken`, so every lease was checked against the value it leased on. */
+export const SCHEMA_VERSION = 3;
 
 /**
  * The kinds an event may carry: `hkb watch`'s vocabulary (so a stream reader learns nothing new)
@@ -255,6 +257,20 @@ CREATE TABLE IF NOT EXISTS locks (
   beat_at TEXT,
   at      TEXT,
   UNIQUE(task_id, k)
+);
+-- This checkout's mirror of where it left each beat chain — the local half of the two the interface
+-- names (beatToken vs lockToken), and the exact counterpart of the GitHub driver's local
+-- refs/kb/locks/<n>/<k> ref. It is *not* the authority and nothing reloads it from the branch:
+-- locks.token is what a lease is checked against, and a mirror that were the same read would make
+-- every compare-and-swap lease on the value it is comparing to — a CAS that can never say "lost".
+-- Deliberately not cascaded off locks: a claim released and re-taken by somebody else is precisely
+-- the reclaim this mirror exists to catch, so the stale token must outlive the row.
+CREATE TABLE IF NOT EXISTS beats (
+  task_id INTEGER NOT NULL,
+  k       INTEGER NOT NULL,
+  token   TEXT NOT NULL,
+  at      TEXT,
+  PRIMARY KEY (task_id, k)
 );
 CREATE TABLE IF NOT EXISTS results (
   task_id       INTEGER NOT NULL,
@@ -633,6 +649,10 @@ function makeIndex({ db, file, root, readOnly, branch = DEFAULT_BRANCH }) {
         if (hasRuns) orphaned.push('NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id = locks.task_id AND a.k = locks.k AND a.ended_at IS NULL)');
         if (orphaned.length) {
           counts.locks_dropped = Number(db.prepare(`DELETE FROM locks WHERE ${orphaned.join(' OR ')}`).run().changes);
+          // The beat mirrors of attempts the branch has closed go the same way. Not the ones whose
+          // lock is merely gone — a released claim is what a stale mirror is *for* — only the ones
+          // whose attempt the branch itself says ended, which nothing will ever beat on again.
+          if (hasRuns) db.exec('DELETE FROM beats WHERE NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id = beats.task_id AND a.k = beats.k AND a.ended_at IS NULL)');
         }
         db.exec('COMMIT');
       } catch (e) {
@@ -701,6 +721,9 @@ function makeIndex({ db, file, root, readOnly, branch = DEFAULT_BRANCH }) {
       db.exec('BEGIN IMMEDIATE');
       try {
         db.prepare('INSERT INTO locks (task_id, k, token, beat_at, at) VALUES (?, ?, ?, NULL, ?)').run(task, att, token, at);
+        // Seed this checkout's mirror: the claimer is where the chain starts, so its first beat
+        // leases on the token the claim minted, exactly as the GitHub driver's `update-ref` does.
+        db.prepare('INSERT OR REPLACE INTO beats (task_id, k, token, at) VALUES (?, ?, ?, ?)').run(task, att, token, at);
         db.prepare(`INSERT OR REPLACE INTO attempts (task_id, k, profile, host, started_at, extra_json) VALUES (?, ?, ?, ?, ?, ?)`)
           .run(task, att, profile, host, at, json(extra ?? null));
         db.prepare('UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?').run('running', at, task);
@@ -741,6 +764,37 @@ function makeIndex({ db, file, root, readOnly, branch = DEFAULT_BRANCH }) {
     },
 
     /**
+     * The claim's current token, or null when the claim is gone — the *authoritative* half of the
+     * pair the interface names. Its mirror is `beatToken`, and the two must be separate reads: an
+     * earlier version answered both from this row, which made `heartbeat`'s `WHERE token = ?` lease
+     * on the value it was comparing against, so the CAS could not fail and no reclaim was ever
+     * detected on a local board.
+     */
+    lockToken(n, k) {
+      return db.prepare('SELECT token FROM locks WHERE task_id = ? AND k = ?').get(Number(n), Number(k))?.token ?? null;
+    },
+
+    /** Where *this checkout* left the chain — local state only, never a reason to conclude the claim
+     *  is gone. `null` means only "nothing has beaten here". */
+    beatToken(n, k) {
+      return db.prepare('SELECT token FROM beats WHERE task_id = ? AND k = ?').get(Number(n), Number(k))?.token ?? null;
+    },
+
+    /** Point the mirror at `token`, after `lockToken` said the chain moved without us. */
+    resyncBeat(n, k, token) {
+      if (readOnly) refuseReadOnly('resyncBeat');
+      if (!token) return false;
+      db.prepare('INSERT OR REPLACE INTO beats (task_id, k, token, at) VALUES (?, ?, ?, ?)').run(Number(n), Number(k), String(token), nowIso());
+      return true;
+    },
+
+    /** Forget the mirror for a finished attempt, so the next one does not lease on a dead chain. */
+    dropBeat(n, k) {
+      if (readOnly) refuseReadOnly('dropBeat');
+      return Number(db.prepare('DELETE FROM beats WHERE task_id = ? AND k = ?').run(Number(n), Number(k)).changes) > 0;
+    },
+
+    /**
      * The worker side, as one `UPDATE … WHERE token = ?`.
      *
      * The token rotates on every beat, the way the lock ref's sha advances on every CAS: the caller
@@ -760,6 +814,7 @@ function makeIndex({ db, file, root, readOnly, branch = DEFAULT_BRANCH }) {
         const r = db.prepare('UPDATE locks SET token = ?, beat_at = ? WHERE task_id = ? AND k = ? AND token = ?')
           .run(next, at, task, att, String(expected));
         if (Number(r.changes) === 0) { db.exec('COMMIT'); return { result: 'lost', token: null }; }
+        db.prepare('INSERT OR REPLACE INTO beats (task_id, k, token, at) VALUES (?, ?, ?, ?)').run(task, att, next, at);
         db.prepare('UPDATE attempts SET heartbeat_at = ? WHERE task_id = ? AND k = ?').run(at, task, att);
         append('attempt', task, { op: 'heartbeat', k: att, at });
         db.exec('COMMIT');
@@ -821,6 +876,21 @@ function makeIndex({ db, file, root, readOnly, branch = DEFAULT_BRANCH }) {
       const rows = db.prepare('SELECT id, at, kind, task_id, payload_json FROM events WHERE id > ? ORDER BY id LIMIT ?')
         .all(count(after, 0), count(limit, 500));
       return rows.map((r) => ({ id: r.id, at: r.at, kind: r.kind, number: r.task_id ?? null, payload: unjson(r.payload_json, {}) }));
+    },
+
+    /**
+     * One card's rows, **newest `limit` of them**, returned oldest-first — what `hkb log` prints.
+     *
+     * Not `events({limit})` filtered in JS: `events` is a forward cursor from id 0, so filtering its
+     * first page for one card read the *oldest* rows in the log. Past the retention floor that
+     * answered `[]` for every recent card and pre-history for an old one, with nothing saying rows
+     * had been cut. Narrowing in SQL is also cheaper — a handful of payloads parsed instead of
+     * thousands.
+     */
+    taskEvents(n, { limit = 500 } = {}) {
+      const rows = db.prepare('SELECT id, at, kind, task_id, payload_json FROM events WHERE task_id = ? ORDER BY id DESC LIMIT ?')
+        .all(Number(n), count(limit, 500));
+      return rows.reverse().map((r) => ({ id: r.id, at: r.at, kind: r.kind, number: r.task_id ?? null, payload: unjson(r.payload_json, {}) }));
     },
 
     /** For a verb whose write is not one of the methods above — the control-plane four (`paused`,

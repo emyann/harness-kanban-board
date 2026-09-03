@@ -25,7 +25,7 @@ import { spawnSync } from 'node:child_process';
 import { openStore, STORE_METHODS } from '../src/store/index.js';
 import { openGitTier } from '../src/store/git.js';
 import { DEFAULT_BOARD, hostId } from '../src/board.js';
-import { L, emptyRun, serializeResultComment, RESULT_MARKER } from '../src/model.js';
+import { L, emptyRun, serializeResultComment, RESULT_MARKER, blockersOf, blockersKnown } from '../src/model.js';
 import { FakeGh, kbIssue } from './fake-gh.js';
 
 // ---------- the GitHub driver ----------
@@ -241,7 +241,11 @@ const SCENARIOS = [
     async run(h) {
       const t = await card(h);
       assert.deepEqual(await h.store.listNotes(t.number), []);
-      await h.store.addNote(t.number, 'a human said this');
+      const wrote = await h.store.addNote(t.number, 'a human said this');
+      // the note it wrote, in the note shape — `url` is where a person reads it, or null on a store
+      // with no page for one. `hkb comment` and the MCP tool answer with that field.
+      for (const key of ['id', 'at', 'actor', 'text', 'url']) assert.ok(key in wrote, `addNote's answer is missing ${key}`);
+      assert.equal(wrote.text, 'a human said this');
       const notes = await h.store.listNotes(t.number);
       assert.equal(notes.length, 1);
       assert.equal(notes[0].text, 'a human said this');
@@ -404,6 +408,147 @@ const SCENARIOS = [
       const notes = await h.store.listNotes(t.number);
       assert.deepEqual(notes.map((n) => n.text), ['a human said this', quoting, halfWritten]);
       assert.equal(await h.store.latestResult(t.number), null, 'and it is not a result either — one predicate, both answers agreeing');
+    },
+  },
+  {
+    name: 'setKb replaces the machine block and leaves the prose alone',
+    async run(h) {
+      const t = await card(h, { kb: { priority: 1, paths: ['src/a.js'] }, body: 'the why, in prose' });
+      await h.store.setKb(t, { ...t.kb, priority: 3, goal: 'ship it' });
+      assert.equal(t.kb.priority, 3, 'the passed task is updated in place, like setStatus');
+      const read = await h.store.getTask(t.number);
+      assert.equal(read.kb.priority, 3);
+      assert.equal(read.kb.goal, 'ship it');
+      assert.deepEqual(read.kb.paths, ['src/a.js'], 'a key the caller carried over survives');
+      assert.match(read.bodyText, /the why, in prose/, 'and the prose is untouched');
+      // and the mirror image still holds: updateBody replaces the prose and keeps the block
+      await h.store.updateBody(t.number, 'rewritten prose');
+      const after = await h.store.getTask(t.number);
+      assert.match(after.bodyText, /rewritten prose/);
+      assert.equal(after.kb.priority, 3, 'updateBody must not drop the kb block');
+    },
+  },
+  {
+    name: 'ensureLabels answers with what it had to create, and is safe to repeat',
+    async run(h) {
+      const name = 'kb:agent:conformance';
+      const created = await h.store.ensureLabels([name]);
+      assert.ok(Array.isArray(created), 'ensureLabels answers with a list of names');
+      assert.deepEqual(await h.store.ensureLabels([name]), [], 'the second call creates nothing');
+      // whatever it does or does not create, a label can be applied afterwards
+      const t = await card(h);
+      await h.store.addLabels(t, [name]);
+      assert.ok((await h.store.getTask(t.number)).labels.includes(name));
+    },
+  },
+  {
+    name: 'the claim tokens: lockToken is the answer, beatToken is this host\'s copy, dropBeat forgets it',
+    async run(h) {
+      const n = (await card(h)).number;
+      assert.equal(await h.store.lockToken(n, 1), null, 'no claim, no token');
+      const { token } = await h.store.claim(n, 1);
+      h.settleClaim(n, 1, token);
+      assert.equal(await h.store.lockToken(n, 1), token, 'the claim is readable as the store has it');
+      // `beatToken` never reaches the network and never throws: it is what the warm path of
+      // `hkb heartbeat` leases on, and a worker that has not beaten yet gets null rather than an error.
+      const local = h.store.beatToken(n, 1);
+      assert.ok(local === null || typeof local === 'string');
+      assert.equal(h.store.resyncBeat(n, 1, token), true, 'a resync onto the authoritative token succeeds');
+      assert.equal(h.store.beatToken(n, 1), token, 'and that is what the next beat leases on');
+      const beat = await h.store.heartbeat(n, 1, token);
+      assert.equal(beat.result, 'ok');
+      assert.equal(typeof beat.detail, 'string', 'a beat says why, so a fallback is never silent');
+      h.store.dropBeat(n, 1);
+      await h.store.release(n, 1);
+      assert.equal(await h.store.lockToken(n, 1), null, 'a released claim has no token');
+    },
+  },
+  {
+    // The one that was aliased away. `beatToken` was `lockToken` on the local driver, so
+    // `heartbeat`'s `WHERE token = ?` leased on the value it compared against and the compare-and-
+    // swap could not fail — `hkb heartbeat`'s warm path could never report `lost`, and the only
+    // reason a reclaim was ever noticed is that `release()` happens to delete the row.
+    name: 'a beat leased on this host\'s stale copy is lost, even while the claim is still there',
+    async run(h) {
+      const n = (await card(h)).number;
+      const { token } = await h.store.claim(n, 1);
+      h.settleClaim(n, 1, token);
+      h.store.resyncBeat(n, 1, token);
+      const mine = h.store.beatToken(n, 1);
+      assert.equal(mine, token, 'this host beats on the token it claimed with');
+
+      // Somebody else beats: the claim is still held, but it has moved on from `mine`.
+      const theirs = await h.store.heartbeat(n, 1, token);
+      assert.equal(theirs.result, 'ok');
+      assert.notEqual(theirs.token, mine, 'a beat rotates the token, which is what makes the CAS a CAS');
+      h.store.resyncBeat(n, 1, theirs.token);
+
+      const stale = await h.store.heartbeat(n, 1, mine);
+      assert.equal(stale.result, 'lost', 'the stale lease is rejected while the claim itself is very much alive');
+      assert.notEqual(await h.store.lockToken(n, 1), null, 'and the claim is still there — `lost` is about the lease, not the row');
+    },
+  },
+  {
+    name: 'lockRef names where a claim lives, or answers null on a store with no name for one',
+    async run(h) {
+      const n = (await card(h)).number;
+      const where = h.store.lockRef(n, 1);
+      assert.ok(where === null || typeof where === 'string', 'a string or null, never undefined');
+      // `hkb heartbeat` and the LOCK_LOST error print this, and used to print `refs/kb/locks/<n>/<k>`
+      // on every board. A store that keeps its claims in a table has no such name, and says so.
+      const { token } = await h.store.claim(n, 1);
+      h.settleClaim(n, 1, token);
+      const listed = (await h.store.listLocks()).find((l) => l.n === n && l.k === 1);
+      assert.equal(listed.ref ?? null, where, '`lockRef` is the `ref` the listing already carries');
+      await h.store.release(n, 1);
+    },
+  },
+  {
+    // `taskEvents` was `events({limit: 5000})` filtered in JS — a forward cursor from id 0, so on a
+    // board past the retention floor `hkb log` read the *oldest* page and answered `[]` for a card
+    // whose whole history was newer than it.
+    name: 'taskEvents answers with a card\'s newest history, not the log\'s oldest page',
+    async run(h) {
+      const noisy = await card(h, { title: 'the other card' });
+      const t = await card(h, { title: 'the one we ask about' });
+      await h.store.setStatus(t, 'running');
+      // Bury it: a long run of events belonging to somebody else, ahead of the card in id order.
+      for (let i = 0; i < 40; i++) await h.store.addNote(noisy.number, `noise ${i}`);
+      const rows = await h.store.taskEvents(t.number);
+      // Only a driver with a log of its own can be buried; the GitHub driver reads the issue
+      // timeline, which is already per-card and cannot be crowded out by another card's rows.
+      if (h.store.capabilities().events) assert.ok(rows.length, `#${t.number} has a history under 40 rows of somebody else's`);
+      for (const e of rows) for (const key of ['at', 'kind', 'detail', 'actor']) assert.ok(key in e, `an entry is missing ${key}`);
+      const ats = rows.map((e) => e.at);
+      assert.deepEqual(ats, [...ats].sort(), 'oldest first, the order hkb log interleaves on');
+    },
+  },
+  {
+    name: 'taskEvents is one card\'s history, in the four fields hkb log prints',
+    async run(h) {
+      const t = await card(h);
+      await h.store.setStatus(t, 'running');
+      const rows = await h.store.taskEvents(t.number);
+      assert.ok(Array.isArray(rows), 'taskEvents is never refused the way events() can be');
+      for (const r of rows) {
+        for (const key of ['at', 'kind', 'detail', 'actor']) assert.ok(key in r, `a taskEvents row is missing ${key}`);
+      }
+    },
+  },
+  {
+    name: 'listTasks says how much of blockedBy was actually looked up',
+    async run(h) {
+      const parent = await card(h, { title: 'first' });
+      const child = await card(h, { title: 'second', status: 'todo' });
+      await h.store.addBlockedBy(child.number, parent.number);
+      const tasks = await h.store.listTasks({ states: ['OPEN'] });
+      const note = blockersOf(tasks);
+      assert.ok(note.filled, 'a board asked for its blockers comes back saying they were read');
+      assert.ok(['all', 'open', 'waiting'].includes(note.scope), `scope was ${note.scope}`);
+      // and the reader agrees for the card that has one — an empty list nobody read is not "no blockers"
+      const read = tasks.find((x) => x.number === child.number);
+      assert.equal(blockersKnown(tasks, read), true);
+      assert.deepEqual(read.blockedBy.map((b) => b.number), [parent.number]);
     },
   },
   {

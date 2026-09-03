@@ -9,7 +9,7 @@
 - [The kb-board branch](./architecture/kb-board-branch.md): The durable half of a local board lives on a dedicated git branch written with plumbing only — no checkout, no staging, no working-tree write — with update-ref as the compare-and-swap and a retry that replays the mutation.
 - [The local store — the two tiers as one board](./architecture/local-store.md): How the kb-board branch and the .git/hkb index compose into one Store: what open() reconciles, the commit-index-wake order every durable verb follows, which reads go to which tier, and the one-writer rule that makes a clone a reader.
 - [hkb at a glance](./architecture/overview.md): The moving parts: CLI, board protocol, dispatcher loop, workers — and the one rule that shapes them all: the board is the only state.
-- [The store seam](./architecture/store-seam.md): One named interface over board state — openStore(ctx) with the GitHub bodies behind it — plus src/forge.js for the pull-request half that is deliberately not part of it, and a driver-parametrised conformance suite that says when a new driver is done.
+- [The store seam](./architecture/store-seam.md): One named interface over board state — openStore(ctx), which every verb in src/ now goes through — plus src/forge.js for the pull-request half that is deliberately not part of it, and a driver-parametrised conformance suite that says when a new driver is done.
 
 ## Concepts
 

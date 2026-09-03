@@ -1,22 +1,20 @@
 // Argument parsing + command routing. Every command has --json; output is stable for scripts and agents.
 import fs from 'node:fs';
-import { makeContext, makeHookContext } from './board.js';
-import { getTask, fetchBoard, assertOnBoard, loadRun, latestResult, parentResults, issueEvents, addComment, addLabels, ensureLabels, removeLabel, setAgent, setStatus, updateBody, blockersOf, blockersKnown } from './tasks.js';
+import { makeContext, makeHookContext, assertOnBoard } from './board.js';
 import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, createTask, linkTask, withOutbox, envAttempt, mergeCard } from './lifecycle.js';
 import { tick, loop, spawnWorker } from './dispatch.js';
 import { serve } from './serve.js';
 import { up, down } from './up.js';
 import { watch, tail } from './watch.js';
 import { stats } from './stats.js';
-import { claim } from './lock.js';
 import { contextCommand } from './context.js';
 import { resolveTrack, trackGraph, trackMermaid } from './track.js';
 import { stopHook, markSessionClaim } from './hook.js';
 import { init, packageVersion } from './init.js';
 import { doctor } from './doctor.js';
 import { gc } from './gc.js';
-import { assertOwningHost, storeKind } from './store/index.js';
-import { STATUSES, DEFAULT_KB, L, blockerDone, parseBodyBlock, lastAttempt, formatSession, formatDenials, resumeCommand, activePrGuard, isTrackRoot, groomBoard, boardSummary, computeReady, pathOverlapGuard, GROOM_LEVELS, parsePriorityFlag, parseScheduledAtFlag } from './model.js';
+import { assertOwningHost, storeKind, openStore, closeStore } from './store/index.js';
+import { STATUSES, DEFAULT_KB, L, blockerDone, blockersOf, blockersKnown, parseBodyBlock, lastAttempt, formatSession, formatDenials, resumeCommand, activePrGuard, isTrackRoot, groomBoard, boardSummary, computeReady, pathOverlapGuard, GROOM_LEVELS, parsePriorityFlag, parseScheduledAtFlag } from './model.js';
 
 /** Flags that never take a value, so `hkb complete --from-stdin 13` keeps `13` as a positional. */
 const BOOL_FLAGS = new Set(['json', 'from-stdin', 'dry-run', 'triage', 'triage-only', 'all', 'spawn', 'yes', 'import', 'no-hook', 'shared-hooks', 'no-labels', 'api', 'mcp', 'mermaid', 'serve', 'off', 'on', 'help']);
@@ -459,7 +457,25 @@ function trackLine(d, n) {
   return `no — ${d.why}`;
 }
 
+/**
+ * Every verb, and the one place a CLI process's store handle is let go of.
+ *
+ * `openStore(ctx)` hands back a single handle per context, so a verb that reads the board four times
+ * holds one connection and this `finally` is all it takes to close it. The context is reported back
+ * through `keep` rather than built here, because `hkb hook …` and `hkb help` return before there is
+ * one — and `closeStore(null)` is a no-op, so the wrapper does not have to know which.
+ */
 export async function main(argv) {
+  /** @type {any} */
+  let ctx = null;
+  try {
+    return await runVerb(argv, (c) => { ctx = c; });
+  } finally {
+    closeStore(ctx);
+  }
+}
+
+async function runVerb(argv, keep) {
   const { flags, pos } = parseArgs(argv);
   const [typed, ...rest] = pos;
   const cmd = VERB_ALIASES[typed] || typed;
@@ -470,12 +486,14 @@ export async function main(argv) {
     // are for a human who can read the error, `makeHookContext` is for a guard rail that must stand
     // aside instead when its own config is unreadable.
     const ctx = makeHookContext(flags);
+    keep(ctx); // a hook reaches the store too (`stopHook`, `preToolHook`), so its handle is closed as well
     if (rest[0] === 'stop') return stopHook(ctx);
     if (rest[0] === 'pretool') { const { preToolHook } = await import('./hook.js'); return preToolHook(ctx); }
     if (rest[0] === 'subagentstop') { const { subagentStopHook } = await import('./hook.js'); return subagentStopHook(ctx); }
     throw usage('hkb hook stop|pretool|subagentstop');
   }
   const ctx = makeContext(flags);
+  keep(ctx);
   const argvForOutbox = process.env.KB_NO_OUTBOX ? null : argv;
 
   switch (cmd) {
@@ -513,7 +531,7 @@ export async function main(argv) {
       return 0;
     }
     case 'list': {
-      const tasks = await fetchBoard(ctx, { includeClosed: !!flags.all });
+      const tasks = await (await openStore(ctx)).listTasks({ states: flags.all ? ['OPEN', 'CLOSED'] : ['OPEN'] });
       // The board's shape without its bodies: one read, no per-card lines — what an opening report
       // needs (is anything in flight, what is waiting on a human) that scanning `hkb list`'s rows or
       // paying for `hkb stats`'s 7-day history cannot answer any cheaper.
@@ -547,7 +565,7 @@ export async function main(argv) {
     // `hkb dispatch --dry-run`, and nothing here may change a status, a label or a body.
     case 'groom': {
       const o = groomOptions(flags); // validated before the request, so a typo costs nothing
-      const tasks = await fetchBoard(ctx, { includeClosed: o.all, blockers: 'all' });
+      const tasks = await (await openStore(ctx)).listTasks({ states: o.all ? ['OPEN', 'CLOSED'] : ['OPEN'], blockers: 'all' });
       const rep = filterGroomLevel(groomBoard(tasks, {
         now: new Date(),
         caps: ctx.caps,
@@ -566,10 +584,11 @@ export async function main(argv) {
     case 'show': {
       const [n] = nums(rest);
       if (!n) throw usage('hkb show <n>');
-      const t = await getTask(ctx, n);
-      const { run } = await loadRun(ctx, n);
-      const result = await latestResult(ctx, n);
-      const parents = await parentResults(ctx, t);
+      const store = await openStore(ctx);
+      const t = await store.getTask(n);
+      const { run } = await store.loadRun(n);
+      const result = await store.latestResult(n);
+      const parents = await store.parentResults(t);
       // the card in isolation: `hkb show` reads one issue, and only the board knows whether
       // something else is still blocked by this one. `hkb track <n>` is the answer that does.
       const trackVerdict = isTrackRoot(t, ctx.cfg);
@@ -608,7 +627,7 @@ export async function main(argv) {
       const [n] = nums(rest);
       if (!n) throw usage('hkb graph <n> [--mermaid] [--json]');
       // one board read, then the same walk the dispatcher does: the root plus what is still blocking it
-      const tasks = await fetchBoard(ctx);
+      const tasks = await (await openStore(ctx)).listTasks();
       const track = resolveTrack(n, new Map(tasks.map((t) => [t.number, t])));
       if (!track.root) throw usage(`no open task #${n} on board "${ctx.board}" — \`hkb list\` shows what is there`);
       const g = trackGraph(track);
@@ -622,12 +641,13 @@ export async function main(argv) {
     case 'track': {
       const [n] = nums(rest);
       if (!n) throw usage('hkb track <n> [--off] [--on] [--json]');
-      const tasks = await fetchBoard(ctx);
-      const t = tasks.find((x) => x.number === n) || await getTask(ctx, n);
+      const store = await openStore(ctx);
+      const tasks = await store.listTasks();
+      const t = tasks.find((x) => x.number === n) || await store.getTask(n);
       if (flags.off || flags.on) {
         if (flags.off && flags.on) throw usage('hkb track <n> takes --off or --on, not both');
-        if (flags.off) { await ensureLabels(ctx, [L.noTrack]); await addLabels(ctx, t, [L.noTrack]); }
-        else await removeLabel(ctx, t, L.noTrack);
+        if (flags.off) { await store.ensureLabels([L.noTrack]); await store.addLabels(t, [L.noTrack]); }
+        else await store.removeLabel(t, L.noTrack);
       }
       const d = isTrackRoot(t, ctx.cfg, { board: tasks });
       const track = d.track ? resolveTrack(n, new Map(tasks.map((x) => [x.number, x]))) : null;
@@ -638,7 +658,7 @@ export async function main(argv) {
     case 'status': {
       const [n] = nums(rest);
       if (!n) throw usage('hkb status <n>');
-      const t = await getTask(ctx, n);
+      const t = await (await openStore(ctx)).getTask(n);
       out(ctx, { number: n, status: t.status }, t.status || 'none');
       return 0;
     }
@@ -689,10 +709,11 @@ export async function main(argv) {
       }
       for (const w of warnings) log(`warning: ${w}`);
       const res = [];
+      const store = await openStore(ctx);
       for (const n of ns) {
-        const t = await getTask(ctx, n);
+        const t = await store.getTask(n);
         const kb = { ...t.kb, ...fields };
-        await updateBody(ctx, t, kb);
+        await store.setKb(t, kb);
         res.push({ number: n, kb });
       }
       out(ctx, res, res.map((r) => `#${r.number} kb: ${Object.keys(fields).join(', ')} set`).join('\n'));
@@ -712,12 +733,13 @@ export async function main(argv) {
       const agent = flags.agent || Object.keys(ctx.cfg.profiles)[0];
       const status = flags.status || 'triage';
       const res = [];
+      const store = await openStore(ctx);
       for (const n of ns) {
-        const t = await getTask(ctx, n);
-        if (!t.kb || !t.body.includes('<!-- kb:')) await updateBody(ctx, t, { ...DEFAULT_KB }, t.body);
-        await addLabels(ctx, t, [L.board(ctx.board)]);
-        await setAgent(ctx, t, agent); // one kb:agent:* label, so re-adopting onto another profile takes
-        await setStatus(ctx, t, status);
+        const t = await store.getTask(n);
+        if (!t.kb || !t.body.includes('<!-- kb:')) await store.setKb(t, { ...DEFAULT_KB }, t.body);
+        await store.addLabels(t, [L.board(ctx.board)]);
+        await store.setAgent(t, agent); // one kb:agent:* label, so re-adopting onto another profile takes
+        await store.setStatus(t, status);
         res.push({ number: n, status, agent });
       }
       out(ctx, res, res.map((r) => `#${r.number} adopted → ${r.status} (${r.agent})`).join('\n'));
@@ -726,17 +748,21 @@ export async function main(argv) {
     case 'comment': {
       const [n] = nums(rest);
       if (!n || !rest[1]) throw usage('hkb comment <n> "text"');
-      const c = await addComment(ctx, n, rest.slice(1).join(' '));
-      out(ctx, { number: n, url: c.html_url }, c.html_url);
+      const c = await (await openStore(ctx)).addNote(n, rest.slice(1).join(' '));
+      // A note has a page to read it on where the store has one, and on a local board it has none —
+      // where `out(ctx, obj, null)` fell through to a JSON blob on a human's terminal. One line per
+      // item, always: the URL when there is one, and what landed where when there is not.
+      out(ctx, { number: n, url: c.url ?? null }, c.url || `#${n} ← comment added`);
       return 0;
     }
     case 'log': {
       const [n] = nums(rest);
       if (!n) throw usage('hkb log <n>');
-      const { run } = await loadRun(ctx, n);
-      const events = await issueEvents(ctx, n);
+      const store = await openStore(ctx);
+      const { run } = await store.loadRun(n);
+      const events = await store.taskEvents(n);
       const rows = [
-        ...events.map((e) => ({ at: e.created_at, kind: e.event, detail: e.label?.name || e.assignee?.login || e.state_reason || '', actor: e.actor?.login })),
+        ...events,
         ...run.attempts.flatMap((a) => [
           { at: a.started_at, kind: 'claimed', detail: `attempt ${a.attempt} ${a.profile}@${a.host || ''}` },
           ...(a.heartbeat_at ? [{ at: a.heartbeat_at, kind: 'heartbeat', detail: `attempt ${a.attempt}` }] : []),
@@ -751,8 +777,12 @@ export async function main(argv) {
       const [n] = nums(rest);
       if (!n) throw usage('hkb heartbeat <n> [--note ..]');
       const r = await withOutbox(ctx, argvForOutbox, () => heartbeat(ctx, n, { note: flags.note, attempt: flags.attempt }));
+      // `r.ref` is null on a store that keeps its claims in a table rather than in a ref, and
+      // "lease held on null" is not a sentence. Same fallback as `claim` below: the claim, said in
+      // whatever terms this board has for one.
+      const on = r.ref ? ` on ${r.ref}` : '';
       const how = r.skipped ? `ok (recent heartbeat; next in ${r.next_in_s}s)`
-        : r.mode === 'ref' ? `#${n} attempt ${r.attempt}: lease held on ${r.ref} → ${String(r.sha).slice(0, 7)}${r.resynced ? ' (chain resynced)' : ''}`
+        : r.mode === 'ref' ? `#${n} attempt ${r.attempt}: lease held${on} → ${String(r.sha).slice(0, 7)}${r.resynced ? ' (chain resynced)' : ''}`
           : `heartbeat recorded for #${n} attempt ${r.attempt}`;
       out(ctx, r, how);
       return 0;
@@ -809,26 +839,26 @@ export async function main(argv) {
     case 'claim': {
       const [n] = nums(rest);
       if (!n) throw usage('hkb claim <n> [--profile p] [--spawn]');
-      const t = await getTask(ctx, n);
+      const store = await openStore(ctx);
+      const t = await store.getTask(n);
       assertOnBoard(ctx, t);
-      const runRec = await loadRun(ctx, n);
+      const runRec = await store.loadRun(n);
       const k = runRec.run.attempts.length + 1;
       // an open PR with the reviewer's changes_requested row on top is a continuation, exactly like
       // the dispatcher's own claim (`activePrGuard`, src/model.js) — a manual claim gets the same
       // `continues_pr`/`continues_branch` bookkeeping, or `finish` will not say "continued" (#162)
       const g = activePrGuard(runRec.run.attempts, t.prs);
       const continuePr = g.continues ? g.pr : null;
-      const c = await claim(ctx, n, k);
+      const c = await store.claim(n, k);
       if (c.result !== 'claimed') { out(ctx, c, `#${n}: ${c.result}${c.error ? ' — ' + c.error.message : ''}`); return c.result === 'held' ? 2 : 1; }
       const profile = flags.profile || t.agent || Object.keys(ctx.cfg.profiles)[0];
-      runRec.run.attempts.push({ attempt: k, profile, host: ctx.host, started_at: new Date().toISOString(), heartbeat_at: new Date().toISOString(), lock_sha: c.sha, manual: !flags.spawn, ...(continuePr ? { continues_pr: continuePr.number } : {}) });
-      const { saveRun } = await import('./tasks.js');
-      await saveRun(ctx, n, runRec);
+      runRec.run.attempts.push({ attempt: k, profile, host: ctx.host, started_at: new Date().toISOString(), heartbeat_at: new Date().toISOString(), lock_sha: c.token, manual: !flags.spawn, ...(continuePr ? { continues_pr: continuePr.number } : {}) });
+      await store.saveRun(n, runRec);
       // Claimed by hand from inside another task's session — a track runner working a node. Leave
       // the marker that tells this session's Stop hook to stamp that node with the session id too.
       if (!flags.spawn) markSessionClaim(ctx.root, n, k, { profiles: ctx.cfg?.profiles });
-      await setStatus(ctx, t, 'running');
-      await setAgent(ctx, t, profile); // `--profile` names who is running it, so it replaces the old label
+      await store.setStatus(t, 'running');
+      await store.setAgent(t, profile); // `--profile` names who is running it, so it replaces the old label
       let pid = null;
       if (flags.spawn) {
         const s = await spawnWorker(ctx, t, profile, k, { continuePr });
@@ -836,9 +866,12 @@ export async function main(argv) {
         runRec.run.attempts[k - 1].pid = pid;
         if (s.continued?.branch) runRec.run.attempts[k - 1].continues_branch = s.continued.branch;
         if (s.continued?.branch && s.continued.why) runRec.run.attempts[k - 1].continues_branch_stale = s.continued.why;
-        await saveRun(ctx, n, runRec);
+        await store.saveRun(n, runRec);
       }
-      out(ctx, { number: n, attempt: k, ref: c.ref, pid }, `#${n} claimed (attempt ${k}, ${c.ref})${pid ? ` pid ${pid}` : `\nexport KB_TASK=${n} KB_ATTEMPT=${k}   # then work, and finish with hkb complete|block|request-review`}`);
+      // `ref` is where the claim lives when the store has such a name — the lock ref on GitHub, and
+      // nothing on a store that keeps its claims in a table, which is already saying "attempt k".
+      const where = c.ref ? `attempt ${k}, ${c.ref}` : `attempt ${k}`;
+      out(ctx, { number: n, attempt: k, ref: c.ref ?? null, pid }, `#${n} claimed (${where})${pid ? ` pid ${pid}` : `\nexport KB_TASK=${n} KB_ATTEMPT=${k}   # then work, and finish with hkb complete|block|request-review`}`);
       return 0;
     }
     case 'up': {

@@ -6,13 +6,128 @@
 //
 // Every body here was moved as it was — from `src/tasks.js` (the PR reads and mutations) and from
 // `src/lifecycle.js` (`prNodeId`, `isGithubUser`, `finishPr`) — and still calls `src/gh.js`.
-import { GhError, isOffline, graphql, rest } from './gh.js';
+import { GhError, isOffline, graphql, rest, restRaw } from './gh.js';
 import { api } from './board.js';
-import { taskBranchRe } from './model.js';
+import { taskBranchRe, trackBranchName, trackBranchRoot } from './model.js';
 
 // `GhError` and `isOffline` are the transport's vocabulary and stay in `src/gh.js`: a caller that
 // classifies a failure has nothing to do with pull requests, and a board whose store is local still
 // has to tell an offline write from a refused one.
+
+// ---------- the repository's own branches ----------
+// Not board state either: `baseSha` is the head every claim and every track branch is created at,
+// and `kb/track-<root>` is a branch on the forge. They moved here from `src/lock.js` with the rest
+// of what a store must not own, so `src/dispatch.js`, `src/doctor.js` and `src/gc.js` reach them
+// without importing a driver. `src/store/github.js` calls `baseSha`/`classifyClaimError` from here.
+
+/** One conditional read of a branch head. A 304 means "still `known`" and costs no rate limit. */
+async function readHead(ctx, branch, known) {
+  const etag = known && known.branch === branch ? known.etag : null;
+  const r = await restRaw('GET', api(ctx, `/git/ref/heads/${branch}`), { headers: etag ? { 'If-None-Match': etag } : {} });
+  if (r.status === 304) {
+    if (known?.sha) return { branch, sha: known.sha, etag: known.etag };
+    throw new GhError(`GET git/ref/heads/${branch} answered 304 with nothing cached`, { status: 304, kind: 'unknown' });
+  }
+  // a prefix match returns an array (the branch itself does not exist) — same fix as a 404
+  const sha = Array.isArray(r.data) ? null : r.data?.object?.sha;
+  if (!sha) throw new GhError(`GET git/ref/heads/${branch} returned no sha`, { status: r.status || 404, kind: 'notfound' });
+  return { branch, sha, etag: r.headers?.etag || null };
+}
+
+/**
+ * The default branch head every claim is created at — **not** a process-lifetime cache.
+ * `staleBaseSha(ctx)` marks the cached value for revalidation (the dispatcher does it once per
+ * tick), and the next call re-reads the ref with `If-None-Match`: a quiet repo answers 304, which
+ * is free, and a moved branch is picked up within the tick. A sha can never outlive one tick, so a
+ * process cannot go on POSTing claims at a sha GitHub has forgotten (the #61 outage).
+ */
+export async function baseSha(ctx) {
+  const known = ctx._cache.base || null;
+  if (known?.sha && known.fresh) return known.sha;
+  const branch = ctx.cfg?.default_branch || 'main';
+  let head;
+  try {
+    head = await readHead(ctx, branch, known);
+  } catch (e) {
+    if (!(e instanceof GhError && e.kind === 'notfound')) throw e;
+    const repo = await rest('GET', api(ctx));
+    head = await readHead(ctx, repo.default_branch, known);
+  }
+  ctx._cache.base = { ...head, fresh: true };
+  return head.sha;
+}
+
+/** Mark the cached base sha for revalidation. The etag survives, so the re-read is usually a 304. */
+export function staleBaseSha(ctx) {
+  if (ctx?._cache?.base) ctx._cache.base.fresh = false;
+}
+
+/** Classify a failed ref-create. Exported for tests. */
+export function classifyClaimError(err) {
+  if (!(err instanceof GhError)) return 'unknown';
+  if (err.status === 409) return 'held';
+  if (err.status === 422 && /already exists/i.test(err.message + err.body)) return 'held';
+  return 'unknown'; // 422 (spam/validation), 403, 429, 5xx, network: never conclude "held"
+}
+
+/**
+ * Create a track's integration branch from the default branch, idempotently, and return its name.
+ * A track root can be claimed more than once for the same subgraph — a runner that crashed before
+ * its attempt ever recorded `ended_at` leaves `trackAlreadyAttempted` false, so the next claim tries
+ * again — and the branch must be *reused*, not recreated: children already based work on it. Reusing
+ * on "already exists" is exactly the claim protocol's own "held" outcome, just for a ref nothing
+ * locks — so the classifier is shared. Any other failure (auth, rate limit, network) is left to
+ * throw: the caller treats it the same as a spawn that never started.
+ */
+export async function ensureTrackBranch(ctx, rootNumber) {
+  const name = trackBranchName(rootNumber);
+  const sha = await baseSha(ctx);
+  try {
+    await rest('POST', api(ctx, '/git/refs'), { body: { ref: `refs/heads/${name}`, sha } });
+  } catch (e) {
+    if (!(e instanceof GhError) || classifyClaimError(e) !== 'held') throw e;
+  }
+  return name;
+}
+
+/** Does this track branch still exist? Doctor's own read — never cached, never assumed. */
+export async function trackBranchSha(ctx, rootNumber) {
+  try {
+    const r = await rest('GET', api(ctx, `/git/ref/heads/${trackBranchName(rootNumber)}`));
+    return Array.isArray(r) ? null : r?.object?.sha || null;
+  } catch (e) {
+    if (e instanceof GhError && e.kind === 'notfound') return null;
+    throw e;
+  }
+}
+
+/** Delete a track's integration branch. Never throws on "already gone" — deletion is idempotent too. */
+export async function deleteTrackBranch(ctx, rootNumber) {
+  try {
+    await rest('DELETE', api(ctx, `/git/refs/heads/${trackBranchName(rootNumber)}`));
+    return true;
+  } catch (e) {
+    if (e instanceof GhError && (e.kind === 'notfound' || (e.kind === 'validation' && /does not exist/i.test(e.message)))) return false;
+    throw e;
+  }
+}
+
+/**
+ * Every track branch on the repo (`kb/track-<root>`), by root number — one paginated read via
+ * `git/matching-refs`, however many tracks the board has ever run. What `hkb doctor` cross-checks
+ * against the board to find one with no live runner (`checkTrackBranches`, src/doctor.js).
+ */
+export async function listTrackBranches(ctx) {
+  const rows = await rest('GET', api(ctx, '/git/matching-refs/heads/kb/track-'));
+  const out = [];
+  for (const row of rows || []) {
+    const name = String(row.ref || '').replace(/^refs\/heads\//, '');
+    const root = trackBranchRoot(name);
+    if (root) out.push({ branch: name, root, sha: row.object?.sha || null });
+  }
+  return out;
+}
+
 
 /**
  * Every open PR on the repo, keyed by head branch — one paginated REST read. `closedByPullRequestsReferences`

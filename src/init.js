@@ -4,8 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_BOARD, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, staleHookLaunches, detectRepo, saveBoard, loadBoard, boardFile, ensureLocalDirs, repoRoot, hkbOnPath, registerUserBoard, userBoardsFile, mainWorktree, runGit } from './board.js';
-import { ensureLabels, fetchBoard, addLabels } from './tasks.js';
 import { rest } from './gh.js';
+// `openStore` and not a driver: `hkb init` writes labels and imports issues through the same seam
+// every verb uses, so the board it has just created decides what those steps mean.
+import { openStore, storeKind } from './store/index.js';
 import { L, STATUSES, parseSkillVersion, stripFrontmatter, insideRepo, worktreePath, hookEntry, hookSettings, mcpSplitApprovals, toolPosture } from './model.js';
 
 export const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -643,13 +645,10 @@ export function removedInitFlag(flags = {}) {
  * Which store this `init` sets the board up on. Pure, so the defaulting is a test rather than a
  * paragraph in the README.
  *
- * A **new** board is `github` — for now, and deliberately against docs/local-first.md §6.1, which
- * makes local the default. The local store is complete, but the *verbs* have not moved onto it yet:
- * `hkb create`, `hkb list` and the rest still reach board state through the GitHub driver (#304, track
- * C). Defaulting to local would therefore hand a new adopter a board `hkb create` cannot write — a
- * loud failure, but a failure — so the default stays where the verbs are until #304 lands, and
- * `--store local` is the opt-in for anyone who wants the branch today. **Flip this back the moment
- * #304 merges**; the line below and this paragraph are the whole change.
+ * A **new** board is local (docs/local-first.md §6.1): the cards live on the `kb-board` branch in
+ * this repository and the index beside them, so the board works with `gh` logged out, on a plane,
+ * and at no API cost. `--store github` keeps the old behaviour while the GitHub driver is still
+ * here (it goes in track C).
  *
  * An **existing** board never changes store by being re-inited: a board.json that already says one
  * keeps it, and one written before the key existed is `github`, which is what `storeKind` answers at
@@ -677,7 +676,7 @@ export function resolveStore(flags = {}, existing = null) {
     throw e;
   }
   if (existing) return existing.store === 'local' ? 'local' : 'github';
-  return 'github';
+  return 'local';
 }
 
 /**
@@ -942,16 +941,13 @@ async function setUpLocalBoard(ctx, flags, log) {
     log(`store: host "${store.owner()}" owns this board, so hkb reads it here and refuses to write. \`hkb init --take-over\` moves it to "${store.host}"`);
   }
 
-  // What a local board can and cannot do *today*, said out loud rather than discovered as a 404.
-  // `openStore()` picks this store, and everything behind that seam works — but the verbs still
-  // reach board state through `src/tasks.js`/`src/lock.js`, which are the GitHub driver's
-  // re-exports (docs/local-first.md §10, track C: "tests onto the store double, retire the GitHub
-  // store"). Until those callers move, a local board is written by the store and read by nothing
-  // else, so a repo with no GitHub behind it wants `--store github` for now.
-  log('store: the board itself is here — the verbs are not, yet. `hkb create`, `hkb list` and the'
-    + ' rest still read and write through the GitHub driver (docs/local-first.md §10, track C moves'
-    + ' them), so on a repo with no GitHub board behind it they will fail with a 404 until then.'
-    + ' `hkb init --store github` sets this checkout up the way today\'s verbs expect.');
+  // What a local board can and cannot do, said out loud rather than discovered. The verbs now reach
+  // board state through `openStore()` (#325), so `hkb create`, `hkb list`, `hkb claim` and the rest
+  // read and write the branch — but a *pull request* is still the forge's (docs/local-first.md
+  // §6.4), and the two commands that only ever ask the forge say so instead of spending a request.
+  log('store: the cards are here — `hkb create`, `hkb list`, `hkb claim` and the rest read and write'
+    + ` ${store.branch}, with no GitHub behind them. Pull requests are still the forge's, so`
+    + ' `hkb merge` and the PR half of `hkb doctor` need a repo and a logged-in `gh`.');
 
   log(store.pushDisabled()
     ? `sync: settings.sync.push is false on the branch, so \`hkb sync\` never *pushes* ${store.branch} — it still fetches ${store.remote}/${store.branch} and fast-forwards onto it, which is how this checkout reads what another host published. Set it to true to back the board up on ${store.remote}`
@@ -1124,8 +1120,16 @@ export async function init(ctx, flags, log) {
   if (flags['no-labels']) {
     log(`skipped the ${labels.length} kb:* labels (--no-labels) — nothing was sent to ${repo.nameWithOwner}`);
   } else {
-    const created = await ensureLabels(ctx, labels);
-    log(created.length ? `created labels: ${created.join(', ')}` : 'labels already present');
+    // Through the seam, so a board whose labels are columns is not asked to create any: the local
+    // driver answers `[]` and this step costs nothing rather than writing kb:* labels onto a
+    // repository the board does not live in.
+    const created = await (await openStore(ctx)).ensureLabels(labels);
+    // Three answers, not two. `[]` means "nothing needed creating", and on the local driver that is
+    // because a card's status is a column and there are no labels to create — so "labels already
+    // present" was false in both halves on a board that has none and uses none.
+    if (created.length) log(`created labels: ${created.join(', ')}`);
+    else if (storeKind(ctx) === 'local') log(`no kb:* labels to create — on the local store a card's status is a field on the card, not a label on an issue`);
+    else log('labels already present');
   }
 
   // 5. Claude hooks + harness files + gitignore + doc sections
@@ -1214,11 +1218,12 @@ export async function init(ctx, flags, log) {
   //    has already run by the time we get here.
   if (flags.import && store === 'github') {
     const all = await rest('GET', `repos/${repo.nameWithOwner}/issues?state=open&per_page=100`);
-    const onBoard = new Set((await fetchBoard(ctx)).map((t) => t.number));
+    const boardStore = await openStore(ctx);
+    const onBoard = new Set((await boardStore.listTasks()).map((t) => t.number));
     let n = 0;
     for (const issue of all || []) {
       if (issue.pull_request || onBoard.has(issue.number)) continue;
-      await addLabels(ctx, { number: issue.number, labels: (issue.labels || []).map((l) => l.name) }, [L.board(board), L.status('triage')]);
+      await boardStore.addLabels({ number: issue.number, labels: (issue.labels || []).map((l) => l.name) }, [L.board(board), L.status('triage')]);
       n++;
     }
     log(`imported ${n} open issue(s) into triage on board "${board}"`);

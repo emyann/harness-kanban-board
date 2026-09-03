@@ -37,7 +37,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { kanbanDir } from './board.js';
 import { currentSession } from './jobs.js';
-import { getTask, loadRun, saveRun } from './tasks.js';
+import { openStore } from './store/index.js';
 import { openAttempt, sessionUpdate, normalizeHookInput, parseWorktreeName, attemptIdentity, shouldNudgeOnStop, buildDeniedTools, deniedToolsUpdate } from './model.js';
 import { deniedToolsFromTranscript } from './stats.js';
 
@@ -324,7 +324,8 @@ function pendingTargets(root, n, k) {
  * @returns true when it wrote.
  */
 async function writeSession(ctx, { n, k, wt, own = false }, input) {
-  const rec = await loadRun(ctx, n);
+  const store = await openStore(ctx);
+  const rec = await store.loadRun(n);
   // A session with a bare `KB_TASK` has no attempt number, so its own row is the open one. A node's
   // number came from the claim that made it: if that row is gone, the open one belongs to whoever
   // took the node over — never write this session onto it.
@@ -342,7 +343,7 @@ async function writeSession(ctx, { n, k, wt, own = false }, input) {
     const denied = deniedToolsUpdate(a, deniedTools);
     if (denied) update = { ...update, ...denied };
   }
-  if (update) { Object.assign(a, update); await saveRun(ctx, n, rec); }
+  if (update) { Object.assign(a, update); await store.saveRun(n, rec); }
   const mark = markerFile(ctx.root, n, k);
   fs.mkdirSync(path.dirname(mark), { recursive: true });
   fs.writeFileSync(mark, `${input.session_id || ''}\n`);
@@ -389,7 +390,7 @@ export async function stopHook(ctx, io = {}) {
   let status = null;
   try {
     ctx.requireBoard();
-    status = (await getTask(ctx, n)).status;
+    status = (await (await openStore(ctx)).getTask(Number(n))).status;
   } catch (e) {
     process.stderr.write(`hkb hook: could not read #${n} (${e.message}); allowing stop\n`);
     return 0;
