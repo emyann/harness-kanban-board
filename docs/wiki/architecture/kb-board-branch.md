@@ -11,8 +11,8 @@ covers:
   - path: src/store/index.js
     sha: 38e2b0bd8634a9dacd68f419dfa25b3d7127894b
   - path: src/board.js
-    sha: 64b0e3dc2c9f0290d8b33e4ba30223363abc58bf
-generated_at_commit: 8aaffbf
+    sha: 543224fb76022abd64b56d834ae0da17b64cb066
+generated_at_commit: b0acc52
 last_refreshed: 2026-09-03
 related: [architecture/store-seam, decisions/adr-006-local-store, decisions/adr-005-control-plane, concepts/claims-and-leases]
 ---

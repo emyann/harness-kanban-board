@@ -9,21 +9,21 @@ covers:
   - path: src/model.js
     sha: 9eceb576d8a0d25f07f89fc26aae3635d072bbc0
   - path: src/dispatch.js
-    sha: 3ef9a36eb027a8e916e18713f1614600857ead52
+    sha: 507787986768d696dc9897002d91317612e5ce0b
   - path: src/board.js
-    sha: 64b0e3dc2c9f0290d8b33e4ba30223363abc58bf
+    sha: 543224fb76022abd64b56d834ae0da17b64cb066
   - path: src/context.js
     sha: be28b4843c2a09afc0c835c4fe195706af86bb15
   - path: src/lifecycle.js
-    sha: af197411d2798847fdc6707c39ae3b60989dc9ed
+    sha: 29089f8c1ba2f46a320316634593773d1d2b67b0
   - path: src/gc.js
     sha: cc129d307e845211036472a76ed7e0f456be1329
   - path: src/cli.js
-    sha: 2c842b6079cd6057056eef2a926edb85a8259d9d
+    sha: a4d80e1fb0fdf6e8e3c0e57494423720775af950
   - path: src/forge.js
-    sha: 0e424d2844bee9b0fdd2f809f7e9ae4314d69e74
+    sha: 1d9e17cd8fad3500b512ef10843d541cda2c65a4
 related: [features/auto-merge, features/tracks, architecture/overview, architecture/dispatcher-tick]
-generated_at_commit: 8aaffbf
+generated_at_commit: b0acc52
 last_refreshed: 2026-09-03
 ---
 
@@ -206,7 +206,20 @@ Two consequences worth stating plainly:
 - **`hkb doctor`'s `checkOrphanedPrs` is the other side.** It looks up each
   hkb-shaped branch's card *through the store* and warns when a settled card
   still has an open PR on its branch — the case a live read cannot reach,
-  because a card in *done* is not one anything revisits.
+  because a card in *done* is not one anything revisits. A card it could not read
+  at all is named and suppresses the `ok`: the check swallowed those throws once,
+  and printed "all on cards still open" — a positive verdict derived from nothing
+  — on a board where every read was failing.
+- **A merged PR does not drag a reopened card back.** `hkb request-changes` on a
+  card whose PR has merged is exactly the fix line above, and the reconcile pass
+  has to honour it: a card whose `updatedAt` is newer than the PR's `mergedAt` is
+  left where the reviewer put it rather than forced to *done* by the next tick
+  (`reconcileDecision`, `src/dispatch.js`; see `features/auto-merge.md`).
+- **The join degrades rather than failing the read.** The cards are local and the
+  pull requests are the forge's, so a forge that cannot be reached leaves
+  `prs: []` and a line saying why (`prsUnavailable`, `src/forge.js`) — except in
+  `hkb finish`/`request-review`/`merge`, where "no PR" is a verdict about the
+  worker's work and must not be inferred from a listing that failed.
 
 ## Known gaps
 

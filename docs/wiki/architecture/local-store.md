@@ -13,14 +13,14 @@ covers:
   - path: src/store/sqlite.js
     sha: ab60bab80331ff0a2ac66141062eb3518a0b4fee
   - path: src/init.js
-    sha: 4028fb041f86af1a44b47ad6ad864fb8ab5dbdb0
+    sha: fe1111b329cf313fdd0c408a932003635204432d
   - path: src/doctor.js
-    sha: 98a643807b3c0024e8a71313662af7b2f77578ca
+    sha: d9df9b7620a2be2d04e0ca59597cfc075381ac60
   - path: src/gc.js
     sha: cc129d307e845211036472a76ed7e0f456be1329
   - path: src/cli.js
-    sha: 2c842b6079cd6057056eef2a926edb85a8259d9d
-generated_at_commit: ef69244
+    sha: a4d80e1fb0fdf6e8e3c0e57494423720775af950
+generated_at_commit: b0acc52
 last_refreshed: 2026-09-03
 related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
@@ -406,6 +406,23 @@ mid-`load()`. The path in the identity line is computed (`indexFileIn`) rather
 than read off an open index, because on the commonest failure here there is no
 index to ask.
 
+`checkClaimLock` — `hkb doctor --api`'s one claim probe, and what replaced the
+lock-ref probe the GitHub store needed — follows the same rule the long way
+round. It *cannot* use a read-only handle, because `BEGIN IMMEDIATE` is a write
+and a connection that refuses writes would fail the probe for a reason that has
+nothing to do with the board. So it computes the path, `existsSync`es it, and
+warns ("nothing to probe — no verb has opened this board on this host") without
+ever touching the lazy `s.index` getter that would have created one. Its two
+statements also get a `try` each: sharing one made a throwing `ROLLBACK` report
+as *"the index would not give this process the write lock"*, which is false — it
+had just given it — and left the write transaction open on that handle.
+
+`checkLocalStore` emits a line even when the store is not `local`. Returning
+bare made the store check *vanish* from the report, and a skipped check that
+looks like a passing one is the one thing doctor may never produce. Nothing
+answers anything but `local` today; `kind` is a caller-supplied override and the
+seam a second driver would arrive through.
+
 These probes run before `hkb doctor` talks to the forge, and — since the round-2
 sweep — they *survive* it: the GitHub half is one `githubChecks()` call inside a
 try, so a 404 from a repo that was renamed or a `gh` that is logged out costs one
@@ -465,6 +482,15 @@ several sweeps before the skip message could be printed.
   is already there, or when `--import` migrates. A plain re-init used to write
   `"store": "local"` into a git-tracked board.json as a side effect — the same
   change `--import` refuses to make without `--force`.
+- **And a board that says `"store": "github"` is refused outright, not pinned.**
+  The rule above has a hole exactly where it matters most: the key *is* already
+  there, so `hkb init` pinned it — rewriting a tracked `github` to `local` and
+  creating an empty `kb-board` branch beside every real card, so the next
+  `hkb list` reported an empty board while the work sat unreachable on the forge.
+  Silent abandonment, from the command a human runs to fix things. `resolveStore`
+  takes the board.json on disk as its second argument for this one reason and
+  answers with `storeKind`'s message, which names `hkb init --import` — the flag
+  that *is* the human asking, and the one way through.
 - **An imported card's `labels`** hold only what is *not* a column —
   `kb:board:*`, `kb:status:*`, `kb:agent:*` and `kb:needs-human` are rebuilt
   from the card, so carrying them would double them (`cardRecord`).

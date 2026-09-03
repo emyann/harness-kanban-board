@@ -9,26 +9,26 @@ covers:
   - path: src/store/index.js
     sha: 38e2b0bd8634a9dacd68f419dfa25b3d7127894b
   - path: src/forge.js
-    sha: 0e424d2844bee9b0fdd2f809f7e9ae4314d69e74
+    sha: 1d9e17cd8fad3500b512ef10843d541cda2c65a4
   - path: src/bridge/github-issues.js
     sha: 55b3b9a708e5d00bdc2cd02a221c0867b10aaea3
   - path: src/board.js
-    sha: 64b0e3dc2c9f0290d8b33e4ba30223363abc58bf
+    sha: 543224fb76022abd64b56d834ae0da17b64cb066
   - path: src/store/git.js
     sha: a42bfffbc1d7cd3197051e7593135d11ab84d48b
   - path: src/store/local.js
     sha: c519ac05bf312c1ac65e1ebd95a2b1858302d163
   - path: src/cli.js
-    sha: 2c842b6079cd6057056eef2a926edb85a8259d9d
+    sha: a4d80e1fb0fdf6e8e3c0e57494423720775af950
   - path: src/lifecycle.js
-    sha: af197411d2798847fdc6707c39ae3b60989dc9ed
+    sha: 29089f8c1ba2f46a320316634593773d1d2b67b0
   - path: src/dispatch.js
-    sha: 3ef9a36eb027a8e916e18713f1614600857ead52
+    sha: 507787986768d696dc9897002d91317612e5ce0b
   - path: src/gc.js
     sha: cc129d307e845211036472a76ed7e0f456be1329
   - path: src/init.js
-    sha: 4028fb041f86af1a44b47ad6ad864fb8ab5dbdb0
-generated_at_commit: 8aaffbf
+    sha: fe1111b329cf313fdd0c408a932003635204432d
+generated_at_commit: b0acc52
 last_refreshed: 2026-09-03
 related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-and-leases, concepts/board-protocol]
 ---
@@ -295,17 +295,34 @@ prompt. Two rules follow for callers:
 - **A read that will judge a card by its PR must call `fillPrs` on it.** The tick
   does it on its board read, and the terminal verbs, `hkb show`, `hkb list`,
   `hkb gc` and `hkb serve` each do it on theirs. It is one listing per context,
-  memoized on `ctx._cache` and dropped at the top of every tick, never one per
-  card (#234).
+  memoized on `ctx._cache` and dropped at the top of every tick (`dropPrCaches`),
+  never one per card (#234).
 - **`state: 'all'` is a different question.** `openPrsByHead` lists open PRs —
   the `active_pr` guard's question. `hkb gc` asks *"has this checkout's work
   landed"*, which only a **closed** PR answers, so it fills with `state: 'all'`
   into its own memo slot. A listing of open PRs can only say "not here", which
   is also what a card with no PR at all looks like.
+- **The forge is an enrichment, never a precondition for reading the board.**
+  This is the rule most easily lost, because `fillPrs` sits on the path of every
+  read: a store that needs no network at all was made to need one the moment the
+  join went in front of it, and `hkb list` on a plane exited non-zero instead of
+  printing the board. A failed listing leaves `prs: []` and records why on the
+  context (`prsUnavailable`, `src/forge.js`); the caller prints that as a line.
+  Only the callers that cannot honestly act on "this card has no PR" —
+  `complete`, `requestReview`, `mergeCard` (`src/lifecycle.js`) — pass
+  `required: true` and still throw, because a silent "no PR" there records a
+  protocol violation for work sitting in a pull request nobody could see.
+  The tick's own answer is the third one: it degrades but declines to *decide*,
+  claiming nothing while the `active_pr` guard cannot be judged, since an empty
+  `prs` means "not known", not "none" (`src/dispatch.js`).
 
-The reconcile pass is the same key read the other way: `mergedPrsByHead` once
-per tick, and a card in a live status whose branch is in it becomes `done`
-(`reconcileDecision`, `src/dispatch.js`).
+The reconcile pass is the same key read the other way: `mergedPrsByHead`, which
+filters the memoized `state: 'all'` listing rather than paying for a second one,
+and a card in a live status whose branch is in it becomes `done`
+(`reconcileDecision`, `src/dispatch.js`). Two preconditions keep that from
+undoing a decision somebody else made: a card whose open attempt is still running
+on this host is left alone, claim and all, and a card whose `updatedAt` is newer
+than the merge is left where the human who moved it put it.
 
 `src/forge.js` is also where `GhError` and `isOffline` are re-exported from, so
 the two files that only *classify* a transport failure — `src/lifecycle.js`'s

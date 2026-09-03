@@ -9,17 +9,17 @@ covers:
   - path: src/model.js
     sha: 9eceb576d8a0d25f07f89fc26aae3635d072bbc0
   - path: src/dispatch.js
-    sha: 3ef9a36eb027a8e916e18713f1614600857ead52
+    sha: 507787986768d696dc9897002d91317612e5ce0b
   - path: src/doctor.js
-    sha: 98a643807b3c0024e8a71313662af7b2f77578ca
+    sha: d9df9b7620a2be2d04e0ca59597cfc075381ac60
   - path: src/context.js
     sha: be28b4843c2a09afc0c835c4fe195706af86bb15
   - path: src/forge.js
-    sha: 0e424d2844bee9b0fdd2f809f7e9ae4314d69e74
+    sha: 1d9e17cd8fad3500b512ef10843d541cda2c65a4
   - path: src/board.js
-    sha: 64b0e3dc2c9f0290d8b33e4ba30223363abc58bf
+    sha: 543224fb76022abd64b56d834ae0da17b64cb066
 related: [architecture/overview, decisions/adr-004-roles-and-adoption, architecture/dispatcher-tick]
-generated_at_commit: 8aaffbf
+generated_at_commit: b0acc52
 last_refreshed: 2026-09-03
 ---
 
@@ -63,9 +63,34 @@ where it came from, but the association is worth knowing when a PR is *not*
 picked up: it was opened from a branch hkb does not recognise as this card's.
 
 The same match closes the loop at the other end. When GitHub's auto-merge
-eventually lands the PR, nothing tells hkb — so the next tick lists the merged
-PRs once and moves the card whose branch is among them to *done*
-(`reconcileDecision`, `src/dispatch.js`).
+eventually lands the PR, nothing tells hkb — so the next tick filters the
+pull-request listing it already has for the merged ones and moves the card whose
+branch is among them to *done* (`mergedPrsByHead`, `src/forge.js`;
+`reconcileDecision`, `src/dispatch.js`).
+
+**Two things a merge must not do**, both learned the hard way when the card
+became reconcilable in `running` and on any base branch:
+
+- **Take a claim away from a live worker.** A reviewer merging a worker's PR
+  mid-task, or auto-merge landing a track node onto its track branch, would
+  otherwise make the tick stamp `ended_at`, release the lock and close the card
+  underneath it — and the worker's next `hkb heartbeat` is then LOCK_LOST, so it
+  exits 3 with no terminal verb, the one shape the protocol cannot recover from.
+  A card whose open attempt is still running on this host is skipped, reported as
+  `reconcile_left: worker_alive`, and reconciled by the tick after the worker is
+  gone.
+- **Undo a human.** While the board was GitHub Issues this pass required the
+  *issue* to be closed, so a reopened card was believed. Nothing closes a card
+  behind hkb's back now, so the rule is the card's own clock: a card whose
+  `updatedAt` is newer than `mergedAt` was moved *after* the merge — by
+  `hkb request-changes`, `hkb unblock`, `hkb adopt` — and is left there.
+
+`hkb merge` (`mergeCard`, `src/lifecycle.js`) does not wait for that pass at all:
+it merged the PR, so it sets `done` and closes the card itself. Because that
+takes the card out of `RECONCILE_STATUSES`, it also has to run the cleanup the
+tick would have run — `sweepTask` with the same `keep` — or the merged card's
+worktree and branch survive until the periodic full sweep, which on a board with
+no dispatcher running is for ever.
 
 ## Why GitHub does the merging, not hkb
 

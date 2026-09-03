@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: 2c842b6079cd6057056eef2a926edb85a8259d9d
+    sha: a4d80e1fb0fdf6e8e3c0e57494423720775af950
   - path: src/gh.js
     sha: 8154ea477e52ed3f769238f1c1bda588fd767798
   - path: src/model.js
@@ -15,11 +15,11 @@ covers:
   - path: src/store/index.js
     sha: 38e2b0bd8634a9dacd68f419dfa25b3d7127894b
   - path: src/forge.js
-    sha: 0e424d2844bee9b0fdd2f809f7e9ae4314d69e74
+    sha: 1d9e17cd8fad3500b512ef10843d541cda2c65a4
   - path: src/lifecycle.js
-    sha: af197411d2798847fdc6707c39ae3b60989dc9ed
+    sha: 29089f8c1ba2f46a320316634593773d1d2b67b0
   - path: src/dispatch.js
-    sha: 3ef9a36eb027a8e916e18713f1614600857ead52
+    sha: 507787986768d696dc9897002d91317612e5ce0b
   - path: src/context.js
     sha: be28b4843c2a09afc0c835c4fe195706af86bb15
   - path: src/hook.js
@@ -27,10 +27,10 @@ covers:
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/board.js
-    sha: 64b0e3dc2c9f0290d8b33e4ba30223363abc58bf
+    sha: 543224fb76022abd64b56d834ae0da17b64cb066
   - path: src/doctor.js
-    sha: 98a643807b3c0024e8a71313662af7b2f77578ca
-generated_at_commit: 8aaffbf
+    sha: d9df9b7620a2be2d04e0ca59597cfc075381ac60
+generated_at_commit: b0acc52
 last_refreshed: 2026-09-03
 related: [concepts/store, concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
@@ -107,7 +107,18 @@ branch* — `kb-<n>-<k>` and the other names hkb creates (`taskBranchRe`,
 `src/model.js`; `fillPrs`, `src/forge.js`). That join is what the `active_pr`
 guard, the terminal verbs and the reconcile pass all run on: a merged PR on a
 card's branch is what moves it to *done*, and `hkb merge` does the same at once
-rather than waiting for the next tick. Judgment (what to build,
+rather than waiting for the next tick — including the cleanup the tick would
+have run, because a card it set to *done* itself is one the reconcile pass will
+never see again.
+
+It is a *join*, not a precondition. The cards are on a branch in this
+repository and cost nothing to read, so a forge that cannot be reached leaves
+`prs: []` and a line saying why rather than failing the read (`prsUnavailable`,
+`src/forge.js`) — `hkb list` on a plane prints the board. The tick degrades the
+same way with one refinement: it goes on doing its local work but claims
+nothing, because an empty `prs` there means "not known", not "none", and the
+`active_pr` guard exists precisely to not open a second pull request on a card
+that already has one. Judgment (what to build,
 whether a PR merges) lives outside the loop, in the seats described in
 `concepts/roles-and-seats`. The tick still never merges anything: a board on
 `dispatch.merge.mode: "auto"` has it enable *GitHub's* auto-merge on a

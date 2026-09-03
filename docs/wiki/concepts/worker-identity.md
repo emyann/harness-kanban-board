@@ -13,12 +13,12 @@ covers:
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/dispatch.js
-    sha: 3ef9a36eb027a8e916e18713f1614600857ead52
+    sha: 507787986768d696dc9897002d91317612e5ce0b
   - path: src/doctor.js
-    sha: 98a643807b3c0024e8a71313662af7b2f77578ca
+    sha: d9df9b7620a2be2d04e0ca59597cfc075381ac60
   - path: src/lifecycle.js
-    sha: af197411d2798847fdc6707c39ae3b60989dc9ed
-generated_at_commit: 8aaffbf
+    sha: 29089f8c1ba2f46a320316634593773d1d2b67b0
+generated_at_commit: b0acc52
 last_refreshed: 2026-09-03
 related: [architecture/overview, features/harness-profiles, features/tracks, decisions/adr-004-roles-and-adoption]
 ---
@@ -180,6 +180,20 @@ overwrite a verb's own record of itself.
 > The one row this could not repair is the one that prompted it: #146 attempt 1
 > was already closed, so no tick will look at it again. It was corrected once by
 > applying the same function to the job id the row already carried.
+
+The same "who is alive here" question guards the *reconcile* pass, and for a
+harder reason. A card in `running` whose pull request merges on the forge looks,
+from the outside, exactly like a card whose worker died with its work landed —
+but a reviewer merging a worker's PR mid-task produces the same picture, and
+reconciling it releases the claim of an attempt that is still going. There is no
+recovery from that: the worker's next `hkb heartbeat` is LOCK_LOST, it exits 3,
+and no terminal verb is ever filed. So the pass asks the same third answer the
+reap does, `openAttempt` plus `a.host === ctx.host && pidAlive(a.pid)`
+(`src/dispatch.js`, `src/gc.js`), and skips the card entirely while that is true
+— reporting it as `reconcile_left: worker_alive` rather than silently. Note the
+limit this inherits: a pid is only checkable on the host that owns it, so an
+attempt whose `host` is another machine is not protected this way. It is
+protected by the *claim* instead, which is the reclaim clock's business.
 
 ## A fourth session that answers for the root: `SubagentStop` from the child's own cwd
 
