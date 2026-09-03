@@ -1,7 +1,7 @@
 // The store conformance suite.
 //
 // One array of scenarios, run against every driver in `DRIVERS`. Today the list holds the GitHub
-// driver backed by `test/fake-gh.js`; the `kb-board` branch tier and the `.git/hkb/index.db` index
+// driver backed by `test/fake-gh.js`; the board-ref tier and the `.git/hkb/index.db` index
 // (docs/local-first.md §6) append theirs, and a driver is "done" when this file is green for it.
 //
 // A scenario may only touch the §6.4 interface (`src/store/index.js`, `STORE_METHODS`). Anything a
@@ -86,7 +86,7 @@ async function openGithubDriver() {
 // ---------- the local driver ----------
 
 /**
- * The composed local store (`src/store/local.js`) in a scratch repository: the `kb-board` branch for
+ * The composed local store (`src/store/local.js`) in a scratch repository: the board's ref for
  * the durable half and `.git/hkb/index.db` for the live one.
  *
  * `openStore(ctx)` is what builds it, from a `.kanban/board.json` that says `"store": "local"` —

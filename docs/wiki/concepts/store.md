@@ -18,7 +18,7 @@ covers:
     sha: ad2e80d73391c5e7c0602c1786ca645604616887
 generated_at_commit: 103ecf4
 last_refreshed: 2026-09-03
-related: [architecture/store-seam, architecture/local-store, architecture/kb-board-branch, architecture/overview, decisions/adr-006-local-store]
+related: [architecture/store-seam, architecture/local-store, architecture/board-ref, architecture/overview, decisions/adr-006-local-store]
 ---
 
 # The store — hkb's one piece of durable truth
@@ -48,10 +48,10 @@ A single file (or a single git ref) cannot be both a **history** and a
 index and no locking, a live claim has no reason to be a commit. So the local
 driver (`src/store/local.js`) splits the work:
 
-- **The `kb-board` branch is the record.** One file per card, one run record
+- **The board's ref is the record.** One file per card, one run record
   per card, written with plumbing (`hash-object`, `write-tree`,
   `commit-tree`, `update-ref <new> <expected-old>`) so no working tree is
-  ever touched (`src/store/git.js`). `git log kb-board` is a history of
+  ever touched (`src/store/git.js`). Its `git log` is a history of
   *decisions* — every status change, every claim's outcome — because nothing
   that isn't a decision is allowed to land there.
 - **`.git/hkb/index.db` is the cache.** A `node:sqlite` database
@@ -66,7 +66,7 @@ makes them one thing lives, and it comes down to three invariants:
 
 1. **The index is rebuilt from the branch whenever it disagrees.** It stores
    the sha it was built from; a fresh `open()` compares that to
-   `refs/heads/kb-board` and reloads on any mismatch. This is what makes the
+   `refs/kb/boards/<slug>` and reloads on any mismatch. This is what makes the
    split safe — the index is disposable, the branch is not.
 2. **A durable verb commits, then indexes, then wakes — in that order.** A
    crash between the commit and the index write leaves the index one commit
@@ -86,7 +86,7 @@ plain `git clone` still gets the whole board with no setup, because
 `.kanban/board.json` is a tracked file and travels with the clone: it reads
 freely and every write is refused, which is what makes a friend's clone a
 *reader* rather than a second writer. `hkb sync` is the only thing that moves
-bytes between hosts — a fast-forward-only push/fetch of the `kb-board`
+bytes between hosts — a fast-forward-only push/fetch of the board's
 branch — and refusing anything else is what keeps "one writer" true even
 across a network.
 
@@ -117,7 +117,7 @@ nothing to say about where the code review happens.
   the mechanics: which tier answers which read, the two claim tokens, sync,
   the migration off GitHub, what `hkb doctor` and `hkb gc` do and do not do
   here.
-- [The kb-board branch](../architecture/kb-board-branch.md) — the plumbing
+- [The board's ref](../architecture/board-ref.md) — the plumbing
   that writes it.
 - [ADR-006: the local store](../decisions/adr-006-local-store.md) — why this
   shape was chosen over the alternatives.

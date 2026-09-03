@@ -49,7 +49,7 @@ related: [concepts/store, concepts/board-protocol, concepts/claims-and-leases, c
 ## The state model
 
 A board is whatever `openStore(ctx)` (`src/store/index.js`) answers, and a
-new board defaults to the **local** store: a card is a file on the `kb-board`
+new board defaults to the **local** store: a card is a file on the board's
 git branch, `.git/hkb/index.db` (`node:sqlite`) indexes it and holds locks and
 the event log, and both are composed behind the interface by
 `src/store/local.js` (*concepts/store*, *architecture/local-store*). The

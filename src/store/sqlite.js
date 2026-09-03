@@ -1,6 +1,6 @@
 // The index — the live half of the board, and a queryable copy of the durable half.
 //
-// docs/local-first.md §6.1 splits the store in two. The durable half is a git branch (`kb-board`,
+// docs/local-first.md §6.1 splits the store in two. The durable half is a git ref (`refs/kb/boards/<slug>`,
 // node A4): every decision, one commit, readable by `git log` and carried by a `git clone`. This
 // file is the other half — `.git/hkb/index.db`, a `node:sqlite` database inside the repository's
 // *common* git directory, holding:
@@ -30,6 +30,7 @@ import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { storeGitDir, storeRoot, readPidFile, pidAlive } from '../board.js';
 import { EVENT_KINDS } from '../watch.js';
+import { BOARD_REF } from './git.js';
 
 /**
  * `node:sqlite`, resolved on the first index open and never at import time.
@@ -111,8 +112,8 @@ const TRIM_EVERY = 1000;
 
 const usage = (msg) => { const e = new Error(msg); e.exitCode = 2; return e; };
 
-/** The durable tier's branch, when a caller did not say. Only error messages read it. */
-const DEFAULT_BRANCH = 'kb-board';
+/** The durable tier's ref, when a caller did not say. Only error messages read it. */
+const DEFAULT_BRANCH = BOARD_REF;
 
 const SQLITE_CONSTRAINT_UNIQUE = 2067;
 const SQLITE_CONSTRAINT_PRIMARYKEY = 1555;
@@ -488,7 +489,7 @@ function makeIndex({ db, file, root, readOnly, branch = DEFAULT_BRANCH }) {
 
     // ---- the branch's tip ----
 
-    /** The sha of the `kb-board` commit this index was built from, or null before the first load. */
+    /** The sha of the board commit this index was built from, or null before the first load. */
     tip() { return db.prepare('SELECT tip_sha FROM board WHERE id = 1').get()?.tip_sha ?? null; },
     /** Cheap enough to ask on every open: one row read against one `git rev-parse`. */
     needsLoad(sha) { return !sha || index.tip() !== String(sha); },
@@ -847,7 +848,7 @@ function makeIndex({ db, file, root, readOnly, branch = DEFAULT_BRANCH }) {
       const task = Number(n); const att = Number(k);
       const keys = Object.keys(patch);
       const bad = keys.filter((key) => !LIVE_ATTEMPT_FIELDS.includes(key));
-      if (bad.length) throw usage(`setAttempt: ${bad.join(', ')} ${bad.length > 1 ? 'are' : 'is'} not live state — the closed attempt fields live on the ${branch} branch. Live: ${LIVE_ATTEMPT_FIELDS.join(', ')}`);
+      if (bad.length) throw usage(`setAttempt: ${bad.join(', ')} ${bad.length > 1 ? 'are' : 'is'} not live state — the closed attempt fields live on ${branch}. Live: ${LIVE_ATTEMPT_FIELDS.join(', ')}`);
       if (!keys.length) return index.getAttempt(task, att);
       const kind = 'paused_at' in patch ? (patch.paused_at ? 'paused' : 'resumed') : 'attempt';
       db.exec('BEGIN IMMEDIATE');
@@ -1008,12 +1009,12 @@ function blockerMap(db, ids = null) {
 
 /**
  * A row the branch wrote that this schema cannot hold, reported with the file to go and look at.
- * `branch` is the durable tier's own — a board on `kb-board-staging` must not be told to
- * `git show kb-board:cards/7.json`.
+ * `branch` is the durable tier's own — a board at `refs/kb/boards/beta` must not be told to read
+ * `refs/kb/boards/default:cards/7.json`.
  */
 function badRecord(branch, file, e) {
   if (e?.exitCode) return e;
-  return usage(`load: ${file} on the ${branch} branch does not fit the index (${e?.message || e}) — read it with \`git show ${branch}:${file}\` and fix the field it names`);
+  return usage(`load: ${file} on ${branch} does not fit the index (${e?.message || e}) — read it with \`git show ${branch}:${file}\` and fix the field it names`);
 }
 
 /**

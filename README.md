@@ -129,16 +129,19 @@ A board is kept in one of two stores, behind one interface — `openStore()` is 
 **The local store — the default.** Nothing leaves the repository, nothing costs an API call, and the board
 works with `gh` logged out.
 
-- **A card is a file.** `cards/42.json` on the `kb-board` branch — title, body, status, agent, priority, paths,
-  blockers — one card per file, sorted keys, written with git plumbing from any worktree. `git log kb-board` is
-  the board's history of decisions, and `git show kb-board:cards/42.json` is the card.
+- **A card is a file.** `cards/42.json` on `refs/kb/boards/default` — title, body, status, agent, priority,
+  paths, blockers — one card per file, sorted keys, written with git plumbing from any worktree.
+  `git log refs/kb/boards/default` is the board's history of decisions, and
+  `git show refs/kb/boards/default:cards/42.json` is the card. It is a git ref, not a branch, so it never
+  appears in `git branch` — see [Backing up and moving a board](#backing-up-and-moving-a-board).
 - **An edge is a field.** `blocked_by: [41]`, and a card turns *ready* the moment its last blocker is done.
 - **A lock is a row.** `.git/hkb/index.db` (SQLite, `node:sqlite`, no dependency) holds the claims, the open
   attempts' pid/worktree/heartbeat and the event log. A claim is one transaction; a heartbeat is one `UPDATE`.
-  It is host-local and rebuilt from the branch whenever the branch has moved, so losing it costs nothing.
+  It is host-local and rebuilt from the board ref whenever that ref has moved, so losing it costs nothing.
 - **A handoff is a record.** The attempts and the structured results live in `runs/42.json` beside the card, and
   the next worker — on that card or on one blocked by it — is handed the last one as part of its brief.
-- **Sync is git.** [`hkb sync`](#sharing-a-board) pushes `kb-board` to the remote and fast-forwards from it.
+- **Sync is git.** [`hkb sync`](#sharing-a-board) pushes `refs/kb/boards/<name>` to the remote and
+  fast-forwards from it.
 
 **The GitHub store — `hkb init --store github`.** The board *is* the issues, which is what you want when people
 who are not running hkb work the same cards. It is still the store this repo's own board runs on, and it goes
@@ -184,7 +187,7 @@ still beating on stops the whole migration **before the first commit**: deleting
 heartbeating into a missing ref, exiting `LOCK_LOST` mid-task. Stop the dispatcher and let the workers finish,
 or run `hkb init --import --force` to migrate anyway and lose them.
 
-Re-running `init` never touches a branch that already exists: a second import over a board that has since been
+Re-running `init` never touches a board that already exists: a second import over a board that has since been
 worked would overwrite it with GitHub's stale copy, so it is refused and says so. And when `.kanban/board.json`
 is a file the repository *tracks*, the import refuses to write `"store": "local"` into it without `--force` —
 that key is every collaborator's next `git pull`, not just this checkout's. The key is written after the
@@ -192,22 +195,44 @@ migration has landed, so a refusal leaves the board exactly where it was.
 
 ### Backing up and moving a board
 
-The `kb-board` branch has **one writer** — the host `board.json` names. That host runs the loop; `hkb sync`
-pushes the branch to the remote after a tick that wrote (at most once a minute, silently when the laptop is
-offline; `"sync": {"push": false}` in the branch's `board.json` turns the **push** off and nothing else — a
+The board is a git ref — `refs/kb/boards/<name>`, `refs/kb/boards/default` unless you passed `--board` —
+and **not a branch**. It is written with plumbing (`update-ref` as the compare-and-swap), pushed and fetched
+like anything else in git, and `git log` and `git show` read it exactly as they read a branch. What it does
+*not* do is show up in `git branch`, in a branch picker, or in GitHub's branch list: a board nobody checks out
+has no business sitting among the branches that mean something. hkb already keeps claims this way, at
+`refs/kb/locks/<n>/<k>`.
+
+**The trade, said out loud.** A hidden ref is not fetched by a default `git clone` and is not visible in
+GitHub's web UI. So:
+
+- `hkb init` writes `+refs/kb/boards/*:refs/remotes/<remote>/kb/boards/*` into `.git/config`
+  (`remote.<name>.fetch`, **appended** — it never replaces the `+refs/heads/*` line), and after that an
+  ordinary `git fetch` carries the board. `hkb doctor` reports the line when it is missing and names the fix.
+- `hkb sync` passes that refspec on the command line rather than trusting config, and writes the config line
+  while it is there. So **restoring a board onto a new machine is still two commands**: `git clone`, then
+  `hkb sync`.
+- The refspec maps into `refs/remotes/`, deliberately. `+refs/kb/*:refs/kb/*` would let a fetch overwrite the
+  local ref the one-writer compare-and-swap leases — the remote's copy silently replacing whatever this host
+  had decided.
+- Two boards in one repository (`--board alpha`, `--board beta`) get `refs/kb/boards/alpha` and
+  `refs/kb/boards/beta`, and an index file each.
+
+The board has **one writer** — the host `board.json` names. That host runs the loop; `hkb sync`
+pushes the ref to the remote after a tick that wrote (at most once a minute, silently when the laptop is
+offline; `"sync": {"push": false}` in the board's `board.json` turns the **push** off and nothing else — a
 checkout that does not publish its copy still fetches and fast-forwards, which is how it reads what the owner
 published).
 
-`hkb sync` also works in a checkout that has no `kb-board` yet — a `git clone --single-branch`, or one taken
+`hkb sync` also works in a checkout that has no copy of the board yet — a fresh clone, or one taken
 before the board was first pushed. It reads the refs first and fetches, so the command you run to *get* the
 board is not the one that tells you there isn't one.
 
 A checkout carries the board with it: `.kanban/board.json` is tracked, its `"store": "local"` comes along,
-and the branch carries the cards — which is what makes a restore work on a new machine, or on the same one
-after a lost disk. **That key is the only thing that decides which store a board is on** — a `kb-board`
-branch appearing in a checkout (a fetch, a push from your other machine) never moves a board onto the local
+and the board ref carries the cards — which is what makes a restore work on a new machine, or on the same one
+after a lost disk. **That key is the only thing that decides which store a board is on** — a board ref
+appearing in a checkout (a fetch, a push from your other machine) never moves a board onto the local
 store on its own, because a store that could be changed by a ref arriving over the network is one the verbs
-can disagree with. `hkb init` and `hkb doctor` say when a checkout has the branch but not the key, and
+can disagree with. `hkb init` and `hkb doctor` say when a checkout has the ref but not the key, and
 `hkb init --store local` is how it adopts it.
 
 Every verb that *writes* refuses on a host that is not the owner, with exit 2 naming it. **That guard is a
@@ -713,7 +738,7 @@ Details, flags and troubleshooting for all of them: [docs/harnesses.md](docs/har
 `--serve`, the web board) and keeps ticking until you stop it. A machine that stays on gives you the 60-second
 cadence; a laptop gives you a board that moves while it is open.
 
-On a local board "the machine that owns it" is literal: `board.json` on the `kb-board` branch names one host,
+On a local board "the machine that owns it" is literal: `board.json` on the board's ref names one host,
 every mutating verb refuses on any other, and [`hkb init --take-over`](#sharing-a-board) is how that moves.
 
 hkb used to also generate a GitHub Actions dispatcher, so a board could keep moving with the laptop closed.
@@ -816,7 +841,7 @@ doctor then names the installed version once with nothing to do about it.
 
 ## Local state (gitignored)
 
-**The board itself, on the local store.** `refs/heads/kb-board` is the board — a branch, not a file, so it is
+**The board itself, on the local store.** `refs/kb/boards/<name>` is the board — a ref, not a file, so it is
 not in `.gitignore` and not in your working tree: nothing checks it out, and `git status` never mentions it.
 `.git/hkb/index.db` (plus its `-wal`/`-shm`) is this host's index of it: locks, the open attempts' pid,
 worktree and heartbeat, and the event log `hkb serve` tails. It is inside `.git`, so it is never committed and

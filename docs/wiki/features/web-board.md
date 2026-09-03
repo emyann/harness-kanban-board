@@ -308,7 +308,7 @@ board" is `git clone` — and what a clone should get is exactly this page. A
 clone needs no configuration because `.kanban/board.json` is a tracked file and
 its `"store": "local"` comes along with it; that key is the whole of what
 `storeKind` (`src/store/index.js`) reads. It deliberately does *not* infer the
-store from a `kb-board` ref: a store that a `git fetch` can change is one the
+store from a board ref: a store that a `git fetch` can change is one the
 verbs can disagree with, and every way that went wrong is in
 `architecture/store-seam`.
 

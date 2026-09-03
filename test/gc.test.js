@@ -532,7 +532,7 @@ test('the sweeps that can only be empty on a local board say so instead of repor
 
 test('gc on a genuinely local board never touches GitHub', async (t) => {
   // The defect this is for: `sweep` opened with an unconditional `fetchBoard` and only branched on
-  // `storeKind` several sweeps later. On a board that is REALLY local — a kb-board branch and no
+  // `storeKind` several sweeps later. On a board that is REALLY local — a board ref and no
   // issues behind it — it threw before `stats.store` was ever read, so the "nothing to sweep on a
   // local board" message could only be seen by a board that was also on GitHub.
   const h = harness();

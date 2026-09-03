@@ -20,8 +20,8 @@
    `mode: trigger`, the `remote` liveness branch). Not refused: deleted. The cloud is a later question.
 7. **The Node floor is `>=22.13`, 24 recommended.** On 22 the `node:sqlite` `ExperimentalWarning` is
    silenced in `bin/hkb.js` (§9). CI runs 22, 24 and 26. 22 is dropped in April 2027 with its end of life.
-8. **The source of truth is local, in two tiers** (§6): the durable half on a dedicated git branch
-   `kb-board`, the live half plus an index in a SQLite file inside the repo's common git directory. A
+8. **The source of truth is local, in two tiers** (§6): the durable half on a dedicated git ref
+   `refs/kb/boards/<slug>`, the live half plus an index in a SQLite file inside the repo's common git directory. A
    board therefore **travels with a `git clone`**, and a board has **one control plane** (one host).
 9. **GitHub is retired as a store** and comes back later as a *bridge* adapter (§8). The forge half —
    pull requests, reviews, merges — stays on GitHub throughout, because the code does.
@@ -146,27 +146,39 @@ is written on resume and after a sleep only, and always after a fresh read.
 
 | tier | holds | written by | who sees it |
 |---|---|---|---|
-| the `kb-board` branch | `board.json` (slug, owning host, settings, paused); one `cards/<id>.json` per card (title, body, status, agent, priority, rank, paths, goal, scheduled_at, suspended, needs_human, blockers); one `runs/<id>.json` per card (the closed attempt rows with outcome, summary, session and cost, and the results — today's run and result comments, same fields) | every durable verb, as one commit, from any worktree, CAS on the ref with a retry | every clone, after `git fetch`; its `git log` is the board's history |
-| `.git/hkb/index.db` | everything on the branch as tables, plus what is live and host-local: locks, the open attempts' pid, job, worktree, heartbeat and pause fields, the events table | durable verbs after their commit; live writes alone; rebuilt from the branch whenever the stored tip sha is not the branch's | this host's processes: the loop, the workers' verbs, the hooks, `hkb serve` |
+| `refs/kb/boards/<slug>` | `board.json` (slug, owning host, settings, paused); one `cards/<id>.json` per card (title, body, status, agent, priority, rank, paths, goal, scheduled_at, suspended, needs_human, blockers); one `runs/<id>.json` per card (the closed attempt rows with outcome, summary, session and cost, and the results — today's run and result comments, same fields) | every durable verb, as one commit, from any worktree, CAS on the ref with a retry | every clone, after a `git fetch` that carries `refs/kb/boards/*` (§6.2); its `git log` is the board's history |
+| `.git/hkb/index.db` | everything on the board ref as tables, plus what is live and host-local: locks, the open attempts' pid, job, worktree, heartbeat and pause fields, the events table | durable verbs after their commit; live writes alone; rebuilt from the branch whenever the stored tip sha is not the branch's | this host's processes: the loop, the workers' verbs, the hooks, `hkb serve` |
 | `.kanban/state.json` | unchanged: pid files, exits, the sleep stamp, `paused_attempts` | the loop and the verbs | this host |
 
 The write path: a durable verb commits first and updates the index second; a crash between the two
 leaves an index one commit behind, which the next open repairs by comparing its stored tip with
-`refs/heads/kb-board`. Live writes never touch git, so the branch's history is a history of decisions.
+`refs/kb/boards/<slug>`. Live writes never touch git, so the board's history is a history of decisions.
 Locks stay in the index under `UNIQUE(task_id, k)`: a claim is one transaction (insert the lock, insert
 the attempt row, set the status), a heartbeat is `UPDATE locks SET beat_at = ? WHERE task_id = ? AND
 k = ? AND token = ?`, and zero rows updated is the same `LOCK_LOST` (exit 3) the ref lease gives today.
 The orphan-lock sweep in the tick goes away with the torn writes it existed for.
 
-### 6.2 The branch
+### 6.2 The board's ref
 
 Written with plumbing, never a checkout: `hash-object -w`, `update-index --cacheinfo` against a
-temporary index (`GIT_INDEX_FILE`), `write-tree`, `commit-tree`, `update-ref refs/heads/kb-board <new>
-<expected-old>` — the expected-old is the compare-and-swap; a mismatch (another writer landed first)
-means re-read and retry. Measured 2026-09-02: from a linked worktree this puts a card on the branch
-with the worktree at zero changed files; the CAS refuses a mismatch; a plain `git clone` brings
-`origin/kb-board` across. hkb already runs this plumbing for every heartbeat (`casHeartbeat`,
-`src/lock.js`). Layout of the tree:
+temporary index (`GIT_INDEX_FILE`), `write-tree`, `commit-tree`,
+`update-ref refs/kb/boards/<slug> <new> <expected-old>` — the expected-old is the compare-and-swap; a
+mismatch (another writer landed first) means re-read and retry. Measured 2026-09-02: from a linked
+worktree this puts a card on the ref with the worktree at zero changed files, and the CAS refuses a
+mismatch. hkb already runs this plumbing for every heartbeat (`casHeartbeat`, `src/lock.js`), and
+already keeps claims outside `refs/heads` at `refs/kb/locks/<n>/<k>`.
+
+**Not a branch (#334).** The board was on `refs/heads/kb-board` in the first cut, which put a branch
+nobody ever checks out into `git branch`, into every branch picker and into GitHub's branch list.
+Nothing about the design needed `refs/heads`. What the move costs is that a hidden ref is not carried
+by a default `git clone` and is not visible in GitHub's UI, so `hkb init` writes
+`+refs/kb/boards/*:refs/remotes/<remote>/kb/boards/*` into `remote.<name>.fetch` (appended, never
+replacing `+refs/heads/*`), `hkb doctor` reports it missing, and `hkb sync` passes that refspec on the
+command line so a restore onto a fresh clone stays `git clone` + `hkb sync`. The refspec maps into
+`refs/remotes/` on purpose: `+refs/kb/*:refs/kb/*` would let a fetch overwrite the very ref the
+one-writer CAS leases. Measured 2026-09-03 against a real GitHub remote: a push to
+`refs/kb/boards/*` is accepted, the fetch lands at `refs/remotes/origin/kb/boards/*`, and neither
+`git show-ref` nor `git ls-remote --heads` shows the board. Layout of the tree:
 
 ```
 board.json            {"version":1,"slug":"default","host":"<hostname>","paused_at":null,"paused_by":null,"settings":{...}}
@@ -181,12 +193,12 @@ One card per file and sorted keys keep the files merge-friendly. The root of the
 *common* git directory's parent, resolved by the existing `mainWorktree` (`src/board.js`) — never
 `--show-toplevel`, which in a linked worktree would give each worktree its own board.
 
-**Sync is git.** `hkb sync` pushes `kb-board` to the remote and fast-forwards from it, refusing anything
-that is not a fast-forward, because the branch has one writer. The loop runs it at the end of any tick
+**Sync is git.** `hkb sync` pushes `refs/kb/boards/<slug>` to the remote and fast-forwards from it,
+refusing anything that is not a fast-forward, because the board has one writer. The loop runs it at the end of any tick
 that made a durable write, throttled and offline-tolerant, when the repo has a remote; `hkb init` says
 so in one line and `sync.push: false` in `board.json` turns it off. The remote copy is also the backup.
 
-**One writer.** `board.json` on the branch names the owning host. `hkb dispatch`, `hkb claim` and the
+**One writer.** `board.json` on the board's ref names the owning host. `hkb dispatch`, `hkb claim` and the
 verbs refuse on a host that is not it, naming the takeover flag (`hkb init --take-over`) as the fix.
 
 This is a **safety** property, not a collaboration feature. It is what stops *one* person's second
@@ -412,7 +424,8 @@ B5 and B6 run side by side.
 - Beads keeps its database out of the working tree and syncs it through `refs/dolt/data` on the git
   remote; its JSONL is "an export for viewers and interchange, not the source of truth".
 - The git plumbing of §6.2, from a linked worktree, in a scratch repository: worktree clean, CAS refused
-  on mismatch, `origin/kb-board` present after `git clone`.
+  on mismatch, and (2026-09-03, against a real remote) `refs/kb/boards/*` pushed, fetched into
+  `refs/remotes/origin/kb/boards/*`, and invisible to `git ls-remote --heads`.
 - GitHub coupling at `7fd6cba`: `src/tasks.js` 36 exports, `src/lock.js` 19, 29 direct transport call
   sites in 6 other files (`projects.js` 11, `doctor.js` 11, `lifecycle.js` 4, `init.js` 1, `watch.js` 1,
   `board.js` 1); 121 test assertion sites read fake-gh internals (`gh.calls` 52, `lockRefs()` 26,

@@ -1,7 +1,7 @@
-// The git tier: the durable half of the board, on the `kb-board` branch.
+// The git tier: the durable half of the board, on `refs/kb/boards/<slug>`.
 //
 // docs/local-first.md §6.1–§6.2. Everything a `git clone` must carry — the board document, one card
-// per file, one run record per card — lives as a tree on `refs/heads/kb-board` and is written with
+// per file, one run record per card — lives as a tree on `refs/kb/boards/<slug>` and is written with
 // plumbing only: `hash-object -w`, `update-index` against a temporary index (`GIT_INDEX_FILE`),
 // `write-tree`, `commit-tree`, and `update-ref <new> <expected-old>` as the compare-and-swap. There is
 // no `checkout`, no `git add`, and no write into anybody's working tree: a worker committing a card
@@ -28,8 +28,72 @@ import {
   RUN_MARKER, statusOf, agentOf, tagBlockers,
 } from '../model.js';
 
-export const BOARD_BRANCH = 'kb-board';
-export const BOARD_REF = `refs/heads/${BOARD_BRANCH}`;
+/**
+ * Where the durable tier lives, and why it is not a branch.
+ *
+ * A board on `refs/heads/kb-board` shows up in `git branch`, in every branch picker and in GitHub's
+ * branch list — a branch nobody ever checks out, sitting among the ones that mean something. Nothing
+ * about the design needed `refs/heads/`: plumbing writes, `update-ref` as a compare-and-swap,
+ * history, `push` and `fetch` all work on any namespace, and hkb already does exactly this for
+ * claims at `refs/kb/locks/<n>/<k>`. So the board is at `refs/kb/boards/<slug>`.
+ *
+ * It is `boards/<slug>` and not `refs/kb/board` with `refs/kb/board/<slug>` beside it because git
+ * forbids a ref being both a file and a directory prefix: those two could never coexist.
+ *
+ * What the move costs, and it is said out loud in the README and in
+ * `docs/wiki/architecture/board-ref.md`: a hidden ref is not fetched by a default `git clone` and is
+ * not visible in GitHub's UI. `hkb sync` fetches the namespace explicitly for exactly that reason,
+ * and `hkb init`/`hkb sync` write the refspec into `.git/config` so an ordinary `git fetch` carries
+ * the board too.
+ */
+export const BOARD_REF_PREFIX = 'refs/kb/boards';
+
+/** The board slug a context that names none is on. */
+export const DEFAULT_BOARD_SLUG = 'default';
+
+/** Ref name rules, narrowed: one path segment, no leading dot, no `.lock`, nothing `git check-ref-format` would refuse. */
+const SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** `refs/kb/boards/<slug>` — the one place that spells the board's ref. */
+export function boardRef(slug = DEFAULT_BOARD_SLUG) {
+  const s = String(slug || DEFAULT_BOARD_SLUG);
+  if (!SLUG_RE.test(s) || s.endsWith('.lock') || s.includes('..')) {
+    throw fail(
+      `"${s}" is not a usable board name: the board lives at ${BOARD_REF_PREFIX}/<name>, so a name must be `
+      + 'letters, digits, `.`, `_` or `-`, start with a letter or digit, and not end in ".lock". '
+      + 'Rename it with `hkb init --board <name>`.',
+    );
+  }
+  return `${BOARD_REF_PREFIX}/${s}`;
+}
+
+/** The default board's ref. A board with a slug of its own gets `boardRef(slug)`. */
+export const BOARD_REF = `${BOARD_REF_PREFIX}/${DEFAULT_BOARD_SLUG}`;
+
+/**
+ * Where a fetch puts the remote's copy: `refs/remotes/<remote>/kb/boards/<slug>`.
+ *
+ * **Not** `refs/kb/*:refs/kb/*`. That would overwrite the local board with the remote's copy on
+ * every fetch, which is the opposite of what the one-writer compare-and-swap needs — the local ref
+ * is the thing being CASed, and a fetch must never move it.
+ */
+export function trackingRefFor(ref, remote = 'origin') {
+  const r = String(ref);
+  if (r.startsWith(`${BOARD_REF_PREFIX}/`)) return `refs/remotes/${remote}/kb/boards/${r.slice(BOARD_REF_PREFIX.length + 1)}`;
+  if (r.startsWith('refs/heads/')) return `refs/remotes/${remote}/${r.slice('refs/heads/'.length)}`;
+  return `refs/remotes/${remote}/${r.replace(/^refs\//, '')}`;
+}
+
+/**
+ * The refspec `hkb init` writes into `.git/config` and `hkb sync` passes on the command line.
+ *
+ * The whole namespace, not one board: a repository with two boards has two refs under it, and a
+ * config line per board is a line somebody has to remember to add.
+ */
+export function boardFetchRefspec(remote = 'origin') {
+  return `+${BOARD_REF_PREFIX}/*:refs/remotes/${remote}/kb/boards/*`;
+}
+
 const ZERO_OID = '0'.repeat(40);
 const BLOB_MODE = '100644';
 /** The two file names this tier writes and reads. `isOwned` and `_parseFiles` share them on
@@ -199,11 +263,14 @@ export class GitTier {
    * @param {any} ctx  a context from `makeContext`/`makeContextAt`, or a path
    * @param {{ref?: string, remote?: string, host?: string, now?: () => Date}} [opts]
    */
-  constructor(ctx, { ref = BOARD_REF, remote = null, host = null, now = () => new Date() } = {}) {
+  constructor(ctx, { ref = null, remote = null, host = null, now = () => new Date() } = {}) {
     this.ctx = ctx;
     /** The common git dir's parent — never `--show-toplevel` (§6.2). */
     this.root = storeRoot(ctx);
-    this.ref = ref;
+    // The ref is per *board*: two boards in one repository (`--board alpha`, `--board beta`) get
+    // `refs/kb/boards/alpha` and `refs/kb/boards/beta` and cannot collide. They shared one branch
+    // before, which made a second board on a checkout silently the same board.
+    this.ref = ref || boardRef(ctx && typeof ctx === 'object' ? ctx.board : DEFAULT_BOARD_SLUG);
     this.remote = remote || ctx?.cfg?.remote || 'origin';
     this.host = host || hostId();
     this.now = now;
@@ -220,8 +287,18 @@ export class GitTier {
     return runGit(this.root, args, opts);
   }
 
-  /** The branch this tier's ref names — `refs/heads/kb-board` is `kb-board`. */
+  /**
+   * The name every message and every `git log`/`git show` in hkb uses for this board.
+   *
+   * For a board at `refs/kb/boards/default` that is the ref itself — `git log refs/kb/boards/default`
+   * and `git show refs/kb/boards/default:cards/7.json` both work, and there is no shorter name a
+   * human could type, because the ref is deliberately outside `refs/heads`. A legacy `refs/heads/x`
+   * still shortens to `x`, which is what keeps a test that pins a branch readable.
+   */
   get branch() { return this.ref.replace(/^refs\/heads\//, ''); }
+
+  /** Where a fetch puts the remote's copy of this board. */
+  get trackingRef() { return trackingRefFor(this.ref, this.remote); }
 
   /**
    * Where the board is, and whether that is a ref this host may write.
@@ -235,7 +312,7 @@ export class GitTier {
   _tip() {
     const local = this._git(['rev-parse', '--verify', '--quiet', `${this.ref}^{commit}`]);
     if (local.status === 0 && SHA_RE.test(local.stdout)) return { sha: local.stdout, local: true };
-    const tracked = this._git(['rev-parse', '--verify', '--quiet', `refs/remotes/${this.remote}/${this.branch}^{commit}`]);
+    const tracked = this._git(['rev-parse', '--verify', '--quiet', `${this.trackingRef}^{commit}`]);
     if (tracked.status === 0 && SHA_RE.test(tracked.stdout)) return { sha: tracked.stdout, local: false };
     return { sha: null, local: false };
   }
@@ -276,7 +353,7 @@ export class GitTier {
     if (this._snap && this._snap.tip === tip && this._snap.local === local) return this._snap;
 
     const listed = this._git(['ls-tree', '-r', '-z', tip]);
-    if (listed.status !== 0) throw fail(`cannot read ${this.ref} at ${tip.slice(0, 7)}: ${short(listed.out) || 'git ls-tree failed'} — check the branch with \`git log ${this.branch}\``);
+    if (listed.status !== 0) throw fail(`cannot read ${this.ref} at ${tip.slice(0, 7)}: ${short(listed.out) || 'git ls-tree failed'} — check the board's ref with \`git log ${this.branch}\``);
 
     /** @type {{sha: string, mode: string, type: string, file: string}[]} */
     const entries = [];
@@ -356,14 +433,14 @@ export class GitTier {
     for (let attempt = 1; attempt <= MAX_CAS_RETRIES; attempt++) {
       const snap = this.readTree();
       if (!snap.tip && !allowMissing) {
-        throw fail(`there is no ${this.branch} branch in ${this.root} — run \`hkb init\` to create the board`);
+        throw fail(`there is no board at ${this.ref} in ${this.root} — run \`hkb init\` to create the board`);
       }
       const tree = { board: snap.board, cards: snap.cards, runs: snap.runs };
       const value = mutate(tree);
       const want = this._serialize(tree);
 
       // Nothing to say. A verb that writes the same bytes back must not put a commit on the board's
-      // history — `git log kb-board` is the board's history of *decisions* (§6.1).
+      // history — `git log refs/kb/boards/<slug>` is the board's history of *decisions* (§6.1).
       //
       // This is asked *before* either guard on writing, because a write that isn't one needs
       // neither: on a read-only clone, `setStatus` to the status a card already has and
@@ -402,10 +479,10 @@ export class GitTier {
 
   /**
    * A write needs a *local* ref to compare-and-swap. On a clone there is only
-   * `refs/remotes/<remote>/kb-board`, which reads fine and cannot be CASed: the update-ref would
-   * lease `refs/heads/kb-board` against a sha that ref has never held, git would answer "unable to
-   * resolve reference", and — before this — that read as contention, so the write retried five times
-   * and blamed a writer that does not exist.
+   * `refs/remotes/<remote>/kb/boards/<slug>`, which reads fine and cannot be CASed: the update-ref
+   * would lease `refs/kb/boards/<slug>` against a sha that ref has never held, git would answer
+   * "unable to resolve reference", and — before this — that read as contention, so the write retried
+   * five times and blamed a writer that does not exist.
    */
   _assertWritableRef(snap) {
     if (!snap.tip || snap.local) return;
@@ -416,21 +493,21 @@ export class GitTier {
    * Why there was no ref to compare-and-swap against.
    *
    * Git says "unable to resolve reference" for two different things: this clone never had the local
-   * branch, and somebody deleted it between the read and the CAS (`git branch -D kb-board`, an
-   * `hkb down` racing a verb). Only the first is the read-only-clone story, and prescribing
-   * `git branch kb-board origin/kb-board` for the second is advice that fails on its own terms —
-   * "not a valid object name" — when there is no remote-tracking ref either. So the clone message
-   * is reached only after re-reading the ref and finding it really is only the remote's.
+   * ref, and somebody deleted it between the read and the CAS (an `hkb down` racing a verb). Only
+   * the first is the read-only-clone story, and prescribing `git update-ref <ref> <tracking>` for
+   * the second is advice that fails on its own terms — "not a valid object name" — when there is no
+   * remote-tracking ref either. So the clone message is reached only after re-reading the ref and
+   * finding it really is only the remote's.
    */
   _absentRefMessage(detail = '') {
     const { sha, local } = this._tip();
     if (sha && !local) {
-      return `the board here is a read-only copy: ${this.remote}/${this.branch} exists but ${this.ref} does not, `
-        + `so there is nothing to compare-and-swap against. Create the local branch with `
-        + `\`git -C ${this.root} branch ${this.branch} ${this.remote}/${this.branch}\`, then take the board over `
+      return `the board here is a read-only copy: ${this.trackingRef} exists but ${this.ref} does not, `
+        + `so there is nothing to compare-and-swap against. Create the local ref with `
+        + `\`git -C ${this.root} update-ref ${this.ref} ${this.trackingRef}\`, then take the board over `
         + `with \`hkb init --take-over\` if this host should be the one writing it${detail ? ` (git said: ${detail})` : ''}.`;
     }
-    return `${this.ref} went away while this write was landing — something deleted the ${this.branch} branch in `
+    return `${this.ref} went away while this write was landing — something deleted the board's ref in `
       + `${this.root} under it${detail ? ` (git said: ${detail})` : ''}. Check \`git reflog ${this.branch}\` for what `
       + 'moved it, then run this again; `hkb init` recreates the board if it is really gone.';
   }
@@ -440,7 +517,7 @@ export class GitTier {
     const owner = board?.host ?? null;
     if (!owner || owner === this.host) return;
     throw fail(
-      `this board belongs to host "${owner}" and this is "${this.host}" — the ${this.branch} branch has one writer. `
+      `this board belongs to host "${owner}" and this is "${this.host}" — the board at ${this.ref} has one writer. `
       + 'Read it here with `hkb list`, or move it to this host with `hkb init --take-over`.',
     );
   }
@@ -560,7 +637,7 @@ export class GitTier {
   /** Move the board to this host. §6.2: the branch has one writer, and this is how the writer changes. */
   takeOver(host = this.host) {
     const r = this.commit((t) => {
-      if (!t.board) throw fail(`there is no ${this.branch} branch in ${this.root} — run \`hkb init\` first`);
+      if (!t.board) throw fail(`there is no board at ${this.ref} in ${this.root} — run \`hkb init\` first`);
       t.board.host = host;
     }, `hkb: board moved to host ${host}`, { allowForeignHost: true });
     return { host, changed: r.changed, tip: r.tip };
@@ -572,7 +649,7 @@ export class GitTier {
 
   board() {
     const b = this._read().board;
-    if (!b) throw fail(`there is no ${this.branch} branch in ${this.root} — run \`hkb init\` to create the board`);
+    if (!b) throw fail(`there is no board at ${this.ref} in ${this.root} — run \`hkb init\` to create the board`);
     return {
       slug: b.slug,
       host: b.host ?? null,
@@ -584,7 +661,7 @@ export class GitTier {
 
   setBoard(patch = {}) {
     this.commit((t) => {
-      if (!t.board) throw fail(`there is no ${this.branch} branch in ${this.root} — run \`hkb init\` to create the board`);
+      if (!t.board) throw fail(`there is no board at ${this.ref} in ${this.root} — run \`hkb init\` to create the board`);
       // `settings` merges, everything else is replaced: a caller patching one setting must not have
       // to read the whole document back and hand it in again.
       const { settings, ...rest } = patch;
@@ -879,7 +956,7 @@ export class GitTier {
    *
    * `updated_at` used to be stamped unconditionally, which made every verb a commit whether or not
    * it changed anything: `setStatus` to the status the card already has, `addLabels` with a label
-   * that is on it, `removeLabel` for one that never was. `git log kb-board` is meant to be the
+   * that is on it, `removeLabel` for one that never was. `git log refs/kb/boards/<slug>` is meant to be the
    * board's history of decisions (§6.1), and a tick that re-asserts the state of twenty cards would
    * have written twenty commits saying nothing. The GitHub store returns early in the same places.
    */
@@ -972,8 +1049,8 @@ function isEmptyRunFile(run) {
 /**
  * Why `update-ref` refused, from what git said. Measured against git 2.43:
  *
- *   contended — `cannot lock ref 'refs/heads/kb-board': is at <sha> but expected <sha>`
- *   absent    — `cannot lock ref 'refs/heads/nope': unable to resolve reference 'refs/heads/nope'`
+ *   contended — `cannot lock ref 'refs/kb/boards/default': is at <sha> but expected <sha>`
+ *   absent    — `cannot lock ref 'refs/kb/boards/nope': unable to resolve reference 'refs/kb/boards/nope'`
  *
  * Both start "cannot lock ref", which is why matching that alone read a branch that is *not there*
  * as a writer that is: the retry then replayed five times and blamed a host nobody is running on.
@@ -1008,8 +1085,8 @@ function nextId(board, cards) {
   return Number.isInteger(want) && want > 0 ? Math.max(want, free) : free;
 }
 
-/** `branch` is the tier's own — the constructor takes `ref`, so no message here may name `kb-board`. */
-function need(cards, id, root, branch = BOARD_BRANCH) {
+/** `branch` is the tier's own — the constructor takes `ref`, so no message here may name a board it is not about. */
+function need(cards, id, root, branch = BOARD_REF) {
   const card = cards.get(id);
   if (!card) throw fail(`card #${id} is not on the ${branch} board in ${root} — \`hkb list\` shows what is`);
   return card;

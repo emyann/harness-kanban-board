@@ -179,16 +179,18 @@ export function checkServe(ctx, { ok, warn }) {
 }
 
 export const STORE_CHECK = 'store';
-export const BRANCH_CHECK = 'kb-board branch';
+export const BRANCH_CHECK = 'board ref';
 export const INDEX_CHECK = 'board index';
 export const MOUNT_CHECK = 'index filesystem';
+export const REFSPEC_CHECK = 'board refspec';
 
 /**
- * The local store's three questions (docs/local-first.md §6.3): is the branch there and can it still
- * fast-forward, is the index built from the tip the branch is actually at, and is the index on a
+ * The local store's four questions (docs/local-first.md §6.3): is the board's ref there and can it
+ * still fast-forward, does `.git/config` carry the refspec that makes a plain `git fetch` bring the
+ * board back, is the index built from the tip the ref is actually at, and is the index on a
  * filesystem where SQLite's locking works.
  *
- * Silent on a GitHub board — there is no branch, no index and no mount to be wrong about. Reads
+ * Silent on a GitHub board — there is no ref, no index and no mount to be wrong about. Reads
  * only local refs: doctor does not fetch, so "behind" here means behind what the last `hkb sync` or
  * `git fetch` brought in, and it says so.
  *
@@ -202,17 +204,17 @@ export async function checkLocalStore(ctx, { ok, warn, bad }, { kind = null, mou
   if (which !== 'local') {
     ok(STORE_CHECK, `github — the board is the kb:* issues on ${ctx.cfg?.repo || 'GitHub'}`);
     // A branch nothing reads is worth one line, for the same reason `hkb init` says it: the store is
-    // the `"store"` key and nothing else, so a checkout carrying `kb-board` from a fetch is inert
+    // the `"store"` key and nothing else, so a checkout carrying a board ref from a fetch is inert
     // and there is no way to tell from the outside.
-    const { localBoardExists, BOARD_BRANCH } = await import('./store/local.js');
-    if (localBoardExists(ctx)) warn(STORE_CHECK, `this repository also has a \`${BOARD_BRANCH}\` branch, and nothing reads it while the board is on the GitHub store`, 'hkb init --store local (or ignore it)');
+    const { localBoardExists, boardRef } = await import('./store/local.js');
+    if (localBoardExists(ctx)) warn(STORE_CHECK, `this repository also has a board at \`${boardRef(ctx?.board)}\`, and nothing reads it while the board is on the GitHub store`, 'hkb init --store local (or ignore it)');
     return;
   }
 
   // Imported here, not at the top of the file: `local.js` pulls in `node:sqlite`, and `hkb doctor`
   // on a plain GitHub board — the board most likely to be run by somebody whose node was built
   // without it — must not die on the import of a store it is not using. Same rule as `openStore`.
-  const { openLocalStore, mountFor, REFUSED_FS } = await import('./store/local.js');
+  const { openLocalStore, mountFor, REFUSED_FS, hasFetchRefspec, boardFetchRefspec } = await import('./store/local.js');
   const { indexFileIn } = await import('./store/sqlite.js');
 
   // **A diagnosis does not create what it is diagnosing.** `openLocalStore` used to open a *writing*
@@ -227,22 +229,33 @@ export async function checkLocalStore(ctx, { ok, warn, bad }, { kind = null, mou
     // The path is computed rather than read off an open index, because on the commonest failure
     // here — there is no index yet — there is no index to ask.
     const indexPath = s.indexOpen ? s.index.file : indexFileIn(storeGitDir(ctx), ctx?.board || null);
-    ok(STORE_CHECK, `local — ${s.branch} in ${s.root()}, index ${path.relative(s.root(), indexPath)}`);
+    ok(STORE_CHECK, `local — ${s.ref} in ${s.root()}, index ${path.relative(s.root(), indexPath)}`);
 
-    // 1. the branch, and whether the remote's copy is still a fast-forward away in either direction
-    const here = s._rev(`refs/heads/${s.branch}`);
+    // 1. the ref, and whether the remote's copy is still a fast-forward away in either direction
+    const here = s._rev(s.ref);
     const there = s._tracking();
-    if (!here && !there) bad(BRANCH_CHECK, `no ${s.branch} branch in ${s.root()} — the board has nowhere to live`, 'hkb init');
-    else if (!here) warn(BRANCH_CHECK, `only ${s.remote}/${s.branch} is here (${String(there).slice(0, 7)}) — this checkout is a read-only copy of somebody else's board`, `git -C ${s.root()} branch ${s.branch} ${s.remote}/${s.branch} && hkb init --take-over`);
+    if (!here && !there) bad(BRANCH_CHECK, `no board at ${s.ref} in ${s.root()} — the board has nowhere to live`, 'hkb init');
+    else if (!here) warn(BRANCH_CHECK, `only ${s.trackingRef} is here (${String(there).slice(0, 7)}) — this checkout is a read-only copy of somebody else's board`, `git -C ${s.root()} update-ref ${s.ref} ${s.trackingRef} && hkb init --take-over`);
     else {
       const owner = s.owner();
       const mine = !owner || owner === s.host;
-      const at = `${s.branch} at ${here.slice(0, 7)} · host "${owner ?? 'nobody'}"${mine ? '' : ` (this is "${s.host}")`}`;
+      const at = `${s.ref} at ${here.slice(0, 7)} · host "${owner ?? 'nobody'}"${mine ? '' : ` (this is "${s.host}")`}`;
       if (!there || here === there) ok(BRANCH_CHECK, `${at}${there ? ' · in sync with ' + s.remote : ` · never pushed to ${s.remote}`}`);
-      else if (s._ancestor(here, there)) warn(BRANCH_CHECK, `${at} · behind ${s.remote}/${s.branch} (${there.slice(0, 7)}) as of the last fetch`, 'hkb sync');
-      else if (s._ancestor(there, here)) ok(BRANCH_CHECK, `${at} · ahead of ${s.remote}/${s.branch}, fast-forwardable`);
-      else bad(BRANCH_CHECK, `${at} · diverged from ${s.remote}/${s.branch} (${there.slice(0, 7)}) — the branch has one writer and two have written it`, `git -C ${s.root()} log --oneline ${s.branch} ${s.remote}/${s.branch}, keep one, then hkb sync`);
+      else if (s._ancestor(here, there)) warn(BRANCH_CHECK, `${at} · behind ${s.trackingRef} (${there.slice(0, 7)}) as of the last fetch`, 'hkb sync');
+      else if (s._ancestor(there, here)) ok(BRANCH_CHECK, `${at} · ahead of ${s.trackingRef}, fast-forwardable`);
+      else bad(BRANCH_CHECK, `${at} · diverged from ${s.trackingRef} (${there.slice(0, 7)}) — the board has one writer and two have written it`, `git -C ${s.root()} log --oneline ${s.ref} ${s.trackingRef}, keep one, then hkb sync`);
       if (!mine) warn(STORE_CHECK, `host "${owner}" owns this board, so every mutating verb refuses here`, 'hkb init --take-over');
+    }
+
+    // 1b. the fetch refspec. The board lives outside `refs/heads`, so a clone's `+refs/heads/*` line
+    //     does not carry it: without this, an ordinary `git fetch` brings back no board and the
+    //     backup is one nobody can restore by hand. `hkb sync` fetches the namespace explicitly and
+    //     writes this line, so the fix is a command the operator already has.
+    if (!s._hasRemote()) ok(REFSPEC_CHECK, `no git remote "${s.remote}" — nothing to fetch the board from`);
+    else if (hasFetchRefspec(s.root(), s.remote)) ok(REFSPEC_CHECK, `remote.${s.remote}.fetch carries ${boardFetchRefspec(s.remote)}`);
+    else {
+      warn(REFSPEC_CHECK, `remote.${s.remote}.fetch does not carry ${boardFetchRefspec(s.remote)} — a plain \`git fetch\` will not bring this board back, because it lives outside refs/heads`,
+        `hkb sync (it writes the line), or git -C ${s.root()} config --add remote.${s.remote}.fetch '${boardFetchRefspec(s.remote)}'`);
     }
 
     // 2. the index: built from the commit the branch is at, or one the next verb will rebuild
@@ -252,11 +265,11 @@ export async function checkLocalStore(ctx, { ok, warn, bad }, { kind = null, mou
     if (fs.existsSync(indexPath)) {
       try { indexed = s.index.tip(); } catch (e) { unreadable = /** @type {Error} */ (e); }
     }
-    if (!tip) warn(INDEX_CHECK, 'nothing indexed — there is no branch to index', 'hkb init');
+    if (!tip) warn(INDEX_CHECK, 'nothing indexed — there is no board ref to index', 'hkb init');
     else if (unreadable) bad(INDEX_CHECK, `${path.relative(s.root(), indexPath)} could not be opened: ${unreadable.message}`, 'hkb doctor after `hkb down`, or delete the file and let the next verb rebuild it');
     else if (!indexed) warn(INDEX_CHECK, `empty — no verb has opened this board here yet`, 'hkb list');
-    else if (indexed === tip) ok(INDEX_CHECK, `at ${tip.slice(0, 7)}, matching the branch`);
-    else warn(INDEX_CHECK, `built from ${indexed.slice(0, 7)}, the branch is at ${tip.slice(0, 7)} — the next verb rebuilds it`, 'hkb list');
+    else if (indexed === tip) ok(INDEX_CHECK, `at ${tip.slice(0, 7)}, matching the board`);
+    else warn(INDEX_CHECK, `built from ${indexed.slice(0, 7)}, the board is at ${tip.slice(0, 7)} — the next verb rebuilds it`, 'hkb list');
 
     // 3. the mount. SQLite's WAL needs POSIX locking that a 9p or NFS mount does not give it: the
     //    failure is a corrupt index or a hang, neither of which says why.

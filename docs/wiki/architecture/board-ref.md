@@ -1,36 +1,75 @@
 ---
-title: The kb-board branch
-summary: "The durable half of a local board lives on a dedicated git branch written with plumbing only — no checkout, no staging, no working-tree write — with update-ref as the compare-and-swap and a retry that replays the mutation."
+title: The board's ref
+summary: "The durable half of a local board lives at refs/kb/boards/<slug> — a git ref outside refs/heads, invisible to git branch — written with plumbing only, with update-ref as the compare-and-swap and a retry that replays the mutation."
 category: architecture
 kind: explanation
 audience: [dev]
-read_when: "adding a durable store verb, debugging a board write that lost or refused, or wondering why a worker's worktree stays clean while the board moves"
+read_when: "adding a durable store verb, debugging a board write that lost or refused, wondering why a worker's worktree stays clean while the board moves, or why a clone did not bring the board"
 covers:
   - path: src/store/git.js
-    sha: a3a5f2ebb104f22bd196c78301036b61b1da2ac9
+    sha: ba2375da1cecafaecc720195ce64528e6c4de5dc
   - path: src/store/index.js
-    sha: 385621acfdf13c32e3477ef35325c763ee1bb6fd
+    sha: d3aa66c1b4256091a3488c9289ff411c0e550355
   - path: src/board.js
-    sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
-generated_at_commit: 90132a1
+    sha: 0bff65f7030fbcf2cfc03c603c5929607b529357
+generated_at_commit: 238a3b6
 last_refreshed: 2026-09-03
 related: [architecture/store-seam, decisions/adr-006-local-store, decisions/adr-005-control-plane, concepts/claims-and-leases]
 ---
 
-# The kb-board branch
+# The board's ref
 
 > A local board is two tiers. This is the one that has to survive a `git clone`:
-> the board document, one file per card, one run record per card, on
-> `refs/heads/kb-board`. `src/store/git.js` is the only thing that writes it.
+> the board document, one file per card, one run record per card, at
+> `refs/kb/boards/<slug>`. `src/store/git.js` is the only thing that writes it.
 
-## Why a branch, and why not the working tree
+## Why a git ref, and why not the working tree
 
-The board must travel with the repository — a clone brings the cards, and
-`git log kb-board` *is* the board's history of decisions
+The board must travel with the repository — a push and fetch bring the cards,
+and `git log refs/kb/boards/default` *is* the board's history of decisions
 (`docs/local-first.md` §6.1). A directory of JSON files in the checkout would
 also travel, but it would be in everyone's `git status`, in everyone's diffs,
-and in the way of every rebase. So the files live on a branch nobody checks
+and in the way of every rebase. So the files live on a ref nobody checks
 out, and `src/store/git.js` reaches them with plumbing.
+
+## Why not `refs/heads` — and what that costs
+
+The first cut put the board on `refs/heads/kb-board`, which meant a branch
+nobody ever checks out showed up in `git branch`, in every branch picker and in
+GitHub's branch list, among the branches that mean something. Nothing about the
+design needed `refs/heads`: plumbing writes, `update-ref` as a compare-and-swap,
+history, push and fetch all work on any namespace — hkb already keeps claims at
+`refs/kb/locks/<n>/<k>` (*concepts/claims-and-leases*). So the board is at
+`refs/kb/boards/<slug>` (`boardRef`, `src/store/git.js`), `refs/kb/boards/default`
+unless `--board` said otherwise. Not `refs/kb/board` with `refs/kb/board/<slug>`
+beside it: git forbids a ref being both a file and a directory prefix, so those
+two could never coexist.
+
+The slug is a ref path segment, so it is validated as one — letters, digits,
+`.`, `_`, `-`, no leading dot, no `.lock` suffix (`boardRef`) — and two boards in
+one repository get two refs and an index file each, where before they shared one
+branch and one board silently became the other.
+
+**The cost, and it is real:** a ref outside `refs/heads` is not carried by a
+default `git clone` and is not visible in GitHub's web UI. Three things pay it
+back, and all three are the operator's ordinary commands:
+
+- `hkb init` **appends** `+refs/kb/boards/*:refs/remotes/<remote>/kb/boards/*` to
+  `remote.<name>.fetch` (`ensureFetchRefspec`, `src/store/local.js`) — appended,
+  never replacing the `+refs/heads/*` line, which is what makes the remote a
+  remote for everything that is not hkb. Idempotent.
+- `hkb doctor` reports the line when it is missing and names the fix
+  (`REFSPEC_CHECK`, `src/doctor.js`).
+- `hkb sync` passes that refspec **on the command line** rather than trusting
+  config, and writes the config line while it is there (`sync`,
+  `src/store/local.js`). A fresh clone has no such config, and that clone is
+  exactly the case sync exists for — so restoring a board onto a new machine is
+  still `git clone` then `hkb sync`, and nothing else.
+
+The refspec maps into `refs/remotes/` deliberately. `+refs/kb/*:refs/kb/*` would
+be shorter and would be a bug: the local ref is the one the one-writer
+compare-and-swap leases, so a fetch writing it would replace whatever this host
+had decided with the remote's older copy, silently, on every fetch.
 
 The consequence worth internalising: **a board write moves a ref and nothing
 else.** A worker committing a card from `.claude/worktrees/kb-99-1` leaves
@@ -73,17 +112,17 @@ spawned:
 
 The temporary index is rebuilt from nothing on every write, so a deleted card
 is simply a card that is not listed — there is no delete path to get wrong.
-That cuts both ways, and it is the branch's sharpest edge: **a path the write
+That cuts both ways, and it is the ref's sharpest edge: **a path the write
 does not list is a path deleted.** The tier owns exactly three file *names* —
 `board.json`, `cards/<n>.json` and `runs/<n>.json`, the same patterns the read
 parses — and carries every other entry across at the sha and mode it already had
 (`isOwned` / `_land`, `src/store/git.js`). Without that, a `README.md` somebody
-put on the branch disappeared on the first `setStatus`, and the no-op guard
+put on the board's ref disappeared on the first `setStatus`, and the no-op guard
 (which compares only owned paths) reported that nothing had changed. Ownership
 is by file name and not by directory for the same reason at one level down: a
 `cards/README.md` is read by no parser, so claiming the whole `cards/` prefix
 would delete it just as silently. A foreign path is never even decoded — the
-write path only ever needs its sha and mode, and a blob on the branch may be
+write path only ever needs its sha and mode, and a blob on the board may be
 binary. Both directions are NUL-delimited for the same reason: git permits a
 newline or a tab in a path name, `ls-tree -z` hands one back raw, and
 `update-index -z --index-info` is what carries it back without one odd name
@@ -102,7 +141,7 @@ value, and refuses a mismatch. That is the entire compare-and-swap: no lock
 file of hkb's own, no advisory protocol, and the same mechanism the GitHub
 store's heartbeat leases on (`concepts/claims-and-leases`).
 
-A refusal means another writer landed first. The tier re-reads the branch and
+A refusal means another writer landed first. The tier re-reads the board and
 **replays the mutation on the newer tree**, up to five times, then throws exit 2
 naming the host that owns the board. This is why a mutation is a *callback*
 rather than a diff: the callback is re-run against whatever the board became,
@@ -111,7 +150,7 @@ than over it. A mutation that closes over state read before `commit()` was
 called breaks that property — read what you need *inside* the callback.
 
 A write whose bytes are identical to what is already there lands **no commit**.
-The branch's history is a history of decisions, and a verb that decided nothing
+The board's history is a history of decisions, and a verb that decided nothing
 should not appear in it. That holds only because `_patch` compares the card
 before and after the mutation and leaves `updated_at` alone when nothing moved:
 a timestamp stamped unconditionally makes every verb "a change", so `setStatus`
@@ -132,15 +171,15 @@ asking the owner question first would have put the same exit 2 one line up.
 and refuses on any other host with exit 2 naming `hkb init --take-over`
 (`docs/local-first.md` §6.2). That guard is a **safety** property for a single
 operator — it stops a second machine, a stale worktree or a second dispatcher
-from writing the branch concurrently — and not a collaboration feature;
+from writing the board concurrently — and not a collaboration feature;
 multi-player is out of scope by decision.
 
-Reads are unrestricted, which is what makes a *restore* work: a fresh checkout
-has no local `kb-board`, so the tier falls back to
-`refs/remotes/<remote>/kb-board` and the board is readable before `hkb sync`
-creates the local ref.
+Reads are unrestricted, which is what makes a *restore* work: a checkout that
+has fetched but not synced has no local `refs/kb/boards/<slug>`, so the tier
+falls back to `refs/remotes/<remote>/kb/boards/<slug>` (`trackingRefFor`) and the
+board is readable before `hkb sync` creates the local ref.
 
-Two hosts writing one branch is not supported in this version, and the reason
+Two hosts writing one board is not supported in this version, and the reason
 is **not** that ids would collide: a CAS refusal re-reads and replays the
 mutation on the newer tree, so two writers racing to create a card get two
 different numbers (`src/store/git.js`, `commit`; `test/store-git.test.js`, "a
@@ -148,28 +187,31 @@ concurrent writer makes the CAS refuse"). Allocation is also guarded — an id a
 card already occupies is never handed out, whatever `board.json` says
 (`nextId`, `src/store/git.js`).
 
-What the rule really buys is everything *around* the branch: the index
+What the rule really buys is everything *around* the board's ref: the index
 (`.git/hkb/index.db`) is host-local, so is the dispatcher, and a second host
-writing decisions into the branch would be making them against an index it
+writing decisions into the ref would be making them against an index it
 cannot see. `board.host` is the enforcement; the collision story was the wrong
 justification for a right rule.
 
 ### A clone can read, and cannot write
 
-A fresh clone has `refs/remotes/origin/kb-board` and no local branch. Reads fall
-back to it; a **write refuses with the branch command that fixes it**, because
-the compare-and-swap is on `refs/heads/kb-board` and there is nothing there to
-swap. Git says `cannot lock ref … unable to resolve reference` for that, which
+A clone that has fetched the namespace has `refs/remotes/origin/kb/boards/<slug>`
+and no local ref. Reads fall back to it; a **write refuses with the
+`update-ref` command that fixes it**, because the compare-and-swap is on
+`refs/kb/boards/<slug>` and there is nothing there to swap. (A clone that has
+*not* fetched it has neither, and reads as an empty board — `hkb sync` is what
+turns that into a restore.) Git says
+`cannot lock ref … unable to resolve reference` for the missing local ref, which
 is one word away from what it says for real contention (`is at X but expected
 Y`) — telling them apart is `classifyRefWrite` (`src/store/git.js`), and getting
-it wrong turned "there is no branch here" into five retries and a message
+it wrong turned "there is no board here" into five retries and a message
 blaming a writer on another host.
 
-## What is *not* on the branch
+## What is *not* on the board's ref
 
 Locks, heartbeats, the open attempts' pid/job/worktree, and the event log. Those
 are host-local and live in the `.git/hkb/index.db` index
-(`docs/local-first.md` §6.3): a lock on a branch would be a commit per beat, and
+(`docs/local-first.md` §6.3): a lock on a ref would be a commit per beat, and
 none of it means anything on another machine. So `src/store/git.js` is a
 **tier**, not a `Store` — it implements the durable methods of the §6.4
 interface and deliberately has no `claim`, `release`, `listLocks`,

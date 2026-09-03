@@ -1,28 +1,28 @@
 ---
 title: The local store — the two tiers as one board
-summary: "How the kb-board branch and the .git/hkb index compose into one Store: what open() reconciles, the commit-index-wake order every durable verb follows, which reads go to which tier, and the one-writer rule that makes a clone a reader."
+summary: "How the board ref and the .git/hkb index compose into one Store: what open() reconciles, the commit-index-wake order every durable verb follows, which reads go to which tier, and the one-writer rule that makes a clone a reader."
 category: architecture
 kind: explanation
 audience: [dev]
 read_when: "adding a store verb, debugging an index that disagrees with the branch, wondering why a verb is refused on this host, or working on hkb sync / init --import"
 covers:
   - path: src/store/local.js
-    sha: 74fc6228a29d959c65472b83ba99e6e343fc8099
+    sha: 68ef16366401483d780690f00e49d833c169a106
   - path: src/store/index.js
-    sha: 385621acfdf13c32e3477ef35325c763ee1bb6fd
+    sha: d3aa66c1b4256091a3488c9289ff411c0e550355
   - path: src/store/sqlite.js
-    sha: ad2e80d73391c5e7c0602c1786ca645604616887
+    sha: 9e140b2992a972a04c377c5b5f46d6bcc299ff3b
   - path: src/init.js
-    sha: fb4b0eb97192e874591ed4940a1e2f32775c1429
+    sha: db5322a663e05cf2c0c3b7f67cee554ff7f5caab
   - path: src/doctor.js
-    sha: 1f944284e5e63b03d83e0ca43c17a115aaafd7bb
+    sha: 49395961f0695579e37f4ef263b2ed85321caed1
   - path: src/gc.js
     sha: 387c7e3da22fb00d1d070903abc12e7f64dfc7cf
   - path: src/cli.js
-    sha: fc69279838602cde09a8e804e4c5456878b71eff
-generated_at_commit: 0cd9e5c
+    sha: f12597f86b87c7bf65c9ffb0ed79a4df3a80b049
+generated_at_commit: 238a3b6
 last_refreshed: 2026-09-03
-related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
+related: [architecture/board-ref, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
 
 # The local store — the two tiers as one board
@@ -51,8 +51,8 @@ what this repository's own board runs on; retiring it is track C.
 it asks exactly one question: `store` in `.kanban/board.json` — `"local"` or
 `"github"`, absent means `github`, anything else is exit 2.
 
-There *was* a second question — does this repository have a `kb-board` branch,
-locally or as `<remote>/kb-board` — so that a plain `git clone` needed no
+There *was* a second question — does this repository have a board ref,
+locally or as a remote-tracking copy — so that a plain `git clone` needed no
 configuration. It was removed in A6's last review round, because a rule that
 reads the store off a **ref** can be reached by `git fetch`, which put a
 checkout on the local store while board.json still pointed every verb at GitHub;
@@ -72,7 +72,7 @@ Everything in `LocalStore` follows from these, and each exists because the
 alternative loses something.
 
 **1. `open()` reconciles.** The index stores the sha it was built from
-(`tip_sha` on its `board` row). When that is not what `refs/heads/kb-board`
+(`tip_sha` on its `board` row). When that is not what `refs/kb/boards/<slug>`
 says, the whole tree is read and loaded. In the common case this is one
 `rev-parse` and one indexed row, which is why every verb can afford it. A
 missing branch loads *nothing* rather than an empty tree — `{tip: null}` would
@@ -102,7 +102,7 @@ written for.
 
 **3. A live write never touches git.** Claims, heartbeats and an open attempt's
 pid/job/worktree are the index's alone. A lock on a branch would be a commit per
-beat, and `git log kb-board` is meant to be a history of *decisions*.
+beat, and the board's `git log` is meant to be a history of *decisions*.
 
 A durable verb's event carries what it decided, and `saveRun`'s is the attempt it
 just wrote: `rec.run.attempts`, not `rec.attempts` — a run record is `{run, id}`
@@ -214,7 +214,10 @@ it is a commit, not a heartbeat.
 
 ## Sync is git
 
-`sync()` fetches `<remote>/kb-board`, fast-forwards the local ref if it is
+`sync()` fetches `+refs/kb/boards/*:refs/remotes/<remote>/kb/boards/*` — named on
+the command line, not read from config, because a fresh clone has no such line —
+and writes that line into `.git/config` while it is there
+(`ensureFetchRefspec`). Then it fast-forwards the local ref if it is
 behind, then pushes if it is ahead. Anything that is not a fast-forward in
 either direction is refused with the one-writer explanation and the commands to
 look at both histories: the branch has one writer, so a divergence is two hosts
@@ -222,9 +225,10 @@ having written it, and hkb will not guess which is right.
 
 **Nothing in `sync()` reads the board document before the fetch.** The order is
 refs, then network, then `board.json` — because the checkout the verb exists for
-is the one that has no `kb-board` at all (a `git clone --single-branch`, or one
+is the one that has no copy of the board at all (a fresh clone — the board is
+outside `refs/heads`, so no default clone carries it — or one
 taken before the branch was first pushed), and reading the board first threw
-"there is no kb-board branch" at exactly the person running the command to go
+"there is no board at refs/kb/boards/…" at exactly the person running the command to go
 and get one. `hkb init` there then made a *second, empty* board.
 
 `settings.sync.push: false` turns off the **push**, and only the push. A
@@ -296,7 +300,7 @@ documented migration reachable only as `--store local --import`.
 everything closed inside the 90-day window, with the **issue number as the card
 id** and `next_id` past the highest of them. Two commits for the whole board —
 one for the cards, one for the run records — rather than one per card, because
-`git log kb-board` should say "the board arrived", not replay a year of issue
+the board's `git log` should say "the board arrived", not replay a year of issue
 history. Per card it is one paginated comments read, which `listComments`
 memoizes on the context, so the run record, the results and the human notes all
 come out of the same request.

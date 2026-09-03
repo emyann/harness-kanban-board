@@ -603,40 +603,46 @@ test('--no-labels says no to the flags that cannot be done offline, before writi
 });
 
 // ---------- the store (docs/local-first.md §6, ADR-006) ----------
-// A new board is local: the cards live on the `kb-board` branch in the repo init just ran in, and
+// A new board is local: the cards live at `refs/kb/boards/default` in the repo init just ran in, and
 // the index beside it. The three things that must hold are that a *fresh* board gets that store, an
 // *existing* board never changes store by being re-inited, and `--store github` still works while
 // the GitHub driver is here.
 
-const branchTip = (root) => spawnSync('git', ['rev-parse', '--verify', '--quiet', 'refs/heads/kb-board'], { cwd: root, encoding: 'utf8' }).stdout.trim();
+const BOARD_REF = 'refs/kb/boards/default';
+const branchTip = (root) => spawnSync('git', ['rev-parse', '--verify', '--quiet', BOARD_REF], { cwd: root, encoding: 'utf8' }).stdout.trim();
+/** Every branch this checkout has. The board must not be among them — that is the point of #334. */
+const branches = (root) => spawnSync('git', ['for-each-ref', '--format=%(refname)', 'refs/heads/'], { cwd: root, encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean);
 
-test('a fresh init creates a local board: the branch, the index, and board.json says so', async () => {
+test('a fresh init creates a local board: the ref, the index, and board.json says so', async () => {
   const { root, printed } = await runInit();
   assert.equal(board(root).store, 'local');
-  assert.match(branchTip(root), /^[0-9a-f]{40}$/, 'the kb-board branch is there');
+  assert.match(branchTip(root), /^[0-9a-f]{40}$/, 'the board ref is there');
+  // **And it is not a branch.** The whole of #334: a board nobody checks out must not sit in
+  // `git branch`, in a branch picker, or in GitHub's branch list among the refs that mean something.
+  assert.deepEqual(branches(root).filter((b) => /kb-board|kb\/boards/.test(b)), [], `no board branch: ${branches(root).join(', ')}`);
   assert.equal(fs.existsSync(path.join(root, '.git', 'hkb', 'index.db')), true, 'and the index beside it');
-  assert.ok(printed.some((l) => /^store: local — created the kb-board branch/.test(l)), printed.join('\n'));
-  // §6.2: the branch is pushed, and init is where a human is told so.
-  assert.ok(printed.some((l) => /^sync: `hkb sync` pushes kb-board/.test(l)), printed.join('\n'));
+  assert.ok(printed.some((l) => /^store: local — created the board at refs\/kb\/boards\/default/.test(l)), printed.join('\n'));
+  // §6.2: the board is pushed, and init is where a human is told so.
+  assert.ok(printed.some((l) => /^sync: `hkb sync` pushes refs\/kb\/boards\/default/.test(l)), printed.join('\n'));
 
-  const doc = JSON.parse(spawnSync('git', ['show', 'kb-board:board.json'], { cwd: root, encoding: 'utf8' }).stdout);
+  const doc = JSON.parse(spawnSync('git', ['show', `${BOARD_REF}:board.json`], { cwd: root, encoding: 'utf8' }).stdout);
   assert.equal(doc.slug, 'default');
   assert.equal(doc.next_id, 1);
-  assert.equal(typeof doc.host, 'string', 'the branch names its one writer');
+  assert.equal(typeof doc.host, 'string', 'the board names its one writer');
 });
 
-test('a second init leaves the branch and the index exactly as they were', async () => {
+test('a second init leaves the ref and the index exactly as they were', async () => {
   const first = await runInit();
   const tip = branchTip(first.root);
   const { printed } = await runInit([], first);
   assert.equal(branchTip(first.root), tip, 'an existing board is adopted, never recreated');
-  assert.ok(printed.some((l) => /^store: local — kb-board at/.test(l)), printed.join('\n'));
+  assert.ok(printed.some((l) => /^store: local — refs\/kb\/boards\/default at/.test(l)), printed.join('\n'));
 });
 
 test('--store github keeps the old behaviour, and an existing board keeps the store it has', async () => {
   const gh = await runInit(['--store', 'github']);
   assert.equal(board(gh.root).store, 'github');
-  assert.equal(branchTip(gh.root), '', 'no branch: the issues are the board');
+  assert.equal(branchTip(gh.root), '', 'no ref: the issues are the board');
   assert.ok(gh.printed.some((l) => /^store: github/.test(l)));
 
   // and a board that was set up before the local store existed is not moved by a re-run
@@ -644,27 +650,27 @@ test('--store github keeps the old behaviour, and an existing board keeps the st
   const cfg = board(legacy.root);
   delete cfg.store;
   fs.writeFileSync(path.join(legacy.root, BOARD_FILE), JSON.stringify(cfg, null, 2));
-  spawnSync('git', ['branch', '-D', 'kb-board'], { cwd: legacy.root });
+  spawnSync('git', ['update-ref', '-d', BOARD_REF], { cwd: legacy.root });
   const again = await runInit([], legacy);
   // The key is NOT written back. Nobody chose it — `resolveStore` read an absent key and answered
   // with the default — and a plain re-init must not turn that into a line in a file the repository
   // tracks. `|| store === 'local'` used to, which put `"store": "local"` into everybody's checkout
   // as a side effect of a routine `hkb init`.
   assert.equal(board(legacy.root).store, undefined, 'an unasked-for answer is not pinned into board.json');
-  assert.equal(branchTip(legacy.root), '', 'nothing created a branch under it');
+  assert.equal(branchTip(legacy.root), '', 'nothing created a board ref under it');
   assert.ok(again.printed.some((l) => /^store: github/.test(l)));
 
-  // And a `kb-board` branch appearing in the checkout — a fetch, another host's push, somebody's
-  // experiment — changes **nothing**: the store is the key, so an inert branch is reported in words
+  // And a board ref appearing in the checkout — a fetch, another host's push, somebody's
+  // experiment — changes **nothing**: the store is the key, so an inert ref is reported in words
   // and never acted on. That inference is what produced a destructive interaction in three
   // successive reviews (see `storeKind`).
   const { openGitTier } = await import('../src/store/git.js');
   openGitTier(legacy.root).init('default');
   const withBranch = await runInit([], legacy);
-  assert.equal(board(legacy.root).store, undefined, 'a branch cannot move a board onto the local store');
+  assert.equal(board(legacy.root).store, undefined, 'a ref cannot move a board onto the local store');
   assert.ok(withBranch.printed.some((l) => /^store: github/.test(l)), withBranch.printed.join('\n'));
-  assert.ok(withBranch.printed.some((l) => /has a `kb-board` branch, and this board is on the GitHub store/.test(l)),
-    'but the human is told the branch is there and inert');
+  assert.ok(withBranch.printed.some((l) => /has a board at `refs\/kb\/boards\/default`, and this board is on the GitHub store/.test(l)),
+    'but the human is told the ref is there and inert');
 });
 
 test('a plain re-init writes no store key into a board.json the repository tracks', async () => {
@@ -680,14 +686,14 @@ test('a plain re-init writes no store key into a board.json the repository track
   git('-c', 'user.email=hkb@local', '-c', 'user.name=hkb', 'commit', '-qm', 'board.json');
   const { boardFileTracked } = await import('../src/init.js');
   assert.equal(boardFileTracked(legacy.root), true, 'the file this init must not rewrite');
-  // …and the checkout has a `kb-board` branch, which is the case that made this a defect rather
-  // than a tidiness point: the store was inferred from the branch, so a plain re-init resolved
-  // `local` and pinned it. The branch is inert now, and the re-init says so instead of acting.
+  // …and the checkout has a board ref, which is the case that made this a defect rather
+  // than a tidiness point: the store was inferred from the ref, so a plain re-init resolved
+  // `local` and pinned it. The ref is inert now, and the re-init says so instead of acting.
   const { openGitTier } = await import('../src/store/git.js');
   openGitTier(legacy.root).init('default');
 
   const again = await runInit([], legacy);
-  assert.ok(again.printed.some((l) => /has a `kb-board` branch/.test(l)), again.printed.join('\n'));
+  assert.ok(again.printed.some((l) => /has a board at `refs\/kb\/boards\/default`/.test(l)), again.printed.join('\n'));
   assert.equal(board(legacy.root).store, undefined, 'a re-init did not move everybody onto the local store');
   // init rewrites the tracked file for its own reasons (profiles, skill version); what it must not
   // do is put a `store` line into everybody's copy.
@@ -746,7 +752,7 @@ test('resolveStore agrees with storeKind, and neither of them looks at a branch'
   assert.equal(resolveStore({}, { store: 'github' }), 'github');
 
   // And one written before the key existed is `github` — the same answer `storeKind` gives from the
-  // same input, because the key is the only input either of them has. The `kb-board` branch used to
+  // same input, because the key is the only input either of them has. The board's ref used to
   // decide it, which meant a ref arriving over the network (another host's push, a colleague's
   // experiment, a plain `git fetch`) could flip a checkout onto a store its verbs were not using.
   // `hkb init` says the branch is there; nothing acts on it.

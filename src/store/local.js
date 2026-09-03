@@ -1,4 +1,5 @@
-// The local store: the `kb-board` branch and the `.git/hkb/index.db` index, as one `Store`.
+// The local store: the board's ref (`refs/kb/boards/<slug>`) and the `.git/hkb/index.db` index, as
+// one `Store`.
 //
 // docs/local-first.md §6.1. The two tiers are halves of one board and neither is a `Store` on its
 // own: the branch (`./git.js`, A4) holds everything a `git clone` must carry and none of what is
@@ -7,13 +8,13 @@
 // rules it enforces are three:
 //
 //   1. **open() reconciles.** The index stores the sha it was built from; when that is not what
-//      `refs/heads/kb-board` says, the whole tree is read and loaded. A crash between a commit and
+//      `refs/kb/boards/<slug>` says, the whole tree is read and loaded. A crash between a commit and
 //      the index write leaves the index one commit behind, and this is what repairs it.
 //   2. **A durable write commits first, indexes second, wakes third.** In that order, because the
 //      branch is the source of truth: an index ahead of the branch is a board that lost a decision
 //      on the next reload, while an index behind one is repaired by rule 1.
 //   3. **A live write never touches git.** Claims, heartbeats and the attempt's pid/job/worktree are
-//      the index's alone — a lock on a branch would be a commit per beat, and `git log kb-board` is
+//      the index's alone — a lock on a ref would be a commit per beat, and the board's git log is
 //      meant to be the board's history of *decisions*.
 //
 // Reads of durable state go to the branch, not to the index: the tier memoizes the tree per sha, so
@@ -23,12 +24,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { storeRoot, storeGitDir, hostId, runGit, runGitAsync, gitSays, GIT_SHA_RE, readState, writeState, normalizeCardGrants } from '../board.js';
 import { RESULT_MARKER, RUN_MARKER, DEFAULT_KB, L, emptyRun, parseResultComment, isResultComment } from '../model.js';
-import { openGitTier, BOARD_BRANCH, BOARD_REF } from './git.js';
+import { openGitTier, BOARD_REF, BOARD_REF_PREFIX, boardRef, trackingRefFor, boardFetchRefspec } from './git.js';
 import { openIndex, openIndexReadOnly, indexFileIn } from './sqlite.js';
 import { openGithubStore, listComments, listLocks, lockBeatAt, release, listBeatChains, dropBeatChain, blockersOf, blockersKnown } from './github.js';
 import { rest } from '../gh.js';
 
-export { BOARD_BRANCH, BOARD_REF };
+export { BOARD_REF, BOARD_REF_PREFIX, boardRef, trackingRefFor, boardFetchRefspec };
 
 /** How often the loop may push, at most (§6.2: "throttled and offline-tolerant"). */
 export const SYNC_THROTTLE_MS = 60_000;
@@ -78,7 +79,7 @@ export class LocalStore {
    *   `readOnly` opens the index through `openIndexReadOnly` — `hkb doctor`'s reader, which must
    *   diagnose an index rather than create one.
    */
-  constructor(ctx, { git = null, index = null, host = null, ref = BOARD_REF, remote = null, now = null, readOnly = false } = {}) {
+  constructor(ctx, { git = null, index = null, host = null, ref = null, remote = null, now = null, readOnly = false } = {}) {
     this.ctx = ctx;
     this._root = storeRoot(ctx);
     // The context's own identity, when it has one: `makeContext` sets `host` and every other verb
@@ -126,8 +127,12 @@ export class LocalStore {
    */
   root() { return this._root; }
 
-  /** The branch the durable tier writes — `kb-board` unless a test asked for another. */
+  /** The name the durable tier's ref goes by — `refs/kb/boards/<slug>` unless a test asked for another. */
   get branch() { return this.git.branch; }
+
+  /** The ref the durable tier compare-and-swaps, and where a fetch puts the remote's copy of it. */
+  get ref() { return this.git.ref; }
+  get trackingRef() { return this.git.trackingRef; }
 
   /**
    * Reconcile the index with the branch, and answer what moved.
@@ -453,8 +458,8 @@ export class LocalStore {
       return { stamped: false, tip: this._landedTip() };
     }
     const stamp = { host: this.host, pid, at: at.toISOString() };
-    // Committed here rather than through `setBoard()` so the message says what it is: `git log
-    // kb-board` is meant to read as the board's decisions, and "hkb: board settings" every few
+    // Committed here rather than through `setBoard()` so the message says what it is: the board's
+    // log is meant to read as the board's decisions, and "hkb: board settings" every few
     // minutes reads as a decision nobody made.
     const r = this.git.commit((t) => {
       if (!t.board) throw fail(`there is no ${this.branch} branch in ${this.root()} — run \`hkb init\` to create the board`);
@@ -476,19 +481,25 @@ export class LocalStore {
   // ---------- sync (§6.2: "Sync is git") ----------
 
   /**
-   * Push `kb-board` to the remote and fast-forward the local ref from it.
+   * Push `refs/kb/boards/<slug>` to the remote and fast-forward the local ref from it.
    *
    * The branch has one writer, so anything that is not a fast-forward in either direction is a board
    * two hosts have written and this refuses to guess which is right. Offline is not a failure: the
    * remote copy is a backup and a reader's view, and the loop calls this on a laptop that spends its
    * day on and off a network.
    *
-   * **Nothing here reads the board document before the fetch.** A `--single-branch` clone, or one
-   * taken before the branch was first pushed, has no `kb-board` at all — and that checkout is the
-   * case `hkb sync` exists for: **restoring the board onto a fresh checkout of your own repo**, on a
-   * new machine or after a lost disk. Asking `board()` first threw `there is no kb-board branch` at
-   * exactly the person who ran the command to get one. The ref state comes first, the fetch second,
-   * and the board document is only read once there is one to read.
+   * **Nothing here reads the board document before the fetch.** A fresh `git clone` has no copy of
+   * the board at all — the board lives outside `refs/heads`, so no default clone or fetch carries
+   * it — and that checkout is the case `hkb sync` exists for: **restoring the board onto a fresh
+   * checkout of your own repo**, on a new machine or after a lost disk. Asking `board()` first threw
+   * `there is no board at ...` at exactly the person who ran the command to get one. The ref state
+   * comes first, the fetch second, and the board document is only read once there is one to read.
+   *
+   * **The fetch names its refspec rather than trusting `.git/config`,** and writes the config line
+   * while it is there. That is the whole cost of a hidden ref: a clone's `remote.origin.fetch` is
+   * `+refs/heads/*` and nothing else, so a `git fetch` there brings back no board. Restoring one
+   * onto a new machine therefore stays two commands — `git clone`, `hkb sync` — which is the
+   * durability requirement, and after the first sync an ordinary `git fetch` carries it too.
    *
    * (This is a durability path, not a collaboration one. Multi-player — a second person on the same
    * board — is out of scope by decision, `docs/local-first.md` §6.2.)
@@ -507,21 +518,26 @@ export class LocalStore {
     // path — including `no-remote` and `offline`, which do no work at all — so the sync the loop
     // runs after every decisive tick spawned five git processes to report that it had done nothing.
     // Every path that *moves* a ref passes what it moved it to, which it already knows.
-    let here = this._rev(`refs/heads/${branch}`);
+    let here = this._rev(this.ref);
     let there = this._tracking();
     const answer = (over = {}) => ({
       ok: true, pushed: false, fastForwarded: false, offline: false, skipped: null,
-      remote, branch, local: here, tracking: there, detail: '', ...over,
+      remote, branch, ref: this.ref, local: here, tracking: there, detail: '', ...over,
     });
     if (!this._hasRemote()) return answer({ skipped: 'no-remote', detail: `no git remote "${remote}" in ${this.root()}` });
 
     if (fetch) {
-      const r = await this._netGit(['fetch', '--quiet', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
-      // A remote that simply has no such branch is not an error: this host is the first to push it.
+      const r = await this._netGit(['fetch', '--quiet', remote, boardFetchRefspec(remote)]);
+      // A remote that simply has nothing under the namespace is not an error: this host is the first
+      // to push a board there. A wildcard refspec that matches nothing exits 0 anyway; the two
+      // messages are kept for a git that names them.
       if (r.status !== 0 && !/couldn't find remote ref|not found in upstream/i.test(r.out)) {
         if (OFFLINE.test(r.out)) return answer({ offline: true, detail: gitSays(r.out) || 'offline' });
-        throw fail(`\`git fetch ${remote} ${branch}\` failed: ${gitSays(r.out) || 'unknown error'} — check the remote with \`git -C ${this.root()} remote -v\`.`);
+        throw fail(`\`git fetch ${remote} ${boardFetchRefspec(remote)}\` failed: ${gitSays(r.out) || 'unknown error'} — check the remote with \`git -C ${this.root()} remote -v\`.`);
       }
+      // The clone that just fetched should not have to name the refspec again. Idempotent, and never
+      // over the `+refs/heads/*` line a clone already has (`ensureFetchRefspec`).
+      ensureFetchRefspec(this.root(), remote);
     }
 
     // The fetch may have moved the tracking ref, and only that one.
@@ -539,27 +555,27 @@ export class LocalStore {
     if (!push) return answer({ detail: 'fetch only' });
 
     const from = here;
-    if (!from) return answer({ skipped: 'no-branch', detail: `there is no ${branch} branch in ${this.root()} and none on ${remote} — run \`hkb init\`` });
+    if (!from) return answer({ skipped: 'no-branch', detail: `there is no board at ${this.ref} in ${this.root()} and none on ${remote} — run \`hkb init\`` });
     if (this.pushDisabled({ exists: true })) return answer({ skipped: 'off', detail: `sync.push is false in ${branch}'s board.json` });
     if (from === there) return answer({ detail: 'up to date' });
 
-    const r = await this._netGit(['push', remote, `refs/heads/${branch}:refs/heads/${branch}`]);
+    const r = await this._netGit(['push', remote, `${this.ref}:${this.ref}`]);
     if (r.status !== 0) {
       if (OFFLINE.test(r.out)) return answer({ offline: true, detail: gitSays(r.out) || 'offline' });
-      if (/non-fast-forward|fetch first|rejected/i.test(r.out)) throw fail(this._divergedMessage(from, this._rev(`refs/remotes/${remote}/${branch}`)));
-      throw fail(`\`git push ${remote} ${branch}\` failed: ${gitSays(r.out) || 'unknown error'}`);
+      if (/non-fast-forward|fetch first|rejected/i.test(r.out)) throw fail(this._divergedMessage(from, this._tracking()));
+      throw fail(`\`git push ${remote} ${this.ref}\` failed: ${gitSays(r.out) || 'unknown error'}`);
     }
     // The remote's copy is now `from`, and the tracking ref is told so under the same compare-and-swap
     // as the rest: `there` is what this pass read. If somebody's `git fetch` moved it in between, the
     // CAS loses and the ref is already right — so the answer reports what the ref *is*, re-read,
     // rather than what this call meant to write.
-    const upd = this._setRef(`refs/remotes/${remote}/${branch}`, from, there);
+    const upd = this._setRef(this.trackingRef, from, there);
     there = upd.status === 0 ? from : this._tracking();
-    return answer({ pushed: true, detail: `pushed ${from.slice(0, 7)} to ${remote}/${branch}` });
+    return answer({ pushed: true, detail: `pushed ${from.slice(0, 7)} to ${remote} ${this.ref}` });
   }
 
   /**
-   * Bring `refs/heads/<branch>` up to the remote-tracking ref, or answer null when there is nothing
+   * Bring `refs/kb/boards/<slug>` up to the remote-tracking ref, or answer null when there is nothing
    * to bring: no tracking ref, already equal, or a local branch that is *ahead* (the push publishes
    * that one).
    *
@@ -575,18 +591,18 @@ export class LocalStore {
     for (let i = 0; i < tries; i++) {
       // Read through git rather than the tier: `tip()` falls back to the remote-tracking ref when
       // there is no local branch, and this is the one place that must tell the two apart.
-      const here = this._rev(`refs/heads/${branch}`);
+      const here = this._rev(this.ref);
       const there = this._tracking();
       if (!there || here === there) return null;
       if (!here) {
-        // A clone that has read the board off `origin/kb-board` and now wants a local branch to
+        // A clone that has read the board off the remote-tracking ref and now wants a local one to
         // write. `''` as the old value is git's "this ref must not exist" — the CAS for a create.
-        if (this._setRef(`refs/heads/${branch}`, there, '').status !== 0) continue;
+        if (this._setRef(this.ref, there, '').status !== 0) continue;
         this._afterRefMoved();
         return { local: there, detail: `created ${branch} at ${short(there)}`, created: true };
       }
       if (this._ancestor(here, there)) {
-        if (this._setRef(`refs/heads/${branch}`, there, here).status !== 0) continue;
+        if (this._setRef(this.ref, there, here).status !== 0) continue;
         this._afterRefMoved();
         return { local: there, detail: `fast-forwarded to ${short(there)}`, created: false };
       }
@@ -594,8 +610,8 @@ export class LocalStore {
       return null; // local is ahead of the remote: the push below is what publishes it
     }
     throw fail(
-      `refs/heads/${branch} moved while \`hkb sync\` was fast-forwarding it, ${tries} times in a row — `
-      + `something else in this checkout is writing the branch. Look at \`git -C ${this.root()} reflog ${branch}\`, `
+      `${this.ref} moved while \`hkb sync\` was fast-forwarding it, ${tries} times in a row — `
+      + `something else in this checkout is writing the board. Look at \`git -C ${this.root()} reflog ${branch}\`, `
       + 'stop the other writer (`hkb down`), and run `hkb sync` again.',
     );
   }
@@ -615,7 +631,7 @@ export class LocalStore {
    *   and knows there is a branch, so this does not read them a second time.
    */
   pushDisabled({ exists = false } = {}) {
-    if (!exists && !this._rev(`refs/heads/${this.branch}`) && !this._tracking()) return false;
+    if (!exists && !this._rev(this.ref) && !this._tracking()) return false;
     return this.git._read().board?.settings?.sync?.push === false;
   }
 
@@ -623,11 +639,11 @@ export class LocalStore {
   _divergedMessage(here, there) {
     const owner = this.git._read().board?.host || 'another host';
     return (
-      `${this.branch} and ${this.remote}/${this.branch} have diverged (${short(here)} vs ${short(there)}) — `
+      `${this.ref} and ${this.trackingRef} have diverged (${short(here)} vs ${short(there)}) — `
       + `the board has one writer (docs/local-first.md §6.2) and two hosts have written this one. `
       + `hkb will not merge them. Look at what each side decided with `
-      + `\`git -C ${this.root()} log --oneline ${this.branch} ${this.remote}/${this.branch}\`, keep one `
-      + `(\`git -C ${this.root()} update-ref refs/heads/${this.branch} <sha>\`), and make sure only host `
+      + `\`git -C ${this.root()} log --oneline ${this.ref} ${this.trackingRef}\`, keep one `
+      + `(\`git -C ${this.root()} update-ref ${this.ref} <sha>\`), and make sure only host `
       + `"${owner}" writes it — \`hkb init --take-over\` on the host that should.`
     );
   }
@@ -647,7 +663,7 @@ export class LocalStore {
     return r.status === 0 && GIT_SHA_RE.test(r.stdout) ? r.stdout : null;
   }
 
-  _tracking() { return this._rev(`refs/remotes/${this.remote}/${this.branch}`); }
+  _tracking() { return this._rev(this.trackingRef); }
 
   _ancestor(a, b) { return this._git(['merge-base', '--is-ancestor', a, b]).status === 0; }
 
@@ -674,7 +690,7 @@ const short = (sha) => (sha ? String(sha).slice(0, 7) : 'nothing');
  *     answer a stamp from the future with *yes* as well — for a different reason, and this is the
  *     one that was wrong. A clock corrected backwards (NTP, a VM or WSL resync, a laptop waking)
  *     makes `now - last` negative, and `delta >= 0 && delta < window` then read that as **due**: the
- *     dispatcher committed a stamp on `kb-board` and pushed it on *every* tick until real time
+ *     dispatcher committed a stamp on the board's ref and pushed it on *every* tick until real time
  *     caught up, on a branch documented as a history of decisions. It also made a live flaky test.
  *
  * The clamp the previous round put on `liveDispatcher` was the same fix applied to one side of the
@@ -733,7 +749,7 @@ const TIERS = new WeakMap();
 /** @param {any} ctx @param {{ref?: string, remote?: string, host?: string, now?: () => Date}} [opts] */
 export function gitTierFor(ctx, opts = {}) {
   if (!ctx || typeof ctx !== 'object' || opts.now) return openGitTier(ctx, opts);
-  const key = `${opts.ref || BOARD_REF} ${opts.remote || ''} ${opts.host || ''}`;
+  const key = `${opts.ref || boardRef(ctx.board)} ${opts.remote || ''} ${opts.host || ''}`;
   let byKey = TIERS.get(ctx);
   if (!byKey) { byKey = new Map(); TIERS.set(ctx, byKey); }
   let tier = byKey.get(key);
@@ -782,13 +798,51 @@ export function openLocalStore(ctx, { reconcile = true, ...opts } = {}) {
  * Does this checkout have a local board at all? One `rev-parse`, and the question `openStore` asks
  * when nothing in `.kanban/board.json` says which store to use.
  */
-export function localBoardExists(ctx, { ref = BOARD_REF } = {}) {
+export function localBoardExists(ctx, { ref = null } = {}) {
   const root = storeRoot(ctx);
-  const branch = ref.replace(/^refs\/heads\//, '');
-  for (const r of [ref, `refs/remotes/${(typeof ctx === 'object' && ctx?.cfg?.remote) || 'origin'}/${branch}`]) {
+  const remote = (typeof ctx === 'object' && ctx?.cfg?.remote) || 'origin';
+  const board = ref || boardRef(ctx && typeof ctx === 'object' ? ctx.board : undefined);
+  for (const r of [board, trackingRefFor(board, remote)]) {
     if (runGit(root, ['rev-parse', '--verify', '--quiet', `${r}^{commit}`]).status === 0) return true;
   }
   return false;
+}
+
+/**
+ * Put `+refs/kb/boards/*:refs/remotes/<remote>/kb/boards/*` in `.git/config`, once.
+ *
+ * A board outside `refs/heads` is not carried by a default clone or fetch — that is the whole cost
+ * of keeping it out of `git branch` — and this is what buys it back for every `git fetch` after the
+ * first. **Appended, never replacing:** a remote's `+refs/heads/*:refs/remotes/<remote>/*` line is
+ * what makes the remote a remote, and a config write that overwrote it would break the repository
+ * for everything that is not hkb.
+ *
+ * @param {string} root  the store root (the common git dir's parent)
+ * @param {string} remote
+ * @returns {{added: boolean, refspec: string, why: string}}
+ */
+export function ensureFetchRefspec(root, remote = 'origin') {
+  const refspec = boardFetchRefspec(remote);
+  const key = `remote.${remote}.fetch`;
+  const got = runGit(root, ['config', '--get-all', key]);
+  // No remote block at all is not a place to add a fetch line: `git config --add` would create a
+  // `[remote "origin"]` section with a fetch refspec and no URL, which git then reports as a broken
+  // remote. `hkb sync` says "no git remote" for that case and this stays out of its way.
+  if (runGit(root, ['remote', 'get-url', remote]).status !== 0) return { added: false, refspec, why: 'no-remote' };
+  const lines = got.status === 0 ? got.stdout.split('\n').map((l) => l.trim()).filter(Boolean) : [];
+  // `+refs/kb/boards/*:...` and `refs/kb/boards/*:...` are the same refspec with and without the
+  // force flag, and a `refs/kb/*` line somebody wrote by hand already covers the namespace: none of
+  // them is worth a second line.
+  if (lines.some((l) => l.includes(`${BOARD_REF_PREFIX}/*:`) || l.includes('refs/kb/*:'))) return { added: false, refspec, why: 'present' };
+  const r = runGit(root, ['config', '--add', key, refspec]);
+  return { added: r.status === 0, refspec, why: r.status === 0 ? 'added' : gitSays(r.out) || 'git config failed' };
+}
+
+/** Does `.git/config` carry the refspec that makes a plain `git fetch` bring the board back? */
+export function hasFetchRefspec(root, remote = 'origin') {
+  const got = runGit(root, ['config', '--get-all', `remote.${remote}.fetch`]);
+  if (got.status !== 0) return false;
+  return got.stdout.split('\n').some((l) => l.includes(`${BOARD_REF_PREFIX}/*:`) || l.includes('refs/kb/*:'));
 }
 
 /**
@@ -945,8 +999,8 @@ export function cardRecord(task, { at = new Date().toISOString(), blockersKnown:
  *
  * The budget is one paginated comments read per card (`listComments` memoizes on the context, so the
  * run record, the results and the notes all come out of the same read) and **two** commits for the
- * whole board — one for the cards, one for the run records — rather than one per card: `git log
- * kb-board` should say "the board arrived", not replay a year of issue history.
+ * whole board — one for the cards, one for the run records — rather than one per card: the board's
+ * log should say "the board arrived", not replay a year of issue history.
  *
  * Idempotent by refusal, not by merge: a branch that already exists is left exactly as it is (the
  * card's "re-running `init` never touches an existing branch or index"), because a second import
@@ -978,7 +1032,7 @@ export async function importGithubBoard(ctx, { store = null, from = null, days =
       `${s.branch} already exists in ${s.root()} — \`hkb init --import\` migrates a GitHub board onto a *new* local board, `
       + `and re-importing over one that has been worked would overwrite it with GitHub's copy. `
       + `Look at what is there (\`git log --oneline ${s.branch}\`), and delete it deliberately if the import is what you want: `
-      + `\`git -C ${s.root()} branch -D ${s.branch} && rm -f ${file}*\`.`,
+      + `\`git -C ${s.root()} update-ref -d ${s.ref} && rm -f ${file}*\`.`,
     );
   }
   const gh = from || openGithubStore(ctx);
