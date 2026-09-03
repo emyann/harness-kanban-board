@@ -588,6 +588,29 @@ test('a card moved after its PR merged is left alone, not dragged back to done',
 });
 
 /**
+ * **One pull-request listing per question, not one per caller** (#304 review, item 9).
+ *
+ * CLAUDE.md states the cost as "one board read per tick and one pull-request listing".
+ * `mergedPrsByHead` used to issue its own unmemoized `state=closed` read, duplicating rows the
+ * `state=all` listing already returns — so a gc tick, which asks for `all` too, paid for the same
+ * answer twice (and up to ten pages each time).
+ */
+test('the tick pays for one listing per state, and never a third for the merged PRs', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.store.addIssue(kbIssue({ number: 7, status: 'review', agent: 'claude' }));
+  h.gh.addPull({ number: 90, head: 'kb-7-1', state: 'closed', merged: true, mergedAt: ago(60) });
+
+  await h.tick({ max: 0 });
+
+  const listings = h.gh.requests.filter((c) => c.kind === 'rest' && /\/pulls\?state=/.test(c.path || ''));
+  const states = listings.map((c) => (c.path.match(/state=(\w+)/) || [])[1]);
+  assert.deepEqual(states.filter((x) => x === 'closed'), [], 'the reconcile pass asks no listing of its own');
+  assert.equal(new Set(states).size, states.length, `one page per state, no duplicate listing: ${listings.map((c) => c.path).join(' · ')}`);
+  assert.equal(h.store.statusOf(7), 'done', 'and it still found the merge');
+});
+
+/**
  * **An unreachable forge does not fail the tick, and does not let it guess** (#304 review, item 1).
  *
  * The cards are local and need no network at all; a pull request is an *enrichment* of one. So a
