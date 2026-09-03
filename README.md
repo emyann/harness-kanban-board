@@ -172,6 +172,14 @@ is a file the repository *tracks*, the import refuses to write `"store": "local"
 that key is every collaborator's next `git pull`, not just this checkout's. The key is written after the
 migration has landed, so a refusal leaves the board exactly where it was.
 
+And a plain `hkb init` will not create a local board *over* one that has not been migrated. If `.kanban/board.json`
+carries no `store` key — every board.json written before the key existed — init asks the forge whether
+`kb:board:<slug>` issues are still there before it creates the `kb-board` branch, and refuses with the count and
+the command above if they are. A forge it cannot reach refuses too, in its own sentence: creating the branch is
+the irreversible half, and "could not check" is not "there is nothing there". `hkb init --force` makes the local
+board anyway and says what it is walking away from. A repository with no board.json is never asked about, so
+`hkb init --repo owner/name --no-labels` still adopts a fresh repo with `gh` logged out.
+
 ### Sharing a board
 
 The `kb-board` branch has **one writer** — the host `board.json` names. That host runs the loop; `hkb sync`

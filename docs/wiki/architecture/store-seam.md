@@ -11,7 +11,7 @@ covers:
   - path: src/forge.js
     sha: 1d9e17cd8fad3500b512ef10843d541cda2c65a4
   - path: src/bridge/github-issues.js
-    sha: 55b3b9a708e5d00bdc2cd02a221c0867b10aaea3
+    sha: 89337d4523b1b0e3a335a29c7ad1cafbabaa2070
   - path: src/board.js
     sha: 543224fb76022abd64b56d834ae0da17b64cb066
   - path: src/store/git.js
@@ -27,8 +27,8 @@ covers:
   - path: src/gc.js
     sha: cc129d307e845211036472a76ed7e0f456be1329
   - path: src/init.js
-    sha: fe1111b329cf313fdd0c408a932003635204432d
-generated_at_commit: b0acc52
+    sha: 986db0bb9f95179b12c7c012b61e2d9f3e20a7e8
+generated_at_commit: 457f943
 last_refreshed: 2026-09-03
 related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-and-leases, concepts/board-protocol]
 ---
@@ -80,7 +80,11 @@ when the human passed `--store local`, when the board is new (the default *is*
 the decision), when it was already there, or when `--import` migrates. A plain
 re-init writes nothing — it used to write `"store": "local"` into a git-tracked
 board.json as a side effect, which is the same change `--import` refuses to make
-without `--force`.
+without `--force`. Writing nothing is not the same as *assuming* nothing, though:
+before it creates the branch, an init over a board.json that carries no `store`
+key asks the forge whether the cards are still there (`needsMigrationProbe` /
+`migrationVerdict`, `src/init.js`; see *architecture/local-store*, "Which store a
+board is on").
 
 A verb that writes is refused on a host that is not `board.host`
 (`assertOwningHost`) — and the test is on the *invocation*, not the verb name:
@@ -106,9 +110,12 @@ driver.
 
 What survives of GitHub Issues is `src/bridge/github-issues.js`: the **read**
 half, and only that — `fetchBoard`, `fetchClosedRecent`, `listComments`,
-`loadRun`, and the `refs/kb/locks/*` reads the migration sweeps up afterwards.
-It has no writes, no claims and no `openStore` branch, and its only caller is
-`importGithubBoard` (`src/store/local.js`). It lives under `src/bridge/` because
+`loadRun`, `countBoardIssues`, and the `refs/kb/locks/*` reads the migration
+sweeps up afterwards. It has no writes, no claims and no `openStore` branch, and
+its callers are `importGithubBoard` (`src/store/local.js`) and `hkb init`'s
+pre-branch probe. `countBoardIssues` is the one read that never throws: it
+answers "reachable, N cards" or "could not be asked", and what to do with the
+second belongs to the caller. It lives under `src/bridge/` because
 that is where the bridge adapter goes when it comes back (`docs/local-first.md`
 §8) — this is its read half, arrived early.
 

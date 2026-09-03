@@ -680,6 +680,62 @@ export function resolveStore(flags = {}, existing = null) {
 }
 
 /**
+ * Does this `init` have to ask the forge whether the board it is about to create already exists
+ * there? Pure, so the four conditions are a test rather than a paragraph.
+ *
+ * `resolveStore` answers for a board.json that *declares* `"store": "github"`. This is the other
+ * shape, and the one that actually exists in the wild: a board.json written before the key did,
+ * which declares nothing. `storeKind` resolves an absent key to `local`, so nothing refuses, nothing
+ * is written into the tracked file (`pinStore` is false), and `setUpLocalBoard` cheerfully creates
+ * an empty `kb-board` branch beside a board with hundreds of cards on it. The next `hkb list` prints
+ * an empty board and says nothing — the same silent abandonment `resolveStore` exists to prevent,
+ * reached by the one path its guard cannot see.
+ *
+ * So: an *existing* config, no `store` key, no `--import` (that is the migration), and no local
+ * branch yet (once the branch is here the board is local and there is nothing left to strand).
+ * A repository with no board.json at all is a fresh adoption and is never probed — that is what
+ * keeps `hkb init --repo owner/name --no-labels`, the offline path, working on a new repo.
+ * @param {{flags?: any, existing?: any, branchExists?: boolean}} [opts]
+ */
+export function needsMigrationProbe({ flags = {}, existing = null, branchExists = false } = {}) {
+  if (!existing) return false;
+  if (existing.store !== undefined) return false;
+  if (flags.import) return false;
+  if (branchExists) return false;
+  return true;
+}
+
+/** The name `migrationVerdict` says out loud, so its messages never drift from the file init writes. */
+const BOARD_FILE_NAME = '.kanban/board.json';
+
+/**
+ * What to do with `countBoardIssues`' answer. Pure: `null` means proceed silently, `{refuse}` is an
+ * exit-2 message, `{proceed}` is a line to log and carry on.
+ *
+ * The asymmetry is deliberate. Creating the branch is the **irreversible** half — an empty board
+ * over a real one, with no message — so "could not check" refuses too, and says which of the two
+ * sentences it is: a board that is known to be on the forge, and a forge that could not be asked.
+ * `--force` is the human's "I know": it proceeds, and names what it is walking away from.
+ * @param {{label?: string, reachable?: boolean, count?: number, capped?: boolean, why?: string|null}} probe
+ * @param {{board?: string, force?: boolean}} [opts]
+ * @returns {{refuse: string}|{proceed: string}|null}
+ */
+export function migrationVerdict(probe, { board = 'default', force = false } = {}) {
+  const label = probe?.label || L.board(board || 'default');
+  if (probe?.reachable && !probe.count) return null; // no kb cards on the forge: a fresh repository
+  const how = force ? '`--force`: creating the local board anyway' : null;
+  if (probe?.reachable) {
+    const n = probe.capped ? `at least ${probe.count}` : `${probe.count}`;
+    const why = `${BOARD_FILE_NAME} names no store, and this repository still has ${n} \`${label}\` issue(s) on GitHub — its board has not been migrated yet.`;
+    if (force) return { proceed: `${why} ${how}; those cards stay on GitHub and hkb will not read them again.` };
+    return { refuse: `${why} Creating the \`kb-board\` branch here would leave every one of them unreachable. \`hkb init --import\` moves them onto the local board; \`hkb init --force\` creates an empty one anyway and abandons them.` };
+  }
+  const why = `${BOARD_FILE_NAME} names no store, so this board may still be on GitHub Issues — and the forge could not be reached to check (${probe?.why || 'unknown error'}).`;
+  if (force) return { proceed: `${why} ${how}; if there is a \`${label}\` board on GitHub it stays there.` };
+  return { refuse: `${why} Creating the \`kb-board\` branch is the irreversible half, so hkb stops rather than guess. Check with \`gh auth status\`, then \`hkb init\` (or \`hkb init --import\`) — or \`hkb init --force\` to make a local board regardless.` };
+}
+
+/**
  * Is `.kanban/board.json` a file this repository tracks?
  *
  * It usually is — the board's config is meant to be shared — and that is exactly why the migration
@@ -909,6 +965,29 @@ export function registerCheckout(root, log) {
 }
 
 /**
+ * The probe `needsMigrationProbe` decides on, run and acted upon. Nothing here writes: it is the
+ * last thing between a plain `hkb init` and a `kb-board` branch created over a board that is still
+ * on the forge, so it runs before step 2 touches a file.
+ *
+ * `ctx.repo` is not set until step 3, and this needs it — so the probe gets one built from the repo
+ * step 1 just resolved rather than mutating the context out of order.
+ */
+async function refuseUnmigratedBoard(ctx, flags, { root, existing, repo, board }, log) {
+  const { BOARD_REF } = await import('./store/local.js');
+  const branchExists = runGit(root, ['rev-parse', '--verify', '--quiet', BOARD_REF]).status === 0;
+  if (!needsMigrationProbe({ flags, existing, branchExists })) return;
+  const [owner, name] = String(repo.nameWithOwner).split('/');
+  const { countBoardIssues } = await import('./bridge/github-issues.js');
+  const probe = await countBoardIssues({ ...ctx, board, repo: { owner, repo: name, nameWithOwner: repo.nameWithOwner } }, board);
+  const verdict = migrationVerdict(probe, { board, force: !!flags.force });
+  if (!verdict) return;
+  if ('proceed' in verdict) { log(`store: ${verdict.proceed}`); return; }
+  const e = /** @type {any} */ (new Error(verdict.refuse));
+  e.exitCode = 2;
+  throw e;
+}
+
+/**
  * Create (or adopt) the local board: the `kb-board` branch, the index beside it, and the two things
  * a human has to be told about a board with one writer — that the branch is pushed, and which host
  * owns it.
@@ -994,6 +1073,12 @@ export async function init(ctx, flags, log) {
   // 1. repo
   const repo = flags.repo ? { nameWithOwner: flags.repo, defaultBranch: 'main' } : detectRepo();
   log(`repo: ${repo.nameWithOwner}`);
+
+  // 1b. the other unmigrated board: the one that declares nothing. `resolveStore` above refused a
+  //     board.json that says `"store": "github"`; a board.json written before that key existed says
+  //     nothing at all, resolves to `local`, and would have had an empty `kb-board` branch created
+  //     beside every card it still holds on the forge. Ask the forge before creating anything.
+  await refuseUnmigratedBoard(ctx, flags, { root, existing, repo, board }, log);
 
   // 2. skill: .agents/skills/kanban (canonical) + .claude/skills/kanban symlink.
   //    In the hkb repo the package *is* the source, so a copy there would be a second source of

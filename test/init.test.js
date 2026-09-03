@@ -692,6 +692,117 @@ test('a plain `hkb init` over a board still on the GitHub store refuses, and aba
   assert.equal(board(imported.root).store, 'local', '--import is the migration, and pins the key it moved to');
 });
 
+// ---------- the *other* unmigrated board: the one that declares nothing ----------
+// `resolveStore` answers for `"store": "github"`. The board.json this repository actually has was
+// written before that key existed and declares nothing at all: `storeKind` resolves the absent key
+// to `local`, `pinStore` is false so nothing is written, and `setUpLocalBoard` created an empty
+// `kb-board` branch beside 188 cards still sitting on the forge. `hkb list` then printed an empty
+// board and said nothing — from the command an operator runs *because* `hkb list` went quiet.
+
+/** Put a board back the way an unmigrated one looks: no `store` key, no branch, no index. */
+const unmigrate = (root) => {
+  const cfg = board(root);
+  delete cfg.store;
+  fs.writeFileSync(path.join(root, BOARD_FILE), JSON.stringify(cfg, null, 2));
+  spawnSync('git', ['branch', '-D', 'kb-board'], { cwd: root, encoding: 'utf8' });
+  fs.rmSync(path.join(root, '.git', 'hkb'), { recursive: true, force: true });
+};
+
+test('a plain `hkb init` over an unkeyed board.json with cards on the forge refuses, naming the count', async () => {
+  const legacy = await runInit();
+  unmigrate(legacy.root);
+  legacy.gh.addIssue({ number: 7, labels: [L.board('default'), L.status('todo')] });
+  legacy.gh.addIssue({ number: 8, labels: [L.board('default'), L.status('done')], state: 'CLOSED' });
+  legacy.gh.addIssue({ number: 9, labels: ['bug'] }); // not a card, and must not be counted
+
+  await assert.rejects(
+    () => runInit([], legacy),
+    (e) => e.exitCode === 2
+      && /still has 2 `kb:board:default` issue\(s\)/.test(e.message)
+      && /hkb init --import/.test(e.message),
+    'it refuses, names how many cards are out there, and names the migration',
+  );
+
+  // And nothing ran: the branch that would have shadowed them was never created, and the key that
+  // would have declared the empty board local was never written.
+  assert.equal(branchTip(legacy.root), '', 'no empty board was created over the cards');
+  assert.equal(board(legacy.root).store, undefined, 'and no key was written to say otherwise');
+});
+
+test('a repo with no kb cards on it inits clean, --no-labels included', async () => {
+  // A genuinely fresh repository is not an unmigrated board: the probe comes back reachable and
+  // empty, and init proceeds silently. This is the offline adoption path from the README, so it has
+  // to survive the guard above.
+  const legacy = await runInit();
+  unmigrate(legacy.root);
+  legacy.gh.addIssue({ number: 4, labels: ['enhancement'] }); // somebody's ordinary issues
+
+  const again = await runInit([], legacy);
+  assert.equal(again.code, 0);
+  assert.match(branchTip(legacy.root), /^[0-9a-f]{40}$/, 'the local board was created');
+  assert.ok(!again.printed.some((l) => /has not been migrated/.test(l)), again.printed.join('\n'));
+
+  const fresh = await runInit(['--no-labels']);
+  assert.equal(fresh.code, 0);
+  assert.match(branchTip(fresh.root), /^[0-9a-f]{40}$/, 'a fresh repo never probes at all — there is no board.json to be behind');
+});
+
+test('a forge that cannot be reached refuses with its own sentence, not the migration one', async () => {
+  const legacy = await runInit();
+  unmigrate(legacy.root);
+  legacy.gh.fail({ method: 'GET', path: 'issues' }, { status: 401, message: 'gh: not logged in', times: 5 });
+
+  await assert.rejects(
+    () => runInit([], legacy),
+    (e) => e.exitCode === 2
+      && /could not be reached to check/.test(e.message)
+      && /gh auth status/.test(e.message)
+      && !/still has \d+ `kb:board/.test(e.message),
+    'creating the branch is the irreversible half, so an unknown answer refuses too — and says which refusal it is',
+  );
+  assert.equal(branchTip(legacy.root), '', 'and it refuses *before* creating anything');
+});
+
+test('--force creates the local board anyway, and says what it is walking away from', async () => {
+  const legacy = await runInit();
+  unmigrate(legacy.root);
+  legacy.gh.addIssue({ number: 7, labels: [L.board('default')] });
+
+  const forced = await runInit(['--force'], legacy);
+  assert.equal(forced.code, 0);
+  assert.match(branchTip(legacy.root), /^[0-9a-f]{40}$/, '--force is the human saying "I know"');
+  assert.ok(
+    forced.printed.some((l) => /^store: .*still has 1 `kb:board:default` issue\(s\)/.test(l) && /stay on GitHub/.test(l)),
+    `--force must still name the cards it abandons:\n${forced.printed.join('\n')}`,
+  );
+});
+
+test('needsMigrationProbe and migrationVerdict: the four conditions and the three answers', async () => {
+  const { needsMigrationProbe, migrationVerdict } = await import('../src/init.js');
+
+  // Only an existing, unkeyed, un-branched board that is not already being migrated is asked about.
+  assert.equal(needsMigrationProbe({ existing: {} }), true);
+  assert.equal(needsMigrationProbe({ existing: null }), false, 'a fresh repo has nothing to strand');
+  assert.equal(needsMigrationProbe({ existing: { store: 'local' } }), false, 'a keyed board already answered');
+  assert.equal(needsMigrationProbe({ existing: { store: 'github' } }), false, 'resolveStore refused that one already');
+  assert.equal(needsMigrationProbe({ existing: {}, flags: { import: true } }), false, '--import *is* the migration');
+  assert.equal(needsMigrationProbe({ existing: {}, branchExists: true }), false, 'the board is already local');
+
+  assert.equal(migrationVerdict({ reachable: true, count: 0 }), null, 'no cards on the forge: proceed, silently');
+
+  const found = migrationVerdict({ label: 'kb:board:default', reachable: true, count: 3 });
+  assert.match(found.refuse, /still has 3 `kb:board:default` issue\(s\)/);
+  assert.match(found.refuse, /hkb init --import/);
+  const capped = migrationVerdict({ label: 'kb:board:default', reachable: true, count: 100, capped: true });
+  assert.match(capped.refuse, /at least 100/, 'a full page says "at least", never a number it does not know');
+
+  const dark = migrationVerdict({ label: 'kb:board:default', reachable: false, why: 'not logged in' });
+  assert.match(dark.refuse, /could not be reached to check \(not logged in\)/);
+
+  assert.match(migrationVerdict({ reachable: true, count: 3 }, { force: true }).proceed, /stay on GitHub/);
+  assert.match(migrationVerdict({ reachable: false, why: 'offline' }, { force: true }).proceed, /--force/);
+});
+
 test('--store github is refused by name, and names the migration instead', async () => {
   await assert.rejects(() => runInit(['--store', 'github']), (e) => e.exitCode === 2 && /--store github is gone/.test(e.message));
   await assert.rejects(() => runInit(['--store', 'github']), (e) => /hkb init --import/.test(e.message));

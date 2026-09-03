@@ -13,14 +13,14 @@ covers:
   - path: src/store/sqlite.js
     sha: ab60bab80331ff0a2ac66141062eb3518a0b4fee
   - path: src/init.js
-    sha: fe1111b329cf313fdd0c408a932003635204432d
+    sha: 986db0bb9f95179b12c7c012b61e2d9f3e20a7e8
   - path: src/doctor.js
     sha: d9df9b7620a2be2d04e0ca59597cfc075381ac60
   - path: src/gc.js
     sha: cc129d307e845211036472a76ed7e0f456be1329
   - path: src/cli.js
     sha: a4d80e1fb0fdf6e8e3c0e57494423720775af950
-generated_at_commit: b0acc52
+generated_at_commit: 457f943
 last_refreshed: 2026-09-03
 related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
@@ -70,6 +70,27 @@ rather than being handed a board hkb cannot make.
 `hkb init` writes the key only when it is a **decision** — the human's
 `--store`, a fresh board (the default *is* the decision), a board that already
 carries it, or an `--import` that migrates. A plain re-init writes nothing.
+
+**And a board that declares nothing is asked about.** Writing nothing is the
+right answer for the *key*, but it is not an answer about the **cards**:
+`resolveStore` refuses a board.json that says `"store": "github"`, and the
+board.json most repositories actually have was written before that key existed
+and says nothing at all. Absent resolves to `local`, nothing is written, and
+`setUpLocalBoard` would create an empty `kb-board` branch beside every card
+still on the forge — an empty `hkb list` and no message, from the command an
+operator runs *because* `hkb list` went quiet. So `needsMigrationProbe`
+(`src/init.js`) puts one condition in front of it: an existing config, no
+`store` key, no `--import`, no branch yet. When all four hold, `init` asks the
+forge — one `GET /issues?labels=kb:board:<slug>&state=all` through
+`countBoardIssues` (`src/bridge/github-issues.js`), the bridge's read half, not
+`fetchBoard` — and `migrationVerdict` decides: no cards is a fresh repository and
+proceeds silently; cards found is exit 2 naming the count and `hkb init
+--import`; a forge that **could not be asked** is also exit 2, in its own
+sentence, because creating the branch is the irreversible half and an unknown
+answer must not be read as "none". `--force` proceeds either way and says what
+it is walking away from. A repository with no board.json at all is never probed,
+which is what keeps `hkb init --repo owner/name --no-labels` — the offline
+adoption path — working on a new repo.
 
 ## The three rules
 

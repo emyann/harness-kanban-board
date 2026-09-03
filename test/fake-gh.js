@@ -385,8 +385,12 @@ export class FakeGh {
     } else if (p === 'issues') {
       if (method === 'GET') {
         const state = (q.get('state') || 'open').toLowerCase();
+        // `labels` is AND-of-all, the way GitHub's own list endpoint reads it — that is what makes
+        // `?labels=kb:board:<slug>` a board probe (`countBoardIssues`) and not a repo dump.
+        const wanted = (q.get('labels') || '').split(',').map((s) => s.trim()).filter(Boolean);
         const all = [...this.issues.values()]
           .filter((i) => state === 'all' || String(i.state).toLowerCase() === state)
+          .filter((i) => wanted.every((l) => (i.labels || []).includes(l)))
           .map((i) => ({ ...this.#issueRest(i), created_at: i.createdAt ?? i.updatedAt }));
         return this.#page(all, q);
       }

@@ -222,6 +222,37 @@ export function openGithubIssues(ctx) {
   };
 }
 
+/** One page is all this probe asks for. A board with more than this is still "a board". */
+export const BOARD_PROBE_PAGE = 100;
+
+/**
+ * Does this repository still hold a board on GitHub Issues?
+ *
+ * One REST list — `GET /issues?labels=kb:board:<slug>&state=all` — and deliberately not
+ * `fetchBoard`: the caller is `hkb init`, which is about to create the `kb-board` branch and only
+ * needs to know whether doing so would leave cards stranded. It never throws: an unreachable forge
+ * (offline, `gh` logged out, a repo that does not exist) is an *answer* — "could not check" — and
+ * the decision about what to do with that belongs to the caller, not here (`migrationVerdict`,
+ * src/init.js).
+ *
+ * `pull_request` rows are dropped: `/issues` returns pull requests too, and a PR carrying a board
+ * label is not a card.
+ * @param {any} ctx
+ * @param {string} [board] the board slug, as `kb:board:<slug>`
+ * @returns {Promise<{label: string, reachable: boolean, count: number, capped: boolean, why: string|null}>}
+ */
+export async function countBoardIssues(ctx, board = 'default') {
+  const label = L.board(board || 'default');
+  const q = `?state=all&per_page=${BOARD_PROBE_PAGE}&labels=${encodeURIComponent(label)}`;
+  try {
+    const rows = await rest('GET', api(ctx, `/issues${q}`));
+    const cards = (Array.isArray(rows) ? rows : []).filter((r) => !r?.pull_request);
+    return { label, reachable: true, count: cards.length, capped: cards.length >= BOARD_PROBE_PAGE, why: null };
+  } catch (e) {
+    return { label, reachable: false, count: 0, capped: false, why: (e && /** @type {any} */ (e).message) || String(e) };
+  }
+}
+
 // ---------- the claims the old protocol left on the forge ----------
 
 /** All lock refs in the repo: `[{ref, n, k, sha}]`. */
