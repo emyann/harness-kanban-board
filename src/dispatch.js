@@ -1200,8 +1200,21 @@ export function installStamp() {
  * ladder ran out — or when the code on disk has moved past what this process loaded: either way the
  * honest thing left is to die with a reason a supervisor and a human can both read.
  */
-/** Did this tick decide anything the branch has to record? Only then is there something to push. */
-export const DURABLE_TICK_KEYS = ['reconciled', 'reclaimed', 'reaped', 'promoted', 'claimed', 'guarded', 'auto_merge', 'self_heal'];
+/**
+ * Did this tick decide anything the branch has to record? Only then is there something to push.
+ *
+ * `tracks` and `spawn_failed` are on the list for the same reason as `claimed`: a track-root
+ * dispatch does `saveRun` and `setStatus(t, 'running')`, and a spawn that failed writes the card
+ * back — both durable, both reported nowhere else. Leaving them off meant a board driven entirely by
+ * track dispatch never pushed and, worse, never re-stamped: after `HOST_LIVE_MS` another host's
+ * `hkb init --take-over` sees no live dispatcher and takes a board that is ticking right now, which
+ * is the two-writers case the one-writer rule exists to prevent, reached from the inside.
+ * `track_conflicts` is the same shape, found by the test below: it comments, labels and saves a run.
+ *
+ * The test asserts this list against a real tick's summary rather than a copy of it, so a new key
+ * that reports a decision has to be classified here rather than defaulting to "not durable".
+ */
+export const DURABLE_TICK_KEYS = ['reconciled', 'reclaimed', 'reaped', 'promoted', 'claimed', 'guarded', 'auto_merge', 'self_heal', 'tracks', 'spawn_failed', 'track_conflicts'];
 
 /**
  * The loop's end-of-tick sync (docs/local-first.md §6.2, "Sync is git").
@@ -1213,14 +1226,16 @@ export const DURABLE_TICK_KEYS = ['reconciled', 'reclaimed', 'reaped', 'promoted
  */
 async function syncPass(ctx, summary, log) {
   try {
+    // The free question first: on a quiet tick there is nothing to push and nothing to stamp, and
+    // `storeKind` is two `git rev-parse` that buy nothing on a GitHub board.
+    if (!DURABLE_TICK_KEYS.some((k) => (summary?.[k] || []).length)) return;
     const { storeKind } = await import('./store/index.js');
     if (storeKind(ctx) !== 'local') return;
     const { openLocalStore, syncAfterTick } = await import('./store/local.js');
-    if (!DURABLE_TICK_KEYS.some((k) => (summary?.[k] || []).length)) return;
     const store = openLocalStore(ctx, { reconcile: false });
     try {
       store.markDispatcher();
-      syncAfterTick(ctx, { store, log });
+      await syncAfterTick(ctx, { store, log });
     } finally { store.close(); }
   } catch (e) {
     // A tick that decided something has already landed on the branch; the copy on the remote is a

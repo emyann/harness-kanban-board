@@ -857,7 +857,7 @@ export async function main(argv) {
       const { openLocalStore } = await import('./store/local.js');
       const store = openLocalStore(ctx, { reconcile: false });
       try {
-        const r = store.sync({ push: !flags['no-push'] });
+        const r = await store.sync({ push: !flags['no-push'] });
         store.open();
         const said = r.offline ? `offline — ${r.detail}`
           : r.skipped ? `nothing to do: ${r.detail}`

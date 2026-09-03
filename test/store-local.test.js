@@ -12,9 +12,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { openStore, storeKind, assertOwningHost } from '../src/store/index.js';
-import { openLocalStore, importGithubBoard, mountFor, syncAfterTick, cardRecord, SYNC_THROTTLE_MS } from '../src/store/local.js';
+import { gitTierFor } from '../src/store/local.js';
+import { openLocalStore, importGithubBoard, mountFor, syncAfterTick, cardRecord, SYNC_THROTTLE_MS, OFFLINE } from '../src/store/local.js';
 import { openGitTier } from '../src/store/git.js';
-import { DEFAULT_BOARD, hostId, readState } from '../src/board.js';
+import { DEFAULT_BOARD, hostId, readState, runGitAsync } from '../src/board.js';
 import { emptyRun, serializeResultComment, serializeRunComment } from '../src/model.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
@@ -194,15 +195,15 @@ test('markDispatcher stamps once, then holds off — it is a commit, not a heart
 
 // ---------- sync (§6.2) ----------
 
-test('sync pushes the branch, and a clone reads the same cards read-only', (t) => {
+test('sync pushes the branch, and a clone reads the same cards read-only', async (t) => {
   const { dir, origin, ctx, store } = board(t);
   const a = store.createTask({ title: 'first', status: 'ready', agent: 'claude' });
   store.createTask({ title: 'second', status: 'todo' });
 
-  const pushed = store.sync();
+  const pushed = await store.sync();
   assert.equal(pushed.pushed, true);
   assert.equal(pushed.local, git(origin, 'rev-parse', 'refs/heads/kb-board'), 'origin has the board');
-  assert.equal(store.sync().pushed, false, 'a second sync has nothing to push');
+  assert.equal((await store.sync()).pushed, false, 'a second sync has nothing to push');
 
   // A friend clones. No .kanban/board.json of their own, no local kb-board — just the remote copy.
   const clone = path.join(dir, 'clone');
@@ -220,10 +221,10 @@ test('sync pushes the branch, and a clone reads the same cards read-only', (t) =
   void ctx;
 });
 
-test('sync fast-forwards a clone that has a local branch, and refuses a divergence', (t) => {
+test('sync fast-forwards a clone that has a local branch, and refuses a divergence', async (t) => {
   const { dir, origin, store } = board(t);
   store.createTask({ title: 'first', status: 'ready' });
-  store.sync();
+  await store.sync();
 
   const clone = path.join(dir, 'clone');
   git(dir, 'clone', '-q', origin, clone);
@@ -234,19 +235,19 @@ test('sync fast-forwards a clone that has a local branch, and refuses a divergen
 
   // The owner writes and pushes; the clone fast-forwards to it and sees the new card.
   store.createTask({ title: 'second', status: 'ready' });
-  store.sync();
-  const ff = theirs.sync({ push: false });
+  await store.sync();
+  const ff = await theirs.sync({ push: false });
   assert.equal(ff.fastForwarded, true);
   assert.deepEqual(theirs.listTasks().map((x) => x.title).sort(), ['first', 'second']);
 
   // Now both sides write. The branch has one writer, so hkb refuses to guess which history is right.
   store.createTask({ title: 'owner wrote this', status: 'ready' });
-  store.sync();
+  await store.sync();
   theirs.git.commit((tree) => { tree.cards.set(999, { ...cardRecord({ number: 999, title: 'the clone wrote this', status: 'ready', kb: {} }) }); }, 'hkb: a second writer', { allowForeignHost: true });
-  assert.throws(() => theirs.sync(), (e) => e.exitCode === 2 && /diverged/.test(e.message) && /one writer/.test(e.message));
+  await assert.rejects(() => theirs.sync(), (e) => e.exitCode === 2 && /diverged/.test(e.message) && /one writer/.test(e.message));
 });
 
-test('sync is a no-op with no remote, and off when the board says so', (t) => {
+test('sync is a no-op with no remote, and off when the board says so', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-local-noremote-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   git(dir, 'init', '-q', '-b', 'main', dir);
@@ -256,25 +257,25 @@ test('sync is a no-op with no remote, and off when the board says so', (t) => {
   openGitTier(ctx).init('default');
   const store = openStore(ctx);
   t.after(() => store.close());
-  assert.equal(store.sync().skipped, 'no-remote');
+  assert.equal((await store.sync()).skipped, 'no-remote');
 
   store.setBoard({ settings: { sync: { push: false } } });
-  assert.equal(store.sync().skipped, 'off');
+  assert.equal((await store.sync()).skipped, 'no-remote', 'no remote is still the first answer');
 });
 
-test('the loop syncs after a tick that wrote, at most once a minute', (t) => {
+test('the loop syncs after a tick that wrote, at most once a minute', async (t) => {
   const { ctx, origin, store } = board(t);
   store.createTask({ title: 'first', status: 'ready' });
-  const first = syncAfterTick(ctx, { store });
+  const first = await syncAfterTick(ctx, { store });
   assert.equal(first.synced, true);
   assert.equal(first.result.pushed, true);
   assert.equal(Number.isFinite(readState(store.root).sync_at), true, 'the stamp is this host\'s, in .kanban/state.json');
 
   store.createTask({ title: 'second', status: 'ready' });
-  assert.equal(syncAfterTick(ctx, { store }).why, 'throttled');
+  assert.equal((await syncAfterTick(ctx, { store })).why, 'throttled');
   assert.equal(git(origin, 'rev-parse', 'refs/heads/kb-board'), first.result.local, 'and nothing was pushed');
 
-  const later = syncAfterTick(ctx, { store, now: Date.now() + SYNC_THROTTLE_MS + 1 });
+  const later = await syncAfterTick(ctx, { store, now: Date.now() + SYNC_THROTTLE_MS + 1 });
   assert.equal(later.result.pushed, true);
 });
 
@@ -368,7 +369,7 @@ test('the import deletes the lock refs on the remote and the local beat chains',
 
 // ---------- a card's whole life on a local board ----------
 
-test('create, claim, work and finish — the whole card, with nothing on GitHub', (t) => {
+test('create, claim, work and finish — the whole card, with nothing on GitHub', async (t) => {
   const { origin, store } = board(t);
   const card = store.createTask({ title: 'do the thing', status: 'ready', agent: 'claude' });
 
@@ -401,7 +402,7 @@ test('create, claim, work and finish — the whole card, with nothing on GitHub'
   for (const k of ['appeared', 'status', 'attempt', 'result', 'closed']) assert.ok(kinds.includes(k), `the log records ${k}: ${kinds.join(',')}`);
 
   // and the whole of it is one branch anyone can fetch
-  store.sync();
+  await store.sync();
   assert.equal(git(origin, 'rev-parse', 'refs/heads/kb-board'), store.git.tip());
   assert.match(git(origin, 'show', 'kb-board:cards/1.json'), /"status": "done"/);
 });
@@ -462,4 +463,231 @@ test('a run record written by the store is the same file the index reads back', 
   assert.equal(row.reason, 'needs_input');
   assert.equal(store.loadRun(card.number).run.failures, 2);
   void serializeRunComment;
+});
+
+// ---------- what the round-2 review found: a local answer decided after the GitHub path ran ----------
+
+test('the migration keeps the blockers of every open card, not only the tick lanes', async (t) => {
+  // A repository WITHOUT the GraphQL blockedBy field: every list costs one REST call, and the
+  // default `blockers: true` fills them in for todo/blocked only. A card in ready, review or
+  // running would then arrive with an empty list that means "not asked", and the branch would
+  // record it as "nothing blocks it" — the board's DAG, gone, on the one operation nobody re-runs.
+  const s = scratch(t);
+  const ctx = ctxAt(s.root, { repo: 'o/r' });
+  const gh = new FakeGh({ baseSha: '0'.repeat(40), caps: { blockedByGql: false } });
+  gh.addIssue(kbIssue({ number: 5, title: 'the blocker', status: 'ready' }));
+  gh.addIssue(kbIssue({ number: 6, title: 'in review, and blocked', status: 'review', blockedBy: [5] }));
+  gh.addIssue(kbIssue({ number: 8, title: 'waiting, and blocked', status: 'todo', blockedBy: [5] }));
+  const restore = gh.install();
+  t.after(restore);
+  ctx.repo = { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner };
+  ctx.cfg.repo = gh.nameWithOwner;
+
+  const store = openLocalStore(ctx, { reconcile: false });
+  t.after(() => store.close());
+  await importGithubBoard(ctx, { store, log: () => {}, now: () => new Date('2026-09-03T00:00:00Z') });
+
+  assert.deepEqual(store.getTask(8).blockedBy.map((b) => b.number), [5], 'a todo card, which the default would have filled in');
+  assert.deepEqual(store.getTask(6).blockedBy.map((b) => b.number), [5], 'and a review card, which it would not');
+});
+
+test('cardRecord refuses to write "no blockers" for a card nobody looked up', () => {
+  const task = { number: 9, title: 'x', status: 'ready', kb: {}, blockedBy: [], state: 'OPEN' };
+  assert.throws(
+    () => cardRecord(task, { blockersKnown: false }),
+    (e) => e.exitCode === 2 && /never looked up/.test(e.message) && /blockers: "all"/.test(e.message),
+  );
+  assert.deepEqual(cardRecord(task, { blockersKnown: true }).blocked_by, [], 'and writes it when it is a real answer');
+});
+
+test('a blocker that is not imported is dropped, said out loud, and does not block the card forever', async (t) => {
+  const s = scratch(t);
+  const ctx = ctxAt(s.root, { repo: 'o/r' });
+  const gh = new FakeGh({ baseSha: '0'.repeat(40) });
+  // #40 is open and blocked by #11, closed 200 days ago — outside the 90-day window, so it is not
+  // imported. Keeping the edge would leave #40 blocked by an id that reads back as an open issue
+  // nobody can close: `blockerDone()` false forever, `computeReady()` never true, #40 undispatchable.
+  gh.addIssue(kbIssue({ number: 11, title: 'ancient blocker', status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', updatedAt: '2025-06-01T00:00:00Z' }));
+  gh.addIssue(kbIssue({ number: 40, title: 'the child', status: 'todo', blockedBy: [11] }));
+  const restore = gh.install();
+  t.after(restore);
+  ctx.repo = { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner };
+
+  const lines = [];
+  const store = openLocalStore(ctx, { reconcile: false });
+  t.after(() => store.close());
+  const summary = await importGithubBoard(ctx, { store, log: (l) => lines.push(l), now: () => new Date('2026-09-03T00:00:00Z') });
+
+  assert.deepEqual(summary.dropped_blockers, [{ card: 40, blocker: 11 }], 'the summary says which edge went');
+  assert.ok(lines.some((l) => /#40 was blocked by #11/.test(l) && /dropped/.test(l)), `and so does the output: ${lines.join(' | ')}`);
+  assert.deepEqual(store.getTask(40).blockedBy, [], 'and #40 is not held back by a card that is not there');
+});
+
+test('the closed-card page is a cap, and the import says so rather than reading as the whole window', async (t) => {
+  const s = scratch(t);
+  const ctx = ctxAt(s.root, { repo: 'o/r' });
+  const gh = new FakeGh({ baseSha: '0'.repeat(40) });
+  gh.addIssue(kbIssue({ number: 1, title: 'open', status: 'ready' }));
+  for (let i = 0; i < 100; i++) {
+    gh.addIssue(kbIssue({ number: 200 + i, title: `closed ${i}`, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', updatedAt: '2026-09-01T00:00:00Z' }));
+  }
+  const restore = gh.install();
+  t.after(restore);
+  ctx.repo = { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner };
+
+  const lines = [];
+  const store = openLocalStore(ctx, { reconcile: false });
+  t.after(() => store.close());
+  const summary = await importGithubBoard(ctx, { store, log: (l) => lines.push(l), now: () => new Date('2026-09-03T00:00:00Z') });
+  assert.equal(summary.closed_capped, true);
+  assert.equal(summary.closed_page, 100);
+  assert.ok(lines.some((l) => /WARNING/.test(l) && /one page of 100/.test(l)), `the cap is named: ${lines.join(' | ')}`);
+});
+
+test('a lock ref that will not delete does not fail a migration that landed', async (t) => {
+  const s = scratch(t);
+  const ctx = ctxAt(s.root, { repo: 'o/r' });
+  const gh = seededGh();
+  const restore = gh.install();
+  t.after(restore);
+  ctx.repo = { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner };
+
+  const lines = [];
+  const store = openLocalStore(ctx, { reconcile: false });
+  t.after(() => store.close());
+  const summary = await importGithubBoard(ctx, {
+    store, log: (l) => lines.push(l), now: () => new Date('2026-09-03T00:00:00Z'),
+    leftovers: {
+      locks: { list: () => { throw new Error('the remote said no'); }, release: () => true },
+      chains: { list: () => { throw new Error('refs/kb/beats is locked'); }, drop: () => true },
+    },
+  });
+  assert.equal(summary.cards, 3, 'the board migrated');
+  assert.equal(summary.locks, 0);
+  assert.equal(summary.chains, 0);
+  assert.ok(lines.some((l) => /lock refs on the remote were left alone/.test(l)));
+  assert.ok(lines.some((l) => /beat chains were left alone/.test(l)));
+});
+
+test('sync fetches a board this checkout does not have a branch for yet', async (t) => {
+  // The friend's clone: `git clone --single-branch`, so `origin/kb-board` is not even here. Reading
+  // the board document first threw "there is no kb-board branch" at the exact person who ran the
+  // command to go and get one — and `hkb init` there then made a second, empty board.
+  const { dir, origin, store } = board(t);
+  store.createTask({ title: 'the owner made this', status: 'ready' });
+  await store.sync();
+
+  const clone = path.join(dir, 'thin');
+  git(dir, 'clone', '-q', '--single-branch', '--branch', 'main', origin, clone);
+  assert.equal(spawnSync('git', ['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/kb-board'], { cwd: clone }).status !== 0, true, 'the clone really has no copy of the branch');
+  fs.mkdirSync(path.join(clone, '.kanban'), { recursive: true });
+
+  const theirs = openLocalStore(ctxAt(clone), { reconcile: false });
+  t.after(() => theirs.close());
+  const r = await theirs.sync();
+  assert.equal(r.fastForwarded, true, `sync brought the board in: ${r.detail}`);
+  assert.deepEqual(theirs.listTasks().map((x) => x.title), ['the owner made this']);
+});
+
+test('sync.push false turns off the push and nothing else, and --no-push cannot do more than the default', async (t) => {
+  const { dir, origin, root, store } = board(t);
+  store.setBoard({ settings: { sync: { push: false } } });
+  store.createTask({ title: 'first', status: 'ready' });
+
+  // The push half is off: nothing this host decided reaches the remote.
+  const off = await store.sync();
+  assert.equal(off.skipped, 'off');
+  assert.equal(off.pushed, false);
+  assert.equal(spawnSync('git', ['rev-parse', '--verify', '--quiet', 'refs/heads/kb-board'], { cwd: origin }).status !== 0, true, 'origin has no board at all');
+
+  // The fetch half is NOT. A checkout that does not publish its copy still has to be able to read
+  // what another host published — that is the whole of what `hkb sync` is for on a reader's clone.
+  git(root, 'push', '-q', origin, 'kb-board:kb-board');
+  const other = path.join(dir, 'other');
+  git(dir, 'clone', '-q', origin, other);
+  const theirs = git(other, 'commit-tree', git(other, 'rev-parse', 'origin/kb-board^{tree}'), '-p', git(other, 'rev-parse', 'origin/kb-board'), '-m', 'hkb: somebody else decided something');
+  git(other, 'push', '-q', origin, `${theirs}:refs/heads/kb-board`);
+
+  const r = await store.sync();
+  assert.equal(r.fastForwarded, true, `push: false must not disable the fetch — ${r.detail}`);
+  assert.equal(r.pushed, false);
+  assert.equal(store.git.tip(), theirs, 'and the branch here is what the remote said');
+
+  // And the flag is the same switch, so the more restrictive spelling cannot do strictly more work.
+  const noPush = await store.sync({ push: false });
+  assert.equal(noPush.pushed, false);
+  assert.equal(noPush.offline, false);
+});
+
+test('the dispatcher stamp leaves the index level with the branch', async (t) => {
+  const clock = { at: new Date('2026-09-03T12:00:00Z') };
+  const { root } = scratch(t, { name: 'stamped' });
+  const ctx = ctxAt(root);
+  openGitTier(ctx).init('default');
+  const store = openLocalStore(ctx, { now: () => clock.at });
+  t.after(() => store.close());
+
+  assert.equal(store.markDispatcher(4242).stamped, true);
+  assert.equal(store.index.tip(), store.git.tip(), 'a stamp that is not indexed is a permanent `hkb doctor` warning on a healthy board');
+  assert.match(git(root, 'log', '-1', '--format=%s', 'kb-board'), /dispatcher on host/, 'and the log says what the commit is');
+});
+
+test('OFFLINE reads a git that never answered as offline, not as a broken remote', () => {
+  for (const said of [
+    'spawn git ETIMEDOUT after 15000ms',
+    'fatal: unable to access \'https://example/\': Connection timed out after 30001 milliseconds',
+    'ssh: connect to host example port 22: Connection refused',
+    'fatal: unable to access \'https://example/\': getaddrinfo() thread failed to start: EAI_AGAIN',
+    'error: RPC failed; ECONNRESET',
+  ]) assert.equal(OFFLINE.test(said), true, said);
+  assert.equal(OFFLINE.test('! [rejected] kb-board -> kb-board (non-fast-forward)'), false, 'a divergence is not a network');
+});
+
+test('mountFor keeps the LAST of two entries on one mount point', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-mounts2-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'mounts');
+  // `/proc/mounts` is in mount order. A network filesystem remounted over a local path is exactly
+  // what the probe exists to catch, and keeping the first entry reads it as the ext4 underneath.
+  fs.writeFileSync(file, [
+    '/dev/sda1 / ext4 rw 0 0',
+    '/dev/sdb1 /work ext4 rw 0 0',
+    'server:/export /work nfs4 rw 0 0',
+  ].join('\n') + '\n');
+  assert.equal(mountFor('/work/repo/.git/hkb', { mounts: file })?.type, 'nfs4');
+});
+
+test('the network git runs off the event loop, and a git that never answers reads as offline', async (t) => {
+  const { root } = scratch(t, { name: 'async' });
+  // 10.255.255.1 is not routable, so this hangs rather than failing fast — which is the case that
+  // matters: `spawnSync` would hold the dispatcher's loop for the whole timeout, and while it did,
+  // a finished worker's exit handler could not fire, the sleeper could not be woken and `hkb down`'s
+  // SIGTERM would not be handled.
+  let tickedWhileGitRan = 0;
+  const beat = setInterval(() => { tickedWhileGitRan++; }, 20);
+  const r = await runGitAsync(root, ['ls-remote', 'https://10.255.255.1/nothing.git'], { timeout: 400 });
+  clearInterval(beat);
+
+  assert.notEqual(r.status, 0);
+  assert.ok(tickedWhileGitRan > 0, 'timers kept firing while git was out on the network');
+  assert.equal(OFFLINE.test(r.out), true, `a git that never answered is offline, not a broken remote: ${r.out}`);
+});
+
+test('the one-writer guard and the verb behind it share one decoded tree', (t) => {
+  // `assertOwningHost` opened a tier to read one string out of board.json and threw the memo away;
+  // the verb behind it then opened the store and decoded the whole board again. Two `ls-tree -r`
+  // plus two `cat-file --batch` per `hkb create`, on every card of the board.
+  const { ctx, store } = board(t);
+  store.createTask({ title: 'a card', status: 'ready' });
+
+  assert.equal(assertOwningHost(ctx, 'create'), null, 'this host owns it');
+  const second = openStore(ctx);
+  t.after(() => { try { second.close(); } catch { /* already closed */ } });
+  assert.equal(second.git, store.git, 'one tier per context, so one decode');
+  assert.equal(gitTierFor(ctx, { host: ctx.host }), store.git);
+
+  // A caller with its own clock is a test, and never gets — or poisons — the shared one.
+  const withClock = gitTierFor(ctx, { host: ctx.host, now: () => new Date('2020-01-01T00:00:00Z') });
+  assert.notEqual(withClock, store.git);
+  assert.equal(gitTierFor(ctx, { host: ctx.host }), store.git, 'and the shared tier is still the shared tier');
 });

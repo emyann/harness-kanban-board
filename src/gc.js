@@ -7,10 +7,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fetchBoard, loadRun, deleteComment } from './tasks.js';
+import { loadRun, deleteComment } from './tasks.js';
 import { listLocks, listBeatChains, dropBeatChain, listTrackBranches, deleteTrackBranch } from './lock.js';
 import { logsDir, kanbanDir } from './board.js';
-import { storeKind } from './store/index.js';
+import { storeKind, openStore } from './store/index.js';
 
 const git = (root, args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
 const lastLine = (s) => String(s || '').trim().split('\n').pop() || '';
@@ -304,7 +304,16 @@ export function sweepTask(ctx, n, { keep = [], log = /** @type {(...a: any[]) =>
  */
 export async function sweep(ctx, { yes = false, days = 14, memo = null, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   ctx.requireBoard();
-  const tasks = await fetchBoard(ctx, { includeClosed: true });
+  // The store is chosen *before* the board is read, not after. `fetchBoard` is the GitHub driver's
+  // read, and calling it unconditionally meant a genuinely local board — one with no issues behind
+  // it at all — threw here, several sweeps before the `stats.store` branch below could skip
+  // anything. The skip message was therefore only ever reachable on a board that was also on
+  // GitHub, which is the one board that did not need it.
+  const kind = storeKind(ctx);
+  const store = openStore(ctx);
+  // `blockers: false` — no sweep here reads a dependency, and on a repo without the GraphQL field
+  // filling them in is one REST call per card.
+  const tasks = await store.listTasks({ states: ['OPEN', 'CLOSED'], blockers: false });
   const byNumber = new Map(tasks.map((t) => [t.number, t]));
   const settled = (t) => ['done', 'archived'].includes(t.status) || t.state === 'CLOSED';
   // A worktree named after a task this board has never heard of is scrap either way. A *branch* of
@@ -313,7 +322,7 @@ export async function sweep(ctx, { yes = false, days = 14, memo = null, log = /*
   const finished = (n) => { const t = byNumber.get(n); return !t || settled(t); };
   const finishedHere = (n) => { const t = byNumber.get(n); return !!t && settled(t); };
   const label = (n) => `task #${n} ${byNumber.get(n)?.status || 'not on board'}`;
-  const stats = { worktrees: 0, branches: 0, track_branches: 0, comments: 0, chains: 0, files: 0, pending: 0, skipped: 0, days, applied: !!yes, store: storeKind(ctx) };
+  const stats = { worktrees: 0, branches: 0, track_branches: 0, comments: 0, chains: 0, files: 0, pending: 0, skipped: 0, days, applied: !!yes, store: kind };
 
   const wt = sweepWorktrees(ctx, { finished, yes, label, log });
   const prByBranch = (n, branch) => (byNumber.get(n)?.prs || []).find((p) => p.headRefName === branch) || null;
@@ -337,6 +346,7 @@ export async function sweep(ctx, { yes = false, days = 14, memo = null, log = /*
     try { stats.chains = await sweepBeatChains(ctx, { yes, log }); } catch (e) { log(`beat chains skipped: ${e.message}`); }
   }
   stats.files = sweepFiles(ctx, { days, yes, log });
+  /** @type {any} */ (store).close?.(); // the local driver holds a SQLite connection; the GitHub one holds nothing
   return stats;
 }
 

@@ -16,7 +16,23 @@
 // go on calling `src/gh.js` whatever the board is kept in — a local board still opens its work on a
 // forge (§6.4).
 import { openGithubStore } from './github.js';
-import { openLocalStore, localBoardExists, assertLocalOwner } from './local.js';
+import { openLocalStore, localBoardExists, assertLocalOwner, forgetGitTiers } from './local.js';
+
+/**
+ * The answer `storeKind` already gave for a context.
+ *
+ * Two `git rev-parse` is not much, but `storeKind` is on the path of every board-writing verb, every
+ * `gc.sweep` and every dispatcher tick, and on a GitHub board it buys nothing at all. A board does
+ * not change store while a process runs — except in `hkb init`, which creates the branch under its
+ * own feet and calls `forgetStore` when it does.
+ * @type {WeakMap<object, string>}
+ */
+const KINDS = new WeakMap();
+
+/** Forget what `storeKind` answered for `ctx` — `hkb init` has just changed the answer. */
+export function forgetStore(ctx) {
+  if (ctx && typeof ctx === 'object') { KINDS.delete(ctx); forgetGitTiers(ctx); }
+}
 
 /**
  * Which store a board uses, and **the only place that decides it** (the card's contract).
@@ -39,7 +55,14 @@ export function storeKind(ctx) {
     e.exitCode = 2;
     throw e;
   }
-  return localBoardExists(ctx) ? 'local' : 'github';
+  if (ctx && typeof ctx === 'object' && KINDS.get(ctx) === 'local') return 'local';
+  const kind = localBoardExists(ctx) ? 'local' : 'github';
+  // Only `local` is remembered, and deliberately: a branch that exists does not stop existing while
+  // a process runs, so that answer cannot go stale — while `github` is exactly the answer `hkb init`
+  // and `hkb init --import` turn into `local` under their own feet. Caching the negative made an
+  // init that had just created the branch go on believing the board was on GitHub.
+  if (kind === 'local' && ctx && typeof ctx === 'object') KINDS.set(ctx, kind);
+  return kind;
 }
 
 /**

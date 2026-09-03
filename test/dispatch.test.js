@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { tick, withoutWorktreeFlag } from '../src/dispatch.js';
+import { tick, withoutWorktreeFlag, DURABLE_TICK_KEYS } from '../src/dispatch.js';
 import { DEFAULT_BOARD } from '../src/board.js';
 import { claim, release, listLocks } from '../src/lock.js';
 import { complete, requestChanges } from '../src/lifecycle.js';
@@ -1259,4 +1259,24 @@ test('a legacy remote attempt keeps its heartbeat-only liveness — no pid to lo
   assert.deepEqual(s.reclaimed, [], 'a fresh heartbeat is the whole check for a row with no local handle');
   assert.equal(h.gh.statusOf(5), 'running');
   assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/5/1'], 'and its lock is left alone');
+});
+
+// ---------- what the loop calls a tick worth pushing (docs/local-first.md §6.2) ----------
+
+test('DURABLE_TICK_KEYS names every summary key a tick writes the branch for', async (t) => {
+  // Read off a real tick's summary rather than a retyped list, so a new key that reports a decision
+  // has to be classified here rather than silently defaulting to "not durable". That default is
+  // what left `tracks` and `spawn_failed` off the list: a board driven by track dispatch does
+  // `saveRun` and `setStatus(t, 'running')`, reports it under `tracks` alone, and so never pushed
+  // and — worse — never re-stamped, which is how another host's `--take-over` comes to take a board
+  // that is ticking right now.
+  const h = harness();
+  t.after(h.cleanup);
+  const s = await tick(h.ctx, { log: h.log });
+
+  // The three keys that are not decisions: a claim somebody else won, a card the tick passed over,
+  // and the fatal slot, which is not a list at all.
+  const notDecisions = new Set(['held', 'skipped', 'fatal']);
+  const expected = Object.keys(s).filter((k) => Array.isArray(s[k]) && !notDecisions.has(k)).sort();
+  assert.deepEqual([...DURABLE_TICK_KEYS].sort(), expected);
 });

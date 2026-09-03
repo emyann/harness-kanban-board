@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "writing a verb that reads or writes board state, adding a store driver, or wondering why tasks.js and lock.js are two lines long"
 covers:
   - path: src/store/index.js
-    sha: c411c7f6f1c832c340b10f9c263b02adde998066
+    sha: 84551d05f93f745140a7322fed6ddedc9484850a
   - path: src/store/github.js
     sha: c7868a5dfbf4188ade5bf135ad321c57f18e76e5
   - path: src/forge.js
@@ -17,8 +17,8 @@ covers:
   - path: src/lock.js
     sha: cfb7eaf1a75003826cf610ee136a08dc0d4ff281
   - path: src/board.js
-    sha: f69569a4ef1ba7e4dabb5af394dddac6ba8d4a1f
-generated_at_commit: 2ce39a7
+    sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
+generated_at_commit: 6af026a
 last_refreshed: 2026-09-03
 related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-and-leases, concepts/board-protocol]
 ---

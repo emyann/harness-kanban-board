@@ -1502,6 +1502,27 @@ export async function doctor(ctx, flags, log) {
 
   if (!ctx.repo) return report(results, ctx, log);
 
+  // Everything below this line asks GitHub, and a board on the local store may have nothing behind
+  // it — a repo that was renamed, a `repo` left over from an old init, `gh` logged out. When one of
+  // these threw, it threw out of `doctor` itself and took the WHOLE report with it: every local
+  // probe above had already run and answered, and the human saw one 404 instead. So the GitHub half
+  // is a section that can fail, and the report is printed either way.
+  try {
+    await githubChecks(ctx, flags, { ok, warn, bad });
+  } catch (e) {
+    bad('github', /** @type {Error} */ (e).message, `everything above was checked locally; on a local board this half needs no repo at all — check "repo" in ${path.relative(ctx.root, boardFile(ctx.root))}, or \`gh auth status\``);
+  }
+  return report(results, ctx, log);
+}
+
+/**
+ * The half of `hkb doctor` that talks to the forge. Split out so a failure in it is one `bad` line
+ * rather than the loss of every local answer — see the caller.
+ * @param {any} ctx
+ * @param {any} flags
+ * @param {{ok: Function, warn: Function, bad: Function}} report0
+ */
+async function githubChecks(ctx, flags, { ok, warn, bad }) {
   // labels
   try {
     const labels = new Set();
@@ -1569,7 +1590,6 @@ export async function doctor(ctx, flags, log) {
   } else {
     warn('API probes', 'skipped', 'hkb doctor --api (creates and deletes one probe ref)');
   }
-  return report(results, ctx, log);
 }
 
 function report(results, ctx, log) {

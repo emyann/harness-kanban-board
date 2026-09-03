@@ -11,14 +11,14 @@ covers:
   - path: src/model.js
     sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/board.js
-    sha: f69569a4ef1ba7e4dabb5af394dddac6ba8d4a1f
+    sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
   - path: src/dispatch.js
-    sha: a75cb673ec4521836113ba1b8358f4cb5bd175e8
+    sha: 4fbf0d410edd19916fb7ee27ed77648da12f994d
   - path: src/serve.js
     sha: fe50acf9c37de567f1a90fd802e682ab746f6d50
   - path: src/doctor.js
     sha: 4ed022c48ec21ba66b92f895fefa333b6c928133
-generated_at_commit: 2ce39a7
+generated_at_commit: 6af026a
 last_refreshed: 2026-09-03
 related: [architecture/overview, features/web-board, concepts/roles-and-seats, architecture/dispatcher-tick]
 ---
@@ -359,15 +359,42 @@ Two things ride the end of a tick when the board is on the local store
   throttled to a third of `HOST_LIVE_MS`. That stamp is the *only* thing that
   lets another machine's `hkb init --take-over` tell a board somebody is still
   ticking from one whose laptop is not coming back — and it is a commit, which
-  is why it is throttled and why it rides a tick rather than the beat.
+  is why it is throttled and why it rides a tick rather than the beat. It
+  reloads the index behind itself: a commit the index has not seen is exactly
+  the shape `hkb doctor` reports as a broken index, and skipping it put a
+  permanent warning on a perfectly healthy board.
+
+`DURABLE_TICK_KEYS` is what "decided something" means, and it is every key of
+the tick's summary that is a list of decisions — `tracks` and `spawn_failed`
+and `track_conflicts` included. A track-root dispatch does `saveRun` and
+`setStatus(t, 'running')` and reports it under `tracks` alone, so a board driven
+by track dispatch that left those keys off never pushed and never re-stamped:
+after `HOST_LIVE_MS` another host's `--take-over` sees no live dispatcher and
+takes a board that is ticking right now. A test asserts the list against a real
+tick's summary rather than a copy of it.
 
 Both are wrapped: a failure here logs `sync skipped: …` and the loop carries
 on. The decision has already landed on the branch; the copy on the remote is a
-backup.
+backup. The two git calls that reach the network run through `runGitAsync`
+(`src/board.js`) with a 15-second leash rather than `spawnSync`: while a fetch
+or a push is out, the loop still has to be able to reap a finished worker, wake
+on an event and handle `hkb down`'s SIGTERM.
 
-`hkb sync` is the same push and fast-forward, by hand, on demand. It refuses on
-a GitHub board naming the store the cards are actually on, because "sync" there
-would be a verb with nothing to do.
+`hkb sync` is the same push and fast-forward, by hand, on demand. Two things it
+is careful about:
+
+- It reads the refs and fetches **before** it reads the board document, so it
+  works in a checkout that has no `kb-board` yet — a `--single-branch` clone, or
+  one taken before the branch was first pushed. That checkout is the whole
+  reason the verb exists, and asking `board()` first threw "there is no kb-board
+  branch" at exactly the person running the command to go and get one.
+- `settings.sync.push: false` turns off the **push** and nothing else. A host
+  that does not publish its copy still has to be able to read a co-worker's, and
+  `--no-push` is the same switch as a flag, so the more restrictive spelling can
+  never do more work than the default.
+
+It refuses on a GitHub board naming the store the cards are actually on, because
+"sync" there would be a verb with nothing to do.
 
 ## Related
 

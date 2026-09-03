@@ -649,12 +649,17 @@ export function removedInitFlag(flags = {}) {
  * here (it goes in track C).
  *
  * An **existing** board never changes store by being re-inited: a board.json that already says one
- * keeps it, and one written before the key existed is GitHub, because that is what it is.
+ * keeps it, and one written before the key existed is answered exactly the way `storeKind` answers
+ * it at runtime — by whether this repository has a `kb-board` branch. That agreement is the point:
+ * when the two disagreed, an `init` in a checkout with a branch full of cards wrote `"store":
+ * "github"` into board.json and detached the board from its own branch, permanently and silently.
  * @param {{store?: any}} flags
  * @param {any} existing  the board's current config, or null for a fresh board
+ * @param {boolean} [hasLocalBranch]  does this repo have a `kb-board` (or `<remote>/kb-board`)?
+ *   `localBoardExists(ctx)` — `storeKind`'s rule 2, passed in so this stays pure.
  * @returns {'local'|'github'}
  */
-export function resolveStore(flags = {}, existing = null) {
+export function resolveStore(flags = {}, existing = null, hasLocalBranch = false) {
   const asked = flags.store;
   if (asked !== undefined && asked !== true) {
     if (asked !== 'local' && asked !== 'github') {
@@ -669,7 +674,10 @@ export function resolveStore(flags = {}, existing = null) {
     e.exitCode = 2;
     throw e;
   }
-  if (existing) return existing.store === 'local' ? 'local' : 'github';
+  if (existing) {
+    if (existing.store === 'local' || existing.store === 'github') return existing.store;
+    return hasLocalBranch ? 'local' : 'github';
+  }
   return 'local';
 }
 
@@ -929,10 +937,9 @@ async function setUpLocalBoard(ctx, flags, log) {
     + ' them), so on a repo with no GitHub board behind it they will fail with a 404 until then.'
     + ' `hkb init --store github` sets this checkout up the way today\'s verbs expect.');
 
-  const sync = store.board().settings?.sync?.push === false;
-  log(sync
-    ? `sync: off — settings.sync.push is false on the branch, so ${store.branch} is never pushed. Set it to true to back the board up on ${store.remote}`
-    : `sync: \`hkb sync\` pushes ${store.branch} to ${store.remote} and fast-forwards from it, and the loop does it after a tick that wrote (at most once a minute, silent offline). \`"sync": {"push": false}\` in the branch's board.json turns it off`);
+  log(store.pushDisabled()
+    ? `sync: settings.sync.push is false on the branch, so \`hkb sync\` never *pushes* ${store.branch} — it still fetches ${store.remote}/${store.branch} and fast-forwards onto it, which is how this checkout reads what another host published. Set it to true to back the board up on ${store.remote}`
+    : `sync: \`hkb sync\` pushes ${store.branch} to ${store.remote} and fast-forwards from it, and the loop does it after a tick that wrote (at most once a minute, silent offline). \`"sync": {"push": false}\` in the branch's board.json turns the push half off`);
   store.close();
   return migration;
 }
@@ -960,7 +967,8 @@ export async function init(ctx, flags, log) {
   }
   const { harnesses, profiles } = resolveProfiles(flags);
   const existing = loadBoard(root);
-  const store = resolveStore(flags, existing);
+  const { localBoardExists } = await import('./store/local.js');
+  const store = resolveStore(flags, existing, localBoardExists(ctx));
   if (flags['take-over'] && store !== 'local') {
     const e = /** @type {any} */ (new Error('--take-over moves the `kb-board` branch to this host, and this board is on the GitHub store — there is no owning host to move.'));
     e.exitCode = 2;
@@ -1032,6 +1040,8 @@ export async function init(ctx, flags, log) {
   //     Idempotent both ways: an existing branch is left exactly as it is, host included — moving
   //     that is `--take-over`, which is a decision and not a side effect of running init again.
   const migration = store === 'local' ? await setUpLocalBoard(ctx, flags, log) : null;
+  // `storeKind` memoizes per context, and this init has just created the branch that answers it.
+  if (store === 'local') { const { forgetStore } = await import('./store/index.js'); forgetStore(ctx); }
   if (store === 'github') log(`store: github — the board is the \`kb:*\` issues on ${repo.nameWithOwner} (\`hkb init --store local\` moves a new board onto the kb-board branch instead)`);
 
   // 3b. optional Projects v2 mirror (opt-in, one-way). Everything above is already saved, so a
@@ -1148,6 +1158,10 @@ export async function init(ctx, flags, log) {
       n++;
     }
     log(`imported ${n} open issue(s) into triage on board "${board}"`);
+    // One page, said out loud. "imported 100 open issues" over a repository with 300 of them reads
+    // as "all of them", and the human has no way to tell the two apart — the same shape as the
+    // local migration's closed-card cap, and the same answer: name the ceiling.
+    if ((all || []).length >= 100) log(`  that is one page of 100 open issues — this repository has more, so re-run \`hkb init --import\` until this line stops appearing`);
   }
 
   // 7. the cross-repo board list. A local write, so the offline path (`--no-labels`) does it too.

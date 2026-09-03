@@ -11,6 +11,7 @@ import { agentWorktreeNode, attemptOf, gc, isMerged, listBranches, listWorktrees
 import { tick } from '../src/dispatch.js';
 import { DEFAULT_BOARD, readState, writeState } from '../src/board.js';
 import { GhError, setTransport } from '../src/gh.js';
+import { openGitTier } from '../src/store/git.js';
 import { serializeRunComment } from '../src/model.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
@@ -492,5 +493,33 @@ test('gc on a local board sweeps worktrees, branches and files — and not comme
   assert.equal(stats.chains, 0);
   assert.equal(h.gh.issues.get(1).comments.length, 2, 'the duplicate run comment was left where it is');
   assert.equal(git(h.root, 'for-each-ref', '--format=%(refname)', 'refs/kb/locks/'), 'refs/kb/locks/1/1', 'and the beat chain too');
+  assert.match(h.text(), /nothing to sweep on a local board/);
+});
+
+test('gc on a genuinely local board never touches GitHub', async (t) => {
+  // The defect this is for: `sweep` opened with an unconditional `fetchBoard` and only branched on
+  // `storeKind` several sweeps later. On a board that is REALLY local — a kb-board branch and no
+  // issues behind it — it threw before `stats.store` was ever read, so the "nothing to sweep on a
+  // local board" message could only be seen by a board that was also on GitHub.
+  const h = harness();
+  t.after(h.cleanup);
+  h.ctx.cfg.store = 'local';
+  const tier = openGitTier(h.ctx);
+  tier.init('default');
+  const card = tier.createTask({ title: 'settled', status: 'done' });
+  tier.closeTask(card.number, 'completed');
+
+  // Any call to the forge is now a test failure, not a 404 the sweep swallows.
+  const restore = setTransport(() => { throw new Error('gc reached GitHub on a local board'); });
+  t.after(restore);
+
+  const gone = worktree(h.root, `kb-${card.number}-1`, `worktree-kb-${card.number}-1`);
+  const stats = await sweep(h.ctx, { yes: true, log: h.log });
+
+  assert.equal(stats.store, 'local');
+  assert.equal(stats.worktrees, 1, 'the sweeps that are about this host still run');
+  assert.equal(exists(gone), false);
+  assert.equal(stats.comments, 0);
+  assert.equal(stats.chains, 0);
   assert.match(h.text(), /nothing to sweep on a local board/);
 });

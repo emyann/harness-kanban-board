@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { init, ensureGitignore, GITIGNORE_LINES, CLAUDE_HOOKS, HOOK_SETTINGS, agentsSkillDir, packageSkillDir, readSkillVersion, commandFiles, commandNames } from '../src/init.js';
+import { init, resolveStore, ensureGitignore, GITIGNORE_LINES, CLAUDE_HOOKS, HOOK_SETTINGS, agentsSkillDir, packageSkillDir, readSkillVersion, commandFiles, commandNames } from '../src/init.js';
 import { parseArgs } from '../src/cli.js';
 import { makeContext, DEFAULT_PROFILES, HOOK_SETTINGS_VAR, userBoardsFile } from '../src/board.js';
 import { checkHooks, LAUNCH_HOOK_CHECK } from '../src/doctor.js';
@@ -665,4 +665,25 @@ test('--take-over moves the branch to this host, and init says whose it was', as
 
   const taken = await runInit(['--take-over'], first);
   assert.ok(taken.printed.some((l) => /now owns the board — it was "someone-elses-laptop"/.test(l)), taken.printed.join('\n'));
+});
+
+// ---------- which store an init sets a board up on ----------
+
+test('resolveStore agrees with storeKind: an existing board with a kb-board branch is local', () => {
+  // A fresh board is local by default (docs/local-first.md §6.1).
+  assert.equal(resolveStore({}, null, false), 'local');
+  assert.equal(resolveStore({ store: 'github' }, null, false), 'github');
+
+  // An existing board keeps what it declares, whatever the branch says.
+  assert.equal(resolveStore({}, { store: 'local' }, false), 'local');
+  assert.equal(resolveStore({}, { store: 'github' }, true), 'github');
+
+  // And one written before the key existed is answered by the branch — `storeKind`'s rule 2. When
+  // these two disagreed, an init in a checkout with a branch full of cards wrote "store": "github"
+  // into board.json and detached the board from its own branch, silently and for good.
+  assert.equal(resolveStore({}, { repo: 'o/r' }, true), 'local', 'a kb-board branch is a local board');
+  assert.equal(resolveStore({}, { repo: 'o/r' }, false), 'github', 'and without one it is where it has always been');
+
+  assert.throws(() => resolveStore({ store: 'sqlite' }, null, false), (e) => e.exitCode === 2 && /--store takes/.test(e.message));
+  assert.throws(() => resolveStore({ store: true }, null, false), (e) => e.exitCode === 2 && /--store needs a value/.test(e.message));
 });

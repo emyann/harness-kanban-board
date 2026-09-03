@@ -7,16 +7,16 @@ audience: [dev]
 read_when: "adding a store verb, debugging an index that disagrees with the branch, wondering why a verb is refused on this host, or working on hkb sync / init --import"
 covers:
   - path: src/store/local.js
-    sha: d3eaf14329219a844433ea7c0d420aec9297ced0
+    sha: 5b9ec684225f90da1ae45374dfe07373c1a4f427
   - path: src/store/index.js
-    sha: c411c7f6f1c832c340b10f9c263b02adde998066
+    sha: 84551d05f93f745140a7322fed6ddedc9484850a
   - path: src/store/sqlite.js
     sha: 826f9c91a51e4f2d67a9b15736d221650661dcbd
   - path: src/init.js
-    sha: 70914a43959e7ac6d830fcc24d7e2704d4810293
+    sha: 0522ad93936f58d35e90b67b046aefcc29730e18
   - path: src/doctor.js
-    sha: 4ed022c48ec21ba66b92f895fefa333b6c928133
-generated_at_commit: fb4d64d
+    sha: 2aa97ad82ea530151019ecacb89112607d9163c0
+generated_at_commit: 6af026a
 last_refreshed: 2026-09-03
 related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
@@ -125,12 +125,31 @@ either direction is refused with the one-writer explanation and the commands to
 look at both histories: the branch has one writer, so a divergence is two hosts
 having written it, and hkb will not guess which is right.
 
+**Nothing in `sync()` reads the board document before the fetch.** The order is
+refs, then network, then `board.json` — because the checkout the verb exists for
+is the one that has no `kb-board` at all (a `git clone --single-branch`, or one
+taken before the branch was first pushed), and reading the board first threw
+"there is no kb-board branch" at exactly the person running the command to go
+and get one. `hkb init` there then made a *second, empty* board.
+
+`settings.sync.push: false` turns off the **push**, and only the push. A
+checkout that does not publish its copy still fetches and fast-forwards; that is
+how it reads what the owner published. `--no-push` is the same switch as a flag,
+so the more restrictive spelling can never do strictly more work than the
+default.
+
 Offline is not a failure. A `fetch`/`push` that fails on a network error comes
 back `{offline: true}` and says nothing, because the remote copy is a backup and
-a reader's view, not where the board lives. `syncAfterTick()` is what the
-dispatcher loop calls after a tick that decided something
-(`DURABLE_TICK_KEYS`, `src/dispatch.js`), throttled to once a minute against a
-stamp in `.kanban/state.json` — this host's network, not the board's state.
+a reader's view, not where the board lives. `OFFLINE` matches node's `E*` codes
+as well as git's prose: the two network calls go through `runGitAsync`
+(`src/board.js`) on a 15-second leash, and what a killed git reports is
+`ETIMEDOUT`, not "connection timed out". They are async rather than `spawnSync`
+for the loop's sake — while a fetch is out, a finished worker still has to be
+reaped, a wake still has to arrive, and `hkb down`'s SIGTERM still has to be
+handled. `syncAfterTick()` is what the dispatcher loop calls after a tick that
+decided something (`DURABLE_TICK_KEYS`, `src/dispatch.js`), throttled to once a
+minute against a stamp in `.kanban/state.json` — this host's network, not the
+board's state.
 
 ## The migration off GitHub
 
@@ -143,23 +162,59 @@ history. Per card it is one paginated comments read, which `listComments`
 memoizes on the context, so the run record, the results and the human notes all
 come out of the same request.
 
+Two things the migration will not do quietly, because it is the one operation
+nobody re-runs:
+
+- **It never guesses a card's blockers.** The open cards are read with
+  `blockers: 'all'`, not the default — the default fills `blockedBy` in for the
+  tick's lanes only (todo and blocked), so on a repo without the GraphQL
+  `blockedBy` field every card in triage, ready, running or review would arrive
+  with an empty list meaning "not asked". The branch has no third value for
+  that, and `cardRecord` refuses rather than writing "nothing blocks it" over a
+  board's whole dependency graph (`blockersKnown`, `src/store/github.js`).
+- **It drops an edge to a card it is not importing, and lists it.** #40 blocked
+  by #11, closed 200 days ago: keeping the edge leaves #40 blocked by an id that
+  reads back as an open issue nobody can close — `blockerDone()` false forever,
+  `computeReady()` never true, #40 undispatchable with nothing saying why. The
+  edge is dropped, printed per card, and returned in the summary's
+  `dropped_blockers`.
+
+The closed cards are **one page of 100**, most recently updated first, by the
+GitHub driver's own design. A full page back sets `closed_capped` in the summary
+and prints a WARNING naming the oldest card that made it, because "100 closed in
+the last 90 days" over a truncated set reads as the whole window.
+
 It is idempotent **by refusal**: a branch that already exists is left exactly as
 it is. A second import over a board that has since been worked would overwrite
 live state with GitHub's stale copy, so it says so and names the deliberate way
 to start over. Afterwards it deletes the `refs/kb/locks/*` on the remote and the
 local beat chains — a lock ref means nothing to a board whose locks are rows.
+Both of those sweeps are guarded (`dropGithubLeftovers`): they run *after* both
+commits and the index load have succeeded, so a single ref that will not delete
+must not exit a migration that landed non-zero and leave the human unable to
+tell whether to re-run — which "idempotent by refusal" would then refuse anyway.
 
 ## What doctor asks
 
 `checkLocalStore` (`src/doctor.js`) is three probes and one identity line: the
 branch (present, whose, and fast-forwardable against the last fetch — doctor
 never fetches), the index tip against the branch tip, and the **filesystem the
-index is on**, read from `/proc/mounts` by longest matching mount point. `9p`,
+index is on**, read from `/proc/mounts` by longest matching mount point, and by
+the *last* of two entries sharing one — `/proc/mounts` is in mount order, so a
+network filesystem remounted over a local path (exactly what this catches) is
+the later line. `9p`,
 NFS and CIFS are a refusal, not a warning: SQLite's WAL needs POSIX locking that
 they do not give it, and the failure mode is a corrupt index or a hang that says
 nothing about why. A host with no `/proc/mounts` (macOS) and a filesystem hkb
 does not recognise both warn — "I could not check" is a different answer from
 "this is wrong".
+
+These probes run before `hkb doctor` talks to the forge, and — since the round-2
+sweep — they *survive* it: the GitHub half is one `githubChecks()` call inside a
+try, so a 404 from a repo that was renamed or a `gh` that is logged out costs one
+`github` finding rather than the whole report. It used to throw out of `doctor`
+itself, which meant that on a local board with nothing behind it the human saw a
+single 404 and none of the answers the probes had already computed.
 
 ## Gotchas
 
@@ -170,6 +225,11 @@ does not recognise both warn — "I could not check" is a different answer from
 - **`claim()` sets `tasks.status = 'running'` in the index** while the card's
   status is the branch's. The index is briefly ahead; the next reconcile fixes
   it. Do not read a card's status off the index expecting the branch's answer.
+- **`storeKind` memoizes only `local`.** A branch that exists does not stop
+  existing while a process runs, so that answer cannot go stale — while `github`
+  is the answer `hkb init` turns into `local` under its own feet, which is why
+  the negative is never cached and why `resolveStore` is handed
+  `localBoardExists(ctx)` rather than deciding on its own.
 - **An imported card's `labels`** hold only what is *not* a column —
   `kb:board:*`, `kb:status:*`, `kb:agent:*` and `kb:needs-human` are rebuilt
   from the card, so carrying them would double them (`cardRecord`).

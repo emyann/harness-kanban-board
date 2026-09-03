@@ -19,7 +19,7 @@ import {
   tallyDeniedTools, deniedToolsFinding, checkDeniedTools,
   CAPABILITIES_CHECK, checkCapabilityMap,
   TOOL_POSTURE_CHECK, checkToolPosture, CARD_GRANTS_CHECK, checkCardGrants, checkRemovedProfiles,
-  STORE_CHECK, BRANCH_CHECK, INDEX_CHECK, MOUNT_CHECK, checkLocalStore } from '../src/doctor.js';
+  STORE_CHECK, BRANCH_CHECK, INDEX_CHECK, MOUNT_CHECK, checkLocalStore, doctor } from '../src/doctor.js';
 import { CAPABILITIES, capabilityGrants, effectiveTools, toolPosture } from '../src/model.js';
 import { normalizeCardGrants } from '../src/tasks.js';
 import { setTransport, GhError } from '../src/gh.js';
@@ -1325,4 +1325,32 @@ test('doctor: a branch with no board, an index that has fallen behind, and a for
   const refused = rows.find((r) => r.name === STORE_CHECK && r.ok === null);
   assert.match(refused.detail, /owns this board, so every mutating verb refuses here/);
   assert.equal(refused.fix, 'hkb init --take-over');
+});
+
+test('a forge that is not there costs one line, not the whole report', async (t) => {
+  // Every local probe above the GitHub half had already run and answered when one 404 from the
+  // forge threw out of `doctor` itself and took the report with it. On a local board — a repo that
+  // was renamed, a `repo` left over from an old init, `gh` logged out — that is precisely the
+  // board whose answers the human needed.
+  const { root, ctx } = localBoard();
+  const { openGitTier } = await import('../src/store/git.js');
+  openGitTier(ctx).init('default');
+  ctx.repo = { owner: 'o', repo: 'r', nameWithOwner: 'o/r' };
+  ctx.cfg.repo = 'o/r';
+  ctx.json = true;
+  const restore = setTransport(() => { throw new GhError('gh: Not Found (HTTP 404)', { status: 404, kind: 'notfound' }); });
+  t.after(restore);
+
+  let out = '';
+  await doctor(ctx, {}, (s2) => { out += s2; });
+  const rows = JSON.parse(out);
+  const by = Object.fromEntries(rows.map((r) => [r.name, r]));
+
+  assert.equal(by[STORE_CHECK].ok, true, 'the store line survived');
+  assert.equal(by[BRANCH_CHECK].ok, true);
+  assert.ok(by[INDEX_CHECK], 'and the index probe');
+  assert.ok(by[MOUNT_CHECK], 'and the mount probe');
+  assert.equal(by.github.ok, false, 'the forge half is one finding');
+  assert.match(by.github.fix, /everything above was checked locally/);
+  void root;
 });

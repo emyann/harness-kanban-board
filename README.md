@@ -149,6 +149,10 @@ hkb init --import          # every open card, and everything closed in the last 
 
 The issue number stays the card id, statuses and agents come across as they are, and each card's run record,
 results, human comments and blockers come with it — one paginated comments read per card, printed as it goes.
+Two things the import says out loud rather than leaving you to find: the closed cards are one page of 100, most
+recently updated first, so an older closed card stays on GitHub; and a card blocked by one that is not being
+imported has that edge **dropped** and listed, because keeping it would leave the card blocked by an id that
+can never resolve and so never dispatchable again.
 The leftover `refs/kb/locks/*` on the remote and the local beat chains are deleted, since a local board keeps
 its locks in the index. Re-running `init` never touches a branch that already exists: a second import over a
 board that has since been worked would overwrite it with GitHub's stale copy, so it is refused and says so.
@@ -157,7 +161,13 @@ board that has since been worked would overwrite it with GitHub's stale copy, so
 
 The `kb-board` branch has **one writer** — the host `board.json` names. That host runs the loop; `hkb sync`
 pushes the branch to the remote after a tick that wrote (at most once a minute, silently when the laptop is
-offline; `"sync": {"push": false}` in the branch's `board.json` turns it off).
+offline; `"sync": {"push": false}` in the branch's `board.json` turns the **push** off and nothing else — a
+checkout that does not publish its copy still fetches and fast-forwards, which is how it reads what the owner
+published).
+
+`hkb sync` also works in a checkout that has no `kb-board` yet — a `git clone --single-branch`, or one taken
+before the board was first pushed. It reads the refs first and fetches, so the command you run to *get* the
+board is not the one that tells you there isn't one.
 
 Anyone can `git clone` the repo and get the whole board with it: the branch is what says the board is local, so
 no configuration is needed to read it (`.kanban/board.json` is tracked and comes along). Every *mutating* verb
