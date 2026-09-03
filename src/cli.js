@@ -236,7 +236,7 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
   setup       init [--board slug] [--profiles a,b] [--harness copilot|codex] [--mcp] [--import]
                    [--store local|github] [--take-over [--force]]
                    [--no-hook] [--shared-hooks] [--no-labels] [--project <number|new>]
-                   a new board is LOCAL: the cards live on the kb-board branch in this repo and the
+                   a new board is LOCAL: the cards live at refs/kb/boards/<name> in this repo and the
                    index beside it, so the board costs no API call and works offline. --store github
                    keeps the old issues-are-the-board behaviour; --import migrates one onto the local
                    store (ids, statuses and run records kept); --take-over moves the owning host
@@ -295,7 +295,7 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
                     code is non-zero for a signal that failed or a process that outlived the wait
               dispatch [--loop S] [--max N] [--profiles a,b] [--dry-run]     claim <n> [--profile p] [--spawn]
               gc [--yes]
-              sync [--no-push] [--json]   local board only: push kb-board to the remote and
+              sync [--no-push] [--json]   local board only: push the board ref to the remote and
                     fast-forward from it. The branch has one writer, so a non-fast-forward is
                     refused rather than merged; the loop runs it after a tick that wrote, at most
                     once a minute and silently when offline ("sync": {"push": false} turns it off)
@@ -926,7 +926,7 @@ async function runVerb(argv, keep) {
       // Sync is git (docs/local-first.md §6.2), so there is nothing to sync on a board whose store
       // *is* the network. Say which store this board is on rather than "unknown command".
       if (storeKind(ctx) !== 'local') {
-        throw usage(`\`hkb sync\` is for a local board — the cards on this one are issues on ${ctx.cfg?.repo || 'GitHub'}, which is already the shared copy. \`hkb init --store local --import\` moves a board onto the kb-board branch.`);
+        throw usage(`\`hkb sync\` is for a local board — the cards on this one are issues on ${ctx.cfg?.repo || 'GitHub'}, which is already the shared copy. \`hkb init --store local --import\` moves a board onto a ref in this repo.`);
       }
       const { openLocalStore } = await import('./store/local.js');
       const store = openLocalStore(ctx, { reconcile: false });

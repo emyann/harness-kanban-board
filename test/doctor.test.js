@@ -19,7 +19,7 @@ import {
   tallyDeniedTools, deniedToolsFinding, checkDeniedTools,
   CAPABILITIES_CHECK, checkCapabilityMap,
   TOOL_POSTURE_CHECK, checkToolPosture, CARD_GRANTS_CHECK, checkCardGrants, checkRemovedProfiles,
-  STORE_CHECK, BRANCH_CHECK, INDEX_CHECK, MOUNT_CHECK, checkLocalStore, PATH_OVERLAP_CHECK, doctor } from '../src/doctor.js';
+  STORE_CHECK, BRANCH_CHECK, INDEX_CHECK, MOUNT_CHECK, REFSPEC_CHECK, checkLocalStore, PATH_OVERLAP_CHECK, doctor } from '../src/doctor.js';
 import { CAPABILITIES, capabilityGrants, effectiveTools, toolPosture } from '../src/model.js';
 import { normalizeCardGrants } from '../src/tasks.js';
 import { setTransport, GhError } from '../src/gh.js';
@@ -1246,11 +1246,11 @@ test('doctor on a GitHub board says which store it is and probes nothing else', 
   const rows = await probe({ root: '/tmp/none', cfg: { store: 'github', repo: 'o/r' }, board: 'default', _cache: {} });
   assert.equal(rows[STORE_CHECK].ok, true);
   assert.match(rows[STORE_CHECK].detail, /github — the board is the kb:\* issues on o\/r/);
-  assert.equal(rows[BRANCH_CHECK], undefined, 'there is no branch to be wrong about');
+  assert.equal(rows[BRANCH_CHECK], undefined, 'there is no ref to be wrong about');
   assert.equal(rows[MOUNT_CHECK], undefined);
 });
 
-test('doctor: the branch, the index tip and the mount, on a healthy local board', async () => {
+test('doctor: the board ref, the index tip and the mount, on a healthy local board', async () => {
   const { root, ctx } = localBoard();
   const { openLocalStore } = await import('../src/store/local.js');
   const { openGitTier } = await import('../src/store/git.js');
@@ -1263,13 +1263,44 @@ test('doctor: the branch, the index tip and the mount, on a healthy local board'
   fs.writeFileSync(mounts, `/dev/sda1 ${root} ext4 rw 0 0\n`);
   const rows = await probe(ctx, { mounts });
   assert.equal(rows[STORE_CHECK].ok, true);
-  assert.match(rows[STORE_CHECK].detail, /^local — kb-board in /);
+  assert.match(rows[STORE_CHECK].detail, /^local — refs\/kb\/boards\/default in /);
   assert.equal(rows[BRANCH_CHECK].ok, true);
   assert.match(rows[BRANCH_CHECK].detail, /never pushed to origin/);
   assert.equal(rows[INDEX_CHECK].ok, true, JSON.stringify(rows[INDEX_CHECK]));
-  assert.match(rows[INDEX_CHECK].detail, /matching the branch/);
+  assert.match(rows[INDEX_CHECK].detail, /matching the board/);
   assert.equal(rows[MOUNT_CHECK].ok, true);
   assert.match(rows[MOUNT_CHECK].detail, /^ext4 at /);
+});
+
+test('doctor names the missing fetch refspec, and stops warning once it is there', async () => {
+  // The board is outside `refs/heads`, so a clone's `+refs/heads/*` line does not carry it. Without
+  // this line an ordinary `git fetch` brings back no board and the backup is one nobody can restore
+  // by hand — a silent gap, which is exactly what doctor exists to make loud.
+  const { root, ctx } = localBoard();
+  const { openGitTier } = await import('../src/store/git.js');
+  const { ensureFetchRefspec, boardFetchRefspec } = await import('../src/store/local.js');
+  openGitTier(ctx).init('default');
+
+  // No remote at all: nothing to fetch from, so nothing to warn about.
+  const noRemote = (await probe(ctx, { mounts: '/dev/null' }))[REFSPEC_CHECK];
+  assert.equal(noRemote.ok, true);
+  assert.match(noRemote.detail, /no git remote "origin"/);
+
+  const origin = path.join(root, 'origin.git');
+  spawnSync('git', ['init', '-q', '--bare', origin]);
+  spawnSync('git', ['remote', 'add', 'origin', origin], { cwd: root });
+  spawnSync('git', ['config', '--unset-all', 'remote.origin.fetch'], { cwd: root });
+
+  const missing = (await probe({ ...ctx, _cache: {} }, { mounts: '/dev/null' }))[REFSPEC_CHECK];
+  assert.equal(missing.ok, null, 'a warning, not a refusal: the board still works, it just is not fetched');
+  assert.match(missing.detail, /does not carry \+refs\/kb\/boards\/\*:refs\/kb\/remotes\/origin\/boards\/\*/);
+  assert.match(missing.fix, /hkb sync/, 'and the fix is a command the operator already has');
+  assert.match(missing.fix, /config --add remote\.origin\.fetch/);
+
+  ensureFetchRefspec(root, 'origin');
+  const fixed = (await probe({ ...ctx, _cache: {} }, { mounts: '/dev/null' }))[REFSPEC_CHECK];
+  assert.equal(fixed.ok, true);
+  assert.match(fixed.detail, new RegExp(boardFetchRefspec('origin').replace(/[+*/]/g, (c) => `\\${c}`)));
 });
 
 test('doctor refuses an index on a 9p mount, and warns on a filesystem it does not know', async () => {
@@ -1317,11 +1348,36 @@ test('doctor diagnoses the index without creating it', async () => {
   void root;
 });
 
-test('doctor: a branch with no board, an index that has fallen behind, and a foreign owner', async () => {
+test('doctor names a board still on refs/heads/kb-board instead of reporting none', async () => {
+  // Without this row the board is *right there* and doctor says "no board at refs/kb/boards/default",
+  // then prescribes an `hkb init` that creates a second, empty board beside the real one. Nothing is
+  // on the old ref in this repository — measured — but that measurement covered this repository, and
+  // a checkout made between #326 and the move has a whole board there.
+  const { ctx } = localBoard();
+  const { openGitTier, LEGACY_BOARD_REF } = await import('../src/store/git.js');
+  openGitTier(ctx, { ref: LEGACY_BOARD_REF }).init('default');
+
+  const rows = await probe({ ...ctx, _cache: {} }, { mounts: '/dev/null' });
+  assert.equal(rows[BRANCH_CHECK].ok, false);
+  assert.match(rows[BRANCH_CHECK].detail, /refs\/heads\/kb-board/, 'the board is named, not silently missed');
+  assert.doesNotMatch(rows[BRANCH_CHECK].detail, /^no board at/);
+  assert.match(rows[BRANCH_CHECK].fix, /update-ref refs\/kb\/boards\/default refs\/heads\/kb-board/);
+  assert.notEqual(rows[BRANCH_CHECK].fix, 'hkb init', 'which is the one fix that would lose the board');
+});
+
+test('doctor on a GitHub board whose name is not a ref path still reports it healthy', async () => {
+  // `slugFile` hashes a board name, so `--board "my board"` is a perfectly good GitHub board.
+  // Building its ref from `localBoardExists` turned that into a `bad` row about a board that is fine.
+  const rows = await probe({ root: '/tmp/none', cfg: { store: 'github', repo: 'o/r' }, board: 'my board', _cache: {} });
+  assert.equal(rows[STORE_CHECK].ok, true);
+  assert.match(rows[STORE_CHECK].detail, /github/);
+});
+
+test('doctor: a checkout with no board, an index that has fallen behind, and a foreign owner', async () => {
   const { ctx } = localBoard();
   const empty = await probe(ctx, { mounts: '/dev/null' });
   assert.equal(empty[BRANCH_CHECK].ok, false);
-  assert.match(empty[BRANCH_CHECK].detail, /no kb-board branch/);
+  assert.match(empty[BRANCH_CHECK].detail, /no board at refs\/kb\/boards\/default/);
   assert.equal(empty[BRANCH_CHECK].fix, 'hkb init');
 
   const { openLocalStore } = await import('../src/store/local.js');
@@ -1330,13 +1386,13 @@ test('doctor: a branch with no board, an index that has fallen behind, and a for
   const store = openLocalStore(ctx);
   store.createTask({ title: 'a card', status: 'ready' });
   store.close();
-  // The branch moves with nothing telling the index — the crash `open()` repairs.
+  // The board's ref moves with nothing telling the index — the crash `open()` repairs.
   openGitTier(ctx).createTask({ title: 'and another', status: 'ready' });
   const behind = (await probe(ctx, { mounts: '/dev/null' }))[INDEX_CHECK];
   assert.equal(behind.ok, null);
-  assert.match(behind.detail, /the branch is at .* — the next verb rebuilds it/);
+  assert.match(behind.detail, /the board is at .* — the next verb rebuilds it/);
 
-  // and a board this host does not own is read-only, which doctor says twice: on the branch row
+  // and a board this host does not own is read-only, which doctor says twice: on the board-ref row
   // (whose host it is) and on the store row (that every mutating verb refuses)
   openGitTier(ctx).takeOver('someone-elses-laptop');
   const rows = [];

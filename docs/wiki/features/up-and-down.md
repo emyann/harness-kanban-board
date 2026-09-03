@@ -355,7 +355,7 @@ it.
 Two things ride the end of a tick when the board is on the local store
 (`syncPass`, `src/dispatch.js`), and neither runs on a GitHub board:
 
-- **`syncAfterTick`** pushes `kb-board` to the remote and fast-forwards from it
+- **`syncAfterTick`** pushes the board's ref to the remote and fast-forwards from it
   — but only after a tick that decided something (`DURABLE_TICK_KEYS`), at most
   once a minute (a stamp in `.kanban/state.json`, this host's network rather
   than the board's state), and silently when the laptop is offline. A tick that
@@ -422,9 +422,9 @@ on an event and handle `hkb down`'s SIGTERM.
 is careful about:
 
 - It reads the refs and fetches **before** it reads the board document, so it
-  works in a checkout that has no `kb-board` yet — a `--single-branch` clone, or
+  works in a checkout that has no copy of the board yet — a fresh clone, or
   one taken before the branch was first pushed. That checkout is the whole
-  reason the verb exists, and asking `board()` first threw "there is no kb-board
+  reason the verb exists, and asking `board()` first threw "there is no board
   branch" at exactly the person running the command to go and get one.
 - `settings.sync.push: false` turns off the **push** and nothing else. A host
   that does not publish its copy still has to be able to read a co-worker's, and

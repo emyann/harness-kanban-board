@@ -2,7 +2,7 @@
 //
 // `openStore(ctx)` is the only way a command should reach board state, and the only place that
 // decides which driver answers: the GitHub one (`./github.js`) or the local store of
-// docs/local-first.md §6 (`./local.js` — the `kb-board` branch and the `.git/hkb/index.db` index as
+// docs/local-first.md §6 (`./local.js` — `refs/kb/boards/<slug>` and the `.git/hkb/index.db` index as
 // one `Store`). The decision is `"store"` in `.kanban/board.json` and nothing else; see `storeKind`.
 //
 // **The method names below are the contract.** They are §6.4 verbatim, and the local drivers are
@@ -52,11 +52,11 @@ export function closeStore(ctx) {
 /**
  * Which store a board uses, and **the only place that decides it** (the card's contract).
  *
- * **One answer: `store` in `.kanban/board.json`.** `"local"` is the `kb-board` branch, anything else
+ * **One answer: `store` in `.kanban/board.json`.** `"local"` is the board's own ref, anything else
  * — including the key being absent — is GitHub. `hkb init` writes the key when it creates a local
  * board, and that write is the opt-in.
  *
- * There used to be a second rule: *a repository with a `kb-board` (or `<remote>/kb-board`) ref is a
+ * There used to be a second rule: *a repository with a board ref (local or remote-tracking) is a
  * local board*. It was there so a `git clone` of a local board needed no config, and it is gone,
  * because a rule that infers the store from a **ref** can be reached by `git fetch` — by another
  * host's push, by a colleague's experiment — and it flips a checkout onto the local store while
@@ -67,7 +67,7 @@ export function closeStore(ctx) {
  *   · `gc.sweep` read the board through the local store, got `[]` because the cards were still
  *     issues, concluded every card was finished and destroyed worker worktrees — uncommitted work
  *     included — unattended, from the dispatcher's own `gc_every_ticks`;
- *   · one host pushing `kb-board` converted every collaborator on their next fetch, and
+ *   · one host pushing the board converted every collaborator on their next fetch, and
  *     `assertOwningHost` then refused every write verb on a board whose cards they had always owned.
  *
  * Each was patched where it surfaced; the cause was this inference, so the inference is what is
@@ -84,7 +84,7 @@ export function storeKind(ctx) {
   const declared = ctx?.cfg?.store;
   if (declared === 'local' || declared === 'github') return declared;
   if (declared) {
-    const e = /** @type {any} */ (new Error(`"store": "${declared}" in .kanban/board.json is not a store — hkb has "local" (the kb-board branch) and "github" (issues).`));
+    const e = /** @type {any} */ (new Error(`"store": "${declared}" in .kanban/board.json is not a store — hkb has "local" (a ref in this repo) and "github" (issues).`));
     e.exitCode = 2;
     throw e;
   }
@@ -208,7 +208,7 @@ export async function openStoreReadOnly(ctx) {
  * Refuse a verb that writes the board on a host that does not own it.
  *
  * A no-op on the GitHub store — its board is a repository, and every collaborator writes it. On the
- * local store the `kb-board` branch has exactly one writer (§6.2) and this is where every mutating
+ * local store the board ref has exactly one writer (§6.2) and this is where every mutating
  * verb finds that out, before it spends anything.
  * @param {any} ctx
  * @param {string} verb

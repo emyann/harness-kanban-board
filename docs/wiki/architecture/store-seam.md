@@ -42,7 +42,7 @@ related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-
 > `openStore(ctx)` is the only way board state is reached — not a rule the code
 > aspires to, a fact you can grep for: `from './tasks.js'` and `from './lock.js'`
 > appear nowhere in `src/` outside `src/store/`. Behind it are two drivers: the
-> GitHub one, and the local one — a `kb-board` git branch plus a `node:sqlite`
+> GitHub one, and the local one — a `refs/kb/boards/<slug>` git ref plus a `node:sqlite`
 > index, composed in `src/store/local.js` (`architecture/local-store`,
 > `decisions/adr-006-local-store`). The seam exists so that the verbs written
 > between them are written **once**.
@@ -60,8 +60,8 @@ because a `local` board the verbs cannot write is a board `hkb create` fails on
 — and at that point the verbs still read GitHub through the shims. They no
 longer do, so the default is `local` again (`resolveStore`, `src/init.js`).
 
-There used to be a second rule — *a repository with a `kb-board` (or
-`<remote>/kb-board`) ref is a local board* — so that a clone needed no
+There used to be a second rule — *a repository with a board ref (local or
+remote-tracking) is a local board* — so that a clone needed no
 configuration. It was removed in A6's sixth review round, because a rule that
 reads the store off a **ref** can be reached by `git fetch`, and the checkout
 then runs on the local store while board.json still points every verb at
