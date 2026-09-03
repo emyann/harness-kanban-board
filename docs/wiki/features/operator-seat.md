@@ -7,27 +7,27 @@ audience: [dev, ops]
 read_when: "changing what a session may do on someone's board, adding an event kind / status / outcome / block kind, or wondering why the operator's limits are prose rather than a guard"
 covers:
   - path: skills/kanban/SKILL.md
-    sha: b63cf4b5f47e342aeb35272b03b62d55a364d996
+    sha: 386f0eebb9da5374092734e492e109f8f9ceed4e
   - path: commands/operate.md
     sha: 868663f4ad694f7e336ebbdfec7952e4afd621e1
   - path: src/watch.js
-    sha: 8aba4c441e35c9241124c1278b5f4824706f7e52
+    sha: 8230f906d06eb03a6d90a1a3b505cd305dcde2f0
   - path: src/model.js
-    sha: 1396e51d975eb47370284f457492711a4732a4bf
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/cli.js
-    sha: 36d51b6fc11f9737ee96578bd4fb74e866b8c50b
+    sha: 9d7fc11ad734643205e89668a176d4f29115805f
   - path: src/lifecycle.js
-    sha: 98cf380069697936e2b62fb17402bae7099cf06f
+    sha: c3c49b90e80c7e68d44b4f8f999debcfa484de80
   - path: src/init.js
-    sha: aee5eed4dcc544f9a6fe81c7273f96432aaf1048
+    sha: c905bab09d496c7b7fe2aaa0c92d2109fdd30432
   - path: src/stats.js
-    sha: f81bc37dad19e253bf23a696ba899b4219dd5e53
+    sha: 724cd47d841ef2d5582da18a3e5afdc5062f5e5b
   - path: src/doctor.js
-    sha: 5969652bdbc10eb76cf20a3e682f8ac1b43c818e
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
   - path: src/up.js
-    sha: d071ce334a8166b27957bb2ad6c07dd683c306cb
-generated_at_commit: f04038f
-last_refreshed: 2026-09-01
+    sha: 015e0ff4ffa48e110400065f3d496db7ebd4b730
+generated_at_commit: 237bb61
+last_refreshed: 2026-09-02
 related: [features/planning-commands, decisions/adr-004-roles-and-adoption, features/up-and-down, features/review-loop, concepts/roles-and-seats]
 ---
 

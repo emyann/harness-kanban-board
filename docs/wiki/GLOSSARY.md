@@ -23,9 +23,9 @@ deserves a `concepts/` page (link it).
   profile field about what a session reaches for rather than how it starts; see
   *features/capability-map* and *concepts/capability-portability*.
 - **Card / task** — a GitHub issue on the board; "card" in kanban prose,
-  "task" in code and JSON (`src/tasks.js`).
+  "task" in code and JSON (`src/store/github.js`).
 - **Claim** — an atomic take on a card: creating `refs/kb/locks/<n>/<k>`, the
-  only CAS GitHub offers (`src/lock.js`).
+  only CAS GitHub offers (`src/store/github.js`).
 - **Continuation** — an attempt that carries on an **open PR** the reviewer sent
   back instead of starting a branch of its own; marked `continues_pr` on the
   attempt row, and `continues_branch` when the dispatcher put the checkout on
@@ -58,8 +58,8 @@ deserves a `concepts/` page (link it).
 - **Head-branch fallback** — a card's PR found by matching an open PR's head
   branch against `taskBranchRe(n)` (`kb/<n>`, `kb-<n>-<k>`,
   `worktree-kb-<n>-<k>`) when GitHub's `closedByPullRequestsReferences` links
-  nothing — one board-wide read (`openPrsByHead`), applied whenever a card's
-  own `prs` comes back empty (`fillPrFallback`, `src/tasks.js`; `features/tracks`,
+  nothing — one board-wide read (`openPrsByHead`, `src/forge.js`), applied whenever a card's
+  own `prs` comes back empty (`fillPrFallback`, `src/store/github.js`; `features/tracks`,
   `features/review-loop`).
 - **Host** — machine identity, recorded per attempt, so the tick only checks a
   pid on the machine that owns it (`src/dispatch.js`).
@@ -113,7 +113,7 @@ deserves a `concepts/` page (link it).
   and heartbeat mode; `kb:agent:<profile>` says which one a task runs on. Not
   the model, the machine, or a person (`src/board.js`). Exactly one per card:
   the read is first-wins (`agentOf` in `src/model.js`), so every write goes
-  through `setAgent` (`src/tasks.js`), which takes the old label off, and
+  through `setAgent` (`src/store/github.js`), which takes the old label off, and
   `hkb doctor` names any card still wearing two (`checkAgentLabels` in
   `src/doctor.js`).
 - **Seat** — one of the three roles the protocol has: operator, dispatcher,
@@ -138,7 +138,7 @@ deserves a `concepts/` page (link it).
   inferred from the graph, not switched on: see **Track root**.
 - **Track branch** — a track's own integration branch, `kb/track-<root>`
   (`trackBranchName`, `src/model.js`), created from the default branch at
-  claim time (`ensureTrackBranch`, `src/lock.js`) and recorded on the root's
+  claim time (`ensureTrackBranch`, `src/store/github.js`) and recorded on the root's
   attempt row so a runner that dies never strands work nothing can find.
   Every node of the track branches from it and PRs into it, whatever its
   blockers; the root's own pass runs on it and opens the track's one PR into
@@ -163,7 +163,7 @@ deserves a `concepts/` page (link it).
   that session writes. A `claude --bg` worker's only local way to name itself,
   and the tick's only way to name it from outside (`src/jobs.js`).
 - **Worker** — the seat that codes: one session holding one attempt on one task
-  — any harness, an Actions job, or the operator running the verbs by hand
+  — any harness a profile has a `launch` array for, or the operator running the verbs by hand
   (`src/lifecycle.js`).
 - **Worker identity** — the answer to "which attempt is this session?": the
   launch environment (`KB_TASK`…), else the `kb-<n>-<k>` checkout — and, when the
@@ -171,6 +171,7 @@ deserves a `concepts/` page (link it).
   directory cannot (`attemptIdentity` in `src/model.js`, `whichAttempt` in
   `src/hook.js`; see *concepts/worker-identity*).
 - **Control plane** — hkb read as Kubernetes reads itself: the store is etcd, a host running the dispatcher loop is a node, the tick is kubelet + scheduler + controller-manager in one loop, a board is a namespace, a card a Job, an attempt a Pod (*decisions/adr-005-control-plane*; design in `docs/local-first.md` §2).
-- **Store** — the board's state behind one interface (`docs/local-first.md` §6.4): today `src/tasks.js` + `src/lock.js` on GitHub; after track A, two local tiers — the durable half on the `kb-board` git branch, the live half and an index in `.git/hkb/index.db` (*decisions/adr-006-local-store*).
+- **Store** — the board's state behind one interface (`openStore`, `src/store/index.js`; the names are `docs/local-first.md` §6.4): today the GitHub driver in `src/store/github.js`, which `src/tasks.js` and `src/lock.js` re-export; next, two local tiers — the durable half on the `kb-board` git branch, the live half and an index in `.git/hkb/index.db` (*architecture/store-seam*, *decisions/adr-006-local-store*).
+- **Forge** — the pull-request half, deliberately outside the store (`src/forge.js`): a board kept locally still opens its work on GitHub, so PR reads, auto-merge, branch protection and the merge mutation go on calling `src/gh.js` whatever the store is (*architecture/store-seam*).
 - **Suspended** — a card an operator's `hkb stop <n>` parked: it keeps its lane and the tick skips it until `hkb start <n>` (`kb.suspended`, *decisions/adr-005-control-plane*).
 - **Bridge** — the later GitHub adapter that publishes board state to issues and pulls only forge state (PRs, merges) back; never a claim, a lock, an attempt or a pause (`docs/local-first.md` §8).

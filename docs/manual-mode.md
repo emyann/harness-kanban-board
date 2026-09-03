@@ -15,7 +15,7 @@ npx hkb-cli init --shared-hooks  # labels, .kanban/board.json, the worker skill,
 npx hkb-cli doctor --api         # gh auth, labels, GraphQL fields, the issue-dependency API and lock-ref CAS
 ```
 
-Setup is the same one an autonomous board gets — you simply never start the loop. Skip `--with-actions`.
+Setup is the same one an autonomous board gets — you simply never start the loop.
 
 `--shared-hooks` is the one flag manual mode really wants, and the reason is the whole shape of this page. hkb's
 `Stop`, `PreToolUse` and `SubagentStop` hooks normally ride the launch line of a worker *hkb started* (`claude
@@ -67,7 +67,7 @@ hkb claim 42
 
 `claim` creates the lock ref, moves the card to *running* and opens attempt 1 — marked `manual`, because no
 process was spawned. The ref is the atomicity: a second claim on a card that already has one prints `held` and
-exits 2, so two people (or a laptop and an Actions runner) cannot both take #42. `--spawn` hands the card to the
+exits 2, so two people (or a person and a dispatcher) cannot both take #42. `--spawn` hands the card to the
 profile's launch command instead, which is exactly what the tick would have done.
 
 Then read the brief:
@@ -129,8 +129,8 @@ board telling you where you left off. A hand session that will span a day wants 
 card: `hkb create "…" --max-runtime 86400`, or edit the `kb` block in the issue body.
 
 The honest half: **only a tick reclaims anything.** With no dispatcher running anywhere, a silent attempt sits in
-*running* forever and nothing takes it from you. The moment one does run — the reconcile below, an Actions
-sweeper, a colleague's `--loop` — those two numbers are the whole liveness check.
+*running* forever and nothing takes it from you. The moment one does run — the reconcile below, a colleague's
+`--loop` — those two numbers are the whole liveness check.
 
 ## Steering, and the levers a tick would have pulled
 
@@ -226,7 +226,7 @@ which is a different job.) The decision, and what would make it worth revisiting
 | the protocol by hand | `claim` → `context` → one terminal verb | every run leaves a result the next run reads |
 | explicit order | `--blocked-by`, `promote` | the graph, and a queue that is true without you |
 | the tick | `hkb dispatch --max 0`, then `--loop 60` | reconcile and promotion stop being your job |
-| tracks and the laptop-closed board | `claude-track`, `hkb init --with-actions` | a whole subgraph per session; a board that moves without you |
+| tracks | `claude-track`, `hkb up` | a whole subgraph per session; a board that moves without you |
 
 The payoff rung is the second one: from there on, the board carries the handoff, and whether the next worker is
 you, an agent you launched, or one the tick launched is a setting — not a different way of working.

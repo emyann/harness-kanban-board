@@ -8,7 +8,7 @@ no server, no database and no npm dependencies.
 
 **Before you start**, three things have to be on the machine:
 
-- **Node >= 20** and the [GitHub CLI](https://cli.github.com), `gh auth login` already done.
+- **Node >= 22.13, 24 recommended** and the [GitHub CLI](https://cli.github.com), `gh auth login` already done.
 - **A repo you can push to** — hkb writes labels, issues and refs there.
 - **A coding agent on your PATH** — [Claude Code](https://claude.com/claude-code) for the default profiles,
   or Copilot CLI / Codex with `init --harness`. hkb dispatches *to* a harness; it is not one. Without it
@@ -130,20 +130,20 @@ not a role.
   reclaims what died, launches what it can, and exits. It holds no workflow and has no LLM in it: the graph lives
   on the cards as issue dependencies, and the loop only reconciles labels, locks and attempts against it. That
   dumbness is the point — deterministic code, one GraphQL query per board per tick.
-- **A worker is any harness.** Claude Code, Copilot CLI and Codex CLI ship as profiles; an Actions job, a shell
-  script or you in your own terminal are workers too. A worker reads its brief with `hkb context <n>`, works in a
+- **A worker is any harness.** Claude Code, Copilot CLI and Codex CLI ship as profiles; a harness you write a
+  `launch` array for, a shell script, or you in your own terminal are workers too. A worker reads its brief with `hkb context <n>`, works in a
   worktree, opens a draft PR that says `Closes #42`, and ends with exactly one of `hkb finish` / `hkb block` /
   `hkb request-review`.
 
 Which of them a machine fills is a setting, not a fork of the protocol, so adoption is a ladder rather than a
-migration: cards only → the protocol by hand → explicit order → the tick → tracks and a board that runs with the
-laptop closed. [Driving a board by hand](docs/manual-mode.md) is a rung, not a fallback.
+migration: cards only → the protocol by hand → explicit order → the tick → tracks, a whole subgraph per session.
+[Driving a board by hand](docs/manual-mode.md) is a rung, not a fallback.
 
 ## What it costs
 
 - The board and the dispatcher cost nothing on any GitHub plan (personal or org, public or private).
-- Workers bill only against the harness plan you already have. Paid profiles (Actions, Managed Agents, vendor
-  cloud agents) are opt-in per board, never the default.
+- Workers bill only against the harness plan you already have. Paid profiles (Managed Agents, vendor cloud
+  agents) are opt-in per board, never the default.
 - The dispatcher is deterministic code, never an LLM. One GraphQL query per board per tick.
 - Zero npm dependencies. Everything goes through `gh api`.
 
@@ -384,7 +384,7 @@ it as no claim at all — `--status` says `stopped (pid file predates this boot)
 never signals it.
 
 **`hkb up` is not a supervisor,** and will not pretend to be one: it never restarts anything. Exit code 4 is the
-dispatcher loop deliberately giving itself up for a supervisor to restart (cron, systemd, Actions, or you), and
+dispatcher loop deliberately giving itself up for a supervisor to restart (cron, systemd, launchd, or you), and
 that is still what it means — `hkb up --status` reports `dispatch exited (4) at 19:02 — hkb up restarts it` so an
 operator, or an agent session, can see it in one call. `hkb doctor` says the same thing in one line. If you want
 the loop in the foreground under a real supervisor, `hkb dispatch --loop 60` is unchanged.
@@ -531,7 +531,7 @@ stopped by the dispatcher once their attempt has ended. `hkb show <n>` prints th
 They do not all tell you what they spent, and that is worth knowing at the point of choice: `claude-p` ends in
 Claude's own JSON, so `hkb stats` shows a **reported cost**; `claude` and `claude-track` are background agents
 that report none, so the most they leave is the session transcript — **tokens**, and a dollar figure only if you
-give the board `stats.rates`; `copilot-cli`, `codex` and `claude-action` leave neither, so an attempt there is an
+give the board `stats.rates`; `copilot-cli` and `codex` leave neither, so an attempt there is an
 outcome and a duration.
 Profile by profile: [docs/harnesses.md](docs/harnesses.md#what-a-profile-can-tell-you-it-spent).
 
@@ -593,52 +593,17 @@ before a worker can push: both steps are written into `.codex/README.md` with yo
 Any other harness plugs in the same way — a `launch` array in `.kanban/board.json`; the protocol does not change.
 Details, flags and troubleshooting for all of them: [docs/harnesses.md](docs/harnesses.md).
 
-## Runs when the laptop is closed
+## The board runs on one host
 
-The dispatcher is one command, so it also runs in GitHub Actions. `hkb init --with-actions` generates the two
-workflows that do it — nothing else about the board changes:
+`hkb up` on the machine that owns the board is the whole answer: it starts the dispatcher loop (and, with
+`--serve`, the web board) and keeps ticking until you stop it. A machine that stays on gives you the 60-second
+cadence; a laptop gives you a board that moves while it is open.
 
-```bash
-hkb init --with-actions        # .github/workflows/kanban-dispatch.yml + kanban-worker-claude.yml
-gh secret set KB_TOKEN         # fine-grained PAT, this repo: Issues, Contents, Pull requests, Actions RW
-claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN     # or: gh secret set ANTHROPIC_API_KEY
-git add .github/workflows && git commit -m "kanban: dispatch from Actions" && git push
-```
-
-That last line is not a formality: Actions only ever runs the copy of a workflow that is on the **default
-branch**. No secret is ever written into a template — both files reference `${{ secrets.* }}` and nothing else,
-and until `KB_TOKEN` exists the dispatcher prints a `::notice::` saying so and dispatches nothing.
-
-**`kanban-dispatch.yml`** is `hkb dispatch --max 1`, triggered by what actually changes the board —
-`issues: [closed, reopened, labeled, unlabeled]`, `pull_request: [closed]`, `pull_request_review`,
-`workflow_run` (a worker finishing), `workflow_dispatch` — with `schedule: */15` as a **sweeper only**, for the
-things no event announces: a worker that died, a `scheduled_at` that came due. `concurrency: kb-dispatch-<board>`
-with `cancel-in-progress: false` keeps it to one tick at a time, because a cancelled tick can leave a claimed
-lock ref with no worker behind it. It passes `--profiles claude-action`, so an Actions runner claims only the profile
-it can actually launch and leaves your laptop's `claude` tasks alone; reclaim, promote and reconcile still cover the
-whole board on every tick.
-
-**`kanban-worker-claude.yml`** is one attempt on one task. The `claude-action` profile's launch does not start a
-worker locally — it is `gh workflow run kanban-worker-claude.yml -f task=<n> -f attempt=<k>` and exits, so the
-attempt is recorded as `remote`: no pid, no background job, and its heartbeat (the same CAS on
-`refs/kb/locks/<n>/<k>`) plus `max_runtime` are the whole liveness check. On the Actions runner, a step turns
-`hkb context <n>` into the prompt for [`anthropics/claude-code-action@v1`](https://github.com/anthropics/claude-code-action)
-— the same brief a local worker is launched with, the same allowlist, the same `Closes #<n>` draft PR, the same
-terminal verb. There is no `Stop` hook on an Actions runner, so a final `if: always()` step ends an attempt that finished
-without one (`hkb block … --kind transient`) instead of leaving it `running` until the stale reclaim.
-
-**The honest latency.** The 60-second cadence exists only while your laptop loop runs. Actions' cron floor
-is 5 minutes, top-of-hour schedules are routinely 15-20+ minutes late, and scheduled workflows are dropped
-entirely on a public repo with no activity for 60 days — which is exactly why the cron here is a sweeper and the
-events are the real trigger. **Laptop-off latency is 15-75 minutes**, end to end. If you want 60 seconds, run
-`hkb up` on a machine that stays on; the two dispatchers are safe to run together, because the lock ref is the
-arbiter.
-
-What you give up, plainly: Actions minutes (free on public repos; a platform fee per minute on private ones —
-the board itself stays free), no enforced `Stop` nudge, no spend on the board for those attempts (the log and the
-transcript stay on the runner, so `hkb stats` counts them and prices none of them), a per-task `model` override that is not plumbed through
-workflow inputs yet, and a worker whose run is cancelled or killed is only noticed at `stale_after`, not at
-`workflow_run`. Details and the whole table: [docs/harnesses.md](docs/harnesses.md#github-actions--claude-action).
+hkb used to also generate a GitHub Actions dispatcher, so a board could keep moving with the laptop closed.
+That is **gone** as of [ADR-006](docs/wiki/decisions/adr-006-local-store.md): the board's store becomes local
+and single-host, and a dispatcher inside Actions cannot read it. `hkb init --with-actions` now exits 2 saying
+so, and a `board.json` that still names a `"mode": "trigger"` profile is refused at load with the same
+pointer. Delete the profile and re-point any card carrying its `kb:agent:*` label at a local one.
 
 ## MCP (optional — the CLI is the protocol)
 
@@ -746,10 +711,10 @@ One file lives outside it. `~/.config/hkb/boards.json` (`$XDG_CONFIG_HOME`/`$KB_
 - [The protocol](skills/kanban/references/protocol.md) — statuses, claims, attempts, handoff; what a worker must do.
 - [Driving a board by hand](docs/manual-mode.md) — the day-one loop with no dispatcher: claim, context, one
   terminal verb, the heartbeat contract, and moving an existing roadmap onto the board.
-- [Harnesses](docs/harnesses.md) — per-harness setup, profiles, generated files, Codex's one-time trust, Actions.
+- [Harnesses](docs/harnesses.md) — per-harness setup, profiles, generated files, Codex's one-time trust.
 - [Releasing](docs/releasing.md) — how a version gets to npm: one tag, provenance, and a clean-room `npx` check.
 - [Project status and verified behaviour](docs/status.md) — how far along this is, and the GitHub API facts the
   design leans on, each with the probe that confirmed it.
 - [Design rationale](docs/EVALUATION.md) — judged alternatives and the roadmap.
 
-Requires Node >= 20 and the [GitHub CLI](https://cli.github.com), authenticated. MIT licensed.
+Requires Node >= 22.13 (24 recommended) and the [GitHub CLI](https://cli.github.com), authenticated. MIT licensed.

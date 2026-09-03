@@ -10,15 +10,17 @@ date: 2026-09-02
 supersedes: ~
 superseded_by: ~
 covers:
-  - path: src/tasks.js
-    sha: 6cbae757123f219fc49887566f1f647936dcc88e
-  - path: src/lock.js
-    sha: e9920df913b5e6cd8a648dad6e679cf4a41a6a1a
+  - path: src/store/index.js
+    sha: ff18b848824f2370c915b5417fd6fe51d5c36f2f
+  - path: src/store/github.js
+    sha: e2708642df0ef4599f450e643b9b67eeeb0b2ad5
+  - path: src/forge.js
+    sha: 20dd384386ca63bc98d103b2e7728f29a95bc87c
   - path: src/board.js
-    sha: 6255369a80ea8d77ca11a6e5e2e79d1ebffa6755
+    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
   - path: package.json
-    sha: 615fdaa001b1621fb6eccddaf30e9830208d7e7b
-generated_at_commit: 7fd6cba
+    sha: e0c6c8eeda7d091e841f1a764486ad9a57edd0f5
+generated_at_commit: 447b51e
 last_refreshed: 2026-09-02
 related: [decisions/adr-005-control-plane, decisions/adr-004-roles-and-adoption, architecture/overview, features/web-board, features/up-and-down]
 ---
@@ -62,7 +64,9 @@ from GitHub and cannot read a file on a laptop; the maintainer does not use it.
 - **The seam comes first.** A `Store` interface (`docs/local-first.md` §6.4) is extracted from
   `src/tasks.js` and `src/lock.js` with the GitHub bodies behind it and no behaviour change; the two
   tiers implement it; a driver-parametrised conformance suite runs both; the pull-request functions
-  move to `src/forge.js` and stay on `src/gh.js`.
+  move to `src/forge.js` and stay on `src/gh.js`. *Landed:* `src/store/index.js`,
+  `src/store/github.js`, `src/forge.js` and `test/store.test.js` exist and `src/tasks.js` /
+  `src/lock.js` are re-export shims over them — see *architecture/store-seam*.
 - **The Actions runner is removed**, not refused: templates, profile, `trigger` mode, `remote` liveness,
   docs. `--profiles` stays.
 - **The GitHub store is retired** once every live board has been imported (`hkb init --import`), and the

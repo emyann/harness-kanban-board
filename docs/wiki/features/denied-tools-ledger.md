@@ -7,20 +7,20 @@ audience: [dev, ops]
 read_when: "touching denied_tools, permission_denials, hkb show/stats/doctor's denial reporting, or the two transcript-only denial shapes (dontask-miss, worktree-guard)"
 covers:
   - path: src/model.js
-    sha: da2e9819afadb0fdda2c95fb3e6750bda727e207
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/stats.js
-    sha: 8dd6c0032f972f3eb3fbf6e0dde4c01257765c0b
+    sha: 724cd47d841ef2d5582da18a3e5afdc5062f5e5b
   - path: src/hook.js
-    sha: c7f5ce80b8a0ccfe64b2c4eda3f9b95db343b490
+    sha: 97b9054fbe1769059b882e4779f8279deaf184d8
   - path: src/dispatch.js
-    sha: 4c660ef30b45b404c5744c55f30488afe1b20178
+    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
   - path: src/doctor.js
-    sha: 3d52c57a00096587f6c374f99c36567a2db205d8
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
   - path: src/init.js
-    sha: 1e75c0d47cc9a5441400e7d36da394a6a0e1551a
+    sha: c905bab09d496c7b7fe2aaa0c92d2109fdd30432
 related: [concepts/worker-identity, features/operator-seat, gotchas/long-lived-process-rot]
-generated_at_commit: d1d460e
-last_refreshed: 2026-09-01
+generated_at_commit: 237bb61
+last_refreshed: 2026-09-02
 ---
 
 # The denied-tools ledger

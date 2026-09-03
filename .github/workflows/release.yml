@@ -52,7 +52,10 @@ jobs:
           package-manager-cache: false
 
       # The same three runs test.yml does on every push: same signal, and a tag can point at a commit
-      # that never went through a pull request.
+      # that never went through a pull request. The install is here for the same reason it is in
+      # test.yml — `npm run lint` ends in `tsc --noEmit`, and with no lock file to restore there is
+      # nothing in node_modules until this step runs.
+      - run: npm install --no-audit --no-fund
       - run: npm run lint
       - run: npm test
         env:

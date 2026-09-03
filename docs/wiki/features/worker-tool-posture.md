@@ -7,20 +7,20 @@ audience: [dev, operator]
 read_when: "changing what a worker may run — a profile's tools/mcp keys, kb.tools/kb.mcp on a card, effectiveTools, or the launch line's allow-list"
 covers:
   - path: src/model.js
-    sha: 76768c101bd61f923359547dbf6f8a8dfd64732a
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/board.js
-    sha: 6255369a80ea8d77ca11a6e5e2e79d1ebffa6755
+    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
   - path: src/context.js
     sha: 0eecc3f46fa4d71d3fa12598b474c76e0bc7733d
   - path: src/init.js
-    sha: ab0d1c4a231cc107a3a46a554efe928e5c1d82ca
+    sha: c905bab09d496c7b7fe2aaa0c92d2109fdd30432
   - path: src/doctor.js
-    sha: 5abc1e90778b7ac61fab595b66146c00e965927d
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
   - path: src/dispatch.js
-    sha: 18a622a26529bfb3b7a16cacc44f1079eee4cfb8
+    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
 related: [concepts/tool-grant-ceiling, features/denied-tools-ledger, features/capability-map, features/harness-profiles]
-generated_at_commit: 6c9f65f
-last_refreshed: 2026-09-01
+generated_at_commit: 237bb61
+last_refreshed: 2026-09-02
 ---
 
 # Worker tool posture
@@ -121,8 +121,8 @@ would turn "no allow-list" into an allow-list of one.
   - `tool posture` — one line per profile: posture, ceiling size, and which
     reading its MCP list is under. Printed unconditionally, because a posture
     nobody can see is indistinguishable from no posture at all. On this repo's own
-    board it reads `claude: curate, 45 tools, mcp: none · claude-action: curate,
-    45 tools, mcp: none · claude-track: curate, 46 tools, mcp: none`.
+    board it reads `claude: curate, 45 tools, mcp: none · claude-track: curate,
+    46 tools, mcp: none`.
   - `card grants` — flags any open card asking for what its profile does not
     grant, and is silent on a board where no card names either key.
 
@@ -144,9 +144,6 @@ The gap that matters, and it is the feature's own headline:
 
 Smaller, also open:
 
-- `actionsFiles` (`src/init.js`) renders `DEFAULT_PROFILES[ACTIONS_PROFILE].allowed_tools`
-  straight into the generated CI workflow without going through `effectiveTools`,
-  so a board's posture and `mcp` list never reach an Actions worker.
 - The denied-tools ledger records what a worker was *refused* but not what it
   *used* — "which grant is nobody using" is as much a dial input as "which denial
   keeps happening" (`features/denied-tools-ledger`).

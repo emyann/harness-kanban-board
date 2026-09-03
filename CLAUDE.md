@@ -1,11 +1,11 @@
 # hkb — contributor guide
 
-`hkb` is a zero-dependency Node (>= 20, ESM) CLI that turns GitHub Issues into a Hermes-style kanban for coding agents.
+`hkb` is a zero-dependency Node (>= 22.13, ESM) CLI that turns GitHub Issues into a Hermes-style kanban for coding agents.
 Read `README.md` for the model and `skills/kanban/references/protocol.md` for the exact protocol before changing behaviour.
 
 ## Values (in priority order)
 
-1. **Portable** — the protocol is labels, issue dependencies, refs and comments; any harness drives it through `gh`.
+1. **Portable** — the protocol is labels, issue dependencies, refs and comments; any harness drives it through `hkb` verbs; GitHub is the default store today and becomes a bridge (ADR-006).
 2. **Frugal** — no npm dependencies; no LLM in the dispatcher; one GraphQL query per board per tick; every write is justified.
 3. **Performance** — conditional reads, no polling loops inside commands, no per-task calls when a board-wide one exists.
 4. **Frictionless** — the default path asks nothing of the human that the tool could work out itself: one command over two, a
@@ -16,7 +16,9 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 ## Layout
 
 - `bin/hkb.js` entry · `src/cli.js` arg parsing + routing · `src/gh.js` the only place that shells out to `gh`
-- `src/model.js` pure functions (unit-tested, no I/O) · `src/tasks.js` issue⇄task · `src/lock.js` ref claims
+- `src/model.js` pure functions (unit-tested, no I/O) · `src/store/` the board behind one interface (`index.js` the
+  contract, `github.js` today's driver) · `src/forge.js` pull requests, reviews, merges · `src/tasks.js` and
+  `src/lock.js` are thin re-export shims over the store, kept so existing imports still resolve
 - `src/lifecycle.js` worker verbs · `src/dispatch.js` the tick · `src/context.js` worker prompt · `src/hook.js` Stop hook
 - `src/init.js` `src/doctor.js` `src/gc.js` · `skills/kanban/` the shipped skill
 - `templates/` what `hkb init` generates: `doc-section.md`, `copilot/` and `codex/` for `--harness <name>`
@@ -25,8 +27,13 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 ## Rules
 
 - Keep it dependency-free. If you need YAML/TOML, don't.
-- Pure logic goes in `src/model.js` with a test in `test/`. I/O stays in `tasks.js`/`lock.js`/`gh.js`.
-- The protocol (statuses, claims, attempts, handoff) is backend-neutral; GitHub is an adapter. Keep every GitHub-ism behind `gh.js`/`tasks.js`/`lock.js` so a future `src/backends/{github,local,...}/` split is mechanical; the fake-gh test double (#3) doubles as the backend conformance suite.
+- Pure logic goes in `src/model.js` with a test in `test/`. Board I/O goes behind the `Store` interface
+  (`src/store/`); anything about a pull request goes in `src/forge.js`; `src/gh.js` stays the only place that shells
+  out to `gh`. New board state is a method on the interface and a scenario in `test/store.test.js`, never a fresh
+  call into `gh.js` from a caller.
+- The protocol (statuses, claims, attempts, handoff) is backend-neutral; GitHub is an adapter. Keep every GitHub-ism behind `gh.js`/`src/store/github.js`/`src/forge.js`; the store's conformance suite
+  (`test/store.test.js`) is what a second driver has to pass, and `test/fake-gh.js` is the GitHub double it runs
+  against. See ADR-006 and `docs/local-first.md` §6 for the local store the interface exists for.
 - Pin `X-GitHub-Api-Version` via `src/gh.js`; never call `gh issue`/`gh pr` sub-commands for board state — use `gh api`.
 - Every command returns a stable object under `--json`; human output is a one-liner per item.
 - Errors: throw `Error` with `.exitCode` (2 = usage/state, 3 = LOCK_LOST, 4 = the dispatcher loop

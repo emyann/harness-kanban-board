@@ -7,31 +7,33 @@ audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: 13555690946205fd3e221a8c0b4dcb2b0a92c623
+    sha: 9d7fc11ad734643205e89668a176d4f29115805f
   - path: src/gh.js
-    sha: 97d4dbad5a1c30beb49360d68283e65dc5155e1c
+    sha: 8154ea477e52ed3f769238f1c1bda588fd767798
   - path: src/model.js
-    sha: 022ed7b17c5debc59265f8a1627f82386864de00
-  - path: src/tasks.js
-    sha: e0c09e408b3328d5ca7a4d9f512e4bda73b0d0f0
-  - path: src/lock.js
-    sha: 680eae74c9955003c948a6df9750c25548ccaf86
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
+  - path: src/store/index.js
+    sha: ff18b848824f2370c915b5417fd6fe51d5c36f2f
+  - path: src/store/github.js
+    sha: e2708642df0ef4599f450e643b9b67eeeb0b2ad5
+  - path: src/forge.js
+    sha: 20dd384386ca63bc98d103b2e7728f29a95bc87c
   - path: src/lifecycle.js
-    sha: 98cf380069697936e2b62fb17402bae7099cf06f
+    sha: c3c49b90e80c7e68d44b4f8f999debcfa484de80
   - path: src/dispatch.js
-    sha: 6ceade7f5440ab4194c477cc1bb2cc2900b52632
+    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
   - path: src/context.js
-    sha: ab7afc4eb5158a879ea1700221892229329dce64
+    sha: 0eecc3f46fa4d71d3fa12598b474c76e0bc7733d
   - path: src/hook.js
-    sha: 9c279d75961f372331295d9783dde522e4e175b2
+    sha: 97b9054fbe1769059b882e4779f8279deaf184d8
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/board.js
-    sha: 955f2c7cfc908fe46ebf264e0cb4c8e722c7a79c
+    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
   - path: src/doctor.js
-    sha: 4b49003dc44abe98a35f1c47b9472427e0ab6fba
-generated_at_commit: bcd1dc5
-last_refreshed: 2026-09-01
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
+generated_at_commit: 237bb61
+last_refreshed: 2026-09-02
 related: [concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
 
@@ -40,7 +42,7 @@ related: [concepts/board-protocol, concepts/claims-and-leases, concepts/worker-i
 > hkb turns GitHub Issues into a Hermes-style kanban that coding agents work
 > autonomously. Every structural choice below follows from one rule: **the
 > board is the only durable state**. Processes hold caches, never truth — so
-> any process (dispatcher, worker, a human's laptop, an Actions runner) can
+> any process (dispatcher, worker, a human's laptop) can
 > crash at any moment and the system re-derives itself from GitHub.
 
 ## The state model
@@ -50,13 +52,15 @@ A task is a GitHub issue wearing the board's labels (`kb:status:*`,
 in the issue body, and execution history rides in two structured comments —
 a run record (attempts) and a result record (the handoff) — parsed and
 serialized by pure functions in `src/model.js`. Issue⇄task translation and
-every board read/write live in `src/tasks.js`. Dependencies use GitHub's
-native `blocked_by` issue relations, which makes the board a DAG, not a list.
+every board read/write live in `src/store/github.js`, behind the `Store`
+interface (`src/store/index.js`) — `src/tasks.js` and `src/lock.js` are now
+re-export shims over it. Dependencies use GitHub's native `blocked_by` issue
+relations, which makes the board a DAG, not a list.
 
 ## The one atomic primitive
 
 GitHub offers exactly one cheap compare-and-swap: **git refs**. Claims are
-`refs/kb/locks/<n>/<k>` created via the API (`src/lock.js`) — a 201 means the
+`refs/kb/locks/<n>/<k>` created via the API (`src/store/github.js`) — a 201 means the
 claim is yours, "already exists" means someone holds it, anything else means
 *unknown*, and callers must treat unknown as "back off", never as either
 success or failure. Worker heartbeats are CAS updates of the same ref; a
@@ -102,7 +106,8 @@ board where the loop is current pays nothing per tick for it.
 ## Workers are any harness
 
 A worker is whatever a profile in `src/board.js` can launch — Claude Code,
-Copilot CLI, Codex, or a GitHub Actions run — pointed at one card. Its
+Copilot CLI, Codex, or a harness someone wrote a `launch` array for — pointed
+at one card. Its
 contract is small: the verbs in `src/lifecycle.js` (complete / block /
 request-review), a prompt assembled from the card by `src/context.js`, and
 guard rails on the launch line itself. The protocol is what a worker follows;
@@ -183,10 +188,13 @@ with no JSON result line to read a status from at all.
 ## The seams that keep it portable
 
 `src/gh.js` is the only file that shells out to `gh`, and it pins
-`X-GitHub-Api-Version`; `src/tasks.js` and `src/lock.js` are the only files
-that know board state lives in GitHub. Everything above them speaks statuses,
-claims, and attempts — backend-neutral by construction, so a future
-`src/backends/` split is mechanical. Pure decision logic stays in
+`X-GitHub-Api-Version`. Board state now sits behind one named interface —
+`openStore(ctx)` in `src/store/index.js`, with the GitHub bodies in
+`src/store/github.js` — and pull requests sit beside it rather than inside it,
+in `src/forge.js`, because a board kept locally still opens its work on a
+forge. Everything above the seam speaks statuses, claims and attempts, so the
+local tiers arrive as further drivers rather than as an edit to every caller.
+See [the store seam](store-seam.md). Pure decision logic stays in
 `src/model.js` (unit-tested, no I/O); `src/cli.js` only parses and routes.
 
 ## Related

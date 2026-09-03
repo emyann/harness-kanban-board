@@ -250,8 +250,9 @@ addNote(n, text)   listNotes(n)            (today's addComment / listComments fo
 claim(n, k)                                → { result: 'claimed'|'held'|'unknown', token }
 release(n, k)
 listLocks()                                → [{ n, k, token, beat_at }]
-lockBeatAt(n, k)                           → ISO | null
-heartbeat(n, k, expected)                  → 'ok' | 'lost' | 'unavailable'     (the worker side)
+lockBeatAt(n, k, token?)                   → ISO | null   (token: the sha listLocks returned)
+heartbeat(n, k, expected)                  → { result: 'ok'|'lost'|'unavailable', token }  (the worker
+                                             side; the token is what the NEXT beat leases on)
 
 events({ after, limit })                   → [{ id, at, kind, number, payload }]   (only when capabilities().events)
 ```

@@ -124,7 +124,7 @@ function dropDeadPidFile(root, name, deps = {}) {
  * believing the board is running. The recheck costs 300ms once and turns that into a line naming the
  * log that holds the reason — and, since the process never actually came up, a `failed` entry rather
  * than a `started` one (#164).
- * @returns {{pid: number, line: string, failed: {name: string, pid: number, log: string}|null}}
+ * @returns {Promise<{pid: number, line: string, failed: {name: string, pid: number, log: string}|null}>}
  */
 async function startProcess(ctx, name, flags, deps = {}) {
   ensureLocalDirs(ctx.root);
@@ -178,7 +178,7 @@ export function statusReport(ctx) {
  * `hkb up [--serve] [--loop S] [--port N]` · `hkb up --status [--json]`.
  * Idempotent: a live pid file means "already running", not a second loop.
  */
-export async function up(ctx, flags = {}, out = () => {}, deps = {}) {
+export async function up(ctx, flags = {}, out = /** @type {(...a: any[]) => void} */ (() => {}), deps = {}) {
   const status = statusReport(ctx);
   if (flags.status) {
     if (ctx.json) out(JSON.stringify(status, null, 2));
@@ -237,7 +237,7 @@ async function waitGone(pid, budgetMs, deps = {}) {
  * Workers are never touched: a running attempt belongs to the board and the next dispatcher reclaims
  * or adopts it, which is exactly what the loop's own SIGTERM handler already says.
  */
-export async function down(ctx, flags = {}, out = () => {}, deps = {}) {
+export async function down(ctx, flags = {}, out = /** @type {(...a: any[]) => void} */ (() => {}), deps = {}) {
   const names = flags.serve ? PROCESSES : ['dispatch'];
   const budget = deps.waitMs ?? stopWaitMs(ctx.cfg?.dispatch?.interval);
   const stopped = [];

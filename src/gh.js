@@ -44,6 +44,9 @@ export function classify(status, text) {
   return 'unknown';
 }
 
+/** @param {string[]} args
+ * @param {{input?: string}} [opts]
+ */
 function runGh(args, { input } = {}) {
   const res = spawnSync('gh', args, {
     input,
@@ -100,7 +103,7 @@ function graphqlViaGh({ query, variables = {} }) {
   if (/RATE_LIMITED/.test(text)) kind = 'ratelimit';
   const msg = parsed?.errors ? parsed.errors.map((e) => e.message).join('; ') : res.stderr.trim().split('\n').slice(-2).join(' ');
   const err = new GhError(`GraphQL failed (${status || kind}): ${msg}`, { status, kind, body: res.stdout, path: 'graphql' });
-  err.graphqlErrors = parsed?.errors || [];
+  /** @type {any} */ (err).graphqlErrors = parsed?.errors || [];
   throw err;
 }
 
@@ -167,6 +170,9 @@ export function setTransport(fn) {
 /**
  * REST call. Returns the parsed payload (or null on an empty body).
  * Throws GhError with .kind on failure. Rate limits are retried twice with backoff.
+ * @param {string} method
+ * @param {string} path
+ * @param {{ body?: any, headers?: Record<string, string>, retries?: number }} [opts]
  */
 export async function rest(method, path, { body, headers = {}, retries = 2 } = {}) {
   for (let attempt = 0; ; attempt++) {
@@ -185,6 +191,9 @@ export async function rest(method, path, { body, headers = {}, retries = 2 } = {
  * A REST call that keeps the response envelope: `{ status, headers, data }`.
  * Pass `headers: { 'If-None-Match': etag }` and a 304 comes back as a status, not a throw —
  * that is how `hkb watch` polls without spending rate limit (GitHub does not charge a 304).
+ * @param {string} method
+ * @param {string} path
+ * @param {{ body?: any, headers?: Record<string, string>, retries?: number }} [opts]
  */
 export async function restRaw(method, path, { body, headers = {}, retries = 2 } = {}) {
   for (let attempt = 0; ; attempt++) {
@@ -216,6 +225,10 @@ export async function graphql(query, variables = {}, { retries = 2 } = {}) {
 }
 
 /** Run an arbitrary gh subcommand, returning stdout. Throws GhError on non-zero exit. */
+/**
+ * @param {string[]} args
+ * @param {{input?: string, allowFail?: boolean}} [opts]
+ */
 export function ghCmd(args, { input, allowFail = false } = {}) {
   const res = runGh(args, { input });
   if (res.status !== 0 && !allowFail) {

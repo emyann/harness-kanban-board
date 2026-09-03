@@ -136,8 +136,11 @@ function runEvents(state, number, run) {
  * Events carried by a page of issue comments, against what `state` has already reported.
  * The run comment is *edited* in place, so it is read for attempt transitions every time;
  * result and human comments are reported once, by id.
- * @param {object} opts.number   the issue, when the page came from one issue's endpoint
- * @param {Map}    opts.known    board index — repository-wide comments outside it are not ours
+ * @param {any} state
+ * @param {any[]} comments
+ * @param {object} [opts]
+ * @param {number} [opts.number]   the issue, when the page came from one issue's endpoint
+ * @param {Map}    [opts.known]    board index — repository-wide comments outside it are not ours
  */
 export function commentEvents(state, comments, { number = null, known = null } = {}) {
   const events = [];

@@ -7,22 +7,22 @@ audience: [dev, ops]
 read_when: "changing where hkb's Claude Code hooks are installed, what `hkb init` writes into a settings file, the Codex/Copilot hook files or .mcp.json, doctor's hook checks, or adopting hkb as a devDependency of a repo; also when a hook command in a repo does not resolve"
 covers:
   - path: src/init.js
-    sha: aee5eed4dcc544f9a6fe81c7273f96432aaf1048
+    sha: c905bab09d496c7b7fe2aaa0c92d2109fdd30432
   - path: src/model.js
-    sha: 022ed7b17c5debc59265f8a1627f82386864de00
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/board.js
-    sha: 955f2c7cfc908fe46ebf264e0cb4c8e722c7a79c
+    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
   - path: src/doctor.js
-    sha: 4b49003dc44abe98a35f1c47b9472427e0ab6fba
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
   - path: src/mcp.js
-    sha: ee328e08e3ae942519ab7f22e43ffe860393b51b
+    sha: e45182cb911dd68a1deb4012d9d3dfc67f063234
   - path: skills/kanban/scripts/hkb
     sha: 619505ca77807157084e456057e1857eb9a31419
   - path: scripts/smoke-pack.mjs
-    sha: 2c56112698f348f50eb581891d91bc41ac2d8157
+    sha: 11b1836f6a618f8049aedca5f7fde477a0878b48
 related: [architecture/overview, features/update-notice, concepts/roles-and-seats]
-generated_at_commit: bcd1dc5
-last_refreshed: 2026-09-01
+generated_at_commit: 237bb61
+last_refreshed: 2026-09-02
 ---
 
 # Where a hook command may say hkb is
@@ -221,8 +221,7 @@ variable. Two checks belong to the move itself:
   once nothing is stale; a custom-named profile still has no default behind
   it, so both `init` and doctor's fix text say to add the token by hand.
   `loadBoard` also refuses `effort` outright on any profile whose `launch[0]`
-  is not `claude` (`claude-action` excepted — accepted and ignored, since its
-  launch only triggers a run elsewhere): Codex and Copilot CLI have no
+  is not `claude`: Codex and Copilot CLI have no
   verified `--effort` flag, so a worker used to only find that out from the
   CLI's own error on first spawn.
 

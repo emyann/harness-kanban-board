@@ -1,4 +1,8 @@
 node_modules/
+# `typescript` is the only dependency and it is dev-only, so no lock file is committed — nothing
+# ships from node_modules and `npm install` has nothing to pin for a user. CI installs plain and
+# every setup-node keeps `package-manager-cache: false`, which needs a lock file to be absent.
+package-lock.json
 .kanban/logs/
 .kanban/outbox.jsonl
 .kanban/state.json

@@ -109,17 +109,6 @@ export const DEFAULT_PROFILES = {
     allowed_tools: CLAUDE_TOOLS,
     launch: ['claude', '-p', '{prompt}', '--worktree', 'kb-{n}-{k}', '--permission-mode', 'dontAsk', '--allowedTools', '{allowed_tools}', '--disallowedTools', ...CLAUDE_DENY, HOOK_SETTINGS_VAR, '--output-format', 'json', '--max-turns', '80', '--max-budget-usd', '5', '{model_args}'],
   },
-  'claude-action': {
-    description: 'Claude Code in GitHub Actions (`anthropics/claude-code-action@v1`), for a board that has to keep moving with the laptop closed. The launch does not run a worker here: it fires `kanban-worker-claude.yml` with `gh workflow run` and exits, so the attempt is `remote` — no pid, no job, and the heartbeat plus `max_runtime` are the whole liveness check. `hkb init --with-actions` writes that workflow and the event-driven `kanban-dispatch.yml` beside it. Needs a KB_TOKEN secret, and one of CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY. Honest latency with nothing but Actions: 15-75 minutes (see the README).',
-    mode: 'trigger',
-    // the runner has a full checkout and a token that can push, so the lease works like anywhere
-    // else; `auto` still falls back to the run comment if a repo refuses the ref push
-    heartbeat: 'auto',
-    max_in_progress: 2,
-    model: null, // per-task `model` is not plumbed through workflow inputs yet — set it in claude_args
-    allowed_tools: CLAUDE_TOOLS,
-    launch: ['gh', 'workflow', 'run', 'kanban-worker-claude.yml', '-R', '{repo}', '-f', 'task={n}', '-f', 'attempt={k}', '-f', 'board={board}'],
-  },
   'copilot-cli': {
     description: 'GitHub Copilot CLI on this machine (included in Copilot Free, draws on the plan\'s AI credits). Run `hkb init --harness copilot` first: it writes the `kanban-worker` custom agent and the agentStop hook that enforces the terminal verb. Copilot CLI has no worktree flag, so `workspace: "worktree"` asks the dispatcher to create one. No structured-output flag — the attempt is recorded by the `hkb` calls the worker makes. max_in_progress is 1 because the free credit pool is small.',
     mode: 'process',
@@ -143,6 +132,32 @@ export const DEFAULT_PROFILES = {
     launch: ['codex', 'exec', '-C', '{worktree}', '--sandbox', 'workspace-write', '--output-schema', '.agents/skills/kanban/schema/terminal.json', '{model_args}', '{prompt}'],
   },
 };
+
+/**
+ * Profiles hkb used to ship and no longer does. A board.json written by an older hkb still names one
+ * — this repo's own did — and that file is the operator's, so hkb neither throws on it nor keeps a
+ * profile it cannot launch: `loadBoard` drops the entry and records it, the tick skips its cards
+ * naming the re-point, `hkb doctor` reports it, and `hkb init` deletes it from the file.
+ *
+ * Keyed by NAME as well as by the mode the profile ran under, because the shape an operator writes to
+ * tweak a built-in carries no mode at all: `"claude-action": {}` merged over a default that no longer
+ * exists is an empty object, and a `mode`-only check never fires on it.
+ */
+export const REMOVED_PROFILES = {
+  'claude-action': 'the GitHub Actions runner was removed in ADR-006 — the board\'s store is local and single-host, and a dispatcher inside Actions cannot read it',
+};
+
+/**
+ * Why this profile can no longer be loaded, or null. Pure: the name and the merged body, no I/O.
+ * @param {string} name
+ * @param {any} p the profile as merged over its default
+ * @returns {string|null}
+ */
+export function removedProfile(name, p) {
+  if (Object.hasOwn(REMOVED_PROFILES, name)) return REMOVED_PROFILES[name];
+  if (p && p.mode === 'trigger') return 'the "trigger" mode went with the GitHub Actions runner in ADR-006';
+  return null;
+}
 
 export const DEFAULT_BOARD = {
   version: 1,
@@ -262,10 +277,10 @@ export function readPidFile(root, name, { proc = '/proc' } = {}) {
     const pid = Number(fs.readFileSync(file, 'utf8').trim()) || null;
     const at = fs.statSync(file).mtime.toISOString();
     const alive = pidAlive(pid);
-    const stale = pidClaimStale({
+    const stale = pidClaimStale(/** @type {any} */ ({
       at, name, alive, cmdline: alive ? readCmdline(pid, proc) : null,
       uptime: os.uptime(), btimeSec: readBtimeSec(proc),
-    });
+    }));
     return { pid, at, stale };
   } catch { return { pid: null, at: null, stale: false }; }
 }
@@ -357,7 +372,7 @@ function worktreeHolding(root, branch) {
   const list = [];
   let cur = null;
   for (const line of r.stdout.split('\n')) {
-    if (line.startsWith('worktree ')) { cur = { path: line.slice(9) }; list.push(cur); }
+    if (line.startsWith('worktree ')) { cur = /** @type {{path: string, branch?: string, locked?: string}} */ ({ path: line.slice(9) }); list.push(cur); }
     else if (line.startsWith('branch ') && cur) cur.branch = line.slice(7).replace('refs/heads/', '');
     else if (line.startsWith('locked') && cur) cur.locked = line.slice(6).trim() || 'locked';
   }
@@ -386,7 +401,11 @@ function worktreeHolding(root, branch) {
  * `stale` on their own — only `git merge --ff-only origin/<branch>` failing is: a plain fast-forward
  * catches it up silently, a real divergence names why in `stale`, and the caller falls back to the
  * recipe block instead of claiming the checkout is already at the PR's head.
- * @returns {{ok: true, path: string, branch: string, freed: string|null, stale: string|null} | {ok: false, why: string}}
+ * @param {string} root
+ * @param {string} name
+ * @param {string|null} branch
+ * @param {{number?: number|null, remote?: string, alive?: (pid: number) => boolean}} [opts]
+ * @returns {{ok: true, path: string, branch: string, freed: string|null, stale: string|null} | {ok: false, why: string, path?: undefined, branch?: undefined, freed?: undefined, stale?: undefined}}
  */
 export function worktreeOnBranch(root, name, branch, { number = null, remote = 'origin', alive = () => true } = {}) {
   if (!branch) return { ok: false, why: 'the board query returned no head branch for the PR' };
@@ -490,7 +509,30 @@ export function loadBoard(root) {
   const cfg = deepMerge(DEFAULT_BOARD, raw);
   // profiles: keep only what the user declared, each merged over the default of the same name
   cfg.profiles = {};
-  for (const [name, p] of Object.entries(raw.profiles || DEFAULT_PROFILES)) cfg.profiles[name] = deepMerge(DEFAULT_PROFILES[name] || {}, p);
+  for (const [name, p] of Object.entries(raw.profiles || DEFAULT_PROFILES)) {
+    // A `null` (or a string, or a list) here is how a human "removes" a profile in JSON; without this
+    // it reaches the validators below as a TypeError with no file and no fix in it.
+    if (p == null || typeof p !== 'object' || Array.isArray(p)) {
+      const err = new Error(`profile "${name}" in ${file} is ${Array.isArray(p) ? 'a list' : JSON.stringify(p)} — a profile must be an object. Remove the entry to drop the profile, or give it a body.`);
+      err.exitCode = 2;
+      throw err;
+    }
+    cfg.profiles[name] = deepMerge(DEFAULT_PROFILES[name] || {}, p);
+  }
+  // Profiles this hkb no longer has (see REMOVED_PROFILES). Dropped rather than refused: a throw here
+  // reaches every command through `makeContextAt`, including `hkb doctor` and `hkb init` — the two
+  // verbs that could repair the file — and a worker's terminal verbs, which would strand an attempt
+  // over a profile it never used. Recorded on the config so the tick, doctor and init can each say
+  // the same thing about it.
+  // Non-enumerable so it never reaches board.json: `hkb init` saves the config it loaded, and this
+  // is a fact about *this* load, not a field the operator owns.
+  Object.defineProperty(cfg, 'removed_profiles', { value: [], writable: true, enumerable: false });
+  for (const [name, p] of Object.entries(cfg.profiles)) {
+    const why = removedProfile(name, p);
+    if (!why) continue;
+    cfg.removed_profiles.push({ name, why });
+    delete cfg.profiles[name];
+  }
   // `effort` renders `--effort <v>` through `{model_args}` (#182) — the one other thing a launch used
   // to be pinned for. Validated here, once, so a typo fails loudly at load time rather than as a flag
   // value the harness itself rejects.
@@ -506,12 +548,10 @@ export function loadBoard(root) {
   // high` both die on the CLI's own "unknown option" before the worker gets a turn). Refuse it at
   // load, the same as an unknown level above, rather than let the first spawn discover it. Every
   // built-in non-Claude profile has `launch[0]` name its harness (`codex`, `copilot`), so that is
-  // what the message points at; `claude-action` is the one exception — it only *triggers* a Claude
-  // Code Action run (`launch[0]` is `gh`), and `effort` there is accepted and ignored rather than
-  // refused (see docs/harnesses.md).
+  // what the message points at.
   for (const [name, p] of Object.entries(cfg.profiles)) {
     const harness = (p.launch || [])[0];
-    if (p.effort != null && harness !== 'claude' && name !== 'claude-action') {
+    if (p.effort != null && harness !== 'claude') {
       const err = new Error(`profile "${name}" sets effort, but its harness (${harness || name}) takes no --effort flag; remove it`);
       err.exitCode = 2;
       throw err;
@@ -767,6 +807,30 @@ export function mainWorktree(root) {
   if (path.basename(common) !== '.git') return root;
   const main = path.dirname(common);
   return fs.existsSync(main) ? main : root;
+}
+
+/**
+ * Where the board itself lives — the one directory every store driver agrees on.
+ *
+ * The `kb-board` branch and the `.git/hkb/index.db` index are per *repository*, not per worktree:
+ * a worker beating from `.claude/worktrees/kb-99-1` and the loop ticking in the main checkout must
+ * open the same store or they are two boards that happen to share a name. So this is the common
+ * git directory's parent — `mainWorktree` — and never `git rev-parse --show-toplevel`, which in a
+ * linked worktree answers with the throwaway directory (docs/local-first.md §6.2).
+ *
+ * The GitHub store ignores it: its board is the repo on GitHub, and `ctx.root` still names the
+ * checkout a heartbeat pushes from. The local tiers (A4, A5) key everything off it.
+ */
+export function storeRoot(ctx) {
+  if (typeof ctx === 'string') return mainWorktree(ctx);
+  const root = ctx?.root || process.cwd();
+  // One `git rev-parse --git-common-dir` per process per ctx: the answer cannot change while this
+  // process runs, and `root()` is an accessor a caller will reasonably reach for in a loop.
+  if (ctx && ctx._cache) {
+    if (!ctx._cache.storeRoot) ctx._cache.storeRoot = mainWorktree(root);
+    return ctx._cache.storeRoot;
+  }
+  return mainWorktree(root);
 }
 
 /**

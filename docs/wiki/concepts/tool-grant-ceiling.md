@@ -7,13 +7,13 @@ audience: [dev]
 read_when: "touching kb.tools/kb.mcp on a card, a profile's tool posture or MCP list, or anything that decides what a worker may run"
 covers:
   - path: src/model.js
-    sha: 76768c101bd61f923359547dbf6f8a8dfd64732a
-  - path: src/tasks.js
-    sha: 6cbae757123f219fc49887566f1f647936dcc88e
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
+  - path: src/store/github.js
+    sha: e2708642df0ef4599f450e643b9b67eeeb0b2ad5
   - path: src/doctor.js
-    sha: 5abc1e90778b7ac61fab595b66146c00e965927d
-generated_at_commit: 6c9f65f
-last_refreshed: 2026-09-01
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
+generated_at_commit: 237bb61
+last_refreshed: 2026-09-02
 related: [concepts/capability-portability, features/denied-tools-ledger, features/harness-profiles]
 ---
 
@@ -40,7 +40,7 @@ human's.
 | Where | What it does |
 | --- | --- |
 | `effectiveTools(profile, task, board)` in `src/model.js` | the **only** derivation of a launch's tool list, and the one place the rule is enforced: the profile's grant is intersected with `kb.tools`, then filtered by `kb.mcp`, and anything the profile does not cover comes back in `dropped` with a reason instead of in `tools` |
-| `normalizeCardGrants(kb)` in `src/tasks.js` | the path the card keys enter on (`toTask`): they are settled into lists of trimmed, deduplicated names. A key that is not a list at all is left untouched — coercing it would be a guess on the one axis where a guess widens someone's permissions |
+| `normalizeCardGrants(kb)` in `src/store/github.js` | the path the card keys enter on (`toTask`): they are settled into lists of trimmed, deduplicated names. A key that is not a list at all is left untouched — coercing it would be a guess on the one axis where a guess widens someone's permissions |
 | `checkToolPosture` / `checkCardGrants` in `src/doctor.js` | print what the board decided (posture, ceiling size, MCP answer, one line per profile) and flag any open card asking for what its profile does not grant |
 
 Note what is *not* in that table: nothing recomputes the grant. Doctor asks

@@ -7,13 +7,13 @@ audience: [dev]
 read_when: "touching the path_overlap guard, dispatch.guards.path_overlap, attemptIdle, or why two cards did or did not run in parallel"
 covers:
   - path: src/model.js
-    sha: 022ed7b17c5debc59265f8a1627f82386864de00
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/dispatch.js
-    sha: 6ceade7f5440ab4194c477cc1bb2cc2900b52632
+    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
   - path: src/doctor.js
-    sha: 4b49003dc44abe98a35f1c47b9472427e0ab6fba
-generated_at_commit: bcd1dc5
-last_refreshed: 2026-09-01
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
+generated_at_commit: 237bb61
+last_refreshed: 2026-09-02
 related: [features/tracks, features/review-loop, concepts/worker-identity]
 ---
 
@@ -73,7 +73,7 @@ Three liveness sources, most to least authoritative:
 2. **A live pid** (`process`-mode attempts): `pidAlive(a.pid)`, just as
    authoritative for the same reason — a `process` attempt's heartbeat never
    touches the run comment between beats either.
-3. **Neither** (`manual`, `remote`, or a `claude-bg` job on another host):
+3. **Neither** (`manual`, a legacy `remote` row, or a `claude-bg` job on another host):
    falls back to timing `lastSignal` against an idle threshold
    (`Math.max(d.interval, 1200)` — well above the ~10-minute floor a
    `comment`-mode heartbeat beats on), refreshed by the same lock-ref

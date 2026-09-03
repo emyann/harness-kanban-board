@@ -7,23 +7,23 @@ audience: [dev]
 read_when: "adding a groom finding or action, changing the frozen groom --json shape, touching how blockers are filled, or wondering why hkb groom never promotes anything"
 covers:
   - path: src/model.js
-    sha: d5bfd9d804c3838f356f7d160075e996545ec854
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/cli.js
-    sha: 7ef282690255ad01f17c257a8c64ab5833176ec9
+    sha: 9d7fc11ad734643205e89668a176d4f29115805f
   - path: src/lifecycle.js
-    sha: 98cf380069697936e2b62fb17402bae7099cf06f
-  - path: src/tasks.js
-    sha: e0c09e408b3328d5ca7a4d9f512e4bda73b0d0f0
+    sha: c3c49b90e80c7e68d44b4f8f999debcfa484de80
+  - path: src/store/github.js
+    sha: e2708642df0ef4599f450e643b9b67eeeb0b2ad5
   - path: src/doctor.js
-    sha: 4b49003dc44abe98a35f1c47b9472427e0ab6fba
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
   - path: skills/kanban/SKILL.md
-    sha: a6ffdcca307a58e568a02ff17cba8a00ef3e7caa
+    sha: 386f0eebb9da5374092734e492e109f8f9ceed4e
   - path: commands/groom.md
     sha: 4fc2dc2db984033fe8801e8d28b50e8e68fefddc
   - path: skills/kanban/references/protocol.md
-    sha: 771770f1e8c420d821bf81c34bd63cd9dbc23d87
-generated_at_commit: b5616f3
-last_refreshed: 2026-09-01
+    sha: f17d592ac42cb294d688bf3b00470d02dccac121
+generated_at_commit: 237bb61
+last_refreshed: 2026-09-02
 related: [features/planning-commands, features/operator-seat, features/path-overlap-guard, features/tracks]
 ---
 
@@ -88,9 +88,9 @@ These are the ones a later change is most likely to break:
   merge-conflict risk and nothing more.
 - **Unknown ≠ empty.** An empty `blockedBy` on a card nobody looked up is not "no blockers"; reporting it
   as such would be the silent wrong answer the values forbid. `fetchBoard(ctx, { blockers: 'all' })`
-  (`src/tasks.js:140-144`) REST-fills every open card on a repo without the GraphQL `Issue.blockedBy` field,
+  (`src/store/github.js`) REST-fills every open card on a repo without the GraphQL `Issue.blockedBy` field,
   and the fill's provenance travels with the board and is read back through `blockersOf` / `blockersKnown`
-  (`src/tasks.js:91-100`). `unknown_blockers` is what a card outside the fill's scope gets. The same gate
+  (`src/store/github.js`). `unknown_blockers` is what a card outside the fill's scope gets. The same gate
   gets the ` ⇡ unblocked` nudge in `hkb list` right (`src/cli.js:359`): the marker is computed in memory
   from the same rule, and suppressed entirely when blockers were never filled.
 
@@ -131,7 +131,7 @@ is what makes the promotion theirs rather than the agent's.
 `hkb edit <n>... [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]`
 (`src/cli.js`, `case 'edit'`) sets exactly the kb keys a flag names, spreading
 them over the task's existing `kb` object and leaving every other key as read,
-then writes the block back with `updateBody` (`src/tasks.js:330`) — the same
+then writes the block back with `updateBody` (`src/store/github.js`) — the same
 PATCH-the-body-block path `/kanban:specify` uses by hand. It takes multiple
 task numbers, like `promote`/`archive`, because `priority_inversion`'s
 suggestion can name more than one blocker at once

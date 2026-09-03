@@ -238,7 +238,8 @@ export function whichAttempt(root = process.cwd(), { env = process.env, profiles
     warnedLeaks.set(herePath, id.leak);
     process.stderr.write(`${warn}: ${id.leak}\n`);
   }
-  return id?.n ? { n: id.n, k: id.k, source: id.source } : null;
+  const found = /** @type {{n?: string, k?: string, source?: 'worktree'|'env'}} */ (id || {});
+  return found.n ? { n: found.n, k: found.k, source: found.source } : null;
 }
 
 /**

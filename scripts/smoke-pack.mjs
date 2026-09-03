@@ -39,7 +39,6 @@ const MUST_SHIP = [
   ['commands/operate.md', '`/kanban:operate`, the operator seat\'s own procedure — same contract as the other two (#149)'],
   ['commands/groom.md', '`/kanban:groom`, the backlog pass that turns `hkb groom` into a proposal table (#191)'],
   ['templates/doc-section.md', 'the CLAUDE.md/AGENTS.md section `hkb init` splices in'],
-  ['templates/actions/kanban-dispatch.yml', '`hkb init --with-actions`'],
   ['templates/copilot/kanban-worker.agent.md', '`hkb init --harness copilot`'],
   ['templates/codex/hooks.json', '`hkb init --harness codex`'],
   ['templates/mcp/mcp.json', '`hkb init --mcp`'],

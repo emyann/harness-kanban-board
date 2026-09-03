@@ -234,7 +234,7 @@ breaks. A `!` is a line for the digest, not a stop.
 
 Start the loop no other way. `hkb dispatch --loop` in the foreground dies when your session does, and it is a
 *second* dispatcher if `up` already started one — two loops against one board double-claim cards. (The
-foreground form is for a human under a real supervisor: cron, systemd, Actions.) `hkb up` is your verb; a
+foreground form is for a human under a real supervisor: cron, systemd, launchd.) `hkb up` is your verb; a
 `hkb dispatch` that runs a tick is nobody's from inside a session — every worker launch denies it outright,
 which is the same rule seen from the other side. `hkb dispatch --dry-run` is the exception, and only because it
 runs nothing: it prints what the next tick would claim, which is a read.

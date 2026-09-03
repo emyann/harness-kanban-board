@@ -529,28 +529,6 @@ test('a card sent back by the reviewer is claimed, not guarded, and the attempt 
   assert.match(h.log(), /#7: claimed attempt 3 .*continuing PR #42/);
 });
 
-test('a trigger-mode continuation records continues_pr only — no checkout, no continues_branch', async (t) => {
-  // trigger mode (claude-action) never runs the worker itself: the real checkout happens elsewhere,
-  // in a fresh `actions/checkout` this dispatcher never sees, so it must not claim one of its own (#162)
-  const h = harness({ profiles: { claude: { mode: 'trigger', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] } } });
-  t.after(h.cleanup);
-  const run = runWith([
-    { attempt: 1, ended_at: ago(600), outcome: 'review_requested', pr: 42 },
-    { attempt: 2, profile: 'reviewer', ended_at: ago(30), outcome: 'changes_requested', synthetic: true },
-  ]);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude', run, prs: [{ number: 42, state: 'OPEN', headRefName: 'worktree-kb-7-1' }] }));
-
-  const s = await h.tick();
-
-  assert.deepEqual(s.claimed.map((c) => c.number), [7]);
-  assert.ok(!fs.existsSync(path.join(h.root, worktreePath('kb-7-3'))), 'no worktree was made for a trigger-mode continuation');
-  const last = h.gh.runOf(7).attempts.at(-1);
-  assert.equal(last.continues_pr, 42);
-  assert.equal(last.continues_branch, undefined, 'the real checkout happens elsewhere; this run record must not claim one');
-  assert.equal(last.wt, undefined);
-  assert.match(h.log(), /#7: claimed attempt 3 .*continuing PR #42/, 'the claim log line still names the PR it continues');
-});
-
 test('a claim that could not take the PR branch still runs, and says so', async (t) => {
   const h = harness(); // the board root is a plain temp directory: no git, so no checkout is possible
   t.after(h.cleanup);
@@ -1200,4 +1178,85 @@ test('a dry run reports what it would do and writes nothing', async (t) => {
   assert.equal(h.gh.callsMatching('POST').length, 0);
   assert.equal(h.gh.callsMatching('PATCH').length, 0);
   assert.equal(h.gh.callsMatching('DELETE').length, 0);
+});
+
+// ---------- what a host will and will not launch ----------
+// `--profiles` and the two unclaimable-profile cases. `test/actions.test.js` held the only coverage
+// of the `--profiles` gate and went with the Actions runner (#290); the feature stayed, so the test
+// comes back here on local profiles, where it always belonged.
+
+test('--profiles claims only what this host launches, and sweeps the whole board anyway', async (t) => {
+  const h = harness({
+    profiles: {
+      claude: { mode: 'process', max_in_progress: 2, allowed_tools: [], launch: ['true'] },
+      'claude-p': { mode: 'process', max_in_progress: 2, allowed_tools: [], launch: ['true'] },
+    },
+  });
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 1, title: 'shipped', status: 'done', state: 'CLOSED', stateReason: 'COMPLETED' }));
+  h.gh.addIssue(kbIssue({ number: 5, status: 'ready', agent: 'claude' }));
+  h.gh.addIssue(kbIssue({ number: 6, status: 'ready', agent: 'claude-p' }));
+  h.gh.addIssue(kbIssue({ number: 7, status: 'todo', agent: 'claude-p', blockedBy: [1] }));
+
+  const s = await h.tick({ profiles: ['claude'] });
+
+  assert.deepEqual(s.claimed.map((c) => c.number), [5], 'only the profile this host was told to run');
+  assert.deepEqual(s.skipped.filter((x) => x.number === 6).map((x) => x.why), ['profile claude-p is not dispatched from this host']);
+  assert.deepEqual(s.promoted, [7], 'promotion still covers the whole board, whatever this host claims');
+});
+
+test('a spawn that never starts a process fails the attempt and hands the card back to ready', async (t) => {
+  const h = harness({ profiles: { claude: { mode: 'process', max_in_progress: 2, allowed_tools: [], launch: ['hkb-no-such-binary-38fa1c'] } } });
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 5, status: 'ready', agent: 'claude' }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.spawn_failed.map((x) => x.number), [5]);
+  assert.equal(h.gh.statusOf(5), 'ready', 'the card comes straight back, it was never worked');
+  assert.equal(h.gh.runOf(5).attempts[0].outcome, 'spawn_failed');
+  assert.deepEqual(await listLocks(h.ctx), [], 'and the claim is released');
+});
+
+test('a card on a profile hkb removed is skipped, and the note names the re-point', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.ctx.cfg.removed_profiles = [{ name: 'claude-action', why: 'the GitHub Actions runner was removed in ADR-006' }];
+  h.gh.addIssue(kbIssue({ number: 5, status: 'ready', agent: 'claude-action' }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.claimed, [], 'never claimed — a claim would spawn-fail every tick until the retries ran out');
+  const why = s.skipped.find((x) => x.number === 5).why;
+  assert.match(why, /was removed/);
+  assert.match(why, /hkb adopt 5 --agent claude --status ready/, 'the fix is the verb that re-points the card, not one that writes the profile back');
+  assert.doesNotMatch(why, /hkb init --profiles/);
+});
+
+test('a profile with no launch template is skipped, not claimed', async (t) => {
+  const h = harness({ profiles: { claude: { mode: 'process', max_in_progress: 2, allowed_tools: [], launch: null } } });
+  t.after(h.cleanup);
+  h.gh.addIssue(kbIssue({ number: 5, status: 'ready', agent: 'claude' }));
+
+  const s = await h.tick();
+
+  assert.deepEqual(s.claimed, []);
+  assert.match(s.skipped.find((x) => x.number === 5).why, /no launch template/);
+  assert.equal(h.gh.statusOf(5), 'ready');
+});
+
+test('a legacy remote attempt keeps its heartbeat-only liveness — no pid to look for', async (t) => {
+  const h = harness({ dispatch: { stale_after: 3600 } });
+  t.after(h.cleanup);
+  // Written by an hkb that still had the Actions runner: this host claimed it, and there never was a
+  // local process. The no-handle rule would call it crashed 180s in.
+  const run = runWith([{ attempt: 1, profile: 'claude-action', host: 'test-host', remote: true, pid: null, started_at: ago(7200), heartbeat_at: ago(7200), lock_sha: 'a'.repeat(40) }]);
+  h.gh.addIssue(kbIssue({ number: 5, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.gh.beat(5, 1, ago(120));
+
+  const s = await h.tick({ max: 0 });
+
+  assert.deepEqual(s.reclaimed, [], 'a fresh heartbeat is the whole check for a row with no local handle');
+  assert.equal(h.gh.statusOf(5), 'running');
+  assert.deepEqual(h.gh.lockRefs(), ['refs/kb/locks/5/1'], 'and its lock is left alone');
 });

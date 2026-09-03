@@ -11,7 +11,7 @@ import { spawnSync } from 'node:child_process';
 import {
   harnessFiles, installHarness, harnessHookCommand, installClaudeHooks, hookSummary, CLAUDE_HOOKS, resolveProfiles, boardProfiles,
   HARNESSES, HARNESS_PROFILE, packageSkillDir, HOOK_SETTINGS, NPX_COMMAND, hkbCommandForHook, workerHookSettings,
-  hookCommandNeeds, isHkbHookCommand, isPortableHookCommand, isEphemeralPath, findClaudeHooks, actionsFiles,
+  hookCommandNeeds, isHkbHookCommand, isPortableHookCommand, isEphemeralPath, findClaudeHooks, removedInitFlag,
   projectBinRel, guardedHookCommand, relativeHookCommand, resolveHookPath, hkbHooks, PROJECT_DIR,
 } from '../src/init.js';
 import { parseArgs } from '../src/cli.js';
@@ -145,6 +145,24 @@ test('init refuses a harness it cannot generate for, before touching the repo', 
   });
 });
 
+// #290: the GitHub Actions runner is gone (ADR-006). The flag that generated it must not be silently
+// ignored — a user who types it is asking for a runner, and half an init would leave them without one
+// and without a word about why.
+test('init refuses the removed Actions flag, and the message says what replaces it', () => {
+  const msg = removedInitFlag(parseArgs(['init', '--with-actions']).flags);
+  assert.ok(msg, '--with-actions must still be recognised, as a removal rather than a typo');
+  assert.match(msg, /ADR-006/);
+  assert.match(msg, /hkb up/, 'the error names the way a board keeps moving now');
+  assert.equal(removedInitFlag(parseArgs(['init', '--harness', 'codex']).flags), null, 'a live flag is untouched');
+  assert.equal(removedInitFlag({}), null);
+  // Exactly the three spellings of the Actions flag, matched as whole keys: a substring test claimed
+  // every future flag whose name merely contains the word.
+  assert.match(removedInitFlag(parseArgs(['init', '--actions']).flags), /--actions is gone/);
+  assert.match(removedInitFlag(parseArgs(['init', '--no-actions']).flags), /--no-actions is gone/);
+  assert.equal(removedInitFlag(parseArgs(['init', '--transactions']).flags), null, 'a flag that merely contains the word is not the removed one');
+  assert.equal(removedInitFlag(parseArgs(['init', '--board', 'actions-board']).flags), null, 'a value is never a flag key');
+});
+
 test('every harness brings a profile that exists as a built-in', () => {
   for (const h of HARNESSES) assert.ok(DEFAULT_PROFILES[HARNESS_PROFILE[h]], `${h} → ${HARNESS_PROFILE[h]}`);
 });
@@ -186,32 +204,6 @@ test('every Claude launch denies the dispatcher, and says dontAsk so a denial is
     assert.equal(argv[argv.indexOf('--permission-mode') + 1], 'dontAsk', `${name} would prompt, and nobody is there to answer`);
     assert.deepEqual(denied, CLAUDE_DENY, `${name} carries its own deny list instead of the shared one`);
   }
-});
-
-test('the generated Actions worker carries the same deny list as a local launch', () => {
-  const yml = actionsFiles().find((f) => /worker-claude/.test(f.rel)).contents;
-  const m = /--disallowedTools "([^"]*)"/.exec(yml);
-  assert.ok(m, '--disallowedTools went missing from the worker workflow');
-  assert.deepEqual(m[1].split(','), CLAUDE_DENY);
-  assert.ok(CLAUDE_DENY.includes('Bash(hkb dispatch*)'));
-});
-
-// The runner's workflow is a TRACKED, generated file, so — unlike a local launch — it may not carry
-// a command that only resolves on the machine that ran `hkb init --with-actions`. The runner puts
-// `hkb` on PATH itself, so the portable form is both correct there and identical in every diff.
-test('the generated Actions worker carries the hooks, in a form no machine owns', () => {
-  const yml = actionsFiles().find((f) => /worker-claude/.test(f.rel)).contents;
-  const m = /--settings '([^']*)'/.exec(yml);
-  assert.ok(m, '--settings went missing from the worker workflow');
-  assert.ok(!m[1].includes("'"), 'the JSON is wrapped in single quotes for the runner shell, so it may not contain one');
-  const hooks = JSON.parse(m[1]).hooks;
-  for (const [event, verb] of Object.entries(CLAUDE_HOOKS)) {
-    assert.deepEqual(hooks[event], [hookEntry(`hkb hook ${verb}`)], `${event}: a runner installs hkb on PATH; a path here would name somebody's laptop`);
-  }
-  assert.equal(yml.split("--settings '").length - 1, 1, 'exactly one, on the claude step');
-  // KB_TASK is what makes them live at all, and unlike `claude --bg` a runner really has it
-  assert.match(yml, /KB_TASK: \$\{\{ inputs\.task \}\}/);
-  assert.match(yml, /KB_PROFILE: claude-action/);
 });
 
 test('Copilot gets no dispatch deny — its pattern language is unverified for it (told in the prompt instead)', () => {
@@ -902,7 +894,7 @@ test('every Claude launch carries the hooks, and nothing else does', () => {
   for (const name of ['claude', 'claude-track', 'claude-p']) {
     assert.ok(DEFAULT_PROFILES[name].launch.includes(HOOK_SETTINGS_VAR), `${name} must hand its worker hkb's hooks`);
   }
-  for (const name of ['claude-action', 'copilot-cli', 'codex']) {
+  for (const name of ['copilot-cli', 'codex']) {
     assert.ok(!DEFAULT_PROFILES[name].launch.includes(HOOK_SETTINGS_VAR), `${name} does not spawn Claude Code here`);
   }
 });

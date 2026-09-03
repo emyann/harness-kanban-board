@@ -7,24 +7,26 @@ audience: [dev]
 read_when: "touching the active_pr guard, the claim loop's worktree creation, hkb request-changes, or the worker brief"
 covers:
   - path: src/model.js
-    sha: 022ed7b17c5debc59265f8a1627f82386864de00
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/dispatch.js
-    sha: 6ceade7f5440ab4194c477cc1bb2cc2900b52632
+    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
   - path: src/board.js
-    sha: 955f2c7cfc908fe46ebf264e0cb4c8e722c7a79c
+    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
   - path: src/context.js
-    sha: ab7afc4eb5158a879ea1700221892229329dce64
+    sha: 0eecc3f46fa4d71d3fa12598b474c76e0bc7733d
   - path: src/lifecycle.js
-    sha: 98cf380069697936e2b62fb17402bae7099cf06f
+    sha: c3c49b90e80c7e68d44b4f8f999debcfa484de80
   - path: src/gc.js
-    sha: 40672cb7a84da7170be3f5d99df42f326f9dc1e5
+    sha: 5c9f92377d47e7bca75c32fc675dfa50e617e7a5
   - path: src/cli.js
-    sha: 13555690946205fd3e221a8c0b4dcb2b0a92c623
-  - path: src/tasks.js
-    sha: e0c09e408b3328d5ca7a4d9f512e4bda73b0d0f0
+    sha: 9d7fc11ad734643205e89668a176d4f29115805f
+  - path: src/store/github.js
+    sha: e2708642df0ef4599f450e643b9b67eeeb0b2ad5
+  - path: src/forge.js
+    sha: 20dd384386ca63bc98d103b2e7728f29a95bc87c
 related: [features/auto-merge, features/tracks, architecture/overview, architecture/dispatcher-tick]
-generated_at_commit: bcd1dc5
-last_refreshed: 2026-09-01
+generated_at_commit: 237bb61
+last_refreshed: 2026-09-02
 ---
 
 # The review loop — `request-changes` and continuing one PR
@@ -122,17 +124,13 @@ and runs the same catch-up rather than trusting the leftover checkout as-is.
 claim and records `continues_branch_stale` too, so a manual continuation is
 not silently less honest than an automatic one.
 
-**Trigger-mode profiles never make this checkout at all.** `claude-action`
-does not run the worker — its launch is `gh workflow run`, which fires an
-Actions job that makes its own, unrelated `actions/checkout` elsewhere. A
-checkout made here would sit unused while the real work happens somewhere
-else, so `spawnWorker` skips `worktreeOnBranch` outright when
-`profile.mode === 'trigger'`: such an attempt records `continues_pr` only,
-never `continues_branch`, and the run record stops claiming a checkout that
-was never made. The claim loop's own log line still names the PR being
-continued (`, continuing PR #<n> — the checkout happens in the trigger's own
-run, not here`) — only the checkout claim was ever wrong, not the fact that
-this attempt is a continuation.
+**The one profile that never made this checkout is gone.** A `mode: "trigger"`
+profile (`claude-action`, the GitHub Actions runner) only *started* work
+elsewhere, on its own unrelated `actions/checkout`, so `spawnWorker` skipped
+`worktreeOnBranch` for it and such an attempt recorded `continues_pr` only.
+[ADR-006](../decisions/adr-006-local-store.md) removed the runner and the mode
+(#290), so every profile the dispatcher can launch now runs a worker on this
+host and takes the checkout path above.
 
 ## The brief is what actually prevents the second PR
 
@@ -174,7 +172,7 @@ changes_requested → completed`, all against one PR number.
 ## Finding the PR at all — the head-branch fallback
 
 Everything above assumes `task.prs` already names the open PR. It comes from
-one place, `closedByPullRequestsReferences` (`src/tasks.js`), and that field
+one place, `closedByPullRequestsReferences` (`ISSUE_FIELDS`, `src/store/github.js`), and that field
 only answers "would merging this PR close the issue" — which requires the PR
 to target the default branch, and (#228) came back empty at least once even
 then. When it does, `activePrGuard` never fires, `hkb finish` sees no PR and
@@ -182,10 +180,10 @@ used to close the card as *done* with the branch left unmerged and nothing on
 the board chasing it (#227, #228 — see `features/tracks.md`'s branch-strategy
 section for the fuller incident).
 
-`fetchBoard`/`getTask` (`src/tasks.js`) now fall back to a **head**-branch
+`fetchBoard`/`getTask` (`src/store/github.js`) now fall back to a **head**-branch
 match — `taskBranchRe(n)`, matching `kb/<n>`, `kb-<n>-<k>`,
 `worktree-kb-<n>-<k>` — whenever a card's own `prs` comes back empty: one
-board-wide `GET /pulls?state=open` (`openPrsByHead`), read once per tick (or
+board-wide `GET /pulls?state=open` (`openPrsByHead`, `src/forge.js`), read once per tick (or
 once per single-card read), never once per card. Because the guard, the merge
 policy and this page's whole loop all read `task.prs`, the fallback is
 invisible to them by design — a stacked or otherwise unlinked PR is simply

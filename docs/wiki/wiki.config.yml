@@ -54,6 +54,9 @@ pages:
   - slug: architecture/dispatcher-tick
     summary: "The tick pipeline (outbox, reclaim, reap, orphan sweep, reconcile, promote, tracks, guards, claim+spawn) and the live incident behind each stage."
     status: planned
+  - slug: architecture/store-seam
+    summary: "One named interface over board state — openStore(ctx) with the GitHub bodies behind it — plus src/forge.js for the pull-request half that is deliberately not part of it, and a driver-parametrised conformance suite that says when a new driver is done."
+    status: seeded
   - slug: concepts/board-protocol
     summary: "Statuses, kb:* labels, the body block, run/result comments, terminal verbs — the backend-neutral contract every harness drives through gh."
     status: planned
@@ -75,6 +78,9 @@ pages:
   - slug: features/capability-map
     summary: "How a profile came to say what it reaches for inside a session: the intent vocabulary, the board-local binding, the brief that names it, the tool grant derived from it, and the doctor check that proves the two agree."
     status: seeded
+  - slug: concepts/node-floor-and-type-check
+    summary: "Why the floor moved to 22.13 and what it bought — node:sqlite for the local store, one warning silenced at the entry point without silencing any other, a type check over the JSDoc the code already carried, and a CI matrix that tests the floor and the current line."
+    status: seeded
   - slug: concepts/roles-and-seats
     summary: "Operator, supervisor, dispatcher, workers: who decides, who judges, who loops, who codes — and which seats are optional."
     status: planned
@@ -82,7 +88,7 @@ pages:
     summary: "One session orchestrates a whole DAG subgraph: a wave of siblings as one isolated subagent each, per-node claims as checkpoints, stacked node PRs, fallback to node-by-node."
     status: seeded
   - slug: features/harness-profiles
-    summary: "The shipped profiles (claude, claude-p, claude-track, claude-action, copilot-cli, codex): modes, permissions, models, and what each harness can and cannot do."
+    summary: "The shipped profiles (claude, claude-p, claude-track, copilot-cli, codex): modes, permissions, models, and what each harness can and cannot do."
     status: planned
   - slug: features/up-and-down
     summary: "The two long-running processes as one idempotent verb: pid files as the whole protocol, why the child gets no KB_*, and the line between reporting exit 4 and supervising it."

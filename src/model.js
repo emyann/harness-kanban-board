@@ -365,7 +365,7 @@ export function parseBodyBlock(body) {
       const parsed = JSON.parse(m[1]);
       if (parsed && typeof parsed === 'object') kb = { ...DEFAULT_KB, ...parsed };
     } catch {
-      kb = { ...DEFAULT_KB, _malformed: true };
+      kb = /** @type {any} */ ({ ...DEFAULT_KB, _malformed: true });
     }
   }
   return { kb, rest };
@@ -1010,8 +1010,12 @@ const SPEC_HEADINGS = {
  * good is a judgment, and this function deliberately cannot tell. `thin` is what `thin_spec` reads,
  * and `doneWhen` is what decides whether a missing `kb.goal` is a problem or a formality.
  */
+/**
+ * @returns {{missing: string[], length: number, thin: boolean} & Record<string, any>}
+ */
 export function specShape(bodyText) {
   const s = String(bodyText || '');
+  /** @type {Record<string, boolean>} */
   const found = {};
   for (const [k, re] of Object.entries(SPEC_HEADINGS)) found[k] = re.test(s);
   const missing = Object.keys(SPEC_HEADINGS).filter((k) => !found[k]);
@@ -1170,6 +1174,7 @@ export function boardSummary(tasks) {
  * under `blocks`, which is the point.
  *
  * @param tasks the board read, as `fetchBoard` returns it
+ * @param {object} [opts]
  * @param opts.now injected clock — nothing here reads the real one
  * @param opts.caps `ctx.caps`; `blockedByGql` false and blockers unfilled means an empty
  *   `blockedBy` is *unknown*, never `no_blockers`
@@ -1179,8 +1184,11 @@ export function boardSummary(tasks) {
  *   pair wording is guard-aware, because on a board with the guard off nothing serialises at all
  * @param opts.bodies `flagged` (default), `all` or `none` — which rows carry `bodyText`
  * @param opts.blockersFilled true when the caller REST-filled blockers (`blockers: 'all'`)
+ * @param [opts.board] the board name, for rows that quote a command a human would run
+ * @param [opts.share] flag a path shared by at least this fraction of the cards
+ * @param [opts.overlap] the minimum overlap that counts as a collision
  */
-export function groomBoard(tasks, opts = {}) {
+export function groomBoard(tasks, opts = /** @type {any} */ ({})) {
   const all = Array.isArray(tasks) ? tasks : [];
   const {
     now = new Date(),
@@ -1353,7 +1361,7 @@ export function groomBoard(tasks, opts = {}) {
     delete r._task;
     // Only a flagged card carries its body. That is the whole token argument: the report is the size
     // of the board, and the bodies are the size of only what a human was asked to look at.
-    if (bodies === 'all' || (bodies === 'flagged' && r.needs_judgment)) r.bodyText = task.bodyText || '';
+    if (bodies === 'all' || (bodies === 'flagged' && r.needs_judgment)) /** @type {any} */ (r).bodyText = task.bodyText || '';
   }
 
   const by_status = {};
@@ -1448,6 +1456,10 @@ export function mergePolicy(cfg) {
  *     forget to run, but the one flag `hkb merge` already needs to enforce the condition.
  * Pure — `run` is the run record's `.run`, already loaded by the caller.
  */
+/**
+ * @param {any} run
+ * @param {{summary?: string}} [opts]
+ */
 export function operatorReviewEvidence(run, { summary } = {}) {
   const attempts = run?.attempts || [];
   const reviewed = [...attempts].reverse().find((a) => a?.outcome === 'review_requested' && a.reviewer);
@@ -1462,6 +1474,12 @@ export function operatorReviewEvidence(run, { summary } = {}) {
  * asked for: "on a card without one it refuses naming the condition; with `manual` it refuses
  * naming the mode." Pure: `checksState` is the PR's `statusCheckRollup.state` (or null when it
  * could not be read), fetched by the caller so this stays testable without a GitHub token.
+ */
+/**
+ * @param {any} task
+ * @param {any} run
+ * @param {any} policy
+ * @param {{summary?: string, checksState?: string|null}} [opts]
  */
 export function mergeDecision(task, run, policy, { summary, checksState } = {}) {
   if (policy.error) return { ok: false, reason: `dispatch.merge is misconfigured: ${policy.error}` };
@@ -1814,6 +1832,10 @@ export function mcpGrantedTo(server, allowedTools) {
  * it, most likely; `null` when no profile even grants it, which is a different bug this cannot narrow
  * further (the ledger's own "never there to deny" case).
  */
+/**
+ * @param {string} server
+ * @param {{granted?: boolean, shared?: any, local?: any}} [opts]
+ */
 export function mcpVisibilityDiagnosis(server, { granted, shared, local } = {}) {
   if (!granted) return null;
   if (mcpApproved(server, shared)) return { kind: 'unused' };
@@ -1826,6 +1848,11 @@ export function mcpVisibilityDiagnosis(server, { granted, shared, local } = {}) 
  * server defined in `.mcp.json`, granted in at least one profile's `allowed_tools`, and approved only
  * in the gitignored per-developer settings file. One row per such server; `[]` when nothing here is
  * split, whatever else the settings files hold.
+ */
+/**
+ * @param {string[]} servers
+ * @param {any} profiles
+ * @param {{shared?: any, local?: any}} [opts]
  */
 export function mcpSplitApprovals(servers, profiles, { shared, local } = {}) {
   const out = [];
@@ -1951,6 +1978,7 @@ export const KB_ENV_VARS = ['KB_TASK', 'KB_ATTEMPT', 'KB_BOARD', 'KB_REPO', 'KB_
  * 2.1.x has no flag that hands env to a `--bg` session (`claude --help`, 2026-08-28).
  */
 export function scrubKbEnv(env) {
+  /** @type {Record<string, string>} */
   const out = {};
   for (const [k, v] of Object.entries(env || {})) if (!k.startsWith('KB_')) out[k] = v;
   return out;
@@ -1974,8 +2002,7 @@ export function kbVarsIn(environ) {
  * a `workspace: "worktree"` launch is handed that directory as its cwd (`spawnWorker`). A
  * `mode: "process"` Claude profile also passes `--worktree`, but where its *hooks* run is the
  * harness's business, not ours — and its environment dies with the process, so it can never be the
- * source of a leak. A `trigger` profile's worker runs in an Actions checkout that is nobody's
- * worktree. Both are left exactly as they were.
+ * source of a leak. It is left exactly as it was.
  */
 export function worksInWorktree(profile) {
   return profile?.mode === 'claude-bg' || profile?.workspace === 'worktree';
@@ -2293,7 +2320,7 @@ function firstWords(command) {
 }
 
 /**
- * @returns {decision: 'allow'|'deny', reason, kind?: 'policy'|'capability'|'path'} `kind` is only
+ * @returns {{decision: 'allow'|'deny', reason: string, kind?: 'policy'|'capability'|'path'}} `kind` is only
  *   meaningful on a deny: `path` for a write outside the worktree, `policy` for one of DENY_PATTERNS
  *   (forbidden outright, not a missing permission), `capability` for a command the launch's own
  *   allow-list never granted — the one case where `hkb block --kind capability` is the right next step,
@@ -2441,6 +2468,7 @@ export function cmdlineIsOurs(cmdline, name) {
  * (#202) the arithmetic exists to refuse, so an inconclusive or contradicting cmdline leaves that
  * refusal standing.
  */
+/** @param {{at?: string, name?: string, alive?: boolean, cmdline?: string|null, now?: number, uptime?: number, btimeSec?: number|null}} [opts] */
 export function pidClaimStale({ at, name, alive, cmdline, now = Date.now(), uptime = 0, btimeSec = null } = {}) {
   if (!pidFileStale(at, { now, uptime, btimeSec })) return false;
   if (!alive) return true;

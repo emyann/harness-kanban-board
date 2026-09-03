@@ -9,16 +9,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { DEFAULT_PROFILES, DEFAULT_BOARD, loadBoard, makeContext } from '../src/board.js';
+import { DEFAULT_PROFILES, DEFAULT_BOARD, loadBoard, removedProfile, makeContext } from '../src/board.js';
 import { SAFE_BUILTINS, EFFORT_LEVELS, TOOL_POSTURES, CAPABILITIES, toolPosture, capabilityCommand, modelArgs, allowedCommandsFrom, harnessCommands, uncoveredBuiltins } from '../src/model.js';
-import { actionsFiles, ACTIONS_PROFILE, init } from '../src/init.js';
+import { init } from '../src/init.js';
 import { parseArgs } from '../src/cli.js';
-import { checkWorkerPermissions, workflowAllowedTools, PERMS_CHECK, checkPermissionMode, promptingProfiles, MODE_CHECK } from '../src/doctor.js';
+import { checkWorkerPermissions, PERMS_CHECK, checkPermissionMode, promptingProfiles, MODE_CHECK } from '../src/doctor.js';
 import { FakeGh } from './fake-gh.js';
 
 const claude = () => DEFAULT_PROFILES.claude.allowed_tools;
 const copilot = () => DEFAULT_PROFILES['copilot-cli'].allowed_tools;
-const WORKER = path.join('.github', 'workflows', 'kanban-worker-claude.yml');
 
 function collect() {
   const results = [];
@@ -127,26 +126,12 @@ test('uncoveredBuiltins says nothing about a profile with no allow-list at all',
   assert.deepEqual(uncoveredBuiltins(undefined), []);
 });
 
-// ---------- the generated workflow, which freezes a copy of the list ----------
-
-test('the generated worker workflow bakes in a list that covers the builtins', () => {
-  const yml = actionsFiles().find((f) => f.rel === WORKER).contents;
-  const baked = workflowAllowedTools(yml);
-  assert.deepEqual(baked, DEFAULT_PROFILES[ACTIONS_PROFILE].allowed_tools);
-  assert.deepEqual(uncoveredBuiltins(baked), []);
-});
-
-test('workflowAllowedTools returns null when there is no such flag', () => {
-  assert.equal(workflowAllowedTools('name: nothing to see\n'), null);
-  assert.equal(workflowAllowedTools(null), null);
-});
-
 // ---------- doctor: the migration path for boards carrying a frozen list ----------
 
 test('doctor warns about a board.json profile pinning a pre-#138 allow-list', (t) => {
   const { results, sink } = collect();
   const stale = ['Bash(git *)', 'Bash(npm *)', 'Bash(true)', 'Edit'];
-  checkWorkerPermissions(ctxFor(scratch(t), { claude: { ...DEFAULT_PROFILES.claude, allowed_tools: stale } }), sink, { exists: () => false });
+  checkWorkerPermissions(ctxFor(scratch(t), { claude: { ...DEFAULT_PROFILES.claude, allowed_tools: stale } }), sink);
   assert.equal(results.length, 1);
   assert.equal(results[0].ok, null);
   // one name whatever the answer, so a --json consumer can key on it; the profile is in the detail
@@ -161,7 +146,7 @@ test('a profile hkb ships no default for is told to add the patterns, not to dro
   const stale = ['Bash(git *)', 'Bash(npm *)'];
   // loadBoard deep-merges over DEFAULT_PROFILES[name]; a custom name has nothing behind it, so
   // dropping `allowed_tools` expands `{allowed_tools}` to nothing and --allowedTools eats --disallowedTools
-  checkWorkerPermissions(ctxFor(scratch(t), { 'claude-big': { ...DEFAULT_PROFILES.claude, allowed_tools: stale } }), sink, { exists: () => false });
+  checkWorkerPermissions(ctxFor(scratch(t), { 'claude-big': { ...DEFAULT_PROFILES.claude, allowed_tools: stale } }), sink);
   assert.equal(results.length, 1);
   assert.match(results[0].fix, /^add Bash\(cd \*\), Bash\(pwd \*\), Bash\(true \*\)/);
   assert.match(results[0].fix, /to "allowed_tools" on the claude-big profile/);
@@ -169,20 +154,9 @@ test('a profile hkb ships no default for is told to add the patterns, not to dro
   assert.ok(!/drop "allowed_tools"/.test(results[0].fix), 'the advice that empties the flag');
 });
 
-test('doctor warns about the generated workflow when its baked list is stale', (t) => {
-  const { results, sink } = collect();
-  const old = '            --allowedTools "Bash(git *),Bash(true),Edit"\n';
-  checkWorkerPermissions(ctxFor(scratch(t), {}), sink, { exists: () => true, read: () => old });
-  assert.equal(results.length, 1);
-  assert.equal(results[0].name, PERMS_CHECK);
-  assert.match(results[0].detail, /^the generated \.github[\\/]workflows[\\/]kanban-worker-claude\.yml omits/);
-  assert.equal(results[0].fix, 'hkb init --with-actions');
-});
-
 test('doctor is content with the lists hkb ships today', (t) => {
   const { results, sink } = collect();
-  const yml = actionsFiles().find((f) => f.rel === WORKER).contents;
-  checkWorkerPermissions(ctxFor(scratch(t), DEFAULT_PROFILES), sink, { exists: () => true, read: () => yml });
+  checkWorkerPermissions(ctxFor(scratch(t), DEFAULT_PROFILES), sink);
   assert.deepEqual(results.map((r) => r.ok), [true]);
   assert.equal(results[0].name, PERMS_CHECK);
   assert.match(results[0].detail, new RegExp(`cover the ${SAFE_BUILTINS.length} shell builtins`));
@@ -190,13 +164,7 @@ test('doctor is content with the lists hkb ships today', (t) => {
 
 test('doctor says nothing on a board whose only profile has no allow-list', (t) => {
   const { results, sink } = collect();
-  assert.equal(checkWorkerPermissions(ctxFor(scratch(t), { codex: DEFAULT_PROFILES.codex }), sink, { exists: () => false }), null);
-  assert.deepEqual(results, []);
-});
-
-test('an unreadable workflow is checkActions\' problem, not this check\'s', (t) => {
-  const { results, sink } = collect();
-  checkWorkerPermissions(ctxFor(scratch(t), {}), sink, { exists: () => true, read: () => { throw new Error('EACCES'); } });
+  assert.equal(checkWorkerPermissions(ctxFor(scratch(t), { codex: DEFAULT_PROFILES.codex }), sink), null);
   assert.deepEqual(results, []);
 });
 
@@ -226,8 +194,8 @@ test('doctor is silent on the profiles hkb ships, and asks nothing of a non-Clau
   assert.deepEqual(promptingProfiles({ profiles: DEFAULT_PROFILES }), []);
   assert.equal(checkPermissionMode(ctxFor(scratch(t), DEFAULT_PROFILES), sink), null);
   assert.deepEqual(results, [], 'nothing to act on is nothing to print');
-  // claude-action runs `gh workflow run`: the flags of the run it triggers live in the workflow file
-  assert.deepEqual(promptingProfiles({ profiles: { 'claude-action': DEFAULT_PROFILES['claude-action'], codex: DEFAULT_PROFILES.codex } }), []);
+  // a non-Claude launch: `--permission-mode` is not its flag, and its sandbox is its own policy
+  assert.deepEqual(promptingProfiles({ profiles: { codex: DEFAULT_PROFILES.codex } }), []);
 });
 
 // ---------- effort: the other reason a launch used to be pinned (#182) ----------
@@ -275,12 +243,66 @@ test('loadBoard refuses effort on a harness with no --effort flag, naming the fi
   }
 });
 
-test('loadBoard leaves claude-action alone: effort is accepted there and ignored, not refused', (t) => {
+// #290: the Actions runner is gone, and with it `mode: "trigger"`. A board.json that still names it
+// would otherwise claim a card and then run `gh workflow run` as an ordinary worker process. It is
+// DROPPED rather than refused: a throw from loadBoard reaches every command through makeContextAt,
+// including the two that repair a board (`hkb init`, `hkb doctor`) and a worker's own terminal verbs.
+test('loadBoard drops a profile that still names the removed trigger mode, and records why', (t) => {
   const root = scratch(t);
   fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
-  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { 'claude-action': { ...DEFAULT_PROFILES['claude-action'], effort: 'high' } } }));
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { claude: {}, mine: { mode: 'trigger', launch: ['gh', 'workflow', 'run'] } } }));
   const cfg = loadBoard(root);
-  assert.equal(cfg.profiles['claude-action'].effort, 'high', 'accepted at load time; the workflow it triggers does not plumb it through yet');
+  assert.equal(cfg.profiles.mine, undefined, 'the profile is not loadable');
+  assert.ok(cfg.profiles.claude, 'every other profile still loads');
+  assert.deepEqual(cfg.removed_profiles.map((r) => r.name), ['mine']);
+  assert.match(cfg.removed_profiles[0].why, /ADR-006/);
+});
+
+// The shape an operator actually writes to tweak a built-in carries no `mode` at all — this repo's
+// own board.json said `"claude-action": {}` — so the sweep is keyed on the NAME as well.
+test('loadBoard drops a removed profile named as a bare override, which carries no mode to match on', (t) => {
+  const root = scratch(t);
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { claude: {}, 'claude-action': {} } }));
+  const cfg = loadBoard(root);
+  assert.equal(cfg.profiles['claude-action'], undefined);
+  assert.deepEqual(cfg.removed_profiles.map((r) => r.name), ['claude-action']);
+});
+
+test('removedProfile: by name, by mode, and null for everything else', () => {
+  assert.match(removedProfile('claude-action', {}), /ADR-006/);
+  assert.match(removedProfile('mine', { mode: 'trigger' }), /ADR-006/);
+  assert.equal(removedProfile('claude', DEFAULT_PROFILES.claude), null);
+  assert.equal(removedProfile('mine', null), null);
+});
+
+// The record is about this load, not a field the operator owns: `hkb init` writes back the config it
+// loaded, so a serialized `removed_profiles` would reappear in board.json as data nobody set.
+test('removed_profiles never reaches board.json', (t) => {
+  const root = scratch(t);
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { claude: {}, 'claude-action': {} } }));
+  const cfg = loadBoard(root);
+  assert.equal(JSON.parse(JSON.stringify(cfg)).removed_profiles, undefined);
+});
+
+// A `null` profile is how a human "removes" one in JSON; before this it reached the validators as a
+// TypeError with no file and no fix in it.
+test('loadBoard refuses a profile that is not an object, naming the file and the two ways out', (t) => {
+  const root = scratch(t);
+  fs.mkdirSync(path.join(root, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.kanban', 'board.json'), JSON.stringify({ profiles: { claude: null } }));
+  assert.throws(() => loadBoard(root), (e) => {
+    assert.equal(e.exitCode, 2);
+    assert.match(e.message, /profile "claude"/);
+    assert.match(e.message, /must be an object/);
+    return true;
+  });
+});
+
+test('the built-in profiles carry no trigger mode left to refuse', () => {
+  assert.deepEqual(Object.entries(DEFAULT_PROFILES).filter(([, p]) => p.mode === 'trigger').map(([n]) => n), []);
+  assert.equal(DEFAULT_PROFILES['claude-action'], undefined);
 });
 
 // ---------- tools posture: a profile states inherit or curate, absent meaning today's behaviour (#256) ----------

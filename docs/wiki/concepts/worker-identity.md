@@ -7,19 +7,19 @@ audience: [dev, ops]
 read_when: "touching the launch environment, the Stop, PreToolUse or SubagentStop hooks, session_id/transcript_path on an attempt row, or anything that reads KB_TASK"
 covers:
   - path: src/hook.js
-    sha: c7f5ce80b8a0ccfe64b2c4eda3f9b95db343b490
+    sha: 97b9054fbe1769059b882e4779f8279deaf184d8
   - path: src/model.js
-    sha: da2e9819afadb0fdda2c95fb3e6750bda727e207
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/dispatch.js
-    sha: 4c660ef30b45b404c5744c55f30488afe1b20178
+    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
   - path: src/doctor.js
-    sha: 3d52c57a00096587f6c374f99c36567a2db205d8
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
   - path: src/lifecycle.js
-    sha: 98cf380069697936e2b62fb17402bae7099cf06f
-generated_at_commit: d1d460e
-last_refreshed: 2026-09-01
+    sha: c3c49b90e80c7e68d44b4f8f999debcfa484de80
+generated_at_commit: 237bb61
+last_refreshed: 2026-09-02
 related: [architecture/overview, features/harness-profiles, features/tracks, decisions/adr-004-roles-and-adoption]
 ---
 
@@ -103,10 +103,8 @@ actually knows the location of (`worksInWorktree`,
 `src/model.js`: `mode: "claude-bg"`, whose job is matched by its worktree, and
 `workspace: "worktree"`, which the dispatcher hands that directory as its cwd).
 A `mode: "process"` Claude profile also passes `--worktree`, but where *its*
-hooks run is the harness's business; a `trigger` profile's worker runs in an
-Actions checkout that is nobody's worktree and sets no `KB_ROOT`
-(`templates/actions/kanban-worker-claude.yml`). Both are left exactly as they
-were, because neither can be the source of a leak.
+hooks run is the harness's business, and its environment dies with the process.
+It is left exactly as it was, because it cannot be the source of a leak.
 
 ## A worktree carries no developer approvals either (#254)
 

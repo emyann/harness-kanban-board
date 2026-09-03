@@ -7,18 +7,20 @@ audience: [dev, ops]
 read_when: "touching dispatch.merge, the auto-merge pass in the tick, the doctor merge check, or anything about who lands an agent's PR"
 covers:
   - path: src/model.js
-    sha: 022ed7b17c5debc59265f8a1627f82386864de00
+    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
   - path: src/dispatch.js
-    sha: 6ceade7f5440ab4194c477cc1bb2cc2900b52632
+    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
   - path: src/doctor.js
-    sha: 4b49003dc44abe98a35f1c47b9472427e0ab6fba
-  - path: src/tasks.js
-    sha: e0c09e408b3328d5ca7a4d9f512e4bda73b0d0f0
+    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
+  - path: src/store/github.js
+    sha: e2708642df0ef4599f450e643b9b67eeeb0b2ad5
+  - path: src/forge.js
+    sha: 20dd384386ca63bc98d103b2e7728f29a95bc87c
   - path: src/board.js
-    sha: 955f2c7cfc908fe46ebf264e0cb4c8e722c7a79c
+    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
 related: [architecture/overview, decisions/adr-004-roles-and-adoption, architecture/dispatcher-tick]
-generated_at_commit: bcd1dc5
-last_refreshed: 2026-09-01
+generated_at_commit: 237bb61
+last_refreshed: 2026-09-02
 ---
 
 # The last step — `dispatch.merge` and GitHub's auto-merge
@@ -53,12 +55,12 @@ to take out every command that loads board.json, and must never be guessed
 ## Why GitHub does the merging, not hkb
 
 The tick sends one `enablePullRequestAutoMerge` per PR
-(`enableAutoMerge`, `src/tasks.js`) and nothing else. Three consequences, and
+(`enableAutoMerge`, `src/forge.js`) and nothing else. Three consequences, and
 each is a reason:
 
 - **Frugal.** One mutation at review time. No polling, no timer, no new query:
   the PR node id and `autoMergeRequest` both ride the board query the tick
-  already runs (`ISSUE_FIELDS`, `src/tasks.js`), so "is it already enabled" is
+  already runs (`ISSUE_FIELDS`, `src/store/github.js`), so "is it already enabled" is
   free and enabling is once per PR, not once per tick.
 - **GitHub enforces the gates.** Required checks, required reviews, up-to-date
   branches. hkb never has to answer "is this safe to merge" — a question a
@@ -91,7 +93,7 @@ untested". So the refusal ships in the same change as the capability:
   `src/dispatch.js`), rather than enabling something it cannot vouch for.
 
 Protection is read from **two** mechanisms, cheapest first, because a repo may
-use either (`branchProtection`, `src/tasks.js`): classic branch protection
+use either (`branchProtection`, `src/forge.js`): classic branch protection
 (`/branches/<b>/protection`, admin-only, 404 when there is none) and rulesets
 (`/rules/branches/<b>`, readable without admin). A 403 on the first with no
 ruleset behind it is `known: false` — *unreadable*, which the gate treats as no
@@ -119,7 +121,7 @@ The pass also declines to ask GitHub for things it is known to refuse — a draf
 PR, a closed one, a PR that already carries an auto-merge request
 (`autoMergeDecision`, `src/model.js`). Workers open drafts, but every terminal
 verb takes the PR out of draft before the card reaches review
-(`finishPr`, `src/lifecycle.js`), so by review time there is a real PR to hand
+(`finishPr`, `src/forge.js`), so by review time there is a real PR to hand
 over.
 
 ## For ops

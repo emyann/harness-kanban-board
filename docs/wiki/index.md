@@ -7,10 +7,12 @@
 ## Architecture
 
 - [hkb at a glance](./architecture/overview.md): The moving parts: CLI, board protocol, dispatcher loop, workers — and the one rule that shapes them all: the board is the only state.
+- [The store seam](./architecture/store-seam.md): One named interface over board state — openStore(ctx) with the GitHub bodies behind it — plus src/forge.js for the pull-request half that is deliberately not part of it, and a driver-parametrised conformance suite that says when a new driver is done.
 
 ## Concepts
 
 - [The capability map — the intent travels, the binding is local](./concepts/capability-portability.md): The portability contract behind a profile's `capabilities`: hkb ships a closed vocabulary of intents, a board binds each one to what its own harness calls it, an unbound intent falls back to prose, and the permission a binding needs is derived from the binding rather than typed twice.
+- [The Node floor and the JSDoc type check](./concepts/node-floor-and-type-check.md): Why the floor moved to 22.13 and what it bought — `node:sqlite` for the local store, one warning silenced at the entry point without silencing any other, a type check over the JSDoc the code already carried, and a CI matrix that tests the floor and the current line rather than one version in the middle.
 - [The tool-grant ceiling — the board grants, a card lowers, only a human raises](./concepts/tool-grant-ceiling.md): The one-sentence ceiling rule behind a worker's permissions: the board's profile is the ceiling, `kb.tools`/`kb.mcp` on a card can only lower it, and nothing raises it but a human editing board.json — plus where that rule is enforced and where doctor prints it.
 - [Worker identity — which attempt a session is, and who may say so](./concepts/worker-identity.md): The three answers to "which attempt is this session?" (launch environment, checkout, job record), the order of trust between them, why a `claude --bg` launch must hand over none of them, and — this is also the page for it — how `SubagentStop` resolves a fourth, child-checkout answer via `CLAUDE_PROJECT_DIR`.
 
@@ -46,7 +48,7 @@
 - decisions/adr-001-github-native-backend: GitHub Issues + native dependencies + ref locks won over MCP-first and repo-native designs; stacked PRs rejected for board sequencing.
 - decisions/adr-002-zero-npm-dependencies: The CLI ships with zero npm dependencies; presentation may use Node built-ins only. What would justify revisiting.
 - decisions/adr-003-npm-trusted-publishing: Releases publish via npm trusted publishing (OIDC) from release.yml only; no npm token exists anywhere.
-- features/harness-profiles: The shipped profiles (claude, claude-p, claude-track, claude-action, copilot-cli, codex): modes, permissions, models, and what each harness can and cannot do.
+- features/harness-profiles: The shipped profiles (claude, claude-p, claude-track, copilot-cli, codex): modes, permissions, models, and what each harness can and cannot do.
 - gotchas/github-api-quirks: 422 'already exists' means held, ref GETs prefix-match into arrays, 304s are free, GITHUB_ACTIONS env reroutes gh — the traps the code already survived.
 - gotchas/long-lived-process-rot: The #61 outage: a 90-minute-old loop 404ing on every claim while a fresh process succeeded — why caches are per-tick and the loop exits 4.
 
