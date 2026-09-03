@@ -22,11 +22,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { openStore, STORE_METHODS } from '../src/store/index.js';
+import { openStore, setStore, STORE_METHODS } from '../src/store/index.js';
 import { openGitTier } from '../src/store/git.js';
 import { DEFAULT_BOARD, hostId } from '../src/board.js';
 import { L, emptyRun, serializeResultComment, RESULT_MARKER } from '../src/model.js';
 import { FakeGh, kbIssue } from './fake-gh.js';
+import { FakeStore } from './fake-store.js';
 
 // ---------- the GitHub driver ----------
 
@@ -120,9 +121,28 @@ async function openLocalDriver() {
   };
 }
 
+// ---------- the in-memory double ----------
+
+/**
+ * `test/fake-store.js` — the double the rest of the suite asserts against (docs/local-first.md §10,
+ * track C). It runs here for one reason: a double that answers a scenario differently from every
+ * real driver is a test that passes while the product is broken, so it earns its place by passing
+ * the same conformance suite they do.
+ */
+async function openFakeDriver() {
+  const store = new FakeStore();
+  const restore = store.install();
+  return {
+    store,
+    recordBeat: (n, k, at) => store.recordBeat(n, k, at),
+    cleanup: () => restore(),
+  };
+}
+
 const DRIVERS = [
   { name: 'github', open: openGithubDriver },
   { name: 'local', open: openLocalDriver },
+  { name: 'fake', open: openFakeDriver },
 ];
 
 // ---------- the scenarios ----------
@@ -447,6 +467,32 @@ for (const driver of DRIVERS) {
     });
   }
 }
+
+// ---------- the injection point ----------
+
+// `setStore` is the seam's own `setTransport`: one place to put a double, at the interface rather
+// than under it. The scenarios above install one and pass; these two are about the installing.
+test('setStore: openStore hands back the installed store, and restore puts the driver back', async () => {
+  const ctx = { root: process.cwd(), cfg: { store: 'github' }, board: 'default', _cache: {}, requireBoard() { return this; } };
+  const double = new FakeStore();
+  const restore = setStore(() => double);
+  assert.equal(await openStore(ctx), double);
+  restore();
+  assert.equal((await openStore(ctx)).kind, 'github', 'restoring leaves the normal decision in charge');
+});
+
+test('setStore: a factory that answers nothing lets the normal decision run, and installs nest', async () => {
+  const ctx = { root: process.cwd(), cfg: { store: 'github' }, board: 'default', _cache: {}, requireBoard() { return this; } };
+  const outer = new FakeStore();
+  const restoreOuter = setStore(() => outer);
+  // An inner install that declines for this context: the answer comes from the driver, not the
+  // outer double — a factory says "not mine" by returning nothing, per context, not per install.
+  const restoreInner = setStore(() => null);
+  assert.equal((await openStore(ctx)).kind, 'github');
+  restoreInner();
+  assert.equal(await openStore(ctx), outer, 'restoring the inner install puts the outer one back');
+  restoreOuter();
+});
 
 // One assertion that is *about* the GitHub driver rather than about the interface: the seam moved
 // the bodies, it did not rewrite them, so a card seeded the old way still reads the old way.

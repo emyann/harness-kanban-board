@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "writing a verb that reads or writes board state, adding a store driver, or wondering why tasks.js and lock.js are two lines long"
 covers:
   - path: src/store/index.js
-    sha: 6f80ab71e9efca230d89d25f1b6d9186576ef522
+    sha: f954cc959a98404d4b46fd9940dd6f66a2b88c14
   - path: src/store/github.js
     sha: 57a69a45c3a7998c74f53442a6756873f198f8af
   - path: src/forge.js
@@ -18,7 +18,7 @@ covers:
     sha: cfb7eaf1a75003826cf610ee136a08dc0d4ff281
   - path: src/board.js
     sha: 5b2d5227aa6157021e68c1bd169a5019c79e6944
-generated_at_commit: 29d0d25
+generated_at_commit: 96c4892
 last_refreshed: 2026-09-03
 related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-and-leases, concepts/board-protocol]
 ---
@@ -183,6 +183,41 @@ The invariant the local drivers exist to satisfy — *every mutating call append
 an event* — is in the array already, guarded by `capabilities().events`. For
 GitHub it asserts the refusal; for a driver with a log it asserts one event per
 mutation, id-ordered, with an exclusive `after` cursor.
+
+## `setStore`, and the in-memory double
+
+`setStore(fn)` installs a store factory in front of `openStore` and hands back
+the function that removes it — the same shape as `setTransport` in `src/gh.js`,
+and there for the same reason: a test needs one place to put a double, and the
+double belongs **at** the seam rather than under it. `fn(ctx)` may return a
+store, a promise for one, or something falsy to let the normal decision run for
+that context; restoring puts back whatever was installed before, so nesting
+works. Production code never calls it.
+
+`test/fake-store.js` is what it exists for: the §6.4 interface over plain
+objects, with no `gh`, no git and no SQLite under it. Its `calls` are
+**interface method names**, which is the point — a scenario asserting
+`store.callsOf('setStatus')` says what the board was asked to do, while
+`gh.callsMatching('POST', /issues\/7\/labels/)` pins one driver's REST paths and
+has to be rewritten when that driver goes (`docs/local-first.md` §10, track C).
+`locks()` replaces reading lock ref names; `runOf(n)` and `statusOf(n)` mean
+what they always did. Card records are the shape `test/fake-gh.js` seeds, so
+`kbIssue()` feeds either double, and handing a `FakeGh` to the constructor
+shares one set of records between the board half and the forge half.
+
+The double is registered in `DRIVERS` as a third driver and runs the whole
+conformance suite. That is not decoration: a double that answers a scenario
+differently from every real driver is a test that passes while the product is
+broken, so it earns its place the same way a driver does.
+
+**It is not yet reachable from the verbs.** `openStore` is the contract, but
+`src/cli.js`, `src/dispatch.js`, `src/lifecycle.js`, `src/context.js`,
+`src/stats.js` and `src/hook.js` still import the GitHub bodies directly
+through the `src/tasks.js` and `src/lock.js` shims — which is exactly what the
+shims are for, and what "the verbs are routed" in track B means. Until they
+are, `setStore` changes what `gc.sweep`, `hkb init` and `hkb doctor` see and
+nothing else, and the ~121 assertion sites that read `test/fake-gh.js`
+internals cannot move.
 
 ## Related
 

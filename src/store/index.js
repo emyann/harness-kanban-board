@@ -83,11 +83,41 @@ export function storeKind(ctx) {
 export function localModule() { return import('./local.js'); }
 
 /**
+ * The store `openStore` hands back instead of opening a driver, or null for "decide normally".
+ * @type {((ctx: any) => any)|null}
+ */
+let injected = null;
+
+/**
+ * Install a store factory in front of `openStore`, and hand back the function that removes it.
+ *
+ * The same shape as `setTransport` in `src/gh.js`, and there for the same reason: a test needs one
+ * place to put a double, and the double belongs at the seam the interface defines rather than under
+ * it. `fn(ctx)` may return a store, a promise for one, or a falsy value to let the normal decision
+ * run for that context. Restoring puts back whatever was installed before, so nesting works.
+ *
+ * Production code must never call this — `openStore` is the only way a verb reaches board state,
+ * and this is the only way anything else gets in front of it.
+ *
+ * @param {((ctx: any) => any)|null} fn
+ * @returns {() => void} restore
+ */
+export function setStore(fn) {
+  const previous = injected;
+  injected = fn;
+  return () => { injected = previous; };
+}
+
+/**
  * The store for `ctx`.
  * @param {any} ctx  a context from `makeContext`/`makeContextAt` (src/board.js)
  * @returns {Promise<Store>}
  */
 export async function openStore(ctx) {
+  if (injected) {
+    const supplied = await injected(ctx);
+    if (supplied) return supplied;
+  }
   if (storeKind(ctx) !== 'local') return openGithubStore(ctx);
   const { openLocalStore } = await localModule();
   return openLocalStore(ctx);
