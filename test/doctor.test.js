@@ -1246,7 +1246,7 @@ test('a board.json still pinned to the retired GitHub store is told so, and name
   const rows = await probe({ root: '/tmp/none', cfg: { store: 'github', repo: 'o/r' }, board: 'default', _cache: {} });
   assert.equal(rows[STORE_CHECK].ok, false);
   assert.match(rows[STORE_CHECK].detail, /GitHub store, which hkb no longer has/);
-  assert.match(rows[STORE_CHECK].detail, /hkb init --store local --import/);
+  assert.match(rows[STORE_CHECK].detail, /hkb init --import/);
   assert.equal(rows[BRANCH_CHECK], undefined, 'nothing else is probed against a store hkb cannot open');
   assert.equal(rows[MOUNT_CHECK], undefined);
 });

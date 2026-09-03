@@ -68,7 +68,7 @@ export function storeKind(ctx) {
   const declared = ctx?.cfg?.store;
   if (!declared || declared === 'local') return 'local';
   if (declared === 'github') {
-    const e = /** @type {any} */ (new Error('this board is on the GitHub store, which hkb no longer has (ADR-006). Move it with `hkb init --store local --import`, which reads the kb:* issues once and writes them to the kb-board branch; then drop "store" from .kanban/board.json.'));
+    const e = /** @type {any} */ (new Error('this board is on the GitHub store, which hkb no longer has (ADR-006). Move it with `hkb init --import`, which reads the kb:* issues once and writes them to the kb-board branch; then drop "store" from .kanban/board.json.'));
     e.exitCode = 2;
     throw e;
   }

@@ -15,7 +15,7 @@ import { up, down, statusReport, childArgv, hkbBin } from '../src/up.js';
 import { claimServePid, portInUse } from '../src/serve.js';
 import { loop } from '../src/dispatch.js';
 import { pidFile, processState, readPidFile, recordExit, readExit, readServeUrl, writeServeUrl, DEFAULT_BOARD } from '../src/board.js';
-import { FakeGh, kbIssue } from './fake-gh.js';
+import { installDoubles, kbIssue } from './fake-store.js';
 import {
   PROCESSES, detachedEnv, startDecision, processLine, startLogLine, formatSince, decidePermission,
   allowedCommandsFrom, pidFileStale, stopWaitMs, PID_BOOT_SLACK_MS,
@@ -686,25 +686,37 @@ test('down --json reports a signal it could not send, and exits non-zero', async
 // ---------- the other half of down: the loop has to be able to hear it ----------
 
 /**
+ * A context for the two signal tests: a real `tmpRoot()` for the pid file the loop claims and drops,
+ * and a board that comes from the store double. The forge double is installed beside it only because
+ * a tick reaches the forge for pull requests; nothing here asserts on it.
+ *
+ * These two used to seed a card on the *forge* double, which was the board until this release. That
+ * left them running against an empty board — harmless while a boardless read answered `[]`, and a
+ * failure the moment one started saying "there is no kb-board branch here" instead. The card the
+ * loop ticks over belongs on the store.
+ */
+function loopCtx(root, gh) {
+  return {
+    root,
+    cfg: { ...DEFAULT_BOARD, repo: gh.nameWithOwner, version_check: false, profiles: {} },
+    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
+  };
+}
+
+/**
  * The measured bug (#151 review): a loop asleep in `sleeper(interval)` used to notice a SIGTERM only
  * after its *next* tick — up to a whole interval later. `down` reported it stopped, `up` started its
  * replacement, and two dispatchers ran the same board side by side while the singleton lock (which is
  * that pid file) watched. Waiting in `down` is half the fix; hearing the signal is the other half.
  */
 test('SIGTERM lands in the sleep, and the loop leaves from there — not through another tick', async (t) => {
-  const gh = new FakeGh();
-  gh.addIssue(kbIssue({ number: 1, title: 'a card nobody claims', status: 'todo' }));
-  t.after(gh.install());
   const root = tmpRoot();
+  const { store, ctx, restore } = installDoubles((g) => loopCtx(root, g));
+  t.after(restore);
+  store.addIssue(kbIssue({ number: 1, title: 'a card nobody claims', status: 'todo' }));
   const mine = new Set(process.listeners('SIGTERM'));
   t.after(() => { for (const l of process.listeners('SIGTERM')) if (!mine.has(l)) process.removeListener('SIGTERM', l); });
-
-  const ctx = {
-    root,
-    cfg: { ...DEFAULT_BOARD, repo: gh.nameWithOwner, version_check: false, profiles: {} },
-    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
-    board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
-  };
 
   const lines = [];
   let sleeps = 0;
@@ -732,22 +744,15 @@ test('SIGTERM lands in the sleep, and the loop leaves from there — not through
  * listening on ws://127.0.0.1:9229/…` on the one process that must not stop, and woke nothing.
  */
 test('SIGUSR1 ends the sleep and buys a tick — that is what a board write nudges', async (t) => {
-  const gh = new FakeGh();
-  gh.addIssue(kbIssue({ number: 1, title: 'a card nobody claims', status: 'todo' }));
-  t.after(gh.install());
   const root = tmpRoot();
+  const { store, ctx, restore } = installDoubles((g) => loopCtx(root, g));
+  t.after(restore);
+  store.addIssue(kbIssue({ number: 1, title: 'a card nobody claims', status: 'todo' }));
   const mine = { term: new Set(process.listeners('SIGTERM')), usr: new Set(process.listeners('SIGUSR1')) };
   t.after(() => {
     for (const l of process.listeners('SIGTERM')) if (!mine.term.has(l)) process.removeListener('SIGTERM', l);
     for (const l of process.listeners('SIGUSR1')) if (!mine.usr.has(l)) process.removeListener('SIGUSR1', l);
   });
-
-  const ctx = {
-    root,
-    cfg: { ...DEFAULT_BOARD, repo: gh.nameWithOwner, version_check: false, profiles: {} },
-    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
-    board: 'default', host: 'test-host', json: false, caps: {}, _cache: {}, requireBoard() { return this; },
-  };
 
   const lines = [];
   let sleeps = 0;

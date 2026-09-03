@@ -924,11 +924,11 @@ async function runVerb(argv, keep) {
     case 'mcp': { const { mcp } = await import('./mcp.js'); return mcp(ctx, flags); }
     case 'gc': return gc(ctx, flags, log);
     case 'sync': {
-      // Sync is git (docs/local-first.md §6.2), so there is nothing to sync on a board whose store
-      // *is* the network. Say which store this board is on rather than "unknown command".
-      if (storeKind(ctx) !== 'local') {
-        throw usage(`\`hkb sync\` is for a local board — the cards on this one are issues on ${ctx.cfg?.repo || 'GitHub'}, which is already the shared copy. \`hkb init --store local --import\` moves a board onto the kb-board branch.`);
-      }
+      // Sync is git (docs/local-first.md §6.2). This reaches the store directly rather than through
+      // `openStore`, so `storeKind` is called for its *refusal*: a board.json still naming the
+      // retired GitHub store gets that store's migration sentence here too, instead of `sync`
+      // silently operating on a kb-board branch its cards were never written to.
+      storeKind(ctx);
       const { openLocalStore } = await import('./store/local.js');
       const store = openLocalStore(ctx, { reconcile: false });
       try {

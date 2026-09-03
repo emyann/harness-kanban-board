@@ -2569,3 +2569,22 @@ export function startLogLine(at, pid, argv = []) {
 export function deadAtRecheck(name, pid, log) {
   return { line: `${name} exited immediately (pid ${pid}) — see ${log}`, failed: { name, pid, log } };
 }
+
+/**
+ * What to say when a command reaches for board state in a repository that has no board branch.
+ *
+ * There are three ways to be here and each has a different fix, so the message names all three: a
+ * repository nobody has run `hkb init` in, a repository whose board is still the GitHub Issues one
+ * this release retired (`hkb init --import` reads those issues once and writes them to the branch —
+ * ADR-006), and a clone whose `kb-board` has simply not been fetched yet.
+ *
+ * It exists as one function because the alternative is what this file replaced: six copies of "run
+ * `hkb init`" across the read and write paths, only one of which mentioned the migration. A board
+ * left on the retired store gets a sentence, not an empty list and not a stack trace.
+ * @param {{branch?: string, root?: string, remote?: string}} [where]
+ */
+export function noBoardHere({ branch = 'kb-board', root = '.', remote = 'origin' } = {}) {
+  return `there is no ${branch} branch in ${root} — this repository has no hkb board. `
+    + 'Run `hkb init` to create one, `hkb init --import` to migrate a board that is still on GitHub Issues '
+    + `(that store is gone — ADR-006), or \`git fetch ${remote} ${branch}:${branch}\` if the board is already on the remote.`;
+}

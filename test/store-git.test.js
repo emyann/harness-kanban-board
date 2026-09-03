@@ -391,6 +391,36 @@ test('git tier: a branch with no board.json says what to run, not TypeError', (t
   }
 });
 
+/**
+ * The window this release opens, and the sentence that closes it (#304).
+ *
+ * `storeKind` now reads an absent `"store"` key as `local`, so a repository whose board is still the
+ * retired GitHub Issues one resolves to a local board that was never created. The write path has
+ * always thrown here; the *read* path answered `[]`, which made `hkb list` print "(no tasks)" and
+ * exit 0 and made `hkb dispatch` tick over nothing for ever. An empty board and a missing one are
+ * different facts and a read has to be able to say which it found.
+ */
+test('git tier: reading a repository with no board says so, and names the migration', (t) => {
+  const s = scratch();
+  t.after(s.cleanup);
+  const tier = tierAt(s.wt);
+  assert.equal(tier.exists(), false);
+  for (const call of [() => tier.listTasks(), () => tier.getTask(1), () => tier.listClosedRecent()]) {
+    assert.throws(call, (e) => e.exitCode === 2
+      && /there is no kb-board branch/.test(e.message)
+      // all three ways out, because all three are real: never initialised, still on the retired
+      // GitHub store, or simply not fetched yet
+      && /hkb init`/.test(e.message)
+      && /hkb init --import`/.test(e.message)
+      && /git fetch origin kb-board/.test(e.message));
+  }
+  // and a board that does exist still answers with its cards rather than the sentence
+  const made = board();
+  t.after(made.cleanup);
+  card(made.tier, { title: 'a real card' });
+  assert.equal(made.tier.listTasks().length, 1);
+});
+
 test('git tier: a clone with no local branch is read-only, and says how to make it writable', (t) => {
   const s = board({ host: 'test-host' });
   t.after(s.cleanup);

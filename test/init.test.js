@@ -697,7 +697,7 @@ test('resolveStore agrees with storeKind: one store, and a board.json cannot nam
 
   // `github` is refused on both sides rather than half-honoured, and both name the way out.
   assert.throws(() => resolveStore({ store: 'github' }), (e) => e.exitCode === 2 && /--store github is gone/.test(e.message));
-  assert.throws(() => storeKind({ cfg: { store: 'github' } }), (e) => e.exitCode === 2 && /hkb init --store local --import/.test(e.message));
+  assert.throws(() => storeKind({ cfg: { store: 'github' } }), (e) => e.exitCode === 2 && /hkb init --import/.test(e.message));
 
   assert.throws(() => resolveStore({ store: 'sqlite' }), (e) => e.exitCode === 2 && /--store takes/.test(e.message));
   assert.throws(() => resolveStore({ store: true }), (e) => e.exitCode === 2 && /--store needs a value/.test(e.message));

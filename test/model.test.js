@@ -6,7 +6,7 @@ import {
   blockerDone, computeReady, promoteDecision, pathsOverlap, sortForDispatch, slugify, hashReason,
   normalizeHookInput, stripFrontmatter, sessionUpdate, parseRepoSpecs, boardKey, uniqueKeys, shouldNudgeOnStop, deadAtRecheck,
   pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, parsePriorityFlag, parseScheduledAtFlag, boardSummary,
-  effectiveTools, modelArgs,
+  effectiveTools, modelArgs, noBoardHere,
 } from '../src/model.js';
 import { expandLaunch } from '../src/dispatch.js';
 import { DEFAULT_PROFILES, HOOK_SETTINGS_VAR } from '../src/board.js';
@@ -427,4 +427,25 @@ test('effectiveTools: kb.tools and kb.mcp compose — the card narrows on both a
   const profile = { allowed_tools: ['Read', 'Edit', 'mcp__react-aria__*', 'mcp__figma__*'] };
   const { tools } = effectiveTools(profile, { kb: { tools: ['Read', 'mcp__react-aria__*', 'mcp__figma__*'], mcp: ['react-aria'] } }, {});
   assert.deepEqual(tools, ['Read', 'mcp__react-aria__*']);
+});
+
+/**
+ * One sentence, three fixes. The message exists because a repository can be boardless in three
+ * different ways and only one of them used to be named: `hkb init` covers a fresh checkout, but a
+ * board still on the GitHub Issues store this release retired needs `--import`, and a clone needs a
+ * fetch. Pure, so the wording is a test rather than a paragraph in a doc that drifts.
+ */
+test('noBoardHere names the branch it looked for and all three ways across', () => {
+  const m = noBoardHere({ branch: 'kb-board', root: '/repo', remote: 'origin' });
+  assert.match(m, /there is no kb-board branch in \/repo/);
+  assert.match(m, /`hkb init`/, 'a checkout nobody has initialised');
+  assert.match(m, /`hkb init --import`/, 'a board still on the retired GitHub store');
+  assert.match(m, /`git fetch origin kb-board:kb-board`/, 'a clone that has not fetched it');
+  assert.match(m, /ADR-006/, 'and it says which decision took the old store away');
+
+  // the tier passes its own branch and remote through, so a test board on another ref is not told
+  // to fetch `kb-board`
+  assert.match(noBoardHere({ branch: 'kb-test', root: '/r', remote: 'upstream' }), /fetch upstream kb-test:kb-test/);
+  // callable with nothing: the defaults are the real board's, not placeholders
+  assert.match(noBoardHere(), /kb-board/);
 });

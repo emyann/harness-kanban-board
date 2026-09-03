@@ -25,7 +25,7 @@ import path from 'node:path';
 import { storeRoot, hostId, runGit, gitSays as short, GIT_SHA_RE as SHA_RE, normalizeCardGrants } from '../board.js';
 import {
   DEFAULT_KB, L, STATUSES, emptyRun, parseResultComment, isResultComment, serializeBodyBlock,
-  RUN_MARKER, statusOf, agentOf, tagBlockers,
+  RUN_MARKER, statusOf, agentOf, tagBlockers, noBoardHere,
 } from '../model.js';
 
 export const BOARD_BRANCH = 'kb-board';
@@ -356,7 +356,7 @@ export class GitTier {
     for (let attempt = 1; attempt <= MAX_CAS_RETRIES; attempt++) {
       const snap = this.readTree();
       if (!snap.tip && !allowMissing) {
-        throw fail(`there is no ${this.branch} branch in ${this.root} — run \`hkb init\` to create the board`);
+        throw fail(noBoardHere({ branch: this.branch, root: this.root }));
       }
       const tree = { board: snap.board, cards: snap.cards, runs: snap.runs };
       const value = mutate(tree);
@@ -560,7 +560,7 @@ export class GitTier {
   /** Move the board to this host. §6.2: the branch has one writer, and this is how the writer changes. */
   takeOver(host = this.host) {
     const r = this.commit((t) => {
-      if (!t.board) throw fail(`there is no ${this.branch} branch in ${this.root} — run \`hkb init\` first`);
+      if (!t.board) throw fail(noBoardHere({ branch: this.branch, root: this.root }));
       t.board.host = host;
     }, `hkb: board moved to host ${host}`, { allowForeignHost: true });
     return { host, changed: r.changed, tip: r.tip };
@@ -572,7 +572,7 @@ export class GitTier {
 
   board() {
     const b = this._read().board;
-    if (!b) throw fail(`there is no ${this.branch} branch in ${this.root} — run \`hkb init\` to create the board`);
+    if (!b) throw fail(noBoardHere({ branch: this.branch, root: this.root }));
     return {
       slug: b.slug,
       host: b.host ?? null,
@@ -584,7 +584,7 @@ export class GitTier {
 
   setBoard(patch = {}) {
     this.commit((t) => {
-      if (!t.board) throw fail(`there is no ${this.branch} branch in ${this.root} — run \`hkb init\` to create the board`);
+      if (!t.board) throw fail(noBoardHere({ branch: this.branch, root: this.root }));
       // `settings` merges, everything else is replaced: a caller patching one setting must not have
       // to read the whole document back and hand it in again.
       const { settings, ...rest } = patch;
@@ -603,6 +603,12 @@ export class GitTier {
       if (x !== 'OPEN' && x !== 'CLOSED') throw fail(`listTasks: unknown state "${x}" — a store knows OPEN and CLOSED`);
     }
     const snap = this._read();
+    // A repository with no branch has no board, and saying so is the whole of this card's
+    // migration story. Before this, a checkout whose board was still the retired GitHub one read
+    // as an *empty* board: `hkb list` printed "(no tasks)" and exited 0, and the dispatcher ticked
+    // over nothing for ever. An empty answer and a missing board are not the same fact, and only
+    // the read path could tell them apart — the write path has always thrown here.
+    if (!snap.tip) throw fail(noBoardHere({ branch: this.branch, root: this.root }));
     const slug = snap.board?.slug || 'default';
     const out = [...snap.cards.values()]
       .filter((c) => c && want.includes(String(c.state || 'OPEN').toUpperCase()))
@@ -627,6 +633,7 @@ export class GitTier {
 
   getTask(n) {
     const snap = this._read();
+    if (!snap.tip) throw fail(noBoardHere({ branch: this.branch, root: this.root }));
     const card = snap.cards.get(Number(n));
     if (!card) throw fail(`card #${n} is not on the ${this.branch} board in ${this.root} — \`hkb list\` shows what is`);
     return toTask(structuredClone(card), snap.board?.slug || 'default', snap.cards);
@@ -638,7 +645,7 @@ export class GitTier {
     if (!STATUSES.includes(status)) throw fail(`createTask: invalid status "${status}" — one of ${STATUSES.join(', ')}`);
     const at = this.now().toISOString();
     const { value: id } = this.commit((t) => {
-      if (!t.board) throw fail(`there is no board.json on ${this.branch} in ${this.root} — run \`hkb init\` to create the board`);
+      if (!t.board) throw fail(noBoardHere({ branch: this.branch, root: this.root }));
       const next = nextId(t.board, t.cards);
       t.board.next_id = next + 1;
       const { rest, priority, paths, goal, scheduled_at } = splitKb(kb);
