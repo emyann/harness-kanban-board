@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "adding a store verb, debugging an index that disagrees with the branch, wondering why a verb is refused on this host, or working on hkb sync / init --import"
 covers:
   - path: src/store/local.js
-    sha: 32b68ad027f4ded44074909cda42bf93b7235f75
+    sha: 0f57f49186523f9aa822992f620e54400211ac63
   - path: src/store/index.js
     sha: b67a89674aea78c2540b86c7868607dd4bb92863
   - path: src/store/sqlite.js
@@ -20,7 +20,7 @@ covers:
     sha: cc129d307e845211036472a76ed7e0f456be1329
   - path: src/cli.js
     sha: a4d80e1fb0fdf6e8e3c0e57494423720775af950
-generated_at_commit: 0c4e2e6
+generated_at_commit: 43cf001
 last_refreshed: 2026-09-03
 related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
@@ -255,7 +255,10 @@ and get one. `hkb init` there then made a *second, empty* board.
 
 `settings.sync.push: false` turns off the **push**, and only the push. A
 checkout that does not publish its copy still fetches and fast-forwards; that is
-how it reads what the owner published. `--no-push` is the same switch as a flag,
+how it reads the copy it published earlier — this is a durability path (a fresh
+checkout of your own repo, a new machine, a lost disk), not a collaboration one:
+multi-player is out of scope by decision (`docs/local-first.md` §6.2).
+`--no-push` is the same switch as a flag,
 so the more restrictive spelling can never do strictly more work than the
 default.
 
