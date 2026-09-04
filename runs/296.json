@@ -31,6 +31,56 @@
       "text": "Shape note from #312, before this card is worked.\n\nThe verbs planned here — `launch`/`inspect`/`stop`/`pause`/`resume` — are **process-shaped**, which is right for a cold node and wrong for a track. An SDK adapter runs a whole wave in **one** `query()` with typed `AgentDefinition`s (per-node model, tools, mcpServers, maxTurns, effort), not N spawns; the CLI adapter runs a track by spawning one runner and handing it a prose brief. Both are 'execute this subgraph', and only one of them is 'launch a process'.\n\nSo the seam wants two levels rather than one:\n\n- `runCard(card, ctx)` — execute one card (every adapter)\n- `runTrack(root, waves, ctx)` — execute a subgraph (SDK: one query; CLI: spawn a runner with the brief `trackContext` already builds)\n\nplus the lifecycle verbs (`inspect`/`stop`/`pause`/`resume`) against whatever handle the adapter returned.\n\nBuild the seam so a second implementation is a file, not a refactor — the maintainer's direction is that a harness's SDK is how hkb executes board state, with the Copilot SDK doing the same job later. Keep the process/claude-bg/manual adapters working exactly as they do; this is about the shape of the interface they implement, not about replacing them."
     }
   ],
-  "results": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-04T04:17:56.724Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/runtime/contract.js (new)",
+          "src/runtime/index.js (new)",
+          "src/runtime/process.js (new)",
+          "src/runtime/claude-bg.js (new — src/jobs.js moved here)",
+          "src/runtime/manual.js (new)",
+          "src/jobs.js (deleted)",
+          "src/dispatch.js",
+          "src/model.js",
+          "src/hook.js (one import line)",
+          "test/fake-runtime.js (new)",
+          "test/runtime.test.js (new)",
+          "test/reap.test.js",
+          "test/jobs.test.js (import + comment)",
+          "test/session.test.js (import)",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/concepts/worker-identity.md",
+          "docs/wiki/decisions/adr-005-control-plane.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/log.md",
+          "docs/wiki/index.md"
+        ],
+        "residual_risk": [
+          "The reap now stops parked (pidless) background jobs on finished cards. That is the fix, but it is the one live behaviour change: a `claude --bg` worker sitting on a permission prompt whose card was moved to done/archived is ended, where before it survived. Nothing spares it on a running card — that path is unchanged and still owned by the reclaim.",
+          "src/jobs.js is gone. Anything outside this repo importing it (a local script, a plugin) breaks; inside the repo all four importers were repointed.",
+          "runtimeFor falls through to the process adapter for an unknown profile mode rather than throwing — `undispatchable` and `removedProfileHint` are still where a bad mode is reported, but a hand-written board.json with a typo'd mode now gets process-runtime liveness instead of a distinct error at the seam.",
+          "`test/fake-runtime.js` overrides runtimeFor globally via setRuntime; a test that installs it must restore in t.after or it leaks into the next file in the same process. Both new tick tests do.",
+          "npm install was run to make `tsc --noEmit` actually execute (the lint script silently skips it with an empty node_modules). package-lock.json was NOT touched and node_modules is not committed."
+        ],
+        "verification": [
+          "npm run lint (node --check + tsc --noEmit, after npm install for the local typescript) — clean",
+          "npm test — 1396 pass, 0 fail (was 1366; 29 new tests plus one split)",
+          "node --test test/runtime.test.js — 28 pass",
+          "grep -n \"mode === 'process'\\|mode === 'claude-bg'\\|\\.bg\\b\\|\\.job\\b\" src/dispatch.js — no match",
+          "node bin/hkb.js dispatch --dry-run --json, before and after: sha256 e1c4277b358d66fd53bc4d1e5155c47ffcecff105c4a62acf0f704950efa4da7 both times, diff empty",
+          "node .repolore/scripts/wiki-check.mjs — architecture/overview.md fresh again; 22 pages stale, all pre-existing drift this task did not read",
+          "git rebase origin/main — already up to date; draft PR #337 on worktree-kb-296-1"
+        ]
+      },
+      "pr": 337,
+      "pr_continued": false,
+      "summary": "The runtime seam is in. src/runtime/ is one module per runtime behind one contract (contract.js): process.js (detached child, pid), claude-bg.js (today's src/jobs.js moved wholesale — the listing, the job record, the session behind it), manual.js (a human in their terminal). Each exports launch (reached as runCard/runTrack), inspect, stop, and pause/resume returning {ok:false, why:'not implemented until B4'}; plus two optional verbs a runtime implements only if it has them — listing (its one local subprocess per tick) and postMortem (what an ending attempt's own artefacts still say). runtimeFor(x) is the only place in hkb that reads a profile mode or a handle field by name, and it takes a profile before the launch, an attempt row after it, or a handle out of a listing.\n\nFor B3/B4, three things are the contract you build on. (1) inspect returns {alive, working, handle, session, outcome, patch} and alive is THREE-VALUED: true/false only when this host holds the handle, null for 'nothing to say', where the heartbeat and max_runtime stay the whole check. A runtime that cannot see an attempt must never read as one that found it dead — that keeps a manual claim and another host's worker alive, and every adapter's first line is the host check that enforces it. (2) launch returns {argv, pid, child?, wt, logFile, continued, tools_dropped, handle, row, describe}: `row` is the attempt-row patch (only defined keys, so a null never lands in the serialized record), `handle` is null when nothing started (the tick's spawn-failed check), `describe` is the human handle string. (3) stop(ctx, attempt) may stamp its own bookkeeping on the row — claude-bg sets job_stopped so the daemon is asked once — so callers pass the live row, not a copy.\n\nThe two-level shape from the card's comment is in: runCard(ctx, task, k, opts) and runTrack(ctx, root, k, opts), where a track's {nodes, waves, branch, mode} rides in opts.track as DATA alongside the prose brief. All three adapters run a track by spawning one runner, so both resolve to launch; an SDK adapter that runs a wave in one query() overrides runTrack only. setRuntime(fn) is the test/override seam (same shape as setStore) and may answer null for 'not mine'.\n\nThe reap bug is fixed: reapDecision moved to src/model.js and lost `|| !job.pid`. A claude --bg job has a pid in `claude agents --json` only while on a turn, so a job parked on a permission prompt has none — exactly the job the reap exists to stop. It is re-exported from src/dispatch.js, so the import path is unchanged.\n\nBehaviour is otherwise identical: hkb dispatch --dry-run --json on this board is byte-identical before and after (sha256 e1c4277b358d66fd53bc4d1e5155c47ffcecff105c4a62acf0f704950efa4da7), and the grep in the card's Done-when finds nothing in src/dispatch.js. src/jobs.js is deleted; src/hook.js, test/jobs.test.js and test/session.test.js import currentSession/matchJobByWorktree/jobSessionUpdate from src/runtime/claude-bg.js now.\n\nOne thing B2 should know: the 180s registration grace is REGISTER_GRACE in src/runtime/contract.js and the 30s turn grace is TURN_GRACE in claude-bg.js — the clock work of B2 (attemptElapsed/sinceSignal subtracting pauses[]) will want to reach both through the adapter rather than re-deriving them."
+    }
+  ],
   "v": 1
 }
