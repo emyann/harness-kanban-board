@@ -4,7 +4,7 @@
     304
   ],
   "body": "## Why\n\n`importGithubBoard` reads closed cards through `listClosedRecent({first: CLOSED_PAGE})`, and\n`fetchClosedRecent` (`src/store/github.js`) is one GraphQL query with no `pageInfo` loop — its own\ncomment says *\"One query, no paging\"*. #294's review round made the cap **honest** (`closed_capped` and\n`closed_page` in the import summary) but not **absent**: a board with more than 100 cards closed inside\nthe window still imports the 100 most recently updated and leaves the rest behind.\n\n**Measured on this repository's own board, 2026-09-03**, which root C (#302) is scheduled to migrate:\n\n| | |\n|---|---|\n| kb cards total | 188 |\n| open | 57 |\n| closed | 131 |\n| closed inside the 90-day window | 131 |\n| dropped by the 90-day window | **0** |\n| dropped by the 100-card page cap | **31** |\n\nSo the window is not the problem here and the cap is: migrating this board today silently leaves 31\nclosed cards — their run records, their results, their handoffs — off the local store. The issues stay on\nGitHub, so nothing is destroyed, but the local board becomes the source of truth without them, and\n`next_id` is computed from the truncated set.\n\nThis is the last thing between the local store and migrating a real board, which is why it is filed\nahead of #302 rather than inside it.\n\n## What\n\n1. `fetchClosedRecent` paginates on `pageInfo.hasNextPage`/`endCursor` like the board query already\n   does, until the window is exhausted rather than until a page is full. The 90-day filter stays: it is\n   a deliberate scope, where the page size never was.\n2. A ceiling that is reached is *reported*, not silently applied — keep `closed_capped`, and make it\n   mean \"there is more beyond what any window would take\", not \"the first page ran out\".\n3. `next_id` is computed after the full read.\n4. Check the same shape elsewhere: `adoptOpenIssues` pages open issues to `pages` and warns; #294's\n   review found its `more = page === pages` reports a false positive on an exact multiple. Fix that\n   while here — a warning that cries wolf on a 1000-issue repo trains the reader to ignore it.\n\n## Done when\n\n- [ ] A fixture board with 250 cards closed inside the window imports all 250.\n- [ ] `closed_capped` is false in that case, and true only when a real ceiling was hit.\n- [ ] `adoptOpenIssues`'s `more` is false on an exact multiple of the page size.\n- [ ] `npm run lint && npm test` green.\n\n## Contract\n\nDo not migrate this repository's own board here (root C does that, and it is the reason this card\nexists). Keep `src/gh.js` the only place that shells out to `gh`. `--json` everywhere; errors name the\nfix and carry `.exitCode`.",
-  "closed_at": null,
+  "closed_at": "2026-09-04T03:59:12.866Z",
   "created_at": "2026-09-03T09:56:50Z",
   "goal": null,
   "id": 330,
@@ -23,10 +23,10 @@
   "priority": 3,
   "rank": null,
   "scheduled_at": null,
-  "state": "OPEN",
-  "state_reason": null,
+  "state": "CLOSED",
+  "state_reason": "NOT_PLANNED",
   "status": "archived",
   "suspended": null,
   "title": "hkb init --import silently drops closed cards past one page: 31 of this board’s 131 would not migrate",
-  "updated_at": "2026-09-04T03:59:12.815Z"
+  "updated_at": "2026-09-04T03:59:12.871Z"
 }
