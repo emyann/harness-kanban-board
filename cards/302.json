@@ -2,8 +2,7 @@
   "agent": "claude",
   "blocked_by": [
     304,
-    305,
-    330
+    305
   ],
   "body": "## Why\nThe root of track C (`docs/local-first.md` §10). Its children move the tests onto a store double, delete the GitHub store, and ship the sources as TypeScript. This card is the verify pass once C3 is done, and the one that migrates this repository's own board.\n\n## What\n1. Read C1–C3's results. `npm run lint && npm test && npm run smoke` on Node 22 and 24.\n2. From a clean clone of this repo (a temp dir): `node bin/hkb.js version` runs without `npm install`; `npm pack` then install the tarball in an empty dir and run `hkb version` and `hkb doctor` there.\n3. Migrate this repository's board: `hkb init --import` on the main checkout, then `hkb doctor`, `hkb list`, and confirm every open card and the run records came across; `hkb sync`; report the exact commands in the result. The operator switches the dispatcher after this card lands.\n4. Release notes for the version that carries tracks A–C (`docs/releasing.md` says how a release is cut; do not publish).\n\n## Done when\n- [ ] Steps 1–3 recorded with commands and outputs in this card's result.\n- [ ] Release notes committed; nothing published.\n\n**Read first:** `docs/local-first.md` (the plan; the sections named below), `docs/wiki/decisions/adr-005-control-plane.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Keep it dependency-free at runtime. Pure logic in\n`src/model.js` with a test. Errors name the fix and carry `.exitCode`. `--json` everywhere. Update the wiki page a\nchange touches (`node .repolore/scripts/wiki-check.mjs` lists what went stale); a new feature gets a new page.\nFinish with `npm run lint && npm test` green, one draft PR, and exactly one terminal verb.\n",
   "closed_at": null,
@@ -43,5 +42,5 @@
   "status": "todo",
   "suspended": null,
   "title": "Local-first hkb, track C: tests onto the store double, retire the GitHub store, TypeScript",
-  "updated_at": "2026-09-03T07:21:19Z"
+  "updated_at": "2026-09-04T04:00:18.195Z"
 }
