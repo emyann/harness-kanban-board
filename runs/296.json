@@ -5,10 +5,13 @@
       "bg": true,
       "heartbeat_at": "2026-09-04T04:00:01.399Z",
       "host": "YRND1-GG",
+      "job": "86a0cd7e",
       "log": ".kanban/logs/296-1.log",
       "pid": null,
       "profile": "claude",
+      "session_id": "86a0cd7e-bbb8-47e6-a7eb-48a3881fbc57",
       "started_at": "2026-09-04T04:00:01.399Z",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-296-1/86a0cd7e-bbb8-47e6-a7eb-48a3881fbc57.jsonl",
       "wt": "kb-296-1"
     }
   ],
