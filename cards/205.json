@@ -1,0 +1,37 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found operating this board on 2026-09-01, on WSL2 (Linux 6.6.87.2-microsoft-standard-WSL2, node v24.20.0).\n> `hkb up --serve` had started both processes 30 minutes earlier and they were still running.\n\n## Why\n\n`pidFileStale` (`src/model.js:1164`) decides whether a pid file survived a reboot by arithmetic:\n`mtime < now - os.uptime() * 1000 - 5_000`. The reasoning is sound — a file written before this machine booted\ncannot name a live process of ours — but it assumes the wall clock and `os.uptime()` stay in step for the life of\nthe machine. **On WSL2 they do not.** The VM's clock is resynced against the Windows host across suspend/resume\nwhile `/proc/uptime` keeps its own count, so the derived boot instant walks forward and eventually crosses pid\nfiles written earlier in the same session.\n\nMeasured here, with both processes alive (`ps` shows pid 1101 `dispatch --loop 60` and pid 1122 `serve`, 32\nminutes elapsed):\n\n```\nos.uptime()            2054.62 s\nderived boot           2026-09-01T17:42:32Z\n.kanban/dispatch.pid   2026-09-01T17:32:37Z   ← written by hkb, 10 min \"before boot\"\nstale?                 true\n```\n\n```\n$ hkb up --status\ndispatch stopped (pid file predates this boot — hkb up replaces it)\nserve stopped (pid file predates this boot — hkb up replaces it)\n```\n\nThe failure is not cosmetic. `startProcess` only stands down when the claim is believed — `src/up.js:81`,\n`if (!stale && current && current !== pid && pidAlive(current)) return false` — so with `stale` true, **`hkb up`\nspawns a second dispatcher against a board that already has one**, which is the double-claim the pid file exists\nto prevent and which the skill promises cannot happen (\"safe to type twice\"). The same read gates the\ndispatcher's own singleton lock (`src/dispatch.js:1026`) and the server's claim (`src/serve.js:125`), and\n`hkb doctor` reports `no dispatcher running` (`src/doctor.js:138`) while the loop is ticking.\n\nThis is the mirror of #202, which guards the *false-live* direction (a pid reused after a reboot). Both want the\nsame thing: a claim that identifies the process, not just a number and a timestamp. Worth deciding the two\ntogether.\n\n## What\n\nDo not widen `PID_BOOT_SLACK_MS` — the skew here is ten minutes and unbounded, and a slack big enough to cover it\nwould defeat the guard it belongs to.\n\n- **Prefer a real boot instant over a derived one.** `/proc/stat`'s `btime` is a fixed epoch second written at\n  boot and does not drift with the clock; read it when it exists and fall back to `os.uptime()` where it does\n  not (macOS: `kern.boottime`; otherwise the arithmetic). Note that on the machine above `btime` agreed with\n  `os.uptime()`, so this alone may not be the fix — verify on WSL2 before building on it.\n- **Corroborate before declaring a claim dead.** Staleness is currently a verdict from one timestamp. A pid file\n  whose pid is alive *and* whose `/proc/<pid>/cmdline` names our own `hkb dispatch --loop` / `hkb serve` for this\n  root is our process, whatever the arithmetic says — cheap, zero-dependency, and it settles #202's direction too\n  (a stranger that inherited the pid will not match). Where `/proc` is absent, keep the timestamp verdict.\n- **Never let a stale verdict alone authorise a spawn.** Whatever the rule becomes, `hkb up` must check liveness\n  before starting a rival: today a wrong `stale` is a silent second dispatcher, and the whole point of the pid\n  file is that this cannot happen. Failing closed here costs a manual `hkb down`; failing open costs\n  double-claimed cards.\n- Keep the decision a pure function in `src/model.js` with the boot/`/proc` reads injected, per the layout rule.\n\n## Done when\n\n- [ ] A pid file written by the current `hkb up`, on a machine whose clock has jumped forward relative to\n      `os.uptime()`, is not reported stale — with a unit test that fakes exactly that skew.\n- [ ] `hkb up --status` and `hkb doctor` report the running dispatcher and server on WSL2.\n- [ ] `hkb up` never spawns a second dispatcher while one is alive, on any path through the staleness check.\n- [ ] A genuinely post-reboot pid file naming a reused pid is still refused (the #202 direction does not regress).\n- [ ] `npm run lint && npm test` pass; the wiki page covering `hkb up` / process state is updated.",
+  "closed_at": "2026-09-01T19:39:59Z",
+  "created_at": "2026-09-01T18:25:33Z",
+  "goal": "A pid file written by the running hkb up is never reported stale when the wall clock drifts against os.uptime (WSL2); up --status and doctor see the live processes; hkb up cannot spawn a second dispatcher while one is alive; the post-reboot reused-pid case still fails closed",
+  "id": 205,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/model.js",
+    "src/board.js",
+    "src/up.js",
+    "src/dispatch.js",
+    "src/serve.js",
+    "src/doctor.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb up --status calls a live dispatcher stopped on WSL2, and hkb up would then start a second one",
+  "updated_at": "2026-09-01T19:39:59Z"
+}

@@ -1,0 +1,38 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    150
+  ],
+  "body": "> Split out of #129 after the 2026-08-28 spike (job `cadca6f1`, Claude Code 2.1.251). Prerequisite for #129 piece B.\n\n## What the spike showed\n\nA track root that fans a wave out to subagents **ends its own turn while the children run**: the Agent tool ran in the background, the root parked itself with ScheduleWakeup, and `Stop` fired for the root *before* `SubagentStop` fired for the child. Measured order in the hook log:\n\n```\n23:22:45  PreToolUse  Agent                     (root, cwd kb-spike-129)\n23:22:48  PreToolUse  Bash   agent_id=aff2ce…    (child, cwd .claude/worktrees/agent-aff2ce…)\n23:22:54  Stop                                  (root — children still running)\n23:23:03  SubagentStop      agent_id=aff2ce…\n23:23:19  PreToolUse  Write                     (root resumes)\n```\n\n`stopHook` (`src/hook.js`) answers that moment with what it does for every idle worker: the root's task is still `running` on the board, so it writes `{decision: \"block\"}` with the terminal-verb nudge — twice per attempt (`.kanban/nudges/<n>-<k>`), then allows. On an orchestrator that is *correctly* waiting for its wave, that is two false nudges per wave, each one pushing the root to file a verb on a root whose children are not done — exactly the protocol violation the hook exists to prevent.\n\n## What\n\nTeach the Stop hook to tell \"idle because the work is done\" from \"idle because the work is running in subagents\".\n\n- The Stop payload carries `session_id`, `cwd`, `stop_hook_active` and (for subagent ends) `agent_id`; the root's `SubagentStop` firings carry `agent_id` too. Record live subagents from the hook side — `SubagentStop` is the only \"ended\" signal a hook sees, and the `PreToolUse` for `Agent` is the \"started\" one — under `.kanban/sessions/` beside the existing markers, so a Stop on a session with **started > ended** subagents returns 0 with a one-line stderr note instead of a nudge. Pure decision in `src/model.js` (`shouldNudgeOnStop(state)`), tested with the hook log above as a fixture.\n- A root whose subagents have all ended and whose task is still `running` is nudged as today — that is the real \"you forgot the verb\" case.\n- The nudge counter does not burn on a suppressed Stop: the two real nudges are still available once the wave is finished.\n- The `PreToolUse` hook already runs for `Agent` (matcher `*`); register `SubagentStop` in the same settings block `hkb init` writes (`src/init.js`) and in `hooks/hooks.json` for the plugin, both the local and `--shared-hooks` forms.\n- Cold workers (no `Agent` on their allowlist) never start a subagent, so nothing changes for them.\n\n## Constraints\n\n- No new API call in the hook: everything it needs is on stdin and under `.kanban/`.\n- Never suppress on a guess: if the marker directory cannot be read, nudge as today — a false nudge costs a turn, a missed one costs the protocol.\n- The `KB_TASK`/worktree-name gate stays exactly as it is (`whichAttempt`); this changes only what the hook says, not whom it applies to.\n\n## Done when\n\n- A Stop fired while a subagent is live returns 0, logs why, and leaves the nudge counter untouched (fixture from the spike log).\n- A Stop fired after every subagent ended on a still-running task nudges exactly as today.\n- `hkb init` and the plugin register `SubagentStop`; `hkb doctor` reports its absence on an older board the way it reports a missing Stop hook.\n- `node --test test/model.test.js test/skill.test.js test/init.test.js` cover the three cases; `npm run lint && npm test` green.",
+  "closed_at": "2026-08-29T04:22:08Z",
+  "created_at": "2026-08-28T23:29:08Z",
+  "goal": null,
+  "id": 163,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/hook.js",
+    "src/model.js",
+    "src/init.js",
+    "hooks/hooks.json",
+    "test/"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "The Stop hook must not nudge a track root whose subagents are still running",
+  "updated_at": "2026-08-29T04:22:08Z"
+}

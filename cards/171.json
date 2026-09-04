@@ -1,0 +1,40 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> From the review of PR #169 (#144, merged 2026-08-29). None of these blocked the merge; the operator measured the `--bg` premise live (a `--settings` Stop hook fired 4 s after `claude --bg` launch, comment on #144).\n\n## What\n\n1. **Evidence text** (`src/board.js` ~183-187, `src/model.js` ~834-837, `docs/harnesses.md` ~136-142, `docs/wiki/features/hook-install-shapes.md` ~455-467): the \"six per-launch sources\" table cites the `claude agents` FleetView parser, which runs after `cli_bg_path` returns. The actual `--bg` path is `handleBgFlag → spawnBgSession`: the respawn-flag allowlist keeps `--settings <value>` as a pair and a `{`-leading value passes untouched (traced in 2.1.251). Replace the table with that, and replace the claim \"`hkb stats` profile claude sessions proves the launch hooks fired\" — since #137 the tick records the session id via `jobSessionUpdate`; the Stop-hook trace is the `.kanban/sessions/<n>-<k>` marker. Give `hkb doctor` a check on that marker for the latest bg attempt if cheap.\n2. **`workerHookSettings`** (`src/init.js` ~569): when `hkb` is on the dispatcher's PATH the launch carries bare `hkb hook stop`, but the hook runs under the session daemon's environment, which keeps its own PATH (#150) — so nvm drift moves into the worker session instead of disappearing. Prefer `node \"<PKG_ROOT>/bin/hkb.js\"` whenever PKG_ROOT is not ephemeral (`isEphemeralPath`); bare `hkb` only as the npx-cache fallback.\n3. **Deny-reason nits from #159, parked twice**: `src/hook.js` ~78 `hkb: ${reason}.` double-dots (seen live: \"tools.. If the task\"); the `--kind capability` sentence is appended to policy denials too — give `decidePermission` a `kind` (`policy` | `capability` | `path`) and append it only for `capability`; `promptingProfiles` (`src/doctor.js` ~546) counts `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` as \"will prompt\"; `src/model.js` ~721 header still says \"explicit allow or deny-with-reason\".\n4. Nits: `expandLaunch` only handles a bare `{hook_settings}` element (`--settings={hook_settings}` renders `--settings=` when empty) — either support or refuse it; the PR body's \"residual-risk note below\" does not exist — put the `--shared-hooks` double-fire (Stop nudge drops to one) in `docs/harnesses.md`.\n\n## Done when\n\n- Docs name the measured probe and the respawn-flag path; no mention of the FleetView sources.\n- A launch rendered on a machine with a global `hkb` AND a durable PKG_ROOT names `node \"<PKG_ROOT>/bin/hkb.js\"` (test in `test/harness.test.js`).\n- `test/hook.test.js`: deny reason has no double dot; a policy denial carries no capability sentence; a capability denial does.\n- `npm run lint && npm test` green; `npm run smoke` (launch text changed).\n\n## Contract\n\n- No hook `allow`; the `whichAttempt` worktree fallback untouched; `--shared-hooks` keeps working.",
+  "closed_at": "2026-08-29T03:04:53Z",
+  "created_at": "2026-08-29T01:19:22Z",
+  "goal": "The launch-line hook docs state the measured --bg evidence and the real forwarding path, the launch names the dispatcher's own bin/hkb.js whenever PKG_ROOT is durable, and the PreToolUse deny reason is clean and scoped by kind",
+  "id": 171,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/board.js",
+    "src/model.js",
+    "src/init.js",
+    "src/hook.js",
+    "src/doctor.js",
+    "docs/harnesses.md",
+    "docs/wiki/features/hook-install-shapes.md",
+    "test/hook.test.js",
+    "test/harness.test.js"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Launch-line hooks: cite the real --bg evidence, prefer PKG_ROOT/bin/hkb.js over a bare hkb on the launch, and the deny-reason nits",
+  "updated_at": "2026-08-29T03:04:53Z"
+}

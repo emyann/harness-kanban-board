@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Observed 2026-08-29 01:52–01:55 on this board. #163 was promoted to *ready* by hand and sat there; the tick logged `guarded 2` every minute and `hkb dispatch --dry-run` said `guarded #163: path_overlap` — and neither said *with what*. The answer (#150, running again after request-changes, owns `src/hook.js` and `src/model.js`) took a second command and a hand-written overlap check to find.\n\n## Why\n\nThe path guard (`pathsOverlap`, `src/model.js`; the guard pass in `src/dispatch.js`) is correct and quiet: a card whose `kb.paths` prefix-overlap a running card's is held, and the summary counts it under `guarded`. What it records is only the reason token (`path_overlap`), not the card it collided with or the paths that collided. An operator who promoted a card and sees nothing happen has to reconstruct the collision by hand — which is exactly the \"yes, by hand\" value 4 calls a bug, and the missing \"what to do next\" value 5 rules out. The same is true of `hkb show <n>`: a guarded card looks identical to one nobody has reached yet.\n\n## What\n\n- **The guard records the collider.** Where the guard pass builds its `guarded` entry, keep `{number, why: 'path_overlap', with: <running card number>, paths: [<the overlapping pairs, as the held card's path>]}`. Pure: `pathsOverlap` already knows both sides; return the matched pairs instead of a boolean (or add `overlappingPaths(a, b)` beside it) — one function, one test.\n- **Every surface names it, in one line:**\n  - dispatcher log and `--dry-run`: `guarded #163: path_overlap with #150 (src/hook.js, src/model.js, test/)` — `guarded N` in the tick summary stays as the count.\n  - `hkb show <n>` on a ready card: `held: path_overlap with #150 (src/hook.js, src/model.js) — runs when #150 leaves running`, read from the last tick's summary (`.kanban/state.json` already keeps per-tick state; add the last guard verdict per task there, so `show` costs no API call).\n  - the serve drawer: the same line under the status chip.\n  - `--json`: `guarded[].with`, `guarded[].paths`; `show --json` → `held: {why, with, paths}`.\n- The other guard reasons (`active_pr`, profile at cap, daily spawn cap, unknown profile) get the same treatment where they don't already have it — most already name the fix in `summary.skipped[].why`; make `guarded` and `skipped` read alike.\n\n## Constraints\n\n- No new API call: the running card's paths are in the board the tick already fetched; `show` reads the last verdict from local state.\n- The guard's decision does not change; only what it says.\n\n## Done when\n\n- A tick that holds a card logs the collider and the paths; `--dry-run` prints the same line.\n- `hkb show <n>` on a held card prints the `held:` line; on an unheld ready card, nothing new.\n- `test/model.test.js` (overlapping pairs), `test/dispatch.test.js` (the summary carries `with`/`paths`; dry-run text), `test/cli.test.js` (`show` line); `npm run lint && npm test` green.",
+  "closed_at": null,
+  "created_at": "2026-08-29T01:58:15Z",
+  "goal": null,
+  "id": 176,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/model.js",
+    "src/dispatch.js",
+    "src/cli.js",
+    "src/serve.js",
+    "test/"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "A guarded card says which running card it collides with, and on which paths — in the tick log, --dry-run, hkb show and the drawer",
+  "updated_at": "2026-08-29T04:05:30Z"
+}

@@ -1,0 +1,34 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found piloting hkb on `french-tech-homies/pipao-v2` on 2026-08-27/28. Related to the `firstWords` defect, but independent: any cause of a missing verb produces this.\n\n## Why\n\nAn attempt that finishes its work, pushes, and opens a PR, but cannot record a terminal verb, is recorded as `protocol_violation` and counted in `failures`.\n\nObserved on #126:\n\n```\nfailures: 1 · attempts: 1 · last error: protocol_violation after 598s\n#126  running → ready\n```\n\n...while `worktree-kb-126-1` had an **open PR** titled *\"make the GitHub Pages registry canonical, both gates verified\"*, with the payload staged in `.kanban/sessions/`. The work was complete and correct; only the reporting failed.\n\nWith `max_retries: 2` and `dispatch.failure_limit: 2`, two such events park the card for a human even though nothing went wrong twice.\n\n**What is not broken:** the `active_pr` guard runs first in the ready loop (`dispatch.js:690`), needs no extra API call, and applies even with no slot — so the card would have been moved to `review` on the next tick rather than re-claimed. There is no duplicate-work risk here. The cost is the retry budget and a misleading record.\n\n## What\n\nWhen an attempt ends without a terminal verb **and the task has an open PR**, the honest record is \"the work landed, the report did not\" — not a failure.\n\nOptions, roughly in order of appeal:\n\n1. Record the outcome as `review` (or a distinct `unreported`) rather than `protocol_violation`, and do not increment `failures`.\n2. Keep `protocol_violation` as the outcome for the audit trail but exclude it from `failures` when an open PR exists.\n3. Go further: if the worker staged `.kanban/sessions/<n>-summary.md` and `<n>-metadata.json`, adopt them as the attempt's summary/metadata instead of discarding them. Workers already do this by convention when the verb is blocked; nothing reads it.\n\nOption 3 makes the staged-payload convention a real recovery path rather than a note for a human.\n\n## Done when\n\n- [ ] An attempt that ends with no verb but an open PR does not increment `failures`.\n- [ ] Its run record distinguishes \"no verb, PR open\" from \"no verb, nothing to show\".\n- [ ] If option 3 is taken: a staged `.kanban/sessions/<n>-*` payload is picked up and recorded.\n- [ ] `node --test test/dispatch.test.js` covers both shapes.",
+  "closed_at": "2026-09-01T19:48:24Z",
+  "created_at": "2026-08-28T05:16:43Z",
+  "goal": "An attempt ending with no verb but an open PR does not increment failures, and its record distinguishes 'no verb, PR open' from 'no verb, nothing to show'.",
+  "id": 116,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/dispatch.js",
+    "src/lifecycle.js",
+    "test/dispatch.test.js"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "protocol_violation burns a retry when the work landed and the PR is open",
+  "updated_at": "2026-09-01T19:48:24Z"
+}

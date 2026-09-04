@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> From the third-pass review of PR #190 (#185, merged 2026-08-29). Neither blocked the merge.\n\n## What\n\n1. **Memoise the beat date by sha** (`src/dispatch.js` ~618, the idle-threshold `lockBeatAt` read): a commit's date is immutable and `listLocks` already hands the tick the sha, so keep `sha → date` in `state` and read the commit only when the ref moved. Today: +1 `GET /git/commits/<sha>` per tick per pidless attempt once its run-comment signal is 20 min old, for the rest of its life; and two reads per tick in the window where both the idle read and the `stale_after` read fire for the same sha (probe h). Test: two ticks, unchanged ref → one read.\n2. **Boot-time guard on `livePid`** (`src/dispatch.js` ~601): `pidFileStale(at, { uptime })` exists (`src/model.js` ~1164) but is used for pid files only. After a reboot a reused pid makes a dead attempt hold its paths until the 60-min `stale_after` reclaim — where the old timing rule released it — and that reclaim then SIGTERMs `a.pid` unguarded (the reviewer's probe j killed its own probe process). Gate: `!pidFileStale(a.started_at, { uptime: os.uptime() }) && pidAlive(a.pid)` for `livePid`, and the same guard on the `crashed` check and on `failAttempt`'s kill.\n3. Nit: `test/model.test.js` ~124 assertion strings still say \"inside/past one tick interval\".\n\n## Done when\n\n- Fake-gh test: unchanged lock ref across two ticks → one commit read; moved ref → a second read.\n- A pid attempt whose `started_at` predates boot is treated as not live (holds nothing, is not signalled); a live-after-boot pid still holds.\n- `npm run lint && npm test` green.",
+  "closed_at": null,
+  "created_at": "2026-08-29T05:37:16Z",
+  "goal": "The idle rule costs no repeated commit reads for an unchanged lock ref, and a pid reused after a reboot neither holds paths nor gets SIGTERMed by the reclaim",
+  "id": 202,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/dispatch.js",
+    "src/model.js",
+    "src/board.js",
+    "test/dispatch.test.js",
+    "test/model.test.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "Idle rule follow-ups: memoise the lock-beat date by sha, and guard livePid (and the reclaim kill) against a pid reused after reboot",
+  "updated_at": "2026-08-29T05:37:16Z"
+}

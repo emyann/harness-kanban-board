@@ -1,0 +1,37 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> The operator's own words, 2026-08-29: \"when I'm in this repo folder, I have to run `node bin/hkb.js` to use the CLI.\" Two shorter forms already work and are documented nowhere; the reason `hkb` itself is missing is a trap hkb could name.\n\n## Why\n\nFrom the checkout, `npx hkb <verb>` resolves the package's own `bin` (verified: `npx --no-install hkb version` → `hkb 0.1.4`) and `./bin/hkb.js <verb>` runs directly (shebang, executable bit). Neither CLAUDE.md nor README says so, so a contributor types `node bin/hkb.js` every time. The bare `hkb` is missing for a reason that has now bitten twice (this checkout, and the pipao-v2 hook noise): a global link made with `npm link` / `npm i -g` lives under one nvm Node version (`~/.nvm/versions/node/v24.12.0/bin/hkb` here) and disappears from PATH the moment the shell moves to another (`v24.20.0` now). `hkb doctor` checks whether `hkb` resolves; it does not say *why* it stopped.\n\n## What\n\n1. **`package.json` script**: `\"hkb\": \"node bin/hkb.js\"` so `npm run hkb -- list` works everywhere npm does — cheap, and the form some editors' task runners expect. Note in the docs that `npx hkb list` is the shorter equivalent inside the checkout (no `--`).\n2. **CLAUDE.md \"Layout\" (one line) and README \"Contributing\"/\"From a checkout\"**: `npx hkb <verb>` or `./bin/hkb.js <verb>` from the repo; `npm link` for a global that tracks the checkout; and the nvm rule — a global is per Node version, re-run `npm link` (or `npm i -g hkb-cli`) after switching or upgrading Node.\n3. **`hkb doctor` names the drift** (`src/doctor.js`, next to the existing `hkb` on PATH check): when `hkb` does not resolve but `~/.nvm/versions/node/*/bin/hkb` (or `$NVM_DIR`) exists under another version, say so — `! hkb on PATH   linked under Node v24.12.0, shell runs v24.20.0 → npm link (from the checkout) or npm i -g hkb-cli@latest` — and when the link target is a checkout, say which. Flag only; doctor never installs anything.\n4. **Memory-worthy gotcha into the wiki**: `docs/wiki/gotchas/` gets the nvm-drift entry (the pipao-v2 hook noise as the incident), so the next person does not rediscover it.\n\n## Constraints\n\n- No build step, no dependency, no shell profile edits by hkb.\n- The doctor line reads the filesystem only (`$NVM_DIR` or `~/.nvm`), one `readdir`; absent nvm → today's line unchanged.\n\n## Done when\n\n- `npm run hkb -- version` and `npx hkb version` both print the version from a fresh clone with no global install.\n- CLAUDE.md and README carry the checkout forms and the nvm rule.\n- `hkb doctor` on a host with the link under another Node version prints the drift line with the two commands; with no nvm, output unchanged (`test/doctor.test.js`, fixture dirs).\n- `npm run lint && npm test` green; `npm run smoke` (package.json `scripts` changed, `files` did not).\n\n## The cause, verified by the operator session (2026-08-29)\n\n- The only global `hkb` on this machine is an `npm link` made 2026-08-26 under Node **24.12.0**: `~/.nvm/versions/node/v24.12.0/lib/node_modules/hkb` → `~/projects/ghkanban` → this checkout. nvm's default alias is `lts/*`; when LTS moved 24.12 → 24.20 the alias followed, and `~/.nvm/versions/node/v24.20.0/bin` holds only `corepack node npm npx`. Globals never carry across nvm versions. Nothing in hooks, `.claude/settings*` or a PATH edit is involved.\n- The same drift is why the bare `hkb hook stop` in every settings file failed with `/bin/sh: 1: hkb: not found` on every tool call in this repo and pipao-v2 — the trigger for #146/#144.\n- **Decision (operator):** do **not** re-link a global here. This checkout runs `node bin/hkb.js` (or `npx hkb`); adopters get `hkb-cli` from npm once a release is cut; pipao installs it as a devDependency. The card's \"npm link for a global\" line in *What* 2 should say that a link is optional and per-Node-version, not recommend it.\n\nTwo things the card must state precisely:\n\n- `npx hkb <verb>` works **only inside this checkout**, because npm resolves the package's own bin (package name `hkb-cli`, bin `hkb`); elsewhere `npx hkb-cli`.\n- `~/.nvm/default-packages` now lists `hkb-cli`, so a future `nvm install` of a new Node auto-installs the **published** CLI — which would then shadow this checkout on PATH with the release version. `hkb version` cannot tell the two apart (both print `package.json`'s 0.1.4), so the doctor line must print the **resolved path**: `hkb on PATH is <path> · this checkout's bin is <path> — they differ`, alongside the nvm-drift line when `hkb` is missing altogether.\n",
+  "closed_at": null,
+  "created_at": "2026-08-29T03:25:42Z",
+  "goal": null,
+  "id": 183,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "package.json",
+    "CLAUDE.md",
+    "README.md",
+    "src/doctor.js",
+    "test/doctor.test.js",
+    "docs/wiki/gotchas/"
+  ],
+  "priority": 4,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "Running the CLI from a checkout: npm run hkb / npx hkb documented, and doctor names the nvm-version drift that hides a global hkb",
+  "updated_at": "2026-08-29T03:27:09Z"
+}

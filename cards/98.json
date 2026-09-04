@@ -1,0 +1,32 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    102
+  ],
+  "body": "# Goal: hkb serve shows every hkb checkout without a hand-maintained boards.json\n\nThis is the root of a track. The work is in #99, #100, #101 and #102; this task is the **verify and\nsynthesize pass** that runs after they land. Do not redo their work — read it.\n\n## Why\n\nA checkout that has been `hkb init`ed, with a dispatcher actively running, was invisible to\n`hkb serve` unless a human hand-wrote `~/.config/hkb/boards.json`. Two rungs were missing: nothing\nregistered a checkout, and the list was read once at server startup so even a correct edit needed a\nrestart. Value 4 says a rung that is possible but tedious is a gap to close, not a workflow to\ndocument.\n\n## What the children did\n\n- **#99** — the registry writer: `mergeBoardEntry` in `src/model.js`, `saveUserBoards` and\n  `registerUserBoard` in `src/board.js`. Atomic, idempotent, dedupes on resolved path.\n- **#100** — `hkb init` calls it, prints where it registered, works offline, never fails init.\n- **#101** — `hkb serve` re-reads the list while running, preserving live boards' caches.\n- **#102** — the README rewritten to match, with #96's restart sentence removed.\n\nYou are blocked by #102 only, so its result is the one you are handed. **Run `hkb show 99`,\n`hkb show 100` and `hkb show 101`** to read what the others actually shipped before you verify\nanything.\n\n## What to do\n\nVerify the whole thing fits, end to end, the way an adopter would meet it:\n\n1. In a scratch directory, make a throwaway git repo and `hkb init` it (offline is fine:\n   `--no-labels --repo owner/name` writes every local file and sends nothing). Point\n   `KB_CONFIG_HOME` at a temp directory so you never touch the real user list.\n2. With `hkb serve` **already running** from a different checkout, confirm the new board appears with\n   no restart and no hand-edited file.\n3. Confirm registering an existing checkout twice does not duplicate it, and that a `~`-spelled entry\n   and its absolute form are recognised as one board.\n4. Confirm no worker worktree (`kb-<n>-<attempt>`) can end up in the list.\n5. `npm run lint && npm test`, and `npm run smoke` if anything in `files` or the runtime-read package\n   contents changed.\n\nThen write what no child could: if the four PRs left a seam, a naming inconsistency or a doc that only\nhalf-describes the shipped behaviour, fix it here. If everything fits, say so concretely — name what\nyou ran and what you saw — and complete.\n\n## Done when\n\nThe acceptance scenario from the goal passes as written: `hkb init` a third checkout, `hkb serve` from\na different one, the third board is on the page, no file edited by hand and no server restart. Lint\nand tests green. Any leftover inconsistency between the four PRs is either fixed here or reported as a\nfollow-up card.\n",
+  "closed_at": "2026-08-28T04:09:52Z",
+  "created_at": "2026-08-28T03:23:21Z",
+  "goal": null,
+  "id": 98,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb serve shows every hkb checkout without a hand-maintained boards.json",
+  "updated_at": "2026-08-28T04:09:52Z"
+}

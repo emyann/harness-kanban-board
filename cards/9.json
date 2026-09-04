@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    3
+  ],
+  "body": "## What\n- `hkb mcp` speaks MCP over stdio (JSON-RPC 2.0, `initialize`, `tools/list`, `tools/call`) with no dependency: implement the minimal protocol by hand.\n- Each tool is a thin wrapper that calls the same functions `cli.js` uses (`lifecycle.js`, `tasks.js`); one code path, same `--json` objects.\n- `hkb init --mcp` writes `.mcp.json` (`{\"mcpServers\":{\"kanban\":{\"type\":\"stdio\",\"command\":\"hkb\",\"args\":[\"mcp\"]}}}`) and prints the equivalent for Codex (`.codex/config.toml`) and VS Code.\n\n## Done when\n`claude mcp list` / a manual `tools/list` over stdio shows the tools; a `tools/call` of `kanban_show` returns the same object as `hkb show --json`.",
+  "closed_at": "2026-08-26T23:30:52Z",
+  "created_at": "2026-08-26T04:33:36Z",
+  "goal": null,
+  "id": 9,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/mcp.js",
+    "templates/mcp/"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb mcp: stdio MCP server that wraps the CLI verbs (kanban_show, heartbeat, complete, block, request_review, comment, create, link, unblock)",
+  "updated_at": "2026-08-26T23:30:52Z"
+}

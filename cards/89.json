@@ -1,0 +1,32 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    84
+  ],
+  "body": "hkb never merges. Nothing in `src/` or the skill calls a merge — every PR this board has produced was merged by hand. On a repo where the operator merges every agent PR within a minute of it opening, that is a rote step the tool could take, which value 4 now calls a gap rather than a workflow. On a repo with a careful review culture it is the opposite: the one gate anybody would want to keep.\n\nThat is a policy difference between repos, so it belongs in `.kanban/board.json` under the existing `dispatch` section, defaulting to today's behaviour:\n\n    \"dispatch\": { \"merge\": { \"mode\": \"manual\" } }        // default — nothing changes\n    \"dispatch\": { \"merge\": { \"mode\": \"auto\", \"method\": \"squash\" } }\n\n**Do not make hkb merge.** Use **GitHub's own auto-merge** (`enablePullRequestAutoMerge`, whose `pullRequestId` is the node id the board query already returns — `src/tasks.js:59`). The dispatcher enables it once, when a card reaches review with an open PR; GitHub does the rest. That wins three ways:\n\n- **Frugal** — one mutation at review time, no polling, no new query. `src/dispatch.js:631` already resolves the card's PRs for the `active_pr` guard.\n- **GitHub enforces the gates** — required checks, required reviews, up-to-date branches. hkb never has to answer \"is this safe to merge\", which is not a question it should be in the business of answering.\n- **It degrades correctly** — if a check fails or a review is requested and never given, the PR simply does not merge. No timer, no retry, nothing to reconcile.\n\n**The dispatcher enables it, never the worker.** Merge authority is an operator concern; ADR-004 puts the worker seat at one attempt on one task, and the permission policy already keeps workers away from anything with blast radius. A worker asking for its own PR to be merged is the wrong seat.\n\n**Why this is blocked by #84.** *Auto-merge on an unprotected branch merges immediately.* With no required checks, \"hand the last step to GitHub\" means \"land agent-authored code on `main` the moment the PR opens, unreviewed and untested\". So this feature is only honest once protection exists — which is exactly the decision #84 is holding. Shipping it first would build a footgun and call it a config.\n\nConsequently:\n\n- **`doctor` must refuse the combination.** `merge.mode: auto` with no branch protection requiring status checks is a hard failure with a named fix, not a warning. This is the check that makes the feature safe, so it ships in the same change.\n- The interaction with `request-review --reviewer <user>` is already right: a required review makes the reviewer the gate, and auto-merge waits for them. Confirm rather than assume.\n\n**Verify.** `mode: manual` (the default, and any board.json that predates this) behaves exactly as today. `mode: auto` on a protected branch enables auto-merge once per PR and is idempotent across ticks. `mode: auto` on an unprotected branch fails doctor and the tick refuses with a message naming the fix. Assert the mutation is sent once, against the fake — never against a live PR.",
+  "closed_at": "2026-08-27T19:16:18Z",
+  "created_at": "2026-08-27T18:38:25Z",
+  "goal": null,
+  "id": 89,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Board policy for merging: let the operator hand the last step to GitHub, or keep it",
+  "updated_at": "2026-08-27T19:16:18Z"
+}

@@ -1,0 +1,38 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> From the review of PR #194 (#129, merged 2026-08-29). The orchestration is correct; these are the sentences and one gc pattern it still needs — item 1 before the first real `claude-track` run.\n\n## What\n\n1. **Children heartbeat the root** (`src/track.js` per-node brief ~214): a `--bg` root whose turn has ended runs nothing until a subagent returns, and it cannot wake itself (ScheduleWakeup is not allow-listed). The dispatcher applies `stale_after` (3600 s) to a running --bg attempt and then checks the lock-ref beat (`src/dispatch.js` ~586), so one node longer than an hour gets the root **reclaimed while its subagents are live**, uncovering the nodes for cold workers. Add to the per-node brief: \"run `hkb heartbeat <root>` every ~10 minutes while you work\" — the beat chain is in the shared ref store, so it works from `agent-<id>` (`casHeartbeat`, `src/lock.js` ~170). Test: the per-node brief contains the heartbeat line with the root number. Name it in the tracks page's residual-risk list.\n2. **The branch line** (`src/track.js` ~214 vs `src/context.js` ~165): the per-node brief says `git switch -c kb/<n> <base>` while the `hkb context <n>` it tells the child to read first says \"work on the current branch\" — in the child that is `worktree-agent-<id>`; a child that obeys it pushes an `agent-<id>` branch and wave 2's `<base> = kb/<blocker>` does not exist. One sentence in the per-node brief: \"its current-branch line does not apply to you; use `kb/<n>`\". Test asserts it.\n3. **Spawn failure fallback** (`src/track.js` ~185): the wave is claimed before the `Agent` calls; if the tool errors (worktree creation, budget, denial) the brief never says what to do and nodes sit claimed until `stale_after`. One rule: \"if a spawn fails, work that node yourself in this checkout, sequentially, or `hkb block <n> --kind transient` to release it — never leave a claimed node without a verb\". Test asserts it.\n4. **gc learns `agent-<id>`** (`src/gc.js` ~28): a child that committed keeps its worktree (auto-removed only if unchanged) with `kb/<n>` checked out; gc recognises only `kb-<n>-<k>` / `worktree-kb-<n>-<k>`, so those worktrees and branches accumulate and the checked-out guard skips them. Add the pattern: an `agent-*` worktree whose branch's PR is merged or closed is removable; soften the \"deleted when you finish\" sentence in `src/track.js` and `tracks.md`/`harnesses.md` meanwhile.\n5. Known-gap line on `tracks.md`: a daemon-leaked `KB_TASK` (#150) in a child makes `subagentStopHook` resolve the leaked task instead of falling back to `CLAUDE_PROJECT_DIR` (`attemptIdentity` accepts env with `profile: null`), suppressing the root's Stop up to `MAX_SUPPRESSED_STOPS`.\n\n## Done when\n\n- The fan-out brief tests assert the heartbeat line, the branch override and the spawn fallback (`test/track.test.js`).\n- `hkb gc` on a fixture with an `agent-abc` worktree whose `kb/41` PR is merged removes it; with the PR open leaves it (`test/gc.test.js`).\n- `npm run lint && npm test` green; `npm run smoke` (brief text changed).",
+  "closed_at": "2026-08-29T05:16:29Z",
+  "created_at": "2026-08-29T04:55:16Z",
+  "goal": "A claude-track root parked while its subagents work is never reclaimed as stale, a node subagent always works on kb/<n>, a spawn failure degrades to sequential work instead of leaving nodes claimed, and gc cleans the agent-* worktrees and kb/<n> branches a track leaves",
+  "id": 197,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/track.js",
+    "src/context.js",
+    "src/gc.js",
+    "docs/wiki/features/tracks.md",
+    "docs/harnesses.md",
+    "test/track.test.js",
+    "test/gc.test.js"
+  ],
+  "priority": 4,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Track orchestrator brief: children heartbeat the root, the per-node branch line overrides hkb context, a failed spawn falls back to node-by-node; gc learns agent-* worktrees",
+  "updated_at": "2026-08-29T05:16:29Z"
+}

@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    227
+  ],
+  "body": "## Why\n\n`hkb groom` (a sibling) reports; it never judges. Deciding whether two cards are really duplicates, which way a\nmissing link should point, and whether a spec is thin enough to send back needs a model — which is why it lives\nin the skill, exactly as `/kanban:specify` and `/kanban:decompose` do, and why there is no `hkb groom --apply`.\n\nWithout this task the report is a wall of findings with no procedure, and the first session to read one will\ninvent its own — including, predictably, promoting things nobody said yes to.\n\n## What\n\nPer #191's *What* section 2, amended.\n\n- **A `## /kanban:groom` section** in `skills/kanban/SKILL.md`, between `/kanban:decompose` and `## Rules`:\n  (0) seat check; (1) read **once** — `hkb groom --json` and `hkb dispatch --dry-run`, never `hkb list --json`,\n  never a `hkb show` loop; (2) a findings table with one row per `GROOM_KINDS` kind — kind · prints as · what\n  you do · **what a false positive looks like**; (3) judge only `judgment.cards` and `pairs`, one fixed question\n  per kind; (4) one table grouped by cluster — card · action · target · evidence · exact command — **then stop**;\n  (5) apply approved rows only, in this order: `hkb comment` → `hkb create --triage --blocked-by <revealer>`\n  (never `--priority`) → `hkb link` → the kb PATCH recipe then `hkb show --json` to check `_malformed` → **one**\n  `hkb promote a b c` of triage-only cards, where a `forced` line in the output is a stop-and-report; (6) verify\n  with `hkb groom`, `hkb graph`, `hkb dispatch --dry-run`; (7) digest in operate §5 shape, stating that promoted\n  N is a queue, not N running.\n- **Triage-only in v1** (amendment 7): the skill covers the triage lane; the CLI keeps `--status`. Archive,\n  close-as-duplicate, unlink and priority edits are **never** in the batch — they are handed back as pre-staged\n  commands, because the verbs they need do not exist yet (#192, #193).\n- **`commands/groom.md`** in the exact shape of `commands/specify.md`: frontmatter, the section name, both\n  SKILL.md locations, and at most two invariants restated — one report read, and a stop for a yes before any verb.\n- **Operate §3 and §4**: the `appeared` row and the `triage` status row become \"run the `/kanban:groom` per-card\n  pass (`hkb groom --json --status triage`) and propose — never promote\"; §4 lists `hkb groom` among the reads\n  that are yours. §4's \"never promoting\" clause becomes \"except the rows of a `/kanban:groom` or\n  `/kanban:specify` table the human has said yes to — the yes is what makes it theirs\".\n- Frontmatter `description` names the command; `metadata.version` 0.6.0 → 0.7.0.\n\n## Done when\n\n- [ ] `test/skill.test.js`: the groom section has a row for **every** `GROOM_KINDS` kind (the drift test); it\n      names `hkb groom --json`, \"stop for a yes\", `--triage` and `forced`; every `hkb <verb>` it invokes is a\n      `case '<verb>'` in `src/cli.js`; it never says `hkb dispatch` without `--dry-run`, and never `--loop`.\n- [ ] `GROOM_ACTIONS` is pinned the way the event kinds are: every value appears in the section's action column\n      and no other action word does.\n- [ ] `commands/groom.md` exists in `commands/` and restates at most the two invariants.\n- [ ] Operate §3 and §4 read correctly with the new rows; `metadata.version` bumped.\n- [ ] `npm run lint && npm test` pass. Registration, README, plugin.json, HELP and the wiki page are a\n      sibling's — do not touch them here.\n\n## Contract\n\nThese are the names, signatures and rules a sibling depends on. Do not invent alternatives; a change here\nbreaks a task you cannot see.\n\n- **The eleven \"Amendments from the adversarial pass\" at the top of #191 override its body wherever they\n  differ.** Read `hkb show 191` first and treat the amendments as the specification. In particular: reuse\n  `computeReady`, `agentsOf` and the walk in `src/track.js` — **do not write `detectCycles`**; `no_goal` is\n  `info` when the body already has a Done-when heading; `broad_path` exists and is `ask`; `overlap_pair.why` is\n  guard-aware.\n- `groomBoard(tasks, { now, caps, pairs = 10, statuses })` is exported from `src/model.js` and takes the raw\n  `fetchBoard` array and nothing else — a later card puts the same function behind `hkb serve`'s snapshot.\n- `GROOM_KINDS` and `GROOM_ACTIONS` are exported from `src/model.js`. Actions are the closed vocabulary\n  `promote · specify · link-under · split · supersede · reprioritise · park · archive`, plus `judge` and `none`.\n- `fetchBoard(ctx, { blockers: 'all' })` REST-fills blockers for **every open card** on a repo without GraphQL\n  `blockedBy`; `blockers: true` keeps today's todo/blocked-only behaviour.\n- The `--json` field names in #191 are **frozen**; later kinds are added to `findings`, never renamed.\n- The CLI never emits the word \"duplicate\". `overlap_pair.why` is \"will serialize under path_overlap\".\n- **`src/dispatch.js` is untouched by this whole track** — the promote step still filters `status === 'todo'`.\n- Nothing in this track writes to the board. `hkb groom` is a read, like `hkb dispatch --dry-run`.",
+  "closed_at": "2026-09-01T21:13:22Z",
+  "created_at": "2026-09-01T20:42:40Z",
+  "goal": "A /kanban:groom section with a row per GROOM_KINDS kind and a false-positive column, commands/groom.md in specify.md's shape, operate section 3 and 4 updated, and the drift test asserting every kind and action appears and every verb it names is a real CLI case",
+  "id": 228,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "skills/kanban/SKILL.md",
+    "commands/groom.md",
+    "test/skill.test.js"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "kanban:groom, the procedure: the skill section, commands/groom.md, and the operate rows",
+  "updated_at": "2026-09-01T21:13:22Z"
+}

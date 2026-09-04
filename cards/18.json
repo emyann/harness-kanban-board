@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\nEach worker is a real Claude Code session with its own id and transcript, but the board does not say which. Humans want to reopen a worker session (`claude --resume <id>` inside its worktree) for a post-mortem or to take over; they also want to see what an attempt cost.\n\n## What\n- `hkb hook stop` receives `session_id` and `transcript_path` in its stdin JSON: on the first call for an attempt, write `session_id` (and `transcript_path`) onto the open attempt row in the run comment (one PATCH; skip if already recorded). Keep the nudge logic unchanged.\n- In `src/dispatch.js` loop mode (`watchChild`), when the worker exits, parse the last line of its log as JSON (`claude -p --output-format json`) and record `total_cost_usd`, `num_turns`, `duration_ms`, `session_id` on the attempt row if present. Never fail the tick on a parse error.\n- `hkb show <n>` prints `session <id> · $<cost> · <turns> turns` per attempt when known, and the resume command.\n- Pure-function test for the log-line extraction and the \"record once\" decision.\n\n## Done when\n`hkb show` on a finished attempt shows the session id and cost, and `claude --resume <id>` from the worktree reopens that session.",
+  "closed_at": "2026-08-26T06:53:38Z",
+  "created_at": "2026-08-26T04:44:17Z",
+  "goal": null,
+  "id": 18,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/hook.js",
+    "src/dispatch.js",
+    "src/model.js",
+    "test/session.test.js"
+  ],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Record worker session_id and cost on the attempt row",
+  "updated_at": "2026-08-26T06:53:38Z"
+}

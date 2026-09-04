@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found 2026-09-01: an operator session ran `hkb up --serve` in `pipao-v2` while a server from a *different*\n> checkout was already up on 4666 — and already serving pipao's board. It got told \"port 4666 is already in use\n> — pass --port <n>, or stop the other hkb serve\", followed that advice, and started a second server on 4667.\n> Two servers now poll the same two boards.\n\n## Why\n\n`hkb serve` is **multi-board by design**. It reads `~/.config/hkb/boards.json`, and one process serves every\nregistered checkout — the log says so out loud: `hkb serve on http://127.0.0.1:4666 — 2 boards`, listing both.\nSo the second server was not merely redundant; the board it was started for was *already on screen*.\n\nThe reason nobody could tell is that the two halves of the state live at different levels and nothing joins them:\n\n| what | where | scope |\n|---|---|---|\n| which boards a server shows | `~/.config/hkb/boards.json` | **user-level** — knows every checkout |\n| whether a server is running | `.kanban/serve.pid` | **per-checkout** — knows only its own |\n\n`portInUse` (`src/serve.js:642`) reads the *per-checkout* pid file. From pipao that file does not exist, so the\ncheck falls through to the generic message, whose two suggestions — a second server, or stop the other one —\nare the two worst answers available. The one that was true is not among them.\n\n`hkb up` promises idempotence: \"run it twice and the second run reports what is already running and starts\nnothing.\" That promise holds per checkout and silently does not hold across checkouts, which is precisely the\ncase a multi-board server exists to serve.\n\nThe cost is small but it is waste by accident: two processes polling two boards each, where one was covering\nboth. Value 2 is frugality, and conditional `GET`s being cheap is not a reason to make twice as many.\n\n## What\n\n- **A user-level serve record.** `~/.config/hkb/serve.json` (beside the registry it belongs with):\n  `{ pid, url, boards: [...], started_at }`, written by `serve` at startup and removed on exit — the same\n  lifecycle `writeServeUrl`/`dropServeUrl` (#204) already implement per checkout. That card built the per-board\n  half; this is the same idea one level up, and the two should share code rather than diverge.\n- **`hkb up --serve` consults it before spawning.** If a live server already covers this board, print its URL\n  and start nothing — the idempotence `up` already promises, extended to the scope `serve` actually operates at.\n  A stale record (pid gone) is ignored, exactly as a stale pid file is.\n- **`portInUse` says the true thing.** When the port's holder is a live hkb serve that covers this board:\n  \"already serving this board at <url>\". When it covers other boards but not this one: name the fix that\n  actually works — register this checkout, or `--port`. Only when it is not hkb at all should it say what it\n  says today.\n- **`hkb up --status` should say which server covers this board**, whether or not this checkout started it. An\n  operator asking \"is my board up\" is not asking \"did *this directory* start a process\".\n- **Decide, do not assume:** whether a second server should be refused outright or merely reported. There are\n  real reasons for two (different `--host`, one exposed and one loopback), so refusing outright may be wrong —\n  but the default should not be reached by accident, and `--port` should stay the deliberate escape.\n\n**Not this card:** which boards a server shows is the registry's job and already works; #170 covers keeping a\nworker's checkout out of it.\n\n## Done when\n\n- [ ] A live server records itself where any checkout can see it, and removes the record on exit.\n- [ ] `hkb up --serve` in a checkout whose board is already served prints that server's URL and spawns nothing.\n- [ ] `portInUse` distinguishes \"already serving this board\", \"an hkb serve that does not cover this board\", and\n      \"not hkb at all\", with the right fix on each.\n- [ ] `hkb up --status` names the server covering this board even when another checkout started it.\n- [ ] A stale record never blocks a legitimate start, with a test.\n- [ ] `npm run lint && npm test` pass; the web-board wiki page describes the record and the one-server rule.",
+  "closed_at": null,
+  "created_at": "2026-09-02T00:07:52Z",
+  "goal": "A live server records itself where any checkout can see it; hkb up --serve prints that URL and spawns nothing when this board is already served; portInUse tells the three cases apart with the right fix on each; up --status names the server covering this board whoever started it",
+  "id": 265,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/up.js",
+    "src/serve.js",
+    "src/board.js",
+    "src/model.js",
+    "docs/wiki"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "hkb up --serve starts a second server for a board an existing server is already showing, because the pid file is per checkout and the board registry is not",
+  "updated_at": "2026-09-02T00:07:52Z"
+}

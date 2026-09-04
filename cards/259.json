@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    255
+  ],
+  "body": "## Why\n\nA profile says how to *start* a session and nothing about what to reach for inside it. `DEFAULT_PROFILES`\n(`src/board.js`) carries `mode`, `launch`, `allowed_tools`, `model`, `effort`, `heartbeat`, `track_agents` —\nevery one about spawning. Nothing maps a *kind of work* to *what this harness does for that kind of work*.\n\nThe one half-attempt is broken: `kb.skills` renders into the brief (`src/context.js`) while `Skill` was absent\nfrom the allowlist, so the field told a worker to do something `dontAsk` guaranteed to refuse (#114).\n\n## What\n\n- **`\"capabilities\"` on a profile** — an object mapping an intent to this harness's command. Schema and\n  validation in `src/board.js`; an unknown intent fails `loadBoard` naming the vocabulary.\n- **`CAPABILITIES` exported from `src/model.js`**, pinned by a test the way `EVENT_KINDS` and `GROOM_KINDS` are,\n  so an intent cannot be added without saying what it means. Start small — `review`, `goal`, `specify` — and\n  make adding one a deliberate act.\n- **Absent means today's behaviour**, everywhere. A board with no `capabilities` key is unchanged.\n- Do not render the brief (a sibling's) or derive the grant (another sibling's, through #255).\n\n## Done when\n\n- [ ] A profile accepts `\"capabilities\"`; an unknown intent fails `loadBoard` naming the vocabulary.\n- [ ] `CAPABILITIES` is exported and pinned by a test that fails when an intent is added without documenting it.\n- [ ] A board with no `capabilities` key behaves byte-identically to today, pinned by a test.\n- [ ] `npm run lint && npm test` pass.\n\n## Contract\n\nNames a sibling depends on. Do not invent alternatives.\n\n- **`effectiveTools(profile, task, board)` (#255) is the only place a launch's tool list is derived.** A grant\n  implied by a capability binding goes through it. Never read `profile.allowed_tools` directly.\n- The profile key is `\"capabilities\"`, an object mapping an intent to this harness's command:\n  `\"capabilities\": { \"review\": \"/code-review\", \"goal\": \"/goal\" }`.\n- `CAPABILITIES` is the closed vocabulary, exported from `src/model.js` and pinned by a test the way\n  `EVENT_KINDS` and `GROOM_KINDS` are — a new intent cannot be added without saying what it means.\n- **An unmapped intent is not an error.** It falls back to today's prose brief. That is what keeps a Copilot or\n  Codex board working unchanged, and it is the whole difference between a capability map and a dependency.\n- Portability is the constraint the design exists to satisfy: the *intent* travels, the *binding* is local. hkb\n  must never name `/code-review` itself outside a board's own config.\n- Read `hkb show 217` for the goal, and #114 for the instance this generalises.",
+  "closed_at": "2026-09-02T00:37:43Z",
+  "created_at": "2026-09-01T23:55:07Z",
+  "goal": "A profile accepts a capabilities map with an unknown intent failing loadBoard; CAPABILITIES is exported from model.js and pinned by a test; a board with no capabilities key is byte-identically today's behaviour",
+  "id": 259,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/board.js",
+    "src/model.js",
+    "test/profiles.test.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "A profile declares a capability map: an intent from a closed vocabulary, bound to what this harness calls it",
+  "updated_at": "2026-09-02T00:37:43Z"
+}

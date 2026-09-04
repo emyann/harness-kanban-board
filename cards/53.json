@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    52
+  ],
+  "body": "Part of track #51. Decisions settled here.\n\n## What\n- `.github/workflows/release.yml` on `v*` tags: run lint+tests, refuse if tag ≠ package.json version, then `npm publish --provenance --access public` using `NPM_TOKEN` (needs `id-token: write`).\n- Missing secret ⇒ a clear `::notice::` telling the operator how to create it, and no publish — same graceful pattern as kanban-dispatch.yml; fork-safe.\n- **Post-publish verify job**: after publish succeeds, in a clean job with no checkout, run `npx -y hkb@$VERSION version` and `npx -y hkb@$VERSION help` (retry a few times for registry propagation, give up loudly after ~5 min). This is the end-to-end proof that real-world `npx hkb` distribution works, on every release.\n- One short `docs/releasing.md`: the operator's two steps (set NPM_TOKEN once; push the tag).\n\n## Done when\nWorkflow lints/parses, its logic is covered by the same style of tests as test/actions.test.js, docs page exists.",
+  "closed_at": "2026-08-27T03:40:43Z",
+  "created_at": "2026-08-27T03:25:29Z",
+  "goal": null,
+  "id": 53,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    ".github/workflows/release.yml",
+    "docs/"
+  ],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Release workflow: tag → npm publish with provenance, then a real npx verify",
+  "updated_at": "2026-08-27T03:40:43Z"
+}

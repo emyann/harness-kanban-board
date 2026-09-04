@@ -1,0 +1,37 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found operating this board on 2026-09-01, running the #191 track. Two of its five children — #227 and #228 —\n> completed, closed as done, and left their work unmerged with no card chasing it. Recovered by hand; the code\n> in both was fine.\n\n## Why\n\n`hkb` learns a card's pull requests from exactly one place: GitHub's `closedByPullRequestsReferences`\n(`src/tasks.js:34`). That field answers a narrower question than hkb asks of it — *\"which PRs will close this\nissue when merged\"* — and GitHub declines to answer it in cases hkb treats as impossible.\n\nWhen it returns nothing, the consequence is severe and silent:\n\n1. `hkb show <n>` reports `prs: []`.\n2. `hkb finish` sees a card with no PR and sends it to **done**, closing the issue.\n3. The `active_pr` guard never fires, the card never enters *review*, `dispatch.merge.mode` never applies.\n4. The work sits in an open PR that no card references, and the card that would have chased it is closed.\n\nA card said *done* with nothing delivered. That is the silent failure the values forbid, and it happened twice\nin one track.\n\n### #227 — cause established\n\nIts worker opened PR #232 against `kb/191-wave1`, an intermediate branch the track runner created, rather than\nthe default branch. GitHub only honours `Closes #N` for a PR targeting the **default branch**, so the field\nreturned nothing. **Retargeting the PR to `main` alone flipped `prs: []` to\n`prs: [{232, base: main, OPEN}]`** — a clean, reproducible demonstration.\n\n### #228 — cause NOT established\n\nSame symptom, different circumstances, and this one is unexplained. PR #233 targeted `main` from creation, its\nbody's **first line** was `Closes #228`, its timeline contains no `base_ref_changed`, and the field still\nreturned `[]`. Marking it ready for review, reopening the issue, and rewriting the PR body verbatim each failed\nto create the link. Whoever picks this card up should reproduce that before theorising: the honest state of\nknowledge is that hkb's single source for \"does this card have a PR\" fails for at least one reason nobody has\nidentified.\n\n## What\n\n- **Do not depend on one source.** Fall back to a lookup by **head branch**: hkb generates those names itself\n  (`kb/<n>`, `worktree-kb-<n>-<k>` — `worktreePath` / the track runner), so a PR whose head is this card's own\n  branch is this card's PR whatever GitHub's linking believes. That single fallback would have caught **both**\n  cases above. One extra request per card is too expensive; one board-wide `gh api` listing open PRs and\n  matching heads is not, and it fits the one-read-per-tick rule.\n- **`finish` must not silently complete a card with no PR.** A worker's brief says \"open a draft PR that says\n  `Closes #$KB_TASK`\". Finishing with no PR found is either a protocol violation or a card that legitimately\n  needed none — and hkb cannot tell those apart today, so it silently picks the wrong one. Refuse, or record\n  `protocol_violation` with a reason naming the missing PR, and leave the card where a human will see it.\n  (#116 fixed the mirror image of this: work landed, report failed. This is report landed, work invisible.)\n- **Surface a PR the board cannot see.** `hkb doctor` should flag an open PR whose head matches `kb/<n>` /\n  `worktree-kb-<n>-<k>` for a card that reports no PRs — the \"your board has lost track of work\" check.\n- **Decide what a track may do with branches.** The track runner created `kb/191-wave1` and based children on\n  it. Nothing on the board recorded that the branch existed or had to reach `main`, and stacked PRs were\n  rejected for sequencing in the original evaluation. Either the runner stops stacking, or stacking becomes a\n  first-class thing the board knows about. It cannot stay implicit.\n\n## Done when\n\n- [ ] A card whose PR GitHub does not link is still associated with it, via the head-branch fallback, with a\n      test covering a PR based on a non-default branch.\n- [ ] `hkb finish` on a card with no PR found does not silently land in *done*: it refuses or records a\n      protocol violation naming what is missing.\n- [ ] `hkb doctor` flags an open PR whose head names a card that reports no PRs.\n- [ ] The track runner's branch strategy is decided and written down, and the board can see any branch a track\n      expects to merge.\n- [ ] `npm run lint && npm test` pass; the wiki pages for the review loop and tracks describe the fallback.",
+  "closed_at": "2026-09-01T21:57:14Z",
+  "created_at": "2026-09-01T21:13:59Z",
+  "goal": "A card is associated with its PR even when closedByPullRequestsReferences returns nothing, via a head-branch fallback proven against a non-default-base PR; finish with no PR found refuses or records a protocol violation instead of landing in done; doctor flags an open PR the board cannot see; the track runner's branch strategy is decided and visible on the board",
+  "id": 234,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/tasks.js",
+    "src/lifecycle.js",
+    "src/doctor.js",
+    "src/track.js",
+    "test/tasks.test.js",
+    "docs/wiki/"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "A card whose PR GitHub declines to link completes to done with the work unmerged and nothing left to chase it",
+  "updated_at": "2026-09-01T21:57:14Z"
+}

@@ -1,0 +1,46 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    143,
+    146
+  ],
+  "body": "> Observed 2026-08-28 on a real board (pipao-v2). The hooks `hkb init` wrote were `hkb hook stop` / `hkb hook pretool` — correct on the day — then an nvm version switch left `hkb` off PATH, and from then on **every tool call in every Claude Code session in that repo** logged `PreToolUse:Bash hook error … /bin/sh: 1: hkb: not found`. The hooks are inert outside a worker by design, so the only thing the repo's other sessions ever get from them is this noise. `hkb doctor` names the fault; nothing prevents it.\n\n## Why\n\nhkb's hooks serve exactly one kind of session — the worker hkb launched — but they are installed as `matcher: \"*\"` entries in a settings file *every* session in the repo reads (`.claude/settings.local.json`, or `.claude/settings.json` with `--shared-hooks`). Two costs follow:\n\n- Every tool call in every non-worker session spawns a shell + node just to `return 0` (`src/hook.js:47`), and when the command stops resolving (PATH drift, npx cache, a teammate without the global) that becomes a logged failure per tool call in sessions that have nothing to do with hkb. #85 moved the file and taught `doctor` to see it; it could not remove the exposure.\n- `hkb init` carries the whole local-vs-shared placement policy (`hookPlacement`, `HOOK_SETTINGS`, `--shared-hooks`, the \"moved from\" dance) to manage a file that only workers need.\n\nClaude Code takes settings **per launch**: `claude --settings <file-or-json>` (listed beside `--agents` / `--plugin-dir` as a per-session source). The launch line is already the worker's whole permission policy (#143); it should carry the worker's hooks too. Then only sessions hkb launched ever see the hooks, PATH drift can hit nobody else, and the repo's settings files stay untouched.\n\n## What\n\n1. **Hooks on the launch line.** The `claude`, `claude-track` and `claude-p` profiles (`src/board.js` launch lines) gain `--settings '{hooks}'` — one JSON string, built by a pure function in `src/model.js` from `CLAUDE_HOOKS` (`src/init.js`) and the hook command, so the value is tested without a launch. The command in that JSON follows `hkbCommandForHook` for *this* machine (bare `hkb` when on PATH, else `node \"<bin>\"`): the launch is local, so a machine-specific path is correct here — it is exactly the case #85 ruled out for a tracked file. Also the `claude` step in `templates/actions/kanban-worker-claude.yml`, if `claude_args` can carry it.\n2. **`hkb init` stops writing Claude hooks into the repo's settings files** by default. Keep `--shared-hooks` as the explicit opt-in for the tracked file (a team that wants hooks on every session can say so); drop the local-file default and the moving-between-files logic that only existed to serve it. Existing `hkb`-written hook entries in `settings.local.json` are removed on the next `init` (they are hkb's own, matched by `isHkbHookCommand`) with one line saying so. Copilot (`.github/hooks/kanban.json`) and Codex (`.codex/hooks.json`) have no per-launch equivalent — leave them as they are; say so in `docs/harnesses.md`.\n3. **`hkb doctor`**: `checkHooks` moves from \"does the settings file's command resolve here\" to \"does the launch line's hook command resolve here\" for the `claude*` profiles, plus a `warn` when a stale hkb hook is still in a settings file (\"fires in every session; hkb init removes it\"). Keep the `permission policy` line (#139) — it becomes `live` on `claude`/`claude-track` too once the hook rides the launch.\n4. **Measure `--bg` before anything else.** `claude --bg` hands the request to the session daemon; confirm a `--settings` hook actually fires in that session (one launch, one `KB_TASK`-gated hook that writes a marker file). If it does not, the `claude` and `claude-track` profiles keep needing a file — then do 1–3 for `claude-p`/Actions only, write the measured answer in `docs/harnesses.md`, and file the `--bg` gap as its own card rather than guessing.\n5. **Docs**: `docs/harnesses.md` hooks table, README's init line (\"the Stop + PreToolUse hooks\" → \"hooks ride the worker launch\"), `docs/manual-mode.md:14`, the `HOOK_NOTE` in `src/init.js`, and the wiki page that covers hooks (`docs/wiki/architecture/overview.md`; run `node .repolore/scripts/wiki-check.mjs`).\n\n## Done when\n\n- A session opened by hand in a repo `hkb init` set up has **no** hkb hook in its settings and pays nothing per tool call.\n- A worker launched by `hkb dispatch` on `claude-p` (and on `claude`/`claude-track` if 4 measures yes) still gets the Stop nudge and records its session id — `hkb show <n>` shows the `session_id`.\n- `hkb doctor` on a machine where `hkb` is off PATH reports the launch line, not a settings file, and names the fix.\n- `npm run lint && npm test` green; `npm run smoke` (launch lines and `init` output changed).\n\n## Contract\n\n- Blocked by #143 — it edits the same launch lines and makes the PreToolUse hook deny-only; branch from its merge. Do not reintroduce a hook `allow`.\n- Do not touch the Stop hook's worktree-name fallback (`whichAttempt`, #125): a `claude --bg` daemon has no `KB_TASK`, and the checkout name is how that profile's sessions are still identified.\n- `--shared-hooks` keeps working; nothing here removes a hook a human chose to put in the tracked file.",
+  "closed_at": "2026-08-29T01:19:29Z",
+  "created_at": "2026-08-28T19:02:04Z",
+  "goal": "hkb's Stop/PreToolUse hooks reach only the sessions hkb launches: they ride the claude launch line as --settings, hkb init no longer writes them into the repo's settings files by default, and a missing hkb on PATH can never fail a tool call in a session that is not a worker",
+  "id": 144,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/board.js",
+    "src/init.js",
+    "src/model.js",
+    "src/doctor.js",
+    "src/hook.js",
+    "templates/actions/kanban-worker-claude.yml",
+    "docs/harnesses.md",
+    "README.md",
+    "docs/manual-mode.md",
+    "docs/wiki/architecture/overview.md",
+    "test/harness.test.js",
+    "test/doctor.test.js"
+  ],
+  "priority": 4,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Worker hooks ride the claude launch line (--settings), not the repo's settings files",
+  "updated_at": "2026-08-29T01:19:29Z"
+}

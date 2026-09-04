@@ -1,0 +1,34 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Reported from the pipao-v2 board, where `hkb merge` has now done six merges under `merge.mode: \"operator\"`. It behaved correctly throughout — this is the one papercut, and it cost twenty minutes of looking in the wrong place.\n\n## What happens\n\n`hkb merge <n>` refuses a conflicted PR by passing GitHub's own message through: `Pull Request has merge conflicts`. Accurate, and useless when the operator then runs `git merge-tree` locally, sees a **clean** merge, and cannot reconcile the two answers.\n\nThe cause is that **GitHub does not run custom merge drivers**. A repo with\n\n```\ndocs/wiki/log.md merge=union\n```\n\nin `.gitattributes` merges that file cleanly on any machine with the driver configured, and *conflicting* on GitHub's servers, which resolve with the built-in strategies only. Every worker PR appends to the wiki log, so once any one of them lands, every other open PR reads as `CONFLICTING` — and it compounds O(N²) across a merge queue.\n\nThis board has the same line in its own `.gitattributes`, so the same trap is loaded here; it has not fired yet only because the recent conflicts happened to be in source files.\n\n## Why it belongs to `hkb merge` and not to the operator\n\nValue 5: every error says what to do next. The current one says what GitHub said, which points at the diff. The actual next step is to look at `.gitattributes` — a place nobody looks when git has just told them the merge is clean.\n\n## Done when\n\n- On a refusal for conflicts, `hkb merge` distinguishes the two cases rather than relaying one message for both: when GitHub reports the PR unmergeable **and** a local three-way merge of the two commits is clean, the error names custom merge drivers as the likely cause and points at `.gitattributes`; when both agree it is conflicted, the message is unchanged.\n- The local check is cheap and never blocks the answer: one `git merge-tree`, skipped without complaint when the base or head commit is not present locally (an Actions dispatcher has no full clone), in which case the message stays today's.\n- The driver detection names the file: the hint says *which* path carries a `merge=` attribute, not just that some do, so the operator can see whether it is the file the PR touches.\n- A test covers the three states — agreed-conflicted, GitHub-only-conflicted with a `merge=` attribute present, and GitHub-only-conflicted with none — through the fake gh double.\n- The union-driver trap is stated once where an adopter meets it: a line in the wiki page that covers merging.",
+  "closed_at": null,
+  "created_at": "2026-09-02T01:28:27Z",
+  "goal": "A conflict refusal that git disagrees with names custom merge drivers and the .gitattributes path carrying one, with the agreed-conflict message unchanged and all three states tested",
+  "id": 279,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/lifecycle.js",
+    "src/tasks.js",
+    "docs/wiki/"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "hkb merge relays GitHub's conflict message for a conflict git says is clean, because GitHub does not run custom merge drivers",
+  "updated_at": "2026-09-02T01:28:27Z"
+}

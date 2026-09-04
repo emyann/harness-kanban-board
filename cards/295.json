@@ -1,0 +1,40 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    300,
+    301
+  ],
+  "body": "## Why\nThe root of track B (`docs/local-first.md` §10). Its children put the runtime seam under the tick, make the clocks pause-aware and sleep-aware, and add `start`/`pause`/`resume`/`stop` at worker and board level, `hkb ps`, and the live web board. This card is the verify-and-synthesize pass once B5 and B6 are done.\n\n## What\nDo not redo the children's work; read their results (`hkb show <n> --json` on B1–B6; B5 and B6 are your blockers, name the others by number). Then:\n1. On a scratch local board with the `claude-p` profile (or manual attempts): `start <n>`, `pause <n>`, `resume <n>`, `stop <n>`, `start <n>` again (warm), then the board-level four and `ps`, recording each command and what `hkb show` said after it.\n2. Check the pieces fit: a paused attempt is never reclaimed at any clock value; a stopped card with an open PR stays claimable; the reap stops a parked job.\n3. Write what no child could: `docs/wiki/concepts/control-plane.md` (the mapping, the verbs, \"a pause lives on its object\"), `features/runtime-seam.md`, refresh `features/web-board.md`; `skills/kanban/references/protocol.md` gains the `stopped` outcome and the ⏸ overlay in the state machine; a CHANGELOG entry.\n4. `npm run lint && npm test && npm run smoke`.\n\n## Done when\n- [ ] The walk-through of step 1 is in this card's result with exact commands.\n- [ ] The three wiki pages exist/are refreshed and `wiki-check` reports nothing stale for track B's pages.\n- [ ] `npm test` and `npm run smoke` green.\n\n**Read first:** `docs/local-first.md` (the plan; the sections named below), `docs/wiki/decisions/adr-005-control-plane.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Keep it dependency-free at runtime. Pure logic in\n`src/model.js` with a test. Errors name the fix and carry `.exitCode`. `--json` everywhere. Update the wiki page a\nchange touches (`node .repolore/scripts/wiki-check.mjs` lists what went stale); a new feature gets a new page.\nFinish with `npm run lint && npm test` green, one draft PR, and exactly one terminal verb.\n",
+  "closed_at": null,
+  "created_at": "2026-09-02T23:32:01Z",
+  "goal": "every verb of docs/local-first.md §3 exercised on a scratch local board; wiki pages for the verbs, the runtime seam and the live web board; npm test and smoke green",
+  "id": 295,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 28800,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/",
+    "web/",
+    "skills/",
+    "test/",
+    "docs/",
+    "README.md"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "Local-first hkb, track B: the control plane verbs on the store",
+  "updated_at": "2026-09-03T04:00:13Z"
+}

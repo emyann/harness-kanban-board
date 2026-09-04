@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\n\nFound by the worker on #325 and recorded in `docs/wiki/FINDINGS.md`:\n\n> **`hkb init` needs a forge even for a purely local board** — `init` resolves the repo through\n> `gh repo view` and refuses a checkout with no remote (`no git remotes found`), so the store that\n> exists to work with `gh` logged out cannot be created without one.\n\nThat is a direct contradiction of what the local store is *for*. ADR-006 and `docs/local-first.md` §6.1\njustify it as \"nothing leaves the repository, nothing costs an API call, and the board works with `gh`\nlogged out\" — and the one command that creates such a board requires a forge to reach.\n\nIt also blocks the plainest demonstration of the whole track: `git init` a directory, `hkb init --store\nlocal`, file a card, work it. Today that walk-through cannot start. Root A (#288) asks for a scratch-repo\nversion of exactly this, and its scratch repo is specified *with* a remote — which hides the gap rather\nthan testing it.\n\nNote `init --no-labels --repo owner/name` already exists as \"writes every local file and sends nothing\",\nso the offline path is half-built: the flag skips the network *writes* but the repo is still resolved\nfirst, and `--repo` still makes you name a forge that does not have to exist.\n\n## What\n\n1. On `--store local`, `hkb init` does not need a remote and does not call `gh`. The board's identity is\n   the repository on disk; `repo` in `.kanban/board.json` becomes optional and its absence is a normal\n   state, not a missing field to warn about.\n2. What genuinely needs a forge — opening pull requests (`src/forge.js`), `hkb sync`'s push — degrades with\n   a message naming what is unavailable and what still works, rather than being refused at `init`.\n   `hkb doctor` says \"no remote: PRs and sync are unavailable; the board is local and complete\" as an\n   ordinary line, not a `bad`.\n3. Adding a remote later must work: `hkb sync` on a board created without one picks it up (#294 already\n   made `sync` read ref state before the board document, so this is mostly a matter of not having refused\n   at init).\n4. `--store github` keeps today's behaviour exactly, remote required.\n\n## Done when\n\n- [ ] In a directory with `git init` and one commit and **no remote**: `hkb init --store local` succeeds,\n      then `create` → `list` → `claim` → `finish` runs, with the exact commands in the result.\n- [ ] `hkb doctor` on that board exits 0 and says what is unavailable without calling it a problem.\n- [ ] `git remote add origin …` then `hkb sync` works with no re-init.\n- [ ] `--store github` behaviour and messages unchanged.\n- [ ] `npm run lint && npm test` green.\n\n## Contract\n\nKeep `src/gh.js` the only place that shells out to `gh`. Do not weaken the `--store github` path. Errors\nname the fix and carry `.exitCode`; `--json` everywhere.",
+  "closed_at": null,
+  "created_at": "2026-09-03T08:26:14Z",
+  "goal": null,
+  "id": 327,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "hkb init needs a forge even for a purely local board, which is the one thing that store exists to avoid",
+  "updated_at": "2026-09-03T08:26:14Z"
+}

@@ -1,0 +1,37 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found 2026-09-01 by an operator session driving `french-tech-homies/pipao-v2`, asked by its human to thin a\n> saturated *ready* lane before a groom pass. It had to do it as a raw `gh issue edit` label swap\n> (`kb:status:ready` → `kb:status:triage`) on four cards, because hkb has no verb for it.\n\n## Why\n\n`hkb promote` moves a card forward — triage → todo → ready — and since #209 it sweeps a whole subgraph.\n**Nothing moves one back.** The status table in `src/serve.js` is explicit about it: `NO_SUCH_VERB.triage` reads\n*\"nothing demotes a task back to triage — drop it on Blocked, or archive it\"*, and the two escapes it offers are\nboth wrong for this case. `hkb block` needs a reason and records a block on the attempt history, which is a lie\nabout a card nobody worked on; `hkb archive` closes the issue, which is a different decision entirely.\n\nSo an operator with an over-full *ready* lane — exactly the situation `/kanban:groom` exists to address — has\none option: edit the label by hand, outside every verb, guard and record hkb has. It worked (`hkb watch` emitted\nfour clean `status ready → triage` events, which is a nice proof the label really is the whole state), and that\nis the problem: **the board cannot tell a considered demotion from someone poking labels**, and neither can the\nnext session reading the card.\n\nCLAUDE.md's fourth value names this shape exactly: *\"if the answer to 'can hkb do X' is 'yes, by hand', that is\na bug report.\"*\n\n## What\n\n- **A verb that is `promote`'s inverse.** `hkb demote <n>...` (or `hkb park`) moving *ready* → *todo* and\n  *todo* → *triage*, one step, the mirror of what `promote` does in the other direction. Name it once and use\n  that name everywhere; `park` reads better for the operator's intent, `demote` for the symmetry — decide.\n- **Does it cascade?** `promote` sweeps a subgraph (#209). The inverse probably should not: pulling a root back\n  should not silently unqueue children another card depends on. Recommend single-card by default, and say so in\n  the help text rather than leaving it to be discovered.\n- **Refuse what it must not touch.** A *running* card has a live claim and a worktree — demoting it would strand\n  both; that is `hkb block`'s job or a reclaim. A card in *review* has an open PR. Refuse both, naming the verb\n  that does fit, per the error rule.\n- **The web board gains the drag.** `MOVES` in `src/serve.js` has no backwards entry above *blocked*; this is the\n  verb that would let `ready → todo` and `todo → triage` exist there, and `NO_SUCH_VERB.triage` should stop\n  saying nothing demotes a task once something does.\n- **`/kanban:groom`'s vocabulary already anticipates it.** `GROOM_ACTIONS` includes `park`, and the procedure\n  hands park rows back as pre-staged commands precisely because the verb does not exist. Wire it up, and check\n  whether the apply step can then include park in the batch.\n\n## Done when\n\n- [ ] One verb moves *ready* → *todo* and *todo* → *triage*, with `--json`, refusing *running* and *review* and\n      naming the verb that fits instead.\n- [ ] Its cascade behaviour is decided, tested, and stated in the help text.\n- [ ] The web board can drag a card backwards through the same verb; `NO_SUCH_VERB.triage` is updated.\n- [ ] `/kanban:groom`'s `park` action names a real command, and the skill says whether it may be applied in the\n      batch.\n- [ ] `npm run lint && npm test` pass; the wiki page covering the status verbs describes the pair.",
+  "closed_at": null,
+  "created_at": "2026-09-02T00:01:59Z",
+  "goal": "One verb moves ready to todo and todo to triage with --json, refusing running and review and naming what fits instead; its cascade behaviour is decided and stated; the web board drags backwards through it; groom's park action names a real command",
+  "id": 262,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/cli.js",
+    "src/lifecycle.js",
+    "src/serve.js",
+    "src/model.js",
+    "skills/kanban/SKILL.md",
+    "docs/wiki"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "hkb has no inverse of promote, so thinning a saturated ready lane means editing labels by hand outside every verb and guard",
+  "updated_at": "2026-09-02T00:01:59Z"
+}

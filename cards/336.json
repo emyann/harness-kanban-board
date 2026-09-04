@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\n\n**Observed 2026-09-03: a healthy dispatcher took itself down over a worker's commit and the board went\nsilent for six hours.**\n\n`.kanban/logs/dispatch.log`:\n\n```\n2026-09-03T16:50:28.601Z tick: reconciled 0 reclaimed 0 ... claimed 0 ...\n2026-09-03T16:50:28.615Z FATAL hkb: this loop is running 238a3b65d997, the installed hkb is\n                         b9aef19f1a87 — restarting. Running workers are untouched.\n```\n\n- `238a3b6` is the checkout's HEAD, and it never moved: `git log --oneline -1` in the repo root still\n  reports it, and `git status` is clean.\n- `b9aef19` is **a commit on `worktree-kb-334-1`** — the branch of the worker that was running at the\n  time. It is not on `main`, was never merged, and is not what the dispatcher is executing.\n\nSo the self-heal ladder — which exists to restart a loop whose code is genuinely stale (#140) — compared\nthe loop against a *worker's worktree* and gave itself up. `hkb up` is deliberately not a supervisor, so\nnothing restarted it. Cards sat in `ready` from 16:50 to 22:37 with a serve process up, a pid file\npresent, and every card looking normal on the web board. The operator noticed from the board being still,\nnot from any signal hkb produced.\n\n**Why this is worse than a stalled loop.** The failure is silent and self-inflicted, and the state it\nleaves is indistinguishable from an idle board: `hkb up --status` says `dispatch exited (4)`, but nothing\nwatches that, and `hkb watch` — the documented monitor — reports *board transitions*, of which a dead\ndispatcher produces exactly none. A guard that stops all work when it misfires needs to be much harder to\nmisfire than this one is.\n\n## What\n\n1. **Find out what `installStamp()` is actually reading.** It is documented as \"the checkout's own\n   `git rev-parse HEAD` when it has one, the package version otherwise, both read fresh off disk\"\n   (`docs/wiki/architecture/overview.md`). It returned a commit that exists only on a linked worktree's\n   branch, so either the `git rev-parse` runs with a cwd that can land in a worktree, or it resolves the\n   *installed* `hkb` (a global npm link) to a path that is not the loop's own checkout. Both are plausible\n   here: this machine has had an `hkb` npm-link drift before, and hkb creates linked worktrees constantly.\n   Reproduce it before fixing it.\n2. **Pin the comparison to the loop's own module path**, not to a cwd and not to whatever `hkb` resolves\n   to on `PATH`. The question the guard asks is \"has the code *this process imported* been replaced\", so\n   the answer must come from the directory that process's entry point lives in\n   (`fileURLToPath(import.meta.url)`), resolved through `--git-dir`/`--git-common-dir` so a linked\n   worktree answers with the common repository rather than its own branch tip.\n3. **A stamp mismatch must be corroborated before it is fatal.** Exit 4 stops all work; it should require\n   more than one unequal string. At minimum, confirm the new sha is an ancestor-or-equal of the checkout's\n   HEAD, or that the entry file's mtime actually changed — a commit that is on neither is a bug in the\n   probe, not a redeploy, and should log loudly and keep ticking.\n4. **Say it where someone will see it.** `hkb watch` streams board transitions and a dead dispatcher makes\n   none, so the one monitor the operate procedure prescribes cannot report this. Either `hkb watch` emits a\n   `dispatcher` event when the loop it is watching goes away, or the exit-4 line becomes something\n   `hkb doctor` reports as a hard `✗` with the restart command — silence is the actual defect here.\n\n## Done when\n\n- [ ] The misfire is reproduced in a test: a loop in a checkout that has linked worktrees, whose branches\n      carry commits the checkout's HEAD does not, keeps running.\n- [ ] A genuine redeploy (HEAD of the loop's own checkout really moves) still exits 4 — that behaviour is\n      correct and must not be lost.\n- [ ] An uncorroborated mismatch logs and continues rather than exiting.\n- [ ] A dead dispatcher is visible to something the operator is already looking at.\n- [ ] `npm run lint && npm test` green.\n\n## Contract\n\nDo not remove the self-heal ladder — #140 is real, and a loop running code that a merge replaced is a\ngenuine hazard. This narrows *what counts as evidence* that it happened. Errors name the fix and carry\n`.exitCode`; `--json` everywhere.",
+  "closed_at": null,
+  "created_at": "2026-09-03T22:39:30Z",
+  "goal": null,
+  "id": 336,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "installStamp compared the loop against a worker's worktree commit and killed a healthy dispatcher for six hours",
+  "updated_at": "2026-09-03T22:39:30Z"
+}

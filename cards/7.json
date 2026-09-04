@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    3
+  ],
+  "body": "## What\n- `hkb watch [--interval 30] [--kinds completed,blocked,...]` prints one line per board transition (status label changes, new attempts, outcomes) by polling with `If-None-Match` ETags so unchanged polls cost no rate limit (304).\n- `hkb tail <n>` follows one task's attempts and comments the same way.\n- Put the loop in `src/watch.js`; `cli.js` only routes. `--json` emits one JSON object per line.\n\n## Done when\nBoth commands run against this repo and a 304 poll is observable in `GHK_DEBUG=1` output.",
+  "closed_at": "2026-08-26T08:12:58Z",
+  "created_at": "2026-08-26T04:33:32Z",
+  "goal": null,
+  "id": 7,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/watch.js",
+    "src/cli.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb watch / hkb tail: live board and task events with conditional requests",
+  "updated_at": "2026-08-26T08:12:58Z"
+}

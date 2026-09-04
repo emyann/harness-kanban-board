@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "Found by the first cold start on a repo that is not hkb on 2026-08-27 (a private, org-owned monorepo with live CI).\n\n`ensureGitignore`'s `wanted` list (`src/init.js:285`) is:\n\n    .kanban/logs/  .kanban/outbox.jsonl  .kanban/state.json  .kanban/cache.json\n    .kanban/nudges/  .kanban/sessions/  .claude/worktrees/\n\nIt does not include `.kanban/dispatch.pid`.\n\nThis repo's own `.gitignore` does include it — added by `9b6914d` (\"Untrack the dispatcher pidfile\") after we tripped over it here. The lesson was learned on hkb and never shipped to adopters: the first person to run `hkb dispatch --loop` and then `git add -A` commits a pidfile carrying their host and pid.\n\n**Fix.** Add `.kanban/dispatch.pid` to `wanted`, and diff the rest of that list against this repo's `.gitignore` while there, so the same drift is not sitting in another entry.\n\n**Verify.** `ensureGitignore` on a fixture repo writes the pidfile line; a repo that already has it is left unchanged (the function filters per-line, so it stays idempotent).\n",
+  "closed_at": "2026-08-27T18:04:27Z",
+  "created_at": "2026-08-27T17:03:13Z",
+  "goal": null,
+  "id": 74,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "The shipped .gitignore misses .kanban/dispatch.pid",
+  "updated_at": "2026-08-27T18:04:27Z"
+}

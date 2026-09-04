@@ -1,0 +1,37 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> From the review of PR #199 (#188, merged 2026-08-29). The repair works; these are its edges — and the root cause of the whole frozen-copy class (#138, #182, #188), found while reviewing.\n\n## Why\n\n`hkb init` writes every profile back to `.kanban/board.json` fully expanded — including `launch` — so a board that dropped its pin (by hand or by #188's repair) is re-frozen at the next `init` with whatever the default was that day. That is exactly how today's pins came to lack `{hook_settings}` and `allowed_tools` came to lack the builtins (#138): the file holds a copy of a default it never meant to own. Measured: `init` over this checkout's own board.json changes the file even with nothing to repair.\n\n## What\n\n1. **Init writes only what the human set** (`src/init.js` `boardProfiles`, `init`): profile keys equal to the shipped default are not written (`launch`, `allowed_tools`, `model`, `effort`, `max_in_progress` when unchanged); `loadBoard`'s deep-merge already supplies defaults at read time. A board.json that names only `{ \"claude\": { \"effort\": \"medium\" } }` stays that way across inits. Migration: an existing board whose expanded keys equal the current default gets them removed with one line saying so; keys that differ are kept (they are the human's pins) and reported.\n2. **Validate a migrated `--effort`** (`src/init.js` ~298): a pin `--effort turbo` is written as `\"effort\": \"turbo\"`, init #1 exits 0, then every later command — including init #2 — exits 2. Validate against `EFFORT_LEVELS` before moving; on an invalid value fall back to the insert shape and say why.\n3. **The drop-pin line never reads \"added nothing but  over the default\"** (`src/init.js` ~296): when `moved` is empty (a pin equal to the default minus placeholders, or a pin whose `--effort high` lost to an existing `effort: \"medium\"` field — silently discarded today) say what was kept and what was dropped; never claim a move that did not happen.\n4. **Doctor's `launch hooks` fix text** (`src/doctor.js` ~268): \"re-run `hkb init`, which inserts the placeholder / drops the pin\" — not the by-hand edit, now that init does it (`docs/harnesses.md` already says so).\n5. Nits: the insert shape leaves a launch with both `{model_args}` and a literal `--effort`, so a later profile `effort` renders `--effort` twice — migrate the literal when the field is unset, or warn; `src/board.js` ~452 keys the refusal on `launch[0] !== 'claude'` and the exception on the profile name `claude-action` — key both on the harness (`mode`), not the name; re-stamp `review-loop.md` (gc.js) and `tracks.md` (board.js), leftovers from #197.\n\n## Done when\n\n- `hkb init` twice over a board that sets only `effort` leaves the file byte-identical and pin-free; doctor clean.\n- A pin `--effort turbo` → insert shape + one line naming the invalid value; nothing invalid is ever written.\n- Fixtures for the empty-`moved` cases print an accurate line. `npm run lint && npm test` green; `npm run smoke` (init output changed).",
+  "closed_at": null,
+  "created_at": "2026-08-29T05:24:31Z",
+  "goal": "board.json never carries a pinned launch the human did not write, a migrated effort value is validated before it is written, the repair line always says what it did, and doctor's fix for a stale pin is one command",
+  "id": 200,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/init.js",
+    "src/board.js",
+    "src/doctor.js",
+    "test/harness.test.js",
+    "test/profiles.test.js",
+    "docs/harnesses.md"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "hkb init must not re-freeze the expanded launch into board.json; validate a migrated --effort; say what the drop-pin repair kept; doctor's fix says re-run init",
+  "updated_at": "2026-08-29T05:24:31Z"
+}

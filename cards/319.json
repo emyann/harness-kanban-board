@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\n\n`request-changes` is the operator verb whose text is *longest* — it carries a whole review — and it is\nthe only terminal-shaped verb with no file input. `hkb help` says it plainly:\n\n> `finish|block|request-review` also take `--summary-file <p>` `--metadata-file <p>` `--reason-file <p>`, or\n> `--from-stdin` with one JSON object\n\n`request-changes` is in neither list. Hit for real on 2026-09-03 sending a 15-finding review back to\n#315: `hkb request-changes 315 --reason-file <p>` answers `hkb: a reason is required`, so the reason has\nto travel as a positional argument. A worker cannot type that — CLAUDE.md already records that Claude\nCode's worktree sessions refuse heredocs, and a multi-paragraph positional with backticks and `$` in it\nis exactly what a harness vetting the command line word by word rejects. The operator seat hit it from a\nplain interactive shell too and had to spawn `bin/hkb.js` from a `.mjs` with a literal argv array.\n\nValue 4: a rung that is *possible* but tedious is a gap to close, not a workflow to document.\n\n## What\n\n1. `request-changes <n>` accepts `--reason-file <p>` and `--from-stdin` (the `{reason}` key of the same\n   one-object shape the other verbs read), with the positional still working.\n2. The reason becomes optional *only* when one of those supplies it — an empty reason stays exit 2 with\n   the message it has now.\n3. `hkb help` moves `request-changes` into the same sentence as the other three rather than leaving it\n   on the line above.\n4. Check the same gap on any other verb that takes free text: `hkb comment`, `hkb create --body`,\n   `hkb edit --goal`. `create` in particular has the same problem for anything longer than a line, and\n   filing a decomposed card body is the single most common long-text write on the board.\n\n## Done when\n\n- [ ] `hkb request-changes <n> --reason-file <p>` and `... --from-stdin` both land the reason.\n- [ ] A test per input path, plus one asserting a missing reason still exits 2.\n- [ ] Every free-text verb takes a file or stdin, or this card says in one line which does not and why.\n- [ ] `npm run lint && npm test` green.",
+  "closed_at": null,
+  "created_at": "2026-09-03T03:14:51Z",
+  "goal": null,
+  "id": 319,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "request-changes is the only free-text verb with no --reason-file, so a review has to travel as a positional",
+  "updated_at": "2026-09-03T03:14:51Z"
+}

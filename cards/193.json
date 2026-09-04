@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Prerequisite named by the /kanban:groom design (#191). Today `hkb archive` closes the card and leaves every card that was blocked by it pointing at a closed NOT_PLANNED issue — which `computeReady` never counts as done, so those children never promote. The groom plan's supersede rows are therefore handed back as by-hand recipes until this exists.\n\n## What\n\n- `hkb archive <n> --superseded-by <m>`: comment \"Superseded by #m\" on n, for every open child blocked by n add m as a blocker and remove n, then close n as not_planned; one line per edge moved; `--json` lists them. Without `--superseded-by`, `archive` refuses when n has open children and names them (today it silently strands them); `--force` keeps the old behaviour.\n- Pure decision in `src/model.js` (children to move, children that would be stranded); I/O in lifecycle.js.\n\n## Done when\n\n- Fixture: n blocks two open cards → `archive n --superseded-by m` re-links both and closes n; plain `archive n` refuses naming them. `npm run lint && npm test` green.",
+  "closed_at": null,
+  "created_at": "2026-08-29T04:39:56Z",
+  "goal": "A superseded card is archived in one command that comments the pointer, moves its children under the survivor, and refuses when a child would be stranded",
+  "id": 193,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/cli.js",
+    "src/lifecycle.js",
+    "src/model.js",
+    "test/lifecycle.test.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "hkb archive --superseded-by <m>: close as a duplicate with a pointer, re-linking the children it would otherwise strand",
+  "updated_at": "2026-08-29T04:39:56Z"
+}

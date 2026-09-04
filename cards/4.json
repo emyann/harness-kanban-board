@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    3
+  ],
+  "body": "## Why\nThe MVP heartbeat edits the run comment (a content write, 10-min floor). The design calls for a compare-and-swap on the lock ref so heartbeats are free and a reclaim is detected atomically.\n\n## What\n- `hkb heartbeat <n>`: advance `refs/kb/locks/<n>/<k>` to a fresh object using `git push origin <new>:refs/kb/locks/<n>/<k> --force-with-lease=refs/kb/locks/<n>/<k>:<expected>` from the worktree (the expected sha is recorded in the attempt). Rejected lease ⇒ exit 3 `LOCK_LOST`.\n- Fresh object: an empty commit on top of the current lock sha (`git commit-tree` of the same tree) — created locally, not via REST.\n- Keep the run-comment heartbeat as a fallback when `git` push is unavailable (cloud tiers), selected by profile.\n- Dispatcher reclaim reads the ref sha's commit timestamp instead of `heartbeat_at` for Tier A attempts.\n- Update `skills/kanban/SKILL.md` step 3 and `references/protocol.md`.\n\n## Done when\nFake-gh tests cover lease rejection ⇒ LOCK_LOST; a manual round trip on this repo works.",
+  "closed_at": "2026-08-26T07:40:48Z",
+  "created_at": "2026-08-26T04:33:25Z",
+  "goal": null,
+  "id": 4,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/lock.js",
+    "src/lifecycle.js",
+    "skills/kanban/"
+  ],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Ref-CAS heartbeat: LOCK_LOST via git push --force-with-lease on the lock ref",
+  "updated_at": "2026-08-26T07:40:48Z"
+}

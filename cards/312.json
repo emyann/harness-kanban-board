@@ -1,0 +1,39 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    296
+  ],
+  "body": "## Why\n\nhkb's track runner is **prose persuading a model to call a tool with the right arguments**. `trackContext` (`src/track.js`) writes a brief that says \"use the `Agent` tool, `isolation: \"worktree\"`, this prompt\" — and every property of the node that should be configuration is either in that prose or missing from it. #310 is what that costs: the node's model was never in the brief, so five nodes ran on the runner's model while the board said otherwise, and nobody noticed until the transcripts were read.\n\nThe Agent SDK turns that brief into a typed object. `AgentDefinition` (verified against the SDK docs, 2026-09-02, `@anthropic-ai/claude-agent-sdk` 0.3.259) takes per-subagent `description`, `prompt`, `tools`, `disallowedTools`, `model` (`'opus' | 'sonnet' | 'inherit' | <full id>`), `skills`, `mcpServers`, `maxTurns`, `effort`, `permissionMode` and `background`. Every one of those is something a hkb profile or card already wants to say about a node, and every one of them is currently either prose or silently inherited.\n\nThree more things the SDK gives that hkb currently approximates:\n\n- **Real caps.** `maxBudgetUsd` on the query, `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` and `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` in `env`. Today the brief *asks* a runner to cap its fan-out at about four and not to nest; the SDK enforces it.\n- **Hooks as callbacks.** `hooks: Partial<Record<HookEvent, HookCallbackMatcher[]>>` — in-process functions instead of a `--settings` JSON blob carrying a command line that has to resolve `hkb` on PATH. That is the whole `features/hook-install-shapes` problem class, gone: no npx cache path, no nvm drift, no \"this repo's hkb has moved\".\n- **`cwd`.** hkb already makes the worktree itself for `workspace: \"worktree\"` profiles, so owning the checkout and passing `cwd` is *simpler* than the `--worktree` flag it currently has to strip when continuing a PR.\n\n## What\n\n**A fourth runtime adapter, not a replacement.** This card lands `src/runtime/sdk.js` behind the seam #296 builds, selected by a profile `\"mode\": \"sdk\"`. Boards that want the `claude agents` view keep `claude-bg`; boards that want typed orchestration opt in. That is literally \"use the CLI for everything the SDK does not cover\".\n\n1. **Optional dependency.** `@anthropic-ai/claude-agent-sdk` ships 8 platform binaries as `optionalDependencies` plus peers (`zod`, `@anthropic-ai/sdk`, `@modelcontextprotocol/sdk`). It must never be in the path of `npx hkb-cli init` for someone who does not use it — declare it optional (or a documented peer the operator installs), load it with a dynamic `import()` inside the adapter only, and refuse `mode: \"sdk\"` with a message naming the exact install command when it is absent. Value 2 keeps its meaning: nothing is added to the default install.\n2. **The node becomes an `AgentDefinition`.** A pure `agentDefinition(node, cfg, runnerProfile)` in `src/track.js` (or `src/runtime/sdk.js`) that maps what the board already says: `prompt` ← `hkb context <n>`, `tools` ← `effectiveTools(profile, task, cfg)` (the ceiling rule of `concepts/tool-grant-ceiling` applies unchanged), `mcpServers` ← the profile's `mcp`, `model` ← #310's `nodeModel` resolution, `maxTurns`/`effort`/`permissionMode` ← the profile. #310's fix is for the CLI path; on this path the same resolution feeds a typed field instead of a sentence.\n3. **The runner becomes a `query()`.** One call, `agents: {...}` holding one definition per node of the wave, `cwd` the runner's checkout, `maxBudgetUsd` from the profile, the depth and concurrency caps in `env`. The runner still claims each node and still runs one terminal verb per node — **the protocol does not change**, and a board driven this way must read identically to one driven by the CLI. That is the acceptance test.\n4. **Hooks move in-process** for this adapter: `hookStop`, `preToolHook`, `subagentStopHook` become callbacks rather than a `--settings` command line.\n5. **Liveness.** An SDK query is a process hkb owns, so `inspect`/`stop`/`pause` are pid work — the same shape as the `process` adapter, and simpler than the job-record dance `claude-bg` needs.\n\n## What this gives up, and the decision it needs\n\n**The `claude agents` row.** `--bg` is what puts a track in the agent view, and the SDK has no documented equivalent; the docs do not say an SDK session is visible to `claude agents` or answers `claude stop`. One row per track in that view was recorded as a requirement when `--bg` was chosen for `claude`/`claude-track`. Either that requirement is now served by `hkb ps` (ADR-005's board-level read, which lists every running attempt and its runtime state), or `mode: \"sdk\"` is for boards that do not need the view. **Confirm which before building step 3** — everything up to it is useful either way.\n\nAlso to settle while building: whether the SDK's auth path is the operator's existing subscription rather than an API key, since an open-source hkb cannot require the latter. Verify against the current terms, and record the answer in the ADR; if it forces API keys, the adapter stays opt-in and says so at `hkb doctor`.\n\n## Done when\n\n- [ ] `mode: \"sdk\"` is a working profile: a track root runs, its nodes each get an `AgentDefinition` built from the board, and the resulting board state is identical to the same graph run through `claude-bg` (asserted by running the same fixture graph both ways against the fake store).\n- [ ] A node's model, tools and MCP servers on that path come from the card and the profile — the #310 measurement repeated on this adapter shows the node running what the board says.\n- [ ] The SDK is absent from a default `npm i -g hkb-cli`; `mode: \"sdk\"` without it exits 2 naming the install; `npm run smoke` proves the tarball still runs with nothing installed.\n- [ ] hkb's three hooks run as callbacks on this adapter, with the same deny-or-silent contract.\n- [ ] ADR-007 records the hybrid (SDK adapter beside the CLI adapters), the agent-view trade-off and the auth answer; `docs/wiki/features/tracks.md` and `features/harness-profiles` gain the mode.\n\n## Contract\n\nThe protocol is unchanged: same claims, same one terminal verb per node, same run records, same PR per node. This adapter changes *how a session is started and configured*, nothing about what the board means. Do not remove or deprecate the `claude-bg` adapter in this card. Do not make the SDK a hard dependency of the CLI.\n",
+  "closed_at": null,
+  "created_at": "2026-09-03T02:06:50Z",
+  "goal": "mode: sdk runs a track whose nodes carry their own model/tools/mcp from the board, the SDK stays out of a default install, and the board reads identically to the same graph run through claude-bg",
+  "id": 312,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 10800,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/runtime/",
+    "src/track.js",
+    "src/board.js",
+    "src/doctor.js",
+    "package.json",
+    "docs/wiki/decisions/"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "An SDK runtime adapter: a node's model, tools and caps as typed config instead of prose",
+  "updated_at": "2026-09-03T04:00:26Z"
+}

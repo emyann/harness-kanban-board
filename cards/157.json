@@ -1,0 +1,34 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> From the 2026-08-28 Agent SDK evaluation, step 5 — write down the decision so the next contributor reads it instead of re-deriving it.\n\n## Why\n\n\"Zero npm dependencies\" is stated in CLAUDE.md (values 2, Rules), README, `test.yml` and `scripts/smoke-pack.mjs`, and `docs/wiki/wiki.config.yml` reserves `decisions/adr-002-zero-npm-dependencies` for it — but the page was never written, so the rule has no record of *what would justify revisiting it*. The Agent SDK evaluation produced exactly that: measured numbers and explicit triggers.\n\n## What\n\n`docs/wiki/decisions/adr-002-zero-npm-dependencies.md`, status **accepted**, following `docs/wiki/AGENTS.md` and the ADR-004 shape:\n\n- **Context:** the wording already in CLAUDE.md/README; the channels hkb ships through (`npx hkb-cli` — one 211 KB tarball, ~40 ms start; `npm i -g`; the Claude Code plugin copy, which gets no `npm install`; the skill/hooks `init` copies; the Actions templates' `npm i -g` per tick; the smoke's `npm install <tgz>`).\n- **The case that tested it:** `@anthropic-ai/claude-agent-sdk` 0.3.251 — a subprocess wrapper over the same `claude` binary (`--output-format stream-json`), 8 platform optionalDependencies bundling that binary (linux-x64 214 MB), peers zod/@anthropic-ai/sdk/@modelcontextprotocol/sdk (≈238 MB per install, 49 MB with `--omit=optional`), no `--bg`/`--worktree`, child dies with the parent, Commercial Terms with API-key guidance where the unmodified CLI + own subscription is explicitly allowed. Every benefit cited was already a CLI flag (`-p --session-id`, `--settings '<json>'`, `--permission-prompt-tool`, richer `--output-format json`), verified on 2.1.251.\n- **The sanctioned extension seams:** launch arrays in `board.json`, the `gh.js`/`harness.js` transports, `hkb mcp`.\n- **Revisit triggers:** the CLI drops `-p` with `--session-id`/`--settings`/`--permission-prompt-tool`/`--output-format json`; the SDK gains a re-attachable session handle or a `--bg`/`--worktree` equivalent, or ships without the bundled binary; Anthropic states in writing that an OSS CLI may drive a user's own Pro/Max login through the SDK; the `--permission-prompt-tool` experiment fails and the denied-tools ledger shows the two-layer policy is still costing attempts; hkb adopts API-key billing as its default.\n- Link it from `index.md`, mark it written in `wiki.config.yml`, and add the `features/harness-profiles` page the plan lists (the six profiles, modes, and the job-record field table dated to 2.1.251).\n- While there: `.claude-plugin/plugin.json` says `0.1.0` while `package.json` says `0.1.4` — bring it in step and note in `docs/releasing.md` which step bumps it.\n\n## Done when\n\n- `node .repolore/scripts/wiki-check.mjs` reports nothing stale; `index.md` lists ADR-002 and `features/harness-profiles`.\n- The ADR names every trigger above and the evaluation date.\n- `.claude-plugin/plugin.json` version matches `package.json`.",
+  "closed_at": null,
+  "created_at": "2026-08-28T22:48:01Z",
+  "goal": null,
+  "id": 157,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "docs/wiki/",
+    ".claude-plugin/plugin.json",
+    "docs/releasing.md"
+  ],
+  "priority": 4,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "ADR-002 zero npm dependencies: the record, the seams, and what would reopen the Agent SDK question",
+  "updated_at": "2026-08-28T22:48:01Z"
+}

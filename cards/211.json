@@ -1,0 +1,33 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found filing five cards on this board on 2026-09-01, each from a conversation rather than from a plan.\n\n## Why\n\n`hkb create` prints the card and stops:\n\n```\n$ hkb create \"...\" --triage --paths ... --goal \"...\"\n#204 triage (claude) https://github.com/emyann/harness-kanban-board/issues/204\n```\n\nThat is the whole output. The two rungs that come next — `/kanban:specify <n>` to turn a sentence into\nsomething a cold worker can execute, `/kanban:decompose <n>` when it is really several tasks — exist only if\nthe person typing already knows they exist. The most common way a card gets filed is the way these five were:\nmid-conversation, from an idea or a bug someone just hit, with no spec and no thought yet about whether it is\none task. That is exactly the moment the next rung is worth naming, and exactly the moment nobody looks it up.\n\nValue 4: the default path should ask nothing of the human that the tool could work out itself. A rung that is\npossible but requires knowing a command name is a gap to close.\n\n## What\n\n- **`hkb create` names the next rung** in its output, from arithmetic only — no judgement in the CLI:\n  - the body has no `## Why` / `## What` / `## Done when` shape, or is under a small length threshold →\n    `#204 triage — a sentence, not a spec: /kanban:specify 204`\n  - it has the shape → say nothing, the card is already a spec.\n  `specShape(bodyText)` is designed as a pure helper in #191 for exactly this test; build it once, in\n  `src/model.js`, and let both use it.\n- **Do not try to detect \"this is several tasks.\"** That needs a model, and the CLI has none by design. Name\n  `/kanban:decompose` once in the same line as the alternative — a pointer, not a verdict.\n- **One line, suppressed under `--json`** (the JSON gains a `suggests` field instead), and suppressed for a\n  worker: `KB_TASK` set means the card was filed by an agent that has its own instructions.\n- Same treatment for `hkb create --triage` vs without: a card that landed in *ready* with no spec is the more\n  urgent case, not the quieter one, because the next tick will claim it.\n\nIndependent of #161, #204 and #207; it is the same frictionless value applied to the filing step.\n\n## Done when\n\n- [ ] `hkb create` with a one-line body prints the card and names `/kanban:specify <n>`.\n- [ ] A body already carrying the three headings gets no suggestion.\n- [ ] `--json` carries the suggestion as a field and prints no extra line; a worker session gets neither.\n- [ ] `specShape` lives in `src/model.js` with unit tests, and is the only place the test is written.\n- [ ] `npm run lint && npm test` pass.",
+  "closed_at": null,
+  "created_at": "2026-09-01T19:07:16Z",
+  "goal": "hkb create names /kanban:specify when the body has no spec shape and stays quiet when it does, from a pure specShape helper in model.js; --json carries it as a field and a worker session gets neither",
+  "id": 211,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/cli.js",
+    "src/model.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "hkb create prints the card and stops, so the specify and decompose rungs exist only for people who already know them",
+  "updated_at": "2026-09-01T19:07:16Z"
+}

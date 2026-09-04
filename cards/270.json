@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found operating this board on 2026-09-01, decomposing #217 and #223 into two tracks. `hkb merge 255` succeeded\n> while #259's branch was based on #255's head. The squash put the same content on `main` under a different sha,\n> and #259 — plus #260 and #261 stacked above it — needed a relaunch each to reconcile. Three worker sessions\n> for one avoidable merge.\n\n## Why\n\n`mergeDecision` (`src/model.js`, #189) already refuses a merge for every reason that makes the *card* wrong: the\nmode is manual, the card is not in review, there is no open PR, the PR is a draft, no review is recorded, the\nchecks are not green. It has no idea whether the merge is wrong for the *repository*.\n\nA PR whose head branch is another open PR's base is a load-bearing branch. Merging it — especially squashing it,\nwhich is this repo's convention — makes its commits cease to be ancestors of anything, and every PR stacked\nabove it is instantly `CONFLICTING`. Each one then costs a full worker session to merge `origin/main` back in and\nresolve content it never wrote.\n\nThe operator seat cannot reasonably be expected to remember this. It is one GraphQL field away from being\nmechanical, and the seat is exactly where the mistake gets made: `hkb merge` is the verb an `operator` board\nhands to a session, and that session is looking at one card.\n\n**This is not the same as \"do not merge a track node\".** That rule is a workaround for stacked node PRs, and\n#245 removes the stacking — once a track owns `kb/track-<root>`, children base on it and each track sends one PR\nto `main`, where merging a node *into the track branch* is normal and expected. Encoding the workaround would\nbake in a rule its own fix obsoletes. The invariant below is true either way.\n\n## What\n\n- **`hkb merge <n>` refuses when this PR's head branch is the base of another open PR**, naming them: which PRs\n  depend on it and in what order they would have to land. One listing of open PRs answers it — the same read\n  `openPrsByHead` (#234) already makes — so it costs nothing extra on a board that is already doing it.\n- **The refusal names the way through**, per the error rule: merge the dependents first (bottom-up), retarget\n  them onto the default branch, or pass an explicit override. A refusal that only says no is a worse version of\n  the problem.\n- **An override exists and is deliberate.** `--force-base` (name it as you like) for the case where the operator\n  knows the dependents will be retargeted anyway. The point is that the default is safe, not that the case is\n  forbidden.\n- **`autoMergeDecision` gets the same guard.** A board on `merge.mode: \"auto\"` hands the merge to GitHub, which\n  has no idea about stacked PRs either — the guard belongs on the decision, not on the verb.\n- **Pure, in `src/model.js`**, taking the PR list rather than fetching it, so the rule is unit-testable against a\n  fixture without a network round trip.\n\n## Done when\n\n- [ ] `hkb merge <n>` refuses when another open PR is based on this PR's head, naming the dependents and the\n      order they would land in.\n- [ ] The refusal names merging bottom-up, retargeting, and the override.\n- [ ] The override merges anyway and records that it was used.\n- [ ] `auto` mode does not enable GitHub auto-merge on a PR another open PR is based on.\n- [ ] The decision is pure and takes its PR list as an argument, with fixture tests for: no dependents, one\n      dependent, a chain of three, and a dependent that is itself already merged.\n- [ ] `npm run lint && npm test` pass; the review-loop wiki page describes the guard.",
+  "closed_at": null,
+  "created_at": "2026-09-02T00:17:25Z",
+  "goal": "hkb merge refuses when another open PR is based on this PR's head, naming the dependents, the bottom-up order and the override; auto mode gets the same guard; the decision is pure and takes its PR list as an argument with fixture tests for a chain",
+  "id": 270,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/model.js",
+    "src/lifecycle.js",
+    "src/tasks.js",
+    "docs/wiki",
+    "test/merge.test.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "hkb merge will squash a branch another open PR is based on, stranding every PR stacked above it",
+  "updated_at": "2026-09-02T00:17:25Z"
+}

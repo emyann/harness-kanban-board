@@ -1,0 +1,34 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\n\n`hkb groom` (a sibling task) needs every open card's blockers. Today `fetchBoard` deliberately does not fetch\nthem for every card: on a repo where the GraphQL `Issue.blockedBy` field is unavailable it REST-fills blockers\nonly for the lanes the tick actually needs — todo and blocked. A groom report built on that would report\n`no_blockers` for a triage card that has blockers nobody read, which is a **silently wrong answer**, the one\nfailure mode the values forbid.\n\n## What\n\n- **`fetchBoard(ctx, { blockers: 'all' })`** in `src/tasks.js`: on a repo without the GraphQL field, REST-fill\n  blockers for every **open** card, not only todo/blocked. `blockers: true` keeps today's behaviour exactly;\n  `'all'` is the only new value. Boards whose repo *has* the GraphQL field pay nothing either way — the blockers\n  arrive in the one query the tick already makes.\n- **Report the source.** The returned board (or a field the caller can read) says whether blockers came from\n  `graphql` or `rest`, and whether they were filled at all, so a caller can distinguish \"no blockers\" from \"not\n  looked up\". This is what feeds the `unknown_blockers` kind a sibling implements — an empty list on a repo\n  where blockers were never filled must never be reported as `no_blockers`.\n- **A doctor line.** Next to the existing `GraphQL Issue.blockedBy` check in `src/doctor.js`: when the field is\n  absent, say that `hkb groom` will fill blockers with one REST call per open card, so the cost is visible\n  before somebody runs it on a large board.\n\n## Done when\n\n- [ ] `fetchBoard(ctx, { blockers: 'all' })` fills blockers for every open card on a repo with no GraphQL\n      `blockedBy`, verified against the fake-gh double, and `blockers: true` is byte-for-byte today's behaviour.\n- [ ] The result says where blockers came from and whether they were filled.\n- [ ] `hkb doctor` names the REST-fill cost when the GraphQL field is absent.\n- [ ] A repo **with** the GraphQL field makes no extra request for `'all'` — pinned by a test that counts calls.\n- [ ] `npm run lint && npm test` pass. `src/model.js` is not touched by this task.\n\n## Contract\n\nThese are the names, signatures and rules a sibling depends on. Do not invent alternatives; a change here\nbreaks a task you cannot see.\n\n- **The eleven \"Amendments from the adversarial pass\" at the top of #191 override its body wherever they\n  differ.** Read `hkb show 191` first and treat the amendments as the specification. In particular: reuse\n  `computeReady`, `agentsOf` and the walk in `src/track.js` — **do not write `detectCycles`**; `no_goal` is\n  `info` when the body already has a Done-when heading; `broad_path` exists and is `ask`; `overlap_pair.why` is\n  guard-aware.\n- `groomBoard(tasks, { now, caps, pairs = 10, statuses })` is exported from `src/model.js` and takes the raw\n  `fetchBoard` array and nothing else — a later card puts the same function behind `hkb serve`'s snapshot.\n- `GROOM_KINDS` and `GROOM_ACTIONS` are exported from `src/model.js`. Actions are the closed vocabulary\n  `promote · specify · link-under · split · supersede · reprioritise · park · archive`, plus `judge` and `none`.\n- `fetchBoard(ctx, { blockers: 'all' })` REST-fills blockers for **every open card** on a repo without GraphQL\n  `blockedBy`; `blockers: true` keeps today's todo/blocked-only behaviour.\n- The `--json` field names in #191 are **frozen**; later kinds are added to `findings`, never renamed.\n- The CLI never emits the word \"duplicate\". `overlap_pair.why` is \"will serialize under path_overlap\".\n- **`src/dispatch.js` is untouched by this whole track** — the promote step still filters `status === 'todo'`.\n- Nothing in this track writes to the board. `hkb groom` is a read, like `hkb dispatch --dry-run`.",
+  "closed_at": "2026-09-01T20:49:16Z",
+  "created_at": "2026-09-01T20:42:23Z",
+  "goal": "fetchBoard(ctx,{blockers:'all'}) REST-fills blockers for every open card on a repo without GraphQL blockedBy, reports where they came from so an empty list is never mistaken for no blockers, and doctor names the cost; blockers:true is unchanged and a GraphQL repo makes no extra call",
+  "id": 226,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/tasks.js",
+    "src/doctor.js",
+    "test/tasks.test.js"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "fetchBoard blockers all: fill every open card's blockers where GraphQL blockedBy is missing",
+  "updated_at": "2026-09-01T20:49:16Z"
+}

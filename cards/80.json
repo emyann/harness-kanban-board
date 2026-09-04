@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "The v0.1.3 release run (33099663653) succeeded with this annotation on both jobs:\n\n> Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: `actions/checkout@v4`, `actions/setup-node@v4`.\n\nForced today, failing later. The point of fixing it now is that **the templates ship to adopters**: `hkb init --with-actions` writes `templates/actions/*` into their repository, so every adopter inherits our pins and will see the same annotation on their own board — a warning they cannot fix without editing generated files.\n\n**Every site** (14 pins, `actions/checkout@v4` and `actions/setup-node@v4` throughout):\n\n- `.github/workflows/test.yml:10,11` and `:38,39` (the `test` and `smoke` jobs)\n- `.github/workflows/release.yml:41,45` (publish) and `:132` (verify)\n- `.github/workflows/kanban-dispatch.yml:43,44`\n- `.github/workflows/kanban-worker-claude.yml:55,58`\n- `templates/actions/kanban-dispatch.yml:43,44` — **shipped to adopters**\n- `templates/actions/kanban-worker-claude.yml:55,58` — **shipped to adopters**\n\nCurrent latest at the time of writing: `actions/checkout@v7.0.1`, `actions/setup-node@v7.0.0`. Re-check before pinning rather than trusting these numbers, and read each action's migration notes — the major bumps between v4 and v7 carry more than a runtime change, and `setup-node`'s cache and `registry-url` behaviour is load-bearing for the publish job.\n\n**Two tests assert the pinned string** and will fail until they are updated with the workflows — that is the coupling working, not a problem:\n\n- `test/release.test.js:212` — `step('publish', 'actions/setup-node@v4').with['registry-url']` must stay `undefined`. That assertion exists because trusted publishing must not be handed a registry-url; keep the assertion and change only the version in the selector.\n- `test/actions.test.js:148` — `step(doc, 'work', 'actions/checkout@v4')`.\n\n**Do not rename `release.yml`, and do not move its `npm publish` step into another workflow.** The workflow *filename* is part of the trusted-publisher identity on npmjs.com (`docs/releasing.md`); bumping an action version inside the file is safe, restructuring the file is not.\n\n**Verify.** `npm test` green; the next push shows no Node-20 annotation on `test.yml`; `hkb init --with-actions` in a scratch repo generates workflows carrying the new pins. The release path can only be fully proven by the next tag — call that out in the PR rather than claiming it was tested.",
+  "closed_at": "2026-08-27T18:00:03Z",
+  "created_at": "2026-08-27T17:46:30Z",
+  "goal": null,
+  "id": 80,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "GitHub is forcing our v4 actions onto Node 24; bump before it becomes a hard failure",
+  "updated_at": "2026-08-27T18:00:03Z"
+}

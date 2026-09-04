@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> From the review of PR #172 (#164, merged 2026-08-29). One-line fixes; none blocked the merge.\n\n## What\n\n1. `src/up.js` ~221 — the \"not running\" branch of `down` re-reads the pid file and `rmSync`s it unconditionally. Between `processState` and that read a concurrent `hkb up` (or the child's own `claimServePid`/`acquireLoopLock`) can write a fresh live pid, and `down` would drop a live process's claim — the invariant the file header forbids. Guard it: `const f = readPidFile(root, name); if (f.pid && (f.stale || !pidAlive(f.pid))) rmSync(…)`. Test: write a live pid into the file after `processState` was taken (inject the read) and assert the file survives.\n2. `src/up.js` ~122 — `up` leaves the pid file it wrote naming the corpse it just reported as `failed` (observed `serve.pid` holding a dead pid). It verified that pid dead and owns the claim: tidy it there, pid-guarded the same way.\n3. `src/up.js` ~224 — for a stale pid file the human line still says \"hkb up replaces it\" right after `down` removed it; say \"removed\".\n4. `src/model.js` ~973 `deadAtRecheck` returns `{name,pid,log,line}` and `up.js` re-picks three fields; return `{ line, failed: {name,pid,log} }` and add a direct unit test in `test/model.test.js` (CLAUDE.md: pure logic gets a test).\n5. `docs/wiki/features/up-and-down.md`: line anchors drifted (ESRCH ~228-235, tidy ~217-224, `up` ~144-170, `down` ~203-258) and the page is stale on main after the merge — re-verify and re-stamp; add the 300 ms recheck window to Known limits (a child that dies after the recheck is reported started, exit 0).\n\n## Done when\n\n- `down` with a pid file rewritten to a live pid between the state read and the tidy leaves the file in place (test).\n- `up --serve --port 80` leaves no `serve.pid`; `--status` says stopped.\n- `npm run lint && npm test` green; wiki-check shows up-and-down.md fresh.",
+  "closed_at": "2026-08-29T02:46:22Z",
+  "created_at": "2026-08-29T02:12:51Z",
+  "goal": "Neither up nor down ever removes a pid file that names a live process, and the wiki page for up/down is fresh with correct line anchors",
+  "id": 177,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/up.js",
+    "src/model.js",
+    "test/up.test.js",
+    "test/model.test.js",
+    "docs/wiki/features/up-and-down.md"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb down: never drop a pid file without checking the pid is dead; hkb up: tidy the corpse it just reported",
+  "updated_at": "2026-08-29T02:46:22Z"
+}

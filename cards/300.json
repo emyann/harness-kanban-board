@@ -1,0 +1,46 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    299
+  ],
+  "body": "## Why\nThe board-level half of the verbs, and the read that goes with them (`docs/local-first.md` §3 board-level table; §1 items 2 and 5).\n\n## What\n1. The board record gains `paused_at`, `paused_by` (`board()`/`setBoard` on the store; on the GitHub store, `state.json` is the fallback with a doctor note that it is host-local).\n2. `src/dispatch.js`: a paused board's tick runs outbox replay, reconcile, promote and the finished-card reap, and skips the reclaim loop and the claim loop, logging `board paused since …` once per tick.\n3. `src/lifecycle.js`/`src/cli.js`: `hkb pause` (+ every running local attempt via B4, `--keep-workers` skips that), `hkb resume` (only the attempts this host paused, by `paused_by`), `hkb stop` (pause, then `stop <n>` on every running local attempt with `reason: board stop`), `hkb start` (clears the board pause and `suspended` on every card whose reason was `board stop`). `--all`: the verb once per entry of `~/.config/hkb/boards.json` (`loadUserBoards`, `src/board.js`), one line each. `--json`: one object per attempt plus `{ board, paused_since }`.\n4. `hkb ps [--all]` (`src/up.js` beside `statusReport`): the process lines of `up --status`, then `paused since`, then one line per running attempt: number, attempt, runtime, state from `inspect`, paused-since.\n5. `hkb doctor`: a pause older than 24 h is a `!` line naming `hkb resume`.\n6. `skills/kanban/SKILL.md` `/kanban:operate`: the four verbs in \"What is yours\", the `paused`/`resumed`/`stopped`/`suspended` rows in the reaction table, `hkb ps` in the opening report; `README.md` \"Keeping the board running\" gains the verbs.\n\n## Done when\n- [ ] Tests: a paused board's tick promotes and reconciles but claims nothing and reclaims nothing; `stop` then `start` round-trips two running fake attempts and their cards; `--all` over a temp registry of two boards runs both; `ps --json` shape.\n- [ ] `npm run lint && npm test` green; the wiki pages named in `paths` refreshed.\n\n## Contract\nB6 runs beside you and owns `src/serve.js`, `web/index.html`, `src/watch.js`: touch nothing there. The board-pause pill in the web board is B6's; you provide `board().paused_at`.\n\n**Read first:** `docs/local-first.md` (the plan; the sections named below), `docs/wiki/decisions/adr-005-control-plane.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Keep it dependency-free at runtime. Pure logic in\n`src/model.js` with a test. Errors name the fix and carry `.exitCode`. `--json` everywhere. Update the wiki page a\nchange touches (`node .repolore/scripts/wiki-check.mjs` lists what went stale); a new feature gets a new page.\nFinish with `npm run lint && npm test` green, one draft PR, and exactly one terminal verb.\n",
+  "closed_at": null,
+  "created_at": "2026-09-02T23:32:09Z",
+  "goal": "hkb pause/resume/stop/start without a number act on the board (a column on the board row); a paused board tick claims and reclaims nothing but keeps its bookkeeping; --all runs the verb per registry entry; hkb ps lists processes, paused-since and running attempts with runtime state; doctor warns on a pause older than a day; the operate procedure gains the rows",
+  "id": 300,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 7200,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/cli.js",
+    "src/dispatch.js",
+    "src/up.js",
+    "src/lifecycle.js",
+    "src/doctor.js",
+    "src/model.js",
+    "skills/kanban/SKILL.md",
+    "README.md",
+    "test/cli.test.js",
+    "test/dispatch.test.js",
+    "test/up.test.js",
+    "docs/wiki/features/operator-seat.md",
+    "docs/wiki/features/up-and-down.md"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "The board verbs and the cluster flag: hkb pause|resume|stop|start with no card, --all over the registry, hkb ps, the operator rows",
+  "updated_at": "2026-09-03T04:00:19Z"
+}

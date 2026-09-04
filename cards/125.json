@@ -1,0 +1,33 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    121,
+    134
+  ],
+  "body": "> Found while documenting #121, verified on this board and on pipao-v2 on 2026-08-28.\n> **Re-scoped after #115's verify pass shipped PR #135 (`f25bbb8`)**, which fixed the core of this\n> from inside a live worker.\n\n# Goal: hkb's hooks and session recording actually run for the default profile\n\nThis is the root of a track: the verify-and-synthesize pass after #132, #133 and #134. Read them;\ndo not redo them.\n\n## Where things stand\n\n- **Landed in #135:** the Stop hook derives the attempt from the `kb-<n>-<k>` worktree; the terminal\n  verb records `session_id`/`transcript_path`; `hkb stats` prices a `claude-bg` attempt from its\n  transcript (`~$6.64 estimated` was the first real number). README/docs updated.\n- **#132** — verb-less attempts (crash/timeout/violation) get their session from the dispatcher.\n- **#133** — a human decides whether hkb's PreToolUse policy becomes live on `claude-bg`; if (b), it\n  resolves the profile once per attempt.\n- **#134** — `hkb doctor` says when a profile's recording or enforcement is inert.\n\n## What to do\n\n1. Confirm on a fresh `claude-bg` attempt: session fields on the row, a nudge trail, a price.\n2. Kill one deliberately (or observe a timeout) and confirm #132 stamped it anyway.\n3. **Settle the #112 question with one live test**: from a real worker, run a terminal verb whose\n   `--from-stdin` heredoc contains `|`, `;`, `&&`. If Claude Code's native allowlist denies it, that\n   is what the pilot hit and #124 did not fix it — file it with the exact denial text. If it passes,\n   say so. Nothing on the board has answered this yet.\n4. `hkb doctor` ok here; warns on a fixture board.\n5. `npm run lint && npm test`; smoke if package-read contents changed.\n\nAny seam between the four PRs: fixed here or filed. Complete with numbers, not a summary of the plan.\n",
+  "closed_at": "2026-08-28T17:24:02Z",
+  "created_at": "2026-08-28T15:51:09Z",
+  "goal": "the Stop hook fires for claude-bg workers, or doctor says it cannot",
+  "id": 125,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 6,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "A claude --bg worker never sees KB_TASK, so its Stop hook records nothing and never nudges",
+  "updated_at": "2026-08-28T17:24:02Z"
+}

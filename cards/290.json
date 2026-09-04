@@ -1,0 +1,43 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    289
+  ],
+  "body": "<!-- kb: {\"priority\":2} -->\n## Why\nADR-006: the store becomes local and single-host, and a dispatcher in GitHub Actions cannot read it. The maintainer never used it. Deleting it now means the runtime seam that follows (track B) has three adapters to write, not four (`docs/local-first.md` §1 item 6, §7).\n\n## What\nDelete, do not stub:\n- `templates/actions/` and `actionsFiles` / `--with-actions` in `src/init.js` (an unknown-flag error that says the runner was removed in ADR-006 and names `hkb up` as the way to keep a board moving).\n- The `claude-action` profile in `DEFAULT_PROFILES` (`src/board.js`), and `mode: 'trigger'` everywhere: the trigger tail of `spawnWorker`, the `remote` branch of the reclaim loop and every `a.remote` read in `src/dispatch.js`; `loadBoard` should refuse a board.json that still names `mode: \"trigger\"` with a message that says so.\n- The doctor checks about the workflows and the Actions secrets in `src/doctor.js`; `test/actions.test.js`.\n- `README.md` \"Runs when the laptop is closed\" and every mention of `claude-action`; the Actions section of `docs/harnesses.md`; the \"Actions runner\" mentions in `docs/wiki/` pages (`architecture/overview.md`, `features/up-and-down.md`, `concepts/worker-identity.md`, `decisions/adr-004-roles-and-adoption.md` is a record and stays as written).\nKeep: `--profiles` on `hkb dispatch` (a host says which profiles it launches), `manual` attempts and their heartbeat-only liveness, `heartbeat: comment` (a later card removes it with the GitHub store).\n\n## Done when\n- [ ] `grep -rn \"claude-action\\|kanban-dispatch\\|kanban-worker\\|with-actions\\|'trigger'\\|\\.remote\\b\" src bin templates skills README.md docs --include=*.js --include=*.md --include=*.yml` returns nothing outside `docs/EVALUATION.md`, `docs/status.md`, `docs/wiki/log.md` and ADR-004/005/006 (history stays).\n- [ ] `hkb init --with-actions` exits 2 with a message naming ADR-006.\n- [ ] `npm run lint && npm test` green; `node .repolore/scripts/wiki-check.mjs` reports nothing stale.\n\n## Contract\nDo not touch `src/tasks.js` or `src/lock.js` beyond removing dead imports: the next card (A3) moves them. Do not rename anything in `spawnWorker`'s signature.\n\n**Read first:** `docs/local-first.md` (the plan; the sections named below), `docs/wiki/decisions/adr-005-control-plane.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Keep it dependency-free at runtime. Pure logic in\n`src/model.js` with a test. Errors name the fix and carry `.exitCode`. `--json` everywhere. Update the wiki page a\nchange touches (`node .repolore/scripts/wiki-check.mjs` lists what went stale); a new feature gets a new page.\nFinish with `npm run lint && npm test` green, one draft PR, and exactly one terminal verb.",
+  "closed_at": "2026-09-03T01:58:33Z",
+  "created_at": "2026-09-02T23:31:51Z",
+  "goal": "no file references kanban-dispatch.yml, claude-action, mode trigger or a remote attempt; init --with-actions is an unknown flag with a message; tests green",
+  "id": 290,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 7200,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "templates/actions/",
+    "src/init.js",
+    "src/board.js",
+    "src/dispatch.js",
+    "src/doctor.js",
+    "src/model.js",
+    "docs/harnesses.md",
+    "README.md",
+    "test/actions.test.js",
+    "docs/wiki/"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Remove the GitHub Actions runner: templates, claude-action, trigger mode, remote liveness",
+  "updated_at": "2026-09-03T01:58:33Z"
+}

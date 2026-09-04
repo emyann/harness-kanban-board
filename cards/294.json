@@ -1,0 +1,50 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    292,
+    293,
+    315
+  ],
+  "body": "## Why\nA4 and A5 are two halves; this card makes them one store and the default (`docs/local-first.md` §6.1–6.3, §1 items 8–9, §7 second paragraph for what gc loses).\n\n## What\n1. `src/store/local.js`: `LocalStore` composing `GitTier` (A4) and `Index` (A5): on `open()`, if the index's `tip_sha` ≠ `refs/heads/kb-board`, `readTree()` → `load()`. Durable methods: `commit` first, then the index, then `wake()`. Live methods: index only.\n2. `src/store/index.js`: `openStore(ctx)` picks the local store when `refs/heads/kb-board` exists (or `board.json.store === \"local\"`), the GitHub one otherwise (it stays until track C). `hkb init` creates a **local** board by default; `hkb init --store github` keeps the old behaviour for now.\n3. `hkb init --import` (the flag exists: it imports open issues into triage) grows into the migration when the checkout has a GitHub board: every open card and every closed card of the last 90 days, `id = issue number`, `board.json.next_id = max + 1`, the run record from `loadRun` per card (budget: one paginated comments read per card, printed as progress), results from the result comments, blockers from `blockedBy`, then the one-time deletion of `refs/kb/locks/*` on origin and the local beat chains. Re-running `init` never touches an existing branch or index. Print what was imported.\n4. `hkb sync`: `git push <remote> kb-board` and `git fetch` + fast-forward of the local ref; refuse a non-fast-forward with the one-writer explanation. The loop calls it after a tick that made durable writes, at most once a minute, silent when offline; `board.json.settings.sync.push: false` turns it off; `hkb init` prints one line saying the branch will be pushed.\n5. The owning-host guard: `hkb dispatch`, `hkb claim` and every mutating verb refuse on a host ≠ `board.host` with exit 2 naming `hkb init --take-over` (which rewrites `board.host` and is refused while the old host's dispatcher pid file is fresh on the branch's `board.json`… keep it simple: refuse when `paused_by`/pid data says the other host is live, else take over).\n6. `hkb doctor`: the mount probe (refuse an index on 9p/NFS: read `/proc/mounts` for the index path's filesystem type, warn on unknown), the branch present and fast-forwardable, the index tip matching.\n7. `hkb gc` on a local board: skip the duplicate-run-comment sweep and the beat-chain sweep; keep worktrees, branches and old files.\n8. `README.md`: the \"How it works\" bullets and \"Local state\" section for the local store; a short \"Sharing a board\" paragraph (clone → read-only; `--take-over`).\n\n## Done when\n- [ ] `test/store.test.js` green with the **local** driver registered for the full suite.\n- [ ] `test/store-local.test.js`: a scratch repo with a bare remote: `init`, `create`, `claim` (manual), `finish`, `sync`; a second clone opens read-only and lists the same cards; a third host name is refused with the take-over line.\n- [ ] `hkb init --import` on a copy of this repo's board (use `test/fake-gh.js` seeded from `hkb list --all --json` for the test; do **not** migrate this repo's live board — track C does that) produces cards with matching ids, statuses and run records.\n- [ ] `npm run lint && npm test` green; wiki: `features/up-and-down.md` (sync) and `features/web-board.md` (read-only clone) refreshed.\n\n## Contract\n`openStore(ctx)` is the only place that decides which store a board uses. Method names of §6.4. This repo's own board stays on GitHub until track C.\n\n**Read first:** `docs/local-first.md` (the plan; the sections named below), `docs/wiki/decisions/adr-005-control-plane.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Keep it dependency-free at runtime. Pure logic in\n`src/model.js` with a test. Errors name the fix and carry `.exitCode`. `--json` everywhere. Update the wiki page a\nchange touches (`node .repolore/scripts/wiki-check.mjs` lists what went stale); a new feature gets a new page.\nFinish with `npm run lint && npm test` green, one draft PR, and exactly one terminal verb.\n",
+  "closed_at": "2026-09-03T07:16:35Z",
+  "created_at": "2026-09-02T23:31:58Z",
+  "goal": "a new board is created on the local store by default; hkb init --import moves an existing GitHub board onto it (id = issue number, run records column for column) and deletes the leftover lock refs; hkb sync pushes/fast-forwards kb-board; dispatch/claim refuse on a host that is not board.host; doctor probes the mount and the branch; gc no longer sweeps comments or beat chains on a local board",
+  "id": 294,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 10800,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/store/index.js",
+    "src/store/local.js",
+    "src/init.js",
+    "src/cli.js",
+    "src/doctor.js",
+    "src/gc.js",
+    "src/board.js",
+    "src/dispatch.js",
+    "src/lifecycle.js",
+    "test/store-local.test.js",
+    "test/init.test.js",
+    "test/doctor.test.js",
+    "test/gc.test.js",
+    "README.md",
+    "docs/wiki/"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "The local store as the default: open() composes the two tiers, hkb init --import migrates a GitHub board, hkb sync, the owning-host guard, doctor probes, gc",
+  "updated_at": "2026-09-03T07:16:35Z"
+}

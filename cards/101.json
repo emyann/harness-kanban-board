@@ -1,0 +1,33 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "Part of #98.\n\n## Why\n\n`serveContexts` runs once, while the server boots (`src/serve.js:128`, called from `startServer` at\n:317). #96 documented the consequence — a change to the board list needs `hkb serve` restarted. Once\n`hkb init` registers checkouts automatically, that restart is the last manual step left: set up a repo\nwhile the server is up and it still will not appear. Fixing registration without this one just trades\n\"edit a JSON file\" for \"bounce the server\".\n\n## What\n\nMake the served board set live.\n\n- Re-resolve the user-level list on a cadence — once per poll interval is right, and it costs no\n  GitHub call: `loadUserBoards` is a local file read.\n- A board that appeared gets added and starts being polled. A board that vanished from the list stops\n  being served and its cache is dropped.\n- **Boards that are still in the list keep their existing state** — their `boardState` closure, cached\n  cards, `generation` counter and detail cache. A reload must never blank a working board or force a\n  refetch of everything; that is the difference between this and just restarting.\n- Log a one-liner when the set actually changes. A stale entry already logs \"skipping …\" — make sure it\n  logs once when it appears, not on every poll forever.\n- `boards`, `byKey` and `keyList()` at src/serve.js:317-319 are `const` and captured by every handler.\n  They have to become re-derivable without tearing the handlers off their bindings.\n\n## Done when\n\n`npm run lint && npm test` is green and `test/serve.test.js` covers, using the existing temp\n`KB_CONFIG_HOME` harness at test/serve.test.js:157:\n\n- a board added to `boards.json` after the server started is served, without a restart;\n- a board removed from the list stops being served;\n- a board present before and after a reload keeps its cached cards (assert no refetch);\n- a stale entry is logged once across several reloads, not once per poll;\n- `--repos` is unaffected: an explicit set does not reload.\n\n## Contract\n\n- **`--repos` stays static.** It is an explicit set the human typed for this run; only the user-level\n  list is live. `serveContexts`' existing \"explicit wins\" behaviour must not change.\n- Keep board identity coming from `keyBoards` — stable `key` per `repo#board` is what makes preserving\n  a board's cache across a reload possible. Do not renumber or re-key boards on reload.\n- Touch only `src/serve.js` and `test/serve.test.js`. Do not change `loadUserBoards`, `expandHome` or\n  `userBoardsFile` in `src/board.js` — a sibling is adding a writer next to them.",
+  "closed_at": "2026-08-28T03:41:21Z",
+  "created_at": "2026-08-28T03:31:25Z",
+  "goal": "a board added to the list appears on a running hkb serve without a restart",
+  "id": 101,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/serve.js",
+    "test/serve.test.js"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb serve picks up boards.json changes while it runs",
+  "updated_at": "2026-08-28T03:41:21Z"
+}

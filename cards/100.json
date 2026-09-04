@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    99
+  ],
+  "body": "Part of #98.\n\n## Why\n\nThe manual step is the whole complaint: today you `hkb init` a repo, start its dispatcher, and the\nboard is still invisible to `hkb serve` until a human hand-edits `~/.config/hkb/boards.json`.\n\n## What\n\nAt the end of a successful `hkb init`, register the checkout that was just set up by calling\n`registerUserBoard(root, board)` from `src/board.js`.\n\n- **Idempotent** — the helper already handles it; a second `hkb init` in the same checkout must not\n  add a second entry.\n- **Never silent.** Print one line saying what happened and where, e.g.\n  `registered this checkout in ~/.config/hkb/boards.json — hkb serve will show it` or\n  `already listed in ~/.config/hkb/boards.json`. This line is the disclosure that init wrote a file\n  outside the repo, so it is not optional.\n- **Works offline.** `hkb init --no-labels --repo owner/name` writes every local file and sends\n  nothing; registration is a local write, so it must still happen on that path.\n- **Not fatal.** If the list cannot be written (unwritable config dir, malformed existing file), say\n  so and carry on — a failed registration must never fail an otherwise good `hkb init`.\n- `--json` gains a stable field: `registered: { file, added }`.\n\nThere is deliberately **no `--no-register` flag**. The default path asks nothing of the human, and the\nprinted line is how they find out.\n\n## Done when\n\n`npm run lint && npm test` is green and `test/init.test.js` covers, under a temp `KB_CONFIG_HOME`:\n\n- a fresh `hkb init` adds exactly one entry pointing at the new checkout;\n- a second `hkb init` in the same checkout leaves the list unchanged and says \"already listed\";\n- the offline `--no-labels --repo owner/name` path still registers;\n- an unwritable/malformed list produces a warning and exit 0, not a failed init;\n- the human line and the `--json` `registered` field are both asserted.\n\n## Contract\n\n- Call `registerUserBoard(root, board = null, file = userBoardsFile())` from `src/board.js` and use its\n  `{ added, file, entries }` result — do not re-implement merging or writing in `src/init.js`.\n- The `--json` field is exactly `registered: { file, added }`.\n- Touch only `src/init.js` and `test/init.test.js`. The registry itself and `src/serve.js` belong to\n  siblings; changing them here will collide.",
+  "closed_at": "2026-08-28T03:51:42Z",
+  "created_at": "2026-08-28T03:31:24Z",
+  "goal": "hkb init in a new checkout makes it appear on hkb serve with no hand-edited config",
+  "id": 100,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/init.js",
+    "test/init.test.js"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb init registers the checkout it just set up",
+  "updated_at": "2026-08-28T03:51:42Z"
+}

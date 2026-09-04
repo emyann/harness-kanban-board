@@ -1,0 +1,32 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    125
+  ],
+  "body": "Found by #125's verify pass, on this board, 2026-08-28.\n\n`hkb dispatch --loop 60` imports its modules once, at startup, and then ticks for hours. The global\n`hkb` is a symlink into the checkout, so upgrading hkb — a merge to `main`, a `git pull`, an\n`npm i -g` — changes the code on disk and changes nothing about the loop already running. Every\nbehaviour added since that process started is inert until a human notices and restarts it.\n\n## Evidence\n\n#137 (`69bf76a`, \"Record a background worker's session from the tick\") merged at 12:46. The loop that\nlaunched attempt #125-1 at 13:02 had been running since **06:13**. Twenty minutes and twenty ticks\nlater, #125-1 still carried no `session_id` and no `transcript_path`, and neither did any of the 10\n`protocol_violation`, 5 `timed_out` or 2 `crashed` rows #137 exists to stamp. Across all 89 attempts\non the board the only three with session fields are the three whose *worker* ran a terminal verb\nafter #135 merged — the `src/lifecycle.js` path, which runs in a fresh process every time.\n\nSo #137 is correct code that has never executed here, and nothing says so. `hkb doctor`'s new\n`profile claude sessions` check (#134) reports `session recorded on 3/9 that filed a terminal verb`\n— an ok line — because it asks whether *verbs* are stamping, which they are.\n\n## Options\n\n1. **The loop gives itself up.** Exit code 4 already means \"the dispatcher loop gave itself up for a\n   supervisor to restart\", and `docs/wiki` and `README` already document a supervisor as the thing\n   that restarts it. A tick that notices its own entry point has a newer mtime (or a different\n   `packageVersion()`) than the one it loaded can exit 4 with `hkb: this loop is running <old>, the\n   installed hkb is <new> — restarting`. Cheapest, and it self-heals on a supervised board.\n2. **`hkb doctor` says it.** One line: the running loop's start time against the installed hkb's\n   mtime. Honest, but the human still has to act.\n\n(1) matches the existing ladder; (2) is a fallback for an unsupervised laptop loop. Either way the\nrule is the same as #134's: a mechanism that cannot run should say so rather than read as ok.\n\n## Done when\n\n- A loop older than the hkb it would load either restarts itself or is reported.\n- A board where the loop is current is unchanged, and pays nothing per tick for the check.\n",
+  "closed_at": "2026-09-01T21:45:40Z",
+  "created_at": "2026-08-28T17:17:54Z",
+  "goal": null,
+  "id": 140,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "A dispatch --loop keeps the code it started with, so an upgrade never reaches it",
+  "updated_at": "2026-09-01T21:45:40Z"
+}

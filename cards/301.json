@@ -1,0 +1,39 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    299
+  ],
+  "body": "## Why\nEvery limit of the browser board today is GitHub as the store (`docs/local-first.md` §1 item 10, the table under \"The visual board\" in the study, §6.3 for the cursor and the wake).\n\n## What\n1. `src/serve.js`: `GET /api/boards/:key/events` as an SSE stream: a one-second cursor over `store.events({ after })` on the read-only connection; `web/index.html` opens it when `/api/board` says the store has events, and keeps today's poll otherwise (no behaviour change on the GitHub store).\n2. Rank: `tasks.rank` (a durable field: a commit on the local store; `kb.rank` in the body block on GitHub); `POST /api/tasks/:n/rank { after }`; drag inside a lane reorders; the lane sorts by `rank, priority desc, number` — priority stays the dispatcher's ruler.\n3. Timeline: the drawer lists the card's events (and its attempts, as today); `GET /api/tasks/:n/events`.\n4. Reopen: a closed card gets a \"reopen\" action through `reopenTask` (`runVerb`), replacing the \"reopen on GitHub\" text.\n5. Quick-add: a box at the top of the board, `POST /api/boards/:key/tasks { title }` → `createTask` in triage.\n6. The header: the dispatcher dot as today, plus a \"paused since\" pill from `board().paused_at` (B5 provides the field; read it defensively).\n7. `src/watch.js`: when `store.capabilities().events`, `follow()` tails the cursor (keep `parseKinds`, `matchesKinds`, `formatEvent`, `sortEvents`; replace `watchSources`/`tailSources`/`pollSource` for that path); `--since` becomes a floor on the id. The GitHub path stays as it is.\n\n## Done when\n- [ ] `test/serve.test.js`: with the fake store reporting events, the stream emits an event within one tick of a verb; without events, the poll path is unchanged; rank round-trips; quick-add creates a triage card; reopen works.\n- [ ] `test/watch.test.js`: the cursor path emits the same kinds as the poll path for the same transitions.\n- [ ] `npm run lint && npm test` green; `docs/wiki/features/web-board.md` refreshed.\n\n## Contract\nB5 runs beside you and owns `src/cli.js`, `src/dispatch.js`, `src/up.js`, `src/lifecycle.js`: touch nothing there. Use the store interface only (§6.4); never read the index or the branch directly from `serve.js`.\n\n**Read first:** `docs/local-first.md` (the plan; the sections named below), `docs/wiki/decisions/adr-005-control-plane.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Keep it dependency-free at runtime. Pure logic in\n`src/model.js` with a test. Errors name the fix and carry `.exitCode`. `--json` everywhere. Update the wiki page a\nchange touches (`node .repolore/scripts/wiki-check.mjs` lists what went stale); a new feature gets a new page.\nFinish with `npm run lint && npm test` green, one draft PR, and exactly one terminal verb.\n",
+  "closed_at": null,
+  "created_at": "2026-09-02T23:32:11Z",
+  "goal": "on a store with events, the browser board holds one server-sent-events stream fed by a one-second cursor over events.id and falls back to today's poll on the GitHub store; cards can be reordered inside a lane (rank); the drawer shows a timeline; a closed card can be reopened; a quick-add box files a triage card; hkb watch tails the events cursor when the store has one",
+  "id": 301,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 10800,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/serve.js",
+    "web/index.html",
+    "src/watch.js",
+    "test/serve.test.js",
+    "test/watch.test.js",
+    "docs/wiki/features/web-board.md"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "The live web board: the events stream, rank and reorder, the timeline, reopen, the quick-add inbox; hkb watch on the events cursor",
+  "updated_at": "2026-09-03T04:00:20Z"
+}

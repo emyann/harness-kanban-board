@@ -1,0 +1,38 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> From the review of PR #186 (#182, merged 2026-08-29). Both halves were in #182's Done-when / Contract and did not ship; neither regresses main.\n\n## What\n\n1. **`hkb init` repairs a pinned launch** (`src/init.js` `boardProfiles` ~719, `init` ~880): today, over a board whose `claude` launch is pinned without `{hook_settings}`, init re-writes the file, expands the profiles (adds `\"effort\": null`), keeps the broken pin and says nothing. Do what doctor's fix text says: insert `{hook_settings}` right after the `--disallowedTools` group and print one line per profile — `inserted \"{hook_settings}\" after --disallowedTools in the claude launch` — or, when the pin adds nothing but `--model`/`--effort`, drop it, move those into the profile fields, and say so. Never silent. Test: a pinned scratch board → init output names the insertion; second run says nothing.\n2. **Refuse `effort` where the harness has no flag** (`src/board.js` `loadBoard` validation ~410): `\"effort\": \"high\"` on `codex` or `copilot-cli` renders `… --effort high <PROMPT>` (measured) and the first spawn dies on the CLI's own error. Refuse at load time — exit 2, `profile \"codex\" sets effort, but its harness (codex) takes no --effort flag; remove it` — for any profile whose `launch[0]` is not `claude`; `claude-action` accepted and documented as ignored (or plumbed into `claude_args` in `templates/actions/kanban-worker-claude.yml`, which is hand-written today and carries no effort).\n3. **One test for the wiring**: `spawnWorker` (`src/dispatch.js` ~147, `effort: profile.effort || ''`) has none — dropping the token passes 815/815. The codex dry-run test at `test/harness.test.js` ~445 is the template.\n4. `docs/harnesses.md` ~38-51: say which placeholders a pinned claude launch must carry (`{hook_settings}`, `{allowed_tools}`, `{model_args}`, `{prompt}`) and that doctor checks `{hook_settings}`.\n5. Wiki: re-stamp `operator-seat`, `review-loop`, `up-and-down`, `web-board` (stale from #186's model.js/board.js/dispatch.js edits; no claim changes).\n\n## Done when\n\n- Scratch board with a pinned launch lacking `{hook_settings}` → `hkb init` prints the insertion line and doctor is clean afterwards; re-run is silent.\n- `\"effort\": \"high\"` on a codex profile → exit 2 with the message above; on claude → `--effort high` rendered (test through `spawnWorker`).\n- `npm run lint && npm test` green; `npm run smoke` (init output changed).",
+  "closed_at": "2026-08-29T05:24:42Z",
+  "created_at": "2026-08-29T04:26:41Z",
+  "goal": "A pinned claude launch that lacks a placeholder is repaired by hkb init with one line saying what it inserted, an effort on a codex/copilot profile is refused at load time naming the fix, and spawnWorker has a test that pins the --effort token",
+  "id": 188,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/init.js",
+    "src/board.js",
+    "src/dispatch.js",
+    "src/doctor.js",
+    "docs/harnesses.md",
+    "test/harness.test.js",
+    "test/profiles.test.js"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb init applies the launch-hooks fix and says so; effort is refused on profiles whose harness has no such flag",
+  "updated_at": "2026-08-29T05:24:42Z"
+}

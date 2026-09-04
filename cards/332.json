@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\n\nAn attempt that dies **before** it opens its PR has no automatic path back to its own work, even though\nthe work is sitting on a branch hkb named itself.\n\nHit on #304, 2026-09-03. Attempt 1 ran about an hour, made three good commits on `worktree-kb-304-1`,\nand was reclaimed when its Claude session daemon died (`control.sock` ENOENT) — before opening a PR. The\ntick was right to reclaim it. But hkb's continuation keys on an **open PR**: `continues_pr` is set when\nthe dispatcher finds one for the card, and the worker brief then says \"continue it\". With no PR there was\nnothing to continue, so attempt 2 was dispatched to start from `main` and would have redone the hour.\n\nWhat actually saved it was manual: the operator pushed the branch, committed the 13 uncommitted files as a\nlabelled recovery commit, and wrote a note on the card telling the next attempt where to look. That worked\n— attempt 3 continued from it and reported the recovered WIP was accurate — but none of it is a mechanism.\n\nThe information needed was all present and machine-readable the whole time: the branch is\n`worktree-kb-<n>-<k>` (or `kb-<n>-<k>`), hkb generates that name itself, and `taskBranchRe` already exists\nto match it.\n\n## What\n\n1. When the dispatcher builds a worker brief for attempt `k+1` and finds **no open PR**, look for a branch\n   matching this card's naming convention that has commits the default branch does not. If there is one,\n   say so in the brief the way `continues_pr` does: which branch, how many commits ahead, and that the\n   attempt should continue rather than restart.\n2. Prefer the newest such branch when several attempts left one; name them all when it is ambiguous rather\n   than guessing.\n3. A branch that exists only locally is worth naming too — but the brief must say it is unpushed, because\n   a fresh worktree cannot see it. (Deciding whether hkb should *push* an abandoned attempt's branch is\n   part of this card: it makes the work durable, and it also puts commits on the remote that no PR\n   explains. Argue it either way on the card.)\n4. `hkb show <n>` and `hkb log <n>` mention an orphaned branch, since the operator is the one who\n   currently has to notice.\n\n## Done when\n\n- [ ] An attempt killed after committing but before opening a PR leaves a branch that the next attempt's\n      brief names, with its commit count.\n- [ ] The brief distinguishes \"continue this PR\" from \"continue this branch, no PR yet\".\n- [ ] Tests for: no branch, one branch, several branches, and a branch already merged into the default\n      branch (which must NOT be offered).\n- [ ] `npm run lint && npm test` green.\n\n## Contract\n\nDo not change what happens when a PR *does* exist — that path works. Do not force-push or rewrite any\nbranch. Keep `src/gh.js`/`src/forge.js` as the only places that reach the forge.",
+  "closed_at": null,
+  "created_at": "2026-09-03T11:19:49Z",
+  "goal": null,
+  "id": 332,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "An attempt that dies before opening its PR loses its commits: continuation keys on the PR, not the branch",
+  "updated_at": "2026-09-03T11:19:49Z"
+}

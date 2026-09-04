@@ -1,0 +1,42 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Operator observation, 2026-08-29. The human delegated merging to the operator session in conversation (\"we ain't on a manual board\"). hkb has no way to record that: `dispatch.merge.mode` is `manual` (human clicks) or `auto` (GitHub merges on green), and the /kanban:operate procedure reads `manual` as \"hand every PR back\". So the next operator session — or this one after a restart — will refuse to merge and ask again, and #185's guard default, keyed on `merge.mode`, cannot see the real policy either.\n\n## Why\n\nThe seats model (README) says the approvals stay with the human — and they do: the human is approving a *class* of merges, under a condition, once. That is board policy, and board policy lives in `.kanban/board.json`, where doctor prints it and the skill reads it. A delegation that lives only in a chat transcript is a seat the tool cannot see.\n\n## What\n\n1. **`dispatch.merge.mode: \"operator\"`** (`src/board.js` schema + `loadBoard` validation, pure `mergePolicy` in `src/model.js`): a third value. Meaning: a session driving the operator seat may merge a card's PR **only when** the card carries a review on it — a `review_requested` row naming a reviewer, or a result/comment written by the operator session that names what was checked (tests run, Done-when items verified). Without that, the PR is handed back exactly as under `manual`. Optional `merge.require`: `{ checks: true, review_comment: true }` — defaults on.\n2. **The record**: a merge done under `operator` leaves one comment on the card (`**Merged by the operator seat** — review: <link>, checks: green, method: merge`) and the attempt row gets `merged_by: \"operator\"`; `hkb log <n>` shows it. `hkb merge <n>` is the verb (a thin wrapper over `gh pr merge` that enforces the condition and writes the record) so the policy is enforced by code, not remembered by prose.\n3. **Readers**: `/kanban:operate`'s `review` row becomes three-way — `manual` → hand back; `operator` → review, then `hkb merge`; `auto` → GitHub's. `hkb doctor` prints the effective mode and, for `operator`, the condition. The web board's review column shows the mode. #185's guard default treats `operator` like `manual` (`off`) unless set.\n4. **Docs**: protocol.md merging row; README seats section (\"the approvals stay with the human — including the approval to delegate them, written down\"); `docs/harnesses.md` if it mentions merge policy.\n5. **This board**: set `\"merge\": { \"mode\": \"operator\" }` in `.kanban/board.json` in the PR — the human already said so; the card is where it gets written down.\n\n## Done when\n\n- With `operator` set, `hkb merge <n>` on a card with a review comment merges and records; on a card without one it refuses naming the condition; with `manual` it refuses naming the mode.\n- `test/skill.test.js` asserts the operate section names all three modes; `hkb doctor` line covered in `test/profiles.test.js` (or wherever mergePolicy is tested).\n- `npm run lint && npm test` green; `npm run smoke` if init output changes.\n\n## Contract\n\n- `auto` and `manual` unchanged. Never merge without the recorded review; never on a red check.\n- Board policy is still the human's: nothing here flips a board to `operator` except a human commit to board.json.",
+  "closed_at": "2026-09-01T20:40:23Z",
+  "created_at": "2026-08-29T04:28:23Z",
+  "goal": "A board can say the operator session merges, under a stated condition (a review on the card), and every reader — the operate skill, doctor, the web board — behaves accordingly, so a delegation survives the session that received it",
+  "id": 189,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/board.js",
+    "src/model.js",
+    "src/lifecycle.js",
+    "src/cli.js",
+    "src/doctor.js",
+    "skills/kanban/SKILL.md",
+    "skills/kanban/references/protocol.md",
+    "README.md",
+    "docs/harnesses.md",
+    "test/profiles.test.js",
+    "test/skill.test.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "dispatch.merge.mode \"operator\": the operator seat merges after a review is on the card — the delegation is board policy, not a sentence in a chat",
+  "updated_at": "2026-09-01T20:40:23Z"
+}

@@ -1,0 +1,40 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> From the review of PR #160 (#153, merged 2026-08-28). The guard exemption, the worktree-on-PR-branch and the continuation brief are correct and tested; these are the gaps the review found, none of which blocked the merge.\n\n## What\n\n1. **Fast-forward the continued branch** (`src/board.js` ~246, `worktreeOnBranch`): `git worktree add <dir> <branch>` reuses the *local* branch as-is; the fetch updates `origin/<branch>` but nothing fast-forwards. Reproduced: one commit pushed to the PR branch by a human → the continuation checkout is one behind and its plain `git push` is rejected non-fast-forward, contradicting the brief (\"an ordinary `git push` updates the PR\"). After the add, `git -C <dir> merge --ff-only origin/<branch>` (best effort); if the local branch cannot fast-forward, fall back to the recipe block and say why in the attempt row.\n2. **Skip the checkout for trigger-mode profiles** (`src/dispatch.js` ~108): for `claude-action` the Actions dispatcher creates the worktree in its own ephemeral checkout, records `continues_branch` and logs \"continuing PR on <branch>\", while the real worker runs elsewhere on a fresh `actions/checkout` — the run record lies by protocol.md's own definition. `profile.mode === 'trigger'` → no worktree, `continues_pr` only.\n3. **The reviewer's note reaches the worker whole.** `src/lifecycle.js` ~345 slices the reason to 400 chars on the attempt row, and `src/context.js` ~8 filters the `**Changes requested**` comment out of the brief's Comments section — so a relaunched worker sees the review cut mid-sentence (live #146: items 2 and 3 of its review never reach the brief). Either stop truncating the reviewer row, or render the full comment inside the continuation block. Test with a 1,500-char reason.\n4. **Wiki**: `features/web-board.md` went stale (5 → 6) from #160's own `src/board.js` edit; re-stamp (`node .repolore/scripts/wiki-check.mjs`).\n5. Nits: `activePrGuard` picks the first OPEN PR — with two, prefer the one the last `review_requested`/`completed` row recorded; `src/cli.js` ~418 \"waiting on the PR it continued, PR #147\" reads awkwardly; `hkb claim --spawn` (`src/cli.js` ~473) does not pass `continuePr`, so the row lacks `continues_pr` and `finish` will not say \"continued\"; an exempt card waiting for a slot pays one `loadRun` per tick because the budget check comes after the guard.\n\n## Done when\n\n- A continuation checkout is at the PR branch's remote head even when a human pushed to it since the last attempt; its plain `git push` succeeds (fake-git test).\n- A trigger-mode claim on a sent-back card records `continues_pr` and no `continues_branch`, and creates no worktree.\n- A 1,500-character review reaches `hkb context <n>` in full.\n- `npm run lint && npm test` green; wiki-check back to the 5-page baseline or better.\n\n## Contract\n\n- Never `git push --force`; a branch that cannot fast-forward is reported, not forced.\n- Keep the guard predicate pure and keyed on the synthetic reviewer row only.",
+  "closed_at": "2026-08-29T02:29:29Z",
+  "created_at": "2026-08-28T23:23:13Z",
+  "goal": "A relaunched attempt starts on the PR branch at its remote head, trigger-mode claims record only continues_pr, and the full reviewer note is in the brief",
+  "id": 162,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/board.js",
+    "src/dispatch.js",
+    "src/lifecycle.js",
+    "src/context.js",
+    "src/cli.js",
+    "src/model.js",
+    "docs/wiki",
+    "test/dispatch.test.js",
+    "test/context.test.js"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Continuation attempts: fast-forward the PR branch, skip the checkout in trigger mode, hand the worker the whole review",
+  "updated_at": "2026-08-29T02:29:29Z"
+}

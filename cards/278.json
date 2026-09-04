@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Flagged by the operator on 2026-09-02, from GitHub's changelog:\n> https://github.blog/changelog/2026-09-01-github-cli-media-in-issues-pull-requests-and-comments/\n>\n> *\"GitHub CLI now has a repeatable `--attach` flag that uploads a local image or video. Reference it inline in\n> an issue, pull request, or comment body. Available now to all users on GitHub across all plans.\"*\n>\n> This card is an **investigation**, not a decision to build. The question is whether hkb should be able to\n> attach media, and what it would cost.\n\n## Why\n\nThe protocol is text, everywhere. A worker's result comment (`<!-- kb-result -->`) carries `summary`, `metadata`\nand `artifacts[]`; a review record is prose; `hkb graph` is the only visual output and only because GitHub\nrenders mermaid. So a card whose *subject* is visual can be described and never shown.\n\nThat gap has already cost something measurable. #130 recorded a worker on `french-tech-homies/pipao-v2` that\ncould not reach the `react-aria` MCP server, built the components from training knowledge instead, and said\nnothing — **and the output looked fine**. A screenshot in the result comment is exactly what would have made\nthat visible to a human reading the card. The same repo's board is full of cards whose acceptance is visual: a\ncomponent kit re-synced to a design system, an admin page, a marketing page that fails SSR.\n\nThere is also a hook already in the protocol waiting for this. `hkb finish --artifacts a,b` exists and is\nvalidated (`assertPayload`, `src/lifecycle.js:173`) — it takes a list of strings and records them in the result\ncomment. Today those are names of things a reader cannot see. `--attach` is what would make an artifact an\nartifact.\n\n## What to investigate — and the constraint that decides it\n\n- **hkb never calls `gh issue` / `gh pr`.** CLAUDE.md is explicit: *\"never call `gh issue`/`gh pr` sub-commands\n  for board state — use `gh api`\"*, and `src/gh.js:12` repeats it (`ghCmd` is for repo detection and doctor,\n  \"never board state\"). `--attach` is a `gh issue comment` / `gh pr comment` flag. **So the first question is\n  not \"should we\" but \"can we without breaking the rule that keeps the backend swappable.\"**\n  - Does the CLI flag wrap a REST endpoint hkb could call directly? If media upload has an API surface, this is\n    an ordinary `gh api` call and the rule is untouched.\n  - If it is CLI-only, the honest options are a narrow, documented exception for *media only* (never board\n    state), or not doing it. Say which, with the reasoning, rather than quietly widening `gh.js`.\n- **Who would attach, and would they be allowed to?** A worker's launch is `--permission-mode dontAsk` with an\n  allow-list; `Bash(gh pr *)` is granted and `gh issue comment` is not. Whatever shape this takes has to work\n  from inside a worker, or it is a feature only humans can use — which is most of the value gone.\n- **What is worth attaching, concretely.** Do not build a general upload. The candidates the board already\n  implies: a screenshot supporting a `completed` result on a visual card; a before/after on a\n  `changes_requested` reason; the web board's own view on an operator's review record.\n- **Cost and failure modes.** Uploads are not free, not conditional-GET-able, and can fail independently of the\n  comment. A result comment that fails because an image upload failed would be worse than no image — the\n  terminal verb must never depend on it.\n- **Portability.** The protocol is meant to be backend-neutral. An attachment that only exists on GitHub is\n  fine as an enhancement and wrong as a requirement; whatever lands must degrade to today's text.\n\n## Done when\n\n- [ ] It is established whether media upload is reachable through `gh api`, or is CLI-only.\n- [ ] A decision is recorded — build, or do not build, with the reason — and if building, which of the concrete\n      cases above is in scope.\n- [ ] If it is CLI-only and worth doing, the exception to the `gh api` rule is written down where the rule is,\n      not buried in a commit.\n- [ ] Whatever ships, a failed upload never fails a terminal verb, and a board with no attachments reads exactly\n      as it does today.",
+  "closed_at": null,
+  "created_at": "2026-09-02T01:14:56Z",
+  "goal": "A decision is recorded on whether media upload is reachable via gh api or CLI-only, whether a dontAsk worker could use it, which concrete cases are in scope, and how a failed upload stays unable to fail a terminal verb",
+  "id": 278,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/gh.js",
+    "src/lifecycle.js",
+    "src/model.js",
+    "docs/wiki"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "Investigate gh --attach: whether a worker can show its work, and whether hkb can use it without breaking the gh api rule",
+  "updated_at": "2026-09-02T01:14:56Z"
+}

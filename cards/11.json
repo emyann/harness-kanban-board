@@ -1,0 +1,32 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "Triage: needs a design decision first. Options: (a) a skill that runs in the orchestrator's session and calls `hkb create --blocked-by`; (b) `hkb decompose <n>` spawning `claude -p` with a JSON schema. Decide, write the spec into this issue, then promote.\n\n## Decision (2026-08-26)\n\n**Skill first, CLI later.** Decompose and specify ship as sections of the kanban skill — they run in the\norchestrating session of ANY harness (Claude, Copilot, Codex all read SKILL.md), cost nothing to build, and keep\nthe human in the loop on the proposed graph before anything is created. `hkb decompose <n>` (headless\nauto-decompose, Hermes' auto mode) is deferred until someone actually wants unattended triage.\n\n## Spec\n\n**/kanban:specify <n>** — read the issue, rewrite the one-liner into a real spec (Why / What / Done when,\nplus `kb.paths` and priority), show it, and on approval update the body and `hkb promote <n>`.\n\n**/kanban:decompose <n>** — read the goal issue and propose the graph BEFORE creating anything, as a table:\ntitle · blocked-by · paths · agent · priority, with design decisions written into each child body (children\ncannot see their siblings). On approval:\n1. `hkb create` each child with its `--blocked-by` mapping (topological order so numbers exist).\n2. Link the ROOT as blocked by every leaf (Hermes: the root completes when the tree completes), so the root\n   becomes ready for a final verify/synthesize pass when all children are done.\n3. Comment the materialized graph on the root; the root stays the track handle #26 will claim.\n\nDeliverable: the two skill sections in `skills/kanban/SKILL.md` (+ a worked example in\n`references/protocol.md`), nothing in src/ — this task is documentation-as-behavior.\nPaths: `skills/kanban/`. Tests: none required (no code), but the example graph in the docs must be valid.",
+  "closed_at": "2026-08-26T07:54:56Z",
+  "created_at": "2026-08-26T04:33:40Z",
+  "goal": null,
+  "id": 11,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "skills/"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Decompose and specify: /kanban:decompose turns a triage issue into a dependency graph; /kanban:specify rewrites a one-liner into a spec",
+  "updated_at": "2026-08-26T07:54:56Z"
+}

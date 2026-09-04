@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    11
+  ],
+  "body": "## Why\nThe board is one big DAG; a \"track\" is a connected subgraph, usually materialized by decompose (#11). Today the only execution engine is the dispatcher: global ready-frontier, one cold session per node — perfect durability, but tick latency and context re-derivation between dependent nodes. A track runner is a second engine: ONE session executes a whole subgraph like a workflow (nodes in dependency order, independent branches as subagents, context flowing in memory), while the board stays the source of truth.\n\n## Design (agreed 2026-08-26)\n- A track = a root task plus its descendants (or an explicit `kb.track` slug on each node). Same board, same issues — a track is a view, not a new object.\n- The dispatcher, seeing a ready track root whose profile is `claude-track`, claims the ROOT lock and spawns one worker whose prompt is: \"execute this subgraph — for each node: claim its lock (`hkb claim <n>`), do the work, finish it with its own terminal verb; run independent branches as subagents; stop at the frontier if a node blocks.\"\n- Every node completion goes through the normal verbs → every node is a durable checkpoint. If the runner dies mid-track, the board still holds per-node truth and the ordinary dispatcher resumes node-by-node — no new crash semantics.\n- Node locks claimed as-you-go (not all up front) so a dead runner never wedges the whole track.\n- Concurrency caps count the track as ONE running slot (it is one session); per-node `kb.paths` guards still apply to protect against other concurrent workers.\n- Out of scope: cross-harness tracks (a track whose nodes need different harnesses is simply not claimable as a track and falls back to node dispatch).\n\n## What\n- `src/track.js`: subgraph resolution (root → descendants via blocking edges), track-readiness (root ready AND all nodes on-board), and the runner prompt builder (reuses `workerContext` per node).\n- Dispatcher: recognize track roots, claim + spawn the runner, and treat node-level verbs from inside the runner exactly like any worker's.\n- Skill: a `## When you run a track` section teaching the claim→work→verb loop per node and subagent fan-out for independent branches.\n- Tests against the fake-gh harness (#3): runner crash mid-track → dispatcher resumes remaining nodes; a blocking node parks only its branch.\n\n## Done when\nA 3-node chain executes end-to-end in one session with three result comments and three PRs (or one PR if the track declares a shared branch — decide and document), and killing the runner after node 1 leaves a board the plain dispatcher finishes correctly.",
+  "closed_at": "2026-08-26T23:54:53Z",
+  "created_at": "2026-08-26T06:34:52Z",
+  "goal": null,
+  "id": 26,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/track.js",
+    "src/dispatch.js",
+    "skills/kanban/"
+  ],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Track runner: execute a claimed subgraph workflow-style, checkpointing every node through the board",
+  "updated_at": "2026-08-26T23:54:53Z"
+}

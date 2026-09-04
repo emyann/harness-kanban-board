@@ -1,0 +1,34 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "",
+  "closed_at": "2026-09-01T21:44:10Z",
+  "created_at": "2026-09-01T21:24:56Z",
+  "goal": "hkb edit <n> --paths/--goal/--scheduled-at/--priority sets exactly those keys in the kb block, and every hkb edit string groomBoard suggests is a command that runs, pinned by a test",
+  "id": 237,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/cli.js",
+    "src/tasks.js",
+    "test/cli.test.js"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb edit: the write half of the kb block, so hkb groom stops suggesting a verb the CLI refuses",
+  "updated_at": "2026-09-01T21:44:10Z"
+}

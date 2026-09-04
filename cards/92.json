@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "`SKILL.md` documents `/kanban:specify <n>` and `/kanban:decompose <n>` as commands — its own frontmatter `description` names them, and two sections are titled after them (`## /kanban:decompose \\<n\\> — turn a goal into a dependency graph`). The syntax is Claude Code's namespaced-plugin-command form, so a reader types it.\n\n**Nothing registers them.** There is no `.claude/commands/` in this repo, no `commands` key in `.claude-plugin/plugin.json`, and no commands directory in the package `files` list. Typing `/kanban:decompose 103` gets:\n\n    Unknown command: /kanban:decompose\n    Args from unknown skill: 103 — read packages/md3 ...\n\nConfirmed on a fresh install; it fails here too. They are sections of a skill written to look like commands.\n\nThis is value 4 in its plainest form: the documentation instructs an action the tool does not support, and the failure lands on someone's first real use of the feature.\n\n**Two ways to fix it, and they are not equivalent.**\n\n1. **Make them real.** Ship `commands/specify.md` and `commands/decompose.md` in the plugin (add `commands` to `.claude-plugin/plugin.json` and to `files`), and have `hkb init` write them into `.claude/commands/kanban/` for people who install the skill without the plugin. The command body delegates to the SKILL.md section so the procedure lives in one place. This is the honest reading of what the docs already promise — and both are genuinely command-shaped: they take one issue number and run a fixed procedure.\n2. **Stop promising them.** Retitle the sections (\"Decomposing a goal into a track\"), drop the slash syntax from the frontmatter description, and say plainly that you ask the skill for this. Cheaper, and correct — but it removes an affordance that ought to exist.\n\nRecommend 1. Decompose in particular is a procedure people will run repeatedly and want by name; the reason it is not a CLI verb (`hkb decompose` would put an LLM in the dispatcher, which the design forbids) is exactly the reason it *should* be a harness command.\n\nWhichever way it goes, the frontmatter `description`, the section titles, and reality must agree — they are what a fresh session reads to decide the skill applies.\n\n**Also check while here:** whether anything else in the shipped skill or the generated doc sections names an affordance that does not exist. This one survived because nobody typed it until an adopter did.\n\n**Verify.** On a repo where only `hkb init` has run (no plugin), the documented invocation works exactly as written, or SKILL.md no longer claims it does. Add whichever files ship to the `MUST_SHIP` list in `scripts/smoke-pack.mjs`, so a `files` entry that stops shipping them fails CI rather than a stranger's session.",
+  "closed_at": "2026-08-27T19:49:38Z",
+  "created_at": "2026-08-27T19:34:09Z",
+  "goal": null,
+  "id": 92,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "The skill advertises two slash commands that do not exist",
+  "updated_at": "2026-08-27T19:49:38Z"
+}

@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    291
+  ],
+  "body": "## Why\nThe live half of the board (locks, open attempts, events) and an index over the durable half need a store four kinds of process can query without loading the branch (`docs/local-first.md` §6.1, §6.3).\n\n## What\n`src/store/sqlite.js`, exporting an `Index` used by the local store (A6 composes it with A4's branch):\n- Opens `.git/hkb/index.db` under `storeRoot(ctx)` (from A3) with `node:sqlite`'s `DatabaseSync`; `PRAGMA journal_mode=WAL`; `timeout` per §6.3; the schema of §6.3 created once, guarded by a `schema_version` row.\n- `load(tree)`: replaces the indexed tables (`board`, `tasks`, `links`, `runs`, `attempts` closed rows, `results`) from a tree of A4's shape and stores `tip_sha`; cheap enough to run on every open when the tip differs.\n- `claim(n, k)`: `BEGIN IMMEDIATE`; insert into `locks` (UNIQUE(task_id, k) violated → `held`); insert the open attempt row; set `tasks.status = 'running'`; append the event; `COMMIT` → `{ result: 'claimed', token }`. `release(n, k)` deletes the lock and appends an event. `heartbeat(n, k, expected)` is the single `UPDATE … WHERE token = ?`; zero rows → `'lost'`.\n- `listLocks()`, `lockBeatAt(n, k)`, the open-attempt live fields (`pid`, `job`, `wt`, `heartbeat_at`, `paused_at`, `pauses_json`) read and written here, never on the branch.\n- `events({ after, limit })` over `events.id`; **every mutating method appends one event** (`{ kind, task_id, payload_json }`, kinds from `src/watch.js`'s `EVENT_KINDS` plus `paused`, `resumed`, `stopped`, `suspended`).\n- `wake()`: sends `SIGUSR1` to the pid in `.kanban/dispatch.pid` when it names a live process; never throws.\n- A read-only connection factory for `hkb serve` (`timeout: 0`).\n\nTests (`test/store-sqlite.test.js`): a temp dir per test; the claim is atomic under two processes racing (spawn two `node -e` claimers, exactly one wins); heartbeat lost after release; `load()` twice with a changed tree replaces cleanly; every mutating call appends exactly one event; `wake()` with no pid file is a no-op. Register the driver in `DRIVERS` of `test/store.test.js` for the live methods and the events invariant.\n\n## Done when\n- [ ] `npm test` green on Node 22 and 24 (the 22 warning is silenced by A1's filter; assert an empty stderr once).\n- [ ] The two-process claim race test exists and passes ten times in a row (`for i in 1..10` in the PR description, not in CI).\n- [ ] No `git` call anywhere in the module.\n\n## Contract\nThe schema of §6.3 and the method names of §6.4 for what this tier implements (`capabilities` → `{ events: true }`, `claim`, `release`, `listLocks`, `lockBeatAt`, `heartbeat`, `events`, plus the live attempt fields). Branch writes are **not** this tier's (A4). A4 runs beside you: touch nothing outside your `paths`.\n\n**Read first:** `docs/local-first.md` (the plan; the sections named below), `docs/wiki/decisions/adr-005-control-plane.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Keep it dependency-free at runtime. Pure logic in\n`src/model.js` with a test. Errors name the fix and carry `.exitCode`. `--json` everywhere. Update the wiki page a\nchange touches (`node .repolore/scripts/wiki-check.mjs` lists what went stale); a new feature gets a new page.\nFinish with `npm run lint && npm test` green, one draft PR, and exactly one terminal verb.\n",
+  "closed_at": "2026-09-03T04:00:11Z",
+  "created_at": "2026-09-02T23:31:57Z",
+  "goal": "src/store/sqlite.js implements the schema of docs/local-first.md §6.3 with a one-transaction claim, a row-count heartbeat, an events cursor and a rebuild from a given tree; the conformance suite passes for the live methods and the events invariant",
+  "id": 293,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 10800,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/store/sqlite.js",
+    "test/store-sqlite.test.js"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "The index: src/store/sqlite.js — node:sqlite under the common git dir, the transactional claim, the events table",
+  "updated_at": "2026-09-03T04:00:11Z"
+}

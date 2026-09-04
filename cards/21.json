@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    14
+  ],
+  "body": "## Why\nSome users want the board inside GitHub's own Projects UI. Labels stay canonical; the Project is a read surface.\n\n## What\n- `hkb init --project <number|new>`: link a Projects v2 board, create a single-select \"Status\" field matching the kb statuses, store ids in board.json.\n- Dispatcher: after each status transition, one GraphQL mutation sets the item's Status field (add the issue to the project on first touch). Strictly one-way: drags in the Project UI change nothing and drift is repaired from labels on the next tick.\n- Requires `gh auth refresh -s project`; `hkb doctor` checks the scope and says exactly that when missing.\n- Off by default; document the extra write per transition.\n\n## Done when\nTransitions on this repo appear as column moves in a linked Project; deleting the Project breaks nothing.",
+  "closed_at": "2026-08-26T07:34:48Z",
+  "created_at": "2026-08-26T05:46:31Z",
+  "goal": null,
+  "id": 21,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/projects.js",
+    "src/dispatch.js",
+    "src/doctor.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Projects v2 mirror: opt-in, one-way status sync for people who live in GitHub Projects",
+  "updated_at": "2026-08-26T07:34:48Z"
+}

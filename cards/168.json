@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Filed 2026-08-29 after 71 merged-PR branches were found on `origin` — one per worker attempt since the board started. The operator's rule for this card: **flag, never enforce.** hkb tells the user what is off and how to turn it on; the repo setting stays the user's decision.\n\n## Why\n\nEvery worker attempt pushes a branch (`worktree-kb-<n>-<k>` from Claude Code, `kb-<n>-<k>` from a dispatcher-made checkout) and opens a PR. After the squash-merge nothing removes the branch: `hkb gc` sweeps local worktrees and branches only (`src/gc.js` `branch -D`), and the repository setting that would do it on GitHub's side — *Automatically delete head branches* (`delete_branch_on_merge`) — is off by default on every repo. Measured on this board on 2026-08-29: 73 remote branches, 71 of them heads of merged PRs, 2 heads of open PRs, none orphaned. Nothing was wrong; nothing said so either, which is the value-5 gap.\n\n## What\n\n- **`hkb doctor` gets one line for the setting.** It already runs `gh api` for the repo (`--api`); read `delete_branch_on_merge` from the same response, or in the same call:\n  - on → `✓ merged branches   GitHub deletes a PR's head branch on merge`\n  - off → `! merged branches   GitHub keeps every worker's branch after merge (N on origin now) → gh api -X PATCH repos/<owner>/<repo> -f delete_branch_on_merge=true — or leave it; hkb will not change it`\n  The count comes from the branches `gh api` already lists for the lock check where that is free; otherwise omit it. The line is a **warning, never an error**: `hkb doctor` still exits 0, and nothing in hkb ever sets the flag or deletes a remote branch.\n- **`docs/harnesses.md` / README setup notes** name the setting once, in the \"what `init` does not do for you\" spirit, with the same one-line command and the note that a deleted branch can be restored from its PR page.\n- **`--json`**: `checks[].id = \"delete_branch_on_merge\"`, `status`, `value`, `fix`.\n\n## Not this card, but where it points\n\n`hkb init` runs a repo through hkb's expectations one at a time and stops at what it cannot decide for the user. Repo-side settings a board benefits from — this flag, branch protection for `dispatch.merge` (`features/auto-merge` in the wiki), the `KB_TOKEN` secret for Actions — are all \"yes, by hand\" today. A guided pass — `hkb init --walkthrough`, or a `/kanban:setup` skill section like `/kanban:operate` — that reads each setting, explains it, and offers the command to apply it (never applying it unasked) is the frictionless shape. When that card exists, this doctor line is one of its rows.\n\n## Constraints\n\n- One extra field on a call `doctor --api` already makes; no new API call, no new command, no write to GitHub.\n- The advice names the exact command and what it does; it never runs it.\n\n## Done when\n\n- `hkb doctor --api` on a repo with the flag off prints the warning with the command; with it on, the ✓ line; without `--api`, nothing (the check needs the repo).\n- Exit code unchanged either way; `--json` carries the check.\n- `test/doctor.test.js` covers on, off, and no-`--api`; `npm run lint && npm test` green.",
+  "closed_at": null,
+  "created_at": "2026-08-29T01:05:07Z",
+  "goal": null,
+  "id": 168,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/doctor.js",
+    "test/doctor.test.js",
+    "docs/harnesses.md",
+    "README.md"
+  ],
+  "priority": 4,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "hkb doctor flags a repo that keeps merged PR branches — and says the one command, without ever running it",
+  "updated_at": "2026-08-29T01:05:07Z"
+}

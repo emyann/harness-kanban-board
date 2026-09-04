@@ -1,0 +1,41 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\nFive places in `src/dispatch.js` and all of `src/jobs.js` branch on the profile mode; every verb of this track needs one interface instead (`docs/local-first.md` §4). The reap has a live bug: `reapDecision` returns early without a pid, and a parked background job has none (§4, last paragraph; §11).\n\n## What\n1. `src/runtime/index.js`: `runtimeFor(attempt | profile)` → the adapter (`manual` rows → manual; `job`/`bg` → claude-bg; `pid` → process; by profile `mode` at launch).\n2. `src/runtime/process.js`, `claude-bg.js` (today's `src/jobs.js` moved), `manual.js`: each exports `launch(ctx, task, k, opts)` (the corresponding tail of `spawnWorker`), `inspect(ctx, attempt, { jobs })` → `{ alive, working, handle, session }`, `stop(ctx, attempt)` (`claude stop` / SIGTERM→SIGKILL as today), and `pause`/`resume` that return `{ ok: false, why: 'not implemented until B4' }` for now.\n3. `src/dispatch.js`: `spawnWorker` delegates its tail to `runtime.launch`; the reclaim loop's liveness branches become one `inspect` per running card; `failAttempt`'s kill and the reap call `runtime.stop`; `watchChild` unchanged in behaviour. `listKbJobs` stays one call per tick, inside the claude-bg adapter, passed in through `{ jobs }`.\n4. `reapDecision` (`src/model.js`): drop `|| !job.pid`; `test/reap.test.js` fixtures stop carrying a pid the listing never has, and gain the parked-job case.\n5. `test/fake-runtime.js`: an in-memory adapter recording launches, stops, pauses; `test/runtime.test.js`: the same liveness scenarios run against every adapter with the fake harness.\n\n## Done when\n- [ ] `grep -n \"mode === 'process'\\|mode === 'claude-bg'\\|\\.bg\\b\\|\\.job\\b\" src/dispatch.js` finds nothing outside `runtimeFor` selection.\n- [ ] Every existing test passes; `test/reap.test.js` has a parked job (no pid, `state: blocked`) on a done card being stopped.\n- [ ] `hkb dispatch --dry-run --json` on this board is byte-identical before and after (hashes in the PR).\n- [ ] Wiki: `architecture/overview.md` \"Workers are any harness\" names the seam; `features/runtime-seam.md` is left to the root.\n\n## Contract\nThe five function names above and their return shapes are the contract B3/B4 build on. Three adapters only (the Actions runner is gone, A2).\n\n**Read first:** `docs/local-first.md` (the plan; the sections named below), `docs/wiki/decisions/adr-005-control-plane.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Keep it dependency-free at runtime. Pure logic in\n`src/model.js` with a test. Errors name the fix and carry `.exitCode`. `--json` everywhere. Update the wiki page a\nchange touches (`node .repolore/scripts/wiki-check.mjs` lists what went stale); a new feature gets a new page.\nFinish with `npm run lint && npm test` green, one draft PR, and exactly one terminal verb.\n",
+  "closed_at": null,
+  "created_at": "2026-09-02T23:32:02Z",
+  "goal": "the tick never branches on a profile mode; src/runtime/* export launch/inspect/stop/pause/resume; test/fake-runtime.js lets tick tests run without claude; reapDecision no longer gates on a pid; behaviour otherwise unchanged",
+  "id": 296,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 10800,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/runtime/",
+    "src/dispatch.js",
+    "src/jobs.js",
+    "src/model.js",
+    "test/fake-runtime.js",
+    "test/runtime.test.js",
+    "test/reap.test.js",
+    "test/jobs.test.js",
+    "test/dispatch.test.js",
+    "docs/wiki/"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "The runtime seam: src/runtime/{process,claude-bg,manual}.js, a fake runtime, and the reap pid-gate fix",
+  "updated_at": "2026-09-03T04:00:14Z"
+}

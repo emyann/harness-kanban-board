@@ -1,0 +1,33 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\nnpm is restricting 2FA-bypass tokens (direct publishing restricted Jan 2027) and its UI now says outright: \"For automation or CI/CD uses, please use Trusted Publishing instead.\" Our v0.1.0 bootstrap used a 30-day bypass token because trusted publishers are configured in a package's settings page, which does not exist before first publish. The moment `hkb` exists on the registry, the token has no reason to live.\n\n## What (after v0.1.0 is on the registry)\n- On npmjs.com → package `hkb` → Settings → Trusted Publisher: GitHub Actions, org `emyann`, repo `harness-kanban-board`, workflow `release.yml`, allowed action `npm publish`.\n- `release.yml`: ensure Node >= 22.14 and npm CLI >= 11.5.1 on the runner (docs requirement); keep `id-token: write`; REMOVE the `NODE_AUTH_TOKEN`/`NPM_TOKEN` wiring — with a trusted publisher, provenance and auth are automatic and no secret is read.\n- Delete the `NPM_TOKEN` repo secret and revoke the npm token; update `docs/releasing.md` so the operator's only step is pushing the tag.\n- Keep the graceful-degrade notice for forks (they have no trusted-publisher identity).\n\n## Done when\nA `v0.1.1` tag publishes with provenance and zero npm secrets in the repo, and the bypass token is revoked.",
+  "closed_at": "2026-08-27T05:00:47Z",
+  "created_at": "2026-08-27T04:03:53Z",
+  "goal": null,
+  "id": 61,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    ".github/workflows/release.yml",
+    "docs/releasing.md"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Switch the release to npm Trusted Publishing and delete NPM_TOKEN",
+  "updated_at": "2026-08-27T05:00:47Z"
+}

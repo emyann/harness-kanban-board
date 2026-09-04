@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\n\nA card with unfinished children is a track by default. So `hkb promote <root>` does not queue that card —\nit queues **one session that will run the root and every node under it**. Nothing at the moment of typing\nsays so.\n\nHit twice on this board. On 2026-09-03, `hkb promote 302` (track C's root, intended only to unpark the\nlane) claimed a `claude-track` runner that fanned out to five nodes — `#303 → #304 → #288 → #305 → #302` —\nwhich would have put root A *and* the entire TypeScript migration in a single opus session with no\nper-node review gate. Recovery was `hkb track 302 --off`, `hkb block --kind transient`, `hkb unblock`,\n`claude stop` on two agents, `claude rm` on two worktrees, and releasing a node's orphaned claim. The\nearlier occurrence (2026-09-02, root C) cost ten minutes of runner time.\n\n`hkb track <n>` already answers \"is this a track and why\" — but it is a command you have to know to run\n*before* the one you were going to run. That is the gap: the information exists and arrives too late.\n\n## What\n\n1. `hkb promote <n>` on a card that would dispatch as a track says so **before** it writes, naming the\n   nodes and the profile: `#302 is a track root — promoting it queues ONE claude-track session over 5\n   nodes (#303 → #304 → #288 → #305 → #302). \\`hkb track 302 --off\\` runs them as cold nodes instead.`\n   Under `--json`, the same as a `track` key on the result.\n2. Consider making it a confirmation rather than a notice when the node count is above some small number,\n   with `--yes` to skip — a five-node fan-out is a much bigger commitment than promoting a card, and the\n   two are the same keystroke today. (Judgment call: a notice may be enough if it is loud. Decide on the\n   card and say which.)\n3. The same line in `hkb groom`'s proposal table, where promoting is what the table invites.\n\n## Done when\n\n- [ ] `hkb promote` on a track root prints the node list and the profile before it writes.\n- [ ] `--json` carries it.\n- [ ] Tests: a track root, a non-track card (no extra output), and `--off` suppressing it.\n- [ ] `npm run lint && npm test` green.",
+  "closed_at": null,
+  "created_at": "2026-09-03T07:24:13Z",
+  "goal": null,
+  "id": 323,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "hkb promote on a card with unfinished children silently starts a whole track, and there is no warning before it spawns",
+  "updated_at": "2026-09-03T10:59:18Z"
+}

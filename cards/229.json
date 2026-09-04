@@ -1,0 +1,39 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    228
+  ],
+  "body": "## Why\n\n`hkb groom` and `/kanban:groom` (siblings) are not shipped until the packaging knows about them. hkb installs\ncommands by reading the `commands/` directory rather than a list, so the command needs no code change to be\ninstalled — but several **fixed lists** are spelled out deliberately, in tests and in the smoke script, and they\nare what actually prove the tarball ships the file.\n\n## What\n\nPer #191's *Registration and docs* section.\n\n- **Tests that enumerate**: `test/init.test.js`'s file list and its `commandNames()` assertion gain `groom`;\n  `test/skill.test.js`'s doctor string becomes `/kanban:decompose, /kanban:groom, /kanban:operate,\n  /kanban:specify not registered — the skill documents them`.\n- **`scripts/smoke-pack.mjs`**: `commands/groom.md` in `MUST_SHIP`, `.claude/commands/kanban/groom.md` in\n  `FROM_PACKAGE` — so `npm run smoke` proves the packed tarball installs it.\n- **Docs**: the README planning table gains a third row and `hkb groom` joins the snippet beside\n  `hkb dispatch --dry-run`; `.claude-plugin/plugin.json`'s description names four commands; `src/cli.js`'s HELP\n  gains the verb; one sentence in `skills/kanban/references/protocol.md` under the tick saying `hkb groom` is a\n  read like `dispatch --dry-run` — no status, label or transition changes.\n- **The wiki**: a new page `docs/wiki/features/backlog-grooming.md` from `docs/wiki/_templates/page.md`;\n  `planning-commands.md` re-stamped; `index.md` and `log.md` updated. Re-stamp only the `covers` shas for files\n  this track actually changed — leave unrelated drift visible rather than silently stamping it.\n\n## Done when\n\n- [ ] `test/init.test.js` and the doctor \"not registered\" string list four commands.\n- [ ] `npm run smoke` packs, installs and finds `groom.md` in both places.\n- [ ] README, plugin.json, HELP and the protocol.md sentence are in place.\n- [ ] `docs/wiki/features/backlog-grooming.md` exists and `node .repolore/scripts/wiki-check.mjs` reports no\n      staleness **caused by this track**.\n- [ ] `npm run lint && npm test && npm run smoke` pass. `src/model.js` and `skills/kanban/SKILL.md` are not\n      touched by this task.\n\n## Contract\n\nThese are the names, signatures and rules a sibling depends on. Do not invent alternatives; a change here\nbreaks a task you cannot see.\n\n- **The eleven \"Amendments from the adversarial pass\" at the top of #191 override its body wherever they\n  differ.** Read `hkb show 191` first and treat the amendments as the specification. In particular: reuse\n  `computeReady`, `agentsOf` and the walk in `src/track.js` — **do not write `detectCycles`**; `no_goal` is\n  `info` when the body already has a Done-when heading; `broad_path` exists and is `ask`; `overlap_pair.why` is\n  guard-aware.\n- `groomBoard(tasks, { now, caps, pairs = 10, statuses })` is exported from `src/model.js` and takes the raw\n  `fetchBoard` array and nothing else — a later card puts the same function behind `hkb serve`'s snapshot.\n- `GROOM_KINDS` and `GROOM_ACTIONS` are exported from `src/model.js`. Actions are the closed vocabulary\n  `promote · specify · link-under · split · supersede · reprioritise · park · archive`, plus `judge` and `none`.\n- `fetchBoard(ctx, { blockers: 'all' })` REST-fills blockers for **every open card** on a repo without GraphQL\n  `blockedBy`; `blockers: true` keeps today's todo/blocked-only behaviour.\n- The `--json` field names in #191 are **frozen**; later kinds are added to `findings`, never renamed.\n- The CLI never emits the word \"duplicate\". `overlap_pair.why` is \"will serialize under path_overlap\".\n- **`src/dispatch.js` is untouched by this whole track** — the promote step still filters `status === 'todo'`.\n- Nothing in this track writes to the board. `hkb groom` is a read, like `hkb dispatch --dry-run`.",
+  "closed_at": "2026-09-01T21:20:27Z",
+  "created_at": "2026-09-01T20:42:42Z",
+  "goal": "The enumerated lists in test/init.test.js and the doctor string name four commands, npm run smoke finds groom.md in the tarball and the install, README/plugin.json/HELP/protocol.md name the verb, and docs/wiki/features/backlog-grooming.md exists with no staleness caused by this track",
+  "id": 229,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "test/init.test.js",
+    "scripts/smoke-pack.mjs",
+    "README.md",
+    ".claude-plugin/plugin.json",
+    "docs/wiki",
+    "skills/kanban/references/protocol.md"
+  ],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Ship groom: registration lists, smoke-pack, README, plugin.json, HELP and the wiki page",
+  "updated_at": "2026-09-01T21:20:27Z"
+}

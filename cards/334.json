@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\n\nThe durable tier lives at `refs/heads/kb-board`, so it shows up in `git branch`, in every branch picker,\nand in GitHub's branch list — a branch nobody ever checks out, sitting among the ones that mean something.\nThe operator's objection (2026-09-03) is to that visibility, not to the mechanism.\n\nNothing about the design needs `refs/heads/`. Everything the tier relies on — plumbing writes,\n`update-ref` as compare-and-swap, history, push and fetch — works on any ref namespace. hkb **already**\ndoes this for claims, at `refs/kb/locks/<n>/<k>`.\n\nConsidered and rejected: moving the board to a user folder (`~/.hkb/…`, the way Hermes keeps\n`~/.hermes/kanban.db`, \"deliberately single-host\", no sync). It has zero repo footprint, but it gives up\nbackup-without-user-action, needs a path-keying scheme that breaks when a directory moves or when one repo\nhas several worktrees — which hkb creates constantly — and loses `git log` as a history a human can read\nwith tools they already have. A hidden ref keeps all three and still answers the complaint.\n\n**Measured before filing** (2026-09-03, against this repo's real remote), because the whole option depends\non it:\n\n- `git push origin refs/kb/boards/probe:refs/kb/boards/hkb-push-probe` → `[new reference]`. GitHub accepts\n  pushes outside `refs/heads`/`refs/tags`, so the backup property survives the move.\n- `git fetch origin '+refs/kb/boards/*:refs/remotes/origin/kb/boards/*'` → landed at\n  `refs/remotes/origin/kb/boards/hkb-push-probe`, distinct from the local ref.\n- `git show-ref | grep kb-board` and `git ls-remote --heads origin | grep kb-board` → **nothing**. No board\n  exists on the old ref yet, here or on the remote, so **there is no migration to write**. This must land\n  before this repository's board is migrated (the operator is holding #304 for that), so the board is\n  created at the new ref directly.\n\n## What\n\n1. **The ref is `refs/kb/boards/<slug>`**, default `refs/kb/boards/default`. Not `refs/kb/board` with\n   `refs/kb/board/<slug>` beside it: git forbids a ref being both a file and a directory prefix, so those\n   two could never coexist. `GitTier`'s constructor already takes `ref` as an option — this is mostly the\n   default value, plus everything that hardcodes `kb-board`.\n2. **The fetch refspec maps into a remote-tracking namespace**:\n   `+refs/kb/boards/*:refs/remotes/<remote>/kb/boards/*`. **Not** `refs/kb/*:refs/kb/*` — that would\n   overwrite the local board with the remote's copy on every fetch, which is the opposite of what the\n   one-writer CAS needs. Measured above.\n3. **`tip()`'s read-only fallback** moves from `refs/remotes/<remote>/kb-board` to\n   `refs/remotes/<remote>/kb/boards/<slug>`.\n4. **`hkb init` writes the refspec** into `.git/config` (`remote.<name>.fetch`, appended, idempotent, never\n   replacing the existing `+refs/heads/*` line), and **`hkb doctor` checks it** and names the fix when it is\n   missing.\n5. **Restore on a fresh clone must still be one command.** A clone has no such refspec — that is the whole\n   cost of this option — so `hkb sync` fetches `+refs/kb/boards/*:refs/remotes/<remote>/kb/boards/*`\n   explicitly rather than relying on config, and writes the config line while it is there. Restoring a\n   board onto a new machine stays: clone, `hkb sync`. That path is tested in\n   `test/store-local.test.js` — keep that test passing, it is the durability requirement.\n6. **Say the trade in the docs.** `README` (\"Backing up and moving a board\") and\n   `docs/wiki/architecture/kb-board-branch.md` (which needs renaming — the page is about the board's\n   durable tier, not about a branch) must say that the board is not visible in GitHub's UI and not fetched\n   by a default `git clone`, and why that was chosen.\n\n## Done when\n\n- [ ] No `refs/heads/kb-board` anywhere: `git branch -a` on a board repo shows only the code's branches.\n- [ ] A board created, written, pushed, and restored into a fresh clone with `clone` + `hkb sync`.\n- [ ] A fetch does not clobber a local board that is ahead of the remote (the refspec mapping, with a test).\n- [ ] `hkb doctor` reports a missing refspec and names the fix; `hkb init` writes it idempotently.\n- [ ] `hkb sync` works on a clone whose config lacks the refspec.\n- [ ] Two boards in one repo (`--board alpha`, `--board beta`) get distinct refs and do not collide.\n- [ ] Docs updated, including the page rename.\n- [ ] `npm run lint && npm test` green.\n\n## Contract\n\nDo not change the tree shape, the write path, or the one-writer rule — this moves *where the ref lives* and\nnothing else. Do not write a migration from `refs/heads/kb-board`: measured above, there is nothing on it.\nKeep `src/gh.js`/`src/forge.js` the only places that reach the forge. Errors name the fix and carry\n`.exitCode`; `--json` everywhere.",
+  "closed_at": "2026-09-03T22:55:52Z",
+  "created_at": "2026-09-03T16:10:25Z",
+  "goal": null,
+  "id": 334,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Move the board off refs/heads: the durable tier lives at refs/kb/boards/<slug>, invisible to git branch",
+  "updated_at": "2026-09-03T22:55:52Z"
+}

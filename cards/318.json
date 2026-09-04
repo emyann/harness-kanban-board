@@ -1,0 +1,32 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    305
+  ],
+  "body": "## Why\n\n`node .repolore/scripts/wiki-check.mjs` reports **23 of 24 pages stale** — every page whose `covers:`\nlist names a file that track A moved. The drift is real but it is not per-card sloppiness: #311 alone\ntouched `src/board.js`, `src/dispatch.js`, `src/store/*`, `src/forge.js`, `src/init.js`, `src/doctor.js`\nand `src/cli.js`, which is most of the `covers:` surface of the whole wiki. Refreshing page-by-page\ninside each track card would have meant seven cards each rewriting the same eight pages against a\ncodebase still moving under them.\n\n**Why it waits for TypeScript.** #305 renames every `src/*.js` to `src/*.ts`. Every `covers:` entry in\nevery page is a `path` plus a `sha`, so a refresh done before #305 is invalidated by #305 in full — the\npaths stop resolving, not just the shas. One refresh after the rename costs what one refresh costs; one\nbefore costs two.\n\n## What\n\nOne pass over `docs/wiki/`, after #305 has landed:\n\n1. **Re-read each stale page against the code it now covers** and correct what track A actually changed —\n   not a sha bump. The known behavioural deltas: the store seam (`openStore`, `src/store/{index,github,git,sqlite}.js`),\n   pull requests moved to `src/forge.js`, the Actions runner and `trigger` mode removed (the\n   `REMOVED_PROFILES` tombstone in `src/board.js`), the Node floor at 22.13, the `test`/`packed artifact`\n   gate jobs, and `storeGitDir` vs `storeRoot`.\n2. **Repoint every `covers:` path** to its `.ts` name and re-stamp `sha`/`generated_at_commit`/`last_refreshed`.\n3. **New pages for what has no page**: the two local tiers already have `architecture/kb-board-branch`;\n   the index tier (`src/store/sqlite.js`) and the composed store (#294) do not. AGENTS.md: new feature →\n   new page.\n4. Pages that describe something that no longer exists (the Actions runner path in\n   `features/tracks.md`, `features/up-and-down.md`) say so or lose the section — a wiki that documents a\n   removed profile is worse than one that omits it.\n\n## Done when\n\n- [ ] `node .repolore/scripts/wiki-check.mjs` → 0 stale, 0 malformed.\n- [ ] No page's prose contradicts the code it covers (spot-check each rewritten claim against the file).\n- [ ] The index tier and the composed store each have a page.\n- [ ] `npm run lint && npm test` green (docs-only, but the hook runs anyway).\n",
+  "closed_at": null,
+  "created_at": "2026-09-03T03:00:43Z",
+  "goal": null,
+  "id": 318,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "The wiki is 23 pages stale after track A: one refresh pass, after the TypeScript rename",
+  "updated_at": "2026-09-03T03:00:43Z"
+}

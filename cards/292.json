@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    291
+  ],
+  "body": "## Why\nThe durable half of the board must travel with a `git clone`, so it lives on a dedicated branch written without a checkout (`docs/local-first.md` §6.1, §6.2, measured in §11).\n\n## What\n`src/store/git.js`, exporting a `GitTier` used by the local store (A6 composes it with A5's index):\n- `readTree()` → `{ tip, board, cards: Map<id, card>, runs: Map<id, run> }` from `refs/heads/kb-board` (`git cat-file --batch` over the tree; one process per read of the whole tree, never one per file).\n- `commit(mutate, message)`: takes the current tip, applies a mutation to an in-memory copy of the tree, writes it with `hash-object -w` / `update-index --add --cacheinfo` against a temporary index (`GIT_INDEX_FILE`) / `write-tree` / `commit-tree -p <tip>` / `update-ref refs/heads/kb-board <new> <tip>`; a CAS refusal (\"cannot lock ref\" / \"is at X but expected Y\") re-reads and retries, up to 5 times, then throws with `.exitCode = 2` naming the other writer.\n- `init(slug, host)`: creates the branch from an empty tree with `board.json` when it does not exist.\n- The layouts of §6.2 exactly: `board.json`, `cards/<id>.json`, `runs/<id>.json`, sorted keys, two-space JSON, trailing newline. Integer ids allocated from `board.json.next_id`.\n- Root: `storeRoot(ctx)` from A3 (the common git dir's parent); all git calls run there with `GIT_DIR` unset, so a linked worktree writes the same branch as the main checkout.\n- Read-only mode: when `board.json.host` is not this host (`hostId()` in `src/board.js`), `commit()` throws exit 2 naming `hkb init --take-over`.\n\nTests (`test/store-git.test.js`): a scratch repo per test (`git init` in a temp dir, one commit, a linked worktree); commit from the worktree leaves `git status --porcelain` empty; two concurrent `commit()` calls both land (one retries); a clone of the scratch repo can `readTree()` from `origin/kb-board`; read-only refusal on another host; and the conformance suite's durable scenarios (register the driver in `DRIVERS` for the methods this tier owns).\n\n## Done when\n- [ ] `npm test` green, including `test/store.test.js` with the git driver for the durable methods.\n- [ ] No `git checkout`, `git add` or working-tree write anywhere in the module.\n- [ ] A commit is one process chain per write; a read is one `cat-file --batch`.\n\n## Contract\nExactly the layouts and file names of §6.2, and the method names of §6.4 for what this tier implements (`board`, `setBoard`, `listTasks`, `listClosedRecent`, `getTask`, `createTask`, `updateBody`, `setStatus`, `setAgent`, `addLabels`, `removeLabel`, `closeTask`, `reopenTask`, `addBlockedBy`, `removeBlockedBy`, `loadRun`, `saveRun`, `latestResult`, `parentResults`, `addNote`, `listNotes`). Locks, heartbeats and events are **not** this tier's (A5). A5 runs beside you: touch nothing outside your `paths`.\n\n**Read first:** `docs/local-first.md` (the plan; the sections named below), `docs/wiki/decisions/adr-005-control-plane.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Keep it dependency-free at runtime. Pure logic in\n`src/model.js` with a test. Errors name the fix and carry `.exitCode`. `--json` everywhere. Update the wiki page a\nchange touches (`node .repolore/scripts/wiki-check.mjs` lists what went stale); a new feature gets a new page.\nFinish with `npm run lint && npm test` green, one draft PR, and exactly one terminal verb.\n",
+  "closed_at": "2026-09-03T04:00:10Z",
+  "created_at": "2026-09-02T23:31:55Z",
+  "goal": "src/store/git.js reads and writes board.json, cards/<id>.json and runs/<id>.json on refs/heads/kb-board with commit-tree + update-ref CAS from a linked worktree; the conformance suite of test/store.test.js passes for the durable methods",
+  "id": 292,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 10800,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/store/git.js",
+    "test/store-git.test.js"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "The git tier: src/store/git.js — the kb-board branch written with plumbing from any worktree",
+  "updated_at": "2026-09-03T04:00:10Z"
+}

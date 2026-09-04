@@ -1,0 +1,40 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Operator observation, 2026-08-29, after a day of eleven merges on this board. Every worker runs in its own worktree, so the guard is not about two workers touching one file — it exists to avoid the *merge* conflict when two PRs change the same files. Measured today it does not achieve that on this (manual) board, and it removes most of the board's parallelism.\n\n## Why\n\n- **It releases at `review`, not at merge.** The guard keys on *running* attempts. On a `manual` board the first card's PR then waits for a human; the next card starts from a `main` that does not contain it and conflicts anyway. Today: #152 vs #159/#160/#169, #175 vs #150, #173 vs #162 — all ran serially under the guard and every one needed a merge round-trip (a continuation attempt, or the operator hand-merging on the branch). `docs/wiki/log.md` conflicted on **every** PR regardless of paths.\n- **It serializes almost everything.** `src/model.js` sits in nearly every card's `paths`, so a board with `max_in_progress: 4` ran as one slot.\n- **It holds behind dead attempts.** #182 attempt 1 sat idle for 40 minutes (its session had exhausted its turn budget — see #184) and held #184 and #163 the whole time; `--dry-run` said only `guarded: path_overlap`, not behind what (#176).\n- Where it does earn its keep: `merge.mode: \"auto\"`, where `review → merged` is immediate, so \"do not start B until A is running\" approximates \"until A is merged\".\n\n## What\n\n1. **Policy switch** (`.kanban/board.json` `dispatch.guards.path_overlap`: `\"off\" | \"running\" | \"unmerged\"`; `src/board.js` schema, `src/dispatch.js` guard, pure predicate in `src/model.js`). Default: `\"off\"` when `merge.mode` is `manual` (the default), `\"unmerged\"` when it is `auto`. `\"running\"` is today's behaviour, kept for boards that want it. `\"unmerged\"` keys the overlap on cards whose PR is open (running *or* review) — the honest serial-landing version. `hkb doctor` prints the effective value and why.\n2. **Never hold behind an idle attempt** (whatever the mode): an attempt whose session has been idle longer than one tick — job record says the turn ended, or no transcript write for `> interval` — does not count as holding its paths. Cheap: the tick already reads the job record (#137). Log it once: `#184 held by #182, whose session has been idle since 03:33`.\n3. **Name the collision** in the tick log, `--dry-run`, `hkb show` and the board drawer — this is #176, folded in here; close #176 as a duplicate when this lands, or keep it as the UI half.\n4. **Make the one universal conflict impossible**: `.gitattributes` with `docs/wiki/log.md merge=union` (append-only log; union is correct), and `hkb init` writes that line for adopters that ship the wiki. Note in `docs/wiki/AGENTS.md`.\n5. **Docs**: `protocol.md` tick step 5 (guards) states the three modes and the default; README's dispatcher section; `docs/harnesses.md` if it mentions the guard. Say plainly that with the guard off, conflicts are expected and cheap: the worker's finishing step merges `origin/main`, and a conflicted PR is one continuation attempt (#153/#162).\n\n## Done when\n\n- Fake-gh tests: manual board → two overlapping ready cards are both claimed in one tick; auto board → the second waits until the first's PR is merged, not until it reaches review; `\"running\"` reproduces today; an idle running attempt holds nothing in any mode.\n- A dry-run on a guarded card prints the card it collides with and the overlapping paths.\n- Two PRs that both append to `docs/wiki/log.md` merge without conflict (test with a real git repo).\n- `npm run lint && npm test` green; `npm run smoke` (init writes .gitattributes).\n\n## Contract\n\n- Do not remove `\"running\"`; boards that want today's behaviour keep it by one line.\n- The idle rule must not reclaim or end the attempt — that stays the tick's liveness logic (#136); it only stops the attempt from counting as a path holder.\n- Board policy: the default flips only with `merge.mode`; nothing here edits an existing board.json.",
+  "closed_at": "2026-08-29T05:37:37Z",
+  "created_at": "2026-08-29T04:05:29Z",
+  "goal": "On a manual board overlapping cards run in parallel and land through the continuation loop; on an auto-merge board the guard serializes on unmerged PRs; no guard ever waits on an idle attempt; docs/wiki/log.md never conflicts",
+  "id": 185,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/dispatch.js",
+    "src/model.js",
+    "src/board.js",
+    "src/doctor.js",
+    ".gitattributes",
+    "skills/kanban/references/protocol.md",
+    "README.md",
+    "docs/harnesses.md",
+    "test/dispatch.test.js"
+  ],
+  "priority": 5,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "The path_overlap guard is off by default on a manual board, keyed on unmerged PRs where it stays on, and never holds behind an idle attempt; wiki/log.md merges by union",
+  "updated_at": "2026-08-29T05:37:37Z"
+}

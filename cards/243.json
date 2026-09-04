@@ -1,0 +1,34 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found reviewing #237 (PR #240) on 2026-09-01, immediately after `hkb edit` shipped. The card's goal was met;\n> this is outside it.\n\n## Why\n\n`hkb edit` is the write half of the kb block, and two of its four flags take unvalidated input\n(`src/cli.js`, the `edit` case):\n\n```js\nif (flags.priority !== undefined) fields.priority = Number(flags.priority);\nif (flags['scheduled-at'] !== undefined) fields.scheduled_at = str(flags['scheduled-at']);\n```\n\n`hkb edit 5 --priority abc` computes `Number('abc')` → `NaN`, and `JSON.stringify` writes\n`\"priority\": null`. The card's priority is **silently reset** — and the command reports `#5 kb: priority set`,\nwhich is worse than saying nothing. The same shape applies to `--scheduled-at`: any string is accepted, and a\nmalformed one lands in the block where `computeReady` will parse it as an invalid `Date` and treat the card as\nnot scheduled, with nothing anywhere saying the value was junk.\n\nBoth are exactly what value 5 forbids: never a silent failure, and every error says what to do next. They are\nalso more dangerous here than in most verbs, because `hkb edit` is the command `hkb groom`'s findings tell a\nhuman to run — including `priority_inversion`, whose whole purpose is to *correct* a priority.\n\n## What\n\n- **`--priority` must be an integer.** Reject anything else with exit 2 naming the flag, what was given, and the\n  band (`0` unfiled · `1` normal · `2` next up · `3` urgent — #207). `Number.isInteger` after an explicit parse;\n  do not silently floor a float either.\n- **`--scheduled-at` must be a valid ISO instant.** Reject anything `new Date(...)` cannot parse, with exit 2\n  naming the flag and showing the expected shape. Consider warning (not refusing) on a timestamp in the past,\n  since a past `scheduled_at` is a no-op the card's author probably did not intend.\n- **Validate before writing anything**, and for `hkb edit <n>...` with several numbers, validate the flags once\n  up front so a bad flag cannot edit the first card and then fail on the second.\n- Keep the decision pure in `src/model.js` so the parse is unit-tested without a board, per the layout rule.\n- While here: `--paths` and `--goal` accept the empty string, which is a legitimate way to clear a field. Decide\n  whether that is intended and say so in the usage line either way — today it is neither documented nor refused.\n\n## Done when\n\n- [ ] `hkb edit <n> --priority abc` exits 2 naming the flag and the band, and writes nothing.\n- [ ] `hkb edit <n> --scheduled-at nonsense` exits 2 naming the flag and the expected shape, and writes nothing.\n- [ ] A multi-number `hkb edit` validates its flags before touching the first card, covered by a test.\n- [ ] The usage line says what clearing a field looks like.\n- [ ] `npm run lint && npm test` pass.",
+  "closed_at": "2026-09-01T22:25:09Z",
+  "created_at": "2026-09-01T21:44:32Z",
+  "goal": "hkb edit rejects a non-integer --priority and an unparseable --scheduled-at with exit 2 naming the flag and the expected shape, writes nothing when it refuses, validates flags once before touching the first of several cards, and documents how to clear a field",
+  "id": 243,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/cli.js",
+    "src/model.js",
+    "test/cli.test.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb edit accepts a non-numeric priority and writes null, silently resetting the card while reporting success",
+  "updated_at": "2026-09-01T22:25:09Z"
+}

@@ -1,0 +1,39 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    148
+  ],
+  "body": "> Observed 2026-08-28, an agent session operating hkb's own board. The README grants the role in one sentence — *\"An agent session may drive those verbs for you — the approvals and the credentials stay with you\"* — and encodes none of it. This session found out by trial: `ps` for the dispatcher, a hand-rolled `tail -f | grep` on a scratch log to learn a claim happened, `claude logs <id>` (fails from a sandboxed shell), then grepping transcript `.jsonl` files to see what the worker was doing — and only on the fourth try, `hkb watch`, the tool built for exactly this. Every one of those is a \"yes, by hand\".\n\n## Why\n\nhkb has three seats and the operator is the human; a session that drives the operator's verbs is the one seat with no brief. Workers get `hkb context` and the skill; planners get `/kanban:specify` and `/kanban:decompose`; the operator's session gets nothing, so each one rediscovers the loop, and gets the boundaries (what it may merge, what it must hand back) wrong in its own way.\n\n## What\n\nOne new section in `skills/kanban/SKILL.md`, **`## /kanban:operate`**, and a command file beside `specify.md`/`decompose.md` that points at it (same pattern: the procedure lives in exactly one place, `src/init.js:102`). The section is a procedure, not prose:\n\n1. **Bring the board up**: `hkb up --serve` (#148) then `hkb up --status`; `hkb doctor` once, act on any `✗`.\n2. **Watch, don't poll**: run `hkb watch --json --interval 60` as the session's monitor (a Claude Code session: the Monitor tool over that command; another harness: its background-process equivalent). Never `sleep`-and-`list`; never tail the dispatcher log for state the board already has — the log is for a claim that failed to spawn, and `up --status` for the loop itself.\n3. **A reaction table, one row per event kind** (`EVENT_KINDS` / `--kinds` tokens in `src/watch.js`):\n   - `review` → read the PR against the card's *Done when*; run the repo's checks; merge per the board's merge policy (`dispatch.merge.mode`) or `hkb request-changes <n> \"why\"` with the specific gap. Never merge on a `manual` board without the human — that is the policy's meaning.\n   - `blocked` / `needs_input` → answer with `hkb comment` + `hkb unblock` **only** when the answer is already on the board (the card, its parents, an earlier comment); otherwise surface the question to the human and stop.\n   - `blocked` / `capability` → do not widen a profile's `allowed_tools` alone; report the tool the worker asked for (#130 is the board's view of it).\n   - `protocol_violation` / `crashed` → before a retry burns, open the attempt: `hkb show <n>` prints the session/transcript resume line; say what happened in one comment on the card so the next attempt reads it.\n   - `needs-human` → the human, always; `appeared` → nothing, unless the session is also planning.\n   - dispatcher gone (`up --status` says exited 4) → `hkb up`, once; twice in a row → the human.\n4. **The seat boundary, stated**: the session drives verbs; the credentials, the approvals and any release stay with the human. It files cards it can justify from evidence on the board; it does not re-prioritise, archive, or change board policy. It never runs `hkb dispatch` in the foreground (#143's reason) and never starts a second loop.\n5. **Reporting**: end each cycle with the one-line-per-transition digest `hkb watch` already prints, plus what it did and what it handed back.\n\nAlso: `README.md` seats section gains a link to the command; `hkb init` installs the third command file with the other two; `docs/wiki/` page for the feature (`node .repolore/scripts/wiki-check.mjs`).\n\n## Done when\n\n- `/kanban:operate` exists in a repo after `hkb init` (and in this checkout via the existing link), and its procedure lives only in `SKILL.md`.\n- A fresh agent session given `/kanban:operate` brings the board up with one command, arms `hkb watch`, and handles a `review` and a `needs_input` transition per the table — verified once by hand on this board and the run linked from the PR.\n- The reaction table names every `EVENT_KINDS` token or says which ones need no reaction.\n- `npm run lint && npm test` green; `npm run smoke` (init installs a new file).\n\n## Contract\n\n- Blocked by #148 — step 1 is that verb; branch from its merge.\n- No LLM in hkb, no new CLI verb beyond #148: this is skill text and one command file. The dispatcher stays a tick.",
+  "closed_at": "2026-08-29T01:31:32Z",
+  "created_at": "2026-08-28T21:41:23Z",
+  "goal": "An agent session told /kanban:operate runs the board the way the README's operator sentence promises: one command up, hkb watch as its monitor, a reaction per event kind, and a stated line for what it hands back to the human",
+  "id": 149,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "skills/kanban/SKILL.md",
+    ".claude/commands/kanban",
+    "src/init.js",
+    "README.md",
+    "docs/wiki",
+    "test/harness.test.js"
+  ],
+  "priority": 4,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "/kanban:operate: the operator seat as a procedure — bring the board up, watch it, react per event kind, know what stays with the human",
+  "updated_at": "2026-08-29T01:31:32Z"
+}

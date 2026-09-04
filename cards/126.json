@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    121
+  ],
+  "body": "Found while documenting #121 (per-profile spend), verified against src/stats.js on 2026-08-28.\n\n## What\n\nSince #119, every node a track runner claims in-session carries the runner's `session_id` and\n`transcript_path` — the same file for the root and every node. `priceOf` (src/stats.js:207) reads\nthat transcript per attempt row, and `summarizeSpend` adds each row's usage, so one session's tokens\nare counted once per node.\n\nReproduced with the module directly: three node attempts naming one transcript of 100 turns report\n`spend.usage.turns = 300` and three times the estimate.\n\n## Why it matters\n\nA track is the recommended engine for coupled work, so the boards most likely to want a spend number\nare exactly the ones that over-state it — silently, and by a factor nobody can see in the output.\n\n## Direction\n\nSum usage per distinct transcript (or per `session_id`), not per attempt row: read each transcript\nonce, attribute it to one attempt, and leave the other rows of that session with no usage — or add a\n`shared_with` count so the report can say \"one session across N nodes\". Either way `hkb stats`\nshould never print a total that double-counts a file it read twice.\n\nDocs written in #121 describe the current behaviour as a caveat; update them with the fix.\n\nScope: src/stats.js, test/stats.test.js, and the track paragraph in docs/harnesses.md.",
+  "closed_at": "2026-08-28T16:06:32Z",
+  "created_at": "2026-08-28T15:51:11Z",
+  "goal": "a track session is counted once, however many nodes carry its transcript",
+  "id": 126,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/stats.js",
+    "test/stats.test.js"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb stats counts a track's one transcript once per node",
+  "updated_at": "2026-08-28T16:06:32Z"
+}

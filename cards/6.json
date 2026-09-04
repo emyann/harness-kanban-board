@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    3
+  ],
+  "body": "## What\n- Built-in profile `codex`: `codex exec -C {worktree} --sandbox workspace-write --output-schema .agents/skills/kanban/schema/terminal.json \"{prompt}\"`, worktree created by the dispatcher (`git worktree add`).\n- `hkb init --harness codex` generates `.codex/hooks.json` (Stop → `hkb hook stop`) and appends `[mcp_servers]`-free config notes; write `docs/harnesses.md` with the exact one-time trust steps (`/hooks`, project `trust_level`) verified against https://learn.chatgpt.com/docs/hooks and the config reference.\n- Reuse the same template mechanism as the copilot profile (coordinate through the run comment of that task if it merged first: read its summary).\n\n## Done when\nGenerated files exist, `hkb doctor` reports the profile, docs are accurate to the current Codex docs (cite URLs in the PR).",
+  "closed_at": "2026-08-26T08:05:57Z",
+  "created_at": "2026-08-26T04:33:30Z",
+  "goal": null,
+  "id": 6,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "templates/codex/",
+    "docs/harnesses.md"
+  ],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "codex profile: codex exec --output-schema in a worktree, .codex/hooks.json Stop nudge, documented one-time trust",
+  "updated_at": "2026-08-26T08:05:57Z"
+}

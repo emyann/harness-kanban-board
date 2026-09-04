@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Extracted 2026-09-01 while decomposing #223 (the tool posture) and #217 (the capability map). Both change how\n> a worker's permitted tools are *derived*, and #217's own body flags the collision: \"if both land, the grant\n> should be derived from the union of the map and the posture rather than maintained twice.\"\n\n## Why\n\nToday \"what may this worker use\" is answered by reading `profile.allowed_tools` at the launch site and nowhere\nelse. That was fine while it was one hand-maintained list. It is about to stop being one:\n\n- **#223** wants the answer to depend on a posture (`inherit` vs `curate`) and on MCP servers named or excluded.\n- **#217** wants part of the answer *derived* — if a profile binds an intent to something invoked with `Skill`,\n  then `Skill` is granted because of that binding rather than because somebody remembered to type it.\n- **#223** also wants a card to be able to **narrow** the profile's grant, and never to widen it.\n\nThree sources, one output, and no single place that combines them. Land either feature first and it reaches into\nthe launch directly; land the second and it either overwrites the first's reasoning or bolts a second derivation\nbeside it. That is exactly the drift that produced #114 — a field naming a capability and a launch granting it,\nmaintained separately, disagreeing silently under `dontAsk` where an unlisted tool is denied rather than\nprompted.\n\nThis card builds **only the seam**. No posture, no map, no new configuration, no behaviour change: today's\ninputs through today's rules, with one function that both siblings can plug into instead of into `src/board.js`.\n\n## What\n\n- **`effectiveTools(profile, task, board)` in `src/model.js`** — pure, no I/O — returning the tool list a launch\n  should use, plus what it dropped and why. Today that is `profile.allowed_tools` unchanged; the value is the\n  shape, not the logic.\n- **A card narrows, never widens.** `kb.tools` / `kb.mcp` on a task intersect with the profile's grant. Anything\n  a card asks for that its profile does not have is **dropped and recorded**, never granted — a card that could\n  widen its own permissions is the seat problem one rung down. The dropped list is returned, not swallowed, so a\n  caller can say so.\n- **Extension points, unused here**: the signature takes what the two siblings will need (the profile, the card,\n  the board) so neither has to change it. Do not implement a posture or a map — a stub for either is worse than\n  a clean seam, because it invites a second one.\n- **The launch site calls it.** `src/board.js` / `src/dispatch.js` stop reading `allowed_tools` directly and ask\n  `effectiveTools` instead. That is the whole point: after this, there is exactly one answer to the question.\n- **Tests are the deliverable as much as the function**: today's behaviour is byte-identical for every existing\n  profile — a test asserts the launch line is unchanged for the shipped `claude`, `claude-track` and `claude-p`\n  — and the narrowing rule is pinned, including the widening attempt that gets dropped and reported.\n\n## Done when\n\n- [ ] `effectiveTools(profile, task, board)` is exported from `src/model.js`, pure, and returns both the list and\n      what it dropped.\n- [ ] Every existing profile produces a byte-identical launch line to today's, pinned by a test.\n- [ ] A card narrowing its profile's grant works; a card attempting to widen it is dropped and reported, with a\n      test for each.\n- [ ] Nothing outside `effectiveTools` reads `profile.allowed_tools` to build a launch.\n- [ ] `npm run lint && npm test` pass. No new configuration key ships in this card.",
+  "closed_at": "2026-09-02T00:09:30Z",
+  "created_at": "2026-09-01T23:52:41Z",
+  "goal": "effectiveTools(profile, task, board) is the single pure derivation of a launch's tool list, returning what it dropped; a card can narrow but never widen; every shipped profile's launch line is byte-identical to today's, pinned by a test; nothing else reads allowed_tools to build a launch",
+  "id": 255,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/model.js",
+    "src/board.js",
+    "src/dispatch.js",
+    "test/model.test.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "One place derives what a worker may use, so the posture and the capability map do not each grow their own answer",
+  "updated_at": "2026-09-02T00:09:30Z"
+}

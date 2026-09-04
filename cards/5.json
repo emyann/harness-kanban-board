@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    3
+  ],
+  "body": "## Why\nPortability is the point. Copilot CLI is included in Copilot Free; its local profile is Tier A in the design.\n\n## What\n- Built-in profile `copilot-cli` in `src/board.js`: `copilot -p \"{prompt}\" --agent=kanban-worker --allow-tool='shell(hkb *)' --allow-tool='shell(git *)' --allow-tool='shell(gh pr *)'` run in a worktree the dispatcher creates with `git worktree add .claude/worktrees/kb-{n}-{k} -b kb-{n}-{k}` (Copilot has no --worktree flag).\n- `hkb init --harness copilot` generates from templates: `.github/agents/kanban-worker.agent.md` (same protocol text as SKILL.md) and `.github/hooks/kanban.json` with an `agentStop` hook that calls `hkb hook stop` and returns `decision: block` (max 2 nudges).\n- `hkb hook stop` must accept Copilot's hook input shape as well as Claude's; document the differences in `src/hook.js`.\n- Verify flag names against https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference and the hooks reference; if a flag differs, follow the docs and note it in the PR.\n\n## Done when\n`hkb init --harness copilot` on a scratch dir produces the files; `hkb doctor` reports the profile; tests for template generation.",
+  "closed_at": "2026-08-26T07:52:56Z",
+  "created_at": "2026-08-26T04:33:28Z",
+  "goal": null,
+  "id": 5,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/init.js",
+    "src/board.js",
+    "templates/copilot/"
+  ],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "copilot-cli profile: launch template, .github/agents/kanban-worker.agent.md, agentStop hook via hkb init --harness copilot",
+  "updated_at": "2026-08-26T07:52:56Z"
+}

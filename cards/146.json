@@ -1,0 +1,41 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Observed 2026-08-28 on pipao-v2, an adopter whose maintainer also works from a machine with only pipao checked out. The adopter's own answer to \"where is hkb\" is already local: `.agents/skills/kanban/scripts/hkb` does `command -v hkb || npx -y hkb-cli`, and `npx hkb …` resolves `node_modules/.bin` first. What broke was the one thing that cannot go through npx: the hooks.\n\n## Why\n\n`npm i -D hkb-cli` is the proper adopter install — the version is pinned in `package.json`/lockfile, every machine and every teammate gets it from `npm install`, no global step, no PATH drift when nvm's `lts/*` alias moves. hkb does not support it today:\n\n- Claude Code runs hook commands in a plain `/bin/sh` with the session's PATH; `node_modules/.bin` is not on it. So the bare `hkb hook <verb>` init writes fails on every tool call in every session (`/bin/sh: 1: hkb: not found`), and the hooks are the only thing the repo's other sessions ever see of hkb.\n- `hkbOnPath()` (`src/board.js:164`) is wrong under `npx hkb init`: npx puts `node_modules/.bin` on the child's PATH, so init answers \"on PATH\", writes the bare form, and it never resolves outside npx. Run as `./node_modules/.bin/hkb init` it writes `node \"/abs/path/to/repo/node_modules/hkb-cli/bin/hkb.js\"` into `settings.local.json` — right on this machine, meaningless on the next, so `init` has to be repeated per machine (#85's compromise, which a local install no longer needs).\n- Claude Code sets `CLAUDE_PROJECT_DIR` for hook commands precisely so a project can reference its own files portably. `node \"$CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js\" hook stop` is the same on every machine that ran `npm install` — it belongs in the **tracked** `.claude/settings.json`, and then a teammate's `git pull && npm install` is the whole setup.\n\n## What\n\n1. **Detect the local install** (`src/init.js`, pure helper in `src/model.js`): `PKG_ROOT` sits under `<repo>/node_modules/` — compare against the repo root, not PATH. `hkbCommandForHook` gains this case and returns `node \"$CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js\" hook <verb>` (the package name from `package.json`, never hard-coded). Treat it as **portable** (`isPortableHookCommand`): it means the same on every machine, so `hookPlacement` puts it in the tracked file by default, no `--shared-hooks` needed. Fix `hkbOnPath()` so npx's augmented PATH does not count — strip `node_modules/.bin` entries, or resolve `command -v hkb` and reject a path under the repo's `node_modules`.\n2. **Worktree edge.** A worker runs in `.claude/worktrees/kb-<n>-<k>`, a fresh checkout with no `node_modules` until it runs `npm ci`; `CLAUDE_PROJECT_DIR` there is the worktree. Both hooks are inert without `KB_TASK`, so the command guards: `f=\"$CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js\"; [ -f \"$f\" ] || exit 0; exec node \"$f\" hook <verb>` — one line, no output, no error before the install; the Stop hook is what matters and by then `npm ci` has run. Say in `docs/harnesses.md` that a worker prompt on a local-install board should install before it finishes. (#144 later hands the worker the absolute path of the hkb that ran the dispatcher, which closes this fully.)\n3. **`hkb doctor`** (`checkHooks`, `hookCommandNeeds`): understand the guarded form; resolve `$CLAUDE_PROJECT_DIR` to the repo root when checking that the file exists; on a local install where the tracked file still holds the bare `hkb` form, say so with the fix (`hkb init` rewrites it). `hookCommandNeeds` currently tokenises the first two words — extend it, do not special-case.\n4. **The skill shim** (`skills/kanban/scripts/hkb`): keep it; it is already right for a local install. One comment saying so.\n5. **Docs**: README's install section names `npm i -D hkb-cli` + `npx hkb init` as the adopter path and `npm i -g` as the alternative; `docs/harnesses.md` hooks table gets the local-install row; `src/init.js` header comment (#85's reasoning) gets the third case; wiki page covering hooks (`docs/wiki/architecture/overview.md`; run `node .repolore/scripts/wiki-check.mjs`).\n\n## Done when\n\n- In a repo with `hkb-cli` in `devDependencies`, `npx hkb init` writes the `$CLAUDE_PROJECT_DIR` form into `.claude/settings.json`, and a second machine that runs `git pull && npm install` has working hooks with no further command.\n- No session in that repo logs a hook error, installed or not: before `npm install` the hook exits 0 silently.\n- `npx hkb doctor` on that repo reports `✓ hook command` with the file it resolved, and a stale bare-`hkb` entry as a failure naming `hkb init`.\n- Tests: `hkbCommandForHook` for the local case, `hkbOnPath` ignoring `node_modules/.bin`, `hookPlacement` treating the form as portable, `hookCommandNeeds` parsing the guarded form (`test/harness.test.js`, `test/doctor.test.js`). `npm run lint && npm test` green; `npm run smoke` (init output changed) — and the smoke's scratch repo should exercise the local-install branch.\n\n## Contract\n\n- Blocks #144: both edit `hkbCommandForHook`, `checkHooks` and the same docs; #144 branches from this merge.\n- Do not remove the global-install path or `--shared-hooks`; this adds the third case, it does not replace the first two.\n- No new dependency; the detection is a path comparison.",
+  "closed_at": "2026-08-29T00:22:59Z",
+  "created_at": "2026-08-28T21:08:59Z",
+  "goal": "An adopter installs hkb-cli as a devDependency and runs npx hkb init once: the hooks land in the tracked .claude/settings.json as a CLAUDE_PROJECT_DIR-relative command that resolves on every machine after npm install, exits 0 silently before it, and hkb doctor verifies it",
+  "id": 146,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/init.js",
+    "src/board.js",
+    "src/model.js",
+    "src/doctor.js",
+    "skills/kanban/scripts/hkb",
+    "README.md",
+    "docs/harnesses.md",
+    "docs/wiki/architecture/overview.md",
+    "test/harness.test.js",
+    "test/doctor.test.js"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Support npm i -D hkb-cli: init writes a $CLAUDE_PROJECT_DIR-relative hook command into the tracked settings",
+  "updated_at": "2026-08-29T00:22:59Z"
+}

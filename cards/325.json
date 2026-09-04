@@ -1,0 +1,41 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\n\n**No card owns this, and everything downstream assumes it is done.** A6 (#294) composed the two tiers and\nsaid so plainly in its result: the verbs were deliberately out of scope. C1 (#303) tried to move the test\nassertion sites onto a store double and found, file by file, that **zero of the 121 sites can move**,\nbecause `src/cli.js`, `src/dispatch.js`, `src/lifecycle.js`, `src/context.js`, `src/stats.js` and\n`src/hook.js` all still import the GitHub bodies through the `src/tasks.js`/`src/lock.js` re-export shims —\nnothing installed at the seam is on their path. C2 (#304) opens by *deleting* `src/store/github.js` and\nthose shims, which presumes every caller already routes through `openStore`.\n\nSo the plan (`docs/local-first.md` §10) has A6 land the store, C1 test against it and C2 delete the old\none, with nothing in between that moves the callers. Two workers each guessed a different owner (\"track\nC's paths\", \"routing the verbs is track B\") because there is no owner. This card is that step.\n\nIt is also what unblocks root A: #288's verification is a scratch repo running `hkb init --store local`\nthen create → claim → finish → serve end to end, which cannot pass while the verbs read GitHub. And it is\nwhat lets `hkb init` default back to `local` — `resolveStore` and its test both carry a \"flip this back\nwhen the verbs are routed\" note pointing here.\n\n## What\n\nMove every board read and write off `src/tasks.js`/`src/lock.js` and onto `openStore(ctx)`. **No deletion\nand no behaviour change** — the shims stay until #304, the GitHub driver stays the default, and a board on\n`\"store\": \"github\"` must behave exactly as it does today.\n\n1. `src/cli.js`, `src/lifecycle.js`, `src/dispatch.js`, `src/context.js`, `src/stats.js`, `src/hook.js`:\n   every call that reaches board state goes through `openStore(ctx)`. Where a caller needs a shape the\n   interface does not have, add it to the interface (`src/store/index.js`) and to **both** drivers with a\n   scenario in `test/store.test.js` — never a fresh call into `gh.js`, per CLAUDE.md.\n2. Where the two drivers disagree on a shape, the contract in §6.4 wins and the driver changes. #315's\n   review already found this class once: the index tier had `blocked_by: number[]` and `needs_human` where\n   the contract says `blockedBy[{number,state}]` and `needsHuman`, and a forwarding driver got wrong rows\n   with no error. Expect more of it here; a shape mismatch must fail loudly, not silently.\n3. `setStore()` and `test/fake-store.js` (PR #324, merged ahead of this card) are the injection point and\n   the double. As call sites move, they become testable against the double — but **do not** rewrite the 121\n   assertion sites here; that is #303's whole job and this card's `paths` exclude `test/` except for what\n   the moves force.\n4. When it is done, flip `hkb init`'s default back to `local`: `resolveStore` (`src/init.js`), its doc\n   block, the test at `test/init.test.js`, and the README's \"How it works\" preamble and \"Where this is,\n   right now\" note all say where and why.\n\n## Done when\n\n- [ ] `grep -rn \"from './tasks.js'\\|from './lock.js'\" src` returns nothing outside `src/store/`.\n- [ ] `npm run lint && npm test` green with **no test rewritten to accommodate the move** — a test that has\n      to change is a behaviour change and needs saying on the card.\n- [ ] A scratch repo on `--store local` runs `hkb create` → `hkb list` → `hkb claim` → `hkb finish`, with\n      the exact commands in the result. This is the check root A is waiting for.\n- [ ] The same walk-through on a `--store github` board is unchanged.\n- [ ] `hkb init` defaults to `local` again, and the four \"flip this back\" notes are gone.\n- [ ] The wiki page each change touches is updated (`node .repolore/scripts/wiki-check.mjs`).\n\n## Contract\n\nDo not delete the GitHub driver or the shims (#304). Do not migrate this repository's own board. Keep\n`src/gh.js` as the only place that shells out to `gh`. Pure logic in `src/model.js` with a test. Errors\nname the fix and carry `.exitCode`. `--json` everywhere.\n\n**Read first:** `docs/local-first.md` §6.4 (the interface) and §7, `docs/wiki/architecture/store-seam.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Finish with one draft PR and exactly one\nterminal verb.",
+  "closed_at": "2026-09-03T08:55:06Z",
+  "created_at": "2026-09-03T07:34:12Z",
+  "goal": null,
+  "id": 325,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/cli.js",
+    "src/lifecycle.js",
+    "src/dispatch.js",
+    "src/context.js",
+    "src/stats.js",
+    "src/hook.js",
+    "src/store/",
+    "src/init.js",
+    "README.md",
+    "docs/"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Route the verbs through openStore: move cli/lifecycle/dispatch/context/stats/hook off the tasks.js and lock.js shims",
+  "updated_at": "2026-09-03T08:55:06Z"
+}

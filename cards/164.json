@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> From the second-pass review of PR #151 (#148, merged). `hkb up` rechecks `pidAlive` 300 ms after the spawn and prints \"serve exited immediately (pid N) — see .kanban/logs/serve.log\" — but it still pushes the process into `started`, adds no error field under `--json`, and **returns 0**. Measured: `hkb up --serve --port 80 --json` → exit 0, `started:[\"serve\"]`, `serve.running:false`. A script sees a clean run for a board that is not up.\n\n## What\n\n- `src/up.js` (~121, ~158-165): a child that is dead at the recheck goes into `failed: [{ name, pid, log }]`, not `started`; exit 1 when `failed` is non-empty — mirroring what `down` already does. Human line unchanged. Pure decision in `src/model.js` beside `startDecision`.\n- While there: `down` on a pid file naming a dead pid says \"not running\" and leaves the file — remove it; a kill that throws `ESRCH` (died between `processState` and `kill`) counts as stopped, not failed.\n- Wiki page `features/up-and-down.md`: the `--json` shape gains `failed`.\n\n## Done when\n\n- `hkb up --serve --port 80 --json` (port refused) exits 1 with `failed:[{name:\"serve\",…,log:\".kanban/logs/serve.log\"}]` and `started:[]`; the loop half still starts and is reported.\n- `test/up.test.js` covers the dead-at-recheck path and the ESRCH race. `npm run lint && npm test` green.\n\n## Contract\n\n- Keep `up` idempotent and non-supervising; this changes only what it reports and its exit code.",
+  "closed_at": "2026-08-29T02:12:59Z",
+  "created_at": "2026-08-29T00:00:43Z",
+  "goal": "hkb up reports a child that exited within the recheck window as failed, with the log path and a non-zero exit, under both human and --json output",
+  "id": 164,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/up.js",
+    "src/model.js",
+    "test/up.test.js",
+    "docs/wiki/features/up-and-down.md"
+  ],
+  "priority": 4,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb up exits 0 and reports started when the child died on startup",
+  "updated_at": "2026-08-29T02:12:59Z"
+}

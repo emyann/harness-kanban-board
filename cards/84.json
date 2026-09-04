@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "`GET /repos/emyann/harness-kanban-board/branches/main/protection` returns **404 Branch not protected**. Nothing requires a passing `test` or `packed artifact` run before a commit lands on `main`.\n\nToday that held only by habit. Worker PRs happen to merge slowly enough that CI finishes first — #81 opened 17:56:22, checks green by 17:56:47, merged 17:59:48. But two docs PRs merged **with checks still pending** (#82, #83) because they were merged the moment they opened. Harmless for prose; the identical path would put an unverified `src/` change on `main`.\n\nThis matters more here than in a repo where a human reads every diff, because most changes on this board are written by an agent and merged within minutes. The invariant worth buying is \"nothing reaches `main` that CI has not agreed with\".\n\n**The constraint that shapes the fix.** `docs/releasing.md` publishes by pushing a commit *and* tag straight to `main`:\n\n    npm version patch\n    git push --follow-tags\n\nA protection rule that **requires pull requests** breaks that runbook — the release commit has no PR and never will. So either:\n\n- require *status checks* on `main` without requiring PRs (simplest; keeps the release flow intact), or\n- require PRs too, and give the maintainer an explicit bypass, or\n- move the version bump to a PR and tag the merge commit — a real change to `docs/releasing.md`, and it must keep tag ⇄ `package.json` in step, which is what the publish job gates on.\n\nRecommend the first unless there is a reason not to.\n\n**Which checks.** `test` and `packed artifact` (both from `test.yml`). **Not** `dispatch` — that check run comes from `kanban-dispatch.yml` and is board machinery, not a quality gate; requiring it would wedge merges on an unrelated workflow.\n\n**Also decide:** whether the dispatcher's own merges need anything (it does not merge today — every PR so far was merged by the operator), and whether to require branches be up to date before merging, which costs a re-run per merge and is probably not worth it at this volume.\n\n**Done when** protection is configured, a PR with a failing test cannot be merged, and `docs/releasing.md` still works end to end — verified at the next release, not asserted.",
+  "closed_at": "2026-08-27T18:57:22Z",
+  "created_at": "2026-08-27T18:10:10Z",
+  "goal": null,
+  "id": 84,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "main has no branch protection: agent-authored changes can reach it unverified",
+  "updated_at": "2026-08-27T18:57:22Z"
+}

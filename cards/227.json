@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    225,
+    226
+  ],
+  "body": "## Why\n\nThe pure report (`groomBoard`, a sibling) and the board read that feeds it (`fetchBoard(ctx, {blockers: 'all'})`,\nanother sibling) are useless without a way to run them. This task is the verb: one read, zero writes, a stable\n`--json` shape and a human format a person can scan.\n\nThe token argument is the whole point of the output design. Today learning the state of the triage lane means\n~78 KB of JSON, 58 KB of it issue bodies. The report plus only the flagged cards' bodies is roughly 10 KB + 28 KB.\nA card nobody needs to judge must carry no `bodyText` at all.\n\n## What\n\nPer #191's *What* section 1 (the CLI half), amended:\n\n- **`hkb groom`** in `src/cli.js`: one `fetchBoard(ctx, { includeClosed: !!flags.all, blockers: 'all' })`, then\n  `groomBoard`. Flags: `--status triage,todo,ready` (default those three), `--all`, `--pairs N`,\n  `--level act|ask|info`, `--bodies flagged|all|none` (default `flagged`), `--json`. **It writes nothing.**\n- **The `--json` shape is exactly the one #191 specifies and is frozen.** `bodyText` appears only when\n  `needs_judgment` is true, or under `--bodies all`.\n- **Human output**: a header (`26 open · 21 triage · hubs: src/model.js (12), …`), one row per card in\n  `taskLine` style ending `⇒ <proposal>` plus the evidence, a `pairs` block, and a footer counting act/ask/info.\n- **`hkb list` gains ` ⇡ unblocked`** on a triage card whose (>= 1) blockers are all done — computed in memory\n  in `taskLine`, no new field, no write.\n- Unknown `--level` / `--bodies` values exit 2 naming the valid list, per the error rule.\n\n## Done when\n\n- [ ] `hkb groom --json` on the fake-gh double makes exactly **one** GraphQL call and **zero** writes.\n- [ ] `hkb groom` prints one line per card; `--level x` exits 2 naming the list.\n- [ ] A test asserts unflagged cards carry no `bodyText`, and that the `--json` keys are the frozen set.\n- [ ] `hkb list` shows ` ⇡ unblocked` on a qualifying triage card, computed in memory.\n- [ ] `npm run lint && npm test` pass. `skills/kanban/SKILL.md` is **not** touched by this task — the procedure\n      is a sibling's.\n\n## Contract\n\nThese are the names, signatures and rules a sibling depends on. Do not invent alternatives; a change here\nbreaks a task you cannot see.\n\n- **The eleven \"Amendments from the adversarial pass\" at the top of #191 override its body wherever they\n  differ.** Read `hkb show 191` first and treat the amendments as the specification. In particular: reuse\n  `computeReady`, `agentsOf` and the walk in `src/track.js` — **do not write `detectCycles`**; `no_goal` is\n  `info` when the body already has a Done-when heading; `broad_path` exists and is `ask`; `overlap_pair.why` is\n  guard-aware.\n- `groomBoard(tasks, { now, caps, pairs = 10, statuses })` is exported from `src/model.js` and takes the raw\n  `fetchBoard` array and nothing else — a later card puts the same function behind `hkb serve`'s snapshot.\n- `GROOM_KINDS` and `GROOM_ACTIONS` are exported from `src/model.js`. Actions are the closed vocabulary\n  `promote · specify · link-under · split · supersede · reprioritise · park · archive`, plus `judge` and `none`.\n- `fetchBoard(ctx, { blockers: 'all' })` REST-fills blockers for **every open card** on a repo without GraphQL\n  `blockedBy`; `blockers: true` keeps today's todo/blocked-only behaviour.\n- The `--json` field names in #191 are **frozen**; later kinds are added to `findings`, never renamed.\n- The CLI never emits the word \"duplicate\". `overlap_pair.why` is \"will serialize under path_overlap\".\n- **`src/dispatch.js` is untouched by this whole track** — the promote step still filters `status === 'todo'`.\n- Nothing in this track writes to the board. `hkb groom` is a read, like `hkb dispatch --dry-run`.",
+  "closed_at": "2026-09-01T21:10:21Z",
+  "created_at": "2026-09-01T20:42:37Z",
+  "goal": "hkb groom makes one GraphQL call and zero writes, prints one row per card ending in its proposal, emits the frozen --json shape carrying bodyText only for cards needing judgment, exits 2 on an unknown --level/--bodies, and hkb list shows the unblocked nudge computed in memory",
+  "id": 227,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/cli.js",
+    "test/cli.test.js"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb groom: the read verb, its frozen JSON shape, and the unblocked nudge in hkb list",
+  "updated_at": "2026-09-01T21:10:21Z"
+}

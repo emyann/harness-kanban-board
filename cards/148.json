@@ -1,0 +1,41 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Observed 2026-08-28, operating hkb's own board from an agent session. Starting the two long-running processes took `ps`/`ss` to learn whether they were already up, then `setsid nohup node bin/hkb.js dispatch --loop 60 > <scratch>/dispatch.log 2>&1 < /dev/null &` and the same for `serve` — logs in a directory nobody will find next week. Everything hkb needs for this already exists: the dispatcher's singleton lock (`.kanban/dispatch.pid`, `src/dispatch.js:865`), `pidAlive`, `serve.js:106` reading that lock to show dispatcher state, `logsDir()` (`src/board.js:126`), and a detached spawn pattern (`src/dispatch.js:117`). What is missing is the verb.\n\n## Why\n\nAn operator's first act on a board is \"make sure it is running\" — and today that is a shell recipe, different on every machine and unwritable for a harness that vets a command line word by word (`nohup`, `&`, redirections). The README's free path is three commands, and the third (`dispatch --loop 60`) takes over the terminal. A board that is meant to keep moving needs a way to be started that is one command, idempotent, and leaves its logs where `hkb` looks for logs.\n\n## What\n\n1. **`hkb up [--serve] [--loop S] [--port N]`** (`src/cli.js`, new `src/up.js`, pure helpers in `src/model.js`): start the dispatcher loop detached; with `--serve` also the board server. Idempotent — a live `dispatch.pid` means \"already running (pid N, since T)\", not a second loop (the singleton would refuse anyway; say it before spawning). For `serve`, a pid file beside it (`.kanban/serve.pid`, same `pidAlive` check) and `EADDRINUSE` treated as \"already up on that port\" when the pid file agrees. Detach with the same `spawn(..., { detached: true, stdio: ['ignore', fd, fd] })` the dispatcher uses for workers; `unref()`; logs at `.kanban/logs/dispatch.log` and `.kanban/logs/serve.log`, appended, one `# <ISO> started pid N` line per start. The child is this same binary: `process.execPath` + `process.argv[1]`, so a checkout runs the checkout and an install runs the install — no PATH lookup. **Scrub `KB_*` from the child's env** (see the daemon-leak card filed alongside this one): `up` may be run from a session that wrongly believes it is a worker, and the loop it starts must not inherit that.\n2. **`hkb up --status`** and **`hkb down [--serve]`**: status prints one line per process (`dispatch running pid 3843 since 19:02 · log .kanban/logs/dispatch.log`, `serve stopped`), `--json` `{ dispatch: {running, pid, since, log}, serve: {...} }`; `down` sends SIGTERM to what the pid files name and removes them. `down` never touches workers — attempts are the dispatcher's to reconcile, not this verb's.\n3. **Exit code 4 is the loop giving itself up for a supervisor.** `up` is not a supervisor and must not pretend to be one: it does not restart. It records the exit in the log and `--status` reports `dispatch exited (4) at T — hkb up restarts it`, so the README's supervisor advice stays true and an operator session can see the state in one call.\n4. **`hkb doctor`**: one `ok`/`warn` line, `dispatcher running pid N` / `no dispatcher running — hkb up`. No board read; it is the pid file.\n5. **Docs**: README free path gains `npx hkb-cli up --serve` as the third line (keep `dispatch --loop` documented for the foreground/supervised case); `docs/wiki/` new page for the feature (`node .repolore/scripts/wiki-check.mjs`); `hkb --help` block. The worker guard's \"never run the dispatcher\" rule (`src/model.js:610`, `src/cli.js:478`) must cover `hkb up` too.\n\n## Done when\n\n- `hkb up --serve` twice in a row: the second reports both already running and starts nothing.\n- After `hkb up`, `hkb up --status --json` names live pids and log paths; `hkb down` stops them and a third `--status` says stopped.\n- The dispatcher started by `up` is the same code that ran `up` (checkout → checkout; global → global), and its env carries no `KB_*`.\n- `npm run lint && npm test` green (tests for the pure parts: status shape, the already-running decision, the log line); `npm run smoke` (new command surface).\n\n## Contract\n\n- No supervision, no restart loops, no cron — exit 4 stays a message to a supervisor.\n- No new dependency; `spawn` + pid files only. Windows: `detached` + `unref` is enough for a first cut; `down` uses `process.kill(pid)`; say in the docs that `--status` is the source of truth there.",
+  "closed_at": "2026-08-29T00:00:59Z",
+  "created_at": "2026-08-28T21:41:22Z",
+  "goal": "One idempotent command starts (and --status reports, and down stops) the dispatcher loop and the board server as detached processes of the same hkb that ran it, logging under .kanban/logs, without becoming a supervisor",
+  "id": 148,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/cli.js",
+    "src/up.js",
+    "src/model.js",
+    "src/dispatch.js",
+    "src/serve.js",
+    "src/board.js",
+    "src/doctor.js",
+    "README.md",
+    "docs/wiki",
+    "test/up.test.js"
+  ],
+  "priority": 4,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb up: start the dispatcher and the board server detached, idempotently, with logs under .kanban/logs",
+  "updated_at": "2026-08-29T00:00:59Z"
+}

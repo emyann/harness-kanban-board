@@ -1,0 +1,34 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\n\nA decomposed track is only legible as text today: `hkb list` shows `⇐ #101,#100` and the drawer shows a\n\"Blocked by\" list. Reconstructing a diamond from that is work a picture would do for free, and the\nmaintainer is a visual thinker. Value 4: a rung that is possible but tedious is a gap to close.\n\nThe decisive fact: **the graph is already on the wire.** `src/serve.js:96` already puts\n`blockedBy: [{number, title, done}]` on every card in the `/api/board` payload. The page already renders\nthose as chips and as a \"Blocked by\" list, and blocker titles are already clickable through a\n`data-open=\"<n>\"` handler that reopens the drawer on that card. Drawing the subgraph needs **no new\nroute, no new fetch, no new server call, no new dependency and no new file** — it is a rendering change\nover data that is already fetched, already tested and already polled.\n\nPut it in the drawer, not behind the board: the drawer is where you already land when you ask \"what is\nthis card waiting on\", it is scoped to one root so 5-15 nodes is the honest common case, and clicking a\nnode reuses wiring that exists today.\n\n## What\n\nAn inline SVG of the focused card's dependency subgraph, above the existing \"Blocked by\" section:\nthe card itself, everything it is transitively blocked by, and the root it blocks if there is one.\n\n- Nodes fill from the existing status custom properties (`var(--ready)`, `var(--running)`, …) so the\n  graph matches the columns with **no new palette**. Done blockers are dimmed and keep their `✓`; the\n  focused card is outlined.\n- Clicking a node opens that card in the drawer — **reuse the existing `data-open=\"<n>\"` handler**\n  (`web/index.html`, the blocked-by list). Do not add a second open path.\n- Layout is a top-level function in the page's **existing single classic `<script>`**: longest-path\n  layering, then one or two barycenter ordering passes.\n- Nothing renders when a card has neither blockers nor a blocked parent — no empty box.\n\n**The landmine, verified — do not step on it.** Do *not* introduce `<script type=\"module\">` with a\nrelative `import`. It passes the four self-containment regexes in `test/serve.test.js`, but a top-level\n`import` makes `new vm.Script(PAGE_SCRIPT)` throw and breaks all five `loadPage` tests, which use\n`vm.runInContext` — a classic-script evaluator that cannot load a module. Keep the layout inside the\nexisting classic script as a top-level function; that is how `mdLite`, `esc` and the render path are\nreached from the vm harness today. CLAUDE.md's \"pure logic goes in `src/model.js`\" is real, but\n`web/index.html` is an existing tested-in-vm exception — do not create a second copy of the algorithm\nin `src/model.js`, and do not add a static asset route to honour the letter of the rule.\n\n**The incomplete-history case.** Where the GraphQL `blockedBy` field is unavailable, `src/tasks.js:94`\nREST-fills only `todo`/`blocked` cards, so edges to *already-closed* blockers are missing. Show a\none-line note that the history is incomplete rather than drawing a confidently wrong picture.\n**Do not widen `fillBlockedByRest`** — it is a per-task REST call and violates Values 2 and 3.\n\n## Done when\n\n- Opening a card in the drawer shows its subgraph as inline SVG, with the behaviours above.\n- `test/serve.test.js` asserts layer assignment, node count and edge count on a fixture containing a\n  **diamond**, reached from the vm harness, **without a DOM**.\n- Graph data comes only from the `/api/board` payload — no change to `src/serve.js`, none to `src/tasks.js`.\n- The four existing self-containment assertions still pass unchanged: exactly one `<script`, no `src=`,\n  no `https?:` in `src|href`, no protocol-relative URL.\n- `npm run lint && npm test` green.\n- `docs/wiki/features/web-board.md` updated and `node .repolore/scripts/wiki-check.mjs` clean.\n\n## Known limitation, accept it\n\nBarycenter ordering measured ~6.8 average crossings on random 12-node DAGs. This is a *readable* graph\nat 5-15 nodes, not a pretty one at 30. Do not gold-plate the layout to chase that; if it proves\nunreadable on a real decomposition, the follow-up is a separate vendored `web/mermaid.min.js` on its own\nETag'd route — never inline, never a CDN.",
+  "closed_at": "2026-08-28T04:42:06Z",
+  "created_at": "2026-08-28T04:27:50Z",
+  "goal": "opening a card in the hkb serve drawer shows its dependency subgraph as inline SVG, no new dependency",
+  "id": 108,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "web/index.html",
+    "test/serve.test.js",
+    "docs/wiki/features/web-board.md"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "See the subgraph: a dependency graph in the board drawer",
+  "updated_at": "2026-08-28T04:42:06Z"
+}

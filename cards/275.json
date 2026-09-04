@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found operating this board on 2026-09-02, landing track #217's stacked node PRs bottom-up. #260 and #261 both\n> merged into `kb/259` and immediately went invisible: both sit in *review* with `prs: []`, their work landed,\n> and nothing on the board able to say so.\n\n## Why\n\n#234 fixed the case where GitHub will not link a PR: `openPrsByHead` (`src/tasks.js`) lists the repo's **open**\nPRs and matches them by head branch, so a card whose PR targets a non-default base is still associated with it.\nThat is what stopped #227 and #228 from vanishing.\n\nThe fallback is scoped to *open* PRs, and that is where it ends. The moment a stacked PR **merges**, it leaves\nthat listing, GitHub still refuses to link it (the base was never the default branch, and merging does not\nchange that), and the card is back where #227 started — except now the work is genuinely landed, so nothing is\nwrong except the board's account of it:\n\n```\n#259  review  state:OPEN  prs:[264]   ← its PR targets main, still open\n#260  review  state:OPEN  prs:[]      ← PR267 merged into kb/259\n#261  review  state:OPEN  prs:[]      ← PR269 merged into kb/259\n```\n\n`hkb merge 260` had already run and recorded its review on the card. The merge succeeded. The card still cannot\nbe moved off *review* by anything the board does, because `reconcileClosed` reasons about issues GitHub closed\nand the `active_pr` guard reasons about open PRs — and this card is neither.\n\n`checkOrphanedPrs` (#234's other half) does not catch it either: it looks for an **open** PR on an hkb branch\nwhose card is closed. This is the mirror image — a **merged** PR whose card is open — and nothing looks for it.\n\nThis is not hypothetical tidiness. A card stuck in *review* holds its slot in every count an operator reads, and\nthe one thing the board exists to answer — what is actually finished — is wrong.\n\n## What\n\n- **Match merged PRs too, not only open ones.** The head-branch fallback should consider a recently merged PR on\n  a branch this card owns (`taskBranchRe`) as that card's PR, carrying `merged: true`. One listing with\n  `state=all` bounded by a recent window, or the same listing already made plus a targeted lookup — the budget\n  matters, so pick deliberately and say which in the PR.\n- **A card in *review* whose PR merged should reach *done*.** That is the whole point of the association: the\n  tick already moves a card whose PR merged; it simply never sees this one. Decide whether that lands in\n  `reconcileClosed` or in the review pass, and make it work whatever base the PR targeted.\n- **`hkb doctor` gains the mirror check.** `checkOrphanedPrs` finds an open PR whose card is closed; this is a\n  merged PR whose card is open. Same shape, opposite polarity, and the same cheap listing answers both.\n- **Say what a non-default base costs**, once, where a track author will read it: a PR that does not target the\n  default branch is invisible to GitHub's issue linkage forever, not just while it is open. #245's track-branch\n  model makes this the *normal* case rather than an accident, so it has to work rather than be worked around.\n\n## Done when\n\n- [ ] A card whose PR merged into a non-default branch is still associated with that PR, with a test using a\n      merged PR on a `kb/<n>` head.\n- [ ] Such a card reaches *done* rather than sitting in *review* forever.\n- [ ] `hkb doctor` flags a merged PR on an hkb branch whose card is still open.\n- [ ] The extra reads are bounded and the choice is stated in the PR.\n- [ ] `npm run lint && npm test` pass; the review-loop wiki page covers both polarities.",
+  "closed_at": null,
+  "created_at": "2026-09-02T00:36:38Z",
+  "goal": "A card whose PR merged into a non-default branch is still associated with it and reaches done rather than sitting in review; doctor flags a merged PR on an hkb branch whose card is open; the extra reads are bounded and the choice stated",
+  "id": 275,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/tasks.js",
+    "src/dispatch.js",
+    "src/doctor.js",
+    "src/model.js",
+    "docs/wiki"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "A card whose PR merged into a non-default branch goes invisible again: the head-branch fallback covers open PRs only",
+  "updated_at": "2026-09-02T01:51:09Z"
+}

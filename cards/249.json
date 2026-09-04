@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Asked by the operator on 2026-09-01, cutting 0.2.0: \"is there a baked-in command to update hkb or auto update\n> like claude code does? Sometimes I have this nudge from Claude Code 'Update installed · Restart to update' and\n> I like that I don't have to think about it.\"\n\n## Why\n\nThe daily check already exists and is well built. `latestVersion` (`src/registry.js`) asks npm once a day,\n`versionFinding` (`src/doctor.js`) turns the pair into a finding, and `upgradeCommand` already tailors the fix to\nhow hkb was installed — `npx -y hkb-cli@latest init` from an ephemeral path, `npm i -g hkb-cli@latest && hkb init`\notherwise. Being *ahead* of the registry is reported as a fact, not a problem. None of that needs changing.\n\nWhat is wrong is **where it surfaces**. There are exactly two places\n(`docs/wiki/features/update-notice.md`):\n\n- `hkb doctor` — which a human runs *deliberately*, usually because they already suspect something.\n- the dispatcher log, one line on the first tick of a day it is behind — and `/kanban:operate` explicitly tells\n  a session **not** to tail the dispatcher log for anything the board can answer.\n\nSo the notice reaches the person who went looking, and the log nobody is told to read. The install most likely\nto be stale — a loop that has been up for weeks, exactly as the wiki page argues — belongs to the operator\nleast likely to see it.\n\n**Something changed today that makes this newly worth doing.** #140 shipped the *\"Restart to update\"* half: the\nloop reads its own install stamp every tick and exits 4 when the code on disk has moved past what it loaded.\nWhat is missing is the *\"Update installed\"* half arriving somewhere a human already looks. Claude Code's nudge\nworks not because it self-installs but because it appears **where you already are**.\n\nThis card is explicitly **not** a request for `hkb update`. That was considered and refused, and the reasoning\nin `src/doctor.js:1023-1030` still holds: hkb cannot know how it was installed, so a self-install would guess,\nand guessing wrong breaks the tool doing the guessing. Two honest commands beat one that gambles.\n\n## What\n\n- **The operate opening report carries it.** `skills/kanban/SKILL.md` step 1 already prints one verdict line for\n  `hkb doctor`; when the version finding is behind, that line says so and names `upgradeCommand()`'s exact\n  string for *this* install. One line, at the top of a session, where a human is already reading.\n- **`hkb up` says it once.** Starting the dispatcher is the other moment with an audience — and after #140 it is\n  the moment that matters, because that process will now exit 4 the next time the code moves. `hkb up --status`\n  should not repeat it; once per start is the whole point.\n- **No new network call.** The daily stamp in `.kanban/state.json` is the budget; both surfaces read what the\n  existing check already wrote. A surface that triggers its own request has missed the point, and\n  `\"version_check\": false` must silence every surface, not only doctor's.\n- **Say it the way `upgradeCommand` already does** — the tailored string, not a generic `npm i -g`. A board\n  driven through `npx` must never be told to install globally; that is how two installs end up fighting.\n- Keep the dispatcher-log line: an unattended loop still has no other voice.\n\n## Done when\n\n- [ ] With a stale install, the operate opening's doctor line names the new version and the exact upgrade command\n      for this install shape; with a current one it says nothing extra.\n- [ ] `hkb up` prints the notice once per start, and `hkb up --status` never does.\n- [ ] Neither surface makes an HTTP request of its own — a test asserts the daily stamp is the only fetch.\n- [ ] `\"version_check\": false` silences all of them.\n- [ ] `npm run lint && npm test` pass; `docs/wiki/features/update-notice.md` gains the new surfaces to its\n      \"Where it surfaces\" list.",
+  "closed_at": null,
+  "created_at": "2026-09-01T22:49:15Z",
+  "goal": "A stale install is named in the operate opening's doctor line and once per hkb up, with upgradeCommand's tailored string for this install shape, reading the existing daily stamp with no new request, and version_check false silences every surface",
+  "id": 249,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/doctor.js",
+    "src/up.js",
+    "src/registry.js",
+    "skills/kanban/SKILL.md",
+    "docs/wiki/"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "The update notice reaches doctor and the dispatcher log, which is everywhere except where a human is actually looking",
+  "updated_at": "2026-09-01T22:49:15Z"
+}

@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> From the 2026-08-28 Agent SDK evaluation (16-agent workflow; verdict: keep spawning the `claude` CLI). Step 1 of 5. No behaviour change.\n\n## Why\n\nEvery Claude Code interaction is a subprocess or a file read, spread over three modules: the three spawn shapes in `spawnWorker` (`src/dispatch.js:100-131` — trigger, claude-bg, process), `listKbJobs`/`stopJob` in `src/jobs.js:88-105`, and the binary checks in `src/doctor.js:14-15`. Tests double the binary by putting an `sh` stub on `PATH` and redirecting `HOME` (`test/jobs.test.js`, `test/reap.test.js`). A contributor who wants to know what hkb asks Claude Code has to read all of it; a test that needs a different answer from `claude` has to write a shell script.\n\n`src/gh.js` already solves this for GitHub: one transport, `setTransport()`, and `test/fake-gh.js` as the conformance double. The evaluation's judges rated this seam the one change every proposal agreed on — and it is what makes a different Claude transport (an SDK adapter, a remote runner) a second implementation of one module instead of a rewrite, if one is ever justified.\n\n## What\n\n- `src/harness.js`: a `defaultTransport` with `launch(argv, {cwd, env, detached, stdio})`, `agents(root)`, `stop(id)`, `jobRecord(id)`, `version()`; `setHarnessTransport(t)` returning a restore function. The three spawn sites move **byte-for-byte** — keep `detached`, `unref`, the fd handling and the log banners exactly as they are.\n- `test/fake-harness.js`: an in-memory Claude Code. A `--bg` launch registers a job the `agents()` call lists; a `-p` launch returns a driveable child whose exit and final JSON line the test controls; `stop()` ends a job; anything unmodelled throws loudly.\n- `test/harness-conformance.test.js`: today's `sh` stub run against `defaultTransport` in a temp `CLAUDE_CONFIG_DIR`, plus one `HKB_REAL_CLAUDE=1`-gated case that records `claude --version` — so the fake and the real binary are checked against the same expectations.\n- `test/jobs.test.js` and `test/reap.test.js` switch to the fake; no more `PATH`/`HOME` mutation.\n- CLAUDE.md Layout/Rules name `harness.js` beside `gh.js`: *the only place that shells out to `claude`*.\n\n## Scope\n\nSpawns and job records only. Leave transcript parsing (`src/stats.js`), lock-reason parsing (`src/gc.js`), hook stdin shapes (`src/hook.js`) and `.claude/worktrees` (`src/model.js`) where they are — the judges' one objection to this step was scope creep past the spawn seam.\n\n## Done when\n\n- `grep -rn \"spawn.*'claude'\" src/` finds nothing outside `src/harness.js`.\n- `test/jobs.test.js` and `test/reap.test.js` pass with no shell stub on `PATH`.\n- The conformance test passes against the fake and (gated) against the installed `claude`.\n- `npm run lint && npm test` green; `npm run smoke` unchanged.",
+  "closed_at": null,
+  "created_at": "2026-08-28T22:47:57Z",
+  "goal": null,
+  "id": 154,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/harness.js",
+    "src/dispatch.js",
+    "src/jobs.js",
+    "src/doctor.js",
+    "test/"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "One transport for claude: src/harness.js + an in-memory fake, so tests stop stubbing the binary on PATH",
+  "updated_at": "2026-08-29T00:24:34Z"
+}

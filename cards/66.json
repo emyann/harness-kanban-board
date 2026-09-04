@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "Implements the rename list of ADR-004 (docs/wiki/decisions/adr-004-roles-and-adoption.md) — docs/strings only, no behavior change:\n\n1. Exit-code lists: add 4 (= the dispatcher gave itself up; a supervisor — cron, systemd, Actions — or you starts a fresh one) to skills/kanban/references/protocol.md (~230) and the cli.js global help line (currently stops at 3 = LOCK_LOST).\n2. --reviewer <profile> -> --reviewer <github-user> in skills/kanban/SKILL.md:63 and cli.js:161 (docs match lifecycle.js:226-237; code unchanged).\n3. \"fake-gh harness\" -> \"fake-gh test double\" at 4 sites: cli.js:429, model.js:434 (worker-facing deny message), SKILL.md:66, CLAUDE.md:26.\n4. context.js:10 \"a comment a human meant for\" -> \"a comment the operator meant for\" (kills the contradiction with context.js:107).\n5. SKILL.md:12 subtitle \"the worker protocol\" -> \"the board protocol\".\n6. README.md:229 \"a runner\" -> \"an Actions runner\"; qualify track runner vs Actions runner everywhere.\n7. protocol.md: add a short glossary (seat vs reviewer = per-card gate, always a GitHub user; profile = harness adapter; host = machine identity; track runner = worker mode) and document the reserved synthetic profile values dispatcher/reviewer/human in the attempts schema (human reads as: the operator by hand).\n\nDeliberately unchanged (do NOT rename): dispatcher, worker, kb:needs-human, kb:agent:* namespace, attempt-history values, README \"Humans get\" line, doctor.js operator sites.",
+  "closed_at": "2026-08-27T06:15:08Z",
+  "created_at": "2026-08-27T05:54:03Z",
+  "goal": null,
+  "id": 66,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Seats vocabulary sync: one docs/strings PR from ADR-004",
+  "updated_at": "2026-08-27T06:15:08Z"
+}

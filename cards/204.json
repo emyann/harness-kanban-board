@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found operating this board on 2026-09-01. The operator's own report of the session opening the human\n> asked for: \"there has to be a middle ground ... he does not want too much information, but enough so\n> that he can start right away.\"\n\n## Why\n\n`/kanban:operate` is the first command a human runs when they sit down, and today the seat can only answer them\nby hand. The prompt side of that is now fixed — `skills/kanban/SKILL.md` step 1 specifies a one-screen opening\nreport (board and URL, the two pids, one verdict for `doctor`, a lane table, at most three things that need the\nhuman) — but the CLI still makes the session assemble it out of parts, and two of those parts are not available\nas reads at all:\n\n1. **Nothing prints the serve URL.** `hkb up --serve` prints `serve started pid 1122 · log .kanban/logs/serve.log`\n   and `hkb up --status` prints the pid and the log; neither prints `http://127.0.0.1:4666`. The URL is the whole\n   point of `--serve` and the human's way into the board, and the only way to it is the first line of\n   `.kanban/logs/serve.log` — a log grep for a fact the process knows. `--port` is a flag on `up`, so the value is\n   in hand at spawn time.\n2. **There is no cheap \"where is this board\" read.** Lane counts come from `hkb list` (the whole board, one line\n   per card — 29 lines here to learn that all 29 are in triage) or from `hkb stats --json`, which pays for a\n   7-day attempt-and-spend history to reach `tasks.by_status`. Neither gives the priority spread within a lane,\n   and neither answers the question that actually decides the opening: *is anything in flight, and what is\n   waiting on a human.* An idle dispatcher and a busy one print the same status line, so with no lane read the\n   report cannot tell them apart.\n\nBoth are value 4 (frictionless): the answer to \"can hkb print the board's opening screen\" is \"yes, by hand\".\n\n## What\n\n- **`hkb up --serve` and `hkb up --status` print the URL** for a running server, human form and `--json`\n  (`serve.url`). The server already logs it; have `up` hold the origin it spawned with, and `--status` recover it\n  the same way it recovers the pid. `hkb doctor`'s serve line should carry it too.\n- **One board-summary read** — the shape the opening needs, from the single board query the tick already makes.\n  Prefer extending what exists over a new verb: `hkb list --summary [--json]` returning counts per status, the\n  priority spread per status, and the cards wearing `kb:needs-human`, with no bodies. (`hkb status <n>` is taken\n  by the per-card verb, so `status` is not free as a board-level name — decide the surface before building.)\n- **Keep it one read.** The opening runs `up --serve`, `up --status`, `doctor` and this one summary; anything\n  that adds a second board query for the same screen has missed the point.\n- Leave `hkb stats` where it is — it is the once-a-cycle spend line, not an opening.\n\n## Done when\n\n- [ ] `hkb up --status` and `hkb up --serve` name the URL of a running server, in both human and `--json` output.\n- [ ] A single documented read returns per-lane counts, the priority spread and the needs-human cards, with no\n      issue bodies in it.\n- [ ] A session can print step 1's opening report from those commands without reading `.kanban/logs/serve.log`\n      and without `hkb list` returning 29 bodies.\n- [ ] `npm run lint && npm test` pass; `docs/wiki/` updated where the opening or `hkb up` is documented.",
+  "closed_at": "2026-09-01T23:18:31Z",
+  "created_at": "2026-09-01T18:19:39Z",
+  "goal": "hkb up --status and --serve print the running server's URL (human and --json), and one read returns per-lane counts, the priority spread and the needs-human cards with no issue bodies; the step 1 opening report needs no serve.log grep",
+  "id": 204,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/up.js",
+    "src/serve.js",
+    "src/cli.js",
+    "src/model.js",
+    "src/doctor.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "The operate opening is assembled by hand: hkb up never prints the serve URL, and no read gives the board's lanes without every body",
+  "updated_at": "2026-09-01T23:18:31Z"
+}

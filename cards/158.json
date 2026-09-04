@@ -1,0 +1,41 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    144,
+    154,
+    155
+  ],
+  "body": "> **Re-scoped 2026-08-28.** The first version flipped the default `claude` profile to process mode. That trades away the agent view (`claude agents`): it lists background sessions only, so a `--bg` root is the one row an operator sees per track, and a process-mode child is invisible there. Visibility is a requirement, so `claude` and `claude-track` **stay `--bg`**. What is left is the CI/container profile, done right, and it is still worth doing.\n\n## Why\n\n`claude-p` is the profile for hosts with no session daemon — CI, containers, an Actions runner. It is also the one launch shape whose worker receives the environment, exits with a code and prints a typed result; it never had #125/#132/#137/#150. But it is a second-class citizen today: it uses `--worktree` (the CLI's own checkout, which the dispatcher cannot name ahead of time), takes no `--session-id`, and its result JSON is truncated to four fields (#155).\n\n## What\n\n- `claude-p` becomes `mode: \"process\"`, `workspace: \"worktree\"` — the dispatcher makes `kb-<n>-<k>` with `ensureWorktree` (explicit `git fetch`, `origin/<default>` start point), no `--worktree` flag — with `--session-id {session}` chosen at claim and saved on the attempt row, `--settings {hook_settings}` (from #144), `--setting-sources project`, `--output-format json`, and the existing tool/budget flags.\n- `hkb show` prints the `claude --resume <session>` line from the row the moment a `claude-p` attempt is claimed.\n- The `claude` and `claude-track` launches are untouched; their identity lands through #150 (no `KB_*` leak) and #144 (`--settings` hooks, verified to fire inside `--bg` sessions). `docs/harnesses.md` says plainly which profile to pick where: `--bg` where a human watches the agent view, `claude-p` where no daemon exists.\n- Measure and record whether the `complete`-builtin and heredoc refusals recur when the cwd is an hkb-made worktree without `--worktree` (so far measured only under `--bg --worktree`).\n\n## Constraints\n\n- The protocol does not change: claim → work → verb, one PR per node. Only the `claude-p` launch shape does.\n- A pid-mode child is `detached` and survives a one-shot `hkb dispatch`; a `--loop` still reaps it by pid. #136's grace rule applies to it as a `kill(pid)`.\n- Nothing here touches Copilot or Codex; they already run as dispatcher-made-worktree processes.\n\n## Done when\n\n- A `claude-p` attempt has `KB_TASK` visible inside the worker, a session id on the row at claim time, and a cost on the row at exit.\n- `claude`/`claude-track` boards behave exactly as today; the agent view still shows one row per track.\n- `npm run lint && npm test` green; `npm run smoke` green (profiles are read from the package at runtime).\n",
+  "closed_at": null,
+  "created_at": "2026-08-28T22:48:02Z",
+  "goal": null,
+  "id": 158,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/board.js",
+    "src/dispatch.js",
+    "src/model.js",
+    "src/stats.js",
+    "docs/harnesses.md",
+    "README.md"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "claude-p, the CI profile, done right: hkb-made worktree, session id chosen at claim, hooks on the launch line — claude stays --bg",
+  "updated_at": "2026-08-29T00:24:37Z"
+}

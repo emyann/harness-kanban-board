@@ -1,0 +1,34 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found operating this board on 2026-09-01: the human asked how to see a running root with its children\n> attached, and the board has no way to show it.\n\n## Why\n\n`src/serve.js` knows nothing about tracks. Grep it for `track` and every hit is a filesystem root, not a graph\none. So a running track renders as **one card in *running*** — the root — and its children render as nothing at\nall, because a track is one claim, one lease and one slot however many nodes it holds. The lane cannot\ndistinguish \"one card is running\" from \"one session is running six nodes inside it\", which is the single most\nuseful thing to know while a track is up.\n\nThe data already exists and is thrown away. `planTracks` (`src/track.js:153`) returns `covered`, a\n`Map<node number, running root number>` — the tick computes it every pass precisely so it does not reclaim,\nre-claim or double-count a node a live runner owns. The server does its own board read and never asks for it.\n\nToday this is rarely seen because tracks are rarely used — `kb:agent:claude-track` has been applied three times\never, all by hand (#161). #161 makes a root with children a track by default, at which point the *running* lane\nshowing a bare root with invisible children stops being an edge case and becomes the normal view.\n\n## What\n\n- **The *running* lane renders a track as its root with its children attached** — the root marked as the\n  session, its nodes listed under it in wave order, each with its own status. `trackWaves` and `trackGraph`\n  (`src/track.js:87, 196`) already produce that ordering.\n- **Expose `covered` to the server**, or recompute it there from the same board read — whichever keeps the\n  server's one read per poll. A node's card says which root owns it; the drawer for a covered node links to the\n  root rather than offering verbs that belong to the runner.\n- **The lane's count must not lie.** A track is one `max_in_progress` slot; a lane header that counts six\n  running nodes against a cap of four contradicts the dispatcher. Count sessions, and show the node total\n  separately.\n- Drag on a covered node: refuse it the way `moveDecision` refuses anything with no verb behind it, and say the\n  runner owns it.\n\nContext, not a dependency: #161 makes this the common case rather than a rarity; #174 covers the log panel for\na `--bg` worker, which is the same lane and a different panel.\n\n## Done when\n\n- [ ] With a track running, the board shows the root and its child nodes as one group, in wave order.\n- [ ] A covered node names its root, and dragging it is refused with the reason.\n- [ ] The *running* lane's count reflects sessions (slots), not nodes, and the node total is visible separately.\n- [ ] The server still makes one board read per poll.\n- [ ] `npm run lint && npm test` pass; the web-board wiki page describes the track group.",
+  "closed_at": null,
+  "created_at": "2026-09-01T19:07:15Z",
+  "goal": "A running track renders as its root with its child nodes attached in wave order, a covered node names its root and refuses a drag, and the lane counts sessions rather than nodes, still on one board read per poll",
+  "id": 210,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/serve.js",
+    "src/track.js",
+    "src/dispatch.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "The running lane shows a track's root as one bare card and its children not at all",
+  "updated_at": "2026-09-01T19:07:15Z"
+}

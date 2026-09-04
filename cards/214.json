@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found operating this board on 2026-09-01, working out how \"run everything unblocked in parallel and deal with\n> conflicts at merge time\" would actually work. The operator's framing: a conflict that needs a human should\n> stamp the card and be surfaced; a clean merge should need nobody.\n\n## Why\n\nhkb never asks whether a pull request can merge. `mergeable` and `mergeStateStatus` appear nowhere in `src/` —\nthe only grep hit is a comment in `src/lifecycle.js:212` about taking a PR out of draft. The PR fields the board\nreads are `state, isDraft, merged, autoMergeEnabled, headRefName, baseRefName`; mergeability is not among them.\n\nSo a conflicted PR is invisible to the board:\n\n- Under `merge.mode: \"auto\"`, `autoMergePass` (`src/dispatch.js:315`) enables GitHub's auto-merge and the PR\n  sits there. GitHub will not merge it, hkb will not notice, and the card stays in *review* forever. A silent\n  stall — the one failure mode the values say hkb must not have.\n- Under `manual` or `operator` (#189), the human or the operator seat discovers it by trying to merge.\n\nThis is the missing half of #185. That card turned the `path_overlap` guard off on manual boards because it\n*predicted* collisions badly — it serialized nearly everything and the cards conflicted on landing anyway. The\nhonest replacement for a bad prediction is an observation: `mergeable: CONFLICTING` is GitHub reporting that two\nPRs actually collided, not a guess that they might. With this card in place the guard is not merely off, it is\nunnecessary.\n\nIt also matters more as parallelism goes up. A worker merges `origin/main` into its branch when it *finishes*\n(`src/context.js:108`); a sibling that lands after that leaves the first PR stale, with its session already\nover. Nothing today notices.\n\n## What\n\n- **Read mergeability in the board query.** Add `mergeable` and `mergeStateStatus` to the PR selection in the\n  GraphQL used by `fetchBoard` (`src/tasks.js`), so it costs no extra request.\n- **`UNKNOWN` is not a conflict.** GitHub computes mergeability asynchronously and answers `UNKNOWN` for a\n  moment after every push. Treat it as \"ask again next tick\" — never as a finding, or every fresh PR is stamped.\n  This wants an explicit test.\n- **A ladder, and its first rung costs no session at all.** `mergeStateStatus` separates two cases the word\n  \"stale\" hides, and they deserve different answers:\n  - **`BEHIND`** — out of date with the base, no conflict. `gh pr update-branch` merges the base into the PR\n    branch server-side. No worktree, no agent, no attempt row: mechanical catch-up does not need a session, and\n    spending one on it is the most avoidable cost on the board.\n  - **`DIRTY` / `CONFLICTING`** — a real textual conflict. `update-branch` cannot resolve it, so relaunch the\n    card on its own PR the way `request-changes` already does: the attempt continues the same PR\n    (`continues_pr`) and the worker's brief already tells it to merge `origin/main` in. Stamp `kb:needs-human`\n    only when *that* attempt also ends without resolving it.\n\n  Try `update-branch` first regardless of which the API reports — one cheap call, idempotent, and\n  `mergeStateStatus` can be stale by the time the tick reads it. Whatever the rung, the record must name the PR\n  and which case it was, so the board can be asked afterwards how often catch-up cost a session.\n\n  Measured here on 2026-09-01, which is both the argument for this rung and its limit: #161 was sent back twice\n  purely to catch up — two full worker sessions — while #209, #114 and #155 landed around it. Both of #161's\n  were genuinely `DIRTY`, every card in the batch having inserted into `src/model.js`, so `update-branch` would\n  **not** have saved those two. The rung still earns its place: the repo's layout rule routes all pure logic\n  through one module, so `BEHIND` and `DIRTY` will both be common, and only one of them is worth an agent.\n- **Never merge a PR whose mergeability is not `MERGEABLE`.** `autoMergeDecision` and #189's `hkb merge` both\n  gate on it; auto-merge should not be enabled on a PR already known to conflict.\n- **Surface it as a board fact**: `hkb show <n>` and the web board's review column say the PR conflicts;\n  `hkb watch` emits it so an operator session reacts without polling GitHub.\n- Pure decision in `src/model.js` (a `prMergeability(task)` / `conflictDecision` alongside `autoMergeDecision`),\n  I/O in `tasks.js`/`dispatch.js`, per the layout rule.\n\n## Done when\n\n- [ ] The board read carries `mergeable`/`mergeStateStatus` with no extra API call.\n- [ ] A PR reporting `UNKNOWN` produces no finding and is re-checked on a later tick, with a test that pins it.\n- [ ] A `CONFLICTING` PR moves its card off the silent path — per the ladder chosen — and the card says which PR\n      conflicts and why.\n- [ ] A PR that is `BEHIND` and not conflicting is caught up with `gh pr update-branch` and never costs a\n      worker session; the record says catch-up happened without one.\n- [ ] Nothing enables auto-merge on, or merges, a PR that is not `MERGEABLE`.\n- [ ] `npm run lint && npm test` pass; the wiki pages for auto-merge and the review loop describe the new state.\n",
+  "closed_at": null,
+  "created_at": "2026-09-01T19:38:28Z",
+  "goal": "The board read carries mergeable/mergeStateStatus with no extra call; UNKNOWN is re-checked rather than reported; a CONFLICTING PR takes the chosen ladder and names itself on the card; nothing auto-merges a PR that is not MERGEABLE",
+  "id": 214,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/model.js",
+    "src/tasks.js",
+    "src/dispatch.js",
+    "src/serve.js",
+    "docs/wiki/"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "The board never reads whether a PR can actually merge, so a conflicted PR stalls in review and nothing says so",
+  "updated_at": "2026-09-01T20:09:55Z"
+}

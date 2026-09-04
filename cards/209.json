@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found operating this board on 2026-09-01, asking what dragging #158 into *todo* would do. Its subgraph is\n> #155 → #158 and #154 → #158, all three in triage.\n\n## Why\n\nPromoting a node moves exactly that node. `promote` (`src/lifecycle.js:422-427`) is one `setStatus` on one\nissue, and the board's drag map is one verb per move (`MOVES['triage>todo'] = {steps: ['promote']}`,\n`src/serve.js:33`). Nothing walks the graph.\n\nThe result is worse than a no-op, because it looks like progress. #158 lands in *todo*; the tick promotes\n*todo* → *ready* only when every blocker is closed as completed; #154 and #155 are open and in *triage*, where\nthe tick never claims anything. So the card sits in *todo* indefinitely while the lane says \"queued\", and the\nhuman who dragged it has no signal that two thirds of the work is still parked. The same trap catches\n`hkb promote 158` typed by hand.\n\nThe semantics are already written and already named: `resolveTrack(n, byNumber)` (`src/track.js:59`) returns\n\"the root plus every task it is still blocked by, transitively\" — exactly \"this node and its subgraph, if any\".\nA leaf resolves to itself, so today's behaviour is the degenerate case of the general one.\n\n## What\n\n- **`hkb promote <n>` promotes the subgraph**: `resolveTrack(n)` — the node plus everything still blocking it —\n  in one call. A node with no open blockers behaves exactly as today.\n- **The CLI is the source of truth; the board displays the next state.** The drag keeps mapping to the same\n  verb and the board shows the result on its next poll. No optimistic multi-card animation on the client, and\n  no cascade logic in `src/serve.js` — that is the invariant `moveDecision` already protects (the board can\n  never show a state no CLI command could have produced).\n- **Say what moved.** Human output names every card the call touched and every one already past *todo*\n  (`#158 → todo · #154 #155 → todo · #144 already done`); `--json` returns the list rather than one object.\n  A cascade that moves five cards and prints one line is a silent write.\n- **Never force a blocker.** `promote` on a card already in *todo* sets it *ready* with `forced` when its\n  blockers are open (`lifecycle.js:426`). The cascade must promote each node no further than *todo* and let the\n  tick decide readiness, or dragging a root jumps its own dependencies ahead of it.\n- **No reverse cascade — and say so.** There is no demote-to-triage verb at all (`NO_SUCH_VERB.triage`,\n  `src/serve.js:52`); the only backwards drag is onto *blocked*, which takes a reason. Blocking a root does not\n  invalidate its children's work, so `block` stays single-card. Worth one line in the docs because the\n  asymmetry is otherwise surprising.\n- Decision stays pure (`src/model.js` or the existing walk in `src/track.js`); `lifecycle.js` does the writes.\n\nContext, not a dependency: #161 makes a root with children a track by default. This card is useful either way —\na subgraph promoted node-by-node still needs promoting as a unit.\n\n## Done when\n\n- [ ] `hkb promote 158` on a board where #154 and #155 are open triage blockers moves all three to *todo*.\n- [ ] `hkb promote <leaf>` is unchanged, and no cascade ever sets a card to *ready* with open blockers.\n- [ ] Dragging a card from *triage* to *todo* on the web board produces the same set of moves, via the verb.\n- [ ] Human output and `--json` both name every card moved and every one skipped, with the reason.\n- [ ] `npm run lint && npm test` pass; the wiki page covering promote / the drag map says what cascades and\n      that nothing cascades backwards.",
+  "closed_at": "2026-09-01T19:59:41Z",
+  "created_at": "2026-09-01T19:07:14Z",
+  "goal": "hkb promote n moves n plus everything still blocking it to todo, never forcing a blocker to ready; the board drag produces the same moves through the same verb; output names every card moved and skipped; nothing cascades backwards",
+  "id": 209,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/lifecycle.js",
+    "src/track.js",
+    "src/serve.js",
+    "src/cli.js",
+    "src/model.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Promote moves one card, so dragging a root into todo parks its subgraph in triage and calls it queued",
+  "updated_at": "2026-09-01T19:59:41Z"
+}

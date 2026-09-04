@@ -1,0 +1,37 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    256
+  ],
+  "body": "## Why\n\nA posture nobody can see is the bug this track exists to fix, one level up. Once a board can *state* whether it\ninherits or curates, two things have to be true or the statement is decoration: a **card** must be able to lower\nthe ceiling for one task, and `hkb doctor` must **print** what the board actually decided.\n\nThe narrowing half is a safety property, not a convenience. The operator's framing was exact: the board grants\nthe ceiling, a card can lower it, and nothing raises it but a human editing `.kanban/board.json`. A card that\ncould grant itself a capability is the seat problem one rung down.\n\n## What\n\n- **`kb.tools` and `kb.mcp` on a task**, both **subsets only**. The rule itself already lives in\n  `effectiveTools` (#255) — this card adds the card-level keys, their schema, and the path that feeds them in.\n  A card asking for something its profile lacks is **dropped and reported**, never granted.\n- **`hkb doctor` prints the effective posture per profile**, its MCP list, and flags any open card asking for\n  what its profile does not grant — the \"your board says one thing and a card assumes another\" check.\n- **A wiki page states the ceiling rule in one sentence** so the next person does not re-derive it: the board is\n  the ceiling, a card lowers it, only a human raises it.\n- Do not implement the posture field or the MCP resolution (siblings').\n\n## Done when\n\n- [ ] `kb.tools` / `kb.mcp` narrow a task's grant; an attempt to widen is dropped and reported, tested.\n- [ ] `hkb doctor` prints each profile's posture and MCP list, and flags a card asking for what it cannot have.\n- [ ] A wiki page states the ceiling rule in one sentence.\n- [ ] `npm run lint && npm test` pass; `node .repolore/scripts/wiki-check.mjs` clean for the page it adds.\n\n## Contract\n\nNames a sibling depends on. Do not invent alternatives.\n\n- **`effectiveTools(profile, task, board)` (#255) is the only place a launch's tool list is derived.** Do not read\n  `profile.allowed_tools` directly and do not add a second derivation. It already returns what it dropped.\n- The posture key is `\"tools\"` on a profile, with exactly two values: `\"inherit\"` and `\"curate\"`. `\"curate\"` is\n  today's behaviour and the safe default for anything unattended.\n- The MCP key is `\"mcp\"` on a profile: under `curate` it is the servers a worker **may** reach; under `inherit`\n  it is the servers to **exclude**. The supabase-writes-to-production case must be expressible as a subtraction.\n- A card narrows and never widens — that rule lives in `effectiveTools`, not here. A card key that would widen is\n  dropped and reported, never granted.\n- Absent `\"tools\"` means `\"curate\"`: every board that exists today keeps its behaviour with no edit.\n- Read `hkb show 223` for the goal this serves, and #130 (the denied-tools ledger) and #254 (approvals do not\n  reach a worktree) for what the posture is answering.",
+  "closed_at": "2026-09-02T01:51:03Z",
+  "created_at": "2026-09-01T23:53:43Z",
+  "goal": "kb.tools and kb.mcp narrow only with widening dropped and reported; doctor prints each profile's posture and MCP list and flags a card asking for what it cannot have; a wiki page states the ceiling rule in one sentence",
+  "id": 258,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/doctor.js",
+    "src/tasks.js",
+    "docs/wiki",
+    "test/doctor.test.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "A card narrows its profile's grant and doctor prints what the board actually decided",
+  "updated_at": "2026-09-02T01:51:03Z"
+}

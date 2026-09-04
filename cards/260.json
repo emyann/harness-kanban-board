@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    259
+  ],
+  "body": "## Why\n\nA capability map nothing reads is configuration theatre. The worker's brief is where an intent becomes an\ninstruction — `src/context.js` already renders `kb.skills` as \"Skills to apply: `/foo`\", which is exactly the\nshape, and exactly the thing that was lying before #114.\n\nThe constraint that makes this portable rather than a Claude-ism: **the intent travels, the binding is local.**\nA card says its work needs a review; the `claude` profile says review means `/code-review`; a Copilot profile\nsays something else; a profile that says nothing gets prose. hkb must never name `/code-review` itself.\n\n## What\n\n- **The brief names the bound command** for every intent the card triggers, rendered in `src/context.js` beside\n  the existing fields.\n- **An unmapped intent falls back to prose** — the brief says what to achieve, as it does today. No error, no\n  warning, no behaviour change for a board that declares nothing. This is the line between a capability map and\n  a hard dependency on one harness.\n- **`kb.goal` is the worked example**: every card has acceptance criteria and `hkb context` already prints them\n  under a heading. A profile that binds `goal` should have its worker told the command; one that does not keeps\n  the heading.\n- Do not touch the launch's grant (a sibling's, through #255) or the operate procedure (the same sibling's).\n\n## Done when\n\n- [ ] A card whose profile binds an intent has the bound command named in `hkb context <n>`.\n- [ ] A profile with no binding for that intent produces today's prose, with no error — tested.\n- [ ] hkb names no harness-specific command anywhere outside a board's own config, pinned by a test.\n- [ ] `npm run lint && npm test` pass.\n\n## Contract\n\nNames a sibling depends on. Do not invent alternatives.\n\n- **`effectiveTools(profile, task, board)` (#255) is the only place a launch's tool list is derived.** A grant\n  implied by a capability binding goes through it. Never read `profile.allowed_tools` directly.\n- The profile key is `\"capabilities\"`, an object mapping an intent to this harness's command:\n  `\"capabilities\": { \"review\": \"/code-review\", \"goal\": \"/goal\" }`.\n- `CAPABILITIES` is the closed vocabulary, exported from `src/model.js` and pinned by a test the way\n  `EVENT_KINDS` and `GROOM_KINDS` are — a new intent cannot be added without saying what it means.\n- **An unmapped intent is not an error.** It falls back to today's prose brief. That is what keeps a Copilot or\n  Codex board working unchanged, and it is the whole difference between a capability map and a dependency.\n- Portability is the constraint the design exists to satisfy: the *intent* travels, the *binding* is local. hkb\n  must never name `/code-review` itself outside a board's own config.\n- Read `hkb show 217` for the goal, and #114 for the instance this generalises.",
+  "closed_at": "2026-09-02T00:38:55Z",
+  "created_at": "2026-09-01T23:55:38Z",
+  "goal": "A card whose profile binds an intent gets the bound command named in hkb context; an unmapped intent produces today's prose with no error; hkb names no harness-specific command outside a board's own config, pinned by a test",
+  "id": 260,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/context.js",
+    "test/context.test.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "The worker brief names the bound command, and an unmapped intent still falls back to prose",
+  "updated_at": "2026-09-02T00:38:55Z"
+}

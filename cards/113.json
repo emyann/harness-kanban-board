@@ -1,0 +1,34 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found piloting hkb on `french-tech-homies/pipao-v2` on 2026-08-27/28. Hit on **both** tracks set up that night (#103 and #112).\n\n## Why\n\n`hkb adopt <n> --agent claude-track` adds `kb:agent:claude-track` but leaves the existing `kb:agent:claude` in place. The task then carries two `kb:agent:*` labels, and the resolver takes the first — so the task still resolves to `claude`.\n\nThe failure is silent and total for tracks:\n\n```\n$ hkb adopt 103 --agent claude-track --status todo\n#103 adopted → todo (claude-track)          # says it worked\n\n$ hkb show 103 --json | jq -r '.agent, (.labels|join(\" \"))'\nclaude\nenhancement kb:status:todo kb:board:default kb:agent:claude kb:agent:claude-track\n\n$ hkb dispatch --dry-run\n[dry-run] ... tracks 0/0 ...               # not recognised as a track root\n  claimed #106 attempt 1 → claude          # falls back to node dispatch\n```\n\nAfter `gh api repos/emyann/harness-kanban-board/issues/103/labels/kb:agent:claude -X DELETE`:\n\n```\n#103: [dry-run] would run track #107 → #108 → #111 → #106 → #109 → #110 → #103 as one claude-track session\n```\n\n**The documented setup line does not work as written.** `SKILL.md` and `references/protocol.md` both say `hkb adopt <root> --agent claude-track --status todo` is how you make a track. Following it verbatim produces a board that looks adopted, reports success, and then silently runs the slower engine. The only symptom is `tracks 0/0` in a dry-run, which nobody reads unless they already suspect something.\n\n## What\n\n1. **`adopt` removes every other `kb:agent:*` label** when it sets one. That is the fix.\n2. **`doctor` reports a task carrying more than one `kb:agent:*` label**, since existing boards already have them.\n3. Consider making the agent resolver *fail loudly* on multiple agent labels rather than silently taking the first — an ambiguous card is a bug, not a default.\n\n## Done when\n\n- [ ] `hkb adopt <n> --agent X` leaves exactly one `kb:agent:*` label on the issue.\n- [ ] A test covers adopt-over-an-existing-agent and asserts the resolved agent changed.\n- [ ] `hkb doctor` flags multi-agent-label tasks with the fix.\n- [ ] Re-running the worked example in `references/protocol.md` produces a claimable track with no manual label surgery.\n",
+  "closed_at": "2026-08-28T15:55:20Z",
+  "created_at": "2026-08-28T05:15:31Z",
+  "goal": "adopt leaves exactly one kb:agent:* label; doctor flags multi-label tasks; the protocol.md worked example produces a claimable track with no manual label surgery.",
+  "id": 113,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/tasks.js",
+    "src/doctor.js",
+    "test/"
+  ],
+  "priority": 5,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb adopt leaves the previous kb:agent:* label, so adopting a track silently does nothing",
+  "updated_at": "2026-08-28T15:55:20Z"
+}

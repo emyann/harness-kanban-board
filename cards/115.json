@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    121,
+    126
+  ],
+  "body": "> Found piloting hkb on `french-tech-homies/pipao-v2` on 2026-08-27/28: 20 attempts, 13 PRs, **zero cost data**.\n\n# Goal: a board that can answer \"what did this cost\"\n\nThis is the root of a track. The work is in #119, #120 and #121; this task is the **verify and\nsynthesize pass** that runs after they land. Do not redo their work — read it.\n\n## Why\n\nTwo independent holes meet here. `claude-bg` — the default profile, the one the README calls the free\npath — never emits the closing JSON that `sessionFromLog` parses, so `priceOf` has nothing to read. And\nin a track, the Stop hook keys on `KB_TASK`, which is the *root*, so node attempts carry no session\nfields at all. Together they mean the recommended engine on the default profile produces no spend data\nof any kind, and recovering it by hand meant reading JSONL out of `claude agents --json`.\n\n## What the children did\n\n- **#119** — the Stop hook propagates session identity to the nodes a track claimed, using the existing\n  `.kanban/sessions/` marker convention.\n- **#120** — `priceOf` falls back to the transcript: sum per-message `usage` from the JSONL when no cost\n  was reported, and label an estimate as an estimate.\n- **#121** — the docs say, per profile, what spend data you actually get.\n\nYou are blocked by #121 only, so its result is the one you are handed. **Run `hkb show 119` and\n`hkb show 120`** to read what the other two shipped before verifying anything.\n\n## What to do\n\n1. Run a real track on this board — adopt a small root with `hkb adopt <n> --agent claude-track\n   --status todo` — and confirm each node attempt ends up with `session_id` and `transcript_path`.\n   **Note:** `hkb adopt` has a known defect (#113) where the previous `kb:agent:*` label is left in\n   place, so the task still resolves to `claude`. Check `hkb dispatch --dry-run` reports a track before\n   concluding anything about #119; if #113 has not landed, delete the stale label by hand and say so.\n2. Confirm `hkb stats` now reports something for this board, and that what it reports is labelled\n   correctly — reported cost, estimate, or raw usage.\n3. Confirm the degraded paths still degrade: an attempt with no transcript, an unreadable transcript,\n   and a board with no attempts at all must each produce a message, never an error.\n4. `npm run lint && npm test`, and `npm run smoke` if anything the CLI reads from the package changed.\n\nThen write what no child could: if the three PRs left a seam — a number reported in two places that\ndisagree, a doc describing behaviour that shipped differently — fix it here. If everything fits, say so\nconcretely, naming what you ran and the numbers you saw, and complete.\n\n## Done when\n\n`hkb stats` answers \"what did this cost\" for a `claude-bg` board, including for nodes run inside a\ntrack, or says precisely what it can and cannot know and why. Lint and tests green. Any leftover\ninconsistency between the three PRs is fixed here or filed as a follow-up card.\n\n",
+  "closed_at": "2026-08-28T16:31:32Z",
+  "created_at": "2026-08-28T05:16:07Z",
+  "goal": "hkb stats reports cost or at least turns/tokens for a claude-bg board, and track node attempts carry session_id and transcript_path.",
+  "id": 115,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/stats.js"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "No spend visibility on claude-bg, the default profile — and none at all for track nodes",
+  "updated_at": "2026-08-28T16:31:32Z"
+}

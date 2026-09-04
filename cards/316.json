@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "<!-- kb: {\"priority\":2} -->\n## Why\n\n`hkb doctor` gives two contradictory instructions about the same field, on the same board, in the same run.\n\nObserved on this board after granting the worker profiles plain `Bash`:\n\n```\n! worker permissions   the claude profile in .kanban/board.json omits cd, pwd, true, false +12 more\n                       → drop \"allowed_tools\" from the claude profile to take hkb's own list\n! denied tools         Bash denied 7 times on the claude profile\n                       → add \"Bash\" to \"allowed_tools\" on the claude profile\n```\n\nOne line asks for `Bash` in `allowed_tools`; the other, once it is there, asks for `allowed_tools` to be deleted. Following either undoes the other.\n\nThe first line is simply wrong. `checkWorkerPermissions` (`src/doctor.js`) asks `uncoveredBuiltins(p.allowed_tools)` whether the list covers the 16 shell builtins in `SAFE_BUILTINS`, and that question is asked pattern by pattern: it looks for `Bash(cd *)`, `Bash(pwd *)` and so on. A bare `Bash` grant permits **every** command, `cd` and `pwd` included, so nothing is uncovered — but the check does not know that a bare `Bash` subsumes every `Bash(...)` pattern, so it reports all 16 as missing and recommends deleting the very grant that fixed the denials.\n\nValue 5: \"every error says what to do next\". Two `!` lines whose fixes cancel out is worse than either alone, because an operator who follows both in sequence ends where they started, having been told twice that the board is misconfigured.\n\n## What\n\n1. **Teach the coverage check that `Bash` covers everything.** In whatever computes `uncoveredBuiltins` (imported by `src/doctor.js` from `src/model.js`; note plain `grep` did not find its definition in this repo — use a node-based search), return `[]` when the list contains a bare `Bash` entry. The same holds for any harness spelling that means \"all shell\": Copilot's `shell` without a pattern, if that is a legal grant.\n2. **Make the denied-tools advice aware of what is already granted.** The `denied tools` line should not keep recommending `Bash` once the profile has it; its ledger is historical, so it should either say the denials predate the current grant, or stop firing when the current grant would have allowed them.\n3. **A test that pins the pair.** A profile with `allowed_tools: [\"Bash\", \"Edit\", ...]` produces neither warning. This is the case the two checks currently disagree about, so it is the case worth freezing.\n\nOut of scope: changing what the default profiles grant. This card is about the checks being right, whatever the board says.\n\n## Done when\n\n- [ ] A board whose profile grants bare `Bash` gets no `worker permissions` warning, and a test asserts it.\n- [ ] The `denied tools` line does not advise adding a tool the profile already has.\n- [ ] `hkb doctor` on this repo's own board is clean of both lines.\n- [ ] `npm run lint && npm test` green.\n\n## Contract\n\nDo not \"fix\" this by changing `SAFE_BUILTINS` or the shipped `allowed_tools`. The defect is in the two checks, not in what a board is allowed to grant.",
+  "closed_at": null,
+  "created_at": "2026-09-03T02:45:39Z",
+  "goal": "a profile granting bare Bash produces neither the worker-permissions warning nor a denied-tools line telling it to add what it has",
+  "id": 316,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/doctor.js",
+    "src/model.js",
+    "test/doctor.test.js",
+    "test/profiles.test.js"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "hkb doctor contradicts itself about allowed_tools once a profile grants bare Bash",
+  "updated_at": "2026-09-03T02:47:55Z"
+}

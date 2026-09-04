@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "`hkbCommandForHook()` (`src/init.js:93`) picks the hook command from the **installing machine's** PATH:\n\n    if (hkbOnPath()) return 'hkb hook stop';\n    const bin = path.join(PKG_ROOT, 'bin', 'hkb.js');\n    return `node \"${bin}\" hook stop`;\n\n`.claude/settings.json` is normally **tracked and shared**. Both branches are wrong for a file the whole team gets:\n\n- **`hkb` on PATH → a bare `hkb`.** Correct for the person who installed it, broken for every teammate who has not run `npm i -g hkb-cli`. Because `PreToolUse` matches `*`, that is a failing hook on *every tool call in every session* in that repo — not only hkb ones. The hooks are inert without `KB_TASK`, so nothing misbehaves; it is noise, and noise in a shared config that most of the team cannot explain.\n- **`hkb` not on PATH → an absolute path to `PKG_ROOT/bin/hkb.js`.** Worse. If `init` was run via `npx`, `PKG_ROOT` is inside the npx cache — a path that is wrong for every teammate *and* stops existing for the installer once that cache is cleared.\n\nSo the branch that looks like the fallback is a trap, and the branch that looks right only works for one person.\n\n**Design question to settle first, because it decides the fix:** should `init` write hooks into shared `.claude/settings.json` at all, or into `.claude/settings.local.json` (gitignored, per-developer)? Claude Code reads both. Local is honest — the hooks serve whoever runs the board, not the repo — but it means a fresh clone has no nudge until that person runs something, which weakens the Stop-hook guarantee on Actions and on a teammate's first worker run.\n\nOptions worth weighing:\n\n1. **Write to `settings.local.json` by default**, `--shared-hooks` to opt into the tracked file. Add the local file to the generated `.gitignore`.\n2. **Keep the shared file but make the command portable** — `npx -y hkb-cli hook stop` works on any machine with node, at the cost of an npx resolve per tool call, which on `PreToolUse` is a real per-call latency tax.\n3. **Keep it shared and bare**, and have `hkb doctor` detect \"a hook command that is not resolvable here\" and name the fix (`npm i -g hkb-cli`). Cheapest, but every teammate meets the error before they meet doctor.\n\nRecommend 1, with doctor's check from 3 regardless — a hook pointing at a binary that is not there should be something doctor names, however it got written.\n\n**Also fix while here:** the npx-cache absolute path is a latent bug even for a solo user, since the cache is not durable. Never write a `PKG_ROOT` path that lives under `_npx`.\n\n**Verify.** Install from a machine where `hkb` is not on PATH and assert nothing under `_npx` is written into any settings file; assert the generated `.gitignore` covers whichever settings file is used; a doctor check that fails when the configured hook command cannot be resolved.",
+  "closed_at": "2026-08-27T18:32:06Z",
+  "created_at": "2026-08-27T18:13:07Z",
+  "goal": null,
+  "id": 85,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "init writes a machine-specific hook command into a shared, committed settings.json",
+  "updated_at": "2026-08-27T18:32:06Z"
+}

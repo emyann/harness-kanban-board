@@ -1,0 +1,37 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Named as a follow-up in the review of PR #147 (#146, merged): the worker reported the note arrived truncated, so it was never filed.\n\n## Why\n\n#146 made `hkbOnPath()` ignore npx's augmented `node_modules/.bin` and taught `installClaudeHooks` the `$CLAUDE_PROJECT_DIR` form. Two other writers still take `hkbCommandForHook()` / `hkbOnPath()` without a `root`: `installHarness` (`src/init.js`, `{{command}}` in `templates/codex/hooks.json` and `templates/copilot/…`) and `mcpLaunch` (`src/mcp.js`, `.mcp.json`). On a devDependency or self-checkout repo they now write `node \"/abs/path/to/repo/node_modules/hkb-cli/bin/hkb.js\"` (or `/abs/…/bin/hkb.js`) into **tracked** files — exactly what `docs/harnesses.md` says hkb never does, and wrong for every teammate.\n\n## What\n\n- Codex and Copilot have no `$CLAUDE_PROJECT_DIR`; check what each expands in a hook command (Codex runs hooks from the project root; Copilot's `.github/hooks/*.json` likewise) and use a cwd-relative `node node_modules/hkb-cli/bin/hkb.js` / `node bin/hkb.js` with the same `[ -f … ] || exit 0` guard where the harness runs a shell, or the plain relative form where it does not. Same `projectBinRel(root)` helper as #146 — one source of the remainder.\n- `.mcp.json`: MCP servers launch from the project directory in Claude Code and VS Code; write `node` + the relative path there too, and say in the `hkb init --mcp` output which machines it resolves on.\n- `hkb doctor`: the harness hook files and `.mcp.json` get the same resolve check `checkHooks` does for Claude's settings.\n- `docs/harnesses.md` \"where the hkb you ran init with lives\" table gains the Codex/Copilot/MCP columns.\n\n## Done when\n\n- In a devDependency scratch repo, `npx hkb init --harness codex`, `--harness copilot` and `--mcp` write no absolute path anywhere (grep the generated files for `/home` or the tmp root), and each generated command runs from a plain `sh` in the project root with exit 0.\n- Tests in `test/harness.test.js` for the three writers; `npm run lint && npm test` green; `npm run smoke` (init output changed).\n\n## Contract\n\n- Global-install repos keep the bare `hkb`; this is the third case only, as in #146.",
+  "closed_at": "2026-08-29T02:42:26Z",
+  "created_at": "2026-08-29T00:22:26Z",
+  "goal": "Every file hkb init writes for a devDependency or self-checkout install names hkb by a project-relative path, so the tracked Codex and Copilot hook files and .mcp.json mean the same thing on every machine",
+  "id": 166,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/init.js",
+    "src/mcp.js",
+    "templates/codex",
+    "templates/copilot",
+    "docs/harnesses.md",
+    "test/harness.test.js"
+  ],
+  "priority": 4,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "On a local-install repo, init still writes absolute machine paths into the Codex/Copilot hook files and .mcp.json",
+  "updated_at": "2026-08-29T02:42:26Z"
+}

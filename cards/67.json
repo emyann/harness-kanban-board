@@ -1,0 +1,32 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    65
+  ],
+  "body": "Implements the adoption + messaging half of ADR-004 (docs/wiki/decisions/adr-004-roles-and-adoption.md). Blocked by the manual-reclaim fix — the framing sentence is dishonest until it lands.\n\n1. docs/manual-mode.md: the day-one loop (init/doctor, create --blocked-by, list, claim -> export line, context as the brief, one terminal verb, comment as steering, promote as the by-hand lever, dispatch --max 0 to reconcile merged PRs), the heartbeat contract (heartbeat or be reclaimed after stale_after), serve as the human board view, and the agent-assisted migration recipe: paste roadmap.md, have your agent run hkb create per story. NO hkb import parser (see ADR-004 rejected alternatives).\n2. README: insert the \"Who runs a board: the seats\" section between How-it-works and What-it-costs (final wording in ADR-004 / the evaluation report), folding in the bolded sentences at README.md:41/44; keep the autonomous quickstart first and add a \"drive it by hand\" subsection directly after, with: hand mode and autonomous mode are the same protocol with a different dispatcher - you, or the tick; and: every agent run leaves a summary the next run reads - even when you launch the agent yourself.\n3. protocol.md: condensed 5-line seats version at the top.",
+  "closed_at": "2026-08-27T06:41:08Z",
+  "created_at": "2026-08-27T05:54:04Z",
+  "goal": null,
+  "id": 67,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Manual mode: docs/manual-mode.md, README seats section and hand-mode subsection",
+  "updated_at": "2026-08-27T06:41:08Z"
+}

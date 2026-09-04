@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> **Re-scoped 2026-08-28 after decision (a) on #133.** The ledger is built from the transcript only;\n> the hook counter is dropped. `session_id`/`transcript_path` are now stamped on every attempt\n> (#135 at the verb, #137 from the tick), so the input exists.\n\n## The problem\n\nWorkers run with `--permission-mode dontAsk`: an unlisted tool is denied, never prompted for. A denied\nworker does not stop — it finds a workaround. Measured on this board: **208 native denials in 56 of 71\nattempts**, zero of which ended the attempt; every worker routed around. Sometimes that is the whole\nquality of the result — on pipao-v2 a worker denied the `react-aria` MCP server sitting in `.mcp.json`\nbuilt the components from training knowledge and said nothing.\n\n## What to build\n\n**1. A denied-tools ledger on the attempt row**, `denied_tools: [{tool, kind, count, first_seen}]`,\nread from the transcript when the attempt ends (or at reap). Three native shapes land differently and\nall three must be classified:\n- `permission_denials` / `toolDenialKind: permission-rule` — a `--disallowedTools` rule;\n- *\"Permission to use <tool> has been denied because Claude Code is running in don't ask mode\"* — an\n  allowlist miss, a heredoc by shape, or `$(…)` substitution;\n- the worktree guard's *\"…can't be verified to stay inside the worktree\"* — a tool **error**, absent\n  from `permission_denials`; read tool results, not just the denials array.\n\n**2. Surfaces.** `hkb show <n>` prints `denied: mcp__react-aria__* ×7, Skill ×2`. `hkb stats` adds a\nboard-wide line — *tools workers wanted and could not use*. The serve drawer shows it on the card.\n`hkb doctor` turns the most-denied tool into the exact `allowed_tools` edit.\n\n**3. Doctor checks the MCP servers reach a worker at all.** A `.mcp.json` server may never load in a\n`--bg dontAsk` session; if the tool never appears, the ledger stays empty for the wrong reason. Verify\nwhat a worker session sees and warn when repo MCP servers are invisible to workers.\n\n(The \"disclose, don't work around\" instruction now ships as prompt text in the follow-up to #133.)\n\n## Constraints\n\n- Read the transcript once per attempt, locally, never over the network.\n- Tool names verbatim. `--json` stable: `denied_tools` on the attempt, the aggregate in `hkb stats --json`.\n\n## Done when\n\n- An attempt refused a tool shows it in `hkb show`, the drawer and `hkb stats`, with the right `kind`.\n- The worktree-guard shape is counted (a fixture transcript with that error, no `permission_denials`).\n- `hkb doctor` proposes the allowlist edit and reports invisible `.mcp.json` servers.\n- `npm run lint && npm test` green.\n",
+  "closed_at": "2026-09-01T23:25:34Z",
+  "created_at": "2026-08-28T16:03:15Z",
+  "goal": "a denied MCP/Skill/Agent/Bash attempt is visible on the attempt, the card and the board stats, with the config fix suggested",
+  "id": 130,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/dispatch.js",
+    "src/hook.js",
+    "src/stats.js",
+    "src/doctor.js",
+    "src/model.js"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "The board shows every tool a worker wanted and was refused, so the operator can grant it",
+  "updated_at": "2026-09-01T23:25:34Z"
+}

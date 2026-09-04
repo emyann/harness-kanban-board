@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    284
+  ],
+  "body": "",
+  "closed_at": null,
+  "created_at": "2026-09-02T01:44:43Z",
+  "goal": "actionsFiles derives the runner's tool list from effectiveTools with the board's own profile, a board-level customisation of claude-action reaches the generated workflow under test, and a posture a runner cannot honour is refused or documented rather than silently dropped",
+  "id": 285,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/init.js",
+    "templates/actions",
+    "test/harness.test.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "The generated Actions workflow renders a profile's raw allowed_tools, so the tool posture governs every launch except the one nobody is watching",
+  "updated_at": "2026-09-02T01:46:39Z"
+}

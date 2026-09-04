@@ -1,0 +1,38 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found operating this board on 2026-09-01. #161 sat in *review* with a green, `MERGEABLE` PR for eight minutes\n> while the operator session did other work. The board knew. Nothing said so a second time, and the human had to\n> ask \"anything stall?\" to surface it.\n\n## Why\n\n`hkb watch` is edge-triggered, all the way down. Every one of `EVENT_KINDS` (`src/watch.js:29`) —\n`appeared, status, agent, needs-human, closed, reopened, attempt, outcome, result, comment` — is a *transition*:\ncomputed by diffing two snapshots, emitted once, never repeated. There is no aging, no \"still in\", no re-raise.\n\nThat is exactly right for the lanes the **tick** owns, and exactly wrong for the lanes a **human or the operator\nseat** owns:\n\n| lane | owner | what happens if the event is missed |\n|---|---|---|\n| `todo`, `ready` | the tick | promoted / claimed on the next pass — self-correcting |\n| `running` | the tick | the reclaim loop reaps a dead lease — self-correcting |\n| `review` | the seat, or the human on a `manual` board | **nothing, forever** |\n| `blocked` + `kb:needs-human` | the human | **nothing, forever** |\n| `triage` | the planner | **nothing, forever** |\n\nSo the instrument is loudest about the half of the board that repairs itself and silent about the half that\ncannot. A card parked in a seat-owned lane is the one state that has no mechanism behind it, and it is the one\nstate `watch` mentions only once.\n\nThis is not hypothetical and it is not only about sessions: a human who steps away for an hour comes back to a\nwatcher whose scrollback long ago stopped mentioning the PR that has been waiting the whole time. The web board\nshows it, but only to somebody already looking at the web board.\n\n## What\n\n- **A `waiting` event kind**, emitted by `hkb watch` for a card that has been in a seat-owned lane longer than a\n  threshold, and re-emitted on an interval while it stays there. Add it to `EVENT_KINDS` and `KIND_TOKENS` so\n  `--kinds waiting` works and the operate table's row-per-kind test keeps it honest.\n- **It costs no API call.** `watch` already polls conditionally (an unchanged board is a `304`) and already holds\n  the previous snapshot. When a card's status changes it can record *when*; the waiting check is then local\n  arithmetic against that. Pure decision in `src/model.js` (`waitingFindings(snapshot, since, {now, thresholds})`),\n  so the interval logic is unit-testable with an injected clock. **No new request, ever** — a design that adds a\n  poll has missed the point.\n- **Seat-owned lanes only**: `review`, `blocked` with `kb:needs-human`, and `triage`. Never `ready`, `running` or\n  `todo` — re-raising a lane the tick owns is noise that trains people to ignore the signal.\n- **The event says who is waited on and on what**: `{kind: 'waiting', number, status, for_ms, owner, pr?}` —\n  `owner` being `operator` / `human` / `planner`, and `pr` the PR number and its mergeability when the lane is\n  `review`, because \"mergeable and waiting\" is the actionable case and \"conflicting and waiting\" is a different\n  one (#214).\n- **Thresholds are board policy**, `dispatch.waiting: {review: 600, needs_human: 3600, triage: null}` in\n  `.kanban/board.json`, with `null` meaning never (a board that files ideas in triage on purpose should not be\n  nagged about them). Defaults should be generous: this is a nudge, not an alarm.\n- **`hkb list` shows the age** in a seat-owned lane — `#161 review claude p3 … waiting 8m` — so the answer to\n  \"anything stall?\" is one read the human already knows.\n- **The operate procedure** (`skills/kanban/SKILL.md`) gains a `waiting` row in its reaction table: it is the one\n  kind that means *you already knew, and it is still true*.\n\n## Done when\n\n- [ ] `hkb watch --json` emits a `waiting` event for a card held in `review` past the threshold, and re-emits it\n      on the interval while it stays there, with no additional API request in any poll.\n- [ ] `--kinds waiting` filters to it; the operate section has a row for it; the kinds test covers it.\n- [ ] `waitingFindings` is pure, in `src/model.js`, with fixture tests on an injected clock covering: a card that\n      just arrived (no event), one past threshold (one event), one still there an interval later (a second\n      event), and a card in `ready`/`running`/`todo` (never an event).\n- [ ] A `review` waiting event carries the PR and whether it is mergeable.\n- [ ] Thresholds are read from `.kanban/board.json` with `null` disabling a lane; `hkb doctor` prints them.\n- [ ] `hkb list` shows the waiting age for seat-owned lanes.\n- [ ] `npm run lint && npm test` pass; the wiki page covering `hkb watch` / the operator seat describes it.",
+  "closed_at": null,
+  "created_at": "2026-09-01T20:18:02Z",
+  "goal": "hkb watch emits a re-raised waiting event for a card held past a threshold in review, needs-human or triage, computed locally with no extra API call, carrying the owner and the PR's mergeability; thresholds are board policy; hkb list shows the age; the operate table has a row for it",
+  "id": 222,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/watch.js",
+    "src/model.js",
+    "src/cli.js",
+    "src/board.js",
+    "src/doctor.js",
+    "skills/kanban/SKILL.md",
+    "docs/wiki/"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "hkb watch only ever fires on a transition, so a card parked in a lane a human owns is announced once and never again",
+  "updated_at": "2026-09-01T20:18:02Z"
+}

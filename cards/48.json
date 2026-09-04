@@ -1,0 +1,33 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\n`not ok 95 - a token inside the window is reported to the loop with the fix` failed on a UTC Actions runner (PR #47's run) while passing locally (EDT) and on main's next run. A test of a 7-day expiry window that depends on the process clock or timezone is a latent flake that will eventually fail main at random and erode trust in the CI gate.\n\n## What\n- Make the expiry logic in `src/doctor.js` take an injectable `now` (default `Date.now`), same pattern the reap/track code uses.\n- The tests construct explicit instants (e.g. expiry = now + 6d23h, now + 7d1h, expired) instead of deriving from the real clock; run the boundary cases in both directions.\n- While there: assert the warning text renders the date in UTC so the same token warns on the same day everywhere.\n\n## Done when\n`TZ=UTC node --test test/doctor.test.js` and `TZ=America/New_York node --test test/doctor.test.js` both pass at any wall-clock time (add both TZ runs to the test workflow's matrix if cheap).",
+  "closed_at": "2026-08-27T01:37:05Z",
+  "created_at": "2026-08-27T01:29:02Z",
+  "goal": null,
+  "id": 48,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "test/doctor.test.js",
+    "src/doctor.js"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Deterministic clock in the doctor expiry tests",
+  "updated_at": "2026-08-27T01:37:05Z"
+}

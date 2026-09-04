@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\n\nWithdrawn as a requirement on 2026-09-03 and parked here deliberately. The local-first plan\n(`docs/local-first.md`) had justified part of its design with *\"if a friend clones the repo, I want them\nto have the board as well\"*. The operator's call: **collaboration is its own epic, and the single-operator\nsystem has to work first.**\n\nThat is the right cut, because the requirement was quietly doing two different jobs and only one of them\nis collaboration:\n\n- **Durability** — the remote copy is a backup, so a board is not a single point of failure inside one\n  laptop's `.git`, and it can be restored onto a fresh checkout. **This stayed.** `hkb sync`, the tracked\n  `store` key, and the read-through-to-`origin/kb-board` fallback all serve it.\n- **One writer as a safety property** — the owning-host guard stops *one* person's second machine, a stale\n  worktree, or a second dispatcher from writing the branch concurrently, which integer card ids cannot\n  survive. **This stayed too**, re-justified: it is load-bearing single-player, not a multi-user feature.\n\nSo nothing was removed from the code. What was removed is the *goal* of a second human, and the pressure\nit was putting on design decisions that had no other reason to be shaped that way.\n\n## What this epic owns, when it is picked up\n\n1. **A second person reading a board.** Today `hkb serve` is refused on a non-owning checkout because its\n   drag-and-drop runs the same mutating verbs, so a read-only browser view is a UI that does not exist.\n   That view is this epic's, not a papercut to fix in passing.\n2. **Concurrent hosts.** `hkb sync` refuses any non-fast-forward and tells the human to pick a side. Real\n   multi-player means merging two hosts' work, which means card ids that do not collide — hash ids were\n   named as the later answer (`docs/local-first.md` §6.2) and belong here.\n3. **Handoff vs. takeover.** `hkb init --take-over` exists and works, but it is a *move*: it rewrites\n   `board.host`. A handoff between two people who both keep working is a different verb with different\n   guarantees.\n4. **Claims across hosts.** The index (`.git/hkb/index.db`) is host-local by design, so a claim taken on\n   one machine is invisible on another. Multi-player needs the live tier to be shared or reconciled — the\n   single hardest piece, and the reason this is an epic and not a card.\n5. **Identity.** `hostId()` answers \"which machine\", never \"which person\". Anything about who did what\n   needs a notion of actor that hkb does not have.\n6. **The GitHub bridge interacts with all of this** (ADR-006 keeps it as a later adapter): a board\n   mirrored to issues is a collaboration surface that already exists, and may be the cheaper answer to\n   most of the above than teaching the local store to be multi-writer.\n\n## Not in this epic\n\nDurability and single-operator safety, as above — those are shipped and stay. If a change here would make\na one-person board *less* safe or *less* recoverable, it is out of scope by construction.\n\n## Done when\n\nThis is a placeholder for scoping, not for building. It is done when it has been decomposed into cards\nwith a decided approach to item 4 (shared or reconciled live tier) and item 2 (id scheme), because\neverything else depends on those two answers.",
+  "closed_at": null,
+  "created_at": "2026-09-03T15:34:41Z",
+  "goal": null,
+  "id": 333,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "EPIC: multi-player — a second person on a board (scoping placeholder, deliberately parked)",
+  "updated_at": "2026-09-03T15:34:41Z"
+}

@@ -1,0 +1,39 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Observed 2026-08-29 on hkb's own board. To run Claude workers at `--effort medium`, the board's `claude` and `claude-track` profiles had to pin a full `launch` array (commits d866ceb/3fc087a) — the only way to add a flag. When #144 moved the hooks onto the launch line, the pinned arrays silently predated `{hook_settings}`: every worker spawned after the loop restart had **no Stop nudge and no PreToolUse policy**. `hkb doctor` caught it (`! launch hooks … predates the hooks moving onto it`) but its fix — *drop \"launch\" from the profile* — would have lost `--effort medium`, the reason the pin existed. The operator fixed it by hand, inserting `{hook_settings}` into both arrays.\n\n## Why\n\nA pinned launch is a frozen copy of hkb's default: every placeholder hkb adds later is missing from it, and the same class of drift already bit `allowed_tools` (#138). The frictionless answer is that the two things people pin a launch for — model and effort — are profile fields rendered into the default launch, so the pin is never needed; and that when a pin does exist, doctor names the surgical fix.\n\n## What\n\n1. **`effort` profile field** (`src/board.js` profile schema, `src/dispatch.js` where `{model_args}` is built, pure in `src/model.js`): `\"effort\": \"low\" | \"medium\" | \"high\" | \"xhigh\"` renders `--effort <v>` into `{model_args}` for the Claude profiles (claude, claude-track, claude-p), the Actions template's `claude_args`, and whatever Copilot/Codex accept if they have an equivalent (say so if they do not). Validate the value at `loadBoard`; unknown → exit 2 naming the allowed set.\n2. **Doctor's stale-pin fix names the placeholder** (`src/doctor.js` `launch hooks` check and any sibling check on pinned launches): instead of \"drop launch\", say *insert `{hook_settings}` after the `--disallowedTools` group (or drop the pin if it only adds --effort / --model, which are profile fields now)*. Better: `hkb init` offers to rewrite a pinned launch that lacks a placeholder the default carries, keeping the extra flags — one line per profile saying what it inserted.\n3. **Migrate this board**: drop the pinned `launch` from `claude` and `claude-track` in `.kanban/board.json` and set `\"effort\": \"medium\"` — in this PR, so the repo dogfoods the field.\n4. **Docs**: README profile table + `docs/harnesses.md` gain `effort`; the \"pinning a launch\" paragraph says which placeholders a pin must carry and that doctor checks them.\n\n## Done when\n\n- A board with `\"effort\": \"medium\"` and no pinned launch renders `--effort medium` on the claude launch (test), and `hkb doctor` reports `✓ launch hooks`.\n- A pinned launch lacking `{hook_settings}` gets a doctor line whose fix inserts the placeholder, and `hkb init` can apply it.\n- `npm run lint && npm test` green; `npm run smoke` (launch text changed).\n\n## Contract\n\n- Do not change the placeholder set or the default launch order beyond adding `--effort` through `{model_args}`.\n- Never rewrite a pinned launch silently; init says what it did, doctor says what to do.",
+  "closed_at": "2026-08-29T04:26:57Z",
+  "created_at": "2026-08-29T03:09:58Z",
+  "goal": "A profile says effort: medium and the default launch renders it through {model_args}; a pinned launch that predates a placeholder gets a doctor fix that inserts the placeholder rather than dropping the pin",
+  "id": 182,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/board.js",
+    "src/dispatch.js",
+    "src/model.js",
+    "src/doctor.js",
+    "docs/harnesses.md",
+    "README.md",
+    "test/harness.test.js",
+    "test/profiles.test.js"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "effort is a profile field: nobody should pin a launch line to pass --effort, and doctor's fix for a stale pinned launch must not lose it",
+  "updated_at": "2026-08-29T04:26:57Z"
+}

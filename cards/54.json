@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    52
+  ],
+  "body": "Part of track #51. Decisions settled here.\n\n## What\n- Lead with the adopter's 3-command quickstart (`npx hkb init` → `npx hkb doctor --api` → `npx hkb dispatch --loop 60`), then npm-version + CI badges, then a ~10-line \"how it works\" (issues are cards, deps are edges, refs are locks, any harness is a worker).\n- Move this repo's self-hosting narrative and verified-API-facts detail into `docs/` (linked), keeping README pointed at someone who has never seen the project.\n- Keep the philosophy bullets (free board, deterministic dispatcher, zero deps) — they are the pitch.\n\n## Done when\nA stranger can go from zero to a dispatched worker using README alone; links intact; lint/test green (README examples that claim commands exist must be real).",
+  "closed_at": "2026-08-27T03:36:18Z",
+  "created_at": "2026-08-27T03:25:31Z",
+  "goal": null,
+  "id": 54,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "README.md",
+    "docs/"
+  ],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "README for an adopter, not for us",
+  "updated_at": "2026-08-27T03:36:18Z"
+}

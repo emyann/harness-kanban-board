@@ -1,0 +1,34 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\nWhen PR #12 merges, GitHub closes #1 via `Closes #1`. The issue then disappears from the open-issues board query while still carrying `kb:status:review`. The label must follow the state.\n\n## What\n- In the dispatcher tick, after the open-board query, run one more query for **closed** issues on the board that still carry `kb:status:running|review|ready|todo|triage|blocked` (labels filter + `states: [CLOSED]`, `orderBy UPDATED_AT desc`, `first: 50`). For each: closed as completed → set `kb:status:done`; closed as not_planned → `kb:status:archived`. Close the open attempt in the run comment with outcome `completed` (or `blocked` for not_planned) if still open, and release its lock ref.\n- Keep it to one extra GraphQL query per tick; skip the query entirely when the board has no review/running tasks and the last tick found nothing (cache in `.kanban/state.json` with the board's max `updatedAt`).\n- `hkb list --all` should show these as `done`.\n- Test with the fake-gh harness if #3 has merged (read its result via `hkb show 3`); otherwise a pure-function test of the reconcile decision.\n\n## Done when\nMerging a worker PR leaves the issue closed with `kb:status:done` after the next tick, and the attempt row reads `completed`.",
+  "closed_at": "2026-08-26T05:58:00Z",
+  "created_at": "2026-08-26T04:37:27Z",
+  "goal": null,
+  "id": 14,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/dispatch.js",
+    "src/tasks.js",
+    "test/reconcile.test.js"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Reconcile merged PRs: review/running tasks whose issue was closed get kb:status:done",
+  "updated_at": "2026-08-26T05:58:00Z"
+}

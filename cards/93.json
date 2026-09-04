@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "hkb has no push channel and should not have one — it is a CLI over `gh`, with no service and nothing that phones home. Updates are pull-only. But pull-only only works if something tells you there is something to pull, and nothing does.\n\n**The skill half already works.** `hkb init` is idempotent and re-copies the skill; `checkSkill` (`src/doctor.js:21`) compares the installed copy's `SKILL.md` version against the packaged one and warns with the fix:\n\n    ! skill   .agents/skills/kanban is v0.4.0, hkb ships v0.5.0  → hkb init\n\n**The CLI half does not exist.** No registry check, no dist-tag comparison, no notice — nowhere in `doctor`, `dispatch` or the CLI. An adopter who ran `npm i -g hkb-cli` six months ago has no signal at all.\n\n**And the two compound into a false green.** A stale CLI ships a stale *packaged* skill, so `installed` and `packaged` match, `checkSkill` reports `✓ skill`, and doctor prints \"All good\" on an install that is months behind — including behind bug fixes for the exact paths doctor is checking. The one check that exists is silently disarmed by the missing one.\n\n**Fix: a once-a-day version notice, on the pattern this repo already has.** `tokenExpiryNotice` (`src/doctor.js:272`) is the precedent, and it should be copied deliberately rather than reinvented: read `state.json`, compare a `*_day` stamp, do nothing if it already ran today, stamp only on success so a failure retries next time (`src/doctor.js:275-280`). Same shape for the version check, with a separate stamp key.\n\nTwo places, because they have different audiences:\n\n- **`doctor`** — a line naming the installed version, the latest, and the upgrade command. Someone running doctor is asking \"is this healthy\", and \"you are five releases behind\" is part of the answer.\n- **the dispatcher loop** — one log line on the same daily cadence. A loop that has been up for weeks is exactly the install most likely to be stale, and its operator is not running doctor.\n\n**Constraints that shape it:**\n\n- **No new dependency.** The registry is `https://registry.npmjs.org/hkb-cli` over `node:https` — a plain GET returning `dist-tags.latest`. Nothing else.\n- **Never on the hot path.** Not on every command, not in a tick that is not the day's first. Frugality is a value and so is not making `hkb list` wait on a network call.\n- **Offline is not a failure.** No registry, no notice, no error, no stamp. An air-gapped or rate-limited machine must behave exactly as it does now.\n- **A pinned install is a choice.** If someone runs `hkb-cli@0.1.4` deliberately, a nag every day is friction, not help. Consider an opt-out in `board.json`, and say the version once rather than warning about it.\n\n**Decide, do not assume: is there an `hkb update`?** Today the upgrade is two commands — `npm i -g hkb-cli@latest && hkb init` — and value 4 says one command beats two. But a CLI npm-installing over itself while running is genuinely awkward (permissions, a global install that may not be how they installed it, npx users for whom it means nothing), and getting it wrong breaks the tool it is upgrading. Weigh it on the card. Printing the exact two commands may be the honest answer; if so, say why in the code.\n\n**Verify.** With a stubbed registry: a first run stamps and notices, a second the same day is silent, a network failure is silent and does not stamp, an up-to-date install says nothing or says it once. Assert `hkb list` makes no registry call. And assert the compound case directly — a stale CLI whose packaged skill matches the installed skill must still produce a notice, because that is the bug this card exists for.",
+  "closed_at": "2026-08-27T19:59:46Z",
+  "created_at": "2026-08-27T19:40:40Z",
+  "goal": null,
+  "id": 93,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Nothing tells an adopter their hkb is old, and a stale CLI hides a stale skill",
+  "updated_at": "2026-08-27T19:59:46Z"
+}

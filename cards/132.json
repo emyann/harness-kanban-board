@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    115
+  ],
+  "body": "Part of #125. **Re-scoped 2026-08-28 after PR #135 (`f25bbb8`) landed** — read that PR first.\n\n## What #135 already does\n\nThe terminal verb records `session_id` and `transcript_path` onto the attempt it ran, from\n`CLAUDE_CODE_SESSION_ID` and the job record under `$CLAUDE_JOB_DIR` (`currentSession`, `src/jobs.js`,\ncalled from `finishAttempt` in `src/lifecycle.js`). A worker that completes, blocks or requests review\nnow leaves a resumable, priceable row. Do not rebuild that.\n\n## What is still missing — the attempts that never file a verb\n\nOn this board: 10 `protocol_violation`, 5 `timed_out`, 2 `crashed`. None of those run a terminal verb,\nso none gets a session under #135 — and they are exactly the attempts a human wants to `claude\n--resume` for a post-mortem, and exactly the spend `hkb stats` still cannot see.\n\nThe dispatcher can fill them without a hook or a verb. It already reads the job id from the launch\nlog (`parseBackgroundedId`, `src/dispatch.js:492`), already reads the job record (`readJobState`,\n`src/jobs.js`), and already lists `claude agents --json` each tick. Everything needed to name the\nsession is in hand one tick after launch.\n\n## What\n\nOn the first tick where an attempt's job is matched, if the row has no `session_id`, write the same\n`SESSION_FIELDS` the verb would — same `sessionUpdate`, same marker discipline #135 uses — from the\njob record. Then, when the attempt is later written off as crashed/timed out/violated, the row\nalready carries what `priceOf` and `hkb show` need.\n\n- Write only when absent; a row the verb has stamped is never touched.\n- No new calls. No per-attempt call.\n- Record early (the tick after launch), so the resume line is there while the attempt is still live.\n\n## Done when\n\n- An attempt the dispatcher writes off as `protocol_violation` still has `session_id` and\n  `transcript_path`, and `hkb stats` prices it through the transcript fallback.\n- A row already stamped by the verb is byte-identical after the tick.\n- `node --test test/jobs.test.js` covers: unmatched job → nothing; matched, empty row → written;\n  matched, stamped row → untouched.\n\n## Contract\n\n- Reuse `currentSession`/`readJobState` from `src/jobs.js` and `sessionUpdate` from `src/model.js`\n  as #135 left them. Do not add a second field set or a second marker.\n- Touch only `src/dispatch.js`, `src/jobs.js`, `test/jobs.test.js`.\n",
+  "closed_at": "2026-08-28T16:47:06Z",
+  "created_at": "2026-08-28T16:17:51Z",
+  "goal": "one tick after launch a claude-bg attempt row carries session_id and transcript_path",
+  "id": 132,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/dispatch.js",
+    "src/model.js",
+    "test/jobs.test.js"
+  ],
+  "priority": 6,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "The dispatcher records a background worker's session from claude agents, no hook needed",
+  "updated_at": "2026-08-28T16:47:06Z"
+}

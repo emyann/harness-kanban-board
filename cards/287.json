@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Observed live on 2026-09-02 while the operator seat was closing the stranded nodes of track #223.\n\n## What happens\n\n`setStatus` (`src/tasks.js`) removes the old status label before adding the new one:\n\n```js\nfor (const l of toRemove) {\n  await rest('DELETE', api(ctx, `/issues/${task.number}/labels/${...}`));\n}\nconst missing = toAdd.filter((l) => !task.labels.includes(l));\nif (missing.length) await rest('POST', api(ctx, `/issues/${task.number}/labels`), { body: { labels: missing } });\n```\n\nBetween those two requests the issue carries no `kb:status:*` label at all. `statusOf` (`src/model.js`) returns `null` for that, and a card whose status is `null` is **in no lane** — it is not in `hkb list --status <anything>`, not in the lane grouping, and not in any dispatch filter keyed on a status value. For the length of one REST round trip the card is off the board.\n\nThe labels *are* the state, so this is not a display artifact. It is the card genuinely having no state.\n\n## Observed\n\nThe watcher caught it at `01:50:48` on **#257**: `review → null`, then `null → done` at `01:51:05`. **#258**, written seconds later by the same reconcile pass, went `review → done` in one step — so this is a race an external reader wins sometimes, not a fixed window. The writer was the dispatcher's reconcile pass reacting to the issue being closed as completed.\n\n## The repo already knows the rule\n\n`setAgent`, twenty lines below in the same file, does the opposite deliberately and says why (#113):\n\n> **Add first, then remove:** a half-applied set leaves the card on two profiles, which is what it already was, never on none — a card with no `kb:agent:*` is one the dispatcher has to guess for.\n\nThat reasoning is *stronger* for status than for agent, because status is the lane itself. `setStatus` is the one write that did not get it.\n\n## Why it is worth fixing rather than tolerating\n\nThe transient is small and self-heals. The durable version does not: if the process dies between the two calls — a crash, a dropped connection, `max_runtime`, a Ctrl-C — the card is left **permanently statusless**. It is then in no lane, invisible to `hkb list`, and nothing reports it, because every surface that would notice a stuck card iterates lanes. That is the same invisible-work family as #227, #228 and #275, which have already cost this project real losses, and it is the worst of them: there is no lane to look in.\n\n## Done when\n\n- `setStatus` adds the new status label before removing the old, so the intermediate state is *two* status labels rather than none — recoverable, and what `setAgent` already does for the same reason.\n- Which of two status labels wins is stated and deterministic: `statusOf` takes the first match on an array whose order is GitHub's, so the fix either makes the intermediate unambiguous or documents that the transient reads as one of the two real statuses and never as an invented one.\n- A failure injected between the add and the remove leaves the card readable on a real status, asserted by a test through the fake-gh double.\n- `hkb doctor` reports any card on the board carrying no `kb:status:*` label — existing boards may already hold one from a past interrupted write, and today nothing would ever surface it.\n- The same audit covers any other write that clears a `kb:*` label before setting its replacement.",
+  "closed_at": null,
+  "created_at": "2026-09-02T02:11:00Z",
+  "goal": "A status change never leaves a card without a kb:status label, with the intermediate state being two labels rather than none as setAgent already does, a failure injected between the two writes leaving the card readable under test, and doctor reporting any card that carries no status label",
+  "id": 287,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/tasks.js",
+    "src/model.js",
+    "src/doctor.js",
+    "test/reconcile.test.js"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "setStatus removes the old status label before adding the new one, so a card is momentarily in no lane and a crash mid-write strands it there permanently",
+  "updated_at": "2026-09-02T02:11:00Z"
+}

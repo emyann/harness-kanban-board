@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "On 2026-08-27 hkb was installed on a repo that is not hkb for the first time — a private, org-owned monorepo with live CI. The run found three bugs — #72 (`--profiles` could not narrow a fresh board), #73 (two hooks written, one reported), #74 (`.kanban/dispatch.pid` missing from the shipped `.gitignore`).\n\n**All three were in `init`, and CI could not have caught any of them.** No test calls `init()`. The suite covers its helpers — `harnessFiles`, `installHarness`, `resolveProfiles`, `boardProfiles`, `actionsFiles` — but every one of those three bugs lived in the *composition*: which profiles the board is seeded with, which hooks get installed versus reported, what the ignore list contains. `scripts/smoke-pack.mjs` runs only `version`, `help` and `hook stop`, so it proves the tarball starts, not that it works.\n\nThat is the gap: a stranger's first command is the least-tested path in the project.\n\n**Primary fix — a real `init()` test.** `test/fake-gh.js` installs itself as the transport *inside* `src/gh.js` via `setTransport`, so an in-process test never spawns `gh` and never touches the network. Drive the actual `init()` against a temp git repo with `--repo owner/name` (which bypasses `detectRepo`, `src/init.js:364`) and assert the whole contract:\n\n- the exact profile set on a fresh board, and that a second `init` stays additive over a hand-added profile\n- the exact label set that reaches the transport — the count is the regression #72 was\n- both hooks present in `.claude/settings.json`, and the summary line naming both (#73)\n- every line of the `wanted` ignore list, including `.kanban/dispatch.pid` (#74)\n- the skill copied out of the *package*, the `.claude/skills/kanban` link, the `CLAUDE.md`/`AGENTS.md` section\n- a clean re-run: no duplicate hooks, no duplicate ignore lines, no label churn\n\n**Secondary — the tarball half.** `smoke-pack.mjs` should prove the *installed package* can do this too, since that is where a missing `templates/` or `skills/` entry bites. It cannot create labels without the network, so scope it to the local half: run `hkb init` in a temp git repo and assert the skill and doc sections were written from the packaged copy before the API step, with a clear assertion about where it is expected to stop. Choose the seam you find cleanest — if `init` needs a documented offline path to make this honest, say so on the card rather than making the test tolerate a vague failure.\n\n**Done when** a deliberate reintroduction of any of #72/#73/#74 fails `npm test`.\n",
+  "closed_at": "2026-08-27T18:04:29Z",
+  "created_at": "2026-08-27T17:27:51Z",
+  "goal": null,
+  "id": 78,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Nothing tests init(): the cold-start net that would have caught #72, #73 and #74",
+  "updated_at": "2026-08-27T18:04:29Z"
+}

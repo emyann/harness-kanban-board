@@ -1,0 +1,39 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    182
+  ],
+  "body": "> Filed 2026-08-28 after the operator moved the default `claude` profile to Sonnet 5 to protect a subscription. Model and effort are per-card decisions today only by hand; this makes them part of the system without putting a judgment call in the dispatcher.\n\n## Why\n\nThree facts about this board on 2026-08-28:\n\n- Every worker ran on Opus 5 at Claude Code's default effort (`xhigh`), because `board.json` pinned `model: claude-opus-5` and the launch arrays pass no `--effort` at all. Effort moves spend more than tier does on this model family.\n- The only way to pass `--effort` today is to copy the whole shipped launch array into `board.json` and edit it — which this board now does, and which **freezes** the array against future defaults (`deepMerge`, `src/board.js:269-274`, replaces an array wholesale; #143's `Bash(hkb dispatch*)` deny reached this board only because the copy was taken after it merged).\n- A retry re-runs the exact launch that just failed: attempt 2 gets the same model as attempt 1. Nothing on the board makes a second try smarter than the first.\n\nMost decomposed cards are bounded, test-verified, single-module work — the Sonnet-shaped kind. A few are not. The board should express that per card at planning time, and escalate on its own when the cheap guess was wrong.\n\n## What\n\n**A — `effort` is a profile field, not a launch edit.** `effort: \"medium\"` on a profile expands to `--effort <level>` through a new `{effort_args}` token in `expandLaunch` (`src/dispatch.js`), exactly as `{model_args}` does for `model`; the shipped launch arrays (`src/board.js`) carry the token. `kb.effort` on a card wins over the profile, like `kb.model`. Then delete this board's two `launch` overrides and go back to the shipped arrays — `hkb doctor` gains a line that says when a board's `launch` override is byte-identical to the default minus a flag the profile could express (*\"launch override in board.json only adds `--effort`; set `effort` on the profile and drop it\"*).\n\n**B — a retry climbs a ladder.** `model_ladder: [\"claude-sonnet-5\", \"claude-opus-5\"]` on a profile; attempt `k` launches on rung `min(k, len) - 1`. Pure function `modelForAttempt(task, profile, k)` in `src/model.js`: `kb.model` pins every attempt (a card that must start high stays high); no ladder → today's behaviour. The attempt row records `model` at spawn so `hkb show` and the run comment say which rung ran. One line in `spawnWorker`.\n\n**C — the planners suggest.** `/kanban:decompose`'s child table (`skills/kanban/SKILL.md`, *\"| child | title | blocked by | paths | agent | priority |\"*) gains a `model` column and `/kanban:specify` a `model` field, with the rubric in the skill text: one module + a test that decides + no design freedom → the profile's first rung; cross-module, concurrency, protocol semantics, anything a reviewer cannot tick from a checklist → pin `claude-opus-5`. `hkb create --model` already carries it. Coordinate with #117, which reopens the same recipe.\n\nOut of scope here, filed where the data lives: a `by_model` table in `hkb stats` (#155 — needs `model_usage` on the row) and the operator's \"read it, adjust the ladder\" routine (#149).\n\n## Constraints\n\n- The dispatcher chooses by arithmetic on `k`, never by reading the card's text. No LLM in the tick (ADR-004).\n- `kb.model` and `kb.effort` are the card's word and beat both the ladder and the profile.\n- Backend-neutral: the token expands to nothing on a harness whose profile sets no `effort`; Copilot/Codex launches are untouched.\n\n## Done when\n\n- `hkb init` boards get `{effort_args}` in every Claude launch array and `effort: \"medium\"` on `claude`; `hkb dispatch --dry-run` shows `--effort medium` with no `launch` override in `board.json`.\n- A card whose attempt 1 ended `protocol_violation` on `claude-sonnet-5` is relaunched on `claude-opus-5`; `hkb show` names both rungs.\n- A card with `kb.model` set runs that model on every attempt.\n- The decompose/specify sections carry the `model` column/field and the rubric; `references/protocol.md`'s example stays consistent.\n- `test/model.test.js` (ladder, pin, no-ladder), `test/dispatch.test.js` (relaunch on rung 2, `{effort_args}` expansion), `test/skill.test.js`; `npm run lint && npm test` green; `npm run smoke` (board defaults are read from the package).\n- The pinned and the actual model are visible on the board: `hkb list` marks a card only when `kb.model` pins one (e.g. `·opus-5` after the priority), `hkb show` prints `model` per attempt row, `hkb doctor` prints each profile's `model` / `effort` / ladder on its profile line, and the serve drawer renders `kb.model` and the attempt's model. `--json` carries `kb.model` (already) and `attempts[].model`.",
+  "closed_at": null,
+  "created_at": "2026-08-29T00:10:47Z",
+  "goal": null,
+  "id": 165,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/board.js",
+    "src/dispatch.js",
+    "src/model.js",
+    "src/doctor.js",
+    "skills/kanban/SKILL.md",
+    "test/"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "Model and effort are the board's decision: an effort field, a retry ladder, and a model column at decompose time",
+  "updated_at": "2026-08-29T03:11:29Z"
+}

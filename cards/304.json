@@ -1,0 +1,51 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    303
+  ],
+  "body": "## Why\nTwo stores mean every verb is written twice (`docs/local-first.md` §1 item 9, §7 second paragraph, ADR-006 consequences).\n\n## What\n1. Delete `src/store/github.js`, the `tasks.js`/`lock.js` shims, `src/projects.js` (the Projects mirror returns with the bridge; keep its pure `planSync` in `src/bridge/` as a stub file with a note if you prefer, or delete it and say so), `init --store github`, `heartbeat: comment` and `HEARTBEAT_MODES`, `KB_LOCK_REF` and `lock_sha` (the skill, `protocol.md`, `src/context.js`), the run-comment serialisers in `src/model.js` that nothing reads any more, `hkb doctor --api`'s lock-ref probe (replaced by `BEGIN IMMEDIATE` + WAL + mount).\n2. The forge half (`src/forge.js`, still on `src/gh.js`): the worker brief (`src/context.js`) stops writing `Closes #n` and instead names the branch `kb-<id>-<k>` as the link; the `active_pr` guard and the reconcile pass tie a PR to its card by head branch (`branchFallbackPrs` becomes the only path; a merged PR found by `GET pulls?state=closed&head=…` marks the card `done`); `hkb merge` (`mergeCard`) sets `done` itself after the merge; `finishPr`'s un-draft and reviewer request stay.\n3. `test/fake-gh.js` shrinks to the forge routes (pulls, merge, protection, rules, auto-merge); every remaining test runs on `test/fake-store.js` (C1).\n4. Docs: `README.md` \"How it works\" and \"How it maps to GitHub\" rewritten for the local store (issues are no longer the board); `skills/kanban/references/protocol.md` loses the GitHub-isms (labels, refs, comments as the record) and gains the two tiers; `CLAUDE.md` \"Rules\" bullet about `gh.js`/`tasks.js`/`lock.js` rewritten; the wiki pages that describe the GitHub store (`architecture/overview.md`, `concepts/worker-identity.md`, `features/review-loop.md`, `features/auto-merge.md`) refreshed.\n\n## Done when\n- [ ] `grep -rn \"Closes #\" src skills` returns nothing; `grep -rn \"kb:status\\|kb:agent\\|refs/kb/locks\" src` returns nothing outside `src/init.js`'s import path.\n- [ ] A PR merged on a scratch repo (use the forge double) moves its card to `done` on the next tick; `hkb merge` does the same immediately.\n- [ ] `npm run lint && npm test` green; `wiki-check` reports nothing stale for the pages named.\n\n## Contract\nDo not migrate this repository's own board in this card (the root does it, after the code has landed). Keep `src/gh.js` and the forge functions' names.\n\n**Read first:** `docs/local-first.md` (the plan; the sections named below), `docs/wiki/decisions/adr-005-control-plane.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Keep it dependency-free at runtime. Pure logic in\n`src/model.js` with a test. Errors name the fix and carry `.exitCode`. `--json` everywhere. Update the wiki page a\nchange touches (`node .repolore/scripts/wiki-check.mjs` lists what went stale); a new feature gets a new page.\nFinish with `npm run lint && npm test` green, one draft PR, and exactly one terminal verb.\n",
+  "closed_at": "2026-09-04T03:56:45Z",
+  "created_at": "2026-09-02T23:32:15Z",
+  "goal": "src/store/github.js is deleted; no worker brief writes Closes #n; a PR is tied to its card by the kb-<id>-<k> branch name; a merged PR marks its card done through the listing by head branch; hkb merge sets done; KB_LOCK_REF, lock_sha, the comment-mode heartbeat and the run-comment format are gone; fake-gh holds only forge routes",
+  "id": 304,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 10800,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/store/",
+    "src/tasks.js",
+    "src/lock.js",
+    "src/context.js",
+    "src/dispatch.js",
+    "src/lifecycle.js",
+    "src/forge.js",
+    "src/init.js",
+    "src/gc.js",
+    "src/model.js",
+    "src/doctor.js",
+    "src/projects.js",
+    "test/fake-gh.js",
+    "test/",
+    "skills/kanban/",
+    "README.md",
+    "docs/",
+    "CLAUDE.md"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Retire the GitHub store; the forge half without issues",
+  "updated_at": "2026-09-04T03:56:45Z"
+}

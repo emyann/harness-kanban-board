@@ -1,0 +1,37 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    115
+  ],
+  "body": "Part of #125. **Re-scoped 2026-08-28 after PR #135 (`f25bbb8`) landed** — read that PR first.\n\n## What #135 already does\n\n`whichAttempt` (`src/hook.js`) takes `KB_TASK` first and falls back to the `kb-<n>-<k>` worktree\nname. The **Stop hook** — the two-nudge enforcement and the session marker — is live in a\n`claude --bg` worker as of that PR. Do not rebuild it.\n\n## What #135 deliberately did not do, and the decision this card now carries\n\n`preToolHook` stays gated on `KB_TASK` alone. #135's reasoning: a checkout name says which *task* a\nsession is, never which *profile* launched it, and hkb's policy with no profile would deny a worker\n`npm test`. That is correct as far as it goes. The consequence is that **hkb's own permission policy\nstill never runs inside a `claude-bg` worker** — only Claude Code's native `--allowedTools` does —\nand #130's \"disclose instead of work around\" deny reason has no place to fire.\n\nSo the residual question is a design fork, and a human should pick:\n\n- **(a) Keep it inert.** Claude Code's allowlist is the policy for bg workers; hkb's `decidePermission`\n  applies only where `KB_PROFILE` arrives (e.g. `-p` profiles, Copilot, Codex). Then this card is\n  archived, and #130 must be built on the transcript route alone.\n- **(b) Make it live.** When `KB_PROFILE` is absent, resolve the profile **once per attempt** from the\n  attempt row (`a.profile`) and cache it locally under `.kanban/sessions/<n>-<k>.profile`, so the\n  per-tool-call cost is one file read. If the row cannot be read, stand aside (exit 0) — never a\n  blanket deny. This is what lets hkb's policy, and #130, exist on the default profile.\n\nRecommendation recorded at re-scope: **(b)**. Value 5 says every error should say what to do next,\nand only hkb's hook can say `hkb block --kind capability`.\n\n## Done when (if (b))\n\n- A PreToolUse call with no `KB_*` env, from inside `…/kb-42-1`, applies the `claude` profile's policy\n  after one row read, and the second call reads no row.\n- Unreadable row → exit 0, and a test asserts no blanket deny.\n- `node --test test/permission.test.js test/session.test.js` green.\n\n## Contract\n\n- Do not touch `whichAttempt`, the Stop hook path, or the marker; reuse them.\n- Touch only `src/hook.js`, `test/permission.test.js`, `test/session.test.js`.\n",
+  "closed_at": "2026-08-28T18:12:19Z",
+  "created_at": "2026-08-28T16:17:52Z",
+  "goal": "inside .claude/worktrees/kb-<n>-<k> the Stop nudge and the permission policy run without env",
+  "id": 133,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/hook.js",
+    "src/board.js",
+    "test/session.test.js",
+    "test/permission.test.js"
+  ],
+  "priority": 6,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "archived",
+  "suspended": null,
+  "title": "The hooks find their task from the worktree name when KB_TASK never arrives",
+  "updated_at": "2026-08-28T18:12:19Z"
+}

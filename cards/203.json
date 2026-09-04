@@ -1,0 +1,38 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> From the review of PR #201 (#184, merged 2026-08-29). The deadlock is fixed; these are the steering and the docs it still needs.\n\n## What\n\n1. **The merge step in the worker brief** (`src/context.js` ~108 and ~169 — not SKILL.md, which #184 named by mistake): \"`git fetch origin main && git merge origin/main`\" becomes the one-command form that leaves no window with a broken board file and no `git checkout --ours` round-trip: `git merge origin/main || (git checkout --ours .kanban/board.json && git add .kanban/board.json && git commit --no-edit)` — with one sentence saying why (a conflicted board.json makes every non-hook `hkb` verb exit 2 until resolved; the hooks now stand aside, the verbs do not). Test in `test/context.test.js`.\n2. **Docs for the KB_ROOT policy**: `README.md` ~646 and `docs/wiki/concepts/worker-identity.md` ~115-120 still describe the PreToolUse policy without saying it is read from `KB_ROOT`'s board when set — a worker editing its worktree board.json sees no effect and nothing says why. One sentence each; re-stamp.\n3. Nits: `src/init.js` ~243 still says all three hooks are inert without KB_TASK (stale since #125: Stop/SubagentStop identify a --bg worker by its checkout); `src/hook.js` ~96 with KB_ROOT set but no board.json there says `KB_PROFILE … is not a profile on this board` instead of naming the missing file; a one-line comment on `subagentStopHook` saying it deliberately keeps recording `E` on a broken board; tests: the pretool fixture always sets KB_ROOT, so the no-KB_ROOT fallback is untested, and the stop-hook stand-aside test sets `ctx.cfgError` by hand rather than through `makeHookContext`; `makeHookContext.requireBoard()`'s unreadable branch is dead code.\n\n## Done when\n\n- The rendered brief contains the one-command merge form (test); a worker following it never has a conflicted board.json between two tool calls.\n- README and worker-identity.md state the KB_ROOT rule; wiki-check fresh for that page.\n- `test/hook.test.js` covers pretool/stop with no KB_ROOT and a broken worktree board. `npm run lint && npm test` green.",
+  "closed_at": null,
+  "created_at": "2026-08-29T05:48:16Z",
+  "goal": "A worker's merge step resolves a board.json conflict in the same command, README and the worker-identity page say the PreToolUse policy is read from KB_ROOT's board when set, and the hook tests cover the no-KB_ROOT fallback",
+  "id": 203,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/context.js",
+    "src/hook.js",
+    "src/init.js",
+    "README.md",
+    "docs/wiki/concepts/worker-identity.md",
+    "test/context.test.js",
+    "test/hook.test.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "Worker brief: merge main without a window where board.json is broken; docs say the hook policy is KB_ROOT's board",
+  "updated_at": "2026-08-29T05:48:16Z"
+}

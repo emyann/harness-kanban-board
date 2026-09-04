@@ -1,0 +1,38 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    259
+  ],
+  "body": "## Why\n\nThis is the child that makes the map worth having rather than a second list to maintain. **#114 happened because\na field naming a capability and a launch granting it were two hand-maintained facts that drifted** — under\n`dontAsk` an unlisted tool is denied rather than prompted, so the drift was silent.\n\nIf a profile binds an intent to something invoked with `Skill`, then `Skill` is granted **because of that\nbinding**. Derived, not typed twice. That is the whole argument, and without it this feature is #114 again with\nmore configuration.\n\nThe operator seat is in scope because that is where the gap was noticed: `/kanban:operate`'s `review` row tells\na session to read the PR and run the repo's checks, and never to use the harness's own review capability when\nthe board declares one.\n\n## What\n\n- **The grant is derived from the map, through `effectiveTools` (#255).** A binding invoked with `Skill` puts\n  `Skill` in that launch's tools. A test asserts the two cannot drift — that is the deliverable, not the wiring.\n- **`hkb doctor` prints each profile's capability map** and flags a binding whose launch cannot actually grant\n  it: the check #114 asked for, generalised.\n- **`/kanban:operate`'s review row** says to run the board's declared `review` capability *and* judge against\n  *Done when* — not one or the other. A session reviewing by hand where a capability exists is leaving the\n  harness's own tooling unused, which is how this card was found.\n- **A wiki page** states the portability contract in one sentence: the intent travels, the binding is local, an\n  unmapped intent is prose.\n- Settle, rather than assume: whether #114's hardcoded `Skill` grant is now redundant. Both answers are\n  defensible; say which in the PR.\n\n## Done when\n\n- [ ] A capability bound to a `Skill`-invoked command is reflected in that launch's tools, derived not\n      duplicated, with a test that the two cannot drift.\n- [ ] `hkb doctor` prints the map and flags a binding the launch cannot grant.\n- [ ] The operate review row names the declared `review` capability when the board has one.\n- [ ] A wiki page states the portability contract; `wiki-check.mjs` clean for it.\n- [ ] `npm run lint && npm test` pass.\n\n## Contract\n\nNames a sibling depends on. Do not invent alternatives.\n\n- **`effectiveTools(profile, task, board)` (#255) is the only place a launch's tool list is derived.** A grant\n  implied by a capability binding goes through it. Never read `profile.allowed_tools` directly.\n- The profile key is `\"capabilities\"`, an object mapping an intent to this harness's command:\n  `\"capabilities\": { \"review\": \"/code-review\", \"goal\": \"/goal\" }`.\n- `CAPABILITIES` is the closed vocabulary, exported from `src/model.js` and pinned by a test the way\n  `EVENT_KINDS` and `GROOM_KINDS` are — a new intent cannot be added without saying what it means.\n- **An unmapped intent is not an error.** It falls back to today's prose brief. That is what keeps a Copilot or\n  Codex board working unchanged, and it is the whole difference between a capability map and a dependency.\n- Portability is the constraint the design exists to satisfy: the *intent* travels, the *binding* is local. hkb\n  must never name `/code-review` itself outside a board's own config.\n- Read `hkb show 217` for the goal, and #114 for the instance this generalises.",
+  "closed_at": "2026-09-02T00:39:10Z",
+  "created_at": "2026-09-01T23:55:40Z",
+  "goal": "A capability bound to a Skill-invoked command is granted by derivation with a test that the two cannot drift; doctor prints the map and flags a binding the launch cannot grant; the operate review row names the declared review capability; a wiki page states the portability contract",
+  "id": 261,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/model.js",
+    "src/doctor.js",
+    "skills/kanban/SKILL.md",
+    "docs/wiki",
+    "test/doctor.test.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "The grant is derived from the capability map, so a binding and its permission cannot drift",
+  "updated_at": "2026-09-02T00:39:10Z"
+}

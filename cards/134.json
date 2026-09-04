@@ -1,0 +1,37 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    132
+  ],
+  "body": "Part of #125. **Re-scoped 2026-08-28 after PR #135 (`f25bbb8`) landed** — it already rewrote\n`README.md`, `docs/harnesses.md` and the wiki for the new recording model. Do not redo the docs.\n\n## What remains — the doctor check\n\nThe gap that started this track was found by an empty spend report, weeks late. `hkb doctor` should\nbe able to say it directly.\n\n- Per `claude-bg` profile that has run attempts on this board: warn when **no** ended attempt carries\n  `session_id`, with the fix (`hkb` is older than #135: `npm i -g hkb-cli@latest`; or the harness is\n  not stamping — check `$CLAUDE_JOB_DIR`).\n- Warn when attempts ended without a verb (`crashed`/`timed_out`/`protocol_violation`) carry no\n  session, and #132 has not landed — name #132's mechanism once it has.\n- Say, per profile, whether hkb's PreToolUse policy is live there (it is not on `claude-bg` unless\n  #133 (b) ships) — one line, so the operator knows which layer is enforcing.\n- Docs: only if `docs/harnesses.md` after #135 is missing the \"which layer enforces\" line; otherwise\n  leave it.\n\n## Done when\n\n- `hkb doctor` on a board whose `claude-bg` attempts carry no session fields warns and names the fix;\n  on this board after #135 it says ok for verb-ended attempts.\n- `node --test test/doctor.test.js` covers warn and ok with a deterministic board fixture.\n\n## Contract\n\n- Read `hkb show` on what this is blocked by; touch only `src/doctor.js`, `test/doctor.test.js`,\n  and `docs/harnesses.md` if genuinely stale.\n",
+  "closed_at": "2026-08-28T17:02:19Z",
+  "created_at": "2026-08-28T16:17:53Z",
+  "goal": "hkb doctor warns on a board whose claude-bg attempts carry no session fields",
+  "id": 134,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/doctor.js",
+    "test/doctor.test.js",
+    "docs/harnesses.md",
+    "README.md"
+  ],
+  "priority": 5,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "doctor says when a profile's hooks are inert, and the docs say what each profile really runs",
+  "updated_at": "2026-08-28T17:02:19Z"
+}

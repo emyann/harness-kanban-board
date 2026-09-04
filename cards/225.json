@@ -1,0 +1,33 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\n\nTriage is where cards wait for a human'\"'\"'s yes, and nothing tells the human what is waiting or why. Finding it by\nhand means reading ~78 KB of `hkb list --status triage --json` or running `hkb show` twenty times. CLAUDE.md calls\na rung that is possible but tedious a bug.\n\nThe arithmetic half of that judgement needs no LLM: whether every blocker is closed as completed, whether\n`kb.paths` is empty, whether the body has a spec shape, which cards name each other, which pairs share files.\nIt belongs in `src/model.js` beside `blockerDone`, `computeReady`, `priorityOf` and `pathsOverlap`, which\nalready live there. This card is that half and only that half: pure functions and their tests, no I/O, no CLI.\n\n## What\n\nPer #191'\"'\"'s *What* section 1, amended. Add after `sortForDispatch` in `src/model.js`:\n\n- The helpers: `blocksIndex(tasks)`, `ageDays(task, now)`, `specShape(bodyText)`, `cardMentions(text, openNumbers)`,\n  `pathHubs(tasks, share = 0.25)`, `pathJaccard(a, b, hubs)`. **No `detectCycles`** — amendment 1 says to reuse the\n  walk in `src/track.js` (import it, or lift it into `model.js` and have `track.js` call it).\n- `GROOM_KINDS` with the exact kinds and levels #191 lists, as amended: `unblocked` (act; requires\n  `blockedBy.length >= 1`), `no_blockers`/`unknown_blockers` (info), `dead_blocker`/`blocker_in_triage`/\n  `priority_inversion`/`thin_spec`/`merged_pr_open`/`broad_path` (ask), `no_paths`/`malformed_kb`/`cycle`/\n  `two_agents`/`blocker_off_board` (act), `no_goal` (act only when `specShape` finds no Done-when heading, else\n  info), and the two shortlists `mentions_unlinked` and `overlap_pair` (always `needs_judgment`).\n- `proposeAction(card)` → one `GROOM_ACTIONS` value, or `judge`, or `none`.\n- `groomBoard(tasks, opts)` assembling the report object #191 specifies. `blocksIndex` and mentions are computed\n  over **all** tasks passed in; `statuses` filters only which cards get a row.\n\nEverything is pure: an injected `now`, no dates from the clock, no network, no `ctx`.\n\n## Done when\n\n- [ ] `test/groom.test.js` has one fixture case per `GROOM_KINDS` kind, including a zero-blocker triage card that\n      must **not** match `unblocked`; a NOT_PLANNED blocker → `dead_blocker`, never `unblocked`; `no_goal` as\n      `info` when a Done-when heading exists; hub removal at 25%; mentions minus blockers minus children.\n- [ ] `proposeAction`'\"'\"'s table is pinned by a test, and every value it returns is in `GROOM_ACTIONS`.\n- [ ] `groomBoard` makes no I/O and takes only the array plus options; a test passes it a plain fixture array.\n- [ ] `npm run lint && npm test` pass. No file outside `src/model.js` and `test/groom.test.js` changes.\n\n## Contract\n\nThese are the names, signatures and rules a sibling depends on. Do not invent alternatives; a change here\nbreaks a task you cannot see.\n\n- **The eleven \"Amendments from the adversarial pass\" at the top of #191 override its body wherever they\n  differ.** Read `hkb show 191` first and treat the amendments as the specification. In particular: reuse\n  `computeReady`, `agentsOf` and the walk in `src/track.js` — **do not write `detectCycles`**; `no_goal` is\n  `info` when the body already has a Done-when heading; `broad_path` exists and is `ask`; `overlap_pair.why` is\n  guard-aware.\n- `groomBoard(tasks, { now, caps, pairs = 10, statuses })` is exported from `src/model.js` and takes the raw\n  `fetchBoard` array and nothing else — a later card puts the same function behind `hkb serve`'s snapshot.\n- `GROOM_KINDS` and `GROOM_ACTIONS` are exported from `src/model.js`. Actions are the closed vocabulary\n  `promote · specify · link-under · split · supersede · reprioritise · park · archive`, plus `judge` and `none`.\n- `fetchBoard(ctx, { blockers: 'all' })` REST-fills blockers for **every open card** on a repo without GraphQL\n  `blockedBy`; `blockers: true` keeps today's todo/blocked-only behaviour.\n- The `--json` field names in #191 are **frozen**; later kinds are added to `findings`, never renamed.\n- The CLI never emits the word \"duplicate\". `overlap_pair.why` is \"will serialize under path_overlap\".\n- **`src/dispatch.js` is untouched by this whole track** — the promote step still filters `status === 'todo'`.\n- Nothing in this track writes to the board. `hkb groom` is a read, like `hkb dispatch --dry-run`.",
+  "closed_at": "2026-09-01T20:55:32Z",
+  "created_at": "2026-09-01T20:42:22Z",
+  "goal": "groomBoard(tasks,{now,caps,pairs,statuses}) and GROOM_KINDS/GROOM_ACTIONS are exported from src/model.js, pure and I/O-free, with one fixture test per kind including the false-positive cases the amendments name",
+  "id": 225,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/model.js",
+    "test/groom.test.js"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "groomBoard, GROOM_KINDS and the pure grooming helpers in model.js",
+  "updated_at": "2026-09-01T20:55:32Z"
+}

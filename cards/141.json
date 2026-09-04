@@ -1,0 +1,32 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    125
+  ],
+  "body": "Found by #125's verify pass while probing the terminal-verb path, 2026-08-28.\n\n`src/gh.js:30` classifies an error as `network` when its text matches, among others, `could not\nresolve` — meant for the DNS failure `could not resolve host: github.com`. GitHub's GraphQL error for\nan issue number that does not exist is **`Could not resolve to an Issue with the number of 999999.`**,\nwhich matches the same pattern.\n\n## What it costs\n\nA read just misreports:\n\n```\n$ hkb show 999999\nhkb: GraphQL failed (network): Could not resolve to an Issue with the number of 999999.\n```\n\nA **terminal verb** does worse, because `isOffline` is what `withOutbox` (`src/lifecycle.js:26`) uses\nto decide a write should be kept for later:\n\n```\n$ hkb finish 999999 --from-stdin < payload.json\nhkb: GitHub unreachable — queued for replay in .kanban/outbox.jsonl: hkb complete 999999 --summary …\n```\n\nExit code 0, a \"we'll do it later\" message, and a line in the outbox that can never succeed — it will\nbe retried on every replay for as long as the file lives. A worker that typos its own task number is\ntold its handoff is safe when it has been dropped, which is exactly the silent failure value 5 rules\nout. The same pattern hits `Could not resolve to a Repository`, `to a User`, and `to a node`.\n\n## Fix\n\nNarrow the DNS branch so it cannot swallow a GraphQL 404 — match the host form (`could not resolve\nhost`, `could not resolve hostname`) rather than the bare phrase, or exclude `could not resolve to a`\nbefore the network test. A misidentified issue is a state error (exit 2, \"no such issue\"), never a\nqueued write.\n\n`eof` in the same alternation is worth a look while there: it is three letters, unanchored, and\nmatches any message containing the substring.\n\n## Done when\n\n- `hkb show <missing>` says the issue does not exist, exit 2.\n- A terminal verb against a missing issue fails and queues nothing.\n- A real DNS failure still classifies as `network` and still queues — a test for each.\n",
+  "closed_at": "2026-09-01T21:43:00Z",
+  "created_at": "2026-08-28T17:17:59Z",
+  "goal": null,
+  "id": 141,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "A missing issue number reads as \"GitHub unreachable\", so a terminal verb for it is queued forever",
+  "updated_at": "2026-09-01T21:43:00Z"
+}

@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "Found by the first cold start on a repo that is not hkb on 2026-08-27 (a private, org-owned monorepo with live CI).\n\nA bare `hkb init` on a Claude-only repo created six profiles and **16** `kb:*` labels:\n\n    wrote .kanban/board.json (board \"default\", profiles claude, claude-track, claude-p, claude-action, copilot-cli, codex)\n    created labels: ... kb:agent:claude, kb:agent:claude-track, kb:agent:claude-p, kb:agent:claude-action, kb:agent:copilot-cli, kb:agent:codex\n\n**Cause.** `init()` seeds `cfg` from `DEFAULT_BOARD` (`src/board.js:87`), whose `profiles` is the whole of `DEFAULT_PROFILES` (`src/board.js:19` — six keys), then only fills in profiles that are *missing* (`src/init.js:337-343`). So `--profiles claude` adds nothing and removes nothing: the flag can only widen, never narrow. The help text `init [--profiles claude]` implies otherwise.\n\n**Consequence for an adopter.** Five unusable `kb:agent:*` labels on their repo, and `hkb doctor` warns forever about things they will never use:\n\n    ! copilot         not on PATH\n    ! codex           not on PATH\n    ! copilot harness missing .github/agents/kanban-worker.agent.md, ...\n    ! codex harness   missing .codex/hooks.json, ...\n\nA permanently non-green doctor teaches people to ignore doctor.\n\n**Fix.** On a *fresh* board (no existing `.kanban/board.json`), seed `cfg.profiles` from the resolved profile list rather than from all of `DEFAULT_PROFILES`. `loadBoard` already implements exactly this — \"keep only what the user declared, each merged over the default of the same name\" (`src/board.js:184-186`) — so init should match its sibling. Re-running init on an existing board must stay additive: never delete a profile the operator added by hand.\n\n**Verify.** `hkb init` on a fresh repo yields `claude` only and 11 labels; `--profiles claude,codex` yields two and 12; a second `init` over an existing board leaves hand-added profiles untouched. Unit-test beside the existing `resolveProfiles` cases in `test/harness.test.js`.\n",
+  "closed_at": "2026-08-27T18:04:24Z",
+  "created_at": "2026-08-27T17:02:50Z",
+  "goal": null,
+  "id": 72,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "init --profiles cannot narrow the board: every adopter gets all six profiles",
+  "updated_at": "2026-08-27T18:04:24Z"
+}

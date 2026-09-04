@@ -1,0 +1,39 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Observed 2026-08-28 on hkb's own board, with process evidence. The dispatcher launched #146 attempt 1 on the `claude` profile at 21:10. No Claude Code session daemon was running, so `claude --bg` cold-started one — `claude daemon run --origin transient --spawned-by {\"label\":\"claude --bg\",\"cwd\":\"…/harness-kanban-board\",\"pid\":22486}` — and that daemon **inherited the launch environment**: `KB_TASK=146 KB_ATTEMPT=1 KB_PROFILE=claude KB_ROOT=…`. Every process under it carries them: its spare pty hosts, and the *operator's* long-running session (`89e6aba3`, a conversation that predates #146 and was re-hosted by the new daemon).\n\nWhat that did, measured:\n- **#146 attempt 1 records the wrong session.** The operator session's Stop hook fired with `KB_TASK=146`, `recordSessions` wrote `session_id: 89e6aba3…` and that session's `transcript_path` onto the attempt, and `.kanban/sessions/146-1` holds the same id. The worker that did the work is job `60f4948c` (its transcript is under `…--claude-worktrees-kb-146-1/60f4948c-….jsonl`). `hkb show 146`'s resume line now opens an operator conversation.\n- **The worker permission policy enforced on the operator.** With `KB_TASK` + `KB_PROFILE=claude` set, `preToolHook` applied the profile's allowlist to the operator's shell: a diagnostic `for … do … done` loop was denied (`for, do, tr, break, cut, done`), and a card body that *mentioned* the dispatcher was denied by the `\\bhkb\\s+dispatch\\b` pattern — which reads heredoc bodies on purpose (`src/model.js:677`).\n- Had #146 still been `running` when the operator ended a turn, the Stop hook would have nudged the operator (twice) to finish someone else's card.\n\n## Why\n\n`src/dispatch.js:93` puts `KB_TASK/KB_ATTEMPT/KB_BOARD/KB_REPO/KB_LOCK_REF/KB_ROOT/KB_PROFILE` into the env of **every** launch. For a child-process harness (`claude -p`, Copilot, Codex) that env dies with the worker. `claude --bg` is different — #125 already found the daemon does not *forward* that env to the session it hosts, which is why `whichAttempt` falls back to the `kb-<n>-<k>` checkout name. This card is the other half: when the launch is the one that *starts* the daemon, the env does not vanish — it becomes the daemon's, for the daemon's lifetime, and leaks into every session it will ever host. The worktree fallback (#125/#135) is that profile's identity; the env on a `--bg` launch buys nothing and poisons a shared process.\n\n## What\n\n1. **Scrub `KB_*` from a `--bg` launch** (`src/dispatch.js`): a profile whose launch is `claude --bg` (the attempt already records `bg: true`) gets an env with no `KB_*` at all. Identity for that profile is the checkout name, as #125 decided; the PreToolUse hook is deliberately inert there (#143). If Claude Code has a way to hand env to the *session* rather than the launch (`claude --help` for the current version — check before deciding), prefer it; otherwise scrub.\n2. **The hook trusts env only when the checkout agrees** (`src/hook.js` `whichAttempt`, pure helper in `src/model.js`): when `KB_TASK` is set but the cwd is the board root itself (`KB_ROOT`, or a checkout that is not `kb-<KB_TASK>-<KB_ATTEMPT>`) and the profile's workspace is `worktree`, the env is a leak, not an identity — answer null, one stderr line (`hkb hook: KB_TASK=146 in the environment but this is not its worktree; ignoring`). Same gate in `preToolHook`. Belt and braces: 1 stops the leak at the source, 2 makes the next leak harmless.\n3. **The tick's identity outranks a hook stamp** (#137 records the job id from the tick): when the job record's session id and a hook-stamped `session_id` disagree, the job's wins and the tick rewrites it, logging the correction. Repair #146 attempt 1 that way (`session_id`/`transcript_path` → `60f4948c`), not by hand.\n4. **`hkb doctor`**: `warn` when `KB_TASK` is set in the environment doctor runs in and the cwd is not that task's worktree — \"this shell thinks it is a worker for #n; a `claude --bg` launch probably started the session daemon with that env — restart the daemon (`claude daemon` …) once its sessions are done\". Linux extra, if cheap: read `/proc/<daemon pid>/environ` and say so outright.\n5. **Docs**: `docs/harnesses.md` `claude` profile row says the env is not passed and why; wiki page covering attempts/sessions (`node .repolore/scripts/wiki-check.mjs`).\n\n## Done when\n\n- A `claude --bg` launch that cold-starts the daemon leaves no `KB_*` in the daemon's environment (`node -e 'console.log(process.env.KB_TASK)'` in a later session prints undefined).\n- An operator session with a leaked `KB_TASK` in its env: no Stop nudge, no permission policy, no session stamp — and one stderr line saying why.\n- #146 attempt 1's `session_id` is `60f4948c…` after a tick.\n- `test/hook.test.js`: env-vs-checkout disagreement; `test/dispatch.test.js`: the bg launch env has no `KB_` key. `npm run lint && npm test` green; `npm run smoke` (launch env changed).\n\n## Contract\n\n- Do not remove the env for child-process profiles (`claude-p`, Copilot, Codex): it is their only identity and the hook's gate.\n- Do not weaken the worktree fallback; this card makes it the *only* identity for `--bg`, not a second one.\n- Touches `src/dispatch.js` launch code beside #143/#144 — small, separable change; land it first if it is ready first.",
+  "closed_at": "2026-08-29T02:02:53Z",
+  "created_at": "2026-08-28T21:41:25Z",
+  "goal": "A claude --bg launch never puts KB_* into the session daemon's environment; a hook that finds KB_* in an environment whose checkout disagrees stands aside; the tick's job identity outranks a hook stamp, repairing #146's attempt record",
+  "id": 150,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/dispatch.js",
+    "src/hook.js",
+    "src/model.js",
+    "src/doctor.js",
+    "docs/harnesses.md",
+    "docs/wiki",
+    "test/hook.test.js",
+    "test/dispatch.test.js"
+  ],
+  "priority": 5,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "A claude --bg launch that starts the session daemon leaks KB_* into every session the daemon hosts",
+  "updated_at": "2026-08-29T02:02:53Z"
+}

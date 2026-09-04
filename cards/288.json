@@ -1,0 +1,42 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    294,
+    325
+  ],
+  "body": "## Why\nThe root of track A (`docs/local-first.md` §10). Its children move hkb onto a Node floor of 22.13, delete the Actions runner, put a `Store` seam under the tick, and build the two local tiers (a `kb-board` git branch plus a `node:sqlite` index) behind it. This card is the verify-and-synthesize pass that runs once the leaf (A6) is done.\n\n## What\nDo not redo the children's work. Read their results (`hkb show <n> --json` on each of A1–A6; only A6 is your blocker, so name the others by their numbers in this card's comments). Then:\n1. Check the pieces fit: the conformance suite runs both drivers; `hkb dispatch --dry-run --json` on this repo's GitHub-backed board is unchanged from before the seam.\n2. In a scratch repository (`git init`, one commit, a remote pointing at a bare clone), run `hkb init` on the local store, `hkb create`, `hkb claim --spawn` with the `claude-p` profile (or a manual claim + `hkb finish` if no harness is available), `hkb sync`, and `hkb serve` — and from a second clone of that remote, `hkb serve` shows the board read-only.\n3. Write what no child could: the wiki page `concepts/store.md` (the two tiers, the write path, the one-writer rule, the index rebuild), refresh `architecture/overview.md`'s \"the board is the only state\" section to \"the store is the only state\", and a CHANGELOG entry.\n4. Run `npm run lint && npm test && npm run smoke`.\n\n## Done when\n- [ ] `npm test` green, `npm run smoke` green (the tarball on Node 22 and 24).\n- [ ] The scratch-repo walk-through above is recorded in this card's result with the exact commands.\n- [ ] `docs/wiki/concepts/store.md` exists, `architecture/overview.md` is refreshed, `node .repolore/scripts/wiki-check.mjs` reports nothing stale for the pages this track touched.\n- [ ] The track's summary names, per child, what landed and what is open.\n\n**Read first:** `docs/local-first.md` (the plan; the sections named below), `docs/wiki/decisions/adr-005-control-plane.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Keep it dependency-free at runtime. Pure logic in\n`src/model.js` with a test. Errors name the fix and carry `.exitCode`. `--json` everywhere. Update the wiki page a\nchange touches (`node .repolore/scripts/wiki-check.mjs` lists what went stale); a new feature gets a new page.\nFinish with `npm run lint && npm test` green, one draft PR, and exactly one terminal verb.\n",
+  "closed_at": "2026-09-03T09:06:11Z",
+  "created_at": "2026-09-02T23:31:49Z",
+  "goal": "test/store.test.js green on the github and local drivers; a scratch repo initialised on the local store runs create → claim → finish → serve end to end; docs and wiki updated",
+  "id": 288,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 28800,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/",
+    "bin/",
+    "test/",
+    "docs/",
+    "templates/",
+    "package.json",
+    "CLAUDE.md",
+    "README.md"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Local-first hkb, track A: the Node floor, no Actions, the store seam, the two-tier store",
+  "updated_at": "2026-09-03T09:06:11Z"
+}

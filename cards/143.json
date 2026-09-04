@@ -1,0 +1,43 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    138
+  ],
+  "body": "> Decision (a) on #133, 2026-08-28, on measured evidence — see #133's closing comment. #142 already shipped\n> `hkb finish` and rewired every prescription; this card is what remains. **Read #142's diff first** and\n> drop any item it already covers.\n\n## Why\n\nWorker policy on the default profile is the launch line — `--permission-mode dontAsk --allowedTools …\n--disallowedTools …` — and hkb's PreToolUse hook stays `KB_TASK`-gated (inert on `claude-bg`). Two things\nfollow: the launch line must close the gaps a live hook would have closed, and on the profiles where the\nhook *is* live (`claude-p`, Actions if the runner honours project hooks) it must never widen the launch\nallowlist — a hook `allow` overrides Claude Code's own command-substitution check (measured).\n\n## What\n\n1. **`Bash(hkb dispatch*)` in `--disallowedTools`** on `claude`, `claude-track`, `claude-p`\n   (`src/board.js` launch lines) and in `templates/actions/kanban-worker-claude.yml`. Copilot: no deny\n   (space-star deny on Copilot is unverified) — put the reason in the prompt instead. One sentence in\n   `src/context.js` and `SKILL.md`: *\"Never run `hkb dispatch` — it is what dispatched you; a second\n   dispatcher double-claims tasks.\"* Test: the rendered launch line contains the token.\n2. **`preToolHook` becomes deny-or-silence.** Emit stdout only on `deny`; on `allow` exit 0 with no\n   output, so the native allowlist stays authoritative. When `KB_TASK` is set but `KB_PROFILE` is unset\n   or unknown, stand aside with one stderr line — never run the `{}` policy. Gate unchanged.\n   Deny wording for a capability denial:\n   `hkb: <existing reason>. If the task cannot be done without this, do not work around it — run \\`hkb block <n> \"needs <what>: <why>\" --kind capability\\` (describe it, do not paste the command) and stop.`\n   Test (`test/hook.test.js`): allow → empty stdout; deny → the JSON; unknown profile → empty stdout + stderr.\n3. **Disclose, don't work around — as prompt text.** `src/context.js` + `SKILL.md`: *\"If a tool or command\n   you need is refused and there is no allowlisted way to do the work, `hkb block <n> \"needs <tool>: <why>\"\n   --kind capability`. A refusal of `hkb complete` itself is never a reason to block — use `hkb finish`.\"*\n4. **`hkb doctor`**: one `warn` when any `claude*` profile's launch lacks `--permission-mode dontAsk`\n   (\"a prompt in a background worker blocks the attempt\"). Keep #139's `permission policy` line as is.\n5. **Stale strings**: `src/init.js` HOOK_NOTE/docstring and `docs/harnesses.md` say the Stop hook stands\n   aside outside a worker session (`KB_TASK` or the `kb-<n>-<k>` checkout) and PreToolUse is `KB_TASK`\n   only, live on process-mode profiles; README drops \"file tools confined to the worktree\" as a\n   default-profile feature. Check what #142 already changed before editing.\n\n## Done when\n\n- `hkb dispatch` from inside a `claude` worker is refused by the launch line, not by hkb.\n- On a profile where the hook runs, no tool call is allowed that the launch line would have denied.\n- A worker prompt tells the agent to `block --kind capability` rather than route around a refusal.\n- `npm run lint && npm test` green; `npm run smoke` (launch/template contents changed).\n\n## Contract\n\n- Blocked by #138, which edits the same `CLAUDE_TOOLS`/launch lines; branch from its merge, not from\n  before it. #114 follows this one for the same reason.\n- Do not reintroduce a hook `allow`. Do not touch `hkb finish` (#142).",
+  "closed_at": "2026-08-28T22:57:59Z",
+  "created_at": "2026-08-28T18:12:20Z",
+  "goal": "hkb dispatch is denied at launch, the hook never widens the allowlist, and a worker is told to block --kind capability instead of working around a refusal",
+  "id": 143,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/board.js",
+    "src/hook.js",
+    "src/context.js",
+    "src/doctor.js",
+    "src/init.js",
+    "skills/kanban/SKILL.md",
+    "templates/actions/kanban-worker-claude.yml",
+    "docs/harnesses.md",
+    "test/hook.test.js",
+    "test/harness.test.js"
+  ],
+  "priority": 4,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Worker policy is the launch line: close the native gaps, make the hook deny-only",
+  "updated_at": "2026-08-28T22:57:59Z"
+}

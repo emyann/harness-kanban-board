@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> From the 2026-08-28 Agent SDK evaluation, step 3a — split out because it is small, independent, and two triage cards want it.\n\n## Why\n\n`claude -p --output-format json` on 2.1.251 already signs off with `terminal_reason`, `api_error_status`, `modelUsage` (per-model tokens) and `permission_denials`, alongside the `session_id`/`total_cost_usd`/`num_turns`/`duration_ms` hkb keeps. `parseSessionLog` (`src/model.js:465-480`) truncates the result to `SESSION_FIELDS` and throws the rest away — and then `watchChild` (`src/dispatch.js:838-850`) grep-scans the log tail for `429|rate limit|quota|401|unauthorized` to guess why the worker died, which the result already states.\n\nTwo open cards are waiting on exactly these fields: #130 (the denied-tools ledger — `permission_denials` is one of its three shapes, delivered for free on process-mode attempts) and #116 (`terminal_reason` tells \"hit `--max-turns` with a PR open\" from \"crashed\").\n\n## What\n\n- Extend `SESSION_FIELDS` / `parseSessionLog` with `terminal_reason`, `api_error_status`, `model_usage`, `permission_denials`. Unknown fields stay ignored; old logs still parse.\n- `watchChild`: pause the profile on `api_error_status` 401/429 from the result; keep the regex only as the fallback for a log with no JSON line.\n- `hkb show <n>` prints `ended: <terminal_reason>` and `denied: <tool> ×N` when present; `--json` carries them on the attempt row verbatim.\n- The tick reads the log tail for pid-mode rows it writes off as `crashed`/`timed_out`, so they get session and cost the way `--bg` rows do since #137.\n- Pin the field names in a test against a fixture from `claude --version` 2.1.251, so a rename upstream fails a test rather than silently emptying the row.\n\n## Done when\n\n- An attempt that ended on `--max-turns` shows `terminal_reason` in `hkb show` and `--json`.\n- A 429 in the result pauses the profile without the log regex.\n- `node --test test/model.test.js test/dispatch.test.js` covers the new fields and an old-format log.",
+  "closed_at": "2026-09-01T20:06:19Z",
+  "created_at": "2026-08-28T22:47:58Z",
+  "goal": null,
+  "id": 155,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/model.js",
+    "src/dispatch.js",
+    "src/stats.js",
+    "test/"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Read the whole --output-format json result: terminal_reason, api_error_status, model_usage, permission_denials on the attempt row",
+  "updated_at": "2026-09-01T20:06:19Z"
+}

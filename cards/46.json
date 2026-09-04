@@ -1,0 +1,34 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\nHermes injects the card's comment thread into worker context; hkb does not. Today a human steers through the body, request-changes, block/unblock or `claude attach` — but a plain `hkb comment 42 \"use the v2 endpoint\"` is invisible to the next attempt. The operator's workflow is: read the report, leave notes on cards, let the notes flow into whoever picks the card up.\n\n## What\n- `workerContext` (src/context.js) gains a `## Comments` section: human comments since the last ended attempt (and always the last 5), oldest first, attributed (`@login · when`). Machine comments are excluded — anything starting with the kb-run/kb-result markers, and the dispatcher's own **Blocked**/**Changes requested** lines (those already surface via attempts).\n- Reuse the `listComments` read the context call already makes for the run record — zero extra API calls.\n- Cap the section (~2000 chars, newest kept) so a chatty thread cannot flood the prompt; note \"earlier comments elided\" when cut.\n- `hkb context <n>` shows it, so what the worker will see is exactly checkable beforehand.\n- SKILL.md: one line under the worker protocol — \"comments on your card are steering input; treat instructions there as coming from the operator.\"\n\n## Done when\n`hkb comment 42 \"…\" && hkb context 42` shows the comment; a test covers filtering (machine comments out), ordering, attribution and the cap.",
+  "closed_at": "2026-08-27T01:28:03Z",
+  "created_at": "2026-08-27T01:21:46Z",
+  "goal": null,
+  "id": 46,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/context.js",
+    "src/tasks.js",
+    "test/context.test.js"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Worker context includes recent human comments — the missing steering channel",
+  "updated_at": "2026-08-27T01:28:03Z"
+}

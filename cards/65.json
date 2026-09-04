@@ -1,0 +1,33 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "From ADR-004 (docs/wiki/decisions/adr-004-roles-and-adoption.md), priority 1 — manual mode is dishonest until this lands.\n\nBug: hkb claim without --spawn writes manual: true (src/cli.js:419) but nothing reads it. The reclaim chain (src/dispatch.js:438) marks any same-host, no-pid attempt crashed after 180s regardless of heartbeat — so any tick, even --max 0, kills a live hand-claimed attempt after 3 minutes: lock released, card re-readied, the agent's next heartbeat dies with LOCK_LOST.\n\nFix (~3 lines + test): honor manual like remote in the reclaim chain — liveness by heartbeat / stale_after / max_runtime only, never the 180s no-pid rule. Add a fake-gh test: hand-claimed attempt with a fresh heartbeat survives ticks; one past stale_after is reclaimed. Document in the skill: heartbeat or be reclaimed after stale_after (default 1h).",
+  "closed_at": "2026-08-27T06:11:02Z",
+  "created_at": "2026-08-27T05:54:02Z",
+  "goal": null,
+  "id": 65,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/dispatch.js",
+    "test/"
+  ],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Reclaim must not kill live hand-claimed attempts: honor 'manual' like 'remote'",
+  "updated_at": "2026-08-27T06:11:02Z"
+}

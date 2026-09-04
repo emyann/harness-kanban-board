@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\nA background worker has nobody to answer a permission prompt: attempt 2 of #3 sat status=waiting on a shell command outside the allowlist until the dispatcher (wrongly, now fixed) killed it. The widened allowlist reduces the frequency, but any residual prompt still strands a worker until max_runtime.\n\n## What\n- Ship a PreToolUse hook (gated on KB_TASK, like the Stop hook) that turns any would-be permission prompt into a structured deny: decision \"deny\" with a reason naming the allowlist and suggesting the closest allowed alternative. The model adapts instead of hanging.\n- `hkb init` installs it next to the Stop hook; board.json gets `dispatch.on_unlisted_tool: \"deny\" | \"prompt\"` (default deny) so an attended board can keep prompts and answer them via `claude attach`.\n- `hkb doctor` warns when the hook is missing while a claude-bg profile exists.\n- Document in the profile section: attended = prompts + attach; unattended = deny.\n\n## Done when\nA worker that calls a non-allowlisted command gets an immediate deny message, keeps working, and never shows status=waiting for more than a heartbeat.",
+  "closed_at": "2026-08-26T06:12:26Z",
+  "created_at": "2026-08-26T05:57:55Z",
+  "goal": null,
+  "id": 23,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/init.js",
+    "src/board.js",
+    "templates/",
+    "docs/"
+  ],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Permission story for unattended workers: auto-deny with a message instead of prompting",
+  "updated_at": "2026-08-26T06:12:26Z"
+}

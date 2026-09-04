@@ -1,0 +1,34 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    325
+  ],
+  "body": "## Why\n121 assertion sites in 21 test files read the fake GitHub's internals (`gh.calls` 52, `lockRefs()` 26, `runOf()` 43 — `docs/local-first.md` §11). Nothing under `src/store/github.js` can be deleted before they move (§10, track C).\n\n## What\n1. `test/fake-store.js`: an in-memory implementation of the `Store` interface (§6.4) with the fixture helpers the suite uses today (`kbIssue`, `runWith`, `statusOf`, `runOf`, `locks()`, `calls`), installable through `openStore`'s injection point (add one to `src/store/index.js` if A3 did not: `setStore(fn)` returning a restore function, like `setTransport`).\n2. Rewrite the assertion sites: `gh.calls` → `store.calls` (the method names, not REST paths); `lockRefs()` → `store.locks()`; `runOf()` unchanged in meaning. Keep `test/fake-gh.js` for the forge half and for `test/store.test.js`'s GitHub driver only.\n3. Run every rewritten scenario against the local driver too where it is board behaviour (a temp repo per file is acceptable; keep the run under two minutes).\n\n## Done when\n- [ ] `grep -rn \"gh\\.calls\\|lockRefs()\" test | grep -v fake-gh.js | grep -v store.test.js` returns nothing.\n- [ ] `npm test` green in under three minutes on this machine.\n\n## Contract\nTest-only card: nothing under `src/` changes except the injection point named above, if missing.\n\n**Read first:** `docs/local-first.md` (the plan; the sections named below), `docs/wiki/decisions/adr-005-control-plane.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Keep it dependency-free at runtime. Pure logic in\n`src/model.js` with a test. Errors name the fix and carry `.exitCode`. `--json` everywhere. Update the wiki page a\nchange touches (`node .repolore/scripts/wiki-check.mjs` lists what went stale); a new feature gets a new page.\nFinish with `npm run lint && npm test` green, one draft PR, and exactly one terminal verb.\n",
+  "closed_at": "2026-09-03T09:54:01Z",
+  "created_at": "2026-09-02T23:32:13Z",
+  "goal": "test/fake-store.js exists; every test that asserted on fake-gh internals asserts on the store double instead; the same scenarios run against the local driver; npm test green",
+  "id": 303,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 10800,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "test/"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Tests onto a store double: the assertion sites that read gh.calls, lockRefs() and runOf()",
+  "updated_at": "2026-09-03T09:54:01Z"
+}

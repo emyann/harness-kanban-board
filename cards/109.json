@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\n\nThe picture belongs where the tasks live. GitHub renders mermaid fenced blocks natively in issues and\ncomments, so `/kanban:decompose` can post the graph it is proposing and a reviewer sees a diagram\ninstead of an arrow list. Zero dependencies, roughly a string builder's worth of code, and it is\nportable (Value 1) in a way a local web page is not.\n\nThis complements the drawer subgraph rather than replacing it: a copy-paste step does not answer \"let\nme see it while I work\", which is why that one goes first.\n\n## What\n\n`hkb graph <n> [--mermaid] [--json]` — emit the track rooted at `<n>` as a graph.\n\n- Reuse `resolveTrack` / `trackWaves` in `src/track.js`; do not re-walk the dependency graph by hand.\n- `--mermaid` prints a fenced mermaid block ready to paste into an issue or a markdown file.\n- `--json` returns `{ nodes, edges, mermaid }` — a stable object, like every other command.\n- `/kanban:decompose`'s proposal comment includes the diagram.\n\n**Two defects found in the prototype — fix them on the way in:**\n\n- Label escaping neutralises `\"` → `#quot;` but leaves `#` alone. A title containing `#123` renders as\n  `{` — a silently wrong glyph, not a parse error. Escape `#` → `#35;` as well, and unit-test a title\n  containing `#123`.\n- Theme. `classDef todo fill:#64748b22,stroke:#64748b,color:#111` is near-black text on a 13%-alpha\n  fill; GitHub uses a dark mermaid theme for dark-mode readers, so every label is unreadable there. Use\n  theme-neutral classDefs, or none at all.\n\n**Integration note.** `hkb comment` does not read stdin (`--from-stdin` is a global flag whose JSON keys\nare fixed in `src/cli.js`, and the `comment` case never reads it). The form that works today is\n`hkb comment 12 \"$(hkb graph 12 --mermaid)\"`. Either use that, or extend `comment` deliberately — do not\nassume a stdin path exists.\n\n## Done when\n\n- `hkb graph <n> --mermaid` emits a valid fenced mermaid block for the track rooted at `<n>`.\n- `--json` returns `{ nodes, edges, mermaid }`.\n- A unit test covers a title containing `#123` and one containing `\"`.\n- classDefs are readable in both GitHub light and dark themes (or absent).\n- `/kanban:decompose`'s comment step includes the diagram; `skills/kanban/references/protocol.md` and\n  the README document the command.\n- `npm run lint && npm test` green.",
+  "closed_at": "2026-08-28T05:04:10Z",
+  "created_at": "2026-08-28T04:27:51Z",
+  "goal": "hkb graph <n> --mermaid emits a fenced diagram GitHub renders in issues, and decompose posts it",
+  "id": 109,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/cli.js",
+    "src/track.js",
+    "test/track.test.js",
+    "skills/kanban/references/protocol.md"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb graph <n> --mermaid: the track as a diagram, where the tasks live",
+  "updated_at": "2026-08-28T05:04:10Z"
+}

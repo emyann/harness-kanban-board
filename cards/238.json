@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "",
+  "closed_at": "2026-09-01T21:49:48Z",
+  "created_at": "2026-09-01T21:25:13Z",
+  "goal": "hkb promote <n...> --triage-only writes nothing for a card that is no longer in triage and reports it as skipped, so /kanban:groom's batch stops relying on reading the forced line after the fact",
+  "id": 238,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/lifecycle.js",
+    "src/cli.js",
+    "skills/kanban/SKILL.md",
+    "test/lifecycle.test.js"
+  ],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb promote --triage-only: skip a card that moved on, before the label is written rather than after",
+  "updated_at": "2026-09-01T21:49:48Z"
+}

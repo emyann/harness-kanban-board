@@ -1,0 +1,48 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    298
+  ],
+  "body": "## Why\nThe pause the laptop already takes, made a verb (`docs/local-first.md` §3 rows `pause`/`resume`, §4 runtime table, §11 measurements).\n\n## What\n1. `src/runtime/claude-bg.js`: `pause` = `claude stop <job>`; `resume` = `claude --bg --resume <session_id> \"continue\"` with **no other flags**, cwd = the attempt's worktree (the saved options bring the hooks and the grant back; flags fork a copy; no prompt idles). Same job id, fresh pid; assert the transcript grew in the test (the fake runtime records it).\n2. `src/runtime/process.js`: `pause` = `process.kill(-pid, 'SIGSTOP')`, refused on `win32`; `resume` = `SIGCONT`; `stop` = `SIGCONT`, then SIGTERM, then SIGKILL after 5 s.\n3. `src/lifecycle.js`: `pauseAttempt`/`resumeAttempt`: runtime first; `state.paused_attempts[\"n/k\"] = iso` (`src/board.js` state helpers); then the row (`paused_at`, `paused_by: <host>`), through the outbox when offline. Resume: runtime, clear the marker, `resumed_at`, append `{ at, until, by }` to `pauses[]` after a fresh `loadRun`.\n4. `src/dispatch.js`: a tick that finds a marker in `state.json` with no `paused_at` on the row repairs the row; `watchChild` deletes `ctx._cache['comments:<n>']` before its `loadRun`; every row-closing verb (`block`, `archive`, `requestChanges`, the web board's moves) calls `runtime.stop` when the row says paused.\n5. `src/hook.js`: the Stop hook stands aside when `paused_attempts` lists the attempt. Measure and record in the PR whether the Stop hook fires on `claude stop` at all.\n6. `src/cli.js`: `hkb pause <n>`, `hkb resume <n>`, refused under `KB_TASK`; `CLAUDE_DENY` gains `Bash(hkb pause*)`, `Bash(hkb resume*)`.\n7. `src/serve.js` + `web/index.html`: `POST /api/tasks/:n/{start,pause,resume,stop}` through `runVerb`; pause/resume/stop/start buttons in the drawer; the card shows ⏸ when paused or suspended. `src/watch.js`: `paused`/`resumed` kinds.\n8. `hkb show` renders `paused_at` and the `pauses[]` total.\n\n## Done when\n- [ ] Tests with the fake runtime: the order \"runtime paused, marker written, then row\"; a paused attempt is never reclaimed at any clock value (reuse B2's injected clock); resume appends exactly one window; a paused `process` attempt that is then `block`ed gets `SIGCONT` before SIGTERM; `watchChild` after an operator stop leaves the `stopped` row intact.\n- [ ] A live check on this machine with a throwaway `claude --bg` session outside the repo (name it so `kb #` does not match), recorded in the PR: pause, resume with the prompt, the transcript grew, same job id.\n- [ ] `npm run lint && npm test` green; wiki `features/web-board.md` refreshed (the buttons).\n\n## Contract\nRow fields `paused_at`, `paused_by`, `resumed_at`, `pauses[]` (B2's shape); `state.json` key `paused_attempts`. The board-level verbs are B5's; the events stream is B6's.\n\n**Read first:** `docs/local-first.md` (the plan; the sections named below), `docs/wiki/decisions/adr-005-control-plane.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Keep it dependency-free at runtime. Pure logic in\n`src/model.js` with a test. Errors name the fix and carry `.exitCode`. `--json` everywhere. Update the wiki page a\nchange touches (`node .repolore/scripts/wiki-check.mjs` lists what went stale); a new feature gets a new page.\nFinish with `npm run lint && npm test` green, one draft PR, and exactly one terminal verb.\n",
+  "closed_at": null,
+  "created_at": "2026-09-02T23:32:07Z",
+  "goal": "hkb pause <n> pauses the runtime first, records paused_attempts in state.json, then paused_at on the row; hkb resume <n> reverses it and appends the window to pauses[]; claude-bg pauses by claude stop and resumes flag-less with a prompt under the same job id; process freezes with SIGSTOP on the group and every stop sends SIGCONT first; the Stop hook stands aside on the marker; the web board has the buttons",
+  "id": 299,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 10800,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/cli.js",
+    "src/lifecycle.js",
+    "src/runtime/",
+    "src/hook.js",
+    "src/dispatch.js",
+    "src/board.js",
+    "src/watch.js",
+    "src/serve.js",
+    "web/index.html",
+    "test/lifecycle.test.js",
+    "test/runtime.test.js",
+    "test/hook.test.js",
+    "test/dispatch.test.js",
+    "test/serve.test.js",
+    "docs/wiki/"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "hkb pause <n> and hkb resume <n>: the checkpoint for claude-bg, the freeze for process, the hooks marker, SIGCONT before every stop",
+  "updated_at": "2026-09-03T04:00:18Z"
+}

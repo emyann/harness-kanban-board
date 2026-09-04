@@ -1,0 +1,34 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "Part of #115.\n\n## Why\n\n`stopHook` (`src/hook.js:78`) reads `KB_TASK` and `KB_ATTEMPT`, and `recordSession` (`src/hook.js:55`)\nwrites `SESSION_FIELDS` (`src/model.js:421` — `session_id`, `transcript_path`, `total_cost_usd`,\n`num_turns`, `duration_ms`) onto **that** task's attempt row.\n\nIn a track, `KB_TASK` is the **root**. Every node the runner claims inside that session gets nothing:\n\n```\n$ hkb show 111 --json | jq '.run.attempts[0] | keys'\n[\"attempt\",\"profile\",\"host\",\"started_at\",\"heartbeat_at\",\"lock_sha\",\"manual\",\n \"ended_at\",\"outcome\",\"summary\",\"pr\",\"pr_head\"]      # no session_id, no transcript_path\n```\n\nAnswering \"what did this node cost\" therefore meant finding the session by name in `claude agents\n--json`, locating its JSONL by hand and summing usage. That is archaeology, and it is the reason the\nboard has no per-node story for the engine it recommends for coupled work.\n\n## What\n\nPropagate the session identity to the node attempts claimed during a track session.\n\n- The set is discoverable locally: `hkb claim` records `manual: true` on the node's attempt and\n  `recordSession` already writes a marker under `.kanban/sessions/<n>-<k>`. Use that convention rather\n  than inventing a second one, and rather than adding an API call.\n- Nodes finished earlier in the session get their fields written when the hook finally fires. That is\n  fine — a finished attempt is exactly the one a human reopens for a post-mortem, which is why\n  `recordSession` already runs whatever the status (`src/hook.js:86-87`).\n- `hkb show <node>` should print the same resumable session line for a track node as it does for a\n  cold one.\n\n**Do not** make the Stop hook expensive or fallible. `src/hook.js:88-91` deliberately swallows errors\nso that recording a session can never cost the nudge — keep that property, and keep the early return\nwhen there is nothing to record.\n\n## Done when\n\n- [ ] After a track run, each node's attempt row carries `session_id` and `transcript_path`.\n- [ ] `hkb show <node>` prints a resumable session line for a node run inside a track.\n- [ ] A hook invocation with no session fields still writes nothing and still costs one marker check.\n- [ ] `node --test test/` passes, with a test covering a root plus two claimed nodes in one session.\n\n## Contract — a sibling depends on this\n\n- **Do not change the `SESSION_FIELDS` list or `sessionUpdate`'s signature** (`src/model.js:421-429`).\n  #115's other child reads these same rows and will break if the shape moves.\n- Do not touch `src/stats.js` — that file belongs to the sibling.",
+  "closed_at": "2026-08-28T15:39:26Z",
+  "created_at": "2026-08-28T15:24:33Z",
+  "goal": "a track's node attempts carry session_id and transcript_path, like a cold node",
+  "id": 119,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/hook.js",
+    "src/track.js",
+    "test/session.test.js"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Session identity reaches the nodes a track claims",
+  "updated_at": "2026-08-28T15:39:26Z"
+}

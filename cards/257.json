@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    256
+  ],
+  "body": "## Why\n\nA worker inherits the repo's `.mcp.json` and is then refused every tool those servers expose, because\n`allowed_tools` never named them. On `french-tech-homies/pipao-v2` that produced the story #130 was filed about\n— a worker denied the `react-aria` server *sitting in that repo's own `.mcp.json`* built the components from\ntraining knowledge and said nothing.\n\nThe other half is the one the operator raised: a board might have a Supabase server that writes to production,\nand an unattended worker should not hold it. **Both directions have to be expressible**, and today neither is:\nthere is no MCP vocabulary on a profile at all.\n\n## What\n\n- **`\"mcp\"` on a profile.** Under `\"tools\": \"curate\"` it is the servers a worker **may** reach; under\n  `\"inherit\"` it is the servers to **exclude**. A whitelist alone is not enough — the production-database case\n  has to be expressible as a subtraction, or an inherit board can never be safe.\n- **The brief says what the worker has.** `src/context.js` renders the servers this card's worker may use, the\n  way it already renders `kb.skills`. A worker that cannot tell whether a server is available guesses, and #130\n  measured what guessing costs.\n- **Feed it through `effectiveTools` (#255)** — do not compute a second answer at the launch site.\n- Do not implement the posture field itself (a sibling's) or the doctor surface (another sibling's).\n\n## Done when\n\n- [ ] A `curate` profile reaches exactly the MCP servers its `\"mcp\"` list names, and no others.\n- [ ] An `inherit` profile reaches the session's servers minus the ones `\"mcp\"` excludes, with a test for the\n      production-server subtraction specifically.\n- [ ] The worker brief names the servers available to it.\n- [ ] The result goes through `effectiveTools`; nothing here reads `allowed_tools` directly.\n- [ ] `npm run lint && npm test` pass.\n\n## Contract\n\nNames a sibling depends on. Do not invent alternatives.\n\n- **`effectiveTools(profile, task, board)` (#255) is the only place a launch's tool list is derived.** Do not read\n  `profile.allowed_tools` directly and do not add a second derivation. It already returns what it dropped.\n- The posture key is `\"tools\"` on a profile, with exactly two values: `\"inherit\"` and `\"curate\"`. `\"curate\"` is\n  today's behaviour and the safe default for anything unattended.\n- The MCP key is `\"mcp\"` on a profile: under `curate` it is the servers a worker **may** reach; under `inherit`\n  it is the servers to **exclude**. The supabase-writes-to-production case must be expressible as a subtraction.\n- A card narrows and never widens — that rule lives in `effectiveTools`, not here. A card key that would widen is\n  dropped and reported, never granted.\n- Absent `\"tools\"` means `\"curate\"`: every board that exists today keeps its behaviour with no edit.\n- Read `hkb show 223` for the goal this serves, and #130 (the denied-tools ledger) and #254 (approvals do not\n  reach a worktree) for what the posture is answering.",
+  "closed_at": "2026-09-02T01:51:05Z",
+  "created_at": "2026-09-01T23:53:41Z",
+  "goal": "A curate profile reaches exactly the servers its mcp list names; an inherit profile reaches the session's minus its exclusions, with the production-server subtraction tested; the brief names what the worker has; everything routes through effectiveTools",
+  "id": 257,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/context.js",
+    "src/model.js",
+    "test/context.test.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "MCP servers are named on a profile: a whitelist under curate, a subtraction under inherit",
+  "updated_at": "2026-09-02T01:51:05Z"
+}

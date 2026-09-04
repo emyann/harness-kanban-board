@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found upgrading `french-tech-homies/pipao-v2` to 0.2.1 on 2026-09-01, using the `mcp visibility` check that\n> shipped in that same release. The finding: **no worker on that board had ever loaded an MCP server**, across\n> every attempt it has run.\n\n## Why\n\nA worker runs in a git worktree, and a worktree contains **tracked files only**. That is usually the right thing\n— it is what makes a worktree a clean checkout. But a Claude Code project is configured in *two* files with\ndeliberately different lifetimes:\n\n| file | tracked | reaches a worktree |\n|---|---|---|\n| `.mcp.json` | usually yes | **yes** |\n| `.claude/settings.json` | yes | **yes** |\n| `.claude/settings.local.json` | **no**, gitignored | **never** |\n\nMCP servers need both halves: `.mcp.json` *defines* them, and `enabledMcpjsonServers` /\n`enableAllProjectMcpServers` *approves* them. Claude Code writes that approval into\n`.claude/settings.local.json` — the per-developer file — because approving a server is a trust decision one\nhuman made on one machine. Which is correct for a human, and silently wrong for a worker: the definitions\narrive, the approval does not, and **every MCP tool the board granted is inert**.\n\nOn pipao this had been true for the life of the board. `mcp__react-aria__*` sat in both profiles'\n`allowed_tools`, so the board believed it had granted the server; `.mcp.json` defined `react-aria`, `supabase`\nand `vercel`; and not one of the three ever appeared in a worker's tool calls. The failure it produced is the\none #130 was filed about — a worker building React components from training knowledge instead of the\ncomponent library sitting right there, and saying nothing — but the diagnosis in that card was **wrong**. It\nwas never denied. It was never there.\n\nThat is the general shape, and MCP is only its first instance: **a worker inherits the repo, and none of the\ndeveloper's approvals.** Anything Claude Code records in `settings.local.json` — approved servers, trusted\ndirectories, remembered permission decisions — is invisible to every worker hkb launches, while the thing it\napproves is right there in the worktree looking granted.\n\n## What\n\n- **`hkb doctor` names the split, not just the symptom.** The `mcp visibility` check (#130) reports that a\n  server never appeared. It should also say *why* when it can: a server defined in `.mcp.json`, granted in a\n  profile's `allowed_tools`, and approved **only** in `.claude/settings.local.json` is diagnosable from three\n  files hkb can already read, and the fix is one line — move that entry into the tracked\n  `.claude/settings.json`. Today the check says \"check `.mcp.json` is readable\", which is the wrong file.\n- **`hkb init` should ask about it**, or at minimum report it: a repo with `.mcp.json` and approvals only in the\n  local file is a board whose workers will silently have no MCP. Initialising is the moment a human is present\n  and thinking about setup.\n- **Audit the rest of `settings.local.json`** for anything else a worker needs and cannot inherit, and say so in\n  one place. Approved MCP servers are what this card found; they are unlikely to be the only entry.\n- **Do not have hkb write to `settings.local.json`.** It is the developer's file, hkb already refuses to put its\n  hooks there (`init` moves them out on purpose), and the fix here is to tell a human which line to move, not to\n  reach into a gitignored file on their behalf.\n- Relationship to its neighbours, worth settling rather than assuming: #130 is the *detection* (a tool that was\n  refused, or never showed up), #223 is the *posture* (how much power a worker may hold at all), and this is the\n  *plumbing* between a repo's configuration and a worktree. All three touch `allowed_tools` and should not each\n  grow their own answer.\n\n## Done when\n\n- [ ] `hkb doctor` distinguishes \"the server was never approved for a worktree\" from \"the server was there and\n      unused\", and names the exact line to move and the file to move it to.\n- [ ] A repo with `.mcp.json` whose approvals live only in `.claude/settings.local.json` is reported at `init`.\n- [ ] The wiki page covering worker identity or the launch environment states the rule in one sentence: a worker\n      inherits tracked files and no developer approvals.\n- [ ] `npm run lint && npm test` pass, with a test for the three-file diagnosis on a fixture repo.",
+  "closed_at": "2026-09-02T00:15:43Z",
+  "created_at": "2026-09-01T23:42:16Z",
+  "goal": "doctor tells an MCP server that was never approved for a worktree apart from one that was there and unused, naming the line to move and the tracked file to move it to; init reports the same at setup; the rule that a worker inherits tracked files and no developer approvals is written down",
+  "id": 254,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/doctor.js",
+    "src/init.js",
+    "src/model.js",
+    "docs/wiki/"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "A worker inherits the repo but none of the developer's approvals, so an MCP server the board granted is never loaded and nothing says why",
+  "updated_at": "2026-09-02T00:15:43Z"
+}

@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Observed 2026-08-29 on #182 attempt 1 (session 14e71bab, worktree kb-182-1). The worker ran `git merge origin/main`, which conflicted in `.kanban/board.json` (its commit drops the pinned launch arrays; main had just gained `{hook_settings}` inside them). From that moment every tool call — `git status`, `ListAgents`, an Edit — was refused with `PreToolUse:Bash hook error: […hkb.js hook pretool]: hkb: …/kb-182-1/.kanban/board.json is not valid JSON: Expected double-quoted property name`. The worker printed \"Still blocked — no change.\" 24 times, hit its turn budget, and stopped without a terminal verb; the card sits in *running* until `max_runtime` times it out and burns a retry on the same wall.\n\n## Why\n\n`preToolHook` (`src/hook.js`) resolves `ctx.cfg` — the board file of the checkout it runs in — before it decides anything, and an unreadable file is a thrown error, which Claude Code treats as a blocking hook failure for the tool that triggered it. With `matcher: \"*\"` that is every tool. So the one state a worker most needs its tools in (a conflicted or half-edited board file in its own worktree) is the state in which the hook takes them all away. Hooks are advisory guard rails; a guard rail that cannot read its config must stand aside, never lock the door.\n\n## What\n\n1. `preToolHook`: load the board lazily and defensively — if `.kanban/board.json` cannot be read or parsed, write one stderr line (`hkb hook: cannot read .kanban/board.json (<why>); standing aside`) and exit 0 with no stdout. Same for `stopHook` (it already tolerates a board read failure at the API layer — check the local file path too) and `subagentStopHook` once #163 lands.\n2. Better: the policy the hook applies is the *launch's* profile, not the worktree's file. Read the profile from `KB_ROOT/.kanban/board.json` (the dispatcher's checkout, which is never mid-merge) when `KB_ROOT` is set, and fall back to the worktree file only without it. That also stops a worker from loosening its own allowlist by editing board.json in its checkout.\n3. Test (`test/hook.test.js`): a worktree fixture whose board.json holds conflict markers → pretool exits 0, empty stdout, one stderr line; with KB_ROOT pointing at a valid board → the policy still applies.\n4. `docs/harnesses.md` hooks section: one sentence — the hook never blocks on its own config.\n5. Steering for workers meanwhile (`skills/kanban/SKILL.md`, the merge step): resolve a board.json conflict in the same command as the merge so there is no window: `git merge origin/main || (git checkout --ours .kanban/board.json && git add .kanban/board.json && git commit --no-edit)` — or `-X ours` scoped to that path.\n\n## Done when\n\n- A conflicted board.json in the worktree no longer costs a worker a single tool call (fixture test), and the stderr line names the file and the reason.\n- The policy applied comes from KB_ROOT's board when set (test).\n- `npm run lint && npm test` green.",
+  "closed_at": "2026-08-29T05:48:27Z",
+  "created_at": "2026-08-29T03:53:45Z",
+  "goal": "A worker whose checkout has a broken .kanban/board.json (merge conflict, half-written edit) keeps its tools: the PreToolUse hook stands aside with one stderr line instead of failing, and the Stop hook does the same",
+  "id": 184,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/hook.js",
+    "src/board.js",
+    "src/model.js",
+    "test/hook.test.js",
+    "docs/harnesses.md"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "The PreToolUse hook throws when the worktree's board.json is unreadable, blocking every tool — including the one that would fix it",
+  "updated_at": "2026-08-29T05:48:27Z"
+}

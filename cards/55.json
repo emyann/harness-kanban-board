@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    53,
+    54
+  ],
+  "body": "Part of track #51. Decisions settled here.\n\n## What\n- A script (`scripts/smoke-pack.sh` or node) that: `npm pack` → install the tarball into a fresh temp dir → run from the INSTALLED location: `hkb version`, `hkb help`, `hkb hook stop </dev/null` (no KB_TASK ⇒ exit 0), and assert the installed package contains `skills/kanban/SKILL.md` and `templates/` (proves `files` shipped the runtime set from node A).\n- Wire it as a job in the test workflow so a tarball regression can never reach a release (release workflow from node B depends on tests passing).\n\n## Done when\nThe smoke job passes in CI and fails if `files` in package.json drops `skills/`.",
+  "closed_at": "2026-08-27T03:46:55Z",
+  "created_at": "2026-08-27T03:25:33Z",
+  "goal": null,
+  "id": 55,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    ".github/workflows/test.yml",
+    "scripts/"
+  ],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Smoke-test the packed artifact in CI",
+  "updated_at": "2026-08-27T03:46:55Z"
+}

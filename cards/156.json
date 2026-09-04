@@ -1,0 +1,38 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    143
+  ],
+  "body": "> From the 2026-08-28 Agent SDK evaluation, step 4 — the one SDK capability the CLI has not yet been shown to match end to end. An experiment with a written-up answer, not a feature.\n\n## Why\n\nWorkers run `--permission-mode dontAsk`: an unlisted tool is denied, never prompted for, and workers route around denials (#130 measured 208 denials in 56 of 71 attempts). hkb's policy lives in two layers that must be kept aligned by hand — the launch's `--allowedTools` and the `PreToolUse` hook (#138, #114, #143). The Agent SDK's `canUseTool` callback would collapse them into one in-process decision; the CLI's equivalent is `--permission-prompt-tool <mcp tool>`, which 2.1.251 accepts (\"Specify an MCP tool to handle permission prompts in non-interactive mode\") — and hkb already ships a zero-dependency MCP server (`src/mcp.js`, `hkb mcp`) and a pure `decidePermission` in `src/model.js`.\n\nNobody has measured whether the prompt tool is consulted for the cases that hurt: compound commands, heredocs, the `complete` builtin, an MCP server from `.mcp.json`.\n\n## What\n\n1. Add a `permission` tool to `hkb mcp` that calls `decidePermission` and returns the allow/deny shape the CLI expects.\n2. Launch one process-mode worker with `--permission-prompt-tool mcp__kanban__permission --mcp-config <hkb mcp> --permission-mode default` plus the existing allow rules; drive it through a heredoc, a `cd && npm test` compound, `hkb finish`, and a `.mcp.json` server.\n3. Record, per case, whether the tool was called, what it received, and whether an `allow` from it pre-empts the worktree guard. Count the decisions onto the attempt row (#130's ledger shape).\n4. **If it works:** ship it as a profile option (`permission: \"prompt-tool\"`) and make `SAFE_BUILTINS`/`CLAUDE_TOOLS` one list. **If it does not:** write the result into `docs/harnesses.md` and the ADR-002 revisit triggers — that is the first condition under which the SDK question reopens.\n\n## Done when\n\n- A table in `docs/harnesses.md`: case → called? → decision → outcome, dated to the `claude --version` it was measured on.\n- Either the profile option with a test in `test/permission.test.js`, or the negative result recorded in ADR-002.\n- `npm run lint && npm test` green.",
+  "closed_at": null,
+  "created_at": "2026-08-28T22:47:59Z",
+  "goal": null,
+  "id": 156,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/mcp.js",
+    "src/model.js",
+    "src/board.js",
+    "test/permission.test.js",
+    "docs/harnesses.md"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "Measure --permission-prompt-tool against hkb mcp: can the CLI consult hkb's own policy in-process, with zero deps",
+  "updated_at": "2026-08-29T00:24:35Z"
+}

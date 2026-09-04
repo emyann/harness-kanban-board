@@ -1,0 +1,34 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "Part of #98.\n\n## Why\n\n`~/.config/hkb/boards.json` has exactly one reader (`serveContexts`, src/serve.js:128) and no writer\nanywhere in `src/`. Every other piece of #98 needs a safe way to add a checkout to that list, so the\nwriter lands first, on its own, with its own tests.\n\n## What\n\n**Pure, in `src/model.js`** (next to `parseRepoSpecs`, which already parses this shape):\n\n- `mergeBoardEntry(entries, entry)` → `{ entries, added }`. Appends `entry` unless an equivalent one is\n  already there. Never reorders, rewrites or normalises entries it did not add — an entry a human typed\n  as `~/code/web` stays spelled that way.\n\n**I/O, in `src/board.js`** (next to `loadUserBoards`):\n\n- `saveUserBoards(list, file = userBoardsFile())` — writes `{ \"version\": 1, \"boards\": [...] }`. Creates\n  the directory when missing. Atomic: write a temp file in the same directory, then `rename` over the\n  target, so a reader never sees a half-written list and a crash never truncates it.\n- `registerUserBoard(root, board = null, file = userBoardsFile())` → `{ added, file, entries }`. Loads,\n  merges, saves only when something changed.\n\nTwo things this must get right:\n\n- **Equivalence is by resolved path**, `path.resolve(expandHome(p))`, plus the board slug. The real\n  user list already contains `~/projects/pipao-v2`; registering `/home/…/projects/pipao-v2` must be a\n  no-op, not a second entry.\n- **A linked worktree is not a checkout to register.** `repoRoot()` (src/board.js:118) shells\n  `git rev-parse --show-toplevel`, which inside a worker worktree returns the worktree. Resolve to the\n  main worktree before registering, so `kb-96-1` can never end up on someone's board list.\n\nAn absent file is not an error — it is created. A malformed file keeps `loadUserBoards`' current\nexitCode 2 behaviour and is never overwritten: refuse rather than clobber a file a human wrote.\n\n## Done when\n\n`npm run lint && npm test` is green and a new `test/boards.test.js` covers, under a temp\n`KB_CONFIG_HOME`:\n\n- registering into a missing file creates `{version:1,boards:[…]}` with one entry;\n- registering the same root twice returns `added:false` the second time and leaves the file byte-identical;\n- `~/x` and the absolute expansion of `~/x` are one entry, in both orders;\n- an existing hand-written entry (including the object form `{path, board}`) survives a registration untouched;\n- a malformed file throws exitCode 2 and is left on disk unchanged;\n- two registrations of different roots both land (simulate by calling twice; the point is no lost update).\n\n## Contract — siblings depend on these exact names\n\n- `registerUserBoard(root, board = null, file = userBoardsFile())` exported from `src/board.js`,\n  returning `{ added: boolean, file: string, entries: number }`. #98's init child calls exactly this.\n- The on-disk shape is `{ \"version\": 1, \"boards\": [...] }`. A file that was a bare JSON array on input\n  is written back in the object shape.\n- `board` stays `null` when the checkout uses its own default — do not write `\"default\"` explicitly.\n- Do not change `loadUserBoards`, `expandHome`, `userBoardsFile` or `parseRepoSpecs` signatures; the\n  serve child is reading them concurrently.",
+  "closed_at": "2026-08-28T03:39:29Z",
+  "created_at": "2026-08-28T03:31:22Z",
+  "goal": "registerUserBoard() adds a checkout to ~/.config/hkb/boards.json idempotently and atomically",
+  "id": 99,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/model.js",
+    "src/board.js",
+    "test/boards.test.js"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "A user-level board registry that can be written, not just read",
+  "updated_at": "2026-08-28T03:39:29Z"
+}

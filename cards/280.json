@@ -1,0 +1,34 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found while clearing the todo and review lanes on 2026-09-02. Two worktrees for finished cards have been un-reclaimable for hours, and the dispatch log has skipped them on every tick since.\n\n## What happens\n\n`removeWorktree` (`src/gc.js`) reads the pid out of the worktree lock and treats `pidAlive(pid)` as proof the session still owns the checkout:\n\n```js\nif (w.locked) {\n  const pm = /pid (\\d+)/.exec(w.locked);\n  if (pm && pidAlive(Number(pm[1]))) return { result: 'locked', pid: Number(pm[1]) };\n  git(root, ['worktree', 'unlock', w.path]);\n}\n```\n\nClaude Code does not exit a finished worker's process. It **recycles it into a background spare pool**, so the pid stays alive indefinitely under a new job:\n\n```\npid 195775: claude bg-spare --bg-spare /tmp/cc-daemon-1000/d25c3cd9/spare/d72abef4.claim.sock\npid 463367: claude bg-spare --bg-spare /tmp/cc-daemon-1000/d25c3cd9/spare/ea438784.claim.sock\n```\n\nThe lock says `claude session kb-191-1 (pid 195775 start 1098055)`. The session is long over; the process is not. So the lock is never released and the worktree is never removed — on any tick, ever.\n\n## What it is not\n\n**Not pid reuse.** The lock records the process start jiffies, and they still match `/proc/<pid>/stat` field 22 exactly for both. This really is the same process that took the lock; it simply outlived the role it took it for. A start-time check — the obvious first idea, and the one the lock string is already shaped for — would not catch this.\n\n## Observed\n\n- `.claude/worktrees/kb-191-1` on `kb/191-root`, and `.claude/worktrees/kb-217-1` on `kb/217`.\n- Both cards closed completed; both PRs (#236, #271) merged. Nothing is stranded — `git cherry origin/main kb/191-root` is 0, and #271's symbols are on main. The three-dot diffs are the usual squash artifact, not unlanded work.\n- 9 skip lines in the current `.kanban/logs/dispatch.log`, one per gc pass, growing.\n\n## The shape of the fix\n\n#205 already built this vocabulary for the dispatcher's own pid claim: `cmdlineIsOurs` corroborates a timestamp verdict against `/proc/<pid>/cmdline`, under the rule that **corroboration only rescues, never manufactures**. The same corroboration belongs here — a live pid whose command line is no longer that worker's session is not a reason to keep a lock.\n\n## Done when\n\n- `removeWorktree` frees a worktree whose lock names a live pid whose `/proc/<pid>/cmdline` is not that worker's session, and the log line says why it overrode the lock rather than going silent.\n- A pid that genuinely still is the worker keeps its lock. This must never remove a running worker's checkout, and a test asserts that with a live pid whose cmdline does match.\n- Where the cmdline cannot be read at all (macOS, a restricted /proc), behaviour is exactly today's: keep the lock, skip quietly. Absence of corroboration is never evidence.\n- A test covers the three states through the existing gc double: matching cmdline (keep), non-matching cmdline (reclaim), unreadable (keep).\n- The two worktrees above are gone after a `hkb gc --yes` on this checkout.",
+  "closed_at": null,
+  "created_at": "2026-09-02T01:31:23Z",
+  "goal": "gc reclaims a worktree whose lock names a live pid that is no longer that worker, corroborated by cmdline the way pidClaimStale does, never touching a genuine live worker and never acting where /proc cannot be read",
+  "id": 280,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/gc.js",
+    "src/model.js",
+    "test/gc.test.js"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "A finished worker's process is recycled into a spare pool, so its worktree lock never expires and gc can never reclaim the checkout",
+  "updated_at": "2026-09-02T02:44:42Z"
+}

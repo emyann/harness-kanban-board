@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "",
+  "closed_at": null,
+  "created_at": "2026-09-02T01:44:22Z",
+  "goal": "src/dispatch.js consults toolPosture: an inherit launch carries no curated allow-list, its mcp exclusions are refused positively via mcp.deny, and every shipped curate profile's launch line stays byte-identical, all tested",
+  "id": 284,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/dispatch.js",
+    "src/board.js",
+    "src/model.js",
+    "test/dispatch.test.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "A profile can declare inherit but the launch line never changes, so an inherit board gets curate minus exclusions and believes its gate is open",
+  "updated_at": "2026-09-02T01:48:54Z"
+}

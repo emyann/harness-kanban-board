@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Observed 2026-08-29 04:43 on hkb's own board, with the fix from #153 (PR #160) on main. `hkb request-changes 185` (another process) added the synthetic `changes_requested` row at 04:42:21 and set the card `ready`; the loop's next tick at 04:43:26 logged `#185: open PR #190 → review (active_pr guard)` — the exact bounce #153 removed. `activePrGuard(attempts, prs)` on the live data answers `guard: false, continues: true`; the tick answered `guard: true` because it judged attempts **without** that row.\n\n## Why\n\n`listComments` (`src/tasks.js` ~144) memoises `comments:<n>` in `ctx._cache`, and `saveRun` invalidates it only for writes made by the same process (~172). `loop()` (`src/dispatch.js` ~989) reuses one `ctx` for every tick and clears `ctx._cache` only on the self-heal `drop_caches` path (~415). So the first `loadRun(n)` a loop ever makes for a card — here at 04:33, when it stopped #185's idle agent — is the run record it will believe until it restarts. `src/mcp.js` ~286 already clears the cache per call with the comment \"a server outlives many calls; never answer from a previous call's comments\"; the loop has the identical hazard and never got the same line.\n\nConsequences beyond tonight's bounce: any verb run outside the loop process — a worker's `finish`/`block`/`request-review`, an operator's `request-changes`/`unblock`, the Actions dispatcher's writes — is invisible to a running loop for any card it has already touched. Which paths that corrupts depends on what `reconcile`/`reap`/the guard read from `loadRun` (~268, ~536, ~632, ~700, ~785). The bounce is the visible one; audit the others.\n\n## What\n\n1. **Scope the comments cache to one tick** (`src/dispatch.js` `tick` entry, or `loop` before each `tick`): `ctx._cache = { ...keep the parts that are per-process by design (`base`, `mergeGate`), comments: fresh }` — the way `mcp.js` does it. Cheapest correct fix. Alternatively key the memo on the issue's `updated_at` from the board read the tick already has (`fetchBoard` returns it): a hit only when the issue has not changed since the cache was filled — that keeps the read-saving for untouched cards and is provably fresh for the rest.\n2. **Test** (`test/dispatch.test.js`, fake-gh): tick 1 loads #n's run; between ticks the fake-gh store gains a `changes_requested` row written \"by another process\"; tick 2 claims the continuation instead of guarding. A second test for a worker's `finish` between ticks being seen by reconcile.\n3. Audit note in the PR: which tick paths read `loadRun` and what a stale record did to each (protocol_violation write-offs? reclaim? the active_pr guard?).\n\n## Done when\n\n- The fake-gh two-tick test passes; `hkb request-changes <n>` from another process is honoured by the next tick of a loop that had already loaded the card.\n- `npm run lint && npm test` green.\n\n## Contract\n\n- Keep the memo within a tick (many reads of one card per tick are the frugal case it exists for); do not add API calls for cards the tick does not touch.",
+  "closed_at": "2026-09-01T19:28:24Z",
+  "created_at": "2026-08-29T04:45:56Z",
+  "goal": "A tick never judges a card on comments cached by an earlier tick: the per-process comments cache is scoped to one tick (or keyed on the issue's updated_at the board read already carries), so request-changes, finish and block written from other processes are seen on the next tick",
+  "id": 195,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/dispatch.js",
+    "src/tasks.js",
+    "src/board.js",
+    "test/dispatch.test.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "The dispatcher loop caches every card's comments for its whole lifetime, so a run record written by any other process — request-changes, a worker's finish or block — is invisible to it",
+  "updated_at": "2026-09-01T19:28:24Z"
+}

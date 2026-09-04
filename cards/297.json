@@ -1,0 +1,39 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    296
+  ],
+  "body": "## Why\nEvery liveness judgement is a wall-clock subtraction, so a laptop sleep longer than `max_runtime` has the first tick write local attempts off as `timed_out`, and no pause verb can be safe before the clocks know the word (`docs/local-first.md` §5, §11).\n\n## What\n1. `src/model.js`: `attemptElapsed(a, now)` and `sinceSignal(a, now)`, pure, subtracting `a.pauses` (`[{ at, until, by }]`; an open pause has `until: null` and counts to `now`). Tests for: no pauses, one closed, one open, overlapping windows clipped.\n2. `src/dispatch.js`: `max_runtime`, `stale_after`, the idle threshold and `recent_success_window` checks use them; the reclaim loop skips an attempt whose row has an open pause (`paused_at` set) entirely.\n3. The loop stamps `state.last_tick_at`; a tick that finds `now - last_tick_at > 3 × interval` logs `host slept Ns; N attempts paused for the gap`, appends `{ at: last_tick_at, until: now, by: 'sleep' }` to `pauses[]` of every open attempt with a local handle (`pid`, `job` or `bg`; never `manual`), one `saveRun` each after a **fresh** `loadRun`, and does not reclaim any of them on that tick.\n4. `docs/wiki/features/up-and-down.md`: a section \"A sleep is a pause\".\n\n## Done when\n- [ ] `test/dispatch.test.js`: with an injected clock jumping three hours between two ticks, no local attempt is reclaimed or timed out, each gained a `sleep` pause window, and a `manual` attempt past `stale_after` is still reclaimed.\n- [ ] `npm run lint && npm test` green.\n\n## Contract\n`pauses[]` is the field name; the window shape is `{ at, until, by }`; `by` ∈ `sleep | <host> | operator`. B3/B4 write it.\n\n**Read first:** `docs/local-first.md` (the plan; the sections named below), `docs/wiki/decisions/adr-005-control-plane.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Keep it dependency-free at runtime. Pure logic in\n`src/model.js` with a test. Errors name the fix and carry `.exitCode`. `--json` everywhere. Update the wiki page a\nchange touches (`node .repolore/scripts/wiki-check.mjs` lists what went stale); a new feature gets a new page.\nFinish with `npm run lint && npm test` green, one draft PR, and exactly one terminal verb.\n",
+  "closed_at": null,
+  "created_at": "2026-09-02T23:32:04Z",
+  "goal": "every liveness subtraction in the tick goes through attemptElapsed/sinceSignal, which subtract pauses[]; a loop that wakes to a gap longer than three intervals writes that window into pauses[] of every local-handle attempt and reclaims nothing local on that tick",
+  "id": 297,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 7200,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/model.js",
+    "src/dispatch.js",
+    "src/board.js",
+    "test/model.test.js",
+    "test/dispatch.test.js",
+    "docs/wiki/features/up-and-down.md"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "Clocks and the sleep-aware tick: attemptElapsed, sinceSignal, pauses[], last_tick_at",
+  "updated_at": "2026-09-03T04:00:16Z"
+}

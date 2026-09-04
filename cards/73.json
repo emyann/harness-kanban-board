@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "Found by the first cold start on a repo that is not hkb on 2026-08-27 (a private, org-owned monorepo with live CI).\n\n`installStopHook` (`src/init.js:99-119`) writes **two** hooks into `.claude/settings.json` — `ensure('Stop', ...)` and `ensure('PreToolUse', ...)` at lines 116-117 — but init logs only:\n\n    added Stop hook to .claude/settings.json (inert unless KB_TASK is set)\n\nThe adopter found the `PreToolUse` entry by reading `git diff`, not from our output. `hkb help` under `plumbing` also lists only `hook stop`, while `src/cli.js:210` already knows `hkb hook stop|pretool`.\n\n**The hook is correct and must stay on by default.** It is hkb's permission policy for workers — \"allow or deny, never a prompt\" (`src/hook.js:31`): file tools are confined to the worktree, five patterns are hard-denied (`hkb dispatch`, `pkill`/`kill`, force-push, `sudo`, `rm -rf <abs>` — `src/model.js:433-439`), and everything else is checked against the profile allowlist. Without it, a dispatched worker stalls on the first permission prompt with nobody there to answer. It is inert outside a worker: `src/hook.js:33` returns before it reads stdin unless `KB_TASK` is set.\n\nSo this is a disclosure bug, not a design one. Writing a repo-wide `matcher: \"*\"` hook into a settings file the operator shares with every other session in that repo, and not saying so, is value 4 (\"never a silent failure\") inverted.\n\n**Fix.**\n- Init names both hooks and says what the second one is for, e.g. `added Stop and PreToolUse hooks to .claude/settings.json (both inert unless KB_TASK is set; PreToolUse is the worker permission policy)`.\n- The `plumbing` line in `HELP` becomes `hook stop|pretool`.\n- Rename `installStopHook` to match what it installs.\n\n**Verify.** A fresh `init` prints both; a re-run reports both already present; the settings.json shape assertions in `test/harness.test.js` cover it.\n",
+  "closed_at": "2026-08-27T18:04:26Z",
+  "created_at": "2026-08-27T17:03:04Z",
+  "goal": null,
+  "id": 73,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "init installs two hooks and reports one",
+  "updated_at": "2026-08-27T18:04:26Z"
+}

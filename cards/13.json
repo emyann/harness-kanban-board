@@ -1,0 +1,35 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\nThe first self-hosted worker (#1) could not run `ghk complete 1 --summary \"...\" --metadata '{\"changed_files\":[...]}'` through its shell: a permission hook rejected the quoted JSON and flagged `{a,b}` as brace expansion. It had to write a one-off node script that called `main()`. Every harness has some quoting pain; the protocol must not depend on shell quoting of JSON.\n\n## What\n- `ghk complete|block|request-review` accept `--summary-file <path>`, `--metadata-file <path>` and `--from-stdin` (a JSON object `{summary, metadata, artifacts, reason, kind}` on stdin). Keep the inline flags.\n- `--metadata` also accepts a path to a `.json` file if the value does not start with `{`.\n- Update `skills/kanban/SKILL.md`, `src/context.js` (the protocol section of the worker prompt) and `references/protocol.md` to show the file/stdin form as the recommended one, with a heredoc example that has no nested quotes.\n- Tests in `test/args.test.js` for the three input paths (use a temp dir; no GitHub calls — factor the arg-to-payload resolution into a pure function).\n\n## Done when\nA worker can finish with: `printf '%s' '{\"summary\":\"...\",\"metadata\":{...}}' | ghk complete 1 --from-stdin`.",
+  "closed_at": "2026-08-26T05:58:02Z",
+  "created_at": "2026-08-26T04:37:26Z",
+  "goal": null,
+  "id": 13,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/cli.js",
+    "src/lifecycle.js",
+    "skills/kanban/SKILL.md",
+    "test/args.test.js"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Terminal verbs must be easy to call from any harness: --summary-file/--metadata-file and stdin JSON",
+  "updated_at": "2026-08-26T05:58:02Z"
+}

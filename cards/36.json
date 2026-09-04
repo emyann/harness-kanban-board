@@ -1,0 +1,33 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\nThe reap step skips any job that `jobAlive()` says is alive — which since the classifier fix includes `blocked` (permission-waiting). Correct for a RUNNING task, but a job whose task is already closed/done can never legitimately be waiting: kb #17 and kb #21 sat as blocked zombies for 15 hours after their tasks merged.\n\n## What\nIn the tick's reap step: a kb job whose task number is not on the open board (closed issue) or whose task is done/archived gets `claude stop` regardless of blocked/waiting state — only `working`/`busy` jobs of RUNNING tasks are protected. Cover with a fake-gh + stubbed-jobs test.",
+  "closed_at": "2026-08-27T01:02:56Z",
+  "created_at": "2026-08-26T23:12:54Z",
+  "goal": null,
+  "id": 36,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/dispatch.js",
+    "test/reap.test.js"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Reap background agents whose task is closed, even when their state is blocked",
+  "updated_at": "2026-08-27T01:02:56Z"
+}

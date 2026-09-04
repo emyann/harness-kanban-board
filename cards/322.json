@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\n\n`hkb link 288 304` reads in English as \"288 depends on 304\". It means the reverse: it made **#304 blocked\nby #288**. Hit for real on 2026-09-03 re-sequencing root A behind #304; the only signal was the output\nline, and the fix was `unlink 288 304` then `link 304 288`.\n\nThe help says `link <parent> <child>`, which is correct and is no help at the moment of typing: \"parent\"\nand \"child\" do not say which one waits. Every *other* place the same relation is expressed says it the\nother way round — `hkb create \"x\" --blocked-by 41` puts the waiting card first, and `hkb list` renders it\n`#288 ⇐ #304`, arrow pointing at the blocker. So the CLI has two orders for one relation and the rarer one\nis the positional command.\n\nAn operator recovers from this in two commands. A worker following the protocol may not notice at all: a\nwrong edge does not error, it just makes a card unreachable or ready too early, which is the silent-failure\nclass (value 5).\n\n## What\n\n1. `hkb link` and `unlink` take the same order as everything else: `hkb link <card> --blocked-by <blocker>`,\n   with the bare two-positional form kept and **printed back in the `⇐` notation** so the direction is\n   visible without reading the docs: `#288 ⇐ #304 (linked)`.\n2. Refuse the obvious mistake: linking a card to one that already blocks it in the other direction is a\n   cycle — `hkb link` should say so rather than create it. (Check whether `computeReady` already survives a\n   cycle; if it does, this is still worth refusing at the verb.)\n3. `hkb help` names the relation in words on the same line: \"link <parent> <child> — the child must finish\n   before the parent can start\".\n\n## Done when\n\n- [ ] The `--blocked-by` form works and is what `hkb help` shows first.\n- [ ] Both forms print the resulting edge in `⇐` notation.\n- [ ] A cycle is refused with exit 2 naming both cards.\n- [ ] Tests for the order, the echo, and the cycle refusal.\n- [ ] `npm run lint && npm test` green.",
+  "closed_at": null,
+  "created_at": "2026-09-03T07:24:12Z",
+  "goal": null,
+  "id": 322,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "hkb link <a> <b> reads as \"a depends on b\" and means the opposite, with nothing to confirm the direction",
+  "updated_at": "2026-09-03T07:24:12Z"
+}

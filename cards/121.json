@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    119,
+    120
+  ],
+  "body": "Part of #115.\n\n## Why\n\n\"Which profiles can report spend\" is currently discoverable only by running one and finding out that it\ncannot. `hkb stats` says so honestly at the point of failure, but nothing tells you before you choose a\nprofile, and the README calls `claude-bg` the free path without mentioning that free also means\nunmeasured.\n\nOnce this track's siblings land, the answer changes — and a doc that still describes the old gap is\nworse than one that never mentioned it.\n\n## What\n\nDocument, per profile, what it reports: real cost, an estimate, raw usage, or nothing.\n\n- Put it where someone chooses a profile, not only where they hit the wall.\n- Cover the track case explicitly: what a node attempt carries versus a cold one.\n- If `hkb stats`' existing message is now wrong or incomplete, say so here and fix the wording — but\n  the code that produces it belongs to a sibling, so coordinate rather than editing `src/stats.js`.\n\nMatch the surrounding prose. `docs/harnesses.md` is the per-harness page; the README's profiles section\nis the shorter, decision-time surface.\n\n## Done when\n\n- [ ] `docs/harnesses.md` states, per profile, what spend data it produces.\n- [ ] The README's profiles section says the same in one line, at the point of choice.\n- [ ] No page still claims spend is unavailable if the siblings changed that.\n- [ ] `npm run lint && npm test` green.\n\n## Contract\n\n- **Read what the siblings actually shipped** — `hkb show` the tasks this one is blocked by, and run\n  `hkb stats` yourself. This body was written before they ran; do not paraphrase it.\n- Docs only. Do not touch `src/stats.js` or `src/hook.js`.",
+  "closed_at": "2026-08-28T15:55:56Z",
+  "created_at": "2026-08-28T15:24:35Z",
+  "goal": "docs state per profile what spend data it produces, including track nodes",
+  "id": 121,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "README.md",
+    "docs/harnesses.md"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Say which profiles can report spend, and what you get instead",
+  "updated_at": "2026-08-28T15:55:56Z"
+}

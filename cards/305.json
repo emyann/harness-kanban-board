@@ -1,0 +1,44 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    288,
+    304,
+    312
+  ],
+  "body": "## Why\nTypes without a build in the checkout, and a tarball that runs everywhere: Node refuses to strip types under `node_modules`, so the tarball ships JavaScript (`docs/local-first.md` §9, §1 item 11).\n\n## What\n1. Rename `src/**/*.js` → `.ts` file by file (git renames, minimal diffs), erasable syntax only, `.ts` in every import specifier, `import type` where a name is only a type; `tsconfig.json` gains `verbatimModuleSyntax`, `allowImportingTsExtensions`, `rewriteRelativeImportExtensions`, `outDir: dist`, and drops `checkJs` once nothing is `.js`.\n2. `bin/hkb.js` (stays JavaScript): loads `../dist/cli.js` when `dist/` exists and the package has no `.git` beside it, else `../src/cli.ts`; a clear error on a Node older than 22.18 in a checkout.\n3. `package.json`: `\"prepack\": \"tsc -p tsconfig.build.json\"`, `files` gains `dist` and drops `src`; `npm run lint` = `tsc --noEmit` (keep a `node --check` over `bin/` and `scripts/`); `.github/workflows/release.yml` runs `npm ci`-less `npx tsc`? No: `npm install --no-save typescript` then `npm pack`, as `docs/releasing.md` documents.\n4. `scripts/smoke-pack.mjs`: unchanged in purpose; it must now prove `dist/` is what runs from the tarball (assert `src/` is absent from the installed package) on 22 and 24 (`test.yml` matrix).\n5. `CLAUDE.md`: \"Do not add a build step\" becomes \"no build step to run from a clone; `prepack` builds the tarball in `release.yml` only\"; a line saying `typescript` is a devDependency and `npm ci` is never needed to run hkb.\n\n## Done when\n- [ ] From a clean clone without `npm install`: `node bin/hkb.js version` works on Node 24.\n- [ ] `npm pack` in CI produces a tarball with `dist/` and no `src/`; installed in an empty dir, `hkb doctor` runs on 22 and 24.\n- [ ] `npm run lint && npm test && npm run smoke` green; `.github/workflows/test.yml` runs smoke on 22 and 26.\n- [ ] The hook command shapes in `src/init.ts` that point at `bin/hkb.js` still resolve in a clone and in an installed package (`test/harness.test.ts`).\n\n## Contract\nLast card of the plan on purpose: no seam is renamed. Keep `bin/hkb.js` as JavaScript.\n\n**Read first:** `docs/local-first.md` (the plan; the sections named below), `docs/wiki/decisions/adr-005-control-plane.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Keep it dependency-free at runtime. Pure logic in\n`src/model.js` with a test. Errors name the fix and carry `.exitCode`. `--json` everywhere. Update the wiki page a\nchange touches (`node .repolore/scripts/wiki-check.mjs` lists what went stale); a new feature gets a new page.\nFinish with `npm run lint && npm test` green, one draft PR, and exactly one terminal verb.\n\n**Moved forward, 2026-09-02:** this card now runs directly after track A rather than last, because #312 (the SDK adapter) follows it and the SDK's value is typed configuration.\n\n",
+  "closed_at": null,
+  "created_at": "2026-09-02T23:32:17Z",
+  "goal": "every src file is .ts and runs directly from a clone on Node 22.18+/24; prepack emits dist/ and the tarball ships it; bin/hkb.js loads dist/ in an installed package and src/ in a checkout; npm run lint runs tsc --noEmit; npm run smoke passes on 22 and 24; zero runtime dependencies",
+  "id": 305,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 10800,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/",
+    "bin/",
+    "tsconfig.json",
+    "package.json",
+    ".github/workflows/release.yml",
+    ".github/workflows/test.yml",
+    "scripts/",
+    "CLAUDE.md",
+    "docs/releasing.md"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "todo",
+  "suspended": null,
+  "title": "TypeScript: native .ts in the checkout, dist/ built by prepack at publish, tsc replacing node --check",
+  "updated_at": "2026-09-03T09:07:30Z"
+}

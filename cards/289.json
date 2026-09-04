@@ -1,0 +1,37 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "<!-- kb: {\"priority\":2} -->\n## Why\n`engines: \">=20\"` promises a Node line nodejs.org lists as end-of-life, and the store that track A builds needs `node:sqlite`, which does not exist on 20 (`docs/local-first.md` §1 item 7, §9, §11). The code carries JSDoc nobody checks.\n\n## What\n1. `package.json`: `engines.node` → `\">=22.13\"`; add `typescript` as a **devDependency** only (no lockfile is committed today — keep it that way, and keep `package-manager-cache: false` in CI); add `\"typecheck\": \"tsc --noEmit\"` and run it from `npm run lint` after the existing `node --check` loop.\n2. `tsconfig.json`: `allowJs`, `checkJs`, `noEmit`, `module: nodenext`, `target: es2022`, `strict: false`, include `bin/**/*.js`, `src/**/*.js`, `scripts/**/*.mjs`. Fix the annotations the check rejects; where a fix is not a one-liner, a `// @ts-expect-error <why>` with a reason is acceptable. Do not change runtime behaviour to satisfy the checker.\n3. `bin/hkb.js`: before any import, the warning filter from §9 verbatim (silences only the `node:sqlite` ExperimentalWarning; every other warning still prints).\n4. `.github/workflows/test.yml`: the `test` job on 22 and 24 (a matrix is fine now: two floors is a real signal), the `smoke` job on 22 and 26 (the floor and the current line); update the comment that says \"On Node 20 on purpose\".\n5. Wording: `CLAUDE.md` value 1 \"any harness drives it through `gh`\" → \"any harness drives it through `hkb` verbs; GitHub is the default store today and becomes a bridge (ADR-006)\"; `README.md`'s \"Before you start\" Node line → \">= 22.13, 24 recommended\".\n\n## Done when\n- [ ] `npm run lint` runs the type check and is green; `npm test` green.\n- [ ] `node -e \"process.emitWarning('x', 'ExperimentalWarning')\"` through `bin/hkb.js`'s filter still prints, and the SQLite one does not (a unit test in `test/cli.test.js` that spawns `bin/hkb.js version` on this Node and asserts an empty stderr is enough).\n- [ ] CI green on all four jobs.\n- [ ] No line in CLAUDE.md or README.md still says a harness drives hkb \"through gh\" or that the floor is 20.\n\n## Contract\nKeep `npm run lint`'s `node --check` loop as-is (a later card replaces it when the sources become `.ts`). The devDependency must not be needed to *run* hkb from a clone: `node bin/hkb.js version` in a fresh clone without `npm install` still works.\n\n**Read first:** `docs/local-first.md` (the plan; the sections named below), `docs/wiki/decisions/adr-005-control-plane.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Keep it dependency-free at runtime. Pure logic in\n`src/model.js` with a test. Errors name the fix and carry `.exitCode`. `--json` everywhere. Update the wiki page a\nchange touches (`node .repolore/scripts/wiki-check.mjs` lists what went stale); a new feature gets a new page.\nFinish with `npm run lint && npm test` green, one draft PR, and exactly one terminal verb.",
+  "closed_at": "2026-09-03T01:58:34Z",
+  "created_at": "2026-09-02T23:31:50Z",
+  "goal": "engines >=22.13; npm run typecheck green; CI runs lint+test on 22 and 24, smoke on 22 and 26; bin/hkb.js carries the warning filter; CLAUDE.md and README no longer say a harness drives hkb through gh",
+  "id": 289,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 7200,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "package.json",
+    "bin/hkb.js",
+    ".github/workflows/test.yml",
+    "tsconfig.json",
+    "CLAUDE.md",
+    "README.md"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Node floor 22.13 with the SQLite warning silenced, CI on 22/24/26, the JSDoc type check, the wording",
+  "updated_at": "2026-09-03T01:58:34Z"
+}

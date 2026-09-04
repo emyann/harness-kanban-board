@@ -1,0 +1,40 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    141
+  ],
+  "body": "> Observed 2026-08-29 01:10–01:14 UTC on this board. A reviewer subagent (the operator session's review of PR #169 for #144) made a scratch repo — `git init` in `.claude/worktrees/scratch-144` — and ran the PR branch's `bin/hkb.js init --repo o/n` in it to exercise the hook-writing change. `hkb serve` showed a third board, `o/n`, for the next four minutes: *\"GraphQL failed (network): Could not resolve to a Repository with the name 'o/n'\"* (the `(network)` is #141). The reviewer cleaned up its directory and the list entry itself; nothing in hkb would have.\n\n## Why\n\n`hkb init`'s last step registers the checkout in the user-level list `~/.config/hkb/boards.json` (`registerCheckout`, `src/init.js`; `registerUserBoard`, `src/board.js:525`). The wiki's promise for that write — *\"a worker running in `.claude/worktrees/kb-99-1` … has no business on anyone's board list\"* (`docs/wiki/features/web-board.md`) — is enforced by `mainWorktree` (`src/board.js:507`), which resolves a **linked** worktree to its main checkout. A scratch repo with its own `.git` is not linked to anything, so it resolves to itself and lands on the operator's page. Reviewers and workers will keep doing this: running `init` in a throwaway repo is the right way to test `init`. And once an entry is wrong, the only remedy is editing the file by hand — the list has a writer and a reader but no eraser.\n\n## What\n\n- **Registration stands aside in an agent session.** `registerCheckout` skips the write, with the same one-line disclosure it prints today (`not registered: running as a worker/reviewer — add it by hand if this checkout is real`), when any of these hold: `KB_TASK` is set; the checkout is under a `.claude/worktrees/` directory (linked or not — `path.resolve(root)` contains that segment); the `--repo` given cannot be resolved by `gh` **and** the caller passed `--no-labels` (the offline path, where a placeholder repo is the norm). Decision is a pure function in `src/model.js` (`shouldRegisterCheckout({env, root, repoResolved, noLabels})`).\n- **`hkb boards`** — the eraser. `hkb boards` lists the entries with their resolved path and slug and whether each still resolves; `hkb boards forget <path|#slug>` removes one, printing what it removed; `--json` both. Same temp-file-and-rename write as `saveUserBoards`; an unreadable file is the same warning `serve` prints. No `add` — `hkb init` is the act of naming a checkout, and that stays true.\n- **`hkb serve` labels a board it cannot read for what it is.** After #141 the error reads *no such repository*; the chip should say `unreachable` rather than `n 0`, and name `hkb boards forget <path>` as the fix.\n- Wiki: update `features/web-board.md` \"How a checkout gets on the list\" with the three stand-aside conditions and the new verb; stamp it.\n\n## Constraints\n\n- No filesystem scanning, ever — the list still holds only checkouts someone named.\n- The stand-aside is never silent (value 5): one line, naming the file the entry would have gone in.\n- `hkb boards forget` never touches the checkout on disk.\n\n## Done when\n\n- `KB_TASK=1 hkb init --repo o/n --no-labels` in a scratch repo writes no entry and says why; the same command from an operator shell in a real checkout still registers.\n- `hkb boards` lists; `hkb boards forget` removes exactly one entry and leaves the others byte-identical.\n- A board whose repo 404s shows `unreachable` on the page with the forget command.\n- `test/init.test.js` (three stand-aside cases + the normal one), `test/boards.test.js` (list/forget/--json), `test/serve.test.js`; `npm run lint && npm test` green; `npm run smoke`.",
+  "closed_at": null,
+  "created_at": "2026-08-29T01:18:00Z",
+  "goal": null,
+  "id": 170,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/init.js",
+    "src/board.js",
+    "src/model.js",
+    "src/cli.js",
+    "src/serve.js",
+    "test/",
+    "docs/wiki/features/web-board.md"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "hkb init in a worker or reviewer session must not register the operator's board list — and hkb boards forget <path> is the eraser",
+  "updated_at": "2026-08-29T01:18:00Z"
+}

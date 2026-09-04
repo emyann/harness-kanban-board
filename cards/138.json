@@ -1,0 +1,38 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    134
+  ],
+  "body": "> Observed while running a `claude` worker on a real board. Every command shape below was denied in one attempt; the worker spent roughly 40% of its Bash calls rewriting commands to get past the allowlist, and never completed its task inside `max_runtime`.\n\n## Why\n\n`decidePermission` and the launched harness enforce **two different policies**, and the stricter one wins.\n\n`src/model.js:608` declares a set of shell builtins hkb considers safe for a worker:\n\n```js\nexport const SAFE_BUILTINS = ['cd', 'pwd', 'true', 'false', 'echo', 'printf', 'test', '[',\n                              'env', 'which', 'command', 'type', 'sleep', 'time', 'set', 'export'];\n```\n\n`allowedCommandsFrom` (`src/model.js:618`) seeds hkb's own PreToolUse allow-set with it, so **hkb's guard permits `cd`, `export`, `which`, `test`, `sleep`.**\n\nBut `src/board.js:11-12` builds the harness allowlist from `SHELL_TOOLS` alone:\n\n```js\nconst SHELL_TOOLS  = ['hkb *', 'git *', 'gh pr *', …, 'jq *'];   // no builtins\nconst CLAUDE_TOOLS = [...SHELL_TOOLS.map((c) => `Bash(${c})`), 'Bash(true)', 'Edit', 'Write', 'Read', 'Glob', 'Grep'];\n```\n\n`CLAUDE_TOOLS` becomes `--allowedTools`, and the profile launches `--permission-mode dontAsk`, which **denies rather than prompts**. `SAFE_BUILTINS` is never added, so the harness refuses precisely the commands hkb's own policy declares safe. `Bash(true)` is spliced in by hand — evidence the omission is an oversight, not a decision, since `true` is itself in `SAFE_BUILTINS`.\n\n## Observed denials\n\nAll returned `Permission to use Bash has been denied because Claude Code is running in don't ask mode`. Shapes generalised; each is a real denial from one worker session:\n\n```bash\ncd <dir> && ls -la <dir>                              # cd      — in SAFE_BUILTINS\nVAR=\"value\" npm ci --no-audit --no-fund               # VAR=    — firstWords skips `w.includes('=')`\nexport VAR=\"value\"; npm ci --no-audit                 # export  — in SAFE_BUILTINS\nwhich <bin>; readlink -f \"$(which <bin>)\"             # which   — in SAFE_BUILTINS\nwhile true; do hkb heartbeat <n>; sleep 300; done     # while   — a keyword, in neither list\n```\n\nhkb's own guard would have allowed the first four.\n\n## Impact\n\n- **Workers burn turns and budget fighting the allowlist.** Roughly 40% of one session's Bash calls were denied; it exhausted its runtime without finishing.\n- **It silently breaks the heartbeat.** The fourth shape above is a worker setting up its own `hkb heartbeat` loop, exactly as `SKILL.md` asks (\"run `hkb heartbeat <n>` roughly every 10 minutes\"). Denied, so `heartbeat_at` never advanced from `started_at` and the task drifted toward `stale_after` while genuinely alive. A reviewer reading the run record sees a worker that never heartbeated and concludes it hung.\n- **`cd` is the most common shell idiom there is.** Its absence makes multi-directory work in a monorepo needlessly awkward, and every worker rediscovers the constraint by trial and error.\n\n## What\n\n1. **Add `SAFE_BUILTINS` to `CLAUDE_TOOLS`** so the two layers agree:\n   ```js\n   const CLAUDE_TOOLS = [...SHELL_TOOLS.map((c) => `Bash(${c})`),\n                         ...SAFE_BUILTINS.map((c) => `Bash(${c})`),\n                         'Edit', 'Write', 'Read', 'Glob', 'Grep'];\n   ```\n   `Bash(true)` then falls out of the spread and the hand-splice goes.\n2. **Do the same for `COPILOT_TOOLS`**, which is derived from `SHELL_TOOLS` and has the same gap.\n3. **Decide on shell keywords** (`while`, `for`, `if`, `case`). They are not commands and no allowlist entry can name them; either document that workers should avoid loops in a single `Bash` call, or note in `SKILL.md` that the heartbeat is a per-turn call rather than a background loop.\n4. Consider a `doctor` check that flags a profile whose `allowed_tools` omits `SAFE_BUILTINS`, since existing boards carry the generated list verbatim and will not pick up a default change.\n\n## Done when\n\n- [ ] A worker can run `cd`, `export`, `which`, `test` and a `VAR=value` prefix without a denial.\n- [ ] The heartbeat idiom `SKILL.md` recommends actually runs under `dontAsk`.\n- [ ] `COPILOT_TOOLS` covers the same set.\n- [ ] `node --test test/` passes, with a case asserting `CLAUDE_TOOLS` is a superset of `SAFE_BUILTINS`.\n- [ ] Existing boards get a migration path — a `doctor` warning, or a note in the release notes.\n",
+  "closed_at": "2026-08-28T22:35:15Z",
+  "created_at": "2026-08-28T16:47:04Z",
+  "goal": "A worker can run cd, export, which, test and VAR=value prefixes without a denial; CLAUDE_TOOLS and COPILOT_TOOLS are supersets of SAFE_BUILTINS; a test asserts it and existing boards get a migration path.",
+  "id": 138,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/board.js",
+    "src/model.js",
+    "src/doctor.js",
+    "skills/kanban/SKILL.md",
+    "test/profiles.test.js"
+  ],
+  "priority": 5,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "CLAUDE_TOOLS omits SAFE_BUILTINS, so dontAsk denies the commands hkb's own guard allows",
+  "updated_at": "2026-08-28T22:35:15Z"
+}

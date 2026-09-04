@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Found operating this board on 2026-09-01, deciding which of 31 triage cards to suggest promoting first.\n\n## Why\n\n`--priority`'s *direction* is documented four times and consistently — `README.md:52` (\"a plain number and\n**higher wins** … any positive number jumps the queue\"), `skills/kanban/references/protocol.md:37`,\n`hkb create --help` (`src/cli.js:179`), and `skills/kanban/SKILL.md:334`. `sortReady` (`src/model.js:472`) is\n`priorityOf(b) - priorityOf(a) || a.number - b.number`, exactly as advertised.\n\nWhat is documented nowhere is a **scale**. `--priority` is an unbounded integer with a stated direction and no\nvocabulary: nothing says what `2` means, what the top of the range is, or what a card should be filed at by\ndefault. So two cards filed by two people — or by the same person a fortnight apart — only compare if both had\nthe same unwritten ruler in mind. On this board the open cards run p0–p4 with the p0s being simply *unset*\n(`create` defaults to 0), which makes the queue's front the three p4s and its back the eight p0s, and no way to\ntell from the board whether that is anybody's intent.\n\nThe shipped worked example makes it worse by contradicting the rule's spirit. `SKILL.md:429-433`, mirrored at\n`protocol.md:180-182`:\n\n```\nA  Token bucket + tests            --priority 2   → ready\nB  Wire the limiter into server     --priority 2   → todo (blocked by A)\nC  Document the limits and the 429  --priority 3   → ready\n```\n\nAt the first tick the ready set is {A p2, C p3} and `sortReady` takes **C** — the canonical decompose recipe\nclaims the documentation card before the token bucket it documents. Either the example means `3` as \"lower\",\nthree files away from the rule that says higher wins, or hkb ships an example that tells you to write the docs\nfirst. Readers learn the convention from the example, not the sentence, which is a plausible source of the\ninverted-looking numbers on this board.\n\n## What\n\n- **Write the scale down once**, next to the direction, and reference it from the other three places rather than\n  restating it. A small named band is enough — e.g. `0` default / unfiled, `1` normal, `2` next up, `3` urgent —\n  what matters is that the top of the range is stated and the default has a meaning. Decide the band before\n  writing it; do not invent a second convention.\n- **Fix both worked examples** so the foundation outranks the work that depends on it, and so no example gives a\n  documentation card a higher number than the code it documents. The decompose table in `SKILL.md` (the `child /\n  title / blocked by / paths / agent / priority` table) needs the same pass.\n- **`hkb create --help` gains the band** in the same breath as \"higher wins\" — the usage line is where most\n  people meet the flag.\n- Consider whether `hkb list` should show the queue order it would actually produce, so a board whose numbers\n  disagree with their author's intent is visible without doing the sort in your head. Related: #204, which wants\n  a lane-and-priority summary read for the operate opening.\n- No behaviour change to `sortReady`: the direction is right and documented, and re-numbering an existing board\n  is its owner's call, never a migration.\n\n## Done when\n\n- [ ] One place defines the priority band and what the default means; `README.md`, `protocol.md`, `SKILL.md` and\n      `hkb create --help` agree with it and do not each define their own.\n- [ ] No shipped example gives a card a higher priority than a card it depends on, and the decompose walkthrough\n      claims the token bucket before its documentation.\n- [ ] `npm run lint && npm test` pass; the wiki page covering the dispatch queue order says what the band is.",
+  "closed_at": "2026-09-01T19:45:27Z",
+  "created_at": "2026-09-01T18:38:02Z",
+  "goal": "One place defines the priority band and the default's meaning, README/protocol/SKILL/--help agree with it, and no shipped example gives a card a higher priority than the card it depends on",
+  "id": 207,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "README.md",
+    "skills/kanban/SKILL.md",
+    "skills/kanban/references/protocol.md",
+    "src/cli.js",
+    "docs/wiki/"
+  ],
+  "priority": 0,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "The priority flag has a documented direction and no scale, and the decompose example claims the docs card before the code it documents",
+  "updated_at": "2026-09-01T19:45:27Z"
+}

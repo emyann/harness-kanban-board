@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "> Observed 2026-08-29 on the web board: every running card's log panel shows the same four lines — `# … launch background agent for #162 attempt 1`, `backgrounded · e381f784 · …`, then the `claude agents / attach / logs / stop` hints. 0.4 KB, and nothing about what the worker is doing.\n\n## Why\n\n`.kanban/logs/<n>-<k>.log` is the stdout of the command the dispatcher spawned (`spawnWorker`, `src/dispatch.js`). On `claude` and `claude-track` that command is `claude --bg …`: it asks the session daemon to start the agent, prints the banner, and exits. The worker then lives inside the daemon and writes to Claude Code's own records — `~/.claude/jobs/<id>/state.json` and the transcript under `~/.claude/projects/` — never back into hkb's file (`docs/harnesses.md`: *\"a launch banner and nothing else\"*). Only `claude-p`, a real child, writes its turns and its final JSON there.\n\nSo the panel (`src/serve.js` log endpoint → `web/index.html` drawer; the same tail `hkb show` does not print at all) is honest about the file and useless about the worker. The facts it should show already exist locally, since #137: the attempt row carries `job`, `session_id` and `transcript_path` one tick after launch, and the job record has `detail` — the worker's own one-line status, the text `claude agents` shows — plus `state` and `updatedAt`. `claude logs <id>` is the interactive equivalent and #149 already records that it fails from a sandboxed shell, so reading the record is the right primitive for both surfaces.\n\n## What\n\n- **`jobs.js`**: one function, `attemptActivity(attempt)` → `{state, detail, updated_at, last_message, transcript_lines}` from `readJobState` (already there) plus the transcript's last assistant text block (last N lines of `transcript_path`, parsed with the same care `parseTranscriptUsage` takes — never throw, null when absent). Two local reads, no subprocess.\n- **`hkb show <n>`** prints, for a live `--bg` attempt: `working · <detail> · last turn <age>` and the last assistant message indented under it; for an ended one, the outcome line it prints today. `--json`: `attempts[].activity`.\n- **The drawer** shows the same block above the file tail, with the banner demoted to one `launched <when> · job <id>` line. For `claude-p` and Copilot/Codex attempts (a real child), the file tail stays the primary view — it is the worker's output there.\n- **Freshness**: the drawer already polls; `activity` rides the payload it fetches, no new request. The transcript read is capped (tail bytes, like `tailLog`) so a long session costs the same as a short one.\n\n## Constraints\n\n- Never a subprocess (no `claude logs`); never an API call. Both records are files on the host that launched the attempt, so a board viewed from another machine shows the file tail and says so.\n- Nothing here changes what is recorded; it only shows what #137 already stamps.\n\n## Done when\n\n- A running `claude` attempt shows its `detail` and last message in `hkb show` and the drawer; the launch banner is one line.\n- A `claude-p` attempt is unchanged; a board with no job record for an attempt shows the file tail with no error.\n- `test/jobs.test.js` (activity from a fixture job + transcript, and from nothing), `test/serve.test.js`, `test/cli.test.js`; `npm run lint && npm test` green.",
+  "closed_at": null,
+  "created_at": "2026-08-29T01:42:12Z",
+  "goal": null,
+  "id": 174,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/jobs.js",
+    "src/serve.js",
+    "src/cli.js",
+    "web/index.html",
+    "test/"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "The log panel shows a --bg worker's launch banner; show the job's status line and transcript tail instead",
+  "updated_at": "2026-08-29T01:42:12Z"
+}

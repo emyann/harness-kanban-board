@@ -1,0 +1,36 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    100,
+    101
+  ],
+  "body": "Part of #98.\n\n## Why\n\nThe README's multi-board section tells adopters to hand-maintain `~/.config/hkb/boards.json`, and #96\nrecently added a sentence saying a change to it needs `hkb serve` restarted. Both become wrong once\nthis track lands, and a README that describes the old friction is worse than one that says nothing.\n\n## What\n\nRewrite the multi-board part of the \"More than one repo\" section (README.md, around lines 184-202):\n\n- `hkb init` registers the checkout it sets up, so the list maintains itself — the common case needs no\n  config at all.\n- The file is still yours: still documented, still hand-editable, still the place to pin a non-default\n  board with `#slug`, and `--repos` still overrides it for one run.\n- Changes are picked up while the server runs. **Delete the sentence #96 added** (\"The list is read\n  once, while `hkb serve` starts, …\") — it is now false.\n- Keep the \"Nothing is scanned for\" promise and sharpen it: hkb still never crawls your filesystem\n  looking for repos. A checkout registering itself at `hkb init` is not scanning — running `hkb init`\n  there *is* the act of naming it. Say that, because it is the distinction that makes automatic\n  registration compatible with the promise.\n- Mention that `hkb init` prints where it registered, so nobody is surprised that init wrote outside\n  the repo.\n\nMatch the surrounding prose: plain, second person, no bullet lists in that section.\n\n## Done when\n\n- The section describes the behaviour that actually shipped in this track's siblings — read them\n  (`hkb show` the tasks this one is blocked by) rather than this description, which was written before\n  they ran.\n- `rg -n \"read once, while .hkb serve. starts\" README.md docs/` returns nothing.\n- No other page still claims the list is manual or needs a restart: check `docs/manual-mode.md:48-49`,\n  which mentions the file today.\n- `npm run lint && npm test` green.\n\n## Contract\n\n- Use the exact `hkb init` message wording and the exact reload semantics your blockers shipped — quote\n  them, do not paraphrase from this body.\n- Docs only. Touch `README.md` (and `docs/manual-mode.md` if it is stale). No source, no test changes.",
+  "closed_at": "2026-08-28T03:57:39Z",
+  "created_at": "2026-08-28T03:31:27Z",
+  "goal": "the multi-board section describes automatic registration and live reload, with no stale restart claim",
+  "id": 102,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "README.md",
+    "docs/manual-mode.md"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "README: the board list maintains itself",
+  "updated_at": "2026-08-28T03:57:39Z"
+}

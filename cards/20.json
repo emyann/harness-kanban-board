@@ -1,0 +1,34 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\nThe board needs a visual surface that requires no token scopes and no second source of truth. A tiny local webapp (like the Hermes dashboard) over the live GitHub backend: columns per status, cards, drawer with attempts/results, and actions that go through the same verbs the CLI uses — so it is authoritative, not a mirror.\n\n## What\n- `hkb serve [--port 4666]`: zero-dependency Node http server. One page (inline HTML/CSS/JS, no build step): columns triage|todo|ready|running|blocked|review|done, card = issue title + agent + priority + deps + PR link, drawer = body, kb block, attempts, latest result, log tail link.\n- Data: `GET /api/board` reuses `fetchBoard` (one GraphQL query); poll every 30 s with ETag; `POST /api/tasks/:n/<verb>` routes to the same functions as the CLI (promote, unblock, block, request-changes, archive, comment).\n- Drag-drop between columns maps to the legal verbs only; illegal moves are rejected with the reason.\n- No auth (binds 127.0.0.1 only, like Hermes); print a warning if --host is set to anything else.\n\n## Done when\n`hkb serve` shows this repo's live board and `hkb dispatch --loop` activity is visible without refresh beyond the poll.",
+  "closed_at": "2026-08-26T07:15:46Z",
+  "created_at": "2026-08-26T05:46:30Z",
+  "goal": null,
+  "id": 20,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/serve.js",
+    "src/cli.js",
+    "web/"
+  ],
+  "priority": 1,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "hkb serve: local web dashboard over the GitHub backend (Hermes-style board)",
+  "updated_at": "2026-08-26T07:15:46Z"
+}

@@ -1,0 +1,48 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    297
+  ],
+  "body": "## Why\nAn operator cannot stop a worker today, and a stop that let the next tick relaunch the card would be a restart with extra steps (`docs/local-first.md` §3, worker-level rows for `stop` and `start`).\n\n## What\n1. `src/lifecycle.js`: `stopAttempt(ctx, n, { reason })` and `startCard(ctx, n, { fresh })`; `src/cli.js`: `hkb stop <n> [--reason ..]` and `hkb start <n> [--fresh]`, refused under `KB_TASK` (`refuseIfWorker`), `--json` shape `{ number, attempt, runtime, action, ok, why }`.\n2. `stopped` joins `OUTCOMES` (`src/model.js`); `failures` untouched; `hkb stats` gets a neutral bucket for it (`summarizeAttempts`, `src/stats.js`).\n3. The card: `kb.suspended = { at, by, reason }` in the body block (a column on the local store: `updateBody`/the store's task fields); the tick checks it **before** the `active_pr` guard and skips like a future `scheduled_at`; `activePrGuard` treats a last row of `stopped` as a continuation (`continues: true`), like `changes_requested`.\n4. Track root: `stopAttempt` on a root with covered nodes closes every covered node's open attempt as `stopped` in the same call; `trackAlreadyAttempted` ignores `stopped` rows so `start <root>` restarts the track.\n5. Warm restart: `startCard` on a card whose last attempt is `stopped` with a `session_id` and an existing worktree launches attempt k+1 through the runtime's `resume` (B4 implements it for claude-bg; until then, for `process` a fresh launch in the same worktree) with `resumes: k` and `wt: kb-<n>-<k>` on the new row. The rule: **a worktree belongs to the attempt whose row names it in `wt`**, not to the number in its directory name — `sweepTask` (`src/gc.js`), the reconcile keep-list and `matchJobByWorktree` read `wt`.\n6. `CLAUDE_DENY` (`src/board.js`) gains `Bash(hkb stop*)`, `Bash(hkb start*)` (they do not match `hkb stats` or `hkb claim`: check with a test).\n7. `protocol.md`: the `stopped` outcome; the ⏸ overlay (a suspended card keeps its lane).\n\n## Done when\n- [ ] Tests: stop on a running `process` attempt (fake runtime) → row `stopped`, lock gone, card `ready` with `suspended`; the next tick with an open PR on that card does **not** park it in review and does not claim it; `start` clears `suspended`, claims, and the new row carries `resumes` and `wt`; a reconcile sweep keeps `kb-<n>-<k>` while a row names it; stopping a track root closes its nodes.\n- [ ] `hkb watch` emits `stopped` and `suspended` kinds (`src/watch.js` diffs the run comment and the body block — add the `kb.suspended` field to the snapshot).\n- [ ] `npm run lint && npm test` green.\n\n## Contract\nVerb names `stop`/`start`; row fields `resumes`, `wt`; card field `kb.suspended = { at, by, reason }`; outcome `stopped`. B4 adds `pause`/`resume` beside these.\n\n**Read first:** `docs/local-first.md` (the plan; the sections named below), `docs/wiki/decisions/adr-005-control-plane.md`,\n`docs/wiki/decisions/adr-006-local-store.md`, `CLAUDE.md`. Keep it dependency-free at runtime. Pure logic in\n`src/model.js` with a test. Errors name the fix and carry `.exitCode`. `--json` everywhere. Update the wiki page a\nchange touches (`node .repolore/scripts/wiki-check.mjs` lists what went stale); a new feature gets a new page.\nFinish with `npm run lint && npm test` green, one draft PR, and exactly one terminal verb.\n",
+  "closed_at": null,
+  "created_at": "2026-09-02T23:32:05Z",
+  "goal": "hkb stop <n> closes the attempt as stopped, releases the lock, suspends the card; the tick skips a suspended card before the active_pr guard; hkb start <n> clears the suspension and resumes the last stopped session in its worktree when one exists; a stopped track root closes its covered nodes",
+  "id": 298,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 10800,
+    "model": "claude-opus-5",
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/cli.js",
+    "src/lifecycle.js",
+    "src/model.js",
+    "src/dispatch.js",
+    "src/gc.js",
+    "src/stats.js",
+    "src/runtime/",
+    "src/board.js",
+    "skills/kanban/references/protocol.md",
+    "test/lifecycle.test.js",
+    "test/dispatch.test.js",
+    "test/model.test.js",
+    "test/gc.test.js",
+    "test/stats.test.js",
+    "docs/wiki/"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "hkb stop <n> and hkb start <n>: the stopped outcome, the suspended card, the guard exemption, the warm restart",
+  "updated_at": "2026-09-03T04:00:17Z"
+}

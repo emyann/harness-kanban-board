@@ -1,0 +1,33 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "Part of #115.\n\n## Why\n\n`priceOf` (`src/stats.js:79`) reads `total_cost_usd` off the attempt row, then falls back to\n`sessionFromLog` (`:363`), which parses the closing JSON object of `claude -p --output-format json`.\n\n**`claude-bg` never emits that object.** Its log is a launch banner:\n\n```\n# 2026-08-28T01:29:42.943Z launch background agent for #103 attempt 1\nbackgrounded · dd1e06c1 · kb track #103 · ...\n```\n\n`claude-bg` is the **default profile** and the one the README calls the free path, so out of the box\n`hkb stats` reports honestly that it has nothing:\n\n```\nspend      not recorded on any of the 1 worker attempt — only a harness whose\n           log ends in Claude's final JSON reports one\n```\n\nTwenty attempts and thirteen merged PRs in one night produced zero cost data.\n\n## What\n\nAdd a further fallback to `priceOf`: when the row has no `total_cost_usd` and the log yields nothing,\nread the attempt's `transcript_path` and sum the per-message `usage` from the JSONL.\n\n- Report turns and input/output tokens at minimum — that already beats nothing.\n- A token→cost estimate is a reasonable next step, but it must be **labelled an estimate** in the\n  output. Never present a derived number as a reported one.\n- `hkb stats` should say which of the three it is showing for a given board: reported cost, estimate,\n  or raw usage.\n\nFrugality still applies (Value 3): read the transcript **only** when the cheaper sources are absent,\nread it once per attempt, and never fetch it over the network — `transcript_path` is a local file and\nonly the host that ran the attempt has it, exactly as `sessionFromLog` already documents at `:360`.\n\n## Done when\n\n- [ ] `hkb stats` reports turns and tokens for a board whose attempts came from `claude-bg`.\n- [ ] The output distinguishes reported cost from an estimate from raw usage.\n- [ ] A missing or unreadable transcript degrades to today's message, never an error.\n- [ ] `node --test test/stats.test.js` covers: row with cost, row with log-only, row with\n      transcript-only, and row with nothing.\n\n## Contract\n\n- **This must not depend on #115's other child.** Cold nodes already carry `transcript_path` today, so\n  build and test against those; the sibling only widens which attempts have the field.\n- Touch only `src/stats.js` and `test/stats.test.js`. `src/hook.js` and `src/model.js`'s\n  `SESSION_FIELDS` belong to the sibling — read them, do not change them.",
+  "closed_at": "2026-08-28T15:39:24Z",
+  "created_at": "2026-08-28T15:24:34Z",
+  "goal": "hkb stats reports turns and tokens for a claude-bg board instead of nothing",
+  "id": 120,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/stats.js",
+    "test/stats.test.js"
+  ],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "Spend from the transcript when the harness never reported it",
+  "updated_at": "2026-08-28T15:39:24Z"
+}

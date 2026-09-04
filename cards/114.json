@@ -1,0 +1,37 @@
+{
+  "agent": "claude",
+  "blocked_by": [
+    138,
+    143
+  ],
+  "body": "> Found piloting hkb on `french-tech-homies/pipao-v2` on 2026-08-27/28.\n\n## Why\n\n`src/context.js:87` renders the task's `kb.skills` into the worker brief:\n\n```js\nif (task.kb.skills?.length) lines.push(`Skills to apply: ${task.kb.skills.map((s) => '`/' + s + '`').join(', ')}\\n`);\n```\n\nBut `Skill` is not in `DEFAULT_PROFILES`' `CLAUDE_TOOLS` (`src/board.js`), and workers launch `--permission-mode dontAsk`, which **denies** an unlisted tool rather than prompting. So setting `kb.skills` tells the worker to invoke something it is guaranteed to be refused.\n\nThat is worse than the field not existing: the worker reads an instruction from its own brief, tries it, is denied, and has to decide whether the instruction or the denial is authoritative. `--skills` is advertised in `hkb create`'s usage line and in the MCP schema (\"Skills the worker should load\"), so the field reads as a capability grant. It is not one.\n\nVerified on this board: `profiles.claude.allowed_tools` contains no `Skill` entry, and a worker's own transcript shows the equivalent denial for an MCP tool —\n\n```\nPermission to use mcp__claude-in-chrome__tabs_context_mcp has been denied\nbecause Claude Code is running in don't ask mode.\n```\n\n## What\n\nPick one, or both:\n\n1. **Add `Skill` to `CLAUDE_TOOLS`** in `src/board.js`, so the field grants what it advertises. Skills are repo-local and already reachable with `Read`, so this widens very little.\n2. **Have `doctor` warn** when any task sets `kb.skills` while its profile's `allowed_tools` lacks `Skill` — needed regardless for boards whose profiles were written before the fix.\n\nWorth deciding at the same time whether `kb.skills` should *inject* the tool into that task's launch rather than relying on the profile, since the field is per-task and the allowlist is per-profile.\n\n## Done when\n\n- [ ] A task with `kb.skills` set can actually invoke the named skill under `dontAsk`.\n- [ ] `hkb doctor` flags the mismatch on a board where it exists.\n- [ ] `hkb create --skills` usage text says whether it grants or merely suggests.\n",
+  "closed_at": "2026-09-01T20:05:18Z",
+  "created_at": "2026-08-28T05:16:05Z",
+  "goal": "A task with kb.skills set can invoke the named skill under dontAsk, or doctor flags the mismatch; the --skills usage text says whether it grants or suggests.",
+  "id": 114,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [
+    "src/board.js",
+    "src/context.js",
+    "src/doctor.js"
+  ],
+  "priority": 2,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "CLOSED",
+  "state_reason": "COMPLETED",
+  "status": "done",
+  "suspended": null,
+  "title": "kb.skills tells the worker to use a Skill tool the default profile denies",
+  "updated_at": "2026-09-01T20:05:18Z"
+}
