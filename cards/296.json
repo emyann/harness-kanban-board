@@ -34,8 +34,8 @@
   "scheduled_at": null,
   "state": "OPEN",
   "state_reason": null,
-  "status": "running",
+  "status": "review",
   "suspended": null,
   "title": "The runtime seam: src/runtime/{process,claude-bg,manual}.js, a fake runtime, and the reap pid-gate fix",
-  "updated_at": "2026-09-04T04:00:01.465Z"
+  "updated_at": "2026-09-04T04:17:57.432Z"
 }
