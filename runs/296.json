@@ -2,11 +2,14 @@
   "attempts": [
     {
       "attempt": 1,
+      "bg": true,
       "heartbeat_at": "2026-09-04T04:00:01.399Z",
       "host": "YRND1-GG",
+      "log": ".kanban/logs/296-1.log",
       "pid": null,
       "profile": "claude",
-      "started_at": "2026-09-04T04:00:01.399Z"
+      "started_at": "2026-09-04T04:00:01.399Z",
+      "wt": "kb-296-1"
     }
   ],
   "block_loops": {},
