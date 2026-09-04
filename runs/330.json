@@ -19,17 +19,22 @@
     {
       "attempt": 2,
       "bg": true,
+      "ended_at": "2026-09-04T03:59:02.885Z",
       "heartbeat_at": "2026-09-04T03:56:48.273Z",
       "host": "YRND1-GG",
+      "kind": "transient",
       "lock_sha": "0413bdaf78d09a7b902ad509649238eb26da1e90",
       "log": ".kanban/logs/330-2.log",
+      "outcome": "blocked",
       "pid": null,
       "profile": "claude",
+      "reason": "Operator: superseded. This card's fix was folded into #304 (round 4) and merged as 0413bda — the paginated closed-card read now lives in src/bridge/github-issues.js. Proven empirically minutes ago: hkb init --import migrated 193 cards, 151 run records, 155 results and 173 notes with no cap, where the single-page read would have stopped at 100. This attempt was claimed in the seconds between #304 m",
       "started_at": "2026-09-04T03:56:48.273Z",
       "wt": "kb-330-2"
     }
   ],
   "block_loops": {
+    "1w56138": 1,
     "ofqfew": 1
   },
   "failures": 0,
