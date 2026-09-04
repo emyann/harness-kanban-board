@@ -51,6 +51,13 @@
       "at": "2026-09-03T09:57:33Z",
       "id": 5523950993,
       "text": "**Blocked** (transient, attempt 1): Operator: claimed in the tick before the dependency edit landed. Sequenced behind #304, which is deleting the file this card names — see the comment above."
+    },
+    {
+      "actor": null,
+      "at": "2026-09-04T03:59:02.976Z",
+      "id": 5523950994,
+      "text": "**Blocked** (transient, attempt 2): Operator: superseded. This card's fix was folded into #304 (round 4) and merged as 0413bda — the paginated closed-card read now lives in src/bridge/github-issues.js. Proven empirically minutes ago: hkb init --import migrated 193 cards, 151 run records, 155 results and 173 notes with no cap, where the single-page read would have stopped at 100. This attempt was claimed in the seconds between #304 merging and the loop being stopped, and has nothing left to do.",
+      "url": null
     }
   ],
   "results": [],
