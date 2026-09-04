@@ -1,0 +1,83 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T16:19:13.036Z",
+      "heartbeat_at": "2026-08-28T16:18:06.488Z",
+      "host": "YRND1-GG",
+      "kind": "dependency",
+      "lock_sha": "c46b183e5f08990c3b0da726c36a0143462a7bde",
+      "log": ".kanban/logs/134-1.log",
+      "outcome": "blocked",
+      "pid": null,
+      "profile": "claude",
+      "reason": "Filed with its blockers inverted — #132 and #133 must land first. Links corrected; unblock once both are done.",
+      "started_at": "2026-08-28T16:18:06.488Z",
+      "wt": "kb-134-1"
+    },
+    {
+      "attempt": 2,
+      "bg": true,
+      "ended_at": "2026-08-28T17:00:51.415Z",
+      "heartbeat_at": "2026-08-28T16:47:19.830Z",
+      "host": "YRND1-GG",
+      "job": "6cdca743",
+      "lock_sha": "69bf76aa2d56c97c9937beaf684615d87c76fa11",
+      "log": ".kanban/logs/134-2.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 139,
+      "pr_head": "worktree-kb-134-2",
+      "profile": "claude",
+      "session_id": "6cdca743-34ec-4816-9cc7-edd9f99bd6a3",
+      "started_at": "2026-08-28T16:47:19.830Z",
+      "summary": "hkb doctor now names the two things a `claude-bg` board could not tell you.\n\n**(1) `profile <name> sessions`** — one finding per `claude-bg` profile that has ended an attempt on this board. A warning when NO ended attempt carries `session_id`, naming both causes: an hkb older than the recording (`npm i -g hkb-cli@latest && hkb init`), or a harness that is not stamping (`$CLAUDE_JOB_DIR`, the only ",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-134-2/6cdca743-34ec-4816-9cc7-edd9f99bd6a3.jsonl",
+      "wt": "kb-134-2"
+    }
+  ],
+  "block_loops": {
+    "vep3fq": 1
+  },
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T16:19:15Z",
+      "id": 5454949051,
+      "text": "**Blocked** (dependency, attempt 1): Filed with its blockers inverted — #132 and #133 must land first. Links corrected; unblock once both are done."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T17:00:54Z",
+      "attempt": 2,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/doctor.js",
+          "test/doctor.test.js",
+          "docs/harnesses.md",
+          "README.md"
+        ],
+        "residual_risk": [
+          "A board whose only claude-bg profile has no ended attempt in the newest 10 run records reads the full sample on every `hkb doctor` (10 REST calls) - bounded and reported, but it is the worst case; this repo hits it because claude-track has no recent attempts.",
+          "The sample is the newest 10 cards by updatedAt, so a profile whose attempts are all older than that is invisible to the check - deliberate (it answers about now, not about history), but a very quiet profile shows no finding rather than a warning.",
+          "The wiki was stale on five pages before this change and remains so; not in this card's scope."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (652 pass, 0 fail)",
+          "node --test test/doctor.test.js (45 pass, 16 new)",
+          "node bin/hkb.js doctor",
+          "node bin/hkb.js doctor --json"
+        ]
+      },
+      "summary": "hkb doctor now names the two things a `claude-bg` board could not tell you.\n\n**(1) `profile <name> sessions`** — one finding per `claude-bg` profile that has ended an attempt on this board. A warning when NO ended attempt carries `session_id`, naming both causes: an hkb older than the recording (`npm i -g hkb-cli@latest && hkb init`), or a harness that is not stamping (`$CLAUDE_JOB_DIR`, the only thing a `claude --bg` worker can read its own identity from). Otherwise an ok line splitting verb-ended rows from the ones written off without a verb, so a blank column points at the mechanism that owns it. `spawn_failed`/`reclaimed`/`gave_up` and `synthetic` rows are never counted — no worker session ran, so a board of those must not warn about a hole that is not one.\n\n**(2) `permission policy`** — one line. hkb's PreToolUse hook is inert on `claude-bg` (no `KB_TASK`) and on `trigger`, and never runs for Copilot/Codex, so on a default board the launch's own `--allowedTools` is the whole policy. It is an `ok`, not a warning: #133 is where that fork gets decided, and warning on every default board about an undecided choice would be noise.\n\n**Cost.** Attempt rows live in one `<!-- kb-run -->` comment per card, so the sample is newest-first, capped at `SESSION_SAMPLE` (10), and stops as soon as every background profile has shown a session — a board recording normally pays for one read. Recently-closed cards are folded in (one extra query, no paging) because a *completed* attempt lives on a closed issue. `checkAgentLabels` and the new check share the one open-board query through the new `boardOnce`; `checkAgentLabels` gained an optional `board` argument and is otherwise unchanged.\n\n**Docs.** `docs/harnesses.md` gained the \"which layer is actually enforcing\" table and lost the paragraph still saying an attempt without a verb records nothing — #137 corrected the wiki but not that file. README's worker-permissions row and spend paragraph point at both.\n\nDraft PR #139. Verified live: `node bin/hkb.js doctor` on this board prints `✓ profile claude sessions  session recorded on 2/8 that filed a terminal verb` plus the permission-policy line, and `--json` stays parseable.\n\n**For the next worker.** The wiki was already stale on five pages before this change (earlier commits, not this one) and this card's scope did not include it, so `/repolore:refresh` is still owed. #133 is still blocked/needs-human — if (b) ships, `policyLayers()` in `src/doctor.js` is the one place the `claude-bg` row flips to live."
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,75 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T19:58:19.041Z",
+      "heartbeat_at": "2026-09-01T19:46:27.559Z",
+      "host": "YRND1-GG",
+      "job": "8fe7b513",
+      "lock_sha": "f2d9b404bbb0bd8145670bce1e843e7b68c39038",
+      "log": ".kanban/logs/155-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 220,
+      "pr_head": "worktree-kb-155-1",
+      "profile": "claude",
+      "session_id": "8fe7b513-f10f-4c8f-a452-d062cb9f6138",
+      "started_at": "2026-09-01T19:46:27.559Z",
+      "summary": "parseSessionLog/SESSION_FIELDS now keep terminal_reason, api_error_status, model_usage (aliased from the result's camelCase modelUsage) and permission_denials alongside session_id/total_cost_usd/num_turns/duration_ms; old logs without them still parse unchanged. sessionUpdate compares object/array fields by JSON.stringify so a re-parsed log never looks 'new' on every Stop fire. Added formatDenials",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-155-1/8fe7b513-f10f-4c8f-a452-d062cb9f6138.jsonl",
+      "wt": "kb-155-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T23:26:01Z",
+      "id": 5458803761,
+      "text": "From the #129 spike (2.1.251): a subagent's usage is written to ~/.claude/projects/<proj>/<session>/subagents/agent-<id>.jsonl, a sidecar the parent transcript does not include. usageFromTranscript (src/stats.js:651) reads only transcript_path, so subagent tokens are invisible to hkb stats today — the 'sidechain lines are counted' comment at src/stats.js:114 describes the older in-file format. This card should walk <session>/subagents/*.jsonl next to the transcript."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-29T00:10:59Z",
+      "id": 5459067193,
+      "text": "Follow-on from #165 (model/effort ladder): once model_usage is on the attempt row, hkb stats should add a by_model table beside by_profile — attempts, completed / protocol_violation / changes_requested rates, mean turns, cost — and, crossed with kb.paths (docs-only · one module · several modules), a per-shape line such as 'claude-sonnet-5: 9/9 docs cards completed, 3/7 multi-module'. That table is the evidence the ladder in #165 and the operator routine in #149 read; without it the ladder is a guess. Keep --json stable: stats.by_model[model] and stats.by_shape[shape][model]."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T19:58:21Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/dispatch.js",
+          "src/cli.js",
+          "test/session.test.js",
+          "test/dispatch.test.js",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "Field names (terminal_reason, api_error_status, modelUsage, permission_denials) and their exact shapes were not verified against a live claude 2.1.251 binary (none was available in this sandbox, and running `claude` was blocked by the harness) — they were taken from the task's own description and pinned in a hand-built fixture; a real-world rename or shape difference on the actual CLI would need a follow-up fixture update.",
+          "cli.js is outside the task's declared kb.paths scope (src/model.js, src/dispatch.js, src/stats.js, test/) but the 'hkb show' output change required it; flagging in case that collides with a concurrently-dispatched card touching cli.js.",
+          "src/stats.js was left untouched — the comment-thread follow-on (by_model stats table) is explicitly scoped to a separate future task (#165/#149), not this one."
+        ],
+        "verification": [
+          "node --test test/model.test.js test/dispatch.test.js",
+          "npm test (883 passing)",
+          "npm run lint",
+          "node .repolore/scripts/wiki-check.mjs"
+        ]
+      },
+      "pr": 220,
+      "pr_continued": false,
+      "summary": "parseSessionLog/SESSION_FIELDS now keep terminal_reason, api_error_status, model_usage (aliased from the result's camelCase modelUsage) and permission_denials alongside session_id/total_cost_usd/num_turns/duration_ms; old logs without them still parse unchanged. sessionUpdate compares object/array fields by JSON.stringify so a re-parsed log never looks 'new' on every Stop fire. Added formatDenials and authPauseReason (pure, in model.js). watchChild pauses a profile on api_error_status 401/429 from the result, falling back to the old log-tail regex only when there is no JSON result line at all. The tick backfills session/cost/terminal_reason from the log for pid-mode attempts written off as crashed/timed_out (same treatment a --bg attempt already gets via jobSessionUpdate). hkb show prints 'ended: <terminal_reason>' and 'denied: <tool> ×N'; --json carries the fields verbatim on the attempt row. Refreshed and re-stamped docs/wiki/architecture/overview.md (its session-identity section) and appended a docs/wiki/log.md entry; the other 12 pre-existing stale wiki pages predate this change (verified by diffing wiki-check output before/after). PR: https://github.com/emyann/harness-kanban-board/pull/220"
+    }
+  ],
+  "v": 1
+}

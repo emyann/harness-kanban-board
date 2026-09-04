@@ -1,0 +1,57 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-29T01:30:32.596Z",
+      "heartbeat_at": "2026-08-29T01:25:52.411Z",
+      "host": "YRND1-GG",
+      "job": "5c56f21d",
+      "lock_sha": "c2486c958cc5c1c4cd3356c982d6ddfc658356d4",
+      "log": ".kanban/logs/164-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 172,
+      "pr_head": "worktree-kb-164-1",
+      "profile": "claude",
+      "session_id": "5c56f21d-0248-450c-9449-24727e48772e",
+      "started_at": "2026-08-29T01:25:52.411Z",
+      "summary": "hkb up now reports a child that died at the 300ms recheck as `failed`, not `started`, and exits 1 when any child failed. Added the pure `deadAtRecheck` decision in model.js beside `startDecision`. While there: `down` tidies a pid file naming an already-dead process instead of leaving it (it used to say \"not running\" and never clean up), and a kill that throws ESRCH (process died between the livene",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-164-1/5c56f21d-0248-450c-9449-24727e48772e.jsonl",
+      "wt": "kb-164-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-29T01:30:35Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/up.js",
+          "src/model.js",
+          "test/up.test.js",
+          "docs/wiki/features/up-and-down.md"
+        ],
+        "residual_risk": [
+          "Pre-existing wiki staleness on unrelated pages (architecture/overview.md, adr-004, etc.) surfaced by the pre-commit hook — not caused by this change and out of task #164's declared scope (src/up.js, src/model.js, test/up.test.js, docs/wiki/features/up-and-down.md)."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (762 passing)",
+          "node .repolore/scripts/wiki-stamp.mjs docs/wiki/features/up-and-down.md",
+          "node .repolore/scripts/wiki-check.mjs docs/wiki/features/up-and-down.md (fresh)"
+        ]
+      },
+      "pr": 172,
+      "pr_continued": false,
+      "summary": "hkb up now reports a child that died at the 300ms recheck as `failed`, not `started`, and exits 1 when any child failed. Added the pure `deadAtRecheck` decision in model.js beside `startDecision`. While there: `down` tidies a pid file naming an already-dead process instead of leaving it (it used to say \"not running\" and never clean up), and a kill that throws ESRCH (process died between the liveness check and the signal) counts as stopped, not failed. Updated test/up.test.js (dead-at-recheck human + --json, ESRCH race, dead-pid-file tidy) and re-stamped docs/wiki/features/up-and-down.md. PR: https://github.com/emyann/harness-kanban-board/pull/172"
+    }
+  ],
+  "v": 1
+}

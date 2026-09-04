@@ -1,0 +1,131 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-09-02T00:07:49.988Z",
+      "heartbeat_at": "2026-09-02T00:04:16.518Z",
+      "host": "YRND1-GG",
+      "lock_sha": "d9e7359040f134e390a7bc69bc72e93a713edd1c",
+      "manual": true,
+      "outcome": "completed",
+      "pr": 264,
+      "pr_head": "kb/259",
+      "profile": "claude",
+      "session_id": "4048cfbf-a952-49b8-9e95-092b30a8a130",
+      "started_at": "2026-09-02T00:04:16.517Z",
+      "summary": "A profile may now carry \"capabilities\": an object mapping an intent from a closed vocabulary to what THIS harness calls it, e.g. {\"review\": \"/code-review\", \"goal\": \"/goal\"}. The intent travels, the binding is local — hkb names no harness command itself, pinned by a test.\n\nExported vocabulary: CAPABILITIES in src/model.js — Object.freeze({ review, goal, specify }), each key mapped to a one-line pro",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-217-1/4048cfbf-a952-49b8-9e95-092b30a8a130.jsonl",
+      "wt": "kb-217-1"
+    },
+    {
+      "attempt": 2,
+      "ended_at": "2026-09-02T00:11:10.224Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "The work is right and reviewed — this is a catch-up caused by how its parent landed, not by anything you did.\n\nYou correctly based this branch on #255's branch commit (2103f6b), which was the only way to build on\n`effectiveTools` before it merged. I then squash-merged #255, so that commit is not an ancestor of `main` —\nmain carries the same *content* under a different sha (42fdd5b). Git therefore sees your branch as re-adding\n`effectiveTools` and `model.test.js`'s seam tests on top of a main that already has them. `gh pr update-branch`\nrefused with 422 \"merge conflict between base and head\", so this needs a real merge.\n\nMerge `origin/main` into the branch — never rebase, never force-push, it is already pushed — and resolve it\nthis way:\n\n- **src/model.js**: main's `effectiveTools` is authoritative; it is the same code you built on. Keep main's\n  copy, and keep YOUR additions beside it: `CAPABILITIES` and `capabilityCommand`. The result should have all\n  three exports and only one `effectiveTools`.\n- **test/model.test.js**: same shape — main already has the eight `effectiveTools:` tests; keep them once, and\n  keep your capability tests.\n- **src/board.js, src/dispatch.js, test/profiles.test.js**: yours, keep them.\n\nThen `npm run lint && npm test`. Main is at 1070 tests after #254 merged; expect that plus your own additions,\nand make sure the seam tests are present exactly once.\n\nDo not reopen any decision from attempt 1 and do not change `effectiveTools` itself — #255 owns it, and this\ntrack's whole point is that there is one derivation and not two.",
+      "started_at": "2026-09-02T00:11:10.223Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 3,
+      "bg": true,
+      "denied_tools": [
+        {
+          "count": 1,
+          "first_seen": "2026-09-02T00:25:44.875Z",
+          "kind": "dontask-miss",
+          "tool": "Bash"
+        }
+      ],
+      "ended_at": "2026-09-02T00:25:53.025Z",
+      "heartbeat_at": "2026-09-02T00:23:53.959Z",
+      "host": "YRND1-GG",
+      "job": "508b3dcd",
+      "lock_sha": "88d18b924709f315ddb98e7399052f574fd7be47",
+      "log": ".kanban/logs/259-3.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 264,
+      "pr_head": "kb/259",
+      "profile": "claude",
+      "session_id": "508b3dcd-1ba3-489d-856a-9e6848ee25ac",
+      "started_at": "2026-09-02T00:23:53.959Z",
+      "summary": "Merged main into kb/259 to resolve the git-history divergence the reviewer flagged (attempt 2): #255's effectiveTools was squash-merged to main as 42fdd5b while this branch still carried it as 2103f6b, so the merge conflicted only in src/model.js. Resolved by keeping main's effectiveTools untouched and re-adding this task's CAPABILITIES/capabilityCommand block beside it. The actual feature (CAPABI",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-259-3/508b3dcd-1ba3-489d-856a-9e6848ee25ac.jsonl",
+      "wt": "kb-259-3"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T00:11:10Z",
+      "id": 5502350160,
+      "text": "**Changes requested** (after attempt 1): The work is right and reviewed — this is a catch-up caused by how its parent landed, not by anything you did.\n\nYou correctly based this branch on #255's branch commit (2103f6b), which was the only way to build on\n`effectiveTools` before it merged. I then squash-merged #255, so that commit is not an ancestor of `main` —\nmain carries the same *content* under a different sha (42fdd5b). Git therefore sees your branch as re-adding\n`effectiveTools` and `model.test.js`'s seam tests on top of a main that already has them. `gh pr update-branch`\nrefused with 422 \"merge conflict between base and head\", so this needs a real merge.\n\nMerge `origin/main` into the branch — never rebase, never force-push, it is already pushed — and resolve it\nthis way:\n\n- **src/model.js**: main's `effectiveTools` is authoritative; it is the same code you built on. Keep main's\n  copy, and keep YOUR additions beside it: `CAPABILITIES` and `capabilityCommand`. The result should have all\n  three exports and only one `effectiveTools`.\n- **test/model.test.js**: same shape — main already has the eight `effectiveTools:` tests; keep them once, and\n  keep your capability tests.\n- **src/board.js, src/dispatch.js, test/profiles.test.js**: yours, keep them.\n\nThen `npm run lint && npm test`. Main is at 1070 tests after #254 merged; expect that plus your own additions,\nand make sure the seam tests are present exactly once.\n\nDo not reopen any decision from attempt 1 and do not change `effectiveTools` itself — #255 owns it, and this\ntrack's whole point is that there is one derivation and not two."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T00:37:30Z",
+      "id": 5502563372,
+      "text": "**Merged by the operator seat** — review: Reviewed as the top of track 217's stack, and this merge carries three nodes rather than one: kb/259 now holds its own capability vocabulary plus 260 (the brief naming the bound command) and 261 (the derived grant), both merged into it bottom-up. What this node itself adds: a frozen CAPABILITIES vocabulary with a per-intent meaning, capabilityCommand(profile, intent), and loadBoard validation of an optional profile.capabilities. The promise that matters is that a board declaring nothing is byte-identically unchanged, which the profiles tests pin. Verified myself: CI green on the final head, lint clean, 1099 tests locally with the stack merged in. Two process notes worth the record. This card took three attempts, and attempt 3 was my fault: I squash-merged its parent 255 while this branch was based on it, so the content landed on main under a different sha and the branch had to reconcile against work it already contained. That is now filed as 270, which would refuse such a merge mechanically. And when I then squashed 260 into this branch, 261 conflicted against its own base for the identical reason one level down, which I fixed by hand rather than spending a fourth session on a single-line import union. The last merge into this branch used a merge commit rather than a squash so its history stayed a valid ancestor. Siblings 260 and 261 will need closing by hand: their PRs merged into this branch rather than the default one, so GitHub never linked them and the board cannot see a merged PR on a non-default base. Filed as 275., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-02T00:07:50Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/board.js",
+          "test/profiles.test.js"
+        ],
+        "residual_risk": [
+          "capabilityCommand has no caller yet: nothing renders a binding into a brief (#260) or derives a grant from one (#261), so the key is validated and inert until a sibling lands. Deliberate — this card was told not to do either.",
+          "hkb doctor says nothing about capabilities (no check that a bound command exists in the harness, or that a Claude binding's Skill/slash-command tool is granted). #261 owns the grant and is the natural place for that check.",
+          "The vocabulary ships with three intents chosen from the track's framing, not from a survey of boards; adding a fourth is cheap but the test makes it deliberate, which is the point.",
+          "Validation is loadBoard-only. A caller that hand-builds a cfg object (tests, hooks reading a partial config) can hold an unvalidated capabilities map; capabilityCommand degrades to null rather than trusting it.",
+          "docs/wiki pages covering model.js/board.js are flagged stale by the wiki check; the whole set was already stale on kb/255 and docs/ is outside this card's kb.paths."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (1073 pass, 0 fail; kb/255 baseline was 1066)",
+          "node --test test/profiles.test.js (37 pass)",
+          "gh pr create --draft --base kb/255"
+        ]
+      },
+      "pr": 264,
+      "pr_continued": false,
+      "summary": "A profile may now carry \"capabilities\": an object mapping an intent from a closed vocabulary to what THIS harness calls it, e.g. {\"review\": \"/code-review\", \"goal\": \"/goal\"}. The intent travels, the binding is local — hkb names no harness command itself, pinned by a test.\n\nExported vocabulary: CAPABILITIES in src/model.js — Object.freeze({ review, goal, specify }), each key mapped to a one-line prose meaning (not a command). review = a second pass over work that already exists; goal = state the outcome the work is for; specify = turn a one-liner into a spec a cold worker can execute. It is pinned in test/profiles.test.js the way GROOM_KINDS is: every key must be frozen, name-shaped, carry a >=5-word meaning with no \"/\" in it, and be named by a case in that file — so an intent cannot be added without saying what it means.\n\nResolution function: capabilityCommand(profile, intent) -> string | null, pure, exported from src/model.js. It returns the bound command string for a known intent, and null for everything else: no capabilities key, a non-object/array map, a blank or non-string binding, an unbound intent, or an intent outside CAPABILITIES. null is the ordinary answer, never a throw — an unbound intent falls back to today's prose brief. #260 should render the brief off capabilityCommand(profile, intent) and treat null as \"say it in prose\"; #261 should derive its grant from the same call and route it through effectiveTools(profile, task, board), never profile.allowed_tools.\n\nSchema: profile.capabilities is optional; when present it must be a plain object whose keys are all in CAPABILITIES and whose values are non-empty strings. loadBoard (src/board.js) validates it once, next to the existing effort checks, throwing Error with exitCode 2: `profile \"<name>\" in <file>: unknown capability \"<intent>\" — must be one of review, goal, specify`, or `... \"capabilities\" must be an object mapping an intent to this harness's command, e.g. {\"review\": \"/code-review\"}`, or `... capability \"<intent>\" must name this harness's command as a non-empty string`. An UNBOUND intent is not an error — that is the difference between a capability map and a dependency.\n\nAbsent means today's behaviour: no DEFAULT_PROFILES entry binds anything, DEFAULT_KB and DEFAULT_BOARD are untouched, nothing is defaulted in, and a board with no capabilities key deep-equals DEFAULT_PROFILES with no \"capabilities\" anywhere in its serialization — pinned by a test. Nothing in this card touches effectiveTools, src/dispatch.js or src/context.js.\n\nBranched from kb/255. PR: https://github.com/emyann/harness-kanban-board/pull/264 (draft, --base kb/255)."
+    },
+    {
+      "artifacts": [],
+      "at": "2026-09-02T00:25:55Z",
+      "attempt": 3,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js (merge only)"
+        ],
+        "residual_risk": [
+          "PR #264 mergeStateStatus is BLOCKED, but that's review/checks gating, not a merge conflict (mergeable: MERGEABLE)."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (1085 pass, 0 fail)",
+          "gh pr view 264 --json mergeable -> MERGEABLE"
+        ]
+      },
+      "pr": 264,
+      "pr_continued": false,
+      "summary": "Merged main into kb/259 to resolve the git-history divergence the reviewer flagged (attempt 2): #255's effectiveTools was squash-merged to main as 42fdd5b while this branch still carried it as 2103f6b, so the merge conflicted only in src/model.js. Resolved by keeping main's effectiveTools untouched and re-adding this task's CAPABILITIES/capabilityCommand block beside it. The actual feature (CAPABILITIES vocabulary in src/model.js, capabilityCommand, loadBoard validation of profile.capabilities in src/board.js, tests in test/profiles.test.js) was already complete from attempt 1 and required no changes."
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,53 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-08-27T03:40:41.022Z",
+      "heartbeat_at": "2026-08-27T03:35:49.568Z",
+      "host": "YRND1-GG",
+      "lock_sha": "6bfb352a2c210724f03586db804fd66b38268a32",
+      "manual": true,
+      "outcome": "completed",
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-27T03:35:49.568Z"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T03:40:06Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "branch": "kb/53",
+        "changed_files": [
+          ".github/workflows/release.yml",
+          "docs/releasing.md",
+          "test/release.test.js"
+        ],
+        "pr_url": "https://github.com/emyann/harness-kanban-board/pull/58",
+        "residual_risk": [
+          "The workflow has never run: there is no tag and no NPM_TOKEN yet, and both are deliberately the operator's step (out of scope for the track). Proven here: it parses, its shell is valid, and the gate and retry logic behave correctly when executed. The first real tag is still the first real test of setup-node's registry-url wiring and of the OIDC provenance exchange.",
+          "npm's provenance requirements could change; if the OIDC exchange fails the publish fails closed rather than shipping unsigned, which is the intended direction but will need a human.",
+          "The verify job matches the tail of `hkb version`'s human output. If that output format ever changes, a release goes red until the workflow is updated — a deliberate contract, but a coupling worth knowing about."
+        ],
+        "verification": [
+          "node --test test/release.test.js (20 pass, 0 fail)",
+          "npm test (411 pass, 0 fail — 391 before this change)",
+          "npm run lint (clean)",
+          "every `run:` block extracted and syntax-checked with `bash -n` (7/7 ok)",
+          "release.yml parses under test/yaml.js, the strict subset parser the other workflow tests use",
+          "the gate script executed against a matching and a mismatching package.json",
+          "the retry loop executed against a stub npx (0, 4 and 99 failures) with a no-op sleep"
+        ]
+      },
+      "summary": "Release path is in: `.github/workflows/release.yml`, `docs/releasing.md`, `test/release.test.js`. Draft PR #58 on branch kb/53, based on main.\n\nTHE WORKFLOW. Trigger is `push: tags: [\"v*\"]` and nothing else — no cron, no workflow_dispatch, so there is no way to publish except by tagging. `concurrency: release-${{ github.ref }}` with cancel-in-progress false.\n\nJob `publish` (permissions contents:read + id-token:write, timeout 15m): checkout → setup-node 22 with registry-url https://registry.npmjs.org → `npm run lint` → `npm test` under TZ=UTC → `npm test` under TZ=America/New_York (same pair test.yml runs) → step id `gate` (compares \"${GITHUB_REF_NAME#v}\" with package.json version; on mismatch ::error:: naming both numbers AND the fix, exit 1; on match emits output `version`) → step id `preflight` (NPM_TOKEN present ⇒ ready=true, absent ⇒ ready=false plus a ::notice:: naming `npm token create --read-only=false` and `gh secret set NPM_TOKEN`, exit 0 — a fork or an unconfigured repo never goes red) → step id `publish`, `if: steps.preflight.outputs.ready == 'true'`, runs `npm publish --provenance --access public` with NODE_AUTH_TOKEN from the secret and emits output `published=true`.\n\nJob `verify` (needs: publish, `if: needs.publish.outputs.published == 'true'`, timeout 10m): setup-node ONLY — deliberately NO actions/checkout, so nothing from this repo is on that runner. Runs `npx -y hkb@$VERSION version`, retrying 10 times 30s apart for registry propagation, matches the output on the TAIL of the line (`*\" ${VERSION}\"`) so hkb@1.4.10 cannot pass for a 1.4.1 release, then runs `npx -y hkb@$VERSION help`. Gives up after ~5 min with an ::error::. THIS JOB IS THE END-TO-END PROOF that `npx hkb` works for a stranger.\n\nFOR #55: the smoke test in .github/workflows/test.yml is the pre-publish counterpart to this — release.yml verifies the REGISTRY copy after publishing, #55 should verify the PACKED copy before it (npm pack → install the tarball in a clean dir → run the bin). Do not duplicate the registry check; it lives here. Note #52's residual risk: nobody has yet installed a packed hkb tarball and run it, so #55 is the first place that actually happens.\n\nTESTS (test/release.test.js, 20 tests, style of test/actions.test.js — parsed with test/yaml.js, never regexed). Beyond the structural assertions, the two steps with real logic are EXECUTED: a `runStep()` helper runs a step's `run:` under `bash -e` in a scratch cwd with $GITHUB_OUTPUT wired up and stub executables prepended to PATH. That covers the gate (match / mismatch), the preflight (secret present / absent, and that the token is never echoed), and the retry loop against a stub `npx` that 404s N times plus a no-op `sleep` — first-try success, success after 4 propagation failures, the bounded give-up (exactly 10 calls), a wrong-version answer, and the 1.4.10-vs-1.4.1 case. Reuse `runStep()` if #55 needs to exercise shell.\n\nSCOPE NOTE: test/release.test.js is outside this task's declared kb.paths (.github/workflows/release.yml, docs/), but the \"done when\" requires tests in the style of test/actions.test.js. No other node on the track declares test/.\n\nFOR THE ROOT (#51): docs/releasing.md is not linked from the README — README.md is #54's scope, so I did not touch it. The root pass should add it to the README's Docs section (which #54 created, listing protocol.md, docs/harnesses.md, docs/status.md, docs/EVALUATION.md)."
+    }
+  ],
+  "v": 1
+}

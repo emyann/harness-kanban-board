@@ -1,0 +1,65 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-26T07:52:54.286Z",
+      "heartbeat_at": "2026-08-26T07:33:47.114Z",
+      "host": "YRND1-GG",
+      "job": "5dc74623",
+      "log": ".kanban/logs/5-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-26T07:33:47.114Z",
+      "wt": "kb-5-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "at": "2026-08-26T07:49:04Z",
+      "attempt": 1,
+      "kind": "review",
+      "metadata": {
+        "changed_files": [
+          "src/board.js",
+          "src/dispatch.js",
+          "src/init.js",
+          "src/hook.js",
+          "src/model.js",
+          "src/doctor.js",
+          "src/cli.js",
+          "templates/copilot/kanban-worker.agent.md",
+          "templates/copilot/hooks.json",
+          "test/harness.test.js",
+          "test/model.test.js",
+          "README.md",
+          "CLAUDE.md"
+        ],
+        "dependencies": [],
+        "residual_risk": [
+          "Copilot CLI flag names and the shell(<glob>) pattern syntax are UNVERIFIED against the live docs — no network in this sandbox and no copilot binary on the host. If a flag is wrong, every copilot-cli attempt fails at launch with Copilot's own usage error.",
+          "The .github/hooks/kanban.json schema (nesting and the agentStop event name) is UNVERIFIED. If it is wrong the hook is silently inert: workers still run, but nothing nudges one that stops without a terminal verb — the dispatcher still catches it as protocol_violation on the next tick.",
+          "No real `copilot -p` run happened, so the end-to-end worker loop (agent selection, allowlist, hook firing) has never executed.",
+          "ensureWorktree shells out to `git worktree add`; on a board root that is not a git repo it throws with exitCode 2 and the attempt is recorded as spawn_failed. Correct, but it is a new failure mode for worktree profiles."
+        ],
+        "retry_notes": null,
+        "verification": [
+          "npm run lint",
+          "npm test — 185 pass, 0 fail (24 new tests)",
+          "installHarness into a scratch dir, then hkb doctor against it: reports the copilot-cli profile, and flips the 'copilot harness' check from ! (with the fix `hkb init --harness copilot`) to a pass once the files exist",
+          "a full dispatcher tick against a real scratch git repo with a workspace:worktree profile, asserting the worker got its own checkout and the attempt row records wt",
+          "rebased on origin/main (through #31 lock-ref heartbeat and #30 Projects mirror), resolved the two import/HELP conflicts, re-ran lint + tests"
+        ]
+      },
+      "reviewer": null,
+      "summary": "The `copilot-cli` profile is in, generated from templates and wired end to end.\n\n**1. Built-in `copilot-cli` profile** (`src/board.js`): `copilot -p {prompt} --agent kanban-worker --allow-tool 'shell(...)' ×N --deny-tool 'shell(git push --force*)' [--model M]`, `heartbeat: \"auto\"`, `max_in_progress: 1` (Copilot Free's credit pool is small). Copilot repeats `--allow-tool` per pattern instead of taking a list, so `expandLaunch` (dispatch.js) grew an `--allow-tool={allowed_tools}` token that emits one flag pair per entry. The allowlist is now ONE list of shell patterns (`SHELL_TOOLS`) rendered into both `Bash(...)` for Claude and `shell(...)` for Copilot, so the two cannot drift apart.\n\n**2. A dispatcher-made worktree.** A profile can declare `workspace: \"worktree\"`; `spawnWorker` then calls the new `ensureWorktree(root, name)` in board.js (`git worktree add .claude/worktrees/kb-<n>-<k> -b kb-<n>-<k>`, reuses an existing checkout, falls back to checking out a branch an earlier attempt left behind) and runs the worker with that as its cwd. Same directory Claude Code uses, so `hkb gc` already sweeps them. `attempt.wt` is now recorded for process workers too, not only background ones.\n\n**3. `hkb init --harness copilot`** writes `.github/agents/kanban-worker.agent.md` and `.github/hooks/kanban.json` from `templates/copilot/`. The agent body is spliced out of the packaged `skills/kanban/SKILL.md` (only the skill-relative `references/protocol.md` link is rewritten), so the protocol text lives in exactly one place; both files are generated and re-running init rewrites them. `--harness copilot` on its own also brings the `copilot-cli` profile and replaces the `claude` default (`resolveProfiles` in init.js — pure, tested); naming `--profiles` too keeps both.\n\n`hkb hook stop` now serves both harnesses: `normalizeHookInput` (model.js) folds Copilot's camelCase `agentStop` payload onto Claude's snake_case, and `{\"decision\":\"block\",\"reason\":…}` is what both read back. `src/hook.js` carries the full comparison table — event name, config file, stdin spelling, stdout, and why it is `agentStop` and not `sessionEnd`.\n\nAlso: `hkb doctor` warns when the `copilot-cli` profile is configured but the generated files are missing (without them `--agent kanban-worker` resolves to nothing and no hook enforces the terminal verb); `init` now gitignores `.claude/worktrees/` and `.kanban/sessions/`, which hkb writes but did not ignore.\n\n## Caveat for the next worker — the docs check did not happen\n\nThe task asked to verify flag names against docs.github.com. **This worker had no web access** (WebFetch, WebSearch and outbound shell were all denied by the permission mode) and `copilot` is not installed on this host, so `copilot --help` was not available either. The flags and the hook-config schema follow `docs/EVALUATION.md`, which was written from those docs.\n\nTwo things need a networked check before the profile is used for real. Both are isolated so a correction is a one-line edit:\n\n- **(a)** `-p`, `--agent`, `--allow-tool`, `--deny-tool`, `--model`, and whether `shell(hkb *)` accepts a wildcard — all in the `copilot-cli` `launch` array in `src/board.js`. The wildcard is the assumption to check first; if it is not supported the allowlist needs exact commands.\n- **(b)** The hook config shape in `templates/copilot/hooks.json` (Claude-style `hooks.<event>[].hooks[]` nesting, event name `agentStop`). Nothing in `src/` parses it, so correcting the template is enough.\n\nFlags I was less confident about (`--no-color`, `--log-level`) were deliberately left out so an unknown flag cannot make every attempt fail at launch, and the generated agent's frontmatter is kept to `name` + `description` for the same reason. PR #32 spells all of this out for the reviewer.\n\n## Why `request-review` and not `complete`\n\nTwo reasons, and they point the same way. Substantively: the two unverified assumptions above need someone with a browser to check them against docs.github.com before this counts as done — which is what this verb is for. Mechanically: `hkb complete` could not be run from this attempt at all. The harness's worktree-isolation guard matches the bare token `complete` in any command line and refuses it (\"this command runs a string through complete, which can't be verified to stay inside the worktree\"), including `hkb complete --help` and `node bin/hkb.js complete …`. `heartbeat` and `request-review` pass the same guard. Worth fixing in the harness; it makes `complete` unreachable for any worker running in an isolated worktree."
+    }
+  ],
+  "v": 1
+}

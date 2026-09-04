@@ -1,0 +1,63 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-09-01T21:01:55.791Z",
+      "heartbeat_at": "2026-09-01T20:54:47.087Z",
+      "host": "YRND1-GG",
+      "lock_sha": "aa4339d941a5ddd18471685b624c5662fd342cf4",
+      "manual": true,
+      "outcome": "completed",
+      "profile": "claude",
+      "session_id": "2abc5911-ed47-4920-a41b-ae02a2292a6b",
+      "started_at": "2026-09-01T20:54:47.087Z",
+      "summary": "`hkb groom` lands in src/cli.js as a read (one fetchBoard(ctx, {includeClosed: !!flags.all, blockers: 'all'}), then groomBoard, ZERO writes) plus the ` ⇡ unblocked` nudge in `hkb list`. Draft PR https://github.com/emyann/harness-kanban-board/pull/232 on kb/227, base kb/191-wave1. FLAGS (exact): `--status triage,todo,ready` (default those three; a comma list of STATUSES), `--all` (includeClosed), `",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-191-1/2abc5911-ed47-4920-a41b-ae02a2292a6b.jsonl",
+      "wt": "kb-191-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T21:10:21Z",
+      "id": 5500480238,
+      "text": "**Merged by the operator seat** — PR #232 (squash), after recovering it from a delivery failure. The code was\nnever the problem.\n\n**Review.** `hkb groom` is a read: one `fetchBoard(ctx, {includeClosed, blockers: 'all'})`, then `groomBoard`,\nzero writes. Flags are the specified set, and an unknown `--status` / `--level` / `--bodies` exits 2 naming the\nvalid list. `hkb list` gains the ` ⇡ unblocked` nudge computed in memory. CI green (test + packed artifact),\nlint clean, 966 tests on the branch, up from 951.\n\n**What went wrong.** The worker opened this PR against `kb/191-wave1`, an intermediate branch the track runner\ncreated, rather than `main`. GitHub only honours `Closes #N` for a PR targeting the **default branch**, so\n`closedByPullRequestsReferences` — the field `src/tasks.js` reads — returned nothing, `hkb show 227` reported\n`prs: []`, and `hkb finish` on a card with no PR sent it straight to *done*. The card closed as completed at\n21:02 with the work unmerged and no card left to chase it. `hkb groom` was not on `main`.\n\n**Recovery.** Merged `origin/main` into `kb/227` (after which its diff against main is only its own ~124 lines\nof `src/cli.js` plus tests — no re-adding of the wave-1 children), retargeted the PR to `main`, reopened the\nissue, then merged. Retargeting *alone* flipped `prs: []` to `prs: [{232, base: main, OPEN}]`, which is direct\nproof of the cause.\n\nTwo things this leaves behind, both filed rather than fixed here: hkb cannot see a PR that does not target the\ndefault branch, and `finish` with no PR detected should be a protocol violation rather than a completion. Also\nnoted: the tick's gc logged \"#227's PR is merged\" and removed a worktree while the GitHub API reported that PR\n`open`, `merged=false`."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T21:01:58Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/cli.js",
+          "test/cli.test.js"
+        ],
+        "residual_risk": [
+          "The `--level` filter narrows `cards` and `judgment.cards` but deliberately leaves `summary` and `pairs` board-wide, so a filtered report's counts exceed its row count. That is documented in the code and pinned by a test, but the skill (#228) must not read summary.levels as 'the rows you can see'.",
+          "The human header prints every lane in summary.by_status, not only the ones --status selected, because by_status is computed over the whole board by design (amendment 9). Reads slightly odd next to `--status triage`.",
+          "GROOM_LEVELS includes needs_judgment, so `--level needs_judgment` is accepted even though #191 spelled the flag `act|ask|info`. The error text names all four; if the skill's table says three, that is a doc-side choice, not a CLI restriction.",
+          "The pair line repeats the other card's number: the score/shared prefix and groomBoard's guard-aware `why` both name it. Cosmetic.",
+          "hkb list still reads with the default blockers: true (todo/blocked only), so on a repo without GraphQL blockedBy the nudge never appears there — correct by amendment 8, but it means the marker is a graphql-repo feature in practice on such boards; `hkb groom` is the answer there.",
+          "No docs, README, wiki page or help-registration test was touched — those belong to #229 and the root. Only the HELP string in src/cli.js gained the groom lines."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (966 pass, 0 fail — 959 before, 7 new)",
+          "node --test test/cli.test.js (11 pass)",
+          "node bin/hkb.js groom --status triage / --json / --level act / --bodies all against the live board (read-only)",
+          "node bin/hkb.js list --status triage — the nudge on #140, #141, #156 and on no card without blockers"
+        ]
+      },
+      "pr": null,
+      "pr_continued": false,
+      "summary": "`hkb groom` lands in src/cli.js as a read (one fetchBoard(ctx, {includeClosed: !!flags.all, blockers: 'all'}), then groomBoard, ZERO writes) plus the ` ⇡ unblocked` nudge in `hkb list`. Draft PR https://github.com/emyann/harness-kanban-board/pull/232 on kb/227, base kb/191-wave1. FLAGS (exact): `--status triage,todo,ready` (default those three; a comma list of STATUSES), `--all` (includeClosed), `--pairs N` (default 10, whole number >= 0), `--level act|ask|info|needs_judgment` (all four GROOM_LEVELS accepted), `--bodies flagged|all|none` (default flagged), `--json`. Three new EXPORTS from src/cli.js for #228 and the root to assert against: groomOptions(flags) -> {statuses, level, bodies, pairs, all} — pure, validates BEFORE any request, throws Error with .exitCode 2 and the messages `--level: unknown level \"x\" — one of act, ask, info, needs_judgment`, `--bodies: unknown value \"x\" — one of flagged, all, none`, `--status: unknown lane \"x\" — one of <STATUSES>`, `--pairs: a whole number of pairs to list, not \"x\"`; filterGroomLevel(rep, level); formatGroom(rep, byNumberMap). --json IS EXACTLY groomBoard's object (frozen top-level keys, in this order): board, read_at, cards_read, blockers_source, summary{by_status,hubs,one_slot,levels,lane,path_overlap}, cards[], pairs[], judgment{cards,pairs}; each card is number,title,status,agent,priority,age_days,touched_days,paths,goal,blocked_by,blocks,findings,proposal,needs_judgment and bodyText ONLY when needs_judgment (or under --bodies all). groomBoard is called with {now, caps: ctx.caps, pairs, statuses, board: ctx.board, guard: pathOverlapGuard(ctx.cfg), bodies, blockersFilled: blockersOf(tasks).filled} — provenance is read off the array fetchBoard returned, before any reshape. `--level` is a VIEW: it narrows `cards` and `judgment.cards` only; summary and pairs stay the whole lane's truth. Human output: header `34 cards · 2 running · 30 triage · hubs: src/model.js (17), …`, then one taskLine row per card ending `  ⇒ <proposal>` with findings indented six spaces as `kind (level): evidence → suggests`, then a `pairs (N would take one slot under path_overlap: <mode>)` block of `#a ~ #b  score  shared — why`, then the footer `act N · ask N · info N · judge N cards, N pairs · blockers from graphql|rest|unknown`. THE NUDGE: taskLine(t, {known}) appends ` ⇡ unblocked` when known && status==='triage' && blockedBy.length >= 1 && computeReady(t) — in memory, no new field, no write, no extra request; `hkb list` passes known: blockersKnown(tasks, t) so a repo without GraphQL blockedBy stays silent instead of wrong, `hkb show` passes known: true (getTask always fills). Ran live against this board: `hkb groom --status triage` prints 30 rows with 6 act findings and 10 pairs, `hkb list --status triage` marks #140 #141 #156 unblocked. src/model.js, src/tasks.js, src/dispatch.js and skills/kanban/SKILL.md untouched."
+    }
+  ],
+  "v": 1
+}

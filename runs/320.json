@@ -1,0 +1,16 @@
+{
+  "attempts": [],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T04:01:27Z",
+      "id": 5520142106,
+      "text": "This card demonstrates its own edge case: it counts **three** `kb:` blocks — one real, plus two the\n\"What\" section quotes as examples inside backticks. So the doctor check in item 4 must not be a\nnaive count.\n\nWhat separates a real block from a quoted one is the same thing `parseBodyBlock` already relies on:\nposition. A machine block is at the very top of the body; anything else is prose, whether or not it\nis fenced. So the check is \"more than one block that starts at column 0 of its own line, outside a\ncode fence\" — and even that flags a card whose prose legitimately opens a line with the syntax.\n\nCheaper and exact: flag a card only when a second block would change the card if it were the first\n— i.e. it parses as JSON and its keys differ from the governing block. A quoted `<!-- kb: … -->`\nwith an ellipsis does not parse, so it never fires. That also makes the message actionable: name\nthe keys that disagree, which is the drift the card is actually about."
+    }
+  ],
+  "results": [],
+  "v": 1
+}

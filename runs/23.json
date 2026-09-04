@@ -1,0 +1,45 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-08-26T06:12:24.200Z",
+      "host": "YRND1-GG",
+      "outcome": "completed",
+      "profile": "claude",
+      "started_at": "2026-08-26T06:12:24.200Z",
+      "summary": "Implemented directly during bootstrap (commit 7b92c57): PreToolUse hook gated on KB_TASK; decidePermission() in model.js (unit-tested) allows file tools inside the repo and shell commands whose every segment is allowlisted, denies force-push/sudo/rm -rf and unlisted commands with an actionable reason; hkb init installs it next to the Stop hook. Workers can no longer strand on permission prompts.",
+      "synthetic": true
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-26T06:12:26Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/hook.js",
+          "src/cli.js",
+          "src/init.js",
+          ".claude/settings.json",
+          "test/permission.test.js"
+        ],
+        "residual_risk": [
+          "policy parser splits on &&/;/| only — subshells $( ) are not inspected; acceptable inside a worktree"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (50 pass)"
+        ]
+      },
+      "summary": "Implemented directly during bootstrap (commit 7b92c57): PreToolUse hook gated on KB_TASK; decidePermission() in model.js (unit-tested) allows file tools inside the repo and shell commands whose every segment is allowlisted, denies force-push/sudo/rm -rf and unlisted commands with an actionable reason; hkb init installs it next to the Stop hook. Workers can no longer strand on permission prompts."
+    }
+  ],
+  "v": 1
+}

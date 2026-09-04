@@ -1,0 +1,27 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T00:12:55.047Z",
+      "heartbeat_at": "2026-08-26T23:12:05.457Z",
+      "host": "YRND1-GG",
+      "job": "b5220fbb",
+      "job_stopped": true,
+      "lock_sha": "41c1b148eb9bde2786ad9eb672fb2f706c1a8a14",
+      "log": ".kanban/logs/10-1.log",
+      "outcome": "timed_out",
+      "pid": null,
+      "profile": "claude",
+      "reason": "timed_out after 3649s",
+      "started_at": "2026-08-26T23:12:05.457Z",
+      "wt": "kb-10-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 1,
+  "last_error": "timed_out after 3649s",
+  "notes": [],
+  "results": [],
+  "v": 1
+}

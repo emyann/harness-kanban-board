@@ -1,0 +1,268 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-09-03T07:22:14.986Z",
+      "heartbeat_at": "2026-09-03T07:20:12.985Z",
+      "host": "YRND1-GG",
+      "kind": "transient",
+      "lock_sha": "96c4892c499ae9f79a050cbe41c87c7754ce3ece",
+      "manual": true,
+      "outcome": "blocked",
+      "profile": "claude",
+      "reason": "Operator: its claim was held by the withdrawn track runner on #302, not by a worker of its own. Releasing so the tick re-claims it as a cold node.",
+      "session_id": "8b68d42f-0670-44b0-a9e2-23717d68285d",
+      "started_at": "2026-09-03T07:20:12.985Z",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-302-2/8b68d42f-0670-44b0-a9e2-23717d68285d.jsonl",
+      "wt": "kb-302-2"
+    },
+    {
+      "attempt": 2,
+      "bg": true,
+      "ended_at": "2026-09-03T07:31:47.696Z",
+      "heartbeat_at": "2026-09-03T07:22:57.209Z",
+      "host": "YRND1-GG",
+      "job": "789176dc",
+      "kind": "dependency",
+      "lock_sha": "96c4892c499ae9f79a050cbe41c87c7754ce3ece",
+      "log": ".kanban/logs/303-2.log",
+      "outcome": "blocked",
+      "pid": null,
+      "profile": "claude",
+      "reason": "The verbs are not routed through openStore yet, so the store double cannot answer under them and none of the 121 assertion sites can move. src/cli.js, src/dispatch.js, src/lifecycle.js, src/context.js, src/stats.js and src/hook.js import the GitHub bodies directly through the src/tasks.js and src/lock.js re-export shims; openGithubStore is a facade over those same functions. Nothing installed at t",
+      "session_id": "789176dc-801e-4a68-bb1b-bbf23aac0638",
+      "started_at": "2026-09-03T07:22:57.209Z",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-303-2/789176dc-801e-4a68-bb1b-bbf23aac0638.jsonl",
+      "wt": "kb-303-2"
+    },
+    {
+      "attempt": 3,
+      "bg": true,
+      "ended_at": "2026-09-03T07:34:43.576Z",
+      "heartbeat_at": "2026-09-03T07:34:08.666Z",
+      "host": "YRND1-GG",
+      "kind": "transient",
+      "lock_sha": "96c4892c499ae9f79a050cbe41c87c7754ce3ece",
+      "log": ".kanban/logs/303-3.log",
+      "outcome": "blocked",
+      "pid": null,
+      "profile": "claude",
+      "reason": "Operator: re-sequenced behind #325 (route the verbs through openStore), which is the step no card owned — your attempt-2 analysis was right and is what produced it. PR #324 stays open and is being merged separately, so the next attempt inherits setStore() and the proven double.",
+      "started_at": "2026-09-03T07:34:08.666Z",
+      "wt": "kb-303-3"
+    },
+    {
+      "attempt": 4,
+      "bg": true,
+      "ended_at": "2026-09-03T09:22:08.933Z",
+      "heartbeat_at": "2026-09-03T08:55:17.603Z",
+      "host": "YRND1-GG",
+      "job": "b6d18cd9",
+      "lock_sha": "103ecf41fea50af039ad147370f3d312262221bd",
+      "log": ".kanban/logs/303-4.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 329,
+      "pr_head": "worktree-kb-303-4",
+      "profile": "claude",
+      "session_id": "b6d18cd9-6463-43ff-aa6b-8ad70552a5ca",
+      "started_at": "2026-09-03T08:55:17.603Z",
+      "summary": "PR #329 (draft, branch worktree-kb-303-4). `grep -rn \"gh\\.calls\\|lockRefs()\" test | grep -v fake-gh.js | grep -v store.test.js` returns nothing; 1403 tests green in 11s (14 new), lint and tsc clean.\n\n**The double, and the one src/ change.** `setStore(fn)` in `src/store/index.js` replaces what `openStore`/`openStoreReadOnly` hand back and returns a restore function, like `setTransport`. Two deliber",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-303-4/b6d18cd9-6463-43ff-aa6b-8ad70552a5ca.jsonl",
+      "wt": "kb-303-4"
+    },
+    {
+      "attempt": 5,
+      "ended_at": "2026-09-03T09:35:36.802Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "The machinery here is right and I want to say so before the list: registering the double as a third driver\nin the conformance suite, and `test/verbs-portable.test.js` running seven scenarios against the double AND\nthe real local driver in a scratch repo, are the two things that make a migration like this trustworthy\nrather than hopeful. `revisionOf` as \"how many times the card actually changed\" is the correct answer to\n\"what were these assertions *for*\". 1403 green, and the grep criterion is met.\n\nA high-effort review found 15. The headline is that **the machinery has holes in exactly the place it\nexists to protect**, and the reviewer proved each one by mutating the code and watching the suite stay\ngreen.\n\n## Must fix — assertions that no longer test what they name\n\n1. **`revisionOf` cannot see a removal** (fake-store.js:383). `rec.labels` is reassigned to\n   `[...kept, ...added]` on the line above, so `kept.length !== rec.labels.length - added.length` is false\n   *by construction* — only `added.length` can ever fire. A card put through\n   `setStatus(task, 'todo', {remove: [L.needsHuman]})` loses the label while `revisionOf(7)` stays 0. So\n   `assert.equal(store.revisionOf(n), before, 'nothing to change is nothing to write')`\n   (agent-label.test.js:112) keeps passing after a regression that strips and re-adds labels — and the real\n   driver issues a `DELETE /issues/7/labels/…` for exactly that call. **This is the lie-that-passes this\n   card exists to remove, in the counter built to remove it.**\n2. **`test/jobs.test.js:189` seeds a lock on the fake GitHub** while the board moved to the double, so the\n   protocol-violation reclaim test has no claim to release. The reviewer commented the line out and all 10\n   tests still passed — it is inert. Use `h.store.hold(7, 1)`, as every other migrated site does.\n3. **`agent-label.test.js:219` no longer exercises either half.** The board reads through the double, which\n   never consults `gh.caps`, so flipping `blockedByGql` to `true` leaves all 13 tests green. The original\n   assertion caught a real regression — one REST dependency call per card when GraphQL cannot supply\n   `blockedBy`; the replacement counts `getTask`, which `checkAgentLabels` never calls on any path. A\n   regression re-introducing `listTasks({blockers: 'all'})` sails through. Restore the property, through\n   the double or through fake-gh, whichever can still see it.\n4. **The \"dry run writes nothing\" and \"stats must not POST\" assertions were dropped, not moved**\n   (dispatch.test.js:1188, track.test.js:734, stats.test.js:652 and :705). They now assert only\n   `store.writes() === []`, so a write that goes out through `src/forge.js` or `gh.js` on a read-only path\n   is caught nowhere. `test/fake-gh.js` is still installed under all three harnesses, so\n   `assert.deepEqual(h.gh.requestsMatching('POST'), [])` (plus PATCH and DELETE) can simply be kept\n   *alongside* the new assertion. A `hkb stats` that started calling `enableAutoMerge`, or a `--dry-run`\n   that PATCHed a PR, currently passes.\n\n## Must fix — the double's fidelity\n\n5. **`listTasks` discards the `blockers` knob** (fake-store.js:339: `void blockers`) and unconditionally\n   tags `{source: 'store', filled: true, scope: 'all'}`. The real drivers answer\n   `{source: null, filled: false, scope: 'none'}` for `blockers: false` (github.js:148) and\n   `source: 'local'` (git.js:619). So `blockersKnown` is `true` through the double where it is `false`\n   through GitHub, and any migrated assertion about \"an empty `blockedBy` nobody read is not 'no blockers'\"\n   is true only of the double. The conformance scenario accepts any scope, so it does not ask — **tighten\n   the scenario too**, since that is the mechanism that is supposed to catch this.\n6. **The override bypasses the handle cache** (src/store/index.js:155): `openStore` returns the override\n   *before* `ctx._store = store`, so an overridden store never enters the memo and `closeStore(ctx)` is a\n   no-op — `FakeStore.close`/`closed` is dead code whose comment says \"`closeStore` calls it and the seam's\n   own tests count it\". Two costs: the handle lifecycle #326 was rewritten for is the one part of the seam\n   no test exercises through the double, and a future `assert(store.closed === 1)` would assert a constant.\n   Put the override after the memo lookup and before the assignment.\n7. **`writes()` counts calls, not effects** (fake-store.js:33), contradicting the module's own \"`[]` is\n   'and nothing was written'\". `ensureLabels` that creates nothing and `setStatus` to the status the card\n   already has both report as writes, where the real driver makes no request for either. Count what\n   `revisionOf` counts.\n8. **Assertion helpers re-enter the recording store** (fake-store.js:204): `locks()` calls\n   `asStore().listLocks()`, so reading an assertion appends to the call log another assertion reads — and\n   with `store.fail('listLocks')` armed (dispatch.test.js:1302) the *assertion* can be the caller that\n   consumes the injected error. Read `this.lockRows` directly and have internal re-entries call the raw\n   methods.\n\n## Also fix\n\n9. **dispatch.test.js:248 and :294 assert `beat on refs/kb/locks/7/1`** against a store whose `lockRef()`\n   is null — they pass only because `src/dispatch.js:727` builds the name from `model.js`'s `lockRef`\n   rather than the store's. That pins in place the GitHub-ism this same PR filed in FINDINGS.md, and unlike\n   the `blockers_source` case (cli.test.js:100) it carries no note, so the fix for the filed finding breaks\n   them with nothing saying why.\n10. **`addComment` is copy-pasted from `FakeGh.addComment` and has already diverged** (fake-store.js:160):\n    the same off-by-one `html_url` (id `1000` → `#issuecomment-1001`, because the template interpolates\n    after the `++`) and a dropped `updated_at`. `addIssue` is a near-verbatim copy too. Share one factory,\n    the way `kbIssue`/`runWith` already do.\n11. **Dead code and a tautological assertion** (fake-store.js:616, verbs-portable.test.js:153):\n    `detailOf`'s trailing `?? ''` is unreachable because the penultimate operand is a string in both\n    branches; and `assert.equal(run.attempts[0].host, 'test-host' === h.ctx.host ? 'test-host' : h.ctx.host)`\n    is `h.ctx.host` either way — write it plainly.\n12. **Eleven harnesses copy the same four-line install/teardown**, with the LIFO restore order re-derived\n    by hand each time. One `installDoubles(ctx, {board, host})` returning `{gh, store, restore}` removes\n    ~50 lines and makes the ordering hazard impossible rather than repeatedly correct by hand.\n13. **A JSDoc comment was orphaned** (context.test.js:150): the FakeGh note now documents `card` instead of\n    `say()`, and names the wrong double.\n14. **Three wiki pages went stale** — `concepts/store.md`, `architecture/local-store.md` and\n    `architecture/overview.md` all cover `src/store/index.js`, and only `architecture/store-seam.md` was\n    refreshed. Re-stamp them or say in the PR why `setStore` changes nothing they describe.\n\n## Before merge — repo rule, not a review finding\n\n15. **Every commit on this branch carries a `Co-Authored-By: Claude …` trailer and a `Claude-Session:`\n    line, and the PR body ends with \"🤖 Generated with Claude Code\".** CLAUDE.md, *Commits and PRs*:\n    \"Never add `Co-Authored-By: Claude ...` trailers and never add '🤖 Generated with Claude Code' to\n    commit messages or PR bodies.\" Strip them from all five commits and edit the PR body.\n\n## Done when\n\n- [ ] Every item fixed, or one line arguing why not.\n- [ ] For 1-4, the test must **fail** against the pre-fix behaviour — mutate it and say so, the way the\n      reviewer did to find them.\n- [ ] The conformance scenario for blockers actually pins the provenance, so item 5's class cannot recur.\n- [ ] No commit carries a Claude trailer; the PR body has no attribution footer.\n- [ ] `npm run lint && npm test` green.\n",
+      "started_at": "2026-09-03T09:35:36.795Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 6,
+      "bg": true,
+      "continues_branch": "worktree-kb-303-4",
+      "continues_pr": 329,
+      "ended_at": "2026-09-03T09:52:39.887Z",
+      "heartbeat_at": "2026-09-03T09:35:46.294Z",
+      "host": "YRND1-GG",
+      "job": "80384cfb",
+      "lock_sha": "063829e8c10b80175e21f2b325ec55b41729e24a",
+      "log": ".kanban/logs/303-6.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 329,
+      "pr_head": "worktree-kb-303-4",
+      "profile": "claude",
+      "session_id": "80384cfb-ef1d-4d99-b05f-0ac8a78b736e",
+      "started_at": "2026-09-03T09:35:46.294Z",
+      "summary": "All 15 review items addressed: 14 fixed, item 15 half-done with the reason stated. 1407 tests green (4 new), lint and tsc clean, PR #329 updated on branch worktree-kb-303-4 (commit e4cf661). For items 1-4, 6, 7 and 8 the fix was verified by mutating the code back and watching the named test fail — the numbers below are those mutations.\n\n**The counter that could not count (1).** `revisionOf` compar",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-303-6/80384cfb-ef1d-4d99-b05f-0ac8a78b736e.jsonl",
+      "wt": "kb-303-6"
+    }
+  ],
+  "block_loops": {
+    "14g7wk4": 1,
+    "1eqc26p": 1,
+    "1uakijf": 1
+  },
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T07:22:16Z",
+      "id": 5522104898,
+      "text": "**Blocked** (transient, attempt 1): Operator: its claim was held by the withdrawn track runner on #302, not by a worker of its own. Releasing so the tick re-claims it as a cold node."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T07:31:50Z",
+      "id": 5522209758,
+      "text": "**Blocked** (dependency, attempt 2): The verbs are not routed through openStore yet, so the store double cannot answer under them and none of the 121 assertion sites can move. src/cli.js, src/dispatch.js, src/lifecycle.js, src/context.js, src/stats.js and src/hook.js import the GitHub bodies directly through the src/tasks.js and src/lock.js re-export shims; openGithubStore is a facade over those same functions. Nothing installed at the seam is on their path. HEAD's own commit says so: 'default a new board to the github store until the verbs are routed'. The only routed verb is gc.sweep, and only for store.listTasks -- the comment-read counts test/gc.test.js:313 asserts on still go through listComments from tasks.js, so even that one site is not convertible. Checked file by file: zero of the 121 sites can move today. Routing the verbs is track B (docs/local-first.md section 10) and a src/-wide change, which this card's contract forbids ('nothing under src/ changes except the injection point'). Section 10 lists C1 as blocked by root B; that edge was lost when the card was filed, which is why it dispatched early. Refile #303 blocked by the track B work, or add a card for 'route the verbs through openStore' and block #303 on it. What I did land, in PR #324 (draft, Refs #303, NOT Closes): setStore(fn) in src/store/index.js -- the injection point the card names, the same shape as setTransport, returning a restore function, with a falsy answer meaning 'let the normal decision run for this context' so installs nest; and test/fake-store.js -- the section 6.4 interface over plain objects, no gh, no git, no SQLite, whose `calls` are interface method names (store.callsOf('setStatus')) rather than REST paths, with locks(), runOf(n), statusOf(n), labelsOf(n), writes(), addCard() and kbIssue/runWith re-exported. Card records are the shape test/fake-gh.js seeds, so kbIssue() feeds either double and handing a FakeGh to the constructor shares one set of records with the forge half. The double is registered as a third entry in DRIVERS and passes the whole conformance suite, plus two tests for the installing itself. So the next attempt inherits a double that is already proven against section 6.4 and only has to rewrite call sites once the verbs are routed."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T07:34:45Z",
+      "id": 5522242717,
+      "text": "**Blocked** (transient, attempt 3): Operator: re-sequenced behind #325 (route the verbs through openStore), which is the step no card owned — your attempt-2 analysis was right and is what produced it. PR #324 stays open and is being merged separately, so the next attempt inherits setStore() and the proven double."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T09:35:38Z",
+      "id": 5523690523,
+      "text": "**Changes requested** (after attempt 4): The machinery here is right and I want to say so before the list: registering the double as a third driver\nin the conformance suite, and `test/verbs-portable.test.js` running seven scenarios against the double AND\nthe real local driver in a scratch repo, are the two things that make a migration like this trustworthy\nrather than hopeful. `revisionOf` as \"how many times the card actually changed\" is the correct answer to\n\"what were these assertions *for*\". 1403 green, and the grep criterion is met.\n\nA high-effort review found 15. The headline is that **the machinery has holes in exactly the place it\nexists to protect**, and the reviewer proved each one by mutating the code and watching the suite stay\ngreen.\n\n## Must fix — assertions that no longer test what they name\n\n1. **`revisionOf` cannot see a removal** (fake-store.js:383). `rec.labels` is reassigned to\n   `[...kept, ...added]` on the line above, so `kept.length !== rec.labels.length - added.length` is false\n   *by construction* — only `added.length` can ever fire. A card put through\n   `setStatus(task, 'todo', {remove: [L.needsHuman]})` loses the label while `revisionOf(7)` stays 0. So\n   `assert.equal(store.revisionOf(n), before, 'nothing to change is nothing to write')`\n   (agent-label.test.js:112) keeps passing after a regression that strips and re-adds labels — and the real\n   driver issues a `DELETE /issues/7/labels/…` for exactly that call. **This is the lie-that-passes this\n   card exists to remove, in the counter built to remove it.**\n2. **`test/jobs.test.js:189` seeds a lock on the fake GitHub** while the board moved to the double, so the\n   protocol-violation reclaim test has no claim to release. The reviewer commented the line out and all 10\n   tests still passed — it is inert. Use `h.store.hold(7, 1)`, as every other migrated site does.\n3. **`agent-label.test.js:219` no longer exercises either half.** The board reads through the double, which\n   never consults `gh.caps`, so flipping `blockedByGql` to `true` leaves all 13 tests green. The original\n   assertion caught a real regression — one REST dependency call per card when GraphQL cannot supply\n   `blockedBy`; the replacement counts `getTask`, which `checkAgentLabels` never calls on any path. A\n   regression re-introducing `listTasks({blockers: 'all'})` sails through. Restore the property, through\n   the double or through fake-gh, whichever can still see it.\n4. **The \"dry run writes nothing\" and \"stats must not POST\" assertions were dropped, not moved**\n   (dispatch.test.js:1188, track.test.js:734, stats.test.js:652 and :705). They now assert only\n   `store.writes() === []`, so a write that goes out through `src/forge.js` or `gh.js` on a read-only path\n   is caught nowhere. `test/fake-gh.js` is still installed under all three harnesses, so\n   `assert.deepEqual(h.gh.requestsMatching('POST'), [])` (plus PATCH and DELETE) can simply be kept\n   *alongside* the new assertion. A `hkb stats` that started calling `enableAutoMerge`, or a `--dry-run`\n   that PATCHed a PR, currently passes.\n\n## Must fix — the double's fidelity\n\n5. **`listTasks` discards the `blockers` knob** (fake-store.js:339: `void blockers`) and unconditionally\n   tags `{source: 'store', filled: true, scope: 'all'}`. The real drivers answer\n   `{source: null, filled: false, scope: 'none'}` for `blockers: false` (github.js:148) and\n   `source: 'local'` (git.js:619). So `blockersKnown` is `true` through the double where it is `false`\n   through GitHub, and any migrated assertion about \"an empty `blockedBy` nobody read is not 'no blockers'\"\n   is true only of the double. The conformance scenario accepts any scope, so it does not ask — **tighten\n   the scenario too**, since that is the mechanism that is supposed to catch this.\n6. **The override bypasses the handle cache** (src/store/index.js:155): `openStore` returns the override\n   *before* `ctx._store = store`, so an overridden store never enters the memo and `closeStore(ctx)` is a\n   no-op — `FakeStore.close`/`closed` is dead code whose comment says \"`closeStore` calls it and the seam's\n   own tests count it\". Two costs: the handle lifecycle #326 was rewritten for is the one part of the seam\n   no test exercises through the double, and a future `assert(store.closed === 1)` would assert a constant.\n   Put the override after the memo lookup and before the assignment.\n7. **`writes()` counts calls, not effects** (fake-store.js:33), contradicting the module's own \"`[]` is\n   'and nothing was written'\". `ensureLabels` that creates nothing and `setStatus` to the status the card\n   already has both report as writes, where the real driver makes no request for either. Count what\n   `revisionOf` counts.\n8. **Assertion helpers re-enter the recording store** (fake-store.js:204): `locks()` calls\n   `asStore().listLocks()`, so reading an assertion appends to the call log another assertion reads — and\n   with `store.fail('listLocks')` armed (dispatch.test.js:1302) the *assertion* can be the caller that\n   consumes the injected error. Read `this.lockRows` directly and have internal re-entries call the raw\n   methods.\n\n## Also fix\n\n9. **dispatch.test.js:248 and :294 assert `beat on refs/kb/locks/7/1`** against a store whose `lockRef()`\n   is null — they pass only because `src/dispatch.js:727` builds the name from `model.js`'s `lockRef`\n   rather than the store's. That pins in place the GitHub-ism this same PR filed in FINDINGS.md, and unlike\n   the `blockers_source` case (cli.test.js:100) it carries no note, so the fix for the filed finding breaks\n   them with nothing saying why.\n10. **`addComment` is copy-pasted from `FakeGh.addComment` and has already diverged** (fake-store.js:160):\n    the same off-by-one `html_url` (id `1000` → `#issuecomment-1001`, because the template interpolates\n    after the `++`) and a dropped `updated_at`. `addIssue` is a near-verbatim copy too. Share one factory,\n    the way `kbIssue`/`runWith` already do.\n11. **Dead code and a tautological assertion** (fake-store.js:616, verbs-portable.test.js:153):\n    `detailOf`'s trailing `?? ''` is unreachable because the penultimate operand is a string in both\n    branches; and `assert.equal(run.attempts[0].host, 'test-host' === h.ctx.host ? 'test-host' : h.ctx.host)`\n    is `h.ctx.host` either way — write it plainly.\n12. **Eleven harnesses copy the same four-line install/teardown**, with the LIFO restore order re-derived\n    by hand each time. One `installDoubles(ctx, {board, host})` returning `{gh, store, restore}` removes\n    ~50 lines and makes the ordering hazard impossible rather than repeatedly correct by hand.\n13. **A JSDoc comment was orphaned** (context.test.js:150): the FakeGh note now documents `card` instead of\n    `say()`, and names the wrong double.\n14. **Three wiki pages went stale** — `concepts/store.md`, `architecture/local-store.md` and\n    `architecture/overview.md` all cover `src/store/index.js`, and only `architecture/store-seam.md` was\n    refreshed. Re-stamp them or say in the PR why `setStore` changes nothing they describe.\n\n## Before merge — repo rule, not a review finding\n\n15. **Every commit on this branch carries a `Co-Authored-By: Claude …` trailer and a `Claude-Session:`\n    line, and the PR body ends with \"🤖 Generated with Claude Code\".** CLAUDE.md, *Commits and PRs*:\n    \"Never add `Co-Authored-By: Claude ...` trailers and never add '🤖 Generated with Claude Code' to\n    commit messages or PR bodies.\" Strip them from all five commits and edit the PR body.\n\n## Done when\n\n- [ ] Every item fixed, or one line arguing why not.\n- [ ] For 1-4, the test must **fail** against the pre-fix behaviour — mutate it and say so, the way the\n      reviewer did to find them.\n- [ ] The conformance scenario for blockers actually pins the provenance, so item 5's class cannot recur.\n- [ ] No commit carries a Claude trailer; the PR body has no attribution footer.\n- [ ] `npm run lint && npm test` green.\n"
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T09:36:36Z",
+      "id": 5523702191,
+      "text": "Narrowing item 15, so the fix round does not spend effort on the wrong half of it.\n\nI asked for the `Co-Authored-By: Claude` trailers to be stripped from all five commits AND the PR body\nedited. Only the second half is needed. `hkb merge` squashes, so branch commit messages never reach main —\nchecked: main carries no Claude trailer in its last 20 commits, and the squash commits carry only GitHub own\n`Co-authored-by: emyann`. A rebase would also need a force-push, which the worker deny list refuses\n(`Bash(git push --force*)`), so attempting it wastes turns and cannot succeed.\n\n**So: edit the PR #329 body to remove the trailing attribution line. Leave the commits alone.** The rule\nstill matters — the PR body is permanently visible in the GitHub record where the squash message is not."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T09:53:59Z",
+      "id": 5523907873,
+      "text": "**Merged by the operator seat** — review: Two review rounds (15 findings, 14 fixed and the 15th narrowed by the operator). Verified by hand before merge: revisionOf compares kept.length against a before.length captured ahead of the reassignment, so a removal-only setStatus is now seen (it was tautologically invisible, in the very counter built to mean \"nothing was written\"); the blockers knob answers {source: null, filled: false, scope: none} for blockers:false like the real drivers; jobs.test.js holds its claim through store.hold rather than a lock ref seeded on the fake GitHub that the board no longer reads; the override now answers inside the memo, so a double enters the handle cache and closeStore can close it.  Two answered better than asked. The \"no per-task dependency call\" property was restated portably — it asserts the request is blockers:false rather than counting REST calls, which survives the store move and still catches the regression. And the dry-run assertion kept both halves with a named gh.writeRequests() helper: the store sees the board, but a write leaving through src/forge.js never reaches the interface, so \"writes nothing\" is only half-said until the forge says it too.  The card itself: grep for gh.calls and lockRefs() in test/ returns nothing outside fake-gh.js and store.test.js. The double is registered as a third driver in the conformance suite, which is what catches a double that answers differently from the real ones — two real gaps surfaced there and were fixed. And test/verbs-portable.test.js runs seven scenarios against both the double and the real local driver in a scratch repo, which proves the rewritten assertions are portable rather than asserting it.  CI green (six checks). 1403+ tests, lint clean. The PR body carries no attribution footer., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-03T09:22:10Z",
+      "attempt": 4,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/store/index.js",
+          "test/fake-store.js",
+          "test/verbs-portable.test.js",
+          "test/fake-gh.js",
+          "test/store.test.js",
+          "test/dispatch.test.js",
+          "test/track.test.js",
+          "test/agent-label.test.js",
+          "test/cli.test.js",
+          "test/context.test.js",
+          "test/doctor.test.js",
+          "test/hook.test.js",
+          "test/jobs.test.js",
+          "test/mcp.test.js",
+          "test/session.test.js",
+          "test/stats.test.js",
+          "test/gc.test.js",
+          "test/heartbeat.test.js",
+          "test/init.test.js",
+          "test/merge.test.js",
+          "test/routing-fixes.test.js",
+          "test/selfheal.test.js",
+          "test/tasks.test.js",
+          "docs/wiki/architecture/store-seam.md",
+          "docs/wiki/FINDINGS.md",
+          "docs/wiki/log.md",
+          "docs/wiki/index.md"
+        ],
+        "residual_risk": [
+          "The done-when grep is satisfied two ways, and the split is a judgement call worth reviewing. Eleven files moved onto the interface. Eight kept reading the fake GitHub's request log under its new name (requests/requestsMatching) because what they assert IS GitHub: the forge (merge, routing-fixes, tasks' /pulls), the driver's own read path (tasks), the ref-CAS lease (heartbeat), claim-error classification (selfheal), init's label REST, and gc's two GitHub-only sweeps. If the reviewer disagrees about any one of those, the double is ready for it — none of them is blocked by a missing interface method.",
+          "test/fake-store.js is a third implementation of a 37-method interface, and a divergence from the real drivers makes every assertion made through it a false pass. The conformance suite is the guard (it caught two divergences already), so a scenario the suite does not exercise is where a divergence could still hide. The rule the suite's own header states — a method no scenario exercises is a method the next driver will get wrong — now applies to the double as well.",
+          "test/verbs-portable.test.js covers the dispatcher's core lanes and one terminal verb, not the whole of what moved (no track dispatch, no path_overlap guard, no review loop) — those still run on the double alone. Widening it is cheap: add a scenario to the array.",
+          "The GitHub-store paths those eleven files used to exercise end-to-end are now covered by test/store.test.js's github driver rather than by the verb tests. `hkb init`'s label REST and gc's sweeps still exercise it directly. Nothing lost coverage that the conformance suite does not assert, but a GitHub-only regression in a verb would now show up in store.test.js rather than in dispatch.test.js.",
+          "src/store/index.js's override is consulted before openStore's per-context memo, so a test's double is never cached into ctx._store and closeStore(ctx) has nothing to close for it. FakeStore counts close() calls (`store.closed`) if a later card wants to assert on handle lifetime through the double."
+        ],
+        "verification": [
+          "npm run lint  — node --check over bin/src/scripts, then tsc --noEmit (node_modules installed in the worktree so the type check actually ran rather than printing its skip line): clean",
+          "npm test  — 1403 tests, 1403 pass, 0 fail, 11.2s (was 1361 before this branch; 14 new in test/verbs-portable.test.js, 27 new store[fake] conformance runs)",
+          "npm test x4 back to back, 0 fail each time — one earlier run showed a single failure immediately after the rebase onto origin/main 063829e and has not reproduced in four runs; nothing in the diff is time- or order-dependent that I found, but it is worth a reviewer's eye",
+          "grep -rn 'gh\\.calls\\|lockRefs()' test | grep -v fake-gh.js | grep -v store.test.js  — no output (the card's first Done-when)",
+          "node --test test/store.test.js  — 82 pass: the double conforms to the same SCENARIOS array as the GitHub and composed-local drivers",
+          "node --test test/verbs-portable.test.js  — 14 pass: 7 scenarios x {fake, local}, the local half against a real git repo with a kb-board branch and a SQLite index",
+          "node .repolore/scripts/wiki-check.mjs  — architecture/store-seam is fresh (stamped); the other 23 stale pages were stale before this branch",
+          "git rebase origin/main (063829e) clean; pushed as worktree-kb-303-4; PR #329 draft, body says Closes #303"
+        ]
+      },
+      "pr": 329,
+      "pr_continued": false,
+      "summary": "PR #329 (draft, branch worktree-kb-303-4). `grep -rn \"gh\\.calls\\|lockRefs()\" test | grep -v fake-gh.js | grep -v store.test.js` returns nothing; 1403 tests green in 11s (14 new), lint and tsc clean.\n\n**The double, and the one src/ change.** `setStore(fn)` in `src/store/index.js` replaces what `openStore`/`openStoreReadOnly` hand back and returns a restore function, like `setTransport`. Two deliberate limits, both written into the doc comment: it is NOT consulted by `storeKind` (what a board is kept in is still `\"store\"` in board.json and nothing else, so a test that swaps the store does not also change what doctor/gc/init say the board *is*), and it covers board state only, since a pull request is `src/forge.js` on every board. `test/fake-store.js` is the in-memory `Store` behind it: same `kbIssue({...})` specs, `statusOf`/`runOf`/`labelsOf`/`beat` under the same names, plus `locks()` → `[\"7/1\"]` (a store with a table has no `refs/kb/locks/7/1` to name), `writes()`/`writesTo(n)` for \"and nothing was written\", `callsOf(name)`, `hold(n,k)` for an out-of-band claim, `fail(name, {result|kind|times})`, and `revisionOf(n)` — how many times a card ACTUALLY changed, which is what lets \"nothing to change is nothing to write\" survive the move: a verb may reach the interface and still leave the card as it found it, and that, not the absence of a REST call, is the assertable thing.\n\n**It conforms or the assertions are lies that pass.** The double is a third driver in `test/store.test.js`'s `DRIVERS`, beside GitHub and the composed local store — that is where a double that answers a method differently from the real drivers gets caught. Two real gaps surfaced there and are fixed (`taskEvents` narrowing to one card's newest rows rather than a forward page; `addNote` appending an event).\n\n**Item 3 is `test/verbs-portable.test.js`.** Seven scenarios — promote, claim and its run record, a live worker left alone, reclaim, a dry run, a terminal verb, and the tokens a claim records — run unchanged against the double AND against the real local driver (`src/store/local.js`: the kb-board branch plus `.git/hkb/index.db`) in a scratch repo, one per scenario, ~1.2s for the local half. That is what says the rewritten assertions are portable rather than asserting it.\n\n**Migrated onto the double:** dispatch, track, agent-label, cli, context, doctor, hook, jobs, mcp, session, stats.\n\n**Deliberately NOT migrated**, with `test/fake-gh.js`'s request log renamed `requests`/`requestsMatching` so the remaining reads say what they are: the forge (merge, routing-fixes, tasks' /pulls listing); the GitHub driver itself (tasks' fetchBoard read path; heartbeat — the ref-CAS lease, where only git can say whether a --force-with-lease held and \"the warm path talks to git, not to GitHub\" is a statement about that driver; selfheal — how a claim error is *classified*, which is `src/gh.js`'s job; init's label REST and \"the offline path must not reach the transport at all\"); and gc, because `src/gc.js` imports the GitHub driver by name and its own module comment says why, `gc.sweepOpen` already skipping those sweeps on a non-GitHub board. If a later card wants those files store-neutral too, the interface is not what is missing — the behaviour under test is GitHub's.\n\n**Three assertions changed meaning, each argued at the site.** `setAgent` \"adds before it removes\" is about the order of two REST writes and only the GitHub driver has two, so that test's card is seeded on fake-gh. A claim reported `held` needs the row to appear between the board listing and our own POST — a pre-existing lock row makes the tick pass the card over instead — so it is produced with `fail('claim', {result: 'held'})`, and `verbs-portable` asserts the passed-over shape instead. `hkb groom`'s `blockers_source` is asserted as it behaves ('rest') with the bug named in a comment at the assertion; see below.\n\n**Two findings filed rather than patched** (test-only contract), `docs/wiki/FINDINGS.md`: (1) `groomBoard` derives `blockers_source` from `caps.blockedByGql` (`src/model.js:1272`) instead of from the provenance `listTasks` already hangs on the array it returns — `tagBlockers`/`blockersOf` exist so an answer about provenance reads the same whichever store produced it, and `cli.js` reads `blockersOf(tasks).filled` from it two lines away — so a local board prints \"blockers from rest\" having made no REST call. (2) `src/dispatch.js:200` puts `lockRef(n, k)` in `KB_LOCK_REF` and line 727 prints `beat on refs/kb/locks/7/1` in the tick log on every board; #325 grew `lockRef(n, k)` on the interface for exactly that and moved heartbeat/claim/LOCK_LOST onto it, and missed these two.\n\n`docs/wiki/architecture/store-seam.md` gained the `setStore` section and the third conformance driver; stamped, indexed, logged."
+    },
+    {
+      "artifacts": [],
+      "at": "2026-09-03T09:52:42Z",
+      "attempt": 6,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/store/index.js",
+          "test/fake-store.js",
+          "test/fake-gh.js",
+          "test/store.test.js",
+          "test/agent-label.test.js",
+          "test/cli.test.js",
+          "test/context.test.js",
+          "test/dispatch.test.js",
+          "test/doctor.test.js",
+          "test/hook.test.js",
+          "test/jobs.test.js",
+          "test/mcp.test.js",
+          "test/session.test.js",
+          "test/stats.test.js",
+          "test/track.test.js",
+          "test/verbs-portable.test.js",
+          "docs/wiki/architecture/store-seam.md",
+          "docs/wiki/architecture/local-store.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/architecture/kb-board-branch.md",
+          "docs/wiki/concepts/store.md"
+        ],
+        "residual_risk": [
+          "The double now answers blockers:false like the GitHub driver (no edges, scope 'none') where the local driver fills them for free. That is deliberate — the conservative answer is the one that cannot make an assertion true only of the double — but a future test that reads blockedBy off a boardOnce-style read will see [] through the double and real edges through the local driver. The conformance scenario's two branches are what document the difference.",
+          "writes() counts effects, so a verb that reaches a mutating method and changes nothing is invisible to it. That matches the drivers (no request either) but means 'writes() === []' no longer proves 'the method was never called' — use callsOf(name) for that; the new store.test.js test states the distinction.",
+          "installDoubles installs both doubles before the harness builds its board.json, where several harnesses used to install after seeding. Nothing in the suite depends on the order (the transport is only consulted on a call), but a future harness that relies on a real transport during setup would now hit the fake.",
+          "Item 15's commit half is not done: the five earlier commits on this branch still carry Co-Authored-By and Claude-Session trailers. A squash merge does not carry them into main's commit body, but they remain on the branch until someone force-pushes a rewrite."
+        ],
+        "verification": [
+          "npm run lint && npm test — 1407 tests, 1407 pass, 0 fail, 11.2s (4 new)",
+          "npm install first: tsc had been skipping for want of node_modules; typecheck now runs and is clean",
+          "grep -rn \"gh\\\\.calls\\\\|lockRefs()\" test | grep -v fake-gh.js | grep -v store.test.js — empty",
+          "item 1 mutation: revisionOf compared against rec.labels post-reassignment → 'the double: revisionOf counts a label taken off' fails",
+          "item 2 mutation: h.store.hold(7,1) → h.gh.refs.set('refs/kb/locks/7/1', ...) → the protocol_violation reclaim test fails",
+          "item 3 mutation: doctor's boardOnce asks blockers:'all' → the agent-label board-read test fails",
+          "item 4 mutation: a stray rest('PATCH','repos/<r>/pulls/1') on the tick and on hkb stats → the dispatch dry-run, track dry-run and all six stats tests fail",
+          "item 6 mutation: the override returned ahead of the memo → 'the double: setStore hands its store through the same one-handle-per-context memo' fails",
+          "item 7 mutation: writes() dropping the changed filter → 'the double: writes() counts effects' fails",
+          "item 8 mutation: locks() reading through asStore() → 'reading an assertion is not a call' fails",
+          "store conformance: 85+ scenarios across github, local and fake drivers green, including the tightened blockers-provenance scenario whose two branches are both exercised (github/local fill, the double refuses)",
+          "node .repolore/scripts/wiki-check.mjs — the five pages covering src/store/index.js are no longer stale for it; the 21 that remain were stale before this branch",
+          "git fetch origin main && git merge origin/main — already up to date; pushed to worktree-kb-303-4, no force"
+        ]
+      },
+      "pr": 329,
+      "pr_continued": true,
+      "summary": "All 15 review items addressed: 14 fixed, item 15 half-done with the reason stated. 1407 tests green (4 new), lint and tsc clean, PR #329 updated on branch worktree-kb-303-4 (commit e4cf661). For items 1-4, 6, 7 and 8 the fix was verified by mutating the code back and watching the named test fail — the numbers below are those mutations.\n\n**The counter that could not count (1).** `revisionOf` compared `kept.length` against `rec.labels` after the line that reassigned it, so only additions could fire: a card put through `setStatus(task, 'todo', {remove: [needsHuman]})` lost the label and read as unwritten, where the real driver issues a DELETE. Fixed against the pre-write list; `test/store.test.js` now has a \"the double's own contract\" section (three tests) that pins this, `writes()` counting effects rather than calls (7 — `ensureLabels` with nothing to create and `setStatus` to the current status reach the interface and make no request), and the handle memo (6). The assertion helpers no longer re-enter the recording store (8): there is a `raw()` method table the double's internals and its helpers use, so reading `locks()` neither logs nor consumes a `fail('listLocks')` meant for the tick.\n\n**Provenance (5).** `listTasks` honours `blockers: false` the conservative way GitHub does — no edges, `{source: null, filled: false, scope: 'none'}` — and the conformance scenario pins the pairing on all three drivers: a driver may fill for free (a local board's `blocked_by` is a column) but a filled board names its source, and an unfilled one says so in all three fields and hands back no edges to be mistaken for \"none\". That is the strongest invariant a scenario can hold without forbidding the local driver's honest answer; the double taking the conservative branch is what stops the divergence the item named.\n\n**The one src/ change (6)** is still the injection point: `setStore`'s override now answers *inside* `openStore`'s handle memo instead of in front of it (and `openStoreReadOnly` into `_storeRO`), so the double is memoized on the context and `closeStore` closes it. Without it `FakeStore.close` was dead code and the handle lifecycle #326 was rewritten for was the one part of the seam no test could reach through the double.\n\n**Four assertions that no longer tested what they named (2-4).** jobs.test.js seeded a lock on the fake GitHub for a board that reads the double, so the reclaim test had no claim to release — now `store.hold(7, 1)`, with the claim asserted present before the tick and gone after. agent-label's \"no per-task dependency call\" counted `getTask`, which `checkAgentLabels` never calls; it asserts the request instead — one `listTasks` with `blockers: false` — and fails when `boardOnce` is mutated to `blockers: 'all'`. The dry-run and stats \"writes nothing\" assertions got their forge half back as `gh.writeRequests()` (POST/PATCH/PUT/DELETE plus GraphQL mutations), and all three fail when a stray `PATCH /pulls/1` is put on the path.\n\n**Also (9-14).** The two `beat on refs/kb/locks/7/1` assertions no longer pin the GitHub-ism this branch filed in FINDINGS.md and carry a note saying so. One `issueRecord`/`commentRecord` factory is shared by both doubles — the copy is where the off-by-one `html_url` and the dropped `updated_at` came from. `installDoubles(makeCtx, opts)` replaces the four-line install/teardown eleven harnesses had copied, LIFO order written once. The tautological host assertion and the unreachable `?? ''` are written plainly; the JSDoc comment is reattached in context.test.js; the five wiki pages covering src/store/index.js are re-stamped and store-seam.md gains the memo rule.\n\n**Item 15, not fully done, and the reason.** No trailer on this round's commit and no attribution footer on the PR body (edited via `gh api PATCH`, since `gh pr edit` fails on this repo with a Projects-classic GraphQL error). The five commits already pushed are untouched: stripping their trailers means rewriting pushed history and force-pushing, which CLAUDE.md and the worker protocol both forbid without qualification (\"Never `git push --force`\"). `dispatch.merge.method` defaults to squash so those commit bodies do not reach main as they are, but if the branch itself must be clean that is a rebase and a force push by someone the rule does not bind. Flagged in the PR body under its own heading."
+    }
+  ],
+  "v": 1
+}

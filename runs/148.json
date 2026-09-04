@@ -1,0 +1,186 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T22:03:14.301Z",
+      "heartbeat_at": "2026-08-28T21:41:50.794Z",
+      "host": "YRND1-GG",
+      "job": "1d758267",
+      "lock_sha": "616f0b73930f6cf60862e4088ba8556232cdca68",
+      "log": ".kanban/logs/148-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 151,
+      "pr_head": "worktree-kb-148-1",
+      "profile": "claude",
+      "session_id": "1d758267-d02c-47b6-822c-ccfc5fac884f",
+      "started_at": "2026-08-28T21:41:50.794Z",
+      "summary": "hkb up / hkb down: the board's two long-running processes as one idempotent verb. `hkb up [--serve] [--loop S] [--port N]` starts the dispatcher loop (and with --serve the board server) detached — same spawn+unref pattern the dispatcher uses for workers, logs appended to .kanban/logs/dispatch.log and serve.log under one `# <ISO> started pid N` header per start. A live pid file means 'already runni",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-148-1/1d758267-d02c-47b6-822c-ccfc5fac884f.jsonl",
+      "wt": "kb-148-1"
+    },
+    {
+      "attempt": 2,
+      "ended_at": "2026-08-28T22:38:23.259Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "Review of PR #151 — the card is implemented cleanly: idempotent `up`, `--status` (+ stable `--json`), `down`, same-binary detached spawn, logs with the header line, KB_* scrubbed (proven by a real spawn in the tests), exit 4 recorded not restarted, doctor line, README/help/wiki, worker guard extended; 683 tests, smoke and wiki-check green; driven by hand in a scratch repo. One thing must change be",
+      "started_at": "2026-08-28T22:38:23.253Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 3,
+      "ended_at": "2026-08-28T23:23:20.023Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "Continue PR #151 per the full review re-posted as a plain comment just above (down must not delete dispatch.pid before the loop exits — wait for pidAlive or make the sleep interruptible; down --json must report a signal failure; stale pid files after reboot). Merge origin/main first — #138, #143 (#159) and #153 (#160) have landed; doctor.js and the wiki files need a hand merge.",
+      "started_at": "2026-08-28T23:23:20.023Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 4,
+      "bg": true,
+      "continues_branch": "worktree-kb-148-1",
+      "continues_pr": 151,
+      "ended_at": "2026-08-28T23:52:05.336Z",
+      "heartbeat_at": "2026-08-28T23:23:34.692Z",
+      "host": "YRND1-GG",
+      "job": "b903dbf8",
+      "lock_sha": "886eff8fde62fab34b98b4b4ab26f2a0b98f3853",
+      "log": ".kanban/logs/148-4.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 151,
+      "pr_head": "worktree-kb-148-1",
+      "profile": "claude",
+      "session_id": "b903dbf8-5dbf-4b34-84f9-dc3feac3ece8",
+      "started_at": "2026-08-28T23:23:34.692Z",
+      "summary": "PR #151 continued on the same branch. origin/main merged in first (#138, #143/#159, #153/#160): src/dispatch.js and src/doctor.js imports and README/wiki conflicts hand-merged, both sides kept.\n\nThe blocking finding is fixed in both halves. (a) The dispatcher loop's wait between ticks is now a Promise.race against a resolver the SIGTERM handler holds, so a signal landing in a 60s sleep ends the lo",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-148-4/b903dbf8-5dbf-4b34-84f9-dc3feac3ece8.jsonl",
+      "wt": "kb-148-4"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T22:38:24Z",
+      "id": 5458490410,
+      "text": "**Changes requested** (after attempt 1): Review of PR #151 — the card is implemented cleanly: idempotent `up`, `--status` (+ stable `--json`), `down`, same-binary detached spawn, logs with the header line, KB_* scrubbed (proven by a real spawn in the tests), exit 4 recorded not restarted, doctor line, README/help/wiki, worker guard extended; 683 tests, smoke and wiki-check green; driven by hand in a scratch repo. One thing must change before it merges:\n\n**`down` defeats the singleton lock — `hkb down && hkb up` runs two loops.** src/up.js ~158-161 SIGTERMs the pid and `rmSync`s `dispatch.pid` at once, but the loop's handler (src/dispatch.js ~894) only sets `stopping = true`, checked after the *next* tick (~914) — a loop asleep in `sleeper(wait)` wakes, runs a full tick, then exits, up to `interval` seconds later. Measured: after `down`, `--status` said `running:false` while pid A was alive; `up` started B at +2.9 s; A ran a complete tick at +6.4 s beside B. At HEAD, Ctrl-C + re-run was protected because the pid file stayed until exit; `down` removes that protection. Fix (pick one, or both): (a) `down` never deletes `dispatch.pid` — the loop drops its own on exit — and waits, bounded (say 2×interval, then a named give-up), for `pidAlive` to go false before reporting stopped; (b) make the loop's sleep interruptible on SIGTERM so it exits within a second (touches src/dispatch.js, which PR #152 also edits — merge origin/main first, #145 already landed there). Also correct the \"exits after its current tick\" wording (up.js ~163, README, wiki): a sleeping loop exits after its *next* tick.\n\nAlso fix in the same pass:\n- `down --json` swallows a signal failure: when `process.kill` throws, the human line says \"stop it yourself\" but the JSON is `{stopped, dispatch, serve}` with no error and exit 0. Add `failed: [{name, pid, error}]` or throw with `.exitCode`.\n- pid reuse after reboot: `.kanban/*.pid` survive a reboot and `processState` trusts any live pid, so `down` could SIGTERM an unrelated process. Zero-dependency guard in board.js `readPidFile`/`processState`: a pid file whose mtime predates `Date.now() - os.uptime()*1000` is stale.\n\nNits, take what is cheap: `up` says \"started pid N\" for a child that died in milliseconds (a ~300 ms `pidAlive` recheck → \"exited immediately — see .kanban/logs/dispatch.log\"; `claimPid`'s false return at up.js ~100 is ignored); `windowsHide: true` on the spawn; skills/kanban/SKILL.md ~73 still says only \"never run the dispatcher\" while the guard now refuses `up`/`down` too; doctor closes with \"hkb up when ready\" right after saying it is running. Follow-up to file, not here: `detachedEnv` (this PR) and `scrubKbEnv` (#152) are two functions for one idea — unify once both land.\n\nSame branch, same PR (worktree-kb-148-1): push the fix, rerun lint/test/smoke, then `hkb finish` again."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T22:57:51Z",
+      "id": 5458621670,
+      "text": "Heads-up for the fix pass: main now has #138 (cb9e43d) and #159 (#143). Both edit `src/doctor.js` (import line, check list — #159 adds `checkPermissionMode`), `src/board.js` and `README.md`; `docs/wiki/features/web-board.md` was re-stamped by #159 and `docs/wiki/log.md` gained entries. Merge origin/main into worktree-kb-148-1 before the fix; board.js/init.js/README should auto-merge, doctor.js and the two wiki files need a hand merge."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T23:23:19Z",
+      "id": 5458787344,
+      "text": "Full review for the continuation attempt (the attempt row keeps only 400 characters of it):\n\nReview of PR #151 — the card is implemented cleanly: idempotent `up`, `--status` (+ stable `--json`), `down`, same-binary detached spawn, logs with the header line, KB_* scrubbed (proven by a real spawn in the tests), exit 4 recorded not restarted, doctor line, README/help/wiki, worker guard extended; 683 tests, smoke and wiki-check green; driven by hand in a scratch repo. One thing must change before it merges:\n\n**`down` defeats the singleton lock — `hkb down && hkb up` runs two loops.** src/up.js ~158-161 SIGTERMs the pid and `rmSync`s `dispatch.pid` at once, but the loop's handler (src/dispatch.js ~894) only sets `stopping = true`, checked after the *next* tick (~914) — a loop asleep in `sleeper(wait)` wakes, runs a full tick, then exits, up to `interval` seconds later. Measured: after `down`, `--status` said `running:false` while pid A was alive; `up` started B at +2.9 s; A ran a complete tick at +6.4 s beside B. At HEAD, Ctrl-C + re-run was protected because the pid file stayed until exit; `down` removes that protection. Fix (pick one, or both): (a) `down` never deletes `dispatch.pid` — the loop drops its own on exit — and waits, bounded (say 2×interval, then a named give-up), for `pidAlive` to go false before reporting stopped; (b) make the loop's sleep interruptible on SIGTERM so it exits within a second (touches src/dispatch.js, which PR #152 also edits — merge origin/main first, #145 already landed there). Also correct the \"exits after its current tick\" wording (up.js ~163, README, wiki): a sleeping loop exits after its *next* tick.\n\nAlso fix in the same pass:\n- `down --json` swallows a signal failure: when `process.kill` throws, the human line says \"stop it yourself\" but the JSON is `{stopped, dispatch, serve}` with no error and exit 0. Add `failed: [{name, pid, error}]` or throw with `.exitCode`.\n- pid reuse after reboot: `.kanban/*.pid` survive a reboot and `processState` trusts any live pid, so `down` could SIGTERM an unrelated process. Zero-dependency guard in board.js `readPidFile`/`processState`: a pid file whose mtime predates `Date.now() - os.uptime()*1000` is stale.\n\nNits, take what is cheap: `up` says \"started pid N\" for a child that died in milliseconds (a ~300 ms `pidAlive` recheck → \"exited immediately — see .kanban/logs/dispatch.log\"; `claimPid`'s false return at up.js ~100 is ignored); `windowsHide: true` on the spawn; skills/kanban/SKILL.md ~73 still says only \"never run the dispatcher\" while the guard now refuses `up`/`down` too; doctor closes with \"hkb up when ready\" right after saying it is running. Follow-up to file, not here: `detachedEnv` (this PR) and `scrubKbEnv` (#152) are two functions for one idea — unify once both land.\n\nSame branch, same PR (worktree-kb-148-1): push the fix, rerun lint/test/smoke, then `hkb finish` again."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T23:23:22Z",
+      "id": 5458787602,
+      "text": "**Changes requested** (after attempt 2): Continue PR #151 per the full review re-posted as a plain comment just above (down must not delete dispatch.pid before the loop exits — wait for pidAlive or make the sleep interruptible; down --json must report a signal failure; stale pid files after reboot). Merge origin/main first — #138, #143 (#159) and #153 (#160) have landed; doctor.js and the wiki files need a hand merge."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T22:03:17Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/up.js",
+          "src/cli.js",
+          "src/model.js",
+          "src/board.js",
+          "src/dispatch.js",
+          "src/serve.js",
+          "src/doctor.js",
+          "src/init.js",
+          ".gitignore",
+          "scripts/smoke-pack.mjs",
+          "test/up.test.js",
+          "README.md",
+          "docs/wiki/features/up-and-down.md",
+          "docs/wiki/features/web-board.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/wiki.config.yml",
+          "docs/wiki/index.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "No real dispatcher loop was started against a live board from this session (the worker guard forbids it, and it would double-claim): the real-spawn coverage is the fast-failing child in test/up.test.js plus the smoke run's --status. `hkb up --serve` against a live board is worth one manual run before release.",
+          "Windows is a first cut: detached+unref only, no job-object teardown, `down` is a plain process.kill(pid). Documented in the README and the wiki page, with --status named as the source of truth there.",
+          "A second `hkb serve` on another port does not claim the pid file, so `hkb down --serve` stops the one that holds it; reported at claim time, not managed.",
+          "`up --status`/`down` require a board.json (they run after requireBoard), so they cannot report on a checkout that was never `hkb init`ed.",
+          "`.kanban/serve.pid` was added to GITIGNORE_LINES in src/init.js and to this repo's .gitignore — src/init.js is one line outside the task's declared scope, needed so the new pid file is not untracked noise in every repo (test/init.test.js holds the superset rule)."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (683 pass, 0 fail; 24 new in test/up.test.js)",
+          "npm run smoke (adds `hkb up --status --json` -> dispatch:false serve:false in the scratch repo init writes)",
+          "node --test test/up.test.js (includes one real detached spawn: up against a board.json with no repo, asserting the header lands in .kanban/logs/dispatch.log and that KB_TASK did not survive into the child)",
+          "node .repolore/scripts/wiki-stamp.mjs + wiki-index.mjs + wiki-check.mjs (features/up-and-down and features/web-board fresh)",
+          "node bin/hkb.js help (new dispatch block)",
+          "node bin/hkb.js up --status from this worker session -> exit 2, worker guard refusal"
+        ]
+      },
+      "summary": "hkb up / hkb down: the board's two long-running processes as one idempotent verb. `hkb up [--serve] [--loop S] [--port N]` starts the dispatcher loop (and with --serve the board server) detached — same spawn+unref pattern the dispatcher uses for workers, logs appended to .kanban/logs/dispatch.log and serve.log under one `# <ISO> started pid N` header per start. A live pid file means 'already running (pid N, since T)', said before anything is spawned; `up` also pre-writes the pid of the child it spawned so two ups a millisecond apart cannot both start one, and neither writer ever clobbers a live foreign pid. The child is process.execPath + this package's own bin/hkb.js (checkout->checkout, global->global) and its env is scrubbed of every KB_* except KB_CONFIG_HOME, with the board passed as --board. `hkb up --status [--json]` reports {dispatch,serve} = {name,running,pid,since,log,exit,exited_at}; `hkb down [--serve]` SIGTERMs what the pid files name, removes them, and never touches workers. up is not a supervisor: exit 4 stays the loop giving itself up, and to make that visible the loop now records {code,at,reason} under `exits` in .kanban/state.json (no new file, so no new .gitignore line in every repo) — acquireLoopLock and a fresh up clear it. hkb doctor gained one ok/warn line off the same pid file. The worker guard now covers `hkb up`/`hkb down` in both layers (cli.js refuseIfWorker, model.js DENY_PATTERNS). hkb serve claims .kanban/serve.pid after the port is bound and drops it on exit — so a hand-started server is visible to --status and stoppable by `down --serve` — and refuses nothing (two ports out of one checkout is legitimate) but never overwrites a live claim; EADDRINUSE says 'already up on port N (pid M)' only when the pid file agrees. Pure decisions live in model.js (PROCESSES, detachedEnv, formatSince, processLine, startDecision, startLogLine), pid-file I/O in board.js (pidFile, pidAlive — moved here from dispatch.js and re-exported there, readPidFile, processState, recordExit/readExit/clearExit); src/up.js is only the spawn, the log and the signal, with deps.spawn as the test seam. Note for the next worker: `up` intentionally does NOT forward --profiles, and `down` without --serve leaves the server running (it says so and names the flag). Docs: README quickstart line 3 is now `npx hkb-cli up --serve` plus a new 'Keeping the board running' section (dispatch --loop still documented for the foreground/supervised case), hkb --help, and a new wiki page features/up-and-down (stamped fresh; features/web-board refreshed for the server's pid claim; the five pages already stale at HEAD were deliberately left unstamped, per the repo's refresh-by-rote rule)."
+    },
+    {
+      "artifacts": [],
+      "at": "2026-08-28T23:52:08Z",
+      "attempt": 4,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/up.js",
+          "src/dispatch.js",
+          "src/board.js",
+          "src/model.js",
+          "src/serve.js",
+          "src/doctor.js",
+          "src/cli.js",
+          "skills/kanban/SKILL.md",
+          "README.md",
+          "docs/wiki/features/up-and-down.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/index.md",
+          "docs/wiki/log.md",
+          "test/up.test.js",
+          "test/track.test.js"
+        ],
+        "residual_risk": [
+          "The stale-pid guard reads os.uptime(), which is the HOST's uptime: a pid file written inside a container that has since been recreated on a host that never rebooted still reads as a live claim. pidAlive and each process's own lock remain the second line of defence; noted in the wiki page's Known limits.",
+          "down's give-up budget is stopWaitMs(board.json dispatch.interval), not the interval the running loop was actually started with — `hkb up --loop 300` then `hkb down` on a board whose interval is 60 waits 120s rather than 600s before reporting 'still running'. It is a report, not a kill, so the loop still exits on its own; --status is the source of truth.",
+          "Windows is untested here: detached + unref + windowsHide and process.kill(pid) only, no job-object teardown, so a child's own children may outlive it. down's wait itself is portable (it only asks pidAlive).",
+          "skills/kanban/SKILL.md and test/track.test.js are outside the card's declared paths. Both were touched for one reason the reviewer asked for: the SKILL.md sentence that still said only 'never run the dispatcher'. The version bump it forces is exactly what that test exists to require."
+        ],
+        "verification": [
+          "git fetch origin main && git merge origin/main (hand-merged src/dispatch.js, src/doctor.js, README.md, docs/wiki/{GLOSSARY,index,log}.md, docs/wiki/features/web-board.md)",
+          "npm run lint (exit 0)",
+          "npm test — 732 tests, 732 pass, 0 fail (was 683 before the merge + this pass)",
+          "npm run smoke — 25 content checks, 3 command checks, 10 init checks, exit 0",
+          "node .repolore/scripts/wiki-check.mjs — features/up-and-down fresh (re-stamped, every citation on it re-read and corrected); the other 7 pages were already stale at HEAD for drift this task did not verify",
+          "by hand in a scratch board: up / up / up --status --json / down / up --status / up / down --serve / doctor; down measured at ~150ms with the pid gone on return, log shows 'stopping now'",
+          "by hand: a pid file backdated to epoch 0 -> --status says 'stopped (pid file predates this boot)', down does not signal the live process holding that pid"
+        ]
+      },
+      "pr": 151,
+      "pr_continued": true,
+      "summary": "PR #151 continued on the same branch. origin/main merged in first (#138, #143/#159, #153/#160): src/dispatch.js and src/doctor.js imports and README/wiki conflicts hand-merged, both sides kept.\n\nThe blocking finding is fixed in both halves. (a) The dispatcher loop's wait between ticks is now a Promise.race against a resolver the SIGTERM handler holds, so a signal landing in a 60s sleep ends the loop there instead of buying it another full tick; a tick already in flight still finishes, and the log distinguishes 'stopping now' from 'stopping after this tick'. The default sleeper is owned inside loop() so its timer can be cleared with it (injection for tests is unchanged). (b) hkb down no longer deletes a claim on a live process: it waits, bounded by stopWaitMs (2x the loop's own interval, floored 5s, capped 120s), for pidAlive to go false, tidies only a pid file whose process it watched die and that still names the same pid, and on give-up leaves the claim standing and says so. Wording corrected everywhere ('exits after its current tick' was wrong for a sleeping loop).\n\nAlso from the review: down --json now carries failed:[{name,pid,error}] beside stopped, and exits 1 for a signal that threw or a process that outlived the wait (was: human line said 'stop it yourself', JSON said {stopped:[]}, exit 0). Stale pid files after a reboot are handled by pidFileStale (mtime < Date.now() - os.uptime()*1000 - 5s slack, erring towards believing the file): readPidFile carries `stale`, and processState, acquireLoopLock, claimServePid and portInUse all honour it, so down never SIGTERMs a stranger that inherited the pid. Nits taken: up rechecks pidAlive 300ms after the spawn and says 'exited immediately (pid N) - see <log>' instead of claiming a corpse started, claimPid's false return is now reported, windowsHide:true on the spawn, doctor's closing line no longer says 'hkb up when ready' under 'dispatcher running pid N', and SKILL.md's rule names up/down beside dispatch (skill version 0.5.3 -> 0.5.4, with test/track.test.js's pin moved to match - that pin is the mechanism that forces the bump).\n\nNot done, deliberately: the detachedEnv/scrubKbEnv unification the review flagged as a follow-up to file once #152 lands.\n\nDriven by hand against a scratch board (repo that does not exist, so every tick fails and logs while the loop keeps looping): up -> up (idempotent) -> --status --json -> down returns in ~150ms with the pid already dead -> up starts B -> after 6s A is gone and B alone is running; up --serve --port twice and down --serve both behave; a pid file backdated to 1970 reports 'stopped (pid file predates this boot)' and down leaves the live stranger untouched."
+    }
+  ],
+  "v": 1
+}

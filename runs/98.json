@@ -1,0 +1,75 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T04:08:54.733Z",
+      "heartbeat_at": "2026-08-28T03:57:59.417Z",
+      "host": "YRND1-GG",
+      "job": "49683833",
+      "lock_sha": "c7ee90c9f926e0ba33edf52b4f8f1a842bfa2418",
+      "log": ".kanban/logs/98-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 107,
+      "pr_head": "worktree-kb-98-1",
+      "profile": "claude",
+      "started_at": "2026-08-28T03:57:59.417Z",
+      "summary": "The acceptance scenario passes as written. I ran it end to end against bin/hkb.js on this branch, with KB_CONFIG_HOME pointed at a scratch directory: two throwaway git repos `hkb init --no-labels --repo acme/<n>`ed offline, `hkb serve --poll 5` started from one of them, then a fourth checkout init'ed while the server was up. The new board appeared on the running server with no restart and no hand-",
+      "wt": "kb-98-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T03:32:52Z",
+      "id": 5448061651,
+      "text": "## The graph\n\n```mermaid\ngraph BT\n  A[\"#99 registry writer<br/>src/model.js · src/board.js\"]\n  B[\"#100 hkb init registers<br/>src/init.js\"]\n  C[\"#101 serve live reload<br/>src/serve.js\"]\n  D[\"#102 README<br/>README.md\"]\n  R[\"#98 verify + synthesize\"]\n  B --> A\n  D --> B\n  D --> C\n  R --> D\n```\n\nArrows point from a task to what blocks it.\n\n| task | blocked by | paths | why it is its own PR |\n|---|---|---|---|\n| #99 | — | `src/model.js`, `src/board.js`, `test/boards.test.js` | the file has a reader and no writer; everything else needs the writer first |\n| #100 | #99 | `src/init.js`, `test/init.test.js` | calls #99's helper; nothing else in init changes |\n| #101 | — | `src/serve.js`, `test/serve.test.js` | only re-reads an existing loader, so it needs nothing from #99 |\n| #102 | #100, #101 | `README.md`, `docs/manual-mode.md` | can only be written once the behaviour it describes exists |\n| #98 | #102 | — | the end-to-end acceptance run, plus whatever seam the four PRs leave |\n\nInvariants this satisfies:\n\n- **#99 and #101 are independent and path-disjoint**, so the dispatcher runs them at the same time.\n  Making #101 depend on #99 would have cost wall-clock and bought nothing — the reload path only uses\n  `loadUserBoards`, which already exists.\n- **The root is blocked by the only leaf**, #102. Nothing is blocked by the root.\n- **Every child owns different files**, so the `path_overlap` guard never has to serialize two of them.\n  #99 owns `src/board.js`; #101 is told explicitly not to touch it.\n- **Shared decisions are written into every body that depends on them** — the `registerUserBoard`\n  signature is in #99's Contract and repeated in #100's, because #100's worker cannot see #99's body.\n\nNot run as a track (`--agent claude-track`): the children are loosely coupled and two of them are\ngenuinely parallel, which node dispatch exploits and a single track session would not.\n\nDecided at decomposition time, recorded here so it is not relitigated: **no `--no-register` flag** on\n`hkb init` (#100). The frictionless default registers; the printed line is the disclosure."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T04:08:57Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "README.md",
+          "src/cli.js",
+          "src/model.js",
+          "docs/wiki/features/web-board.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/features/auto-merge.md",
+          "docs/wiki/decisions/adr-004-roles-and-adoption.md",
+          "docs/wiki/index.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "hkb doctor still has no 'is this checkout registered' check — left out on purpose (one idempotent hkb init answers it and says which), but it is the obvious next rung",
+          "the literal-NUL regression is guarded only by a code comment, not a test; a future edit could reintroduce a raw byte and silently make src/model.js binary to grep again",
+          "hkb init run inside a linked worktree of a repo that has never been init'ed registers the main checkout, which will not have .kanban/board.json — serve then logs 'skipping' for it. Graceful, and an unusual way to adopt, so left as is",
+          "the end-to-end run used repos GitHub cannot resolve (acme/*), so every board carried a fetch error; that exercises the list and reload paths, not the card-rendering path"
+        ],
+        "verification": [
+          "end-to-end acceptance: 2 throwaway git repos hkb init'ed offline under a scratch KB_CONFIG_HOME, hkb serve --poll 5 running from one, a further checkout init'ed while it ran — new board on the page with no restart and no hand-edited file (14/14 checks)",
+          "idempotence: second hkb init in the same checkout => 'already listed', boards.json byte-identical",
+          "tilde dedupe: hand-written ~/x entry + absolute registration => one entry, hand-written spelling preserved verbatim",
+          "worktree safety: hkb init inside .claude/worktrees/kb-98-1 registers the main checkout; no kb-<n>-<attempt> path can reach the list",
+          "live removal: an entry deleted from boards.json stops being served without a restart",
+          "the real ~/.config/hkb/boards.json verified unchanged after the whole run",
+          "npm run lint",
+          "npm test (566 pass, 0 fail)",
+          "npm run smoke (25 content checks, 3 command checks, 9 init checks)",
+          "node .repolore/scripts/wiki-check.mjs (all 6 pages fresh)",
+          "node .repolore/scripts/wiki-index.mjs --check (no drift)"
+        ]
+      },
+      "summary": "The acceptance scenario passes as written. I ran it end to end against bin/hkb.js on this branch, with KB_CONFIG_HOME pointed at a scratch directory: two throwaway git repos `hkb init --no-labels --repo acme/<n>`ed offline, `hkb serve --poll 5` started from one of them, then a fourth checkout init'ed while the server was up. The new board appeared on the running server with no restart and no hand-edited file (server logged `board list changed: +acme~four~default — now 5 boards`), the boards already there kept their caches, and deleting an entry stopped it being served live. Fourteen checks, all green: a second init in the same checkout is `already listed` with the file byte-identical; a hand-written `~/x` entry makes registering its absolute form a no-op and keeps its spelling verbatim; `hkb init` inside `.claude/worktrees/kb-98-1` resolves to the main checkout, so no `kb-<n>-<attempt>` path can reach the list; `hkb init --json` emits `{repo, board, root, registered:{file, added}}`. The real `~/.config/hkb/boards.json` was untouched — still only its two hand-written entries. lint, 566 tests, smoke (25 content / 3 command / 9 init checks), wiki-check and wiki-index --check are all green.\n\nThe four PRs fit each other. What did not fit was around the edges, and PR #107 closes it.\n\nDocs: the README's \"Local state (gitignored)\" section is its inventory of what hkb writes on your machine and every entry in it was inside the repo — the one file init now writes outside the repo was documented only in the multi-board section three hundred lines away, so it gets a line there too. That section also only spoke to a checkout being set up for the first time; an adopter upgrading with repos already init'ed had no sentence telling them re-running `hkb init` is how they get listed, so it now says that. `hkb help` described the list as a file that is read, not one that is kept.\n\nWiki: `features/web-board` owns the board list but described only the reading half — #99's own log line deferred the writer to \"when #98 makes one visible to a user\" and #102 was scoped to README + manual-mode, so nobody wrote it. It now carries \"How a checkout gets on the list\": the three properties that make registering without asking defensible, the linked-worktree rule, and why the entry is a bare path and not `path#board`. Its \"nothing is scanned for\" promise gained the distinction that keeps it true. src/board.js and src/init.js joined its covers — the page cited board.js with no freshness anchor before.\n\nOne code fix. `mergeBoardEntry`'s dedupe key joins the resolved path and the board slug with a NUL, which is the right separator — nothing in a path or a slug can forge a collision — but #99 wrote it as a raw byte, which makes grep and ripgrep classify src/model.js as binary and skip it *silently*. I hit it myself: searching for `mergeBoardEntry` returned \"binary file matches\". Written as an escape it is the same value and model.js, the file CLAUDE.md points people at for pure logic, is searchable again. Three wiki pages were re-stamped for that and the help line, both cosmetic; one present-tense anchor shifted (adr-004 `src/cli.js:181` → `:182`), and that record's two `6c0e81f`-pinned citations are historical by construction and were left alone.\n\nNot done, deliberately: `hkb doctor` has no \"is this checkout on the serve list\" check. The answer is one idempotent `hkb init` away and init says which it was, so there is no tedious rung to close — but it is the obvious next one if the question comes up."
+    }
+  ],
+  "v": 1
+}

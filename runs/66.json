@@ -1,0 +1,65 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T06:14:12.911Z",
+      "heartbeat_at": "2026-08-27T06:05:49.449Z",
+      "host": "YRND1-GG",
+      "job": "8381efef",
+      "lock_sha": "3d6fcf05c73192059512a7df637e1a5adb07109c",
+      "log": ".kanban/logs/66-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 69,
+      "pr_head": "worktree-kb-66-1",
+      "profile": "claude",
+      "started_at": "2026-08-27T06:05:49.449Z",
+      "summary": "ADR-004's rename list is landed in one docs/strings PR (#69, draft, branch worktree-kb-66-1). No behaviour change: no code path, label, or attempt-history value was touched, and the test suite is untouched (427 pass — two of those arrived with #68, which landed under me mid-task).\n\nAll 7 items done:\n1. Exit code 4 added to both exit-code lists — protocol.md's \"Exit codes\" section and the cli.js gl",
+      "wt": "kb-66-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T06:14:15Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "skills/kanban/references/protocol.md",
+          "skills/kanban/SKILL.md",
+          "src/cli.js",
+          "src/context.js",
+          "src/model.js",
+          "README.md",
+          "docs/harnesses.md",
+          "CLAUDE.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/log.md"
+        ],
+        "dependencies": [],
+        "residual_risk": [
+          "docs/wiki/decisions/adr-004-roles-and-adoption.md is left STALE deliberately — it is a decision record whose Context anchors its file:line claims to commit 6c0e81f, and #68 had already staled it via dispatch.js. It needs a supersede-or-accept decision from whoever finishes ADR-004's remaining consequences, not a re-stamp.",
+          "protocol.md's attempts-schema cell is now very long (one table cell carrying track/remote/manual/synthetic-profile notes). It reads fine as markdown but is a candidate for being split into its own subsection next time that row is touched.",
+          "Bare 'runner' still appears inside protocol.md's Tracks section and SKILL.md's 'When you run a track' section. Unambiguous in context and now covered by the glossary, but a stricter pass could qualify them."
+        ],
+        "retry_notes": null,
+        "verification": [
+          "npm run lint",
+          "npm test (427 pass, 0 fail)",
+          "npm run smoke (23 content checks, 3 command checks — the skill files are read from the package at runtime)",
+          "node bin/hkb.js help (checked the new three-line exit-code block and the widened --reviewer column render aligned)",
+          "node .repolore/scripts/wiki-check.mjs (architecture/overview back to fresh; adr-004 left stale on purpose)",
+          "grep sweep over templates/, .agents/, .claude-plugin/, web/, hooks/ for stale copies of every renamed string"
+        ]
+      },
+      "summary": "ADR-004's rename list is landed in one docs/strings PR (#69, draft, branch worktree-kb-66-1). No behaviour change: no code path, label, or attempt-history value was touched, and the test suite is untouched (427 pass — two of those arrived with #68, which landed under me mid-task).\n\nAll 7 items done:\n1. Exit code 4 added to both exit-code lists — protocol.md's \"Exit codes\" section and the cli.js global help (which now spans three lines; the help text renders aligned). Wording: the dispatcher loop gave itself up, only `hkb dispatch --loop` ever exits 4, and a supervisor (cron/systemd/Actions) or the operator starts a fresh one.\n2. `--reviewer <profile>` -> `--reviewer <github-user>`, matching lifecycle.js:226-237 (isGithubUser + requested_reviewers). Fixed at 4 sites, not the 2 the card listed: SKILL.md:63, cli.js help, plus protocol.md:212 and cli.js's request-review usage-error string — leaving `<profile>` in the same file that now says \"always a GitHub user\" would have contradicted the new glossary.\n3. \"fake-gh harness\" -> \"fake-gh test double\" at all 4 sites: cli.js:429, model.js:434 (worker-facing deny message), SKILL.md:66, CLAUDE.md:26. Verified nothing stale in templates/, .agents/, web/, hooks/.\n4. context.js:10 now says \"the operator\", killing the contradiction with context.js:107. The function name `isHumanComment` is deliberately unchanged (code untouched).\n5. SKILL.md:12 subtitle is now \"the board protocol\".\n6. Bare \"runner\" qualified: README ×7 (track runner in the claude-track paragraph, Actions runner in the Actions section), docs/harnesses.md ×3, and one cli.js comment. Bare \"runner\" inside protocol.md's *Tracks* section and SKILL.md's *When you run a track* is left as-is — the section establishes the sense, and the new glossary now draws the track-runner/Actions-runner line explicitly.\n7. protocol.md gains a \"## Glossary\" table at the top: three seats (operator/dispatcher/worker) in bold, vocabulary (reviewer/track runner/profile/host/supervisor) in italic, each with an \"Is\"/\"Is not\" column. The attempts-schema row now documents the reserved synthetic `profile` values — `dispatcher` (tick wrote the row, out of retries), `reviewer` (`hkb request-changes`), `human` (operator by hand, verified against lifecycle.js:60 — it is `task.agent || 'human'`, so only on a task with no `kb:agent:*` label) — plus \"do not name a board profile after one of them\".\n\nNothing on the \"deliberately unchanged\" list was touched.\n\nWIKI, for the next worker: docs/wiki/decisions/adr-004-roles-and-adoption.md reports STALE and I left it that way on purpose. It covers context.js, cli.js, SKILL.md, protocol.md (all mine) and dispatch.js (already moved by #68 before I rebased). Its Context section anchors every file:line claim to commit 6c0e81f, so re-stamping would rewrite generated_at_commit and bless prose against code it was never written against — and docs/wiki/AGENTS.md says a stale decision record is a prompt to consider a superseding record, not to edit or re-stamp it. ADR-004 still has consequences outstanding (the \"Who runs a board: the seats\" docs section), so whoever closes those out should decide the ADR's fate. By contrast architecture/overview WAS re-stamped and is fresh: the churn under it is comments and help strings only, and no claim on the page changed; a log.md line records that.\n\nREBASE NOTE: #68 (manual-attempt reclaim) landed on main mid-task and conflicted in protocol.md's attempts row and docs/wiki/log.md. Both resolved by keeping both sides. While merging I also applied item 4's rename to #68's new sentence: \"a human claimed it\" -> \"the operator claimed it\"."
+    }
+  ],
+  "v": 1
+}

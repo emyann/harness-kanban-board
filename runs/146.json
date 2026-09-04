@@ -1,0 +1,178 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-29T00:14:13.819Z",
+      "heartbeat_at": "2026-08-28T21:10:03.020Z",
+      "host": "YRND1-GG",
+      "job": "60f4948c",
+      "lock_sha": "616f0b73930f6cf60862e4088ba8556232cdca68",
+      "log": ".kanban/logs/146-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 147,
+      "pr_head": "worktree-kb-146-1",
+      "profile": "claude",
+      "session_id": "12aa38d3-475a-4891-8acf-8f93b8e183d3",
+      "started_at": "2026-08-28T21:10:03.020Z",
+      "summary": "Continued PR #147 for the three review items; merged origin/main twice (886eff8, then 2c62289 after #148 landed mid-attempt).\n\n1. SELF-CHECKOUT CASE, IMPLEMENTED. Detection is now \"is the running hkb under the repo root at all\", not \"under <root>/node_modules/\". `isLocalInstall` is gone; `insideRepo(root, target)` (src/model.js) returns the real POSIX remainder — '' for hkb's own checkout, `node_m",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-146-4/12aa38d3-475a-4891-8acf-8f93b8e183d3.jsonl",
+      "wt": "kb-146-1"
+    },
+    {
+      "attempt": 2,
+      "ended_at": "2026-08-28T22:35:38.676Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "Review of PR #147 — the devDependency shape is solid (673 tests, smoke proves the two-machine flow) and it correctly fixes doctor for the hand-written `$CLAUDE_PROJECT_DIR` form. Three things before it merges:\n\n1. **The self-checkout case (this card's comment of 21:30, posted after your terminal verb) is not implemented.** `isLocalInstall` (src/model.js) requires `<root>/node_modules/`, and test/h",
+      "started_at": "2026-08-28T22:35:38.671Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 3,
+      "ended_at": "2026-08-28T23:23:15.050Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "Continue PR #147 per the full review re-posted as a plain comment just above (self-checkout case: PKG_ROOT under root at all → $CLAUDE_PROJECT_DIR + real relative remainder; measure the path instead of fabricating node_modules/hkb-cli; re-stamp features/web-board.md). Merge origin/main first — #138, #143 (#159) and #153 (#160) have landed since your branch.",
+      "started_at": "2026-08-28T23:23:15.050Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 4,
+      "bg": true,
+      "continues_branch": "worktree-kb-146-1",
+      "continues_pr": 147,
+      "ended_at": "2026-08-29T00:22:56.642Z",
+      "heartbeat_at": "2026-08-28T23:52:20.777Z",
+      "host": "YRND1-GG",
+      "job": "12aa38d3",
+      "lock_sha": "886eff8fde62fab34b98b4b4ab26f2a0b98f3853",
+      "log": ".kanban/logs/146-4.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "session_id": "12aa38d3-475a-4891-8acf-8f93b8e183d3",
+      "started_at": "2026-08-28T23:52:20.777Z",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-146-4/12aa38d3-475a-4891-8acf-8f93b8e183d3.jsonl",
+      "wt": "kb-146-4"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T21:30:13Z",
+      "id": 5457965248,
+      "text": "**Scope addition — the self-checkout case (2026-08-28).** A second place `PKG_ROOT` can sit inside the repo root: when the repo *is* hkb (this checkout, or any fork developing it). Today that case falls through to the old branches — no global `hkb` → an absolute machine path into `settings.local.json`, and `hookPlacement` keeps a bare `hkb hook …` in the tracked file because the bare form counts as portable. So hkb's own board keeps logging `hkb: not found` on every tool call after this card as first written.\n\nTreat it as the same case with a different file: `PKG_ROOT === repo root` → `node \"$CLAUDE_PROJECT_DIR/bin/hkb.js\" hook <verb>`, same `[ -f … ] || exit 0` guard, same *portable* classification, tracked file by default. Detection is one comparison next to the `node_modules/` one: `PKG_ROOT` under the repo root at all → `$CLAUDE_PROJECT_DIR` + the relative remainder (`node_modules/hkb-cli` or nothing). One helper covers both.\n\nThis repo's `.claude/settings.json` already carries that form (edited by hand today, ahead of this card) — so `doctor`'s `checkHooks`/`hookCommandNeeds` must resolve `$CLAUDE_PROJECT_DIR` to the repo root when it checks the file exists, or `hkb doctor` here reports the file \"not there\", and `hkb init` here must recognise it as portable rather than move it to the local file. Add a test for both from this repo's own settings."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T22:35:39Z",
+      "id": 5458471031,
+      "text": "**Changes requested** (after attempt 1): Review of PR #147 — the devDependency shape is solid (673 tests, smoke proves the two-machine flow) and it correctly fixes doctor for the hand-written `$CLAUDE_PROJECT_DIR` form. Three things before it merges:\n\n1. **The self-checkout case (this card's comment of 21:30, posted after your terminal verb) is not implemented.** `isLocalInstall` (src/model.js) requires `<root>/node_modules/`, and test/harness.test.js asserts `!isLocalInstall('/repo', '/repo')` — the opposite of the comment. On hkb's own checkout `hkbCommandForHook` still returns an absolute machine path and `hkb init` leaves the tracked bare `hkb hook …` alone, so doctor's fix (`hkb init`) is a no-op on the repo whose noise motivated the card. Make detection \"PKG_ROOT is under root at all\" and use the real POSIX `path.relative(root, PKG_ROOT)` remainder (empty for the checkout itself, `node_modules/hkb-cli` for the install) → `node \"$CLAUDE_PROJECT_DIR/<rel>/bin/hkb.js\"` with the same guard, classified portable, tracked file. Flip that test, and add one that reads this repo's own .claude/settings.json (main now carries the `$CLAUDE_PROJECT_DIR/bin/hkb.js` form) through hookCommandNeeds / isPortableHookCommand / hookPlacement / installClaudeHooks and expects it left byte-identical.\n\n2. **`localInstallRel` fabricates `node_modules/hkb-cli/bin/hkb.js` instead of measuring it** (src/init.js ~213). A nested or pnpm-store PKG_ROOT is detected but the written path never exists, so the guard exits 0 forever and doctor says \"npm install\". Item 1's real-remainder helper removes this and the `packageInfo()` plumbing.\n\n3. **`features/web-board.md` went stale** from this PR's src/board.js + src/init.js edits (baseline was 5 stale pages, not 6) — re-verify and re-stamp it; do not claim the stale set is unchanged.\n\nName as a filed follow-up, not in this PR: the stricter `hkbOnPath` now makes `installHarness` (templates/codex, templates/copilot `{{command}}`) and `mcpLaunch` (.mcp.json) write absolute machine paths into tracked files on a local-install repo — a cwd-relative `node node_modules/hkb-cli/bin/hkb.js` likely suffices there. Nit: the \"resolves in every checkout\" wording in hookSummary is the local-install rationale, shown for a plain --shared-hooks move too; Windows: resolveHookPath joins with '/' while the test expects path.join.\n\nSame branch, same PR (worktree-kb-146-1): push the fix commits, rerun lint/test/smoke, then `hkb finish` again."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T23:23:14Z",
+      "id": 5458786820,
+      "text": "Full review for the continuation attempt (the attempt row keeps only 400 characters of it):\n\nReview of PR #147 — the devDependency shape is solid (673 tests, smoke proves the two-machine flow) and it correctly fixes doctor for the hand-written `$CLAUDE_PROJECT_DIR` form. Three things before it merges:\n\n1. **The self-checkout case (this card's comment of 21:30, posted after your terminal verb) is not implemented.** `isLocalInstall` (src/model.js) requires `<root>/node_modules/`, and test/harness.test.js asserts `!isLocalInstall('/repo', '/repo')` — the opposite of the comment. On hkb's own checkout `hkbCommandForHook` still returns an absolute machine path and `hkb init` leaves the tracked bare `hkb hook …` alone, so doctor's fix (`hkb init`) is a no-op on the repo whose noise motivated the card. Make detection \"PKG_ROOT is under root at all\" and use the real POSIX `path.relative(root, PKG_ROOT)` remainder (empty for the checkout itself, `node_modules/hkb-cli` for the install) → `node \"$CLAUDE_PROJECT_DIR/<rel>/bin/hkb.js\"` with the same guard, classified portable, tracked file. Flip that test, and add one that reads this repo's own .claude/settings.json (main now carries the `$CLAUDE_PROJECT_DIR/bin/hkb.js` form) through hookCommandNeeds / isPortableHookCommand / hookPlacement / installClaudeHooks and expects it left byte-identical.\n\n2. **`localInstallRel` fabricates `node_modules/hkb-cli/bin/hkb.js` instead of measuring it** (src/init.js ~213). A nested or pnpm-store PKG_ROOT is detected but the written path never exists, so the guard exits 0 forever and doctor says \"npm install\". Item 1's real-remainder helper removes this and the `packageInfo()` plumbing.\n\n3. **`features/web-board.md` went stale** from this PR's src/board.js + src/init.js edits (baseline was 5 stale pages, not 6) — re-verify and re-stamp it; do not claim the stale set is unchanged.\n\nName as a filed follow-up, not in this PR: the stricter `hkbOnPath` now makes `installHarness` (templates/codex, templates/copilot `{{command}}`) and `mcpLaunch` (.mcp.json) write absolute machine paths into tracked files on a local-install repo — a cwd-relative `node node_modules/hkb-cli/bin/hkb.js` likely suffices there. Nit: the \"resolves in every checkout\" wording in hookSummary is the local-install rationale, shown for a plain --shared-hooks move too; Windows: resolveHookPath joins with '/' while the test expects path.join.\n\nSame branch, same PR (worktree-kb-146-1): push the fix commits, rerun lint/test/smoke, then `hkb finish` again."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T23:23:16Z",
+      "id": 5458787057,
+      "text": "**Changes requested** (after attempt 1): Continue PR #147 per the full review re-posted as a plain comment just above (self-checkout case: PKG_ROOT under root at all → $CLAUDE_PROJECT_DIR + real relative remainder; measure the path instead of fabricating node_modules/hkb-cli; re-stamp features/web-board.md). Merge origin/main first — #138, #143 (#159) and #153 (#160) have landed since your branch."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T21:29:18Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/board.js",
+          "src/init.js",
+          "src/doctor.js",
+          "skills/kanban/scripts/hkb",
+          "scripts/smoke-pack.mjs",
+          "test/harness.test.js",
+          "README.md",
+          "docs/harnesses.md",
+          "docs/wiki/features/hook-install-shapes.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/index.md",
+          "docs/wiki/log.md",
+          "docs/wiki/wiki.config.yml"
+        ],
+        "residual_risk": [
+          "hkb init --mcp writes .mcp.json, which is tracked and has no $CLAUDE_PROJECT_DIR handling. The stricter hkbOnPath means a local-install repo now gets an absolute path there instead of a bare `hkb` that never resolved for anyone else. Neither is right for a teammate; src/mcp.js was outside this task's scope, so it is untouched and worth its own card.",
+          "The doctor-side hook tests are in test/harness.test.js beside the three that were already there (shared findings()/writeSettings helpers), not in test/doctor.test.js as the card listed.",
+          "Adding a wiki page required the three files the wiki contract carries with it (wiki.config.yml page plan, generated index.md, log.md) beyond the card's scope list. architecture/overview.md got the cross-link only and was deliberately NOT re-stamped: it is stale for #124/#127/#131 drift this task did not verify.",
+          "isLocalInstall is a string path comparison and is case-sensitive, so a Windows repo whose two paths disagree only in drive-letter case would not be detected (it would fall back to the previous behaviour, not misbehave).",
+          "A local install now wins over a hand-written local hook command on re-run: on such a repo init rewrites any hkb hook that is not the pinned form. It is announced in init's output ('rewrote the ... command')."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (673 pass, 0 fail)",
+          "npm run smoke (new checkInitLocalInstall: installs the tarball into a scratch repo, runs init, then runs the generated command through sh with the install present and against a checkout with no node_modules — exit 0, no output, both)",
+          "manual: init + doctor in a temp repo whose node_modules holds this checkout — tracked settings.json gets the guarded form, doctor prints `✓ hook command  $CLAUDE_PROJECT_DIR/... → /tmp/.../bin/hkb.js`, and a hand-restored bare `hkb` there is reported as ✗ naming hkb init",
+          "node .repolore/scripts/wiki-check.mjs (new page fresh; the 6 pre-existing stale pages are unchanged from the baseline)"
+        ]
+      },
+      "summary": "hkb init now supports `npm i -D hkb-cli`. It detects the shape by path (PKG_ROOT under <repo>/node_modules/, `isLocalInstall` in src/model.js — never PATH, because npx's node_modules/.bin makes PATH lie) and writes `f=\"$CLAUDE_PROJECT_DIR/node_modules/hkb-cli/bin/hkb.js\"; [ -f \"$f\" ] || exit 0; exec node \"$f\" hook <verb>` into the TRACKED .claude/settings.json with no --shared-hooks: the command is exact here and correct on every other machine at once, so a teammate's `git pull && npm install` is the whole setup. The path is built from package.json's name+bin (`packageInfo`), never a literal. The guard is for the worker worktree, which has no node_modules until `npm ci`; both hooks are inert without KB_TASK, so before the install it is a silent exit 0. Three supporting changes: `hkbOnPath` now strips node_modules/.bin from PATH before asking (`stripNodeModulesBin`); `hookCommandNeeds` was generalised, not special-cased — it records VAR= assignments, expands $VAR/${VAR}, finds `node` anywhere in the line, and returns a `guarded` flag (this changed its return shape, so its deepEqual assertions gained `guarded: false`); `isHkbHookCommand` accepts a `;` after the binary, since the new form names hkb.js inside an assignment. doctor resolves $CLAUDE_PROJECT_DIR against the repo before looking, prints the resolved file, warns (naming `npm install`) when a guarded file is missing, and fails a bare `hkb` on a local-install repo naming `hkb init`. The global install and --shared-hooks are unchanged: this is a third case. For #144, which branches from this merge: the seam to reuse is `hkbCommandForHook(verb, { root, localRel })` plus `checkHooks(ctx, sink, { localRel })` — both take the answer as an injectable option, which is also how the tests fake an install. `installClaudeHooks` returns `local: <rel|null>` so callers can say which shape they got."
+    },
+    {
+      "artifacts": [],
+      "at": "2026-08-29T00:14:16Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/init.js",
+          "src/board.js",
+          "src/doctor.js",
+          "test/harness.test.js",
+          "scripts/smoke-pack.mjs",
+          "README.md",
+          "docs/harnesses.md",
+          "skills/kanban/scripts/hkb",
+          "docs/wiki/features/hook-install-shapes.md",
+          "docs/wiki/features/web-board.md",
+          "docs/wiki/features/up-and-down.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/index.md",
+          "docs/wiki/log.md",
+          "docs/wiki/wiki.config.yml"
+        ],
+        "residual_risk": [
+          "The tracked .claude/settings.json in THIS repo still carries the bare `hkb hook stop`: writes to that path were denied to my session. `hkb init` in the checkout rewrites it; doctor already reports it as a failure with that exact fix.",
+          "A version-stamped pnpm store path is measured correctly but changes on upgrade, so a committed command can name a path that no longer exists. doctor now calls that a failure naming `hkb init` (not a wait naming `npm install`), but nothing rewrites it automatically.",
+          "The review's follow-up about a stricter hkbOnPath was truncated in my brief and is unfiled — see the summary for the risk I could identify from the code.",
+          "6 wiki pages remain stale (overview, adr-004, auto-merge, planning-commands, review-loop, update-notice); all were stale at origin/main before this branch and none of their claims concern hook commands."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (749 pass, 0 fail)",
+          "npm run smoke (25 content, 3 command, 10 init, 6 inside-the-repo checks — the last six are the devDependency and self-checkout branches end to end: tracked file names the measured path, never the temp dir; the command exits 0 with no output both with the file present and in a checkout without it)",
+          "node bin/hkb.js doctor on this checkout — 'hook command' now FAILS the committed bare `hkb`, naming `hkb init` and $CLAUDE_PROJECT_DIR/bin/hkb.js",
+          "node .repolore/scripts/wiki-check.mjs (6 stale, vs 7 at origin/main; both pages this branch touched are fresh) + wiki-index.mjs --check",
+          "git merge origin/main (twice: 886eff8, then 2c62289) — no rebase, no force-push"
+        ]
+      },
+      "pr": 147,
+      "pr_continued": false,
+      "summary": "Continued PR #147 for the three review items; merged origin/main twice (886eff8, then 2c62289 after #148 landed mid-attempt).\n\n1. SELF-CHECKOUT CASE, IMPLEMENTED. Detection is now \"is the running hkb under the repo root at all\", not \"under <root>/node_modules/\". `isLocalInstall` is gone; `insideRepo(root, target)` (src/model.js) returns the real POSIX remainder — '' for hkb's own checkout, `node_modules/hkb-cli` for a devDependency, null for anything outside. `projectBinRel` (src/init.js, was `localInstallRel`) joins that remainder to `packageBinRel()`, the bin entry read from package.json, so the written path is MEASURED: a pnpm store (`node_modules/.pnpm/hkb-cli@x/node_modules/hkb-cli`) or a nested install is named as it actually is. That removes item 2's fabrication and the `packageInfo()` plumbing with it. Two paths under the root are refused rather than named: an npx cache anywhere, and `.claude/worktrees/<attempt>` (gitignored, gone with the attempt — a hazard the widened rule opened, so it is closed here with a test). On hkb's own checkout `hkb init` now writes `f=\"$CLAUDE_PROJECT_DIR/bin/hkb.js\"; [ -f \"$f\" ] || exit 0; exec node \"$f\" hook <verb>` into the tracked file, and `hkb doctor` on this repo now FAILS the bare `hkb` naming `hkb init` — doctor's fix is no longer a no-op on the repo whose noise filed the card. Naming followed: option/field `localRel` → `binRel` everywhere (init, doctor, the return of installClaudeHooks), which #144 should adopt.\n\n2. THE BYTE-IDENTICAL TEST, WITH ONE DEVIATION YOU NEED TO KNOW. The review said main carries the `$CLAUDE_PROJECT_DIR/bin/hkb.js` form in .claude/settings.json — it does not; main still has the bare `hkb hook stop`, and MY SESSION IS DENIED WRITES TO .claude/settings.json (the Write tool was refused under don't-ask mode; I did not route around it). So the test reads this repo's committed .claude/settings.json, copies it into a scratch repo, runs `installClaudeHooks(..., {binRel: BIN})` over the real content and asserts: it stays in the tracked file, every command comes out as `guardedHookCommand(BIN, verb)`, hookCommandNeeds/isPortableHookCommand/hookPlacement all agree, $CLAUDE_PROJECT_DIR resolves to a file that exists, and a second run is byte-identical. It exercises the same chain the review asked for, on real content, without depending on a file I cannot change. **The one thing left for you: run `hkb init` in the checkout (or apply the two-line change) to commit the portable form.** That is now a one-command fix, which is the point of the card.\n\n3. WEB-BOARD RE-STAMPED, AND THE STALE SET IS NOT WHAT THE REVIEW SAID. Measured against the current origin/main: 7 of 8 pages were ALREADY stale there, features/web-board among them — #148's re-stamp of it never landed, so its serve.js/board.js/init.js shas still pointed at cb9e43d. I re-read all sixteen of its line anchors and corrected thirteen (most drifted from #143/#148, not from this branch); it is fresh again. features/up-and-down went stale from this branch and got a true no-op re-stamp: my model.js change is one 39-line insertion above everything it cites, so every citation below shifted by exactly 39 and was corrected. Net: the wiki is at 6 stale, one FEWER than origin/main, and both pages this branch touched are fresh. The other 6 were stale before this branch and none of their claims are about hook commands.\n\nAlso: docs/harnesses.md's table is now four rows keyed on where the running hkb lives (two of them tracked-file rows) plus the measured-path and refused-path paragraphs and doctor's third verdict; the wiki page was rewritten for the same; smoke-pack's local-install check became `checkInitInsideRepo` called twice — as a devDependency and as a checkout of hkb itself — and both prove the tracked file names the measured path and never the temp dir.\n\nNOT DONE, deliberately: the review's last line asked me to name a follow-up about \"the stricter `hkbOnPath` n…\" — it reached me truncated, so I did not file a card from half a sentence. The concrete risk I can see in the code, for whoever writes it: stripping every `node_modules/.bin` entry hides a genuinely global hkb whose bin directory happens to end in `node_modules/.bin` (some npm-prefix layouts), and init then writes an absolute path instead of the bare `hkb` — wrong-looking, not broken, since that path is durable."
+    }
+  ],
+  "v": 1
+}

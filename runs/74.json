@@ -1,0 +1,52 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T17:13:20.637Z",
+      "heartbeat_at": "2026-08-27T17:10:08.048Z",
+      "host": "YRND1-GG",
+      "job": "9dc3d362",
+      "lock_sha": "abf0c054e51fdfe67d183688571cd63df33f0f86",
+      "log": ".kanban/logs/74-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 77,
+      "pr_head": "worktree-kb-74-1",
+      "profile": "claude",
+      "started_at": "2026-08-27T17:10:08.048Z",
+      "summary": "`hkb init` now writes `.kanban/dispatch.pid` into .gitignore. The list moved to an exported GITIGNORE_LINES in src/init.js and ensureGitignore is exported; test/init.test.js (new, 5 tests) asserts both directions of the drift that caused this — hkb's own .gitignore is a superset of what init ships, and no .kanban/ path ignored here goes unshipped (board.json excepted, it is the tracked one). I dif",
+      "wt": "kb-74-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T17:13:22Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/init.js",
+          "test/init.test.js",
+          "README.md"
+        ],
+        "residual_risk": [
+          "Adopters who already ran hkb init keep the old block; their next init appends only the pidfile line, but a pidfile already committed stays committed until they git rm --cached it. Nothing warns about that — hkb doctor could, and does not.",
+          "The superset guard only runs in this repo, so it protects the shipped list against hkb-side drift, not against a .kanban/ path added without touching either file."
+        ],
+        "verification": [
+          "npm run lint && npm test — 435 pass, 0 fail",
+          "node --test test/init.test.js — 5 pass",
+          "removed the dispatch.pid line again and re-ran: 3 tests fail, including the superset guard"
+        ]
+      },
+      "summary": "`hkb init` now writes `.kanban/dispatch.pid` into .gitignore. The list moved to an exported GITIGNORE_LINES in src/init.js and ensureGitignore is exported; test/init.test.js (new, 5 tests) asserts both directions of the drift that caused this — hkb's own .gitignore is a superset of what init ships, and no .kanban/ path ignored here goes unshipped (board.json excepted, it is the tracked one). I diffed the rest of the list against this repo's .gitignore: dispatch.pid was the only entry missing. Two smaller things: presence is compared per trimmed line so a CRLF .gitignore stays idempotent instead of re-appending the block on every init, and the README's 'Local state (gitignored)' section now lists all seven paths instead of four. Draft PR #77."
+    }
+  ],
+  "v": 1
+}

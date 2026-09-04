@@ -1,0 +1,54 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T01:36:08.770Z",
+      "heartbeat_at": "2026-08-27T01:29:22.336Z",
+      "host": "YRND1-GG",
+      "job": "0ba253b6",
+      "lock_sha": "9b6914d59de9a119d0a64fc6a7a67f623f5405ce",
+      "log": ".kanban/logs/48-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 49,
+      "pr_head": "worktree-kb-48-1",
+      "profile": "claude",
+      "started_at": "2026-08-27T01:29:22.336Z",
+      "summary": "The flake was not the clock or the timezone. `tokenExpiryNotice` read `process.env.GITHUB_ACTIONS` itself, so on a runner it wrote the Actions annotation to stdout instead of calling `log` — and the test asserted on `log`. Reproduces with `GITHUB_ACTIONS=true node --test test/doctor.test.js`, no clock involved. Fix: `tokenExpiryNotice(ctx, log, { now, inActions, out })`, defaulted the way `emitAnn",
+      "wt": "kb-48-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T01:36:11Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/doctor.js",
+          "test/doctor.test.js",
+          ".github/workflows/test.yml"
+        ],
+        "residual_risk": [
+          "The in-process zone sweep relies on Node honouring a live `process.env.TZ` assignment (>=16). If that ever stops holding, the sweep silently tests one zone four times — the two real TZ runs in the workflow are the backstop.",
+          "checkToken still renders the rate-limit reset with toLocaleTimeString(), i.e. in local time. Deliberate (it is a \"when does my quota come back\" line for a human at a terminal, not a shared instant) and asserted by nothing, so it cannot flake.",
+          "tokenExpiryNotice remains unwired: no caller means the loop never warns about an expiring KB_TOKEN. Not introduced here, and outside this task’s paths."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (391 tests, 0 fail)",
+          "full suite x {TZ=UTC, America/New_York, Asia/Kolkata, Pacific/Kiritimati, Pacific/Niue} x {GITHUB_ACTIONS unset, GITHUB_ACTIONS=true} — 10 combinations, all green",
+          "before the fix: all 5 GITHUB_ACTIONS=true combinations failed on \"a token inside the window is reported to the loop with the fix\""
+        ]
+      },
+      "summary": "The flake was not the clock or the timezone. `tokenExpiryNotice` read `process.env.GITHUB_ACTIONS` itself, so on a runner it wrote the Actions annotation to stdout instead of calling `log` — and the test asserted on `log`. Reproduces with `GITHUB_ACTIONS=true node --test test/doctor.test.js`, no clock involved. Fix: `tokenExpiryNotice(ctx, log, { now, inActions, out })`, defaulted the way `emitAnnotations`/`actionsAnnotation` already default them; tests inject all three so a test picks the branch it means to check and nothing reaches the real stdout. One new test sets GITHUB_ACTIONS=true deliberately and asserts the argument wins — that is the regression guard. The suspected timezone hole is closed anyway: window boundaries walked from both sides (7d+1h ok, 7d ok, 6d23h warn, 1ms warn, 0 expired) at four explicit instants including 02:30Z, 23:30Z and the US spring-forward hour; every case that renders or stamps a date replayed across UTC, America/New_York, Asia/Kolkata and Pacific/Kiritimati; GitHub’s non-ISO header format asserted per zone since it goes through the engine fallback parser. `.github/workflows/test.yml` now runs `npm test` under TZ=UTC and TZ=America/New_York as two steps in one job (same signal, half the runners). Heads-up for whoever picks it up: `tokenExpiryNotice` is exported and tested but nothing imports it — `src/dispatch.js` never calls it, so the loop does not actually warn before KB_TOKEN lapses. Out of scope for #48; worth a card. PR #49."
+    }
+  ],
+  "v": 1
+}

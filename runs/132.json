@@ -1,0 +1,115 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T16:31:28.260Z",
+      "heartbeat_at": "2026-08-28T16:30:11.158Z",
+      "host": "YRND1-GG",
+      "kind": "dependency",
+      "lock_sha": "c46b183e5f08990c3b0da726c36a0143462a7bde",
+      "log": ".kanban/logs/132-1.log",
+      "outcome": "blocked",
+      "pid": null,
+      "profile": "claude",
+      "reason": "PR #135 (from #115's verify pass) already implements most of this on an unmerged branch that touches the same files. Paused to avoid a duplicate and a conflict; re-scoped against #135 once it merges.",
+      "started_at": "2026-08-28T16:30:11.158Z",
+      "wt": "kb-132-1"
+    },
+    {
+      "attempt": 2,
+      "bg": true,
+      "ended_at": "2026-08-28T16:32:41.522Z",
+      "heartbeat_at": "2026-08-28T16:32:12.663Z",
+      "host": "YRND1-GG",
+      "kind": "needs_input",
+      "lock_sha": "f25bbb85f8535c88969458b0ee7c684db9bab5a9",
+      "log": ".kanban/logs/132-2.log",
+      "outcome": "blocked",
+      "pid": null,
+      "profile": "claude",
+      "reason": "Superseded in large part by PR #135 (merged as f25bbb8): the Stop hook now derives the attempt from the kb-<n>-<k> worktree, and the terminal verb records session_id/transcript_path. Needs re-scoping to the residual gap before any further attempt.",
+      "started_at": "2026-08-28T16:32:12.663Z",
+      "wt": "kb-132-2"
+    },
+    {
+      "attempt": 3,
+      "bg": true,
+      "ended_at": "2026-08-28T16:45:29.532Z",
+      "heartbeat_at": "2026-08-28T16:35:14.054Z",
+      "host": "YRND1-GG",
+      "job": "fc9c6de3",
+      "lock_sha": "f25bbb85f8535c88969458b0ee7c684db9bab5a9",
+      "log": ".kanban/logs/132-3.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 137,
+      "pr_head": "worktree-kb-132-3",
+      "profile": "claude",
+      "session_id": "fc9c6de3-0741-4f3b-bd60-3cd7608f6af7",
+      "started_at": "2026-08-28T16:35:14.054Z",
+      "summary": "The dispatcher now names the session behind a background attempt one tick after its launch, so the attempts that never file a terminal verb — crashed, timed_out, protocol_violation — still carry session_id and transcript_path when they are written off. Draft PR #137.\n\nNew `jobSessionUpdate(attempt, job, root = jobsDir())` in src/jobs.js: reads the job record via the same `currentSession` #135 uses",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-132-3/fc9c6de3-0741-4f3b-bd60-3cd7608f6af7.jsonl",
+      "wt": "kb-132-3"
+    }
+  ],
+  "block_loops": {
+    "1k7zjaq": 1,
+    "1myi2jc": 1
+  },
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T16:31:18Z",
+      "id": 5455070723,
+      "text": "Operator note: PR #135 (just merged to main, closes #115) landed session recording for background workers — whichAttempt (KB_TASK, then the kb-<n>-<k> checkout basename), currentSession via CLAUDE_CODE_SESSION_ID / $CLAUDE_JOB_DIR/state.json, and stopHook stamping. Before opening a PR: git fetch + rebase onto main, then re-read src/hook.js and src/jobs.js. If your card's remaining scope (dispatcher-side recording from claude agents with no hook at all) is still distinct, build only the delta on top of main; if main already covers it, finish with hkb complete and a summary saying it was superseded by #135 — do not re-implement what merged."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T16:31:31Z",
+      "id": 5455073387,
+      "text": "**Blocked** (dependency, attempt 1): PR #135 (from #115's verify pass) already implements most of this on an unmerged branch that touches the same files. Paused to avoid a duplicate and a conflict; re-scoped against #135 once it merges."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T16:32:44Z",
+      "id": 5455087851,
+      "text": "**Blocked** (needs_input, attempt 2): Superseded in large part by PR #135 (merged as f25bbb8): the Stop hook now derives the attempt from the kb-<n>-<k> worktree, and the terminal verb records session_id/transcript_path. Needs re-scoping to the residual gap before any further attempt."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T16:45:32Z",
+      "attempt": 3,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/jobs.js",
+          "src/dispatch.js",
+          "test/jobs.test.js",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/GLOSSARY.md"
+        ],
+        "pr": 137,
+        "residual_risk": [
+          "The tick-side test points $HOME at a temp dir so jobsDir() finds the fake job record; os.homedir() reads $HOME on POSIX only, so that test would not exercise the record path on Windows (the unit tests pass the root explicitly and are unaffected).",
+          "jobSession prefers the job record over the listing's sessionId and never blends them. If a state.json ever named a stale sessionId next to a fresh linkScanPath, the row would take the record's pair verbatim.",
+          "The dispatcher records nothing for an attempt whose job it cannot match at all (job already gone before the first tick after launch) — that path still ends as 'crashed' with a bare row.",
+          "docs/wiki/architecture/overview.md stays STALE: the targeted paragraph is correct, but the page covers 12 files and was already stale from other commits, so it was not re-stamped."
+        ],
+        "verification": [
+          "node --test test/jobs.test.js (10 pass: 3 required unit cases + blanks/no-blend + 4 whole-tick tests)",
+          "npm run lint",
+          "npm test (636 pass, 0 fail)",
+          "mutation check: neutering the one dispatch.js call fails exactly the two tick tests that assert the recording",
+          "node .repolore/scripts/wiki-check.mjs (5 pages stale, all from earlier commits; unchanged by this PR)"
+        ]
+      },
+      "summary": "The dispatcher now names the session behind a background attempt one tick after its launch, so the attempts that never file a terminal verb — crashed, timed_out, protocol_violation — still carry session_id and transcript_path when they are written off. Draft PR #137.\n\nNew `jobSessionUpdate(attempt, job, root = jobsDir())` in src/jobs.js: reads the job record via the same `currentSession` #135 uses (handed a synthesized CLAUDE_JOB_DIR, which is the only way to read a job this process is not inside), falls back to the listing's own `sessionId` while the record says nothing, and goes through the same `sessionUpdate` from src/model.js. Fills blanks only — a row a verb has stamped is byte-identical afterwards — and refuses to write at all when the record names a session the row does not (a resumed job is one record over two sessions, so pairing the verb's id with the record's transcript would describe two).\n\nsrc/dispatch.js calls it once, inside the reclaim branch that had already resolved the job for the liveness check: no new subprocess, no per-attempt API call. The branch's writes are now batched behind one `dirty` flag saved after the outcome is known, so an attempt written off in the same tick that named its session costs one PATCH instead of two (failAttempt saves the same record).\n\nNothing in #135 was rebuilt or duplicated: no second field set, no second marker, no hook. The Stop hook and the terminal verb still win on any row they reach first, and can still add the cost fields the job record does not carry.\n\nScope note for the reviewer: the card said to touch only src/dispatch.js, src/jobs.js and test/jobs.test.js, but two wiki lines described the terminal verb as the only path to a recorded session and AGENTS.md asks for the covering page to be updated in the same change. docs/wiki/architecture/overview.md and docs/wiki/GLOSSARY.md carry a targeted correction; the page is deliberately NOT re-stamped, since it was already stale from earlier commits I did not re-verify."
+    }
+  ],
+  "v": 1
+}

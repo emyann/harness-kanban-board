@@ -1,0 +1,46 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-08-26T05:58:03.416Z",
+      "heartbeat_at": "2026-08-26T04:38:02.465Z",
+      "host": "YRND1-GG",
+      "log": ".kanban/logs/2-1.log",
+      "outcome": "completed",
+      "pid": 6220,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-26T04:38:02.465Z"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "at": "2026-08-26T04:40:37Z",
+      "attempt": 1,
+      "kind": "review",
+      "metadata": {
+        "changed_files": [
+          "README.md",
+          "docs/EVALUATION.md",
+          "skills/kanban/references/protocol.md"
+        ],
+        "residual_risk": [
+          ".agents/skills/kanban/references/protocol.md is a tracked installed copy (from ghk init) and now lags skills/kanban/references/protocol.md by the one claim-row line; outside this task paths, needs ghk init re-run or the .agents sync owner",
+          "harness hook blocks the ghk complete verb for worktree sessions; worth a ghk/hook follow-up so workers can finish with complete"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (16/16 pass after rebase on 3b4fef7)",
+          "diff reviewed against classifyClaimError in the lock module"
+        ]
+      },
+      "reviewer": null,
+      "summary": "Docs now match classifyClaimError in the lock module: a duplicate lock-ref create returns 422 'Reference already exists' (observed 2026-08-26 via ghk doctor --api); 409 is still handled as held; anything else is unknown/back off. Updated: protocol.md claim row; README How-it-maps atomic-claim row and Status section; EVALUATION.md section 7 '409 semantics' marked VERIFIED with the finding, and GraphQL blockedBy/blocking/subIssues/closedByPullRequestsReferences plus REST issues/{n}/dependencies/blocked_by (2026-03-10) verification recorded on the 'API versioning churn' item (section 7 had no standalone blockedBy bullet). Draft PR #16. No code changes. NOTE for reviewer: work is finished; used request-review instead of complete because the worktree-isolation hook in this harness refuses any command containing the verb 'complete' (even --help). Merge PR #16 to close."
+    }
+  ],
+  "v": 1
+}

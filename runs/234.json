@@ -1,0 +1,83 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T21:55:31.729Z",
+      "heartbeat_at": "2026-09-01T21:41:18.649Z",
+      "host": "YRND1-GG",
+      "job": "268693e5",
+      "lock_sha": "5db5afabd8f9396f9e164cd43ba1e90166f87dc2",
+      "log": ".kanban/logs/234-1.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 244,
+      "pr_head": "worktree-kb-234-1",
+      "profile": "claude",
+      "session_id": "268693e5-2ca9-4c79-933b-d9791c21888f",
+      "started_at": "2026-09-01T21:41:18.649Z",
+      "summary": "Added a head-branch fallback for the PR association gap #227/#228 exposed: src/tasks.js's fetchBoard/getTask now match an open PR to a card by head branch (taskBranchRe: kb/<n>, kb-<n>-<k>, worktree-kb-<n>-<k>) whenever closedByPullRequestsReferences comes back empty, via one board-wide GET /pulls?state=open read (openPrsByHead), never one per card. hkb finish (complete, src/lifecycle.js) now refu",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-234-1/268693e5-2ca9-4c79-933b-d9791c21888f.jsonl",
+      "wt": "kb-234-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T21:56:48Z",
+      "id": 5500971466,
+      "text": "**Merged by the operator seat** — review: Reviewed hard, because this is the fix for the failure that silently lost #227 and #228 earlier today. Three layers, all present. (1) taskBranchRe/branchTaskNumber in src/model.js match every branch shape hkb generates itself — kb-<n>-<k>, worktree-kb-<n>-<k>, kb/<n> — so a PR on one of them is that card's PR whatever GitHub believes. (2) openPrsByHead does ONE paginated REST read of open PRs keyed by head, and fetchBoard/getTask apply it as a fallback; the frugality is pinned by a test asserting ZERO /pulls requests when every card already has its PR, not merely claimed in a comment. (3) complete now refuses to land in done when no PR is found even after the fallback: it records protocol_violation, comments on the card, and sets blocked + needs-human, with an error naming all three fixes — open the PR, retarget an existing one, or finish again with --no-pr '<why>'. That is the values' standard rather than a silent done. The doctor check closes the case the live fallback structurally cannot: fetchBoard reads open issues, so a card ALREADY closed by this bug never gets revisited — which is exactly #227 and #228 — and checkOrphanedPrs finds an open PR on an hkb branch whose card is closed. Two tests reproduce today's failures by name: 'a non-default base, #227's exact shape' and 'a worktree-kb-<n>-<k> head even against the default branch — #228's symptom'. Note that the second one pins behaviour for a cause I never managed to explain, which is the right way to handle it: the fallback makes the explanation unnecessary. Also covered: the fallback never overrides a PR GitHub already linked, and never claims another card's PR. Verified myself: CI green, lint clean, 996 tests, up from 980., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [
+        "https://github.com/emyann/harness-kanban-board/pull/244"
+      ],
+      "at": "2026-09-01T21:55:33Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/tasks.js",
+          "src/lifecycle.js",
+          "src/doctor.js",
+          "src/cli.js",
+          "src/mcp.js",
+          "src/model.js",
+          "test/tasks.test.js",
+          "test/pr-ready.test.js",
+          "test/complete-no-pr.test.js",
+          "test/orphaned-prs.test.js",
+          "test/fake-gh.js",
+          "test/heartbeat.test.js",
+          "test/mcp.test.js",
+          "test/session.test.js",
+          "docs/wiki/features/tracks.md",
+          "docs/wiki/features/review-loop.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/log.md"
+        ],
+        "dependencies": [],
+        "residual_risk": [
+          "src/track.js and skills/kanban/references/protocol.md were not touched -- the branch strategy decision is written down in the wiki but the per-node brief text in track.js already matched it (kb/<n> off the blocker's own branch), so nothing there needed to change",
+          "fetchClosedRecent (the reconcile read) does not apply the head-branch fallback; a card that closes after this ships is covered by the live fallback while still open, and hkb doctor's checkOrphanedPrs is the backstop for anything that slips through or predates this fix",
+          "docs/wiki/architecture/overview.md and several other pages were already stale (unrelated upstream drift, e.g. src/dispatch.js) before and after this change -- left alone as out of scope"
+        ],
+        "retry_notes": null,
+        "verification": [
+          "npm run lint",
+          "npm test (996 tests, all pass)"
+        ]
+      },
+      "pr": 244,
+      "pr_continued": false,
+      "summary": "Added a head-branch fallback for the PR association gap #227/#228 exposed: src/tasks.js's fetchBoard/getTask now match an open PR to a card by head branch (taskBranchRe: kb/<n>, kb-<n>-<k>, worktree-kb-<n>-<k>) whenever closedByPullRequestsReferences comes back empty, via one board-wide GET /pulls?state=open read (openPrsByHead), never one per card. hkb finish (complete, src/lifecycle.js) now refuses to land a card in done with no PR found at all -- it records protocol_violation and blocks with kb:needs-human, naming what's missing, unless the worker passes --no-pr \"why\" (wired through src/cli.js and src/mcp.js's kanban_complete). hkb doctor gained checkOrphanedPrs, which flags an open PR on one of hkb's own branches whose card has already closed -- the one case the live fallback can't reach, since fetchBoard/getTask only run for open cards. docs/wiki/features/tracks.md documents the track runner's branch strategy as a deliberate decision (nodes stack their PR on their blocker's kb/<n> branch; the track runner itself never makes a branch of its own) and how the fallback makes that visible instead of invisible; docs/wiki/features/review-loop.md documents the same fallback from the guard/merge-policy side. GLOSSARY.md gained a Head-branch fallback entry."
+    }
+  ],
+  "v": 1
+}

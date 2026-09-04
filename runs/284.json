@@ -1,0 +1,16 @@
+{
+  "attempts": [],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T01:48:54Z",
+      "id": 5503119045,
+      "text": "Review finding from the operator seat on PR #286, added here because this card owns the line that fixes it.\n\n**The worker brief already claims the inheritance this card is about.** `mcpLine` (`src/context.js`) under `inherit` with no card narrowing returns:\n\n> MCP: you inherit this session's MCP servers.\n\nThe wiki page landing in the same PR says that is not true — `src/dispatch.js` never consults `toolPosture`, so the launch still carries the curated `--allowedTools` under `dontAsk`. So the page tells the *human* the inheritance is not live while the brief tells the *worker* it is, and the worker is the one who acts on it.\n\nThat matters more than an ordinary doc mismatch because of which bug this line exists to fix. #130 was a worker that could not tell whether the repo's own `react-aria` server was available, built from training knowledge, and said nothing. A brief promising servers the launch will deny reproduces #130 under `inherit` rather than fixing it — the worker has a positive statement to trust, so it has less reason to disclose, not more.\n\n`src/doctor.js` has the milder form of the same thing: it prints the posture as fact, with no note that `inherit` is not yet honoured at launch.\n\n**Nothing is live.** No shipped profile declares `inherit` and this board does not, so the false statement is unreachable until someone sets it. That is why PR #286 was merged rather than held — the permissions themselves are fail-closed (a worker gets *less* reach than declared, never more) and both gaps are stated in the wiki.\n\n**Please fold this into this card's Done when:** the brief and the launch become true together. Whatever `mcpLine` says under `inherit` must be a statement `src/dispatch.js` actually delivers as of the same commit — with a test that fails if the brief describes reach the launch does not grant. If the launch half is split out or deferred again, the brief's claim has to be walked back in the same change rather than left standing. Same for doctor's posture line: while the inheritance half is unspent, it should say so."
+    }
+  ],
+  "results": [],
+  "v": 1
+}

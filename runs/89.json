@@ -1,0 +1,72 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T19:15:34.153Z",
+      "heartbeat_at": "2026-08-27T18:58:05.944Z",
+      "host": "YRND1-GG",
+      "job": "d13948ed",
+      "lock_sha": "876b9eed7cd4c0112ccd141623ab2279d3e7d6ee",
+      "log": ".kanban/logs/89-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 91,
+      "pr_head": "worktree-kb-89-1",
+      "profile": "claude",
+      "started_at": "2026-08-27T18:58:05.944Z",
+      "summary": "Merging is now board policy, in `dispatch.merge` (.kanban/board.json), defaulting to today's behaviour: `{\"mode\": \"manual\"}` — hkb sends nothing, not a mutation and not even a protection read. `{\"mode\": \"auto\", \"method\": \"squash|merge|rebase\"}` has the DISPATCHER (never the worker) enable GitHub's own auto-merge on a reviewed card's PR: one `enablePullRequestAutoMerge` per PR, at review time, no n",
+      "wt": "kb-89-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T19:15:36Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/board.js",
+          "src/tasks.js",
+          "src/dispatch.js",
+          "src/doctor.js",
+          "test/merge.test.js",
+          "test/fake-gh.js",
+          "README.md",
+          "skills/kanban/references/protocol.md",
+          "docs/wiki/features/auto-merge.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/decisions/adr-004-roles-and-adoption.md",
+          "docs/wiki/index.md",
+          "docs/wiki/log.md",
+          "docs/wiki/wiki.config.yml"
+        ],
+        "dependencies": [
+          "#84 (branch protection on main) — the gate this feature refuses without; main now requires the 'test' and 'packed artifact' checks, so this repo could turn mode:auto on today."
+        ],
+        "residual_risk": [
+          "The GraphQL mutation shape (enablePullRequestAutoMerge / PullRequestMergeMethod / autoMergeRequest) and GitHub's refusals for draft PRs and repos with allow_auto_merge off are modelled from the API contract, not observed live: this worker's permission policy blocks `gh api`, and #89 asked for the mutation to be asserted against the fake only. `hkb doctor` on a repo with mode:auto exercises the real protection reads; the first enabled PR is the first live exercise of the mutation.",
+          "mergeGate accepts a required approving review as a gate, not only a required status check as #89's wording had it. A branch requiring N approvals genuinely stops an instant merge, and refusing that board would have been wrong-headed; the failure message still names status checks first.",
+          "A board on mode:auto whose base branch is ungated logs one refusal per waiting card per tick. That is deliberate (a misconfiguration should be loud), but it is the one path that gets noisier over time — the fix in the message is to protect the branch or go back to manual.",
+          "A track's stacked node PR is refused, because the branch it targets is another node's branch. Correct and documented, but it means mode:auto only lands the bottom PR of a stack unattended.",
+          "The skill version was deliberately NOT bumped: references/protocol.md gained a data-model row and a tick step, but nothing in the worker's contract changed (workers still never merge). Same call as #69/#70."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (509 pass, 0 fail — 24 new in test/merge.test.js)",
+          "npm run smoke (packed tarball installs, runs, and init copies the changed protocol.md)",
+          "node .repolore/scripts/wiki-check.mjs (all pages fresh, page plan updated)",
+          "node --test test/merge.test.js"
+        ]
+      },
+      "summary": "Merging is now board policy, in `dispatch.merge` (.kanban/board.json), defaulting to today's behaviour: `{\"mode\": \"manual\"}` — hkb sends nothing, not a mutation and not even a protection read. `{\"mode\": \"auto\", \"method\": \"squash|merge|rebase\"}` has the DISPATCHER (never the worker) enable GitHub's own auto-merge on a reviewed card's PR: one `enablePullRequestAutoMerge` per PR, at review time, no new query (the node id and `autoMergeRequest` were added to the board read the tick already does), no polling, nothing to reconcile. hkb still never merges anything itself.\n\nThe gate ships with it, because auto-merge on an unprotected branch merges immediately. `hkb doctor` HARD FAILS (exit non-zero) `mode: auto` when the base branch requires no status check and no approving review, when its protection cannot be read at all, and when the repository does not allow auto-merge; it is silent on a manual board. The tick refuses the same combination card by card with the fix, rather than enabling what it cannot vouch for. Classic branch protection and rulesets both count (`/branches/<b>/protection` needs admin, `/rules/branches/<b>` does not) — a gate that cannot be verified is not a gate. The gate is read on the branch the PR actually TARGETS (`baseRefName`), not the repo default, so a track's stacked node PR is left to the human unless that branch is protected too; at most two requests, only when there is a PR to enable, memoised per branch per tick.\n\nTwo things confirmed rather than assumed, and both now documented: (1) `request-review --reviewer <user>` REQUESTS a review, it does not require one — auto-merge waits for what the branch requires, so on a checks-only branch the PR lands whether or not the reviewer looked; doctor's passing line says which of the two the branch has. (2) A draft PR cannot auto-merge, and the pass never asks: every terminal verb already takes the PR out of draft (`finishPr`) before the card reaches review.\n\nFor the next worker: the pure decisions are `mergePolicy` / `autoMergeDecision` / `mergeGate` / `mergeGateFix` in src/model.js (mergePolicy never throws — an unreadable policy stays manual and doctor fails on it); the two GitHub-isms are `enableAutoMerge` and `branchProtection` in src/tasks.js; the tick's pass is `autoMergePass` in src/dispatch.js, placed after the claim loop so a card the active_pr guard moved to review is handed over on the same tick. `hkb dispatch --json` reports it under `auto_merge` (and `auto_merge_error` if the whole pass throws). test/fake-gh.js grew `protect()`, `ruleset()`, `autoMergeOf()`, `allowAutoMerge` and the matching routes — a future backend has to model them.\n\nPR: https://github.com/emyann/harness-kanban-board/pull/91 (draft)."
+    }
+  ],
+  "v": 1
+}

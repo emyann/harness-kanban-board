@@ -1,0 +1,60 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T19:44:13.327Z",
+      "heartbeat_at": "2026-09-01T19:40:40.642Z",
+      "host": "YRND1-GG",
+      "job": "39395df1",
+      "lock_sha": "4714e4f16920270394c1aaa9382d8b2c08e4ab51",
+      "log": ".kanban/logs/207-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 215,
+      "pr_head": "worktree-kb-207-1",
+      "profile": "claude",
+      "session_id": "39395df1-06aa-47be-8174-32a6e23a598e",
+      "started_at": "2026-09-01T19:40:40.642Z",
+      "summary": "Defined the --priority band once (0 unfiled/default, 1 normal, 2 next up, 3 urgent) in README.md and referenced it from protocol.md, SKILL.md and `hkb create --help` (src/cli.js), instead of each restating direction with no vocabulary. Fixed both shipped worked examples (protocol.md's inline decompose example and SKILL.md's decompose table/create commands/board snapshot), which had given the docum",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-207-1/39395df1-06aa-47be-8174-32a6e23a598e.jsonl",
+      "wt": "kb-207-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T19:44:15Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "README.md",
+          "src/cli.js",
+          "skills/kanban/SKILL.md",
+          "skills/kanban/references/protocol.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "hkb list showing the actual queue order (mentioned as a 'consider' in the issue, related to #204) was left as a follow-up - not required by the acceptance criteria",
+          "Re-numbering an existing board to the new band is explicitly out of scope per the issue and was not done"
+        ],
+        "verification": [
+          "npm run lint && npm test (872 passing)",
+          "node .repolore/scripts/wiki-stamp.mjs docs/wiki/architecture/overview.md",
+          "node .repolore/scripts/wiki-check.mjs (refreshed page fresh; 11 other pages report pre-existing, unrelated staleness)"
+        ]
+      },
+      "pr": 215,
+      "pr_continued": false,
+      "summary": "Defined the --priority band once (0 unfiled/default, 1 normal, 2 next up, 3 urgent) in README.md and referenced it from protocol.md, SKILL.md and `hkb create --help` (src/cli.js), instead of each restating direction with no vocabulary. Fixed both shipped worked examples (protocol.md's inline decompose example and SKILL.md's decompose table/create commands/board snapshot), which had given the documentation card (#43/C) a higher priority than the token bucket it documents (#41/A) - now the foundation card outranks it. Added the band to docs/wiki/architecture/overview.md (alongside the existing sortReady claim, which is unchanged - it only ever compares the raw integer) and to GLOSSARY.md. No behaviour change to sortReady/src/model.js. Opened PR #215 (draft) on branch worktree-kb-207-1."
+    }
+  ],
+  "v": 1
+}

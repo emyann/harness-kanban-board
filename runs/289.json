@@ -1,0 +1,121 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-09-02T23:37:26.790Z",
+      "heartbeat_at": "2026-09-02T23:35:28.279Z",
+      "host": "YRND1-GG",
+      "kind": "transient",
+      "lock_sha": "e36702183ba25314524011b55bf4b9e673139498",
+      "manual": true,
+      "outcome": "blocked",
+      "profile": "claude",
+      "reason": "operator withdrew this attempt: the graph was re-cut into three tracks (A, B, C) so each runs as its own session; A1 relaunches under track A (#288)",
+      "session_id": "0bee8494-2eb3-4cb4-9ebb-0b184ef2ec1b",
+      "started_at": "2026-09-02T23:35:28.279Z",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-302-1/0bee8494-2eb3-4cb4-9ebb-0b184ef2ec1b.jsonl",
+      "wt": "kb-302-1"
+    },
+    {
+      "attempt": 2,
+      "ended_at": "2026-09-02T23:56:25.759Z",
+      "heartbeat_at": "2026-09-02T23:40:18.307Z",
+      "host": "YRND1-GG",
+      "lock_sha": "e36702183ba25314524011b55bf4b9e673139498",
+      "manual": true,
+      "outcome": "completed",
+      "pr": 307,
+      "pr_head": "kb/289",
+      "profile": "claude",
+      "session_id": "ea24eaa1-7d40-474a-9971-78298416d23e",
+      "started_at": "2026-09-02T23:40:18.307Z",
+      "summary": "Node floor is now >=22.13 (24 recommended) and `npm run lint` type-checks the JSDoc. bin/hkb.js carries the SQLite ExperimentalWarning filter verbatim from docs/local-first.md §9 and loads src/cli.js via a DYNAMIC `await import()` — a static import is hoisted above the filter and would defeat it; keep it dynamic. tsconfig.json is a checker, not a build (noEmit, allowJs+checkJs, strict:false) over ",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-288-1/ea24eaa1-7d40-474a-9971-78298416d23e.jsonl",
+      "wt": "kb-288-1"
+    }
+  ],
+  "block_loops": {
+    "1t116zs": 1
+  },
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T23:37:27Z",
+      "id": 5518009663,
+      "text": "**Blocked** (transient, attempt 1): operator withdrew this attempt: the graph was re-cut into three tracks (A, B, C) so each runs as its own session; A1 relaunches under track A (#288)"
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T23:59:01Z",
+      "id": 5518197203,
+      "text": "Operator review of PR #307 (merged into kb/track-288 by the runner): matches Done-when. engines >=22.13, the warning filter with a dynamic import so it installs before the module graph evaluates, tsconfig with checkJs and a types/hkb.d.ts, CI matrices test 22/24 and smoke 22/26, CLAUDE.md and README wording. Checks green on all four jobs. Under src/ the only non-annotation change is an explicit Number() in the list --summary priority sort, behaviour-preserving. Lands on main with the track's PR; this card closes then."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T00:22:47Z",
+      "id": 5518397771,
+      "text": "Track #288 review note — `/code-review 307 high`, post-merge into `kb/track-288`.\n\nThe ~370 JSDoc edits were checked as behaviour-neutral one by one (the `cli.js` `Number()`\ncoercion, the `board.js`/`gc.js`/`model.js`/`gh.js`/`serve.js` casts, `hook.js`'s `found` local,\n`lifecycle.js`'s `title = ''`) — all equivalent at runtime. The findings were in the build and CI\ncontract the new `lint` script created.\n\nFixed on the track branch (commits 0fabaeb, 18bd037):\n\n1. **`release.yml` had no `npm install`** (high). `npm run lint` now ends in `tsc --noEmit`, and with\n   no lock file nothing is restored — a `v*` tag would have died at `sh: 1: tsc: not found` before\n   anything was published. `test.yml` got the step; `release.yml` did not. Added, with\n   `test/release.test.js` updated to pin the step order.\n2. **`bin/hkb.js` reimplemented the printing** (medium). Node registers its default `warning` listener\n   only when warnings are enabled, so the unconditional `process.on` *resurrected* warnings under\n   `--no-warnings` / `NODE_NO_WARNINGS=1`, and `--no-deprecation`, `--throw-deprecation`,\n   `--trace-warnings`, `warning.code`, `warning.detail` and the `(node:pid)` prefix are all the\n   default listener's doing. It is now captured and re-invoked; three new tests in `test/cli.test.js`\n   pin the flags.\n3. **`typescript` floated at `^5.9.3`** (low) against a plain `npm install` with no committed lock, so\n   a new 5.x minor could turn lint red on an unrelated PR with nothing to roll back to. Both\n   devDependencies pinned exactly.\n4. **`npm run typecheck` died as `sh: 1: tsc: not found`** in any checkout that had not run\n   `npm install` — every fresh worker worktree (medium). It now prints a one-line message naming the\n   fix and lint stays green there; the type check remains a CI gate.\n\nLeft as-is, recorded here rather than fixed:\n\n5. `src/gc.js:119`/`:145` — `finished` and `prByBranch` are annotated optional (`finished?:`) but have\n   no default and are called unconditionally, so `sweepWorktrees(ctx, {})` type-checks and throws at\n   runtime. They should be required in the annotation. Not fixed: `src/gc.js` is in #291's paths.\n6. `src/projects.js:136` — the `boardLabel` description was reattached to `maxAdds`, merging two\n   options' prose into one sentence and leaving `boardLabel` undocumented. Also #291's path.\n7. `src/doctor.js:712`, `src/lifecycle.js:226`, `src/init.js:451`, `src/serve.js:330`,\n   `src/model.js:684` — the new `@param`/`@returns` blocks were added as a *second* JSDoc comment\n   between the existing prose block and the declaration. Only the immediately preceding comment\n   attaches, so the rationale those functions carry no longer shows on hover. Merging the tags into\n   the existing block keeps both. All five files are in #291's paths.\n"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-02T23:56:27Z",
+      "attempt": 2,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "package.json",
+          "tsconfig.json",
+          "types/hkb.d.ts",
+          "bin/hkb.js",
+          ".github/workflows/test.yml",
+          ".gitignore",
+          "CLAUDE.md",
+          "README.md",
+          "test/cli.test.js",
+          "docs/wiki/concepts/node-floor-and-type-check.md",
+          "docs/wiki/index.md",
+          "src/board.js",
+          "src/cli.js",
+          "src/dispatch.js",
+          "src/doctor.js",
+          "src/gc.js",
+          "src/gh.js",
+          "src/hook.js",
+          "src/init.js",
+          "src/lifecycle.js",
+          "src/lock.js",
+          "src/mcp.js",
+          "src/model.js",
+          "src/projects.js",
+          "src/serve.js",
+          "src/stats.js",
+          "src/tasks.js",
+          "src/up.js",
+          "src/watch.js"
+        ],
+        "residual_risk": [
+          "CI's four jobs have not run yet: Node 26 on setup-node and the new `npm install` step before lint are the parts not exercised locally.",
+          "The wiki checker still lists the src/ pages as stale by file hash. Their content is unaffected (the edits are comments), so they were deliberately not restamped over a behaviour change that did not happen — a later node touching those files should restamp then.",
+          "The type check is green on the annotations as they stand today, not proof the annotations are correct; a wrong-but-consistent @returns still passes.",
+          "kb/289 was already held by a locked leftover worktree (agent-a7322af51a69312c4) from the withdrawn attempt 1, so this work was committed on the throwaway agent branch and pushed to refs/heads/kb/289. That stale worktree is still on disk and is a candidate for `hkb gc`."
+        ],
+        "verification": [
+          "npm run lint  (node --check loop + tsc --noEmit, both green; 366 -> 0 type errors)",
+          "npm test  (1138 pass, 0 fail; 3 new tests pin the warning filter)",
+          "npm run smoke  (packs, installs and runs the tarball from outside the repo, as a devDependency, and as the checkout itself)",
+          "node bin/hkb.js version  (fresh checkout path, empty stderr, exit 0)",
+          "node .repolore/scripts/wiki-check.mjs; wiki-stamp.mjs on the new page; wiki-index.mjs",
+          "git diff -- src/ reviewed line by line to confirm only four non-comment edits, all behaviour-preserving"
+        ]
+      },
+      "pr": 307,
+      "pr_continued": false,
+      "summary": "Node floor is now >=22.13 (24 recommended) and `npm run lint` type-checks the JSDoc. bin/hkb.js carries the SQLite ExperimentalWarning filter verbatim from docs/local-first.md §9 and loads src/cli.js via a DYNAMIC `await import()` — a static import is hoisted above the filter and would defeat it; keep it dynamic. tsconfig.json is a checker, not a build (noEmit, allowJs+checkJs, strict:false) over bin/, src/, scripts/ and types/. New types/hkb.d.ts declares the two shapes plain JS cannot: `Error` with .exitCode/.userMessage/.kind/.needs/... (CLAUDE.md's own rule, read back at ~60 sites) and `HkbAttempt`, one run-record row whose fields are written in stages — later nodes adding attempt fields should add them there rather than casting at the construction site. ~370 type errors were fixed as JSDoc only; no @ts-expect-error was needed and no runtime behaviour changed (four non-comment edits, each behaviour-identical: an explicit Number() around an already-coercing comparator in cli.js, a cast's closing paren in board.js, a `?.` rewritten through a local in hook.js, and `title = ''` as createTask's default in lifecycle.js, which the existing guard rejects exactly as it rejected undefined). typescript and @types/node are devDependencies; nothing under src/ imports either, so `node bin/hkb.js version` in a fresh clone with no npm install still works and the packed tarball is unaffected. No lock file is committed and package-lock.json is now gitignored — CI runs a plain `npm install` before lint and every setup-node keeps package-manager-cache:false, which requires the lock file to stay absent. CI is now four jobs: test on 22 and 24, smoke on 22 and 26; smoke deliberately runs NO npm install because the tarball must work with nothing installed beside it. A2 (remove the Actions runner) can proceed on this branch as-is; note that .github/workflows/test.yml now has matrices in both jobs."
+    }
+  ],
+  "v": 1
+}

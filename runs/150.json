@@ -1,0 +1,249 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T22:25:19.582Z",
+      "heartbeat_at": "2026-08-28T22:03:24.110Z",
+      "host": "YRND1-GG",
+      "job": "aaeb7afb",
+      "lock_sha": "616f0b73930f6cf60862e4088ba8556232cdca68",
+      "log": ".kanban/logs/150-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 152,
+      "pr_head": "worktree-kb-150-1",
+      "profile": "claude",
+      "session_id": "aaeb7afb-5d91-4fef-95e0-40d087d713ad",
+      "started_at": "2026-08-28T22:03:24.110Z",
+      "summary": "A `claude --bg` launch now carries no KB_* at all, and a hook that finds a KB_TASK its checkout contradicts stands aside. Four parts. (1) src/dispatch.js: a `mode: \"claude-bg\"` spawn gets `scrubKbEnv(process.env)` — every KB_* key removed — because a launch that finds no session daemon starts one and the daemon keeps that environment for life; it reaches no worker there anyway (#125), and Claude C",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-150-1/aaeb7afb-5d91-4fef-95e0-40d087d713ad.jsonl",
+      "wt": "kb-150-1"
+    },
+    {
+      "attempt": 2,
+      "ended_at": "2026-08-28T22:37:17.638Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "Review of PR #152 — the scrub (`scrubKbEnv`, tested through a real `spawnWorker` for both bg and child-process launches), the tick-outranks-hook repair (#146 attempt 1 now reads `60f4948c`), `checkEnvLeak` over /proc and the docs/wiki page are all sound; 673 tests, smoke green, no new stale wiki pages. One blocker, from this card's own What #2 / Done-when #2:\n\n**B1 — the gate only recognises a lea",
+      "started_at": "2026-08-28T22:37:17.637Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 3,
+      "ended_at": "2026-08-28T23:23:25.602Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "Continue PR #152 per the full review re-posted as a plain comment just above (B1: treat any cwd other than KB_ROOT/<worktree of kb-<n>-<k>> as the leak, in attemptIdentity and checkEnvLeak; S1/S2/N1/N3). Merge origin/main first — #159 rewrote the preToolHook gate and created test/hook.test.js: keep both gates, leak check first, then the KB_PROFILE stand-aside; concatenate the two test files.",
+      "started_at": "2026-08-28T23:23:25.602Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 4,
+      "bg": true,
+      "continues_branch": "worktree-kb-150-1",
+      "continues_pr": 152,
+      "ended_at": "2026-08-29T01:15:57.787Z",
+      "heartbeat_at": "2026-08-29T01:07:21.889Z",
+      "host": "YRND1-GG",
+      "job": "ef401c71",
+      "lock_sha": "6c54af5edbd105e0aab11149831d021d6953d27d",
+      "log": ".kanban/logs/150-4.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 152,
+      "pr_head": "worktree-kb-150-1",
+      "profile": "claude",
+      "session_id": "ef401c71-0841-43fc-a6f2-d694f31e4dc6",
+      "started_at": "2026-08-29T01:07:21.889Z",
+      "summary": "Fixed B1 from the review, then merged the long-diverged origin/main into PR #152's branch and resolved every conflict. B1: `attemptIdentity` (src/model.js) had a `if (!wt && !atRoot) return { n, k, source: 'env' }` branch that trusted the environment from ANY cwd that wasn't the board root or a mismatched kb-<n>-<k> checkout — a review worktree, or a session a poisoned daemon went on to host for a",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-150-4/ef401c71-0841-43fc-a6f2-d694f31e4dc6.jsonl",
+      "wt": "kb-150-4"
+    },
+    {
+      "attempt": 5,
+      "ended_at": "2026-08-29T01:25:59.621Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "Continue PR #152: it is CONFLICTING with main since #169 — merge origin/main (three mechanical conflicts: dispatch.js imports, harnesses.md hooks table, wiki/log.md; keep both sides). Then, per the full review re-posted just above: implement the exact KB_ROOT-joined path compare in attemptIdentity (or retract the docs' claim), refresh the stale PR body (S2), re-stamp up-and-down.md and hook-instal",
+      "started_at": "2026-08-29T01:25:59.621Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 6,
+      "bg": true,
+      "continues_branch": "worktree-kb-150-1",
+      "continues_pr": 152,
+      "ended_at": "2026-08-29T02:02:51.622Z",
+      "heartbeat_at": "2026-08-29T01:45:26.388Z",
+      "host": "YRND1-GG",
+      "job": "242a42b9",
+      "lock_sha": "da9b0a0a83afa5e834b7c588e9a3746529d83ab5",
+      "log": ".kanban/logs/150-6.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "session_id": "242a42b9-bfb9-4590-bf8d-28a82c13ffea",
+      "started_at": "2026-08-29T01:45:26.388Z",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-150-6/242a42b9-bfb9-4590-bf8d-28a82c13ffea.jsonl",
+      "wt": "kb-150-6"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T22:37:18Z",
+      "id": 5458482666,
+      "text": "**Changes requested** (after attempt 1): Review of PR #152 — the scrub (`scrubKbEnv`, tested through a real `spawnWorker` for both bg and child-process launches), the tick-outranks-hook repair (#146 attempt 1 now reads `60f4948c`), `checkEnvLeak` over /proc and the docs/wiki page are all sound; 673 tests, smoke green, no new stale wiki pages. One blocker, from this card's own What #2 / Done-when #2:\n\n**B1 — the gate only recognises a leak at `KB_ROOT` itself or inside another `kb-<n>-<k>` checkout; any other cwd still trusts the env** (`attemptIdentity`, src/model.js ~604: `if (!wt && !atRoot) return { n, k, source: 'env' }`). Reproduced: with this session's leaked `KB_TASK=146`, from `.claude/worktrees/review-152` the PR's pretool hook denies `for x in 1; do …; done` byte-identically to main, with no stderr line, and `whichAttempt()` answers `{146,1,env}` — so the Stop hook there would `writeSession` the operator's id back onto #146 attempt 1 (src/hook.js ~207 overwrites regardless of outcome), undoing the repair. Same hole across repos: a pipao-v2 session hosted by the poisoned daemon carries `KB_ROOT=…/harness-kanban-board`, cwd = pipao root → env trusted → pipao's hooks act as worker 146 on pipao's board. Poisoned daemons persist until restarted (six processes on this host right now), so \"makes the next leak harmless\" currently holds only at the board root. Fix: for a profile whose workspace is a worktree and with `KB_ROOT` set, the worker's root is deterministic — `path.join(KB_ROOT, worktreePath('kb-<n>-<k>'))` (`ensureWorktree`, src/board.js ~144; Claude's `--worktree` uses the same directory) — treat any other cwd as the leak, print the one stderr line, answer null. Apply the same rule in `checkEnvLeak` (src/doctor.js ~421), which today also reports nothing from a review worktree. Add the two tests: review-worktree cwd and foreign-repo cwd both → leak.\n\nAlso, while you are in there:\n- S1: `docs/harnesses.md` says a session \"plainly not sitting in the worktree of\" its task falls back — true only after B1; align the prose (the wiki page already states the narrower rule, update it too).\n- S2: `jobSessionUpdate` (src/jobs.js ~84) now overwrites whenever the job record's session differs, which includes the legitimate `claude --resume` case the old test guarded, and clears `total_cost_usd/num_turns/duration_ms`. Acceptable (logged in the tick, only open non-manual attempts on this host) — say so in the PR body rather than only \"a hook stamp\".\n- N1: `atRoot` compares `path.resolve` strings — on Windows a drive-letter case mismatch defeats it; `fs.realpathSync` or case-folding on win32.\n- N3: `preToolHook` re-reads `process.env.KB_PROFILE/KB_ROOT` after the gate instead of the identity it just computed.\n\nSame branch, same PR (worktree-kb-150-1): push the fix, rerun lint/test/smoke, then `hkb finish` again. Note main moved (PR #145 merged): merge origin/main into your branch first — src/doctor.js and src/model.js are touched by both."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T22:57:50Z",
+      "id": 5458621587,
+      "text": "Heads-up for the fix pass: main now has PR #159 (#143), which rewrites the same `preToolHook` gate lines your branch changes (`whichAttempt(...)?.source !== 'env'` vs the new `KB_PROFILE` lookup + stand-aside) and also creates `test/hook.test.js` (add/add conflict) and edits `src/doctor.js`'s import line and check list. Merge origin/main first and keep BOTH gates in this order: leak check (your attemptIdentity) first, then #159's KB_PROFILE unset/unknown stand-aside; concatenate the two test/hook.test.js files. Your branch is also behind #138 (cb9e43d)."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T23:23:24Z",
+      "id": 5458787840,
+      "text": "Full review for the continuation attempt (the attempt row keeps only 400 characters of it):\n\nReview of PR #152 — the scrub (`scrubKbEnv`, tested through a real `spawnWorker` for both bg and child-process launches), the tick-outranks-hook repair (#146 attempt 1 now reads `60f4948c`), `checkEnvLeak` over /proc and the docs/wiki page are all sound; 673 tests, smoke green, no new stale wiki pages. One blocker, from this card's own What #2 / Done-when #2:\n\n**B1 — the gate only recognises a leak at `KB_ROOT` itself or inside another `kb-<n>-<k>` checkout; any other cwd still trusts the env** (`attemptIdentity`, src/model.js ~604: `if (!wt && !atRoot) return { n, k, source: 'env' }`). Reproduced: with this session's leaked `KB_TASK=146`, from `.claude/worktrees/review-152` the PR's pretool hook denies `for x in 1; do …; done` byte-identically to main, with no stderr line, and `whichAttempt()` answers `{146,1,env}` — so the Stop hook there would `writeSession` the operator's id back onto #146 attempt 1 (src/hook.js ~207 overwrites regardless of outcome), undoing the repair. Same hole across repos: a pipao-v2 session hosted by the poisoned daemon carries `KB_ROOT=…/harness-kanban-board`, cwd = pipao root → env trusted → pipao's hooks act as worker 146 on pipao's board. Poisoned daemons persist until restarted (six processes on this host right now), so \"makes the next leak harmless\" currently holds only at the board root. Fix: for a profile whose workspace is a worktree and with `KB_ROOT` set, the worker's root is deterministic — `path.join(KB_ROOT, worktreePath('kb-<n>-<k>'))` (`ensureWorktree`, src/board.js ~144; Claude's `--worktree` uses the same directory) — treat any other cwd as the leak, print the one stderr line, answer null. Apply the same rule in `checkEnvLeak` (src/doctor.js ~421), which today also reports nothing from a review worktree. Add the two tests: review-worktree cwd and foreign-repo cwd both → leak.\n\nAlso, while you are in there:\n- S1: `docs/harnesses.md` says a session \"plainly not sitting in the worktree of\" its task falls back — true only after B1; align the prose (the wiki page already states the narrower rule, update it too).\n- S2: `jobSessionUpdate` (src/jobs.js ~84) now overwrites whenever the job record's session differs, which includes the legitimate `claude --resume` case the old test guarded, and clears `total_cost_usd/num_turns/duration_ms`. Acceptable (logged in the tick, only open non-manual attempts on this host) — say so in the PR body rather than only \"a hook stamp\".\n- N1: `atRoot` compares `path.resolve` strings — on Windows a drive-letter case mismatch defeats it; `fs.realpathSync` or case-folding on win32.\n- N3: `preToolHook` re-reads `process.env.KB_PROFILE/KB_ROOT` after the gate instead of the identity it just computed.\n\nSame branch, same PR (worktree-kb-150-1): push the fix, rerun lint/test/smoke, then `hkb finish` again. Note main moved (PR #145 merged): merge origin/main into your branch first — src/doctor.js and src/model.js are touched by both."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T23:23:26Z",
+      "id": 5458788070,
+      "text": "**Changes requested** (after attempt 2): Continue PR #152 per the full review re-posted as a plain comment just above (B1: treat any cwd other than KB_ROOT/<worktree of kb-<n>-<k>> as the leak, in attemptIdentity and checkEnvLeak; S1/S2/N1/N3). Merge origin/main first — #159 rewrote the preToolHook gate and created test/hook.test.js: keep both gates, leak check first, then the KB_PROFILE stand-aside; concatenate the two test files."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-29T01:25:59Z",
+      "id": 5459482763,
+      "text": "Full second-pass review of PR #152 for the continuation attempt (the attempt row keeps only 400 characters):\n\nB1 is closed for every shape the first review reproduced — board root, a review worktree, a foreign repo (pipao-v2), a mismatched `kb-<n>-<k>` — each answers empty stdout + one \"ignoring\" stderr line + exit 0, with tests in attemptIdentity and checkEnvLeak; #159's KB_PROFILE stand-aside survived the merge in the right order; scrubKbEnv still applies only to `mode: claude-bg` with the real-spawn test asserting both halves; 765 tests, smoke green. Live evidence for the card, found during the review: the attempt-4 worker of #146 (hosted by the still-poisoned daemon, env KB_ATTEMPT=1) re-stamped #146 attempt 1 with its own session on main's code.\n\n**Must do (the PR is now CONFLICTING with main):** merge origin/main (c2486c9, PR #169 / #144: hooks ride the launch line as `--settings`). Three mechanical conflicts: `src/dispatch.js` import block (#144 adds `HOOK_SETTINGS_VAR`/`workerHookSettings`, yours adds `scrubKbEnv` — keep both), `docs/harnesses.md` hooks table (keep both rows), `docs/wiki/log.md` (append both). No semantic clash: #144 passes hook settings on argv, not via KB_*, so the scrub does not strip it.\n\n**Should fix in the same pass:**\n1. `src/model.js` ~643 `attemptIdentity`: the rule shipped is \"basename of the git toplevel matches kb-<n>-<k>\", while `docs/harnesses.md` and the docstring (~631) claim the stronger \"KB_ROOT joined with kb-<n>-<k> is the only cwd that counts\". Probe: cwd `kb-149-3` with `KB_ROOT=/nonexistent` → env trusted, policy live. Either implement the path compare — `fs.realpathSync(path.join(KB_ROOT, worktreePath('kb-<n>-<k>')))` equals `realpathSync(root)` — which also closes N1 properly, or retract the claim in harnesses.md and the docstring so the docs match what ships. Prefer implementing it: a poisoned daemon hosting a session in another board's same-numbered worktree would otherwise run `decidePermission` with `root = KB_ROOT` of the wrong repo and deny every Write in that worker's own worktree.\n2. PR body is stale: still describes the pre-B1 rule and \"673 pass\"; and S2 from the first review — `jobSessionUpdate` now overwrites on any differing job session, which includes the legitimate `claude --resume` case and clears total_cost_usd/num_turns/duration_ms — say so there.\n3. `docs/wiki/features/up-and-down.md` and `features/hook-install-shapes.md` went stale on this branch (model.js/dispatch.js/doctor.js anchors shifted by your insertion; up-and-down.md ~97 cites detachedEnv at model.js 827-831, now ~925) — re-stamp; do not attribute them to main drift (they are fresh on main).\n4. N3: `src/hook.js` ~65-66 and ~80 re-read `process.env.KB_TASK/KB_PROFILE/KB_ROOT` after the gate instead of the identity it computed. `model.js` ~632 docstring: \"or KB_ROOT itself for a track root\" — no such case exists. `hook.js` ~109 `warnedLeak` dedupes per process on message text, so two in-process tests with the same message are order-dependent.\n\nSame branch, same PR (worktree-kb-150-1). Rerun lint/test/smoke, then `hkb finish`."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-29T01:26:01Z",
+      "id": 5459482991,
+      "text": "**Changes requested** (after attempt 4): Continue PR #152: it is CONFLICTING with main since #169 — merge origin/main (three mechanical conflicts: dispatch.js imports, harnesses.md hooks table, wiki/log.md; keep both sides). Then, per the full review re-posted just above: implement the exact KB_ROOT-joined path compare in attemptIdentity (or retract the docs' claim), refresh the stale PR body (S2), re-stamp up-and-down.md and hook-install-shapes.md, N3."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T22:25:23Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/dispatch.js",
+          "src/hook.js",
+          "src/jobs.js",
+          "src/doctor.js",
+          "src/lifecycle.js",
+          "src/cli.js",
+          "test/hook.test.js",
+          "test/dispatch.test.js",
+          "test/jobs.test.js",
+          "docs/harnesses.md",
+          "docs/wiki/concepts/worker-identity.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/index.md",
+          "docs/wiki/log.md",
+          "docs/wiki/wiki.config.yml"
+        ],
+        "residual_risk": [
+          "The done-when 'a later session prints undefined for KB_TASK' cannot be observed from inside a worker: it needs a cold daemon start by a dispatcher on this version. The launch env itself is asserted in test/dispatch.test.js.",
+          "The tick's correction could rewrite a legitimately-resumed job's session onto an open attempt (one job record over two sessions — #137's original worry). Bounded: open attempts only, and the job record is the tick's own evidence, tied to the attempt's checkout.",
+          "The leak gate excludes `mode: process` Claude profiles (claude-p) on purpose — I could not verify from here whether a `claude -p --worktree` session's hooks run at the board root or in the worktree, and gating on a wrong assumption would have disarmed claude-p's live Stop nudge and PreToolUse policy. If that is ever confirmed, worksInWorktree is the one place to widen.",
+          "Three small out-of-scope touches: one-line call sites in src/lifecycle.js and src/cli.js (pass `profiles` to the hook helpers), and the correction itself in src/jobs.js, where jobSessionUpdate lives."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (673 pass, 0 fail — includes the new test/hook.test.js and the launch-env test in test/dispatch.test.js)",
+          "npm run smoke (the launch env changed)",
+          "node .repolore/scripts/wiki-check.mjs (concepts/worker-identity fresh) and wiki-index.mjs --check",
+          "node bin/hkb.js doctor against the live board — the new `worker environment` line fired on this very session, which was carrying KB_TASK=146 from a daemon, and named six poisoned daemon pids",
+          "the #146 repair was dry-run first, then applied via jobSessionUpdate; hkb show 146 now names session 60f4948c-… and the kb-146-1 transcript"
+        ]
+      },
+      "summary": "A `claude --bg` launch now carries no KB_* at all, and a hook that finds a KB_TASK its checkout contradicts stands aside. Four parts. (1) src/dispatch.js: a `mode: \"claude-bg\"` spawn gets `scrubKbEnv(process.env)` — every KB_* key removed — because a launch that finds no session daemon starts one and the daemon keeps that environment for life; it reaches no worker there anyway (#125), and Claude Code 2.1.x has no flag that hands env to the session instead (checked against `claude --help`). Every other mode is untouched: for a child process the env is the only identity there is and it dies with the process. (2) `attemptIdentity` (src/model.js) reconciles the environment with the checkout, and `whichAttempt` (src/hook.js) uses it: an env naming a task whose worktree this plainly is not is dropped, the checkout answers if it can, one line to stderr. Judged only on evidence (cwd is KB_ROOT, or a kb-<n>-<k> naming another attempt) and only for a profile whose worker hkb knows the location of (`worksInWorktree`: mode claude-bg or workspace worktree) — claude-p and claude-action are deliberately excluded, since neither can leak and where claude-p's hooks run is the harness's business. preToolHook now gates on `source === 'env'`. (3) `jobSessionUpdate` (src/jobs.js): when the job the tick matched to an OPEN attempt names a different session than the row, the job wins and the row is rewritten, clearing the fields the job cannot name so a corrected id never sits beside the replaced transcript; the tick logs the id it replaced. It cannot overwrite a verb's own stamp, because a verb closes the row it stamps and the tick only sees open attempts. (4) `checkEnvLeak`/`daemonsWithKbEnv` (src/doctor.js): a `worker environment` warning when doctor's own shell wears a contradicted identity, naming the daemon pids on Linux from /proc/<pid>/environ. NEXT WORKER, READ THIS: two tests in test/jobs.test.js changed contract (#137's \"a row a terminal verb has stamped is byte-identical after a tick\" no longer holds for a row naming a different session) — both rewritten with the reasoning. #146 attempt 1 was repaired to session 60f4948c-67d7-47dc-b554-afa3804d9618 by applying jobSessionUpdate once to the job id the row already carried: its attempt was already closed, so no tick will ever reach it. Its stale marker file at <board root>/.kanban/sessions/146-1 still holds the operator's session id; harmless (the attempt is closed and the hook now stands aside at the board root), but delete it if it ever matters. Daemons started before this fix keep their inherited KB_* until restarted — `hkb doctor` found six on this host and names their pids."
+    },
+    {
+      "artifacts": [],
+      "at": "2026-08-29T01:16:00Z",
+      "attempt": 4,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/dispatch.js",
+          "src/hook.js",
+          "src/doctor.js",
+          "test/hook.test.js",
+          "test/dispatch.test.js",
+          "docs/harnesses.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/concepts/worker-identity.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "7 wiki pages outside this task's scope (features/auto-merge, hook-install-shapes, planning-commands, review-loop, up-and-down, update-notice, decisions/adr-004) are stale for drift introduced by other PRs on origin/main this task did not verify — left unstamped rather than blessed without reading, per the wiki's own rule",
+          "The done-when 'a later session prints undefined for KB_TASK' still cannot be observed from inside a worker (needs a cold daemon start by a dispatcher on this version) — same residual risk attempt 1 already noted, unchanged by this pass"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (765 pass, 0 fail)",
+          "npm run smoke (green)",
+          "node .repolore/scripts/wiki-check.mjs (worker-identity and architecture/overview both fresh; 7 unrelated pages remain stale from origin/main drift this task did not touch)",
+          "node .repolore/scripts/wiki-index.mjs --check (up to date)",
+          "merged origin/main (6c54af5) into worktree-kb-150-1, pushed f79e7c6"
+        ]
+      },
+      "pr": 152,
+      "pr_continued": true,
+      "summary": "Fixed B1 from the review, then merged the long-diverged origin/main into PR #152's branch and resolved every conflict. B1: `attemptIdentity` (src/model.js) had a `if (!wt && !atRoot) return { n, k, source: 'env' }` branch that trusted the environment from ANY cwd that wasn't the board root or a mismatched kb-<n>-<k> checkout — a review worktree, or a session a poisoned daemon went on to host for an unrelated repo, both read as agreement. Fixed so only a `kb-<n>-<k>` checkout naming this exact task and attempt counts as evidence for the environment; everything else (board root, mismatched worktree, review worktree, foreign repo) is a leak. `checkEnvLeak` (src/doctor.js) inherits the fix for free since it calls the same function; `preToolHook`/`whichAttempt` (src/hook.js) too. Merge conflicts resolved: src/dispatch.js (combined the launch-env scrub with origin/main's active_pr-guard continuation code), src/hook.js (kept both preToolHook gates — leak check first, then the KB_PROFILE stand-aside — per the reviewer's note), src/doctor.js (kept both checkEnvLeak and the new checkPermissionMode/checkWorkerPermissions checks from #159), src/model.js (merged import list), test/dispatch.test.js (kept origin/main's `root` param addition), test/hook.test.js (an add/add conflict — concatenated this task's leak-focused tests with #159's new PreToolUse pretool subprocess tests into one file, updated the existing 'judged only where hkb knows where the worker sits' test for the new stricter B1 behavior, added two new tests for review-worktree and foreign-repo leak cases in both attemptIdentity and checkEnvLeak, fixed one pre-existing assertion whose expected denial wording had changed upstream). docs/harnesses.md and docs/wiki/architecture/overview.md and docs/wiki/log.md conflicts resolved by combining both sides' additions. docs/wiki/concepts/worker-identity.md updated (not just re-stamped) to describe the widened B1 rule, then both worker-identity.md and architecture/overview.md re-stamped fresh since I verified their prose against the current code. Other wiki pages this task doesn't own were left stale (pre-existing drift from origin/main's own commits, not introduced here) per the wiki's own established practice of not re-stamping unverified pages."
+    },
+    {
+      "at": "2026-08-29T01:56:03Z",
+      "attempt": 6,
+      "kind": "review",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/hook.js",
+          "src/doctor.js",
+          "test/hook.test.js",
+          "docs/wiki/concepts/worker-identity.md",
+          "docs/wiki/log.md",
+          "docs/harnesses.md (merge only, no further change needed)",
+          "src/dispatch.js (merge only)"
+        ],
+        "residual_risk": [
+          "9 wiki pages are stale from #144/#149's own changes, unrelated to this card's scope -- left for whoever owns that drift",
+          "The path compare uses path.resolve, not fs.realpathSync -- it does not follow symlinks in KB_ROOT or the checkout, which the review's probe did not require but a truly adversarial symlink could still evade"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (779 passing)",
+          "npm run smoke (green)",
+          "node .repolore/scripts/wiki-check.mjs (worker-identity fresh; 9 other pages stale from #144/#149 drift this task did not touch)",
+          "node .repolore/scripts/wiki-index.mjs --check (up to date)"
+        ]
+      },
+      "pr": 152,
+      "pr_continued": true,
+      "reviewer": null,
+      "summary": "Closed B1's remaining gap and merged main. attemptIdentity (src/model.js) previously agreed whenever a cwd's basename simply matched kb-<n>-<k>, even under a KB_ROOT that named something else entirely -- exactly the probe the reviewer gave (cwd kb-149-3, KB_ROOT=/nonexistent). It now takes herePath/rootPath (the caller's path.resolve'd cwd and KB_ROOT) and only returns source: 'env' when the resolved cwd equals rootPath joined with kb-<n>-<k>; a same-numbered checkout under the wrong or unset KB_ROOT falls back to source: 'worktree' with a leak note, so the worker permission policy and Stop nudge stay inert. whichAttempt (src/hook.js) and checkEnvLeak (src/doctor.js) updated to pass the new params. Also merged origin/main (#144 hooks-on-launch-line, #149 operator-seat) -- three mechanical conflicts (src/dispatch.js imports, docs/harnesses.md hook table, docs/wiki/log.md), no semantic clash since #144 passes hook settings on argv, not KB_*. docs/harnesses.md's \"KB_ROOT joined with kb-<n>-<k> is the only cwd that counts\" claim needed no change -- it's now accurate. Refreshed docs/wiki/concepts/worker-identity.md to describe the exact-path rule and re-stamped it."
+    }
+  ],
+  "v": 1
+}

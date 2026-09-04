@@ -1,0 +1,58 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T17:13:04.227Z",
+      "heartbeat_at": "2026-08-27T17:04:06.315Z",
+      "host": "YRND1-GG",
+      "job": "09631239",
+      "lock_sha": "abf0c054e51fdfe67d183688571cd63df33f0f86",
+      "log": ".kanban/logs/73-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-27T17:04:06.315Z",
+      "wt": "kb-73-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T17:09:45Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/init.js",
+          "src/cli.js",
+          "test/harness.test.js",
+          "README.md",
+          "docs/manual-mode.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/decisions/adr-004-roles-and-adoption.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "hkb doctor still checks and labels only the Stop hook (src/doctor.js:253) — a repo missing PreToolUse still reports clean. Left out as a separate detection gap.",
+          "The dedup check in installClaudeHooks is still the pre-existing substring heuristic (JSON of the group contains the verb and 'hkb'), so an unrelated operator hook whose command contains both words would be mistaken for ours. Unchanged behaviour, not touched here.",
+          "npm run smoke not run — nothing the CLI reads from the package at runtime, nor package.json files[], changed."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test  (432 pass, 0 fail)",
+          "node --test test/harness.test.js  (36 pass, incl. 5 new settings.json/help tests)",
+          "node -e \"installClaudeHooks + hookSummary against a temp root\"  (fresh and re-run lines, settings.json shape eyeballed)",
+          "node .repolore/scripts/wiki-check.mjs  (all pages fresh)"
+        ]
+      },
+      "summary": "init now names both hooks it writes into `.claude/settings.json`. `installStopHook` → `installClaudeHooks`, driven by a `CLAUDE_HOOKS` map (`event → hkb hook <verb>`) and returning the events it actually added; the new pure `hookSummary(added)` turns that into one line: fresh → \"added Stop and PreToolUse hooks to .claude/settings.json (both inert unless KB_TASK is set; PreToolUse is the worker permission policy)\", re-run → \"Stop and PreToolUse hooks already present in …\", half-installed → \"added PreToolUse hook to …; Stop hook already there (…)\". `--no-hook` and the unparseable-settings message are plural now too. HELP's plumbing line is `hook stop|pretool`, matching what `src/cli.js` has routed since it learned `hook pretool`. The hook itself is unchanged and still on by default — it is the worker permission policy, and a dispatched worker without it stalls on the first prompt.\n\nDocs: the two `hkb init` one-liners (README, docs/manual-mode.md) name both hooks, and the README \"how it maps\" table gained a `worker permissions` row beside `stop nudge`. Wiki `architecture/overview` and `decisions/adr-004` re-stamped as a no-op (the only covered-file change is one help string in cli.js) with a log.md line.\n\nTests: `test/harness.test.js` had no `.claude/settings.json` assertions at all; it now has five — both hooks written with `matcher: \"*\"`, `hkb hook <verb>`, `timeout: 30`; a re-run adds nothing; unrelated settings and an operator's own Stop hook survive; an unparseable settings.json is reported, not overwritten; the three hookSummary wordings name both hooks; and `hkb help` lists every hook verb the CLI routes.\n\nNot done, deliberately: `hkb doctor` still checks and labels only the Stop hook (`src/doctor.js:253`), so an operator who removed PreToolUse by hand still gets a clean bill of health. That is a detection gap rather than this disclosure bug — worth its own task if you want it.\n\nPR #76 (draft): https://github.com/emyann/harness-kanban-board/pull/76"
+    }
+  ],
+  "v": 1
+}

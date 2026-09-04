@@ -1,0 +1,63 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-09-01T20:47:38.941Z",
+      "heartbeat_at": "2026-09-01T20:43:41.679Z",
+      "host": "YRND1-GG",
+      "lock_sha": "14cab83f2ad560d26962e7d81a320801397496b0",
+      "manual": true,
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pr": 230,
+      "pr_head": "kb/226",
+      "profile": "claude",
+      "session_id": "2abc5911-ed47-4920-a41b-ae02a2292a6b",
+      "started_at": "2026-09-01T20:43:41.679Z",
+      "summary": "fetchBoard(ctx, { blockers: 'all' }) now REST-fills blockers for every OPEN card on a repo without GraphQL Issue.blockedBy; blockers: true is unchanged (todo/blocked only) and blockers: false still asks for nothing. A repo WITH the GraphQL field makes no extra request for any value - pinned by a test that counts every call. The array fetchBoard returns carries a non-enumerable provenance record { ",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-191-1/2abc5911-ed47-4920-a41b-ae02a2292a6b.jsonl",
+      "wt": "kb-191-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T20:48:56Z",
+      "id": 5500236814,
+      "text": "**Merged by the operator seat** — review: Reviewed against the card's Done when. All five met: blockers:'all' REST-fills every open card only where GraphQL blockedBy is missing; blockers:true is byte-for-byte the old todo/blocked behaviour; the board carries its own provenance (source/filled/scope) as a NON-ENUMERABLE property so every existing caller still sees a plain array, with blockersOf/blockersKnown answering unknown-vs-none; doctor names the one-REST-call-per-open-card cost; src/model.js untouched, as the Contract required. Verified myself: CI green (test + packed artifact), lint clean, 932 tests pass on the branch (up from 924). Eight new tests, including the two that matter most — 'a repo with GraphQL blockedBy makes no extra request for all' (pins the frugality claim by counting calls) and 'blockersKnown tells an empty list apart from a list nobody read' (pins the silently-wrong-answer case the card exists to prevent)., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T20:47:40Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/tasks.js",
+          "src/doctor.js",
+          "test/tasks.test.js"
+        ],
+        "residual_risk": [
+          "The provenance record lives on the array as a non-enumerable property, so it does not survive board.map/filter/slice - a caller that reshapes the board must read blockersOf/blockersKnown against the original array from fetchBoard.",
+          "blockers: 'all' costs one REST call per open card on a repo without GraphQL blockedBy; nothing rate-limits or batches it, doctor only names the cost.",
+          "No caller passes 'all' yet - hkb groom (a sibling card) is the first, so the path is covered by tests only until it lands.",
+          "docs/wiki was already stale board-wide before this change and was left alone; the groom feature page belongs to the later node in track #191."
+        ],
+        "verification": [
+          "node --test test/tasks.test.js (8 new tests pass)",
+          "npm run lint",
+          "npm test (932 tests, 0 failures)"
+        ]
+      },
+      "pr": 230,
+      "pr_continued": false,
+      "summary": "fetchBoard(ctx, { blockers: 'all' }) now REST-fills blockers for every OPEN card on a repo without GraphQL Issue.blockedBy; blockers: true is unchanged (todo/blocked only) and blockers: false still asks for nothing. A repo WITH the GraphQL field makes no extra request for any value - pinned by a test that counts every call. The array fetchBoard returns carries a non-enumerable provenance record { source: 'graphql'|'rest'|null, filled: boolean, scope: 'all'|'open'|'waiting'|'none' }, read through two new exports from src/tasks.js: blockersOf(board) returns the record (safe on a plain array, defaults to { source: null, filled: false, scope: 'none' }), and blockersKnown(board, task) returns whether that task's blockedBy is a real answer or was never looked up. blockersKnown is what the unknown_blockers finding must use: an empty blockedBy on a card outside the fill-in's scope means UNKNOWN, never no_blockers. The record is non-enumerable so JSON.stringify, Object.keys, spreads and for..of over the board are unchanged. src/doctor.js gains an exported checkGroomBlockers(ctx, { ok, warn }, { caps, board }) and GROOM_BLOCKERS_CHECK = 'groom blockers', called from the run right after the GraphQL capability lines: ok when blockedByGql is present ('hkb groom costs no extra request'), warn otherwise naming the cost as N REST calls, one per open card, using the shared board read for N. src/model.js and src/dispatch.js are untouched. PR https://github.com/emyann/harness-kanban-board/pull/230 (draft, base main)."
+    }
+  ],
+  "v": 1
+}

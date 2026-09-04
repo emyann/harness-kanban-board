@@ -1,0 +1,78 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T19:48:51.258Z",
+      "heartbeat_at": "2026-08-27T19:35:06.331Z",
+      "host": "YRND1-GG",
+      "job": "18241699",
+      "lock_sha": "1a26d7e5f8492fed5fe9d4a99a2452feccd7da2a",
+      "log": ".kanban/logs/92-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 94,
+      "pr_head": "worktree-kb-92-1",
+      "profile": "claude",
+      "started_at": "2026-08-27T19:35:06.331Z",
+      "summary": "`/kanban:specify` and `/kanban:decompose` are now real slash commands instead of section titles that looked like ones. Took option 1 from the card (make them real), not option 2.\n\n**One source, two registrations.** `commands/specify.md` and `commands/decompose.md` at the package root are (a) the plugin's command directory — `\"commands\": \"./commands\"` in `.claude-plugin/plugin.json`, plus `commands",
+      "wt": "kb-92-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T19:48:53Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "commands/specify.md",
+          "commands/decompose.md",
+          ".claude/commands/kanban",
+          ".claude-plugin/plugin.json",
+          "package.json",
+          "src/init.js",
+          "src/doctor.js",
+          "skills/kanban/SKILL.md",
+          "skills/kanban/references/protocol.md",
+          "scripts/smoke-pack.mjs",
+          "README.md",
+          "docs/harnesses.md",
+          "test/init.test.js",
+          "test/skill.test.js",
+          "test/track.test.js",
+          "docs/wiki/features/planning-commands.md",
+          "docs/wiki/features/auto-merge.md",
+          "docs/wiki/decisions/adr-004-roles-and-adoption.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/wiki.config.yml",
+          "docs/wiki/index.md",
+          "docs/wiki/log.md"
+        ],
+        "dependencies": [],
+        "residual_risk": [
+          "Verified end to end that the files are written and that the harness registers them from .claude/commands/kanban/. The plugin path (`\"commands\": \"./commands\"` in plugin.json) was not exercised by installing hkb as a plugin — it follows the documented plugin layout and a test asserts the key and the flat directory, but nobody typed /kanban:decompose from a plugin install.",
+          "If a repo has BOTH the plugin and `hkb init`'s copy, two sources register the same two names. Expected to be a duplicate listing rather than an error, but untested.",
+          "`${CLAUDE_PLUGIN_ROOT}` appears in the command bodies. It expands under a plugin install and stays literal in the .claude/commands/ copy; the surrounding sentence names both paths so either reading works, but the literal form is slightly ugly to a human reader.",
+          "The skill version bump (0.4.0 -> 0.5.0) means every existing adopter's `hkb doctor` will now report their skill copy stale until they re-run `hkb init` — intended, since that is also what installs the commands."
+        ],
+        "retry_notes": null,
+        "verification": [
+          "npm run lint",
+          "npm test (515 pass, 0 fail)",
+          "npm run smoke (25 content checks, 3 command checks, 9 init checks — the tarball ships commands/ and hkb init writes .claude/commands/kanban/{specify,decompose}.md byte-identical to the packaged originals)",
+          "node bin/hkb.js doctor — new line: claude commands  .claude/commands/kanban (/kanban:decompose, /kanban:specify)",
+          "live in this session: with .claude/commands/kanban/ present the harness registered kanban:specify and kanban:decompose",
+          "node .repolore/scripts/wiki-check.mjs — all pages fresh"
+        ]
+      },
+      "summary": "`/kanban:specify` and `/kanban:decompose` are now real slash commands instead of section titles that looked like ones. Took option 1 from the card (make them real), not option 2.\n\n**One source, two registrations.** `commands/specify.md` and `commands/decompose.md` at the package root are (a) the plugin's command directory — `\"commands\": \"./commands\"` in `.claude-plugin/plugin.json`, plus `commands` added to `files` in package.json — and (b) what `hkb init` now copies into `.claude/commands/kanban/` for everyone who installs from npm without the plugin. Both produce the same name: a plugin namespaces its commands by plugin name, a project namespaces them by directory, and both are `kanban`. In hkb's own repo init links instead of copying (`.claude/commands/kanban → ../../commands`), same reasoning as `.agents/skills/kanban`; `installCommands()` in `src/init.js` picks link-or-copy off `isPackageRepo()`, and `linkSkill` was refactored onto a shared `linkDir()`.\n\n**The bodies delegate.** Each command file sends the reader to the `SKILL.md` section of the same name, so the procedure has one home. SKILL.md now says where the commands come from and what a harness without slash commands (Copilot, Codex) should do instead — ask for the section by name. Skill `metadata.version` 0.4.0 → 0.5.0 so `hkb doctor` tells an existing adopter their copy is behind; `test/track.test.js` pins that version and was updated with it.\n\n**Three guards, each aimed at a different way this returns.** `commands/*.md` in `MUST_SHIP` and the init-written copies in `FROM_PACKAGE` (`scripts/smoke-pack.mjs`), so a `files` regression fails CI. A test that scrapes every `/kanban:*` out of the installed SKILL.md and asserts the set equals the set of files that ship — add a name to the skill without a file and `npm test` fails. And `checkCommands()` in `src/doctor.js`, which warns with `hkb init` as the fix in a repo where they were never installed.\n\n**The \"also check\" audit came back clean.** Every `hkb <verb>` and every flag named in the shipped skill, `references/protocol.md` and the generated doc sections exists in `src/cli.js`. One thing left deliberately: SKILL.md's aside that dispatcher changes are tested with `node --test test/dispatch.test.js` names a file adopters do not have — but it explains why not to run `hkb dispatch` rather than instructing an action, and only fires for someone editing hkb itself. Also noted, not changed: `templates/copilot/kanban-worker.agent.md` splices the whole SKILL.md body, so a Copilot worker's agent file carries the two `/kanban:*` sections; the new SKILL.md sentence about harnesses with no slash commands makes that generated file honest without forking the text.\n\n**Not done here:** nothing. The PR is a draft (#94) awaiting the operator's review and merge, per board policy."
+    }
+  ],
+  "v": 1
+}

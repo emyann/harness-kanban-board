@@ -1,0 +1,70 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-09-02T00:12:21.731Z",
+      "heartbeat_at": "2026-09-02T00:08:08.906Z",
+      "host": "YRND1-GG",
+      "lock_sha": "d9e7359040f134e390a7bc69bc72e93a713edd1c",
+      "manual": true,
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pr": 267,
+      "pr_head": "kb/260",
+      "profile": "claude",
+      "session_id": "4048cfbf-a952-49b8-9e95-092b30a8a130",
+      "started_at": "2026-09-02T00:08:08.905Z",
+      "summary": "src/context.js now reads the capability map #259 made loadable, and renders it into the worker brief. Two new pure exports from src/context.js:\n\n- briefIntents(task, {cont}) -> string[]: the intents THIS CARD triggers, derived from card state and never from a command name. A card with acceptance criteria (task.kb.goal) triggers \"goal\"; a card continuing a PR that came back with changes requested t",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-217-1/4048cfbf-a952-49b8-9e95-092b30a8a130.jsonl",
+      "wt": "kb-217-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T00:32:32Z",
+      "id": 5502524297,
+      "text": "**Merged by the operator seat** — review: Reviewed as part of track 217's bottom-up merge pass. This node adds briefIntents and capabilityLine in src/context.js so the worker brief names the bound command for each intent a card triggers, and renders nothing when an intent is unmapped. That fallback is the portability contract the whole track rests on: the intent travels, the binding is local, and a board declaring nothing behaves exactly as before. Verified on the track root's branch, which carries this node's work: lint clean, 1087 tests, npm run smoke green. Merging into kb/259 rather than main because that is this PR's base and the stack has to land deepest-first: kb/260 and kb/261 are both based on kb/259, so merging kb/259 first would strand them. That ordering is precisely what card 270 exists to make mechanical rather than remembered., checks: green, method: squash"
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T00:38:51Z",
+      "id": 5502573690,
+      "text": "**Landed on `main` in 9323033**, via `kb/259` — PR #267 merged into that branch, and `kb/259` then merged to `main` carrying it.\n\nClosing by hand because the board cannot see it: the PR targeted `kb/259` rather than the default branch, so GitHub never linked it, and once it merged it also left the open-PR listing that #234's head-branch fallback reads. The card was therefore stuck in *review* with `prs: []` and its work already shipped. That gap is filed as **#275** — until it lands, a stacked node PR needs this comment and a manual close.\n\nVerified present on `main`: `briefIntents` / `capabilityCommand` in `src/context.js`."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-02T00:12:22Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/context.js",
+          "test/context.test.js"
+        ],
+        "residual_risk": [
+          "The profile is resolved by default from ctx.cfg.profiles[task.agent]. src/dispatch.js was out of my kb.paths, so it still calls workerContext without passing the profile it actually launches — for a track root dispatched on a board-level track profile (cand.profile), the brief would read the card's agent-label profile's bindings instead. workerContext now takes a `profile` option; a one-line change in dispatch.js closes it.",
+          "Only `goal` and `review` are triggered from a worker brief; `specify` is bound-but-never-rendered here by design, so a board binding it sees nothing in hkb context. That is deliberate, not an omission.",
+          "The `review` trigger is a PR continuation. A worker asked to re-read an existing diff in some other situation gets nothing; broadening the trigger is a card, not a bug.",
+          "The portability pin is on rendered output and the CAPABILITIES vocabulary, not a grep over src/ — src/board.js legitimately quotes {\"review\": \"/code-review\"} in a validation error message as the example config shape.",
+          "docs/wiki pages covering context.js are flagged stale by the wiki check; the whole set was already stale on kb/255 and kb/259, and docs/ is outside this card's kb.paths."
+        ],
+        "verification": [
+          "node --test test/context.test.js (23 pass, 0 fail; 6 of them new)",
+          "npm run lint",
+          "npm test (1079 pass, 0 fail; kb/259 baseline was 1073)",
+          "gh pr create --draft --base kb/259 --head kb/260"
+        ]
+      },
+      "pr": 267,
+      "pr_continued": false,
+      "summary": "src/context.js now reads the capability map #259 made loadable, and renders it into the worker brief. Two new pure exports from src/context.js:\n\n- briefIntents(task, {cont}) -> string[]: the intents THIS CARD triggers, derived from card state and never from a command name. A card with acceptance criteria (task.kb.goal) triggers \"goal\"; a card continuing a PR that came back with changes requested triggers \"review\"; the order is [\"goal\", \"review\"]. \"specify\" is deliberately never triggered from a worker brief — turning a one-liner into a spec happens before a card is dispatched.\n- capabilityLine(profile, intent) -> string | null: capabilityCommand(profile, intent) wrapped as one rendered line, `On this harness that is `<cmd>` — <CAPABILITIES[intent]>.`, or null for anything unbound. The command text is the board's own string, echoed verbatim; the meaning is hkb's frozen prose.\n\nworkerContext takes an optional `profile` option; by default it resolves ctx.cfg?.profiles?.[task.agent] ?? null. Nothing else was touched — src/dispatch.js keeps calling workerContext exactly as before and picks the binding up through the card's agent label.\n\nWHAT A BOUND INTENT RENDERS (this is what the root asked me to state exactly):\n- goal, bound to \"/goal\": the acceptance-criteria block becomes\n    ## Acceptance criteria\n    <the criteria>\n    On this harness that is `/goal` — state the outcome a piece of work is for, so a worker can tell done from finished.\n  i.e. today's heading and criteria, unchanged, with ONE line appended after them.\n- review, bound (test uses the nonsense command \"::second-look\" precisely to prove hkb substitutes nothing of its own): immediately after the continuation block, one line\n    Read what is already there before you change it. On this harness that is `::second-look` — a second pass over work that already exists — read the diff and report what is wrong with it, changing nothing.\n\nWHAT AN UNMAPPED INTENT RENDERS: nothing. No line, no error, no warning. The `## Acceptance criteria` heading and its criteria stay exactly as they are today, and the continuation block ends where it ended before. That is the whole difference between a capability map and a dependency on one harness.\n\nBYTE-IDENTICAL, CONFIRMED AND PINNED: test \"an unmapped intent keeps today's prose, and a board with no capabilities gets a byte-identical brief\" renders the same card four ways and asserts string equality with ===: a profile `{}` (declares no capabilities), a ctx with cfg undefined (no board config at all), and a profile that binds only a DIFFERENT intent (`{specify: \"/specify\"}`) all produce the identical brief; only the profile that binds `goal` differs (asserted notEqual, so the test cannot pass by rendering nothing in every case). So a board that declares no capabilities — every board that exists today — gets exactly the bytes it got before this card.\n\nPORTABILITY PIN: test \"hkb names no harness command in a brief the board did not bind\" renders both an ordinary card and a continuation with an unbound profile and asserts the brief contains none of \"/code-review\", \"/goal\", \"/specify\", \"/review\"; it also asserts every CAPABILITIES meaning is prose with no \"/\" in it. Note for anyone re-checking this: a *source scan* of src/ would fail on src/board.js's validation error message, which quotes {\"review\": \"/code-review\"} as the example shape (#259's, and outside my kb.paths) — the honest pin is on rendered output plus the vocabulary, which is what I wrote.\n\nI did not touch src/model.js, src/dispatch.js, src/doctor.js or skills/ (#261's). effectiveTools and the launch grant are untouched: this card renders text only, it grants nothing.\n\nBranched from kb/259. PR: https://github.com/emyann/harness-kanban-board/pull/267 (draft, --base kb/259)."
+    }
+  ],
+  "v": 1
+}

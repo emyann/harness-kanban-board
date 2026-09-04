@@ -1,0 +1,56 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T06:40:24.635Z",
+      "heartbeat_at": "2026-08-27T06:29:49.573Z",
+      "host": "YRND1-GG",
+      "job": "3d228304",
+      "lock_sha": "dfa5c16eb0894ed744c21eb85eaed308716ca0f1",
+      "log": ".kanban/logs/67-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 70,
+      "pr_head": "worktree-kb-67-1",
+      "profile": "claude",
+      "started_at": "2026-08-27T06:29:49.573Z",
+      "summary": "Docs only — the adoption + messaging half of ADR-004, in three files, with no code or behaviour touched. Draft PR: https://github.com/emyann/harness-kanban-board/pull/70 (branch worktree-kb-67-1).\n\n**docs/manual-mode.md** (new, 210 lines) is the day-one loop with no dispatcher running anywhere: init/doctor; `create` (ready with no open blocker, todo with one, `--triage` before either); list/show/s",
+      "wt": "kb-67-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T06:40:27Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "docs/manual-mode.md",
+          "README.md",
+          "skills/kanban/references/protocol.md"
+        ],
+        "residual_risk": [
+          "docs/ does not ship in the npm tarball (MUST_NOT_SHIP in scripts/smoke-pack.mjs), so the README's links to docs/manual-mode.md resolve on GitHub and on npm's rendered README but not inside an installed package — same as the existing docs/harnesses.md links.",
+          "protocol.md ships inside the skill, so it deliberately carries no link to docs/manual-mode.md: that path would dangle in a consumer repo. A reader of an installed skill gets the seats and the hand/tick sentence but no pointer to the full page.",
+          "ADR-004 was left untouched again (status: proposed, its priority-1 item and now its docs items have shipped). wiki-check keeps reporting it stale because this change edits a file it covers; flipping it to accepted, or writing concepts/roles-and-seats from the wiki plan, is still unclaimed work.",
+          "The doc states hand attempts are bounded by max_runtime (1h default) as well as stale_after. That is read from src/dispatch.js:442, which applies before the manual/remote branch matters — it is not exercised by a test that specifically covers a manual attempt timing out."
+        ],
+        "verification": [
+          "npm run lint (clean)",
+          "npm test (427 pass, 0 fail)",
+          "npm run smoke (packed tarball installs and runs: 23 content checks, 3 command checks — protocol.md still ships with the skill, docs/ still does not)",
+          "node .repolore/scripts/wiki-check.mjs (unchanged: ADR-004 is the only stale page, for the reason #68 recorded)",
+          "read every documented flag/default out of src/ before writing it (dispatch.js, board.js, cli.js, lifecycle.js, context.js, hook.js, model.js)"
+        ]
+      },
+      "summary": "Docs only — the adoption + messaging half of ADR-004, in three files, with no code or behaviour touched. Draft PR: https://github.com/emyann/harness-kanban-board/pull/70 (branch worktree-kb-67-1).\n\n**docs/manual-mode.md** (new, 210 lines) is the day-one loop with no dispatcher running anywhere: init/doctor; `create` (ready with no open blocker, todo with one, `--triage` before either); list/show/serve as the board view; `claim` (lock ref, attempt marked `manual`, the export line, `held` + exit 2 on a second claim); `hkb context` presented as the exact prompt a dispatched worker would get, not a summary; branch + `Closes #n` PR; one terminal verb, with `complete` on an open PR landing in *review*. Then the four things only hand mode raises: (1) the heartbeat contract — a hand attempt is judged by `stale_after` (3600s, `dispatch.stale_after`) and `max_runtime` (3600s, card `kb.max_runtime` first) and nothing else, a reclaim counts as a failure so `max_retries` still ends in blocked + `kb:needs-human`, and the honest half, that only a tick enforces any of it; (2) `hkb promote` as the by-hand promote step, since nothing promotes itself with no tick — plus the fact that `hkb claim` never checks the status; (3) `hkb dispatch --max 0` as the reconcile-only tick (reconcile + promote + reclaim + sweep, claims and launches nothing), which must run from a shell with no `KB_TASK` exported; (4) launching your own agent with `KB_TASK` set, which turns on the `Stop` and `PreToolUse` hooks in that session — hence `KB_PROFILE`, because with no profile named the allowlist is only hkb/git/gh plus builtins and the agent's `npm test` is denied. Ends with the roadmap migration as a prompt for an agent, the reasoning for no `hkb import` parser, and the adoption ladder as a table.\n\n**README.md**: new \"Who runs a board: the seats\" section between How-it-works and What-it-costs, wording carried from ADR-004's Decision (operator = the human; dispatcher = a tick, not an agent and not an orchestrator; worker = any harness), closing on the ladder rather than repeating the hand/autonomous sentence verbatim. It folds in the two bolded How-it-works bullets that said the same things (old README.md:41 and :44); that list keeps its card/edge/lock bullets and gains \"A handoff is a comment\" in their place, so the mechanism list stays four bullets and the seats live in one section. The autonomous three-command quickstart stays first, with an \"### Or drive it by hand\" subsection directly after it carrying both required sentences. New Docs-list entry.\n\n**skills/kanban/references/protocol.md**: the three seats condensed to a five-line block above the glossary, ending on \"hand mode and autonomous mode are the same protocol with a different dispatcher — you, or the tick\". The glossary's lead sentence was rewritten so it introduces the table (what each word is *not*) instead of restating the seats a paragraph later.\n\nEvery CLI claim in the doc was read out of the code first: `--max 0` reaching `budget = min(0, slots)` (src/dispatch.js:511) while reconcile/promote/reclaim/sweep run unconditionally; the manual-vs-remote reclaim branch #65 added (src/dispatch.js:427); `stale_after`/`max_runtime_default` = 3600 (src/board.js:97-98); `manual: !flags.spawn` and the export line (src/cli.js:421,427); create's ready/todo/triage rule (src/lifecycle.js:355-365); promote's forced ready (src/lifecycle.js:388-398); the KB_TASK dispatch guard (src/cli.js:431); and the PreToolUse allowlist collapsing to hkb/git/gh + SAFE_BUILTINS when KB_PROFILE is unset (src/hook.js:31-45, src/model.js:432-478)."
+    }
+  ],
+  "v": 1
+}

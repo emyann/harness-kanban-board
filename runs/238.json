@@ -1,0 +1,127 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T21:43:21.551Z",
+      "heartbeat_at": "2026-09-01T21:37:37.510Z",
+      "host": "YRND1-GG",
+      "job": "e881595a",
+      "lock_sha": "5db5afabd8f9396f9e164cd43ba1e90166f87dc2",
+      "log": ".kanban/logs/238-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 242,
+      "pr_head": "worktree-kb-238-1",
+      "profile": "claude",
+      "session_id": "e881595a-d682-4463-b8f6-a53fd800b7f5",
+      "started_at": "2026-09-01T21:37:37.510Z",
+      "summary": "hkb promote <n...> --triage-only: before touching the board, promote() checks the root's current status; if it is no longer 'triage', it returns a single skipped row (unchanged:true, skipped:true, reason: 'not in triage — already <status>') and writes nothing at all, instead of falling through to promoteDecision and — for a todo root with no open blockers of its own — forcing it to ready (allowFor",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-238-1/e881595a-d682-4463-b8f6-a53fd800b7f5.jsonl",
+      "wt": "kb-238-1"
+    },
+    {
+      "attempt": 2,
+      "ended_at": "2026-09-01T21:46:30.515Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "The work is right and reviewed — this is catch-up only. Do not reopen any decision.\n\nThe branch conflicts with main. Since it was cut, two siblings landed on the same files:\n\n  9bada4c  #237  adds `case 'edit'` to src/cli.js (the HELP block and a new case), and edits\n                 docs/wiki/features/backlog-grooming.md\n  (latest)  #140  adds installStamp() and the upgrade check to src/dispatch.js\n\n`gh pr update-branch` refused with 422 \"merge conflict between base and head\", so this needs a real merge.\n\nMerge `origin/main` into the branch — never rebase, never force-push, the branch is already pushed — and keep\nboth sides:\n\n- **src/cli.js**: #237's `edit` case and HELP lines stay; your `--triage-only` flag on the `promote` case stays.\n  They are different cases in the same switch and different lines in the same HELP block.\n- **docs/wiki/features/backlog-grooming.md**: #237 rewrote part of it because `hkb edit` now exists. Your change\n  removes the `promote --triage-only` gap note for the same reason. Both notes should end up gone and the page\n  should describe both verbs as shipped — read what is on main before you edit, do not restore the old text.\n- **skills/kanban/SKILL.md**: your apply-step change stays.\n\nThen `npm run lint && npm test` — the suite is at 972 on current main, so expect that plus nothing new; you are\nnot adding tests in this pass.",
+      "started_at": "2026-09-01T21:46:30.515Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 3,
+      "bg": true,
+      "continues_branch": "worktree-kb-238-1",
+      "continues_pr": 242,
+      "ended_at": "2026-09-01T21:48:34.349Z",
+      "heartbeat_at": "2026-09-01T21:47:07.176Z",
+      "host": "YRND1-GG",
+      "lock_sha": "96605748a914883038bce08dc487630850e6be6d",
+      "log": ".kanban/logs/238-3.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 242,
+      "pr_head": "worktree-kb-238-1",
+      "profile": "claude",
+      "session_id": "d268600e-b897-4fb0-8579-1eefb2632042",
+      "started_at": "2026-09-01T21:47:07.176Z",
+      "summary": "Merged origin/main into worktree-kb-238-1 (PR #242) to resolve the conflict left by #237 (hkb edit) and #140 (installStamp/upgrade check). No decisions reopened: kept both #237's `case 'edit'` and this task's `--triage-only` flag in src/cli.js's promote case; in docs/wiki/features/backlog-grooming.md merged both sides' covers/generated_at_commit, kept both procedure notes describing hkb edit and h",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-238-3/d268600e-b897-4fb0-8579-1eefb2632042.jsonl",
+      "wt": "kb-238-3"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T21:46:31Z",
+      "id": 5500869308,
+      "text": "**Changes requested** (after attempt 1): The work is right and reviewed — this is catch-up only. Do not reopen any decision.\n\nThe branch conflicts with main. Since it was cut, two siblings landed on the same files:\n\n  9bada4c  #237  adds `case 'edit'` to src/cli.js (the HELP block and a new case), and edits\n                 docs/wiki/features/backlog-grooming.md\n  (latest)  #140  adds installStamp() and the upgrade check to src/dispatch.js\n\n`gh pr update-branch` refused with 422 \"merge conflict between base and head\", so this needs a real merge.\n\nMerge `origin/main` into the branch — never rebase, never force-push, the branch is already pushed — and keep\nboth sides:\n\n- **src/cli.js**: #237's `edit` case and HELP lines stay; your `--triage-only` flag on the `promote` case stays.\n  They are different cases in the same switch and different lines in the same HELP block.\n- **docs/wiki/features/backlog-grooming.md**: #237 rewrote part of it because `hkb edit` now exists. Your change\n  removes the `promote --triage-only` gap note for the same reason. Both notes should end up gone and the page\n  should describe both verbs as shipped — read what is on main before you edit, do not restore the old text.\n- **skills/kanban/SKILL.md**: your apply-step change stays.\n\nThen `npm run lint && npm test` — the suite is at 972 on current main, so expect that plus nothing new; you are\nnot adding tests in this pass."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T21:49:37Z",
+      "id": 5500900056,
+      "text": "**Merged by the operator seat** — review: Reviewed at attempt 1 and re-verified after the catch-up merge at attempt 3; the work never changed, only its base. The guard fires where the card asked — promote(ctx, n, {triageOnly}) returns a skipped row naming the status it actually found BEFORE resolveTrack and before any read or write. The failure it closes is subtle and worth stating: a todo root has no open blockers of its own, so allowForce was true and promoting an already-moved card silently FORCED it to ready, detectable only by noticing a forced line in the output afterwards. Now a batch mixing triage and already-moved cards produces one clean report, using the same skipped-row shape formatPromote already groups. Three tests, each named for the card: the CLI flag end to end, the guard firing before anything is written, and the flag being a no-op on a card genuinely still in triage. Catch-up verified specifically, since two siblings had landed on the same files: case 'edit' from #237 survives in src/cli.js alongside this card's --triage-only on the promote case, and the wiki page's obsolete gap notes for both verbs are gone while the genuine remaining gap (no close-as-duplicate verb, #193) stays. CI green, lint clean, 980 tests. Process note: hkb merge refused this PR outright with 'Pull Request has merge conflicts' rather than forcing, and gh pr update-branch then declined with 422 'merge conflict between base and head' — the cheap rung correctly saying it cannot help before a worker session was spent, which is the ladder #214 specifies. This closes the second half of amendment 6, the two verbs I failed to assign to any child when I decomposed #191., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T21:43:24Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/lifecycle.js",
+          "src/cli.js",
+          "skills/kanban/SKILL.md",
+          "test/promote.test.js",
+          "test/cli.test.js",
+          "docs/wiki/features/backlog-grooming.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "--triage-only only guards the explicitly-named root of each promote call, not blockers a cascade drags along under a plain promote — that's unchanged and matches how groom only ever names cards it decided on",
+          "the 13 other stale wiki pages predate this task and were left untouched, in scope"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (972 passing, including new promote.test.js and cli.test.js cases for --triage-only)",
+          "node .repolore/scripts/wiki-check.mjs (backlog-grooming.md no longer stale; 13 other pages remain stale pre-existing, out of scope)"
+        ]
+      },
+      "pr": 242,
+      "pr_continued": false,
+      "summary": "hkb promote <n...> --triage-only: before touching the board, promote() checks the root's current status; if it is no longer 'triage', it returns a single skipped row (unchanged:true, skipped:true, reason: 'not in triage — already <status>') and writes nothing at all, instead of falling through to promoteDecision and — for a todo root with no open blockers of its own — forcing it to ready (allowForce is true for a single-node track). Wired the flag in src/cli.js (added to BOOL_FLAGS, passed as { triageOnly } into lifecycle.promote per number). Updated skills/kanban/SKILL.md's groom batch example and the promote explainer bullet to use --triage-only instead of relying on reading a 'forced' line after the fact. Also refreshed docs/wiki/features/backlog-grooming.md, which had a known-gaps note naming this exact missing flag; removed the gap note, updated the batch/procedure prose, added src/lifecycle.js to its covers, and appended a docs/wiki/log.md line. PR: https://github.com/emyann/harness-kanban-board/pull/242 (draft)."
+    },
+    {
+      "artifacts": [],
+      "at": "2026-09-01T21:48:36Z",
+      "attempt": 3,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "docs/wiki/features/backlog-grooming.md"
+        ],
+        "residual_risk": [
+          "PR #242 mergeStateStatus is BLOCKED, likely pending review/checks rather than conflicts (mergeable=MERGEABLE) — reviewer should confirm before merge"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (980 pass)",
+          "gh pr view 242 --json state,mergeable,mergeStateStatus (MERGEABLE)"
+        ]
+      },
+      "pr": 242,
+      "pr_continued": true,
+      "summary": "Merged origin/main into worktree-kb-238-1 (PR #242) to resolve the conflict left by #237 (hkb edit) and #140 (installStamp/upgrade check). No decisions reopened: kept both #237's `case 'edit'` and this task's `--triage-only` flag in src/cli.js's promote case; in docs/wiki/features/backlog-grooming.md merged both sides' covers/generated_at_commit, kept both procedure notes describing hkb edit and hkb promote --triage-only as shipped, and removed both now-resolved gap notes from Known gaps. Re-stamped the wiki page's blob SHAs with wiki-stamp.mjs. Pushed the merge commit to PR #242's branch."
+    }
+  ],
+  "v": 1
+}

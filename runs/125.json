@@ -1,0 +1,107 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T17:22:12.900Z",
+      "heartbeat_at": "2026-08-28T17:20:52.526Z",
+      "host": "YRND1-GG",
+      "job": "943fa290",
+      "lock_sha": "b9afe8b1f397070b57da3f650db7d294ac2c323f",
+      "log": ".kanban/logs/125-1.log",
+      "note": "PR #142 updated; writing the result",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 142,
+      "pr_head": "worktree-kb-125-1",
+      "profile": "claude",
+      "session_id": "943fa290-fb54-48da-af8e-edb4f2b42cbc",
+      "started_at": "2026-08-28T17:02:26.019Z",
+      "summary": "The verify pass found that the four PRs left one thing broken that none of them could see: a claude-bg worker cannot type the command the protocol asks it for. Fixed here (PR #142), with the #112 question settled by measurement.\n\n## 1. A fresh claude-bg attempt (this one) — the chain works, end to end\n\nKB_TASK undefined; CLAUDE_JOB_DIR and CLAUDE_CODE_SESSION_ID set. After a deliberate stop: .kanb",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-125-1/943fa290-fb54-48da-af8e-edb4f2b42cbc.jsonl",
+      "wt": "kb-125-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T16:03:23Z",
+      "id": 5454783260,
+      "text": "Two things checked on 2026-08-28 that bear on the direction:\n\n**1. This is not specific to this repo, and it is not new.** pipao-v2's `claude-bg` attempts have the\nsame shape: no `session_id`/`transcript_path` on any row, and zero entries in `.kanban/nudges/`.\nBoth hkb hooks return immediately without `KB_TASK` (`src/hook.js:32` for PreToolUse, `:158` for\nStop), so on both boards **hkb's permission policy has never run in a worker** — the only thing\ngoverning workers has been Claude Code's native `--allowedTools` matching.\n\nThat has a consequence for #112/#124: the pilot's terminal-verb denials cannot have come from\n`firstWords`, because the hook that calls it was inert. #124 fixed a real bug in hkb's function, but\nthe live failure the workers hit was most likely Claude Code's own compound-command matching against\n`--allowedTools` — which needs one live test to confirm, and a different fix if so.\n\n**2. A hook-free route exists for the session fields.** `claude agents --json` exposes `id`,\n`sessionId` and `cwd` per background agent, and the dispatcher already holds the agent id — it stops\nthe agent by id when it reaps. Resolving `session_id` (and from it `transcript_path`) **in the\ndispatcher** on the tick after launch, or at reap, needs no env passthrough and no hook. `claude\nagents --json` is already called every tick, so it is free.\n\nSo the fix splits: session fields → dispatcher-side, from `claude agents`; the nudge → still needs\n`KB_TASK` in the session, for which the cheapest fallback is deriving it from the worktree name the\nlaunch already sets (`kb-{n}-{k}`, `src/board.js:30`) when the env is absent. Both halves want the\n`hkb doctor` line the card asks for."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T16:19:54Z",
+      "id": 5454955420,
+      "text": "## The graph\n\n```mermaid\ngraph BT\n  A[\"#132 dispatcher records the session<br/>from claude agents --json<br/>src/dispatch.js · src/model.js\"]\n  B[\"#133 hooks derive the task<br/>from the worktree name<br/>src/hook.js · src/board.js\"]\n  C[\"#134 doctor warns, docs say<br/>what each profile really runs<br/>src/doctor.js · docs/harnesses.md\"]\n  R[\"#125 verify + synthesize<br/>incl. the live test that settles #112\"]\n  C --> A\n  C --> B\n  R --> C\n```\n\nArrows point from a task to what blocks it.\n\n| task | blocked by | paths | why it is its own PR |\n|---|---|---|---|\n| #132 | — | `src/dispatch.js`, `src/model.js`, `test/jobs.test.js` | hook-free: the listing is already fetched every tick; only the write is new |\n| #133 | — | `src/hook.js`, `src/board.js`, `test/session.test.js`, `test/permission.test.js` | the hooks' gate, nothing else |\n| #134 | #132, #133 | `src/doctor.js`, `test/doctor.test.js`, `docs/harnesses.md`, `README.md` | can only describe what shipped |\n| #125 | #134 | — | one real attempt end to end, plus the #112 live test |\n\nInvariants:\n\n- **#132 and #133 are independent and path-disjoint.** They converge on the *same rows* through\n  the same `SESSION_FIELDS`/`sessionUpdate` and the same `.kanban/sessions/<n>-<k>` marker — that\n  contract is written into both bodies, because neither worker can see the other's. `src/model.js`\n  is given to #132 alone and `src/board.js` to #133 alone so they never touch one file.\n- **The root is blocked by the only leaf**, #134.\n- **Not a track**: two genuinely parallel children.\n\nDecided here, so it is not relitigated: **env stays authoritative** in #133; the worktree name is a\nfallback, never an override. And the #112 question — whether the pilot's denials were Claude Code's\nnative allowlist matching rather than hkb's inert hook — is settled by a live test in the root's\nverify pass, not by inference.\n\nCorrection recorded for honesty: #134 was briefly claimed with its links inverted (my `hkb link`\nargument order), blocked back to *todo* within a minute, and relinked. Its first attempt row shows\nthat; it is not a failure of the task."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T16:59:22Z",
+      "id": 5455356246,
+      "text": "Evidence for step 3 of the verify pass: #138 quotes the denial text a real `claude` worker received for `cd`, `export`, `VAR=… cmd` and a `while` loop — *\"Permission to use Bash has been denied because Claude Code is running in don't ask mode\"*. That is Claude Code's native message, not hkb's. Whether native also denies an allowed command with a heredoc containing `|`/`;` (the exact #112 shape) is being measured by the a-vs-b workflow's `heredoc-compound` probe; use its result rather than re-running the test if it lands first."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T17:21:22Z",
+      "id": 5455576591,
+      "text": "**Step 3 of the verify pass — the answer is in, measured, and it is not the heredoc.**\n\nAn adversarial workflow (11 agents, 2026-08-28, Claude Code 2.1.250) read all 71 worker transcripts on this board and reproduced the failure in a throwaway repo:\n\n- **86 refusals in 29 worktrees are Claude Code's `--worktree` isolation guard**, triggered by the bash-builtin *name* `complete` anywhere in the command — *\"runs a string through complete, which can't be verified to stay inside the worktree\"*. Every spelling: `hkb complete …`, `--summary-file`, even `node bin/hkb.js complete`. No heredoc needed. `hkb block` is never refused. A PreToolUse `allow` does **not** override this guard.\n- The heredoc/prefix denial (an allowed `Bash(hkb *)` prefix with `|`/`;` in a heredoc body is denied natively) is real but accounts for **2** cases.\n- `firstWords` (#112/#124) accounts for **zero**: hkb's hook never ran in a bg worker.\n\nSo for the live test: if your terminal verb is refused, look at the refusal text. If it names the worktree guard, that is the known cause — file nothing new, cite this comment, and finish via the route workers already use (a `.mjs` under `$CLAUDE_JOB_DIR/tmp/` spawning `hkb` with a literal argv). The proposed fix is an alias without the token — `hkb finish` — being measured now."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T17:22:15Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/cli.js",
+          "src/context.js",
+          "src/hook.js",
+          "src/track.js",
+          "src/doctor.js",
+          "skills/kanban/SKILL.md",
+          "skills/kanban/references/protocol.md",
+          "templates/doc-section.md",
+          "templates/copilot/kanban-worker.agent.md",
+          "README.md",
+          "CLAUDE.md",
+          "AGENTS.md",
+          "docs/harnesses.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/log.md",
+          "test/args.test.js",
+          "test/context.test.js",
+          "test/session.test.js",
+          "test/track.test.js",
+          "test/harness.test.js",
+          "test/doctor.test.js"
+        ],
+        "residual_risk": [
+          "Every permission measurement is Claude Code 2.1.250/2.1.251 on this host. The guard could change or be absent elsewhere, in which case the alias is harmless but the docs' emphasis would overstate a build-specific quirk. docs/harnesses.md dates and versions the table so a reader can re-check rather than trust it.",
+          "The fix is inert until merged AND the global hkb is refreshed: the Stop hook runs `hkb hook stop`, which resolves to the main checkout, so a worker on today's install still reads the old `hkb complete` nudge. Verified: the nudge that fired at me printed the old text.",
+          "#137's tick-stamping is still unproven in production — I could not observe it because the running dispatcher predates it (#140). Its unit tests pass, but no attempt on this board has been stamped by that path.",
+          "The doctor rates clause fires per background profile with sessions; a board with several such profiles and no rates repeats it on each line. Deliberate (each line answers about its own profile) but it is repetition.",
+          "The wiki keeps only the one paragraph this change touches, unstamped. Five pages were already stale for #124/#127/#131 drift this task did not re-verify, and stamping would have blessed claims it did not read — /repolore:refresh is still owed from #134."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test — 659 pass, 0 fail",
+          "npm run smoke — 25 content checks, 3 command checks, 9 init checks (templates and the skill are read from the package at runtime)",
+          "node --test test/doctor.test.js — 48 pass, including #134's two fixture-board warnings and 3 new cases",
+          "node bin/hkb.js doctor — all green on this board, now printing the stats.rates clause",
+          "live permission probes from inside this worker: heredoc vs --note control, herestring, < redirect, backslash continuation, two-line command, bare `complete`, quoted `complete`, `source`, $(…)",
+          "node bin/hkb.js finish 999999 --from-stdin < payload.json — ran end to end with | ; && in the payload, and queued canonically as `complete`",
+          "session coverage tallied over all 89 attempts on the board by driving fetchBoard/loadRun directly",
+          "observed the Stop hook live: .kanban/nudges/125-1 = 1, .kanban/sessions/125-1 written, session_id + transcript_path on the row mid-attempt"
+        ]
+      },
+      "summary": "The verify pass found that the four PRs left one thing broken that none of them could see: a claude-bg worker cannot type the command the protocol asks it for. Fixed here (PR #142), with the #112 question settled by measurement.\n\n## 1. A fresh claude-bg attempt (this one) — the chain works, end to end\n\nKB_TASK undefined; CLAUDE_JOB_DIR and CLAUDE_CODE_SESSION_ID set. After a deliberate stop: .kanban/nudges/125-1 = 1 (the hook found the attempt from the kb-125-1 checkout with no env and blocked the stop), .kanban/sessions/125-1 holds the session id, and the row carried session_id 943fa290-fb54-48da-af8e-edb4f2b42cbc and transcript_path MID-ATTEMPT — stamped by the Stop hook's recordSessions, before any terminal verb. Better than #135's card claimed: the row was priceable and resumable while still running.\n\nA price: there is none, and there cannot be. hkb stats reports 244 turns · in 488 · out 207k · cache 656k written / 37M read (3 transcripts) and no money, because .kanban/board.json has no stats.rates — and doctor said `✓ session recorded on 3/8` and stopped, which reads as spend visibility working. Fixed: sessionFinding now appends the missing half (see 6).\n\n## 2. Session coverage across all 89 attempts, and #132/#137 has never fired\n\nclaude/completed 3/55 · protocol_violation 0/10 · timed_out 0/5 · crashed 0/2 · blocked 0/5 · claude-track/completed 0/1. The three stamped rows are #115-1, #132-3, #134-2 — every attempt that ran a terminal verb after #135 merged (12:31), and no others.\n\nSo #135 works and #137's tick-stamping has never executed on this board: the `hkb dispatch --loop 60` that launched this attempt at 13:02 has been running since 06:13, hours before #137 merged at 12:46, and a long-running loop keeps the code it imported at startup even though the global hkb symlinks into the checkout. Filed as #140 (the loop should give itself up on upgrade — exit 4 already means exactly that — or doctor should say it). Not patched here: restarting the dispatcher is its own change.\n\n## 3. #112 SETTLED — and it was never about | ; &&\n\nMeasured from this live worker, Claude Code 2.1.250/2.1.251:\n\n  RUNS:  heartbeat --note \"…\" · the same command with <<<'…' (herestring) · with < /dev/null · split over two lines · with a \\ continuation · `echo complete` inside quotes · --grep=complete\n  DENIED: any command with a <<'EOF' heredoc — \"Permission to use Bash has been denied because Claude Code is running in don't ask mode\" — INCLUDING a heredoc whose body has no metacharacters at all\n  DENIED: `node bin/hkb.js complete` with no arguments, and bare `echo complete` — \"This session is isolated in the worktree …, but this command runs a string through complete, which can't be verified to stay inside the worktree\"\n  RUNS:  `node bin/hkb.js block` and `request-review`\n\nControl that settles it: heartbeat --note \"…\" is allowed and the identical heartbeat with a metacharacter-free heredoc is denied. The heredoc is refused for its SHAPE, whatever it contains — so the pilot's failure was never about | ; && in the payload, and #124 did not fail to fix it because there was nothing there for hkb to fix. And `complete` is refused because it is a bash builtin (complete -C <cmd> runs a string): the guard matches an argument token equal to it, so no quoting helps (`node bin/hkb.js \"complete\"` is refused too). `source` is refused identically. $(…) command substitution is also refused.\n\nConsequence: on the default profile the two shapes prescribed for FINISHING were the two a worker could not run, so it stalled and the dispatcher wrote it off — 10 protocol_violations on this board against 5 timeouts and 2 crashes.\n\n## 4. The fix — `hkb finish`\n\n`finish` is `complete` under a name no shell claims, resolved in main() before routing, so the run record, the outbox replay (terminalArgv) and the board still say `complete`. Everything a worker reads now names finish and prescribes a file redirect instead of a heredoc: the worker prompt, the track runner's prompt, the Stop hook's nudge (which had been telling a stalling worker to run the one command it could not), SKILL.md, protocol.md, the Copilot agent template, README, and templates/doc-section.md which generates CLAUDE.md/AGENTS.md. block and request-review are not builtins and keep one name each. docs/harnesses.md gains the measurement table under \"Which layer is actually enforcing\".\n\nProof: in this same session, `node bin/hkb.js finish` reaches hkb's own usage error, and `node bin/hkb.js finish 999999 --from-stdin < payload.json` (payload containing | ; &&) executed end to end. This card was completed with it.\n\n## 5. doctor — ok here, warns on a fixture\n\n`node bin/hkb.js doctor` is all-green on this board; node --test test/doctor.test.js is 48 pass, including #134's two fixture-board warning cases and three new ones here.\n\n## 6. Second seam fixed — recorded but unpriceable\n\nsessionFinding gained a `priced` argument: with sessions recorded and no stats.rates it appends \"· no `stats.rates` in .kanban/board.json, so those transcripts give `hkb stats` turns and tokens but never a cost\". Still an ok (an unconfigured rates table is a fact, not a broken board), silent when rates exist, silent when nothing is recorded yet.\n\n## Also filed\n\n#140 — a dispatch --loop never picks up an upgrade (above).\n#141 — \"Could not resolve to an Issue with the number of N\" matches the `could not resolve` DNS pattern in src/gh.js:30, so a missing issue is classed as network and a terminal verb for it is queued to the outbox to be replayed forever. Reproduced; exit 0 and a \"we'll do it later\" message for a write that was dropped.\n\n## For the next worker\n\nThe alias does nothing until this merges AND the global hkb is refreshed: the Stop hook runs `hkb hook stop`, which resolves to the main checkout, so the nudge I triggered still printed the old `hkb complete` text. After merge, restart the dispatcher loop too — that is #140, and it is why #137 has never run.\n\nOne small gap hit while filing #140/#141 and not fixed: `hkb create` takes --body inline only, so on a shell-vetting harness a long body needs a spawn helper with a literal argv. --body-file would close it."
+    }
+  ],
+  "v": 1
+}

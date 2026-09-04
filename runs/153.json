@@ -1,0 +1,72 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T23:12:37.189Z",
+      "heartbeat_at": "2026-08-28T22:49:38.635Z",
+      "host": "YRND1-GG",
+      "job": "f224cfed",
+      "lock_sha": "cb9e43d129ed66f3b7b3f257d89d6de7bf4d47bd",
+      "log": ".kanban/logs/153-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 160,
+      "pr_head": "worktree-kb-153-1",
+      "profile": "claude",
+      "session_id": "f224cfed-8d69-4e90-9947-643b094bfc69",
+      "started_at": "2026-08-28T22:49:38.635Z",
+      "summary": "The active_pr guard now exempts exactly one card — the one `hkb request-changes` produces — and the attempt it lets through continues that PR instead of opening a second one. `activePrGuard(attempts, prs)` (src/model.js) is the whole decision, pure: an open PR guards a `ready` card unless its LATEST attempt is the reviewer's synthetic `changes_requested` row. Only the latest row exempts, so a cont",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-153-1/f224cfed-8d69-4e90-9947-643b094bfc69.jsonl",
+      "wt": "kb-153-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T23:12:39Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/board.js",
+          "src/dispatch.js",
+          "src/context.js",
+          "src/lifecycle.js",
+          "src/cli.js",
+          "skills/kanban/references/protocol.md",
+          "README.md",
+          "docs/wiki/features/review-loop.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/log.md",
+          "docs/wiki/index.md",
+          "docs/wiki/wiki.config.yml",
+          "test/dispatch.test.js",
+          "test/context.test.js"
+        ],
+        "residual_risk": [
+          "A continuation that crashes or spawn-fails leaves a non-changes_requested row on top, so the next tick parks the card in review rather than retrying. Deliberate (the contract keys the exemption on the latest row only, and it bounds respawning), but it means the ordinary crash-retry ladder does not apply to a continuation — the reviewer has to send it back again.",
+          "`worktreeOnBranch` was exercised against a real git repo in the test suite but never against a live `claude --bg` launch: the assumption that Claude Code runs happily in a cwd the dispatcher made once `--worktree` is stripped is reasoned, not measured. If it turns out not to, the fallback already exists — `worktreeOnBranch` returning {ok:false} keeps the old path and the brief still names the PR.",
+          "The fetch inside worktreeOnBranch is best-effort with a 60s cap; on a repo whose remote is not `origin` and whose board.json sets no `remote`, it fetches nothing and the checkout falls back to whatever the local branch holds.",
+          "`hkb claim <n> --spawn` by hand does not pass continuePr, so an operator claiming a sent-back card gets a fresh worktree — the brief still carries the block (derived from the card), so the instruction is there, just not the checkout."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (699 pass, 0 fail — 9 new: the predicate as a table both ways, an exempted claim, a claim whose checkout falls back, a real git repo where the continuation lands on the PR's branch and frees the previous worktree, withoutWorktreeFlag, the whole request-changes → claim → finish loop on one PR, and three brief tests)",
+          "npm run smoke (the brief text changed; packed artifact installs, runs, initialises)",
+          "node .repolore/scripts/wiki-check.mjs (features/review-loop fresh; the 6 pre-existing stale pages are unchanged from before this task)",
+          "node .repolore/scripts/wiki-index.mjs --check"
+        ]
+      },
+      "pr": 160,
+      "pr_continued": false,
+      "summary": "The active_pr guard now exempts exactly one card — the one `hkb request-changes` produces — and the attempt it lets through continues that PR instead of opening a second one. `activePrGuard(attempts, prs)` (src/model.js) is the whole decision, pure: an open PR guards a `ready` card unless its LATEST attempt is the reviewer's synthetic `changes_requested` row. Only the latest row exempts, so a continuation that crashes is parked in `review` again — one request-changes, one relaunch. Deciding it needs the run record, so the claim loop hoists `loadRun` and reuses it; the read only happens for a `ready` card that already has an open PR, on the single tick where the guard fires. For the continuation the dispatcher makes the checkout itself: `worktreeOnBranch` (src/board.js) fetches the PR's head branch, frees it from the ended attempt's worktree when that still holds it (only a worktree of this task, never one a live session holds — the same pid-in-the-lock check gc makes, injected as `alive`), and `git worktree add`s it at the usual `.claude/worktrees/kb-<n>-<k>` path; `spawnWorker` then runs the harness in that directory with its own `--worktree` flag stripped (`withoutWorktreeFlag`), so the basename stays `kb-<n>-<k>` and background-job matching and gc are unaffected. The attempt row records `continues_pr` always and `continues_branch` only when the checkout is really on that branch. The brief (src/context.js) derives the continuation from the card (`continuation()`), so `hkb context <n>` shows it too, and emits a block naming the PR plus three changed protocol lines: which branch, push instead of `gh pr create`, and merge the base branch rather than rebase one already pushed. When the branch cannot be had the attempt still runs on a fresh worktree and the block carries the by-hand recipe. `hkb finish`/`request-review` name the PR in the result comment (`**PR:** #147 — continued after changes requested, not reopened`) and `request-changes` returns `{pr, note}` so its one-liner says what happens next. Docs: protocol.md (state table, the 'PR state never gates readiness' claim, the tick's guard list, the attempt fields, a new 'review loop, in full' section), README's merge section, and a new wiki page features/review-loop plus two glossary entries. NOTE for a reviewer: src/cli.js was edited (2 one-liner strings) although it is outside the declared scope — the acceptance criteria name the exact request-changes one-liner, which is built there. Also note the branch carries a merge of origin/main (#143 landed mid-flight) rather than a rebase, since it was already pushed and force-pushing is forbidden."
+    }
+  ],
+  "v": 1
+}

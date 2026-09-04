@@ -1,0 +1,92 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T21:25:50.412Z",
+      "heartbeat_at": "2026-09-01T20:43:28.429Z",
+      "host": "YRND1-GG",
+      "job": "2abc5911",
+      "lock_sha": "14cab83f2ad560d26962e7d81a320801397496b0",
+      "log": ".kanban/logs/191-1.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 236,
+      "pr_head": "kb/191-root",
+      "profile": "claude-track",
+      "session_id": "2abc5911-ed47-4920-a41b-ae02a2292a6b",
+      "started_at": "2026-09-01T20:43:28.429Z",
+      "summary": "Track #191 is complete: five children plus the root's verify-and-synthesize pass. WHAT EACH NODE LANDED — #225 (PR #231, merged): GROOM_KINDS / GROOM_LEVELS / GROOM_SHORTLISTS / GROOM_ACTIONS, proposeAction, groomBoard and the six pure helpers (blocksIndex, ageDays, specShape, cardMentions, pathHubs, pathJaccard) in src/model.js, 27 fixture tests. #226 (PR #230, merged): fetchBoard(ctx,{blockers:'",
+      "track": true,
+      "track_mode": "inferred",
+      "track_nodes": [
+        226,
+        225,
+        227,
+        228,
+        229
+      ],
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-191-1/2abc5911-ed47-4920-a41b-ae02a2292a6b.jsonl",
+      "wt": "kb-191-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T20:43:24Z",
+      "id": 5500172675,
+      "text": "**Decomposed 2026-09-01** — five children, approved by the human before anything was created. A and B are the only pair that runs concurrently (disjoint paths); the rest is a chain because each needs the previous one's exports to exist.\n\n```mermaid\nflowchart TD\n  n226[\"#35;226 · todo<br>fetchBoard blockers all: fill every open card's blocker…\"]\n  n225[\"#35;225 · todo<br>groomBoard, GROOM_KINDS and the pure grooming helpers i…\"]\n  n227[\"#35;227 · todo<br>hkb groom: the read verb, its frozen JSON shape, and th…\"]\n  n228[\"#35;228 · todo<br>kanban:groom, the procedure: the skill section, command…\"]\n  n229[\"#35;229 · todo<br>Ship groom: registration lists, smoke-pack, README, plu…\"]\n  n191([\"#35;191 · todo<br>hkb groom: a read-only lane report from the one board r…\"])\n  n226 --> n227\n  n225 --> n227\n  n227 --> n228\n  n228 --> n229\n  n229 --> n191\n  classDef todo stroke:#8b949e,stroke-width:1px\n  class n226,n225,n227,n228,n229,n191 todo\n```"
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T21:27:21Z",
+      "id": 5500667329,
+      "text": "**Merged by the operator seat** — review: Reviewed as a task in its own right, not as a formality. CI green, lint clean, 969 tests, npm run smoke green (27 content / 3 command / 12 init / 6 in-repo checks), and wiki-check reports backlog-grooming.md and planning-commands.md both fresh — the 12 stale pages it lists were already stale on main and none of that drift comes from this track. The page I owed exists: docs/wiki/features/backlog-grooming.md, 142 lines, proper frontmatter and covers shas, describing the feature as one thing rather than five PRs, plus four GLOSSARY terms and a log entry. I ran hkb groom against this live board myself: it produces a scannable report with a hubs header, per-card findings, guard-aware overlap wording and an act/ask/info footer. The root's own verification went further than mine did — it measured the one-GraphQL-call claim by tracing every gh invocation through a PATH shim rather than trusting the fake-gh double, and confirmed all eleven amendments individually with live evidence. Two gaps it found are MY decompose error, not a worker's: amendment 6 said hkb edit and hkb promote --triage-only ship with the feature, and when I cut the graph into five children I assigned neither to any of them. The report therefore suggests hkb edit, a verb the CLI refuses. The root filed them as #237 and #238 rather than patching silently, which is what its brief asked for, and both cards name the test that would have caught it: extract the suggests verbs from a fixture report and check each against a case in src/cli.js. Residual, accepted knowingly: the groom findings are only exercised live on a board with path_overlap off; two stale origin branches (kb/191, kb/229) left by the mid-track squash merges want deleting., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T21:25:52Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "docs/wiki/features/backlog-grooming.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/log.md",
+          "docs/wiki/index.md",
+          "docs/wiki/wiki.config.yml"
+        ],
+        "residual_risk": [
+          "PR #236 (the root's page) is open and unmerged; the five node PRs are merged.",
+          "hkb edit is suggested by the live report but does not exist — filed as #237, not fixed here.",
+          "hkb promote --triage-only does not exist — filed as #238, not fixed here.",
+          "Twelve wiki pages are stale, all of them already stale on main before this track; refreshing them is out of scope and unowned.",
+          "Two stale branches on origin from the mid-track squash-merges: kb/191 and kb/229, both with no PR.",
+          "The overlap_pair wording is correct only because dispatch.guards.path_overlap is off on this board; a board with it on has not been exercised live, only in fixtures."
+        ],
+        "verification": [
+          "hkb groom  (live, this board — output scans, 33 cards, hubs header, act/ask/info footer)",
+          "hkb groom --json under a gh PATH shim tracing every invocation: 1 gh api graphql, 0 write-shaped REST calls",
+          "hkb list --status triage  (⇡ unblocked on #140, #141, #156, #165)",
+          "seam check: GROOM_KINDS and GROOM_ACTIONS vs the skill section; frozen --json keys; bodyText only on needs_judgment; proposals inside the closed vocabulary; section verbs vs case '<verb>' in src/cli.js",
+          "amendment check against the live report and the fixture tests (1, 2, 3, 4, 9)",
+          "npm run lint",
+          "npm test (969 pass, 0 fail)",
+          "npm run smoke",
+          "node .repolore/scripts/wiki-check.mjs (backlog-grooming and planning-commands both fresh)",
+          "node .repolore/scripts/wiki-stamp.mjs + wiki-index.mjs"
+        ]
+      },
+      "pr": 236,
+      "pr_continued": false,
+      "summary": "Track #191 is complete: five children plus the root's verify-and-synthesize pass. WHAT EACH NODE LANDED — #225 (PR #231, merged): GROOM_KINDS / GROOM_LEVELS / GROOM_SHORTLISTS / GROOM_ACTIONS, proposeAction, groomBoard and the six pure helpers (blocksIndex, ageDays, specShape, cardMentions, pathHubs, pathJaccard) in src/model.js, 27 fixture tests. #226 (PR #230, merged): fetchBoard(ctx,{blockers:'all'}) REST-fills every open card on a repo without GraphQL Issue.blockedBy, provenance travels on the board and is read via the new blockersOf / blockersKnown exports, plus a doctor line naming the one-REST-call-per-open-card cost. #227 (PR #232, merged): the hkb groom verb, the frozen --json shape, the pure groomOptions / formatGroom, and the ' ⇡ unblocked' nudge in hkb list gated on blockersKnown. #228 (PR #233, merged): the ## /kanban:groom section in SKILL.md, commands/groom.md, the operate §3/§4 rows, skill metadata.version 0.9.0, and the drift tests pinning the section to GROOM_KINDS / GROOM_ACTIONS and to the real CLI verbs. #229 (PR #235, merged): smoke-pack MUST_SHIP/FROM_PACKAGE for groom.md, README planning row and snippet, plugin.json description, the protocol.md sentence, and the planning-commands wiki re-stamp. THE ROOT'S OWN PASS (PR #236, draft, open on kb/191-root): docs/wiki/features/backlog-grooming.md — the whole-feature page no child could write — plus a log.md entry, four GLOSSARY terms (Grooming, Finding / finding level, Groom action, Hub path), the page-plan entry, and planning-commands re-summarised from two commands to three. VERIFIED, NOT ASSUMED: hkb groom --json against this live board made exactly ONE gh api graphql invocation and ZERO writes, measured by tracing every gh invocation through a PATH shim rather than trusting the fake-gh double; the human output scans (header with hubs, one row per card ending in an arrow and its proposal, a pairs block, an act 6 / ask 40 / info 37 footer); hkb list shows ' ⇡ unblocked' on #140, #141, #156, #165. THE PIECES AGREE: every GROOM_KINDS kind and every GROOM_ACTIONS value appears in the skill section; all eight frozen top-level --json keys and all fourteen frozen per-card keys are present; no card that is not needs_judgment carries bodyText; every proposal emitted is inside the closed vocabulary; every hkb verb the section invokes is a case in src/cli.js; the section never says hkb dispatch without --dry-run and never --loop; no groom finding emits the word 'duplicate'. ALL ELEVEN AMENDMENTS CONFIRMED PRESENT, including the five most likely to have been lost across five PRs: (1) no detectCycles — model.js imports resolveTrack from src/track.js and both cycle and blocker_off_board read that one walk; (2) no_goal emitted as info when a Done-when heading exists — 12 live cards; (3) broad_path present as ask; (4) overlap_pair.why is guard-aware and states path_overlap is off on this board; (9) blocksIndex, mentions and hubs computed over all tasks while statuses only picks the rows, pinned by a named fixture test. GATES: npm run lint clean, npm test 969 pass / 0 fail, npm run smoke green, wiki-check reports both groom pages fresh (the 12 stale pages it lists were already stale on main; none of that drift is caused by this track). GAPS FOUND AND FILED AS CARDS RATHER THAN SILENTLY PATCHED: #237 — hkb edit does not exist, yet four finding kinds (no_paths, malformed_kb, priority_inversion, broad_path) emit suggests strings naming it, so the report's act column tells a reader to run a verb the CLI refuses; amendment 6 said it ships with the feature and no node owned it. #238 — hkb promote --triage-only does not exist (same amendment, same cause), so the apply step leans on reading the forced line after the label is already written instead of guarding before it. Both cards name the missing test that would have caught the gap: extract suggests verbs from a fixture report and check each against a case in src/cli.js. PROCESS NOTE FOR THE NEXT TRACK: #229's base branch was squash-merged and deleted mid-task, which forced its PR onto a kb/229-rebased head; the same thing happened to the root, so the root's work lives on kb/191-root (kb/191 is a stale pre-squash branch on origin with no PR and wants deleting, as does kb/229). Stacked node PRs and eager merging of the lower nodes do not compose without either rebasing or accepting a new head branch."
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,64 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-09-02T00:03:53.464Z",
+      "heartbeat_at": "2026-09-01T23:57:44.491Z",
+      "host": "YRND1-GG",
+      "lock_sha": "d9e7359040f134e390a7bc69bc72e93a713edd1c",
+      "manual": true,
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pr": 263,
+      "pr_head": "kb/255",
+      "profile": "claude",
+      "session_id": "4048cfbf-a952-49b8-9e95-092b30a8a130",
+      "started_at": "2026-09-01T23:57:44.490Z",
+      "summary": "effectiveTools(profile, task, board) in src/model.js is now the single pure derivation of a launch's tool list, returning { tools, dropped } where dropped is [{ tool, source, reason }]. A card narrows, never widens: kb.tools and kb.mcp intersect with the profile's allowed_tools, and anything the profile does not grant is dropped and recorded rather than granted (wildcards in a grant, e.g. `Bash(gi",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-217-1/4048cfbf-a952-49b8-9e95-092b30a8a130.jsonl",
+      "wt": "kb-217-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T00:09:18Z",
+      "id": 5502334597,
+      "text": "**Merged by the operator seat** — review: Reviewed against all five Done-when items; every one met, and this is the seam two tracks depend on so I read it harder than its size suggests. effectiveTools(profile, task, board) is pure, in src/model.js, returning {tools, dropped} where dropped is {tool, source, reason} — returned rather than swallowed, so a caller can say what it took away. The narrowing rule is right: kb.tools and kb.mcp intersect with the profile's grant, anything the card asks for that the profile lacks is dropped and recorded, and both keys absent — which is every card today — returns the grant untouched. Two things I would have asked for and did not have to. The unused  parameter carries an eslint-disable naming exactly why it is there: an extension point #223 and #217 read and this card does not, declared honestly instead of stubbed — and a stub is precisely what would have invited the second derivation this card exists to prevent. And  is handled as 'this harness has no per-command allow-list' (Codex, where the sandbox is the policy) rather than crashing or treating it as empty. The test that matters most is named for the promise: 'every shipped profile launch line is byte-identical to the pre-seam one'. Also covered: the returned list is a copy so a caller cannot mutate the profile grant, and kb.tools and kb.mcp composing on both axes at once. Verified myself: CI green (test + packed artifact), lint clean, 1066 tests on the branch. Scope honoured — no posture, no capability map, no new configuration key, and src/dispatch.js now asks this function instead of reading allowed_tools itself., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-02T00:03:55Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/dispatch.js",
+          "test/model.test.js"
+        ],
+        "residual_risk": [
+          "kb.tools/kb.mcp are read but not validated anywhere (not in DEFAULT_KB, no hkb doctor check) - deliberate, since the card forbids shipping a new configuration key; whichever sibling makes them real should add the validation.",
+          "The kb.mcp rule (a list of server names, each becoming mcp__<server>__* and filtering MCP grants) is a first cut - #223 owns MCP posture and may want a different shape; it should change effectiveTools rather than add a second path.",
+          "src/hook.js, src/track.js, src/doctor.js and src/init.js still read profile.allowed_tools, but none of them builds a launch (guard policy, an Agent-capability check, doctor advice, template rendering).",
+          "docs/wiki pages covering model.js/dispatch.js are flagged stale by the wiki check; the whole set was already stale before this branch and docs/ is outside this card's kb.paths."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (1066 pass, 0 fail)",
+          "node --test test/model.test.js (37 pass)",
+          "gh pr create --draft --base main"
+        ]
+      },
+      "pr": 263,
+      "pr_continued": false,
+      "summary": "effectiveTools(profile, task, board) in src/model.js is now the single pure derivation of a launch's tool list, returning { tools, dropped } where dropped is [{ tool, source, reason }]. A card narrows, never widens: kb.tools and kb.mcp intersect with the profile's allowed_tools, and anything the profile does not grant is dropped and recorded rather than granted (wildcards in a grant, e.g. `Bash(git *)` or `mcp__x__*`, cover the narrower thing a card asks for). src/dispatch.js expandLaunch no longer reads profile.allowed_tools: it takes an optional 4th arg { task, board } and spends effectiveTools for both {allowed_tools} shapes (the list form and Copilot's repeated --allow-tool= form); called without it, every existing caller's expansion is unchanged. spawnWorker passes the card and ctx.cfg, returns tools_dropped on every result path, and the tick logs it at spawn time so a narrowed grant is named instead of reaching the worker as a silent dontAsk refusal. No posture, no capability map, no stub for either, and no new configuration key: DEFAULT_KB is untouched, so kb.tools/kb.mcp are honoured if present but ship as nothing. For #223 and #217: plug into effectiveTools — the signature already takes the profile, the card and the board config, so neither of you has to change it, and neither should touch expandLaunch. PR: https://github.com/emyann/harness-kanban-board/pull/263"
+    }
+  ],
+  "v": 1
+}

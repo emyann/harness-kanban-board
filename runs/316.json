@@ -1,0 +1,16 @@
+{
+  "attempts": [],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T02:47:55Z",
+      "id": 5519569109,
+      "text": "Parked deliberately, and possibly subsumed.\n\nThe contradiction is real, but it lives in the `--allowedTools` pattern machinery — `SAFE_BUILTINS`, `uncoveredBuiltins`, the 39 `Bash(...)` entries a launch line carries. Under #312 a Claude worker's grant becomes `AgentDefinition.tools`, a typed list on a query rather than patterns on a command line, and `checkWorkerPermissions` is then asking its question about a shape that no longer exists on that path.\n\nSo: leave this in triage. Fix it standalone only if the CLI adapters outlive #312 by long enough to be worth it; otherwise fold it into #312's doctor work, where the check gets rewritten against whatever the grant actually is. The one thing worth carrying either way is the invariant the tests should pin: **a board that grants everything must produce no warning about what it omits.**"
+    }
+  ],
+  "results": [],
+  "v": 1
+}

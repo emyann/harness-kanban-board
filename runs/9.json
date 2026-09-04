@@ -1,0 +1,60 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-26T23:30:50.592Z",
+      "heartbeat_at": "2026-08-26T23:12:00.351Z",
+      "host": "YRND1-GG",
+      "job": "9c0de62d",
+      "lock_sha": "41c1b148eb9bde2786ad9eb672fb2f706c1a8a14",
+      "log": ".kanban/logs/9-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-26T23:12:00.351Z",
+      "wt": "kb-9-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-26T23:29:50Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/mcp.js (new: protocol, tools, config generation)",
+          "templates/mcp/mcp.json, templates/mcp/codex.toml, templates/mcp/vscode.json (new)",
+          "test/mcp.test.js (new, 28 tests)",
+          "src/cli.js (mcp command, --mcp bool flag, create/link now call lifecycle)",
+          "src/lifecycle.js (createTask, linkTask extracted from cli.js)",
+          "src/init.js (--mcp step, reuses hkbOnPath)",
+          "src/board.js (hkbOnPath)",
+          "README.md (MCP section + mapping-table row)",
+          "docs/harnesses.md, templates/codex/notes.md (point at hkb init --mcp)"
+        ],
+        "residual_risk": [
+          "`claude mcp list` was not run: `claude` is not in the worker profile's allowlist, so the manual initialize + tools/list handshake stands in for it. Worth one run by hand before trusting the .mcp.json path end to end.",
+          "Only protocol versions 2025-06-18 / 2025-03-26 / 2024-11-05 are echoed back; anything else silently gets 2025-06-18 (spec-conformant, but the list needs updating as MCP revises).",
+          "resources/list and prompts/list answer -32601 rather than empty lists — correct per spec since neither capability is declared, but a noisy client may log it.",
+          "Moving create/link into lifecycle.js changed two --json payloads by addition: `hkb create --json` now returns the whole task on an idempotency-key hit, and `hkb link --json` gained `linked`. Supersets, but a script pinning exact keys would notice.",
+          "hkb doctor has no MCP check (out of scope): a .mcp.json pointing at an hkb that later leaves PATH fails at the client, not at doctor."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test — 254 pass, 0 fail (28 new; no gh and no network: fake-gh is the transport, stdin/stdout are plain objects)",
+          "live stdio handshake against emyann/harness-kanban-board: initialize -> tools/list (9 tools) -> tools/call kanban_show 9, whose structuredContent deep-equals `hkb show 9 --json`; unknown tool -> -32602, unknown argument -> isError content, ping -> {}",
+          "hkb init --mcp file generation exercised through installMcp (writes .mcp.json, prints both snippets); the generated file was removed again, not committed"
+        ]
+      },
+      "summary": "hkb mcp: a stdio MCP server (JSON-RPC 2.0 by hand, no dependency) exposing the nine verbs as kanban_* tools, each a wrapper of the same function cli.js calls. A tools/call of kanban_show is byte-for-byte `hkb show <n> --json` (asserted in test, verified live). `task` defaults to $KB_TASK; bad arguments and refused verbs come back as isError content so the model can read LOCK_LOST; the terminal verbs replay through the offline outbox. `hkb create` / `hkb link` moved out of the CLI switch into lifecycle.js as createTask/linkTask so there is one code path (CLI --json gained fields, no behaviour change). `hkb init --mcp` merges .mcp.json without clobbering other servers and prints the Codex (~/.codex/config.toml) and VS Code (.vscode/mcp.json) snippets, which are not hkb's files to write; with hkb off PATH the config names process.execPath + bin/hkb.js absolutely on both halves. No .mcp.json is committed for this repo on purpose: the dispatcher spawns workers with --permission-mode dontAsk and no mcp__* in the allowlist, so a project-level server here would be noise for every worker. Draft PR #38."
+    }
+  ],
+  "v": 1
+}

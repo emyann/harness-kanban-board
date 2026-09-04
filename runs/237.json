@@ -1,0 +1,65 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T21:42:09.206Z",
+      "heartbeat_at": "2026-09-01T21:37:33.103Z",
+      "host": "YRND1-GG",
+      "job": "478c7449",
+      "lock_sha": "5db5afabd8f9396f9e164cd43ba1e90166f87dc2",
+      "log": ".kanban/logs/237-1.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 240,
+      "pr_head": "kb-237-hkb-edit",
+      "profile": "claude",
+      "session_id": "478c7449-7610-425b-9d5b-afda41e14a06",
+      "started_at": "2026-09-01T21:37:33.103Z",
+      "summary": "Added `hkb edit <n>... [--paths a,b] [--goal \"..\"] [--scheduled-at ISO] [--priority N]` (src/cli.js, case 'edit') — sets exactly the kb keys named, spread over the task's existing kb object via the already-existing updateBody helper in src/tasks.js, leaving every other key untouched. Accepts multiple task numbers (like promote/archive) because groom's priority_inversion suggestion can name several",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-237-1/478c7449-7610-425b-9d5b-afda41e14a06.jsonl",
+      "wt": "kb-237-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T21:44:04Z",
+      "id": 5500844853,
+      "text": "**Merged by the operator seat** — review: Reviewed against the card's goal, which is met: hkb edit <n>... sets exactly the kb keys named — {...t.kb, ...fields} leaves every other key as read — and it refuses with a usage error when no field flag is given. The test that matters is the one the root asked for when it filed this card: 'hkb groom: every hkb edit line it suggests is a command hkb edit actually runs', which walks a fixture report covering malformed_kb, no_paths, broad_path and priority_inversion and checks each suggested string against the real verb. That is the drift guard whose absence caused this gap, so it closes the class and not just the instance. Verified myself: CI green (test + packed artifact), lint clean, 971 tests on the branch, and the wiki page was updated in the same PR rather than left stale. One defect outside the card's goal, filed rather than bounced: --priority and --scheduled-at are not validated, so hkb edit <n> --priority abc computes Number('abc') = NaN, JSON.stringify writes \"priority\": null, and the card's priority is silently reset while the output cheerfully says 'priority set'. Values say never a silent failure. It is two lines of validation and did not warrant a full relaunch, so it is a follow-up card., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T21:42:11Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/cli.js",
+          "test/cli.test.js",
+          "docs/wiki/features/backlog-grooming.md"
+        ],
+        "dependencies": [],
+        "residual_risk": [
+          "hkb edit is not yet wired into /kanban:groom's approved-batch verbs (the skill still routes specify-flagged findings through the /kanban:specify PATCH recipe) — noted in the wiki page as a follow-up, not part of this task's acceptance criteria.",
+          "--paths/--goal/--scheduled-at only set; there is no way to clear a field back to null/[] via hkb edit (not required by the acceptance criteria, but a likely next ask)."
+        ],
+        "retry_notes": null,
+        "verification": [
+          "npm run lint",
+          "npm test (972 tests, all passing)"
+        ]
+      },
+      "pr": 240,
+      "pr_continued": false,
+      "summary": "Added `hkb edit <n>... [--paths a,b] [--goal \"..\"] [--scheduled-at ISO] [--priority N]` (src/cli.js, case 'edit') — sets exactly the kb keys named, spread over the task's existing kb object via the already-existing updateBody helper in src/tasks.js, leaving every other key untouched. Accepts multiple task numbers (like promote/archive) because groom's priority_inversion suggestion can name several blockers at once. Documented in HELP. Two tests added in test/cli.test.js: one asserts a partial edit changes only the named keys (and a full edit changes exactly the four named), the other builds a board that triggers all four hkb-edit-suggesting groom findings (malformed_kb, no_paths, broad_path, priority_inversion), runs `hkb groom --json`, and runs every suggested `hkb edit ...` line through the CLI, asserting none throw a usage error. Also updated docs/wiki/features/backlog-grooming.md, which explicitly documented hkb edit as a known gap, to describe the new verb instead. PR: https://github.com/emyann/harness-kanban-board/pull/240 (draft, Closes #237)."
+    }
+  ],
+  "v": 1
+}

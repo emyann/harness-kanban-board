@@ -1,0 +1,63 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-26T08:05:55.246Z",
+      "heartbeat_at": "2026-08-26T07:49:56.467Z",
+      "host": "YRND1-GG",
+      "job": "7ec4fda3",
+      "lock_sha": "41c1b148eb9bde2786ad9eb672fb2f706c1a8a14",
+      "log": ".kanban/logs/6-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-26T07:49:56.467Z",
+      "wt": "kb-6-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-26T08:04:32Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/board.js",
+          "src/init.js",
+          "src/dispatch.js",
+          "src/doctor.js",
+          "src/hook.js",
+          "src/cli.js",
+          "templates/codex/hooks.json",
+          "templates/codex/notes.md",
+          "docs/harnesses.md",
+          "README.md",
+          "CLAUDE.md",
+          "test/harness.test.js"
+        ],
+        "residual_risk": [
+          "No `codex exec` was ever run: the flags, the hook file shape, the Stop event name and the config keys come from docs/EVALUATION.md, not from a live CLI or the current docs — this host had no network access and no codex binary. Verify before relying on the profile.",
+          "If Codex's hooks.json shape is flat rather than the Claude-style hooks.<event>[].hooks[] nesting, templates/codex/hooks.json is the single edit.",
+          "The launch passes the schema by a repo-relative path, so .agents/skills/kanban/ must be committed or a fresh worktree will not have it. hkb doctor now fails loudly on that, but only at the board root.",
+          "Codex's workspace-write sandbox blocks the network by default; a user who skips the config notes gets workers that edit files but never push, and every attempt is reclaimed as stale."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test — 197 pass, 0 fail (12 new tests in test/harness.test.js)",
+          "hkb doctor against a codex-only board in this repo: reports the profile, the output schema, and the missing harness files with the init that fixes them",
+          "rendered .codex/hooks.json and .codex/README.md for a POSIX and a Windows root, checking the TOML escaping",
+          "git rebase origin/main (2a76e24), then lint + test again"
+        ]
+      },
+      "summary": "Added the built-in `codex` profile and everything around it, reusing the copilot harness mechanism from #32 rather than growing a second one. PR #34 (draft, `Closes #6`), branch `worktree-kb-6-1`, rebased on main at 2a76e24.\n\nWhat a next worker needs to know:\n\n- `codex` profile in `src/board.js` launches `codex exec -C {worktree} --sandbox workspace-write --output-schema .agents/skills/kanban/schema/terminal.json [--model M] \"{prompt}\"` — mode `process`, `workspace: \"worktree\"`, `heartbeat: \"auto\"`, `max_in_progress: 1`, `allowed_tools: null` (the sandbox is the whole permission policy; Codex has no per-command allowlist).\n- New launch placeholder `{worktree}`: the absolute path of the checkout the dispatcher is about to create. `spawnWorker` now computes the worktree name before expanding the launch array, so `--dry-run` prints the real command without creating anything. Any future harness that wants its workdir as an argument uses this.\n- `harnessFiles` in `src/init.js` is now a table (`HARNESS_FILES`) keyed by harness, with `HARNESS_PROFILE = { copilot: 'copilot-cli', codex: 'codex' }`. Copilot generation is byte-identical. Adding a harness = a `templates/<name>/` directory plus one entry there.\n- `hkb init --harness codex` generates `.codex/hooks.json` (Stop → `hkb hook stop`) and `.codex/README.md` (the one-time trust steps and the `~/.codex/config.toml` notes, with the repo path filled in and TOML-escaped, no `[mcp_servers]` table).\n- `hkb doctor`: `checkHarnesses` now covers every configured harness and takes its file list from the generator itself, so it cannot drift (it replaced the hardcoded copilot check); plus a new check that any profile passing `--output-schema <path>` actually has that file — a missing one is a hard failure because it breaks every attempt.\n- `docs/harnesses.md` is the new per-harness page (profile table, launch placeholders, Codex trust/sandbox setup, troubleshooting, how to add a harness). README and `src/hook.js` point at it.\n\nImportant for the reviewer: I had no web access and no `codex` binary on this host, so four external Codex facts are documented-but-unverified, called out in the PR body and in the doc's Sources section — (1) the `.codex/hooks.json` shape and the `Stop` event name (`templates/codex/hooks.json`), (2) whether a Codex Stop hook honours `{\"decision\":\"block\"}`, (3) the `codex exec` flags (the launch array in `src/board.js`), (4) the trust and sandbox keys `/hooks`, `projects.*.trust_level`, `[sandbox_workspace_write] network_access` / `writable_roots` (`templates/codex/notes.md`, `docs/harnesses.md`). Each is isolated to one file and nothing in `src/` parses any of it."
+    }
+  ],
+  "v": 1
+}

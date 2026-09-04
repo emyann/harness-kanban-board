@@ -1,0 +1,98 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-09-03T00:13:39.763Z",
+      "heartbeat_at": "2026-09-02T23:57:16.770Z",
+      "host": "YRND1-GG",
+      "lock_sha": "e36702183ba25314524011b55bf4b9e673139498",
+      "manual": true,
+      "outcome": "completed",
+      "pr": 308,
+      "pr_head": "kb/290",
+      "profile": "claude",
+      "session_id": "ea24eaa1-7d40-474a-9971-78298416d23e",
+      "started_at": "2026-09-02T23:57:16.769Z",
+      "summary": "The GitHub Actions runner is gone whole: templates/actions/ and this repo's two generated workflows, actionsFiles/installActions/hkbInstallForActions/triggerProfiles/ACTIONS_PROFILE and the --with-actions path in src/init.js, the claude-action profile in DEFAULT_PROFILES, mode:'trigger' everywhere (the trigger tail of spawnWorker, the remote branch of the reclaim loop, every a.remote and spawned.r",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-288-1/ea24eaa1-7d40-474a-9971-78298416d23e.jsonl",
+      "wt": "kb-288-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T00:22:30Z",
+      "id": 5518395360,
+      "text": "Track #288 review note — `/code-review 308 high`, post-merge into `kb/track-288`.\n\nThe removal itself verified clean: every removed symbol (`actionsFiles`, `installActions`,\n`triggerProfiles`, `ACTIONS_PROFILE`, `workflowAllowedTools`, `checkActions`,\n`hkbInstallForActions`, `mode: 'trigger'`, `a.remote`, `attempt.remote`) has no dangling\nreference anywhere in `src/`, `test/`, `types/`, `scripts/`, `skills/`, `templates/`, `bin/`;\nno helper went dead; `checkWorkerPermissions`'s only caller matches its new signature; the\n`removedInitFlag` guard fires before anything is written.\n\nFour findings, none fixed yet — #291 is live on `src/dispatch.js` and `src/board.js` right now,\nso 1 and 4 wait for the root's own verify pass on the track branch:\n\n1. `src/dispatch.js:648` — dropping `a.remote` from the \"nothing local to inspect\" branch means an\n   existing run record carrying `remote: true` (pidless, no job, host = the claiming laptop) now\n   falls through to line 676 and is marked `crashed` 180s in. After an operator deletes the\n   `claude-action` profile, as the new `loadBoard` error tells them to, a still-running Actions\n   worker's attempt is reclaimed and its card re-claimed — two workers on one PR. Those records are\n   durable (they live in run comments) and no migration covers them.\n2. `skills/kanban/references/protocol.md:127` — the attempts row (line 39) was updated but tick\n   step 2 still documents `remote` attempts twice. `skills/kanban/SKILL.md:237` still names Actions\n   as a supervisor where protocol.md's exit-code section now says `launchd`.\n3. `test/dispatch.test.js` — `test/actions.test.js` held the only test of `hkb dispatch --profiles`\n   and the `dispatchable` gate, and it was deleted whole. The PR keeps that feature deliberately;\n   nothing in the suite asserts it any more.\n4. `src/board.js:502` — the `mode: \"trigger\"` refusal throws from `loadBoard`, which `makeContextAt`\n   and `init()` both call, so `hkb doctor` and `hkb init` — the two repair verbs — also exit 2 on an\n   affected board. Hooks degrade via `loadBoardSafe`; the CLI has no equivalent, so hand-editing\n   board.json is the only way out.\n"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-03T00:13:40Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/init.js",
+          "src/board.js",
+          "src/dispatch.js",
+          "src/doctor.js",
+          "src/cli.js",
+          "src/model.js",
+          "types/hkb.d.ts",
+          "scripts/smoke-pack.mjs",
+          "templates/actions/kanban-dispatch.yml (deleted)",
+          "templates/actions/kanban-worker-claude.yml (deleted)",
+          ".github/workflows/kanban-dispatch.yml (deleted)",
+          ".github/workflows/kanban-worker-claude.yml (deleted)",
+          "test/actions.test.js (deleted)",
+          "test/dispatch.test.js",
+          "test/doctor.test.js",
+          "test/harness.test.js",
+          "test/hook.test.js",
+          "test/profiles.test.js",
+          "test/release.test.js",
+          "README.md",
+          "docs/harnesses.md",
+          "docs/manual-mode.md",
+          "skills/kanban/references/protocol.md",
+          "docs/wiki/index.md",
+          "docs/wiki/wiki.config.yml",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/concepts/worker-identity.md",
+          "docs/wiki/features/review-loop.md",
+          "docs/wiki/features/up-and-down.md",
+          "docs/wiki/features/update-notice.md",
+          "docs/wiki/features/hook-install-shapes.md",
+          "docs/wiki/features/worker-tool-posture.md",
+          "docs/wiki/ (all 22 pages restamped)"
+        ],
+        "residual_risk": [
+          "The card asked for a new pure function with a test in src/model.js; the two new pure functions live where their siblings do instead - removedInitFlag beside resolveProfiles in src/init.js, the trigger refusal beside the effort/tools refusals in loadBoard (src/board.js). Both are exported and tested (test/harness.test.js, test/profiles.test.js). Nothing new went into src/model.js; only a stale comment was dropped there.",
+          "hkb show no longer prints the off-host marker for a HISTORICAL attempt row carrying remote:true. Such rows can still exist in old run comments; they now render as an ordinary attempt. Judged right (the field is gone from the type and nothing writes it) but it is a silent change to how old history reads.",
+          "wiki-stamp --all was used, so the 20 pages #289 left stale by file hash are now stamped at this commit too. Their content was checked only where it mentioned the runner; a page asserting something else about src/*.js that #289's JSDoc pass changed would now be stamped fresh without having been re-read line by line.",
+          "CI has not run on this branch. The four jobs #289 added (test on 22/24, smoke on 22/26) are unexercised here beyond the local lint/test/smoke.",
+          "docs/wiki/features/harness-profiles is still an unwritten planned page; its plan summary was updated to five profiles, but nothing yet asserts the removal in a drafted page of its own.",
+          "The base is kb/track-288, which already contains #289. PR #308 targets that branch, so Closes #290 will not auto-close - the track branch's own PR into main is what lands it."
+        ],
+        "verification": [
+          "npm install (devDeps: tsc was not present in this throwaway worktree)",
+          "npm run lint - node --check loop + tsc --noEmit, green",
+          "npm test - 1107 pass, 0 fail (was 941 tests with 4 failing files mid-change: doctor, harness, profiles, release)",
+          "npm run smoke - packs, installs and runs the tarball; it caught the templates/actions/ entry still listed in scripts/smoke-pack.mjs's content checks, now removed",
+          "node bin/hkb.js init --with-actions - exit 2 with the ADR-006 message",
+          "node .repolore/scripts/wiki-check.mjs - all 22 pages fresh, no plan drift",
+          "node .repolore/scripts/wiki-stamp.mjs --all, then again on the two pages covering scripts/smoke-pack.mjs after the second commit"
+        ]
+      },
+      "pr": 308,
+      "pr_continued": false,
+      "summary": "The GitHub Actions runner is gone whole: templates/actions/ and this repo's two generated workflows, actionsFiles/installActions/hkbInstallForActions/triggerProfiles/ACTIONS_PROFILE and the --with-actions path in src/init.js, the claude-action profile in DEFAULT_PROFILES, mode:'trigger' everywhere (the trigger tail of spawnWorker, the remote branch of the reclaim loop, every a.remote and spawned.remote read in src/dispatch.js, attempt.remote in types/hkb.d.ts, the \"off-host\" marker in hkb show), checkActions and workflowAllowedTools in src/doctor.js, and test/actions.test.js.\n\nTwo things speak instead of failing silently: `hkb init --with-actions` exits 2 via removedInitFlag (a pure exported function in src/init.js, called first thing in init() before anything is written; it matches ANY flag name containing \"actions\", so --actions and --no-actions answer the same way) with a message naming ADR-006 and `hkb up`; and loadBoard now refuses a board.json naming mode:'trigger', exit 2, naming the profile and telling the operator to delete it and re-point its cards.\n\nKept deliberately, do not remove in a later node: --profiles on hkb dispatch (a host says which profiles it launches; the comments that used to justify it by Actions were rewritten, not deleted), manual attempts and their heartbeat-only liveness, heartbeat:'comment', and actionsAnnotation/emitAnnotations in src/doctor.js (those are about running `hkb doctor` INSIDE CI, not about dispatching from it, and this repo's own test.yml/release.yml still run on Actions).\n\nNote for A3 (which moves tasks.js/lock.js): neither file was touched, and no import in either changed. checkWorkerPermissions(ctx, sink) lost its third injectable {read, exists} parameter, which only the deleted workflow branch used; the test callers were updated.\n\nTwo deliberate deviations from the card's Done-when grep, both defensible: (1) docs/harnesses.md and README.md keep a short migration table naming claude-action, --with-actions and mode trigger. That is the only place they survive outside the history files, and it exists so a user with the old setup finds the answer rather than a silent removal (value 5: every error says what to do next). (2) docs/local-first.md still describes what to remove, because it is the plan-of-record for this very card and rewriting it would falsify the record. Also, the card's grep pattern for a dotted \"remote\" word cannot return clean either way: cfg?.remote in src/gc.js and src/lock.js is the GIT remote name, unrelated, and stays."
+    }
+  ],
+  "v": 1
+}

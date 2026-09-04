@@ -1,0 +1,76 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T23:17:02.185Z",
+      "heartbeat_at": "2026-09-01T23:04:16.551Z",
+      "host": "YRND1-GG",
+      "job": "aca3d38a",
+      "lock_sha": "f04038f169f82ebd747c6c1f93835f1c9e9f9c46",
+      "log": ".kanban/logs/204-1.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 251,
+      "pr_head": "worktree-kb-204-1",
+      "profile": "claude",
+      "session_id": "aca3d38a-4058-4d65-b66d-bc33b2d80ec0",
+      "started_at": "2026-09-01T23:04:16.551Z",
+      "summary": "hkb up --serve and hkb up --status now name a running server's URL (human line and serve.url under --json); hkb doctor gained a new serve line carrying the same URL. .kanban/serve.url follows the pid file's two-writer pattern: up pre-writes a guess from --port at spawn time (serveOrigin in up.js), and claimServePid (now (root, log, url)) corrects it to the real bound origin once the port is open; ",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-204-1/aca3d38a-4058-4d65-b66d-bc33b2d80ec0.jsonl",
+      "wt": "kb-204-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T23:18:26Z",
+      "id": 5501812484,
+      "text": "**Merged by the operator seat** — review: Reviewed against the card's five Done-when items; all met. hkb up --serve and hkb up --status now name the running server's URL in human and --json output (serve.url), with writeServeUrl/dropServeUrl keeping it truthful across a stop — --port is a flag on up, so the value is known at spawn time and costs no lookup. hkb list --summary is the second half: per-lane counts and the priority spread within each, with no issue bodies at all, which is what the operate opening needed and could not get without pulling 78 KB. Ran it live on this board rather than trusting the description: '29 cards on board default · triage 27 (p4:4 p3:6 p2:3 p1:1 p0:13) · running 1 (p3:1) · review 1 (p0:1)' — one line, exactly the shape the opening report specifies, and the priority spread makes the ruler visible now that #207 gave it a band. doctor gained the URL too. Verified myself: CI green, lint clean, 1031 tests on the branch, up from 1012, and the three wiki pages it touches (operator-seat, up-and-down, web-board) were updated in the same PR rather than left to drift. Worth noting what this closes: the operate opening had to grep .kanban/logs/serve.log for the board's own URL, which is a log read for a fact the process already knew, and the SKILL.md line saying so is now gone., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T23:17:02Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/board.js",
+          "src/up.js",
+          "src/serve.js",
+          "src/doctor.js",
+          "src/model.js",
+          "src/cli.js",
+          "test/up.test.js",
+          "test/doctor.test.js",
+          "test/model.test.js",
+          "test/cli.test.js",
+          "skills/kanban/SKILL.md",
+          "docs/wiki/features/up-and-down.md",
+          "docs/wiki/features/web-board.md",
+          "docs/wiki/features/operator-seat.md"
+        ],
+        "residual_risk": [
+          "checkServe in doctor.js always warns 'no server running' when --serve was never used on this board, same as checkDispatcher's existing pattern for the dispatcher — intentional symmetry, but on a board that never runs --serve this is one more standing warning line in hkb doctor",
+          "up.js's pre-written serve.url guess assumes host 127.0.0.1 (childArgv never passes --host, matching serve.js's own default) and a concrete --port; a --port 0 (OS-assigned) spawn shows a wrong guess for the ~300ms SPAWN_CHECK_MS window until claimServePid corrects it — same window the pid pre-write already has",
+          "composing the four reads (up --serve/--status, doctor, list --summary) into the actual step-1 screen is still a session doing it by hand each time, not a single hkb command — SKILL.md documents the shape, the CLI supplies the parts"
+        ],
+        "verification": [
+          "npm run lint && npm test (1031 passing)",
+          "node .repolore/scripts/wiki-check.mjs — the three touched wiki pages are no longer stale",
+          "rebased onto origin/main, pushed worktree-kb-204-1, opened draft PR #251"
+        ]
+      },
+      "pr": 251,
+      "pr_continued": false,
+      "summary": "hkb up --serve and hkb up --status now name a running server's URL (human line and serve.url under --json); hkb doctor gained a new serve line carrying the same URL. .kanban/serve.url follows the pid file's two-writer pattern: up pre-writes a guess from --port at spawn time (serveOrigin in up.js), and claimServePid (now (root, log, url)) corrects it to the real bound origin once the port is open; both drop it together with the pid claim (dropServeUrl in board.js). Added hkb list --summary [--json]: one board read (the same one list already pays for) returning per-status counts, the priority spread within each status, and the kb:needs-human cards, with no issue bodies (boardSummary, pure, in model.js). Updated skills/kanban/SKILL.md's opening-report section (no more serve.log grep, list --summary named for the lane table) and the up-and-down/web-board/operator-seat wiki pages; stamped via wiki-stamp.mjs."
+    }
+  ],
+  "v": 1
+}

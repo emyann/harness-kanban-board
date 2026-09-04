@@ -1,0 +1,67 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T22:23:41.433Z",
+      "heartbeat_at": "2026-09-01T22:18:03.772Z",
+      "host": "YRND1-GG",
+      "job": "132f6f03",
+      "lock_sha": "5a51d71427fac7aa9263b0af31f025198e59a3cc",
+      "log": ".kanban/logs/243-1.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 247,
+      "pr_head": "worktree-kb-243-1",
+      "profile": "claude",
+      "session_id": "132f6f03-599a-4bcd-bf4d-ee45e815df12",
+      "started_at": "2026-09-01T22:18:03.772Z",
+      "summary": "hkb edit's --priority and --scheduled-at flags now validate before any card is written. Added parsePriorityFlag/parseScheduledAtFlag (pure functions in src/model.js, next to priorityOf) — --priority must be Number.isInteger (rejects floats like 2.5 rather than flooring, rejects blank/whitespace/non-numeric strings), --scheduled-at must be a string `new Date()` can parse. Both are validated in src/",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-243-1/132f6f03-599a-4bcd-bf4d-ee45e815df12.jsonl",
+      "wt": "kb-243-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T22:24:53Z",
+      "id": 5501248051,
+      "text": "**Merged by the operator seat** — review: Reviewed against all five Done-when items; every one met. parsePriorityFlag and parseScheduledAtFlag are pure in src/model.js per the layout rule, and the CLI validates EVERY flag before touching any of the <n> — the specific thing the card asked for, so a bad flag rejects the whole command rather than editing the first card and failing on the second, with a test named for exactly that. --priority abc exits 2 naming the flag, the value and the band; 2.5 is rejected rather than silently floored, which I would have asked for and did not have to. --scheduled-at nonsense exits 2 naming the flag and the expected shape. The clearing question the card raised is answered rather than left ambiguous: --paths \"\" and --goal \"\" clear the field, and the usage line now says so. A past scheduled_at warns rather than refuses, which is the right call — it is a no-op, not an error. Verified myself: CI green (test + packed artifact), lint clean, 1002 tests on the branch, up from 996, and the wiki page was refreshed in the same PR rather than left to drift. This closes the silent-corruption path in a verb that shipped four hours ago and has not yet been released, so no published version ever carried it., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T22:23:43Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/cli.js",
+          "src/model.js",
+          "test/cli.test.js",
+          "test/model.test.js",
+          "docs/wiki/features/backlog-grooming.md"
+        ],
+        "dependencies": [],
+        "residual_risk": [
+          "The other ~11 wiki pages the wiki-check hook flagged stale (architecture/overview, concepts/worker-identity, features/auto-merge, features/tracks, etc.) were left unrefreshed — they cover src/model.js or src/cli.js broadly and don't describe hkb edit's validation specifically, so refreshing them is out of this task's scope, but a future pass should confirm none of them make claims this change invalidates."
+        ],
+        "retry_notes": null,
+        "verification": [
+          "npm run lint",
+          "npm test (1002 passing)",
+          "manual: node bin/hkb.js edit --help shows the updated usage line"
+        ]
+      },
+      "pr": 247,
+      "pr_continued": false,
+      "summary": "hkb edit's --priority and --scheduled-at flags now validate before any card is written. Added parsePriorityFlag/parseScheduledAtFlag (pure functions in src/model.js, next to priorityOf) — --priority must be Number.isInteger (rejects floats like 2.5 rather than flooring, rejects blank/whitespace/non-numeric strings), --scheduled-at must be a string `new Date()` can parse. Both are validated in src/cli.js's `edit` case before the per-number write loop starts, so `hkb edit 5 6 --priority abc` rejects the whole command with exit 2 and writes nothing to either card (previously it silently wrote `priority: null`). A --scheduled-at in the past is not refused — it's a legal no-op — but the CLI prints a warning line to stderr via the existing `log()` (stderr) helper. The usage line for `edit` now documents --priority's integer requirement, the priority band, --scheduled-at's ISO-instant requirement, and that --paths \"\" / --goal \"\" clears those two fields (this behavior already existed via `list()`/`str()`, just wasn't documented). Refreshed docs/wiki/features/backlog-grooming.md's `hkb edit` section to describe the validation and re-stamped it; left the other ~11 pages that went stale from touching src/model.js and src/cli.js unrefreshed since they only broadly cover those files and don't describe hkb edit's behavior specifically."
+    }
+  ],
+  "v": 1
+}

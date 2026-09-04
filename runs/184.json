@@ -1,0 +1,74 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-29T05:36:48.019Z",
+      "heartbeat_at": "2026-08-29T05:26:46.298Z",
+      "host": "YRND1-GG",
+      "job": "661b47b1",
+      "lock_sha": "ec196c817b037ee423a6a901539cb51cd3da0225",
+      "log": ".kanban/logs/184-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 201,
+      "pr_head": "worktree-kb-184-1",
+      "profile": "claude",
+      "session_id": "661b47b1-2ee9-4de2-bd11-70adb61ba217",
+      "started_at": "2026-08-29T05:26:46.298Z",
+      "summary": "Fixed the PreToolUse/Stop hook deadlock: hkb hook now builds its context via a new makeHookContext (src/board.js) that never throws on an unreadable/invalid .kanban/board.json — it catches the failure and preToolHook/stopHook print one stderr line ('hkb hook: cannot read .kanban/board.json (<why>); standing aside') and exit 0 with no stdout, instead of the old makeContext->loadBoard throw that blo",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-184-1/661b47b1-2ee9-4de2-bd11-70adb61ba217.jsonl",
+      "wt": "kb-184-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-29T04:26:42Z",
+      "id": 5460324763,
+      "text": "Second trigger for the same deadlock, found in the review of PR #186 (#182): `hook pretool` goes through `boardCtx` → `loadBoard`, which now exits 2 on an invalid `effort` value — so a worker whose card edits `effort` in its worktree's board.json and typos it is locked out of every tool call, exactly as with conflict markers. The fix here (never let the hook fail on its own config; apply the policy from KB_ROOT's board) covers both."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-29T05:03:01Z",
+      "id": 5460469684,
+      "text": "Two more items for this card, from the review of PR #196 (#187, merged), since both live in the hook code this card rewrites:\n- `test/hook.test.js` ~150 `leakHarness` scrubs `KB_*` but not `CLAUDE_PROJECT_DIR`: with an ambient CLAUDE_PROJECT_DIR naming any kb-<n>-<k> checkout, two tests fail and write `.kanban/sessions/187-1.subagents` into that real checkout. One line: `delete process.env.CLAUDE_PROJECT_DIR` in the harness.\n- When the cwd has no board.json, `ctx.cfg.profiles` is undefined and `attemptIdentity` trusts the env, so `subagentStopHook` records `E` under whatever CLAUDE_PROJECT_DIR names (a non-kb repo got a `.kanban/sessions/9-1.subagents` in the probe). Reading the policy/profiles from KB_ROOT's board — this card's item 2 — closes it; add the probe as a test.\n- Wording: `src/hook.js` ~416 comment attributes the old leak line to a `claude -p` child whose cwd is the root; measured, it came from the child worktree cwd with inherited env and a tracked board.json. \"both hooks\" still at `src/init.js` ~243/~662, `src/model.js` ~772, `docs/harnesses.md` ~436; init.js ~243 is also stale since #125."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-29T05:36:51Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/board.js",
+          "src/cli.js",
+          "src/hook.js",
+          "src/init.js",
+          "src/model.js",
+          "test/hook.test.js",
+          "docs/harnesses.md"
+        ],
+        "residual_risk": [
+          "Did not touch skills/kanban/SKILL.md's merge-step steering (item 5 in the card's 'What' section) — that file is outside this card's declared scope (src/hook.js, src/board.js, src/model.js, test/hook.test.js, docs/harnesses.md)",
+          "Did not update docs/wiki/concepts/worker-identity.md even though wiki-check flagged it stale (src/hook.js and src/model.js changed) — the identity algorithm (attemptIdentity/whichAttempt) itself is unchanged; only where the policy board.json is loaded from changed, which that page doesn't describe in detail",
+          "subagentStopHook was left without its own early cfgError stand-aside check (unlike preToolHook/stopHook) since it never calls ctx.requireBoard()/getTask() and its only cfg use (worksInWorktree via ctx.cfg?.profiles) is already null-safe — but this is worth a second look if subagentStopHook grows more cfg-dependent logic later"
+        ],
+        "verification": [
+          "npm run lint && npm test (847 passing)",
+          "node --test test/hook.test.js (39 passing, including the new fixture tests)",
+          "manual repro: a worktree whose .kanban/board.json holds git conflict markers; `hkb hook stop` (and `hkb hook pretool`) exit 0 with one stderr line and empty stdout"
+        ]
+      },
+      "pr": 201,
+      "pr_continued": false,
+      "summary": "Fixed the PreToolUse/Stop hook deadlock: hkb hook now builds its context via a new makeHookContext (src/board.js) that never throws on an unreadable/invalid .kanban/board.json — it catches the failure and preToolHook/stopHook print one stderr line ('hkb hook: cannot read .kanban/board.json (<why>); standing aside') and exit 0 with no stdout, instead of the old makeContext->loadBoard throw that blocked every tool call under matcher \"*\". Also implemented the 'better' fix from the task: the policy hkb applies now comes from KB_ROOT's board.json when KB_ROOT is set (the dispatcher's own checkout, never mid-merge), falling back to the worktree's own file only when KB_ROOT is unset — so a worker can no longer loosen its own allowlist by editing board.json in its worktree, and this incidentally closes a second leak where a checkout with no board.json of its own made worksInWorktree default to false and trust a leaked KB_TASK outright. Opened PR #201 (draft): https://github.com/emyann/harness-kanban-board/pull/201"
+    }
+  ],
+  "v": 1
+}

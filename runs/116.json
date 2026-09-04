@@ -1,0 +1,62 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T19:46:53.676Z",
+      "heartbeat_at": "2026-09-01T19:43:31.362Z",
+      "host": "YRND1-GG",
+      "job": "6540b6fa",
+      "lock_sha": "4714e4f16920270394c1aaa9382d8b2c08e4ab51",
+      "log": ".kanban/logs/116-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 216,
+      "pr_head": "worktree-kb-116-1",
+      "profile": "claude",
+      "session_id": "6540b6fa-3163-49bd-a327-ae1701280096",
+      "started_at": "2026-09-01T19:43:31.362Z",
+      "summary": "failAttempt (src/dispatch.js) now checks the task's open PRs whenever the outcome is protocol_violation: it stamps the closed attempt row with pr:<number> (reusing the existing convention activePrGuard already reads) instead of incrementing runRec.run.failures, so the record distinguishes 'no verb, PR open' from 'no verb, nothing to show' and the retry budget is not spent when the work actually la",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-116-1/6540b6fa-3163-49bd-a327-ae1701280096.jsonl",
+      "wt": "kb-116-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T22:48:32Z",
+      "id": 5458558540,
+      "text": "Overlap note: #155 puts `terminal_reason` on the attempt row from the result, which is the signal option 1/2 here need to tell 'ran out of turns with a PR open' from 'crashed'. Not blocked by it — the active_pr check works without — but the run record gets honest for free once #155 lands."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T19:46:55Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/dispatch.js",
+          "test/dispatch.test.js"
+        ],
+        "residual_risk": [
+          "Option 3 (adopting a staged .kanban/sessions/<n>-summary.md/<n>-metadata.json payload as the attempt's summary/metadata) was not implemented -- the checklist item for it is conditional and it's a larger, separable change.",
+          "docs/wiki was already stale on every page covering src/dispatch.js before this change (verified via git stash); nothing in the wiki documents protocol_violation specifically, so no page needed updating."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (874 passing)",
+          "node --test test/dispatch.test.js (48 passing, includes the two new protocol_violation cases)"
+        ]
+      },
+      "pr": 216,
+      "pr_continued": false,
+      "summary": "failAttempt (src/dispatch.js) now checks the task's open PRs whenever the outcome is protocol_violation: it stamps the closed attempt row with pr:<number> (reusing the existing convention activePrGuard already reads) instead of incrementing runRec.run.failures, so the record distinguishes 'no verb, PR open' from 'no verb, nothing to show' and the retry budget is not spent when the work actually landed. Both call sites that can produce protocol_violation (the reclaim loop's idle/dead-job check and watchChild's exit handler) share this function, so both are covered. Went with option 2 from the task (keep the protocol_violation outcome, exclude it from failures) rather than option 1 or 3, to stay inside src/dispatch.js/src/lifecycle.js/test/dispatch.test.js as scoped -- option 1 would have needed a new OUTCOMES entry touching model.js/stats.js/doctor.js/watch.js, and option 3 (adopting staged .kanban/sessions/<n>-* payloads) is a bigger, separable follow-up."
+    }
+  ],
+  "v": 1
+}

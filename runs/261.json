@@ -1,0 +1,72 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-09-02T00:15:29.471Z",
+      "heartbeat_at": "2026-09-02T00:08:15.819Z",
+      "host": "YRND1-GG",
+      "lock_sha": "d9e7359040f134e390a7bc69bc72e93a713edd1c",
+      "manual": true,
+      "outcome": "completed",
+      "pr": 269,
+      "pr_head": "kb/261",
+      "profile": "claude",
+      "session_id": "4048cfbf-a952-49b8-9e95-092b30a8a130",
+      "started_at": "2026-09-02T00:08:15.819Z",
+      "summary": "The grant is derived inside effectiveTools (src/model.js) and nowhere else. Two new pure exports feed it: capabilityTool(profile, command) answers what invoking a binding needs on that harness — a slash command on a `claude` launch needs Skill, everything else needs nothing (hkb reads the shape of what the board wrote, never the name) — and capabilityGrants(profile) is the single reading of a prof",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-217-1/4048cfbf-a952-49b8-9e95-092b30a8a130.jsonl",
+      "wt": "kb-217-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T00:38:53Z",
+      "id": 5502573913,
+      "text": "**Landed on `main` in 9323033**, via `kb/259` — PR #269 merged into that branch, and `kb/259` then merged to `main` carrying it.\n\nClosing by hand because the board cannot see it: the PR targeted `kb/259` rather than the default branch, so GitHub never linked it, and once it merged it also left the open-PR listing that #234's head-branch fallback reads. The card was therefore stuck in *review* with `prs: []` and its work already shipped. That gap is filed as **#275** — until it lands, a stacked node PR needs this comment and a manual close.\n\nVerified present on `main`: `grantWithCapabilities`, called from inside `effectiveTools` in `src/model.js`."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-02T00:15:31Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/doctor.js",
+          "skills/kanban/SKILL.md",
+          "test/doctor.test.js",
+          "docs/wiki/concepts/capability-portability.md",
+          "docs/wiki/wiki.config.yml",
+          "docs/wiki/index.md"
+        ],
+        "residual_risk": [
+          "Only one invocation shape is known: a slash command on a launch whose argv[0] is 'claude' implies Skill. A binding on a Copilot or Codex launch implies no tool, so the drift guarantee is Claude-only. Honest rather than wrong — hkb does not know how those harnesses invoke a command — but a future harness that needs a named tool must extend capabilityTool, not add a second derivation.",
+          "The shape test is `command.trim().startsWith('/')`. A Claude board that binds an intent to something invoked with Skill but written without a leading slash (a bare skill name) gets no derived grant and no doctor warning. Widening the test was rejected as guessing at the board's intent; if it bites, the fix belongs in capabilityTool.",
+          "A card may narrow a derived tool away silently — no `dropped` entry says 'and that was the tool your review binding needed'. Consistent with how every other tool is narrowed, but the operator-facing story for it is thinner than doctor's.",
+          "The doctor check reads ctx.cfg only. A capabilities map that reached a cfg without going through loadBoard (a hand-built cfg in a test or a hook reading a partial config) is unvalidated; capabilityCommand degrades to null rather than trusting it, so the check under-reports rather than lying.",
+          "checkCapabilityMap emits both an ok (the map) and warns under one check name. A --json consumer keying on CAPABILITIES_CHECK sees more than one row for a board with a broken binding — the same shape checkWorkerPermissions already has.",
+          "docs/wiki pages covering model.js/doctor.js/SKILL.md are flagged stale by wiki-check. They were already stale on kb/259 and the track root owns the whole-story page, so nothing was refreshed here beyond the new page."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (1081 pass, 0 fail; kb/259 baseline was 1073)",
+          "node --test test/doctor.test.js (76 pass)",
+          "node .repolore/scripts/wiki-stamp.mjs docs/wiki/concepts/capability-portability.md",
+          "node .repolore/scripts/wiki-index.mjs",
+          "node .repolore/scripts/wiki-check.mjs (new page fresh; the other 15 were already stale on kb/259)",
+          "gh pr create --draft --base kb/259"
+        ]
+      },
+      "pr": 269,
+      "pr_continued": false,
+      "summary": "The grant is derived inside effectiveTools (src/model.js) and nowhere else. Two new pure exports feed it: capabilityTool(profile, command) answers what invoking a binding needs on that harness — a slash command on a `claude` launch needs Skill, everything else needs nothing (hkb reads the shape of what the board wrote, never the name) — and capabilityGrants(profile) is the single reading of a profile's map, returning {intent, command, tool} per binding. effectiveTools widens the profile's grant from capabilityGrants via a private helper with exactly one caller, so there is no second derivation to disagree with the launch. The widening happens BEFORE the card narrows: a card still cannot widen its own permissions, and a card that narrows past the derived tool takes it away like anything else. `allowed_tools: null` (Codex) is never widened — turning \"no allow-list\" into an allow-list of one would change that launch.\n\nHow the test pins that a binding and its permission cannot drift: the drift test in test/doctor.test.js never names \"Skill\". For every intent in CAPABILITIES it binds a slash command on a Claude-shaped profile whose allowed_tools deliberately omits the tool, asks capabilityGrants what that binding needs, and asserts effectiveTools grants exactly that. Both sides are read off the derivation, so a change to what a binding implies must move both at once or the assertion fails. A sibling test asserts the tool is granted by derivation and not because someone also typed it into allowed_tools.\n\nConfirmed: a board declaring no capabilities has a byte-identical launch line and byte-identical doctor output. Pinned by test — every DEFAULT_PROFILES entry derives zero grants and effectiveTools returns its own allowed_tools list unchanged with nothing dropped, and checkCapabilityMap returns null with an empty result sink. The pre-existing model.test.js \"every shipped profile launch line is byte-identical to the pre-seam one\" test still passes untouched.\n\ndoctor: new `capability map` check (CAPABILITIES_CHECK, exported from src/doctor.js, registered next to checkWorkerPermissions so it runs config-only, before the first API call). It prints the map unconditionally — one `name: intent → command (Tool)` entry per binding — and warns per binding the launch cannot grant. It does NOT recompute the grant: it calls effectiveTools and asks whether the implied tool is in the result, so the check cannot disagree with the launch. What it adds is the half effectiveTools cannot see: a launch array that never spends {allowed_tools}, which renders a perfect tool list into nothing.\n\nOperate: the SKILL.md `review` status row now says to run the board's declared review capability AND judge against Done when — the capability finds what is wrong with the diff, the card says what the diff was for — pointing at the profile's `capabilities.review` and at doctor's printed map so a session never guesses the command. No binding means nothing to run, as before.\n\nWiki: docs/wiki/concepts/capability-portability.md states the contract in one sentence (the intent travels, the binding is local, an unmapped intent is prose), stamped, added to the page plan and the index; wiki-check reports it fresh.\n\nSettled in the PR: #114's hardcoded Skill grant in CLAUDE_TOOLS is NOT redundant and stays. Its source is a CARD's kb.skills, which has nothing to do with a profile binding a capability; removing it would strip Skill from every board that binds nothing (i.e. all of them today) and make checkTaskSkills warn on cards that work now. The derivation covers what the default cannot: a custom profile that binds an intent without ever having heard of Skill.\n\nBranched from kb/259. PR: https://github.com/emyann/harness-kanban-board/pull/269 (draft, --base kb/259)."
+    }
+  ],
+  "v": 1
+}

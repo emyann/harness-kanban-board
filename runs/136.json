@@ -1,0 +1,16 @@
+{
+  "attempts": [],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T22:48:33Z",
+      "id": 5458558623,
+      "text": "Overlap note: once #158 makes process mode the default, the reaper's stop is a kill(pid) on a child the dispatcher owns rather than a `claude stop` on a daemon job; the grace rule here should be written against the attempt row so it applies to both shapes. Independent of #158 otherwise."
+    }
+  ],
+  "results": [],
+  "v": 1
+}

@@ -1,0 +1,78 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-02T23:37:33.289Z",
+      "heartbeat_at": "2026-09-02T23:35:18.795Z",
+      "host": "YRND1-GG",
+      "kind": "transient",
+      "lock_sha": "e36702183ba25314524011b55bf4b9e673139498",
+      "log": ".kanban/logs/302-1.log",
+      "note": "track marker withdrawn by the operator: the 18-node track was re-cut into three (see the comment on #288)",
+      "outcome": "blocked",
+      "pid": null,
+      "profile": "claude-track",
+      "reason": "operator withdrew the 18-node track: root C was the outermost root because B1 was blocked by root A and C1 by root B, so one session got every node; the cross-track links are removed and tracks are sequenced by the operator",
+      "session_id": "0bee8494-2eb3-4cb4-9ebb-0b184ef2ec1b",
+      "started_at": "2026-09-02T23:35:18.795Z",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-302-1/0bee8494-2eb3-4cb4-9ebb-0b184ef2ec1b.jsonl",
+      "wt": "kb-302-1"
+    },
+    {
+      "attempt": 2,
+      "bg": true,
+      "ended_at": "2026-09-03T07:21:07.071Z",
+      "heartbeat_at": "2026-09-03T07:20:05.399Z",
+      "host": "YRND1-GG",
+      "kind": "transient",
+      "lock_sha": "96c4892c499ae9f79a050cbe41c87c7754ce3ece",
+      "log": ".kanban/logs/302-2.log",
+      "outcome": "blocked",
+      "pid": null,
+      "profile": "claude-track",
+      "reason": "Operator: track C runs as cold nodes, not one fanned-out session — each of #303/#304/#305 gets its own PR so the review-and-merge gate applies per node. The root waits for its children like root A does.",
+      "session_id": "8b68d42f-0670-44b0-a9e2-23717d68285d",
+      "started_at": "2026-09-03T07:20:05.399Z",
+      "track": true,
+      "track_branch": "kb/track-302",
+      "track_mode": "inferred",
+      "track_nodes": [
+        303,
+        304,
+        288,
+        305
+      ],
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-302-2/8b68d42f-0670-44b0-a9e2-23717d68285d.jsonl",
+      "wt": "kb-302-2"
+    }
+  ],
+  "block_loops": {
+    "10kbz4q": 1,
+    "7xxq61": 1
+  },
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T23:35:09Z",
+      "id": 5517983655,
+      "text": "Track C as filed:\n\n```mermaid\nflowchart TD\n  n289[\"#35;289 · ready<br>Node floor 22.13 with the SQLite warning silenced, CI o…\"]\n  n290[\"#35;290 · todo<br>Remove the GitHub Actions runner: templates, claude-act…\"]\n  n291[\"#35;291 · todo<br>The store seam: a Store interface over tasks.js and loc…\"]\n  n293[\"#35;293 · todo<br>The index: src/store/sqlite.js — node:sqlite under the…\"]\n  n292[\"#35;292 · todo<br>The git tier: src/store/git.js — the kb-board branch wr…\"]\n  n294[\"#35;294 · todo<br>The local store as the default: open() composes the two…\"]\n  n288[\"#35;288 · todo<br>Local-first hkb, track A: the Node floor, no Actions, t…\"]\n  n296[\"#35;296 · todo<br>The runtime seam: src/runtime/{process,claude-bg,manual…\"]\n  n297[\"#35;297 · todo<br>Clocks and the sleep-aware tick: attemptElapsed, sinceS…\"]\n  n298[\"#35;298 · todo<br>hkb stop #60;n#62; and hkb start #60;n#62;: the stopped outcome, th…\"]\n  n299[\"#35;299 · todo<br>hkb pause #60;n#62; and hkb resume #60;n#62;: the checkpoint for cl…\"]\n  n301[\"#35;301 · todo<br>The live web board: the events stream, rank and reorder…\"]\n  n300[\"#35;300 · todo<br>The board verbs and the cluster flag: hkb pause|resume|…\"]\n  n295[\"#35;295 · todo<br>Local-first hkb, track B: the control plane verbs on th…\"]\n  n303[\"#35;303 · todo<br>Tests onto a store double: the assertion sites that rea…\"]\n  n304[\"#35;304 · todo<br>Retire the GitHub store; the forge half without issues\"]\n  n305[\"#35;305 · todo<br>TypeScript: native .ts in the checkout, dist/ built by…\"]\n  n302([\"#35;302 · todo<br>Local-first hkb, track C: tests onto the store double,…\"])\n  n289 --> n290\n  n290 --> n291\n  n291 --> n293\n  n291 --> n292\n  n293 --> n294\n  n292 --> n294\n  n294 --> n288\n  n288 --> n296\n  n296 --> n297\n  n297 --> n298\n  n298 --> n299\n  n299 --> n301\n  n299 --> n300\n  n301 --> n295\n  n300 --> n295\n  n295 --> n303\n  n303 --> n304\n  n304 --> n305\n  n305 --> n302\n  classDef todo stroke:#8b949e,stroke-width:1px\n  class n290,n291,n293,n292,n294,n288,n296,n297,n298,n299,n301,n300,n295,n303,n304,n305,n302 todo\n  classDef ready stroke:#3fb950,stroke-width:2px\n  class n289 ready\n```\n"
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T23:37:35Z",
+      "id": 5518011329,
+      "text": "**Blocked** (transient, attempt 1): operator withdrew the 18-node track: root C was the outermost root because B1 was blocked by root A and C1 by root B, so one session got every node; the cross-track links are removed and tracks are sequenced by the operator"
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T07:21:08Z",
+      "id": 5522092341,
+      "text": "**Blocked** (transient, attempt 2): Operator: track C runs as cold nodes, not one fanned-out session — each of #303/#304/#305 gets its own PR so the review-and-merge gate applies per node. The root waits for its children like root A does."
+    }
+  ],
+  "results": [],
+  "v": 1
+}

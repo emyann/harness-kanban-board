@@ -1,0 +1,219 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T19:57:00.216Z",
+      "heartbeat_at": "2026-09-01T19:40:35.268Z",
+      "host": "YRND1-GG",
+      "job": "5f0e5237",
+      "lock_sha": "4714e4f16920270394c1aaa9382d8b2c08e4ab51",
+      "log": ".kanban/logs/161-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 219,
+      "pr_head": "worktree-kb-161-1",
+      "profile": "claude",
+      "session_id": "5f0e5237-3304-4dfd-a38a-788e933e2371",
+      "started_at": "2026-09-01T19:40:35.268Z",
+      "summary": "A root with unfinished children is now dispatched as ONE orchestrated session by default, with no adopt step. The decision is `isTrackRoot(task, cfg, {board})` in src/model.js (pure, four modes): `forced` when the card's own profile has \"track\": true; `opted-out` on the new `kb:no-track` label; `inferred` when the card has >=1 unfinished child, nothing on the board is still blocked by it, and some",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-161-1/5f0e5237-3304-4dfd-a38a-788e933e2371.jsonl",
+      "wt": "kb-161-1"
+    },
+    {
+      "attempt": 2,
+      "ended_at": "2026-09-01T20:00:42.834Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "Two gaps, both small; the PR is otherwise green (885 pass, CI green) and the design is right.\n\n1. The branch no longer merges: `mergeable: CONFLICTING`. #209 landed on main (b3dbe39) and added\n`promoteDecision` to src/model.js immediately after `computeReady` — the same place this branch inserts\n`unfinishedChildren`, `trackProfileFor` and `isTrackRoot`. Merge `origin/main` into the branch and keep both\nsets of exports (never rebase, never force-push: the branch is already pushed). Re-run `npm test` after — #209\nalso changed `promote`'s return type from one object to an array of rows, so check nothing this branch touches\nassumed the old shape.\n\n2. `kb:no-track` is never created on a board. `hkb init` builds its label list at src/init.js:971 from\nSTATUSES + board + needs-human + agent labels, and this branch does not add the new one, so the opt-out label\nexists nowhere until a human hand-creates it in the GitHub UI — without hkb's colour or description, and with\nnothing saying so. Add `L.noTrack` to that list, and include it in doctor's `labels` check (src/doctor.js:1029)\nso an existing board is told to re-run init.\n\nWorth noting for the record, no change needed: the card's Done-when said a root labelled `kb:agent:claude`\nopts out. You used a dedicated `kb:no-track` label instead, which is the better call — under inference,\n`kb:agent:claude` is the default every root carries, so making it the opt-out would mean inference could never\nfire. Keep it; just make the label real.",
+      "started_at": "2026-09-01T20:00:42.834Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 3,
+      "bg": true,
+      "continues_branch": "worktree-kb-161-1",
+      "continues_pr": 219,
+      "ended_at": "2026-09-01T20:04:08.805Z",
+      "heartbeat_at": "2026-09-01T20:01:08.642Z",
+      "host": "YRND1-GG",
+      "job": "7355853a",
+      "lock_sha": "b3dbe39048caf00585da324b78b57d69e3abb84c",
+      "log": ".kanban/logs/161-3.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 219,
+      "pr_head": "worktree-kb-161-1",
+      "profile": "claude",
+      "session_id": "7355853a-3427-4fda-8a80-7b39ebef2985",
+      "started_at": "2026-09-01T20:01:08.642Z",
+      "summary": "Round-2 review fixes on PR #219, both from the reviewer's note; the inference itself is unchanged from attempt 1. (1) The branch no longer conflicts: merged origin/main in (merge commit 37e1171, ort, clean — #209's promoteDecision now sits next to isTrackRoot/unfinishedChildren/trackProfileFor in src/model.js and both sets of exports survive). Nothing on this branch touched promote, and the array-",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-161-3/7355853a-3427-4fda-8a80-7b39ebef2985.jsonl",
+      "wt": "kb-161-3"
+    },
+    {
+      "attempt": 4,
+      "ended_at": "2026-09-01T20:06:24.109Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "Both round-2 fixes are right — the merge of main and `kb:no-track` in init's label list and doctor's check.\nThis is a catch-up, not a rework: nothing you wrote is wrong.\n\nThe branch conflicts again. Since your merge at 37e1171 (which was b3dbe39), main has taken four more:\n\n  60aa73b  #114  Skill in CLAUDE_TOOLS; new checkTaskSkills in src/doctor.js; --skills usage text in src/cli.js\n  289d8c3  #155  SESSION_FIELDS gains terminal_reason/api_error_status/model_usage/permission_denials;\n                 parseSessionLog, sessionUpdate and formatSession in src/model.js; src/dispatch.js\n\nBoth touch the same three files this branch does (src/model.js, src/doctor.js, src/cli.js). Merge `origin/main`\nin again — never rebase, never force-push — and keep every side's additions rather than choosing between them:\n\n- src/doctor.js: `checkTaskSkills` (#114) and your `checkTrackProfile` are separate checks; both stay, and both\n  must still be called from the doctor run.\n- src/model.js: #155's session-field changes and your `isTrackRoot`/`trackProfileFor`/`unfinishedChildren` do not\n  overlap in purpose; keep both sets of exports.\n- src/cli.js: #114 added lines to the `create` usage block, #155 to the session output; your track changes are\n  elsewhere in the file.\n\nThen `npm run lint && npm test` — the suite is at 888 on current main, so expect that plus your own additions.\nDo not re-open any decision from round 1 or 2; this is purely bringing the branch up to main.",
+      "started_at": "2026-09-01T20:06:24.108Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 5,
+      "bg": true,
+      "continues_branch": "worktree-kb-161-1",
+      "continues_pr": 219,
+      "ended_at": "2026-09-01T20:08:38.337Z",
+      "heartbeat_at": "2026-09-01T20:07:00.568Z",
+      "host": "YRND1-GG",
+      "lock_sha": "289d8c35bbef65e07705bb846d8069f3b95c84a2",
+      "log": ".kanban/logs/161-5.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 219,
+      "pr_head": "worktree-kb-161-1",
+      "profile": "claude",
+      "session_id": "d714ecd4-9593-49a4-beed-177e321db0a8",
+      "started_at": "2026-09-01T20:07:00.568Z",
+      "summary": "Round-3 catch-up on PR #219: brought the branch up to main again, no design changes. Since the last merge (37e1171 = b3dbe39), main took #114 (Skill in CLAUDE_TOOLS, checkTaskSkills in src/doctor.js, --skills usage in src/cli.js) and #155 (SESSION_FIELDS terminal_reason/api_error_status/model_usage/permission_denials, formatDenials, parseSessionLog/sessionUpdate/formatSession changes in src/model.",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-161-5/d714ecd4-9593-49a4-beed-177e321db0a8.jsonl",
+      "wt": "kb-161-5"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-29T04:56:00Z",
+      "id": 5460442253,
+      "text": "Now unblocked by #129 (PR #194 merged, 1aed45a). Linked under #197 too: its three brief fixes (children heartbeat the root, per-node branch line, node-by-node fallback on a failed spawn) must land before tracks are the default, or an inferred track with a >1 h node gets reclaimed as stale and its nodes double-run."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T20:00:43Z",
+      "id": 5499662169,
+      "text": "**Changes requested** (after attempt 1): Two gaps, both small; the PR is otherwise green (885 pass, CI green) and the design is right.\n\n1. The branch no longer merges: `mergeable: CONFLICTING`. #209 landed on main (b3dbe39) and added\n`promoteDecision` to src/model.js immediately after `computeReady` — the same place this branch inserts\n`unfinishedChildren`, `trackProfileFor` and `isTrackRoot`. Merge `origin/main` into the branch and keep both\nsets of exports (never rebase, never force-push: the branch is already pushed). Re-run `npm test` after — #209\nalso changed `promote`'s return type from one object to an array of rows, so check nothing this branch touches\nassumed the old shape.\n\n2. `kb:no-track` is never created on a board. `hkb init` builds its label list at src/init.js:971 from\nSTATUSES + board + needs-human + agent labels, and this branch does not add the new one, so the opt-out label\nexists nowhere until a human hand-creates it in the GitHub UI — without hkb's colour or description, and with\nnothing saying so. Add `L.noTrack` to that list, and include it in doctor's `labels` check (src/doctor.js:1029)\nso an existing board is told to re-run init.\n\nWorth noting for the record, no change needed: the card's Done-when said a root labelled `kb:agent:claude`\nopts out. You used a dedicated `kb:no-track` label instead, which is the better call — under inference,\n`kb:agent:claude` is the default every root carries, so making it the opt-out would mean inference could never\nfire. Keep it; just make the label real."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T20:06:25Z",
+      "id": 5499729009,
+      "text": "**Changes requested** (after attempt 3): Both round-2 fixes are right — the merge of main and `kb:no-track` in init's label list and doctor's check.\nThis is a catch-up, not a rework: nothing you wrote is wrong.\n\nThe branch conflicts again. Since your merge at 37e1171 (which was b3dbe39), main has taken four more:\n\n  60aa73b  #114  Skill in CLAUDE_TOOLS; new checkTaskSkills in src/doctor.js; --skills usage text in src/cli.js\n  289d8c3  #155  SESSION_FIELDS gains terminal_reason/api_error_status/model_usage/permission_denials;\n                 parseSessionLog, sessionUpdate and formatSession in src/model.js; src/dispatch.js\n\nBoth touch the same three files this branch does (src/model.js, src/doctor.js, src/cli.js). Merge `origin/main`\nin again — never rebase, never force-push — and keep every side's additions rather than choosing between them:\n\n- src/doctor.js: `checkTaskSkills` (#114) and your `checkTrackProfile` are separate checks; both stay, and both\n  must still be called from the doctor run.\n- src/model.js: #155's session-field changes and your `isTrackRoot`/`trackProfileFor`/`unfinishedChildren` do not\n  overlap in purpose; keep both sets of exports.\n- src/cli.js: #114 added lines to the `create` usage block, #155 to the session output; your track changes are\n  elsewhere in the file.\n\nThen `npm run lint && npm test` — the suite is at 888 on current main, so expect that plus your own additions.\nDo not re-open any decision from round 1 or 2; this is purely bringing the branch up to main."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T19:57:02Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/track.js",
+          "src/dispatch.js",
+          "src/cli.js",
+          "src/doctor.js",
+          "src/mcp.js",
+          "skills/kanban/SKILL.md",
+          "skills/kanban/references/protocol.md",
+          "README.md",
+          "docs/wiki/features/tracks.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/log.md",
+          "docs/wiki/index.md",
+          "test/track.test.js",
+          "test/dispatch.test.js",
+          "test/doctor.test.js"
+        ],
+        "residual_risk": [
+          "The opt-out label deviates from the issue's literal wording (kb:no-track instead of kb:agent:claude) because the issue's two 'Done when' bullets contradict each other on a board where hkb create stamps a default agent on every card. If the operator wants the letter of the issue instead, the change is one branch in isTrackRoot -- but inference would then never fire for a decomposed goal.",
+          "No decomposed goal has been dispatched live: the acceptance case is argued from the tick tests against fake-gh, not observed end to end on GitHub.",
+          "planTracks marks a running root's nodes `covered` from its status, not from its run record, so a root claimed by hand (or running for any other reason) holds its children for as long as that attempt lives. True before this change for claude-track roots and now true for every inferred one; documented as a known gap on the tracks wiki page. The effect is latency, never a double claim.",
+          "Inference makes tracks the common path, so #197's brief-level gaps (a subagent that skips `hkb heartbeat <root>` exposes the whole track to reclaim past stale_after; the verb check is unenforced) now apply to every decomposed goal rather than to the rare adopted one. A root also still needs kb.max_runtime larger than the whole track -- the heartbeat does not defend against max_runtime.",
+          "Three files outside the card's declared paths were touched and are disclosed on the PR: src/cli.js (the `hkb track` verb and the `hkb show` line the issue asks for), src/doctor.js (the check the issue asks for) and src/mcp.js (two tokens, so kanban_show keeps returning exactly what `hkb show --json` prints -- a test pins that). README.md was updated too, since its track paragraph would otherwise tell readers to adopt.",
+          "12 wiki pages remain stale from pre-existing drift, unrelated to this card -- the same note #163 and #197 left."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (885 passing, 0 failing)",
+          "npm run smoke (packs, installs and runs the tarball; SKILL.md is read from the package at runtime)",
+          "node --test test/track.test.js test/dispatch.test.js (the new cases: inferred/forced/opted-out roots at the tick, the outermost-root rule, the isTrackRoot table, the hkb track CLI round trip, a board with no track profile, and a running track counted against the track profile's cap)",
+          "node .repolore/scripts/wiki-check.mjs (features/tracks fresh; the other 12 pages were already stale at HEAD for drift this card did not own)",
+          "hkb track 161 and hkb show 161 run against the live board"
+        ]
+      },
+      "pr": 219,
+      "pr_continued": false,
+      "summary": "A root with unfinished children is now dispatched as ONE orchestrated session by default, with no adopt step. The decision is `isTrackRoot(task, cfg, {board})` in src/model.js (pure, four modes): `forced` when the card's own profile has \"track\": true; `opted-out` on the new `kb:no-track` label; `inferred` when the card has >=1 unfinished child, nothing on the board is still blocked by it, and some track profile's `track_agents` can execute its profile; `none` otherwise. planTracks now asks it which cards are roots instead of reading the agent label, and trackReadiness carries `profile` and `mode` through to the tick. Two things worth knowing for the next worker: (1) the kb:agent:* label is NEVER rewritten -- an inferred root keeps kb:agent:claude and launches on claude-track, because that label is what node dispatch reads on every fallback, so the tick takes the launch profile from cand.profile and counts the running track's slot against that profile's cap via plan.profiles; (2) only the OUTERMOST root is inferred (an interior node of a chain is a node of the bigger track), which is the one part of the decision that needs the whole board, hence the `board` parameter -- `hkb show`, which reads one issue, answers without it. New `hkb track <n> [--off|--on] [--json]` prints the verdict and its reason and toggles kb:no-track; `hkb show` (and kanban_show) repeat it under `track`; `hkb doctor` gains checkTrackProfile, which warns when a board holds cards with unfinished children and no profile with \"track\": true, and costs no board read when one exists. DEVIATION from the issue, disclosed on the PR: the issue asked for `kb:agent:claude` to be the opt-out, but `hkb create` stamps the default profile on every card, so that is exactly what a freshly decomposed root already wears -- using it would mean nothing is ever inferred. The opt-out is the explicit `kb:no-track` label instead; forcing is unchanged, and a forced profile beats kb:no-track."
+    },
+    {
+      "artifacts": [],
+      "at": "2026-09-01T20:04:10Z",
+      "attempt": 3,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/init.js",
+          "src/doctor.js",
+          "test/init.test.js",
+          "docs/wiki/features/tracks.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "The doctor half of fix (2) is one token in a list and has no test: test/doctor.test.js only covers pure helpers (annotations, formatting) — there is no end-to-end doctor harness against fake-gh, and building one is outside this card's scope. The init half is covered by test/init.test.js.",
+          "hkb init is outside this card's declared paths (src/model.js, src/dispatch.js, src/track.js, skills/kanban/SKILL.md, docs/), as is src/doctor.js; both were changed because the reviewer asked for exactly that, and are disclosed here.",
+          "An existing board that has already run `hkb track --off` at least once has the label with the same colour and description ensureLabels would give it, so re-running init is a no-op there; a board that has not gets it created on the next init — but nothing back-fills it automatically, and doctor's message is the only prompt.",
+          "12 wiki pages remain stale from #144/#149-era drift plus this session's merge of main — unrelated to this card, same note attempts 1 and #163 left."
+        ],
+        "verification": [
+          "git fetch origin main && git merge origin/main (clean, ort strategy, no conflicts)",
+          "npm run lint",
+          "npm test (894/894 passing, 0 failing — up from 885 by main's new test/promote.test.js)",
+          "npm run smoke (packs, installs and initialises: 26 content + 3 command + 11 init + 6 inside-the-repo checks green — run because init.js changed)",
+          "node .repolore/scripts/wiki-check.mjs (12 stale, down from 13: features/tracks.md is fresh again)",
+          "git push origin worktree-kb-161-1 (9d20c72..465bb66) — PR #219 updated, no second PR, no force"
+        ]
+      },
+      "pr": 219,
+      "pr_continued": true,
+      "summary": "Round-2 review fixes on PR #219, both from the reviewer's note; the inference itself is unchanged from attempt 1. (1) The branch no longer conflicts: merged origin/main in (merge commit 37e1171, ort, clean — #209's promoteDecision now sits next to isTrackRoot/unfinishedChildren/trackProfileFor in src/model.js and both sets of exports survive). Nothing on this branch touched promote, and the array-of-rows return type #209 introduced is exercised by main's own test/promote.test.js, which passes here. (2) kb:no-track is now a real board label rather than one `hkb track --off` conjured on demand: added L.noTrack to hkb init's label list (src/init.js) and to hkb doctor's `labels` missing-check (src/doctor.js), so a fresh board gets it with hkb's colour and description and an existing board is told to re-run init instead of being left with an opt-out that only exists once a human hand-makes it in the GitHub UI. test/init.test.js's label-set regression updated (11 -> 12, the count is the point of that test). Docs: features/tracks.md's `hkb track` paragraph says where the label comes from, gains src/init.js in `covers`, and its shas + generated_at_commit are refreshed for the merge; one wiki log entry. As the reviewer noted, kb:no-track stays the opt-out rather than kb:agent:claude — under inference that label is the default every root carries, so making it the opt-out would mean inference could never fire."
+    },
+    {
+      "artifacts": [],
+      "at": "2026-09-01T20:08:41Z",
+      "attempt": 5,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/cli.js",
+          "src/doctor.js",
+          "test/doctor.test.js"
+        ],
+        "residual_risk": [
+          "Only local lint/tests were run for this catch-up; CI on the updated head had not reported when the merge landed.",
+          "The merge resolutions are mechanical (import lists and one adjacent call pair). No behavioural interaction between #155's session fields and isTrackRoot was exercised beyond the existing suites, which both sides' tests still pass.",
+          "Residual risks from attempt 1 stand unchanged: the inferred-track path has not been observed live on a freshly decomposed goal, only through tests.",
+          "13 wiki pages report stale in the repolore check — pre-existing drift this card does not own."
+        ],
+        "verification": [
+          "git merge FETCH_HEAD (origin/main) — three conflicts resolved by keeping both sides",
+          "npm run lint",
+          "npm test (908 passing, 0 failing)",
+          "git push (no force) — 465bb66..15c3059 on worktree-kb-161-1",
+          "gh pr view 219 --json mergeable → MERGEABLE"
+        ]
+      },
+      "pr": 219,
+      "pr_continued": true,
+      "summary": "Round-3 catch-up on PR #219: brought the branch up to main again, no design changes. Since the last merge (37e1171 = b3dbe39), main took #114 (Skill in CLAUDE_TOOLS, checkTaskSkills in src/doctor.js, --skills usage in src/cli.js) and #155 (SESSION_FIELDS terminal_reason/api_error_status/model_usage/permission_denials, formatDenials, parseSessionLog/sessionUpdate/formatSession changes in src/model.js and src/dispatch.js). Merged origin/main in (merge commit 15c3059, no rebase, no force). Three conflicts, all import/call-site adjacency, all resolved by keeping BOTH sides: src/cli.js kept formatDenials (#155) alongside isTrackRoot (this branch) in the model.js import; src/doctor.js calls checkTrackProfile AND checkTaskSkills in the doctor run; test/doctor.test.js imports TASK_SKILLS_CHECK/checkTaskSkills (#114) alongside TRACK_PROFILE_CHECK/checkTrackProfile. src/model.js, src/dispatch.js, test/dispatch.test.js and docs/wiki/log.md auto-merged with no manual edits. npm run lint clean, npm test 908/908 passing (888 on main plus this branch's 20). PR #219 is MERGEABLE again. The inference itself is unchanged from attempts 1 and 3: isTrackRoot(task, cfg, {board}) with forced / opted-out (kb:no-track) / inferred / node modes, kb:no-track created by hkb init and checked by doctor."
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,106 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "denied_tools": [
+        {
+          "count": 1,
+          "first_seen": "2026-09-03T00:22:23.688Z",
+          "kind": "dontask-miss",
+          "tool": "Bash"
+        }
+      ],
+      "ended_at": "2026-09-03T01:24:31.048Z",
+      "heartbeat_at": "2026-09-03T00:32:39.612Z",
+      "host": "YRND1-GG",
+      "kind": "transient",
+      "lock_sha": "e36702183ba25314524011b55bf4b9e673139498",
+      "manual": true,
+      "outcome": "blocked",
+      "profile": "claude",
+      "reason": "operator: same as #292 — the track runner was throttled and parked; A5 will be re-dispatched as its own session",
+      "session_id": "ea24eaa1-7d40-474a-9971-78298416d23e",
+      "started_at": "2026-09-03T00:32:39.611Z",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-288-1/ea24eaa1-7d40-474a-9971-78298416d23e.jsonl",
+      "wt": "kb-288-1"
+    },
+    {
+      "attempt": 2,
+      "bg": true,
+      "denied_tools": [
+        {
+          "count": 3,
+          "first_seen": "2026-09-03T01:59:40.180Z",
+          "kind": "dontask-miss",
+          "tool": "Bash"
+        }
+      ],
+      "ended_at": "2026-09-03T02:09:07.674Z",
+      "heartbeat_at": "2026-09-03T01:58:45.960Z",
+      "host": "YRND1-GG",
+      "job": "ebd6bdb6",
+      "lock_sha": "5d3bc73623f9557b1886882c0472b92294dc74b1",
+      "log": ".kanban/logs/293-2.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 313,
+      "pr_head": "kb/293",
+      "profile": "claude",
+      "session_id": "ebd6bdb6-b84f-4ffa-84bb-987e1c479202",
+      "started_at": "2026-09-03T01:58:45.960Z",
+      "summary": "src/store/sqlite.js is the index tier of docs/local-first.md §6 — `.git/hkb/index.db` under storeRoot(ctx)'s common git dir, opened with node:sqlite DatabaseSync in WAL with a busy timeout, the §6.3 schema created once behind a `schema_version` row in a small `meta` table (tip_sha stays on `board`). It exports openIndex(ctx, {timeout, file, root, slug}) and openIndexReadOnly(ctx, {...}) (timeout: ",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-293-2/ebd6bdb6-b84f-4ffa-84bb-987e1c479202.jsonl",
+      "wt": "kb-293-2"
+    }
+  ],
+  "block_loops": {
+    "1rsd84x": 1
+  },
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T01:24:33Z",
+      "id": 5518889233,
+      "text": "**Blocked** (transient, attempt 1): operator: same as #292 — the track runner was throttled and parked; A5 will be re-dispatched as its own session"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-03T02:09:10Z",
+      "attempt": 2,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/store/sqlite.js (new — the index: openIndex/openIndexReadOnly, load, claim/release/heartbeat, listLocks/lockBeatAt, the live attempt fields, events/appendEvent, wake)",
+          "test/store-sqlite.test.js (new — 23 tests, including the two-process claim race and the empty-stderr assertion through bin/hkb.js's real warning filter)"
+        ],
+        "residual_risk": [
+          "Verified on Node 24.20.0 only. Node 22 was not available in this worker's environment; CI covers it. The empty-stderr test is version-agnostic: it builds its probe from bin/hkb.js's real filter SOURCE (sliced at `const { main }`) rather than a retyped copy, so on 22 it asserts the ExperimentalWarning is really silenced and on 24 it is trivially satisfied. If A1's bin/hkb.js stops loading src/cli.js that way, the test fails loudly with a message saying so.",
+          "The DRIVERS registration in test/store.test.js was NOT done — the card asks for it and also scopes this task to two files while A4 runs beside me, and the two cannot both hold: the conformance suite runs every scenario against every driver and the index implements only the live half. Disclosed rather than routed around. A6 registers the composed driver.",
+          "No wiki page. A new module warrants one, but the page that makes sense covers the local store as a whole (both tiers) and docs/wiki/ is shared with A4 in flight.",
+          "load() reads A4's tree shape tolerantly because the two nodes were written in parallel; a shape disagreement costs a field rather than the board, but it also means a wrong shape fails quietly. A6 should settle the shape and tighten this.",
+          "claim() sets tasks.status='running' in the index while the card's status is also A4's on the branch. That is §6.1's commit-first/index-second design read from the other end, and the tip comparison on the next open repairs it — but until A6 sequences the two writes the index is briefly ahead of the branch.",
+          "The lock token is this driver's own opaque string (time-pid-random), not a sha. Nothing but the next beat may read either, but a caller that assumed the GitHub driver's sha shape would not find out until it tried to parse one.",
+          "The schema adds a `meta` table §6.3 does not list, to hold the schema_version row the card asks for. A mismatched version refuses with the `rm` that resets it rather than migrating — every table here is either live state a restart can lose or a copy load() rebuilds.",
+          "CI has not run on this branch."
+        ],
+        "verification": [
+          "npm install (devDeps — tsc is not present in a fresh worktree)",
+          "npm run lint — node --check over bin/src/scripts then tsc --noEmit --checkJs: green",
+          "npm test — 1164 pass, 0 fail; no existing test file edited",
+          "node --test --test-name-pattern 'two processes racing' test/store-sqlite.test.js — run ten separate times, ten green",
+          "node .repolore/scripts/wiki-check.mjs — 23 stale, all pre-existing from #311; none covers a file this PR touches",
+          "git status — only the two new files",
+          "draft PR #313 opened against main, body carries Closes #293"
+        ]
+      },
+      "pr": 313,
+      "pr_continued": false,
+      "summary": "src/store/sqlite.js is the index tier of docs/local-first.md §6 — `.git/hkb/index.db` under storeRoot(ctx)'s common git dir, opened with node:sqlite DatabaseSync in WAL with a busy timeout, the §6.3 schema created once behind a `schema_version` row in a small `meta` table (tip_sha stays on `board`). It exports openIndex(ctx, {timeout, file, root, slug}) and openIndexReadOnly(ctx, {...}) (timeout: 0, every mutating method refuses with exit 2), plus SCHEMA_VERSION, LOCAL_EVENT_KINDS, LIVE_ATTEMPT_FIELDS, indexFile(root), indexDir(root).\n\nFOR A6, WHICH COMPOSES THIS WITH A4'S BRANCH: load(tree) replaces board/tasks/links/runs/results and the CLOSED attempt rows and records tree.tip; it deliberately leaves locks, the open attempt rows and events alone, and appends no event (a rebuild is a repair, not a decision). needsLoad(sha) is the one-row question to ask on every open. The tree is read tolerantly — cards/runs as an array or an id-keyed map, needs_human or needsHuman, blockers as ids or objects — because A4 and A5 were written in parallel; when you wire them, pick one shape and shrink the tolerance to it. Attempt fields the schema does not name ride in extra_json, so a new protocol.md field is not a migration.\n\nclaim(n, k, {profile, host, extra}) is one BEGIN IMMEDIATE: lock, open attempt row, tasks.status='running', event, commit. UNIQUE(task_id, k) makes the loser `held` with a full rollback — verified with two real processes racing behind a barrier, ten green runs. release(n, k) returns false when nothing was held. heartbeat(n, k, expected) is the single UPDATE ... WHERE token = ?; zero rows is {result:'lost', token:null}; the token ROTATES on every beat (like the ref's sha), so the caller must beat on the token the previous beat returned. listLocks() -> [{n,k,token,beat_at}] with beat_at actually populated (the GitHub driver returns null there). setAttempt(n,k,patch) accepts only pid/job/wt/heartbeat_at/paused_at/pauses_json and refuses anything else by name; setting paused_at events `paused`, clearing it `resumed`. events({after, limit}) is an exclusive cursor over events.id returning {id, at, kind, number, payload}; appendEvent({kind, task_id, payload}) is for the control-plane verbs and for A4 to event after its commit. wake() SIGUSR1s the pid in .kanban/dispatch.pid and never throws. Every mutating method appends exactly one event, and only when it changed something.\n\nNOT DONE, ON PURPOSE, AND A6'S TO FINISH: the DRIVERS registration in test/store.test.js, and a wiki page. Both are argued in the PR body — the index is not a whole Store (createTask/setStatus/updateBody are A4's), so registering it alone fails fifteen scenarios that are not about it; the live scenarios are run against it in test/store-sqlite.test.js with bodies kept close to the suite's, and the composed driver is what belongs in DRIVERS. The wiki page that makes sense covers both tiers, and docs/wiki/ is shared with A4 running beside me."
+    }
+  ],
+  "v": 1
+}

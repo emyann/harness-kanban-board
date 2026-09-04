@@ -1,0 +1,63 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-26T07:34:46.056Z",
+      "heartbeat_at": "2026-08-26T07:12:48.703Z",
+      "host": "YRND1-GG",
+      "job": "e010d895",
+      "log": ".kanban/logs/21-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-26T07:12:48.703Z",
+      "wt": "kb-21-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-26T07:33:42Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/projects.js",
+          "test/projects.test.js",
+          "src/dispatch.js",
+          "src/doctor.js",
+          "src/init.js",
+          "src/cli.js",
+          "README.md",
+          "skills/kanban/references/protocol.md"
+        ],
+        "dependencies": [
+          "Projects v2 needs the project OAuth scope on the gh token: gh auth refresh -s project"
+        ],
+        "residual_risk": [
+          "The happy path is unexecuted: no Projects v2 board was created or written. addProjectV2ItemById, updateProjectV2ItemFieldValue, updateProjectV2Field and fieldValueByName are written from the documented schema. Confirm the task's 'done when' with: gh auth refresh -s project && hkb init --project new, then a tick.",
+          "updateProjectV2Field replaces the whole option list; hkb only ever appends and always re-sends existing names, but whether GitHub preserves item values across that call was not observed on a live board.",
+          "Worker transitions (hkb complete, hkb serve drag-drop) reach the Project only on the next dispatcher tick — by design, but it means no dispatcher, no mirror.",
+          "skills/kanban/SKILL.md metadata.version left at 0.1.0 although references/protocol.md gained a section; bump it if downstream skill copies should be flagged stale."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test — 143 pass (23 new in test/projects.test.js)",
+          "live: checkProject against a bogus project id — scope parsed from the real gh auth status, one finding carrying the exact fix",
+          "live: syncProject with an unreachable project returns {skipped:'scope'} instead of throwing, and throttles its warning on the second call",
+          "live: every hkb init --project argument error, and the scope guard that fires before any network call",
+          "node bin/hkb.js dispatch --dry-run --json — no mirror step when unconfigured",
+          "node bin/hkb.js doctor — silent about the mirror when board.json has no project"
+        ]
+      },
+      "summary": "Opt-in Projects v2 mirror in src/projects.js. `hkb init --project <number|new|url>` links or creates a project and appends the missing kb statuses to its single-select Status field (existing options kept; Todo/In Progress/Done reused as todo/running/done), storing the ids in board.json under \"project\". The dispatcher gets a last tick step that mirrors labels onto the project — one mutation per moved card, two on an issue's first touch — and repairs drift, so a drag in the Project UI is undone on the next tick. `hkb doctor` is silent unless a project is linked, then checks the `project` scope (fix: `gh auth refresh -s project`) and probes that the project and its Status field still exist. A deleted project or a lost scope is logged once an hour and skipped; the board is unaffected. The decisions are pure functions (planSync, matchOption, optionInputs, projectError, parseProjectSpec, parseTokenScopes) with 23 new tests. For the next worker: the happy path has never run against a real project — this host's token has no `project` scope — so the GraphQL mutation shapes are unexecuted."
+    }
+  ],
+  "v": 1
+}

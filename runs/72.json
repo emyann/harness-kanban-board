@@ -1,0 +1,59 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T17:09:28.035Z",
+      "heartbeat_at": "2026-08-27T17:03:06.292Z",
+      "host": "YRND1-GG",
+      "job": "60518144",
+      "lock_sha": "abf0c054e51fdfe67d183688571cd63df33f0f86",
+      "log": ".kanban/logs/72-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 75,
+      "pr_head": "worktree-kb-72-1",
+      "profile": "claude",
+      "started_at": "2026-08-27T17:03:06.292Z",
+      "summary": "A fresh `hkb init` now seeds board.json with exactly the profiles that were resolved (`--profiles` / `--harness` / `--with-actions`), instead of all six DEFAULT_PROFILES: a bare init yields `claude` and 11 kb:* labels, `--profiles claude,codex` yields two and 12. Re-running init over an existing board stays additive — a profile the operator added or tuned by hand is never touched. The logic is a n",
+      "wt": "kb-72-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T17:09:30Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/init.js",
+          "src/dispatch.js",
+          "src/cli.js",
+          "test/harness.test.js",
+          "README.md",
+          "docs/harnesses.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/decisions/adr-004-roles-and-adoption.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "Behaviour change for new adopters only: a fresh board no longer carries claude-track / claude-p / claude-action / copilot-cli / codex. Anyone who wants one adds it with `hkb init --profiles <name>` (additive) — the tick's skip message now says so. Existing boards, including this repo's, are unaffected.",
+          "A board.json that exists but has no `profiles` key still loads as all six via loadBoard (src/board.js:186) — unchanged, and init over it stays additive.",
+          "No smoke run: nothing in `files` or in what the CLI reads from the package at runtime changed."
+        ],
+        "verification": [
+          "npm run lint && npm test — 430 pass, 0 fail (3 new boardProfiles cases in test/harness.test.js)",
+          "end-to-end: real `hkb init` in scratch git repos against a fake `gh` — bare init = [claude] + 11 labels; --profiles claude,codex = [claude,codex] + 12; --with-actions = [claude,claude-action]; a second init --harness codex over a board with a hand-added `homegrown` profile and max_in_progress:7 kept both and added codex",
+          "node .repolore/scripts/wiki-check.mjs — all pages fresh (two pages re-stamped for the one-line cli.js/dispatch.js churn)"
+        ]
+      },
+      "summary": "A fresh `hkb init` now seeds board.json with exactly the profiles that were resolved (`--profiles` / `--harness` / `--with-actions`), instead of all six DEFAULT_PROFILES: a bare init yields `claude` and 11 kb:* labels, `--profiles claude,codex` yields two and 12. Re-running init over an existing board stays additive — a profile the operator added or tuned by hand is never touched. The logic is a new pure `boardProfiles(existing, profiles, onUnknown)` in src/init.js, beside `resolveProfiles`, mirroring loadBoard's \"keep only what the user declared\". Fallout handled in the same change: the tick's `unknown profile <name>` skip now names the fix (`hkb init --profiles <name>`), because claude-track/claude-p are no longer on every board by default; docs/harnesses.md gained a \"Which profiles a board gets\" section, the README a paragraph, and the CLI help now reads `--profiles a,b`. Draft PR: https://github.com/emyann/harness-kanban-board/pull/75"
+    }
+  ],
+  "v": 1
+}

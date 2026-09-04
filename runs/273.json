@@ -1,0 +1,70 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-02T01:13:48.328Z",
+      "heartbeat_at": "2026-09-02T01:08:41.271Z",
+      "host": "YRND1-GG",
+      "job": "7558eee9",
+      "lock_sha": "1590a97d33a647e9a00d0bf2eade2f27f4090087",
+      "log": ".kanban/logs/273-1.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 277,
+      "pr_head": "worktree-kb-273-1",
+      "profile": "claude",
+      "session_id": "7558eee9-2352-44f7-a6f2-42e56a3e0134",
+      "started_at": "2026-09-02T01:08:41.271Z",
+      "summary": "trackFanout (src/track.js) took an optional root-task param and now decides whether a track runner may fan out by calling effectiveTools(profile, task, cfg) instead of reading profile.allowed_tools raw, so a root card's kb.tools narrowing that drops Agent also drops the fan-out brief. src/dispatch.js's one call site (~line 917) now passes the root task. The Stop hook's preToolHook (src/hook.js) no",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-273-1/7558eee9-2352-44f7-a6f2-42e56a3e0134.jsonl",
+      "wt": "kb-273-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T01:16:24Z",
+      "id": 5502867365,
+      "text": "**Merged by the operator seat** — review: Reviewed by running the check I skipped when I merged 255, which is why this card existed. A repo-wide grep for a raw profile.allowed_tools read now finds it only where it belongs: model.js, which owns the derivation, and init.js line 656, which embeds the shipped default into the generated Actions workflow template rather than building a runtime launch. Every launch-building caller is clean — hook.js, track.js, dispatch.js, context.js, board.js. src/hook.js:103 now imports effectiveTools and uses the same derivation the launch line reads, with a comment saying so; src/track.js:52 does the same for trackFanout. That closes 255's Done-when item, which said nothing outside effectiveTools reads allowed_tools to build a launch and was false on main for four hours. Why it matters concretely: a card narrowing kb.tools got a launch that respected the narrowing and a PreToolUse policy that did not, and under dontAsk a disagreement between those two is silent — the exact failure class the seam was built to end. Verified myself: CI green, lint clean, 1100 tests. The miss was mine — I checked src/dispatch.js because the diff touched it and never grepped the repo. The track's own worker found it and filed it rather than patching silently, which is the protocol working better than my review did., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-02T01:13:50Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/track.js",
+          "src/hook.js",
+          "src/dispatch.js",
+          "test/track.test.js",
+          "docs/wiki/features/capability-map.md",
+          "docs/wiki/features/tracks.md",
+          "docs/wiki/log.md"
+        ],
+        "dependencies": [],
+        "residual_risk": [
+          "preToolHook still cannot see a card's kb.tools/kb.mcp narrowing (only the profile's effective grant, capability-widened) — deliberate, to avoid a GraphQL call on every tool invocation; documented in docs/wiki/features/capability-map.md",
+          "The pre-existing 14 stale wiki pages (architecture/overview, concepts/worker-identity, etc.) were not touched or fixed by this task — they were already stale before this branch"
+        ],
+        "retry_notes": null,
+        "verification": [
+          "npm run lint",
+          "npm test (1100 pass)",
+          "node .repolore/scripts/wiki-check.mjs (the two touched pages are fresh; 14 other pages were already stale before this change, unrelated to this task)"
+        ]
+      },
+      "pr": 277,
+      "pr_continued": false,
+      "summary": "trackFanout (src/track.js) took an optional root-task param and now decides whether a track runner may fan out by calling effectiveTools(profile, task, cfg) instead of reading profile.allowed_tools raw, so a root card's kb.tools narrowing that drops Agent also drops the fan-out brief. src/dispatch.js's one call site (~line 917) now passes the root task. The Stop hook's preToolHook (src/hook.js) now derives allowedCmds from effectiveTools(profile, null, ctx.cfg).tools instead of the profile's raw list, so a capability-derived grant is on its radar; it deliberately passes no task since it fires per tool call and fetching the card there would cost a request per call (documented as the residual gap in the wiki). Added a track.test.js case covering the narrowing behavior; refreshed and re-stamped docs/wiki/features/capability-map.md and docs/wiki/features/tracks.md, appended a log.md line. PR #277 opened (draft), Closes #273."
+    }
+  ],
+  "v": 1
+}

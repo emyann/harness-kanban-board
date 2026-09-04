@@ -1,0 +1,16 @@
+{
+  "attempts": [],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T02:26:42Z",
+      "id": 5519400072,
+      "text": "Shape note from #312, before this card is worked.\n\nThe verbs planned here — `launch`/`inspect`/`stop`/`pause`/`resume` — are **process-shaped**, which is right for a cold node and wrong for a track. An SDK adapter runs a whole wave in **one** `query()` with typed `AgentDefinition`s (per-node model, tools, mcpServers, maxTurns, effort), not N spawns; the CLI adapter runs a track by spawning one runner and handing it a prose brief. Both are 'execute this subgraph', and only one of them is 'launch a process'.\n\nSo the seam wants two levels rather than one:\n\n- `runCard(card, ctx)` — execute one card (every adapter)\n- `runTrack(root, waves, ctx)` — execute a subgraph (SDK: one query; CLI: spawn a runner with the brief `trackContext` already builds)\n\nplus the lifecycle verbs (`inspect`/`stop`/`pause`/`resume`) against whatever handle the adapter returned.\n\nBuild the seam so a second implementation is a file, not a refactor — the maintainer's direction is that a harness's SDK is how hkb executes board state, with the Copilot SDK doing the same job later. Keep the process/claude-bg/manual adapters working exactly as they do; this is about the shape of the interface they implement, not about replacing them."
+    }
+  ],
+  "results": [],
+  "v": 1
+}

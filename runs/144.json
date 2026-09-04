@@ -1,0 +1,105 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-29T01:06:25.821Z",
+      "heartbeat_at": "2026-08-29T00:32:23.669Z",
+      "host": "YRND1-GG",
+      "job": "54e024a8",
+      "lock_sha": "6c54af5edbd105e0aab11149831d021d6953d27d",
+      "log": ".kanban/logs/144-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 169,
+      "pr_head": "worktree-kb-144-1",
+      "profile": "claude",
+      "session_id": "54e024a8-c082-42b0-b645-9548c3021665",
+      "started_at": "2026-08-29T00:32:23.669Z",
+      "summary": "hkb's Stop and PreToolUse hooks now reach only the sessions hkb launches. Draft PR #169.\n\n**4 FIRST — and the answer is YES, but measured statically, not with the marker-file probe the card describes.** `claude` is not on the worker launch's allow-list (`CLAUDE_TOOLS`, src/board.js), so `claude --version` and every nested launch was DENIED to my session under dontAsk. I disclosed rather than routi",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-144-1/54e024a8-c082-42b0-b645-9548c3021665.jsonl",
+      "wt": "kb-144-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T22:57:50Z",
+      "id": 5458621504,
+      "text": "Nits from the review of PR #159 (#143, merged) that land in the hook code this card edits next:\n- src/hook.js ~78: `hkb: ${reason}.` double-dots when the reason already ends with a period (the allowlist denial reads `…Edit/Write/Read tools.. If the task…`). Strip a trailing `.` from `reason`.\n- src/hook.js ~76-79: the `--kind capability` sentence is appended to every deny, including policy denials (the dispatcher verb, force pushes, privilege escalation, process signals) where a capability block is the wrong answer. Give `decidePermission` (src/model.js) a `kind` (`policy` | `capability` | `path`) and append the sentence only for `capability`.\n- src/doctor.js ~445: `promptingProfiles` counts `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` as \"will prompt\"; and the custom-profile fix text always spells `Bash(<cmd> *)`, wrong for a Copilot-shaped `shell(...)` list. Edge cases; fix if you touch those lines.\n- src/model.js ~606 header still says the hook answers \"explicit allow or deny-with-reason\" — it is deny-or-silence now."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-29T00:22:27Z",
+      "id": 5459137508,
+      "text": "Nits from the second-pass review of PR #147 (#146, merged), in the init hook code this card edits next:\n- src/init.js ~454 + hookSummary ~414: on a self-carrying repo, an existing *portable* plain form (`node \"$CLAUDE_PROJECT_DIR/bin/hkb.js\" hook stop`) is rewritten to the guarded form and reported as \"which did not resolve for everyone that file serves\" — false (doctor passes it one line earlier). Either accept a command whose target is `$CLAUDE_PROJECT_DIR/<binRel>` as fine, or keep the rewrite and say \"added the missing-file guard\". Add the test that starts from the plain form.\n- src/init.js ~412: \"because this command resolves in every checkout\" is shown for a plain --shared-hooks move of a bare `hkb hook stop` too.\n- src/init.js ~243 resolveHookPath joins with \"/\" while test/harness.test.js ~876 expects path.join (Windows).\n- docs/harnesses.md ~351 \"A re-run leaves a shared, portable setup where it is\" is no longer true on a self-carrying repo."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-29T01:19:20Z",
+      "id": 5459445708,
+      "text": "Measured by the operator before merging (2026-08-29 01:17Z, Claude Code 2.1.251): `claude --bg --settings '{\"hooks\":{\"Stop\":[{\"matcher\":\"*\",\"hooks\":[{\"type\":\"command\",\"command\":\"touch <marker>\"}]}]}}' \"Reply with the single word ok and stop.\"` — the marker appeared 4 s after launch. A `--settings` hook does fire in a daemon-hosted `--bg` session; item 4's answer is yes, now with evidence. The PR's written evidence cites the wrong code path (the `claude agents` FleetView parser, not `handleBgFlag → spawnBgSession`'s respawn-flag allowlist) — follow-up card filed."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-29T01:06:29Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/board.js",
+          "src/init.js",
+          "src/dispatch.js",
+          "src/doctor.js",
+          "src/hook.js",
+          "src/cli.js",
+          "templates/actions/kanban-worker-claude.yml",
+          ".github/workflows/kanban-worker-claude.yml",
+          ".claude/settings.json",
+          "scripts/smoke-pack.mjs",
+          "test/harness.test.js",
+          "test/init.test.js",
+          "README.md",
+          "docs/harnesses.md",
+          "docs/manual-mode.md",
+          "docs/wiki/features/hook-install-shapes.md",
+          "docs/wiki/features/up-and-down.md",
+          "docs/wiki/features/web-board.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/index.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "The --bg answer is a STATIC read of the shipped 2.1.251 binary's own forwarding table, not the live marker-file probe item 4 asked for: `claude` is not on the worker launch's allow-list, so every nested launch was denied to my session and I disclosed rather than working around it. The evidence is direct (an explicit six-source forwarding list with an explicit inline-JSON branch) but it is code-reading, not observation. Worth one live probe before this is relied on; carried as a TODO-VERIFY on docs/wiki/features/hook-install-shapes.md. If it turns out false, `claude` and `claude-track` lose their Stop nudge and session-id recording — doctor's existing `profile claude sessions` check is the standing detector, and the revert is dropping HOOK_SETTINGS_VAR from those two launches.",
+          "EXISTING BOARDS DO NOT PICK THIS UP AUTOMATICALLY. `loadBoard` lets a `launch` array in board.json win whole, and `hkb init` writes the merged result straight back, so any board whose board.json holds a full launch keeps the old one — and with init no longer writing a settings file, those workers would get no hooks at all. `hkb doctor`'s new `launch hooks` check is the whole mitigation, and it is a warning, not a failure. Anyone upgrading a live board should run doctor first.",
+          "The Actions `claude_args` change is unverified against a real runner: it depends on claude-code-action splitting `--settings '<json>'` as one shell-quoted word. Single quotes were chosen because the JSON contains `\"` and no `'`, and because `--allowedTools \"...\"` beside it already relies on the same parser — but no Actions run has exercised it.",
+          "hkb init still expands a deliberately sparse .kanban/board.json into the full frozen defaults (saveBoard writes the merged cfg). That is pre-existing, not this card's, but it is now sharper: freezing a launch is what the `launch hooks` check exists to catch, and init is what freezes it. Worth its own card.",
+          "A --shared-hooks board now runs each hook twice in a worker (once from the file, once from the launch). Harmless in practice — the Stop nudge counter just burns both of its two tries in one stop — but it is a behaviour change nobody asked for. doctor names it in the `hooks in settings` warning; a proper fix would need board.json to know the flag was used.",
+          "test/init.test.js, src/cli.js, src/hook.js, src/dispatch.js and scripts/smoke-pack.mjs are outside the card's scope list. The dispatch.js edit (two lines) is structural: board.json is tracked, so the JSON has to be a placeholder resolved at spawn time. The others are stale strings and tests that asserted removed behaviour.",
+          "docs/wiki/architecture/overview.md got a targeted UNSTAMPED paragraph, exactly as #146 left it: it is stale for #124/#127/#131 drift this task did not verify. A /repolore:refresh is still owed on it and on the other five."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (759 pass, 0 fail)",
+          "npm run smoke (25 content, 3 command, 10 init, 6 inside-the-repo checks; new checkLaunchHooks builds the launch's --settings from the INSTALLED tarball, asserts both events and no npx cache, and runs its Stop command through sh -> exit 0, no output)",
+          "the --bg question, measured statically against the shipped Claude Code 2.1.251 binary: the cli_bg_path builds dispatchExtraArgs = Eke(wke(config, resolve)); wke carries `settings` and passes a value starting with `{` through verbatim; Eke emits [\"--settings\", value]; those become the background session's respawnFlags. Corroborated by the option's own help text, `--settings <file-or-json>` \"Path to a settings JSON file or a JSON string\"",
+          "rendered the real launch: expandLaunch(DEFAULT_PROFILES.claude.launch, {..., hook_settings: workerHookSettings()}) puts `--settings <one JSON arg>` between --disallowedTools and --max-turns, naming node \"<abs>/bin/hkb.js\"",
+          "node bin/hkb.js doctor on this repo: `/ stop hook  on the claude, claude-track launch (--settings), so no other session in this repo runs it` and `/ hook command  node \"...bin/hkb.js\" hook stop`; the `hooks in settings` warning appeared while .claude/settings.json still had the hooks and went when it was removed",
+          "node bin/hkb.js init --no-labels in this checkout: wrote no settings file, printed the `ride the worker launch` line and the reason; board.json expansion it caused was reverted (pre-existing init behaviour, not this card's)",
+          "regenerated .github/workflows/kanban-worker-claude.yml from the template and read the diff: one `--settings '<json>'` line in claude_args, portable `hkb hook <verb>` commands, no single quote inside the JSON",
+          "node .repolore/scripts/wiki-check.mjs: 6 stale, the same six that were stale at origin/main; hook-install-shapes refreshed and fresh, up-and-down and web-board re-anchored (every shifted citation re-read at its new line) and fresh"
+        ]
+      },
+      "pr": 169,
+      "pr_continued": false,
+      "summary": "hkb's Stop and PreToolUse hooks now reach only the sessions hkb launches. Draft PR #169.\n\n**4 FIRST — and the answer is YES, but measured statically, not with the marker-file probe the card describes.** `claude` is not on the worker launch's allow-list (`CLAUDE_TOOLS`, src/board.js), so `claude --version` and every nested launch was DENIED to my session under dontAsk. I disclosed rather than routing around it, and got the answer a different allow-listed way: grepping the shipped 2.1.251 binary (`/home/yrnd1/.local/share/claude/versions/2.1.251`) for the `--bg` dispatch path. It is decisive and specific. `cli_bg_path` builds `dispatchExtraArgs: Eke(wke(config, resolvePath))`; `wke` carries exactly `{settings, pluginDir, pluginDirNoMcp, addDir, mcpConfig, strictMcpConfig, restricted}` and, for `settings` only, passes a value through VERBATIM when it `.trimStart().startsWith(\"{\")` instead of path-resolving it; `Eke` emits `[...n.settings?[\"--settings\",n.settings]:[], ...]`; those become `qe().extraArgs`, which become the background session's `respawnFlags`. Plus the option's own help: `--settings <file-or-json>`, \"Path to a settings JSON file **or a JSON string**\". So `--settings` is one of six per-launch sources forwarded into the daemon, inline JSON is a first-class case, and all three claude profiles get the hooks. The standing empirical check is doctor's existing `profile claude sessions` line: a `--bg` attempt records its session id *from the Stop hook*, so recent attempts carrying one prove the launch hooks fired. A live marker-file probe is still worth running once; it is carried as a TODO-VERIFY on the wiki page.\n\n**1. The launch.** `hookSettings(events, command)` in src/model.js is the pure builder (returns the JSON string, or '' — callers drop the flag on ''); `hookEntry(command)` is the shared group shape so `installClaudeHooks` and the launch cannot drift. `workerHookSettings()` (src/init.js) wraps it. `HOOK_SETTINGS_VAR = '{hook_settings}'` (src/board.js) is in all three claude launches; `expandLaunch` spends it as a `--settings <json>` pair or drops it, exactly like `{model_args}`. **It has to be a placeholder, not baked JSON: `.kanban/board.json` is TRACKED** and `boardProfiles` freezes whatever `loadBoard` returns, so a machine-specific path in a launch array would be committed. That forced two lines in src/dispatch.js (outside the card's scope list): the `expandLaunch` branch and one `vars` entry, computed only when the profile's launch carries the token.\n\n**`workerHookSettings` passes `binRel: null` — a deliberate deviation from letting `hkbCommandForHook` do its usual thing.** The `$CLAUDE_PROJECT_DIR` form exists to be right on machines this one has never seen; a launch never leaves this machine. There it would only cost, because a worker's `$CLAUDE_PROJECT_DIR` is its fresh worktree with no `node_modules` until `npm ci` — the hooks would be silent for exactly the early part of an attempt where a short card finishes without ever seeing a Stop nudge. The hkb that ran the dispatcher is installed by definition; the launch names that one (bare `hkb` on PATH, else `node \"<abs>\"`). Rendered launch verified end to end.\n\n**2. init.** `hookPlacement` and the moving-between-files logic are DELETED. `installClaudeHooks(root, log, {shared, binRel})` now: always strips hkb's own hooks from `.claude/settings.local.json` (reported as `cleared`), and writes `.claude/settings.json` only with `--shared-hooks`. It never removes from the tracked file — that is a human's choice. Return shape changed: `{file: <rel|null>, added, repaired, cleared, command, binRel}`, and `hookSummary` now takes that object rather than `(added, opts)`. #146's command shapes are all preserved under the flag, including the guarded form for a self-carrying repo.\n\n**3. doctor.** `checkHooks` builds the launch's command with the same `hkbCommandForHook(..., {binRel: null, onPath})` call and checks that, naming `hookLaunchProfiles`. Two new checks: `hooks in settings` (STALE_HOOK_CHECK) warns per settings file with a different fix for local vs tracked; **`launch hooks` (LAUNCH_HOOK_CHECK) is the one I added that the card did not ask for, and it matters** — `loadBoard` deep-merges and an array in board.json wins whole, so a `launch` an older `init` froze there never gains `{hook_settings}`, and with no settings file to fall back on those workers would go quiet. Same frozen-copy blind spot `worker permissions` watches on `allowed_tools`; same `DEFAULT_PROFILES[name]` branching fix. It runs BEFORE the early return, or a board in that state reports nothing at all.\n\n`policyLayers` gained a per-profile `{hook_settings}` test with the repo-wide `preTool` as fallback. **I did NOT make `claude`/`claude-track` report `live` as the card's item 3 suggests**: riding the launch installs the hook there but does not deliver `KB_TASK`, so `preToolHook` still stands aside — which is the card's own Contract and #133's decision. The verdict stays accurate and the docs say why.\n\n**Dogfooding.** This repo's `.claude/settings.json` held nothing but hkb's two hooks running a bare `hkb` that does not resolve on this machine — the exact bug, live in the repo that ships the fix. `git rm`'d. The #146 test that read it as a fixture is replaced by the new invariant: hkb's own repo ships NO hkb hook in either settings file.\n\n**#147 review nits, both fixed with tests:** `hookSummary` no longer says a portable command \"did not resolve for everyone that file serves\" when the rewrite only adds the guard (it says \"to name this repo's own hkb, guarded\"); `resolveHookPath` normalises with `path.normalize` after substituting, so the Windows `path.join` expectation at test/harness.test.js holds. The other two nits were paragraphs the rewrite replaced.\n\n**Manual mode is the one workflow this makes worse, and it is handled:** there the human is the launcher, so `hkb init --shared-hooks` is now the documented day-one command in docs/manual-mode.md, with the hand-rolled `--settings` line as the alternative.\n\n**For the next worker:** the seam is `hookSettings(CLAUDE_HOOKS, verb => ...)` — add a hook event to `CLAUDE_HOOKS` and the launch, the Actions workflow, `installClaudeHooks`, `findClaudeHooks` and doctor all follow. If you add a launch-level flag, note that board.json freezes launches: anything machine-specific must be a placeholder, and `staleHookLaunches` is the pattern for warning boards frozen before it."
+    }
+  ],
+  "v": 1
+}

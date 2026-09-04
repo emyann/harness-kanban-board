@@ -1,0 +1,67 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T20:35:42.166Z",
+      "heartbeat_at": "2026-09-01T20:22:40.938Z",
+      "host": "YRND1-GG",
+      "job": "26c23aaa",
+      "lock_sha": "3d75bfee7cc2bab2d6b7038625789541f27a85f7",
+      "log": ".kanban/logs/189-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 224,
+      "pr_head": "worktree-kb-189-1",
+      "profile": "claude",
+      "session_id": "26c23aaa-a75d-4405-b24a-de8aeff678b5",
+      "started_at": "2026-09-01T20:22:40.938Z",
+      "summary": "Added dispatch.merge.mode \"operator\": a third merge mode that lets a human delegate the merge click to the operator seat, gated by a condition (a review on the card) enforced in code rather than remembered in a chat transcript. mergePolicy() (src/model.js) now parses dispatch.merge.require {checks, review_comment} (both default on); new pure operatorReviewEvidence() and mergeDecision() compute the",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-189-1/26c23aaa-a75d-4405-b24a-de8aeff678b5.jsonl",
+      "wt": "kb-189-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T20:35:44Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/tasks.js",
+          "src/lifecycle.js",
+          "src/cli.js",
+          "src/doctor.js",
+          "src/board.js",
+          "skills/kanban/SKILL.md",
+          "skills/kanban/references/protocol.md",
+          "README.md",
+          ".kanban/board.json",
+          "test/merge.test.js",
+          "test/fake-gh.js",
+          "test/skill.test.js"
+        ],
+        "residual_risk": [
+          "The web board's review column does not show the merge mode yet — no web/serve file was in this task's scope",
+          "docs/wiki/features/auto-merge.md and docs/wiki/features/operator-seat.md are flagged stale (already stale for several unrelated files pre-existing this change) and need a /repolore:refresh pass to mention \"operator\"",
+          "docs/harnesses.md had no merge-policy mentions to update"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (924 tests, all green)",
+          "node bin/hkb.js doctor — confirms the operator merge policy line and path_overlap default"
+        ]
+      },
+      "pr": 224,
+      "pr_continued": false,
+      "summary": "Added dispatch.merge.mode \"operator\": a third merge mode that lets a human delegate the merge click to the operator seat, gated by a condition (a review on the card) enforced in code rather than remembered in a chat transcript. mergePolicy() (src/model.js) now parses dispatch.merge.require {checks, review_comment} (both default on); new pure operatorReviewEvidence() and mergeDecision() compute the condition and every refusal message. src/tasks.js gained prChecksState() (PR's own statusCheckRollup) and mergePullRequest() (gh api GraphQL mutation, not gh pr merge, per CLAUDE.md). New verb hkb merge <n> [--summary \"..\"] in src/lifecycle.js/src/cli.js: refuses outright under manual/auto naming the mode, enforces the condition under operator and refuses naming what's missing, and on success leaves a **Merged by the operator seat** comment plus merged_by: \"operator\" on the attempt. doctor.js's checkMergePolicy now always names operator's effective condition (still silent only on manual). path_overlap guard needed no code change — its merge.mode-keyed default already falls through to off for anything but auto. Updated protocol.md's merging row, README's seats + \"last step\" sections, and /kanban:operate's three-way review row in skills/kanban/SKILL.md. Set this board's own .kanban/board.json to dispatch.merge.mode: operator per the card. Extended test/merge.test.js (pure mergeDecision/operatorReviewEvidence coverage, doctor coverage, end-to-end hkb merge against test/fake-gh.js, which gained a mergePullRequest mutation handler and a statusCheckRollup resolver) and test/skill.test.js (operate section names all three modes). PR: https://github.com/emyann/harness-kanban-board/pull/224"
+    }
+  ],
+  "v": 1
+}

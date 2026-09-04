@@ -1,0 +1,16 @@
+{
+  "attempts": [],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-29T03:11:28Z",
+      "id": 5459978051,
+      "text": "Scope change 2026-08-29: piece A (the effort profile field, the doctor fix for a stale pinned launch, and migrating this board off its pinned launch arrays) is #182, which is already running — filed by the operator session after the pinned arrays turned out to predate {hook_settings} and every worker since #144 launched without hooks. This card keeps B (the per-profile model_ladder and modelForAttempt, recording the rung on the attempt row) and C (the model column in decompose/specify with the rubric), plus the visibility line in Done when. Blocked by #182 so the ladder builds on the effort field it lands."
+    }
+  ],
+  "results": [],
+  "v": 1
+}

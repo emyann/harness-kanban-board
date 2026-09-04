@@ -1,0 +1,63 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T17:41:08.485Z",
+      "heartbeat_at": "2026-08-27T17:28:06.785Z",
+      "host": "YRND1-GG",
+      "job": "d954c02a",
+      "lock_sha": "6e866c9c66752bb2a182b80be5444276f3f05ac4",
+      "log": ".kanban/logs/78-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 79,
+      "pr_head": "worktree-kb-78-1",
+      "profile": "claude",
+      "started_at": "2026-08-27T17:28:06.785Z",
+      "summary": "A real init() test, plus the offline seam the tarball half needed. PR #79 (draft), branch worktree-kb-78-1, commit 58e4f87.\n\nPrimary: test/init.test.js now drives the actual init() against a temp git repo with test/fake-gh.js installed as the transport inside src/gh.js (no gh, no network), through the real parseArgs + makeContext, with --repo acme/board so detectRepo never runs. It asserts the who",
+      "wt": "kb-78-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T17:41:10Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "test/init.test.js",
+          "src/init.js",
+          "src/cli.js",
+          "scripts/smoke-pack.mjs",
+          "README.md",
+          "docs/releasing.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/decisions/adr-004-roles-and-adoption.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "The init tests process.chdir into a temp repo; node --test runs each file in its own process and the cwd is restored in a finally, but a future concurrent runner inside one file would need rework.",
+          "smoke-pack asserts .claude/settings.json has exactly the two hooks — a third hook in CLAUDE_HOOKS means updating that expectation there as well as in the test.",
+          "The offline claim holds for `--no-labels` with `--repo`; without `--repo`, init still calls detectRepo (gh repo view).",
+          "src/init.js remains uncovered by the wiki; a future init/adoption page would own --no-labels."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (450 pass, 0 fail)",
+          "npm run smoke (23 content checks, 3 command checks, 7 init checks)",
+          "reintroduced #72/#73/#74 one at a time: npm test exits 1 each time (3, 2 and 5 failing tests)",
+          "smoke-pack --verify-only against a package root missing templates/doc-section.md: exit 1, init check reports it",
+          "node .repolore/scripts/wiki-check.mjs (all pages fresh)"
+        ]
+      },
+      "summary": "A real init() test, plus the offline seam the tarball half needed. PR #79 (draft), branch worktree-kb-78-1, commit 58e4f87.\n\nPrimary: test/init.test.js now drives the actual init() against a temp git repo with test/fake-gh.js installed as the transport inside src/gh.js (no gh, no network), through the real parseArgs + makeContext, with --repo acme/board so detectRepo never runs. It asserts the whole contract: the profile set on a fresh board (bare / --profiles / --harness) and a re-run that keeps a hand-added profile with the operator's edits; the exact 11 labels that reach the transport and that nothing else does; both hooks in .claude/settings.json plus a summary line naming both; every line of the shipped ignore list; the skill copied out of the package file for file with board.json stamped and the .claude/skills/kanban link; the CLAUDE.md/AGENTS.md section spliced from templates/doc-section.md above pre-existing content; and a second init that leaves the footprint byte-identical with no duplicate hook, ignore line or section and no label churn. Verified the done-when: reintroducing #72 fails 3 tests, #73 fails 2, #74 fails 5, each under npm test.\n\nSecondary (the seam, called out as the card asked): smoke-pack could only have run init as far as the API step, so init grows --no-labels. Labels are the only step that needs the network, so with --repo owner/name the command writes the whole local footprint and sends nothing — a real offline path for a machine where gh is not logged in yet. It is in the help and the README quickstart, it names what it skipped and what to run next, and it refuses --import/--project (exit 2) before writing anything rather than half-honouring them. scripts/smoke-pack.mjs runs it in a scratch repo from the installed tarball and compares what landed against the packaged originals (SKILL.md, references/protocol.md, doc-section.md) plus board.json, the .gitignore block and the two hooks. Checked the failure path by hand against a package root with templates/doc-section.md removed: exit 1, with the fix named.\n\nNote for the next worker: src/init.js is covered by no wiki page (wiki-coverage: 10 of 21 in-scope src files uncovered, no init/adoption page in the plan), so --no-labels is documented in README/help only. The two existing pages went stale purely on the cli.js blob and were re-stamped with a log line."
+    }
+  ],
+  "v": 1
+}

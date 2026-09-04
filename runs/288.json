@@ -1,0 +1,160 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-03T01:24:40.310Z",
+      "heartbeat_at": "2026-09-02T23:40:11.379Z",
+      "host": "YRND1-GG",
+      "job": "ea24eaa1",
+      "kind": "transient",
+      "lock_sha": "e36702183ba25314524011b55bf4b9e673139498",
+      "log": ".kanban/logs/288-1.log",
+      "outcome": "blocked",
+      "pid": null,
+      "profile": "claude-track",
+      "reason": "operator: the track runner was throttled by a session quota mid-wave and parked with A4/A5 in flight. Closing the track attempt: A1-A3 are done and on kb/track-288, and the remaining nodes go to node-by-node dispatch once that branch is on main",
+      "session_id": "ea24eaa1-7d40-474a-9971-78298416d23e",
+      "started_at": "2026-09-02T23:40:11.379Z",
+      "track": true,
+      "track_branch": "kb/track-288",
+      "track_mode": "inferred",
+      "track_nodes": [
+        289,
+        290,
+        291,
+        293,
+        292,
+        294
+      ],
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-288-1/ea24eaa1-7d40-474a-9971-78298416d23e.jsonl",
+      "wt": "kb-288-1"
+    },
+    {
+      "attempt": 2,
+      "bg": true,
+      "ended_at": "2026-09-03T07:19:12.607Z",
+      "heartbeat_at": "2026-09-03T07:16:41.560Z",
+      "host": "YRND1-GG",
+      "kind": "transient",
+      "lock_sha": "7a6e4555c4830ae4f53d3f8a9a014089d6898181",
+      "log": ".kanban/logs/288-2.log",
+      "outcome": "blocked",
+      "pid": null,
+      "profile": "claude",
+      "reason": "Re-sequenced by the operator: root A's verification (item 2) is a scratch-repo walk-through of hkb init --store local then create/claim/finish/serve end to end, and that cannot pass until #304 routes the verbs off the GitHub driver. Its done-when also wants wiki-check clean, which is #318 behind #305. Blocking #288 on #304 and running track C first.",
+      "started_at": "2026-09-03T07:16:41.560Z",
+      "wt": "kb-288-2"
+    },
+    {
+      "attempt": 3,
+      "bg": true,
+      "ended_at": "2026-09-03T09:04:06.033Z",
+      "heartbeat_at": "2026-09-03T08:55:12.161Z",
+      "host": "YRND1-GG",
+      "job": "13ac1765",
+      "lock_sha": "103ecf41fea50af039ad147370f3d312262221bd",
+      "log": ".kanban/logs/288-3.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 328,
+      "pr_head": "worktree-kb-288-3",
+      "profile": "claude",
+      "session_id": "13ac1765-9745-49e4-99b0-01ae8273b048",
+      "started_at": "2026-09-03T08:55:12.161Z",
+      "summary": "Track A verify-and-synthesize (root A). No source changes — A1-A6 (and A7/#325, which routed the verbs) already shipped the behaviour. This pass checked the pieces fit, walked the scratch-repo protocol end to end, and wrote the docs no child could.\n\n**1. Pieces fit.** `node --test test/store.test.js` — 55/55 pass, both drivers (github + local). `node bin/hkb.js dispatch --dry-run --json` on this r",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-288-3/13ac1765-9745-49e4-99b0-01ae8273b048.jsonl",
+      "wt": "kb-288-3"
+    }
+  ],
+  "block_loops": {
+    "n08zc7": 1,
+    "n2uq4s": 1
+  },
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T23:35:06Z",
+      "id": 5517982898,
+      "text": "Track A as filed:\n\n```mermaid\nflowchart TD\n  n289[\"#35;289 · ready<br>Node floor 22.13 with the SQLite warning silenced, CI o…\"]\n  n290[\"#35;290 · todo<br>Remove the GitHub Actions runner: templates, claude-act…\"]\n  n291[\"#35;291 · todo<br>The store seam: a Store interface over tasks.js and loc…\"]\n  n293[\"#35;293 · todo<br>The index: src/store/sqlite.js — node:sqlite under the…\"]\n  n292[\"#35;292 · todo<br>The git tier: src/store/git.js — the kb-board branch wr…\"]\n  n294[\"#35;294 · todo<br>The local store as the default: open() composes the two…\"]\n  n288([\"#35;288 · todo<br>Local-first hkb, track A: the Node floor, no Actions, t…\"])\n  n289 --> n290\n  n290 --> n291\n  n291 --> n293\n  n291 --> n292\n  n293 --> n294\n  n292 --> n294\n  n294 --> n288\n  classDef todo stroke:#8b949e,stroke-width:1px\n  class n290,n291,n293,n292,n294,n288 todo\n  classDef ready stroke:#3fb950,stroke-width:2px\n  class n289 ready\n```\n"
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T23:40:04Z",
+      "id": 5518041212,
+      "text": "Operator note (2026-09-02): the plan was first filed as three roots chained by dependencies (B1 blocked by this root, C1 blocked by #295). The dispatcher resolves a track as the root plus everything transitively blocking it, so the outermost root #302 was claimed as one 18-node session. That attempt was withdrawn (its runner stopped after ten minutes on A1, the attempt on #289 closed as transient and reopened), the two cross-track links were removed, and tracks B (#295) and C (#302) are parked in triage. The operator promotes track B once this root is done, and track C once #295 is done. Nothing else about the graph changed."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T01:24:41Z",
+      "id": 5518890307,
+      "text": "**Blocked** (transient, attempt 1): operator: the track runner was throttled by a session quota mid-wave and parked with A4/A5 in flight. Closing the track attempt: A1-A3 are done and on kb/track-288, and the remaining nodes go to node-by-node dispatch once that branch is on main"
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T07:19:15Z",
+      "id": 5522071325,
+      "text": "**Blocked** (transient, attempt 2): Re-sequenced by the operator: root A's verification (item 2) is a scratch-repo walk-through of hkb init --store local then create/claim/finish/serve end to end, and that cannot pass until #304 routes the verbs off the GitHub driver. Its done-when also wants wiki-check clean, which is #318 behind #305. Blocking #288 on #304 and running track C first."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T09:02:56Z",
+      "id": 5523291084,
+      "text": "Verify-and-synthesize pass for track A. All six children closed completed:\n\n- #289 (A1) — Node floor 22.13, SQLite warning silenced, CI 22/24/26, JSDoc type check\n- #290 (A2) — Removed the GitHub Actions runner (templates/actions/, claude-action profile, trigger mode)\n- #291 (A3) — The store seam: `openStore(ctx)`, `Store` interface, GitHub driver behind it, `src/forge.js`\n- #293 (A5) — The index tier: `src/store/sqlite.js`, `node:sqlite`, transactional claim, events table\n- #292 (A4) — The git tier: `src/store/git.js`, the kb-board branch written with plumbing\n- #294/#325 (A6/A7) — `open()` composes the two tiers, `hkb init --import`, `hkb sync`, the owning-host guard, and — found only once C1 tried to build on it — every verb actually routed through `openStore(ctx)` off the `tasks.js`/`lock.js` shims; `hkb init` now defaults to `local`\n\nThis pass: ran the conformance suite (`test/store.test.js`, both drivers, green), confirmed `hkb dispatch --dry-run --json` on this repo's own GitHub-backed board is unchanged, walked a scratch repo through `init --store local` → `create` → `claim` → `finish` → `sync` → `serve`, and a second clone read the board with every write refused. Added `docs/wiki/concepts/store.md`, refreshed `architecture/overview.md`, added `CHANGELOG.md`. Full details in the finish summary."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T09:05:52Z",
+      "id": 5523326467,
+      "text": "**Merged by the operator seat** — review: Root A, docs and verification only — no source changes, so the rigor rule (full review for locks, gc, worktrees, migration) does not apply and this merged on a hand check rather than a review round.  What it proves, and the reason track A existed: a scratch repo walked init --store local, create, claim, heartbeat, finish, sync end to end, and a second clone then read the board while every mutating verb exited 2 naming hkb init --take-over. The one-writer rule holds through the store, not only at the CLI gate. The conformance suite is 55/55 on both drivers, and dispatch --dry-run --json on this repo own GitHub-backed board returns an unchanged shape.  Honest about its own gaps, both accepted: it used a manual claim + finish rather than --spawn, because spawning a nested claude -p from inside a background worker is a recursion and cost risk with no supervision, and the card allows that fallback; and it left the 21 pre-existing stale wiki pages alone, making only its own two fresh. The card done-when asked for wiki-check clean; that backlog is #318, deliberately sequenced after the TypeScript rename so the covers: paths are repointed once rather than twice. Accepted as the operator, not as an unmet criterion quietly passed.  Adds docs/wiki/concepts/store.md, refreshes architecture/overview.md from \"the board is the only durable state\" to \"the store is\", and creates CHANGELOG.md. lint, test (1361) and smoke green on Node 22 and 24., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-03T09:04:08Z",
+      "attempt": 3,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "CHANGELOG.md",
+          "docs/wiki/concepts/store.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/wiki.config.yml",
+          "docs/wiki/index.md",
+          "docs/wiki/log.md"
+        ],
+        "dependencies": [
+          289,
+          290,
+          291,
+          292,
+          293,
+          294,
+          325
+        ],
+        "residual_risk": [
+          "CHANGELOG.md is new — this repo had none before. It is not in package.json's `files`, so it ships in the git repo but not the npm tarball; that matches how docs/ and other repo-only docs are already handled.",
+          "The scratch-repo walk-through used a manual claim + finish rather than `hkb claim --spawn --agent claude-p`, per the card's own fallback clause — spawning a nested `claude -p` process from inside a background worker session was judged an avoidable cost/recursion risk. The --spawn path itself is exercised by test/dispatch.test.js and test/lifecycle.test.js against the fake harness; it was not re-verified live in this pass.",
+          "Track A leaves tracks B (#295) and C (#302) parked in triage, unpromoted, per the operator's existing note — this card does not touch them."
+        ],
+        "verification": [
+          "node --test test/store.test.js — 55/55 pass (github + local drivers)",
+          "node bin/hkb.js dispatch --dry-run --json — unchanged shape on this repo's GitHub-backed board",
+          "scratch-repo walk-through: init --store local, create, claim, manual finish (--no-pr), sync, up --serve; second clone reads the board and every write is refused (exit 2, hkb init --take-over) — full transcript in the summary",
+          "node .repolore/scripts/wiki-check.mjs — concepts/store.md and architecture/overview.md both fresh; 21 pre-existing stale pages untouched by this track",
+          "npm run lint — clean on Node 22.23.2 and 24.20.0",
+          "npm test — 1361/1361 pass on Node 22.23.2 and 24.20.0",
+          "npm run smoke — all checks pass on Node 22.23.2 and 24.20.0 (tarball pack/install/init)"
+        ]
+      },
+      "pr": 328,
+      "pr_continued": false,
+      "summary": "Track A verify-and-synthesize (root A). No source changes — A1-A6 (and A7/#325, which routed the verbs) already shipped the behaviour. This pass checked the pieces fit, walked the scratch-repo protocol end to end, and wrote the docs no child could.\n\n**1. Pieces fit.** `node --test test/store.test.js` — 55/55 pass, both drivers (github + local). `node bin/hkb.js dispatch --dry-run --json` on this repo's own GitHub-backed board returns the same shape as before the seam (reconciled/reclaimed/promoted/guarded/claimed/spawn_failed/held/skipped/tracks/reaped/self_heal/auto_merge/fatal/track_conflicts), no error.\n\n**2. The scratch-repo walk-through**, exact commands, run in a throwaway dir with a bare 'origin' remote (deleted after):\n```\ngit init --bare                          # origin-bare\ngit init -b main && git config user.*    # repo\ngit add README.md && git commit -m init\ngit remote add origin ../origin-bare && git push -u origin main\n\nnode bin/hkb.js init --store local --no-hook --repo scratch/repo --no-labels\n  -> store: local — created the kb-board branch and .git/hkb/index.db\ngit add -A && git commit -m 'hkb init: local store' && git push origin main\n  # .kanban/board.json is a TRACKED file (per README's 'Sharing a board'),\n  # so it has to be committed for a second clone to see the store key\n\nnode bin/hkb.js create \"Write a hello file\" --body \"...\" --goal \"hello.txt exists and contains hello\"\n  -> #1 ready (claude) null\nnode bin/hkb.js claim 1\n  -> #1 claimed (attempt 1)          # (the A7 cosmetic fix confirmed: no longer 'attempt 1, attempt 1')\n# wrote hello.txt by hand (no harness spawn — see note below)\nKB_TASK=1 KB_ATTEMPT=1 node bin/hkb.js heartbeat 1\n  -> #1 attempt 1: lease held -> mtlakbp\nKB_TASK=1 KB_ATTEMPT=1 node bin/hkb.js finish 1 --from-stdin < finish.json   # {summary, metadata, no_pr: \"scratch repo has no forge\"}\n  -> #1 -> done\nnode bin/hkb.js sync\n  -> sync: pushed 1d3fcba to origin/kb-board\n\n# second clone\ngit clone origin-bare clone2 && git -C clone2 checkout -b main origin/main\nnode bin/hkb.js up --serve --port 8322          # (from clone2)\ncurl localhost:8322/api/board                    # shows the board, dispatcher.running: true\nnode bin/hkb.js comment 1 \"hi\"                    # from clone2\n  -> exit 2: \"the board here is a read-only copy: origin/kb-board exists but\n     refs/heads/kb-board does not ... hkb init --take-over\"\nnode bin/hkb.js list --all                        # from clone2, reads fine: #1 done\nnode bin/hkb.js down --serve                      # both hosts\n```\nUsed a manual `claim` + `finish` rather than `hkb claim --spawn --agent claude-p`: spawning a nested `claude -p` from inside this background worker session risked recursion/cost with no supervision, and the card explicitly allows the manual fallback ('or a manual claim + hkb finish if no harness is available'). The dispatcher process on the non-owning clone ticked correctly (claimed 0) and refused to sync ('nothing to compare-and-swap against'), and any mutating verb there exits 2 naming `hkb init --take-over` — confirms the one-writer rule end to end, not just at the CLI-invocation gate.\n\n**3. Docs and wiki.** New `docs/wiki/concepts/store.md` — a concept-level distillation (one interface, why the local driver has two tiers, the three invariants, one writer, what is deliberately not the store) sitting above the existing deep-mechanics pages `architecture/store-seam.md` and `architecture/local-store.md`, which already covered the write path / one-writer rule / index rebuild in full depth and were left as the detail layer. Added to the wiki's page plan (`wiki.config.yml`). `architecture/overview.md` refreshed: summary and opening paragraph changed from 'the board is the only durable state' / GitHub-only framing to 'the store is the only durable state' with local named as the default and GitHub as the still-live other driver; `concepts/store` added to `related`. Both pages stamped and fresh — `node .repolore/scripts/wiki-check.mjs` shows 0 stale among the pages this track touched (21 stale remain, all pre-existing drift from before this track, matching #294's own note of '21 stale, all pre-existing'). `CHANGELOG.md` created (none existed) with an Unreleased entry for the local-first store.\n\n**4. `npm run lint && npm test && npm run smoke`** — green on Node 22.23.2 and Node 24.20.0 (both installed locally via nvm). `npm test`: 1361/1361 pass on each. `npm run smoke`: all pack/install/init checks pass on each (26 content, 3 command, 12 init, 6 inside-the-repo).\n\n**Track A summary, per child** (all closed completed):\n- #289 (A1) — Node floor 22.13, SQLite ExperimentalWarning silenced at the entry point, CI 22/24/26, JSDoc type check via tsconfig.json (noEmit/checkJs/strict:false)\n- #290 (A2) — GitHub Actions runner removed whole: templates/actions/, claude-action profile, trigger mode, the remote reclaim branch, doctor's workflow checks\n- #291 (A3) — The store seam: `openStore(ctx)` (src/store/index.js), GitHub driver moved into src/store/github.js verbatim, src/forge.js for the PR half, conformance suite scaffolded\n- #292 (A4) — The git tier: src/store/git.js, the kb-board branch written with plumbing only (hash-object/write-tree/commit-tree/update-ref as CAS), never a checkout\n- #293 (A5) — The index tier: src/store/sqlite.js, node:sqlite DatabaseSync in WAL, the §6.3 schema, transactional claim, the events table\n- #294/#325 (A6/A7) — open() composes the two tiers; hkb init --import migrates a GitHub board; hkb sync; the owning-host guard (assertOwningHost/assertLocalOwner, two layers); hkb doctor's local-store probes; hkb gc's four GitHub-only sweeps skipped-with-reason on local. #325 (not originally a track A node) found that A6 had landed the store with zero call sites on it — src/cli.js, dispatch.js, lifecycle.js, context.js, stats.js and hook.js still read GitHub through the tasks.js/lock.js shims — and routed all six; hkb init now defaults to local again.\n\nNothing is open at the end of this track. Track B (#295) and track C (#302) remain parked in triage per the operator's 2026-09-02 note, to be promoted separately."
+    }
+  ],
+  "v": 1
+}

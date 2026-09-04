@@ -1,0 +1,180 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-03T16:34:47.142Z",
+      "heartbeat_at": "2026-09-03T16:11:44.560Z",
+      "host": "YRND1-GG",
+      "job": "785d4d70",
+      "lock_sha": "238a3b65d997c2eb59d8794d893af1d8c3252037",
+      "log": ".kanban/logs/334-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 335,
+      "pr_head": "worktree-kb-334-1",
+      "profile": "claude",
+      "session_id": "785d4d70-f9d5-4d67-badf-491f7fc748b0",
+      "started_at": "2026-09-03T16:11:44.560Z",
+      "summary": "The durable tier moved from refs/heads/kb-board to refs/kb/boards/<slug> — where the ref lives, and nothing else: same tree shape, same write path, same one-writer rule. PR #335 (draft). `boardRef(slug)`, `trackingRefFor(ref, remote)` and `boardFetchRefspec(remote)` in src/store/git.js are the only places that spell a ref; GitTier resolves its own default from ctx.board, so two boards in one repo ",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-334-1/785d4d70-f9d5-4d67-badf-491f7fc748b0.jsonl",
+      "wt": "kb-334-1"
+    },
+    {
+      "attempt": 2,
+      "ended_at": "2026-09-03T16:59:34.256Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "Excellent card. Verifying it end-to-end outside the harness — `git branch -a`, `ls-remote --heads`, a real\nclone-and-restore — is what a ref change needed, and finding that two boards in one repo shared one branch\n(a card written on `--board beta` landing on alpha) is a live data-corruption bug nobody asked you to look\nfor. Leaving ADR-006 untouched was right.\n\nA high-effort review found 14, several verified against real git. **The first one is my mistake, not\nyours** — the card specified the destination refspec and specified it wrong.\n\n## Must fix — the refspec\n\n1. **`refs/remotes/<remote>/kb/boards/*` collides with a remote branch named `kb`, and hkb writes that\n   refspec into `.git/config` unasked** (git.js:80). Verified: on a repo whose origin has a branch `kb`,\n   after `hkb init` appends the line, **`git fetch origin` exits 1** — `cannot lock ref\n   'refs/remotes/origin/kb/boards/default': 'refs/remotes/origin/kb' exists`. Every ordinary fetch, and any\n   CI step that checks its exit status, now fails because of a line hkb added. `sync()` hits the same error\n   at local.js:534, which is neither offline nor whitelisted, so it throws a message naming `git remote -v`\n   — a fix unrelated to the cause.\n\n   The card applied the directory/file rule to `refs/kb/board` vs `refs/kb/board/<slug>` and then put the\n   destination inside `refs/remotes/`, where the same rule bites against real branch names. **My error.**\n   Move the destination out of the remote-branch namespace — `refs/kb/remotes/<remote>/boards/*` has no\n   possible collision — and add the case to the tests: a repo with a branch literally named `kb`, and one\n   named `kb/boards`, both fetching cleanly after `hkb init`.\n\n2. **The refspec check matches the source, not the destination** (local.js:836), so\n   `+refs/kb/*:refs/kb/*` — the exact config the docblock says destroys the board — reads as \"present\".\n   Verified: with that line in `.git/config`, a plain `git fetch origin` **force-rewinds the local\n   `refs/kb/boards/default` from this host's unpushed tip back to the remote's older sha**, silently losing\n   every decision since the last push. Meanwhile `hasFetchRefspec` returns true, so `hkb doctor` prints\n   `✓ board refspec …` — a statement that is false — and neither `init` nor `sync` ever adds the safe line.\n   Match on the destination.\n\n3. **The durable tier no longer has a reflog** (git.js:511). Verified with `core.logAllRefUpdates` at its\n   default: `git update-ref refs/kb/boards/default <new> <old>` writes no entry, `git reflog\n   refs/kb/boards/default` is empty, and `.git/logs/refs` contains only `heads`. Two messages still\n   prescribe `git reflog <ref>` — `_absentRefMessage` and `_reconcileRefs` after three lost CASes — and both\n   are now dead advice. The real cost is worse than the wording: a bad `update-ref`, a racing `hkb down`, or\n   finding 2's clobber used to be recoverable from the branch's reflog and now is not, **on the tier the\n   design calls durable**. Pass `--create-reflog` on the update-ref (or scope\n   `core.logAllRefUpdates=always` to the namespace), and prove it with a test that reads the reflog back.\n\n## Must fix — the missing safety net\n\n4. **A board on the old ref becomes invisible, silently** (local.js:801). `localBoardExists` no longer looks\n   at `refs/heads/kb-board`. On a checkout created since #326 — when local became the default — the whole\n   board is there, and after this change `hkb list` prints nothing, `hkb doctor` says \"no board at\n   refs/kb/boards/default\", and running its suggested `hkb init` **creates a second empty board beside the\n   real one**. The card declined a migration because nothing is on the old ref *in this repository*; your\n   own residual note says that measurement covered this repo only. That is an argument against writing a\n   migration, not against the one-line net: an extra `rev-parse refs/heads/kb-board`, and a doctor row\n   naming `git update-ref refs/kb/boards/default refs/heads/kb-board`. Silent data loss is not an\n   acceptable answer to an unmeasured case.\n\n5. **Slug validation now rejects boards that have no ref at all** (init.js:992). `init()` calls\n   `boardRef(board)` before `resolveStore`, so `hkb init --board \"my board\" --store github` — which worked\n   before, because `slugFile` *hashes* a slug rather than rejecting it — now exits 2. The same reaches\n   `hkb doctor` on a healthy GitHub board through `localBoardExists` → `boardRef`, and the catch turns it\n   into a `bad` row. And the error's fix, \"Rename it with `hkb init --board <name>`\", is the command that\n   just failed and renames nothing. Validate only where a ref is actually needed, and make the fix\n   actionable.\n\n6. **`SLUG_RE` accepts a trailing dot, which git refuses** (git.js:55). Verified: `boardRef('foo.')` returns\n   a ref `git check-ref-format` rejects, so `hkb init --board foo.` passes your validation and dies inside\n   `_land` with a raw `fatal: … is not a valid ref name` naming no fix — while the docblock claims it emits\n   \"nothing `git check-ref-format` would refuse\".\n\n## Also fix\n\n7. **`sync()` calls `ensureFetchRefspec` on every fetch** (local.js:540) — two extra git subprocesses per\n   sync, on the dispatcher's post-tick path, to re-confirm a line written once and never removed. The\n   comment twenty lines above documents rewriting `answer()` precisely because \"the sync the loop runs after\n   every decisive tick spawned five git processes to report that it had done nothing\". Guard on\n   `hasFetchRefspec` being false, and move the `config --get-all` after the no-remote early return, where it\n   is currently wasted.\n8. **The refspec predicate is duplicated verbatim** (local.js:836 and :845) with different plumbing around\n   each. Finding 2's fix applied to one and not the other gives a doctor that reports present while init\n   keeps appending copies. `ensureFetchRefspec` should call `hasFetchRefspec`.\n9. **`sync()`'s payload carries `branch` and `ref` holding byte-identical strings** (local.js:525) —\n   derivable duplicate state in an object CLAUDE.md calls stable — and messages built from `branch` read\n   `sync.push is false in refs/kb/boards/default's board.json`. `importGithubBoard`'s summary has the same\n   key. Build the messages from `ref` and drop `branch`.\n10. **Two vocabularies for one object** (local.js:465, :438; git.js:1089): `markDispatcher` still says\n    \"there is no refs/kb/boards/default **branch**\", `need()` says \"not on the refs/kb/boards/default\n    **board**\", while `commit`/`board`/`setBoard`/`takeOver` were rewritten to \"there is no board at `<ref>`\".\n    Pick one.\n11. **`need()`'s default `branch = BOARD_REF`** (git.js:1089, and `DEFAULT_BRANCH` in sqlite.js) is\n    unreachable today and, if ever reached, would tell an operator on `beta` that their card \"is not on the\n    refs/kb/boards/default board\" and hand them a `git show` against the wrong board — the exact misdirection\n    sqlite.js:1049's comment exists to prevent. Make the parameter required.\n12. **The fetch's `couldn't find remote ref` whitelist is dead by your own reasoning** (local.js:534): your\n    comment says a wildcard refspec matching nothing exits 0, so git never emits those messages here. What\n    survives is a real non-zero failure whose text contains those words being reported as success.\n13. **`localBoardExists` re-derives the remote name inline** (local.js:803), a third copy beside\n    `GitTier`'s constructor and `LocalStore.remote`. When they disagree it probes a remote-tracking ref no\n    fetch writes, and reports \"no local board\" on a checkout that has one.\n14. **`docs/wiki/wiki.config.yml:151`** still describes the store as \"a kb-board git branch\" — in the file\n    this PR edits.\n\n## Done when\n\n- [ ] Items 1-6 fixed, each with a test. Item 1's must include a repo with a branch named `kb`; item 3's\n      must read the reflog back; item 4's must assert the old-ref board is *named*, not silently missed.\n- [ ] Every other item fixed or argued in one line.\n- [ ] The end-to-end check you already ran, re-run after the destination change.\n- [ ] `npm run lint && npm test` green.\n",
+      "started_at": "2026-09-03T16:59:34.246Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 3,
+      "bg": true,
+      "continues_branch": "worktree-kb-334-1",
+      "continues_pr": 335,
+      "ended_at": "2026-09-03T22:53:25.731Z",
+      "heartbeat_at": "2026-09-03T22:37:34.330Z",
+      "host": "YRND1-GG",
+      "job": "31a52e84",
+      "lock_sha": "238a3b65d997c2eb59d8794d893af1d8c3252037",
+      "log": ".kanban/logs/334-3.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 335,
+      "pr_head": "worktree-kb-334-1",
+      "profile": "claude",
+      "session_id": "31a52e84-88c7-4cc7-a0c5-4350f0860b59",
+      "started_at": "2026-09-03T22:37:34.330Z",
+      "summary": "All 14 review findings addressed on PR #335 (branch worktree-kb-334-1, commit 3255b84). Must-fix 1: the fetch destination moved out of `refs/remotes/` — `refs/remotes/<remote>/kb/boards/*` collides with a real branch named `kb` (git forbids a ref being both a file and a directory prefix), so the line hkb writes into .git/config made every plain `git fetch origin` exit 1 in such a repository. It is",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-334-3/31a52e84-88c7-4cc7-a0c5-4350f0860b59.jsonl",
+      "wt": "kb-334-3"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T16:59:36Z",
+      "id": 5529188133,
+      "text": "**Changes requested** (after attempt 1): Excellent card. Verifying it end-to-end outside the harness — `git branch -a`, `ls-remote --heads`, a real\nclone-and-restore — is what a ref change needed, and finding that two boards in one repo shared one branch\n(a card written on `--board beta` landing on alpha) is a live data-corruption bug nobody asked you to look\nfor. Leaving ADR-006 untouched was right.\n\nA high-effort review found 14, several verified against real git. **The first one is my mistake, not\nyours** — the card specified the destination refspec and specified it wrong.\n\n## Must fix — the refspec\n\n1. **`refs/remotes/<remote>/kb/boards/*` collides with a remote branch named `kb`, and hkb writes that\n   refspec into `.git/config` unasked** (git.js:80). Verified: on a repo whose origin has a branch `kb`,\n   after `hkb init` appends the line, **`git fetch origin` exits 1** — `cannot lock ref\n   'refs/remotes/origin/kb/boards/default': 'refs/remotes/origin/kb' exists`. Every ordinary fetch, and any\n   CI step that checks its exit status, now fails because of a line hkb added. `sync()` hits the same error\n   at local.js:534, which is neither offline nor whitelisted, so it throws a message naming `git remote -v`\n   — a fix unrelated to the cause.\n\n   The card applied the directory/file rule to `refs/kb/board` vs `refs/kb/board/<slug>` and then put the\n   destination inside `refs/remotes/`, where the same rule bites against real branch names. **My error.**\n   Move the destination out of the remote-branch namespace — `refs/kb/remotes/<remote>/boards/*` has no\n   possible collision — and add the case to the tests: a repo with a branch literally named `kb`, and one\n   named `kb/boards`, both fetching cleanly after `hkb init`.\n\n2. **The refspec check matches the source, not the destination** (local.js:836), so\n   `+refs/kb/*:refs/kb/*` — the exact config the docblock says destroys the board — reads as \"present\".\n   Verified: with that line in `.git/config`, a plain `git fetch origin` **force-rewinds the local\n   `refs/kb/boards/default` from this host's unpushed tip back to the remote's older sha**, silently losing\n   every decision since the last push. Meanwhile `hasFetchRefspec` returns true, so `hkb doctor` prints\n   `✓ board refspec …` — a statement that is false — and neither `init` nor `sync` ever adds the safe line.\n   Match on the destination.\n\n3. **The durable tier no longer has a reflog** (git.js:511). Verified with `core.logAllRefUpdates` at its\n   default: `git update-ref refs/kb/boards/default <new> <old>` writes no entry, `git reflog\n   refs/kb/boards/default` is empty, and `.git/logs/refs` contains only `heads`. Two messages still\n   prescribe `git reflog <ref>` — `_absentRefMessage` and `_reconcileRefs` after three lost CASes — and both\n   are now dead advice. The real cost is worse than the wording: a bad `update-ref`, a racing `hkb down`, or\n   finding 2's clobber used to be recoverable from the branch's reflog and now is not, **on the tier the\n   design calls durable**. Pass `--create-reflog` on the update-ref (or scope\n   `core.logAllRefUpdates=always` to the namespace), and prove it with a test that reads the reflog back.\n\n## Must fix — the missing safety net\n\n4. **A board on the old ref becomes invisible, silently** (local.js:801). `localBoardExists` no longer looks\n   at `refs/heads/kb-board`. On a checkout created since #326 — when local became the default — the whole\n   board is there, and after this change `hkb list` prints nothing, `hkb doctor` says \"no board at\n   refs/kb/boards/default\", and running its suggested `hkb init` **creates a second empty board beside the\n   real one**. The card declined a migration because nothing is on the old ref *in this repository*; your\n   own residual note says that measurement covered this repo only. That is an argument against writing a\n   migration, not against the one-line net: an extra `rev-parse refs/heads/kb-board`, and a doctor row\n   naming `git update-ref refs/kb/boards/default refs/heads/kb-board`. Silent data loss is not an\n   acceptable answer to an unmeasured case.\n\n5. **Slug validation now rejects boards that have no ref at all** (init.js:992). `init()` calls\n   `boardRef(board)` before `resolveStore`, so `hkb init --board \"my board\" --store github` — which worked\n   before, because `slugFile` *hashes* a slug rather than rejecting it — now exits 2. The same reaches\n   `hkb doctor` on a healthy GitHub board through `localBoardExists` → `boardRef`, and the catch turns it\n   into a `bad` row. And the error's fix, \"Rename it with `hkb init --board <name>`\", is the command that\n   just failed and renames nothing. Validate only where a ref is actually needed, and make the fix\n   actionable.\n\n6. **`SLUG_RE` accepts a trailing dot, which git refuses** (git.js:55). Verified: `boardRef('foo.')` returns\n   a ref `git check-ref-format` rejects, so `hkb init --board foo.` passes your validation and dies inside\n   `_land` with a raw `fatal: … is not a valid ref name` naming no fix — while the docblock claims it emits\n   \"nothing `git check-ref-format` would refuse\".\n\n## Also fix\n\n7. **`sync()` calls `ensureFetchRefspec` on every fetch** (local.js:540) — two extra git subprocesses per\n   sync, on the dispatcher's post-tick path, to re-confirm a line written once and never removed. The\n   comment twenty lines above documents rewriting `answer()` precisely because \"the sync the loop runs after\n   every decisive tick spawned five git processes to report that it had done nothing\". Guard on\n   `hasFetchRefspec` being false, and move the `config --get-all` after the no-remote early return, where it\n   is currently wasted.\n8. **The refspec predicate is duplicated verbatim** (local.js:836 and :845) with different plumbing around\n   each. Finding 2's fix applied to one and not the other gives a doctor that reports present while init\n   keeps appending copies. `ensureFetchRefspec` should call `hasFetchRefspec`.\n9. **`sync()`'s payload carries `branch` and `ref` holding byte-identical strings** (local.js:525) —\n   derivable duplicate state in an object CLAUDE.md calls stable — and messages built from `branch` read\n   `sync.push is false in refs/kb/boards/default's board.json`. `importGithubBoard`'s summary has the same\n   key. Build the messages from `ref` and drop `branch`.\n10. **Two vocabularies for one object** (local.js:465, :438; git.js:1089): `markDispatcher` still says\n    \"there is no refs/kb/boards/default **branch**\", `need()` says \"not on the refs/kb/boards/default\n    **board**\", while `commit`/`board`/`setBoard`/`takeOver` were rewritten to \"there is no board at `<ref>`\".\n    Pick one.\n11. **`need()`'s default `branch = BOARD_REF`** (git.js:1089, and `DEFAULT_BRANCH` in sqlite.js) is\n    unreachable today and, if ever reached, would tell an operator on `beta` that their card \"is not on the\n    refs/kb/boards/default board\" and hand them a `git show` against the wrong board — the exact misdirection\n    sqlite.js:1049's comment exists to prevent. Make the parameter required.\n12. **The fetch's `couldn't find remote ref` whitelist is dead by your own reasoning** (local.js:534): your\n    comment says a wildcard refspec matching nothing exits 0, so git never emits those messages here. What\n    survives is a real non-zero failure whose text contains those words being reported as success.\n13. **`localBoardExists` re-derives the remote name inline** (local.js:803), a third copy beside\n    `GitTier`'s constructor and `LocalStore.remote`. When they disagree it probes a remote-tracking ref no\n    fetch writes, and reports \"no local board\" on a checkout that has one.\n14. **`docs/wiki/wiki.config.yml:151`** still describes the store as \"a kb-board git branch\" — in the file\n    this PR edits.\n\n## Done when\n\n- [ ] Items 1-6 fixed, each with a test. Item 1's must include a repo with a branch named `kb`; item 3's\n      must read the reflog back; item 4's must assert the old-ref board is *named*, not silently missed.\n- [ ] Every other item fixed or argued in one line.\n- [ ] The end-to-end check you already ran, re-run after the destination change.\n- [ ] `npm run lint && npm test` green.\n"
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T22:55:01Z",
+      "id": 5533176908,
+      "text": "**Merged by the operator seat** — review: Two review rounds (14 findings, several verified against real git). Verified by hand before merge: the fetch destination moved to refs/kb/remotes/<remote>/boards/<slug>, out of refs/remotes entirely — the first shape collided with any remote branch named kb and made a plain `git fetch origin` exit 1 repo-wide, for a config line hkb wrote unasked; the refspec check now matches the DESTINATION through one shared predicate, so the destructive +refs/kb/*:refs/kb/* no longer reads as present (under it a plain fetch force-rewinds the local board back to the remote sha); update-ref passes --create-reflog, because a ref outside refs/heads gets no reflog by default and the durable tier had silently lost its recovery record; localBoardExists looks at refs/heads/kb-board so a board on the old ref is named rather than silently replaced by an empty one; and SLUG_RE no longer accepts a trailing dot, which git refuses.  The refspec-destination bug was mine — the card specified refs/remotes/<remote>/kb/boards/* and I probed it only on a repo with no branch named kb.  The card itself: the board is at refs/kb/boards/<slug>, invisible to `git branch` and to GitHub UI, with push and fetch measured against the real remote before the design was committed. It also fixed a live data-corruption bug nobody asked about: two boards in one repo shared one branch, so a card written on --board beta landed on alpha. ADR-006 left untouched, correctly — accepted records are immutable.  Verified end-to-end outside the harness: git branch -a shows only the code branches, ls-remote --heads shows no board ref, and clone + hkb sync restores the board with doctor green. CI green, 1412+ tests., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-03T16:34:49Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/store/git.js",
+          "src/store/local.js",
+          "src/store/sqlite.js",
+          "src/store/index.js",
+          "src/doctor.js",
+          "src/init.js",
+          "src/cli.js",
+          "src/dispatch.js",
+          "src/board.js",
+          "test/store-git.test.js",
+          "test/store-local.test.js",
+          "test/store-sqlite.test.js",
+          "test/init.test.js",
+          "test/doctor.test.js",
+          "test/store.test.js",
+          "test/verbs-portable.test.js",
+          "test/gc.test.js",
+          "README.md",
+          "CHANGELOG.md",
+          "docs/local-first.md",
+          "docs/wiki/architecture/board-ref.md (renamed from kb-board-branch.md)",
+          "docs/wiki/architecture/local-store.md",
+          "docs/wiki/architecture/store-seam.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/concepts/store.md",
+          "docs/wiki/features/up-and-down.md",
+          "docs/wiki/features/web-board.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/index.md",
+          "docs/wiki/log.md",
+          "docs/wiki/wiki.config.yml"
+        ],
+        "residual_risk": [
+          "No migration path exists by design. If any checkout anywhere does have a board on refs/heads/kb-board, hkb will not find it and will offer to create a new one at refs/kb/boards/default — the card measured that there is none, but that measurement was of this repository and its remote only.",
+          "GitTier.branch now returns the full ref for a board ref (and still shortens a legacy refs/heads/x). Every message and every `git log`/`git show` reads correctly, but the accessor's name is now a little off; renaming it touches the sqlite index's `branch` option and its error messages, which the card's contract said not to disturb.",
+          "hkb sync's fetch now uses a wildcard refspec, so it updates the remote-tracking refs of *every* board in the repository, not just this one. Harmless (they are remote-tracking refs) but it is a behaviour change from the single-ref fetch.",
+          "Board slugs are now validated as ref path segments. A board whose slug in .kanban/board.json contains a slash, a space or a leading dot would have worked before (all boards shared one branch) and now fails with exit 2 naming the rule. No such board is known to exist.",
+          "docs/wiki/decisions/adr-006-local-store.md still says 'a dedicated git branch, kb-board'. Left deliberately — accepted ADRs are immutable per docs/wiki/AGENTS.md — so a reader who reaches only the ADR gets the old ref name; the living pages and the wiki log carry the correction."
+        ],
+        "verification": [
+          "npm run lint (with node_modules installed, so tsc --noEmit actually ran — it is skipped on a bare checkout)",
+          "npm test — 1412 pass, 0 fail",
+          "end-to-end outside the harness: hkb init in a scratch repo (git branch -a shows only main; refs/kb/boards/default present; ls-remote --heads shows only refs/heads/main), hkb create, hkb sync, then git clone + hkb sync into a fresh clone restored the card, and hkb doctor there reported store/board ref/board refspec/board index all green",
+          "new tests: 'the board lives at refs/kb/boards/<slug>, invisible to git branch' (store-git), 'the fetch refspec maps into refs/remotes and cannot clobber a local board that is ahead', 'hkb init writes the fetch refspec once, beside the +refs/heads/* line it must never replace', 'two boards in one repository get two refs and do not collide' (store-local), 'doctor names the missing fetch refspec, and stops warning once it is there' (doctor), and a fresh init now asserts no board branch exists (init)"
+        ]
+      },
+      "pr": 335,
+      "pr_continued": false,
+      "summary": "The durable tier moved from refs/heads/kb-board to refs/kb/boards/<slug> — where the ref lives, and nothing else: same tree shape, same write path, same one-writer rule. PR #335 (draft). `boardRef(slug)`, `trackingRefFor(ref, remote)` and `boardFetchRefspec(remote)` in src/store/git.js are the only places that spell a ref; GitTier resolves its own default from ctx.board, so two boards in one repo now get two refs (they shared one branch before — a card written on --board beta silently landed on alpha). GitTier.branch still exists and now returns the ref itself (git log/show read it fine), which is why the sqlite index's `branch` option and its messages needed no restructuring. src/store/local.js: sync() fetches `+refs/kb/boards/*:refs/remotes/<remote>/kb/boards/*` named on the command line (a fresh clone's config has no such line — that is the whole cost of a hidden ref) and calls the new ensureFetchRefspec(root, remote), which appends it to remote.<name>.fetch idempotently and never over the +refs/heads/* line; hasFetchRefspec(root, remote) is doctor's read. hkb init writes the same line and says so; hkb doctor grows a REFSPEC_CHECK ('board refspec') row that warns when it is missing and names both fixes. The refspec maps into refs/remotes/ deliberately: +refs/kb/*:refs/kb/* would let a fetch overwrite the very ref the one-writer CAS leases — there is a test that a fetch leaves a local board that is ahead alone. No migration was written and none is needed: nothing exists on refs/heads/kb-board here or on the remote (measured on the card before filing). ADR-006 is deliberately untouched (accepted records are immutable; the decision it records is unchanged); docs/wiki/architecture/kb-board-branch.md is renamed to board-ref.md and rewritten. Four wiki pages I only touched for the rename were left at their old `covers` shas rather than stamped — they were already stale for reasons this task did not review, and stamping blesses a whole page."
+    },
+    {
+      "artifacts": [],
+      "at": "2026-09-03T22:53:28Z",
+      "attempt": 3,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/store/git.js",
+          "src/store/local.js",
+          "src/store/sqlite.js",
+          "src/doctor.js",
+          "src/init.js",
+          "test/store-git.test.js",
+          "test/store-local.test.js",
+          "test/store-sqlite.test.js",
+          "test/doctor.test.js",
+          "test/init.test.js",
+          "README.md",
+          "CHANGELOG.md",
+          "docs/local-first.md",
+          "docs/wiki/architecture/board-ref.md",
+          "docs/wiki/architecture/local-store.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/wiki.config.yml",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "`hkb doctor`'s legacy-ref row fires only when there is no board at the new ref and none tracking it — a checkout that has both (old board on refs/heads/kb-board AND a new empty one) still reports the new one as healthy and says nothing about the old. Naming it there would need a second row; the card's scope was the net against silent loss, and a checkout with both is one somebody made deliberately.",
+          "A checkout configured before this change carries the old `+refs/kb/boards/*:refs/remotes/<remote>/kb/boards/*` line in .git/config. `ensureFetchRefspec` appends the new one beside it rather than removing it, so that repo now fetches into both namespaces — harmless, except in a repo with a branch named `kb`, where the stale line is the one that breaks fetch. No such checkout exists yet (the ref move has not shipped), so nothing removes it; if that changes, a doctor row that reports a stale destination is the fix.",
+          "The refspec's destination is a namespace hkb owns, so `git remote prune` and `git gc`'s ref pruning never touch the tracking refs — they are ordinary refs to git, kept forever. That was already true of the board ref itself and of refs/kb/locks."
+        ],
+        "verification": [
+          "npm run lint (with typescript installed, so tsc --noEmit actually ran — green)",
+          "npm test — 1421 pass, 0 fail",
+          "npm run smoke — packs, installs and runs the tarball; 26 content / 3 command / 12 init / 6 in-repo checks",
+          "end-to-end in a scratch repo whose origin has a branch named `kb`: hkb init writes the refspec, create x2, hkb sync, plain `git fetch origin` exits 0, `git branch -a` shows only kb+main, `git show-ref | grep kb-board` empty, `ls-remote --heads` does not list the board, reflog on refs/kb/boards/default readable",
+          "end-to-end restore: git clone + hkb sync on a fresh clone → both cards listed, doctor green on store/board ref/board refspec",
+          "end-to-end two boards: --board alpha and --board beta get distinct refs and distinct card lists",
+          "end-to-end: hkb init --store github --board 'my board' exits 0",
+          "against the real remote (github.com:emyann/harness-kanban-board): push refs/kb/boards/hkb-probe accepted, fetch +refs/kb/boards/*:refs/kb/remotes/origin/boards/* landed at refs/kb/remotes/origin/boards/hkb-push-probe, nothing in `git branch -a` or `ls-remote --heads`; probe ref deleted from the remote afterwards"
+        ]
+      },
+      "pr": 335,
+      "pr_continued": true,
+      "summary": "All 14 review findings addressed on PR #335 (branch worktree-kb-334-1, commit 3255b84). Must-fix 1: the fetch destination moved out of `refs/remotes/` — `refs/remotes/<remote>/kb/boards/*` collides with a real branch named `kb` (git forbids a ref being both a file and a directory prefix), so the line hkb writes into .git/config made every plain `git fetch origin` exit 1 in such a repository. It is `refs/kb/remotes/<remote>/boards/*` now (`trackingPrefix`), hkb's own namespace all the way down; tested against repos with branches named `kb` and `kb/boards`, and re-verified end-to-end against the real remote (push accepted, fetch lands outside refs/remotes, nothing in `git branch -a` or `ls-remote --heads`). 2: `isBoardFetchRefspec` matches the config line's DESTINATION, so `+refs/kb/*:refs/kb/*` — the line that force-rewinds the local board on every fetch — no longer reads as present; doctor's row is honest and init/sync add the safe line beside it. 3: both `update-ref` call sites pass `--create-reflog` (`_land`, `_setRef`), because core.logAllRefUpdates covers only refs/heads|remotes|notes and HEAD — the durable tier had silently lost the reflog two of its own messages prescribe; a test reads it back. 4: `findLocalBoardRef` probes `refs/heads/kb-board` too and `hkb doctor` names a board found there with the one-line `update-ref` that moves it (a safety net, not a migration — the old `hkb init` fix would have created a second empty board beside a real one). 5: a board name is validated only where a ref is built, so `hkb init --board \"my board\" --store github` works again, and the refusal names a fix that runs (`suggestSlug`). 6: SLUG_RE refuses a trailing dot, which git refuses. Also: sync() reads the refspec config once, after the no-remote return, and writes it only when missing (7); `ensureFetchRefspec` calls `hasFetchRefspec` (8); sync()'s payload carries `ref` and no duplicate `branch` (9); one vocabulary — the `branch` getters on GitTier/LocalStore and `DEFAULT_BRANCH` in sqlite.js are gone, every message names the ref (10, 11); the dead `couldn't find remote ref` whitelist is gone (12); `remoteFor(ctx)` is the one place the remote name is derived (13); wiki.config.yml's ADR-006 summary no longer calls the store a kb-board branch (14). Docs: README, docs/local-first.md and docs/wiki/architecture/board-ref.md (new sections on the reflog and the old ref, and why the destination is where it is), plus a docs/wiki/log.md entry."
+    }
+  ],
+  "v": 1
+}

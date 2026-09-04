@@ -1,0 +1,57 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T03:40:53.556Z",
+      "heartbeat_at": "2026-08-28T03:32:01.055Z",
+      "host": "YRND1-GG",
+      "job": "6392bd92",
+      "lock_sha": "2f3f11d9c57f89f330496516754393e25a22f29e",
+      "log": ".kanban/logs/101-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 104,
+      "pr_head": "worktree-kb-101-1",
+      "profile": "claude",
+      "started_at": "2026-08-28T03:32:01.055Z",
+      "summary": "The served board set is now live. `reloadBoards` in src/serve.js re-runs `serveContexts` at most once per poll interval, driven by the requests the page already makes — no timer, nothing re-read while nobody is watching, no GitHub call. A board that appeared is added and addressable on that same request; one that left the list stops being served and its cache goes with it; a board still in the lis",
+      "wt": "kb-101-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T03:40:55Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/serve.js",
+          "test/serve.test.js",
+          "README.md",
+          "docs/wiki/features/web-board.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "The reload is demand-driven: it fires on an /api/* request when a poll interval has passed, so a board added while no page is open is noticed on the next request, not on a wall-clock tick. No timer was added on purpose (a serve with no viewer should cost nothing).",
+          "Board identity is the keyBoards key plus root: pointing boards.json at a different checkout of the same repo#board rebuilds that board's state (one refetch) rather than keeping it.",
+          "A drawer left open on a board that was removed mid-session gets a 404 on its next detail poll; the page already clears a filter whose board left (web/index.html:497), so the board itself does not go blank.",
+          "hkb serve was not exercised against live GitHub in this session (no network for gh in the worker); coverage is the injected-deps HTTP tests."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (559 pass, 0 fail)",
+          "node .repolore/scripts/wiki-check.mjs (all pages fresh)",
+          "git rebase origin/main (resolved one docs/wiki/log.md append conflict with #103)"
+        ]
+      },
+      "summary": "The served board set is now live. `reloadBoards` in src/serve.js re-runs `serveContexts` at most once per poll interval, driven by the requests the page already makes — no timer, nothing re-read while nobody is watching, no GitHub call. A board that appeared is added and addressable on that same request; one that left the list stops being served and its cache goes with it; a board still in the list keeps its state object (cached cards, generation counter, detail cache), so a reload never blanks or refetches a working board. `boards`/`byKey` became re-derivable `let` bindings, and `boardsPayload` reads one list for the whole payload so a concurrent reload cannot desynchronise its snapshots from its entries. `--repos` (and the `deps.contexts` test seam) stay static. A stale entry's \"skipping ...\" line and an unparsable boards.json each log once, not once per poll, and a half-written list keeps the boards the server already holds instead of taking the page down.\n\nThe reload clock is a `deps.now` seam, so tests drive the real request path with a clock they move by hand rather than a test-only reload entry point.\n\nDraft PR #104 on branch worktree-kb-101-1, rebased on main (after #103 landed). Beyond the stated file scope I also fixed the README paragraph #97 added (\"the list is read once ... only after you restart the server\"), now false, and refreshed docs/wiki/features/web-board.md, whose covers: SHA for src/serve.js this change would otherwise have made stale — AGENTS.md requires the page move with the code. src/board.js was not touched, as the contract asked."
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,63 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T17:58:28.542Z",
+      "heartbeat_at": "2026-08-27T17:47:06.443Z",
+      "host": "YRND1-GG",
+      "job": "035df6fe",
+      "lock_sha": "00c89072a625200adfc95fe671a88a6dd529aa8f",
+      "log": ".kanban/logs/80-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 81,
+      "pr_head": "worktree-kb-80-1",
+      "profile": "claude",
+      "started_at": "2026-08-27T17:47:06.443Z",
+      "summary": "Bumped actions/checkout and actions/setup-node from v4 to v7 at all 14 sites: the four workflows in .github/workflows, the two shipped templates in templates/actions, and the two test selectors that assert the pinned string. Major-tag pinning kept, matching the existing style and claude-code-action@v1; latest upstream re-checked with `git ls-remote` rather than trusted from the issue (checkout v7.",
+      "wt": "kb-80-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T17:58:30Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          ".github/workflows/test.yml",
+          ".github/workflows/release.yml",
+          ".github/workflows/kanban-dispatch.yml",
+          ".github/workflows/kanban-worker-claude.yml",
+          "templates/actions/kanban-dispatch.yml",
+          "templates/actions/kanban-worker-claude.yml",
+          "test/actions.test.js",
+          "test/release.test.js",
+          "docs/harnesses.md"
+        ],
+        "residual_risk": [
+          "The release path can only be proven by the next v* tag: release.yml's publish and verify jobs never run on a PR. Their YAML is covered by test/release.test.js and the trusted-publishing surface (no registry-url, no secrets, id-token: write) is untouched, but the first real proof is the next release.",
+          "Could not read the run's annotations to confirm the Node-20 deprecation notice is gone — gh api is blocked in this session, only gh pr checks was permitted. Both v7 action.yml files declare runs.using: node24, which is the condition that emits that annotation, so it cannot be produced — but confirm on the PR's checks page.",
+          "Adopters on a self-hosted Actions runner older than v2.327.1 will see both generated workflows fail once they re-run hkb init --with-actions. Documented in docs/harnesses.md; GitHub-hosted runners are unaffected.",
+          "package-manager-cache: false is what keeps CI working if someone later adds a packageManager field to package.json. Do not drop it without committing a lock file first."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test — 450 pass, 0 fail",
+          "npm run smoke — the packed tarball installs, runs and initialises a repo (templates/ is shipped, so this path matters)",
+          "hkb init --repo acme/scratch --no-labels --with-actions in a scratch repo: both generated workflows carry actions/checkout@v7, actions/setup-node@v7, package-manager-cache: false, and no unsubstituted {{placeholder}}",
+          "gh pr checks 81 --watch — test pass 17s, packed artifact pass 10s (run 33100962231)",
+          "read actions/checkout@v7.0.1 and actions/setup-node@v7.0.0 sources directly — CHANGELOG, README breaking-changes sections, action.yml defaults, main.ts cache path, unsafe-pr-checkout-helper.ts — rather than trusting release notes second-hand"
+        ]
+      },
+      "summary": "Bumped actions/checkout and actions/setup-node from v4 to v7 at all 14 sites: the four workflows in .github/workflows, the two shipped templates in templates/actions, and the two test selectors that assert the pinned string. Major-tag pinning kept, matching the existing style and claude-code-action@v1; latest upstream re-checked with `git ls-remote` rather than trusted from the issue (checkout v7.0.1, setup-node v7.0.0).\n\nThe one migration note that touches us is caching. setup-node v5 turned automatic npm caching on by default and v6 narrowed it to \"package.json names npm in packageManager or devEngines\"; hkb has no dependencies and ships no lock file, and restoreCache throws \"Dependencies lock file is not found\" when there is none — a hard step failure. So every setup-node with a checkout behind it now sets `package-manager-cache: false`. It also matters for adopters: the shipped workflows only install hkb globally, so a cache would be saved and restored on every 15-minute tick for nothing, and setup-node's docs recommend disabling it in jobs with elevated privileges (release.yml's `id-token: write`, the kanban jobs' KB_TOKEN). release.yml's verify job is deliberately left without the flag — no checkout means no package.json to detect — and a comment there says so.\n\nrelease.yml was not renamed and the npm publish step did not move. `registry-url` is unchanged across v4-v7 and stays unset in the publish job; the trusted-publishing assertion in test/release.test.js is intact, with only the version in the selector changed.\n\ncheckout's other majors are inert here. v6 moved the persisted credential to a separate file (input defaults unchanged, and v6.0.1 added worktree support for the includeIf it uses). v7 refuses to check out fork PR code from pull_request_target and workflow_run — kanban-dispatch.yml does have a workflow_run trigger, but it fires on the worker workflow, whose event is workflow_dispatch, and the step checks out the base repo's default branch with no `ref`, so the guard returns before it can throw.\n\ndocs/harnesses.md now names the self-hosted runner floor (v2.327.1) the Node 24 actions require — that is the one way this bump can break an adopter. Draft PR: #81."
+    }
+  ],
+  "v": 1
+}

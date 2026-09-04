@@ -1,0 +1,45 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-08-26T05:58:06.377Z",
+      "heartbeat_at": "2026-08-26T04:34:00.840Z",
+      "host": "YRND1-GG",
+      "log": ".kanban/logs/1-1.log",
+      "outcome": "completed",
+      "pid": 3922,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-26T04:34:00.840Z"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-26T04:36:17Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/cli.js",
+          "test/version.test.js"
+        ],
+        "residual_risk": [
+          "ghk version --json output shape is new ({version, node}); no in-repo consumers of the old plain text under --json"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (16 pass, 3 new)",
+          "node bin/ghk.js version",
+          "node bin/ghk.js version --json"
+        ]
+      },
+      "summary": "ghk version now reads package.json via readVersion() in src/cli.js (resolved from import.meta.url, lazy, no deps); ghk version --json returns {version, node}; handled before makeContext so it works outside a board. test/version.test.js covers the helper and both output modes from a neutral cwd. Draft PR #12."
+    }
+  ],
+  "v": 1
+}

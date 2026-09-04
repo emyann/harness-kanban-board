@@ -1,0 +1,115 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-26T06:03:59.988Z",
+      "heartbeat_at": "2026-08-26T06:02:35.649Z",
+      "host": "YRND1-GG",
+      "job": "b897cc8f",
+      "job_stopped": true,
+      "log": ".kanban/logs/17-1.log",
+      "outcome": "protocol_violation",
+      "pid": null,
+      "profile": "claude",
+      "reason": "protocol_violation after 84s",
+      "started_at": "2026-08-26T06:02:35.649Z",
+      "wt": "kb-17-1"
+    },
+    {
+      "attempt": 2,
+      "bg": true,
+      "ended_at": "2026-08-26T06:06:30.796Z",
+      "heartbeat_at": "2026-08-26T06:04:04.336Z",
+      "host": "YRND1-GG",
+      "job": "8057ef1a",
+      "job_stopped": true,
+      "log": ".kanban/logs/17-2.log",
+      "outcome": "protocol_violation",
+      "pid": null,
+      "profile": "claude",
+      "reason": "protocol_violation after 146s",
+      "started_at": "2026-08-26T06:04:04.336Z",
+      "wt": "kb-17-2"
+    },
+    {
+      "attempt": 3,
+      "bg": true,
+      "ended_at": "2026-08-26T06:12:12.143Z",
+      "heartbeat_at": "2026-08-26T06:06:36.305Z",
+      "host": "YRND1-GG",
+      "job": "1b396024",
+      "job_stopped": true,
+      "log": ".kanban/logs/17-3.log",
+      "outcome": "protocol_violation",
+      "pid": null,
+      "profile": "claude",
+      "reason": "protocol_violation after 335s",
+      "started_at": "2026-08-26T06:06:36.305Z",
+      "wt": "kb-17-3"
+    },
+    {
+      "attempt": 4,
+      "ended_at": "2026-08-26T06:12:12.702Z",
+      "host": "YRND1-GG",
+      "outcome": "gave_up",
+      "profile": "dispatcher",
+      "reason": "3 consecutive failures (limit 2)",
+      "started_at": "2026-08-26T06:12:12.702Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 5,
+      "bg": true,
+      "ended_at": "2026-08-26T06:36:35.247Z",
+      "heartbeat_at": "2026-08-26T06:26:40.121Z",
+      "host": "YRND1-GG",
+      "job": "935b33fc",
+      "log": ".kanban/logs/17-5.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-26T06:26:40.121Z",
+      "wt": "kb-17-5"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": "protocol_violation after 335s",
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-26T06:35:26Z",
+      "attempt": 5,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/init.js",
+          "src/doctor.js",
+          "src/model.js",
+          "src/board.js",
+          "test/skill.test.js",
+          ".agents/skills/kanban"
+        ],
+        "pr": 25,
+        "residual_risk": [
+          "Filesystems without symlink permission (Windows, some CI): linkSkill() stages the link at a sibling path and returns null on failure so init falls back to a copy with the existing install intact, but that path is not exercised in tests.",
+          "copySkill() now removes .agents/skills/kanban before copying, so a user who hand-edited files inside that hkb-managed directory loses them on the next `hkb init`. The previous behaviour overwrote in place and left extras.",
+          "src/doctor.js imports agentsSkillDir/packageSkillDir/readSkillVersion from src/init.js. No cycle today (init.js never imports doctor.js), but it couples a check module to a command module; a future src/backends/ split may want these helpers in board.js instead.",
+          "A globally installed hkb resolves packageSkillDir() from the npm package, so `hkb doctor` in a clone compares against the installed hkb rather than the clone's own source. Correct for the copy case, and short-circuited by the link branch in this repo."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test — 63 pass, 0 fail (13 new in test/skill.test.js)",
+          "node bin/hkb.js doctor — all green, skill row reads '.agents/skills/kanban -> ../../skills/kanban (linked, always current)'",
+          "git ls-files -s .agents — mode 120000 for .agents/skills/kanban",
+          "protocol.md read via .agents/, .claude/ and skills/ is byte-identical (asserted in test/skill.test.js)"
+        ]
+      },
+      "summary": "`hkb init` now links `.agents/skills/kanban` to `../../skills/kanban` when the repo being initialised is the hkb package itself (a root package.json named \"hkb\" that actually ships `skills/kanban/SKILL.md`), instead of copying. `.claude/skills/kanban` is unchanged and resolves through the new link.\n\nOther repos still get a copy: `copySkill()` replaces the directory wholesale, so renamed or dropped files (like the old `scripts/ghk` shim) stop lingering, and `.kanban/board.json` now records `skill_version` = `metadata.version` from SKILL.md, null when linked. `hkb doctor` compares the installed copy against the packaged skill and warns when it is behind, preferring the copy's own SKILL.md version over the board.json stamp and falling back to the stamp when the copy has no front matter. A copy newer than the package is not treated as a fault.\n\nNew pure helpers `parseSkillVersion()` and `compareVersions()` live in `src/model.js`, no YAML dependency added.\n\nThe tracked copy in this repo is replaced with the symlink in the same PR, which also drops the pre-#16 `references/protocol.md` and the pre-rename `scripts/ghk` shim.\n\nNote for the next worker: `hkb init` was deliberately NOT run against this repo, because it would also rewrite board.json, `.claude/settings.json` and the CLAUDE.md/AGENTS.md sections, all outside this task's declared paths. The symlink was created by calling `linkSkill()` itself, so the committed state is exactly what init produces. This repo's board.json therefore still has no `skill_version` key, which is correct for a linked repo, and will gain an explicit null whenever init is next run here."
+    }
+  ],
+  "v": 1
+}

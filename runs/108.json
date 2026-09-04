@@ -1,0 +1,58 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T04:42:04.618Z",
+      "heartbeat_at": "2026-08-28T04:28:04.026Z",
+      "host": "YRND1-GG",
+      "job": "86339c8f",
+      "lock_sha": "c6ee6f1552076cfd824680ae0f72e399e92bc32b",
+      "log": ".kanban/logs/108-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-28T04:28:04.026Z",
+      "wt": "kb-108-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T04:41:04Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "web/index.html",
+          "test/serve.test.js",
+          "docs/wiki/features/web-board.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/log.md",
+          "docs/wiki/index.md"
+        ],
+        "residual_risk": [
+          "The SVG has never been rendered in a real browser — browser automation was denied in this session, so layout was verified numerically only. Worth one look at `hkb serve` before the PR leaves draft.",
+          "`edgesMayBeMissing` is a heuristic: a board where every dependency happens to sit on todo/blocked cards and nothing is closed yet will show the incomplete-history note although nothing is actually missing. It is one grey line, never a change in what is drawn.",
+          "The 40-node cap and the ~6.8 average crossings at 12 nodes are accepted per the spec; a genuinely wide decomposition will be readable but not pretty."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (574 tests, 0 fail)",
+          "npm run smoke (the page ships in the package)",
+          "node --test test/serve.test.js (53 tests, 8 new)",
+          "node .repolore/scripts/wiki-check.mjs (all pages fresh)",
+          "node .repolore/scripts/wiki-index.mjs",
+          "a throwaway script printed rows, coordinates and an ASCII picture for a diamond and a 12-node decomposition: 266x192px, no overlapping nodes in a row"
+        ]
+      },
+      "summary": "The drawer now draws the focused card's dependency subgraph as inline SVG, above \"Blocked by\". PR #110 (draft), branch worktree-kb-108-1.\n\nIt is a rendering change only: `cardOf` already puts `blockedBy: [{number, title, done}]` on every /api/board card, so there is no new route, no new fetch, no server change, no dependency and no new file. src/serve.js and src/tasks.js are untouched.\n\nWhat the picture is: the focused card, its transitive blockers, everything transitively waiting on it, and every edge the board knows *between* those nodes — that last part is what makes a diamond come out as a diamond and makes the picture identical opened from either end. A finished blocker is not a board card (fetchBoard reads open issues only), so it becomes a node from the stub the cards that name it carry. Nodes fill from the column colours via `--col` (no second palette) and are `data-open` anchors reusing the blocker list's handler (no second open path). Nothing renders when a card has neither blockers nor a waiting parent.\n\nTwo pure top-level functions in the page's single classic <script>: `depGraph(cards, focus)` returns {nodes, edges, rows, width, height, truncated, incomplete} with layers and coordinates on the nodes; `graphSvg(g)` renders it. Longest-path layering + two barycenter passes, cycle-guarded, capped at 40 nodes with a note. Keeping them classic and top-level is deliberate: a module <script> would make `new vm.Script(PAGE_SCRIPT)` throw and take every page test with it.\n\nThe incomplete-history case is handled without touching tasks.js: `edgesMayBeMissing` reads the REST-fallback fingerprint off the payload (edges exist, and none hang off a card that is neither todo nor blocked) and the graph carries a one-line note instead of drawing a confidently wrong history.\n\nFor the next worker: the vm harness returns objects from the *vm realm*, so `assert.deepEqual` on `g.nodes.map(...)` fails on prototype identity — spread into this realm first ([...g.nodes].map(...)). Browser automation was denied in this session, so the visual check was done numerically (a script printed rows, coordinates and an ASCII picture; the 12-node case lays out 266x192px, well inside the 528px drawer, with no overlapping nodes in a row). The graph has not been seen in a real browser — worth one look at `hkb serve` before the PR leaves draft."
+    }
+  ],
+  "v": 1
+}

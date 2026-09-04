@@ -1,0 +1,88 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T03:49:14.664Z",
+      "heartbeat_at": "2026-08-27T03:25:42.739Z",
+      "host": "YRND1-GG",
+      "job": "7c844357",
+      "lock_sha": "a8ead84aa50d98f020b375aa971560b52db9585c",
+      "log": ".kanban/logs/51-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 60,
+      "pr_head": "kb/51",
+      "profile": "claude-track",
+      "started_at": "2026-08-27T03:25:42.739Z",
+      "summary": "Track complete: all 4 child nodes landed and merged to main, and the root's own integration pass is draft PR #60 on branch kb/51 (based on main).\n\nWHAT EACH NODE LANDED\n#52 (PR #56, merged) — LICENSE (MIT; the license field had been claiming MIT with no file behind it), author/homepage/bugs, keywords, and publishConfig {access: public, provenance: true}. Audited `files` against every runtime read:",
+      "track": true,
+      "track_nodes": [
+        52,
+        54,
+        53,
+        55
+      ],
+      "wt": "kb-51-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-27T03:25:37Z",
+      "id": 5433972065,
+      "text": "Track materialized (approved by operator): #52 → {#53 ∥ #54} → #55 → this root. B carries the post-publish npx verify; D gates the tarball pre-publish. NPM_TOKEN + tag push remain human steps."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T03:49:17Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "branch": "kb/51",
+        "changed_files": [
+          ".github/workflows/release.yml",
+          "package.json",
+          "README.md",
+          "docs/status.md",
+          "docs/releasing.md",
+          "CLAUDE.md",
+          "test/release.test.js"
+        ],
+        "nodes": {
+          "51": "draft PR #60, open",
+          "52": "merged as PR #56",
+          "53": "merged as PR #58",
+          "54": "merged as PR #57",
+          "55": "merged as PR #59"
+        },
+        "operator_next_steps": [
+          "merge PR #60",
+          "npm token create --read-only=false && gh secret set NPM_TOKEN",
+          "npm version 0.1.0 --allow-same-version && git push --follow-tags"
+        ],
+        "pr_url": "https://github.com/emyann/harness-kanban-board/pull/60",
+        "residual_risk": [
+          "release.yml has never run: no tag and no NPM_TOKEN yet, both deliberately the operator's step and out of the track's scope.",
+          "The npm pack → npm install path in scripts/smoke-pack.mjs never executed in the sandbox these nodes were worked in (both commands are blocked there); its first real run is CI. Check the `packed artifact` job is green on main before tagging.",
+          "PR #60 is the only piece of the track not yet merged. Tagging before it merges would publish without the smoke gate and without the docs/releasing.md link."
+        ],
+        "verification": [
+          "npm run lint (clean, and now covering scripts/*.mjs)",
+          "npm test (412 pass, 0 fail)",
+          "all four workflows parse under test/yaml.js; all 18 `run:` blocks syntax-check under bash -n",
+          "every relative link in README.md, docs/status.md, docs/releasing.md, docs/harnesses.md resolves (anchors included)",
+          "npm pack --dry-run: 41 files, 150.3 kB, scripts/ correctly not shipped",
+          "scripts/smoke-pack.mjs against a tree built from the updated files[]: 23 content + 3 command checks, exit 0; with skills/ dropped: exit 1 with 4 named fixes"
+        ]
+      },
+      "summary": "Track complete: all 4 child nodes landed and merged to main, and the root's own integration pass is draft PR #60 on branch kb/51 (based on main).\n\nWHAT EACH NODE LANDED\n#52 (PR #56, merged) — LICENSE (MIT; the license field had been claiming MIT with no file behind it), author/homepage/bugs, keywords, and publishConfig {access: public, provenance: true}. Audited `files` against every runtime read: it needed no change. No .npmignore, deliberately. KEY FACT: the npm name `hkb` is unclaimed (npm view hkb → E404).\n#54 (PR #57, merged) — README now opens on the adopter: `npx hkb init` quickstart, badges, a ten-line \"how it works\", then the philosophy bullets. The self-hosting narrative and the four `hkb doctor --api` observations moved to the new docs/status.md, with the reason each is load-bearing and an honest \"what is not proven yet\".\n#53 (PR #58, merged) — .github/workflows/release.yml: a `v*` tag runs the suite, refuses a tag that disagrees with package.json (naming both numbers and the fix), preflights NPM_TOKEN into a ::notice:: rather than a red build, publishes with --provenance, then a second job with NO checkout runs `npx -y hkb@<version> version` and `help` against the registry copy, retrying 10× 30s for propagation. Plus docs/releasing.md and 20 tests that EXECUTE the gate and the retry loop under a stubbed PATH rather than regexing them.\n#55 (PR #59, merged) — scripts/smoke-pack.mjs: pack → install the tarball into an empty dir → run the CLI from where npm put it (version must match the installed package.json, help must be the help, `hook stop` with no KB_TASK must exit 0), plus 16 must-ship files each annotated with the line that reads it and 7 must-NOT-ship paths (without which deleting `files` outright would ship the whole repo and every other check would still pass). Wired as a `smoke` job in test.yml on Node 20 — the floor `engines` claims and nothing else checked.\n\nTHE ROOT'S OWN PASS (PR #60) — the seam no child could see, because each only had its own paths:\nrelease.yml re-runs lint and the suite ITSELF rather than depending on the test.yml workflow, so #55's smoke job gated pushes and PRs but never a release — the one place a bad tarball does real damage. Both nodes were correct inside their scope; the gap only existed between them. Fixed: release.yml now runs `npm run smoke` before the publish step, and test/release.test.js asserts the ordering and that test.yml still carries the job it mirrors. Also: `npm run smoke` is now a script rather than a path repeated in two workflows; `lint` covers scripts/*.mjs (smoke-pack.mjs was the one file in the repo nothing checked); the README's Docs section links docs/releasing.md (#53 wrote the page, #54 built the section, neither could touch the other's file); docs/status.md gains the tarball to its verified list and drops a test count that #53 had already made stale; CLAUDE.md tells the next contributor when to run the smoke.\n\nVERIFIED OVER THE WHOLE RESULT: npm run lint clean (and now actually covering scripts/); npm test 412 pass / 0 fail; all four workflows parse under test/yaml.js and all 18 of their `run:` blocks syntax-check under bash -n; every relative link in README.md, docs/status.md, docs/releasing.md and docs/harnesses.md resolves, anchors included; npm pack --dry-run is 41 files / 150.3 kB with scripts/ correctly not shipped; smoke-pack re-run against a package tree built from the updated files[] passes 23 content + 3 command checks, and fails with 4 named fixes when skills/ is dropped.\n\nSTILL OPEN, and exactly what the track put out of scope: the operator creates the token (`npm token create --read-only=false && gh secret set NPM_TOKEN`) and pushes the tag (`npm version 0.1.0 --allow-same-version && git push --follow-tags`). Until NPM_TOKEN exists a tag runs the whole workflow, prints a ::notice:: with that first command, and publishes nothing. PR #60 is the last piece to merge; check the `packed artifact` job is green on main before tagging."
+    }
+  ],
+  "v": 1
+}

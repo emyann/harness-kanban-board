@@ -1,0 +1,94 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "denied_tools": [
+        {
+          "count": 1,
+          "first_seen": "2026-09-01T23:59:19.770Z",
+          "kind": "worktree-guard",
+          "tool": "Read"
+        },
+        {
+          "count": 1,
+          "first_seen": "2026-09-01T23:59:52.901Z",
+          "kind": "dontask-miss",
+          "tool": "mcp__react-aria__Button"
+        },
+        {
+          "count": 1,
+          "first_seen": "2026-09-02T00:08:23.105Z",
+          "kind": "dontask-miss",
+          "tool": "Bash"
+        }
+      ],
+      "ended_at": "2026-09-02T00:08:39.433Z",
+      "heartbeat_at": "2026-09-01T23:58:26.980Z",
+      "host": "YRND1-GG",
+      "job": "6c3c31e9",
+      "lock_sha": "d9e7359040f134e390a7bc69bc72e93a713edd1c",
+      "log": ".kanban/logs/254-1.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 266,
+      "pr_head": "worktree-kb-254-1",
+      "profile": "claude",
+      "session_id": "6c3c31e9-8f80-4e47-939c-684af397e5ea",
+      "started_at": "2026-09-01T23:58:26.980Z",
+      "summary": "hkb doctor's `mcp visibility` check and `hkb init` now distinguish why an MCP server never reached a worker: a server defined in .mcp.json and granted in a profile's allowed_tools but approved only in the gitignored .claude/settings.local.json is diagnosed as 'never approved for a worktree' (naming the exact enabledMcpjsonServers/enableAllProjectMcpServers line and telling the operator to move it ",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-254-1/6c3c31e9-8f80-4e47-939c-684af397e5ea.jsonl",
+      "wt": "kb-254-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T00:10:37Z",
+      "id": 5502345720,
+      "text": "**Merged by the operator seat** — review: Reviewed against all four Done-when items; every one met, and the shape is better than the card asked for. Rather than one check that guesses, it lands four pure functions in src/model.js — mcpApproved, mcpApprovalLine, mcpGrantedTo and mcpVisibilityDiagnosis — so the three-file diagnosis is unit-testable without a repo, which is the layout rule applied to a problem that is entirely about reading three files and reasoning. doctor now tells apart a server that was never approved for a worktree from one that was there and unused, and names the line to move and the tracked file to move it to, instead of the old suggestion which pointed at .mcp.json, the one file that was never the problem. init reports the same at setup, which is the moment a human is present and thinking. Verified myself: CI green, lint clean, 1070 tests. Two wiki pages updated in the same PR rather than left to drift, including the rule this card exists to write down: a worker inherits tracked files and no developer approvals. Worth recording that this card had an independent cold repro before it was filed: a separate operator session driving pipao hit doctor's wrong-file suggestion and reported it to its human as the fix, before knowing the real cause. That is the strongest evidence the old message misled, and it is why the new one names the file rather than the symptom., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [
+        "https://github.com/emyann/harness-kanban-board/pull/266"
+      ],
+      "at": "2026-09-02T00:08:41Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/doctor.js",
+          "src/init.js",
+          "test/session.test.js",
+          "test/doctor.test.js",
+          "test/init.test.js",
+          "docs/wiki/concepts/worker-identity.md",
+          "docs/wiki/features/denied-tools-ledger.md",
+          "docs/wiki/log.md"
+        ],
+        "dependencies": [],
+        "residual_risk": [
+          "13 other wiki pages were already stale from unrelated prior merges (model.js/doctor.js/init.js changed) before this PR; left untouched, out of scope",
+          "the 'unapproved' case (granted but approved nowhere) and the 'unused' case (approved but silent) get no automated verification beyond the diagnosis itself — they rely on an operator reading doctor's output"
+        ],
+        "retry_notes": null,
+        "verification": [
+          "npm run lint",
+          "npm test (1070 passing)",
+          "node .repolore/scripts/wiki-check.mjs (both touched pages report fresh)"
+        ]
+      },
+      "pr": 266,
+      "pr_continued": false,
+      "summary": "hkb doctor's `mcp visibility` check and `hkb init` now distinguish why an MCP server never reached a worker: a server defined in .mcp.json and granted in a profile's allowed_tools but approved only in the gitignored .claude/settings.local.json is diagnosed as 'never approved for a worktree' (naming the exact enabledMcpjsonServers/enableAllProjectMcpServers line and telling the operator to move it into the tracked .claude/settings.json), distinct from a server approved in the tracked file that simply went unused. New pure functions in src/model.js: mcpApproved, mcpApprovalLine, mcpGrantedTo, mcpVisibilityDiagnosis, mcpSplitApprovals. doctor.js's checkDeniedTools uses mcpVisibilityDiagnosis per invisible server before falling back to the old generic wording; init.js runs mcpSplitApprovals against whatever .mcp.json/settings files a repo already has and reports the split at setup. docs/wiki/concepts/worker-identity.md gained a section stating the general rule (a worker inherits tracked files and none of the developer's own approvals); docs/wiki/features/denied-tools-ledger.md gained the mechanism and src/init.js in its covers. PR: https://github.com/emyann/harness-kanban-board/pull/266"
+    }
+  ],
+  "v": 1
+}

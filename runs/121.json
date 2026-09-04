@@ -1,0 +1,54 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T15:55:54.035Z",
+      "heartbeat_at": "2026-08-28T15:39:50.084Z",
+      "host": "YRND1-GG",
+      "job": "f44e0ff8",
+      "lock_sha": "2305b13d030a6951929f3a8d842ab90d8bacd00f",
+      "log": ".kanban/logs/121-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-28T15:39:50.084Z",
+      "wt": "kb-121-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T15:55:06Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "README.md",
+          "docs/harnesses.md"
+        ],
+        "residual_risk": [
+          "The #125 finding is verified on this host with Claude Code 2.1.250 and is dated and versioned in the docs as such. Another build (or a daemon started from a dispatcher shell) could pass the env through, in which case the section overstates the gap — the docs give the reader a one-command check (hkb show <n> prints a session line) rather than asking them to trust it.",
+          "docs/harnesses.md now links two open issues (#125, #126). If they are fixed, the track paragraph and the \"reports none\" section have to go, not just the links — #126 says so in its body.",
+          "The claude-p row says \"reported\", which is verified by mechanism (parseSessionLog over the log's final JSON) and by three attempts on this board priced from worker_log, but no claude-p attempt has run on this board since the profile split, so the Stop-hook half of that row (session_id/transcript_path for a -p worker) is reasoned from the code, not observed.",
+          "No wiki page covers hkb stats, so nothing there went stale; the two pages wiki-check reports stale (adr-004, planning-commands) were already stale before this branch and cover files this task did not touch."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test — 604 pass, 0 fail (after rebase on origin/main)",
+          "hkb stats --since all on this board (the honest wall: \"65 worker attempts priced nothing at all\")",
+          "the README's sample report was rendered through computeStats/formatStats, not written by hand",
+          "reproduced the track double-count by driving collectAttempts/summarizeSpend with three rows naming one transcript",
+          "probed a live claude --bg worker: process.env.KB_TASK undefined, no KB_* on any process, no .kanban/nudges in any worker worktree"
+        ]
+      },
+      "summary": "Docs now say, per profile, what spend data it produces — and say it where a profile is chosen.\n\ndocs/harnesses.md: the page's table gained a \"spend\" column and the missing claude-track row, and the\nclaude row's \"attempt cost + session id from the job\" is gone — it was wrong, a background agent writes\na launch banner and no JSON. A new section, \"What a profile can tell you it spent\", sits between \"Which\nprofiles a board gets\" and the per-harness detail: the four bases (reported / estimate / usage /\nnothing) and how each reads, a per-profile table of what an attempt leaves behind, stats.rates (which\nlived only in src/stats.js and the hint line the report prints), the track case, and the reason a Claude\nprofile can still come back unmeasured.\n\nREADME.md: the profiles section says the same in one paragraph at the point of choice. The stats\nsection was stale in two ways and is now correct: the sample block still had the pre-#123 wording\n(\"$9.02 · recorded on 3 of 29 worker attempts\") and no usage line, and the prose still claimed that\n\"harnesses whose log has no final JSON simply report no cost\". The new sample was rendered through\nformatStats rather than written by hand. The Actions \"what you give up\" list now says those attempts\nare counted and never priced, and the SQLite-mapping row for hkb stats names the transcript fallback.\nOne unrelated one-word fix in a paragraph I was already editing: the launch is --permission-mode\ndontAsk, not acceptEdits (src/board.js:30).\n\nI read the siblings and ran hkb stats rather than paraphrasing the task body, and two things it implied\nare not true today. Both are filed, and the docs describe behaviour as it is, each pointing at its issue:\n\n  #125 (triage, p1) — hkb hook stop returns 0 unless KB_TASK is in its environment, and a claude --bg\n  worker never gets it: the session runs under Claude Code's daemon, which does not inherit the env the\n  dispatcher sets on the launch. Evidence: inside this live worker process.env.KB_TASK is undefined; no\n  process on the host carries a KB_* variable; no worker worktree has the .kanban/nudges/ directory\n  stopHook creates unconditionally once KB_TASK is set; and no attempt row on this board carries\n  session_id or transcript_path (hkb stats --since all: \"65 worker attempts priced nothing at all\" —\n  the three that do have a cost got it from their worker log, back when claude was a -p profile). So on\n  the two default profiles nothing records a session: no nudge, no resume line, and nothing for #120's\n  transcript pricing to read. That is #115's stated goal — spend visibility on claude-bg — still unmet\n  after all three of its children landed. Worth linking #125 as a blocker of #115 rather than closing it.\n\n  #126 (todo, p3) — since #119 every node of a track carries the runner's transcript_path, and\n  priceOf/summarizeSpend work per attempt row, so one session's tokens are counted once per node.\n  Reproduced against src/stats.js: three node attempts naming one 100-turn transcript report\n  usage.turns 300 and three times the estimate.\n\nNo source file was touched: src/stats.js and src/hook.js were read only. Draft PR #128."
+    }
+  ],
+  "v": 1
+}

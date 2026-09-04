@@ -1,0 +1,61 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T20:03:31.374Z",
+      "heartbeat_at": "2026-09-01T20:00:11.975Z",
+      "host": "YRND1-GG",
+      "job": "dda277fd",
+      "lock_sha": "b3dbe39048caf00585da324b78b57d69e3abb84c",
+      "log": ".kanban/logs/114-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 221,
+      "pr_head": "worktree-kb-114-1",
+      "profile": "claude",
+      "session_id": "dda277fd-3d43-425c-ab71-0b50acd9388d",
+      "started_at": "2026-09-01T20:00:11.975Z",
+      "summary": "Skill is now in CLAUDE_TOOLS (src/board.js), so a task's kb.skills grants what it advertises on every default Claude profile instead of naming a tool dontAsk is guaranteed to deny. hkb doctor gained a `task skills` check (checkTaskSkills/TASK_SKILLS_CHECK, src/doctor.js) that warns per-card when kb.skills is set but the profile's allowed_tools still omits Skill -- catches a board.json frozen befor",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-114-1/dda277fd-3d43-425c-ab71-0b50acd9388d.jsonl",
+      "wt": "kb-114-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T20:03:33Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/board.js",
+          "src/cli.js",
+          "src/doctor.js",
+          ".github/workflows/kanban-worker-claude.yml",
+          "test/doctor.test.js",
+          "test/profiles.test.js"
+        ],
+        "residual_risk": [
+          "The doctor check reads only the board's open+recently-closed issues (boardOnce), the same sample checkAgentLabels uses -- a card that set kb.skills long ago and has since scrolled out of both windows would not be flagged.",
+          "The check only understands Skill as a Claude Code concept: it is skipped for any profile whose launch[0] is not 'claude', so a future harness that also reads kb.skills but denies its own equivalent tool would need its own check.",
+          "The wiki has a pre-existing 13-page staleness backlog (from unrelated files changed since the last refresh) that this PR does not touch; /repolore:refresh is still owed and was outside this card's scope."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (888 pass, 0 fail)",
+          "node bin/hkb.js doctor on this repo: worker permissions and task skills both quiet (no card here sets kb.skills)",
+          "diffed the regenerated workflow against the previous copy: only the --allowedTools list gained ,Skill"
+        ]
+      },
+      "pr": 221,
+      "pr_continued": false,
+      "summary": "Skill is now in CLAUDE_TOOLS (src/board.js), so a task's kb.skills grants what it advertises on every default Claude profile instead of naming a tool dontAsk is guaranteed to deny. hkb doctor gained a `task skills` check (checkTaskSkills/TASK_SKILLS_CHECK, src/doctor.js) that warns per-card when kb.skills is set but the profile's allowed_tools still omits Skill -- catches a board.json frozen before this fix or a custom profile that never had it; silent when no card sets kb.skills, and skipped for non-Claude launches (Codex/Copilot) where Skill has no meaning. hkb create's usage text now says --skills grants the tool on hkb's default profiles and names the fix for a custom one. Regenerated .github/workflows/kanban-worker-claude.yml (hkb init --with-actions) so its baked --allowedTools carries Skill too. Draft PR #221."
+    }
+  ],
+  "v": 1
+}

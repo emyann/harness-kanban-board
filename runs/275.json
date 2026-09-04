@@ -1,0 +1,16 @@
+{
+  "attempts": [],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T01:51:09Z",
+      "id": 5503136537,
+      "text": "**Reproduced live, 2026-09-02, and it is no longer an edge case.**\n\nTrack #223 landed tonight. Its two node PRs — #281 (#257) and #282 (#258) — merged into `kb/track-223`, and the track then landed on `main` as PR #286. Both cards were stranded in *review* with their work fully merged:\n\n```\nhkb show 257 --json  →  status: review, prs: []\n```\n\n`prs: []` is the whole bug. `closedByPullRequestsReferences` links a `Closes #n` only for a PR targeting the **default branch**, and #234's head-branch fallback matches **open** PRs, so the moment the node PR merged the card lost sight of it through both paths at once. No reconcile pass can move the card, and nothing surfaces it as stuck — it simply sits in review looking like it is waiting for a human.\n\n**What changes the priority: #245 made this the normal path, not an accident.** #227 and #228 happened because a worker happened to target a non-default base. Since track branches, *every node of every track* targets a non-default base by design. So every multi-node track from now on strands all of its nodes, and the operator has to close them by hand — which is what I did here, with the reason recorded on each card.\n\nThe blast radius is bounded and unpleasant rather than dangerous: no work is lost, but the board lies about what is finished, and the lie grows one card per track node. It also makes the *real* stall signal useless — an operator who learns that cards sit in review for no reason will stop investigating cards sitting in review.\n\n**A note for whoever fixes it:** widening the fallback to closed PRs is not sufficient on its own. A closed-unmerged PR must not mark a card done — that is the #228 direction, where the card goes to *done* with the work stranded. The fallback needs the PR's `merged` state, not just its existence, and a merged-into-non-default PR needs its own reconcile path rather than being treated as if it had landed on `main`."
+    }
+  ],
+  "results": [],
+  "v": 1
+}

@@ -1,0 +1,55 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-08-27T03:45:24.611Z",
+      "heartbeat_at": "2026-08-27T03:41:03.153Z",
+      "host": "YRND1-GG",
+      "lock_sha": "f825c70264e3089e3d86a4d833179fc88180404f",
+      "manual": true,
+      "outcome": "completed",
+      "pr": 59,
+      "pr_head": "kb/55",
+      "profile": "claude",
+      "started_at": "2026-08-27T03:41:03.153Z",
+      "summary": "Packed-artifact smoke test is in: `scripts/smoke-pack.mjs` (new, executable, zero deps) and a `smoke` job in `.github/workflows/test.yml`. Draft PR #59 on branch kb/55, rebased onto main (which already carries #56, #57 and #58).\n\nTHE SCRIPT. `node scripts/smoke-pack.mjs` → npm pack into a temp dir → npm install that tarball into an empty directory with its own throwaway package.json → run the CLI "
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T03:45:26Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "base": "main (rebased off kb/53 after PR #58 merged mid-node)",
+        "branch": "kb/55",
+        "changed_files": [
+          "scripts/smoke-pack.mjs",
+          ".github/workflows/test.yml"
+        ],
+        "pr_url": "https://github.com/emyann/harness-kanban-board/pull/59",
+        "residual_risk": [
+          "The pack-and-install half has never executed: real `npm pack` and `npm install` are blocked in this sandbox. `npm pack --pack-destination` and `npm install <tgz>` are the two calls whose first real run is this PR's own CI job.",
+          "release.yml runs lint+npm test directly rather than the test.yml workflow, so the smoke job does NOT currently gate a release. Closing that needs a step in release.yml, which is outside this task's kb.paths — flagged for the root pass.",
+          "The `lint` script covers bin/hkb.js and src/*.js only, so scripts/smoke-pack.mjs is not linted. Also flagged for the root pass.",
+          "MUST_SHIP lists files by hand. A new runtime read added to src/ will not be covered until someone adds it to that list — the list carries the reading line beside each entry to make that obvious."
+        ],
+        "verification": [
+          "node scripts/smoke-pack.mjs --verify-only <hand-built package tree from files[]> → exit 0, 23 content checks + 3 command checks",
+          "same tree with skills/ deleted and test/ added → exit 1, 4 named failures each carrying its fix",
+          "node --check scripts/smoke-pack.mjs",
+          "test.yml parses under test/yaml.js with both the `test` and `smoke` jobs intact",
+          "npm run lint (clean)",
+          "npm test (411 pass, 0 fail)"
+        ]
+      },
+      "summary": "Packed-artifact smoke test is in: `scripts/smoke-pack.mjs` (new, executable, zero deps) and a `smoke` job in `.github/workflows/test.yml`. Draft PR #59 on branch kb/55, rebased onto main (which already carries #56, #57 and #58).\n\nTHE SCRIPT. `node scripts/smoke-pack.mjs` → npm pack into a temp dir → npm install that tarball into an empty directory with its own throwaway package.json → run the CLI from where npm put it (node_modules/.bin/hkb), with cwd outside the checkout and every KB_* var stripped from the env:\n  - `hkb version` must print exactly `hkb <version>` for the version in the INSTALLED package.json (a bin and a manifest that disagree is a failure, not a pass),\n  - `hkb help` must actually be the help text,\n  - `hkb hook stop` with no KB_TASK must exit 0 — that hook is installed into other people's sessions, so one that errors outside a worker breaks every session it is in.\nThen 16 content checks (every file the code reads at runtime, each listed with the line that reads it: skills/kanban/SKILL.md → src/init.js packageSkillDir, web/index.html → src/serve.js PAGE_FILE, templates/mcp/mcp.json → src/mcp.js, and so on) and 7 must-NOT-ship checks (test, docs, .kanban, .github, .agents, CLAUDE.md, AGENTS.md) — without those last ones, deleting `files` altogether would ship the whole repo and every other check would still pass. Failures print the fix, not just the fault, and exit 1.\nTwo extra modes for debugging a red CI job: `--verify-only <dir>` (check an already-installed package root, skipping pack+install) and `--keep` (leave the temp install behind and print where).\n\nTHE JOB. `smoke` in test.yml, beside `test` rather than after it (two independent signals, neither waits), on Node 20 — the floor `engines` claims and nothing else checks; `test` stays on 22.\n\n*** KNOWN GAP FOR THE ROOT PASS (#51) ***\nrelease.yml runs `npm run lint` and `npm test` DIRECTLY, not the test.yml workflow, so as things stand the smoke job gates pushes and PRs but does NOT gate a release. The task's premise (\"release workflow depends on tests passing\") does not hold as written. Three small things the root should do, all outside this node's kb.paths:\n  1. add a `node scripts/smoke-pack.mjs` step to .github/workflows/release.yml, before the publish step (release.yml is #53's file);\n  2. add `\"smoke\": \"node scripts/smoke-pack.mjs\"` to package.json scripts (package.json is #52's file);\n  3. extend the `lint` script to cover scripts/*.mjs — it is currently `bin/hkb.js src/*.js` only, so the new script is not linted.\nAlso for the root: docs/releasing.md (from #53) is still not linked from the README's Docs section.\n\nVERIFICATION CAVEAT: real `npm pack` and `npm install` are blocked in this sandbox (only --dry-run runs), so the pack-and-install half of the script has never executed — its first real run is this PR's own CI job. Everything downstream of it WAS verified here, by building a package tree by hand from files[] and running the script against it: the good tree exits 0 with 23 content checks and 3 command checks; dropping skills/ and adding test/ exits 1 with 4 named failures, each carrying its fix. That is the task's \"done when\" (fails if files drops skills/), demonstrated."
+    }
+  ],
+  "v": 1
+}

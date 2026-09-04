@@ -1,0 +1,177 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-02T00:22:58.218Z",
+      "heartbeat_at": "2026-09-01T23:57:29.425Z",
+      "host": "YRND1-GG",
+      "job": "4048cfbf",
+      "lock_sha": "d9e7359040f134e390a7bc69bc72e93a713edd1c",
+      "log": ".kanban/logs/217-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 271,
+      "pr_head": "kb/217",
+      "profile": "claude-track",
+      "session_id": "4048cfbf-a952-49b8-9e95-092b30a8a130",
+      "started_at": "2026-09-01T23:57:29.425Z",
+      "summary": "Track #217 ran as four nodes in three waves, then the root's own pass. A profile can now declare a capability map — an intent from a closed vocabulary bound to what this harness calls it — and the grant that binding needs is derived rather than typed twice.\n\nWhat each node landed:\n- #255 (PR #263) — `effectiveTools(profile, task, board) -> {tools, dropped}` in src/model.js, the one derivation of a",
+      "track": true,
+      "track_mode": "inferred",
+      "track_nodes": [
+        255,
+        259,
+        261,
+        260
+      ],
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-217-1/4048cfbf-a952-49b8-9e95-092b30a8a130.jsonl",
+      "wt": "kb-217-1"
+    },
+    {
+      "attempt": 2,
+      "ended_at": "2026-09-02T00:31:33.136Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "The track is right and reviewed — this is catch-up plus one wiring gap your own node found. Do not redo the\nfeature.\n\nConfirmed before sending this back: kb/217 carries the whole track (effectiveTools, CAPABILITIES,\ncapabilityCommand, briefIntents, capabilityGrants, both wiki pages), and locally it is lint-clean with 1087\ntests and a green smoke. The problem is only that main moved and one seam is unfinished.\n\n1. The branch conflicts. Since it was cut, main took 88d18b9 (#254 — MCP approval diagnosis), which added\nmcpApproved / mcpApprovalLine / mcpGrantedTo / mcpVisibilityDiagnosis to src/model.js and a check to\nsrc/doctor.js. `gh pr update-branch` refused with 422, so merge `origin/main` in — never rebase, never\nforce-push. Keep both sides: #254's four MCP functions AND your capability exports live in the same file and do\nnot overlap in purpose.\n\n2. Close the seam #273 reports, because it is your track's own Done-when item and it is unmet inside this\nbranch. src/hook.js:104 (`allowedCommandsFrom(profile.allowed_tools || [])`) and src/track.js:44\n(`cfg?.profiles?.[name]?.allowed_tools`) still read the raw list, so the PreToolUse policy and trackFanout do\nnot see a card's narrowing or a capability's derived grant. #255's Done when says \"nothing outside\neffectiveTools reads profile.allowed_tools to build a launch\" — these two are what makes that false. Route both\nthrough effectiveTools and add a test that no other caller reads the raw key, so this cannot regress. I missed\nit when I merged #255; the miss is mine, the fix belongs here.\n\nLeave #272 alone — a card narrowing kb.tools stripping a capability's derived grant is a real defect and it is\nfiled, but it needs a decision about precedence (does an explicit narrowing beat an implied grant, or does a\nbound intent survive it?) that is not yours to settle in a catch-up pass.\n\nThen `npm run lint && npm test && npm run smoke`. Main is at 1070 tests; expect that plus this track's own.\n\nAlso: no CI has run on this PR. After you push, check that Actions actually starts — if it does not, say so in\nyour summary rather than leaving it for the merge to discover.",
+      "started_at": "2026-09-02T00:31:33.135Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 3,
+      "bg": true,
+      "continues_pr": 271,
+      "denied_tools": [
+        {
+          "count": 6,
+          "first_seen": "2026-09-02T00:40:07.716Z",
+          "kind": "dontask-miss",
+          "tool": "Bash"
+        }
+      ],
+      "ended_at": "2026-09-02T00:45:05.693Z",
+      "heartbeat_at": "2026-09-02T00:39:52.888Z",
+      "host": "YRND1-GG",
+      "job": "a7c85919",
+      "lock_sha": "93230333c3000b1e6ad29ffcc5558d6824e215d8",
+      "log": ".kanban/logs/217-3.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 271,
+      "pr_head": "kb/217",
+      "profile": "claude",
+      "session_id": "a7c85919-95f4-40fe-a6c8-d81cd3755183",
+      "started_at": "2026-09-02T00:39:52.888Z",
+      "summary": "Root/verify pass for track #217, continuing PR #271 (kb/217). All three children (#255, #259, #260, #261) are closed and their work is already on this branch. This attempt's own contribution: merged origin/main (which had moved with #254's MCP-approval-diagnosis commit) resolving two small conflicts (an import list in src/doctor.js, one page-plan entry in docs/wiki/wiki.config.yml — kept both side",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-217-3/a7c85919-95f4-40fe-a6c8-d81cd3755183.jsonl",
+      "wt": "kb-217-3"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T23:56:58Z",
+      "id": 5502233681,
+      "text": "**Decomposed 2026-09-01**, approved by the human before anything was created. Three children, plus the shared seam **#255** that this track and its sibling (#223) both depend on — extracted precisely so the two features do not each grow their own derivation of a worker's tool list.\n\n```mermaid\nflowchart TD\n  n255[\"#35;255 · ready<br>One place derives what a worker may use, so the posture…\"]\n  n259[\"#35;259 · todo<br>A profile declares a capability map: an intent from a c…\"]\n  n261[\"#35;261 · todo<br>The grant is derived from the capability map, so a bind…\"]\n  n260[\"#35;260 · todo<br>The worker brief names the bound command, and an unmapp…\"]\n  n217([\"#35;217 · todo<br>A profile knows how to start a session but nothing abou…\"])\n  n255 --> n259\n  n259 --> n261\n  n259 --> n260\n  n261 --> n217\n  n260 --> n217\n  classDef todo stroke:#8b949e,stroke-width:1px\n  class n259,n261,n260,n217 todo\n  classDef ready stroke:#3fb950,stroke-width:2px\n  class n255 ready\n```"
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T00:31:34Z",
+      "id": 5502516586,
+      "text": "**Changes requested** (after attempt 1): The track is right and reviewed — this is catch-up plus one wiring gap your own node found. Do not redo the\nfeature.\n\nConfirmed before sending this back: kb/217 carries the whole track (effectiveTools, CAPABILITIES,\ncapabilityCommand, briefIntents, capabilityGrants, both wiki pages), and locally it is lint-clean with 1087\ntests and a green smoke. The problem is only that main moved and one seam is unfinished.\n\n1. The branch conflicts. Since it was cut, main took 88d18b9 (#254 — MCP approval diagnosis), which added\nmcpApproved / mcpApprovalLine / mcpGrantedTo / mcpVisibilityDiagnosis to src/model.js and a check to\nsrc/doctor.js. `gh pr update-branch` refused with 422, so merge `origin/main` in — never rebase, never\nforce-push. Keep both sides: #254's four MCP functions AND your capability exports live in the same file and do\nnot overlap in purpose.\n\n2. Close the seam #273 reports, because it is your track's own Done-when item and it is unmet inside this\nbranch. src/hook.js:104 (`allowedCommandsFrom(profile.allowed_tools || [])`) and src/track.js:44\n(`cfg?.profiles?.[name]?.allowed_tools`) still read the raw list, so the PreToolUse policy and trackFanout do\nnot see a card's narrowing or a capability's derived grant. #255's Done when says \"nothing outside\neffectiveTools reads profile.allowed_tools to build a launch\" — these two are what makes that false. Route both\nthrough effectiveTools and add a test that no other caller reads the raw key, so this cannot regress. I missed\nit when I merged #255; the miss is mine, the fix belongs here.\n\nLeave #272 alone — a card narrowing kb.tools stripping a capability's derived grant is a real defect and it is\nfiled, but it needs a decision about precedence (does an explicit narrowing beat an implied grant, or does a\nbound intent survive it?) that is not yours to settle in a catch-up pass.\n\nThen `npm run lint && npm test && npm run smoke`. Main is at 1070 tests; expect that plus this track's own.\n\nAlso: no CI has run on this PR. After you push, check that Actions actually starts — if it does not, say so in\nyour summary rather than leaving it for the merge to discover."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T00:46:23Z",
+      "id": 5502633605,
+      "text": "**Merged by the operator seat** — review: Reviewed as the root of track 217, and it is exactly what a synthesize pass should be: six files, all documentation. Every line of code landed through the node PRs, so what remains is the capability-map wiki page, four glossary terms, the concepts page restamped after the merge, and the index entries — the thing no child could write. CI green, lint clean, 1099 tests, and wiki-check reports both capability pages fresh. Confirmed the specific thing the human asked for: this attempt stayed catch-up-only. Zero effectiveTools references in src/hook.js or src/track.js, so the seam leak reported in 273 was left alone rather than folded into a docs pass, and 273 stays a card someone reviews on its own terms. My earlier relaunch had asked for that fix without the human having agreed to it; the corrected instruction is what ran. Track summary for the record: five cards, four merges into main plus this one — 255 the seam, 259 the vocabulary, 260 the brief, 261 the derived grant, and this root. Two follow-ups the track's own workers filed rather than patching silently: 272, where a card narrowing kb.tools can strip a capability's derived grant while the brief still names the command, and 273, where hook.js and track.js still read allowed_tools raw so the PreToolUse policy does not see a card's narrowing. Both are real, both were found honestly, and neither is reachable without opting into keys nobody has set yet., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-02T00:23:00Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "cards_filed": [
+          272,
+          273
+        ],
+        "changed_files": [
+          "docs/wiki/features/capability-map.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/wiki.config.yml",
+          "docs/wiki/index.md",
+          "docs/wiki/log.md"
+        ],
+        "prs": {
+          "nodes": {
+            "255": 263,
+            "259": 264,
+            "260": 267,
+            "261": 269
+          },
+          "track": 271
+        },
+        "residual_risk": [
+          "#272 — a card narrowing kb.tools strips a derived capability grant unreported while the brief still names the command",
+          "#273 — trackFanout and the Stop hook still read profile.allowed_tools raw",
+          "the derived-grant drift guarantee is Claude-only: one invocation shape is known",
+          "five PRs are open and unmerged (#263, #264, #267, #269, #271); the track's content is only durable once #271 merges"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (1087/1087 on the merged whole)",
+          "npm run smoke",
+          "node .repolore/scripts/wiki-check.mjs (both capability pages fresh; 15 stale all predate the track)",
+          "hkb doctor with capabilities bound on the claude profile (map printed, binding grantable)",
+          "hkb context 260 with and without the binding (exactly one line differs; restore is byte-identical)",
+          "effectiveTools on a claude-shaped vs copilot profile (Skill derived only where the harness invokes it that way)"
+        ]
+      },
+      "pr": 271,
+      "pr_continued": false,
+      "summary": "Track #217 ran as four nodes in three waves, then the root's own pass. A profile can now declare a capability map — an intent from a closed vocabulary bound to what this harness calls it — and the grant that binding needs is derived rather than typed twice.\n\nWhat each node landed:\n- #255 (PR #263) — `effectiveTools(profile, task, board) -> {tools, dropped}` in src/model.js, the one derivation of a launch's tool list. A card narrows, never widens; drops recorded. src/dispatch.js stopped reading allowed_tools. No new config, no behaviour change: the seam alone, so this feature and the tool posture (#223) plug into one function.\n- #259 (PR #264) — frozen CAPABILITIES vocabulary (review, goal, specify) with a per-intent meaning, `capabilityCommand(profile, intent)`, and loadBoard validation of an optional `profile.capabilities`.\n- #260 (PR #267) — the worker brief names the bound command for each intent a card triggers (`briefIntents`/`capabilityLine`, src/context.js); an unmapped intent renders nothing.\n- #261 (PR #269) — the implied grant derived INSIDE effectiveTools (`capabilityGrants` -> `grantWithCapabilities`, one consumer), doctor's `capability map` check, and the /kanban:operate review row using the declared capability. Settled there: #114's `kb.skills` grant is not subsumed (its source is a card field, not a profile binding) and stays.\n\nThe root's pass (PR #271, branch kb/217 = kb/260 merged with kb/261): docs/wiki/features/capability-map.md describing the feature as one thing, the glossary terms (capability map, binding, intent), the page-plan entry and the log.md line.\n\nVerified for real, not taken on report:\n- Bound {\"review\": \"/code-review\", \"goal\": \"/goal\"} on this board's claude profile. `hkb doctor` gained exactly two lines (the map printed, and \"every binding is one its launch can grant\"); `hkb context 260` gained exactly one; unbinding restored both byte for byte.\n- The derivation is real and harness-scoped: a claude-shaped profile granting [\"Read\",\"Bash\"] plus a `review` binding yields [\"Read\",\"Bash\",\"Skill\"]; the same binding on a copilot launch yields [\"Read\"]; unbound returns the profile's own array untouched. (The shipped claude profile already carries Skill, so it alone would not have proved anything.)\n- Every derived grant goes through effectiveTools: capabilityGrants has exactly one consumer, and src/doctor.js asks that function rather than recomputing.\n- lint clean, 1087/1087 tests, smoke passes on the merged whole. wiki-check reports both capability pages fresh; its 15 stale pages all predate this track, verified by comparing each page's covers SHAs against origin/main blobs — zero newly stale.\n\nGaps found and filed rather than silently fixed:\n- #272 — a card narrowing kb.tools can strip a capability's derived grant (widening happens before narrowing) while the brief still names the command the launch now denies; `dropped` stays empty because it records only what the card asked for and did not get. #114's drift returning through the card.\n- #273 — trackFanout (src/track.js) and the Stop hook (src/hook.js) still read allowed_tools raw. Neither builds a launch so neither breaks the \"one derivation\" rule as written, but trackFanout has a live failure mode: a card narrowing Agent away still gets the fan-out brief.\n- Not filed, documented as a design limit: the drift guarantee is Claude-only — one invocation shape is known (a /-command on a claude launch implies Skill), so a binding on another harness implies no tool.\n\nStill open: the four node PRs (#263 -> main, #264 -> kb/255, #267 -> kb/259, #269 -> kb/259) and the track PR #271 -> main, which contains all of them. Merging #271 lands the whole track; the node PRs are the per-node checkpoints. Nothing merged — this board's dispatch.merge.mode is \"operator\", so the click is the human's."
+    },
+    {
+      "artifacts": [],
+      "at": "2026-09-02T00:45:07Z",
+      "attempt": 3,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/doctor.js",
+          "docs/wiki/wiki.config.yml",
+          "docs/wiki/features/capability-map.md",
+          "docs/wiki/concepts/capability-portability.md"
+        ],
+        "residual_risk": [
+          "#272 and #273 (both already filed, both in triage) remain open: a card narrowing kb.tools can strip a capability's derived grant with no record in `dropped`, and trackFanout/the Stop hook still read allowed_tools raw rather than through effectiveTools. Precedence/design calls the design record explicitly reserved for a human.",
+          "The drift guarantee (capabilityTool) is Claude-only -- a binding on a Copilot or Codex launch implies no tool grant, which is honest but means doctor can only prove agreement where hkb knows the invocation shape.",
+          "15 wiki pages elsewhere in docs/wiki/ are stale from unrelated work across the repo's history; left untouched as out of this track's scope."
+        ],
+        "verification": [
+          "git fetch origin kb/217 && git reset --hard FETCH_HEAD",
+          "git fetch origin main && git merge origin/main (2 conflicts resolved: src/doctor.js import list, docs/wiki/wiki.config.yml page-plan entry)",
+          "npm run lint",
+          "npm test (1099 pass, 0 fail)",
+          "npm run smoke (pass)",
+          "manual: bound {review, goal} on the claude profile in .kanban/board.json, ran hkb doctor and hkb context 260, observed the exact lines the PR claims, then reverted and confirmed git diff is empty",
+          "node .repolore/scripts/wiki-check.mjs -- both capability pages fresh after restamp (15 pre-existing stale pages elsewhere are unrelated to this track)",
+          "gh api repos/.../pulls/271 -- mergeable: MERGEABLE (was CONFLICTING before this push)",
+          "gh api repos/.../actions/runs?branch=kb/217 -- a `test` workflow run is in_progress on the new push"
+        ]
+      },
+      "pr": 271,
+      "pr_continued": true,
+      "summary": "Root/verify pass for track #217, continuing PR #271 (kb/217). All three children (#255, #259, #260, #261) are closed and their work is already on this branch. This attempt's own contribution: merged origin/main (which had moved with #254's MCP-approval-diagnosis commit) resolving two small conflicts (an import list in src/doctor.js, one page-plan entry in docs/wiki/wiki.config.yml — kept both sides in each case), then verified the whole feature end to end on this repo's own board.\n\nWhat I actually saw running it for real: with `.kanban/board.json`'s `claude` profile temporarily given `\"capabilities\": {\"review\": \"/code-review\", \"goal\": \"/goal\"}`, `hkb doctor` gained exactly two lines (`capability map — 2 bound: claude: review -> /code-review (Skill) - claude: goal -> /goal (Skill)` and `every binding is one its launch can grant`), and `hkb context 260` gained exactly one line after the Acceptance criteria heading (`On this harness that is /goal - state the outcome a piece of work is for, so a worker can tell done from finished`). Reverting the binding restored both outputs byte for byte, and `git diff` on .kanban/board.json confirmed no residual change — this is the byte-identical promise, verified across all three children's work in one place, not just per-child in isolation.\n\nChecked the vocabulary and derivation agree: CAPABILITIES in src/model.js (review/goal/specify) matches what both wiki pages and skills/kanban/SKILL.md's operate review row describe. Confirmed effectiveTools is the only place a derived grant is computed (capabilityGrants -> grantWithCapabilities, single caller; hkb doctor's capability map check asks effectiveTools rather than recomputing) by reading src/model.js and src/doctor.js directly — nothing else in the merged tree calls capabilityGrants.\n\nWiki: docs/wiki/features/capability-map.md (the whole-feature page, already written in attempt 1) and docs/wiki/concepts/capability-portability.md (the contract page from #261) both needed only a restamp after the main-merge touched src/model.js and src/doctor.js for unrelated reasons (#254's MCP diagnosis) -- confirmed via `git log` that no capability-related lines changed in that range. Ran wiki-stamp.mjs on both; wiki-check.mjs now reports both fresh. docs/wiki/log.md already carries the track's summary line from attempt 1 -- no new entry needed.\n\nGaps found and NOT fixed, per the brief -- both already filed as their own triage cards from attempt 2's review, so no new cards needed: #272 (a card narrowing kb.tools can silently strip a capability's derived grant -- the loss isn't recorded in `dropped`) and #273 (trackFanout in src/track.js and the Stop hook in src/hook.js still read profile.allowed_tools raw instead of going through effectiveTools, so neither sees a card's narrowing or a derived grant). Both are precedence/design decisions the design record itself said were not this card's call.\n\nVerification: npm run lint clean; npm test 1099/1099 pass; npm run smoke passes (packs, installs, runs the tarball). Pushed the merge + restamp to kb/217 (PR #271, still `Closes #217`, base main) -- gh api confirms PR is now MERGEABLE (was CONFLICTING) and a `test` GitHub Actions run started on the new push (run 33576552434, in_progress) -- CI is not silently absent."
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,54 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T19:28:22.376Z",
+      "heartbeat_at": "2026-09-01T19:15:39.260Z",
+      "host": "YRND1-GG",
+      "job": "d0df7402",
+      "lock_sha": "308553d1b1c907960b9c617c5e8fbee4b09b9f20",
+      "log": ".kanban/logs/195-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "session_id": "d0df7402-4f18-49e7-848b-655203eaaa02",
+      "started_at": "2026-09-01T19:15:39.260Z",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-195-1/d0df7402-4f18-49e7-848b-655203eaaa02.jsonl",
+      "wt": "kb-195-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T19:23:48Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/dispatch.js",
+          "test/dispatch.test.js",
+          "test/fake-gh.js"
+        ],
+        "residual_risk": [
+          "docs/wiki/ has 13 pre-existing stale pages (wiki-check.mjs) unrelated to this diff (confirmed unchanged before/after this commit) - not touched, out of this task's scope",
+          "the fake-gh.js comment-cloning fix is a small addition to a file not in this task's owned-paths list, but was necessary for the regression test to actually detect the bug (object-reference sharing was masking it)"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (864 passed)",
+          "manually reverted the dispatch.js fix to confirm the new test fails, then restored it and confirmed all tests pass"
+        ]
+      },
+      "pr": 212,
+      "pr_continued": false,
+      "summary": "Fixed: loop() reused one ctx for every tick, and listComments memoized comments:<n> in ctx._cache with no expiry, so a run record written by another process (request-changes, a worker's finish/block) was invisible to a loop that had already read that card. Added dropCommentCaches(ctx), called at the top of tick(), which drops every comments:<n> entry (base and mergeGate stay, they're legitimately per-process). Also fixed test/fake-gh.js: its comment GET returned live object references, so the run record's in-place PATCH from a second ctx was silently visible through an array the first ctx was still holding, which masked this exact bug in a naive two-tick test; GET now returns a snapshot per call, matching a real REST response. Added a regression test in test/dispatch.test.js (verified it fails without the dispatch.js fix even with the fake-gh fix, and passes with both). Audited every other loadRun call site in tick() (reconcileClosed, the reclaim loop, the orphan lock sweep, the remaining claim-loop guards) - all read through the same ctx and get the same one-tick freshness with no further changes needed. PR: https://github.com/emyann/harness-kanban-board/pull/212"
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,78 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T22:28:57.509Z",
+      "heartbeat_at": "2026-09-01T22:12:15.309Z",
+      "host": "YRND1-GG",
+      "job": "7f2df953",
+      "lock_sha": "5a51d71427fac7aa9263b0af31f025198e59a3cc",
+      "log": ".kanban/logs/245-1.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 248,
+      "pr_head": "worktree-kb-245-1",
+      "profile": "claude",
+      "session_id": "7f2df953-4a50-4ea6-bfe0-1cbe51a4b633",
+      "started_at": "2026-09-01T22:12:15.309Z",
+      "summary": "A track now claims its own integration branch, kb/track-<root>, from the default branch at claim time (ensureTrackBranch, src/lock.js), recorded on the root's attempt row as track_branch (src/dispatch.js) before anything spawns, and idempotent across a retried claim. Every node's brief (src/track.js) now bases on the track branch instead of chaining off a sibling — the diamond and eager-merge fail",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-245-1/7f2df953-4a50-4ea6-bfe0-1cbe51a4b633.jsonl",
+      "wt": "kb-245-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T22:30:10Z",
+      "id": 5501298551,
+      "text": "**Merged by the operator seat** — review: Reviewed against all eight Done-when items; every one met, and this is the last card before a release so I ran all three release gates on the branch rather than the usual two: lint clean, 1012 tests, and npm run smoke green (27 content / 3 command / 12 init / 6 in-repo checks). The model is the one the operator designed: trackBranchName gives kb/track-<root>, ensureTrackBranch (src/lock.js) creates it from the default branch at claim time, and it is recorded on the root's attempt row as track_branch so a dead runner cannot strand work the board cannot find. Every node bases on it whatever its blockers — which is what dissolves the diamond that made #227 improvise kb/191-wave1 — and the per-node brief no longer says 'the branch of the node this one is blocked by' anywhere. The root's pass runs on the track branch and opens the track's one PR into the default branch, so its verification now happens BEFORE anything lands rather than after. The conflict trigger is implemented as the design settled it: two children conflicting on their way into the track branch is surfaced as a board event off mergeable/mergeStateStatus, not a judgement hkb makes and not something a human discovers in the PR list. Lifecycle is answered rather than deferred: checkTrackBranches flags a track branch with no live runner (root finished, or root not on the board at all — both tested), and sweepTrackBranches deletes a settled root's branch only with --yes. One limitation is named honestly in the code rather than papered over: the dead-worker brief does not yet look up an ancestor track's branch, so node dispatch picking up what a runner left behind bases on the default branch and cannot see unmerged sibling work — with the doctor check as the stated safety net. There is also a test for the exact shape that lost #227: getTask falling back for a child PR based on the track branch., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T22:28:59Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/track.js",
+          "src/dispatch.js",
+          "src/model.js",
+          "src/doctor.js",
+          "src/lock.js",
+          "src/tasks.js",
+          "src/gc.js",
+          "test/track.test.js",
+          "test/track-branches.test.js",
+          "test/tasks.test.js",
+          "test/fake-gh.js",
+          "docs/wiki/features/tracks.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "A dead runner's leftover node with no open PR yet cold-dispatches onto the default branch, not the track branch (documented in track.js's header comment and the wiki's Known gaps) — a follow-up task to teach src/context.js's workerContext an ancestor-track lookup would close this",
+          "trackConflictPass costs one extra GraphQL request per tick per running track that has 2+ open PRs based on its branch — bounded by how many tracks are live at once, not board size",
+          "sweepTrackBranches/checkTrackBranches touch src/gc.js and src/lock.js/src/tasks.js beyond the task's declared kb.paths; flagged in the PR description for the reviewer"
+        ],
+        "retry_notes": null,
+        "verification": [
+          "npm run lint",
+          "npm test (1012 tests, all passing)",
+          "node .repolore/scripts/wiki-stamp.mjs docs/wiki/features/tracks.md",
+          "node .repolore/scripts/wiki-index.mjs --check"
+        ]
+      },
+      "pr": 248,
+      "pr_continued": false,
+      "summary": "A track now claims its own integration branch, kb/track-<root>, from the default branch at claim time (ensureTrackBranch, src/lock.js), recorded on the root's attempt row as track_branch (src/dispatch.js) before anything spawns, and idempotent across a retried claim. Every node's brief (src/track.js) now bases on the track branch instead of chaining off a sibling — the diamond and eager-merge failures from #191 — and its PR still targets the track branch, found through the existing #234 head-branch fallback. The root's own pass runs on the track branch and opens the track's one PR into the default branch, the one GitHub auto-links. Two children conflicting on the way into the track branch is surfaced as a kb:needs-human label + comment, once per attempt (trackConflictPass/trackBranchConflict, one GraphQL mergeable/mergeStateStatus batch read per tick, dispatch.js). hkb doctor's checkTrackBranches flags a track branch with no live runner; hkb gc's sweepTrackBranches deletes a settled root's branch. src/track.js's per-node brief no longer says the old sibling-blocker sentence. docs/wiki/features/tracks.md rewritten for the new model, GLOSSARY.md gained 'Track branch'. Went slightly outside the task's declared kb.paths (touched src/lock.js for branch creation, src/tasks.js for the conflict-detection GraphQL batch, src/gc.js for the deletion sweep) because those primitives have no other home in the codebase; all covered by tests. Known, documented gap: a dead runner's leftover node with no PR yet still bases a fresh cold worker on the default branch rather than the track branch (src/context.js has no ancestor-track lookup) — hkb doctor's checkTrackBranches is the safety net; a node that already has an open PR reattaches correctly either way."
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,58 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T19:36:18.564Z",
+      "heartbeat_at": "2026-09-01T19:29:46.141Z",
+      "host": "YRND1-GG",
+      "job": "a7ad8488",
+      "lock_sha": "88539480c929f13b9f0cdb9a72d16b8a5016df81",
+      "log": ".kanban/logs/205-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 213,
+      "pr_head": "worktree-kb-205-1",
+      "profile": "claude",
+      "session_id": "a7ad8488-ffd8-451d-a879-86df74ea481a",
+      "started_at": "2026-09-01T19:29:46.141Z",
+      "summary": "Fixed the WSL2 pid-staleness false positive: pidFileStale now prefers a kernel-reported boot instant (btime/kern.boottime) via bootInstantMs, but the real fix is corroboration — pidClaimStale/cmdlineIsOurs (src/model.js) only trust a stale verdict once it's checked against /proc/<pid>/cmdline; a live pid whose cmdline still names our own `hkb dispatch --loop`/`hkb serve` is believed regardless of ",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-205-1/a7ad8488-ffd8-451d-a879-86df74ea481a.jsonl",
+      "wt": "kb-205-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T19:36:20Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/board.js",
+          "test/up.test.js",
+          "docs/wiki/features/up-and-down.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "Fix verified via unit tests with faked /proc and injected clock/uptime values, not on an actual WSL2 machine (this sandbox is plain Linux) — the reported scenario's exact numbers (os.uptime()=2054.62s, mtime 10min 'before' derived boot) are reproduced as a test case and pass.",
+          "macOS kern.boottime path (parseKernBoottimeSec + sysctl invocation) is implemented but untested against a real Darwin machine.",
+          "Several other wiki pages (architecture/overview, concepts/worker-identity, etc.) were already stale before this task from unrelated in-flight work; left untouched as out of scope."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (872 pass, 0 fail)"
+        ]
+      },
+      "pr": 213,
+      "pr_continued": false,
+      "summary": "Fixed the WSL2 pid-staleness false positive: pidFileStale now prefers a kernel-reported boot instant (btime/kern.boottime) via bootInstantMs, but the real fix is corroboration — pidClaimStale/cmdlineIsOurs (src/model.js) only trust a stale verdict once it's checked against /proc/<pid>/cmdline; a live pid whose cmdline still names our own `hkb dispatch --loop`/`hkb serve` is believed regardless of the arithmetic, while a live pid that does not match stays refused (keeps #202's reused-pid direction failing closed). Corroboration never manufactures staleness the timestamp verdict didn't already reach, so a pid file already fresh by arithmetic is never even checked against /proc. The change lives entirely inside readPidFile (src/board.js), so processState, the dispatcher's singleton lock, the server's claim, and hkb up's spawn gate are all fixed without any of them changing. Wiki page docs/wiki/features/up-and-down.md updated and re-stamped; docs/wiki/log.md appended. Opened draft PR #213."
+    }
+  ],
+  "v": 1
+}

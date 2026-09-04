@@ -1,0 +1,62 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-26T07:15:43.891Z",
+      "heartbeat_at": "2026-08-26T06:52:38.449Z",
+      "host": "YRND1-GG",
+      "job": "de9e19de",
+      "log": ".kanban/logs/20-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-26T06:52:38.449Z",
+      "wt": "kb-20-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-26T07:11:10Z",
+      "id": 5421854053,
+      "text": "Verified from `hkb serve`: this comment was posted by the web board through the same `addComment` the CLI uses."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-26T07:13:24Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/serve.js",
+          "web/index.html",
+          "src/cli.js",
+          "test/serve.test.js",
+          "package.json",
+          "README.md"
+        ],
+        "residual_risk": [
+          "No real-browser check: browser automation was denied in this worker's permission mode. The page's script was executed against the live server in a DOM shim, so the render and string-building paths are exercised, but drag-drop DOM events, CSS layout and the light/dark palette have never been seen in a browser.",
+          "moveDecision predicts where unblock and request-changes land from the task's blockers alone. When the verb actually lands somewhere else the response carries a 'landed' note and the page toasts it, rather than the move being rejected.",
+          "The board cache is per-process and time-based, so two hkb serve processes on the same board each spend their own GraphQL query per poll."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test — 105 pass, 0 fail (26 new in test/serve.test.js)",
+          "node bin/hkb.js serve --port 4677 against emyann/harness-kanban-board: all 12 tasks rendered into their columns with dependency and PR chips, conditional GET answered 304, drawer for #20 showed description/kb block/attempts, an illegal move (ready to done) was refused 400 with its reason, a cross-origin POST was refused 403, and a comment was posted through the API onto issue #20",
+          "ran the shipped page's own inline script in a vm against the live server, exercising the real render path (header, all 7 columns, cards, drawer markdown, attempts table)",
+          "error paths: a second serve on the same port printed 'port 4677 is already in use' and exited 2, and '--port' with no value printed 'needs a value' and exited 2"
+        ]
+      },
+      "summary": "`hkb serve [--port 4666] [--host 127.0.0.1] [--poll 30]`: a zero-dependency http server (src/serve.js) plus one inline page (web/index.html, no build step) over the live board.\n\nGET /api/board is the same fetchBoard query the CLI uses — one GraphQL call per poll, cached server-side for the poll interval so N open tabs still cost one query, with an ETag so an unchanged board answers 304. POST /api/tasks/:n/<verb> calls the same lifecycle.js functions as the CLI (promote, unblock, block, request-changes, archive, comment), so the page is authoritative rather than a mirror. GET /api/tasks/:n is the drawer (description, kb block, blockers, parent results, every attempt with its session/cost/`claude --resume` command, latest result) and GET /api/tasks/:n/log?attempt=k tails the worker log.\n\nDrag-drop goes through `moveDecision`, a pure and unit-tested table of the moves a verb actually exists for. Anything else is refused with the reason instead of inventing a state no CLI command could have produced, and the moves that need a reason (block, request-changes) come back 400 with {\"needs\":[\"reason\"]} so nothing is written until the page supplies one. A drag re-reads the task before deciding, so the decision is never made against a stale card.\n\nThere is no auth, so the guards are the boundary: binds 127.0.0.1, refuses non-loopback Host headers (DNS rebinding) and cross-origin calls, requires application/json on writes so a form post cannot slip past the preflight, keeps log reads inside .kanban/logs whatever the run record says, and warns loudly when --host is set to anything else.\n\nFor the next worker: the injectable `deps` argument on startServer(ctx, flags, log, deps) is how the tests drive the whole HTTP surface with no gh and no network — reuse it rather than mocking modules. Two things landed outside the declared scope because the feature is incomplete without them: package.json gained \"web\" in its files array (the page has to ship), and README gained a `hkb serve` paragraph plus a row in the Hermes mapping table."
+    }
+  ],
+  "v": 1
+}

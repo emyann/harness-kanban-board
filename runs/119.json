@@ -1,0 +1,57 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T15:37:39.732Z",
+      "heartbeat_at": "2026-08-28T15:24:42.191Z",
+      "host": "YRND1-GG",
+      "job": "78140949",
+      "lock_sha": "00e8c50b8256ae8bf90871f8b9f6708baff93925",
+      "log": ".kanban/logs/119-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 122,
+      "pr_head": "worktree-kb-119-1",
+      "profile": "claude",
+      "started_at": "2026-08-28T15:24:42.191Z",
+      "summary": "The Stop hook now writes the session identity onto every attempt the session is answerable for, not just KB_TASK's. A claim made from inside a session (a track runner claiming a node) leaves a pending marker in the same `.kanban/sessions/<n>-<k>` file the hook later stamps — `claimed-by <root>-<k> <worktree>` where a recorded marker holds the session id — so the set is on disk in the runner's own ",
+      "wt": "kb-119-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T15:37:42Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/hook.js",
+          "src/cli.js",
+          "test/session.test.js",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "The markers live in the checkout the claim ran from. A runner that fans a wave out to subagents in their own worktrees would leave those markers where its Stop hook cannot see them; the documented sequential default is unaffected.",
+          "Stamping N nodes costs one run-record read plus one PATCH each, once, on the first Stop fire that carries session fields.",
+          "`node --test test/` cannot resolve the directory on this machine's Node 24 (pre-existing, unrelated to this change); `npm test` is the project's command and passes.",
+          "decisions/adr-004 and features/planning-commands stay wiki-stale for skills/kanban/SKILL.md and references/protocol.md — drift from earlier work, deliberately not re-stamped here."
+        ],
+        "verification": [
+          "npm test — 587 pass, 0 fail",
+          "npm run lint — clean",
+          "node --test test/session.test.js — 16 pass (6 new, incl. a root plus two claimed nodes in one session)",
+          "node .repolore/scripts/wiki-check.mjs — architecture/overview back to fresh"
+        ]
+      },
+      "summary": "The Stop hook now writes the session identity onto every attempt the session is answerable for, not just KB_TASK's. A claim made from inside a session (a track runner claiming a node) leaves a pending marker in the same `.kanban/sessions/<n>-<k>` file the hook later stamps — `claimed-by <root>-<k> <worktree>` where a recorded marker holds the session id — so the set is on disk in the runner's own checkout: no board read, no extra API call, no second registry. When the hook fires it stamps its own attempt and every node those markers name, whatever the node's status: a finished attempt is exactly the one a human reopens, and in a track every node is finished by then. The marker carries the runner's worktree too, so `hkb show <node>` prints a resume line naming a checkout that exists (`kb-<node>-<k>` never did).\n\nContract kept: `SESSION_FIELDS` and `sessionUpdate`'s signature are untouched, and `src/stats.js` was not opened. One line outside the declared paths — the `markSessionClaim` call in `hkb claim` (`src/cli.js`), skipped for `--spawn` and for the session's own task: nothing else in the codebase knows that a claim happened inside a session, so without it the set is not discoverable without a board read.\n\nThe hook stays cheap and unfailable: a payload with no session fields returns before the marker directory is even opened; each node is written in its own try/catch so one bad node costs neither the others their identity nor the nudge its turn; a second Stop fire finds nothing pending; and an attempt row the claim named but the record no longer has is left alone rather than swapped for whoever holds the node now.\n\nDraft PR #122."
+    }
+  ],
+  "v": 1
+}

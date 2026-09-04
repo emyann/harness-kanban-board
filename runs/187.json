@@ -1,0 +1,66 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-29T04:51:13.102Z",
+      "heartbeat_at": "2026-08-29T04:46:11.278Z",
+      "host": "YRND1-GG",
+      "job": "c9b6036f",
+      "lock_sha": "d102a4eb6d65e20822724900cba98ce082222842",
+      "log": ".kanban/logs/187-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 196,
+      "pr_head": "worktree-kb-187-1",
+      "profile": "claude",
+      "session_id": "c9b6036f-d56f-48ed-9d1e-cf86cc04166a",
+      "started_at": "2026-08-29T04:46:11.278Z",
+      "summary": "Fixed all three leftovers from #178's second-pass review. (1) readAgentCounts (src/hook.js) now resets the suppressed-Stop streak to 0 on every E line, making suppression consecutive-per-wave instead of lifetime-per-attempt; fixture S X X X X E S now stands aside (new test). (2) subagentStopHook now tries CLAUDE_PROJECT_DIR first whenever it's set and disagrees with the cwd (rather than cwd-first)",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-187-1/c9b6036f-d56f-48ed-9d1e-cf86cc04166a.jsonl",
+      "wt": "kb-187-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-29T04:51:15Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/hook.js",
+          "test/hook.test.js",
+          "docs/harnesses.md",
+          "docs/manual-mode.md",
+          "docs/wiki/features/hook-install-shapes.md",
+          "docs/wiki/concepts/worker-identity.md",
+          "src/init.js",
+          "src/board.js",
+          "docs/wiki/features/operator-seat.md",
+          "docs/wiki/features/review-loop.md",
+          "docs/wiki/features/up-and-down.md",
+          "docs/wiki/features/web-board.md"
+        ],
+        "residual_risk": [
+          "src/model.js was not modified -- its shouldNudgeOnStop doc comments already said 'consecutive'/'in a row', so the bug was purely in readAgentCounts' bookkeeping, not the docs there",
+          "5 wiki pages outside this task's declared scope remain stale from earlier PRs (#182 and others); left untouched per the task's scope list"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (829 passing)",
+          "node .repolore/scripts/wiki-check.mjs (5 stale, all pre-existing/out-of-scope, down from 11)",
+          "grep -rn \"two hooks|Stop and PreToolUse\" . --include=*.md --include=*.js (only legacy/two-hook-era test fixtures and README's historical mention of an old install remain, none of which are stale docs about the current three-hook shape)"
+        ]
+      },
+      "pr": 196,
+      "pr_continued": false,
+      "summary": "Fixed all three leftovers from #178's second-pass review. (1) readAgentCounts (src/hook.js) now resets the suppressed-Stop streak to 0 on every E line, making suppression consecutive-per-wave instead of lifetime-per-attempt; fixture S X X X X E S now stands aside (new test). (2) subagentStopHook now tries CLAUDE_PROJECT_DIR first whenever it's set and disagrees with the cwd (rather than cwd-first), fixing both the false leak-line print on claude-p children and the case where a child checkout has its own board-less .kanban/ and inherited KB_* env, which previously recorded `ended` into the wrong (child's) bookkeeping instead of the root's; new test covers the inherited-env child case. (3) Updated all docs that said 'two hooks' to say three: docs/harnesses.md (table + prose), docs/manual-mode.md, docs/wiki/features/hook-install-shapes.md, src/init.js, src/board.js. worker-identity.md's frontmatter now says it doubles as the SubagentStop reference page, and documents the CLAUDE_PROJECT_DIR design dependency (spike-measured, job cadca6f1) plus the b-neg probe explicitly. Re-stamped the 6 wiki pages in scope that were stale from #178's edits (hook-install-shapes, worker-identity, operator-seat, review-loop, up-and-down, web-board) -- wiki-check went from 11 stale pages to 5 (the remaining 5 are pre-existing staleness outside this task's file scope, e.g. architecture/overview.md, adr-004, auto-merge.md, planning-commands.md, update-notice.md)."
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,94 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-08-27T03:29:25.560Z",
+      "heartbeat_at": "2026-08-27T03:26:03.717Z",
+      "host": "YRND1-GG",
+      "lock_sha": "a8ead84aa50d98f020b375aa971560b52db9585c",
+      "manual": true,
+      "outcome": "completed",
+      "pr": 56,
+      "pr_head": "kb/52",
+      "profile": "claude",
+      "started_at": "2026-08-27T03:26:03.717Z",
+      "summary": "Publish-readiness audit done. Added LICENSE (MIT — the license field had been claiming MIT with no file behind it) and listed it in package.json `files`. Filled in author/homepage/bugs, added `github-issues` and `cli` keywords, and set publishConfig {access: \"public\", provenance: true} so provenance is a property of the package rather than of one workflow's flags — #53 gets attestation even from a"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T03:29:27Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "branch": "kb/52",
+        "changed_files": [
+          "LICENSE",
+          "package.json"
+        ],
+        "pr_url": "https://github.com/emyann/harness-kanban-board/pull/56",
+        "residual_risk": [
+          "Installing the packed tarball and running it was not possible here: real `npm pack` and `npm install` are blocked in this sandbox, only --dry-run runs. The file list proves WHAT ships, not that it RUNS once installed — #55 must close that on a real runner.",
+          "publishConfig.provenance:true makes a publish from a non-attestable environment fail rather than silently ship unattested. Intended, but it means a manual emergency `npm publish` from a laptop will not work; releases must go through CI.",
+          "version is still 0.1.0 and no tag exists; the operator picks the first published version."
+        ],
+        "tarball_contents": [
+          ".claude-plugin/plugin.json",
+          "LICENSE",
+          "README.md",
+          "bin/hkb.js",
+          "hooks/hooks.json",
+          "package.json",
+          "skills/kanban/SKILL.md",
+          "skills/kanban/references/protocol.md",
+          "skills/kanban/schema/terminal.json",
+          "skills/kanban/scripts/hkb",
+          "src/board.js",
+          "src/cli.js",
+          "src/context.js",
+          "src/dispatch.js",
+          "src/doctor.js",
+          "src/gc.js",
+          "src/gh.js",
+          "src/hook.js",
+          "src/init.js",
+          "src/jobs.js",
+          "src/lifecycle.js",
+          "src/lock.js",
+          "src/mcp.js",
+          "src/model.js",
+          "src/projects.js",
+          "src/serve.js",
+          "src/stats.js",
+          "src/tasks.js",
+          "src/track.js",
+          "src/watch.js",
+          "templates/actions/kanban-dispatch.yml",
+          "templates/actions/kanban-worker-claude.yml",
+          "templates/codex/hooks.json",
+          "templates/codex/notes.md",
+          "templates/copilot/hooks.json",
+          "templates/copilot/kanban-worker.agent.md",
+          "templates/doc-section.md",
+          "templates/mcp/codex.toml",
+          "templates/mcp/mcp.json",
+          "templates/mcp/vscode.json",
+          "web/index.html"
+        ],
+        "verification": [
+          "npm pack --dry-run (reviewed line by line; full list in tarball_contents)",
+          "npm view hkb version -> E404, name available on the registry",
+          "npm run lint (clean)",
+          "npm test (391 pass, 0 fail)"
+        ]
+      },
+      "summary": "Publish-readiness audit done. Added LICENSE (MIT — the license field had been claiming MIT with no file behind it) and listed it in package.json `files`. Filled in author/homepage/bugs, added `github-issues` and `cli` keywords, and set publishConfig {access: \"public\", provenance: true} so provenance is a property of the package rather than of one workflow's flags — #53 gets attestation even from a plain `npm publish`, and passing --provenance explicitly agrees with it rather than conflicting.\n\nDeliberately did NOT add .npmignore: `files` is already an exact allowlist, so an ignore file would be a second source of truth that can only drift.\n\n`files` itself needed no change — every runtime read is inside it: init.js reads skills/kanban + templates/** + bin/hkb.js, mcp.js reads templates/mcp/*, serve.js reads web/index.html, dispatch.js reads bin/hkb.js, cli.js reads package.json for --version, and .claude-plugin/plugin.json points at ./skills and ./hooks/hooks.json. The tarball is 41 files / 149.6 kB packed / 463.5 kB unpacked, exactly the tracked files under bin src web skills hooks templates .claude-plugin plus package.json, README.md, LICENSE — no test/, docs/, .kanban/ or .github/. Both executables (bin/hkb.js, skills/kanban/scripts/hkb) are mode 100755 in the git index.\n\nKEY FACT for the rest of the track: the npm name `hkb` is unclaimed — `npm view hkb` returns E404 — so no rename is needed and `npx hkb` is ours to take.\n\nDraft PR #56 on branch kb/52, based on main."
+    }
+  ],
+  "v": 1
+}

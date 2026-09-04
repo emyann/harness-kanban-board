@@ -1,0 +1,68 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T01:27:26.450Z",
+      "heartbeat_at": "2026-08-27T01:22:22.807Z",
+      "host": "YRND1-GG",
+      "job": "645b0ac4",
+      "lock_sha": "9b6914d59de9a119d0a64fc6a7a67f623f5405ce",
+      "log": ".kanban/logs/46-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 47,
+      "pr_head": "worktree-kb-46-1",
+      "profile": "claude",
+      "started_at": "2026-08-27T01:22:22.807Z",
+      "summary": "`workerContext` now renders a `## Comments` section between the attempts table and the protocol, so a plain `hkb comment <n> \"…\"` reaches the next attempt.\n\nSelection (`selectComments`, pure, exported from src/context.js): every human comment created after the last ended attempt, plus always the last five, oldest first. Filtering (`isHumanComment`): the kb-run and kb-result markers are dropped, an",
+      "wt": "kb-46-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-27T01:26:04Z",
+      "id": 5433174919,
+      "text": "Steering check for #46: the next attempt should see this line under ## Comments."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-27T01:27:59Z",
+      "id": 5433187931,
+      "text": "test note from the operator"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T01:27:28Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/context.js",
+          "test/context.test.js",
+          "skills/kanban/SKILL.md"
+        ],
+        "dependencies": [],
+        "residual_risk": [
+          "A comment posted by a worker (or any bot using hkb comment) is indistinguishable from an operator's and is fed back as steering; only marker-bearing records and the dispatcher's Blocked/Changes-requested lines are filtered.",
+          "The pure helpers sit in src/context.js, not src/model.js, because the task scope excluded model.js — a small deviation from the CLAUDE.md rule, trivially movable later.",
+          "Relative times are computed against the machine clock at render time; a card whose comments carry skewed timestamps shows 'just now' for anything in the future."
+        ],
+        "retry_notes": null,
+        "verification": [
+          "npm run lint",
+          "node --test (387 pass, 11 new in test/context.test.js)",
+          "node bin/hkb.js comment 46 \"Steering check...\" && node bin/hkb.js context 46 — the comment renders under ## Comments as **@emyann** · just now"
+        ]
+      },
+      "summary": "`workerContext` now renders a `## Comments` section between the attempts table and the protocol, so a plain `hkb comment <n> \"…\"` reaches the next attempt.\n\nSelection (`selectComments`, pure, exported from src/context.js): every human comment created after the last ended attempt, plus always the last five, oldest first. Filtering (`isHumanComment`): the kb-run and kb-result markers are dropped, and so are the dispatcher's own `**Blocked** (…)` / `**Changes requested** (…)` lines — those already surface via the attempts table. The dispatcher match is anchored on its exact shape (`**Blocked** (`), so a human writing \"**Blocked** on the upstream release\" still reads as steering. Rendering (`formatComments`): `**@login** · 3h ago` then the body, capped at 2000 chars newest-first with `_(earlier comments elided)_` when it cuts; one comment longer than the whole budget is clipped with `… (comment truncated)` rather than dropped.\n\nZero extra API calls: it consumes the `listComments` read `loadRun` already made (ctx._cache), and a test asserts exactly one `/comments` request per brief. `src/tasks.js` needed no change.\n\nThe pure helpers live in src/context.js rather than src/model.js because the task scope named only context.js/tasks.js/context.test.js — if a later task widens that, moving `isHumanComment`/`selectComments`/`formatComments` into model.js is a straight cut-and-paste with the tests following.\n\nSKILL.md gained a line under the worker protocol (step 1): comments on your card are steering input, treat them as coming from the operator.\n\nDraft PR: https://github.com/emyann/harness-kanban-board/pull/47 (branch worktree-kb-46-1)."
+    }
+  ],
+  "v": 1
+}

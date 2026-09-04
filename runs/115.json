@@ -1,0 +1,79 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T16:29:51.339Z",
+      "heartbeat_at": "2026-08-28T16:07:01.235Z",
+      "host": "YRND1-GG",
+      "job": "901aaf18",
+      "lock_sha": "c46b183e5f08990c3b0da726c36a0143462a7bde",
+      "log": ".kanban/logs/115-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 135,
+      "pr_head": "worktree-kb-115-1",
+      "profile": "claude",
+      "session_id": "901aaf18-1d94-4050-8268-933985d902b8",
+      "started_at": "2026-08-28T16:07:01.235Z",
+      "summary": "The three children built the chain that prices a `claude-bg` board; verifying it end to end showed the\nchain has no input on the profile it was built for, and that is what this task fixed.\n\n## The seam (#125, and it was #115's own goal)\n\nThe dispatcher exports `KB_TASK`/`KB_ATTEMPT` on the launch, but `claude --bg` only asks Claude Code's\nsession daemon to start an agent and exits — the daemon was",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-115-1/901aaf18-1d94-4050-8268-933985d902b8.jsonl",
+      "wt": "kb-115-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T15:25:22Z",
+      "id": 5454390757,
+      "text": "## The graph\n\n```mermaid\ngraph BT\n  A[\"#119 session identity for track nodes<br/>src/hook.js · src/track.js\"]\n  B[\"#120 spend from the transcript<br/>src/stats.js\"]\n  C[\"#121 docs: what each profile reports<br/>README.md · docs/harnesses.md\"]\n  R[\"#115 verify + synthesize\"]\n  C --> A\n  C --> B\n  R --> C\n```\n\nArrows point from a task to what blocks it.\n\n| task | blocked by | paths | why it is its own PR |\n|---|---|---|---|\n| #119 | — | `src/hook.js`, `src/track.js`, `test/session.test.js` | the hook keys on `KB_TASK`; nothing in stats changes |\n| #120 | — | `src/stats.js`, `test/stats.test.js` | cold nodes already carry `transcript_path`, so this needs nothing from #119 |\n| #121 | #119, #120 | `README.md`, `docs/harnesses.md` | can only describe what the two actually shipped |\n| #115 | #121 | — | the end-to-end run on a real track, plus whatever seam the three PRs leave |\n\nInvariants:\n\n- **#119 and #120 are independent and path-disjoint**, so the dispatcher runs them at once. The\n  tempting dependency — \"stats needs the session fields\" — is false: cold-node attempts already carry\n  `transcript_path`, and #119 only widens *which* attempts have it. Adding the edge would have cost\n  wall-clock and bought nothing.\n- **The root is blocked by the only leaf**, #121. Nothing is blocked by the root.\n- **The shared decision is written into both bodies that depend on it**: `SESSION_FIELDS` and\n  `sessionUpdate` keep their shape. #119 owns them and is told not to move them; #120 is told to read\n  them and not to change them. Neither worker can see the other's body.\n- **`test/` is deliberately not a path on any child.** #112, #113 and #116 on this board all claim\n  `test/`, which makes three unrelated cards mutually overlapping under the `path_overlap` guard.\n  Naming the specific test file keeps siblings parallel.\n\nNot run as a track: #119 and #120 are genuinely parallel, which node dispatch exploits and a single\ntrack session would not.\n\nKnown hazard recorded for the root's verify pass: `hkb adopt` leaves the previous `kb:agent:*` label\n(#113), so a track adopted before that lands silently resolves to `claude` and runs as node dispatch.\n`hkb dispatch --dry-run` reporting `tracks 0/0` is the only symptom."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T16:29:54Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/hook.js",
+          "src/jobs.js",
+          "src/lifecycle.js",
+          "src/model.js",
+          "src/stats.js",
+          "test/session.test.js",
+          "README.md",
+          "docs/harnesses.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "CLAUDE_CODE_SESSION_ID and $CLAUDE_JOB_DIR/state.json (sessionId, linkScanPath) are Claude Code's own local state, not a documented contract — verified on this host with 2.1.250. A format change yields null and today's message, never a wrong number, but the transcript answer would quietly disappear for claude-bg again. `hkb show <n>` printing a session line is the one-command check.",
+          "The Stop hook's worktree fallback also makes the nudge live for any session sitting in a kb-<n>-<k> checkout — including an operator who opens one to take a running card over. They get the nudge twice and then it stops. Recording is safe there (the marker and sessionUpdate make it record-once), and a finished card returns 0 before nudging.",
+          "An attempt that never reaches a terminal verb (crashed, timed_out, protocol_violation) still records nothing on a claude-bg profile. The dispatcher's reap path already holds the job id and could stamp it from the same readJobState it calls, but src/dispatch.js was outside this task's paths. The report is honest about it: those attempts are counted and never priced.",
+          "Four files outside the declared paths (src/stats.js, src/hook.js, src/model.js): src/jobs.js (the reader belongs with the other ~/.claude/jobs code), src/lifecycle.js (one line in finishAttempt, the only call site that matters), and the two doc files plus the wiki page whose text described the behaviour this branch changed. Every sibling of this card is closed and merged, so no path overlap was live.",
+          "docs/wiki/decisions/adr-004 cites src/lifecycle.js:226-237; my seven-line insertion at line ~67 shifted those bytes without changing them. Decision records are immutable-with-supersession, so the anchor was left as it is — the record was already stale for src/cli.js and the skill before this branch.",
+          "The estimate depends on stats.rates, which this board does not set: as merged, `hkb stats` here shows the usage line and the hint, not a dollar figure. The ~$6.64 above is what it prints once rates are set, and it is labelled an estimate either way."
+        ],
+        "verification": [
+          "npm run lint — clean",
+          "npm test — 630 pass, 0 fail (619 before; 11 new in test/session.test.js)",
+          "npm run smoke — 25 content, 3 command, 9 init checks; includes `hkb hook stop (no KB_TASK) -> exit 0` run from a directory that is not a worker checkout",
+          "in this live claude-bg worker: process.env.KB_TASK undefined; whichAttempt -> {n:115, k:1, source:'worktree'}; currentSession -> this session's id and its transcript on disk; sessionForAttempt(115,1) returns both fields, sessionForAttempt(999,1) returns null",
+          "read #115's real attempt row before completing: no session_id, no transcript_path after 40 minutes of a claude-bg attempt — the bug, live",
+          "rendered computeStats/formatStats over the real board with this session's real 52-turn transcript, with and without stats.rates: usage line, and ~$6.64 estimated kept out of total_usd (9.0178)",
+          "a track of three node rows naming one real transcript: ~$6.80 once not three times, attempts_shared_session 2, attempts_missing_cost 0",
+          "degraded paths, each a message and never a throw: no attempts at all, an attempt with no transcript, a transcript_path not on this disk, an empty file, a path that is a directory",
+          "node .repolore/scripts/wiki-check.mjs — architecture/overview back to fresh; wiki-index.mjs --check up to date"
+        ]
+      },
+      "summary": "The three children built the chain that prices a `claude-bg` board; verifying it end to end showed the\nchain has no input on the profile it was built for, and that is what this task fixed.\n\n## The seam (#125, and it was #115's own goal)\n\nThe dispatcher exports `KB_TASK`/`KB_ATTEMPT` on the launch, but `claude --bg` only asks Claude Code's\nsession daemon to start an agent and exits — the daemon was started long before, with an environment of\nits own. Confirmed from inside this live worker: `process.env.KB_TASK` is undefined. So `stopHook`\nreturned 0 on its first line, no nudge ever fired, no `session_id` was ever written, and #119's per-node\nidentity and #120's transcript pricing had nothing to read. `hkb stats --since all` said \"69 worker\nattempts priced nothing at all\"; the three that were priced date from when `claude` was a `-p` profile.\n\n## What now records a session, and why it is the terminal verb\n\nTwo things a background session does have, neither an API call, both already conventions here:\n\n- **which attempt it is** — its checkout. `whichAttempt` (src/hook.js) takes `KB_TASK` first and falls\n  back to the `kb-<n>-<k>` the launch names, which is already how the tick identifies a running job\n  (`matchJobByWorktree`). One basename, only when the environment is silent, so the Stop hook still\n  returns before it reads stdin in an ordinary session. The two-nudge enforcement comes back with it.\n- **which session it is** — `CLAUDE_CODE_SESSION_ID`, and for a background agent the job record under\n  `$CLAUDE_JOB_DIR`, which also names the transcript on disk. `currentSession` (src/jobs.js), beside the\n  `readJobState` the dispatcher already uses. A resumed job whose record names another session yields\n  only the id, never someone else's transcript.\n\nThe recording is done by the **terminal verb**, not the hook — `sessionForAttempt` (src/hook.js) called\nfrom `finishAttempt` (src/lifecycle.js). It is the one thing every worker runs, it is already writing\nthat attempt row (so it costs nothing), and it does not depend on a harness firing hooks at all. It\nstamps only an attempt this session actually ran — its own, or a node it claimed in-session — so an\noperator finishing a card by hand and the dispatcher writing off a dead attempt record nothing. That\nrule is also what gives a track its per-node identity: the runner finishes each node from inside its own\nsession, so each node's row carries the runner's transcript, which #126's per-file reader counts once.\n\n`preToolHook` stays gated on `KB_TASK` alone, deliberately: a checkout name says which *task* a session\nis, never which *profile* launched it, and that policy with no profile would deny a worker `npm test`.\n\n## Numbers I actually saw\n\nThis attempt is the proof: a `claude-bg` worker with no `KB_TASK`, whose row carried nothing. Rendered\nthrough `computeStats`/`formatStats` against the real board with this session's real 52-turn transcript:\n\n```\nspend      $9.02 reported · on 3 of 74 worker attempts\n           ~$6.64 estimated on top, for 1 worker attempt priced from their transcripts — an estimate, not a reported cost\n           70 worker attempts priced nothing at all — the real total is higher\nusage      52 turns · in 104 · out 68k · cache 216k written / 7.2M read  (1 transcript)\n```\n\n`total_usd` stays 9.0178 (reported money only); the estimate is `estimated_usd` 6.6449 and always carries\nthe tilde and the word. With no `stats.rates` the same board prints the usage line and the hint, `basis`\n`usage`. A track of three nodes naming one real transcript: `~$6.80` once, not three times,\n`attempts_shared_session: 2`, `attempts_missing_cost: 0` — #126's fix holds now that node rows really do\nshare a transcript. The verb carrying this summary is the one that records this attempt's session, so\n`hkb show 115` prints a `session …` line and a `claude --resume` from here on.\n\n## One silence closed in stats\n\nA board with no ended attempt printed no `spend` line at all — a blank where the spend line belongs reads\nlike a failure. It now says there was nothing to price. The other degraded paths already answered with a\nmessage and never an error, and I checked each: an attempt with no transcript, a `transcript_path` not on\nthis disk, an empty file, and a path that is a directory.\n\n## Docs and wiki\n\n`docs/harnesses.md` — \"When a profile that should report tokens reports none\", written by #121 to\ndescribe #125 as an open gap, is replaced by how the recording works, plus what still records nothing\n(an attempt that never reaches a terminal verb: crashed, timed_out, protocol_violation). README's profile\nparagraph and stop-nudge row follow. The wiki's `architecture/overview` claimed a worker is \"pointed at\none card with `KB_TASK` set\", which was never true for the default profile; it now carries the asymmetry\nand both answers, with `src/jobs.js` in `covers`, a `Transcript` glossary line and a `log.md` entry.\n\n## For the next worker\n\n#125 is fixed by this PR and should be closed with it — it is not linked as a blocker of #115, so close\nit by hand. Its second ask is not done: `hkb doctor` still cannot say \"the Stop hook is inert for this\nprofile here\", which is now a much narrower question (does this harness fire hooks at all?) and worth its\nown card. Two attempts on this board are still open-ended holes by design: an attempt that crashes or\ntimes out never runs a verb, so it records nothing — the dispatcher's reap path has the job id and could\nstamp it from the same `readJobState` it already calls, in `src/dispatch.js`, which was outside this\ntask's paths."
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,72 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-26T06:12:16.655Z",
+      "heartbeat_at": "2026-08-26T06:04:36.715Z",
+      "host": "YRND1-GG",
+      "job": "f1b18448",
+      "job_stopped": true,
+      "log": ".kanban/logs/18-1.log",
+      "outcome": "protocol_violation",
+      "pid": null,
+      "profile": "claude",
+      "reason": "protocol_violation after 459s",
+      "started_at": "2026-08-26T06:04:36.715Z",
+      "wt": "kb-18-1"
+    },
+    {
+      "attempt": 2,
+      "bg": true,
+      "ended_at": "2026-08-26T06:53:36.828Z",
+      "heartbeat_at": "2026-08-26T06:43:37.343Z",
+      "host": "YRND1-GG",
+      "job": "e2ed8734",
+      "log": ".kanban/logs/18-2.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-26T06:43:37.343Z",
+      "wt": "kb-18-2"
+    }
+  ],
+  "block_loops": {},
+  "failures": 1,
+  "last_error": "protocol_violation after 459s",
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-26T06:52:33Z",
+      "attempt": 2,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/hook.js",
+          "src/dispatch.js",
+          "src/cli.js",
+          "test/session.test.js",
+          ".gitignore",
+          "skills/kanban/references/protocol.md"
+        ],
+        "residual_risk": [
+          "src/cli.js is outside the task's declared paths — the hkb show rendering lives there and the edit is confined to the attempts block",
+          "total_cost_usd/num_turns/duration_ms are only recorded for dispatcher-watched children (claude-p, loop mode); claude --bg attempts get session_id from the Stop hook only",
+          "the watchChild path was not exercised against a live claude-p worker — it is covered by unit tests on parseSessionLog/sessionUpdate plus a code read"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (79 passing, 6 new in test/session.test.js)",
+          "hkb hook stop run against this task's own attempt 2 with the real Stop payload; hkb show 18 then printed 'session e2ed8734-c0b3-421c-ad68-e7cf788c92fe' and 'cd .claude/worktrees/kb-18-2 && claude --resume e2ed8734-...'",
+          "second hkb hook stop call: still nudged (2/2), no run-comment read and no PATCH — record-once confirmed",
+          "git rebase origin/main clean; gh pr create --draft -> PR #28"
+        ]
+      },
+      "summary": "The attempt row in the run comment now carries the agent session behind it. Draft PR #28 (branch worktree-kb-18-2, \"Closes #18\").\n\n`hkb hook stop` writes session_id + transcript_path onto the attempt row on its first call, before the status check so a finished attempt (the one a human actually reopens) is covered too; a marker at .kanban/sessions/<n>-<k> keeps it to a single read + PATCH, so the 2nd and 3rd Stop-hook firings cost nothing. Nudge logic untouched. In loop mode, watchChild parses the tail of the worker log (`claude -p --output-format json` signs off with one JSON object) and folds session_id/total_cost_usd/num_turns/duration_ms into the save it was already making; the parse is in its own try/catch so a malformed log can never cost the protocol_violation reclaim. `hkb show <n>` prints `session <id> · $0.42 · 37 turns · 6m12s` and a `cd .claude/worktrees/kb-<n>-<k> && claude --resume <id>` line per attempt.\n\nNew pure functions in src/model.js: parseSessionLog, sessionUpdate (the record-once decision), formatSession, resumeCommand, worktreePath, plus the SESSION_FIELDS list.\n\nFor the next worker: cost/turns only appear for profiles the dispatcher watches (claude-p in loop mode). The default `claude-bg` profile is fire-and-forget with no result JSON in its log, so those attempts get session_id from the Stop hook only. If cost on bg attempts is wanted, src/jobs.js already surfaces `sessionId` (and `tokens`) from the job listing/state.json — the reclaim loop in dispatch.js could fold that in for free at a point where it already saves, but I left that delicate loop alone deliberately (it is the code behind the #15/3 and #14/2 regressions)."
+    }
+  ],
+  "v": 1
+}

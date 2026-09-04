@@ -1,0 +1,16 @@
+{
+  "attempts": [],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T02:44:42Z",
+      "id": 5503548768,
+      "text": "**Stronger than filed: this is the normal outcome, not two stale leftovers.**\n\n`hkb gc --yes` at teardown tonight removed **nothing** and skipped three worktrees, every one held by a recycled process:\n\n```\nskip .claude/worktrees/kb-191-1: still locked by a live session (pid 195775)\nskip .claude/worktrees/kb-217-1: still locked by a live session (pid 463367)\nskip .claude/worktrees/kb-223-1: still locked by a live session (pid 7992)\ngc: 0 worktree(s) removed, 0 branch(es) deleted, ...\n```\n\nAll three are `claude bg-spare --bg-spare /tmp/cc-daemon-1000/.../spare/<id>.claim.sock`. The third, `kb-223-1`, is track #223's own root worktree — stranded within minutes of the track finishing and merging, on this same session.\n\nSo the leak is not occasional. **Every completed worker strands its worktree**, because the harness recycles the process rather than exiting it, and `pidAlive` is therefore always true. `hkb gc` currently cannot reclaim anything on this machine at all — its removal count has been zero for every card that finished tonight.\n\nThat also means the branch sweep never runs for those cards (a worktree holds the branch), so `kb/*` branches accumulate alongside the checkouts.\n\nThe fix in the Done when is unchanged; only the priority argument is stronger — this is not cleanup hygiene, it is `hkb gc` being inert for its main job on any host whose harness pools processes."
+    }
+  ],
+  "results": [],
+  "v": 1
+}

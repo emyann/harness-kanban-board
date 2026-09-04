@@ -1,0 +1,79 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-08-26T05:06:57.697Z",
+      "heartbeat_at": "2026-08-26T05:05:54.621Z",
+      "host": "YRND1-GG",
+      "outcome": "spawn_failed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "claude --bg failed (143): no job id printed",
+      "started_at": "2026-08-26T05:05:54.621Z"
+    },
+    {
+      "attempt": 2,
+      "bg": true,
+      "ended_at": "2026-08-26T05:55:29.793Z",
+      "heartbeat_at": "2026-08-26T05:48:30.069Z",
+      "host": "YRND1-GG",
+      "job": "2c36cb66",
+      "job_stopped": true,
+      "log": ".kanban/logs/3-2.log",
+      "outcome": "protocol_violation",
+      "pid": null,
+      "profile": "claude",
+      "reason": "protocol_violation after 419s",
+      "started_at": "2026-08-26T05:48:30.069Z",
+      "wt": "kb-3-2"
+    },
+    {
+      "attempt": 3,
+      "bg": true,
+      "ended_at": "2026-08-26T06:04:30.614Z",
+      "heartbeat_at": "2026-08-26T05:55:35.473Z",
+      "host": "YRND1-GG",
+      "job": "174d86c5",
+      "job_stopped": true,
+      "log": ".kanban/logs/3-3.log",
+      "outcome": "protocol_violation",
+      "pid": null,
+      "profile": "claude",
+      "reason": "protocol_violation after 535s",
+      "started_at": "2026-08-26T05:55:35.473Z",
+      "wt": "kb-3-3"
+    },
+    {
+      "attempt": 4,
+      "ended_at": "2026-08-26T06:04:31.190Z",
+      "host": "YRND1-GG",
+      "outcome": "gave_up",
+      "profile": "dispatcher",
+      "reason": "3 consecutive failures (limit 2)",
+      "started_at": "2026-08-26T06:04:31.190Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 5,
+      "bg": true,
+      "ended_at": "2026-08-26T07:12:44.454Z",
+      "heartbeat_at": "2026-08-26T06:23:05.747Z",
+      "host": "YRND1-GG",
+      "job": "db49c8a6",
+      "job_stopped": true,
+      "log": ".kanban/logs/3-5.log",
+      "outcome": "timed_out",
+      "pid": null,
+      "profile": "claude",
+      "reason": "timed_out after 3613s",
+      "started_at": "2026-08-26T06:12:31.097Z",
+      "wt": "kb-3-5"
+    }
+  ],
+  "block_loops": {},
+  "failures": 1,
+  "last_error": "timed_out after 3613s",
+  "notes": [],
+  "results": [],
+  "v": 1
+}

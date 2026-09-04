@@ -1,0 +1,67 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-29T02:35:54.729Z",
+      "heartbeat_at": "2026-08-29T02:24:59.295Z",
+      "host": "YRND1-GG",
+      "job": "20d9e4ca",
+      "lock_sha": "2895045b1f61e28cfdf577eba16907900e7ec543",
+      "log": ".kanban/logs/177-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 180,
+      "pr_head": "worktree-kb-177-1",
+      "profile": "claude",
+      "session_id": "20d9e4ca-1bfe-47d2-9d07-e038773ec0f2",
+      "started_at": "2026-08-29T02:24:59.295Z",
+      "summary": "up/down never drop a pid file without a fresh, guarded re-read confirming it's dead, right before the delete. down's \"not running\" tidy and up's dead-at-recheck tidy now share dropDeadPidFile(root, name, deps) in src/up.js, which re-reads the pid file immediately before rmSync instead of trusting the processState/liveness snapshot the caller already acted on -- a concurrent hkb up (or the process'",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-177-1/20d9e4ca-1bfe-47d2-9d07-e038773ec0f2.jsonl",
+      "wt": "kb-177-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-29T02:29:19Z",
+      "id": 5459788015,
+      "text": "One more small item while you are in this area (from the review of PR #175, #162, merged): the attempt row now carries `continues_branch_stale` (set when a continued checkout could not be fast-forwarded), but `skills/kanban/references/protocol.md` ~39 (the canonical attempt-field list) and `docs/wiki/GLOSSARY.md` ~24 list only `continues_pr` / `continues_branch`. Add the clause in both."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-29T02:35:57Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/up.js",
+          "src/model.js",
+          "test/up.test.js",
+          "test/model.test.js",
+          "docs/wiki/features/up-and-down.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "dropDeadPidFile's fresh read narrows the race window to essentially nothing but not to zero (rmSync itself is not atomic with the read); this matches the pre-existing tidyPidFile pattern used elsewhere in down and was judged acceptable by the task spec, which asked for a guarded re-read, not a lock",
+          "wiki page still cites src/serve.js and src/doctor.js line ranges that were not touched by this task and were not re-verified beyond confirming their covers sha is unchanged since the last stamp"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (795 passing)",
+          "node .repolore/scripts/wiki-check.mjs (up-and-down.md fresh)",
+          "node .repolore/scripts/wiki-stamp.mjs docs/wiki/features/up-and-down.md"
+        ]
+      },
+      "pr": 180,
+      "pr_continued": false,
+      "summary": "up/down never drop a pid file without a fresh, guarded re-read confirming it's dead, right before the delete. down's \"not running\" tidy and up's dead-at-recheck tidy now share dropDeadPidFile(root, name, deps) in src/up.js, which re-reads the pid file immediately before rmSync instead of trusting the processState/liveness snapshot the caller already acted on -- a concurrent hkb up (or the process's own claimServePid/acquireLoopLock) rewriting the file to a live pid in that window now survives both tidy paths. up now also tidies serve.pid for the corpse it just reported failed at the SPAWN_CHECK_MS recheck, guarded the same way and gated on still owning the claim (claimPid's return value). down's stale-pid-file line now says \"removed\" when it actually removed the file, instead of reusing --status's read-only \"hkb up replaces it\" wording. deadAtRecheck (src/model.js) now returns {line, failed} directly instead of a flat {name,pid,log,line} shape up.js re-picked apart into three fields; added a direct unit test in test/model.test.js. docs/wiki/features/up-and-down.md was re-verified and re-stamped: every src/up.js/model.js/dispatch.js line anchor had drifted (both from #164's merge and from #162's continuation-review merge landing mid-task), and Known limits gained a bullet about the 300ms SPAWN_CHECK_MS recheck window (a child that dies just after it is still reported started, exit 0)."
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,74 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-09-03T00:31:01.115Z",
+      "heartbeat_at": "2026-09-03T00:14:14.891Z",
+      "host": "YRND1-GG",
+      "lock_sha": "e36702183ba25314524011b55bf4b9e673139498",
+      "manual": true,
+      "outcome": "completed",
+      "pr": 309,
+      "pr_head": "kb/291",
+      "profile": "claude",
+      "session_id": "ea24eaa1-7d40-474a-9971-78298416d23e",
+      "started_at": "2026-09-03T00:14:14.891Z",
+      "summary": "Board state now sits behind one interface. `openStore(ctx)` (src/store/index.js) carries the §6.4 method names of docs/local-first.md as the contract A4/A5 implement in parallel, plus STORE_METHODS for the conformance suite to check a driver's shape against. src/store/github.js is src/tasks.js + src/lock.js moved VERBATIM with one wrapper at the bottom exposing them under those names; capabilities",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-288-1/ea24eaa1-7d40-474a-9971-78298416d23e.jsonl",
+      "wt": "kb-288-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-03T00:31:02Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/store/index.js (new — openStore + the §6.4 interface + STORE_METHODS)",
+          "src/store/github.js (new — tasks.js + lock.js bodies moved verbatim, plus openGithubStore)",
+          "src/forge.js (new — the PR half, plus GhError/isOffline re-exports)",
+          "src/tasks.js (now a re-export shim)",
+          "src/lock.js (now a re-export shim)",
+          "src/lifecycle.js (imports from forge.js; prNodeId/isGithubUser/finishPr removed, they moved)",
+          "src/dispatch.js (GhError now from forge.js)",
+          "src/board.js (new storeRoot(ctx))",
+          "package.json (lint glob gained src/*/*.js so node --check reaches src/store/)",
+          "test/store.test.js (new — the driver-parametrised conformance suite)",
+          "docs/wiki/architecture/store-seam.md (new page)",
+          "docs/wiki/wiki.config.yml, docs/wiki/index.md, docs/wiki/log.md, docs/wiki/GLOSSARY.md",
+          "docs/wiki/architecture/overview.md, docs/wiki/decisions/adr-006-local-store.md",
+          "docs/wiki/features/{auto-merge,review-loop,tracks,backlog-grooming,web-board}.md, docs/wiki/concepts/tool-grant-ceiling.md (moved-symbol citations corrected)",
+          "10 further wiki pages restamped for mechanical drift from the import-line edits"
+        ],
+        "residual_risk": [
+          "THE BYTE-IDENTITY CHECK WAS NOT RUN. `node bin/hkb.js dispatch --dry-run --json` was refused by this worker session's launch guard — a worker may not run dispatch, by design, since a second dispatcher double-claims. Disclosed rather than routed around. What stands in its place: test/dispatch.test.js exercises tick() against the fake-gh double and passes unchanged, and every function the dry run reaches was moved rather than rewritten. A reviewer should still run the comparison on kb/track-288 and on this branch before merging.",
+          "branchFallbackPrs is not in the card's §3 list of what moves to forge.js, but went there with openPrsByHead: it is pure PR logic and src/tasks.js had to become a shim, so it could not stay. src/store/github.js imports it back for fillPrFallback. test/tasks.test.js still imports it from src/tasks.js and passes.",
+          "The interface's createTask/updateBody/claim signatures differ from the legacy functions they call (§6.4 shapes vs today's). Both are exported; a caller that mixes them up gets a silent wrong-argument bug rather than a throw. Only the conformance suite uses the interface methods today.",
+          "The GitHub store's board()/setBoard() read and write .kanban/board.json via loadBoard/saveBoard at storeRoot(ctx). That is a reasonable reading of §6.4 for a driver whose board has no document of its own, but it is a choice this card made, not one the plan states — the local drivers will read the board.json ON the kb-board branch instead, and the two must not be assumed interchangeable.",
+          "listLocks() returns beat_at: null for every row on the GitHub driver — the ref listing carries no commit date, and filling it would be one request per lock. Callers that need it call lockBeatAt(n, k). A local driver will populate it, so a caller written against the local shape would silently see nulls on GitHub.",
+          "10 wiki pages were restamped for drift my import-line edits caused (src/dispatch.js, src/board.js, src/lifecycle.js, package.json). I verified no page cited a symbol that moved, and corrected the ones that did — but the restamp blesses those pages' whole prose, and I re-read only the parts touching this change.",
+          "CI has not run on this branch."
+        ],
+        "verification": [
+          "npm install (devDeps: tsc was not present in this throwaway worktree)",
+          "npm run lint — node --check loop over bin/, src/*.js, src/*/*.js, scripts/, then tsc --noEmit: green",
+          "npm test — 1125 pass, 0 fail (1107 before + 18 new conformance tests); nothing under test/ edited except the new file",
+          "npm run smoke — packs, installs and runs the tarball from outside the repo, as a devDependency, and as the checkout itself: 26 content + 3 command + 12 init + 6 in-repo checks",
+          "grep for gh.js importers across src/: exactly the seven the card names — store/github.js, forge.js, doctor.js, projects.js, init.js, watch.js, board.js",
+          "node .repolore/scripts/wiki-check.mjs — all 23 pages fresh",
+          "node .repolore/scripts/wiki-index.mjs and wiki-stamp.mjs on every page touched"
+        ]
+      },
+      "pr": 309,
+      "pr_continued": false,
+      "summary": "Board state now sits behind one interface. `openStore(ctx)` (src/store/index.js) carries the §6.4 method names of docs/local-first.md as the contract A4/A5 implement in parallel, plus STORE_METHODS for the conformance suite to check a driver's shape against. src/store/github.js is src/tasks.js + src/lock.js moved VERBATIM with one wrapper at the bottom exposing them under those names; capabilities() returns {events:false} and events() refuses with exit 2 rather than answering an empty list. The per-tick comments memo and its invalidation are byte-for-byte unchanged. src/forge.js holds the pull-request half — openPrsByHead, branchFallbackPrs, prMergeStates, enableAutoMerge, branchProtection, mergePullRequest, prChecksState from tasks.js plus prNodeId/isGithubUser/finishPr from lifecycle.js — and also re-exports GhError/isOffline so lifecycle.js (outbox) and dispatch.js (reclaim clock), which only classify a transport failure, stop importing gh.js. src/tasks.js and src/lock.js are now re-export shims, which is why no caller changed beyond import lines and no existing test was edited. storeRoot(ctx) in src/board.js is the common git dir's parent via mainWorktree, never --show-toplevel. test/store.test.js is the driver-parametrised conformance suite: one SCENARIOS array, a DRIVERS list holding the GitHub driver over test/fake-gh.js in a real git repo with a real remote.\n\nFOR THE NEXT NODE: the interface method names are frozen — adding one means adding a scenario. createTask({title,body,kb,status,agent}) and updateBody(n, body) take §6.4's signatures, NOT today's createIssue/updateBody argument shapes; the legacy functions are exported unchanged beside them, and new verbs should use the interface. store.claim() returns {result, token} where token is the GitHub driver's sha (ref/error ride along). A local driver appends to DRIVERS and gets the three optional harness hooks — settleClaim, reclaim, recordBeat — for what the interface cannot express; nothing else may reach a driver's internals or the scenario stops being portable. PR #309 targets kb/track-288, so Closes #291 will not auto-close; the track branch's own PR into main lands it."
+    }
+  ],
+  "v": 1
+}

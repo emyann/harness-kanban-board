@@ -1,0 +1,35 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-03T09:07:08.250Z",
+      "heartbeat_at": "2026-09-03T09:06:16.969Z",
+      "host": "YRND1-GG",
+      "kind": "transient",
+      "lock_sha": "063829e8c10b80175e21f2b325ec55b41729e24a",
+      "log": ".kanban/logs/305-1.log",
+      "outcome": "blocked",
+      "pid": null,
+      "profile": "claude",
+      "reason": "Operator: out of order. docs/local-first.md section 10 has C3 (TypeScript) blocked by C2 (#304, retire the GitHub store); that edge was lost when the cards were filed and #305's only blocker was root A, which just closed. Renaming every src/*.js to .ts while #303 rewrites test/ and #304 still has to delete src/store/github.js and the shims would collide with both. Re-pointing #305 behind #304 so t",
+      "started_at": "2026-09-03T09:06:16.969Z",
+      "wt": "kb-305-1"
+    }
+  ],
+  "block_loops": {
+    "1u0d95h": 1
+  },
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T09:07:08Z",
+      "id": 5523341852,
+      "text": "**Blocked** (transient, attempt 1): Operator: out of order. docs/local-first.md section 10 has C3 (TypeScript) blocked by C2 (#304, retire the GitHub store); that edge was lost when the cards were filed and #305's only blocker was root A, which just closed. Renaming every src/*.js to .ts while #303 rewrites test/ and #304 still has to delete src/store/github.js and the shims would collide with both. Re-pointing #305 behind #304 so the rename lands on code that has stopped moving."
+    }
+  ],
+  "results": [],
+  "v": 1
+}

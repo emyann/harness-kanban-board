@@ -1,0 +1,62 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-26T08:12:55.986Z",
+      "heartbeat_at": "2026-08-26T07:53:56.446Z",
+      "host": "YRND1-GG",
+      "job": "53bfcb2f",
+      "lock_sha": "41c1b148eb9bde2786ad9eb672fb2f706c1a8a14",
+      "log": ".kanban/logs/7-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-26T07:53:56.446Z",
+      "wt": "kb-7-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-26T08:04:53Z",
+      "id": 5422398517,
+      "text": "Verifying `hkb tail 7` end to end: this comment should appear as one live event in the watcher."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-26T08:11:05Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/watch.js",
+          "src/cli.js",
+          "src/gh.js",
+          "test/watch.test.js",
+          "README.md"
+        ],
+        "residual_risk": [
+          "src/gh.js is outside the task's declared paths (src/watch.js, src/cli.js). Conditional requests need the response status and headers, which no existing call path exposes, and doing it from watch.js would have meant shelling out to gh outside gh.js. The addition (parseIncluded, rawViaGh, restRaw, one branch in defaultTransport) is purely additive; every existing call path is untouched and all pre-existing tests pass.",
+          "hkb watch reads one page (per_page=100) of board issues, most-recently-updated first. On a board with more than 100 issues that page is a window: an issue outside it has not changed, so nothing is missed, but the index only merges — it never reports a departure, and archiving is seen as a kb:status:archived transition rather than a removal.",
+          "The GHK_DEBUG rate figure is the whole token's x-ratelimit-used counter, so a dispatcher running beside the watcher also moves it. A 304 is free by GitHub's own contract; the (+0) is corroboration, not proof.",
+          "Repository-wide comment polling filters to issues in the board index, so a comment on a board task that has scrolled out of the issues window would be skipped. Any issue with a new comment is by definition freshly updated, so in practice it is always in the window."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test  (226 pass, 29 new in test/watch.test.js)",
+          "GHK_DEBUG=1 hkb watch --interval 5 --polls 2  → live 200 then '304 Not Modified · rate 45 (+0)' on both sources",
+          "GHK_DEBUG=1 hkb tail 7 --interval 5 --polls 4 with a comment posted mid-watch → one 'comment by emyann' event line, then 304s"
+        ]
+      },
+      "summary": "`hkb watch` and `hkb tail <n>` stream board transitions, polled with conditional requests. PR #35 (draft).\n\nNew `src/watch.js` holds both loops; `src/cli.js` only routes. Every poll is a conditional GET — the ETag of the last representation goes back as `If-None-Match`, GitHub answers 304 with an empty body and does not charge it, so a quiet board costs nothing however long you watch. Only a 200 is diffed against the previous snapshot, and only a difference prints a line. GraphQL has no conditional requests, so this is the one read path that is REST rather than `fetchBoard`.\n\nTwo conditional sources per command: `watch` reads one page of board issues (status/agent/needs-human/closed) plus the repo's issue comments since it started (attempts, outcomes, results, human comments); `tail` narrows both to one issue. Poll URLs are fixed for the process lifetime — a moving URL (a rolling `since`) could never match an ETag. The first poll is a baseline that seeds state and prints a summary to stderr, so stdout is only transitions; backfill older than the start is not replayed.\n\n`--kinds` accepts an event kind (status, attempt, outcome, result, comment, …) or the status/outcome an event landed on, so `--kinds completed,blocked` works; an unknown token lists the valid ones. `--json` emits JSONL. `--interval` is floored at 5s and honours `X-Poll-Interval`. `--polls N` stops after N polls. Network/5xx blips back off and retry; auth failures still stop; Ctrl-C mid-poll exits quietly.\n\nFor the next worker: `src/gh.js` gained `restRaw(method, path, {headers})` → `{status, headers, data}`, so a 304 is a value rather than a throw. It goes through the existing transport (`{kind:'rest', raw:true}` → `{__response, status, headers, data}`), so `test/fake-gh.js` could model ETags if a future test needs them — today a transport that returns a bare payload is read as a 200, and fake-gh was left untouched. Anything else that wants response headers should use `restRaw` rather than shelling out."
+    }
+  ],
+  "v": 1
+}

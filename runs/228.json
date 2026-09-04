@@ -1,0 +1,66 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-09-01T21:09:53.240Z",
+      "heartbeat_at": "2026-09-01T21:02:20.552Z",
+      "host": "YRND1-GG",
+      "lock_sha": "bf1cc89baf3b7208d4aaed1bc46b3504b20b173d",
+      "manual": true,
+      "outcome": "completed",
+      "profile": "claude",
+      "session_id": "2abc5911-ed47-4920-a41b-ae02a2292a6b",
+      "started_at": "2026-09-01T21:02:20.551Z",
+      "summary": "The /kanban:groom procedure lands as documentation plus a drift test. FILES: skills/kanban/SKILL.md (new `## /kanban:groom — turn the board's report into a batch a human says yes to` section, placed between `## /kanban:decompose` and `## Rules`; operate section 3 and 4 edited; frontmatter description names the command); commands/groom.md (NEW, in commands/specify.md's exact shape); test/skill.test",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-191-1/2abc5911-ed47-4920-a41b-ae02a2292a6b.jsonl",
+      "wt": "kb-191-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T21:13:04Z",
+      "id": 5500510710,
+      "text": "**Merged by the operator seat** — PR #233 (squash), recovered from the same delivery failure as #227.\n\n**Review.** The `## /kanban:groom` section lands with all seven steps, `commands/groom.md` in `specify.md`'s\nshape, and the operate §3/§4 rows updated. Three drift tests, which are the point of the card: *the groom\nsection has a row for every `GROOM_KINDS` kind*, *the groom action column is exactly `GROOM_ACTIONS`*, and *the\ngroom section invokes only real hkb verbs, and reads the board once*. CI green, lint clean, 969 tests.\n\nAfter merging `origin/main` in, the branch's own diff is `commands/groom.md`, `skills/kanban/SKILL.md`,\n`test/skill.test.js`, and two-line touches to `test/init.test.js` and `test/track.test.js` — slightly outside\nthe card's stated scope (registration was #229's), but small and consistent.\n\n**The failure, and what is different from #227.** This card also went `running → done` with `prs: []`, closing\nwith the work unmerged. But unlike #227, PR #233 targeted `main` from creation, carried `Closes #228` as its\nfirst line, and was never based anywhere else (its timeline has no `base_ref_changed`). Marking it ready,\nreopening the issue and rewriting the PR body each failed to make GitHub's\n`closedByPullRequestsReferences` return it. **The cause here is not established** — #227's was (its base was an\nintermediate branch, and retargeting alone restored the link).\n\nWhat both cases share is the consequence, and that is what the fix should target: hkb reads only\n`closedByPullRequestsReferences`, so when GitHub declines to link for any reason the card completes to *done*\nwith no PR, no review and no way back. A fallback lookup by head branch — `kb/<n>` / `worktree-kb-<n>-<k>`, names\nhkb generates itself — would have caught both."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T21:09:55Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "skills/kanban/SKILL.md",
+          "commands/groom.md",
+          "test/skill.test.js",
+          "test/init.test.js",
+          "test/track.test.js"
+        ],
+        "residual_risk": [
+          "The verb test's regex /\\bhkb ([a-z][a-z-]*)/g matches prose as well as commands, so a sentence like 'the block hkb reads' fails it. That is deliberate strictness (it is what caught two of my own sentences), but a future editor will hit it and should reword rather than loosen the regex.",
+          "GROOM_KINDS is a frozen object, so a kind added to src/model.js fails the test until the section gets a row — which is the point, but it means #191's later kinds land in two files, not one.",
+          "The findings table's 'prints as' column paraphrases the evidence strings in src/model.js rather than quoting them; nothing asserts they match, so an evidence rewrite in model.js can drift from the doc silently. Only the kind names and the action vocabulary are pinned.",
+          "The section tells the reader to use the gh api PATCH recipe for kb edits because hkb has no edit verb. If #192/#193 land `hkb edit`, step 5d and the handback paragraph both want rewriting.",
+          "commands/groom.md's argument-hint is '[--status triage]' — the command takes no issue number, unlike specify/decompose. If a harness insists on a numeric $1 this reads oddly, but nothing asserts the hint's shape.",
+          "Operate section 4 now permits promoting rows a human approved. That is amendment 5's intent, but it is the one place the operate section's 'never yours' list has an exception, and it is written as prose, not asserted by a test.",
+          "test/init.test.js and test/track.test.js are outside this card's kb.paths; I edited four lines in them because a fourth command file and a version bump break their hard-coded lists. #229 should expect them already updated."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (969 pass, 0 fail — 966 before, 3 new)",
+          "node bin/hkb.js groom --json against the live board (a read, zero writes) to check the section's field names against the real shape",
+          "node bin/hkb.js --help / grep \"case '\" src/cli.js to confirm every verb the section invokes exists, and that hkb edit and --triage-only do not"
+        ]
+      },
+      "pr": null,
+      "pr_continued": false,
+      "summary": "The /kanban:groom procedure lands as documentation plus a drift test. FILES: skills/kanban/SKILL.md (new `## /kanban:groom — turn the board's report into a batch a human says yes to` section, placed between `## /kanban:decompose` and `## Rules`; operate section 3 and 4 edited; frontmatter description names the command); commands/groom.md (NEW, in commands/specify.md's exact shape); test/skill.test.js (three new tests, plus one asserted doctor string). VERSION: skills/kanban/SKILL.md metadata.version 0.8.0 -> 0.9.0 (it was already 0.8.0 on kb/227, not the 0.6.0 the card guessed). THE SECTION is seven steps: (0) seat check — KB_TASK set means you are a worker, not the groomer; (1) read once, `hkb groom --json --status triage` plus `hkb dispatch --dry-run`, never `hkb list --json` and never a `hkb show` loop, and read `blockers_source` and `summary.path_overlap` first (it also warns that summary.levels counts the whole lane, not the visible rows — #227's residual risk); (2) a findings table with one row per GROOM_KINDS kind: kind | prints as | what you do | what a false positive looks like; (3) judge only judgment.cards and judgment.pairs, one fixed question per shortlist kind (mentions_unlinked: blocker, parent, or same work? — none of the three is the common answer; overlap_pair: one card, sequence, or narrower paths?); (4) ONE proposal table `| card | action | target | evidence | exact command |` grouped by cluster, then STOP FOR A YES, followed by the closed action-vocabulary table `| action | what it means | what the batch runs |` with all ten GROOM_ACTIONS; (5) apply approved rows only, in order: hkb comment -> hkb create --triage --blocked-by <revealer> (never --priority) -> hkb link -> the gh api PATCH recipe then `hkb show <n> --json` to check kb._malformed -> ONE `hkb promote a b c` of triage cards, where a `forced` line (`-> ready (forced: blockers not done)`) is a stop-and-report; it also says promoted N is a queue, not N running (max_in_progress); (6) verify with hkb groom, hkb graph, hkb dispatch --dry-run; (7) report in the operate section-5 shape. Triage-only in v1 (amendment 7): no blocked lane. supersede, archive, reprioritise and cutting a link are NEVER in the batch — handed back as pre-staged commands (amendment 5). OPERATE EDITS: the `appeared` event row and the `triage` status row both now say to run the /kanban:groom per-card pass (`hkb groom --json --status triage`) and propose, never promote; section 4's Yours list gains `groom` (noting it is a read like `hkb dispatch --dry-run`); section 4's never-yours clause 'promoting or archiving someone else's plan' gains 'except the rows of a /kanban:groom or /kanban:specify table the human has said yes to, because the yes is what makes it theirs'. THE DRIFT TEST (test/skill.test.js, 3 tests, with a generic `skillSection(title)` extractor and a `tableColumn(section, header)` markdown-table parser): every GROOM_KINDS kind has exactly one findings-table row; the action-vocabulary table's first column is deepEqual to GROOM_ACTIONS (so a new action fails until it gets a row, and an invented word fails too) and every action cell of the worked proposal table is a GROOM_ACTIONS value; every `hkb <verb>` matched by /\\bhkb ([a-z][a-z-]*)/g in the section is a `case '<verb>'` in src/cli.js; the section contains 'hkb groom --json', 'stop for a yes', '--triage' and 'forced'; every `hkb dispatch` is followed by ' --dry-run'; '--loop' never appears. AMENDMENT 6 VERBS THAT DO NOT EXIST — file these as cards: (a) `hkb edit` is NOT a case in src/cli.js, yet src/model.js's groom findings emit `suggests` strings that name it (`hkb edit <n> --paths ...`, `hkb edit <n> --priority N`, `hkb edit <n> --goal \"...\"`) for malformed_kb, no_paths, priority_inversion and broad_path — the report tells a reader to run a verb the CLI refuses; the skill works around it with the gh api PATCH recipe and says a suggests naming a missing verb is a description of the fix, not a command. (b) `hkb promote --triage-only` does NOT exist — promote takes numbers only, so the section says 'one `hkb promote a b c` of cards that are in triage' and leans on the `forced` line as the guard rail. (c) there is no verb for close-as-duplicate or for editing kb fields, which is why amendment 5's handback list exists. OUT-OF-SCOPE EDITS I HAD TO MAKE (disclosed): adding a fourth file to commands/ changes commandNames(), which is directory-derived, so three hard-coded lists in test/init.test.js (lines ~307, ~316, ~337) needed 'groom.md' / '/kanban:groom' added, and test/track.test.js's skill-version pin needed 0.8.0 -> 0.9.0. Both are one-line follow-on edits, no new coverage. src/* untouched; README, HELP, .claude-plugin/plugin.json and the wiki are #229's (plugin.json needs nothing — it points at ./commands as a directory)."
+    }
+  ],
+  "v": 1
+}

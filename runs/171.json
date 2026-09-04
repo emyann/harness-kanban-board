@@ -1,0 +1,72 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-29T02:52:01.745Z",
+      "heartbeat_at": "2026-08-29T02:36:17.860Z",
+      "host": "YRND1-GG",
+      "job": "7baa262d",
+      "lock_sha": "ddab240e5bac6660a2f19dedcc8e2d1319363f8e",
+      "log": ".kanban/logs/171-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 181,
+      "pr_head": "worktree-kb-171-1",
+      "profile": "claude",
+      "session_id": "7baa262d-a8e5-47e1-bdbf-a7642b7fd827",
+      "started_at": "2026-08-29T02:36:17.860Z",
+      "summary": "Replaced the stale --bg evidence (FleetView-derived six-source table) with the measured live probe (handleBgFlag -> spawnBgSession, a --settings Stop hook firing seconds after a claude --bg launch) across src/board.js, src/model.js, docs/harnesses.md, docs/wiki/features/hook-install-shapes.md; stopped citing hkb doctor's session-recording line as proof the launch hooks fired (that's since #137's j",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-171-1/7baa262d-a8e5-47e1-bdbf-a7642b7fd827.jsonl",
+      "wt": "kb-171-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-29T02:02:43Z",
+      "id": 5459671411,
+      "text": "Leftovers from the third-pass review of PR #152 (#150, merged), in the files this card edits:\n- Three wiki pages went stale on that branch and are stale on main now: `features/up-and-down.md`, `features/hook-install-shapes.md`, `features/operator-seat.md` — re-stamp (`node .repolore/scripts/wiki-stamp.mjs <page>` after verifying the prose).\n- src/hook.js ~64-66: the pretool gate calls `whichAttempt` and then re-reads `process.env.KB_TASK/KB_PROFILE/KB_ROOT` instead of using the identity it returned (N3 from #150's review).\n- src/model.js ~632 docstring: \"or `KB_ROOT` itself for a track root\" — no such case; claude-track launches with `--worktree kb-{n}-{k}`.\n- src/hook.js ~109 `warnedLeak` is module-level with no reset; test/hook.test.js asserts the single stderr line for the same message in two tests, so they are order-dependent — export a reset or key the dedupe per message+cwd.\n- src/model.js ~652 builds `${rootPath}/${worktreePath(…)}` by string concat and compares `path.resolve` results (not realpath): a symlinked hand-set KB_ROOT is judged a leak (safe direction). The resolve boilerplate is duplicated between `whichAttempt` and `checkEnvLeak`."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-29T02:52:04Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/board.js",
+          "src/model.js",
+          "src/init.js",
+          "src/hook.js",
+          "src/doctor.js",
+          "src/dispatch.js",
+          "docs/harnesses.md",
+          "docs/wiki/features/hook-install-shapes.md",
+          "test/hook.test.js",
+          "test/harness.test.js",
+          "test/profiles.test.js"
+        ],
+        "residual_risk": [
+          "docs/wiki/features/up-and-down.md and docs/wiki/features/operator-seat.md were flagged stale by the operator's comment (from the #152 review) but are outside this card's declared file scope, so left untouched",
+          "hkb doctor's 'if cheap' check on the latest bg attempt's .kanban/sessions/<n>-<k> marker (item 1) was not added -- it's a new check, not a nit fix, and better scoped as its own follow-up card"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (810 passing)",
+          "npm run smoke",
+          "node .repolore/scripts/wiki-stamp.mjs docs/wiki/features/hook-install-shapes.md"
+        ]
+      },
+      "pr": 181,
+      "pr_continued": false,
+      "summary": "Replaced the stale --bg evidence (FleetView-derived six-source table) with the measured live probe (handleBgFlag -> spawnBgSession, a --settings Stop hook firing seconds after a claude --bg launch) across src/board.js, src/model.js, docs/harnesses.md, docs/wiki/features/hook-install-shapes.md; stopped citing hkb doctor's session-recording line as proof the launch hooks fired (that's since #137's jobSessionUpdate, unrelated to hooks) and named the real Stop-hook trace (.kanban/sessions/<n>-<k> marker). hkbCommandForHook now prefers node \"<PKG_ROOT>/bin/hkb.js\" whenever PKG_ROOT is durable even with a bare hkb on PATH (bare hkb is now only the npx-cache fallback) -- the hook runs under the session daemon's own PATH (#150), not the launching shell's. decidePermission now returns a kind (policy/capability/path); the PreToolUse denial only appends the --kind capability suggestion for capability denials and no longer double-dots a reason ending in a period (#159). promptingProfiles also recognizes --permission-mode bypassPermissions and --dangerously-skip-permissions. expandLaunch refuses a launch template embedding {hook_settings} inside a larger token instead of silently rendering a bare --settings=. Added the --shared-hooks double-fire residual-risk note to docs/harnesses.md. Also fixed leftovers from the #150 review named in this card's comment (all in files this card already touches): preToolHook reuses whichAttempt's own identity instead of re-reading KB_TASK from env; the leak-dedupe in src/hook.js is now keyed per checkout (not just message text) via a new exported resolvedIdentity helper, which also de-duplicates the resolve boilerplate that used to be copied into src/doctor.js's checkEnvLeak; dropped a stale 'or KB_ROOT itself for a track root' docstring clause in src/model.js."
+    }
+  ],
+  "v": 1
+}

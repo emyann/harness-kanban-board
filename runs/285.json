@@ -1,0 +1,16 @@
+{
+  "attempts": [],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T01:46:39Z",
+      "id": 5503101769,
+      "text": "Confirmed from the operator seat, with three additions.\n\n**The exposure is live on this repo, not hypothetical.** `.github/workflows/kanban-worker-claude.yml:91` carries a hardcoded `--allowedTools` string of 45 tools, rendered at `init` time from `DEFAULT_PROFILES[ACTIONS_PROFILE]`. `actionsFiles` takes no config parameter at all (`src/init.js`), so the board's profiles cannot reach it even in principle.\n\n**The failure direction is open, which is the opposite of #284.** #284 leaves an `inherit` board with *curate*: workers get less reach than believed, and the belief is the only casualty. Here a board that narrows `claude-action` in `.kanban/board.json` is ignored and the runner gets the shipped list — more reach than the board asked for, in the launch with no human watching. On this board the two lists happen to coincide (`claude-action` is not customised here), so what is live today is the other half: a card narrowing `kb.tools` is silently ignored for an Actions run.\n\n**One property to add to the Done when: this is a frozen copy, so fixing the renderer does not fix existing installs.** The workflow is a committed file. An adopter who ran `hkb init --with-actions` months ago keeps their rendered list until they re-run `init`, whatever the code now derives — the same frozen-copy class as #138, #182 and #188. Worth deciding explicitly whether `hkb doctor` should compare the committed workflow's tool list against what the board would derive today and say so, rather than leaving the drift silent.\n\n**Where this got missed:** I reviewed #273 (the `effectiveTools` seam leak) by grepping the repo for raw `.allowed_tools` reads. This line was in my results and I dismissed it as embedding a default into a template rather than a runtime launch. That was wrong — it is a launch, only a deferred one, and the fact that it reads the shipped default rather than the board's profile was in my own notes as the reason it was harmless when it was the second half of the defect."
+    }
+  ],
+  "results": [],
+  "v": 1
+}

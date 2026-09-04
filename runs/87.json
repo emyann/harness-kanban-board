@@ -1,0 +1,70 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T18:49:48.378Z",
+      "heartbeat_at": "2026-08-27T18:27:06.986Z",
+      "host": "YRND1-GG",
+      "job": "c1ce1ee4",
+      "lock_sha": "3290972527385453b60ba3806bf0e233dfb9d68c",
+      "log": ".kanban/logs/87-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 90,
+      "pr_head": "worktree-kb-87-1",
+      "profile": "claude",
+      "started_at": "2026-08-27T18:27:06.986Z",
+      "summary": "`hkb serve` now holds several checkouts on one server, one port and one page (read side only; the dispatcher keeps its own card).\n\nSelection: `--repos ../a,../b#board` adds checkouts to the one you ran in, or list them once in ~/.config/hkb/boards.json ($XDG_CONFIG_HOME/$KB_CONFIG_HOME honoured). Nothing is scanned for. A bad --repos path is fatal; a stale entry in the user list is a warning and a",
+      "wt": "kb-87-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T18:49:50Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/serve.js",
+          "src/board.js",
+          "src/model.js",
+          "src/cli.js",
+          "web/index.html",
+          "test/serve.test.js",
+          "test/model.test.js",
+          "README.md",
+          "docs/manual-mode.md",
+          "docs/wiki/features/web-board.md",
+          "docs/wiki/index.md",
+          "docs/wiki/log.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/wiki.config.yml",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/decisions/adr-004-roles-and-adoption.md"
+        ],
+        "residual_risk": [
+          "/api/board changed shape (top-level repo/board/dispatcher/tasks -> boards: [...]). Page-private endpoint shipped in the same commit as the page, but anything curling it externally would need updating.",
+          "The page was verified through the vm/fake-DOM tests only — browser automation was denied in this session, so the multi-board bar and repo chips have not been seen rendered.",
+          "--repos always includes the checkout you ran in; there is no way to show only the listed repos. Documented, and the user-level list makes it moot once the cwd repo is in the list.",
+          "A per-board fetch failure is cached for the poll TTL, so recovery after fixing auth takes up to one poll (or a forced refresh)."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (485 pass, incl. new: per-board verb routing asserts the repo AND the checkout root; per-board log tails; per-board dispatcher pid; ambiguous/unknown-key refusals; one board failing to read; serveContexts/loadUserBoards over real temp checkouts)",
+          "npm run smoke (web/index.html is read from the package at runtime)",
+          "a dragstart -> drop replay through the fake DOM asserts the POST went to the dragged card's board and that the other repo was never touched",
+          "end-to-end outside the suite: two real checkouts resolved through --repos, one server, both boards in one payload, per-board dispatcher and log tail, a move landing in the right repo's checkout, the unqualified route refused",
+          "node .repolore/scripts/wiki-check.mjs (all pages fresh) + wiki-coverage (web/ no longer uncovered)"
+        ]
+      },
+      "summary": "`hkb serve` now holds several checkouts on one server, one port and one page (read side only; the dispatcher keeps its own card).\n\nSelection: `--repos ../a,../b#board` adds checkouts to the one you ran in, or list them once in ~/.config/hkb/boards.json ($XDG_CONFIG_HOME/$KB_CONFIG_HOME honoured). Nothing is scanned for. A bad --repos path is fatal; a stale entry in the user list is a warning and a skip.\n\nAddressing: every board gets a URL-safe `owner~repo~slug` key (src/model.js boardKey/uniqueKeys) and its own closure — cache, in-flight read, generation, detail map. dispatcherState, logPathFor and every verb resolve against that board ctx. New route /api/boards/<key>/tasks/<n>[/<verb>]; the unscoped /api/tasks/<n> still resolves when there is exactly one board and is a 400 naming the keys when there are more (an unknown key is a 404 listing the keys).\n\nPage: still one inline file, seven columns, and identical with one board. With more, a board bar appears (chip per board with its own dispatcher dot + count, click to filter) and each card carries its repo. The board key travels with the card via data-card=\"<key>#<n>\" into dataTransfer, so a drag can only act on the repo it came from. /api/board now returns { columns, poll, host, fetched_at, boards: [...] } — a shape change on a page-private endpoint.\n\nIsolation: a board that fails to read keeps its last good cards, reports error/stale, is cached like a success, and shows in an error strip; the other boards render normally (previously one bad read failed the page).\n\nFrugality unchanged: one GraphQL query per board per poll on the same conditional-read/304 path, no new dependency, no build step.\n\nNext worker: if you add a cross-repo dispatcher (the sibling card), serveContexts/keyBoards in src/serve.js are the reusable half — they resolve paths to contexts and key them; only the accounting of max_in_progress and the daily spawn cap is still open."
+    }
+  ],
+  "v": 1
+}

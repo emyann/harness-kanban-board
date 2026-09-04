@@ -1,0 +1,69 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T18:32:04.536Z",
+      "heartbeat_at": "2026-08-27T18:14:06.484Z",
+      "host": "YRND1-GG",
+      "job": "85162747",
+      "lock_sha": "3290972527385453b60ba3806bf0e233dfb9d68c",
+      "log": ".kanban/logs/85-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-27T18:14:06.484Z",
+      "wt": "kb-85-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-27T18:18:32Z",
+      "id": 5443388609,
+      "text": "Confirmed against a real install, and it is worse than the card says: **doctor reads only `.claude/settings.json`** (`src/doctor.js:252`), so it does not know `settings.local.json` exists.\n\nMove the hooks to the local file — which is option 1, the recommended fix — and doctor immediately reports:\n\n    ! stop hook    not configured — workers that exit without a terminal verb are only caught by the\n                   dispatcher  → hkb init\n\nThe hook is installed and working. Doctor cannot see it, and the fix it names (`hkb init`) writes the hooks back into the shared file, undoing the move. Whoever takes this card walks into a loop where the tool argues with itself.\n\nSo option 1 is not a one-line change of destination. The unit of work is: **wherever init writes hooks, doctor resolves them the same way** — read both files, report which one carries them, and only warn when neither does. Same for the `--no-hook` path and for whatever `installClaudeHooks` reports.\n\nThat coupling is the actual bug behind this card: the writer and the checker each hardcode a path instead of sharing one resolver."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T18:30:25Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/init.js",
+          "src/doctor.js",
+          "src/cli.js",
+          "src/hook.js",
+          "scripts/smoke-pack.mjs",
+          "test/init.test.js",
+          "test/harness.test.js",
+          ".gitignore",
+          "README.md",
+          "docs/harnesses.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/decisions/adr-004-roles-and-adoption.md"
+        ],
+        "residual_risk": [
+          "Generated harness hook files (.github/hooks/kanban.json, .codex/hooks.json) are tracked and may still hold an absolute node path on a machine where hkb is not on PATH; only the _npx trap was removed there.",
+          "A team that deliberately kept portable hooks in .claude/settings.json is left alone by a re-run, so a teammate without hkb installed still meets the failing hook first — doctor now names it and the fix.",
+          "`npx -y hkb-cli hook stop` costs an npx resolve per PreToolUse call; it is only written when there is no other command that would still run tomorrow, and init says how to replace it."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (470 pass)",
+          "npm run smoke (tarball init: hooks in .claude/settings.local.json, tracked file not written, .gitignore covers it, no settings file names _npx)",
+          "node --test test/init.test.js — new test runs the real CLI from a copied package root under _npx/... on a PATH with no hkb: Stop hook is `npx -y hkb-cli hook stop`",
+          "node bin/hkb.js doctor --json in this repo — stop hook .claude/settings.json, hook command ok"
+        ]
+      },
+      "summary": "init no longer writes a machine-specific hook command into the tracked .claude/settings.json. Option 1 from the issue, plus doctor's check from option 3. The Stop/PreToolUse hooks now go into .claude/settings.local.json (per-developer, added to GITIGNORE_LINES and to this repo's own .gitignore); `hkb init --shared-hooks` opts into the tracked file, which only ever gets the portable `hkb hook <verb>` form — an absolute path is never written where other people read it. hkbCommandForHook(verb, {shared, onPath, pkgRoot}) never emits a PKG_ROOT under _npx: with no hkb on PATH and a cache root it returns `npx -y hkb-cli hook stop`, and init prints the `npm i -g hkb-cli` nudge. The hooks live in exactly one of the two files (two copies fire every nudge twice): hookPlacement() keeps a shared+portable setup where it is, moves a path-naming one out of the tracked file, and --shared-hooks moves them the other way; an _npx path is repaired in place wherever found. doctor gained checkHooks(): it reads both files, says which one holds the hooks, warns when both do, and FAILS when the command cannot be resolved here (fix: npm i -g hkb-cli), including an _npx path that still exists today. Pure helpers (hookPlacement, hkbCommandForHook, hookCommandNeeds, isHkbHookCommand, isPortableHookCommand, isEphemeralPath, stripHkbHooks) are unit-tested; only installClaudeHooks/findClaudeHooks do I/O. Follow-up worth considering, not done here: .github/hooks/kanban.json and .codex/hooks.json are tracked harness files that can still carry an absolute path when hkb is installed durably but not on PATH (they no longer name the npx cache)."
+    }
+  ],
+  "v": 1
+}

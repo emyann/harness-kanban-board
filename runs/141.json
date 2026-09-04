@@ -1,0 +1,64 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T21:40:58.859Z",
+      "heartbeat_at": "2026-09-01T21:37:28.295Z",
+      "host": "YRND1-GG",
+      "job": "dd43d982",
+      "lock_sha": "5db5afabd8f9396f9e164cd43ba1e90166f87dc2",
+      "log": ".kanban/logs/141-1.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 239,
+      "pr_head": "kb-141-1",
+      "profile": "claude",
+      "session_id": "dd43d982-61a2-4701-88f1-88b309099eeb",
+      "started_at": "2026-09-01T21:37:28.295Z",
+      "summary": "classify() matched the bare phrase \"could not resolve\", meant for DNS failures, but GitHub's GraphQL 404 idiom (\"Could not resolve to an Issue with the number of N.\") matched it too, so a missing issue read as network/offline. For a terminal verb this meant isOffline() told withOutbox to queue the write to .kanban/outbox.jsonl for replay forever, with exit 0 and a false success message. Fixed: nar",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-141-1/dd43d982-61a2-4701-88f1-88b309099eeb.jsonl",
+      "wt": "kb-141-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T21:42:46Z",
+      "id": 5500831281,
+      "text": "**Merged by the operator seat** — review: Reviewed against the card's three Done-when items; all met. The bug was a regex too broad by one phrase: classify() in src/gh.js matched the bare string 'could not resolve', which is GitHub's GraphQL 404 idiom ('Could not resolve to an Issue with the number of N') as well as a DNS failure, so a terminal verb against a missing issue was classified 'network' and queued forever. Now a new 'notfound' kind matches /could not resolve to (a|an) \\w/ ahead of the network branch, and the network branch is narrowed to 'could not resolve host|hostname'. getTask translates that into a clean exit 2 naming the issue and the repo. Two details beyond the card that I would have asked for: the network regex's bare 'eof' became word-bounded, which stops an unrelated message containing that substring being read as a dropped connection; and the notfound branch is guarded on !status so a real HTTP status still routes to its own case. Both required tests exist and are named for the distinction — 'a GraphQL could not resolve 404 is notfound, not network — a real DNS failure still is' and 'a missing issue number is notfound (exit 2), not a network error a terminal verb would queue forever'. Verified myself: CI green (test + packed artifact), lint clean, 971 tests pass on the branch, up from 969. PR was linked normally and the card reached review through the ordinary path — no repeat of the #227/#228 loss., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T21:41:00Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/gh.js",
+          "src/tasks.js",
+          "test/lock.test.js",
+          "test/tasks.test.js"
+        ],
+        "residual_risk": [
+          "Only the direct issue(number:) lookup path (getTask) was given a clean notfound->exit2 translation. Other graphql() call sites (mergePullRequest, enablePullRequestAutoMerge, repository/project lookups in projects.js) will now correctly classify their own \"could not resolve to a ...\" errors as notfound via the shared classify() fix, and most already branch on e.kind === 'notfound' generically, but none were audited individually for whether their fallback behavior on notfound is the ideal one — only the network-misclassification bug (#141's actual scope) was fixed everywhere.",
+          "13 wiki pages were already stale before this change (pre-existing debt noted in #125's report, /repolore:refresh still owed) and were not touched — this fix's own diff (gh.js classify, tasks.js getTask) is not documented in any wiki page today, so nothing here needed updating."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test — 971 pass, 0 fail (added tests: classify() notfound-vs-network-vs-eof cases in test/lock.test.js; getTask() exit-2/non-network case in test/tasks.test.js)"
+        ]
+      },
+      "pr": 239,
+      "pr_continued": false,
+      "summary": "classify() matched the bare phrase \"could not resolve\", meant for DNS failures, but GitHub's GraphQL 404 idiom (\"Could not resolve to an Issue with the number of N.\") matched it too, so a missing issue read as network/offline. For a terminal verb this meant isOffline() told withOutbox to queue the write to .kanban/outbox.jsonl for replay forever, with exit 0 and a false success message. Fixed: narrowed the DNS branch to \"could not resolve host(name)\", classified the GraphQL \"could not resolve to a/an ...\" idiom as notfound, gave eof a word boundary (no longer matches substrings like \"geofencing\"), and made getTask() turn that notfound error into the same clean exit-2 \"issue not found\" it already gives for a null node. PR #239."
+    }
+  ],
+  "v": 1
+}

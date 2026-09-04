@@ -1,0 +1,48 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T02:32:54.726Z",
+      "heartbeat_at": "2026-08-28T02:31:49.524Z",
+      "host": "YRND1-GG",
+      "lock_sha": "cac8368dd0c6ef966c820f0c4ed939915f3c7b86",
+      "log": ".kanban/logs/96-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 97,
+      "pr_head": "worktree-kb-96-1",
+      "profile": "claude",
+      "started_at": "2026-08-28T02:31:49.524Z",
+      "summary": "README multi-board section now says when ~/.config/hkb/boards.json is read. Added one sentence before the existing \"An entry that no longer exists is a warning and a skip\" line: the list is read once, while `hkb serve` starts, so a board you add to it — or a checkout you just `hkb init`ed — shows up only after you restart the server. Matches src/serve.js:128, where serveContexts calls loadUserBoar",
+      "wt": "kb-96-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T02:32:57Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "README.md"
+        ],
+        "pr": "https://github.com/emyann/harness-kanban-board/pull/97",
+        "residual_risk": [
+          "None beyond prose: no code path touched. If the user board list ever becomes hot-reloaded, this sentence must be revisited."
+        ],
+        "verification": [
+          "npm run lint",
+          "git rebase origin/main (already up to date)"
+        ]
+      },
+      "summary": "README multi-board section now says when ~/.config/hkb/boards.json is read. Added one sentence before the existing \"An entry that no longer exists is a warning and a skip\" line: the list is read once, while `hkb serve` starts, so a board you add to it — or a checkout you just `hkb init`ed — shows up only after you restart the server. Matches src/serve.js:128, where serveContexts calls loadUserBoards during boot. Docs only: no source, no test change. Draft PR #97."
+    }
+  ],
+  "v": 1
+}

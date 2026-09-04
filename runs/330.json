@@ -1,0 +1,53 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-03T09:57:31.244Z",
+      "heartbeat_at": "2026-09-03T09:57:00.922Z",
+      "host": "YRND1-GG",
+      "kind": "transient",
+      "lock_sha": "e93a6109a019fcec2e7a25a6a906131a07e29dc0",
+      "log": ".kanban/logs/330-1.log",
+      "outcome": "blocked",
+      "pid": null,
+      "profile": "claude",
+      "reason": "Operator: claimed in the tick before the dependency edit landed. Sequenced behind #304, which is deleting the file this card names — see the comment above.",
+      "started_at": "2026-09-03T09:57:00.922Z",
+      "wt": "kb-330-1"
+    },
+    {
+      "attempt": 2,
+      "bg": true,
+      "heartbeat_at": "2026-09-04T03:56:48.273Z",
+      "host": "YRND1-GG",
+      "lock_sha": "0413bdaf78d09a7b902ad509649238eb26da1e90",
+      "log": ".kanban/logs/330-2.log",
+      "pid": null,
+      "profile": "claude",
+      "started_at": "2026-09-04T03:56:48.273Z",
+      "wt": "kb-330-2"
+    }
+  ],
+  "block_loops": {
+    "ofqfew": 1
+  },
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T09:57:21Z",
+      "id": 5523948601,
+      "text": "Sequenced behind #304, which is running now and deletes src/store/github.js — the file this card names. #304's done-when keeps a GitHub read path alive inside src/init.js for the migration (its grep criterion excludes it explicitly), so the pagination fix belongs on whatever survives that deletion, not on the copy about to be removed. Re-read the import path after #304 lands before assuming fetchClosedRecent is still where this card says it is."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T09:57:33Z",
+      "id": 5523950993,
+      "text": "**Blocked** (transient, attempt 1): Operator: claimed in the tick before the dependency edit landed. Sequenced behind #304, which is deleting the file this card names — see the comment above."
+    }
+  ],
+  "results": [],
+  "v": 1
+}

@@ -1,0 +1,55 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T05:06:57.311Z",
+      "heartbeat_at": "2026-08-27T04:54:47.043Z",
+      "host": "YRND1-GG",
+      "job": "819b2b2b",
+      "lock_sha": "efeaa0c4be3a4a23700cb8856460b5025e2cb98d",
+      "log": ".kanban/logs/62-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 64,
+      "pr_head": "worktree-kb-62-1",
+      "profile": "claude",
+      "started_at": "2026-08-27T04:54:47.043Z",
+      "summary": "The dispatcher loop now self-heals from a claim that will not resolve, instead of backing off for ever. (1) The base sha stops being a process-lifetime cache: tick() calls staleBaseSha(ctx) at the top and the next claim re-reads git/ref/heads/<branch> with If-None-Match, so a quiet repo pays a free 304, a moved branch is picked up within the tick, and a stale sha can never outlive the tick that re",
+      "wt": "kb-62-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T05:06:59Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/dispatch.js",
+          "src/lock.js",
+          "test/selfheal.test.js",
+          "CLAUDE.md"
+        ],
+        "residual_risk": [
+          "The thresholds (3 to drop, 6 to exit) are exported constants, not board.json config: an operator who wants them tuned needs a code change.",
+          "The self-heal ladder only observes claim results. A process poisoned in a way that never reaches a claim (e.g. a wedged board read) still relies on the existing tick-failed logging.",
+          "baseSha now goes through restRaw (gh api -i) instead of rest (gh api); the 304 branch is only exercised by a hand-rolled transport in the tests, since fake-gh does not model ETags. The real 304 path is the same one src/watch.js already uses in production.",
+          "A persistent `auth` claim failure now escalates to exit 4 (a bad or expired dispatcher token is exactly what a restart fixes). If an operator runs the loop under a supervisor with a genuinely dead token, they get a restart loop with a loud reason rather than a silent stall."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (425 passing, 0 failing, after rebase on origin/main)",
+          "node --test test/selfheal.test.js (9 new tests)"
+        ]
+      },
+      "summary": "The dispatcher loop now self-heals from a claim that will not resolve, instead of backing off for ever. (1) The base sha stops being a process-lifetime cache: tick() calls staleBaseSha(ctx) at the top and the next claim re-reads git/ref/heads/<branch> with If-None-Match, so a quiet repo pays a free 304, a moved branch is picked up within the tick, and a stale sha can never outlive the tick that read it (still memoized inside a tick, so N claims cost one request). (2) noteClaimResult(health, n, c) walks a per-process, per-task ladder over consecutive `unknown` claim results: at 3 the process calls dropCaches(ctx) — base sha + etag, ctx.caps, per-issue memos — and logs \"self-heal: caches dropped\"; at 6 the tick returns summary.fatal, loop() drops its singleton lock and throws with exitCode 4 and a line naming the task and the last error, so a supervisor restarts it with fresh state. Any non-unknown result (claimed/held) clears the streak, so an upstream recovery needs no restart; kinds ratelimit and network are excused and never escalate (waiting is the fix there, a restart makes it worse). The ladder lives on ctx._health and is never persisted — the whole hypothesis is that a fresh process is fine. (3) A base sha that will not resolve is now returned as an `unknown` claim instead of thrown: it used to escape claim() and abort the tick with \"tick failed: ...\" every minute, which was the same silent back-off by another route. Exit code 4 is new (2 = usage/state, 3 = LOCK_LOST) and is recorded in CLAUDE.md. loop() gained an injectable `sleeper` so a test can run six ticks in a millisecond. Draft PR #64."
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,62 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-29T05:07:41.914Z",
+      "heartbeat_at": "2026-08-29T05:01:31.374Z",
+      "host": "YRND1-GG",
+      "job": "550cfe69",
+      "lock_sha": "1aed45ae437fcddf2e2daf039f7b2c22078859e7",
+      "log": ".kanban/logs/197-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 198,
+      "pr_head": "worktree-kb-197-1",
+      "profile": "claude",
+      "session_id": "550cfe69-1595-48e6-a713-85f520cf29d0",
+      "started_at": "2026-08-29T05:01:31.374Z",
+      "summary": "Filled in the sentences the fan-out track brief was still missing (PR #194/#129 review): the per-node subagent brief now tells each child to heartbeat the root (not itself) every ~10 minutes, since the orchestrator's own turn ends the moment it spawns a wave and cannot wake itself; it overrides hkb context's current-branch line (the child's checkout is a throwaway agent-<id> one, not the node's kb",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-197-1/550cfe69-1595-48e6-a713-85f520cf29d0.jsonl",
+      "wt": "kb-197-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-29T05:07:46Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/track.js",
+          "src/gc.js",
+          "docs/wiki/features/tracks.md",
+          "docs/harnesses.md",
+          "docs/wiki/log.md",
+          "test/track.test.js",
+          "test/gc.test.js"
+        ],
+        "residual_risk": [
+          "The heartbeat and branch-override lines are brief-level, not enforced code: a subagent that ignores them can still be reclaimed as stale or push to the wrong branch — same caveat as the existing verb-check known gap.",
+          "gc's PR-merged/closed check for agent-* worktrees depends on closedByPullRequestsReferences (caps.closedByPrs); on a GitHub schema without it, these worktrees fall back to accumulating until the task itself settles (sweepTask still cleans them then).",
+          "Item 5 from the issue (the daemon-leaked KB_TASK / attemptIdentity gap, #150) is documented as a known gap in tracks.md but not fixed in this PR — it needs its own attemptIdentity/subagentStopHook change, out of this task's file scope."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (836/836 passing)",
+          "npm run smoke",
+          "node .repolore/scripts/wiki-check.mjs (tracks.md fresh)"
+        ]
+      },
+      "pr": 198,
+      "pr_continued": false,
+      "summary": "Filled in the sentences the fan-out track brief was still missing (PR #194/#129 review): the per-node subagent brief now tells each child to heartbeat the root (not itself) every ~10 minutes, since the orchestrator's own turn ends the moment it spawns a wave and cannot wake itself; it overrides hkb context's current-branch line (the child's checkout is a throwaway agent-<id> one, not the node's kb/<n>); and the wave loop names the fallback when a spawn itself fails (work the node yourself sequentially, or hkb block --kind transient). gc gains agentWorktreeNode/sweepAgentWorktrees so an agent-<id> worktree a committed subagent left behind is swept once its kb/<n> branch's PR merges or closes, from both hkb gc and sweepTask. Softened the 'deleted when you finish' line in the brief and docs/harnesses.md to match reality. tracks.md gained two Known-gaps entries: the heartbeat-skip stale-reclaim risk, and the daemon-leaked KB_TASK (#150) that can suppress the root's Stop."
+    }
+  ],
+  "v": 1
+}

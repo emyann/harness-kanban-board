@@ -1,0 +1,59 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T03:50:47.508Z",
+      "heartbeat_at": "2026-08-28T03:39:57.611Z",
+      "host": "YRND1-GG",
+      "job": "ccfbdf2c",
+      "lock_sha": "80058011b0c55f55e0e687dc27bac5e2379b0520",
+      "log": ".kanban/logs/100-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 105,
+      "pr_head": "worktree-kb-100-1",
+      "profile": "claude",
+      "started_at": "2026-08-28T03:39:57.611Z",
+      "summary": "hkb init now registers the checkout it just set up in the user-level board list (~/.config/hkb/boards.json): a step 7 in src/init.js calling registerUserBoard(root) through a new registerCheckout() helper, at the end of a successful run.\n\nBehaviour: idempotent (the helper compares resolved paths, so a second init — or a checkout somebody already listed by hand — adds nothing); never silent (one li",
+      "wt": "kb-100-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T03:50:50Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/init.js",
+          "test/init.test.js",
+          "scripts/smoke-pack.mjs",
+          "docs/wiki/features/planning-commands.md",
+          "docs/wiki/features/update-notice.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "Two files outside the task's declared scope. scripts/smoke-pack.mjs now points every command at a throwaway KB_CONFIG_HOME: without it `npm run smoke` would leave its deleted scratch repo on the maintainer's real board list — direct fallout of this change, no overlap with #101/#102. The two wiki pages covering src/init.js got a no-op re-stamp plus one shifted anchor (installCommands src/init.js:131-139 → :132-140).",
+          "features/web-board (the page that owns the board list) and src/serve.js were deliberately left alone — #101 landed there while this was in flight, and #102 owns the user-facing narrative.",
+          "The bare-path entry dedupes against the documented hand-written spelling only: a checkout somebody listed as `path#default` would still gain a second, bare entry.",
+          "test/init.test.js now sets KB_CONFIG_HOME for the whole file, including the two tests that spawn the real CLI. A future test there that spawns a process must keep passing it through, or it will write to a real ~/.config/hkb/boards.json.",
+          "#102 (README: the board list maintains itself) still has to document the new behaviour for users."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test — 566 pass, 0 fail (on top of 2354b1e)",
+          "npm run smoke — packs, installs, inits a scratch repo, all checks ok",
+          "node .repolore/scripts/wiki-check.mjs — all pages fresh"
+        ]
+      },
+      "summary": "hkb init now registers the checkout it just set up in the user-level board list (~/.config/hkb/boards.json): a step 7 in src/init.js calling registerUserBoard(root) through a new registerCheckout() helper, at the end of a successful run.\n\nBehaviour: idempotent (the helper compares resolved paths, so a second init — or a checkout somebody already listed by hand — adds nothing); never silent (one line either way, `registered this checkout in <file> — hkb serve will show it` or `already listed in <file> …`, which is the disclosure that init wrote a file outside the repo, so there is deliberately no --no-register flag); never fatal (a malformed or unwritable list prints a warning naming the path to add by hand and init still exits 0, leaving a hand-written file byte-identical); and the offline `--no-labels --repo owner/name` path registers too, since it is a local write.\n\n`hkb init --json` gained its first stdout payload: {repo, board, root, registered: {file, added}}. init's human log has always gone to stderr, so that object has stdout to itself; the test parses the whole of stdout from the real binary.\n\nJudgement call a reviewer should look at: the entry is a BARE path — registerUserBoard(root), letting `board` default to null — not `path#board`. init has just written the slug into .kanban/board.json and contextForPath reads a bare entry's slug from there, so both resolve identically today and a bare entry follows a later rename. The deciding reason is dedupe: a bare resolved path is the spelling the README tells people to hand-write, so registering a checkout already on the list adds nothing instead of a second card on the serve page.\n\nDraft PR #105 on branch worktree-kb-100-1, rebased on 2354b1e (#104)."
+    }
+  ],
+  "v": 1
+}

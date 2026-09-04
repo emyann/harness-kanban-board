@@ -1,0 +1,16 @@
+{
+  "attempts": [],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T16:29:10Z",
+      "id": 5455049950,
+      "text": "## Gap 3 — a root promoted from a plain card keeps that card's `paths`, and they guard its children\n\nObserved 2026-08-28 on #115 → #125. #115 was filed as an ordinary card with\n`paths: [src/stats.js, src/hook.js, src/model.js]`, then decomposed; its body became the\nverify-and-synthesize brief, but its `kb.paths` stayed. While #115's verify pass ran, the two\nchildren of the *next* track (#132 → `src/model.js`, #133 → `src/hook.js`) sat at `guarded 2`\nfor every tick — held by a root that owns nothing and edits nothing.\n\nThe recipe's step (a) rewrites the root's **body** and says nothing about the `kb` line. A root\nthat becomes a verify pass should have its `paths` cleared (or narrowed to what the pass may touch),\nbecause the `path_overlap` guard reads the root's paths like any other running task's.\n\n**Fix:** in *\"3. Materialize\"*, step (a) also resets `kb.paths` on the root — and says why."
+    }
+  ],
+  "results": [],
+  "v": 1
+}

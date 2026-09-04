@@ -1,0 +1,59 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T03:38:20.477Z",
+      "heartbeat_at": "2026-08-28T03:31:57.089Z",
+      "host": "YRND1-GG",
+      "job": "312328a0",
+      "lock_sha": "2f3f11d9c57f89f330496516754393e25a22f29e",
+      "log": ".kanban/logs/99-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 103,
+      "pr_head": "worktree-kb-99-1",
+      "profile": "claude",
+      "started_at": "2026-08-28T03:31:57.089Z",
+      "summary": "The user-level board list can now be written. `mergeBoardEntry(entries, entry, resolve)` in src/model.js is the pure part: it appends an entry unless an equivalent one is there, and never reorders, rewrites or normalises an entry it did not add (a hand-typed `~/code/web` and the `{path, board}` object form both survive verbatim); a null board is written as a bare path string, never \"default\". src/",
+      "wt": "kb-99-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T03:38:23Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/board.js",
+          "test/boards.test.js",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/features/auto-merge.md",
+          "docs/wiki/features/update-notice.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "Atomicity is per-write, not a lock: two processes registering different roots at the same instant can still lose one update, because each reads the list before the other renames. The tests cover sequential calls only, which is what init and doctor do.",
+          "saveUserBoards does not fsync the temp file before rename, so a power loss (not a crash) could leave the old list; the file is cheap to rebuild and this keeps the write to two syscalls.",
+          "The wiki re-stamp touches covers SHAs on three pages that any sibling #98 task editing src/board.js will also want to bump — expect a trivial frontmatter conflict, resolved by re-running wiki-stamp after the merge.",
+          "mainWorktree spawns git per registration; on a path git knows nothing about (or one that does not exist) it keeps the path it was given rather than failing."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (553 pass, 0 fail)",
+          "node --test test/boards.test.js (15 pass)",
+          "node .repolore/scripts/wiki-check.mjs (all pages fresh)"
+        ]
+      },
+      "summary": "The user-level board list can now be written. `mergeBoardEntry(entries, entry, resolve)` in src/model.js is the pure part: it appends an entry unless an equivalent one is there, and never reorders, rewrites or normalises an entry it did not add (a hand-typed `~/code/web` and the `{path, board}` object form both survive verbatim); a null board is written as a bare path string, never \"default\". src/board.js has the I/O: `saveUserBoards(list, file)` writes `{\"version\":1,\"boards\":[...]}` atomically (temp file in the same directory, then rename), creating the directory when missing; `registerUserBoard(root, board = null, file = userBoardsFile())` returns `{added, file, entries}` and saves only when the list grew; `mainWorktree(root)` resolves a linked worktree to its main checkout via `git rev-parse --git-common-dir`, so a worker's kb-99-1 can never land on a board list. Equivalence is `path.resolve(expandHome(p))` plus the board slug, so registering /home/you/projects/x when ~/projects/x is listed is a no-op. Missing file → created; malformed file → exitCode 2 and left untouched on disk.\n\nFor the siblings on #98: call `registerUserBoard(ctx.root)` — it is idempotent, so calling it on every `hkb init` is safe, and it already handles the worktree case. `loadUserBoards`, `expandHome`, `userBoardsFile` and `parseRepoSpecs` keep their signatures; `loadUserBoards` now delegates its parsing to a private `rawUserBoards(file)` (same errors, same exitCode 2) which returns entries with their on-disk spellings intact — that is what a writer needs, so reach for it if you add another writer. Nothing in the CLI calls `registerUserBoard` yet; the visible feature is #98's init child. Draft PR: https://github.com/emyann/harness-kanban-board/pull/103"
+    }
+  ],
+  "v": 1
+}

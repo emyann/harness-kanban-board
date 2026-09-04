@@ -1,0 +1,73 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-09-02T01:35:51.380Z",
+      "heartbeat_at": "2026-09-02T01:29:31.149Z",
+      "host": "YRND1-GG",
+      "lock_sha": "77b16163a95ac5832f0df42433beed43116bf267",
+      "manual": true,
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pr": 281,
+      "pr_head": "kb/257",
+      "profile": "claude",
+      "session_id": "88800f57-40b7-4f7e-9c93-ec31e8548aeb",
+      "started_at": "2026-09-02T01:29:31.148Z",
+      "summary": "\"mcp\" is now a profile key, and toolPosture (#256) decides what it means. Under curate it is the whitelist: applyProfileMcp in src/model.js keeps only the named servers' MCP tools and ADDS mcp__<server>__* for each, so naming a server is what makes the repo's own .mcp.json server reachable (#130's fix); \"mcp\": [] means no server at all, and a profile with allowed_tools: null is left untouched (add",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-223-1/88800f57-40b7-4f7e-9c93-ec31e8548aeb.jsonl",
+      "wt": "kb-223-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T01:38:27Z",
+      "id": 5503038157,
+      "text": "**Merged by the operator seat** — review: Track root #223 review: derives through effectiveTools, no second computation; a board declaring neither tools nor mcp is unchanged; lint + 1121 tests green on the node., checks: green, method: squash"
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T01:50:47Z",
+      "id": 5503133765,
+      "text": "Closed as completed by the operator seat, because nothing else can: this card is stranded by #275.\n\nIts work is in `main`. PR #281 merged into `kb/track-223` (the track's assembly branch) at 01:38, and the track landed on `main` as PR #286 at 01:48.\n\nThe card cannot see any of that. `hkb show 257 --json` reports `prs: []` — GitHub's `closedByPullRequestsReferences` only links a `Closes #n` for a PR targeting the **default branch**, and #234's head-branch fallback matches **open** PRs only, so once #281 merged it went invisible to both. Nothing links the card to the work, so no reconcile pass can move it out of review, and it would have sat there indefinitely.\n\nThis is the exact failure mode of #227 and #228 — work merged, card stranded — and it is now reproducible on demand: it happens to **every node of a track**, since #245 has node PRs target the track branch by design. Recorded on #275, which owns the fix.\n\nNo work is lost and nothing needs redoing."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-02T01:35:52Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/context.js",
+          "test/profile-mcp.test.js",
+          "test/context.test.js",
+          "test/model.test.js"
+        ],
+        "residual_risk": [
+          "effectiveTools returns a third key (mcp) — additive, but a caller comparing the whole object with deepEqual breaks. Two assertions in test/model.test.js were adjusted; src/dispatch.js, src/hook.js and src/track.js all destructure and were unaffected.",
+          "loadBoard does not validate profile.mcp (src/board.js is outside this card's kb.paths): a non-array is ignored and a misspelled server name resolves to a server nobody has, with no error. Worth a card, or #258's doctor surface.",
+          "Nothing yet renders mcp.deny onto an inherit launch line (e.g. --disallowed-tools mcp__supabase__*). The subtraction is derived and disclosed in the brief, but src/dispatch.js is outside this card's paths, so an inherit board's exclusion is not enforced at the launch yet — the root (#223) should check this seam.",
+          "docs/wiki is flagged stale by the wiki-check hook on every commit; the whole set was already stale before this branch and docs/ belongs to #258."
+        ],
+        "verification": [
+          "node --test test/profile-mcp.test.js test/model.test.js (47 pass, 0 fail)",
+          "node --test test/context.test.js (26 pass, 0 fail)",
+          "npm run lint",
+          "npm test (1121 pass, 0 fail)",
+          "gh pr create --draft --base kb/track-223 -> https://github.com/emyann/harness-kanban-board/pull/281"
+        ]
+      },
+      "pr": 281,
+      "pr_continued": false,
+      "summary": "\"mcp\" is now a profile key, and toolPosture (#256) decides what it means. Under curate it is the whitelist: applyProfileMcp in src/model.js keeps only the named servers' MCP tools and ADDS mcp__<server>__* for each, so naming a server is what makes the repo's own .mcp.json server reachable (#130's fix); \"mcp\": [] means no server at all, and a profile with allowed_tools: null is left untouched (adding one server would turn \"no allow-list\" into an allow-list of one). Under inherit it is the subtraction: the session's servers minus the named ones, and any grant an excluded server carried in allowed_tools is stripped too, so a board cannot hand back what it withheld — that is the supabase-writes-to-production case, tested directly. effectiveTools now returns { tools, dropped, mcp } where mcp = { posture, allow, deny }: allow is null for \"whatever the session has\" (a board declaring nothing), and under curate with a declared list it is read back off the FINAL grant, so a card's narrowing is already in it and there is no second derivation. Card rule unchanged: under curate the grant is the ceiling as before; under inherit there is no allow-list to check against, so the only thing kb.mcp can be refused is a server the profile already excluded — every refusal lands in `dropped` with source 'profile.mcp' or 'kb.mcp'. New exports: profileMcp(profile) (null when undeclared, deduped/trimmed when declared — #258's doctor line can use it) and mcpLine(profile, task, board) in src/context.js, which renders effectiveTools(...).mcp beside kb.skills and never recomputes it; null (no line at all) for a board that declares neither mcp nor posture. NOTE for the root: effectiveTools's return shape gained a third key, so any caller doing deepEqual on the whole object needs { tools, dropped } destructured out — I fixed the two such assertions in test/model.test.js. Nothing validates profile.mcp in loadBoard yet (src/board.js is outside this card's paths); profileMcp is defensive about junk, but a typo'd server name is silently a server nobody has, which is a doctor-shaped gap."
+    }
+  ],
+  "v": 1
+}

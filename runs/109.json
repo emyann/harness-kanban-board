@@ -1,0 +1,57 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T05:04:08.160Z",
+      "heartbeat_at": "2026-08-28T04:50:07.771Z",
+      "host": "YRND1-GG",
+      "job": "f2e3fe2b",
+      "lock_sha": "bbc9c77b9e41d2f1bccdc098860be07469d75ad3",
+      "log": ".kanban/logs/109-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-28T04:50:07.771Z",
+      "wt": "kb-109-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T05:02:36Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/track.js",
+          "src/cli.js",
+          "test/track.test.js",
+          "skills/kanban/SKILL.md",
+          "skills/kanban/references/protocol.md",
+          "README.md"
+        ],
+        "residual_risk": [
+          "The mermaid block was reviewed against mermaid's documented grammar but never rendered: browser automation and `npm install mermaid` were both denied in this session. The diagram is embedded in the PR body, README.md and protocol.md, so GitHub renders it on the PR page — that is the first check a reviewer should make.",
+          "Mermaid's handling of #60;/#62; is the uncertain part: if it decodes to a raw `<` before the label becomes HTML, angle brackets in a title still vanish. No worse than leaving them raw (DOMPurify strips the tag either way), but protocol.md states the intent as if it always works.",
+          "hkb graph is not exposed as an MCP tool (src/mcp.js untouched) — out of scope here, cheap to add later.",
+          "Titles clip at 56 characters, so two long titles differing only after char 56 render alike; the issue number in the label disambiguates them.",
+          "docs/wiki/ freshness: three pages report stale on blob SHAs and were left alone, with the reasoning in the summary."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test — 581 tests, 0 fail (9 new in test/track.test.js)",
+          "npm run smoke — the packed tarball installs, runs, and hkb init copies the bumped skill",
+          "gh pr create --draft → https://github.com/emyann/harness-kanban-board/pull/111"
+        ]
+      },
+      "summary": "hkb graph <n> [--mermaid] [--json] emits the track rooted at <n> as one fenced mermaid block; PR #111 (draft, Closes #109).\n\nThree pure functions in src/track.js: trackGraph(track) -> {root, nodes, edges, cycle} built from resolveTrack/trackWaves (no second walk of the dependency graph), trackMermaid(graph) -> the fenced `flowchart TD`, mermaidLabel(text) -> the escaping. src/cli.js gets a `graph` case (one fetchBoard, then resolveTrack; a usage error naming `hkb list` when the number is not on the board), 'mermaid' added to BOOL_FLAGS so `hkb graph --mermaid 12` keeps 12 as the positional, and a help entry.\n\nThe bare command IS the diagram — `--mermaid` is the explicit spelling of the default — so `hkb comment 12 \"$(hkb graph 12)\"` works as the task's integration note requires (hkb comment still does not read stdin; it was not extended). `--json` returns {root, nodes, edges, cycle, mermaid} where `mermaid` is byte-identical to what the command prints, fence included; a test asserts that.\n\nBoth prototype defects are fixed. `#` -> `#35;`, escaped FIRST because it is the escape character (escaping it last would eat the codes the others write), then `\"` -> `#quot;` and `<`/`>` -> `#60;`/`#62;` — labels are HTML, so `<n>` in a title is otherwise swallowed as a tag. Titles clip at 56 chars. classDefs set stroke/width/dash and NOTHING else — a test asserts `fill:` and `color:` never appear in the output — so GitHub's dark mermaid theme and its light one both keep readable labels.\n\nArrows run blocker -> what it unblocks, so the frontier is on top and the root is last, drawn as a stadium. A blocker closed as completed is not drawn (the picture shrinks with the track, exactly as resolveTrack does); an unfinished blocker that is not on this board IS drawn, dashed, as \"not on this board\", so a hole in the graph is visible rather than silently missing.\n\nDocs: /kanban:decompose step (e) appends `hkb graph <root>` to the notes it comments on the goal, and \"check your work\" now leads with it (skills/kanban/SKILL.md, version 0.5.0 -> 0.5.1, with the assertion in test/track.test.js moved to match); skills/kanban/references/protocol.md gains a \"The graph as a diagram\" subsection under Decomposition-worked, showing the real output; README.md gains \"The dependency graph as a diagram: hkb graph\".\n\nNOT done, deliberately: docs/wiki/ still reports architecture/overview, features/planning-commands and adr-004 stale on blob SHAs. No page's prose is made wrong by this change — planning-commands documents command *registration*, not the decompose steps, and per docs/wiki/AGENTS.md an accepted ADR going stale is a prompt to consider a superseding record, not to edit it. The wiki plan already lists an undrafted features/tracks page that would own this command."
+    }
+  ],
+  "v": 1
+}

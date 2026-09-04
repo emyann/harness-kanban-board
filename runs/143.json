@@ -1,0 +1,85 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T22:49:03.008Z",
+      "heartbeat_at": "2026-08-28T22:35:19.192Z",
+      "host": "YRND1-GG",
+      "job": "00dacc8b",
+      "lock_sha": "cb9e43d129ed66f3b7b3f257d89d6de7bf4d47bd",
+      "log": ".kanban/logs/143-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 159,
+      "pr_head": "worktree-kb-143-1",
+      "profile": "claude",
+      "session_id": "00dacc8b-82de-4816-bb4f-329337c0e2f5",
+      "started_at": "2026-08-28T22:35:19.192Z",
+      "summary": "Worker policy on the default profile is the launch line, so the launch now closes what a live hook would have closed, and the hook can only subtract from it. Draft PR #159.\n\n**1. `Bash(hkb dispatch*)` at the launch.** A shared `CLAUDE_DENY` in src/board.js:31-42 carries it beside the two force-push patterns; `claude`, `claude-track` and `claude-p` spread the same constant, and the Actions template",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-143-1/00dacc8b-82de-4816-bb4f-329337c0e2f5.jsonl",
+      "wt": "kb-143-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T22:35:10Z",
+      "id": 5458467432,
+      "text": "Follow-ups from the review of PR #145 (merged), for this card since it branches from that merge and edits the same doctor check:\n1. **`src/doctor.js` stale-profile fix text is wrong for a custom-named profile.** It says *drop `allowed_tools` from the profile to take hkb's own list* — true only when `DEFAULT_PROFILES[name]` exists (loadBoard deep-merges over it). For a custom name, dropping the key makes `{allowed_tools}` expand to nothing (`src/dispatch.js:63`) and `--allowedTools` dangles before `--disallowedTools`. Branch the fix text on `DEFAULT_PROFILES[name]`; otherwise say *add Bash(cd *), … to allowed_tools*.\n2. **Docs not updated where the behaviour lives:** `docs/harnesses.md` \"which layer is actually enforcing\" table (the frozen-copy story + the new `worker permissions` doctor line), README's `worker permissions` row, and the wiki (`architecture/overview.md`, `features/web-board.md` now stale for `src/board.js`).\n3. Nits worth taking while there: `WORKER_WORKFLOW_FILE` in doctor.js is computed at import (every `hkb` call reads both Actions templates) — compute lazily; the check name differs between ok/warn (`worker permissions` vs `profile <name> permissions`) so `--json` consumers cannot key on it; `test/profiles.test.js` leaves five mkdtemp dirs.\n4. Accepted as-is: `VAR=value cmd` prefixes are inexpressible in any allow-list — the PR documents `export VAR=value; cmd` instead."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T22:49:05Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/board.js",
+          "src/hook.js",
+          "src/context.js",
+          "src/doctor.js",
+          "src/init.js",
+          "skills/kanban/SKILL.md",
+          "templates/actions/kanban-worker-claude.yml",
+          ".github/workflows/kanban-worker-claude.yml",
+          "docs/harnesses.md",
+          "docs/manual-mode.md",
+          "README.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/features/web-board.md",
+          "docs/wiki/log.md",
+          "test/hook.test.js",
+          "test/harness.test.js",
+          "test/profiles.test.js",
+          "test/actions.test.js",
+          "test/track.test.js"
+        ],
+        "residual_risk": [
+          "The dispatch deny is a pattern match on the command line, so an unusual spelling (`hkb  dispatch` with two spaces, an env prefix, a wrapper script) may not match it. hkb's own guard catches those on the profiles where the hook runs (`\\bhkb\\s+dispatch\\b`, DENY_PATTERNS in model.js) but the claude --bg default has only the launch line.",
+          "Copilot CLI is still not installed on this host, so `shell(hkb dispatch*)` remains unverified against its parser - which is why it got no deny. If someone verifies that pattern language, Copilot should gain one.",
+          "The probes measure Claude Code 2.1.251. Both the space-star deny semantics and the fact that a hook `allow` overrides the native checks are the harness's behaviour, not hkb's, and could change under us; the tests pin what hkb emits, not what the harness does with it.",
+          "The `capability` sentence is appended to EVERY deny, including the policy denials (force-push, sudo, kill) where blocking is not really the right answer. Splitting it would need a `kind` on `decidePermission`'s return, and src/model.js was outside this card's scope.",
+          "`hkb doctor`'s permission-mode check reads board.json profiles only. A launch frozen somewhere else - a hand-rolled workflow, a wrapper script - is still invisible to it, the same blind spot #138 left on the allow-list check.",
+          "The wiki is stale on 5 pages (architecture/overview, adr-004, auto-merge, planning-commands, update-notice). overview.md got a targeted unstamped edit for this card's paragraph only; a `/repolore:refresh` is still owed and was outside this scope."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (690 pass, 0 fail)",
+          "npm run smoke (launch and template contents changed; 25 content + 3 command + 9 init checks)",
+          "node --test test/hook.test.js (6 new: allow -> empty stdout, deny -> the JSON + the block sentence, unknown profile -> empty stdout + stderr, missing KB_PROFILE -> same, no KB_TASK -> nothing at all, file write outside the worktree denied)",
+          "node bin/hkb.js doctor on this repo: '/ permission policy', '/ worker permissions  4 allow-lists cover the 16 shell builtins hkb calls safe', permission mode silent",
+          "nested `claude -p --permission-mode dontAsk --allowedTools \"Bash(hkb *)\"` (Claude Code 2.1.251, empty temp dir): `hkb dispatch --dry-run` DENIED with --disallowedTools \"Bash(hkb dispatch*)\", RAN without it, `hkb show 1 --json` RAN with it",
+          "node .repolore/scripts/wiki-check.mjs: 6 stale -> 5 (features/web-board back to fresh)"
+        ]
+      },
+      "summary": "Worker policy on the default profile is the launch line, so the launch now closes what a live hook would have closed, and the hook can only subtract from it. Draft PR #159.\n\n**1. `Bash(hkb dispatch*)` at the launch.** A shared `CLAUDE_DENY` in src/board.js:31-42 carries it beside the two force-push patterns; `claude`, `claude-track` and `claude-p` spread the same constant, and the Actions template renders it from a new `{{disallowed_tools}}` variable (src/init.js `actionsFiles`), so the committed .github workflow was regenerated. **Measured**, not assumed — nested `claude -p --permission-mode dontAsk --allowedTools \"Bash(hkb *)\"` against Claude Code 2.1.251, in an empty temp dir, probing `hkb dispatch --dry-run` (writes nothing): DENIED with `--disallowedTools \"Bash(hkb dispatch*)\"`, RAN without it, and `hkb show 1 --json` still RAN with the flag present. So a multiword space-star deny works, it is what refuses the verb, and `Bash(hkb *)` is not collateral damage. Copilot deliberately gets no deny (its `--deny-tool` pattern language is unverified for that shape) and is told in the prompt.\n\n**2. `preToolHook` is deny-or-silence** (src/hook.js). It writes JSON only for a deny and otherwise exits 0 with no output — a hook `allow` overrides Claude Code's own checks, so an allow would let a `claude-p` worker run what the identical `claude --bg` worker beside it is refused. `KB_TASK` set with `KB_PROFILE` unset or unknown now stands aside with one stderr line instead of running the `{}` policy (which denies `npm test`). Gate unchanged. Every deny carries the way out: `hkb block <n> \"needs <what>: <why>\" --kind capability`.\n\n**3. Disclose, don't work around** — as prompt text in src/context.js (protocol step 6) and SKILL.md step 2, with the one exception spelled out: a refusal of `hkb complete` means say `hkb finish`, never block.\n\n**4. `hkb doctor` gained `permission mode`** (`checkPermissionMode`/`promptingProfiles`, src/doctor.js): one warning when a launch whose argv[0] is `claude` lacks `--permission-mode dontAsk`, silent otherwise. `claude-action` is excluded — it runs `gh workflow run`, and the triggered run's flags live in the workflow file.\n\n**5. The #145 review follow-ups**, taken here because this card branches from that merge and edits the same check: the stale-profile fix text branches on `DEFAULT_PROFILES[name]` (drop the key only where hkb ships a default to fall back to; a custom name is told to add the patterns, because dropping it expands `{allowed_tools}` to nothing and `--allowedTools` then swallows `--disallowedTools`); `worker permissions` reports under one check name for ok and warn, with the profile/file in the detail, so `--json` consumers can key on it; `WORKER_WORKFLOW_FILE` is rendered lazily rather than at import (every `hkb` call was filling both Actions templates); test/profiles.test.js cleans up its temp dirs via a `scratch(t)` helper.\n\n**6. Stale strings.** init's HOOK_NOTE said \"both inert unless KB_TASK is set\" — never true of the Stop hook, and the wrong shape for PreToolUse now; harnesses.md's \"which layer is actually enforcing\" table gained a *what it may answer* row plus the launch-line paragraph and both doctor checks; README's row leads with the launch line and drops \"file tools confined to the worktree\" as a default-profile feature; docs/manual-mode.md's KB_PROFILE paragraph claimed the `{}` policy still applies.\n\n**For the next worker.** #114 adds `Skill` to `CLAUDE_TOOLS` (src/board.js:24) — unchanged by this card and still a tool name, so it belongs in the `Edit`/`Write` tail, not in `SHELL_TOOLS`. If you add another launch-level refusal, put it in `CLAUDE_DENY` and nothing else needs touching: the three profiles, the Actions template and three tests all read that one constant. The skill version moved 0.5.2 → 0.5.3 (pinned at test/track.test.js:568)."
+    }
+  ],
+  "v": 1
+}

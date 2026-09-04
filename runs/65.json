@@ -1,0 +1,56 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T06:09:45.991Z",
+      "heartbeat_at": "2026-08-27T06:04:50.493Z",
+      "host": "YRND1-GG",
+      "job": "9ec51b26",
+      "lock_sha": "3d6fcf05c73192059512a7df637e1a5adb07109c",
+      "log": ".kanban/logs/65-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 68,
+      "pr_head": "worktree-kb-65-1",
+      "profile": "claude",
+      "started_at": "2026-08-27T06:04:50.493Z",
+      "summary": "The reclaim chain now honors `manual` exactly like `remote`: `src/dispatch.js` takes the \"liveness is the heartbeat\" branch for `a.remote || a.manual`, so a hand-claimed attempt (`hkb claim <n>` with no --spawn, which has always written `manual: true` at src/cli.js:419) is never judged by the 180s no-handle rule that used to call it crashed three minutes into every tick — releasing the lock under ",
+      "wt": "kb-65-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T06:09:48Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/dispatch.js",
+          "test/dispatch.test.js",
+          "skills/kanban/SKILL.md",
+          "skills/kanban/references/protocol.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "Only the reclaim chain reads `manual`. `hkb show` still prints a manual attempt with no marker (a remote one gets '→ off-host'), and the reap/orphan-sweep paths were not touched — they never looked at pids, so nothing there regressed, but a manual attempt is still visually indistinguishable from a spawn that lost its handle.",
+          "ADR-004 remains flagged stale by wiki-check: its priority-1 item shipped here, but the record was left as written on purpose."
+        ],
+        "verification": [
+          "node --test test/dispatch.test.js (20 pass; the two new tests fail on the pre-fix condition and pass with it)",
+          "npm run lint && npm test (427 pass, 0 fail)",
+          "npm run smoke (packed tarball installs and runs: 23 content checks, 3 command checks)",
+          "node .repolore/scripts/wiki-check.mjs"
+        ]
+      },
+      "summary": "The reclaim chain now honors `manual` exactly like `remote`: `src/dispatch.js` takes the \"liveness is the heartbeat\" branch for `a.remote || a.manual`, so a hand-claimed attempt (`hkb claim <n>` with no --spawn, which has always written `manual: true` at src/cli.js:419) is never judged by the 180s no-handle rule that used to call it crashed three minutes into every tick — releasing the lock under a live worker and killing its next heartbeat with LOCK_LOST. It is still bounded by stale_after and max_runtime, so an attempt that stops beating is reclaimed as `reclaimed` after stale_after (1h default).\n\nTwo fake-gh tests in test/dispatch.test.js pin both halves; I verified both fail on the pre-fix code and pass after. Docs: skills/kanban/SKILL.md gains a \"claim by hand\" bullet in the board-management section (the heartbeat is the only thing holding the attempt), and references/protocol.md documents `manual: true` in the attempt schema and in step 2 of the tick. docs/wiki/architecture/overview.md was re-stamped (its prose was already correct) and log.md notes it; ADR-004 was deliberately left untouched — it is a decision record, and ticking off its own follow-up list would be task state, which docs/wiki/AGENTS.md keeps out of the wiki, so `wiki-check.mjs` still reports it stale.\n\nDraft PR: https://github.com/emyann/harness-kanban-board/pull/68 (branch worktree-kb-65-1)."
+    }
+  ],
+  "v": 1
+}

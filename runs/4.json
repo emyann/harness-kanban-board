@@ -1,0 +1,68 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-26T07:40:46.364Z",
+      "heartbeat_at": "2026-08-26T07:14:59.447Z",
+      "host": "YRND1-GG",
+      "job": "18e3f882",
+      "log": ".kanban/logs/4-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-26T07:14:59.447Z",
+      "wt": "kb-4-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-26T07:38:59Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/lock.js",
+          "src/lifecycle.js",
+          "src/model.js",
+          "src/dispatch.js",
+          "src/board.js",
+          "src/cli.js",
+          "src/context.js",
+          "src/doctor.js",
+          "src/gc.js",
+          "test/heartbeat.test.js",
+          "test/lock.test.js",
+          "test/dispatch.test.js",
+          "test/fake-gh.js",
+          "skills/kanban/SKILL.md",
+          "skills/kanban/references/protocol.md",
+          "README.md"
+        ],
+        "dependencies": [],
+        "residual_risk": [
+          "The lease is only as good as the local mirror ref: a wiped worktree restarts the chain from lock_sha or a REST read — correct, but costs one request.",
+          "A dispatcher that closes an attempt and then fails to delete the ref leaves a lock the worker still leases successfully; same window as the old lockExists check, cleared by the orphan sweep.",
+          "skills/kanban SKILL.md went 0.1.0 -> 0.2.0, so repos that copied the skill will be told by hkb doctor to re-run hkb init.",
+          "DENY_PATTERNS matches the whole Bash command string, so a worker whose terminal verb merely mentions the lease-push command in its summary is denied permission to finish. Worked around here with --summary-file; worth fixing in the policy."
+        ],
+        "retry_notes": null,
+        "verification": [
+          "npm run lint",
+          "npm test — 162 pass, 12 new in test/heartbeat.test.js against a real bare repo plus the in-memory GitHub",
+          "hkb heartbeat 4 — five real beats chained on refs/kb/locks/4/1 against this repo",
+          "hkb doctor --api — the new heartbeat lease probe passes",
+          "GET git/commits/<sha> returns the beat's committer date on the live repo, which is what the dispatcher reclaim reads"
+        ]
+      },
+      "summary": "`hkb heartbeat` is now a compare-and-swap on the lock ref: an empty commit made locally with `commit-tree`, pushed with a `--force-with-lease` refspec on `refs/kb/locks/<n>/<k>`. The lease is the whole check, so a dispatcher reclaim (which deletes the ref) rejects the push atomically and hkb exits 3 LOCK_LOST.\n\n`<expected>` is the worker's own record — the local mirror of the ref, or the new `lock_sha` field the dispatcher writes on the attempt row — never a fresh read of the ref, which would stomp whoever holds it. A warm worker beats with zero API calls: no task read, no run-record read, no write.\n\nOnly a rejected lease may stop a worker. It is verified once against `GET git/ref/...` (gone = LOCK_LOST; still ours = the local chain drifted, so resync and beat again); every other git failure is classified 'unavailable' and falls back to the run-comment heartbeat with a note on stderr. Profiles pick the path with `\"heartbeat\": \"auto\"|\"ref\"|\"comment\"` in board.json; cloud tiers that cannot push refs use `comment`.\n\nThe dispatcher reads the lock ref's committer date before reclaiming a stale-looking attempt, since a CAS beat leaves no trace in the run comment. Its existing `listLocks` call is hoisted to serve both that and the orphan sweep, and the commit is read only for an attempt that already looks stale.\n\nIf you touch this: the design rests on `classifyLeasePush` never returning 'lost' for anything but a rejected lease. A false LOCK_LOST kills a healthy worker; a missed one only wastes work the dispatcher discards — so ambiguity always funnels into the authoritative ref read.\n\nTwo things the next worker should know. (1) The worker permission policy (DENY_PATTERNS in src/model.js) blocks the lease-push command from a worker's Bash on purpose — hkb runs it from its own child_process, and SKILL.md now tells workers never to push the ref themselves. (2) That same pattern is matched against the whole Bash command string, so a worker whose `hkb complete --summary \"...\"` merely *mentions* the command is refused permission to finish. I hit this and had to use `--summary-file`. It is a protocol foot-gun worth fixing: match the deny pattern against the command being run, not against text passed as an argument to another program."
+    }
+  ],
+  "v": 1
+}

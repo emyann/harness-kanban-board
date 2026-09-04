@@ -1,0 +1,55 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T15:38:20.518Z",
+      "heartbeat_at": "2026-08-28T15:24:46.637Z",
+      "host": "YRND1-GG",
+      "job": "5ffc22e4",
+      "lock_sha": "00e8c50b8256ae8bf90871f8b9f6708baff93925",
+      "log": ".kanban/logs/120-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 123,
+      "pr_head": "worktree-kb-120-1",
+      "profile": "claude",
+      "started_at": "2026-08-28T15:24:46.637Z",
+      "summary": "hkb stats now reads spend off the session transcript when no harness reported one.\n\n`priceOf` gained a third source under the run record and the worker log: the attempt's\n`transcript_path` (the JSONL the Stop hook already records), summed per model and deduped by\nmessage id — Claude Code writes one assistant message as several lines, each repeating the same\n`usage`, so summing lines would bill a l",
+      "wt": "kb-120-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T15:38:23Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/stats.js",
+          "test/stats.test.js"
+        ],
+        "residual_risk": [
+          "The per-message `usage` shape is Claude Code's transcript format, not a documented contract; a future format change yields null (today's message) rather than a wrong number, but the usage line would quietly disappear.",
+          "Cache-rate defaults assume the published 1.25x write / 0.1x read multipliers on input, and one cache_write rate covers both the 5m and 1h cache TTLs, which are billed differently (1.25x vs 2x). Set cache_write explicitly to be exact; every figure is labelled an estimate either way.",
+          "Transcript turns count assistant messages, which is not `num_turns`'s definition from `claude -p`. They are kept in separate fields (spend.usage.turns vs num_turns / by_profile.turns) and never summed together.",
+          "Only exercised against Claude transcripts. A Copilot or Codex path landing in transcript_path would parse to null rather than usage.",
+          "`stats.rates` is a new board.json key read only by src/stats.js; loadBoard passes unknown keys through and doctor does not validate the schema, so nothing rejects it, but it is undocumented outside the code and the report's hint line."
+        ],
+        "verification": [
+          "node --test test/stats.test.js — 31 pass",
+          "npm run lint",
+          "npm test — 595 pass",
+          "rendered formatStats against a real 190-turn Claude transcript on this host, with and without stats.rates"
+        ]
+      },
+      "summary": "hkb stats now reads spend off the session transcript when no harness reported one.\n\n`priceOf` gained a third source under the run record and the worker log: the attempt's\n`transcript_path` (the JSONL the Stop hook already records), summed per model and deduped by\nmessage id — Claude Code writes one assistant message as several lines, each repeating the same\n`usage`, so summing lines would bill a long turn four and five times over. The file is streamed a\nchunk at a time through a StringDecoder, read only for an ended attempt that has no cheaper price,\nonce, always from disk and never over the network.\n\nThe report now names which of three things it is showing (`spend.basis`):\n  reported  — `total_cost_usd` off the run record or the worker log\n  estimate  — those tokens priced at the board's `stats.rates`, always written `~$…` and labelled\n  usage     — turns and tokens, unpriced, which beat nothing\n\n`total_usd` stays reported money only; estimates live in `estimated_usd`, so nothing can add the\ntwo by accident.\n\nhkb deliberately ships NO price table: a price it invented would look, in the output, exactly like\none Claude signed off on, and published prices move under a checkout that does not. Estimates come\nfrom rates the board states, in .kanban/board.json:\n\n  \"stats\": { \"rates\": { \"claude-opus-5\": { \"input\": 5, \"output\": 25 } } }\n\nUSD per million tokens; a key matches exactly, then as the longest prefix, then \"default\";\n`cache_write`/`cache_read` are optional and fall back to the published 1.25x / 0.1x multipliers on\n`input`. With no rates the report prints turns and tokens plus a one-line hint saying what to add.\nA model that spent nothing is skipped when pricing — Claude Code files an interrupted turn under\nthe model `<synthetic>` with every counter at zero, and one of those must not cost a board its\nestimate.\n\nA missing or unreadable transcript (a board reported from a host that never ran the attempt)\ndegrades to exactly the message that was there before, never an error.\n\nVerified against a real 190-turn transcript on this host: a board that used to print \"not recorded\non any of the 1 worker attempt\" now prints 190 turns, 160k output tokens, 674k cache writes, 38M\ncache reads — and ~$26.97 ESTIMATED once rates are set.\n\nFor the next worker: `stats.rates` is documented only in the code and in the hint line the report\nprints; a README / docs/ mention would be worth having, and was out of this task's file scope.\n`src/hook.js` and `src/model.js`'s SESSION_FIELDS were left untouched — they belong to #115's\nsibling, which only widens which attempts carry `transcript_path`. Draft PR: #123."
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,52 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T01:01:40.673Z",
+      "heartbeat_at": "2026-08-27T00:52:01.187Z",
+      "host": "YRND1-GG",
+      "job": "b98d25cd",
+      "lock_sha": "746652c3d794ef209e087e1d75b02e1e89fb8fd4",
+      "log": ".kanban/logs/36-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 45,
+      "pr_head": "worktree-kb-36-1",
+      "profile": "claude",
+      "started_at": "2026-08-27T00:52:01.187Z",
+      "summary": "The tick's reap step now stops a background agent whose card is finished, regardless of what the job reports. The decision is one pure exported function in src/dispatch.js, reapDecision(job, task): task not on the open board (a closed issue) or done/archived -> stop whatever state it reports (the #17/#21 15-hour blocked-zombie fix); task running -> left to the reclaim step above, which knows block",
+      "wt": "kb-36-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T01:01:43Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/dispatch.js",
+          "test/reap.test.js"
+        ],
+        "residual_risk": [
+          "Board membership stands in for 'the issue is closed', with no extra API call. Two boards sharing one checkout root would let board A's tick reap board B's live job, since listKbJobs is filtered by root and not by board label. That weakness predates this change (the old code had it for non-alive jobs); making it exact costs one getTask per unknown job.",
+          "A worker that files its terminal verb and then keeps working is stopped on the next tick once the issue closes — intended, but it means a background agent must finish its push/PR before calling complete, as the protocol already requires.",
+          "The stubbed-claude test writes a /bin/sh script and prepends to process.env.PATH, so test/reap.test.js is unix-only, like the existing launch: ['true'] stubs in dispatch.test.js."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test — 351 passing",
+          "node --test test/reap.test.js with the old predicate patched back in: both tick tests fail, confirming they are real regression tests"
+        ]
+      },
+      "summary": "The tick's reap step now stops a background agent whose card is finished, regardless of what the job reports. The decision is one pure exported function in src/dispatch.js, reapDecision(job, task): task not on the open board (a closed issue) or done/archived -> stop whatever state it reports (the #17/#21 15-hour blocked-zombie fix); task running -> left to the reclaim step above, which knows blocked/waiting means a live worker on a permission prompt (#14/2, #3/2); any other live status (triage/todo/ready/blocked/review) -> stopped unless the job is genuinely working/busy, so a worker still writing the turn after its terminal verb is never cut off mid-push; no pid -> nothing to stop.\n\nSide effects: a `claude stop` that fails is logged as \"could not stop ... retrying next tick\" instead of being silently dropped; summary.reaped is always an array and each entry carries `why`; the dispatcher loop's tick line counts reaps.\n\nRebased on main after #41 (auto-gc) landed: the sweepFinished(j.task) call that cleans the stopped job's worktree is kept, driven off the same task lookup.\n\nNew test/reap.test.js covers the decision as a unit and runs whole ticks against fake-gh with `claude` stubbed on PATH (`claude agents --json` lists the jobs, `claude stop <id>` records the kill). PR: #45."
+    }
+  ],
+  "v": 1
+}

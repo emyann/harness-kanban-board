@@ -1,0 +1,94 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-29T04:45:48.115Z",
+      "heartbeat_at": "2026-08-29T04:33:10.590Z",
+      "host": "YRND1-GG",
+      "job": "aac9330e",
+      "lock_sha": "d102a4eb6d65e20822724900cba98ce082222842",
+      "log": ".kanban/logs/129-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 194,
+      "pr_head": "worktree-kb-129-1",
+      "profile": "claude",
+      "session_id": "aac9330e-0dda-457a-9d2c-e1e697771919",
+      "started_at": "2026-08-29T04:33:10.590Z",
+      "summary": "A claude-track root is now an ORCHESTRATOR: it claims a wave of mutually-independent nodes and hands each to its own isolated subagent, so siblings run concurrently inside the track's one slot. Three pieces. (A) `Agent` goes on the claude-track allow-list only (CLAUDE_TRACK_TOOLS, src/board.js) -- under `dontAsk` an unlisted tool is denied rather than prompted, so the allow-list is the whole capab",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-129-1/aac9330e-0dda-457a-9d2c-e1e697771919.jsonl",
+      "wt": "kb-129-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T22:48:31Z",
+      "id": 5458558375,
+      "text": "Overlap note from the 2026-08-28 Agent SDK evaluation (verdict: keep the CLI; #154–#158 are its plan). This card is the orchestration half of what an SDK would have promised, done the right way — inside the runner with the Agent tool, no dependency. It does not depend on those cards, but three things belong in piece A's verification: (1) subagent session id — does `hkb finish <node>` from a child stamp the parent's CLAUDE_CODE_SESSION_ID (then #131's counted-once rule holds) or its own (then `hkb stats` would price transcripts that are not top-level sessions)? (2) does the track's --max-budget-usd envelope count subagent tokens? (3) a subagent's isolation worktree is named by Claude Code, not kb-<n>-<k>, so neither the Stop nudge nor PreToolUse can identify the node — the brief-level 'verify the verb' rule is the only net. Cleaner after #158 (process-mode root gets its env), not blocked by it."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T23:10:39Z",
+      "id": 5458709050,
+      "text": "Follow-up filed: once this lands, a root with unfinished children should be a track without an adopt step (the label becomes the override). See the card blocked by this one."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T23:26:01Z",
+      "id": 5458803691,
+      "text": "Spike A ran (job cadca6f1, 2026-08-28): results are in the body under 'Spike A — measured'. Short version: Agent works under dontAsk once allowlisted; child worktree is a repo-level sibling auto-removed when unchanged; child shares the root's session id; --settings hooks fire in the child; subagent usage is a sidecar transcript hkb stats never opens; the worktree guard refuses ';' and $VAR in root and child; Stop fires while subagents run."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-29T04:45:50Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/board.js",
+          "src/track.js",
+          "src/dispatch.js",
+          "skills/kanban/references/protocol.md",
+          "skills/kanban/SKILL.md",
+          "docs/harnesses.md",
+          "README.md",
+          "docs/wiki/features/tracks.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/wiki.config.yml",
+          "docs/wiki/index.md",
+          "docs/wiki/log.md",
+          "test/track.test.js",
+          "test/profiles.test.js"
+        ],
+        "residual_risk": [
+          "The acceptance case has not been run live: no decomposed diamond was adopted as claude-track and dispatched, so 'two siblings actually run concurrently, one slot, orchestrator killed mid-track reclaimed by the dispatcher' is argued from the code and the 2026-08-28 spike, not observed end to end. Everything the board does is covered by tests; what is untested is the model's compliance with the new brief.",
+          "The 'verify each node recorded a verb' rule is brief-level and unenforced -- by design, since the Stop nudge keys on KB_TASK (the root). A node a subagent leaves running is a stale claim the ordinary dispatcher reclaims after stale_after: the failure mode is latency, never corruption.",
+          "--max-budget-usd 50 is a judgment call: whether the budget counts subagent tokens was not measurable in the spike without exceeding it. If it does not, a fanned-out track is cheaper than the number suggests; if it does, a wide track may still run out mid-wave -- which costs the remaining nodes to node dispatch, not the finished ones.",
+          "hkb stats under-reports a fanned-out track: subagent usage goes to a sidecar transcript usageFromTranscript never opens (#155, unchanged by this card but now the common case rather than a curiosity).",
+          "Nothing re-checks kb.paths disjointness at wave time -- /kanban:decompose enforces it when the graph is built, so a hand-written graph with overlapping paths would have siblings editing the same files in different worktrees.",
+          "Three files outside the card's declared paths were touched and are disclosed on the PR: src/dispatch.js (two tokens, to pass fanout through), README.md (named explicitly in piece C) and skills/kanban/SKILL.md (its track section would otherwise assert the opposite of the shipped behaviour; version bumped, and the test that pins it updated).",
+          "11 wiki pages remain stale from #144/#149-era drift, unrelated to this card -- same note #163 left."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (832 passing, 0 failing)",
+          "npm run smoke (packs, installs and runs the tarball; green)",
+          "node --test test/track.test.js test/profiles.test.js (the 5 new tests: Agent on claude-track and no other shipped profile; trackFanout over the shipped board; the fan-out brief's wave loop and per-node brief; the node protocol and track rules identical either way; and an end-to-end tick where the dispatcher hands a spawning profile the orchestrator brief and a non-spawning one the sequential brief)",
+          "node .repolore/scripts/wiki-check.mjs (features/tracks fresh; the other 11 pages stale from pre-existing #144/#149-era drift this card did not own)",
+          "rendered the fan-out brief for a diamond by hand and read it end to end"
+        ]
+      },
+      "pr": 194,
+      "pr_continued": false,
+      "summary": "A claude-track root is now an ORCHESTRATOR: it claims a wave of mutually-independent nodes and hands each to its own isolated subagent, so siblings run concurrently inside the track's one slot. Three pieces. (A) `Agent` goes on the claude-track allow-list only (CLAUDE_TRACK_TOOLS, src/board.js) -- under `dontAsk` an unlisted tool is denied rather than prompted, so the allow-list is the whole capability, and cold node workers stay single-agent by design; the track budget goes to --max-budget-usd 50, sized as if the envelope counts subagent tokens (unmeasured). (B) New pure `trackFanout(cfg, profile)` reads that list; src/dispatch.js passes its answer to `trackContext`, which now emits an orchestrator brief when it is true: claim the wave -> spawn one subagent per node in a SINGLE message with isolation:\"worktree\" -> heartbeat the root while they work -> verify each node recorded a verb via `hkb show <n> --json` (the Stop nudge keys on KB_TASK, the root, so it never fires for a child) -> next wave; the root is the one node the orchestrator does itself. A profile without `Agent` gets the older node-after-node brief verbatim. The per-node brief handed to each subagent points at `hkb context <n>` rather than pasting it (the orchestrator's window stays the size of the plan) and carries the two facts the 2026-08-28 spike measured: commit and push before returning, because the child's agent-<id> worktree is deleted when it does, and one command per Bash call, because the worktree guard refuses `;`/`&&`/`$VAR` in root and child alike. (C) Docs: protocol.md gained 'One orchestrator, one subagent per node' plus a when-to-prefer-a-track paragraph (a track no longer gives up parallelism, and is the only way to run a wave wider than max_in_progress), SKILL.md's track section was rewritten and bumped 0.6.0 -> 0.7.0, and the claude-track profile description, README and docs/harnesses.md follow. New wiki page docs/wiki/features/tracks.md (the page plan's long-planned slug, now seeded) carries the spike's harness facts and the known gaps; GLOSSARY gained Wave and an amended Track. Every board-visible invariant is unchanged: per-node claim, per-node worktree, per-node PR with exactly one `Closes #`, per-node terminal verb, one slot per track, skip-on-block parking only a blocked node's dependents."
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,85 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-08-27T04:04:14.539Z",
+      "host": "YRND1-GG",
+      "kind": "needs_input",
+      "outcome": "blocked",
+      "profile": "claude",
+      "reason": "HOLD until v0.1.0 is published via the bypass token and the Trusted Publisher is configured on npmjs.com (human step) — removing NPM_TOKEN before the bootstrap release would break it. Unblock after the npx verify passes.",
+      "started_at": "2026-08-27T04:04:14.539Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 2,
+      "bg": true,
+      "ended_at": "2026-08-27T05:00:44.602Z",
+      "heartbeat_at": "2026-08-27T04:52:45.796Z",
+      "host": "YRND1-GG",
+      "job": "e620b939",
+      "lock_sha": "efeaa0c4be3a4a23700cb8856460b5025e2cb98d",
+      "log": ".kanban/logs/61-2.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-27T04:52:45.796Z",
+      "wt": "kb-61-2"
+    }
+  ],
+  "block_loops": {
+    "11tlg1v": 1
+  },
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-27T04:04:16Z",
+      "id": 5434221642,
+      "text": "**Blocked** (needs_input, attempt 1): HOLD until v0.1.0 is published via the bypass token and the Trusted Publisher is configured on npmjs.com (human step) — removing NPM_TOKEN before the bootstrap release would break it. Unblock after the npx verify passes."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-27T04:39:42Z",
+      "id": 5434454951,
+      "text": "Operator update: hkb-cli@0.1.2 is published (release run fully green incl. clean-room npx verify) and the Trusted Publisher is now configured on npmjs.com (GitHub Actions · emyann/harness-kanban-board · release.yml · npm publish). Proceed: strip the NPM_TOKEN wiring from release.yml, ensure the runner has npm >= 11.5.1, keep id-token: write and the fork-degrade notice. The operator will revoke the npm token and delete the repo secret after your PR merges."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T04:59:00Z",
+      "attempt": 2,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          ".github/workflows/release.yml",
+          "docs/releasing.md",
+          "test/release.test.js"
+        ],
+        "operator_followup": [
+          "Revoke the npm 2FA-bypass token",
+          "gh secret delete NPM_TOKEN"
+        ],
+        "pr": "https://github.com/emyann/harness-kanban-board/pull/63",
+        "residual_risk": [
+          "Not provable in-tree: the first real trusted-publisher publish. Every check here is structural or stubbed; the OIDC exchange only happens on a v* tag against npmjs.com.",
+          "Dropping setup-node's registry-url is the judgement call. npm's own example keeps it, but it exists solely to wire NODE_AUTH_TOKEN; without it no .npmrc is written and the OIDC exchange starts from a clean, unauthenticated npm. If the next release fails on auth, re-adding `registry-url: https://registry.npmjs.org` is the first thing to try.",
+          "`npm install -g npm@latest` is unpinned, so a broken npm release breaks a release. The version assert right after it names the floor but not a ceiling.",
+          "The trusted publisher is bound to the filename release.yml. Nothing in CI can detect a rename; only docs/releasing.md warns about it.",
+          "Network was unavailable in this session, so npm's docs could not be re-read — the 22.14 / 11.5.1 floors are the ones the task body states."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (416 pass, 0 fail)",
+          "npm run smoke",
+          "node --test test/release.test.js — the runner step exercised with stubbed node/npm (old node, old npm, 11.5.10 vs 11.5.1 to prove the compare is by version not string); the preflight exercised for the upstream and for a fork"
+        ]
+      },
+      "summary": "release.yml now publishes through npm's trusted publisher: no NODE_AUTH_TOKEN, no secrets.* expression, and no setup-node registry-url (that option only exists to write an .npmrc reading NODE_AUTH_TOKEN, which would hand npm a half-written auth line to start the OIDC exchange from). A new `runner` step runs `npm install -g npm@latest` and then asserts node >= 22.14 and npm >= 11.5.1 — the floors npm documents for trusted publishing; Node 22 still bundles npm 10, and an npm that quietly stayed there fails at publish time as \"need auth\", pointing at a token that no longer exists. `id-token: write` and `--provenance --access public` are unchanged.\n\nThe fork degrade is now identity rather than secret presence: the `preflight` step publishes only when GITHUB_REPOSITORY equals the repository package.json already names, so the upstream is written down once and a rename cannot leave a stale literal behind. A fork gets a ::notice:: naming both repositories and the fix, and the run stays green.\n\ndocs/releasing.md leads with the tag (the operator's only step) and gains a section recording the four trusted-publisher fields, since they live in npmjs.com's settings and a failing publish has nothing in-tree to read otherwise. Two consequences are called out for whoever next refactors CI: the workflow FILENAME is part of the trusted-publisher identity — renaming release.yml or moving the publish step into another workflow breaks releases until npmjs.com is updated — and a fork can never publish hkb-cli. Troubleshooting gained an authentication case that points at the trusted publisher, not at a missing secret.\n\ntest/release.test.js had to follow (it asserts on release.yml's parsed structure and on docs/releasing.md, so it would otherwise fail); it is outside the task's declared paths but is the test for the two files the task owns.\n\nDraft PR #63. Still on the operator: revoke the npm bypass token and delete the NPM_TOKEN repo secret — the workflow already ignores both, so the order does not matter. The end-to-end proof of \"Done when\" is the next v* tag publishing with provenance and zero secrets."
+    }
+  ],
+  "v": 1
+}

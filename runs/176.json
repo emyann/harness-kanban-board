@@ -1,0 +1,16 @@
+{
+  "attempts": [],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-29T04:05:30Z",
+      "id": 5460231470,
+      "text": "Related: #185 proposes turning the path_overlap guard off by default on a manual board (keyed on unmerged PRs where it stays on) and folds the \"name the colliding card and paths\" requirement in as its item 3 — if #185 lands first, this card is its UI half or a duplicate."
+    }
+  ],
+  "results": [],
+  "v": 1
+}

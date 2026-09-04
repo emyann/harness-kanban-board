@@ -1,0 +1,64 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-09-01T20:54:01.986Z",
+      "heartbeat_at": "2026-09-01T20:43:48.134Z",
+      "host": "YRND1-GG",
+      "lock_sha": "14cab83f2ad560d26962e7d81a320801397496b0",
+      "manual": true,
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pr": 231,
+      "pr_head": "kb/225",
+      "profile": "claude",
+      "session_id": "2abc5911-ed47-4920-a41b-ae02a2292a6b",
+      "started_at": "2026-09-01T20:43:48.133Z",
+      "summary": "src/model.js now exports the whole LLM-free half of hkb groom, pure and I/O-free: GROOM_KINDS (kind -> level), GROOM_LEVELS, GROOM_SHORTLISTS, GROOM_ACTIONS (promote/specify/link-under/split/supersede/reprioritise/park/archive + judge + none, frozen), the helpers blocksIndex/ageDays/specShape/cardMentions/pathHubs/pathJaccard, proposeAction(card), and groomBoard(tasks, {now, caps, pairs=10, status",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-191-1/2abc5911-ed47-4920-a41b-ae02a2292a6b.jsonl",
+      "wt": "kb-191-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T20:55:20Z",
+      "id": 5500309479,
+      "text": "**Merged by the operator seat** — review: Reviewed against the card's Done when and, since this is the child most exposed to them, against #191's eleven amendments one by one. Amendment 1: no detectCycles — the only occurrence of the name in src/model.js is a comment saying not to write one; cycle and blocker_off_board come from the src/track.js walk, with a test asserting it. Amendment 2: no_goal is 'act' downgraded to 'info' when specShape finds a Done-when heading, and there is a test named for the amendment. Amendment 3: broad_path present at level 'ask'. Amendment 4: pairWhy is three-way guard-aware — on/off/mode-not-passed — and phrases the finding as a merge-conflict risk that serializes only under path_overlap. Amendment 9: blocksIndex iterates every task passed in, pinned by a test that says so in its name. The Contract's forbidden word holds: the only 'duplicate' on an added line reads GitHub's DUPLICATE stateReason enum and maps it to 'superseded'; nothing emits the word as a finding, and two tests check it explicitly. Verified myself: CI green (test + packed artifact), lint clean, 951 tests pass on the branch, up from 932. Twenty-two new tests including one asserting every GROOM_KINDS kind has a fixture case, which is the drift guard the rest of the track depends on. Scope honoured: only src/model.js and test/groom.test.js changed, and groomBoard takes the raw fetchBoard array with no I/O., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T20:54:04Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "test/groom.test.js"
+        ],
+        "residual_risk": [
+          "src/model.js imports resolveTrack from src/track.js, which imports src/model.js: a cycle on paper, none at runtime (neither module touches the other at evaluation time, and both orders were checked). Amendment 1's other option — lifting the walk into model.js — would have edited track.js, outside this card's kb.paths.",
+          "src/model.js is a hub path and this adds ~440 lines after sortForDispatch; a rebase against the sibling cards is likely.",
+          "The groomBoard options beyond the four the contract names (guard, bodies, share, overlap, blockersFilled) are this card's choice. #227 is the first caller and may want them spelled differently; the four contracted ones (now, caps, pairs, statuses) are exactly as specified.",
+          "blocker_off_board reports resolveTrack's `missing`, which is transitive: a card whose blocker's blocker is off-board also gets the finding. The evidence says 'block it', not 'directly block it'.",
+          "proposeAction never returns split, supersede, park or archive — those stay in the vocabulary for the skill's own table rather than being proposed mechanically. Every value it does return is in GROOM_ACTIONS, which is what the Done-when asked for."
+        ],
+        "verification": [
+          "node --test test/groom.test.js (27 tests, one fixture case per GROOM_KINDS kind, all pass)",
+          "npm run lint && npm test (951 pass, 0 fail)",
+          "node -e \"import('./src/track.js').then(()=>import('./src/model.js'))\" — the model.js <-> track.js import cycle loads cleanly in both orders",
+          "git status --short — only src/model.js and test/groom.test.js changed"
+        ]
+      },
+      "pr": 231,
+      "pr_continued": false,
+      "summary": "src/model.js now exports the whole LLM-free half of hkb groom, pure and I/O-free: GROOM_KINDS (kind -> level), GROOM_LEVELS, GROOM_SHORTLISTS, GROOM_ACTIONS (promote/specify/link-under/split/supersede/reprioritise/park/archive + judge + none, frozen), the helpers blocksIndex/ageDays/specShape/cardMentions/pathHubs/pathJaccard, proposeAction(card), and groomBoard(tasks, {now, caps, pairs=10, statuses=['triage','todo','ready'], board, guard, bodies='flagged', share=0.25, overlap=0.4, blockersFilled}). It takes the raw fetchBoard array and nothing else and returns {board, read_at, cards_read, blockers_source, summary:{by_status,hubs,one_slot,levels,lane,path_overlap}, cards:[{number,title,status,agent,priority,age_days,touched_days,paths,goal,blocked_by,blocks,findings,proposal,needs_judgment,bodyText?}], pairs:[{a,b,score,shared,why}], judgment:{cards,pairs}}. Findings are {kind,level,evidence,suggests}. AMENDMENTS: (1) no detectCycles - model.js imports resolveTrack from src/track.js and both cycle and blocker_off_board read that one walk; unblocked reuses computeReady, two_agents reuses agentsOf. (2) no_goal is info when specShape finds a Done-when heading (then proposal 'none'), act otherwise. (3) broad_path present, level ask. (4) overlap_pair.why is guard-aware via opts.guard (accepts a mode string or pathOverlapGuard(cfg)'s object) and summary.one_slot is 0 when the guard is off. (9) blocksIndex/mentions/hubs/by_status are computed over ALL tasks; statuses only picks which cards get a row. The word 'duplicate' never appears in the report (a DUPLICATE-closed blocker prints as 'superseded'); a test asserts it over the whole JSON. FOR THE NEXT NODES: #227 (the CLI verb) calls groomBoard(tasks, {now, caps: ctx.caps, pairs, statuses, board, guard: pathOverlapGuard(cfg), bodies, blockersFilled}) and renders summary.hubs ([{path,cards}]), each card's findings/proposal, rep.pairs and summary.levels ({act,ask,info,needs_judgment}) for the footer; blockers_source is 'graphql'|'rest'|'unknown' ('unknown' when caps.blockedByGql is false and blockersFilled was not passed, which is also what turns an empty blockedBy into unknown_blockers instead of no_blockers). #228 (the skill) can iterate Object.keys(GROOM_KINDS) for the findings table and GROOM_ACTIONS for the action column - both are frozen exports, so the drift test is a direct comparison. TWO JUDGEMENT CALLS worth knowing: the hub threshold is floored at three cards (Math.max(3, ceil(n*share))) because a path exactly two cards name is the pair signal overlap_pair exists to report, and a mechanical proposal beats 'judge' on a card that is both (the shortlist stays on the row and the card stays in judgment.cards). Draft PR https://github.com/emyann/harness-kanban-board/pull/231 on branch kb/225."
+    }
+  ],
+  "v": 1
+}

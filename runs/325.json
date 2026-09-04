@@ -1,0 +1,196 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-03T08:06:41.185Z",
+      "heartbeat_at": "2026-09-03T07:35:05.478Z",
+      "host": "YRND1-GG",
+      "job": "e8eece5a",
+      "lock_sha": "96c4892c499ae9f79a050cbe41c87c7754ce3ece",
+      "log": ".kanban/logs/325-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 326,
+      "pr_head": "worktree-kb-325-1",
+      "profile": "claude",
+      "session_id": "e8eece5a-208d-40ae-bbb3-2637d1cdcfd3",
+      "started_at": "2026-09-03T07:35:05.478Z",
+      "summary": "Every board read and write in src/ now goes through openStore(ctx): `grep -rn \"from './tasks.js'|from './lock.js'\" src` returns nothing outside src/store/, and hkb init defaults to `local` again (96c4892's four \"flip this back\" notes are gone). PR #326, draft. Nothing was deleted — the shims and the GitHub driver stay for #304.\n\nThe routing sorted src/'s callers into three kinds, and that split is",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-325-1/e8eece5a-208d-40ae-bbb3-2637d1cdcfd3.jsonl",
+      "wt": "kb-325-1"
+    },
+    {
+      "attempt": 2,
+      "ended_at": "2026-09-03T08:24:53.779Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "Excellent card. The three-way sort — board state through `openStore`, the repo's own branches to\n`src/forge.js`, the genuinely driver-specific things left importing the driver by name to die with it in\n#304 — is the judgment this needed, and extending past the card's six files was right for the reason you\ngave. Finding the `blockers` provenance disagreement and fixing it on the contract side is the #315 class\ncaught early. 1343 tests, CI green.\n\nA high-effort review found 15. Two headlines, and both are about the same instinct.\n\n**1. You found two of these yourself and filed them in `docs/wiki/FINDINGS.md` instead of fixing them —\nin files this PR was already editing, one line each.**\n\n- `archive` can never close a card `completed` (lifecycle.js:524). `store.setStatus(task,'archived')`\n  mutates `task.status` in place, so `task.status === 'done'` below it is always false and every archived\n  card closes NOT_PLANNED. `blockerDone` (model.js:547) rejects NOT_PLANNED, so **every card blocked by an\n  archived card stays `todo` forever**. Fix: `const wasDone = task.status === 'done'` before the setStatus.\n- `LocalStore.saveRun` reads `rec.attempts` where a run record is `{run, id}` (local.js:312), so every\n  attempt event on a local board carries `{attempt: null, profile: null, host: null}` — and `hkb log`, which\n  this PR added, is what renders them. Fix: `rec?.run?.attempts`.\n\nA finding recorded is a finding that ships. FINDINGS.md is for what you cannot fix inside the card's\ncontract; a one-line fix in a file you have open is not that. If you judge a fix out of scope, say so on\nthe **card** so it becomes a card, not in a doc nothing dispatches from.\n\n**2. This repo already knows about store handles, and five new opens skipped it.**\n\n`gc.js:321` documents the failure in words — *\"leaked one handle per tick until the process hit its\nfile-descriptor limit\"* — and `gc.js`, `dispatch.js:1259`, `cli.js:906` and `init.js:958` all close in a\n`finally`. The opens this PR added do not:\n\n- **`src/serve.js:23`** — every board read in a long-lived server opens a fresh read-write store and never\n  closes it. Four per `GET /task/42`. And it is `openIndex`, where `sqlite.js:318` and `doctor.js:210` both\n  name `openIndexReadOnly` (`{readOnly: true, timeout: 0}`) as *\"`hkb serve`'s connection, the one that may\n  not write\"* — so a request can now block on the dispatcher mid-`load()`.\n- **`src/dispatch.js`** — `tick` (560), `reconcileClosed` (289), `trackConflictPass` (383) and one per child\n  exit (1134), each per invocation, none closed, in the process designed to run forever. Three-plus handles\n  per tick at the 5 s floor. `trackConflictPass` also opens before the `roots` filter, so a tick with no\n  track roots pays for a database it never uses.\n- **`src/doctor.js:17`** — `fetchBoard`/`fetchClosedRecent`/`loadRun` open per call, so one `hkb doctor` is\n  20+ opens (`SESSION_SAMPLE = 10`, twice) and closes none — while `checkLocalStore` twenty lines below\n  builds its own and closes it. Hoist one store per `doctor()` and pass it down.\n\n## Must fix — the rest\n\n3. **`hkb log <n>` reads the oldest 5,000 of a 50,000-row log** (local.js:382). `index.events({limit})` is\n   `WHERE id > 0 ORDER BY id LIMIT n` with `after` defaulting to 0 — the *oldest* page. On a board past\n   6,000 events, `hkb log` for a recent card returns `[]` and for an old one shows only pre-row-5,000\n   history, with nothing saying rows were cut. `WHERE task_id = ? ORDER BY id DESC LIMIT ?` is both correct\n   and cheaper than parsing 5,000 payloads to keep a handful.\n4. **`beatToken` contradicts the contract this PR added** (local.js:371 vs store/index.js:187). The\n   interface says *\"from local state only… `null` means this host has not beaten on this claim, never that\n   the claim is gone\"*; the local driver aliases it to `index.lockToken`, where null means exactly that. So\n   `lifecycle.js:129` leases on a token the same table just returned and **the warm path can never report\n   `lost`** — no reclaim detection at all, surviving only because `release()` deletes the row. One of the\n   two is wrong; decide which and make them agree.\n5. **`createTask` turned one create into N+1 full paginated PR listings** (lifecycle.js:459). It ends in\n   `getTask` → `fillPrFallback` → `openPrsByHead` (up to 10 pages of `/pulls?state=open`, uncached on\n   `ctx`), and line 452 does the same per blocker — so `hkb create \"x\" --blocked-by 1,2,3` issues four.\n   `fillPrFallback`'s own docstring says *\"One request per tick, never one per card\"* (#234), and CLAUDE.md's\n   Performance value says the same. The PR body calls this \"one extra read\"; it is not.\n6. **`store.lockBeatAt` adds a REST call per stale-looking attempt** (dispatch.js:703) whenever the lock\n   listing carried no token — including when `listLocks()` threw and `locks` is null. The old call site\n   passed the sha straight in and `lockBeatAt(ctx, null)` returned null with no request. One extra request\n   per running card, per tick, on exactly the tick that already failed to list locks.\n7. **`hkb heartbeat` still speaks pure GitHub on a local board** (lifecycle.js:156): it names\n   `refs/kb/locks/42/1` and \"the run comment\", neither of which exists there. You fixed this exact wart two\n   files over — `cli.js:817` `const where = c.ref || \\`attempt ${k}\\`` and `dispatch.js:786` — and left the\n   heartbeat naming a ref no local store has.\n8. **`hkb doctor` hits the forge unconditionally** (doctor.js:1598): `checkTrackBranches` and\n   `checkOrphanedPrs` run on a local board that keeps no track branches and whose cards carry `prs: []`, so\n   with `local` the default they spend requests that can only be empty and report `bad` when the forge is\n   unreachable. `gc.js:376` gates the *identical* sweep with a spoken line saying why; the two commands now\n   disagree about the same question.\n9. **`hkb comment` prints a raw JSON blob** (cli.js:732) whenever a note has no URL — which is always on the\n   local driver. `out(ctx, obj, c.url)` with `c.url === null` falls through to `JSON.stringify`. CLAUDE.md:\n   human output is a one-liner per item. Same shape at mcp.js:128 and serve.js:30.\n10. **A fresh local `init` says \"labels already present\"** (init.js:1130) — false in both halves: there are\n    no `kb:*` labels and the board does not use any. `ensureLabels()` correctly answers `[]` and the caller\n    reads empty as \"nothing needed creating\".\n11. **The `doctor` test rewrite dropped two of the three checks it asserted on**\n    (test/doctor.test.js:1387). It now asserts only `task agent labels`; `task skills` and `card grants` are\n    covered by nothing, and the property the test exists to protect is precisely \"a skipped check is\n    distinguishable from a passing one\". Restore all three.\n12. **Three module-level consts sit inside the import block** (doctor.js:15-19). It works by hoisting and\n    reads as a bug; move them below the last import.\n\n## Done when\n\n- [ ] Every item fixed, or one line on the **card** arguing why not.\n- [ ] Tests for 1-8 and 10-11. The `archive` one must assert a card blocked by an archived-done card\n      promotes.\n- [ ] The store-handle sweep: every `openStore`/`openLocalStore` in `src/` either closes in a `finally` or\n      says on the line why it does not.\n- [ ] `npm run lint && npm test` green, with no existing assertion weakened.\n",
+      "started_at": "2026-09-03T08:24:53.763Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 3,
+      "bg": true,
+      "continues_branch": "worktree-kb-325-1",
+      "continues_pr": 326,
+      "ended_at": "2026-09-03T08:52:35.021Z",
+      "heartbeat_at": "2026-09-03T08:25:18.305Z",
+      "host": "YRND1-GG",
+      "job": "22cf3ee9",
+      "lock_sha": "96c4892c499ae9f79a050cbe41c87c7754ce3ece",
+      "log": ".kanban/logs/325-3.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 326,
+      "pr_head": "worktree-kb-325-1",
+      "profile": "claude",
+      "session_id": "22cf3ee9-b8bf-4b64-a25a-ab2c97f6e7d3",
+      "started_at": "2026-09-03T08:25:18.305Z",
+      "summary": "All 15 findings fixed on PR #326 (commit ab77b6b), 1361 tests green (18 new), no existing assertion weakened. Two existing assertions changed; both are behaviour changes argued below.\n\n**The two headlines.** Both bugs I had filed in `docs/wiki/FINDINGS.md` are fixed rather than recorded, and the file now holds only the one item that is genuinely outside this card's contract (`hkb init` needs a for",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-325-3/22cf3ee9-b8bf-4b64-a25a-ab2c97f6e7d3.jsonl",
+      "wt": "kb-325-3"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T08:24:54Z",
+      "id": 5522825594,
+      "text": "**Changes requested** (after attempt 1): Excellent card. The three-way sort — board state through `openStore`, the repo's own branches to\n`src/forge.js`, the genuinely driver-specific things left importing the driver by name to die with it in\n#304 — is the judgment this needed, and extending past the card's six files was right for the reason you\ngave. Finding the `blockers` provenance disagreement and fixing it on the contract side is the #315 class\ncaught early. 1343 tests, CI green.\n\nA high-effort review found 15. Two headlines, and both are about the same instinct.\n\n**1. You found two of these yourself and filed them in `docs/wiki/FINDINGS.md` instead of fixing them —\nin files this PR was already editing, one line each.**\n\n- `archive` can never close a card `completed` (lifecycle.js:524). `store.setStatus(task,'archived')`\n  mutates `task.status` in place, so `task.status === 'done'` below it is always false and every archived\n  card closes NOT_PLANNED. `blockerDone` (model.js:547) rejects NOT_PLANNED, so **every card blocked by an\n  archived card stays `todo` forever**. Fix: `const wasDone = task.status === 'done'` before the setStatus.\n- `LocalStore.saveRun` reads `rec.attempts` where a run record is `{run, id}` (local.js:312), so every\n  attempt event on a local board carries `{attempt: null, profile: null, host: null}` — and `hkb log`, which\n  this PR added, is what renders them. Fix: `rec?.run?.attempts`.\n\nA finding recorded is a finding that ships. FINDINGS.md is for what you cannot fix inside the card's\ncontract; a one-line fix in a file you have open is not that. If you judge a fix out of scope, say so on\nthe **card** so it becomes a card, not in a doc nothing dispatches from.\n\n**2. This repo already knows about store handles, and five new opens skipped it.**\n\n`gc.js:321` documents the failure in words — *\"leaked one handle per tick until the process hit its\nfile-descriptor limit\"* — and `gc.js`, `dispatch.js:1259`, `cli.js:906` and `init.js:958` all close in a\n`finally`. The opens this PR added do not:\n\n- **`src/serve.js:23`** — every board read in a long-lived server opens a fresh read-write store and never\n  closes it. Four per `GET /task/42`. And it is `openIndex`, where `sqlite.js:318` and `doctor.js:210` both\n  name `openIndexReadOnly` (`{readOnly: true, timeout: 0}`) as *\"`hkb serve`'s connection, the one that may\n  not write\"* — so a request can now block on the dispatcher mid-`load()`.\n- **`src/dispatch.js`** — `tick` (560), `reconcileClosed` (289), `trackConflictPass` (383) and one per child\n  exit (1134), each per invocation, none closed, in the process designed to run forever. Three-plus handles\n  per tick at the 5 s floor. `trackConflictPass` also opens before the `roots` filter, so a tick with no\n  track roots pays for a database it never uses.\n- **`src/doctor.js:17`** — `fetchBoard`/`fetchClosedRecent`/`loadRun` open per call, so one `hkb doctor` is\n  20+ opens (`SESSION_SAMPLE = 10`, twice) and closes none — while `checkLocalStore` twenty lines below\n  builds its own and closes it. Hoist one store per `doctor()` and pass it down.\n\n## Must fix — the rest\n\n3. **`hkb log <n>` reads the oldest 5,000 of a 50,000-row log** (local.js:382). `index.events({limit})` is\n   `WHERE id > 0 ORDER BY id LIMIT n` with `after` defaulting to 0 — the *oldest* page. On a board past\n   6,000 events, `hkb log` for a recent card returns `[]` and for an old one shows only pre-row-5,000\n   history, with nothing saying rows were cut. `WHERE task_id = ? ORDER BY id DESC LIMIT ?` is both correct\n   and cheaper than parsing 5,000 payloads to keep a handful.\n4. **`beatToken` contradicts the contract this PR added** (local.js:371 vs store/index.js:187). The\n   interface says *\"from local state only… `null` means this host has not beaten on this claim, never that\n   the claim is gone\"*; the local driver aliases it to `index.lockToken`, where null means exactly that. So\n   `lifecycle.js:129` leases on a token the same table just returned and **the warm path can never report\n   `lost`** — no reclaim detection at all, surviving only because `release()` deletes the row. One of the\n   two is wrong; decide which and make them agree.\n5. **`createTask` turned one create into N+1 full paginated PR listings** (lifecycle.js:459). It ends in\n   `getTask` → `fillPrFallback` → `openPrsByHead` (up to 10 pages of `/pulls?state=open`, uncached on\n   `ctx`), and line 452 does the same per blocker — so `hkb create \"x\" --blocked-by 1,2,3` issues four.\n   `fillPrFallback`'s own docstring says *\"One request per tick, never one per card\"* (#234), and CLAUDE.md's\n   Performance value says the same. The PR body calls this \"one extra read\"; it is not.\n6. **`store.lockBeatAt` adds a REST call per stale-looking attempt** (dispatch.js:703) whenever the lock\n   listing carried no token — including when `listLocks()` threw and `locks` is null. The old call site\n   passed the sha straight in and `lockBeatAt(ctx, null)` returned null with no request. One extra request\n   per running card, per tick, on exactly the tick that already failed to list locks.\n7. **`hkb heartbeat` still speaks pure GitHub on a local board** (lifecycle.js:156): it names\n   `refs/kb/locks/42/1` and \"the run comment\", neither of which exists there. You fixed this exact wart two\n   files over — `cli.js:817` `const where = c.ref || \\`attempt ${k}\\`` and `dispatch.js:786` — and left the\n   heartbeat naming a ref no local store has.\n8. **`hkb doctor` hits the forge unconditionally** (doctor.js:1598): `checkTrackBranches` and\n   `checkOrphanedPrs` run on a local board that keeps no track branches and whose cards carry `prs: []`, so\n   with `local` the default they spend requests that can only be empty and report `bad` when the forge is\n   unreachable. `gc.js:376` gates the *identical* sweep with a spoken line saying why; the two commands now\n   disagree about the same question.\n9. **`hkb comment` prints a raw JSON blob** (cli.js:732) whenever a note has no URL — which is always on the\n   local driver. `out(ctx, obj, c.url)` with `c.url === null` falls through to `JSON.stringify`. CLAUDE.md:\n   human output is a one-liner per item. Same shape at mcp.js:128 and serve.js:30.\n10. **A fresh local `init` says \"labels already present\"** (init.js:1130) — false in both halves: there are\n    no `kb:*` labels and the board does not use any. `ensureLabels()` correctly answers `[]` and the caller\n    reads empty as \"nothing needed creating\".\n11. **The `doctor` test rewrite dropped two of the three checks it asserted on**\n    (test/doctor.test.js:1387). It now asserts only `task agent labels`; `task skills` and `card grants` are\n    covered by nothing, and the property the test exists to protect is precisely \"a skipped check is\n    distinguishable from a passing one\". Restore all three.\n12. **Three module-level consts sit inside the import block** (doctor.js:15-19). It works by hoisting and\n    reads as a bug; move them below the last import.\n\n## Done when\n\n- [ ] Every item fixed, or one line on the **card** arguing why not.\n- [ ] Tests for 1-8 and 10-11. The `archive` one must assert a card blocked by an archived-done card\n      promotes.\n- [ ] The store-handle sweep: every `openStore`/`openLocalStore` in `src/` either closes in a `finally` or\n      says on the line why it does not.\n- [ ] `npm run lint && npm test` green, with no existing assertion weakened.\n"
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T08:26:13Z",
+      "id": 5522843157,
+      "text": "Correction on the request-changes, so it does not mislead the fix round: I called `docs/wiki/FINDINGS.md`\n\"a doc nothing dispatches from\". That was wrong — it is a repolore convention with four defined exits, one\nof which is \"filed in the issue tracker\", and its own header says so. Using it was not the mistake.\n\nWhat stands is narrower: **\"fixed now\" is one of those four exits and was the right one** for the two\none-line defects in files this PR already had open — `archive` closing every card `not_planned` (which\nstrands every card blocked by it, permanently) and `saveRun` reading `rec.attempts` on a `{run, id}` record\n(which blanks every attempt row in the `hkb log` this same PR shipped). Recording those and moving on is\nwhat turns a one-line fix into a defect on main.\n\nYour third finding — `hkb init` refuses a checkout with no git remote, so the store that exists to work with\n`gh` logged out cannot be created without a forge — is a real one and correctly out of this card. I have\nfiled it rather than leaving it to the inbox, and taken the FINDINGS.md exit for it on your behalf."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T08:54:56Z",
+      "id": 5523190804,
+      "text": "**Merged by the operator seat** — review: Two high-effort review rounds (15 findings, all fixed). Verified by hand before merge, each in the source: archive computes wasDone before setStatus mutates task.status in place (it was closing every archived card not_planned, which strands every card blocked by it forever); saveRun reads rec.run.attempts, so hkb log no longer renders every attempt row with nulls; index.taskEvents is WHERE task_id = ? ORDER BY id DESC LIMIT ? reversed, not the oldest page of a 50k log; beatToken reads the beats table rather than aliasing locks.token, so the warm-path heartbeat can report lost again and reclaim detection works; fillPrFallback caches on ctx._cache.prsByHead, so create --blocked-by 1,2,3 costs one PR listing rather than four.  The store-handle class was answered better than the review asked: openStore memoizes on ctx (_store/_storeRO) with closeStore(ctx) in the loop teardown, so dispatch four call sites share one handle closed once, and the same change collapses doctor 20+ opens and serve per-read opens. serve now takes openIndexReadOnly, the connection sqlite.js names as the one that may not write.  The card itself: every board read and write in src/ goes through openStore; the repo own branches moved to src/forge.js because a local board still cuts work from a forge; the two gc sweeps and doctor --api probes that are genuinely about the GitHub driver still import it by name and die with it in #304. Six methods joined the interface, each on both drivers with a conformance scenario. A #315-class driver disagreement was found and fixed on the contract side: the git tier hung no blockers provenance, so blockersKnown answered false for every card and hkb list marked settled cards blockers unread.  hkb init defaults to local again and the four flip-this-back notes from 96c4892 are gone.  CI green on ab77b6b (six checks). 1361 tests, lint green., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-03T08:06:42Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/store/index.js",
+          "src/store/github.js",
+          "src/store/git.js",
+          "src/store/local.js",
+          "src/store/sqlite.js",
+          "src/forge.js",
+          "src/lock.js",
+          "src/model.js",
+          "src/board.js",
+          "src/cli.js",
+          "src/lifecycle.js",
+          "src/dispatch.js",
+          "src/context.js",
+          "src/stats.js",
+          "src/hook.js",
+          "src/init.js",
+          "src/gc.js",
+          "src/serve.js",
+          "src/mcp.js",
+          "src/doctor.js",
+          "test/store.test.js",
+          "test/doctor.test.js",
+          "test/init.test.js",
+          "README.md",
+          "docs/local-first.md",
+          "docs/wiki/architecture/store-seam.md",
+          "docs/wiki/architecture/local-store.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/features/web-board.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/FINDINGS.md",
+          "docs/wiki/log.md",
+          "docs/wiki/index.md"
+        ],
+        "residual_risk": [
+          "hkb create on a GitHub board costs one extra GraphQL read per card (store.createTask reads the card back to answer with a Task). Frugality regression, deliberate, named in the PR — reverting means a store method that answers with less than a Task.",
+          "hkb doctor on a local board with an unreachable forge now answers three checks it used to skip; one test assertion was updated to match. Verify this is wanted before merge.",
+          "src/gc.js and src/doctor.js import src/store/github.js directly. That is on purpose (GitHub-only sweeps and probes) but it means #304's deletion has two more callers to account for than the grep suggests.",
+          "hkb log --json on a GitHub board now emits actor: null where it used to omit the key (undefined). No test covers hkb log either way.",
+          "PR #324 is open, not merged; it touches src/store/index.js and will conflict lightly with the STORE_METHODS list and the Store typedef.",
+          "The local store's taskEvents renders an event payload with a small heuristic (detailOf, src/store/local.js). hkb log on a local board is legible but its wording is not pinned by a test."
+        ],
+        "verification": [
+          "grep -rn \"from './tasks.js'|from './lock.js'\" src   → nothing outside src/store/",
+          "npm run lint  (node --check on every file + tsc --noEmit, clean)",
+          "npm test  → 1343 pass, 0 fail  (was 1333 before; +10 are the new conformance scenarios on two drivers)",
+          "npm run smoke  → the packed tarball installs, runs and initialises a repo; 26 content / 3 command / 12 init / 6 in-repo checks",
+          "scratch repo on --store local, end to end: hkb init --store local --repo o/r --no-hook; hkb create \"the first card\" --body \"...\"; hkb list; hkb list --json; hkb show 1; hkb claim 1; KB_TASK=1 KB_ATTEMPT=1 hkb heartbeat 1; hkb comment 1 \"...\"; hkb context 1; hkb finish 1 --summary \"did the thing\" --no-pr \"...\"; hkb list --all; hkb log 1; hkb stats; hkb gc; hkb doctor  → card reaches done/CLOSED, doctor reports 'local — kb-board in <root>, index .git/hkb/index.db'",
+          "the same walk on a --store github board, driven against test/fake-gh.js in a real checkout with a real origin (so the lock ref and the --force-with-lease push are real): create → list → claim → heartbeat → heartbeat again (leasing on the first beat's token) → comment → context → block → unblock → claim → finish → CLOSED; the gh paths touched are unchanged",
+          "node .repolore/scripts/wiki-check.mjs → the four pages this change makes claims about are fresh (21 stale remain, all stale at HEAD before this branch)"
+        ]
+      },
+      "pr": 326,
+      "pr_continued": false,
+      "summary": "Every board read and write in src/ now goes through openStore(ctx): `grep -rn \"from './tasks.js'|from './lock.js'\" src` returns nothing outside src/store/, and hkb init defaults to `local` again (96c4892's four \"flip this back\" notes are gone). PR #326, draft. Nothing was deleted — the shims and the GitHub driver stay for #304.\n\nThe routing sorted src/'s callers into three kinds, and that split is what the next worker needs. (1) Board state goes through openStore: cli, lifecycle, dispatch, context, stats, hook, plus init, mcp, serve and doctor's board reads — I extended past the card's six files because the card's own grep criterion covers all of src/ and leaving four files half-routed defeats the point. (2) The repository's OWN BRANCHES are not board state and moved to src/forge.js beside the pull requests: baseSha/staleBaseSha, classifyClaimError, and the four kb/track-<root> functions. A local board still cuts its work from a forge, so a second driver never implements these. (3) Two hkb gc sweeps (duplicate run comments, dead local beat chains) and the hkb doctor --api probes import src/store/github.js BY NAME, because they are about that driver and gc.sweepOpen already skips them on any other store; putting them on the interface would add methods only one driver could mean anything by. They are deleted with the driver in #304. Five pure things moved out of the driver so callers need not import one: blockersOf/blockersKnown/tagBlockers to model.js, assertOnBoard/remoteName to board.js; the driver re-exports all five so the shims still resolve.\n\nSix methods joined the interface, each on both drivers with a scenario in test/store.test.js: setKb (the machine block — updateBody only replaces the prose, so kb was unreachable through the interface), ensureLabels, lockToken/beatToken/resyncBeat/dropBeat (the heartbeat's two-sided lease, replacing lockSha/lockExists/localBeatSha/casHeartbeat/resyncBeatChain/dropBeatChain), and taskEvents for hkb log — never refused the way events() is. heartbeat widened to {result, token, expected, detail} so hkb heartbeat can say why it fell back; addNote answers the note {id, at, actor, text, url} instead of a raw GitHub comment, since its three readers all reached for html_url. claim/listLocks carry an OPTIONAL `ref`; print the attempt number when there is none.\n\nOne driver disagreement, fixed the contract's way (the #315 class): §6.4 says nothing about the `blockers` provenance note listTasks hangs on its array, so the git tier hung none — blockersKnown answered false for every card on a local board and hkb list marked settled cards \"blockers unread\". The tier now tags {source:'local', filled:true, scope:'all'} and a scenario asserts it on both drivers.\n\nTHREE THINGS THAT CHANGED BEHAVIOUR, all deliberate and all in the PR body: (a) hkb create costs one extra read on a GitHub board — it goes through store.createTask, which reads the card back to return a Task; the old path was ensureLabels + createIssue and read nothing. (b) hkb doctor on a LOCAL board with an unreachable forge now answers its board-backed checks instead of \"could not read the board\" — those checks called the GitHub driver's query, so a 404 from a repo the board does not live on silenced three checks whose answers were on disk. test/doctor.test.js's \"a forge that is not there costs one line\" asserted the old behaviour and was updated. (c) two test/init.test.js tests now pass --store github, because they assert the kb:* labels that reach GitHub, which are the board on that store and nothing on the other — forced by the default flip, not the routing (96c4892 made the mirror-image edit). No other test moved.\n\nFor #303: the assertion sites are now reachable — every verb calls methods on the object openStore returns. PR #324 (setStore + test/fake-store.js) is still OPEN, not merged as the card assumed, so I did not use it; it touches src/store/index.js, so expect a small conflict there. Nothing here depends on it.\n\nFor #304: the shims are import-free from src/, so deleting src/store/github.js, src/tasks.js and src/lock.js now only has to account for src/forge.js (which imports baseSha/classifyClaimError), gc.js's two GitHub-only sweeps, doctor.js's --api probes, and the tests that still import the shims.\n\ndocs/wiki/FINDINGS.md is new, with three defects this surfaced but did not fix: hkb archive always closes as not_planned on BOTH drivers (setStatus sets task.status='archived' in place, so the `task.status === 'done'` on the next line can never be true); the local store's saveRun event payload reads rec.attempts where a run record is {run, id}, so every hkb log attempt row on a local board says attempt=null; and hkb init needs a forge (`gh repo view`) even for a purely local board, which is the one store that exists to work with gh logged out."
+    },
+    {
+      "artifacts": [],
+      "at": "2026-09-03T08:52:37Z",
+      "attempt": 3,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/store/index.js",
+          "src/store/sqlite.js",
+          "src/store/local.js",
+          "src/store/github.js",
+          "src/cli.js",
+          "src/lifecycle.js",
+          "src/dispatch.js",
+          "src/doctor.js",
+          "src/gc.js",
+          "src/serve.js",
+          "src/mcp.js",
+          "src/init.js",
+          "test/store.test.js",
+          "test/store-local.test.js",
+          "test/dispatch.test.js",
+          "test/doctor.test.js",
+          "test/init.test.js",
+          "test/routing-fixes.test.js",
+          "docs/wiki/architecture/store-seam.md",
+          "docs/wiki/architecture/local-store.md",
+          "docs/wiki/features/web-board.md",
+          "docs/wiki/FINDINGS.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "SCHEMA_VERSION 3 rebuilds rather than migrates, so an existing local index is deleted and re-read from the branch on the next open. Nothing in it is a source of truth except the live half — and the `beats` mirror it loses is a mirror: a worker mid-attempt whose index is rebuilt falls through to the cold heartbeat path, leases on `a.lock_sha` or `lockToken`, and carries on.",
+          "`hkb serve` on a local board now reads through a read-only connection, so it does not reindex the branch itself. Every local write indexes as it commits (`_durable`) and a local board has one writer, so the index is current — but a serve process pointed at a board whose branch was moved by something other than hkb would show the last indexed state until a verb or the dispatcher reindexes.",
+          "The open-PR listing memo is per context and dropped per tick, per serve poll and per serve write. A single long-running command that opens a PR itself and then re-reads the same card in the same process would see the pre-PR listing; no verb does that today.",
+          "`hkb doctor` no longer reports orphaned PRs or stale track branches on a local board. If a local board ever starts keeping track branches on the forge, that gate has to be revisited — gc.js:376 has the identical gate and would need the same change."
+        ],
+        "verification": [
+          "npm run lint && npm test  — 1361 tests, 1361 pass, 0 fail (18 new)",
+          "node .repolore/scripts/wiki-check.mjs  — the three pages this change touches are fresh; the other 22 were stale before this branch",
+          "scratch repo on --store local: git init + origin; hkb init --store local --no-hook --repo o/r; hkb create 'the first card'; hkb create 'a second one' --blocked-by 1; hkb list; hkb claim 1; KB_TASK=1 KB_ATTEMPT=1 hkb heartbeat 1; KB_TASK=1 KB_ATTEMPT=1 hkb finish 1 --no-pr '..' --summary '..'  → #1 done, #2 shows its blocker as ✓",
+          "same scratch repo, the archive fix end to end: hkb archive 1 → show 1 --json reports state CLOSED / stateReason COMPLETED; hkb promote 2 → ready",
+          "same scratch repo, the saveRun fix end to end: hkb log 1 renders `attempt=1 profile=\"claude\" host=\"YRND1-GG\"` where it used to render nulls",
+          "--store github is covered by the suite throughout (fake-gh); the two GitHub-side behaviour changes have their own tests in test/routing-fixes.test.js and test/dispatch.test.js"
+        ]
+      },
+      "pr": 326,
+      "pr_continued": true,
+      "summary": "All 15 findings fixed on PR #326 (commit ab77b6b), 1361 tests green (18 new), no existing assertion weakened. Two existing assertions changed; both are behaviour changes argued below.\n\n**The two headlines.** Both bugs I had filed in `docs/wiki/FINDINGS.md` are fixed rather than recorded, and the file now holds only the one item that is genuinely outside this card's contract (`hkb init` needs a forge even for a purely local board). `archive` reads `task.status` before `setStatus` mutates it in place — every archived card was closing NOT_PLANNED, `blockerDone` rejects that, so anything blocked by an archived card stayed `todo` forever. `LocalStore.saveRun` reads `rec.run.attempts`, not `rec.attempts`.\n\n**Store handles.** The fix is one level up from a `finally` per call site: `openStore(ctx)` hands back one handle per context and `closeStore(ctx)` closes it — `main()`'s finally, `loop()`'s finally, the server's `close` event, plus `reloadBoards` for a board the operator drops. That covers the five new opens the review named and the forty that already existed, and it is stronger than the `finally` `gc.sweep` carried, so that one is gone (closing a memoized handle mid-tick would kill the loop's store) and its test now asserts twenty failing sweeps hold one handle. A local store still reconciles on every `openStore` call, so a memoized handle sees what a fresh one would. `hkb serve` reads through the new `openStoreReadOnly` (`openIndexReadOnly`, `{readOnly: true, timeout: 0}`) in its own context slot, so a request fails a busy lock fast and the lifecycle verbs a drag runs still get a writable store.\n\n**Items 3-12.** `beatToken` is a real per-checkout mirror — a `beats` table, SCHEMA_VERSION 3, the counterpart of the GitHub driver's local `refs/kb/locks/<n>/<k>` ref, deliberately outliving a released row — so the CAS can fail and the warm path can report `lost`; the contract stands and the driver changed. `index.taskEvents(n, {limit})` narrows in SQL (`WHERE task_id = ? ORDER BY id DESC LIMIT ?`, returned oldest-first). `fillPrFallback` memoizes the open-PR listing on `ctx._cache`, dropped at the top of every tick and at every serve poll and write, so `hkb create --blocked-by 1,2,3` costs one listing rather than four (the promise is memoized, not the value, because `createTask` reads its blockers with `Promise.all`; a failed one is forgotten). The dispatcher's `beatAtOf` prefers the `beat_at` the listing already carried and spends nothing when there is no row — including the tick where `listLocks()` threw. `lockRef(n, k)` joined the interface (both drivers, conformance scenario), so `hkb heartbeat`, `hkb claim` and LOCK_LOST stop naming a git ref on a board that has none. `hkb doctor` skips `checkTrackBranches`/`checkOrphanedPrs` on a local board with the sentence `gc.js` already speaks. `hkb comment` prints `#n ← comment added` rather than a JSON blob; mcp/serve answer `url: null` explicitly. A fresh local `init` says there are no `kb:*` labels to create. The doctor test asserts all three board checks again (the test board now carries a card with `kb.skills`/`kb.tools`, since `task skills` and `card grants` are silent on a board with no such card). doctor's three module consts sit below the last import.\n\n**Two assertions changed, both deliberate.** `test/init.test.js` — 'labels already present' is now 'no kb:* labels to create', because item 10 is exactly that the old line was false in both halves. `test/doctor.test.js` — 'track branches' on a local board is now `ok` with a spoken skip reason rather than `bad`, because item 8 is that gate; the 'checks after it still ran' assertion moved to 'rate limit', and the test additionally asserts each skipped check says *why*, so a skipped check is still distinguishable from a passing one.\n\nAlso removed: the last 'the verbs are not routed yet' note, still printed by `hkb init` on a local board. And two cosmetic slips the end-to-end walk-through surfaced: `#1 claimed (attempt 1, attempt 1)` and `lease held on null`."
+    }
+  ],
+  "v": 1
+}

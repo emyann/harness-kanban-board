@@ -1,0 +1,91 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-29T04:00:54.487Z",
+      "heartbeat_at": "2026-08-29T03:10:32.210Z",
+      "host": "YRND1-GG",
+      "job": "14e71bab",
+      "job_stopped": true,
+      "lock_sha": "cff31f23a7f27c5b765c9ed3d929e6c106a62fbf",
+      "log": ".kanban/logs/182-1.log",
+      "outcome": "protocol_violation",
+      "pid": null,
+      "profile": "claude",
+      "reason": "protocol_violation after 3022s",
+      "session_id": "14e71bab-8c1f-43fa-8bdd-113536835dc8",
+      "started_at": "2026-08-29T03:10:32.210Z",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-182-1/14e71bab-8c1f-43fa-8bdd-113536835dc8.jsonl",
+      "wt": "kb-182-1"
+    },
+    {
+      "attempt": 2,
+      "bg": true,
+      "ended_at": "2026-08-29T04:19:05.221Z",
+      "heartbeat_at": "2026-08-29T04:10:09.614Z",
+      "host": "YRND1-GG",
+      "job": "18eda5c5",
+      "lock_sha": "802ea8178c3b1085691354a0c410777312b33df1",
+      "log": ".kanban/logs/182-2.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 186,
+      "pr_head": "worktree-kb-182-2",
+      "profile": "claude",
+      "session_id": "18eda5c5-209b-4005-b49e-ad6a89befaac",
+      "started_at": "2026-08-29T04:10:09.614Z",
+      "summary": "effort is now a profile field (\"low\"|\"medium\"|\"high\"|\"xhigh\"), rendered into {model_args} alongside --model by a new pure modelArgs() helper (src/model.js), validated in loadBoard (src/board.js). No launch pin is needed just to set --effort any more. doctor's `launch hooks` fix on a stale pinned launch now names the surgical repair (insert {hook_settings} after --disallowedTools, or drop the pin o",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-182-2/18eda5c5-209b-4005-b49e-ad6a89befaac.jsonl",
+      "wt": "kb-182-2"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": "protocol_violation after 3022s",
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-29T03:53:46Z",
+      "id": 5460172606,
+      "text": "Operator note for the next attempt (attempt 1 read from its transcript, 2026-08-29): the worker merged origin/main, hit a conflict in `.kanban/board.json` (main gained `{hook_settings}` inside the pinned launch arrays at 802ea81; this card removes those arrays), and from then on every tool call was refused — hkb's own PreToolUse hook throws when the worktree's board.json is not valid JSON (conflict markers), so the worker could not even edit the file. It looped on \"Still blocked — no change.\" until its turn budget ran out. Bug filed as #184.\n\nHow to get past it this time: do the merge and the resolution in ONE command so there is no window in which board.json is invalid —\n`git merge origin/main || (git checkout --ours .kanban/board.json && git add .kanban/board.json && git commit --no-edit)`\n— and keep your version of board.json (no pinned `launch` on claude/claude-track, `\"effort\": \"medium\"` on both), which is exactly what main's `{hook_settings}` lines were a stopgap for. Verify with `node bin/hkb.js doctor` that `launch hooks` is ✓ afterwards (the default launch carries the placeholder). Everything else in attempt 1's worktree (README, harnesses.md, hook-install-shapes.md, log.md, the code) looked complete; the retry starts fresh, so redo it from the card."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-29T04:19:07Z",
+      "attempt": 2,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/board.js",
+          "src/dispatch.js",
+          "src/doctor.js",
+          ".kanban/board.json",
+          "README.md",
+          "docs/harnesses.md",
+          "docs/wiki/features/hook-install-shapes.md",
+          "docs/wiki/log.md",
+          "test/harness.test.js",
+          "test/profiles.test.js"
+        ],
+        "residual_risk": [
+          "Actions template claude_args does not render effort (documented as a known edge, same as the pre-existing model gap)",
+          "Copilot CLI / Codex have no verified --effort flag so effort is left unset there rather than enforced by validation per-profile"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (815 passing)",
+          "npm run smoke",
+          "node bin/hkb.js doctor (launch hooks clean, no warning)"
+        ]
+      },
+      "pr": 186,
+      "pr_continued": false,
+      "summary": "effort is now a profile field (\"low\"|\"medium\"|\"high\"|\"xhigh\"), rendered into {model_args} alongside --model by a new pure modelArgs() helper (src/model.js), validated in loadBoard (src/board.js). No launch pin is needed just to set --effort any more. doctor's `launch hooks` fix on a stale pinned launch now names the surgical repair (insert {hook_settings} after --disallowedTools, or drop the pin only if it added nothing but --model/--effort) instead of a blanket 'drop launch'. Migrated this repo's own board.json: dropped the pinned launch arrays from claude/claude-track, set effort: medium on both; hkb doctor reports the launch hooks clean. Docs updated: README, docs/harnesses.md (profile shape, the doctor paragraph, an Actions known-edge row), and the hook-install-shapes wiki page. Copilot/Codex have no verified --effort equivalent (left unset, documented); the Actions worker workflow's claude_args is hand-written, not rendered from {model_args}, so effort has no effect there yet (documented, same gap as the existing per-task model override)."
+    }
+  ],
+  "v": 1
+}

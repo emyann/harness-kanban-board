@@ -1,0 +1,63 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T19:56:35.297Z",
+      "heartbeat_at": "2026-09-01T19:43:37.069Z",
+      "host": "YRND1-GG",
+      "job": "22c20cf0",
+      "lock_sha": "4714e4f16920270394c1aaa9382d8b2c08e4ab51",
+      "log": ".kanban/logs/209-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 218,
+      "pr_head": "worktree-kb-209-1",
+      "profile": "claude",
+      "session_id": "22c20cf0-62e1-4a0e-8967-60fa250b3b9b",
+      "started_at": "2026-09-01T19:43:37.069Z",
+      "summary": "hkb promote <n> now resolves the target's subgraph (resolveTrack: n plus everything still blocking it) and promotes it blockers-first, instead of touching only the dragged/typed card. A card with no open blockers left resolves to a track of one and keeps exactly today's single-card behaviour (forcing todo/blocked straight to ready included). A real cascade never forces a blocker ready — promoteDec",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-209-1/22c20cf0-62e1-4a0e-8967-60fa250b3b9b.jsonl",
+      "wt": "kb-209-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T19:56:37Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/lifecycle.js",
+          "src/model.js",
+          "src/cli.js",
+          "src/serve.js",
+          "docs/wiki/features/web-board.md",
+          "docs/wiki/log.md",
+          "test/model.test.js",
+          "test/promote.test.js",
+          "test/cli.test.js",
+          "test/serve.test.js"
+        ],
+        "residual_risk": [
+          "The drawer's `moved` field on the /move response is new API surface with no client UI reading it yet — the page still relies on its next poll to show swept-up cards, per the no-cascade-in-serve.js invariant, so this is inert until a future UI wants a richer toast.",
+          "A card whose only open blocker is off-board or closed-not-planned is treated as a leaf (forcing allowed) rather than skipped, since resolveTrack's `missing` list isn't counted as a track node — matches pre-#209 single-card behaviour for that case, not a regression, but worth knowing if it ever needs its own rung."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (883 passing)",
+          "node .repolore/scripts/wiki-check.mjs (web-board.md fresh; the 12 other stale pages predate this change and are unrelated to promote)"
+        ]
+      },
+      "pr": 218,
+      "pr_continued": false,
+      "summary": "hkb promote <n> now resolves the target's subgraph (resolveTrack: n plus everything still blocking it) and promotes it blockers-first, instead of touching only the dragged/typed card. A card with no open blockers left resolves to a track of one and keeps exactly today's single-card behaviour (forcing todo/blocked straight to ready included). A real cascade never forces a blocker ready — promoteDecision (src/model.js) only advances a todo card that is genuinely ready and leaves blocked cards alone, since that flag means a human, not open dependencies. promote now returns one row per touched card (moved or skipped, with a reason) instead of one object; hkb promote's CLI output names every card via the new formatPromote grouping. The drag map (MOVES in src/serve.js) is unchanged, so the cascade reaches the web board for free — move()/runVerb() just needed to accept promote's list answer and pick out the dragged card's own row for the landed check; the rest ride along under moved. No reverse cascade or reverse verb (unchanged). Documented in docs/wiki/features/web-board.md under a new 'Promote cascades forward, never backward' section, with src/lifecycle.js, src/track.js and src/model.js added to that page's covers."
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,89 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T16:31:34.431Z",
+      "heartbeat_at": "2026-08-28T16:30:15.587Z",
+      "host": "YRND1-GG",
+      "kind": "dependency",
+      "lock_sha": "c46b183e5f08990c3b0da726c36a0143462a7bde",
+      "log": ".kanban/logs/133-1.log",
+      "outcome": "blocked",
+      "pid": null,
+      "profile": "claude",
+      "reason": "PR #135 (from #115's verify pass) already implements most of this on an unmerged branch that touches the same files. Paused to avoid a duplicate and a conflict; re-scoped against #135 once it merges.",
+      "started_at": "2026-08-28T16:30:15.587Z",
+      "wt": "kb-133-1"
+    },
+    {
+      "attempt": 2,
+      "bg": true,
+      "ended_at": "2026-08-28T16:32:47.348Z",
+      "heartbeat_at": "2026-08-28T16:32:17.669Z",
+      "host": "YRND1-GG",
+      "kind": "needs_input",
+      "lock_sha": "f25bbb85f8535c88969458b0ee7c684db9bab5a9",
+      "log": ".kanban/logs/133-2.log",
+      "outcome": "blocked",
+      "pid": null,
+      "profile": "claude",
+      "reason": "Superseded in large part by PR #135 (merged as f25bbb8): the Stop hook now derives the attempt from the kb-<n>-<k> worktree, and the terminal verb records session_id/transcript_path. Needs re-scoping to the residual gap before any further attempt.",
+      "started_at": "2026-08-28T16:32:17.669Z",
+      "wt": "kb-133-2"
+    },
+    {
+      "attempt": 3,
+      "ended_at": "2026-08-28T16:47:57.766Z",
+      "host": "YRND1-GG",
+      "outcome": "completed",
+      "profile": "claude",
+      "started_at": "2026-08-28T16:47:57.766Z",
+      "summary": "Resolved as superseded, no residual scope. The card's ask — hooks find their task from the worktree when KB_TASK never arrives — shipped for the Stop hook in PR #135 (whichAttempt: KB_TASK first, kb-<n>-<k> basename second), and PR #137 covers attempts that never reach a terminal verb by recording sessions from the tick. The remaining KB_TASK gate on preToolHook is deliberate design, documented at",
+      "synthetic": true
+    }
+  ],
+  "block_loops": {
+    "1k7zjaq": 1,
+    "1myi2jc": 1
+  },
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T16:31:19Z",
+      "id": 5455070896,
+      "text": "Operator note: PR #135 (just merged to main, closes #115) implemented this card's core — whichAttempt in src/hook.js resolves the task from the kb-<n>-<k> worktree basename when KB_TASK is absent, and the two-nudge enforcement is back with it. git fetch + rebase onto main and check what, if anything, remains of your scope (e.g. non-worktree layouts, the pretool hook path). If nothing remains, finish with hkb complete and a summary saying it was superseded by #135 — do not open a duplicate PR."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T16:31:37Z",
+      "id": 5455074483,
+      "text": "**Blocked** (dependency, attempt 1): PR #135 (from #115's verify pass) already implements most of this on an unmerged branch that touches the same files. Paused to avoid a duplicate and a conflict; re-scoped against #135 once it merges."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T16:32:50Z",
+      "id": 5455088875,
+      "text": "**Blocked** (needs_input, attempt 2): Superseded in large part by PR #135 (merged as f25bbb8): the Stop hook now derives the attempt from the kb-<n>-<k> worktree, and the terminal verb records session_id/transcript_path. Needs re-scoping to the residual gap before any further attempt."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-28T18:12:17Z",
+      "id": 5456094832,
+      "text": "**Archived — decision (a), 2026-08-28, on measured evidence.**\n\nAn 11-agent adversarial workflow replayed this card's policy against the 71 real worker transcripts on this board and ran live probes against Claude Code 2.1.250/2.1.251:\n\n- A live Layer 2 would have denied **321 legitimate calls in 57 of 71 attempts** — Writes/Edits to `$CLAUDE_JOB_DIR/tmp/` (the scratchpad every bg job is given), Reads of the auto-memory files the system prompt tells the model to consult, `timeout`, `rg`, `for … done`. Worktree containment: **0 out-of-worktree writes in 88 attempts** — a 100% false-positive rate.\n- Its deny text deadlocks on its own regexes: `hkb block <n> \"needs sudo: …\" --kind capability` is denied by `\\bsudo\\b`.\n- Its one `allow` is a measured bypass: `$(sh -c …)` inside an allowed prefix is denied natively and **ran** under a hook `allow`.\n- The gaps it would have covered close natively (`hkb dispatch` → one `--disallowedTools` token) or are not incidents.\n\nThe pilot's terminal-verb failure was Claude Code's `--worktree` guard on the builtin token `complete` plus heredocs denied by shape — fixed by `hkb finish` in #142. What remains of option (a) is the follow-up card filed today. Reopen if a worker ever writes outside its worktree (other than `$CLAUDE_JOB_DIR/tmp/`) or Claude Code documents an additive-only hook decision."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T16:48:00Z",
+      "attempt": 3,
+      "kind": "result",
+      "metadata": {},
+      "summary": "Resolved as superseded, no residual scope. The card's ask — hooks find their task from the worktree when KB_TASK never arrives — shipped for the Stop hook in PR #135 (whichAttempt: KB_TASK first, kb-<n>-<k> basename second), and PR #137 covers attempts that never reach a terminal verb by recording sessions from the tick. The remaining KB_TASK gate on preToolHook is deliberate design, documented at src/hook.js:38: the permission policy must bind only sessions explicitly launched as workers, and a bg session is still constrained by its launch's own --permission-mode/--allowedTools flags, which are CLI args and do reach it. Nothing left to build here."
+    }
+  ],
+  "v": 1
+}

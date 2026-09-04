@@ -1,0 +1,54 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T03:56:21.306Z",
+      "heartbeat_at": "2026-08-28T03:51:59.589Z",
+      "host": "YRND1-GG",
+      "job": "e90c7d96",
+      "lock_sha": "e5ef5046e4629640639dd7f64e48ec3382822235",
+      "log": ".kanban/logs/102-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 106,
+      "pr_head": "worktree-kb-102-1",
+      "profile": "claude",
+      "started_at": "2026-08-28T03:51:59.589Z",
+      "summary": "Docs only, both files this task owns. The multi-board part of README's \"The board in a browser\" now describes what #105 and #104 actually shipped, and `docs/manual-mode.md` no longer implies the cross-repo list is hand-written.\n\nREADME (section \"More than one repo\", the paragraphs after the `--repos` one):\n- `hkb init` puts the checkout it just set up on `~/.config/hkb/boards.json`, so \"the repos ",
+      "wt": "kb-102-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T03:56:23Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "README.md",
+          "docs/manual-mode.md"
+        ],
+        "residual_risk": [
+          "README's Quickstart comment (line 12) and the --no-labels paragraph (lines 20-23) still enumerate what init writes without naming the board-list entry. Left alone deliberately: neither claims to be exhaustive, '--no-labels ... sends nothing at all' is still true (the registration is a local write), and the task scoped this to the multi-board section. If an adopter should learn about ~/.config/hkb/boards.json from the Quickstart too, that is a one-line follow-up.",
+          "The README does not mention that an init run inside a linked worktree registers the main checkout, not the worktree (mainWorktree in src/board.js). Correct behaviour, invisible to the reader, and saying it would cost a sentence in a section that is already long.",
+          "The quoted init lines are copied from src/init.js:606-608 — a later reword of that message makes the README quote stale with nothing to catch it."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test — 566 pass, 0 fail",
+          "node .repolore/scripts/wiki-check.mjs — all 6 pages fresh (no wiki page needed a touch: this change alters no behaviour, and #104/#105 already refreshed the pages covering serve.js and init.js)",
+          "rg -n \"read once, while .hkb serve. starts\" README.md docs/ — no match",
+          "rg -n restart README.md docs/manual-mode.md — only the dispatcher line (README:73) and the 'without a restart' promise (README:214)"
+        ]
+      },
+      "summary": "Docs only, both files this task owns. The multi-board part of README's \"The board in a browser\" now describes what #105 and #104 actually shipped, and `docs/manual-mode.md` no longer implies the cross-repo list is hand-written.\n\nREADME (section \"More than one repo\", the paragraphs after the `--repos` one):\n- `hkb init` puts the checkout it just set up on `~/.config/hkb/boards.json`, so \"the repos you have `init`ed are the repos the page shows, and the common case needs no config at all\". The exact init lines are quoted, not paraphrased: `registered this checkout in ~/.config/hkb/boards.json — hkb serve will show it` and `already listed in …` (the terminal wraps `hkb serve` in backticks; the README quote carries the wording inside a code span, so those inner backticks are dropped). It says why it prints them — that file is the one thing init writes outside your repo.\n- The file is still yours: the JSON example stays, a bare path is what init writes and what you write by hand (the checkout's own `.kanban/board.json` names the board, so a rename follows it), and `{ \"path\": …, \"board\": … }` — or `\"~/code/infra#release\"` — pins a second board inside one repo, \"the thing `init` cannot work out for you\". Delete an entry to stop serving it.\n- The live-reload paragraph #104 wrote is kept nearly verbatim (once per poll interval, no restart, no GitHub call, a board already there keeps its cached cards, a stale entry is a warning and a skip), plus the `--repos` sentence: overrides the list, does not reload.\n- \"Nothing is scanned for\" became its own closing paragraph with the distinction the task asked for: hkb never crawls your filesystem, and a checkout that registers itself is not an exception — running `hkb init` in a directory *is* the act of naming it.\n\n`docs/manual-mode.md:48-50`: \"(or list them once in `~/.config/hkb/boards.json` and just run `hkb serve`)\" became plain `hkb serve` already doing it, because init registers every checkout and the server re-reads the list while it runs.\n\nThe stale sentence #96/#97 added was already gone — #104's worker removed it when the behaviour changed — so `rg -n \"read once, while .hkb serve. starts\" README.md docs/` was already empty before this change and still is.\n\nDraft PR #106 on branch worktree-kb-102-1, at the tip of origin/main (e5ef504), nothing to rebase."
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,91 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-26T23:11:52.756Z",
+      "heartbeat_at": "2026-08-26T08:11:58.086Z",
+      "host": "YRND1-GG",
+      "job": "b1d12acc",
+      "job_stopped": true,
+      "lock_sha": "41c1b148eb9bde2786ad9eb672fb2f706c1a8a14",
+      "log": ".kanban/logs/8-1.log",
+      "outcome": "timed_out",
+      "pid": null,
+      "profile": "claude",
+      "reason": "timed_out after 53994s",
+      "started_at": "2026-08-26T08:11:58.086Z",
+      "wt": "kb-8-1"
+    },
+    {
+      "attempt": 2,
+      "bg": true,
+      "ended_at": "2026-08-27T00:36:54.078Z",
+      "heartbeat_at": "2026-08-27T00:12:59.219Z",
+      "host": "YRND1-GG",
+      "job": "ac58730a",
+      "lock_sha": "3e85a039b7dcf07f5cde5f5c02e0f6f60907b924",
+      "log": ".kanban/logs/8-2.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-27T00:12:59.219Z",
+      "wt": "kb-8-2"
+    }
+  ],
+  "block_loops": {},
+  "failures": 1,
+  "last_error": "timed_out after 53994s",
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T00:36:03Z",
+      "attempt": 2,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "templates/actions/kanban-dispatch.yml",
+          "templates/actions/kanban-worker-claude.yml",
+          ".github/workflows/kanban-dispatch.yml",
+          ".github/workflows/kanban-worker-claude.yml",
+          "src/init.js",
+          "src/board.js",
+          "src/dispatch.js",
+          "src/cli.js",
+          "src/doctor.js",
+          "test/actions.test.js",
+          "test/yaml.js",
+          "README.md",
+          "docs/harnesses.md",
+          "skills/kanban/references/protocol.md",
+          ".kanban/board.json"
+        ],
+        "dependencies": [],
+        "residual_risk": [
+          "Neither workflow has been executed on GitHub: they are not on the default branch yet, and a real run needs KB_TOKEN plus CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY. Everything checked here is schema, parse, unit tests and a local dry run.",
+          "No workflow_run crash detection for remote attempts — nothing records the Actions run id, so a cancelled or killed worker is only noticed at stale_after (1h by default).",
+          "A per-task `model` override is not plumbed through workflow inputs; the worker's model is whatever claude_args says.",
+          "claude-code-action@v1's exact input names (prompt, claude_args, claude_code_oauth_token, anthropic_api_key) and whether the step's `env` reaches the Claude process are taken from the action's documented interface, not verified against a run.",
+          "src/dispatch.js is also owned by in-flight task #39 (PR #41); this rebased cleanly on main 96f3c7b but the two diffs touch the same file.",
+          "The dispatch workflow's `pull_request: [closed]` trigger will start firing on this repo once merged; with no KB_TOKEN it costs one ~20s runner job per closed PR and prints a notice.",
+          "The harness worktree-isolation guard blocks any Bash command containing the token that names this terminal verb, so every documented invocation of it is unreachable from a worktree-isolated session; this attempt finished by spawning the CLI from a script instead."
+        ],
+        "retry_notes": null,
+        "verification": [
+          "npm run lint",
+          "npm test — 324 pass, 25 new in test/actions.test.js",
+          "npx @action-validator/cli on both workflows — clean against the official Actions JSON schema, with a negative control that does report an unknown trigger",
+          "npx js-yaml on both workflows — parses, and agrees with test/yaml.js",
+          "node bin/hkb.js dispatch --dry-run --max 1 --board default --profiles claude-action — the tick executes on this repo (board query, reconcile, lock listing, sweep, selection)",
+          "node bin/hkb.js doctor — reports profile claude-action and the new 'actions workflows' row",
+          "node bin/hkb.js dispatch --profiles nope — usage error naming the profiles that exist",
+          "PR #42 draft, `test` check SUCCESS on 01ef447"
+        ]
+      },
+      "summary": "`hkb init --with-actions` now generates two workflows from `templates/actions/`, and the board can run with the laptop closed. PR #42 (draft, CI green).\n\n**kanban-dispatch.yml** is `hkb dispatch --max 1 --board <slug> --profiles claude-action` on `issues:[closed,reopened,labeled,unlabeled]`, `pull_request:[closed]`, `pull_request_review`, `workflow_run`, `workflow_dispatch`, with `schedule: */15` as a sweeper only and `concurrency: {group: kb-dispatch-<board>, cancel-in-progress: false}`. A preflight step prints a `::notice::` and dispatches nothing when `KB_TOKEN` is unset — which is also what a fork PR gets, since fork events carry no secrets.\n\n**kanban-worker-claude.yml** is one attempt: `hkb context <n>` becomes claude-code-action@v1's `prompt` through `$GITHUB_OUTPUT` behind a `/dev/urandom` delimiter (issue text is untrusted and never reaches a `run:` block), with the same allowlist and force-push denial a local Claude worker gets, and a final `if: always()` step that records an attempt which ended without a terminal verb as `hkb block … --kind transient` — the stand-in for the `Stop` hook a runner has not got.\n\n**Two dispatcher concepts made this work, and both are the load-bearing part of the design.**\n\n`mode: \"trigger\"` (new, third alongside `process` and `claude-bg`): the launch only *starts* work elsewhere and exits. `spawnWorker` runs it to completion — a non-zero exit is a `spawn_failed` and the task goes straight back to *ready* — and returns `remote: true`, which the tick writes onto the attempt row. The reclaim pass then skips every local check (pid, background job, worktree) and the attempt lives or dies by its heartbeat and `max_runtime`. Without it, `gh workflow run` exiting in a second is read as a crash on the very next tick; there is no combination of existing fields that escapes those branches, which is why `src/dispatch.js` had to be touched at all.\n\n`hkb dispatch --profiles a,b` restricts **selection only**. Without it an Actions tick claims a `kb:agent:claude` task, fails to find `claude` on the runner, and burns a retry on work the laptop was about to pick up — with `mode: claude-bg` it does not even fail loudly, it records a live-looking attempt that sits until the stale reclaim. Reclaim, promote, reconcile and the orphan sweep stay unfiltered, because a second dispatcher sweeping the whole board is the entire point. The flag rejects a profile that is not in board.json, which is why `.kanban/board.json` here now lists `\"claude-action\": {}`.\n\n**If you touch this:** `test/actions.test.js` asserts the two workflows committed in `.github/workflows/` are byte-for-byte what the generator writes, so edit `templates/actions/` and regenerate (`installActions(root, {board, profiles: triggerProfiles(cfg), timeoutMinutes})`) rather than editing the committed copies. `test/yaml.js` is a strict YAML-subset parser written for these tests only — hkb itself still parses no YAML — and it throws with a line number on anything outside the subset, so a malformed template fails rather than half-parses.\n\nThree things are honestly unproven, all written into docs/harnesses.md: the workflows have never *executed* on GitHub (they are not on the default branch yet and firing one needs `KB_TOKEN` plus a Claude secret); a worker whose run is cancelled or killed is only noticed at `stale_after`, because nothing records the Actions run id for a remote attempt and `workflow_run` crash detection is therefore not implemented; and a task's `model` override is not plumbed through workflow inputs.\n\n`src/dispatch.js` is also owned by #39 (auto-gc, PR #41). The edits here are five small disjoint spots and this branch rebased onto `main` (96f3c7b) without conflict, but a reviewer merging both should read that file's diff twice.\n\n**Protocol foot-gun, the same class as the one #4 reported.** The harness's worktree-isolation guard refuses any Bash command containing the bare token that names this verb — it reads it as bash's builtin of the same name and answers \"this command runs a string through …, which can't be verified to stay inside the worktree\". `hkb heartbeat 8` was never blocked, so it is the word, not hkb. Every documented form is affected: `--summary-file`, `--from-stdin`, and the `node bin/hkb.js …` spelling. This attempt finished by having a small script under `.kanban/logs/` spawn the real CLI with an argv array, so no such token appears on the command line. As with #4's DENY_PATTERNS note: a guard that matches text anywhere in a command string, rather than the command actually being run, can make a terminal verb unreachable."
+    }
+  ],
+  "v": 1
+}

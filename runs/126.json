@@ -1,0 +1,59 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T16:05:42.897Z",
+      "heartbeat_at": "2026-08-28T15:56:00.855Z",
+      "host": "YRND1-GG",
+      "job": "15d5a278",
+      "lock_sha": "77bcc97898992c033b112cfcac6a5a441029fd0a",
+      "log": ".kanban/logs/126-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 131,
+      "pr_head": "worktree-kb-126-1",
+      "profile": "claude",
+      "started_at": "2026-08-28T15:56:00.855Z",
+      "summary": "hkb stats now counts a track's one session once, however many nodes name its transcript.\n\nThe bug (src/stats.js): since #119 every node a claude-track runner claims in-session carries the runner's\nsession_id and transcript_path — the same file for the root and each node. priceOf read that transcript per\nattempt row and summarizeSpend added each row's usage, so a track of five reported five times w",
+      "wt": "kb-126-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T16:05:45Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/stats.js",
+          "test/stats.test.js",
+          "docs/harnesses.md"
+        ],
+        "residual_risk": [
+          "Dedup is keyed on the transcript_path string as recorded. Two rows naming the same file by different strings (one absolute, one relative) would still double-count; in practice one Stop-hook payload writes the identical absolute path onto the root and every node, so this cannot happen today.",
+          "The reported path (run record, worker log) is untouched on purpose: those are per-invocation numbers and a resumed session could legitimately report two of them. If a harness ever writes total_cost_usd onto a track's nodes — Claude Code's Stop payload carries none today, and Copilot's agentStop carries no cost — that would double-count again, as a separate bug from this one.",
+          "Which of a track's rows carries the session is collection order (task order, then attempt order). The totals and the per-profile split are unaffected — a track's nodes all share one profile — but nothing should be read as a per-task cost off a single row.",
+          "This is verified against synthetic run records and a synthetic transcript; no track has left a session on this board yet, because #125 (the Stop hook never sees KB_TASK under a claude --bg worker) means nothing on the default profiles records session_id or transcript_path at all. The fix is correct by construction and by test, but it has not yet been seen on live data."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test — 619 pass, 0 fail (616 before, +3)",
+          "new unit test: three nodes naming one transcript plus a cold node — the reader is called once per distinct file, one row carries the usage, usage.turns is 200 not 400, attempts_shared_session 2, attempts_missing_cost 0",
+          "new format test: the rendered report says \"(2 transcripts over 4 worker attempts)\" and the shared-session line",
+          "new end-to-end test through the command: three issues whose rows name one real transcript on disk — hkb stats --json reports estimated_usd 0.084, sources.estimate 1, not three times it",
+          "the docs sample block was rendered through computeStats/formatStats, not written by hand",
+          "node .repolore/scripts/wiki-check.mjs — the 5 stale pages were already stale on main and cover src/cli.js, src/model.js, src/tasks.js, src/doctor.js and the skill; none covers src/stats.js",
+          "rebased on origin/main (already up to date at 77bcc97)"
+        ]
+      },
+      "summary": "hkb stats now counts a track's one session once, however many nodes name its transcript.\n\nThe bug (src/stats.js): since #119 every node a claude-track runner claims in-session carries the runner's\nsession_id and transcript_path — the same file for the root and each node. priceOf read that transcript per\nattempt row and summarizeSpend added each row's usage, so a track of five reported five times what it spent.\n\nThe fix is a reader that answers once per FILE instead of once per attempt row (transcriptOnce): the file is\nopened once, the first row to name it carries its usage and its estimate, and every other row of that session\ngets counted:false — no usage, no estimate, no turns (num_turns would have doubled the same way). Opening it\nonce is worth having on its own: a transcript is the largest thing hkb ever reads.\n\nThose nodes are moved, not dropped. summarizeSpend gained spend.attempts_shared_session, and they are\ndeliberately NOT in attempts_missing_cost — an attempt whose tokens are counted on another row is not a hole\nin the coverage, and the \"the real total is higher\" line must not fire for it. The report says so where the\ntotal is read: the usage line becomes \"(2 transcripts over 4 worker attempts)\" and a line under it reads\n\"2 worker attempts ran inside a session another attempt carries — counted once, there, not once per node\".\n\nDeliberately scoped to the transcript, the one source a track shares. A row with a cost on the run record or\nat the end of its worker log is priced exactly as before, and so is a cold node whose transcript nobody else\nnames — the key is transcript_path, so rows that name no file are asked and priced individually, as before.\n\ndocs/harnesses.md: \"A track is one session, however many nodes it holds\" described the double count as a\ncaveat pointing at this issue; it now describes the fix, with the sample block rendered through formatStats\nrather than written by hand, and names attempts_shared_session for --json readers. Both profile tables say\n\"counted once\" where they said \"one transcript for the whole track\". Nothing in README.md stated the caveat,\nso it needed no change.\n\nDraft PR #131."
+    }
+  ],
+  "v": 1
+}

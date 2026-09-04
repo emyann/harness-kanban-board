@@ -1,0 +1,16 @@
+{
+  "attempts": [],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-03T02:01:09Z",
+      "id": 5519178355,
+      "text": "Same board, same cards, both paths — the contrast is exact.\n\n**Through the track (#288, runner on `claude-track` = opus):** #289 and #290 carry no `kb.model`, and their `claude` profile says `claude-sonnet-5`. Both ran `claude-opus-5` anyway, inheriting the runner.\n\n**Through ordinary node dispatch, an hour later, same cards' siblings:** #292 and #293 do carry `kb.model: claude-opus-5`, and the dispatcher launched them with `--model claude-opus-5` — read off each job's own `respawnFlags`. The card decided, exactly as `spawnWorker` intends.\n\nSo the mechanism is not broken in general; it is simply absent on the one path that never builds a launch line. A node inside a track is the only place on this board where what the card says and what runs can differ."
+    }
+  ],
+  "results": [],
+  "v": 1
+}

@@ -1,0 +1,53 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-08-27T03:34:39.692Z",
+      "heartbeat_at": "2026-08-27T03:29:45.120Z",
+      "host": "YRND1-GG",
+      "lock_sha": "a8ead84aa50d98f020b375aa971560b52db9585c",
+      "manual": true,
+      "outcome": "completed",
+      "pr": 57,
+      "pr_head": "kb/54",
+      "profile": "claude",
+      "started_at": "2026-08-27T03:29:45.120Z",
+      "summary": "README now opens on the adopter. Order is: title + one-line pitch → the three-command quickstart in `npx` form (`npx hkb init` / `npx hkb doctor --api` / `npx hkb dispatch --loop 60`) plus three `hkb create`/`list` lines so the first thing a reader sees is a real dependent pair on a board → badges (npm version, CI `test.yml`, node engines, licence) → a ten-line \"How it works\" (a card is an issue, "
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T03:34:42Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "base": "main (rebased off kb/52 after PR #56 merged mid-node)",
+        "branch": "kb/54",
+        "changed_files": [
+          "README.md",
+          "docs/status.md"
+        ],
+        "pr_url": "https://github.com/emyann/harness-kanban-board/pull/57",
+        "residual_risk": [
+          "The npm version badge 404s until the first publish lands (#53), and shields.io caches that for a while afterwards. The CI badge is live now.",
+          "docs/ is not in package.json `files`, so the README's docs/ links only resolve on GitHub and on the npm page (npm rewrites relative links to the repository) — not inside an installed node_modules copy. Same as before this change.",
+          "The README is still long. It is now ordered adopter-first, but a reader who scrolls past `How it works` gets the full reference."
+        ],
+        "verification": [
+          "every command shown in the README checked against `hkb --help`; `hkb adopt --status` checked against src/cli.js:319",
+          "script over README.md and docs/status.md: all 12 relative links resolve, anchors included",
+          "docs/harnesses.md:127 links into the README's MCP heading — heading text unchanged, anchor still valid",
+          "npm run lint (clean)",
+          "npm test (391 pass, 0 fail)"
+        ]
+      },
+      "summary": "README now opens on the adopter. Order is: title + one-line pitch → the three-command quickstart in `npx` form (`npx hkb init` / `npx hkb doctor --api` / `npx hkb dispatch --loop 60`) plus three `hkb create`/`list` lines so the first thing a reader sees is a real dependent pair on a board → badges (npm version, CI `test.yml`, node engines, licence) → a ten-line \"How it works\" (a card is an issue, an edge is a native issue dependency, a lock is a git ref — hence the atomic claim and the free heartbeat, a worker is any harness, the dispatcher is a deterministic tick) → the philosophy bullets, kept verbatim as \"What it costs\".\n\nEverything else kept its content and moved only in order: Working the board · serve · watch/tail · stats · Harnesses · Actions · MCP · Projects mirror · the Hermes mapping table · Local state · a new Docs section · a one-line requirements/licence footer.\n\nMoved out of the README into the NEW file docs/status.md: the MVP status and the four `hkb doctor --api` observations, each now with the reason it is load-bearing (422-not-409 on a duplicate ref create is the atomic claim; `--force-with-lease` rejecting a moved OR deleted ref is what makes the heartbeat free; `GET git/commits/<sha>` committer date is how a lock ages without a write; the pinned `X-GitHub-Api-Version: 2026-03-10`), plus a \"how it is exercised\" section on dogfooding and an honest \"what is not proven yet\" (no second backend, scale untested past tens of tasks, Copilot/Codex have far less mileage than Claude Code).\n\nFor #53 and #55: the CI badge points at `.github/workflows/test.yml` (workflow `name: test`) and is live; the npm badge is `https://img.shields.io/npm/v/hkb.svg` and will 404 until the first publish. The README's Docs section lists protocol.md, docs/harnesses.md, docs/status.md, docs/EVALUATION.md — if #53 adds a release/publishing doc, add it there.\n\nNOTE for the rest of the track: PR #56 (node #52) was merged to main and its branch deleted while this node was in flight, so kb/54 was rebased onto main and PR #57 is based on main, not kb/52. main already carries LICENSE + the package metadata. #53 should branch from main too.\n\nDraft PR #57 on branch kb/54."
+    }
+  ],
+  "v": 1
+}

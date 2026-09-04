@@ -1,0 +1,75 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "denied_tools": [
+        {
+          "count": 1,
+          "first_seen": "2026-09-02T00:13:55.548Z",
+          "kind": "dontask-miss",
+          "tool": "Bash"
+        }
+      ],
+      "ended_at": "2026-09-02T00:14:36.377Z",
+      "heartbeat_at": "2026-09-02T00:09:48.881Z",
+      "host": "YRND1-GG",
+      "job": "5f8bbe9c",
+      "lock_sha": "42fdd5b06767d586e5458e3ce71e45195f83c5e6",
+      "log": ".kanban/logs/256-1.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 268,
+      "pr_head": "worktree-kb-256-1",
+      "profile": "claude",
+      "session_id": "5f8bbe9c-c5e9-439b-94a9-96a60b3c1de8",
+      "started_at": "2026-09-02T00:09:48.881Z",
+      "summary": "Added \"tools\": \"inherit\" | \"curate\" to a profile. Validation lives in loadBoard (src/board.js), mirroring the existing effort check: any value outside TOOL_POSTURES = ['inherit', 'curate'] fails, naming both. toolPosture(profile) in src/model.js is the pure resolver (no board read) — absent \"tools\" resolves to \"curate\", pinned byte-identical by a test. hkb init prints one line naming the posture i",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-256-1/5f8bbe9c-c5e9-439b-94a9-96a60b3c1de8.jsonl",
+      "wt": "kb-256-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T01:28:56Z",
+      "id": 5502965941,
+      "text": "**Merged by the operator seat** — review: Reviewed PR #268 at head 3d2e973. Delivers its four Done-when clauses: TOOL_POSTURES plus a pure toolPosture resolver in model.js, loadBoard refusing any other value with exitCode 2 the same way it refuses effort, an absent key resolving to curate so every existing board launches byte-identically, and init saying the posture out loud. No runtime consumer yet, which is right for this node: #257 routes MCP through it and #258 adds the card-level narrowing. Tests 1108 pass, lint clean, both required checks green.\n\nTwo things I did to the branch rather than bouncing it. It was 5 commits behind and GitHub called it dirty; both conflicts, in src/board.js and test/profiles.test.js, were unions rather than disagreements (the capability map from #217 and this posture field each add an import, a loadBoard validation loop and a test block, side by side), so I merged main in and kept both sides. And one review finding I fixed in its own commit: the new init line printed curate (default) unconditionally, so an init over a board that had already set tools inherit was told the opposite of what it had. It now reads the posture off cfg.profiles and names the inheriting profile. The added test fails against the old line, verified., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-02T00:14:38Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/board.js",
+          "src/init.js",
+          "src/model.js",
+          "test/profiles.test.js"
+        ],
+        "residual_risk": [
+          "toolPosture() is not yet called from anywhere (effectiveTools, dispatch, doctor) — it is inert until #223/#217 plug it in, by design per this card's contract.",
+          "hkb init never writes \"tools\" into board.json, even on a fresh board, so a human reading board.json right after init sees no field — only the printed log line states the posture. If a future card wants the field materialized on fresh boards, boardProfiles() in src/init.js is where to add it, but doing so today would break test/harness.test.js's deepEqual(p, DEFAULT_PROFILES.claude) check (out of this card's scope to edit).",
+          "docs/wiki is flagged stale by the wiki-check hook on every commit; the whole set was already stale before this branch (per #255) and docs/ is outside this card's kb.paths."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (1085 pass, 0 fail)",
+          "node --test test/profiles.test.js (37 pass)",
+          "gh pr create --draft --base main"
+        ]
+      },
+      "pr": 268,
+      "pr_continued": false,
+      "summary": "Added \"tools\": \"inherit\" | \"curate\" to a profile. Validation lives in loadBoard (src/board.js), mirroring the existing effort check: any value outside TOOL_POSTURES = ['inherit', 'curate'] fails, naming both. toolPosture(profile) in src/model.js is the pure resolver (no board read) — absent \"tools\" resolves to \"curate\", pinned byte-identical by a test. hkb init prints one line naming the posture it gave the board (\"curate\", always, today) and what \"inherit\" would mean instead; it deliberately does NOT write the key into board.json, so a freshly-init'ed board's profiles stay identical to DEFAULT_PROFILES (test/harness.test.js already asserts deepEqual against DEFAULT_PROFILES.claude, which would have broken had init materialized the key). No narrowing rule and no consumer of toolPosture — #223/#217 own wiring it into effectiveTools."
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,72 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-09-01T21:18:24.654Z",
+      "heartbeat_at": "2026-09-01T21:10:19.520Z",
+      "host": "YRND1-GG",
+      "lock_sha": "eaa529bc4f38f602b2d46466e806204a19b4d298",
+      "manual": true,
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pr": 235,
+      "pr_head": "kb/229-rebased",
+      "profile": "claude",
+      "session_id": "2abc5911-ed47-4920-a41b-ae02a2292a6b",
+      "started_at": "2026-09-01T21:10:19.519Z",
+      "summary": "Ships groom's registration and docs half. SMOKE-PACK: commands/groom.md added to MUST_SHIP and .claude/commands/kanban/groom.md to FROM_PACKAGE, so `npm run smoke` now proves both that the file is in the packed tarball (27 content checks) and that a real `hkb init` in a scratch repo writes it byte-for-byte from the packaged original (12 init checks). README: the planning section is now 'three slas",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-191-1/2abc5911-ed47-4920-a41b-ae02a2292a6b.jsonl",
+      "wt": "kb-191-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T21:20:11Z",
+      "id": 5500589203,
+      "text": "**Merged by the operator seat** — review: Reviewed against the card's Done when. Met: the enumerated lists carry groom (test/init.test.js was already updated by #228, the doctor 'not registered' string lists four commands); npm run smoke passes end to end — 27 content checks, 3 command checks, 12 init checks, 6 inside-the-repo checks — proving the packed tarball ships and installs commands/groom.md; README, .claude-plugin/plugin.json and protocol.md name the verb; src/cli.js HELP already carried it from #227. CI green, lint clean, 969 tests. Verified myself, including running the smoke suite rather than trusting the claim. One item is NOT met and it is my fault, not this worker's: the card asked for docs/wiki/features/backlog-grooming.md as a new page, and it does not exist — planning-commands.md was extended by 81 lines instead. But when I decomposed #191 I also put that exact page in the ROOT's brief as the thing no child could write, so the same deliverable was assigned twice and this child had no way to know. Merging rather than bouncing: the root #191 is running now with that item in its brief, and I will verify the page exists before accepting its synthesize pass. AGENTS.md's 'new feature → new page' rule is the standard it has to meet., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T21:18:26Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "scripts/smoke-pack.mjs",
+          "README.md",
+          ".claude-plugin/plugin.json",
+          "skills/kanban/references/protocol.md",
+          "docs/wiki/features/planning-commands.md",
+          "docs/wiki/index.md"
+        ],
+        "residual_risk": [
+          "BASE CHANGED UNDER ME: I was briefed to branch from kb/228, but PR #233 squash-merged kb/228 into main and deleted the branch mid-task, so `gh pr create --base kb/228` failed with 'Base ref must be a branch'. The commit is rebased onto main (which carries all of #225-#228) and the PR is #235, base main.",
+          "BRANCH NAME IS kb/229-rebased, NOT kb/229. I had already pushed kb/229 before the rebase; updating it in place needs a history-rewriting push. `git push --force-with-lease` was refused by the harness guard (disclosed, not worked around), and CLAUDE.md forbids force pushes anyway, so I pushed the rebased commit as a new branch. The stale pre-rebase kb/229 branch is still on origin with no PR attached and should be deleted by whoever cleans up.",
+          "src/doctor.js's checkCommands() doc comment still reads 'SKILL.md documents /kanban:specify, /kanban:decompose and /kanban:operate by name' — it should say four now. It is a comment only (the warning string itself is derived from commandFiles() and is correct), and src/ is outside this card's kb.paths except cli.js HELP, so I left it. One-line follow-up.",
+          "The planning-commands page now cites `src/cli.js` (case 'groom') and `src/model.js` (GROOM_ACTIONS) in prose but does NOT list them in `covers`, deliberately — adding two of the largest files in the repo would make this page stale on almost every commit, and features/backlog-grooming is the page that should own them. The cost is that those two claims are not freshness-tracked from here.",
+          "README's 'the plugin registers the same three names' counts only the planning commands; /kanban:operate is a fourth registered command documented in its own section. That was already the shape of the sentence (it said 'two') and I kept it, but a reader counting files in commands/ will find four.",
+          "`rm` on my two throwaway files was refused by the harness guard, so kb-229-stale.mjs, kb-229-msg.txt, kb-229-pr.md and kb-229.json remain untracked in this disposable agent worktree. None is staged or committed; the PR's file list is exactly the six above."
+        ],
+        "verification": [
+          "npm run lint — clean",
+          "npm test — 969 pass, 0 fail",
+          "npm run smoke — packs, installs and runs the tarball; 'ok commands/groom.md' in the contents check and 'ok .claude/commands/kanban/groom.md came from the packaged commands/groom.md' in the offline-init check",
+          "all three re-run after rebasing onto the new main, all still green",
+          "node .repolore/scripts/wiki-check.mjs — planning-commands.md fresh, 12 stale, 0 malformed",
+          "a throwaway node script comparing every page's recorded covers sha against `git rev-parse origin/main:<path>`, to prove all 12 stale pages were already stale on main and none went stale from this PR",
+          "gh pr view 235 — draft, base main, exactly the six files above, body carries one `Closes #229`"
+        ]
+      },
+      "pr": 235,
+      "pr_continued": false,
+      "summary": "Ships groom's registration and docs half. SMOKE-PACK: commands/groom.md added to MUST_SHIP and .claude/commands/kanban/groom.md to FROM_PACKAGE, so `npm run smoke` now proves both that the file is in the packed tarball (27 content checks) and that a real `hkb init` in a scratch repo writes it byte-for-byte from the packaged original (12 init checks). README: the planning section is now 'three slash commands' with a third table row for /kanban:groom, plus a short paragraph naming where the seam falls (hkb groom is the deterministic read, the slash command is the judgement); `hkb groom` joins the working-the-board snippet beside `hkb dispatch --dry-run`. PLUGIN.JSON: description now names /kanban:specify, /kanban:decompose and /kanban:groom (no command-list change needed, it points at ./commands as a directory, exactly as #228 said). PROTOCOL.MD: one paragraph directly under the tick's 'one GraphQL query per board per tick' line saying hkb groom is a read of the same board exactly as dispatch --dry-run is, changes no status/label/transition, and that nothing in the tick depends on whether it has been run. ALREADY DONE BY #228, VERIFIED NOT REDONE: test/init.test.js's three hard-coded lists (lines ~307/~316/~337) and test/track.test.js's skill-version pin were already correct; the doctor 'not registered' string is BUILT from commandFiles() rather than hard-coded, so it grew to four commands on its own and its assertion in test/skill.test.js already reads '/kanban:decompose, /kanban:groom, /kanban:operate, /kanban:specify not registered — the skill documents them'; the src/cli.js HELP entry for groom arrived with the verb in #227. I touched no src/ file at all, not even HELP. WIKI: docs/wiki/features/planning-commands.md refreshed for the third command (retitled and re-summarised for three commands; a new paragraph on the CLI/judgement seam citing src/cli.js case 'groom' and GROOM_ACTIONS in src/model.js and pointing at features/backlog-grooming; a new paragraph noting that neither registration mechanism holds a list, so the smoke lists are the deliberate exception whose job is to fail; the no-issue-number shape of /kanban:groom and its '[--status triage]' argument-hint; commands/groom.md added to covers; SKILL.md section line citations re-checked to 371/399/503; src/init.js citations corrected from :132-140 to :147-155 after reading the actual init.js diff since the page's last stamp rather than stamping by rote) then re-stamped, and docs/wiki/index.md regenerated. WIKI-CHECK, WHAT IS STILL STALE: planning-commands.md is back to fresh. 12 pages remain stale — architecture/overview, concepts/worker-identity, decisions/adr-004-roles-and-adoption, features/auto-merge, features/hook-install-shapes, features/operator-seat, features/path-overlap-guard, features/review-loop, features/tracks, features/up-and-down, features/update-notice, features/web-board. I verified mechanically (comparing every page's recorded covers sha against origin/main's blob for that path) that ZERO of that drift is new with this PR: every stale file was already stale on main. Several of those pages do cover files the groom track changed (src/model.js, src/cli.js, src/doctor.js, src/tasks.js, SKILL.md, protocol.md), but each was already stale on other covered files the track never touched (src/dispatch.js, src/board.js, src/lifecycle.js, src/init.js), so none of them went stale because of this feature. FOR THE ROOT: docs/wiki/features/backlog-grooming.md and the docs/wiki/log.md entry are untouched and still yours, as briefed. Two things to fold into that page's change: (1) docs/wiki/GLOSSARY.md has NO 'groom'/'grooming' entry and the AGENTS.md feeding rule says a page may not lean on a term without recording it — I deliberately left it to you rather than race you on a file that is not merge=union; (2) after backlog-grooming.md lands, re-run wiki-index.mjs, because index.md is generated and I have already regenerated it once for the planning-commands re-title."
+    }
+  ],
+  "v": 1
+}

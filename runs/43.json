@@ -1,0 +1,54 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T01:00:47.852Z",
+      "heartbeat_at": "2026-08-27T00:50:58.252Z",
+      "host": "YRND1-GG",
+      "job": "44fbbb5e",
+      "lock_sha": "746652c3d794ef209e087e1d75b02e1e89fb8fd4",
+      "log": ".kanban/logs/43-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 44,
+      "pr_head": "worktree-kb-43-1",
+      "profile": "claude",
+      "started_at": "2026-08-27T00:50:58.252Z",
+      "summary": "hkb doctor now surfaces KB_TOKEN's expiry. GitHub sends `github-authentication-token-expiration` on every response to a fine-grained PAT; doctor reads it off the `GET rate_limit` response it was already making (switched that one call to restRaw — no new API call, and rate_limit is not charged). Above 7 days it is a green line with the date; under 7 days a warning naming the fix (mint a new PAT, gh",
+      "wt": "kb-43-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T01:00:50Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/doctor.js",
+          "test/doctor.test.js"
+        ],
+        "residual_risk": [
+          "The warn/expired paths were only exercised against synthetic headers — no fine-grained PAT was available in this session to see a real `github-authentication-token-expiration` value end to end.",
+          "tokenExpiryNotice is exported but not yet called: the once-a-day-in-the-loop half of the task needs one line in src/dispatch.js (out of scope here, owned by #36).",
+          "tokenExpiryNotice read-modify-writes .kanban/state.json, which dispatch's tick() also owns. Calling it inside tick() would let tick's later writeState clobber the stamp; the doc comment says to call it outside tick().",
+          "The ::warning:: is emitted on stdout normally and stderr under --json. GitHub's runner processes workflow commands from both streams, but only the stdout path was observed here."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test  # 368 pass, 0 fail (25 new tests in test/doctor.test.js)",
+          "node bin/hkb.js doctor  # live: rate limit still reported, no expiry line on an OAuth login",
+          "restRaw('GET','rate_limit') against the live API: confirmed the expiry header is absent for OAuth (x-oauth-scopes present instead), so the silent path is the real one on this host"
+        ]
+      },
+      "summary": "hkb doctor now surfaces KB_TOKEN's expiry. GitHub sends `github-authentication-token-expiration` on every response to a fine-grained PAT; doctor reads it off the `GET rate_limit` response it was already making (switched that one call to restRaw — no new API call, and rate_limit is not charged). Above 7 days it is a green line with the date; under 7 days a warning naming the fix (mint a new PAT, gh secret set KB_TOKEN); past the date the check fails so doctor exits 1. OAuth/classic tokens send no header and get no line; an unparseable header is treated as no header. In Actions the finding is also emitted as ::warning::/::error:: (stderr under --json so stdout stays one JSON document; %/CR/LF escaped). New exports in src/doctor.js: tokenExpiry, expiryFinding, checkTokenExpiry, checkToken, actionsAnnotation, emitAnnotations, tokenExpiryNotice.\n\nNOT DONE, deliberately: the loop's call site. tokenExpiryNotice(ctx, log) implements the once-a-day check (throttled by a token_expiry_day stamp in .kanban/state.json; a failed probe stamps nothing so the next tick retries), but wiring it needs one line in src/dispatch.js — outside this task's declared scope, and #36 was editing that file concurrently. Whoever owns dispatch.js next should add `await tokenExpiryNotice(ctx, log);` at the top of the loop body, before tick(). Note the annotation there bypasses `log` on purpose: the loop timestamps every line and the runner only reads a workflow command that starts the line."
+    }
+  ],
+  "v": 1
+}

@@ -1,0 +1,57 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-28T15:53:57.608Z",
+      "heartbeat_at": "2026-08-28T15:44:50.876Z",
+      "host": "YRND1-GG",
+      "job": "fa31e0a0",
+      "lock_sha": "2305b13d030a6951929f3a8d842ab90d8bacd00f",
+      "log": ".kanban/logs/113-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 127,
+      "pr_head": "worktree-kb-113-1",
+      "profile": "claude",
+      "started_at": "2026-08-28T15:44:50.876Z",
+      "summary": "Every write of a card's profile label now goes through setAgent (src/tasks.js): it adds the label it is given and removes every other kb:agent:*, so `hkb adopt <n> --agent X` and `hkb claim <n> --profile X` are a set, not an add. Adopting a decomposed root as claude-track now actually makes it a track — verified end to end in test/agent-label.test.js by replaying the worked example from references",
+      "wt": "kb-113-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-28T15:54:00Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/tasks.js",
+          "src/cli.js",
+          "src/doctor.js",
+          "src/model.js",
+          "test/agent-label.test.js",
+          "docs/wiki/GLOSSARY.md"
+        ],
+        "residual_risk": [
+          "agentOf stays first-wins: a card with two kb:agent:* labels still dispatches silently as the first one until someone runs hkb doctor or re-adopts it. Deliberate — see the summary.",
+          "The dispatcher does not normalise a doubled label when it claims a card (src/dispatch.js is outside this task's paths); adopt and doctor are the repair path.",
+          "hkb doctor now costs one extra GraphQL board query per run (no extra REST calls).",
+          "hkb adopt still does not validate --agent against board.json profiles, so a typo'd profile is a card that never dispatches. Out of scope here; worth its own card."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (616 pass, 0 fail)",
+          "node --test test/agent-label.test.js against the pre-fix adopt/claim code: the 3 adopt cases and the claim case fail, confirming they are not vacuous"
+        ]
+      },
+      "summary": "Every write of a card's profile label now goes through setAgent (src/tasks.js): it adds the label it is given and removes every other kb:agent:*, so `hkb adopt <n> --agent X` and `hkb claim <n> --profile X` are a set, not an add. Adopting a decomposed root as claude-track now actually makes it a track — verified end to end in test/agent-label.test.js by replaying the worked example from references/protocol.md and asserting the dry-run tick reports \"would run track #41 → #42 → #12 as one claude-track session\".\n\nhkb doctor grew checkAgentLabels: it names every open card wearing two kb:agent:* labels, both profiles, which one it actually runs as (first-wins), and the `hkb adopt <n>... --agent <profile>` that repairs it. It is a warning, not a failure — the board still dispatches, just as the wrong profile. It reads labels only, so fetchBoard learned `{ blockers: false }` to skip the per-task REST blocker fill-in on repos without the GraphQL blockedBy field.\n\nOn point 3 of the issue (make the resolver fail loudly): deliberately not done. agentOf stays first-wins because throwing there would break `hkb show`, `hkb list` and the tick on exactly the boards that need diagnosing; the new pure agentsOf (src/model.js) carries the ambiguity to doctor instead, where a human is reading. That decision is recorded in the code comments and the PR body.\n\nNo protocol/SKILL.md change was needed — the documented line now works as written. docs/wiki/GLOSSARY.md's *Profile* entry carries the new invariant.\n\nDraft PR: https://github.com/emyann/harness-kanban-board/pull/127 (branch worktree-kb-113-1, rebased on origin/main at 68765e6)."
+    }
+  ],
+  "v": 1
+}

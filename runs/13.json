@@ -1,0 +1,22 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-08-26T04:48:09.615Z",
+      "heartbeat_at": "2026-08-26T04:37:58.354Z",
+      "host": "YRND1-GG",
+      "log": ".kanban/logs/13-1.log",
+      "outcome": "crashed",
+      "pid": 6048,
+      "profile": "claude",
+      "reason": "crashed after 611s",
+      "started_at": "2026-08-26T04:37:58.354Z"
+    }
+  ],
+  "block_loops": {},
+  "failures": 1,
+  "last_error": "crashed after 611s",
+  "notes": [],
+  "results": [],
+  "v": 1
+}

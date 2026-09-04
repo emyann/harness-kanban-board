@@ -1,0 +1,78 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-09-02T01:37:42.743Z",
+      "heartbeat_at": "2026-09-02T01:29:25.088Z",
+      "host": "YRND1-GG",
+      "lock_sha": "77b16163a95ac5832f0df42433beed43116bf267",
+      "manual": true,
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pr": 282,
+      "pr_head": "kb/258",
+      "profile": "claude",
+      "session_id": "88800f57-40b7-4f7e-9c93-ec31e8548aeb",
+      "started_at": "2026-09-02T01:29:25.087Z",
+      "summary": "The card-level half of the tool posture. src/tasks.js: normalizeCardGrants(kb), applied in toTask, is the path kb.tools/kb.mcp enter on — trimmed, deduplicated lists of names; blanks and non-names removed; an empty list kept (the strictest narrowing a card can ask for); a key that is not a list left exactly as written, because coercing it would be a guess on the one axis where guessing widens perm",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-223-1/88800f57-40b7-4f7e-9c93-ec31e8548aeb.jsonl",
+      "wt": "kb-223-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T01:38:35Z",
+      "id": 5503039198,
+      "text": "**Merged by the operator seat** — review: Track root #223 review: card grants enter through normalizeCardGrants and doctor asks effectiveTools with the card rather than recomputing; ceiling-rule wiki page added; lint + 1117 tests + wiki-check green on the node., checks: green, method: squash"
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T01:50:49Z",
+      "id": 5503134010,
+      "text": "Closed as completed by the operator seat, because nothing else can: this card is stranded by #275.\n\nIts work is in `main`. PR #282 merged into `kb/track-223` (the track's assembly branch) at 01:38, and the track landed on `main` as PR #286 at 01:48.\n\nThe card cannot see any of that. `hkb show 258 --json` reports `prs: []` — GitHub's `closedByPullRequestsReferences` only links a `Closes #n` for a PR targeting the **default branch**, and #234's head-branch fallback matches **open** PRs only, so once #282 merged it went invisible to both. Nothing links the card to the work, so no reconcile pass can move it out of review, and it would have sat there indefinitely.\n\nThis is the exact failure mode of #227 and #228 — work merged, card stranded — and it is now reproducible on demand: it happens to **every node of a track**, since #245 has node PRs target the track branch by design. Recorded on #275, which owns the fix.\n\nNo work is lost and nothing needs redoing."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-02T01:37:43Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/doctor.js",
+          "src/tasks.js",
+          "test/doctor.test.js",
+          "docs/wiki/concepts/tool-grant-ceiling.md",
+          "docs/wiki/wiki.config.yml",
+          "docs/wiki/index.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "checkToolPosture reads profile.mcp defensively: the key is a sibling's to define (MCP resolution is not this card's), so if that card lands a different shape than a list of server names, mcpPosture in src/doctor.js is the one place to update. Absent, the line falls back to the servers named in allowed_tools, which is what a worker actually gets today.",
+          "doctor.js has a two-line local mcpServerNamed helper (mcp__<server>__<tool> -> <server>) because model.js's mcpServerOf is module-private and model.js is outside this card's paths. It names servers for a printed line and decides no grant; if a sibling exports the model.js one, delete the local copy.",
+          "No CLI flag sets kb.tools/kb.mcp — src/cli.js is outside this card's paths, so today the keys are written by hand into the body block. The doctor checks work either way.",
+          "The normaliser mutates the kb object parseBodyBlock returns (a fresh object per call), so nothing shared is touched; serializeBodyBlock will now write back the normalised list if a caller re-serializes a card that had blanks or duplicates in it.",
+          "17 wiki pages were already stale before this branch; only the new page is stamped fresh."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (1117 pass, 0 fail)",
+          "node --test test/doctor.test.js (87 pass)",
+          "node .repolore/scripts/wiki-stamp.mjs docs/wiki/concepts/tool-grant-ceiling.md",
+          "node .repolore/scripts/wiki-index.mjs",
+          "node .repolore/scripts/wiki-check.mjs (the new page is not in the stale list; the 17 pre-existing stale pages are unchanged)",
+          "gh pr create --draft --base kb/track-223 -> https://github.com/emyann/harness-kanban-board/pull/282"
+        ]
+      },
+      "pr": 282,
+      "pr_continued": false,
+      "summary": "The card-level half of the tool posture. src/tasks.js: normalizeCardGrants(kb), applied in toTask, is the path kb.tools/kb.mcp enter on — trimmed, deduplicated lists of names; blanks and non-names removed; an empty list kept (the strictest narrowing a card can ask for); a key that is not a list left exactly as written, because coercing it would be a guess on the one axis where guessing widens permissions. src/doctor.js: two new exported checks. checkToolPosture (TOOL_POSTURE_CHECK = 'tool posture', config-only, runs beside checkCapabilityMap) prints one line per profile — posture from toolPosture (absent = curate), the ceiling from effectiveTools with no card, and the MCP answer under the reading its posture implies: a declared profile.mcp is \"may reach\" under curate and \"the session's own, less X\" under inherit, falling back to the servers allowed_tools already names when the key is absent. checkCardGrants (CARD_GRANTS_CHECK = 'card grants', board read, runs beside checkTaskSkills, shares boardOnce) asks effectiveTools WITH the card — exactly as dispatch does, no second derivation — and warns per card on anything in `dropped`, naming the tools, saying they were never granted, and giving the board.json edit that would grant them; it also flags a present-but-not-a-list key, which reads as a restriction and is not one. Silent on a board where no card sets either key, which is every board today. The narrowing rule itself was NOT touched: it lives in effectiveTools (#255). docs/wiki/concepts/tool-grant-ceiling.md states the ceiling rule in one sentence and names the three places it lives; added to the page plan, stamped, indexed, logged. Nothing here reads profile.allowed_tools directly."
+    }
+  ],
+  "v": 1
+}

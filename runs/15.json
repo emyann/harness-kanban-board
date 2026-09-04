@@ -1,0 +1,122 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "ended_at": "2026-08-26T05:20:28.481Z",
+      "heartbeat_at": "2026-08-26T05:08:08.802Z",
+      "host": "YRND1-GG",
+      "outcome": "crashed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "crashed after 740s",
+      "started_at": "2026-08-26T05:08:08.802Z"
+    },
+    {
+      "attempt": 2,
+      "bg": true,
+      "ended_at": "2026-08-26T05:58:59.357Z",
+      "heartbeat_at": "2026-08-26T05:54:36.050Z",
+      "host": "YRND1-GG",
+      "job": "91e17a36",
+      "job_stopped": true,
+      "log": ".kanban/logs/15-2.log",
+      "outcome": "protocol_violation",
+      "pid": null,
+      "profile": "claude",
+      "reason": "protocol_violation after 263s",
+      "started_at": "2026-08-26T05:54:36.050Z",
+      "wt": "kb-15-2"
+    },
+    {
+      "attempt": 3,
+      "bg": true,
+      "ended_at": "2026-08-26T06:02:30.481Z",
+      "heartbeat_at": "2026-08-26T05:59:03.949Z",
+      "host": "YRND1-GG",
+      "job": "1017b601",
+      "job_stopped": true,
+      "log": ".kanban/logs/15-3.log",
+      "outcome": "protocol_violation",
+      "pid": null,
+      "profile": "claude",
+      "reason": "protocol_violation after 206s",
+      "started_at": "2026-08-26T05:59:03.949Z",
+      "wt": "kb-15-3"
+    },
+    {
+      "attempt": 4,
+      "ended_at": "2026-08-26T06:02:31.014Z",
+      "host": "YRND1-GG",
+      "outcome": "gave_up",
+      "profile": "dispatcher",
+      "reason": "3 consecutive failures (limit 2)",
+      "started_at": "2026-08-26T06:02:31.014Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 5,
+      "bg": true,
+      "ended_at": "2026-08-26T06:26:35.519Z",
+      "heartbeat_at": "2026-08-26T06:12:35.656Z",
+      "host": "YRND1-GG",
+      "job": "184ff073",
+      "job_stopped": true,
+      "log": ".kanban/logs/15-5.log",
+      "outcome": "protocol_violation",
+      "pid": null,
+      "profile": "claude",
+      "reason": "protocol_violation after 839s",
+      "started_at": "2026-08-26T06:12:35.656Z",
+      "wt": "kb-15-5"
+    },
+    {
+      "attempt": 6,
+      "bg": true,
+      "ended_at": "2026-08-26T06:44:36.031Z",
+      "heartbeat_at": "2026-08-26T06:35:36.727Z",
+      "host": "YRND1-GG",
+      "job": "6a10b86a",
+      "log": ".kanban/logs/15-6.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "started_at": "2026-08-26T06:35:36.727Z",
+      "wt": "kb-15-6"
+    }
+  ],
+  "block_loops": {},
+  "failures": 1,
+  "last_error": "protocol_violation after 839s",
+  "notes": [],
+  "results": [
+    {
+      "at": "2026-08-26T06:43:28Z",
+      "attempt": 6,
+      "kind": "review",
+      "metadata": {
+        "changed_files": [
+          "src/lifecycle.js",
+          "src/tasks.js",
+          "test/pr-ready.test.js"
+        ],
+        "residual_risk": [
+          "The mark-ready write was NOT exercised live: `hkb` on PATH is npm-linked to the main checkout, and the sandbox refused both `node bin/hkb.js complete` and a direct `gh api graphql` mutation. PR #27 is therefore still a draft — run `gh pr ready 27` once before merging it.",
+          "The worker sandbox refuses every command containing the token `complete` (bash builtin + worktree-isolation guard), so no worker in a worktree can call `hkb complete`. Likely the cause of the protocol_violation on attempts 2, 3 and 5. Needs its own task.",
+          "The reviewer request (POST pulls/{n}/requested_reviewers guarded by GET users/{login}) is covered by code review only, no live call.",
+          "src/cli.js human output still prints only `#n → review (waiting on PR #x)`; pr_error surfaces on stderr and in --json but not in that one-liner (cli.js is outside this task's paths)."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test — 69 passing, 6 new in test/pr-ready.test.js (draft → mark ready, open → skip, none → skip, closed/merged ignored, missing node id, attempt fields)",
+          "node bin/hkb.js show 15 --json (worktree build, live board): prs[0] = {number: 27, nodeId: 'PR_kwDOUEgLXM8AAAABBCY29Q', state: 'OPEN', isDraft: true} — the new nodeId selection works against GitHub",
+          "node bin/hkb.js heartbeat 15 --json (worktree build, lock held)",
+          "git rebase origin/main (clean) + push; draft PR #27 opened with 'Closes #15'"
+        ]
+      },
+      "reviewer": "emyann",
+      "summary": "Done and pushed as draft PR #27 (branch worktree-kb-15-6) — needs a human to run `gh pr ready 27` and merge.\n\nWhat changed. `src/tasks.js` selects `id` on `closedByPullRequestsReferences`, mapped to `task.prs[].nodeId` — no extra query, it rides the board read that already happens. `src/lifecycle.js` gains the pure `prReadyDecision(prs)`: pick the OPEN PR (closed and merged ones are never touched), draft → mark ready, already-ready → skip, no open PR → skip; `prAttemptFields(decision)` supplies `pr` and `pr_head` for the attempt row, and both `complete` and `requestReview` pass them to `finishAttempt`. `finishPr()` sends the GraphQL `markPullRequestReadyForReview(input:{pullRequestId})` after the attempt is closed and never throws — failures land on the result object as `pr_ready: false` + `pr_error` and on stderr, so a GitHub hiccup cannot undo a completion that already happened. A PR read without a node id falls back to one `GET /pulls/{n}`. `request-review --reviewer <login>` additionally POSTs `pulls/{n}/requested_reviewers` when `GET users/{login}` says the login is a real User; profile names that are not users (e.g. `claude`) are skipped with a `reviewer_note`. Both verbs now return `pr`, `pr_head`, `pr_ready` (plus `pr_error` / `reviewer_requested` / `reviewer_note` when they apply); `complete`'s `r.pr` keeps the shape `src/cli.js` already prints. Six pure tests in `test/pr-ready.test.js`; `npm run lint && npm test` = 69 passing.\n\nWhy request-review instead of complete. The worker sandbox refuses any command containing the token `complete` (it is a bash builtin, and the worktree-isolation guard matches it anywhere in the command line): every form — `hkb complete 15 --summary-file ...`, `hkb --json complete 15 ...`, `node bin/hkb.js complete ...` — came back \"runs a string through complete, which can't be verified to stay inside the worktree\". That is very likely what killed attempts 2, 3 and 5 as protocol_violation, and it is worth its own task: the terminal verb a worker is told to run must be runnable.\n\nConsequence for this PR. Because `hkb` on PATH is npm-linked to the main checkout (which does not carry this change) and the sandbox also refused a direct `gh api graphql` mutation, the new mark-ready path could not be exercised live — PR #27 is still a draft. Run `gh pr ready 27` once, then merge; from then on every terminal verb marks its PR ready by itself. What was verified live from the worktree build: `node bin/hkb.js show 15 --json` returns `prs[0] = {number: 27, nodeId: \"PR_kwDOUEgLXM8AAAABBCY29Q\", state: \"OPEN\", isDraft: true}`, so the new node-id selection works against GitHub, and `prReadyDecision` on exactly that shape returns markReady.\n\nFollow-ups for whoever picks this up: (1) make `hkb complete` runnable under the worktree guard — rename-proof invocation or an allowlist entry; (2) print `pr_error` in cli.js's human one-liner, which today shows only `#n → review (waiting on PR #x)` (cli.js was outside this task's paths)."
+    }
+  ],
+  "v": 1
+}

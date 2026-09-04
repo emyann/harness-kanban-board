@@ -1,0 +1,228 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-29T04:32:41.072Z",
+      "heartbeat_at": "2026-08-29T04:19:26.508Z",
+      "host": "YRND1-GG",
+      "job": "8138f865",
+      "lock_sha": "802ea8178c3b1085691354a0c410777312b33df1",
+      "log": ".kanban/logs/185-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 190,
+      "pr_head": "worktree-kb-185-1",
+      "profile": "claude",
+      "session_id": "8138f865-26e1-4609-b916-ee4b0d777ccf",
+      "started_at": "2026-08-29T04:19:26.508Z",
+      "summary": "path_overlap guard now takes dispatch.guards.path_overlap: \"off\"|\"running\"|\"unmerged\". Default follows merge.mode: \"off\" for manual (the default board), \"unmerged\" for auto (keys on running or review-with-open-PR, not just running). Legacy dispatch.path_guard boolean still works. Pure predicates live in src/model.js (pathOverlapGuard, pathHolders, pathCollisions, attemptIdle); src/dispatch.js wire",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-185-1/8138f865-26e1-4609-b916-ee4b0d777ccf.jsonl",
+      "wt": "kb-185-1"
+    },
+    {
+      "attempt": 2,
+      "ended_at": "2026-08-29T04:42:21.733Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "Review of PR #190 (operator session, 2026-08-29). The switch (`dispatch.guards.path_overlap` off|running|unmerged, explicit > legacy `dispatch.path_guard` > `merge.mode`, `operator` treated like manual), the doctor line, the fake-gh tests for manual/auto/running, collision naming in the tick log and `--dry-run --json`, `.gitattributes` + `hkb init` (idempotent, keeps existing lines) with the union merge proven in a scratch repo, protocol.md and README — all sound; 838 tests, smoke green, clean on the tip.\n\n**BLOCKER — the idle rule marks every live attempt idle after 60 s, so `running` and `unmerged` are dead modes.** `src/dispatch.js` ~554/~596-606: `lastSignal = a.heartbeat_at || a.started_at` comes from the run comment, and the default heartbeat is a ref-CAS (`src/lock.js` ~120: the ref's commit date is what the dispatcher reads back, and only when the attempt already looks older than `stale_after`). So between 60 s and 1 h, `lastSignal` is `started_at` and `attemptIdle` returns true even while the job record says `working` — the function checks `job && !jobAlive(job)` and then falls through to the stale timestamp instead of trusting a live job. Measured against the live board from the review worktree: #129 running, started 04:33:10, job aac9330e state \"working\", transcript mtime 0 s (692 KB, being written) → dry-run: \"#129: attempt 1 idle since 04:33:10 — path_overlap will not hold its paths\"; with the worktree's board.json set to `\"running\"`, `{\"guarded\":[],\"claimed\":[187,188,184]}` — all three overlap #129 and main guards them today. That breaks the contract (\"do not remove `running`\") and makes the `auto` default a no-op for bg attempts. The unit test enshrines it: `test/model.test.js` ~117 asserts `attemptIdle({ state: 'working' }, <1h-old>, 60) === true` under the label \"a dead job turn\"; the fake-gh idle test uses a pid attempt with `heartbeat_at: ago(300)`, a fixture the CAS heartbeat never produces.\n\nFix: when a job record exists, its liveness is the answer (`return !jobAlive(job)`); for the no-job clause use a signal that actually advances — the transcript mtime (`a.transcript_path` is on the row, one local `stat`) or the lock-ref beat — and use a threshold larger than one interval (the motivating #182 case was 40 minutes idle; a false \"idle\" under `running`/`unmerged` is exactly what those modes exist to prevent). Fix both tests to a fixture the real heartbeat produces (a bg attempt with a live job → holds; a bg attempt whose job turn ended → does not).\n\n**Should fix in the same pass:**\n- The idle log line fires every tick (`src/dispatch.js` ~608) — the card asked for once per attempt; key it on the attempt like the leak warning.\n- Card item 3 is half done: `hkb show <n>` and the web drawer do not name the collision (`src/cli.js` show case, `web/index.html`/`src/serve.js` untouched). Either finish it or say in the PR body that #176 stays open as the UI half; the human `--dry-run` summary (`src/cli.js` ~539) should append `collides_with`.\n- `docs/wiki/AGENTS.md` note about `merge=union` (card item 4) is missing.\n\nNits: the track-candidate path (`src/dispatch.js` ~708-728) records `collides_with` but emits no log line, unlike the plain-card path.\n\nSame branch, same PR (worktree-kb-185-1). Rerun lint/test/smoke, then `hkb finish`. Note: the running loop must be restarted after this merges (it keeps the code and cfg loaded at start); the operator will do that.",
+      "started_at": "2026-08-29T04:42:21.733Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 3,
+      "ended_at": "2026-08-29T04:46:08.542Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "Re-issued after the loop restart (#195): the previous request-changes was bounced by a loop that had cached this card's run record before the reviewer row existed. The review to act on is the full 'Changes requested (after attempt 1)' comment above — blocker: the idle rule takes heartbeat_at||started_at from the run comment, which a --bg attempt never advances, so every live attempt looks idle after 60 s and running/unmerged never guard; job liveness must be authoritative, transcript mtime or the lock-ref beat for the no-job case, a threshold larger than one tick, corrected tests. Plus: log once per attempt, hkb show/drawer collision naming (or leave #176 as the UI half and say so), the wiki AGENTS.md merge=union note.",
+      "started_at": "2026-08-29T04:46:08.541Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 4,
+      "bg": true,
+      "continues_branch": "worktree-kb-185-1",
+      "continues_pr": 190,
+      "ended_at": "2026-08-29T05:00:25.419Z",
+      "heartbeat_at": "2026-08-29T04:51:18.503Z",
+      "host": "YRND1-GG",
+      "job": "08273eee",
+      "lock_sha": "d102a4eb6d65e20822724900cba98ce082222842",
+      "log": ".kanban/logs/185-4.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 190,
+      "pr_head": "worktree-kb-185-1",
+      "profile": "claude",
+      "session_id": "08273eee-bc25-45c4-81c0-4fe02a4e3b35",
+      "started_at": "2026-08-29T04:51:18.503Z",
+      "summary": "Fixed the reviewer's blocker: attemptIdle (src/model.js) now trusts a claude-bg attempt's job-record liveness unconditionally instead of falling through to a stale lastSignal — the default ref-CAS heartbeat never touches the run comment, so lastSignal sat at started_at for a bg attempt's whole life, making running/unmerged path_overlap guards no-ops between one tick and stale_after (the measured #",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-185-4/08273eee-bc25-45c4-81c0-4fe02a4e3b35.jsonl",
+      "wt": "kb-185-4"
+    },
+    {
+      "attempt": 5,
+      "ended_at": "2026-08-29T05:12:05.887Z",
+      "host": "YRND1-GG",
+      "outcome": "changes_requested",
+      "profile": "reviewer",
+      "reason": "Second-pass review of PR #190 (operator session, 2026-08-29). The blocker is fixed for --bg attempts: `attemptIdle` now returns `!jobAlive(job)` whenever a job record exists (src/model.js ~336), the threshold is `max(interval, 600)`, the idle line logs once per attempt, the track-candidate path and the human --dry-run name the collision, AGENTS.md has the union note; 845 tests, smoke green, fast-forward on the tip. Live cross-check of real job records: working/blocked → holds, done → idle. Good.\n\n**Still open — the no-job clause has no advancing signal** (src/dispatch.js ~553 `lastSignal = a.heartbeat_at || a.started_at`, ~595-603 the lock-beat read only past `stale_after`, ~613 the threshold). With the default `heartbeat: 'auto'` (ref-CAS, src/lifecycle.js ~125) the run comment's `heartbeat_at` is never written, so for every attempt without a job record — `claude-p`, `copilot-cli`, `codex` (process), `claude-action` (remote), `hkb claim` by hand (manual), any bg attempt on another host — `lastSignal` sits at `started_at` and the attempt is \"idle\" from minute 10 until reclaim. Probed on the branch (mode `running`, holder 30 min old): pid attempt with a LIVE pid, lock beat 30 s old and transcript written now → idle, #8 claimed; manual attempt with a 30 s lock beat → idle; remote attempt → idle; bg attempt with a live job on another host → idle. So `running`/`unmerged` are still dead modes for four of the six shipped profiles, and `test/dispatch.test.js` ~816 (pid attempt, `heartbeat_at: ago(700)` → idle) enshrines it with a fixture the ref-CAS heartbeat never produces.\n\nFix, cheap: (1) a live pid is authoritative the way a live job is — `if (a.pid && pidAlive(a.pid)) return false` before the timestamp clause; (2) for pidless no-job attempts (manual, remote, other-host bg) move the existing `lockBeatAt` read to fire past `idleThreshold` instead of only past `stale_after` — one commit read per such attempt per tick, only after 10 min — or `fs.statSync(a.transcript_path).mtime` when present (free); (3) threshold: a worker beating \"every ~10 minutes\" is idle on the tick before each beat at exactly the 600 s floor — use 2× the floor. Replace the ~816 test with the positive case: pid attempt, live pid, fresh lock beat → holds; and one for a manual attempt with a fresh lock beat → holds.\n\nAlso in the same pass: PR body still says collisions are named \"in hkb doctor\" (doctor prints the mode) and does not say #176 stays open as the `hkb show`/drawer half — say it (src/model.js ~305 says \"folded into #185\"; it is not); `docs/wiki/features/tracks.md` went stale (covers src/dispatch.js) and no page names `dispatch.guards.path_overlap` — add a short features page or a section on an existing one, re-stamp; src/board.js ~51 comment lost \"and SubagentStop\" in the merge (main added it in #187); stale \"longer than one tick\" wording at src/dispatch.js ~535 and src/model.js ~322/~330; `state.idle_logged` is never pruned (mirror the 24 h prune of `state.claims`) and `--dry-run` in the main checkout writes it, silencing the real loop's line.\n\nSame branch, same PR (worktree-kb-185-1). Rerun lint/test/smoke, then `hkb finish`. The operator restarts the loop after this merges.",
+      "started_at": "2026-08-29T05:12:05.886Z",
+      "synthetic": true
+    },
+    {
+      "attempt": 6,
+      "bg": true,
+      "continues_branch": "worktree-kb-185-1",
+      "continues_pr": 190,
+      "ended_at": "2026-08-29T05:25:50.895Z",
+      "heartbeat_at": "2026-08-29T05:18:32.895Z",
+      "host": "YRND1-GG",
+      "job": "875d04fd",
+      "lock_sha": "6788a9bd2b4851e51622fa87c08f5aab46d3508e",
+      "log": ".kanban/logs/185-6.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 190,
+      "pr_head": "worktree-kb-185-1",
+      "profile": "claude",
+      "session_id": "875d04fd-2fb0-48a9-949e-0054873ed263",
+      "started_at": "2026-08-29T05:18:32.895Z",
+      "summary": "Third-pass fix for the reviewer's remaining blocker: attemptIdle now trusts a live pid the same way it trusts a live job, and the pidless/jobless fallback (manual, remote, a claude-bg job on another host) refreshes its lock-ref beat at the (raised) idle threshold instead of only at stale_after, so it is no longer falsely called idle between the two. Idle threshold raised to max(interval, 1200) (2x",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-185-6/875d04fd-2fb0-48a9-949e-0054873ed263.jsonl",
+      "wt": "kb-185-6"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-08-29T04:28:24Z",
+      "id": 5460331550,
+      "text": "Related: #189 adds `merge.mode: \"operator\"`; the guard default here should treat it like `manual` (off) unless set explicitly, and its docs should name all three modes."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-29T04:42:23Z",
+      "id": 5460388092,
+      "text": "**Changes requested** (after attempt 1): Review of PR #190 (operator session, 2026-08-29). The switch (`dispatch.guards.path_overlap` off|running|unmerged, explicit > legacy `dispatch.path_guard` > `merge.mode`, `operator` treated like manual), the doctor line, the fake-gh tests for manual/auto/running, collision naming in the tick log and `--dry-run --json`, `.gitattributes` + `hkb init` (idempotent, keeps existing lines) with the union merge proven in a scratch repo, protocol.md and README — all sound; 838 tests, smoke green, clean on the tip.\n\n**BLOCKER — the idle rule marks every live attempt idle after 60 s, so `running` and `unmerged` are dead modes.** `src/dispatch.js` ~554/~596-606: `lastSignal = a.heartbeat_at || a.started_at` comes from the run comment, and the default heartbeat is a ref-CAS (`src/lock.js` ~120: the ref's commit date is what the dispatcher reads back, and only when the attempt already looks older than `stale_after`). So between 60 s and 1 h, `lastSignal` is `started_at` and `attemptIdle` returns true even while the job record says `working` — the function checks `job && !jobAlive(job)` and then falls through to the stale timestamp instead of trusting a live job. Measured against the live board from the review worktree: #129 running, started 04:33:10, job aac9330e state \"working\", transcript mtime 0 s (692 KB, being written) → dry-run: \"#129: attempt 1 idle since 04:33:10 — path_overlap will not hold its paths\"; with the worktree's board.json set to `\"running\"`, `{\"guarded\":[],\"claimed\":[187,188,184]}` — all three overlap #129 and main guards them today. That breaks the contract (\"do not remove `running`\") and makes the `auto` default a no-op for bg attempts. The unit test enshrines it: `test/model.test.js` ~117 asserts `attemptIdle({ state: 'working' }, <1h-old>, 60) === true` under the label \"a dead job turn\"; the fake-gh idle test uses a pid attempt with `heartbeat_at: ago(300)`, a fixture the CAS heartbeat never produces.\n\nFix: when a job record exists, its liveness is the answer (`return !jobAlive(job)`); for the no-job clause use a signal that actually advances — the transcript mtime (`a.transcript_path` is on the row, one local `stat`) or the lock-ref beat — and use a threshold larger than one interval (the motivating #182 case was 40 minutes idle; a false \"idle\" under `running`/`unmerged` is exactly what those modes exist to prevent). Fix both tests to a fixture the real heartbeat produces (a bg attempt with a live job → holds; a bg attempt whose job turn ended → does not).\n\n**Should fix in the same pass:**\n- The idle log line fires every tick (`src/dispatch.js` ~608) — the card asked for once per attempt; key it on the attempt like the leak warning.\n- Card item 3 is half done: `hkb show <n>` and the web drawer do not name the collision (`src/cli.js` show case, `web/index.html`/`src/serve.js` untouched). Either finish it or say in the PR body that #176 stays open as the UI half; the human `--dry-run` summary (`src/cli.js` ~539) should append `collides_with`.\n- `docs/wiki/AGENTS.md` note about `merge=union` (card item 4) is missing.\n\nNits: the track-candidate path (`src/dispatch.js` ~708-728) records `collides_with` but emits no log line, unlike the plain-card path.\n\nSame branch, same PR (worktree-kb-185-1). Rerun lint/test/smoke, then `hkb finish`. Note: the running loop must be restarted after this merges (it keeps the code and cfg loaded at start); the operator will do that."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-29T04:46:09Z",
+      "id": 5460402988,
+      "text": "**Changes requested** (after attempt 2): Re-issued after the loop restart (#195): the previous request-changes was bounced by a loop that had cached this card's run record before the reviewer row existed. The review to act on is the full 'Changes requested (after attempt 1)' comment above — blocker: the idle rule takes heartbeat_at||started_at from the run comment, which a --bg attempt never advances, so every live attempt looks idle after 60 s and running/unmerged never guard; job liveness must be authoritative, transcript mtime or the lock-ref beat for the no-job case, a threshold larger than one tick, corrected tests. Plus: log once per attempt, hkb show/drawer collision naming (or leave #176 as the UI half and say so), the wiki AGENTS.md merge=union note."
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-08-29T05:12:08Z",
+      "id": 5460506720,
+      "text": "**Changes requested** (after attempt 4): Second-pass review of PR #190 (operator session, 2026-08-29). The blocker is fixed for --bg attempts: `attemptIdle` now returns `!jobAlive(job)` whenever a job record exists (src/model.js ~336), the threshold is `max(interval, 600)`, the idle line logs once per attempt, the track-candidate path and the human --dry-run name the collision, AGENTS.md has the union note; 845 tests, smoke green, fast-forward on the tip. Live cross-check of real job records: working/blocked → holds, done → idle. Good.\n\n**Still open — the no-job clause has no advancing signal** (src/dispatch.js ~553 `lastSignal = a.heartbeat_at || a.started_at`, ~595-603 the lock-beat read only past `stale_after`, ~613 the threshold). With the default `heartbeat: 'auto'` (ref-CAS, src/lifecycle.js ~125) the run comment's `heartbeat_at` is never written, so for every attempt without a job record — `claude-p`, `copilot-cli`, `codex` (process), `claude-action` (remote), `hkb claim` by hand (manual), any bg attempt on another host — `lastSignal` sits at `started_at` and the attempt is \"idle\" from minute 10 until reclaim. Probed on the branch (mode `running`, holder 30 min old): pid attempt with a LIVE pid, lock beat 30 s old and transcript written now → idle, #8 claimed; manual attempt with a 30 s lock beat → idle; remote attempt → idle; bg attempt with a live job on another host → idle. So `running`/`unmerged` are still dead modes for four of the six shipped profiles, and `test/dispatch.test.js` ~816 (pid attempt, `heartbeat_at: ago(700)` → idle) enshrines it with a fixture the ref-CAS heartbeat never produces.\n\nFix, cheap: (1) a live pid is authoritative the way a live job is — `if (a.pid && pidAlive(a.pid)) return false` before the timestamp clause; (2) for pidless no-job attempts (manual, remote, other-host bg) move the existing `lockBeatAt` read to fire past `idleThreshold` instead of only past `stale_after` — one commit read per such attempt per tick, only after 10 min — or `fs.statSync(a.transcript_path).mtime` when present (free); (3) threshold: a worker beating \"every ~10 minutes\" is idle on the tick before each beat at exactly the 600 s floor — use 2× the floor. Replace the ~816 test with the positive case: pid attempt, live pid, fresh lock beat → holds; and one for a manual attempt with a fresh lock beat → holds.\n\nAlso in the same pass: PR body still says collisions are named \"in hkb doctor\" (doctor prints the mode) and does not say #176 stays open as the `hkb show`/drawer half — say it (src/model.js ~305 says \"folded into #185\"; it is not); `docs/wiki/features/tracks.md` went stale (covers src/dispatch.js) and no page names `dispatch.guards.path_overlap` — add a short features page or a section on an existing one, re-stamp; src/board.js ~51 comment lost \"and SubagentStop\" in the merge (main added it in #187); stale \"longer than one tick\" wording at src/dispatch.js ~535 and src/model.js ~322/~330; `state.idle_logged` is never pruned (mirror the 24 h prune of `state.claims`) and `--dry-run` in the main checkout writes it, silencing the real loop's line.\n\nSame branch, same PR (worktree-kb-185-1). Rerun lint/test/smoke, then `hkb finish`. The operator restarts the loop after this merges."
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-29T04:32:43Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/dispatch.js",
+          "src/board.js",
+          "src/doctor.js",
+          "src/init.js",
+          ".gitattributes",
+          "scripts/smoke-pack.mjs",
+          "skills/kanban/references/protocol.md",
+          "README.md",
+          "test/dispatch.test.js",
+          "test/model.test.js",
+          "test/track.test.js"
+        ],
+        "residual_risk": [
+          "docs/harnesses.md and docs/wiki/AGENTS.md were not touched: the former had nothing to update (no path_overlap mention), the latter is outside this task's file scope even though the issue body suggested a note there",
+          "src/init.js and scripts/smoke-pack.mjs were edited even though not in the task's listed scope, because the issue's 'Done when' explicitly requires `hkb init` to write .gitattributes and npm run smoke to verify it — flagging in case another task also touches those files",
+          "test/model.test.js and test/track.test.js needed one-line fixes for pre-existing tests that assumed path_overlap defaulted to \"running\"; also outside the listed test-file scope but required to keep `npm test` green"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (838 passing, 0 failing)",
+          "npm run smoke (verifies hkb init writes .gitattributes with docs/wiki/log.md merge=union)"
+        ]
+      },
+      "pr": 190,
+      "pr_continued": false,
+      "summary": "path_overlap guard now takes dispatch.guards.path_overlap: \"off\"|\"running\"|\"unmerged\". Default follows merge.mode: \"off\" for manual (the default board), \"unmerged\" for auto (keys on running or review-with-open-PR, not just running). Legacy dispatch.path_guard boolean still works. Pure predicates live in src/model.js (pathOverlapGuard, pathHolders, pathCollisions, attemptIdle); src/dispatch.js wires attemptIdle into the reclaim pass so a running attempt with no bg-job progress or no heartbeat for over one tick interval never holds its paths in any mode. A guard hit names the colliding card and paths (summary.guarded[].collides_with, and the tick log). hkb doctor prints the effective mode and why (checkPathOverlapGuard). .gitattributes ships docs/wiki/log.md merge=union; hkb init writes the same line (ensureGitAttributes) and scripts/smoke-pack.mjs checks it. Docs: protocol.md (new path_overlap section + idle note in tick step 2), README.md (new path_overlap subsection under 'The last step'). PR #190 opened against main; rebased clean onto d102a4e."
+    },
+    {
+      "artifacts": [],
+      "at": "2026-08-29T05:00:28Z",
+      "attempt": 4,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/dispatch.js",
+          "src/cli.js",
+          "test/model.test.js",
+          "test/dispatch.test.js",
+          "docs/wiki/AGENTS.md",
+          "skills/kanban/references/protocol.md"
+        ],
+        "residual_risk": [
+          "hkb show <n> and the web drawer still do not name a path_overlap collision (#176 stays open as that UI half)",
+          "docs/wiki pages flagged STALE by wiki-check.mjs (architecture/overview, review-loop, etc.) predate this session's changes and are pre-existing drift, not introduced here",
+          "the no-job idle threshold (max(interval,600s)) is a judgment call balancing #185's false-idle bug against not masking a genuinely stuck manual/remote attempt; no live data on manual/remote idle timing to tune it further"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (845 pass)",
+          "npm run smoke",
+          "node --test test/model.test.js test/dispatch.test.js"
+        ]
+      },
+      "pr": 190,
+      "pr_continued": true,
+      "summary": "Fixed the reviewer's blocker: attemptIdle (src/model.js) now trusts a claude-bg attempt's job-record liveness unconditionally instead of falling through to a stale lastSignal — the default ref-CAS heartbeat never touches the run comment, so lastSignal sat at started_at for a bg attempt's whole life, making running/unmerged path_overlap guards no-ops between one tick and stale_after (the measured #129/#182 cases). The no-job fallback (manual/remote/pid attempts) now uses max(tick interval, 600s) instead of one tick, matching the heartbeat's own 10-minute floor. Also addressed the reviewer's should-fix list: the idle line now logs once per attempt (state.idle_logged, keyed by task/attempt, cleared once the attempt is alive again) instead of every tick; the track-candidate collision path now logs the same collision line the plain-card path already had; --dry-run's human summary in src/cli.js now appends 'collides with #N (paths)' to a guarded line; docs/wiki/AGENTS.md now notes the log.md merge=union line next to the log.md section. Left hkb show / the web drawer without collision naming, as the reviewer offered as an alternative — #176 stays open as that UI half; the tick's --dry-run and log output already name the collision, which was this card's actual 'Done when' requirement."
+    },
+    {
+      "artifacts": [],
+      "at": "2026-08-29T05:25:54Z",
+      "attempt": 6,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/model.js",
+          "src/dispatch.js",
+          "test/model.test.js",
+          "test/dispatch.test.js",
+          "README.md",
+          "skills/kanban/references/protocol.md",
+          "docs/wiki/features/path-overlap-guard.md",
+          "docs/wiki/wiki.config.yml",
+          "docs/wiki/index.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "hkb show <n> and the web drawer still print only 'guarded: path_overlap' with no collision detail (#176's UI half, left open on purpose)",
+          "idle threshold heuristics (1200s floor, lock-beat refresh point) are judgment calls, not measured against a live board this pass"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (858 pass)",
+          "npm run smoke"
+        ]
+      },
+      "pr": 190,
+      "pr_continued": true,
+      "summary": "Third-pass fix for the reviewer's remaining blocker: attemptIdle now trusts a live pid the same way it trusts a live job, and the pidless/jobless fallback (manual, remote, a claude-bg job on another host) refreshes its lock-ref beat at the (raised) idle threshold instead of only at stale_after, so it is no longer falsely called idle between the two. Idle threshold raised to max(interval, 1200) (2x the ~10min heartbeat floor). state.idle_logged is now pruned after 24h like state.claims, and a --dry-run tick no longer persists that dedup key (it was silencing the real loop's first idle line for an attempt it never actually watched go idle). Documented merge.mode: \"operator\" (#189) defaulting the guard to off like manual, in README and protocol.md. Added docs/wiki/features/path-overlap-guard.md (three modes, precedence, idle ladder) since no page named dispatch.guards.path_overlap; wiki.config.yml/index/log.md updated. hkb show/web drawer still do not name the collision inline (#176 stays open as that UI half — dry-run and the tick log already do). Merged origin/main (clean auto-merge) and pushed to PR #190's branch."
+    }
+  ],
+  "v": 1
+}

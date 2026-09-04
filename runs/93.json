@@ -1,0 +1,74 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-27T19:58:46.769Z",
+      "heartbeat_at": "2026-08-27T19:41:06.043Z",
+      "host": "YRND1-GG",
+      "job": "514ce001",
+      "lock_sha": "1a26d7e5f8492fed5fe9d4a99a2452feccd7da2a",
+      "log": ".kanban/logs/93-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 95,
+      "pr_head": "worktree-kb-93-1",
+      "profile": "claude",
+      "started_at": "2026-08-27T19:41:06.043Z",
+      "summary": "hkb now tells you when it is old: one GET of registry.npmjs.org/hkb-cli a day, on the tokenExpiryNotice shape (read .kanban/state.json, compare a UTC day stamp, stamp only on success so a failure retries next time; the answer is stamped too, so a second doctor the same day costs no call). `hkb doctor` prints a `hkb version` line every run — behind is a warning, not a failure; ahead of npm (a check",
+      "wt": "kb-93-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-27T19:58:49Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/registry.js",
+          "src/doctor.js",
+          "src/dispatch.js",
+          "src/board.js",
+          "src/init.js",
+          "src/cli.js",
+          "test/update.test.js",
+          "test/selfheal.test.js",
+          "README.md",
+          "docs/wiki/features/update-notice.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/features/planning-commands.md",
+          "docs/wiki/features/auto-merge.md",
+          "docs/wiki/decisions/adr-004-roles-and-adoption.md",
+          "docs/wiki/GLOSSARY.md",
+          "docs/wiki/log.md",
+          "docs/wiki/index.md",
+          "docs/wiki/wiki.config.yml"
+        ],
+        "residual_risk": [
+          "An air-gapped loop retries the registry once per tick forever — no stamp on failure is what the card specified, and an unreachable host fails immediately, but it is one connect attempt per tick rather than one per day.",
+          "A checkout with no board.json is probed on every doctor run: it deliberately does not create .kanban/ just to stamp a day.",
+          "readVersion moved from cli.js into init.js as packageVersion and is re-exported from cli.js; src/mcp.js and test/version.test.js still import it from cli.js and pass.",
+          "An Actions dispatcher never sees the notice — it runs a single tick, not the loop. It installs hkb-cli unpinned on every run, so it cannot be stale; noted on the wiki page.",
+          "The version finding is not an Actions annotation (ANNOTATED is unchanged), so a doctor run inside a workflow log carries it as an ordinary line."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test — 538 pass, 0 fail (23 of them new, in test/update.test.js)",
+          "npm run smoke — the packed tarball installs, runs and initialises a repo",
+          "node .repolore/scripts/wiki-check.mjs — all 6 pages fresh",
+          "node .repolore/scripts/wiki-index.mjs --check — index up to date",
+          "node bin/hkb.js doctor and doctor --json against the live repo: '✓ hkb version 0.1.4 (latest)'",
+          "one real registry GET by hand through src/registry.js: latest = 0.1.4"
+        ]
+      },
+      "summary": "hkb now tells you when it is old: one GET of registry.npmjs.org/hkb-cli a day, on the tokenExpiryNotice shape (read .kanban/state.json, compare a UTC day stamp, stamp only on success so a failure retries next time; the answer is stamped too, so a second doctor the same day costs no call). `hkb doctor` prints a `hkb version` line every run — behind is a warning, not a failure; ahead of npm (a checkout, a release in flight) is reported as the fact it is. The dispatcher loop logs one line on the first tick of a day it is behind and on no other tick. No other command asks: `hkb list` makes no registry call, asserted end-to-end. Offline is silent, stamps nothing and changes no behaviour; `\"version_check\": false` in board.json is the opt-out for a deliberately pinned install.\n\nDecided against an `hkb update`, with the reasoning in the code: hkb cannot know how it was installed (global npm, npx cache, pnpm/volta shim, git checkout) and a package manager rewriting the directory the running process lives out of is not something to guess at. It prints `npm i -g hkb-cli@latest && hkb init`, or `npx -y hkb-cli@latest init` when it is running from an npx cache. The second command is not overhead — a new CLI ships a new skill and init is what copies it, which is the compound this card exists for.\n\nTwo things a reviewer should look at:\n\n1. Beyond the card, this also WIRES `tokenExpiryNotice` into the loop. It was written for the loop in #44 and never called from anywhere, so no long-running dispatcher had ever warned about a lapsing KB_TOKEN — the same shape of silence as this card, at the same call site, already tested. It is one line and can be dropped if you would rather it were its own card.\n\n2. `test/selfheal.test.js`'s loop harness now sets `version_check: false`, so the suite still reaches no network. Any future test that drives `loop()` must do the same or stub the registry.\n\nPR #95 (draft), branch worktree-kb-93-1, rebased on 4e4b3ca."
+    }
+  ],
+  "v": 1
+}

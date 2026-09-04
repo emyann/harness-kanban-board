@@ -1,0 +1,69 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-01T21:43:08.513Z",
+      "heartbeat_at": "2026-09-01T21:37:23.823Z",
+      "host": "YRND1-GG",
+      "job": "2e183328",
+      "lock_sha": "5db5afabd8f9396f9e164cd43ba1e90166f87dc2",
+      "log": ".kanban/logs/140-1.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 241,
+      "pr_head": "worktree-kb-140-1",
+      "profile": "claude",
+      "session_id": "2e183328-b489-4bac-a2fa-86fca7817c4b",
+      "started_at": "2026-09-01T21:37:23.823Z",
+      "summary": "hkb dispatch --loop imports its modules once at startup and ticks for hours; a merge to main, git pull, or npm i -g changes the code on disk but a running loop never notices — #137's session-stamping never fired here because the loop that launched #125-1 predated that merge. Fixed by giving the loop its own staleness check, exactly the mechanism option 1 in the card proposed.\n\n`installStamp()` (sr",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-140-1/2e183328-b489-4bac-a2fa-86fca7817c4b.jsonl",
+      "wt": "kb-140-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T21:45:25Z",
+      "id": 5500858294,
+      "text": "**Merged by the operator seat** — review: Reviewed against the card's option 1, which is what it implements, message and all. installStamp() runs git -C PKG_ROOT rev-parse --short=12 HEAD against the running code's OWN directory and is read fresh every call, never cached — which is the entire point, since modules load once at process start and this is the only thing in the loop that can see disk change. It falls back to packageVersion() when there is no .git, which is the real npm i -g case, and that version does change on every release by definition. The check runs after a tick and before the sleep, so the current tick finishes; on a change it drops the singleton lock, records the exit and throws exit 4 with the message the card asked for verbatim — 'this loop is running X, the installed hkb is Y — restarting' — plus the reassurance that running workers are untouched because the next dispatcher adopts or reclaims them. installStamp is injected into loop() so the three tests drive it without a real checkout: stamp changes → exit 4, stamp stable → never exits on its account, and the git-HEAD-else-version fallback itself. Verified myself: CI green, lint clean, 972 tests on the branch. Worth recording why this card mattered: I restarted this board's loop by hand four times today, and every time it had been dispatching on stale code — twice while I was reviewing merges that changed the tick. hkb up is deliberately not a supervisor, so after this lands the loop still waits for a human to run hkb up; what changes is that it says so instead of silently running yesterday's code., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-01T21:43:10Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/dispatch.js",
+          "test/selfheal.test.js",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/log.md"
+        ],
+        "dependencies": [],
+        "residual_risk": [
+          "installStamp() resolves PKG_ROOT from this module's own import.meta.url, which is fixed at process start — correct for the symlink-into-checkout scenario the card describes, but on a real npm global install (no .git) the only signal is the semver in package.json, which only moves at release time (docs/releasing.md); an npm i -g between releases of the same version (unusual, but possible with a pinned/rebuilt tarball) would go undetected. Not fixable without hashing file contents, which is more than 'pays nothing per tick' can afford.",
+          "The check runs once per tick, right after the tick completes and before the sleep; a `git pull` landing mid-tick is caught on the very next tick, not mid-flight — matches the card's 'twenty ticks later' evidence, where a whole-tick lag was already the observed granularity.",
+          "docs/wiki/architecture/overview.md remains reported stale by wiki-check.mjs (it already was, for six other files, before this change) — the new paragraph is real and cited, but the page as a whole is still owed a full /repolore:refresh."
+        ],
+        "retry_notes": null,
+        "verification": [
+          "npm run lint",
+          "npm test — 972 pass, 0 fail",
+          "node --test test/selfheal.test.js — 12 pass, including the 3 new tests for this change",
+          "manually read the loop() diff to confirm the upgrade check runs after `if (stopping) break;` so a human-requested `hkb down` is never misreported as an upgrade exit"
+        ]
+      },
+      "pr": 241,
+      "pr_continued": false,
+      "summary": "hkb dispatch --loop imports its modules once at startup and ticks for hours; a merge to main, git pull, or npm i -g changes the code on disk but a running loop never notices — #137's session-stamping never fired here because the loop that launched #125-1 predated that merge. Fixed by giving the loop its own staleness check, exactly the mechanism option 1 in the card proposed.\n\n`installStamp()` (src/dispatch.js) is a fresh-every-call fingerprint of the hkb this process would load if it started right now: `git rev-parse HEAD` of the package's own directory (PKG_ROOT, from init.js) when it is a git checkout — the case the bug is about, a symlink into a dev checkout — falling back to the package version when it is not (a real npm i -g install has no .git, and its version does change on every release per docs/releasing.md). `loop()` captures the stamp once at startup and compares a fresh read against it after every tick; a mismatch sets a new `upgrade` state (parallel to the existing self-heal `fatal` state) and the loop exits 4 with `hkb: this loop is running <old>, the installed hkb is <new> — restarting`. That is the same exit code the self-heal claim ladder already uses, so `hkb up --status` and `hkb doctor` report it through the existing recordExit/readExit plumbing with no new surface on that side — satisfying both of the card's options (restart via a supervisor, or reported by doctor) with one mechanism.\n\nCost: one local `git rev-parse` (no network, no GitHub call) per tick, a few ms — nothing an operator of a current loop would notice, matching the card's 'pays nothing per tick' requirement.\n\nNot done: a fuller wiki refresh. architecture/overview.md was already stale for six other covered files from prior tasks' unrelated drift (owed to a future /repolore:refresh per #125's residual risk); I added a real paragraph documenting this check but did not re-stamp the page fresh, since that would bless citations I did not re-verify. Logged in docs/wiki/log.md."
+    }
+  ],
+  "v": 1
+}

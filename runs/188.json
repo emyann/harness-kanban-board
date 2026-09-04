@@ -1,0 +1,70 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-08-29T05:24:40.331Z",
+      "heartbeat_at": "2026-08-29T05:08:42.520Z",
+      "host": "YRND1-GG",
+      "job": "6ce40dd5",
+      "lock_sha": "39d9c05ef6031819ca01317adbe240baf2e56ba8",
+      "log": ".kanban/logs/188-1.log",
+      "outcome": "completed",
+      "pid": null,
+      "profile": "claude",
+      "reason": "issue closed as completed",
+      "session_id": "6ce40dd5-aebe-43dd-b263-fda5aaf1c2d8",
+      "started_at": "2026-08-29T05:08:42.520Z",
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-188-1/6ce40dd5-aebe-43dd-b263-fda5aaf1c2d8.jsonl",
+      "wt": "kb-188-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-08-29T05:17:33Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/board.js",
+          "src/doctor.js",
+          "src/init.js",
+          "docs/harnesses.md",
+          "test/harness.test.js",
+          "test/init.test.js",
+          "test/profiles.test.js",
+          "docs/wiki/features/hook-install-shapes.md",
+          "docs/wiki/architecture/overview.md",
+          "docs/wiki/concepts/worker-identity.md",
+          "docs/wiki/decisions/adr-004-roles-and-adoption.md",
+          "docs/wiki/features/auto-merge.md",
+          "docs/wiki/features/operator-seat.md",
+          "docs/wiki/features/planning-commands.md",
+          "docs/wiki/features/review-loop.md",
+          "docs/wiki/features/up-and-down.md",
+          "docs/wiki/features/update-notice.md",
+          "docs/wiki/features/web-board.md",
+          "docs/wiki/log.md"
+        ],
+        "residual_risk": [
+          "docs/wiki/features/review-loop.md and docs/wiki/features/tracks.md went stale again after rebasing onto main, from #197's gc.js/board.js changes -- unrelated to this task's scope, left for #197's owner",
+          "repairLaunchHooks' drop-pin heuristic only matches when the pin is byte-for-byte the default minus literal --model/--effort tokens; a pin with any other custom flag falls back to the insert repair, which is the documented behaviour but worth knowing if a reviewer expected broader matching"
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (843 passing)",
+          "npm run smoke"
+        ]
+      },
+      "pr": 199,
+      "pr_continued": false,
+      "summary": "hkb init now repairs a claude launch pinned before the hooks moved onto it (#144): repairLaunchHooks (src/init.js), called right after boardProfiles, inserts {hook_settings} after --disallowedTools or drops a launch that only added literal --model/--effort (moving those into the profile's model/effort fields), printing one line per profile touched and staying silent once nothing is stale. staleHookLaunches moved from src/doctor.js to src/board.js so init can share the question doctor only reported; doctor re-exports it. loadBoard now refuses effort at load time (exit 2) on any profile whose launch[0] isn't claude, naming the profile and its harness -- claude-action is the documented exception (accepted, ignored). Added a spawnWorker test that pins --effort end to end. docs/harnesses.md documents the required launch placeholders and the refusal. Re-stamped the wiki pages that went stale from the board.js/doctor.js/init.js edits (only features/hook-install-shapes.md needed real content changes)."
+    }
+  ],
+  "v": 1
+}

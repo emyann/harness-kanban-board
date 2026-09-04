@@ -1,0 +1,89 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "bg": true,
+      "ended_at": "2026-09-02T01:45:39.624Z",
+      "heartbeat_at": "2026-09-02T01:29:15.485Z",
+      "host": "YRND1-GG",
+      "job": "88800f57",
+      "lock_sha": "77b16163a95ac5832f0df42433beed43116bf267",
+      "log": ".kanban/logs/223-1.log",
+      "merged_by": "operator",
+      "outcome": "completed",
+      "pid": null,
+      "pr": 286,
+      "pr_head": "kb/track-223",
+      "profile": "claude-track",
+      "session_id": "88800f57-40b7-4f7e-9c93-ec31e8548aeb",
+      "started_at": "2026-09-02T01:29:15.485Z",
+      "summary": "Track #223 landed the tool posture as one feature. #256 (PR #268) added \"tools\": \"inherit\" | \"curate\" on a profile, validated in loadBoard and resolved by toolPosture, absent meaning curate so no existing board moves; hkb init says which posture the board got. #257 (PR #281) added \"mcp\" on a profile, meaning opposite things at the two postures — a whitelist under curate where naming a server is wh",
+      "track": true,
+      "track_branch": "kb/track-223",
+      "track_mode": "inferred",
+      "track_nodes": [
+        258,
+        257
+      ],
+      "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-223-1/88800f57-40b7-4f7e-9c93-ec31e8548aeb.jsonl",
+      "wt": "kb-223-1"
+    }
+  ],
+  "block_loops": {},
+  "failures": 0,
+  "last_error": null,
+  "notes": [
+    {
+      "actor": "emyann",
+      "at": "2026-09-01T23:56:56Z",
+      "id": 5502233446,
+      "text": "**Decomposed 2026-09-01**, approved by the human before anything was created. Three children, plus the shared seam **#255** that this track and its sibling (#217) both depend on — extracted precisely so the two features do not each grow their own derivation of a worker's tool list.\n\n```mermaid\nflowchart TD\n  n255[\"#35;255 · ready<br>One place derives what a worker may use, so the posture…\"]\n  n256[\"#35;256 · todo<br>A profile states its tool posture: inherit or curate, w…\"]\n  n258[\"#35;258 · todo<br>A card narrows its profile's grant and doctor prints wh…\"]\n  n257[\"#35;257 · todo<br>MCP servers are named on a profile: a whitelist under c…\"]\n  n223([\"#35;223 · todo<br>A profile has one hardcoded tool posture nobody chose,…\"])\n  n255 --> n256\n  n256 --> n258\n  n256 --> n257\n  n258 --> n223\n  n257 --> n223\n  classDef todo stroke:#8b949e,stroke-width:1px\n  class n256,n258,n257,n223 todo\n  classDef ready stroke:#3fb950,stroke-width:2px\n  class n255 ready\n```"
+    },
+    {
+      "actor": "emyann",
+      "at": "2026-09-02T01:49:14Z",
+      "id": 5503121665,
+      "text": "**Merged by the operator seat** — review: Reviewed PR #286 (kb/track-223 into main), the whole track in one pass: 15 files, 826 additions, 1121 tests green, both required checks green, mergeable clean. #256 landed earlier; #257 and #258 were merged onto the track branch by the root, so this is the single landing.\n\nDelivers #223's Done-when as a declaration layer: the mcp key means opposite things at the two postures and both are derived once in effectiveTools with no second computation; a card narrows and never widens, with drops returned rather than swallowed and reported by doctor; under curate a named server gains its grant, which is the actual fix for #130; under inherit an excluded server's grant is stripped from the allow-list, so a board cannot hand back a production server through allowed_tools. profileMcp keeps null and empty as different answers, which is right.\n\nThe feature is deliberately incomplete and the wiki page says so in its own headline: dispatch.js never consults toolPosture, so inherit behaves as curate minus its exclusions. The subtraction half is genuinely enforced; the inheritance half is declared, validated and printed but not spent at the launch. Filed by the worker as #284, with #285 for the Actions renderer. Merging on that basis: the permissions are fail-closed, a worker gets less reach than declared and never more, and both gaps are documented where an adopter meets them.\n\nOne finding the worker did not catch, recorded on #284 rather than fixed here: mcpLine under inherit tells the worker it inherits the session MCP servers, which the wiki page in the same PR says is false. The page tells the human, the brief tells the worker the opposite, and the worker acts on it. That reproduces #130 rather than fixing it, since a positive false statement gives a worker less reason to disclose. Unreachable today because no profile declares inherit. #284 now carries the constraint that the brief and the launch must become true together, tested.\n\nAlso on this PR: my #273 review passed over src/init.js line 656 as a template rather than a launch. It is a launch, and the unattended one. That is #285, where I have added the evidence and the frozen-copy property., checks: green, method: squash"
+    }
+  ],
+  "results": [
+    {
+      "artifacts": [],
+      "at": "2026-09-02T01:45:40Z",
+      "attempt": 1,
+      "kind": "result",
+      "metadata": {
+        "changed_files": [
+          "src/board.js",
+          "test/profiles.test.js",
+          "test/doctor.test.js",
+          "docs/wiki/features/worker-tool-posture.md",
+          "docs/wiki/concepts/tool-grant-ceiling.md",
+          "docs/wiki/log.md",
+          "docs/wiki/index.md",
+          "docs/wiki/wiki.config.yml"
+        ],
+        "residual_risk": [
+          "#284: inherit does not inherit — dispatch.js never reads toolPosture, so an inherit launch is curate minus exclusions. Half of #223's acceptance criterion, filed not fixed.",
+          "#285: actionsFiles bypasses effectiveTools and reads DEFAULT_PROFILES, so a board's posture never reaches an Actions runner.",
+          "The denied-tools ledger still records only what a worker was refused, never what it used — 'which grant is nobody using' remains unspecified, as the original #223 body noted.",
+          "17 wiki pages were already stale before this track and remain so; only the two pages this track owns were refreshed and stamped."
+        ],
+        "verification": [
+          "npm run lint",
+          "npm test (1135 pass, 0 fail; 1130 before adding the mcp validation tests)",
+          "npm run smoke (27 content, 3 command, 12 init, 6 inside-the-repo checks)",
+          "node bin/hkb.js doctor -> tool posture check prints all three profiles live",
+          "node probe against loadBoard+effectiveTools: ceiling 45, narrowing, widening dropped, declares-nothing byte-identical, inherit-minus-supabase",
+          "node probe against expandLaunch: curate vs inherit launch lines compared directly",
+          "node .repolore/scripts/wiki-check.mjs -> features/worker-tool-posture and concepts/tool-grant-ceiling both fresh, no page-plan drift, 17 pre-existing stale pages untouched",
+          "grep allowed_tools across src/ -> only board.js definitions, rule comments, and the {allowed_tools} token"
+        ]
+      },
+      "pr": 286,
+      "pr_continued": false,
+      "summary": "Track #223 landed the tool posture as one feature. #256 (PR #268) added \"tools\": \"inherit\" | \"curate\" on a profile, validated in loadBoard and resolved by toolPosture, absent meaning curate so no existing board moves; hkb init says which posture the board got. #257 (PR #281) added \"mcp\" on a profile, meaning opposite things at the two postures — a whitelist under curate where naming a server is what GRANTS it (mcp__<server>__*, the fix for #130's unreachable react-aria), a subtraction under inherit for the supabase-writes-to-production case — with effectiveTools returning { tools, dropped, mcp } and the worker brief naming the servers it has. #258 (PR #282) added kb.tools/kb.mcp on a card through normalizeCardGrants, narrowing only, plus hkb doctor's tool posture and card grants checks and the concepts/tool-grant-ceiling wiki page. All three sit on #255's seam: effectiveTools(profile, task, board) is the one derivation, and dispatch.js, hook.js, track.js, context.js and doctor.js all ask it — a grep for allowed_tools under src/ finds only definitions in board.js, comments citing the rule, and the {allowed_tools} token.\n\nThe root pass found two defects that exist only BETWEEN the children, which is why the per-child reviews could not have caught them. First, a doctor assertion pinned '1 tool' where a declared mcp list under curate legitimately makes the ceiling 3 — #258 wrote the test against a model.js that predated #257; the code was right, the test was not. Second, loadBoard validated tools but never mcp, so \"mcp\": \"supabase\" (a string where a list belongs) was read as 'declared nothing' and a board writing that to EXCLUDE a production server went on granting it — now validated with the wrong-type cases tested, since that is the one shape where a lenient read widens permissions.\n\nVerified live against this board with node bin/hkb.js (the hkb on PATH is the global 0.2.2, not the checkout): doctor prints 'claude: curate, 45 tools, mcp: none · claude-action: curate, 45 tools, mcp: none · claude-track: curate, 46 tools, mcp: none'; card grants is correctly silent since no card here declares either key; a card narrowing to [\"Read\"] drops nothing; a card asking for Bash(rm -rf /) plus the supabase server has both dropped with source and reason; a profile declaring neither key returns a list byte-identical to its allowed_tools; an inherit profile excluding supabase loses mcp__supabase__write from its launch line and keeps mcp__figma__read.\n\nTHE GAP THIS TRACK DOES NOT CLOSE, and it is half of #223's own acceptance criterion: inherit does not yet inherit. toolPosture is imported only by doctor.js and init.js — dispatch.js never consults it — so an inherit profile's launch still carries an explicit --allowedTools list under --permission-mode dontAsk and behaves as curate minus its exclusions rather than deferring to the session's environment. The subtraction half IS enforced (the excluded grant is stripped and dontAsk denies what is unlisted); the inheritance half is declared, validated, printed and not spent. Filed as #284 rather than fixed silently: dispatch.js is outside this card's kb.paths, and 'what does dontAsk with no allow-list mean' is a design decision, not a patch. Also filed #285 — actionsFiles renders DEFAULT_PROFILES[...].allowed_tools straight into the generated CI workflow without going through effectiveTools, so the posture governs every launch except the unattended one. Both are recorded in the wiki page's 'Status and known gaps' so it does not read as if the feature were complete.\n\nMerged into kb/track-223: PRs #281 and #282 (#268 was already there). Track PR into main: #286."
+    }
+  ],
+  "v": 1
+}
