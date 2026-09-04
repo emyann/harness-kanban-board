@@ -644,14 +644,14 @@ export function removedInitFlag(flags = {}) {
  * Which store this `init` sets the board up on. Pure, so the answer is a test rather than a
  * paragraph in the README.
  *
- * There is one: local (docs/local-first.md §6.1). The cards live on the `kb-board` branch in this
+ * There is one: local (docs/local-first.md §6.1). The cards live at `refs/kb/boards/<slug>` in this
  * repository and the index beside them, so the board works with `gh` logged out, on a plane, and at
  * no API cost. `--store github` is gone with the driver it named (ADR-006) and says so rather than
  * being ignored: a human who types it is asking for a board this hkb cannot make.
  *
  * **`existing` is not decoration.** A board.json that still says `"store": "github"` has its cards
  * on GitHub Issues, and a plain `hkb init` over it would write `"store": "local"` into a git-tracked
- * file and create an empty `kb-board` branch — the next `hkb list` reports a board with nothing on
+ * file and create an empty board ref — the next `hkb list` reports a board with nothing on
  * it while every real card sits, untouched and unreachable, on the forge. Silent data abandonment,
  * from the command a human runs to *fix* things. So it refuses, and names the migration, which is
  * the same answer `storeKind` gives the verbs. `--import` is that migration and is let through.
@@ -966,15 +966,20 @@ export function registerCheckout(root, log) {
 
 /**
  * The probe `needsMigrationProbe` decides on, run and acted upon. Nothing here writes: it is the
- * last thing between a plain `hkb init` and a `kb-board` branch created over a board that is still
- * on the forge, so it runs before step 2 touches a file.
+ * last thing between a plain `hkb init` and a board ref created over a board that is still on the
+ * forge, so it runs before step 2 touches a file.
  *
  * `ctx.repo` is not set until step 3, and this needs it — so the probe gets one built from the repo
  * step 1 just resolved rather than mutating the context out of order.
+ *
+ * "Is there already a board here" is `findLocalBoardRef`, not a `rev-parse` of `BOARD_REF`: this
+ * board may be `--board beta`, whose ref is not the default one, and a board still sitting on
+ * `refs/heads/kb-board` is a board — probing the forge and refusing on account of it would tell an
+ * operator to migrate cards they migrated already.
  */
 async function refuseUnmigratedBoard(ctx, flags, { root, existing, repo, board }, log) {
-  const { BOARD_REF } = await import('./store/local.js');
-  const branchExists = runGit(root, ['rev-parse', '--verify', '--quiet', BOARD_REF]).status === 0;
+  const { findLocalBoardRef } = await import('./store/local.js');
+  const branchExists = !!findLocalBoardRef({ ...ctx, board, root });
   if (!needsMigrationProbe({ flags, existing, branchExists })) return;
   const [owner, name] = String(repo.nameWithOwner).split('/');
   const { countBoardIssues } = await import('./bridge/github-issues.js');
@@ -988,7 +993,7 @@ async function refuseUnmigratedBoard(ctx, flags, { root, existing, repo, board }
 }
 
 /**
- * Create (or adopt) the local board: the `kb-board` branch, the index beside it, and the two things
+ * Create (or adopt) the local board: the board's ref, the index beside it, and the two things
  * a human has to be told about a board with one writer — that the branch is pushed, and which host
  * owns it.
  *
@@ -997,12 +1002,12 @@ async function refuseUnmigratedBoard(ctx, flags, { root, existing, repo, board }
  * @returns {Promise<any>} the migration summary, or null when nothing was imported
  */
 async function setUpLocalBoard(ctx, flags, log) {
-  const { openLocalStore, importGithubBoard } = await import('./store/local.js');
+  const { openLocalStore, importGithubBoard, ensureFetchRefspec, boardFetchRefspec } = await import('./store/local.js');
   const store = openLocalStore(ctx, { reconcile: false });
   const existed = !!store.git.tip();
   let migration = null;
   if (flags.import) {
-    if (existed) log(`--import skipped: ${store.branch} already exists here, and a second import would overwrite a board that has since been worked. \`git log --oneline ${store.branch}\` shows what is on it`);
+    if (existed) log(`--import skipped: ${store.ref} already exists here, and a second import would overwrite a board that has since been worked. \`git log --oneline ${store.ref}\` shows what is on it`);
     // `--force` carries through: it is the human's "I know, do it anyway" for both refusals this
     // command can raise — a board with a live claim on it, and a host that still looks alive.
     else migration = await importGithubBoard(ctx, { store, log, force: !!flags.force });
@@ -1010,8 +1015,17 @@ async function setUpLocalBoard(ctx, flags, log) {
   const made = store.git.init(ctx.board, store.host, { settings: {} });
   const loaded = store.open();
   log(made.created
-    ? `store: local — created the ${store.branch} branch (host "${store.host}") and ${path.relative(store.root(), store.index.file)}`
-    : `store: local — ${store.branch} at ${String(store.git.tip()).slice(0, 7)}, owned by host "${made.board?.host ?? 'nobody'}"${loaded.loaded ? ` (indexed ${loaded.counts?.tasks ?? 0} card(s))` : ''}`);
+    ? `store: local — created the board at ${store.ref} (host "${store.host}") and ${path.relative(store.root(), store.index.file)}`
+    : `store: local — ${store.ref} at ${String(store.git.tip()).slice(0, 7)}, owned by host "${made.board?.host ?? 'nobody'}"${loaded.loaded ? ` (indexed ${loaded.counts?.tasks ?? 0} card(s))` : ''}`);
+
+  // The board is deliberately outside `refs/heads`, so it is not in `git branch` and not in any
+  // branch picker — and, for the same reason, not carried by a clone's `+refs/heads/*` refspec. This
+  // is the line that buys it back for every ordinary `git fetch` in this checkout. Appended, never
+  // replacing (`ensureFetchRefspec`), and repeated `hkb init` runs add nothing.
+  const spec = ensureFetchRefspec(store.root(), store.remote);
+  if (spec.added) log(`store: added \`${spec.refspec}\` to remote.${store.remote}.fetch, so a plain \`git fetch\` carries the board (it is not on a branch, so nothing else would)`);
+  else if (spec.why === 'no-remote') log(`store: no git remote "${store.remote}" here yet — add one and run \`hkb sync\`, which writes \`${boardFetchRefspec(store.remote)}\` into .git/config so a plain \`git fetch\` carries the board`);
+  else if (spec.why !== 'present') log(`store: could not write \`${spec.refspec}\` into remote.${store.remote}.fetch (${spec.why}) — add it by hand, or a plain \`git fetch\` will not bring this board back`);
 
   if (flags['take-over']) {
     const t = store.takeOver({ force: !!flags.force });
@@ -1022,15 +1036,15 @@ async function setUpLocalBoard(ctx, flags, log) {
 
   // What a local board can and cannot do, said out loud rather than discovered. The verbs now reach
   // board state through `openStore()` (#325), so `hkb create`, `hkb list`, `hkb claim` and the rest
-  // read and write the branch — but a *pull request* is still the forge's (docs/local-first.md
+  // read and write the ref — but a *pull request* is still the forge's (docs/local-first.md
   // §6.4), and the two commands that only ever ask the forge say so instead of spending a request.
   log('store: the cards are here — `hkb create`, `hkb list`, `hkb claim` and the rest read and write'
-    + ` ${store.branch}, with no GitHub behind them. Pull requests are still the forge's, so`
+    + ` ${store.ref}, with no GitHub behind them. Pull requests are still the forge's, so`
     + ' `hkb merge` and the PR half of `hkb doctor` need a repo and a logged-in `gh`.');
 
   log(store.pushDisabled()
-    ? `sync: settings.sync.push is false on the branch, so \`hkb sync\` never *pushes* ${store.branch} — it still fetches ${store.remote}/${store.branch} and fast-forwards onto it, which is how this checkout reads what another host published. Set it to true to back the board up on ${store.remote}`
-    : `sync: \`hkb sync\` pushes ${store.branch} to ${store.remote} and fast-forwards from it, and the loop does it after a tick that wrote (at most once a minute, silent offline). \`"sync": {"push": false}\` in the branch's board.json turns the push half off`);
+    ? `sync: settings.sync.push is false on the board, so \`hkb sync\` never *pushes* ${store.ref} — it still fetches ${store.trackingRef} and fast-forwards onto it, which is how this checkout reads what another host published. Set it to true to back the board up on ${store.remote}`
+    : `sync: \`hkb sync\` pushes ${store.ref} to ${store.remote} and fast-forwards from it, and the loop does it after a tick that wrote (at most once a minute, silent offline). \`"sync": {"push": false}\` in the board's board.json turns the push half off`);
   store.close();
   return migration;
 }
@@ -1063,7 +1077,7 @@ export async function init(ctx, flags, log) {
   if (flags.import && existing && existing.store !== 'local' && !flags.force && boardFileTracked(root)) {
     const e = /** @type {any} */ (new Error(
       `${path.relative(root, boardFile(root))} is tracked by git, and \`hkb init --import\` would write "store": "local" into it — `
-      + 'every collaborator who pulls that would switch to a board on the `kb-board` branch, which has one writing host. '
+      + 'every collaborator who pulls that would switch to a board on a ref in their own clone, which has one writing host. '
       + 'Migrate deliberately: `hkb init --import --force` writes it.',
     ));
     e.exitCode = 2;

@@ -594,34 +594,51 @@ test('--no-labels says no to the one flag that cannot be done offline, before wr
 });
 
 // ---------- the store (docs/local-first.md §6, ADR-006) ----------
-// There is one store: the cards live on the `kb-board` branch in the repo init just ran in, and the
-// index beside it. What must hold is that a fresh board gets it, a second init adopts what is there
-// rather than recreating it, `--import` migrates a board that is still on GitHub Issues onto it, and
-// `--store github` — the flag for a store hkb no longer has — says so rather than being ignored.
+// There is one store: the cards live at `refs/kb/boards/default` in the repo init just ran in, and
+// the index beside it. What must hold is that a fresh board gets it, a second init adopts what is
+// there rather than recreating it, `--import` migrates a board that is still on GitHub Issues onto
+// it, and `--store github` — the flag for a store hkb no longer has — says so rather than being
+// ignored.
 
-const branchTip = (root) => spawnSync('git', ['rev-parse', '--verify', '--quiet', 'refs/heads/kb-board'], { cwd: root, encoding: 'utf8' }).stdout.trim();
+const BOARD_REF = 'refs/kb/boards/default';
+const branchTip = (root) => spawnSync('git', ['rev-parse', '--verify', '--quiet', BOARD_REF], { cwd: root, encoding: 'utf8' }).stdout.trim();
+/** Every branch this checkout has. The board must not be among them — that is the point of #334. */
+const branches = (root) => spawnSync('git', ['for-each-ref', '--format=%(refname)', 'refs/heads/'], { cwd: root, encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean);
 
-test('a fresh init creates a local board: the branch, the index, and board.json says so', async () => {
+test('a fresh init creates a local board: the ref, the index, and board.json says so', async () => {
   const { root, printed } = await runInit();
   assert.equal(board(root).store, 'local');
-  assert.match(branchTip(root), /^[0-9a-f]{40}$/, 'the kb-board branch is there');
+  assert.match(branchTip(root), /^[0-9a-f]{40}$/, 'the board ref is there');
+  // **And it is not a branch.** The whole of #334: a board nobody checks out must not sit in
+  // `git branch`, in a branch picker, or in GitHub's branch list among the refs that mean something.
+  assert.deepEqual(branches(root).filter((b) => /kb-board|kb\/boards/.test(b)), [], `no board branch: ${branches(root).join(', ')}`);
   assert.equal(fs.existsSync(path.join(root, '.git', 'hkb', 'index.db')), true, 'and the index beside it');
-  assert.ok(printed.some((l) => /^store: local — created the kb-board branch/.test(l)), printed.join('\n'));
-  // §6.2: the branch is pushed, and init is where a human is told so.
-  assert.ok(printed.some((l) => /^sync: `hkb sync` pushes kb-board/.test(l)), printed.join('\n'));
+  assert.ok(printed.some((l) => /^store: local — created the board at refs\/kb\/boards\/default/.test(l)), printed.join('\n'));
+  // §6.2: the board is pushed, and init is where a human is told so.
+  assert.ok(printed.some((l) => /^sync: `hkb sync` pushes refs\/kb\/boards\/default/.test(l)), printed.join('\n'));
 
-  const doc = JSON.parse(spawnSync('git', ['show', 'kb-board:board.json'], { cwd: root, encoding: 'utf8' }).stdout);
+  const doc = JSON.parse(spawnSync('git', ['show', `${BOARD_REF}:board.json`], { cwd: root, encoding: 'utf8' }).stdout);
   assert.equal(doc.slug, 'default');
   assert.equal(doc.next_id, 1);
-  assert.equal(typeof doc.host, 'string', 'the branch names its one writer');
+  assert.equal(typeof doc.host, 'string', 'the board names its one writer');
 });
 
-test('a second init leaves the branch and the index exactly as they were', async () => {
+test('a second init leaves the ref and the index exactly as they were', async () => {
   const first = await runInit();
   const tip = branchTip(first.root);
   const { printed } = await runInit([], first);
   assert.equal(branchTip(first.root), tip, 'an existing board is adopted, never recreated');
-  assert.ok(printed.some((l) => /^store: local — kb-board at/.test(l)), printed.join('\n'));
+  assert.ok(printed.some((l) => /^store: local — refs\/kb\/boards\/default at/.test(l)), printed.join('\n'));
+});
+
+test('a board name that is not a ref name is refused, with a fix that runs', async () => {
+  // The board *is* a ref now (#334), so its name has to be one — and the message has to hand back a
+  // command rather than a rule: `hkb init --board "my board"` used to die four calls later inside
+  // `_land` with git's own `fatal: ... is not a valid ref name`.
+  const bad = await runInit(['--board', 'my board']).catch((e) => e);
+  assert.equal(bad.exitCode, 2);
+  assert.match(bad.message, /not a usable board name for the local store/);
+  assert.match(bad.message, /hkb init --board my-board/);
 });
 
 test('a board written before the store key existed is not moved by a re-run', async () => {
@@ -637,7 +654,7 @@ test('a board written before the store key existed is not moved by a re-run', as
   // repository tracks. `|| store === 'local'` used to, which put `"store": "local"` into
   // everybody's checkout as a side effect of a routine `hkb init`.
   assert.equal(board(legacy.root).store, undefined, 'an unasked-for answer is not pinned into board.json');
-  assert.ok(again.printed.some((l) => /^store: local — kb-board at/.test(l)), again.printed.join('\n'));
+  assert.ok(again.printed.some((l) => /^store: local — refs\/kb\/boards\/default at/.test(l)), again.printed.join('\n'));
 });
 
 test('a plain re-init writes no store key into a board.json the repository tracks', async () => {
@@ -699,11 +716,15 @@ test('a plain `hkb init` over a board still on the GitHub store refuses, and aba
 // `kb-board` branch beside 188 cards still sitting on the forge. `hkb list` then printed an empty
 // board and said nothing — from the command an operator runs *because* `hkb list` went quiet.
 
-/** Put a board back the way an unmigrated one looks: no `store` key, no branch, no index. */
+/** Put a board back the way an unmigrated one looks: no `store` key, no ref, no index. */
 const unmigrate = (root) => {
   const cfg = board(root);
   delete cfg.store;
   fs.writeFileSync(path.join(root, BOARD_FILE), JSON.stringify(cfg, null, 2));
+  // Both refs a board can be on: the one it lives on now, and `refs/heads/kb-board`, where it lived
+  // before #334 — `findLocalBoardRef` looks at both, so leaving either behind means "there is
+  // already a board here" and the probe never runs.
+  spawnSync('git', ['update-ref', '-d', BOARD_REF], { cwd: root, encoding: 'utf8' });
   spawnSync('git', ['branch', '-D', 'kb-board'], { cwd: root, encoding: 'utf8' });
   fs.rmSync(path.join(root, '.git', 'hkb'), { recursive: true, force: true });
 };

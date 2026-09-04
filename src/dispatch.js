@@ -1412,7 +1412,7 @@ export async function loop(ctx, { interval, max, profiles = null, dryRun = false
       // holding this board, and leaving the stamp inside meant a run of failures — a rate limit, a
       // flaky network — expired this host's claim on the branch while it was very much still here.
       // `syncPass` catches its own failures, so it cannot turn a survivable tick into a dead loop.
-      // …and skipped entirely on a dry run: the stamp is a commit on `kb-board` and the push publishes
+      // …and skipped entirely on a dry run: the stamp is a commit on the board's ref and the push publishes
       // it, so a loop that promised to decide nothing must not write either.
       if (!dryRun) await syncPass(ctx, summary || {}, log);
       if (summary?.fatal) { fatal = summary.fatal; break; }

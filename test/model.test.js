@@ -432,20 +432,21 @@ test('effectiveTools: kb.tools and kb.mcp compose — the card narrows on both a
 /**
  * One sentence, three fixes. The message exists because a repository can be boardless in three
  * different ways and only one of them used to be named: `hkb init` covers a fresh checkout, but a
- * board still on the GitHub Issues store this release retired needs `--import`, and a clone needs a
- * fetch. Pure, so the wording is a test rather than a paragraph in a doc that drifts.
+ * board still on the GitHub Issues store this release retired needs `--import`, and a clone needs
+ * `hkb sync`. Pure, so the wording is a test rather than a paragraph in a doc that drifts.
  */
-test('noBoardHere names the branch it looked for and all three ways across', () => {
-  const m = noBoardHere({ branch: 'kb-board', root: '/repo', remote: 'origin' });
-  assert.match(m, /there is no kb-board branch in \/repo/);
+test('noBoardHere names the ref it looked for and all three ways across', () => {
+  const m = noBoardHere({ ref: 'refs/kb/boards/default', root: '/repo' });
+  assert.match(m, /there is no board at refs\/kb\/boards\/default in \/repo/);
   assert.match(m, /`hkb init`/, 'a checkout nobody has initialised');
   assert.match(m, /`hkb init --import`/, 'a board still on the retired GitHub store');
-  assert.match(m, /`git fetch origin kb-board:kb-board`/, 'a clone that has not fetched it');
+  assert.match(m, /`hkb sync`/, 'a clone that has not fetched it');
   assert.match(m, /ADR-006/, 'and it says which decision took the old store away');
 
-  // the tier passes its own branch and remote through, so a test board on another ref is not told
-  // to fetch `kb-board`
-  assert.match(noBoardHere({ branch: 'kb-test', root: '/r', remote: 'upstream' }), /fetch upstream kb-test:kb-test/);
+  // the tier passes its own ref through, so a board on another slug is not told about `default`
+  assert.match(noBoardHere({ ref: 'refs/kb/boards/beta', root: '/r' }), /no board at refs\/kb\/boards\/beta in \/r/);
   // callable with nothing: the defaults are the real board's, not placeholders
-  assert.match(noBoardHere(), /kb-board/);
+  assert.match(noBoardHere(), /refs\/kb\/boards\/default/);
+  // and it does not send the reader to `git branch`, where a board has been invisible since #334
+  assert.doesNotMatch(noBoardHere(), /branch/);
 });

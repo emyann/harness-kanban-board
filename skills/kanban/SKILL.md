@@ -11,8 +11,9 @@ allowed-tools: Bash(hkb *) Bash(gh api *) Bash(gh pr *) Bash(gh issue view *) Ba
 
 # kanban — the board protocol
 
-**The board lives in this repository**, on a git branch called `kb-board`, with an index beside it in `.git/hkb/`.
-A task is a card on that branch; its dependencies are a field on the card. The dispatcher (`hkb dispatch`) claims a
+**The board lives in this repository**, on a git ref called `refs/kb/boards/<name>` — outside `refs/heads`, so it
+is not a branch and `git branch` never shows it — with an index beside it in `.git/hkb/`.
+A task is a card on that ref; its dependencies are a field on the card. The dispatcher (`hkb dispatch`) claims a
 task by taking a row in the index and launches you with `KB_TASK`, `KB_ATTEMPT`, `KB_BOARD`, `KB_REPO` set.
 Everything you need to know about the task comes from `hkb`; everything you report goes through `hkb`. See
 `references/protocol.md` for the data model.

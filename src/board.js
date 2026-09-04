@@ -200,7 +200,7 @@ export function repoRoot(cwd = process.cwd()) {
 }
 
 // ---------- running git ----------
-// One helper, used by everything in hkb that shells out to git: the `kb-board` branch
+// One helper, used by everything in hkb that shells out to git: the board's ref
 // (`src/store/git.js`) and, until ADR-006 retired it, the GitHub store's lock-ref heartbeat. They
 // had a copy each, with an undocumented drift in `gitSays`'s "which line is the loud one" regex,
 // which meant the same failure printed differently depending on which store hit it. One outlived
@@ -1031,7 +1031,7 @@ export function storeGitDir(ctx) {
 /**
  * Where the board itself lives — the one directory every store driver agrees on.
  *
- * The `kb-board` branch and the `.git/hkb/index.db` index are per *repository*, not per worktree:
+ * The board's ref and the `.git/hkb/index.db` index are per *repository*, not per worktree:
  * a worker beating from `.claude/worktrees/kb-99-1` and the loop ticking in the main checkout must
  * open the same store or they are two boards that happen to share a name. So this is the common
  * git directory's parent — `mainWorktree` — and never `git rev-parse --show-toplevel`, which in a

@@ -18,7 +18,8 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 
 - `bin/hkb.js` entry · `src/cli.js` arg parsing + routing · `src/gh.js` the only place that shells out to `gh`
 - `src/model.js` pure functions (unit-tested, no I/O) · `src/store/` the board behind one interface (`index.js` the
-  contract, `local.js` the one driver over `git.js` — the `kb-board` branch — and `sqlite.js` — the index) ·
+  contract, `local.js` the one driver over `git.js` — the board's ref at `refs/kb/boards/<name>` — and
+  `sqlite.js` — the index) ·
   `src/forge.js` pull requests, reviews, merges, and `fillPrs`, which joins the two by head branch ·
   `src/bridge/github-issues.js` the read-only GitHub Issues adapter `hkb init --import` migrates *from*
 - `src/lifecycle.js` worker verbs · `src/dispatch.js` the tick · `src/context.js` worker prompt · `src/hook.js` Stop hook
@@ -57,7 +58,7 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 <!-- hkb:start -->
 ## Kanban (hkb)
 
-Tasks are cards on the `kb-board` branch in this repository. If `KB_TASK` is set you are a worker: run
+Tasks are cards on the board's git ref (`refs/kb/boards/<name>`) in this repository. If `KB_TASK` is set you are a worker: run
 `hkb show $KB_TASK --json` first, work only in this worktree, open a draft PR **on this worktree's own branch**
 (`kb-$KB_TASK-<attempt>` — the branch name is the only thing that ties a PR to its card), and finish with
 **exactly one** of

@@ -7,28 +7,28 @@ audience: [dev]
 read_when: "writing a verb that reads or writes board state, adding a store driver, or working out where a card's pull request comes from"
 covers:
   - path: src/store/index.js
-    sha: 38e2b0bd8634a9dacd68f419dfa25b3d7127894b
+    sha: fed32f2f24ff0ecb5bbec064c26fcaa3f63fd7dc
   - path: src/forge.js
     sha: 1d9e17cd8fad3500b512ef10843d541cda2c65a4
   - path: src/bridge/github-issues.js
-    sha: 89337d4523b1b0e3a335a29c7ad1cafbabaa2070
+    sha: e056157db3df620b291733ee9be4f9dd2d453b27
   - path: src/board.js
-    sha: 543224fb76022abd64b56d834ae0da17b64cb066
+    sha: 0337a17cf70442cac66fb457c880e4b27a52672e
   - path: src/store/git.js
-    sha: a42bfffbc1d7cd3197051e7593135d11ab84d48b
+    sha: 756d59b84516862697b6d7d7cef20210878ca0ea
   - path: src/store/local.js
-    sha: c519ac05bf312c1ac65e1ebd95a2b1858302d163
+    sha: b11fe32cf346862b8423450d43680708d70eb37a
   - path: src/cli.js
-    sha: a4d80e1fb0fdf6e8e3c0e57494423720775af950
+    sha: b183d59750a4bace38fb612026657ed3ded95708
   - path: src/lifecycle.js
     sha: 29089f8c1ba2f46a320316634593773d1d2b67b0
   - path: src/dispatch.js
-    sha: 507787986768d696dc9897002d91317612e5ce0b
+    sha: 6a31798b86f2e330b93d1bf20f659e4843d6a022
   - path: src/gc.js
     sha: cc129d307e845211036472a76ed7e0f456be1329
   - path: src/init.js
-    sha: 986db0bb9f95179b12c7c012b61e2d9f3e20a7e8
-generated_at_commit: 457f943
+    sha: 6c2d6f8f10fb6f11cde8554f31fbd8f23da717fd
+generated_at_commit: 53ecf5a
 last_refreshed: 2026-09-03
 related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-and-leases, concepts/board-protocol]
 ---
@@ -37,7 +37,7 @@ related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-
 
 > `openStore(ctx)` is the only way board state is reached — not a rule the code
 > aspires to, a fact you can grep for. Behind it is one driver: the local store
-> — a `kb-board` git branch plus a `node:sqlite` index, composed in
+> — a `refs/kb/boards/<slug>` git ref plus a `node:sqlite` index, composed in
 > `src/store/local.js` (`architecture/local-store`,
 > `decisions/adr-006-local-store`). The seam is what let the *other* driver be
 > deleted without editing a verb.
@@ -56,8 +56,8 @@ the local store; `"github"` is refused **by name**, with the migration
 issues is a real thing somebody may have on disk and "silently open something
 else" is the one answer that helps nobody. Anything else is a usage error.
 
-There used to be a second rule — *a repository with a `kb-board` (or
-`<remote>/kb-board`) ref is a local board* — so that a clone needed no
+There used to be a second rule — *a repository with a board ref (local or
+remote-tracking) is a local board* — so that a clone needed no
 configuration. It was removed in A6's sixth review round, because a rule that
 reads the store off a **ref** can be reached by `git fetch`, and the checkout
 then ran on the local store while board.json still pointed every verb at

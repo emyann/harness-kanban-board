@@ -462,7 +462,7 @@ test('setAttempt writes the live fields, refuses the durable ones, and events a 
   idx.setAttempt(4, 1, { paused_at: null });
   assert.equal(idx.events({ after: 0 }).at(-1).kind, 'resumed');
 
-  assert.throws(() => idx.setAttempt(4, 1, { outcome: 'done' }), (e) => e.exitCode === 2 && /kb-board branch/.test(e.message));
+  assert.throws(() => idx.setAttempt(4, 1, { outcome: 'done' }), (e) => e.exitCode === 2 && /refs\/kb\/boards\/default/.test(e.message));
   assert.throws(() => idx.setAttempt(404, 1, { pid: 1 }), (e) => e.exitCode === 2 && /claim it first/.test(e.message));
   for (const f of LIVE_ATTEMPT_FIELDS) assert.doesNotThrow(() => idx.setAttempt(4, 1, { [f]: null }));
 });
@@ -995,20 +995,20 @@ test('read-only: an error that is not "no schema table" is not "delete your data
   );
 });
 
-test('every message names the branch this index was opened for, never kb-board by reflex', (t) => {
+test('every message names the ref this index was opened for, never the default board by reflex', (t) => {
   const root = tmpRoot(t);
-  const idx = open(t, root, { branch: 'kb-board-staging' });
+  const idx = open(t, root, { ref: 'refs/kb/boards/staging' });
   assert.throws(
     () => idx.load(tree({ tip: 'aaa', cards: [card(1, { title: { not: 'a string' } })] })),
-    (e) => e.exitCode === 2 && /kb-board-staging:cards\/1\.json/.test(e.message) && !/ kb-board:/.test(e.message),
+    (e) => e.exitCode === 2 && /refs\/kb\/boards\/staging:cards\/1\.json/.test(e.message) && !/boards\/default/.test(e.message),
   );
   assert.throws(
     () => idx.load({ tip: 'aaa', cards: [card(1), card(1)], runs: new Map(), board: { slug: 'default' } }),
-    (e) => e.exitCode === 2 && /ls-tree -r kb-board-staging/.test(e.message),
+    (e) => e.exitCode === 2 && /ls-tree -r refs\/kb\/boards\/staging/.test(e.message),
   );
   // and the tree may say so itself, for a composed driver that knows better than the open did
   assert.throws(
-    () => idx.load({ tip: 'aaa', branch: 'from-the-tree', cards: [card(1), card(1)], runs: new Map() }),
+    () => idx.load({ tip: 'aaa', ref: 'from-the-tree', cards: [card(1), card(1)], runs: new Map() }),
     (e) => /ls-tree -r from-the-tree/.test(e.message),
   );
 });

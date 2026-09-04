@@ -39,7 +39,7 @@ function git(cwd, ...args) {
 // ---------- the local driver ----------
 
 /**
- * The composed local store (`src/store/local.js`) in a scratch repository: the `kb-board` branch for
+ * The composed local store (`src/store/local.js`) in a scratch repository: the board's ref for
  * the durable half and `.git/hkb/index.db` for the live one.
  *
  * `openStore(ctx)` is what builds it, from a `.kanban/board.json` that says `"store": "local"` —

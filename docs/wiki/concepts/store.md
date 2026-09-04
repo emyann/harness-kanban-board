@@ -7,16 +7,16 @@ audience: [dev]
 read_when: "orienting on where board state actually lives, before diving into architecture/store-seam or architecture/local-store for the mechanics"
 covers:
   - path: src/store/index.js
-    sha: 38e2b0bd8634a9dacd68f419dfa25b3d7127894b
+    sha: fed32f2f24ff0ecb5bbec064c26fcaa3f63fd7dc
   - path: src/store/local.js
-    sha: c519ac05bf312c1ac65e1ebd95a2b1858302d163
+    sha: b11fe32cf346862b8423450d43680708d70eb37a
   - path: src/store/git.js
-    sha: a42bfffbc1d7cd3197051e7593135d11ab84d48b
+    sha: 756d59b84516862697b6d7d7cef20210878ca0ea
   - path: src/store/sqlite.js
-    sha: ab60bab80331ff0a2ac66141062eb3518a0b4fee
-generated_at_commit: ef69244
+    sha: 109968690b1068b0edf2ab028e3440a7ca97dcee
+generated_at_commit: 53ecf5a
 last_refreshed: 2026-09-03
-related: [architecture/store-seam, architecture/local-store, architecture/kb-board-branch, architecture/overview, decisions/adr-006-local-store]
+related: [architecture/store-seam, architecture/local-store, architecture/board-ref, architecture/overview, decisions/adr-006-local-store]
 ---
 
 # The store — hkb's one piece of durable truth
@@ -29,8 +29,8 @@ related: [architecture/store-seam, architecture/local-store, architecture/kb-boa
 
 ## One interface, one driver
 
-There is one store, and it is local: the `kb-board` branch and the index beside
-it. `storeKind` (`src/store/index.js`) still *reads* `store` in
+There is one store, and it is local: the board's own git ref
+(`refs/kb/boards/<slug>`) and the index beside it. `storeKind` (`src/store/index.js`) still *reads* `store` in
 `.kanban/board.json`, but only to answer `local` for `"local"` and for the key
 being absent, and to refuse `"github"` by name with the migration
 (`hkb init --import`) rather than half-opening something that is no longer
@@ -39,10 +39,13 @@ disk; telling them so is the whole reason the key is read at all.
 
 The key being *absent* is the harder half, and the driver answers it rather
 than `storeKind`: an unmigrated board.json has no `store` key, so it resolves
-to *local* and then finds no `kb-board` branch. The read path refuses there
+to *local* and then finds no board ref. The read path refuses there
 too — `listTasks` and `getTask` (`src/store/git.js`) throw `noBoardHere`
-(`src/model.js`), naming `hkb init`, `hkb init --import` and the fetch, because
-the three ways to be boardless have three different fixes. Reads used to
+(`src/model.js`), naming the ref it looked for and then `hkb init`,
+`hkb init --import` and `hkb sync`, because the three ways to be boardless have
+three different fixes. It names the *ref*, not a branch: since the board moved
+out of `refs/heads` (*architecture/board-ref*), "no kb-board branch" would send
+the reader to `git branch`, where a healthy board is invisible too. Reads used to
 answer `[]`, which made a board that was never created indistinguishable from
 an empty one to `hkb list` and to the dispatcher.
 
@@ -62,10 +65,10 @@ A single file (or a single git ref) cannot be both a **history** and a
 index and no locking, a live claim has no reason to be a commit. So the local
 driver (`src/store/local.js`) splits the work:
 
-- **The `kb-board` branch is the record.** One file per card, one run record
+- **The board's ref is the record.** One file per card, one run record
   per card, written with plumbing (`hash-object`, `write-tree`,
   `commit-tree`, `update-ref <new> <expected-old>`) so no working tree is
-  ever touched (`src/store/git.js`). `git log kb-board` is a history of
+  ever touched (`src/store/git.js`). Its `git log` is a history of
   *decisions* — every status change, every claim's outcome — because nothing
   that isn't a decision is allowed to land there.
 - **`.git/hkb/index.db` is the cache.** A `node:sqlite` database
@@ -80,7 +83,7 @@ makes them one thing lives, and it comes down to three invariants:
 
 1. **The index is rebuilt from the branch whenever it disagrees.** It stores
    the sha it was built from; a fresh `open()` compares that to
-   `refs/heads/kb-board` and reloads on any mismatch. This is what makes the
+   `refs/kb/boards/<slug>` and reloads on any mismatch. This is what makes the
    split safe — the index is disposable, the branch is not.
 2. **A durable verb commits, then indexes, then wakes — in that order.** A
    crash between the commit and the index write leaves the index one commit
@@ -100,7 +103,7 @@ plain `git clone` still gets the whole board with no setup, because
 `.kanban/board.json` is a tracked file and travels with the clone: it reads
 freely and every write is refused, which is what makes a friend's clone a
 *reader* rather than a second writer. `hkb sync` is the only thing that moves
-bytes between hosts — a fast-forward-only push/fetch of the `kb-board`
+bytes between hosts — a fast-forward-only push/fetch of the board's
 branch — and refusing anything else is what keeps "one writer" true even
 across a network.
 
@@ -141,7 +144,7 @@ pull request on any other branch name is one hkb cannot see at all.
   the mechanics: which tier answers which read, the two claim tokens, sync,
   the migration off GitHub, what `hkb doctor` and `hkb gc` do and do not do
   here.
-- [The kb-board branch](../architecture/kb-board-branch.md) — the plumbing
+- [The board's ref](../architecture/board-ref.md) — the plumbing
   that writes it.
 - [ADR-006: the local store](../decisions/adr-006-local-store.md) — why this
   shape was chosen over the alternatives.

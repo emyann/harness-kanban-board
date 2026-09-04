@@ -4,8 +4,8 @@
 
 | tier | holds | who sees it |
 |---|---|---|
-| the `kb-board` git branch | the durable half: `board.json` (slug, owning host, settings), one `cards/<id>.json` per card, one `runs/<id>.json` per card (closed attempts, results, notes). Written by every durable verb as one commit, from any worktree, compare-and-swap on the ref | every clone, after a `git fetch`. `git log kb-board` is the board's history |
-| `.git/hkb/index.db` | the same thing as tables, plus what is live and host-local: claims, the open attempts' pid/job/worktree/heartbeat, the events log. Rebuilt from the branch whenever it is behind | this host's processes: the loop, the workers' verbs, the hooks, `hkb serve` |
+| the board's git ref (`refs/kb/boards/<slug>`) | the durable half: `board.json` (slug, owning host, settings), one `cards/<id>.json` per card, one `runs/<id>.json` per card (closed attempts, results, notes). Written by every durable verb as one commit, from any worktree, compare-and-swap on the ref | every clone, after `hkb sync` (the ref is outside `refs/heads`, so a plain clone does not carry it). `git log refs/kb/boards/default` is the board's history |
+| `.git/hkb/index.db` | the same thing as tables, plus what is live and host-local: claims, the open attempts' pid/job/worktree/heartbeat, the events log. Rebuilt from the ref whenever it is behind | this host's processes: the loop, the workers' verbs, the hooks, `hkb serve` |
 
 So a board **travels with a `git clone`**, works with `gh` logged out, costs no API rate limit — and has **one
 writing host** (`board.json` on the branch names it; `hkb init --take-over` moves it). `hkb sync` pushes the branch
@@ -45,7 +45,7 @@ the mistakes actually happen.
 
 ## Task = card
 
-A card is `cards/<id>.json` on the `kb-board` branch and a row in the index. The columns below are that document's
+A card is `cards/<id>.json` on the board's ref and a row in the index. The columns below are that document's
 fields; hkb also speaks them as `kb:*` label names, because that is the vocabulary the model and the CLI were
 written in and a board migrated off GitHub Issues arrives carrying them.
 

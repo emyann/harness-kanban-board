@@ -1,9 +1,9 @@
 // The store seam. One interface over board state, one driver behind it.
 //
 // `openStore(ctx)` is the only way a command should reach board state. There is **one** store now —
-// the local one of docs/local-first.md §6 (`./local.js`: the `kb-board` branch and the
-// `.git/hkb/index.db` index, as one `Store`). The GitHub driver is gone: GitHub Issues was the
-// board until this release, and it comes back later as a *bridge* adapter, not as a second store
+// the local one of docs/local-first.md §6 (`./local.js`: the board's ref at `refs/kb/boards/<slug>`
+// and the `.git/hkb/index.db` index, as one `Store`). The GitHub driver is gone: GitHub Issues was
+// the board until this release, and it comes back later as a *bridge* adapter, not as a second store
 // (ADR-006). The seam stays, because the seam is what let it be replaced at all.
 //
 // **The method names below are the contract.** They are §6.4 verbatim. Do not rename one, and do
@@ -55,11 +55,23 @@ export function closeStore(ctx) {
  * `"store"` in `.kanban/board.json` is `"local"` or absent; `"github"` was the other answer until
  * the GitHub store was retired (ADR-006, docs/local-first.md §1 item 9) and is now an error that
  * names the migration rather than a mode that half-works. Absent means local: a `git clone` of a
- * board needs no configuration, and there is nothing else it could mean.
+ * board needs no configuration, and with one store there is nothing else it could mean.
  *
  * The key is deliberately still read rather than assumed. A board on the old store is a real thing
  * somebody may still have on disk, and "your board is on a store this hkb no longer has, here is
  * how to move it" is the only honest thing to say to them.
+ *
+ * **Absence used to be dangerous, and it is worth saying why it no longer decides anything.** While
+ * both stores existed, the rule was *a repository with a board ref is a local board* — an inference
+ * a plain `git fetch` could trip, flipping a checkout onto the local store while board.json still
+ * pointed every verb at GitHub. That half-migrated state destroyed things: `hkb init --import`
+ * deleted the lock refs of live workers, and `gc.sweep` read `[]` through the local store because
+ * the cards were still issues, concluded every card was finished, and removed worker worktrees —
+ * uncommitted work included — unattended from the dispatcher's own `gc_every_ticks`. Nothing here
+ * infers from a ref any more; the one remaining way to reach an empty board over a real one is a
+ * repository whose cards never migrated, and that is caught where it can still be undone, by
+ * `refuseUnmigratedBoard` in `src/init.js`, before the board's ref is created at all.
+
  *
  * @param {any} ctx  a context from `makeContext`/`makeContextAt` (src/board.js)
  * @returns {string} always 'local'
@@ -68,11 +80,11 @@ export function storeKind(ctx) {
   const declared = ctx?.cfg?.store;
   if (!declared || declared === 'local') return 'local';
   if (declared === 'github') {
-    const e = /** @type {any} */ (new Error('this board is on the GitHub store, which hkb no longer has (ADR-006). Move it with `hkb init --import`, which reads the kb:* issues once and writes them to the kb-board branch; then drop "store" from .kanban/board.json.'));
+    const e = /** @type {any} */ (new Error("this board is on the GitHub store, which hkb no longer has (ADR-006). Move it with `hkb init --import`, which reads the kb:* issues once and writes them to the board's ref at refs/kb/boards/<name>; then drop \"store\" from .kanban/board.json."));
     e.exitCode = 2;
     throw e;
   }
-  const e = /** @type {any} */ (new Error(`"store": "${declared}" in .kanban/board.json is not a store — hkb has one, the local kb-board branch. Drop the key.`));
+  const e = /** @type {any} */ (new Error(`"store": "${declared}" in .kanban/board.json is not a store — hkb has one, the local board at refs/kb/boards/<name>. Drop the key.`));
   e.exitCode = 2;
   throw e;
 }
@@ -193,8 +205,8 @@ export async function openStoreReadOnly(ctx) {
 /**
  * Refuse a verb that writes the board on a host that does not own it.
  *
- * The `kb-board` branch has exactly one writer (§6.2) and this is where every mutating verb finds
- * that out, before it spends anything.
+ * The board's ref has exactly one writer (§6.2) and this is where every mutating verb finds that
+ * out, before it spends anything.
  * @param {any} ctx
  * @param {string} verb
  */

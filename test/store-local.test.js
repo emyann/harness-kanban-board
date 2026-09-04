@@ -14,7 +14,8 @@ import { spawnSync } from 'node:child_process';
 import { openStore, storeKind, assertOwningHost, forgetStore } from '../src/store/index.js';
 import { gitTierFor } from '../src/store/local.js';
 import { openLocalStore, importGithubBoard, adoptOpenIssues, liveDispatcher, dropGithubLeftovers, mountFor, syncAfterTick, cardRecord, SYNC_THROTTLE_MS, OFFLINE } from '../src/store/local.js';
-import { openGitTier } from '../src/store/git.js';
+import { openGitTier, BOARD_REF, LEGACY_BOARD_REF, boardRef, trackingRefFor, boardFetchRefspec, isBoardFetchRefspec } from '../src/store/git.js';
+import { ensureFetchRefspec, hasFetchRefspec, findLocalBoardRef, localBoardExists, legacyBoardFix } from '../src/store/local.js';
 import { syncPass, loop, DURABLE_TICK_KEYS } from '../src/dispatch.js';
 import { invocationWritesBoard } from '../src/cli.js';
 import { DEFAULT_BOARD, hostId, readState, writeState, runGitAsync, storeGitDir } from '../src/board.js';
@@ -71,7 +72,7 @@ async function board(t, opts = {}) {
 
 test('there is one store, and a board.json that names the retired one says so', async (t) => {
   // **The rule this file exists to hold.** `storeKind` used to have a second rule — a repository
-  // with a `kb-board` (or `origin/kb-board`) ref is a local board — so that a clone needed no
+  // with a board ref (local or remote-tracking) is a local board — so that a clone needed no
   // config. It went first, because a rule that reads the store off a *ref* is reachable by `git
   // fetch`; then the other store went too (ADR-006), so the key has one valid value and its absence
   // means that value. What is left to hold is that a board.json still pinned to the GitHub store is
@@ -82,7 +83,7 @@ test('there is one store, and a board.json that names the retired one says so', 
   assert.equal(storeKind(ctx), 'local', 'no declaration: there is one store');
 
   openGitTier(ctx).init('default');
-  assert.equal(storeKind(ctx), 'local');
+  assert.equal(storeKind(ctx), 'local', 'and a board ref appearing under the checkout changes nothing either way');
   await forgetStore(ctx);
   assert.equal(storeKind(ctx), 'local');
 
@@ -95,18 +96,22 @@ test('there is one store, and a board.json that names the retired one says so', 
   assert.throws(() => storeKind(ctx), (e) => e.exitCode === 2 && /not a store/.test(e.message));
 });
 
-test('a clone needs no configuration: the branch is the board, wherever it was fetched from', async (t) => {
-  // One host publishes the branch, everybody else fetches it, and every checkout reads the same
+test('a clone needs no configuration: the ref is the board, wherever it was fetched from', async (t) => {
+  // One host publishes the board, everybody else fetches it, and every checkout reads the same
   // board with nothing written into `.kanban/board.json` at all.
   const s2 = scratch(t);
   const ctx = ctxAt(s2.root, { store: undefined });
   delete ctx.cfg.store;
+  // The board arrives the way it really would: on the remote-tracking ref, from a fetch.
   const publisher = ctxAt(s2.root, {});
   openGitTier(publisher).init('default');
+  git(s2.root, 'push', '-q', 'origin', `${BOARD_REF}:${BOARD_REF}`);
+  git(s2.root, 'update-ref', trackingRefFor(BOARD_REF, 'origin'), git(s2.root, 'rev-parse', BOARD_REF));
+  git(s2.root, 'update-ref', '-d', BOARD_REF);
 
   assert.equal(storeKind(ctx), 'local');
   const store = await openStore(ctx);
-  assert.equal(store.branch, 'kb-board', 'the composed local store, opened with no key at all');
+  assert.equal(store.ref, BOARD_REF, 'the composed local store, opened with no key at all');
   t.after(() => { try { store.close(); } catch { /* already closed */ } });
 });
 
@@ -210,7 +215,7 @@ test('a board with no branch is nobody\'s: both layers pass, and owner() does no
   const ctx = ctxAt(s.root);
   const store = openLocalStore(ctx, { host: 'someone-elses-laptop' });
   t.after(() => store.close());
-  // `owner()` used to go through `git.board()`, which throws `there is no kb-board branch` — while
+  // `owner()` used to go through `git.board()`, which throws `there is no board at …` — while
   // `assertLocalOwner` returns null on the same checkout. The two guards must agree about a board
   // that does not exist yet, or a `hkb init` in a fresh clone is refused by one and passed by the other.
   assert.equal(store.owner(), null);
@@ -283,13 +288,17 @@ test('sync pushes the branch, and a clone reads the same cards read-only', async
 
   const pushed = await store.sync();
   assert.equal(pushed.pushed, true);
-  assert.equal(pushed.local, git(origin, 'rev-parse', 'refs/heads/kb-board'), 'origin has the board');
+  assert.equal(pushed.local, git(origin, 'rev-parse', BOARD_REF), 'origin has the board');
   assert.equal((await store.sync()).pushed, false, 'a second sync has nothing to push');
 
-  // Restore onto a fresh checkout: a new machine, or the same one after a lost disk. No local
-  // kb-board yet — just the remote copy this board pushed above.
+  // **Restore onto a fresh checkout in two commands: `git clone`, `hkb sync`.** That is the
+  // durability requirement, and the reason the fetch names its refspec instead of trusting
+  // `.git/config`: a clone's remote carries `+refs/heads/*` and nothing else, so a plain clone has
+  // no copy of the board at all.
   const clone = path.join(dir, 'clone');
   git(dir, 'clone', '-q', origin, clone);
+  assert.equal(hasFetchRefspec(clone, 'origin'), false, 'a clone has no board refspec — that is the cost of a hidden ref');
+  assert.equal(spawnSync('git', ['rev-parse', '--verify', '--quiet', trackingRefFor(BOARD_REF, 'origin')], { cwd: clone }).status !== 0, true, 'and no copy of the board');
   // `.kanban/board.json` is a tracked file, so the `"store"` key rides in with the checkout and the
   // restored board knows which store it is on without any configuration. That is more deterministic
   // than the rule it replaced: the store no longer depends on which refs a particular clone happens
@@ -303,11 +312,24 @@ test('sync pushes the branch, and a clone reads the same cards read-only', async
   assert.equal(storeKind(theirCtx), 'local', 'the tracked key says which store this is');
   const theirs = await openStore(theirCtx);
   t.after(() => theirs.close());
+  // Before the sync there is nothing to read — and a read *says so* rather than answering `[]`.
+  // The clone did not bring the ref (a hidden ref is the cost), and an empty board and a missing one
+  // are different facts: while `listTasks` answered `[]` here, `hkb list` printed "(no tasks)" and
+  // exited 0 on a checkout that simply had not fetched yet.
+  for (const call of [() => theirs.listTasks(), () => theirs.board()]) {
+    assert.throws(call, (e) => e.exitCode === 2
+      && /no board at refs\/kb\/boards\/default/.test(e.message)
+      && /hkb sync/.test(e.message), 'and the sentence names the fetch that fixes it');
+  }
+
+  // One command, on a clone whose config lacks the refspec: the fetch names it, and writes it.
+  const restored = await theirs.sync({ push: false });
+  assert.equal(restored.ok, true);
+  assert.equal(hasFetchRefspec(clone, 'origin'), true, 'and an ordinary `git fetch` carries the board from now on');
   assert.deepEqual(theirs.listTasks().map((x) => x.title).sort(), ['first', 'second']);
   assert.equal(theirs.getTask(a.number).agent, 'claude');
-
-  // Read-only: there is no local ref to compare-and-swap against, and the message says how to get one.
-  assert.throws(() => theirs.setStatus(theirs.getTask(a.number), 'done'), (e) => e.exitCode === 2 && /read-only copy/.test(e.message));
+  // The restore is complete: this checkout has the local ref, so it can write the board it restored.
+  assert.equal(theirs.setStatus(theirs.getTask(a.number), 'done').status, 'done');
   void ctx;
 });
 
@@ -318,7 +340,8 @@ test('sync fast-forwards a clone that has a local branch, and refuses a divergen
 
   const clone = path.join(dir, 'clone');
   git(dir, 'clone', '-q', origin, clone);
-  git(clone, 'branch', 'kb-board', 'origin/kb-board');
+  git(clone, 'fetch', '-q', 'origin', boardFetchRefspec('origin'));
+  git(clone, 'update-ref', BOARD_REF, trackingRefFor(BOARD_REF, 'origin'));
   const theirCtx = ctxAt(clone);
   const theirs = openLocalStore(theirCtx, { host: hostId() });
   t.after(() => theirs.close());
@@ -335,6 +358,173 @@ test('sync fast-forwards a clone that has a local branch, and refuses a divergen
   await store.sync();
   theirs.git.commit((tree) => { tree.cards.set(999, { ...cardRecord({ number: 999, title: 'the clone wrote this', status: 'ready', kb: {} }) }); }, 'hkb: a second writer', { allowForeignHost: true });
   await assert.rejects(() => theirs.sync(), (e) => e.exitCode === 2 && /diverged/.test(e.message) && /one writer/.test(e.message));
+});
+
+test('the fetch refspec lands outside the board namespace and cannot clobber a local board that is ahead', async (t) => {
+  // **Why the refspec is `+refs/kb/boards/*:refs/kb/remotes/<remote>/boards/*` and not
+  // `+refs/kb/*:refs/kb/*`.** The local ref is the thing the one-writer compare-and-swap leases, so
+  // a fetch that wrote it would overwrite this host's board with the remote's copy — silently, on
+  // every `git fetch`, losing whatever this host had decided since the last push.
+  const { origin, root, ctx, store } = await board(t);
+  store.createTask({ title: 'published', status: 'ready' });
+  await store.sync();
+  const published = store.git.tip();
+  assert.equal(hasFetchRefspec(root, 'origin'), true, '`hkb sync` wrote the refspec into .git/config');
+
+  // This host decides something else and does not push it: the local ref is now ahead of the remote.
+  store.createTask({ title: 'not published yet', status: 'ready' });
+  const ahead = store.git.tip();
+  assert.notEqual(ahead, published);
+
+  // A plain `git fetch` — the one the config line above makes carry the board at all.
+  git(root, 'fetch', '-q', 'origin');
+  assert.equal(git(root, 'rev-parse', BOARD_REF), ahead, 'the fetch did not move the board this host is writing');
+  assert.equal(git(root, 'rev-parse', trackingRefFor(BOARD_REF, 'origin')), published, 'it moved the remote-tracking ref, which is what it is for');
+  assert.deepEqual(store.listTasks().map((x) => x.title).sort(), ['not published yet', 'published']);
+
+  // …and `hkb sync` then publishes the local one rather than treating the older remote as truth.
+  const r = await store.sync();
+  assert.equal(r.pushed, true);
+  assert.equal(git(origin, 'rev-parse', BOARD_REF), ahead);
+  void ctx;
+});
+
+test('hkb init writes the fetch refspec once, beside the +refs/heads/* line it must never replace', async (t) => {
+  const { root } = await board(t);
+  const heads = () => spawnSync('git', ['config', '--get-all', 'remote.origin.fetch'], { cwd: root, encoding: 'utf8' })
+    .stdout.trim().split('\n').filter(Boolean);
+  // The scratch repo starts with whatever `git remote add` wrote; hkb adds its line to it.
+  const before = heads();
+  assert.equal(ensureFetchRefspec(root, 'origin').added, true);
+  const after = heads();
+  assert.ok(after.includes(boardFetchRefspec('origin')), after.join(' · '));
+  assert.ok(before.every((l) => after.includes(l)), 'the existing refspecs are still there');
+
+  // Idempotent: a second `hkb init` (or `hkb sync`) adds nothing.
+  const again = ensureFetchRefspec(root, 'origin');
+  assert.equal(again.added, false);
+  assert.equal(again.why, 'present');
+  assert.deepEqual(heads(), after, 'and the config is byte-for-byte what it was');
+
+  // A remote that does not exist is not a place to invent a `[remote]` section with no URL.
+  assert.equal(ensureFetchRefspec(root, 'upstream').why, 'no-remote');
+  assert.equal(hasFetchRefspec(root, 'upstream'), false);
+});
+
+for (const branch of ['kb', 'kb/boards']) {
+  test(`the refspec hkb writes does not break \`git fetch\` on a repo whose origin has a branch "${branch}"`, async (t) => {
+    // **The line hkb adds to somebody's `.git/config` must never break their fetch.** The first
+    // version of this pointed at `refs/remotes/<remote>/kb/boards/*`, and git forbids a ref being
+    // both a file and a directory prefix: on a repository with a branch called `kb`,
+    // `refs/remotes/origin/kb` exists, so `refs/remotes/origin/kb/boards/default` cannot be created
+    // and **every ordinary `git fetch origin` exits 1** — CI included. `refs/kb/remotes/...` is
+    // hkb's own namespace all the way down, so no branch name can reach it.
+    const { origin, root, store } = await board(t);
+    git(root, 'branch', branch, 'main');
+    git(root, 'push', '-q', 'origin', `${branch}:refs/heads/${branch}`);
+    assert.equal(ensureFetchRefspec(root, 'origin').added, true, 'the line `hkb init` writes');
+
+    store.createTask({ title: 'a card', status: 'ready' });
+    await store.sync();
+
+    // The whole point: exit 0, on the plain command, in a repository hkb has configured.
+    const fetched = spawnSync('git', ['fetch', 'origin'], { cwd: root, encoding: 'utf8' });
+    assert.equal(fetched.status, 0, `${fetched.stdout}${fetched.stderr}`);
+    assert.doesNotMatch(`${fetched.stdout}${fetched.stderr}`, /cannot lock ref/);
+    assert.equal(git(root, 'rev-parse', trackingRefFor(BOARD_REF, 'origin')), git(origin, 'rev-parse', BOARD_REF));
+    assert.equal(git(root, 'rev-parse', `refs/remotes/origin/${branch}`), git(root, 'rev-parse', branch));
+
+    // …and `hkb sync` itself, which names the refspec on the command line, is fine too.
+    store.createTask({ title: 'another', status: 'ready' });
+    assert.equal((await store.sync()).pushed, true);
+  });
+}
+
+test('the refspec is recognised by its destination, so `+refs/kb/*:refs/kb/*` never reads as present', async (t) => {
+  // That line is the one whose docblock says it destroys the board: its *destination* is the ref the
+  // one-writer CAS leases, so a plain `git fetch` force-rewinds the local board to the remote's
+  // older sha. Matching the source called it "present" — `hkb doctor` printed a green `board
+  // refspec` row about it, and neither `init` nor `sync` ever added the safe line.
+  const { root } = await board(t);
+  git(root, 'config', '--add', 'remote.origin.fetch', '+refs/kb/*:refs/kb/*');
+  assert.equal(hasFetchRefspec(root, 'origin'), false, 'the source matches, the destination does not — and only the destination counts');
+
+  // So `hkb init`/`hkb sync` add the safe line beside it rather than trusting what is there.
+  assert.equal(ensureFetchRefspec(root, 'origin').added, true);
+  assert.equal(hasFetchRefspec(root, 'origin'), true);
+  // The near-misses on the destination are not it either.
+  for (const line of ['+refs/kb/boards/*:refs/remotes/origin/kb/boards/*', '+refs/kb/boards/*:refs/kb/remotes/upstream/boards/*']) {
+    assert.equal(isBoardFetchRefspec(line, 'origin'), false, line);
+  }
+  assert.equal(isBoardFetchRefspec(boardFetchRefspec('origin'), 'origin'), true);
+  assert.equal(isBoardFetchRefspec(boardFetchRefspec('origin').slice(1), 'origin'), true, 'with or without the force flag');
+});
+
+test('a board left on refs/heads/kb-board is named, not silently missed', async (t) => {
+  // There is nothing on the old ref *in this repository* — measured before the move — but that
+  // measurement covered this repository. A checkout made between #326 (local became the default
+  // store) and the move has a whole board there, and without this it reads as "no board": `hkb list`
+  // prints nothing, and the `hkb init` doctor prescribes creates a *second, empty* board beside the
+  // real one. One `rev-parse` is the cost of not doing that.
+  const s = scratch(t);
+  const ctx = ctxAt(s.root);
+  assert.equal(findLocalBoardRef(ctx), null, 'a checkout with no board at all still says so');
+
+  // A board on the ref boards used to live on, built the way the tier builds one.
+  const tier = openGitTier(ctx, { ref: LEGACY_BOARD_REF });
+  tier.init('default');
+  tier.createTask({ title: 'written before the move', status: 'ready' });
+
+  const found = findLocalBoardRef(ctx);
+  assert.equal(found?.ref, LEGACY_BOARD_REF);
+  assert.equal(found.legacy, true);
+  assert.equal(localBoardExists(ctx), true);
+
+  // And the fix is a command that runs and lands the board where hkb now reads it.
+  const fix = legacyBoardFix(ctx);
+  assert.match(fix, /update-ref refs\/kb\/boards\/default refs\/heads\/kb-board/);
+  git(s.root, ...fix.split(' && ')[0].replace(`git -C ${s.root} `, '').split(' '));
+  assert.equal(git(s.root, 'rev-parse', BOARD_REF), git(s.root, 'rev-parse', LEGACY_BOARD_REF));
+  assert.equal(findLocalBoardRef(ctx).legacy, false, 'and once moved, the board is where it belongs');
+});
+
+test('a board name a ref cannot hold is rejected where a ref is built, and nowhere else', async (t) => {
+  // `slugFile` *hashes* a board name rather than rejecting it, so a name that cannot be a ref is
+  // still a usable index file name. A caller only *asking whether* there is a board here must
+  // therefore get an answer rather than an exit 2 — `hkb doctor` reaches this through
+  // `localBoardExists`, and a diagnosis that throws diagnoses nothing.
+  const s = scratch(t);
+  const odd = ctxAt(s.root, { repo: 'o/r', board: 'my board' });
+  assert.equal(findLocalBoardRef(odd), null, 'no ref, no throw');
+  assert.equal(localBoardExists(odd), false);
+
+  // A local board does need a ref, and that is where the refusal belongs — naming a fix that runs.
+  assert.throws(() => boardRef('my board'), (e) => e.exitCode === 2 && /hkb init --board my-board/.test(e.message));
+  assert.throws(() => boardRef('foo.'), (e) => e.exitCode === 2, 'a trailing dot is a ref name git refuses');
+});
+
+test('two boards in one repository get two refs and do not collide', async (t) => {
+  // They shared one `kb-board` branch before, so `--board beta` silently wrote `--board alpha`'s
+  // cards. The ref carries the slug now, and the index file already did (`indexFileIn`).
+  const s = scratch(t);
+  const alpha = ctxAt(s.root, { board: 'alpha' });
+  const beta = ctxAt(s.root, { board: 'beta' });
+  openGitTier(alpha).init('alpha');
+  openGitTier(beta).init('beta');
+
+  const a = await openStore(alpha);
+  const b = await openStore(beta);
+  t.after(() => { a.close(); b.close(); });
+  assert.equal(a.ref, boardRef('alpha'));
+  assert.equal(b.ref, boardRef('beta'));
+
+  a.createTask({ title: 'alpha only', status: 'ready' });
+  b.createTask({ title: 'beta only', status: 'ready' });
+  assert.deepEqual(a.listTasks().map((x) => x.title), ['alpha only']);
+  assert.deepEqual(b.listTasks().map((x) => x.title), ['beta only']);
+  assert.notEqual(git(s.root, 'rev-parse', boardRef('alpha')), git(s.root, 'rev-parse', boardRef('beta')));
+  assert.equal(a.board().slug, 'alpha');
+  assert.equal(b.board().slug, 'beta');
 });
 
 test('sync is a no-op with no remote, and off when the board says so', async (t) => {
@@ -363,7 +553,7 @@ test('the loop syncs after a tick that wrote, at most once a minute', async (t) 
 
   store.createTask({ title: 'second', status: 'ready' });
   assert.equal((await syncAfterTick(ctx, { store })).why, 'throttled');
-  assert.equal(git(origin, 'rev-parse', 'refs/heads/kb-board'), first.result.local, 'and nothing was pushed');
+  assert.equal(git(origin, 'rev-parse', BOARD_REF), first.result.local, 'and nothing was pushed');
 
   const later = await syncAfterTick(ctx, { store, now: Date.now() + SYNC_THROTTLE_MS + 1 });
   assert.equal(later.result.pushed, true);
@@ -530,7 +720,7 @@ test('a second import is refused rather than overwriting a board that has been w
   ctx.repo = { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner };
   await assert.rejects(
     () => importGithubBoard(ctx, { store }),
-    (e) => e.exitCode === 2 && /already exists/.test(e.message) && /branch -D kb-board/.test(e.message),
+    (e) => e.exitCode === 2 && /already exists/.test(e.message) && /update-ref -d refs\/kb\/boards\/default/.test(e.message),
   );
 });
 
@@ -610,10 +800,10 @@ test('create, claim, work and finish — the whole card, with nothing on GitHub'
   const kinds = store.events({ after: 0, limit: 100 }).map((e) => e.kind);
   for (const k of ['appeared', 'status', 'attempt', 'result', 'closed']) assert.ok(kinds.includes(k), `the log records ${k}: ${kinds.join(',')}`);
 
-  // and the whole of it is one branch anyone can fetch
+  // and the whole of it is one ref anyone can fetch
   await store.sync();
-  assert.equal(git(origin, 'rev-parse', 'refs/heads/kb-board'), store.git.tip());
-  assert.match(git(origin, 'show', 'kb-board:cards/1.json'), /"status": "done"/);
+  assert.equal(git(origin, 'rev-parse', BOARD_REF), store.git.tip());
+  assert.match(git(origin, 'show', `${BOARD_REF}:cards/1.json`), /"status": "done"/);
 });
 
 // ---------- the mount probe (§6.3) ----------
@@ -890,17 +1080,19 @@ test('a lock ref that will not delete does not fail a migration that landed', as
   assert.ok(lines.some((l) => /beat chains were left alone/.test(l)));
 });
 
-test('sync fetches a board this checkout does not have a branch for yet', async (t) => {
-  // The friend's clone: `git clone --single-branch`, so `origin/kb-board` is not even here. Reading
-  // the board document first threw "there is no kb-board branch" at the exact person who ran the
-  // command to go and get one — and `hkb init` there then made a second, empty board.
+test('sync fetches a board this checkout has no copy of yet', async (t) => {
+  // The ordinary clone: the board is outside `refs/heads`, so nothing about it came with the
+  // checkout — not the local ref and not a remote-tracking one. Reading the board document first
+  // threw "there is no board at …" at the exact person who ran the command to go and get one, and
+  // `hkb init` there then made a second, empty board.
   const { dir, origin, store } = await board(t);
   store.createTask({ title: 'the owner made this', status: 'ready' });
   await store.sync();
 
   const clone = path.join(dir, 'thin');
-  git(dir, 'clone', '-q', '--single-branch', '--branch', 'main', origin, clone);
-  assert.equal(spawnSync('git', ['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/kb-board'], { cwd: clone }).status !== 0, true, 'the clone really has no copy of the branch');
+  git(dir, 'clone', '-q', origin, clone);
+  assert.equal(spawnSync('git', ['rev-parse', '--verify', '--quiet', trackingRefFor(BOARD_REF, 'origin')], { cwd: clone }).status !== 0, true, 'the clone really has no copy of the board');
+  assert.equal(hasFetchRefspec(clone, 'origin'), false, 'and no refspec that would bring one');
   fs.mkdirSync(path.join(clone, '.kanban'), { recursive: true });
 
   const theirs = openLocalStore(ctxAt(clone), { reconcile: false });
@@ -919,20 +1111,22 @@ test('sync.push false turns off the push and nothing else, and --no-push cannot 
   const off = await store.sync();
   assert.equal(off.skipped, 'off');
   assert.equal(off.pushed, false);
-  assert.equal(spawnSync('git', ['rev-parse', '--verify', '--quiet', 'refs/heads/kb-board'], { cwd: origin }).status !== 0, true, 'origin has no board at all');
+  assert.equal(spawnSync('git', ['rev-parse', '--verify', '--quiet', BOARD_REF], { cwd: origin }).status !== 0, true, 'origin has no board at all');
 
   // The fetch half is NOT. A checkout that does not publish its copy still has to be able to read
   // what another host published — that is the whole of what `hkb sync` is for on a reader's clone.
-  git(root, 'push', '-q', origin, 'kb-board:kb-board');
+  git(root, 'push', '-q', origin, `${BOARD_REF}:${BOARD_REF}`);
   const other = path.join(dir, 'other');
   git(dir, 'clone', '-q', origin, other);
-  const theirs = git(other, 'commit-tree', git(other, 'rev-parse', 'origin/kb-board^{tree}'), '-p', git(other, 'rev-parse', 'origin/kb-board'), '-m', 'hkb: somebody else decided something');
-  git(other, 'push', '-q', origin, `${theirs}:refs/heads/kb-board`);
+  git(other, 'fetch', '-q', 'origin', boardFetchRefspec('origin'));
+  const tracking = trackingRefFor(BOARD_REF, 'origin');
+  const theirs = git(other, 'commit-tree', git(other, 'rev-parse', `${tracking}^{tree}`), '-p', git(other, 'rev-parse', tracking), '-m', 'hkb: somebody else decided something');
+  git(other, 'push', '-q', origin, `${theirs}:${BOARD_REF}`);
 
   const r = await store.sync();
   assert.equal(r.fastForwarded, true, `push: false must not disable the fetch — ${r.detail}`);
   assert.equal(r.pushed, false);
-  assert.equal(store.git.tip(), theirs, 'and the branch here is what the remote said');
+  assert.equal(store.git.tip(), theirs, 'and the board here is what the remote said');
 
   // And the flag is the same switch, so the more restrictive spelling cannot do strictly more work.
   const noPush = await store.sync({ push: false });
@@ -940,7 +1134,7 @@ test('sync.push false turns off the push and nothing else, and --no-push cannot 
   assert.equal(noPush.offline, false);
 });
 
-test('the dispatcher stamp leaves the index level with the branch', async (t) => {
+test('the dispatcher stamp leaves the index level with the board', async (t) => {
   const clock = { at: new Date('2026-09-03T12:00:00Z') };
   const { root } = scratch(t, { name: 'stamped' });
   const ctx = ctxAt(root);
@@ -950,7 +1144,7 @@ test('the dispatcher stamp leaves the index level with the branch', async (t) =>
 
   assert.equal(store.markDispatcher(4242).stamped, true);
   assert.equal(store.index.tip(), store.git.tip(), 'a stamp that is not indexed is a permanent `hkb doctor` warning on a healthy board');
-  assert.match(git(root, 'log', '-1', '--format=%s', 'kb-board'), /dispatcher on host/, 'and the log says what the commit is');
+  assert.match(git(root, 'log', '-1', '--format=%s', BOARD_REF), /dispatcher on host/, 'and the log says what the commit is');
 });
 
 test('OFFLINE reads a git that never answered as offline, not as a broken remote', () => {
@@ -961,7 +1155,7 @@ test('OFFLINE reads a git that never answered as offline, not as a broken remote
     'fatal: unable to access \'https://example/\': getaddrinfo() thread failed to start: EAI_AGAIN',
     'error: RPC failed; ECONNRESET',
   ]) assert.equal(OFFLINE.test(said), true, said);
-  assert.equal(OFFLINE.test('! [rejected] kb-board -> kb-board (non-fast-forward)'), false, 'a divergence is not a network');
+  assert.equal(OFFLINE.test('! [rejected] refs/kb/boards/default -> refs/kb/boards/default (non-fast-forward)'), false, 'a divergence is not a network');
 });
 
 test('mountFor keeps the LAST of two entries on one mount point', (t) => {
@@ -1141,16 +1335,16 @@ test('sync reads the exit status of every update-ref: a lost compare-and-swap is
     return true;
   });
   assert.equal(tried.length, 3, 'a lost CAS is retried on a re-read, not reported as done');
-  assert.equal(spawnSync('git', ['rev-parse', '--verify', '--quiet', 'refs/heads/kb-board'], { cwd: clone }).status !== 0, true,
+  assert.equal(spawnSync('git', ['rev-parse', '--verify', '--quiet', BOARD_REF], { cwd: clone }).status !== 0, true,
     'and the ref really did not move, which is what the old code reported as `fastForwarded: true`');
 });
 
-test('a sync that creates the branch changes nothing about which store this is', async (t) => {
-  // The oldest shape of this test asserted that `hkb sync` creating `kb-board` under a running
+test('a sync that creates the board ref changes nothing about which store this is', async (t) => {
+  // The oldest shape of this test asserted that `hkb sync` creating the board ref under a running
   // process *flipped* it onto the local store, and that `forgetStore` was what made that safe. It
-  // was not safe: a branch arriving over the network decided nothing about where a verb writes.
-  // With one store the question cannot even be posed, and a branch arriving is just the board's
-  // cards showing up.
+  // was not safe: a ref arriving over the network decided nothing about where a verb writes. With
+  // one store the question cannot even be posed, and a ref arriving is just the board's cards
+  // showing up.
   const { dir, origin, store } = await board(t);
   store.createTask({ title: 'published', status: 'ready' });
   await store.sync();

@@ -7,19 +7,19 @@ audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: a4d80e1fb0fdf6e8e3c0e57494423720775af950
+    sha: b183d59750a4bace38fb612026657ed3ded95708
   - path: src/gh.js
     sha: 8154ea477e52ed3f769238f1c1bda588fd767798
   - path: src/model.js
-    sha: 01c6ed0b0af060e050ce6387de55f4d1b6b2605d
+    sha: de323e59fae958580450c490eea7fa56520e28a5
   - path: src/store/index.js
-    sha: b67a89674aea78c2540b86c7868607dd4bb92863
+    sha: fed32f2f24ff0ecb5bbec064c26fcaa3f63fd7dc
   - path: src/forge.js
     sha: 1d9e17cd8fad3500b512ef10843d541cda2c65a4
   - path: src/lifecycle.js
     sha: 29089f8c1ba2f46a320316634593773d1d2b67b0
   - path: src/dispatch.js
-    sha: 507787986768d696dc9897002d91317612e5ce0b
+    sha: 6a31798b86f2e330b93d1bf20f659e4843d6a022
   - path: src/context.js
     sha: be28b4843c2a09afc0c835c4fe195706af86bb15
   - path: src/hook.js
@@ -27,10 +27,10 @@ covers:
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/board.js
-    sha: 543224fb76022abd64b56d834ae0da17b64cb066
+    sha: 0337a17cf70442cac66fb457c880e4b27a52672e
   - path: src/doctor.js
-    sha: d9df9b7620a2be2d04e0ca59597cfc075381ac60
-generated_at_commit: 0c4e2e6
+    sha: c29b0cd7856ca394203cb53b8755bf85e25bd239
+generated_at_commit: 53ecf5a
 last_refreshed: 2026-09-03
 related: [concepts/store, concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
@@ -47,10 +47,11 @@ related: [concepts/store, concepts/board-protocol, concepts/claims-and-leases, c
 ## The state model
 
 A board is whatever `openStore(ctx)` (`src/store/index.js`) answers, and there
-is one store: a card is a file on the `kb-board` git branch,
-`.git/hkb/index.db` (`node:sqlite`) indexes it and holds claims and the event
-log, and both are composed behind the interface by `src/store/local.js`
-(*concepts/store*, *architecture/local-store*). Structured fields ride in an
+is one store: a card is a file on the board's own git ref (`refs/kb/boards/<slug>`,
+outside `refs/heads` and so invisible to `git branch` —
+*architecture/board-ref*), `.git/hkb/index.db` (`node:sqlite`) indexes it and
+holds claims and the event log, and both are composed behind the interface by
+`src/store/local.js` (*concepts/store*, *architecture/local-store*). Structured fields ride in an
 HTML-comment block at the top of the card's body and execution history in a run
 record beside it, all parsed and serialized by pure functions in
 `src/model.js`. Dependencies are edges between cards (`blocked_by`), which makes
@@ -63,14 +64,17 @@ removed with no caller changed (*architecture/store-seam*). What remains of it
 is `src/bridge/github-issues.js`, read-only, reachable only from
 `hkb init --import`.
 
-**A repository that has not crossed over says so.** Two refusals, because there
-are two ways to still be on the old store. A `.kanban/board.json` that names
-`"store": "github"` is told by `storeKind` (`src/store/index.js`) that the store
-is gone and how to migrate; a board.json with no `store` key resolves to *local*
-and then finds no `kb-board` branch, which the store's own read path answers
-with `noBoardHere` (`src/model.js`) — one sentence naming `hkb init`,
-`hkb init --import` and the fetch. Reads refuse as loudly as writes here on
-purpose: while `listTasks` answered `[]` for a board that was never created,
+**A repository that has not crossed over says so.** Three refusals, because
+there are three ways to still be on the old store. A `.kanban/board.json` that
+names `"store": "github"` is told by `storeKind` (`src/store/index.js`) that the
+store is gone and how to migrate. A board.json with **no** `store` key resolves
+to *local*, and `hkb init` asks the forge before it creates anything: cards
+under `kb:board:<slug>` and no board ref here means an unmigrated board, and
+`refuseUnmigratedBoard` (`src/init.js`) names the count and `hkb init --import`
+rather than creating an empty board beside a real one. Anything else that reads
+a board that is not there gets `noBoardHere` (`src/model.js`) — one sentence
+naming `hkb init`, `hkb init --import` and `hkb sync`. Reads refuse as loudly as
+writes here on purpose: while `listTasks` answered `[]` for a board that was never created,
 `hkb list` printed "(no tasks)" and exited 0 and the dispatcher ticked over
 nothing indefinitely. An empty board and a missing one are different facts.
 
@@ -227,13 +231,13 @@ with no JSON result line to read a status from at all.
 ## The seams that keep it portable
 
 `src/gh.js` is the only file that shells out to `gh`, and it pins
-`X-GitHub-Api-Version`. Board state now sits behind one named interface —
-`openStore(ctx)` in `src/store/index.js`, with the GitHub bodies in
-`src/store/github.js` — and pull requests sit beside it rather than inside it,
+`X-GitHub-Api-Version`. Board state sits behind one named interface —
+`openStore(ctx)` in `src/store/index.js`, with the one driver's bodies in
+`src/store/local.js` — and pull requests sit beside it rather than inside it,
 in `src/forge.js`, because a board kept locally still opens its work on a
-forge. Everything above the seam speaks statuses, claims and attempts, so the
-local tiers arrive as further drivers rather than as an edit to every caller.
-See [the store seam](store-seam.md). Pure decision logic stays in
+forge. Everything above the seam speaks statuses, claims and attempts, which is
+why retiring a driver was a deletion rather than an edit to every caller. See
+[the store seam](store-seam.md). Pure decision logic stays in
 `src/model.js` (unit-tested, no I/O); `src/cli.js` only parses and routes.
 
 ## Related

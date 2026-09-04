@@ -7,7 +7,7 @@
 // reclaim, a release, "a dry run writes nothing" — and they run unchanged against
 //
 //   · the in-memory double (`test/fake-store.js`), and
-//   · the **real** local driver (`src/store/local.js`: the `kb-board` branch and the
+//   · the **real** local driver (`src/store/local.js`: the board's git ref and the
 //     `.git/hkb/index.db` index) in a scratch repository.
 //
 // One temp repo per scenario, which is what keeps this readable; the whole file is a couple of
@@ -76,7 +76,7 @@ async function openFake({ dispatch = {} } = {}) {
 
 /**
  * `src/store/local.js` for real, in a scratch repository. `hostId()` is the host on purpose: the
- * `kb-board` branch has one writer (§6.2) and `assertOwningHost` refuses every write verb otherwise,
+ * board has one writer (§6.2) and `assertOwningHost` refuses every write verb otherwise,
  * so a scenario run under a made-up host would fail for a reason that is not what it is testing.
  */
 async function openLocal({ dispatch = {} } = {}) {

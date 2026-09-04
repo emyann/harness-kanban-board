@@ -1,4 +1,4 @@
-// The git tier (src/store/git.js) — the `kb-board` branch, written with plumbing from any worktree.
+// The git tier (src/store/git.js) — the board's ref, written with plumbing from any worktree.
 //
 // Two halves:
 //   1. what is *about git* — a commit from a linked worktree that leaves every working tree clean,
@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { GitTier, openGitTier, BOARD_BRANCH, BOARD_REF, fileJson, DURABLE_METHODS, isOwned, classifyRefWrite } from '../src/store/git.js';
+import { GitTier, openGitTier, BOARD_REF, BOARD_REF_PREFIX, boardRef, trackingRefFor, boardFetchRefspec, fileJson, DURABLE_METHODS, isOwned, classifyRefWrite } from '../src/store/git.js';
 import { gitSays } from '../src/board.js';
 import { L, emptyRun, serializeResultComment, RESULT_MARKER } from '../src/model.js';
 import { runComment as serializeRunComment } from './fake-gh.js';
@@ -27,6 +27,13 @@ const ENV = {
   GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t',
   GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t',
 };
+
+/**
+ * The name every `git log`/`git show` below reads the board by. The board is at
+ * `refs/kb/boards/default` and deliberately not on a branch, so the ref *is* the name — there is no
+ * shorter one, which is why `GitTier` has no `branch` any more: one object, one vocabulary.
+ */
+const BOARD_BRANCH = BOARD_REF;
 
 function git(cwd, ...args) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, ...ENV } });
@@ -76,7 +83,7 @@ function card(tier, { title = 'a card', status = 'ready', agent = 'claude', kb =
 
 // ---------- what is about git ----------
 
-test('git tier: init creates kb-board and leaves every working tree untouched', (t) => {
+test('git tier: init creates the board ref and leaves every working tree untouched', (t) => {
   const s = scratch();
   t.after(s.cleanup);
   const tier = tierAt(s.wt);
@@ -85,7 +92,7 @@ test('git tier: init creates kb-board and leaves every working tree untouched', 
   assert.equal(made.created, true);
   assert.ok(made.tip);
 
-  // the branch is real, and it is the repository's — the worktree wrote the main checkout's ref
+  // the ref is real, and it is the repository's — the worktree wrote the main checkout's ref
   assert.equal(git(s.root, 'rev-parse', BOARD_REF), made.tip);
   assert.deepEqual(git(s.root, 'ls-tree', '--name-only', BOARD_BRANCH).split('\n'), ['board.json']);
 
@@ -199,7 +206,7 @@ test('git tier: a concurrent writer makes the CAS refuse, and the retry lands bo
   assert.ok(log.some((l) => l.includes('landed first')), 'and so is the writer that beat it');
 });
 
-test('git tier: a fresh clone reads the board from origin/kb-board', (t) => {
+test('git tier: a clone that fetched the namespace reads the board off the remote-tracking ref', (t) => {
   const s = board();
   t.after(s.cleanup);
   const task = card(s.tier, { title: 'travels with the clone', kb: { priority: 4 } });
@@ -207,12 +214,16 @@ test('git tier: a fresh clone reads the board from origin/kb-board', (t) => {
 
   const clone = path.join(s.dir, 'clone');
   git(s.dir, 'clone', '-q', s.root, clone);
-  // a clone has no local kb-board, only the remote-tracking ref — which is what a friend gets
+  // **The cost of a hidden ref, asserted rather than assumed.** A plain clone carries
+  // `+refs/heads/*` and nothing else, so it has no copy of the board at all — not the local ref and
+  // not a remote-tracking one. That is what `hkb sync` (and the refspec it writes) exists to fix.
   assert.equal(spawnSync('git', ['rev-parse', '--verify', '--quiet', BOARD_REF], { cwd: clone }).status, 1);
+  assert.equal(spawnSync('git', ['rev-parse', '--verify', '--quiet', trackingRefFor(BOARD_REF, 'origin')], { cwd: clone }).status, 1);
+  git(clone, 'fetch', '-q', 'origin', boardFetchRefspec('origin'));
 
   const theirs = tierAt(clone, { host: 'their-laptop' });
   const read = theirs.readTree();
-  assert.ok(read.tip, 'the board is reachable through origin/kb-board');
+  assert.ok(read.tip, 'the board is reachable through the remote-tracking ref');
   assert.equal(read.cards.get(task.number).title, 'travels with the clone');
   assert.equal(theirs.getTask(task.number).kb.priority, 4);
   assert.deepEqual(theirs.listNotes(task.number).map((n) => n.text), ['a human said this']);
@@ -370,7 +381,7 @@ test('git tier: createTask never overwrites a card, whatever next_id says', (t) 
 test('git tier: a branch with no board.json says what to run, not TypeError', (t) => {
   const s = scratch();
   t.after(s.cleanup);
-  // a `kb-board` branch that exists but carries no board document — a half-made board, or one
+  // a board ref that exists but carries no board document — a half-made board, or one
   // somebody rewrote by hand
   const p = path.join(s.dir, 'blob');
   fs.writeFileSync(p, 'hello\n');
@@ -407,12 +418,12 @@ test('git tier: reading a repository with no board says so, and names the migrat
   assert.equal(tier.exists(), false);
   for (const call of [() => tier.listTasks(), () => tier.getTask(1), () => tier.listClosedRecent()]) {
     assert.throws(call, (e) => e.exitCode === 2
-      && /there is no kb-board branch/.test(e.message)
+      && /there is no board at refs\/kb\/boards\/default/.test(e.message)
       // all three ways out, because all three are real: never initialised, still on the retired
       // GitHub store, or simply not fetched yet
       && /hkb init`/.test(e.message)
       && /hkb init --import`/.test(e.message)
-      && /git fetch origin kb-board/.test(e.message));
+      && /hkb sync`/.test(e.message));
   }
   // and a board that does exist still answers with its cards rather than the sentence
   const made = board();
@@ -421,30 +432,31 @@ test('git tier: reading a repository with no board says so, and names the migrat
   assert.equal(made.tier.listTasks().length, 1);
 });
 
-test('git tier: a clone with no local branch is read-only, and says how to make it writable', (t) => {
+test('git tier: a clone with no local ref is read-only, and says how to make it writable', (t) => {
   const s = board({ host: 'test-host' });
   t.after(s.cleanup);
   card(s.tier, { title: 'made here' });
   const clone = path.join(s.dir, 'clone');
   git(s.dir, 'clone', '-q', s.root, clone);
+  git(clone, 'fetch', '-q', 'origin', boardFetchRefspec('origin'));
 
   // the same host as the board's owner, so the one-writer guard is not what answers here
   const theirs = tierAt(clone, { host: 'test-host' });
   assert.equal(theirs.listTasks({ states: ['OPEN'] }).length, 1, 'it still reads');
-  // Before: the CAS leased `refs/heads/kb-board` against a sha only `origin/kb-board` has, git said
+  // Before: the CAS leased the local ref against a sha only the remote-tracking one has, git said
   // "cannot lock ref … unable to resolve reference", `isContended` matched "cannot lock ref", and
   // the write retried five times before blaming a writer on another host that does not exist.
   let threw = null;
   try { theirs.createTask({ title: 'nope' }); } catch (e) { threw = e; }
-  assert.ok(threw, 'a write on a clone with no local branch fails');
+  assert.ok(threw, 'a write on a clone with no local ref fails');
   assert.equal(threw.exitCode, 2);
   assert.match(threw.message, /read-only copy/);
-  assert.match(threw.message, /git -C .* branch kb-board origin\/kb-board/, 'and the message is the recovery path');
+  assert.match(threw.message, /git -C .* update-ref refs\/kb\/boards\/default refs\/kb\/remotes\/origin\/boards\/default/, 'and the message is the recovery path');
   assert.doesNotMatch(threw.message, /another hkb on host/, 'nobody else is writing this board');
   assert.equal(theirs.trace.filter((c) => c === 'update-ref').length, 0, 'and it did not retry five times to find out');
 
-  // and once the branch is there, the same tier writes
-  git(clone, 'branch', BOARD_BRANCH, `origin/${BOARD_BRANCH}`);
+  // and once the local ref is there, the same tier writes
+  git(clone, 'update-ref', BOARD_REF, trackingRefFor(BOARD_REF, 'origin'));
   theirs.forget();
   assert.equal(theirs.createTask({ title: 'now it writes' }).number, 2);
 });
@@ -458,7 +470,7 @@ test('git tier: a verb that decides nothing lands no commit', (t) => {
   const log = () => git(s.root, 'log', '--format=%s', BOARD_BRANCH).split('\n').length;
   const commits = log();
 
-  // Each of these is the state the card is already in. `git log kb-board` is the board's history of
+  // Each of these is the state the card is already in. The board's `git log` is its history of
   // decisions (§6.1), and `_patch` used to stamp `updated_at` before asking whether anything changed.
   s.tier.setStatus(task, 'ready');
   s.tier.setAgent(task, 'claude');
@@ -878,6 +890,7 @@ test('git tier: on a read-only clone a verb that decides nothing still decides n
   const task = card(s.tier, { title: 'made here', status: 'ready', agent: 'claude' });
   const clone = path.join(s.dir, 'clone');
   git(s.dir, 'clone', '-q', s.root, clone);
+  git(clone, 'fetch', '-q', 'origin', boardFetchRefspec('origin'));
   // The clone's host is *not* the board's owner, which is the only host a real clone ever has: a
   // tier constructed with `board.host` was the one configuration that cannot happen here, and it
   // hid the fact that `_assertOwner` still ran before the no-op question and threw exit 2 first.
@@ -937,7 +950,7 @@ test('git tier: a branch deleted under a write is not "this is a clone"', (t) =>
   const task = card(s.tier, { title: 'a card' });
 
   // git says "unable to resolve reference" for two different things, and the clone message
-  // prescribes `git branch kb-board origin/kb-board` — advice that fails with "not a valid object
+  // prescribes `git update-ref <ref> <tracking>` — advice that fails with "not a valid object
   // name" when there is no remote-tracking ref at all. The delete happens inside the mutation, which
   // is precisely the window between the read and the compare-and-swap.
   const tier = tierAt(s.wt);
@@ -952,7 +965,7 @@ test('git tier: a branch deleted under a write is not "this is a clone"', (t) =>
   assert.equal(threw.exitCode, 2);
   assert.match(threw.message, /went away while this write was landing/);
   assert.doesNotMatch(threw.message, /read-only copy/, 'there is no remote here to fall back to');
-  assert.doesNotMatch(threw.message, /branch kb-board origin\/kb-board/, 'and that recovery path would itself fail');
+  assert.doesNotMatch(threw.message, /update-ref refs\/kb\/boards\/default refs\/remotes/, 'and that recovery path would itself fail');
   assert.doesNotMatch(threw.message, /another hkb on host/);
 });
 
@@ -1014,10 +1027,10 @@ test('git tier: a read hands out copies without deep-cloning the whole board', (
   assert.equal(s.tier.getTask(b.number).title, 'two');
 });
 
-test('git tier: every message names this tier\'s branch, never kb-board by reflex', (t) => {
+test('git tier: every message names this tier\'s own ref, never the default board by reflex', (t) => {
   const s = scratch();
   t.after(s.cleanup);
-  const ref = 'refs/heads/kb-board-staging';
+  const ref = 'refs/kb/boards/staging';
   const ctx = { root: s.wt, cfg: {}, board: 'default', json: false, _cache: {} };
   const tier = openGitTier(ctx, { host: 'test-host', ref });
   tier.init('default', 'test-host', { settings: {} });
@@ -1035,12 +1048,87 @@ test('git tier: every message names this tier\'s branch, never kb-board by refle
     try { call(); assert.fail('expected a refusal'); } catch (e) { messages.push(e.message); }
   }
   for (const m of messages) {
-    assert.match(m, /kb-board-staging/);
-    assert.doesNotMatch(m, /(?<!-)\bkb-board board\b/, m);
+    assert.match(m, /refs\/kb\/boards\/staging/);
+    assert.doesNotMatch(m, /refs\/kb\/boards\/default/, m);
   }
 });
 
 // ---------- the pure helpers, without a temp repo ----------
+
+test('the board keeps a reflog on a ref core.logAllRefUpdates does not cover', (t) => {
+  // `core.logAllRefUpdates` at its default logs `refs/heads`, `refs/remotes`, `refs/notes` and HEAD.
+  // Moving the board out of `refs/heads` therefore took its reflog with it: `git reflog
+  // refs/kb/boards/default` came back empty and `.git/logs/refs` held only `heads`, so a bad
+  // `update-ref`, a racing `hkb down` or a clobbering fetch stopped being recoverable — on the tier
+  // the design calls durable, and while two messages here still prescribe `git reflog <ref>`.
+  const s = board();
+  t.after(s.cleanup);
+  const first = s.tier.tip();
+  card(s.tier, { title: 'one' });
+  const second = s.tier.tip();
+  card(s.tier, { title: 'two' });
+
+  const log = git(s.root, 'reflog', '--format=%H %gs', s.tier.ref).split('\n').filter(Boolean);
+  assert.ok(log.length >= 3, `the reflog is readable and records every move: ${log.join(' | ')}`);
+  assert.equal(log.at(-1).split(' ')[0], first, 'down to the commit that created the board');
+  assert.ok(log.some((l) => /hkb: /.test(l)), `and carries the message the write landed with: ${log.join(' | ')}`);
+
+  // Which is what makes the advice in `_absentRefMessage` and `_reconcileRefs` true: a board rewound
+  // by anything at all — a bad `update-ref`, a racing `hkb down`, a clobbering fetch — can be put
+  // back from what the reflog says it was a moment ago.
+  const clobbered = git(s.root, 'rev-parse', s.tier.ref);
+  git(s.root, 'update-ref', s.tier.ref, first);
+  assert.equal(git(s.root, 'rev-parse', `${s.tier.ref}@{1}`), clobbered, '@{1} is the value the rewind threw away');
+  git(s.root, 'update-ref', s.tier.ref, clobbered);
+  s.tier.forget();
+  assert.equal(s.tier.tip(), clobbered);
+  void second;
+});
+
+test('the board lives at refs/kb/boards/<slug>, invisible to git branch', (t) => {
+  const s = board();
+  t.after(s.cleanup);
+  card(s.tier, { title: 'a card' });
+
+  assert.equal(s.tier.ref, 'refs/kb/boards/default');
+  assert.equal(BOARD_REF, `${BOARD_REF_PREFIX}/default`);
+  // The complaint this answers: a branch nobody checks out, sitting in every branch picker.
+  const branches = git(s.root, 'for-each-ref', '--format=%(refname)', 'refs/heads/').split('\n').filter(Boolean);
+  assert.deepEqual(branches.filter((b) => /kb-board|kb\/boards/.test(b)), [], branches.join(', '));
+  assert.ok(git(s.root, 'for-each-ref', '--format=%(refname)', 'refs/kb/boards/').includes(BOARD_REF));
+
+  // The slug is a ref path segment, so it has to be one git will take.
+  assert.equal(boardRef('alpha'), 'refs/kb/boards/alpha');
+  assert.equal(boardRef(), BOARD_REF);
+  assert.notEqual(boardRef('alpha'), boardRef('beta'));
+  for (const bad of ['a/b', '.hidden', 'x.lock', 'a..b', 'a b', 'foo.', 'a.b.', '']) {
+    if (bad === '') { assert.equal(boardRef(bad), BOARD_REF, 'empty falls back to the default'); continue; }
+    assert.throws(() => boardRef(bad), (e) => e.exitCode === 2 && /not a usable board name/.test(e.message), bad);
+  }
+
+  // `refs/kb/board` with `refs/kb/board/<slug>` beside it could never exist: git forbids a ref that
+  // is both a file and a directory prefix. `boards/<slug>` is the shape that has no such collision.
+  assert.equal(trackingRefFor(BOARD_REF, 'origin'), 'refs/kb/remotes/origin/boards/default');
+  assert.equal(trackingRefFor(boardRef('beta'), 'upstream'), 'refs/kb/remotes/upstream/boards/beta');
+  assert.equal(boardFetchRefspec('origin'), '+refs/kb/boards/*:refs/kb/remotes/origin/boards/*');
+  // NOT `+refs/kb/*:refs/kb/*` — that would let a fetch overwrite the ref the CAS leases.
+  assert.doesNotMatch(boardFetchRefspec('origin'), /:refs\/kb\/boards\//);
+  // And NOT into `refs/remotes/<remote>/`, where a real branch named `kb` collides with the
+  // directory the destination needs. `test/store-local.test.js` fetches in such a repository.
+  assert.doesNotMatch(boardFetchRefspec('origin'), /:refs\/remotes\//);
+
+  // Every name this accepts is a name `git check-ref-format` accepts — the whole contract of the
+  // slug rule, and what `foo.` broke: it passed, then died inside `_land` with a raw git fatal.
+  for (const good of ['default', 'alpha', 'a-b_c.d', 'x1']) {
+    assert.equal(git(s.root, 'check-ref-format', boardRef(good)), '', good);
+  }
+  assert.throws(() => boardRef('foo.'), (e) => e.exitCode === 2);
+  // and the fix in the message is a command that runs, not the one that just failed
+  assert.match(
+    (() => { try { boardRef('my board'); return ''; } catch (e) { return e.message; } })(),
+    /hkb init --board my-board/,
+  );
+});
 
 test('isOwned matches the files the parser reads, not the directories they are in', () => {
   for (const file of ['board.json', 'cards/1.json', 'cards/1234.json', 'runs/7.json']) {
@@ -1054,10 +1142,10 @@ test('isOwned matches the files the parser reads, not the directories they are i
 test('classifyRefWrite: an absent ref is not a contended one', () => {
   // The two messages measured against git 2.43, kept as a table so a reword shows up here rather
   // than as a five-times retry blaming a host nobody is running on.
-  assert.equal(classifyRefWrite("fatal: cannot lock ref 'refs/heads/kb-board': is at aaa but expected bbb"), 'contended');
-  assert.equal(classifyRefWrite("error: cannot lock ref 'refs/heads/kb-board': reference already exists"), 'contended');
-  assert.equal(classifyRefWrite("fatal: cannot lock ref 'refs/heads/kb-board': unable to resolve reference 'refs/heads/kb-board'"), 'absent');
-  assert.equal(classifyRefWrite("error: cannot lock ref 'refs/heads/kb-board': reference is missing but expected aaa"), 'absent');
+  assert.equal(classifyRefWrite("fatal: cannot lock ref 'refs/kb/boards/default': is at aaa but expected bbb"), 'contended');
+  assert.equal(classifyRefWrite("error: cannot lock ref 'refs/kb/boards/default': reference already exists"), 'contended');
+  assert.equal(classifyRefWrite("fatal: cannot lock ref 'refs/kb/boards/default': unable to resolve reference 'refs/kb/boards/default'"), 'absent');
+  assert.equal(classifyRefWrite("error: cannot lock ref 'refs/kb/boards/default': reference is missing but expected aaa"), 'absent');
   assert.equal(classifyRefWrite('fatal: not a git repository'), 'error');
   assert.equal(classifyRefWrite(''), 'error');
 });

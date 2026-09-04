@@ -1,28 +1,28 @@
 ---
 title: The local store — the two tiers as one board
-summary: "How the kb-board branch and the .git/hkb index compose into one Store: what open() reconciles, the commit-index-wake order every durable verb follows, which reads go to which tier, and the one-writer rule that makes a clone a reader."
+summary: "How the board ref and the .git/hkb index compose into one Store: what open() reconciles, the commit-index-wake order every durable verb follows, which reads go to which tier, and the one-writer rule that makes a clone a reader."
 category: architecture
 kind: explanation
 audience: [dev]
 read_when: "adding a store verb, debugging an index that disagrees with the branch, wondering why a verb is refused on this host, or working on hkb sync / init --import"
 covers:
   - path: src/store/local.js
-    sha: 0f57f49186523f9aa822992f620e54400211ac63
+    sha: b11fe32cf346862b8423450d43680708d70eb37a
   - path: src/store/index.js
-    sha: b67a89674aea78c2540b86c7868607dd4bb92863
+    sha: fed32f2f24ff0ecb5bbec064c26fcaa3f63fd7dc
   - path: src/store/sqlite.js
-    sha: ab60bab80331ff0a2ac66141062eb3518a0b4fee
+    sha: 109968690b1068b0edf2ab028e3440a7ca97dcee
   - path: src/init.js
-    sha: 986db0bb9f95179b12c7c012b61e2d9f3e20a7e8
+    sha: 6c2d6f8f10fb6f11cde8554f31fbd8f23da717fd
   - path: src/doctor.js
-    sha: d9df9b7620a2be2d04e0ca59597cfc075381ac60
+    sha: c29b0cd7856ca394203cb53b8755bf85e25bd239
   - path: src/gc.js
     sha: cc129d307e845211036472a76ed7e0f456be1329
   - path: src/cli.js
-    sha: a4d80e1fb0fdf6e8e3c0e57494423720775af950
-generated_at_commit: 43cf001
+    sha: b183d59750a4bace38fb612026657ed3ded95708
+generated_at_commit: 53ecf5a
 last_refreshed: 2026-09-03
-related: [architecture/kb-board-branch, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
+related: [architecture/board-ref, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
 
 # The local store — the two tiers as one board
@@ -51,21 +51,23 @@ card's pull request is now comes from the head-branch join in `src/forge.js`.
 it asks exactly one question: `store` in `.kanban/board.json` — `"local"` or
 absent both mean the local store, `"github"` is refused by name with
 `hkb init --import` in the message, anything else is exit 2. A board.json with
-no key that turns out to have no `kb-board` branch either is the unmigrated
+no key that turns out to have no board ref either is the unmigrated
 case, and the driver's own read path says so (`noBoardHere`, `src/model.js`;
 see *concepts/store*).
 
-There *was* a second question — does this repository have a `kb-board` branch,
-locally or as `<remote>/kb-board` — so that a plain `git clone` needed no
+There *was* a second question — does this repository have a board ref,
+locally or as a remote-tracking copy — so that a plain `git clone` needed no
 configuration. It was removed in A6's last review round, because a rule that
 reads the store off a **ref** can be reached by `git fetch`, which put a
 checkout on the local store while board.json still pointed every verb at GitHub;
 *architecture/store-seam* has the three destructive interactions that followed.
-A clone still needs no configuration: the key rides in the tracked board.json.
-`resolveStore` (`src/init.js`) answers for a new board — local — and an existing
-one keeps what it has; `--store github` is refused there too, by name, so a
-human who types the flag the old README taught them is told what happened to it
-rather than being handed a board hkb cannot make.
+A clone still needs no configuration, for a simpler reason now: there is one
+store, so an absent key means it. `resolveStore` (`src/init.js`) answers `local`
+for every board; `--store github` is refused there by name, so a human who types
+the flag the old README taught them is told what happened to it rather than
+being handed a board hkb cannot make. The empty board that absence could still
+produce — a repository whose cards never left the forge — is caught before
+anything is created, by `refuseUnmigratedBoard`.
 
 `hkb init` writes the key only when it is a **decision** — the human's
 `--store`, a fresh board (the default *is* the decision), a board that already
@@ -76,7 +78,7 @@ right answer for the *key*, but it is not an answer about the **cards**:
 `resolveStore` refuses a board.json that says `"store": "github"`, and the
 board.json most repositories actually have was written before that key existed
 and says nothing at all. Absent resolves to `local`, nothing is written, and
-`setUpLocalBoard` would create an empty `kb-board` branch beside every card
+`setUpLocalBoard` would create an empty board ref beside every card
 still on the forge — an empty `hkb list` and no message, from the command an
 operator runs *because* `hkb list` went quiet. So `needsMigrationProbe`
 (`src/init.js`) puts one condition in front of it: an existing config, no
@@ -98,7 +100,7 @@ Everything in `LocalStore` follows from these, and each exists because the
 alternative loses something.
 
 **1. `open()` reconciles.** The index stores the sha it was built from
-(`tip_sha` on its `board` row). When that is not what `refs/heads/kb-board`
+(`tip_sha` on its `board` row). When that is not what `refs/kb/boards/<slug>`
 says, the whole tree is read and loaded. In the common case this is one
 `rev-parse` and one indexed row, which is why every verb can afford it. A
 missing branch loads *nothing* rather than an empty tree — `{tip: null}` would
@@ -128,7 +130,7 @@ written for.
 
 **3. A live write never touches git.** Claims, heartbeats and an open attempt's
 pid/job/worktree are the index's alone. A lock on a branch would be a commit per
-beat, and `git log kb-board` is meant to be a history of *decisions*.
+beat, and the board's `git log` is meant to be a history of *decisions*.
 
 A durable verb's event carries what it decided, and `saveRun`'s is the attempt it
 just wrote: `rec.run.attempts`, not `rec.attempts` — a run record is `{run, id}`
@@ -240,7 +242,10 @@ it is a commit, not a heartbeat.
 
 ## Sync is git
 
-`sync()` fetches `<remote>/kb-board`, fast-forwards the local ref if it is
+`sync()` fetches `+refs/kb/boards/*:refs/kb/remotes/<remote>/boards/*` — named on
+the command line, not read from config, because a fresh clone has no such line —
+and writes that line into `.git/config` while it is there
+(`ensureFetchRefspec`). Then it fast-forwards the local ref if it is
 behind, then pushes if it is ahead. Anything that is not a fast-forward in
 either direction is refused with the one-writer explanation and the commands to
 look at both histories: the branch has one writer, so a divergence is two hosts
@@ -248,9 +253,10 @@ having written it, and hkb will not guess which is right.
 
 **Nothing in `sync()` reads the board document before the fetch.** The order is
 refs, then network, then `board.json` — because the checkout the verb exists for
-is the one that has no `kb-board` at all (a `git clone --single-branch`, or one
+is the one that has no copy of the board at all (a fresh clone — the board is
+outside `refs/heads`, so no default clone carries it — or one
 taken before the branch was first pushed), and reading the board first threw
-"there is no kb-board branch" at exactly the person running the command to go
+"there is no board at refs/kb/boards/…" at exactly the person running the command to go
 and get one. `hkb init` there then made a *second, empty* board.
 
 `settings.sync.push: false` turns off the **push**, and only the push. A
@@ -325,7 +331,7 @@ documented migration reachable only by naming the store as well as the flag.
 everything closed inside the 90-day window, with the **issue number as the card
 id** and `next_id` past the highest of them. Two commits for the whole board —
 one for the cards, one for the run records — rather than one per card, because
-`git log kb-board` should say "the board arrived", not replay a year of issue
+the board's `git log` should say "the board arrived", not replay a year of issue
 history. Per card it is one paginated comments read, which `listComments`
 memoizes on the context, so the run record, the results and the human notes all
 come out of the same request.
@@ -519,7 +525,7 @@ several sweeps before the skip message could be printed.
 - **And a board that says `"store": "github"` is refused outright, not pinned.**
   The rule above has a hole exactly where it matters most: the key *is* already
   there, so `hkb init` pinned it — rewriting a tracked `github` to `local` and
-  creating an empty `kb-board` branch beside every real card, so the next
+  creating an empty board ref beside every real card, so the next
   `hkb list` reported an empty board while the work sat unreachable on the forge.
   Silent abandonment, from the command a human runs to fix things. `resolveStore`
   takes the board.json on disk as its second argument for this one reason and
