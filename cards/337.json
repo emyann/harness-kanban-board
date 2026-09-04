@@ -1,0 +1,30 @@
+{
+  "agent": "claude",
+  "blocked_by": [],
+  "body": "## Why\n\n`hkb watch` still reads GitHub Issues. #304 retired that store, and this file was not part of the move:\n\n```\n$ head -20 src/watch.js | grep '^import'\nimport { restRaw } from './gh.js';\nimport { api } from './board.js';\n\n$ grep -c 'openStore\\|listTasks' src/watch.js   → 0\n$ grep -c 'rest(\\|api(' src/watch.js            → 5\n```\n\nObserved on this repository's own board minutes after it migrated (2026-09-04): the watcher baselined at\n**\"100 tasks (46 open)\"** while the board has **193 cards, 59 open** — 100 being one issues-API page, and\n46 the open issues left behind on GitHub. It then reported nothing, because nothing writes those issues\nany more.\n\n**The failure is silent, and it is the worst kind here.** `hkb watch` is what `/kanban:operate` names as\n*the* monitor — the section is titled \"Watch, don't poll\" and explicitly forbids the alternatives. A\nwatcher that starts cleanly, prints a plausible baseline and then never emits is indistinguishable from a\nquiet board. The operator sits watching a stream that cannot carry anything, and the board can be dead,\nstalled, or busy without a single line arriving.\n\nThis is the third silent-monitor failure of the same session (the dispatcher exiting 4 unnoticed — #336 —\nand `hkb serve` continuing to serve a pre-migration board from a process started before the merge). They\nshare a shape: **a long-lived reader that outlives the thing it reads, and says nothing about it.**\n\nThe file's own comments are now false in a way that will mislead the next reader: it explains the\n`If-None-Match`/304 design and the rate-limit budget as the reason a watcher is free, on a store where\nthere is no request to make conditional.\n\n## What\n\n1. `hkb watch` reads the board through `openStore(ctx)` like every other verb. The local store already\n   has the better primitive: an **events table** (`src/store/sqlite.js`) with an append-only cursor, which\n   is a real change feed rather than a diff of two board reads. Use it — `events({after})` — and keep the\n   diff path only if a driver ever needs it.\n2. `--interval` keeps its meaning, but on the local store a poll is a SQLite read of rows after a cursor,\n   so the rate-limit and 304 machinery goes, and the comments that explain it go with it.\n3. `hkb tail <n>` shares this read path — check it for the same problem, and any other command still\n   importing `gh.js` for board state rather than for the forge.\n4. **A watcher must be able to say the board went away.** Whatever the transport, if the store cannot be\n   read — no ref, a different store, an index that will not open — `watch` emits that as an event and\n   exits non-zero rather than sitting silent. The same is true of a dispatcher that has exited: see #336,\n   which asks for the same property from the other side.\n\n## Done when\n\n- [ ] `grep -n \"gh.js\" src/watch.js` returns nothing, or only a forge-specific import with a comment\n      saying why.\n- [ ] On this board, `hkb watch` baselines at the real card count and emits on the next transition.\n- [ ] Killing the board's ref mid-watch produces an event and a non-zero exit, not silence.\n- [ ] `hkb tail` audited for the same defect.\n- [ ] `npm run lint && npm test` green.\n\n## Contract\n\nKeep `src/gh.js` and `src/forge.js` the only places that reach the forge; `src/bridge/` is the migration\nreader and is not involved here. Errors name the fix and carry `.exitCode`; `--json` everywhere — the\nevent shape `/kanban:operate` documents (`number`, `kind`, `at`, `tags`, and the per-kind fields) is a\ncontract other sessions parse, so it must not change shape.",
+  "closed_at": null,
+  "created_at": "2026-09-04T09:42:56.520Z",
+  "goal": null,
+  "id": 337,
+  "kb": {
+    "idempotency_key": null,
+    "max_retries": 2,
+    "max_runtime": 3600,
+    "model": null,
+    "skills": [],
+    "v": 1,
+    "workspace": "worktree"
+  },
+  "labels": [],
+  "needs_human": false,
+  "paths": [],
+  "priority": 3,
+  "rank": null,
+  "scheduled_at": null,
+  "state": "OPEN",
+  "state_reason": null,
+  "status": "triage",
+  "suspended": null,
+  "title": "hkb watch still polls GitHub Issues after the store retired, so the operate procedure’s monitor is silently dead",
+  "updated_at": "2026-09-04T09:42:56.520Z"
+}
