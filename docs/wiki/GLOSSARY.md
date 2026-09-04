@@ -152,16 +152,17 @@ deserves a `concepts/` page (link it).
   track into waves; wave 0 is the frontier.
 - **Transcript** — the JSONL an agent session writes as it runs, recorded on the
   attempt row as `transcript_path` by the terminal verb (`sessionForAttempt` in
-  `src/hook.js`, off the job record `currentSession` reads in `src/jobs.js`) —
+  `src/hook.js`, off the job record `currentSession` reads in
+  `src/runtime/claude-bg.js`) —
   or, for an attempt that files no verb, by the dispatcher off the background
-  job it matched (`jobSessionUpdate` in `src/jobs.js`).
+  job it matched (`jobSessionUpdate` in `src/runtime/claude-bg.js`).
   A file on the host that ran the attempt, never board state — and hkb's last
   answer to "what did this cost" when the harness reported none
   (`usageFromTranscript` in `src/stats.js`).
 - **Job record** — what Claude Code keeps for a background agent at
   `~/.claude/jobs/<id>/state.json`: the session it is running and the transcript
   that session writes. A `claude --bg` worker's only local way to name itself,
-  and the tick's only way to name it from outside (`src/jobs.js`).
+  and the tick's only way to name it from outside (`src/runtime/claude-bg.js`).
 - **Worker** — the seat that codes: one session holding one attempt on one task
   — any harness a profile has a `launch` array for, or the operator running the verbs by hand
   (`src/lifecycle.js`).

@@ -2,17 +2,17 @@
 // Per tick: replay outbox → reclaim/crash/timeout → promote todo→ready → guards → claim + spawn.
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { enableAutoMerge, branchProtection, openPrsByHead, mergedPrsByHead, prMergeStates, staleBaseSha, ensureTrackBranch, fillPrs, dropPrCaches, prsUnavailable } from './forge.js';
 import { openStore, closeStore } from './store/index.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, remoteName, pidFile, readPidFile, pidAlive, recordExit, clearExit, HOOK_SETTINGS_VAR } from './board.js';
 import { workerHookSettings, PKG_ROOT, packageVersion } from './init.js';
-import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, taskBranchRe, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, authPauseReason, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, effectiveTools, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, isTrackRoot, trackBranchConflict, buildDeniedTools, deniedToolsUpdate } from './model.js';
+import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, taskBranchRe, reapDecision, parseSessionLog, sessionUpdate, formatSession, authPauseReason, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, modelArgs, effectiveTools, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, isTrackRoot, trackBranchConflict, buildDeniedTools, deniedToolsUpdate } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted, trackFanout } from './track.js';
 import { GhError } from './gh.js';
-import { listKbJobs, readJobState, stopJob, matchJobByWorktree, jobSessionUpdate } from './jobs.js';
+import { runtimeFor, runCard, runTrack, listHandles, stopHandle } from './runtime/index.js';
 import { tokenExpiryNotice, versionNotice } from './doctor.js';
 import { sweep, sweepTask } from './gc.js';
 import { deniedToolsFromTranscript } from './stats.js';
@@ -44,13 +44,6 @@ export const GC_EVERY_TICKS = 30;
 // `pidAlive` lives in board.js now, next to the pid files it answers about; re-exported here because
 // this is where every caller has always imported it from.
 export { pidAlive };
-
-function killPid(pid) {
-  if (!pidAlive(pid)) return false;
-  try { process.kill(pid, 'SIGTERM'); } catch { return false; }
-  setTimeout(() => { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }, 5000).unref();
-  return true;
-}
 
 // ---------- outbox replay ----------
 
@@ -149,8 +142,13 @@ export function withoutWorktreeFlag(argv) {
  * launch so there is one checkout, not two. When the branch cannot be had (still held by a live
  * session, no remote, gone) the attempt runs anyway, on an ordinary fresh worktree, and the brief
  * says which PR to continue and how: `continued` on the result records which of the two it was.
+ *
+ * `track` is that subgraph as data — `{nodes, waves, branch, mode}` — alongside the prose brief.
+ * Every runtime here runs a track by spawning one runner and handing it the brief, so both go to
+ * the same `launch`; a runtime that can execute a wave in one call reads `track` instead (see
+ * `runTrack`, src/runtime/index.js).
  */
-export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = false, keepRef = false, prompt: given = null, continuePr = null } = {}) {
+export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = false, keepRef = false, prompt: given = null, continuePr = null, track = null } = {}) {
   const profile = ctx.cfg.profiles[profileName];
   if (!profile?.launch) throw new Error(`profile "${profileName}" has no launch template in board.json`);
   const name = `kb-${task.number}-${attempt}`;
@@ -188,39 +186,16 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
     ? withoutWorktreeFlag(expandLaunch(profile.launch, vars, profile, launchCtx))
     : expandLaunch(profile.launch, vars, profile, launchCtx);
   const continued = continuePr && { pr: continuePr.number, branch: cont?.ok ? cont.branch : null, why: cont ? (cont.ok ? cont.stale : cont.why) : null };
-  // The launch environment is the worker's identity for every harness we run as a child process:
-  // it dies with that process. `claude --bg` is the exception — it hands the request to Claude
-  // Code's session daemon and exits, and a launch that finds no daemon *starts* one, which then
-  // keeps this environment for its whole life and hands it to every session it hosts (#150). It
-  // reaches no worker there anyway (#125: the checkout is that profile's identity), so it goes.
-  const env = profile.mode === 'claude-bg' ? scrubKbEnv(process.env) : {
-    ...process.env,
-    KB_TASK: String(task.number), KB_ATTEMPT: String(attempt), KB_BOARD: ctx.board, KB_REPO: ctx.repo.nameWithOwner,
-    KB_ROOT: ctx.root, KB_PROFILE: profileName,
-  };
   if (dryRun) return { argv, pid: null, continued, tools_dropped: toolsDropped };
   ensureLocalDirs(ctx.root);
   const cwd = wt ? ensureWorktree(ctx.root, wt) : ctx.root;
   const logFile = path.join(logsDir(ctx.root), `${task.number}-${attempt}.log`);
-  if (profile.mode === 'claude-bg') {
-    // Fire-and-forget: `claude --bg` prints "backgrounded · <id>" and exits, but a cold daemon
-    // start can take a minute — never block the tick on it. Detach, log its output, and identify
-    // the running job by its worktree on the next tick (cwd basename == kb-<n>-<k>).
-    fs.appendFileSync(logFile, `# ${nowIso()} launch background agent for #${task.number} attempt ${attempt}\n`);
-    const fd = fs.openSync(logFile, 'a');
-    const child = spawn(argv[0], argv.slice(1), { cwd, env, detached: true, stdio: ['ignore', fd, fd] });
-    child.on('error', () => { /* surfaced next tick as crashed if the job never registers */ });
-    fs.closeSync(fd);
-    child.unref();
-    return { argv, pid: null, bg: true, wt: name, logFile, continued, tools_dropped: toolsDropped };
-  }
-  const fd = fs.openSync(logFile, 'a');
-  fs.writeSync(fd, `# ${nowIso()} spawn ${argv[0]} for #${task.number} attempt ${attempt}${wt ? ` in ${worktreePath(wt)}` : ''}\n`);
-  const child = spawn(argv[0], argv.slice(1), { cwd, env, detached: true, stdio: ['ignore', fd, fd] });
-  child.on('error', () => { /* handled via exit code below */ });
-  fs.closeSync(fd); // the child holds its own copy
-  if (!keepRef) child.unref(); // one-shot dispatch must not wait for the worker
-  return { argv, pid: child.pid, child, wt, logFile, continued, tools_dropped: toolsDropped };
+  // From here down the launch belongs to the runtime, not to the dispatcher: the environment a
+  // worker gets, whether there is a child to hold, and what handle comes back are all things the
+  // three adapters answer differently and this function no longer knows (src/runtime/, §4).
+  // `name` is the checkout the harness will make for itself; `wt` is the one the dispatcher made.
+  const opts = { argv, cwd, logFile, wt, name, profile, profileName, keepRef, continued, toolsDropped, track };
+  return track ? runTrack(ctx, task, attempt, opts) : runCard(ctx, task, attempt, opts);
 }
 
 // ---------- reconcile merged pull requests ----------
@@ -440,36 +415,9 @@ export async function trackConflictPass(ctx, tasks, { dryRun = false, log = /** 
   return out;
 }
 
-// ---------- reaping background agents ----------
-
-/** An agent that is really taking its turn — not parked on a permission prompt. */
-const jobWorking = (job) => job?.state === 'working' || job?.status === 'busy';
-
-/** Statuses that mean the board is finished with the card, so nothing can be waiting for it. */
-const FINISHED_STATUSES = ['done', 'archived'];
-
-/**
- * Should the tick `claude stop` this background job? Pure. `task` is the job's card as the open
- * board read returned it, or null when its number is not on the board at all — a closed issue.
- * Returns why, or null to leave the job running.
- *
- * `jobAlive()` counts blocked/waiting as alive, because an agent sitting on a permission prompt is
- * a live worker (treating it as finished killed #14/2 and #3/2) — but that only holds while its
- * card is RUNNING. Once the card is closed, done or archived, nobody is ever going to answer that
- * prompt: kb #17 and #21 sat blocked for 15 hours after their PRs merged. So a finished card's
- * agent is stopped whatever it claims to be doing, a running card's agent belongs to the reclaim
- * step (which knows blocked means alive), and on any other live status the agent is spared only
- * while it is genuinely working — a worker that has just filed its terminal verb is still writing
- * its last turn, and must not be cut off mid-push.
- */
-export function reapDecision(job, task) {
-  if (!job || !job.pid) return null; // already gone: nothing to stop
-  if (!task) return 'its task is closed';
-  if (FINISHED_STATUSES.includes(task.status)) return `its task is ${task.status}`;
-  if (task.status === 'running') return null; // the reclaim above owns a running card's agent
-  if (jobWorking(job)) return null;
-  return `its task is ${task.status || 'off the board'} and the agent is not working`;
-}
+// The reap decision itself is pure and lives in src/model.js (`reapDecision`), re-exported here
+// because this is where every caller has always imported it from.
+export { reapDecision };
 
 // ---------- self-heal ----------
 // `unknown` says nothing about the lock, so the tick backs off and retries. That is right for one
@@ -541,8 +489,10 @@ async function failAttempt(ctx, store, task, runRec, outcome, note, { kill = tru
   // is what tells that apart from a genuine no-show (#116), and it must not spend the retry budget.
   const openPr = outcome === 'protocol_violation' ? (task.prs || []).find((p) => p.state === 'OPEN') : null;
   if (a) {
-    if (kill && a.host === ctx.host && a.job && !a.job_stopped) { stopJob(a.job); a.job_stopped = true; }
-    else if (kill && a.host === ctx.host && a.pid) killPid(a.pid);
+    // Whatever this attempt was running under, ended the way that runtime ends things: `claude stop`
+    // for a background job (once — the adapter records it on the row), SIGTERM→SIGKILL for a pid,
+    // nothing at all for a human's own terminal.
+    if (kill) runtimeFor(a).stop(ctx, a);
     a.ended_at = nowIso();
     a.outcome = outcome;
     if (note) a.reason = String(note).slice(0, 300);
@@ -663,14 +613,9 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     if (!t || ['done', 'archived'].includes(t.status)) sweepFinished(n);
   }
 
-  // background-agent jobs on this host (one local `claude agents --json` per tick, only if any profile uses them)
-  const usesBg = Object.values(ctx.cfg.profiles).some((p) => p.mode === 'claude-bg');
-  const jobsById = new Map();
-  if (usesBg) {
-    const listing = listKbJobs(ctx.root);
-    if (!listing.ok) log(`claude agents listing failed: ${listing.error}`);
-    for (const j of listing.jobs) jobsById.set(j.id, j);
-  }
+  // Every live handle this board's runtimes can see, once per tick — one local `claude agents --json`
+  // for a board with a `claude-bg` profile, nothing at all for a board without one (src/runtime/).
+  const handles = listHandles(ctx, { log });
 
   // The lock refs, read once for the whole tick: the reclaim check below reads the commit date of
   // the ref a stale-looking attempt holds (a ref-CAS heartbeat leaves no trace in the run comment),
@@ -723,46 +668,29 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     // edits to the row that are not an outcome (the job id, the session behind it): saved once,
     // below, and only when nothing else is about to save the record anyway.
     let dirty = false;
-    // Nothing local to inspect, so the heartbeat and max_runtime are the whole check — the no-handle
-    // rules further down would call a perfectly live attempt crashed three minutes in. `manual` means
-    // a human claimed it by hand (`hkb claim <n>` with no `--spawn`) and is working it in their own
-    // terminal, so there is no pid the dispatcher ever knew. `remote` is the same shape written by an
-    // hkb that still had the Actions runner: the mode is gone but those rows live in run records this
-    // release inherits, so they are read here even though nothing writes them any more.
-    let job = null; // the matched background-agent job, when this attempt has one — the idle check below reuses it
-    if (a.manual || a.remote) { /* liveness is the heartbeat */ }
-    else if (a.host === ctx.host && (a.job || a.bg)) {
-      job = a.job ? (jobsById.get(a.job) || readJobState(a.job)) : null;
-      if (!job && a.bg && a.log) {
-        // the launch log contains "backgrounded · <id>" — the reliable source for the job id
-        let id = null;
-        try { id = parseBackgroundedId(fs.readFileSync(path.join(ctx.root, a.log), 'utf8')); } catch { /* not yet written */ }
-        if (id) { job = jobsById.get(id) || readJobState(id); if (!dryRun) { a.job = id; dirty = true; } }
-      }
-      if (!job && a.bg) job = matchJobByWorktree([...jobsById.values()], a.wt || `kb-${t.number}-${a.attempt}`);
-      // The tick after the launch, name the session behind the job. A `claude --bg` worker records
-      // its own identity from the terminal verb it runs (#135) — but the attempts that need it most
-      // are the ones that never run one, and the job record already says everything they need.
-      const session = dryRun ? null : jobSessionUpdate(a, job);
-      if (session) {
-        // The job the tick matched to this attempt outranks whatever stamped the row: a hook fires
-        // in whichever session had `KB_TASK` in its environment, and that is not always this one
-        // (#150). Say so when it happens — a rewritten session id is the kind of correction an
-        // operator must be able to find afterwards.
-        const wrong = a.session_id && session.session_id && session.session_id !== a.session_id ? a.session_id : null;
-        Object.assign(a, session);
-        dirty = true;
-        log(`#${t.number}: attempt ${a.attempt} ${formatSession(a)}${wrong ? ` — corrected: the row named session ${wrong}, which is not the session job ${a.job || job.id} is running` : ''}`);
-      }
-      if (!job) {
-        if (secondsSince(a.started_at) > 180) outcome = 'crashed'; // cold daemon start gets 3 min to register
-      } else if (classifyJob(job) !== 'running' && secondsSince(a.started_at) > 30) outcome = 'protocol_violation';
-    } else if (a.host === ctx.host && a.pid && !pidAlive(a.pid)) outcome = 'crashed';
-    else if (a.host === ctx.host && !a.pid && !a.job && secondsSince(a.started_at) > 180) outcome = 'crashed'; // spawn never recorded a handle
-    // A live pid is as authoritative as a live job (#185, second pass): a `process` worker never
-    // touches the run comment either between heartbeats, so `lastSignal` alone would call it idle on
-    // the same schedule a bg attempt was. `process.kill(pid, 0)` costs nothing and settles it outright.
-    const livePid = a.host === ctx.host && !!a.pid && pidAlive(a.pid);
+    // One question, whatever this attempt is running under: the runtime that owns its handle looks
+    // and reports. `alive: null` is a runtime with nothing to say — a foreign host, or a human in
+    // their own terminal — and there the heartbeat and `max_runtime` are the whole check, which is
+    // why this must never read as "dead".
+    const runtime = runtimeFor(a);
+    const seen = runtime.inspect(ctx, a, { jobs: handles.byId, task: t, dryRun });
+    const job = seen.handle?.raw || null; // whatever the runtime matched — the idle check below reuses it
+    outcome = seen.outcome;
+    if (seen.patch) { Object.assign(a, seen.patch); dirty = true; }
+    if (seen.session) {
+      // The handle the tick matched to this attempt outranks whatever stamped the row: a hook fires
+      // in whichever session had `KB_TASK` in its environment, and that is not always this one
+      // (#150). Say so when it happens — a rewritten session id is the kind of correction an
+      // operator must be able to find afterwards.
+      const wrong = a.session_id && seen.session.session_id && seen.session.session_id !== a.session_id ? a.session_id : null;
+      Object.assign(a, seen.session);
+      dirty = true;
+      log(`#${t.number}: attempt ${a.attempt} ${formatSession(a)}${wrong ? ` — corrected: the row named session ${wrong}, which is not the session job ${seen.handle?.id} is running` : ''}`);
+    }
+    // A live handle is authoritative on its own (#185, second pass): a `process` worker never
+    // touches the run comment between heartbeats either, so `lastSignal` alone would call a
+    // perfectly live one idle on the same schedule a background attempt was.
+    const livePid = seen.alive === true;
     if (!outcome && secondsSince(a.started_at) > maxRuntime) outcome = 'timed_out';
     else if (!outcome && secondsSince(lastSignal) > d.stale_after) {
       // A ref-CAS worker writes nothing to the run comment, so its real last signal is the commit
@@ -804,13 +732,13 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       continue;
     }
     if (dryRun) { summary.reclaimed.push({ number: t.number, outcome, dry: true }); continue; }
-    // A pid-mode attempt has no job record to name its session (line ~593 above does that for a bg
-    // one) — but its own log ends the same way, so a `crashed`/`timed_out` row gets session and cost
-    // the way a `--bg` row has since #137, and now `terminal_reason` too (#155).
-    if (a.host === ctx.host && a.pid && !job && a.log) {
-      let session = null;
-      try { session = sessionUpdate(a, parseSessionLog(tailLog(ctx, a.log, 200_000))); } catch { /* unreadable log */ }
-      if (session) Object.assign(a, session);
+    // Whatever the runtime still has to say about a row it is about to lose: a `process` attempt's
+    // own log ends the way a job record would have, so a `crashed`/`timed_out` row gets its session
+    // and cost the way a `--bg` row has since #137, and its `terminal_reason` since #155. A runtime
+    // with nothing left to read answers null, and the transcript is not opened either.
+    const post = runtime.postMortem?.(ctx, a) || null;
+    if (post) {
+      if (post.session) Object.assign(a, post.session);
       try { attachDeniedTools(ctx, a); } catch { /* unreadable transcript */ }
     }
     // failAttempt saves the same record, so a row written off in the tick that named its session
@@ -824,19 +752,19 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   // reap the background agents the board is finished with — see reapDecision. `tasks` is the open
   // board with this tick's transitions already applied (setStatus mutates in place), so a card
   // reclaimed a few lines up is seen as ready here, not as still running.
-  if (usesBg && !dryRun) {
+  if (!dryRun) {
     const byNumber = new Map(tasks.map((t) => [t.number, t]));
-    for (const j of jobsById.values()) {
-      const t = byNumber.get(j.task) || null;
-      const why = reapDecision(j, t);
+    for (const h of handles.all) {
+      const t = byNumber.get(h.task) || null;
+      const why = reapDecision(h.raw, t);
       if (!why) continue;
-      if (!stopJob(j.id)) { log(`#${j.task}: could not stop background agent ${j.id} (${why}) — retrying next tick`); continue; }
-      touch(j.task);
-      summary.reaped.push({ number: j.task, job: j.id, why });
-      log(`#${j.task}: stopped background agent ${j.id} — ${why}`);
+      if (!stopHandle(ctx, h)) { log(`#${h.task}: could not stop ${h.label} (${why}) — retrying next tick`); continue; }
+      touch(h.task);
+      summary.reaped.push({ number: h.task, job: h.id, why });
+      log(`#${h.task}: stopped ${h.label} — ${why}`);
       // Its checkout goes with it, unless the task is still waiting for another attempt — the
       // worktree of a crashed one is the post-mortem (`hkb show <n>` prints the resume command).
-      if (!t || ['done', 'archived', 'review'].includes(t.status)) sweepFinished(j.task);
+      if (!t || ['done', 'archived', 'review'].includes(t.status)) sweepFinished(h.task);
     }
   }
 
@@ -997,8 +925,9 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       spawned = await spawnWorker(ctx, t, profileName, k, {
         keepRef: !!children,
         prompt: trackContext({ repo: ctx.repo.nameWithOwner, board: ctx.board, track: cand.track, attempt: k, waves: cand.waves, fanout: trackFanout(ctx.cfg, profileName, t), trackBranch, defaultBranch: ctx.cfg.default_branch || 'main' }),
+        track: { nodes, waves: cand.waves, branch: trackBranch, mode: cand.mode },
       });
-      if (!spawned.pid && !spawned.bg) throw new Error('spawn returned neither a pid nor a background launch');
+      if (!spawned.handle) throw new Error('spawn returned neither a pid nor a background launch');
     } catch (e) {
       log(`#${t.number}: track spawn failed: ${e.message}`);
       // the runner never started, so the fast engine has not had its go: drop the marker that
@@ -1013,9 +942,8 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       for (const nn of nodes) coveredBy.set(nn, t.number);
       continue;
     }
-    attempt.pid = spawned.pid;
-    if (spawned.bg) attempt.bg = true;
-    if (spawned.wt) attempt.wt = spawned.wt;
+    // the handle fields the runtime wants on the row — a pid, a job to come, the checkout it is in
+    Object.assign(attempt, spawned.row);
     attempt.log = path.relative(ctx.root, spawned.logFile);
     await store.saveRun(t.number, runRec);
     state.spawned_today = (state.spawned_today || 0) + 1;
@@ -1099,16 +1027,14 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     let spawned;
     try {
       spawned = await spawnWorker(ctx, t, profileName, k, { keepRef: !!children, continuePr });
-      if (!spawned.pid && !spawned.bg) throw new Error('spawn returned neither a pid nor a background launch');
+      if (!spawned.handle) throw new Error('spawn returned neither a pid nor a background launch');
     } catch (e) {
       log(`#${t.number}: spawn failed: ${e.message}`);
       await failAttempt(ctx, store, t, runRec, 'spawn_failed', e.message, { kill: false });
       summary.spawn_failed.push({ number: t.number, error: e.message });
       continue;
     }
-    attempt.pid = spawned.pid;
-    if (spawned.bg) attempt.bg = true;
-    if (spawned.wt) attempt.wt = spawned.wt;
+    Object.assign(attempt, spawned.row);
     // which of the two continuation paths this attempt took: the branch, when the dispatcher put the
     // checkout on the PR's own; nothing, when the brief is all that tells the worker to continue it
     if (spawned.continued?.branch) attempt.continues_branch = spawned.continued.branch;
@@ -1121,9 +1047,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     perProfile[profileName] = (perProfile[profileName] || 0) + 1;
     claimedPaths.push({ number: t.number, paths: t.kb.paths || [] });
     budget--;
-    const handle = spawned.bg
-      ? `background agent in ${spawned.wt} (job id on next tick; claude agents to watch)`
-      : `pid ${spawned.pid}${spawned.wt ? ` in ${worktreePath(spawned.wt)}` : ''}`;
+    const handle = spawned.describe;
     const continuing = !spawned.continued ? ''
       : spawned.continued.branch
         ? spawned.continued.why

@@ -10,8 +10,8 @@ covers:
     sha: 464c411be61b06c8513fd248847bf0eeceb3eef0
   - path: src/model.js
     sha: de323e59fae958580450c490eea7fa56520e28a5
-  - path: src/jobs.js
-    sha: a5b255731602cb2363ff33745fa1039e211ffdd1
+  - path: src/runtime/claude-bg.js
+    sha: 4a66fce55c3b4fc895eb8b1adaa3cd0eb48c4eff
   - path: src/dispatch.js
     sha: 6a31798b86f2e330b93d1bf20f659e4843d6a022
   - path: src/doctor.js
@@ -37,7 +37,7 @@ related: [architecture/overview, features/harness-profiles, features/tracks, dec
 | Answer | Where it comes from | Whose it is |
 | --- | --- | --- |
 | the launch environment | `KB_TASK`/`KB_ATTEMPT`/`KB_BOARD`/`KB_REPO`/`KB_ROOT`/`KB_PROFILE`, set by `spawnWorker` (`src/dispatch.js`) | every harness the dispatcher runs as a child process |
-| the checkout | the `kb-<n>-<k>` directory name (`parseWorktreeName`, `src/model.js`) | a `claude --bg` worker, and the tick matching a job (`matchJobByWorktree`, `src/jobs.js`) |
+| the checkout | the `kb-<n>-<k>` directory name (`parseWorktreeName`, `src/model.js`) | a `claude --bg` worker, and the tick matching a job (`matchJobByWorktree`, `src/runtime/claude-bg.js`) |
 | the job record | `~/.claude/jobs/<id>/state.json` — `sessionId`, `linkScanPath` (`sessionFromJobState`, `src/model.js`) | which *session* ran it, not which attempt |
 
 The first two answer "which attempt", the third answers "which session", and
@@ -145,7 +145,7 @@ permission decisions) is invisible to a worker the same way.
   transcript.
 - **The tick** names the session behind a live background attempt from the job
   record, one tick after the launch, for the attempts no verb ever reaches
-  (`jobSessionUpdate`, `src/jobs.js`).
+  (`jobSessionUpdate`, `src/runtime/claude-bg.js`).
 
 Answering the identity question is what makes the *rest* of the row worth
 having. `SESSION_FIELDS` (`src/model.js`) is what a stamp carries, and since

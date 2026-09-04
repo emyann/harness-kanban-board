@@ -36,7 +36,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { kanbanDir } from './board.js';
-import { currentSession } from './jobs.js';
+import { currentSession } from './runtime/claude-bg.js';
 import { openStore } from './store/index.js';
 import { openAttempt, sessionUpdate, normalizeHookInput, parseWorktreeName, attemptIdentity, shouldNudgeOnStop, buildDeniedTools, deniedToolsUpdate } from './model.js';
 import { deniedToolsFromTranscript } from './stats.js';

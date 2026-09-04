@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseBackgroundedId, classifyJob, jobName, KB_JOB_NAME_RE } from '../src/model.js';
-import { matchJobByWorktree, jobSessionUpdate } from '../src/jobs.js';
+import { matchJobByWorktree, jobSessionUpdate } from '../src/runtime/claude-bg.js';
 import { tick } from '../src/dispatch.js';
 import { DEFAULT_BOARD } from '../src/board.js';
 import { installDoubles, kbIssue, runWith } from './fake-store.js';
@@ -113,7 +113,7 @@ const bgJob = ({ id, task, ...state }) => ({
   cwd: `/repo/.claude/worktrees/kb-${task}-1`, ...state,
 });
 
-/** A `claude` on PATH that answers the calls src/jobs.js makes: `agents --json` and `stop <id>`. */
+/** A `claude` on PATH that answers the calls src/runtime/claude-bg.js makes: `agents --json` and `stop <id>`. */
 function stubClaude(root, jobs) {
   const bin = path.join(root, 'stub-bin');
   fs.mkdirSync(bin, { recursive: true });

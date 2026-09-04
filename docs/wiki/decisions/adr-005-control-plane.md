@@ -12,8 +12,8 @@ superseded_by: ~
 covers:
   - path: src/dispatch.js
     sha: 492b6362444d3589e4fc0989cf89cd58aad93ccb
-  - path: src/jobs.js
-    sha: a5b255731602cb2363ff33745fa1039e211ffdd1
+  - path: src/runtime/claude-bg.js
+    sha: 4a66fce55c3b4fc895eb8b1adaa3cd0eb48c4eff
   - path: src/cli.js
     sha: 565b5ca72ec257acd2a350d8b465d302061199c3
 generated_at_commit: e16f166
@@ -74,7 +74,7 @@ background job: `reapDecision` gates on a pid parked jobs do not have (`src/disp
   `process` by `SIGSTOP`/`SIGCONT` on its process group (refused on Windows), and its stop sends
   `SIGCONT` before `SIGTERM`; `manual` records the row only.
 - **The runtime behind a profile mode becomes a seam**: `src/runtime/{process,claude-bg,manual}.js`
-  each exporting `launch`, `inspect`, `stop`, `pause`, `resume`; the tick and `src/jobs.js` stop
+  each exporting `launch`, `inspect`, `stop`, `pause`, `resume`; the tick and `src/runtime/claude-bg.js` stop
   branching on the mode; a fake runtime lets `tick` tests run without a `claude` binary.
 - **The tick is sleep-aware**: a gap longer than three intervals between ticks is written into
   `pauses[]` of every attempt with a local handle.

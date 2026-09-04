@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { parseSessionLog, sessionUpdate, formatSession, formatDenials, authPauseReason, resumeCommand, worktreePath, parseWorktreeName, sessionFromJobState, buildDeniedTools, deniedToolsUpdate, formatDeniedTools, denialDisplayTool, DENIAL_KINDS, mcpApproved, mcpApprovalLine, mcpGrantedTo, mcpVisibilityDiagnosis, mcpSplitApprovals } from '../src/model.js';
 import { stopHook, markSessionClaim, whichAttempt, sessionForAttempt } from '../src/hook.js';
-import { currentSession } from '../src/jobs.js';
+import { currentSession } from '../src/runtime/claude-bg.js';
 import { complete } from '../src/lifecycle.js';
 import { DEFAULT_BOARD } from '../src/board.js';
 import { installDoubles, kbIssue, runWith } from './fake-store.js';

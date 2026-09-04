@@ -11,7 +11,7 @@ covers:
   - path: src/gh.js
     sha: 8154ea477e52ed3f769238f1c1bda588fd767798
   - path: src/model.js
-    sha: de323e59fae958580450c490eea7fa56520e28a5
+    sha: a8fb7e0cfbd112e57fc850685f7e830277411454
   - path: src/store/index.js
     sha: fed32f2f24ff0ecb5bbec064c26fcaa3f63fd7dc
   - path: src/forge.js
@@ -19,19 +19,21 @@ covers:
   - path: src/lifecycle.js
     sha: 29089f8c1ba2f46a320316634593773d1d2b67b0
   - path: src/dispatch.js
-    sha: 6a31798b86f2e330b93d1bf20f659e4843d6a022
+    sha: 560c14f9e57550d0886450f2546b70daa9fd4cb4
   - path: src/context.js
     sha: be28b4843c2a09afc0c835c4fe195706af86bb15
   - path: src/hook.js
-    sha: 464c411be61b06c8513fd248847bf0eeceb3eef0
-  - path: src/jobs.js
-    sha: a5b255731602cb2363ff33745fa1039e211ffdd1
+    sha: 8e4435d51d2c7fd297b83ef31a024a5baa9ac058
+  - path: src/runtime/index.js
+    sha: f32ead5122adc442a16778b717359a04128c0d2f
+  - path: src/runtime/claude-bg.js
+    sha: 4a66fce55c3b4fc895eb8b1adaa3cd0eb48c4eff
   - path: src/board.js
     sha: 0337a17cf70442cac66fb457c880e4b27a52672e
   - path: src/doctor.js
     sha: c29b0cd7856ca394203cb53b8755bf85e25bd239
 generated_at_commit: 53ecf5a
-last_refreshed: 2026-09-03
+last_refreshed: 2026-09-04
 related: [concepts/store, concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
 
@@ -156,6 +158,27 @@ request-review), a prompt assembled from the card by `src/context.js`, and
 guard rails on the launch line itself. The protocol is what a worker follows;
 the harness is interchangeable.
 
+**How a worker *runs* is a seam of its own** (`src/runtime/`, one module per
+runtime; the contract is `src/runtime/contract.js`). A profile's `mode` names a
+runtime — a detached child process holding a pid, a Claude Code background agent
+holding a job id, or a human in their own terminal — and `runtimeFor` is the
+only place in hkb that reads either that mode or a handle field by name. It
+takes a profile before the launch, an attempt row after it, or a handle out of a
+listing, because those are the same question at three points in one life. The
+tick then only ever asks the adapter: `launch` (via `runCard`/`runTrack`),
+`inspect`, `stop`, and the `pause`/`resume` the operator verbs will need.
+
+Two things follow, and both are the point. `inspect` answers a three-valued
+`alive` — `true`/`false` only when *this host holds the handle*, and `null` for
+"nothing to say", where the heartbeat and `max_runtime` remain the whole check.
+A runtime that cannot see an attempt must never be read as one that found it
+dead: that is what keeps a `manual` claim and another host's worker alive. And
+the runtime's own local listing (`claude agents --json`) stays one subprocess
+per tick, made by the adapter that needs it and skipped entirely by a board
+whose profiles never use it (`listHandles`). A second harness — an SDK that runs
+a whole wave in one call rather than N spawns — is meant to be a new file here
+that overrides `runTrack`, not a change to the tick.
+
 **The launch line is the permission policy.** `--permission-mode dontAsk` with
 an `--allowedTools` / `--disallowedTools` pair (`CLAUDE_TOOLS` and
 `CLAUDE_DENY`, `src/board.js`) is the layer that is live on every profile,
@@ -186,7 +209,7 @@ daemon and exits, so that environment stops at the CLI and never reaches the
 session doing the work. The default profile is one of those. `whichAttempt`
 (`src/hook.js`) therefore falls back to the `kb-<n>-<k>` checkout the launch
 names, which is already the identity the tick matches a running job by
-(`matchJobByWorktree`, `src/jobs.js`). And when the two *disagree* the checkout
+(`matchJobByWorktree`, `src/runtime/claude-bg.js`). And when the two *disagree* the checkout
 wins: an environment can be inherited — a session daemon a `claude --bg` launch
 cold-started keeps that launch's `KB_TASK` for life and hands it to every
 session it hosts — where a directory cannot, so hkb no longer passes any `KB_*`
@@ -195,7 +218,7 @@ on that launch and a hook that finds a contradicted one stands aside
 
 Session identity travels the same asymmetry. What session a worker *is*
 (`CLAUDE_CODE_SESSION_ID`, plus the job record `currentSession` reads in
-`src/jobs.js`, which names the transcript on disk) is recorded onto the attempt
+`src/runtime/claude-bg.js`, which names the transcript on disk) is recorded onto the attempt
 row by the **terminal verb**, not by the Stop hook — the verb is the one thing
 every worker runs, and it is already writing that row. Which is why the verb has
 to be a command the worker can actually type: `complete` is a bash builtin, and
@@ -211,8 +234,8 @@ The attempts that never reach a verb — crashed, timed out, written off as a
 protocol violation — are exactly the ones a human reopens, so the tick fills
 those from the other end. It has already matched the background job to decide
 whether the attempt is alive, and that job names a record on disk;
-`jobSessionUpdate` (`src/jobs.js`) turns it into the same fields, one tick after
-the launch (`src/dispatch.js`). Blanks only: a row a verb has stamped is left
+`jobSessionUpdate` (`src/runtime/claude-bg.js`) turns it into the same fields, one
+tick after the launch, through `inspect` (`src/dispatch.js`). Blanks only: a row a verb has stamped is left
 exactly as it is, and a resumed job's record is never half-merged into one. A
 pid-mode attempt has no job record, but the same worker log `parseSessionLog`
 already reads for session and cost, so the tick backfills it from there too,

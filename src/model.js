@@ -1604,6 +1604,43 @@ export function classifyJob(job) {
   return jobAlive(job) ? 'running' : 'protocol_violation';
 }
 
+/** An agent that is really taking its turn — not parked on a permission prompt. */
+export const jobWorking = (job) => job?.state === 'working' || job?.status === 'busy';
+
+/** Statuses that mean the board is finished with the card, so nothing can be waiting for it. */
+export const FINISHED_STATUSES = ['done', 'archived'];
+
+/**
+ * Should the tick stop this background job? Pure. `task` is the job's card as the open board read
+ * returned it, or null when its number is not on the board at all — a closed card.
+ * Returns why, or null to leave the job running.
+ *
+ * `jobAlive()` counts blocked/waiting as alive, because an agent sitting on a permission prompt is
+ * a live worker (treating it as finished killed #14/2 and #3/2) — but that only holds while its
+ * card is RUNNING. Once the card is closed, done or archived, nobody is ever going to answer that
+ * prompt: kb #17 and #21 sat blocked for 15 hours after their PRs merged. So a finished card's
+ * agent is stopped whatever it claims to be doing, a running card's agent belongs to the reclaim
+ * step (which knows blocked means alive), and on any other live status the agent is spared only
+ * while it is genuinely working — a worker that has just filed its terminal verb is still writing
+ * its last turn, and must not be cut off mid-push.
+ *
+ * **There is no pid gate, and that is the fix, not an omission.** This opened with
+ * `if (!job || !job.pid) return null` on the reasoning that a job with no pid is already gone —
+ * but a `claude --bg` job only carries a pid in `claude agents --json` *while it is on a turn*
+ * (docs/local-first.md §11): a job parked on a permission prompt has none, and that is exactly the
+ * job this decision exists to stop. `claude stop <id>` needs no pid. The listing entry is the
+ * evidence the job exists; its pid says only whether it is mid-turn, which `jobWorking` asks
+ * properly a few lines down.
+ */
+export function reapDecision(job, task) {
+  if (!job) return null; // nothing to stop
+  if (!task) return 'its task is closed';
+  if (FINISHED_STATUSES.includes(task.status)) return `its task is ${task.status}`;
+  if (task.status === 'running') return null; // the reclaim step owns a running card's agent
+  if (jobWorking(job)) return null;
+  return `its task is ${task.status || 'off the board'} and the agent is not working`;
+}
+
 // ---------- worker session: id, transcript, cost ----------
 // A worker is a real agent session. The attempt row carries its id so a human can reopen it
 // (`claude --resume <id>` inside the worker's worktree) and see what the attempt cost.
@@ -1635,7 +1672,7 @@ function sessionFieldsOf(obj) {
 /**
  * The session behind a background agent, out of the job record Claude Code keeps for it
  * (`~/.claude/jobs/<id>/state.json`): `sessionId` is the session, `linkScanPath` the transcript it
- * writes. Pure — `currentSession` (src/jobs.js) reads the file. null when it names neither.
+ * writes. Pure — `currentSession` (src/runtime/claude-bg.js) reads the file. null when it names neither.
  *
  * This is the only local source a `claude --bg` worker has for its own identity: the launch
  * environment never reaches it, so nothing keyed on `KB_TASK` can answer for it. See src/hook.js.
@@ -1915,7 +1952,7 @@ export function worktreePath(wt) { return `.claude/worktrees/${wt}`; }
  * directory is not a worker's.
  *
  * The dispatcher already identifies a running background job this way (`matchJobByWorktree`,
- * src/jobs.js). It is also all a `claude --bg` session knows about which attempt it is, since the
+ * src/runtime/claude-bg.js). It is also all a `claude --bg` session knows about which attempt it is, since the
  * environment the launch sets never reaches it — see `whichAttempt` in src/hook.js.
  */
 export function parseWorktreeName(name) {
@@ -2034,7 +2071,7 @@ export function kbVarsIn(environ) {
  * Does this profile's worker sit in a `kb-<n>-<k>` checkout hkb can name?
  *
  * Two modes qualify, and only these two, because in both hkb *knows* where the worker is: a
- * `claude --bg` job is identified by its worktree basename (`matchJobByWorktree`, src/jobs.js), and
+ * `claude --bg` job is identified by its worktree basename (`matchJobByWorktree`, src/runtime/claude-bg.js), and
  * a `workspace: "worktree"` launch is handed that directory as its cwd (`spawnWorker`). A
  * `mode: "process"` Claude profile also passes `--worktree`, but where its *hooks* run is the
  * harness's business, not ours — and its environment dies with the process, so it can never be the
