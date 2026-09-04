@@ -1,5 +1,14 @@
 {
-  "attempts": [],
+  "attempts": [
+    {
+      "attempt": 1,
+      "heartbeat_at": "2026-09-04T04:00:01.399Z",
+      "host": "YRND1-GG",
+      "pid": null,
+      "profile": "claude",
+      "started_at": "2026-09-04T04:00:01.399Z"
+    }
+  ],
   "block_loops": {},
   "failures": 0,
   "last_error": null,
