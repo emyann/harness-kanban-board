@@ -3,14 +3,19 @@
     {
       "attempt": 1,
       "bg": true,
+      "ended_at": "2026-09-04T04:17:56.598Z",
       "heartbeat_at": "2026-09-04T04:00:01.399Z",
       "host": "YRND1-GG",
       "job": "86a0cd7e",
       "log": ".kanban/logs/296-1.log",
+      "outcome": "completed",
       "pid": null,
+      "pr": 337,
+      "pr_head": "worktree-kb-296-1",
       "profile": "claude",
       "session_id": "86a0cd7e-bbb8-47e6-a7eb-48a3881fbc57",
       "started_at": "2026-09-04T04:00:01.399Z",
+      "summary": "The runtime seam is in. src/runtime/ is one module per runtime behind one contract (contract.js): process.js (detached child, pid), claude-bg.js (today's src/jobs.js moved wholesale — the listing, the job record, the session behind it), manual.js (a human in their terminal). Each exports launch (reached as runCard/runTrack), inspect, stop, and pause/resume returning {ok:false, why:'not implemented",
       "transcript_path": "/home/yrnd1/.claude/projects/-home-yrnd1-projects-harness-kanban-board--claude-worktrees-kb-296-1/86a0cd7e-bbb8-47e6-a7eb-48a3881fbc57.jsonl",
       "wt": "kb-296-1"
     }
