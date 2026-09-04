@@ -110,12 +110,10 @@ test('hkb groom --json: one board query, zero writes, and the frozen key set', a
   assert.deepEqual(writes(store), [], 'groom is a read, exactly like dispatch --dry-run');
   assert.deepEqual(Object.keys(rep), REPORT_KEYS);
   assert.equal(rep.board, 'default');
-  // NOT the provenance the board came back with. `groomBoard` derives this from
-  // `caps.blockedByGql` — GitHub's own capability probe — rather than from the `blockers` note
-  // `listTasks` hangs on the array (`blockersOf`), so on any store that is not GitHub it reports
-  // "rest" for a board that never made a REST call. Asserted as it behaves, and filed:
-  // docs/wiki/FINDINGS.md, "groom reports blockers_source from caps".
-  assert.equal(rep.blockers_source, 'rest');
+  // The provenance the board actually came back with (`blockersOf`), not a capability probe's
+  // guess: `groomBoard` used to derive this from `caps.blockedByGql` and reported "rest" for a
+  // board that never made a REST call in its life. The store that answered names itself.
+  assert.equal(rep.blockers_source, 'fake');
   assert.deepEqual(Object.keys(rep.summary).sort(), ['by_status', 'hubs', 'lane', 'levels', 'one_slot', 'path_overlap']);
   assert.deepEqual(rep.cards.map((c) => c.number), [10, 11, 12], 'triage/todo/ready by default — #13 is running');
   for (const c of rep.cards) assert.deepEqual(Object.keys(c).filter((k) => k !== 'bodyText'), CARD_KEYS);
@@ -268,6 +266,79 @@ test('hkb edit <n> --paths/--goal/--scheduled-at/--priority sets exactly those k
 
 test('hkb edit <n>... with no field flag is a usage error', async () => {
   await assert.rejects(() => main(['edit', '50']), (e) => e.exitCode === 2);
+});
+
+/**
+ * The verb `/kanban:specify` needs and did not have (#304).
+ *
+ * `updateBody` has been on the store interface all along with nothing above it reaching the verb,
+ * because while the board was GitHub Issues the skill wrote a card's prose with `gh api
+ * issues/<n> -X PATCH -F body=@…`. The board is a branch now, so that request edits an issue that
+ * is not the card — silently, on a repository whose issues may be something else entirely.
+ */
+test('hkb edit <n> --body-file rewrites the prose and keeps the kb block', async (t) => {
+  const { gh, store, restore } = installDoubles();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-edit-body-'));
+  fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
+  store.addIssue(kbIssue({
+    number: 60, title: 'a one-liner', status: 'triage', agent: 'claude', body: 'rate limit the API',
+    kb: { paths: ['src/old.js'], goal: 'old goal', priority: 1 },
+  }));
+  const cwd = process.cwd();
+  const write = process.stdout.write.bind(process.stdout);
+  let printed = '';
+  process.stdout.write = (s) => { printed += s; return true; };
+  process.chdir(dir);
+  t.after(() => { process.stdout.write = write; process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const run = async (...argv) => { printed = ''; await main(argv); return printed; };
+
+  const spec = path.join(dir, 'body.md');
+  fs.writeFileSync(spec, '## Why\nthe API has no limiter\n\n## What\na token bucket\n');
+  const said = await run('edit', '60', '--body-file', spec, '--paths', 'src/limit.js', '--priority', '2');
+  assert.match(said, /#60 body, kb: paths, priority set/);
+
+  const shown = JSON.parse(await run('show', '60', '--json'));
+  assert.match(shown.bodyText, /^## Why\nthe API has no limiter/);
+  assert.doesNotMatch(shown.bodyText, /kb:/, 'the machine block is hkb\'s, and never lands in the prose');
+  assert.deepEqual(shown.kb.paths, ['src/limit.js'], 'the kb block survived the body rewrite');
+  assert.equal(shown.kb.priority, 2);
+  assert.equal(shown.kb.goal, 'old goal', 'and so did the key neither flag named');
+
+  // --body inline is the same write
+  await run('edit', '60', '--body', 'shorter');
+  assert.equal(JSON.parse(await run('show', '60', '--json')).bodyText, 'shorter');
+});
+
+test('hkb edit --body-file: an unreadable path and a multi-card body write both say what to do', async (t) => {
+  const { gh, store, restore } = installDoubles();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-edit-body2-'));
+  fs.mkdirSync(path.join(dir, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.kanban', 'board.json'), JSON.stringify({ ...DEFAULT_BOARD, repo: gh.nameWithOwner }));
+  store.addIssue(kbIssue({ number: 61, status: 'triage', agent: 'claude', body: 'one' }));
+  store.addIssue(kbIssue({ number: 62, status: 'triage', agent: 'claude', body: 'two' }));
+  const cwd = process.cwd();
+  process.chdir(dir);
+  t.after(() => { process.chdir(cwd); restore(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+  await assert.rejects(() => main(['edit', '61', '--body-file', path.join(dir, 'nope.md')]),
+    (e) => e.exitCode === 2 && /cannot read/.test(e.message) && /--body/.test(e.message));
+  // one body, several cards is a typo, not a broadcast — and nothing is written before it is caught
+  await assert.rejects(() => main(['edit', '61', '62', '--body', 'same for both']),
+    (e) => e.exitCode === 2 && /once per card/.test(e.message));
+  // `--body` with nothing after it is `true`, and `str(true)` is null: the prose was silently
+  // dropped and the command reported success, as long as some *other* flag satisfied the "needs at
+  // least one of" guard. `--body-file` already refused that shape; so does this.
+  await assert.rejects(() => main(['edit', '61', '--body', '--priority', '2']),
+    (e) => e.exitCode === 2 && /--body needs the text after it/.test(e.message));
+  await assert.rejects(() => main(['edit', '61', '--body']),
+    (e) => e.exitCode === 2 && /--body needs the text after it/.test(e.message));
+  assert.deepEqual(store.writesTo(61), [], 'the refusal wrote nothing');
+  assert.deepEqual(store.writesTo(62), []);
+
+  // `--body ""` is a real value — a human emptying a card's prose — and is still honoured.
+  await main(['edit', '61', '--body', '']);
+  assert.match(store.bodyOf(61), /^<!-- kb: /, 'the machine block survives; the prose is gone');
 });
 
 // ---------- hkb edit rejects a non-numeric --priority / unparseable --scheduled-at (#243) ----------

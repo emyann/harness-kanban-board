@@ -15,10 +15,10 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { tick, withoutWorktreeFlag, DURABLE_TICK_KEYS } from '../src/dispatch.js';
 import { DEFAULT_BOARD } from '../src/board.js';
-import { claim, release, listLocks } from '../src/lock.js';
 import { complete, requestChanges } from '../src/lifecycle.js';
 import { activePrGuard, L, RESULT_MARKER, worktreePath } from '../src/model.js';
 import { installDoubles, kbIssue, runWith } from './fake-store.js';
+import { openStore } from '../src/store/index.js';
 
 const ago = (seconds) => new Date(Date.now() - seconds * 1000).toISOString();
 
@@ -153,8 +153,11 @@ test('a ready task is claimed once: ref, run comment, running label, worker spaw
   assert.equal(run.attempts[0].ended_at, undefined);
   assert.equal(run.attempts[0].log, '.kanban/logs/7-1.log');
   assert.ok(fs.existsSync(path.join(h.root, '.kanban', 'logs', '7-1.log')));
-  // one run comment, created then updated — never a second create
-  assert.equal(h.store.issues.get(7).comments.length, 1, 'one run record, updated in place — never a second create');
+  // One run record per card, updated in place. The tick writes it twice — once when it opens the
+  // attempt, once when the spawn hands back a pid — and both land on the *same* document, which is
+  // what the GitHub store needed a "never a second create" rule to guarantee about its comment.
+  assert.deepEqual(h.store.writes('saveRun'), ['saveRun', 'saveRun']);
+  assert.equal(h.store.runOf(7).attempts.length, 1, 'one attempt row, not one per write');
 });
 
 test('claim held elsewhere: skipped, and nothing on the issue is touched', async (t) => {
@@ -243,7 +246,7 @@ test('a ref-CAS beat keeps a worker alive: the run comment is stale, the lock re
   // branch filed in docs/wiki/FINDINGS.md ("the tick names refs/kb/locks/<n>/<k> on every board").
   // Assert the sentence and not the name, so fixing that finding does not break a test that was
   // never about it.
-  assert.match(h.log(), /#7: attempt 1 beat on \S+ \d+s ago — alive/);
+  assert.match(h.log(), /#7: attempt 1 beat on .+ \d+s ago — alive/);
 });
 
 test('a ref-CAS worker whose last beat is old is reclaimed like any other', async (t) => {
@@ -293,7 +296,7 @@ test('a hand-claimed attempt is not a crashed spawn: it has no pid and never wil
   // branch filed in docs/wiki/FINDINGS.md ("the tick names refs/kb/locks/<n>/<k> on every board").
   // Assert the sentence and not the name, so fixing that finding does not break a test that was
   // never about it.
-  assert.match(h.log(), /#7: attempt 1 beat on \S+ \d+s ago — alive/);
+  assert.match(h.log(), /#7: attempt 1 beat on .+ \d+s ago — alive/);
 });
 
 test('a hand-claimed attempt that stops beating is reclaimed after stale_after', async (t) => {
@@ -310,17 +313,20 @@ test('a hand-claimed attempt that stops beating is reclaimed after stale_after',
   assert.deepEqual(await h.store.locks(), []);
 });
 
-test('a claim records the token that starts the worker\'s beat chain', async (t) => {
+test('a claim seeds this host\'s beat chain — the attempt row carries no token of its own', async (t) => {
   const h = harness();
   t.after(h.cleanup);
   h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
 
   await h.tick();
 
-  // The row records what the store's own claim handed back — the value the first heartbeat leases
-  // on. It is a sha on GitHub and a row token on a store that keeps its claims in a table; what the
-  // dispatcher must not do is invent one of its own.
-  assert.equal(h.store.runOf(7).attempts[0].lock_sha, h.store.lockOf(7, 1).token);
+  // `lock_sha` used to ride on the attempt row so the worker's first heartbeat had something to
+  // lease on. The claim itself seeds this host's beat chain (`beatToken`), and the store is the
+  // authority for the rest, so the row records nothing about the claim at all — a copy of a token
+  // is a second place for it to be wrong.
+  const store = await openStore(h.ctx);
+  assert.equal(h.store.runOf(7).attempts[0].lock_sha, undefined);
+  assert.equal(store.beatToken(7, 1), h.store.lockOf(7, 1).token);
 });
 
 test('a task past max_runtime is timed_out, not merely reclaimed', async (t) => {
@@ -474,6 +480,159 @@ test('active_pr guard: an open PR sends a ready task to review, even with no slo
   assert.equal(h.store.statusOf(8), 'ready'); // a merged PR is not a reason to wait
   assert.deepEqual(await h.store.locks(), []);
   assert.match(h.log(), /#7: open PR #42 → review \(active_pr guard\)/);
+});
+
+/**
+ * The whole join, end to end (#304's second Done-when).
+ *
+ * `reconcileDecision` is unit-tested against a hand-built listing in test/reconcile.test.js; this is
+ * the same claim made of the *tick*, through the forge double, so the listing is one the tick asked
+ * GitHub for rather than one a test wrote. It is what "a PR merged on a scratch repo moves its card
+ * to done on the next tick" means now that there is no issue for the PR to close: the merge is
+ * matched to the card by head branch (`kb-7-1`) and by nothing else.
+ */
+test('a merged PR moves its card to done on the next tick, found by its head branch alone', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.store.addIssue(kbIssue({
+    number: 7, status: 'review', agent: 'claude',
+    run: runWith([{ attempt: 1, outcome: 'review_requested', pr: 90, ended_at: ago(600) }]),
+  }));
+  // a card whose branch nobody merged, and a merged PR belonging to no card at all: neither moves
+  h.store.addIssue(kbIssue({ number: 8, status: 'review', agent: 'claude' }));
+  h.gh.addPull({ number: 90, head: 'kb-7-1', state: 'closed', merged: true, mergedAt: ago(60) });
+  h.gh.addPull({ number: 91, head: 'release/2.0', state: 'closed', merged: true, mergedAt: ago(60) });
+
+  const s = await h.tick({ max: 0 });
+
+  assert.deepEqual(s.reconciled.map((r) => ({ number: r.number, status: r.status })), [{ number: 7, status: 'done' }]);
+  assert.equal(h.store.statusOf(7), 'done');
+  assert.equal(h.store.stateOf(7).state, 'CLOSED');
+  assert.equal(h.store.runOf(7).attempts[0].outcome, 'review_requested', 'a closed attempt keeps its own outcome');
+  assert.equal(h.store.statusOf(8), 'review', 'a card with no merged branch is left where it is');
+  assert.match(h.log(), /#7: review → done \(PR #90 merged \(kb-7-1\)\)/);
+
+  // and it is idempotent: the second tick finds the same merged PR and has nothing to do with it
+  h.logs.length = 0;
+  const again = await h.tick({ max: 0 });
+  assert.deepEqual(again.reconciled, []);
+  assert.equal(h.store.statusOf(7), 'done');
+});
+
+/**
+ * **A merge does not take a claim away from a worker that is still in it** (#304 review, item 3).
+ *
+ * `running` is a reconcilable status — a worker can die while its pull request lands — but a
+ * reviewer merging a worker's PR mid-task, or auto-merge landing a node onto its track branch, must
+ * not make the tick stamp `ended_at`, release the lock and close the card out from under it. The
+ * worker's next `hkb heartbeat` would be LOCK_LOST and it would exit 3 with no terminal verb, which
+ * is the one shape the protocol cannot recover from. `keep` protects the worktree; this is the
+ * claim.
+ */
+test('a merged PR leaves a live worker its claim, and reconciles the card once the worker is gone', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  // The one pid guaranteed to be alive here, and to be this host's: our own.
+  const run = runWith([{ attempt: 1, host: 'test-host', started_at: ago(60), heartbeat_at: ago(10), pid: process.pid }]);
+  h.store.addIssue(kbIssue({ number: 7, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run }));
+  h.store.hold(7, 1);
+  h.gh.addPull({ number: 90, head: 'kb-7-1', state: 'closed', merged: true, mergedAt: ago(30) });
+
+  const s = await h.tick({ max: 0 });
+
+  assert.deepEqual(s.reconciled, [], 'nothing was reconciled while the worker was in it');
+  assert.deepEqual(s.reconcile_left, [{ number: 7, why: 'worker_alive', attempt: 1, pid: process.pid }]);
+  assert.equal(h.store.statusOf(7), 'running', 'the card stays where the worker left it');
+  assert.deepEqual(await h.store.locks(), ['7/1'], 'and it still holds its claim');
+  assert.equal(h.store.runOf(7).attempts[0].ended_at, undefined, 'no ended_at was stamped under it');
+  assert.match(h.log(), /still running here \(pid \d+\) — leaving its claim alone/);
+
+  // The worker is gone: the very next tick reconciles what the merge left behind.
+  h.store.runOf(7).attempts[0].pid = 4_000_000; // a pid no process on this host has
+  const again = await h.tick({ max: 0 });
+  assert.deepEqual(again.reconciled.map((r) => ({ number: r.number, status: r.status })), [{ number: 7, status: 'done' }]);
+});
+
+/**
+ * **A card a human moved after the merge stays where they put it** (#304 review, item 4).
+ *
+ * While the board was GitHub Issues this pass required the *issue* to be closed, so a reopened card
+ * was believed. Without a second rule, a card whose PR merged and which a reviewer then sent back
+ * with `hkb request-changes` — the fix line `checkOrphanedPrs` itself recommends — is forced back to
+ * `done` and closed again by the next tick, for as long as that PR stays in the listing.
+ */
+test('a card moved after its PR merged is left alone, not dragged back to done', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.store.addIssue(kbIssue({
+    number: 7, status: 'todo', agent: 'claude', updatedAt: ago(10),
+    run: runWith([{ attempt: 1, outcome: 'changes_requested', pr: 90, ended_at: ago(10) }]),
+  }));
+  h.gh.addPull({ number: 90, head: 'kb-7-1', state: 'closed', merged: true, mergedAt: ago(600) });
+
+  const s = await h.tick({ max: 0 });
+
+  assert.deepEqual(s.reconciled, [], 'the merge is older news than the card');
+  assert.equal(s.reconcile_left?.[0]?.why, 'moved_after_merge');
+  // `ready`, not `todo`: the promote pass ran after the reconcile pass and moved an unblocked card
+  // along, which is the ordinary board doing its job. What matters is that it is not `done`.
+  assert.equal(h.store.statusOf(7), 'ready');
+  assert.notEqual(h.store.stateOf(7).state, 'CLOSED', 'and it was not closed again');
+  assert.match(h.log(), /but #7 was moved to todo at/);
+
+  // The other side of the same rule: a card that has *not* moved since the merge still reconciles.
+  h.store.addIssue(kbIssue({ number: 8, status: 'review', agent: 'claude', updatedAt: ago(900) }));
+  h.gh.addPull({ number: 91, head: 'kb-8-1', state: 'closed', merged: true, mergedAt: ago(600) });
+  const again = await h.tick({ max: 0 });
+  assert.deepEqual(again.reconciled.map((r) => r.number), [8]);
+});
+
+/**
+ * **One pull-request listing per question, not one per caller** (#304 review, item 9).
+ *
+ * CLAUDE.md states the cost as "one board read per tick and one pull-request listing".
+ * `mergedPrsByHead` used to issue its own unmemoized `state=closed` read, duplicating rows the
+ * `state=all` listing already returns — so a gc tick, which asks for `all` too, paid for the same
+ * answer twice (and up to ten pages each time).
+ */
+test('the tick pays for one listing per state, and never a third for the merged PRs', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.store.addIssue(kbIssue({ number: 7, status: 'review', agent: 'claude' }));
+  h.gh.addPull({ number: 90, head: 'kb-7-1', state: 'closed', merged: true, mergedAt: ago(60) });
+
+  await h.tick({ max: 0 });
+
+  const listings = h.gh.requests.filter((c) => c.kind === 'rest' && /\/pulls\?state=/.test(c.path || ''));
+  const states = listings.map((c) => (c.path.match(/state=(\w+)/) || [])[1]);
+  assert.deepEqual(states.filter((x) => x === 'closed'), [], 'the reconcile pass asks no listing of its own');
+  assert.equal(new Set(states).size, states.length, `one page per state, no duplicate listing: ${listings.map((c) => c.path).join(' · ')}`);
+  assert.equal(h.store.statusOf(7), 'done', 'and it still found the merge');
+});
+
+/**
+ * **An unreachable forge does not fail the tick, and does not let it guess** (#304 review, item 1).
+ *
+ * The cards are local and need no network at all; a pull request is an *enrichment* of one. So a
+ * failed listing leaves `prs: []` and the tick goes on doing its local work — but it must not then
+ * read that empty list as "this card has no PR", because the `active_pr` guard's whole job is to not
+ * open a second pull request on a card that already has one. It declines to decide instead.
+ */
+test('a forge that cannot be reached degrades the tick rather than aborting it, and claims nothing', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.store.addIssue(kbIssue({ number: 7, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'triage', agent: 'claude' }));
+  h.gh.fail({ method: 'GET', path: '/pulls?state=open' }, { status: 503, message: 'no route to host', times: 99 });
+
+  const s = await h.tick();
+
+  assert.match(s.forge_error, /no route to host/, 'the tick says why, rather than throwing');
+  assert.deepEqual(s.claimed, [], 'and claims nothing while the guard cannot be judged');
+  assert.deepEqual(await h.store.locks(), [], 'no lock was taken');
+  assert.equal(h.store.statusOf(7), 'ready', 'the card is left exactly where it was');
+  assert.match(s.skipped.find((x) => x.number === 7)?.why || '', /^pull requests unreachable \(.*no route to host\) — the active_pr guard cannot be judged$/);
+  assert.match(h.log(), /pull requests unreachable .* nothing is claimed this tick/);
 });
 
 // ---------- the active_pr guard and its one exemption (#153) ----------
@@ -863,14 +1022,15 @@ test('claims are create-if-absent, and releasing twice is not an error', async (
   const h = harness();
   t.after(h.cleanup);
 
-  assert.equal((await claim(h.ctx, 4, 1)).result, 'claimed');
-  const second = await claim(h.ctx, 4, 1);
+  const store = await openStore(h.ctx);
+  assert.equal((await store.claim(4, 1)).result, 'claimed');
+  const second = await store.claim(4, 1);
   assert.equal(second.result, 'held');
   assert.equal(second.error, null);
-  assert.deepEqual((await listLocks(h.ctx)).map((l) => `${l.n}/${l.k}`), ['4/1']);
-  assert.equal(await release(h.ctx, 4, 1), true);
-  assert.equal(await release(h.ctx, 4, 1), false);
-  assert.deepEqual(await listLocks(h.ctx), []);
+  assert.deepEqual(await h.store.locks(), ['4/1']);
+  assert.equal(await store.release(4, 1), true);
+  assert.equal(await store.release(4, 1), false);
+  assert.deepEqual(await h.store.locks(), []);
 });
 
 // ---------- what the launch hands the harness ----------
@@ -925,7 +1085,10 @@ test('a claude --bg launch gets no KB_* at all; a child-process launch keeps its
   assert.equal(proc.KB_ATTEMPT, '1');
   assert.equal(proc.KB_PROFILE, 'claude-p');
   assert.equal(proc.KB_ROOT, h.root);
-  assert.equal(proc.KB_LOCK_REF, 'refs/kb/locks/8/1');
+  // `KB_LOCK_REF` was here. A claim has no ref to name any more (docs/local-first.md §6.1), and a
+  // worker that never needed the name — `hkb heartbeat` reads the claim through the store — is one
+  // less GitHub-ism in every worker's environment.
+  assert.equal(proc.KB_LOCK_REF, undefined);
 });
 
 test('path_overlap guard: an idle no-job, no-pid attempt never holds its paths, in any mode', async (t) => {

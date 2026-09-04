@@ -400,7 +400,15 @@ export function boardOf(labels) {
   return l ? l.slice('kb:board:'.length) : null;
 }
 
-// ---------- run comment (Hermes "runs" table) ----------
+// ---------- run and result records ----------
+//
+// A run record is one `runs/<id>.json` document on the `kb-board` branch and a set of rows in the
+// index (docs/local-first.md §6.2). It used to be a *comment* on a GitHub issue, and the two markers
+// below are what is left of that: every store still recognises them so a card migrated off issues
+// keeps its history, `hkb watch` still parses one when it polls a repository's comments, and
+// `isHumanComment` (src/context.js) still uses them to keep hkb's own writing out of a worker's
+// brief. Nothing writes a run comment any more — `serializeRunComment` went with the driver that
+// did, along with `pickRunComment`, which existed to pick the newest of two a race had created.
 
 export const RUN_MARKER = '<!-- kb-run -->';
 export const RESULT_MARKER = '<!-- kb-result -->';
@@ -422,17 +430,6 @@ export function parseRunComment(body) {
   return { ...emptyRun(), ...parsed, attempts: Array.isArray(parsed.attempts) ? parsed.attempts : [] };
 }
 
-/**
- * Choose the authoritative run comment when an issue has several (a create that was
- * followed by another create instead of an update). Newest wins — it is the one written
- * last by the dispatcher; older ones are duplicates for `hkb gc` to delete.
- */
-export function pickRunComment(comments) {
-  const runs = (comments || []).filter((c) => c && typeof c.body === 'string' && c.body.startsWith(RUN_MARKER));
-  if (!runs.length) return { chosen: null, duplicates: [] };
-  return { chosen: runs[runs.length - 1], duplicates: runs.slice(0, -1) };
-}
-
 export function openAttempt(run) {
   if (!run) return null;
   return [...run.attempts].reverse().find((a) => !a.ended_at) || null;
@@ -441,27 +438,6 @@ export function openAttempt(run) {
 export function lastAttempt(run) {
   if (!run || !run.attempts.length) return null;
   return run.attempts[run.attempts.length - 1];
-}
-
-function fmt(ts) { return ts ? String(ts).replace('T', ' ').replace(/\.\d+Z$/, 'Z') : ''; }
-
-export function serializeRunComment(run) {
-  const rows = run.attempts.map((a) =>
-    `| ${a.attempt} | ${a.profile || ''} | ${a.host || ''} | ${fmt(a.started_at)} | ${fmt(a.ended_at) || '—'} | ${a.outcome || 'active'} | ${(a.summary || a.reason || '').split('\n')[0].slice(0, 120)} |`);
-  return [
-    RUN_MARKER,
-    '**hkb run record** — maintained by `hkb`; do not edit by hand.',
-    '',
-    `failures: ${run.failures} · attempts: ${run.attempts.length}${run.last_error ? ` · last error: ${String(run.last_error).slice(0, 200)}` : ''}`,
-    '',
-    '| # | profile | host | started | ended | outcome | note |',
-    '|---|---|---|---|---|---|---|',
-    ...(rows.length ? rows : ['| — | | | | | | |']),
-    '',
-    '```json',
-    JSON.stringify(run, null, 2),
-    '```',
-  ].join('\n');
 }
 
 // ---------- result comment (structured handoff) ----------
@@ -516,6 +492,25 @@ export function tagBlockers(tasks, meta) {
 }
 
 
+
+/**
+ * Did this listing stop because the caller's ceiling ran out, with more still to read?
+ *
+ * The same shape as `tagBlockers` and for the same reason: a *count* of what came back cannot say
+ * whether it is the whole answer, and a caller that guesses ("the page came back full, so there may
+ * be more") reports a ceiling that was never reached. Only the driver that did the reading knows,
+ * so it says so on the array, non-enumerably — `JSON.stringify` and every spread stay a list of
+ * cards. Absent means "no ceiling was hit", which is what a driver with nothing to page answers.
+ */
+export function tagCapped(list, capped) {
+  Object.defineProperty(list, 'capped', { value: !!capped, enumerable: false, configurable: true });
+  return list;
+}
+
+/** Was this listing cut short by a real ceiling? `false` for any list nobody tagged. */
+export function wasCapped(list) {
+  return !!(/** @type {any} */ (list)?.capped);
+}
 
 /**
  * How much of this board's `blockedBy` was actually looked up.
@@ -874,38 +869,12 @@ export function uniqueKeys(keys) {
   });
 }
 
-export function lockRef(n, k) { return `refs/kb/locks/${n}/${k}`; }
-/** Path form used by GET/PATCH/DELETE git/refs endpoints (no leading "refs/"). */
-export function lockRefPath(n, k) { return `kb/locks/${n}/${k}`; }
-
 // ---------- heartbeat ----------
-// A heartbeat says "the worker is alive". Two ways to say it:
-//   ref     — compare-and-swap on the lock ref (`git push --force-with-lease`). Free: the git
-//             transport is not the REST content budget, and a rejected lease *is* LOCK_LOST.
-//   comment — a write to the `<!-- kb-run -->` comment, floored at 10 min. For workers that
-//             cannot push to arbitrary refs (cloud tiers); the dispatcher owns their lock.
-
-export const HEARTBEAT_MODES = ['auto', 'ref', 'comment'];
-
-/** How a profile's workers heartbeat. Unknown or unset → `auto` (ref, falling back to comment). */
-export function heartbeatMode(cfg, profileName) {
-  const m = cfg?.profiles?.[profileName]?.heartbeat;
-  return HEARTBEAT_MODES.includes(m) ? m : 'auto';
-}
-
-/**
- * What a `git push --force-with-lease` on the lock ref means.
- *   ok          → the lease held: the ref was where we left it, and now carries a fresh commit
- *   lost        → the lease was rejected: the ref moved or is gone (verify, then LOCK_LOST)
- *   unavailable → git, network or auth trouble — says nothing about the lock
- * Only a rejected lease is ever `lost`: an unrecognised failure must never fabricate a LOCK_LOST,
- * because that kills a healthy worker. Ambiguity falls back to the authoritative ref read instead.
- * `git push --delete`d and never-existed refs both come back as "[rejected] ... (stale info)".
- */
-export function classifyLeasePush(status, output) {
-  if (status === 0) return 'ok';
-  return /stale info|\[rejected\]/i.test(String(output || '')) ? 'lost' : 'unavailable';
-}
+// A heartbeat says "the worker is alive", and there is one way to say it: a compare-and-swap on the
+// claim the store holds (`Store.heartbeat`, docs/local-first.md 6.1). A rejected lease *is*
+// LOCK_LOST. The per-profile `heartbeat: "ref" | "comment"` switch is gone with the GitHub store —
+// `comment` existed for a worker that could not push a lock ref to the forge, and a claim is a row
+// in this host's index now, which every verb on it can write.
 
 /**
  * The freshest evidence that an attempt is alive: its run-comment beat, when it started, and
@@ -1233,8 +1202,9 @@ export function boardSummary(tasks) {
  * @param tasks the board read, as `fetchBoard` returns it
  * @param {object} [opts]
  * @param opts.now injected clock — nothing here reads the real one
- * @param opts.caps `ctx.caps`; `blockedByGql` false and blockers unfilled means an empty
- *   `blockedBy` is *unknown*, never `no_blockers`
+ * @param opts.blockersSource where the blockers came from (`blockersOf(tasks).source`) — reported
+ *   as `blockers_source`; an unfilled read means an empty `blockedBy` is *unknown*, never
+ *   `no_blockers`
  * @param opts.pairs how many overlap pairs to list (default 10)
  * @param opts.statuses which lanes get a row (default triage, todo, ready)
  * @param opts.guard the effective `path_overlap` mode (`pathOverlapGuard(cfg)` or its `mode`) — the
@@ -1249,7 +1219,7 @@ export function groomBoard(tasks, opts = /** @type {any} */ ({})) {
   const all = Array.isArray(tasks) ? tasks : [];
   const {
     now = new Date(),
-    caps = {},
+    blockersSource: source = null,
     pairs: pairLimit = 10,
     statuses = ['triage', 'todo', 'ready'],
     board = null,
@@ -1268,8 +1238,8 @@ export function groomBoard(tasks, opts = /** @type {any} */ ({})) {
   const openNumbers = new Set(all.filter((t) => String(t.state || 'OPEN').toUpperCase() === 'OPEN').map((t) => t.number));
   const guardMode = typeof guard === 'string' ? guard : (guard?.mode ?? null);
   const guardOn = guardMode != null && guardMode !== 'off';
-  const blockersKnown = !!caps.blockedByGql || !!blockersFilled;
-  const blockersSource = caps.blockedByGql ? 'graphql' : (blockersFilled ? 'rest' : 'unknown');
+  const blockersKnown = !!blockersFilled;
+  const blockersSource = blockersFilled ? (source || 'store') : 'unknown';
 
   const lane = all.filter((t) => wanted.has(t.status));
 
@@ -1286,7 +1256,7 @@ export function groomBoard(tasks, opts = /** @type {any} */ ({})) {
     // --- the graph ---
     if (!blockedBy.length) {
       if (!blockersKnown) {
-        add('unknown_blockers', 'this repo has no GraphQL Issue.blockedBy and blockers were not filled — an empty list here means nothing', 'hkb groom --status triage on a read that fills blockers');
+        add('unknown_blockers', 'the board read did not fill blockers — an empty list here means nothing', 'hkb groom --status triage on a read that fills blockers');
       } else {
         add('no_blockers', 'nothing blocks it', null);
       }
@@ -1960,17 +1930,26 @@ export function parseWorktreeName(name) {
  * task #n's PR whatever GitHub's own `closedByPullRequestsReferences` believes — the field only
  * answers "will merging this close #n", which needs the PR's base to be the default branch and
  * still went blank at least once for a PR that met that bar (#234). Used both to fall back to a PR
- * this task's own attempt opened (`src/tasks.js`) and to spot one doctor can see but the card can't.
+ * this task's own attempt opened (`fillPrs`, src/forge.js) and to spot one doctor can see but the card can't.
  */
 export function taskBranchRe(n) {
   const num = Number(n);
-  return new RegExp(`^(?:worktree-)?kb-${num}-\\d+$|^kb/${num}$`);
+  return new RegExp(`^(?:worktree-)?kb-${num}-\\d+$|^kb/${num}$|^kb/track-${num}$`);
 }
 
-/** The inverse of `taskBranchRe`: which task number, if any, a branch name belongs to. */
+/**
+ * The inverse of `taskBranchRe`: which task number, if any, a branch name belongs to.
+ *
+ * `kb/track-<n>` is on the list because it is the branch a *track root's* own pull request is
+ * opened from (`trackBranchName`, src/track.js's brief), and the branch name is the only thing that
+ * ties a pull request to its card — there is no issue for a closing keyword to close. Without it a
+ * merged track PR moved nothing, which is the whole subgraph's root.
+ */
 export function branchTaskNumber(branch) {
   const b = String(branch ?? '').trim();
   let m = /^(?:worktree-)?kb-(\d+)-\d+$/.exec(b);
+  if (m) return Number(m[1]);
+  m = /^kb\/track-(\d+)$/.exec(b);
   if (m) return Number(m[1]);
   m = /^kb\/(\d+)$/.exec(b);
   return m ? Number(m[1]) : null;
@@ -1978,7 +1957,7 @@ export function branchTaskNumber(branch) {
 
 /**
  * A track's own integration branch — created from the default branch when the track is claimed
- * (`ensureTrackBranch`, src/lock.js) and recorded as `track_branch` on the root's attempt row. Every
+ * (`ensureTrackBranch`, src/forge.js) and recorded as `track_branch` on the root's attempt row. Every
  * node of the track, whatever its blockers, branches from this one and PRs into it; the root's own
  * pass runs on it and opens the track's one PR into the default branch (`docs/wiki/features/tracks.md`).
  */
@@ -1994,7 +1973,7 @@ export function trackBranchRoot(branch) {
 
 /**
  * Do two or more children conflict on their way into the track branch? `states` is a
- * `Map<prNumber, {mergeable, mergeStateStatus}>` (`prMergeStates`, src/tasks.js) for every open PR
+ * `Map<prNumber, {mergeable, mergeStateStatus}>` (`prMergeStates`, src/forge.js) for every open PR
  * whose base is that branch. `mergeable === 'CONFLICTING'` is GitHub's own verdict, computed
  * asynchronously — `'UNKNOWN'` means "ask again next tick", never a false positive — and one PR
  * cannot conflict with itself, so fewer than two candidates is never a conflict.
@@ -2014,7 +1993,7 @@ export function trackBranchConflict(states) {
  * worker's whole identity and the hook's gate. Named here because two places have to agree on the
  * list — `spawnWorker` sets them, and a `claude --bg` launch scrubs them (src/dispatch.js).
  */
-export const KB_ENV_VARS = ['KB_TASK', 'KB_ATTEMPT', 'KB_BOARD', 'KB_REPO', 'KB_LOCK_REF', 'KB_ROOT', 'KB_PROFILE'];
+export const KB_ENV_VARS = ['KB_TASK', 'KB_ATTEMPT', 'KB_BOARD', 'KB_REPO', 'KB_ROOT', 'KB_PROFILE'];
 
 /**
  * A copy of `env` with every `KB_*` key removed — the environment a `claude --bg` launch gets.
@@ -2423,7 +2402,7 @@ export function hashReason(reason) {
 export const PROCESSES = ['dispatch', 'serve'];
 
 /**
- * `KB_*` names a *worker*: KB_TASK/KB_ATTEMPT/KB_LOCK_REF/KB_PROFILE/KB_ROOT are what the dispatcher
+ * `KB_*` names a *worker*: KB_TASK/KB_ATTEMPT/KB_BOARD/KB_REPO/KB_PROFILE/KB_ROOT are what the dispatcher
  * exports onto a worker's launch, and a process that carries them believes it is one. `hkb up` may be
  * run from such a session (or from one that wrongly believes it is), and the daemons it starts outlive
  * it — a dispatcher loop that thinks it is worker #148 would refuse to run and a `hook stop` inside it
@@ -2608,4 +2587,29 @@ export function startLogLine(at, pid, argv = []) {
  */
 export function deadAtRecheck(name, pid, log) {
   return { line: `${name} exited immediately (pid ${pid}) — see ${log}`, failed: { name, pid, log } };
+}
+
+/**
+ * What to say when a command reaches for board state in a repository that has no board branch.
+ *
+ * There are three ways to be here and each has a different fix, so the message names all three: a
+ * repository nobody has run `hkb init` in, a repository whose board is still the GitHub Issues one
+ * this release retired (`hkb init --import` reads those issues once and writes them to the ref —
+ * ADR-006), and a clone whose board ref has simply not been fetched yet.
+ *
+ * It exists as one function because the alternative is what this file replaced: six copies of "run
+ * `hkb init`" across the read and write paths, only one of which mentioned the migration. A board
+ * left on the retired store gets a sentence, not an empty list and not a stack trace.
+ *
+ * It names the **ref**, not a branch: the durable tier lives at `refs/kb/boards/<slug>`, outside
+ * `refs/heads`, so "there is no kb-board branch" would send the reader to `git branch`, where there
+ * is nothing to find on a repository that has a board. The third way across is `hkb sync` rather
+ * than a raw `git fetch`, because a default clone carries neither the ref nor the refspec that
+ * fetches it, and `sync` passes the refspec on the command line and writes it into `.git/config`.
+ * @param {{ref?: string, root?: string}} [where]
+ */
+export function noBoardHere({ ref = 'refs/kb/boards/default', root = '.' } = {}) {
+  return `there is no board at ${ref} in ${root} — this repository has no hkb board. `
+    + 'Run `hkb init` to create one, `hkb init --import` to migrate a board that is still on GitHub Issues '
+    + '(that store is gone — ADR-006), or `hkb sync` if the board is already on the remote.';
 }

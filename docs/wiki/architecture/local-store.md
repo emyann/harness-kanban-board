@@ -7,20 +7,20 @@ audience: [dev]
 read_when: "adding a store verb, debugging an index that disagrees with the branch, wondering why a verb is refused on this host, or working on hkb sync / init --import"
 covers:
   - path: src/store/local.js
-    sha: 68ef16366401483d780690f00e49d833c169a106
+    sha: b11fe32cf346862b8423450d43680708d70eb37a
   - path: src/store/index.js
-    sha: d3aa66c1b4256091a3488c9289ff411c0e550355
+    sha: fed32f2f24ff0ecb5bbec064c26fcaa3f63fd7dc
   - path: src/store/sqlite.js
-    sha: 9e140b2992a972a04c377c5b5f46d6bcc299ff3b
+    sha: 109968690b1068b0edf2ab028e3440a7ca97dcee
   - path: src/init.js
-    sha: db5322a663e05cf2c0c3b7f67cee554ff7f5caab
+    sha: 6c2d6f8f10fb6f11cde8554f31fbd8f23da717fd
   - path: src/doctor.js
-    sha: 49395961f0695579e37f4ef263b2ed85321caed1
+    sha: c29b0cd7856ca394203cb53b8755bf85e25bd239
   - path: src/gc.js
-    sha: 387c7e3da22fb00d1d070903abc12e7f64dfc7cf
+    sha: cc129d307e845211036472a76ed7e0f456be1329
   - path: src/cli.js
-    sha: f12597f86b87c7bf65c9ffb0ed79a4df3a80b049
-generated_at_commit: 238a3b6
+    sha: b183d59750a4bace38fb612026657ed3ded95708
+generated_at_commit: 53ecf5a
 last_refreshed: 2026-09-03
 related: [architecture/board-ref, architecture/store-seam, decisions/adr-006-local-store, features/up-and-down, features/web-board]
 ---
@@ -42,14 +42,18 @@ runs end to end on a local board, and `hkb init` makes one by default again
 **What is still not true.** Pull requests are not board state and never will be
 (`src/forge.js`, §6.4), so a local card carries `prs: []` and every check that
 reads one — the `active_pr` guard, the agent-worktree sweep, `hkb merge` — has
-nothing to read on a local board. The GitHub driver is still here and is still
-what this repository's own board runs on; retiring it is track C.
+nothing to read on a local board. The GitHub driver is gone (ADR-006); what a
+card's pull request is now comes from the head-branch join in `src/forge.js`.
 
 ## Which store a board is on
 
 `storeKind(ctx)` (`src/store/index.js`) is the **only** place that decides, and
 it asks exactly one question: `store` in `.kanban/board.json` — `"local"` or
-`"github"`, absent means `github`, anything else is exit 2.
+absent both mean the local store, `"github"` is refused by name with
+`hkb init --import` in the message, anything else is exit 2. A board.json with
+no key that turns out to have no board ref either is the unmigrated
+case, and the driver's own read path says so (`noBoardHere`, `src/model.js`;
+see *concepts/store*).
 
 There *was* a second question — does this repository have a board ref,
 locally or as a remote-tracking copy — so that a plain `git clone` needed no
@@ -57,14 +61,38 @@ configuration. It was removed in A6's last review round, because a rule that
 reads the store off a **ref** can be reached by `git fetch`, which put a
 checkout on the local store while board.json still pointed every verb at GitHub;
 *architecture/store-seam* has the three destructive interactions that followed.
-A clone still needs no configuration: the key rides in the tracked board.json.
-`resolveStore` (`src/init.js`) answers for a new board — local — and an existing
-one keeps what it has; `--store github` is the escape hatch while the GitHub
-driver is still here.
+A clone still needs no configuration, for a simpler reason now: there is one
+store, so an absent key means it. `resolveStore` (`src/init.js`) answers `local`
+for every board; `--store github` is refused there by name, so a human who types
+the flag the old README taught them is told what happened to it rather than
+being handed a board hkb cannot make. The empty board that absence could still
+produce — a repository whose cards never left the forge — is caught before
+anything is created, by `refuseUnmigratedBoard`.
 
 `hkb init` writes the key only when it is a **decision** — the human's
 `--store`, a fresh board (the default *is* the decision), a board that already
 carries it, or an `--import` that migrates. A plain re-init writes nothing.
+
+**And a board that declares nothing is asked about.** Writing nothing is the
+right answer for the *key*, but it is not an answer about the **cards**:
+`resolveStore` refuses a board.json that says `"store": "github"`, and the
+board.json most repositories actually have was written before that key existed
+and says nothing at all. Absent resolves to `local`, nothing is written, and
+`setUpLocalBoard` would create an empty board ref beside every card
+still on the forge — an empty `hkb list` and no message, from the command an
+operator runs *because* `hkb list` went quiet. So `needsMigrationProbe`
+(`src/init.js`) puts one condition in front of it: an existing config, no
+`store` key, no `--import`, no branch yet. When all four hold, `init` asks the
+forge — one `GET /issues?labels=kb:board:<slug>&state=all` through
+`countBoardIssues` (`src/bridge/github-issues.js`), the bridge's read half, not
+`fetchBoard` — and `migrationVerdict` decides: no cards is a fresh repository and
+proceeds silently; cards found is exit 2 naming the count and `hkb init
+--import`; a forge that **could not be asked** is also exit 2, in its own
+sentence, because creating the branch is the irreversible half and an unknown
+answer must not be read as "none". `--force` proceeds either way and says what
+it is walking away from. A repository with no board.json at all is never probed,
+which is what keeps `hkb init --repo owner/name --no-labels` — the offline
+adoption path — working on a new repo.
 
 ## The three rules
 
@@ -157,7 +185,7 @@ minutes.
 
 This is a deliberate cost: the index has `tasks` and `runs` tables that no
 `Store` read currently consults. They are there for `hkb serve`'s SQL and for
-the reads that move onto the index in track C, and the reconcile in rule 1 is
+the reads that may yet move onto the index, and the reconcile in rule 1 is
 what keeps them true.
 
 ## One writer, and what a clone gets
@@ -233,7 +261,10 @@ and get one. `hkb init` there then made a *second, empty* board.
 
 `settings.sync.push: false` turns off the **push**, and only the push. A
 checkout that does not publish its copy still fetches and fast-forwards; that is
-how it reads what the owner published. `--no-push` is the same switch as a flag,
+how it reads the copy it published earlier — this is a durability path (a fresh
+checkout of your own repo, a new machine, a lost disk), not a collaboration one:
+multi-player is out of scope by decision (`docs/local-first.md` §6.2).
+`--no-push` is the same switch as a flag,
 so the more restrictive spelling can never do strictly more work than the
 default.
 
@@ -294,7 +325,7 @@ answer is what made a repository with three hundred unlabelled issues import
 zero cards, log `0 open card(s)` and create an empty board — the flag's own
 documented behaviour, unreachable. `--import` also means the migration whatever
 `"store"` in `board.json` says: reading the pinned value first made the
-documented migration reachable only as `--store local --import`.
+documented migration reachable only by naming the store as well as the flag.
 
 `importGithubBoard()` moves a GitHub board onto the branch: every open card and
 everything closed inside the 90-day window, with the **issue number as the card
@@ -314,7 +345,7 @@ nobody re-runs:
   `blockedBy` field every card in triage, ready, running or review would arrive
   with an empty list meaning "not asked". The branch has no third value for
   that, and `cardRecord` refuses rather than writing "nothing blocks it" over a
-  board's whole dependency graph (`blockersKnown`, `src/store/github.js`).
+  board's whole dependency graph (`blockersKnown`, `src/model.js`).
 
   The refusal has a **way through**, per card, or it is only a louder silent
   failure. On a repo without the GraphQL field no read fills a *closed* card's
@@ -333,14 +364,24 @@ nobody re-runs:
   edge is dropped, printed per card, and returned in the summary's
   `dropped_blockers`.
 
-The closed cards are **one page of 100**, most recently updated first, by the
-GitHub driver's own design. A full page back sets `closed_capped` in the summary
-and prints a WARNING naming the oldest card that made it, because "100 closed in
-the last 90 days" over a truncated set reads as the whole window. There are two
-more ceilings and both are named the same way: the adoption path's ten pages of
-open issues (`issues_capped`), and `listComments`'s five pages of 100 per card,
-which leaves a very talkative card's oldest notes behind (`comments_capped`
-lists the numbers). A ceiling that is not named reads as the whole thing.
+The closed cards are read **to the window, not to a page**: `fetchClosedRecent`
+pages on `pageInfo.hasNextPage` ordered by `updatedAt` descending and stops at
+the first card older than the 90 days, which is the scope the migration was
+given. It was one query of 100 before, which made the page size the ceiling by
+accident — measured on this repository's own board, 131 cards were closed inside
+the window and 31 of them would have stayed on GitHub while the local board
+became the source of truth without them (and `next_id` was computed from the
+truncated set). `CLOSED_MAX` (5000) is the runaway stop behind the window, far
+above any board a migration will meet.
+
+`closed_capped` therefore means **a real ceiling was hit**: `CLOSED_MAX` reached
+*and* one more read showing a card behind it that is still inside the window. A
+full page proves nothing about what follows it, which is why the adoption path's
+`issues_capped` reads the page after its last full one too. The third ceiling is
+`listComments`'s five pages of 100 per card, which leaves a very talkative card's
+oldest notes behind (`comments_capped` lists the numbers). A ceiling that is not
+named reads as the whole thing; one that is named when it was not reached trains
+the reader to ignore it.
 
 It is idempotent **by refusal**: a branch that already exists is left exactly as
 it is. A second import over a board that has since been worked would overwrite
@@ -405,6 +446,23 @@ mid-`load()`. The path in the identity line is computed (`indexFileIn`) rather
 than read off an open index, because on the commonest failure here there is no
 index to ask.
 
+`checkClaimLock` — `hkb doctor --api`'s one claim probe, and what replaced the
+lock-ref probe the GitHub store needed — follows the same rule the long way
+round. It *cannot* use a read-only handle, because `BEGIN IMMEDIATE` is a write
+and a connection that refuses writes would fail the probe for a reason that has
+nothing to do with the board. So it computes the path, `existsSync`es it, and
+warns ("nothing to probe — no verb has opened this board on this host") without
+ever touching the lazy `s.index` getter that would have created one. Its two
+statements also get a `try` each: sharing one made a throwing `ROLLBACK` report
+as *"the index would not give this process the write lock"*, which is false — it
+had just given it — and left the write transaction open on that handle.
+
+`checkLocalStore` emits a line even when the store is not `local`. Returning
+bare made the store check *vanish* from the report, and a skipped check that
+looks like a passing one is the one thing doctor may never produce. Nothing
+answers anything but `local` today; `kind` is a caller-supplied override and the
+seam a second driver would arrive through.
+
 These probes run before `hkb doctor` talks to the forge, and — since the round-2
 sweep — they *survive* it: the GitHub half is one `githubChecks()` call inside a
 try, so a 404 from a repo that was renamed or a `gh` that is logged out costs one
@@ -464,6 +522,15 @@ several sweeps before the skip message could be printed.
   is already there, or when `--import` migrates. A plain re-init used to write
   `"store": "local"` into a git-tracked board.json as a side effect — the same
   change `--import` refuses to make without `--force`.
+- **And a board that says `"store": "github"` is refused outright, not pinned.**
+  The rule above has a hole exactly where it matters most: the key *is* already
+  there, so `hkb init` pinned it — rewriting a tracked `github` to `local` and
+  creating an empty board ref beside every real card, so the next
+  `hkb list` reported an empty board while the work sat unreachable on the forge.
+  Silent abandonment, from the command a human runs to fix things. `resolveStore`
+  takes the board.json on disk as its second argument for this one reason and
+  answers with `storeKind`'s message, which names `hkb init --import` — the flag
+  that *is* the human asking, and the one way through.
 - **An imported card's `labels`** hold only what is *not* a column —
   `kb:board:*`, `kb:status:*`, `kb:agent:*` and `kb:needs-human` are rebuilt
   from the card, so carrying them would double them (`cardRecord`).

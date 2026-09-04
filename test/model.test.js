@@ -2,14 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseBodyBlock, serializeBodyBlock, DEFAULT_KB, statusOf, agentOf, boardOf,
-  parseRunComment, serializeRunComment, emptyRun, openAttempt, parseResultComment, serializeResultComment,
-  blockerDone, computeReady, promoteDecision, pathsOverlap, sortForDispatch, slugify, lockRef, lockRefPath, hashReason,
+  parseRunComment, emptyRun, openAttempt, parseResultComment, serializeResultComment,
+  blockerDone, computeReady, promoteDecision, pathsOverlap, sortForDispatch, slugify, hashReason,
   normalizeHookInput, stripFrontmatter, sessionUpdate, parseRepoSpecs, boardKey, uniqueKeys, shouldNudgeOnStop, deadAtRecheck,
   pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, parsePriorityFlag, parseScheduledAtFlag, boardSummary,
-  effectiveTools, modelArgs,
+  effectiveTools, modelArgs, noBoardHere,
 } from '../src/model.js';
 import { expandLaunch } from '../src/dispatch.js';
 import { DEFAULT_PROFILES, HOOK_SETTINGS_VAR } from '../src/board.js';
+import { runComment } from './fake-gh.js';
 
 test('body block: round trip and defaults', () => {
   const kb = { ...DEFAULT_KB, priority: 3, paths: ['apps/web/'] };
@@ -38,13 +39,17 @@ test('labels → status/agent/board', () => {
   assert.equal(statusOf(['bug']), null);
 });
 
-test('run comment: round trip keeps attempts and counters', () => {
+// The parser survives the writer: nothing in `src/` writes a run comment now (the record is a
+// document on the `kb-board` branch), but `hkb watch` still parses one it polls and the migration
+// still reads one off an issue. `runComment` (test/fake-gh.js) is the fixture builder that was the
+// writer.
+test('run comment: a comment the migration reads parses back into a run record', () => {
   const run = emptyRun();
   run.attempts.push({ attempt: 1, profile: 'claude', host: 'wsl', started_at: '2026-08-26T10:00:00Z', ended_at: '2026-08-26T10:20:00Z', outcome: 'crashed' });
   run.attempts.push({ attempt: 2, profile: 'claude', host: 'wsl', started_at: '2026-08-26T10:21:00Z' });
   run.failures = 1;
   run.block_loops = { abc: 2 };
-  const text = serializeRunComment(run);
+  const text = runComment(run);
   assert.ok(text.startsWith('<!-- kb-run -->'));
   const back = parseRunComment(text);
   assert.equal(back.failures, 1);
@@ -253,8 +258,6 @@ test('board keys are URL-safe, legible and never shared by two boards', () => {
 
 test('misc helpers', () => {
   assert.equal(slugify('Implement auth API endpoints!'), 'implement-auth-api-endpoints');
-  assert.equal(lockRef(12, 3), 'refs/kb/locks/12/3');
-  assert.equal(lockRefPath(12, 3), 'kb/locks/12/3');
   assert.equal(hashReason('Missing  AWS creds'), hashReason('missing aws creds'));
   assert.notEqual(hashReason('a'), hashReason('b'));
 });
@@ -424,4 +427,26 @@ test('effectiveTools: kb.tools and kb.mcp compose — the card narrows on both a
   const profile = { allowed_tools: ['Read', 'Edit', 'mcp__react-aria__*', 'mcp__figma__*'] };
   const { tools } = effectiveTools(profile, { kb: { tools: ['Read', 'mcp__react-aria__*', 'mcp__figma__*'], mcp: ['react-aria'] } }, {});
   assert.deepEqual(tools, ['Read', 'mcp__react-aria__*']);
+});
+
+/**
+ * One sentence, three fixes. The message exists because a repository can be boardless in three
+ * different ways and only one of them used to be named: `hkb init` covers a fresh checkout, but a
+ * board still on the GitHub Issues store this release retired needs `--import`, and a clone needs
+ * `hkb sync`. Pure, so the wording is a test rather than a paragraph in a doc that drifts.
+ */
+test('noBoardHere names the ref it looked for and all three ways across', () => {
+  const m = noBoardHere({ ref: 'refs/kb/boards/default', root: '/repo' });
+  assert.match(m, /there is no board at refs\/kb\/boards\/default in \/repo/);
+  assert.match(m, /`hkb init`/, 'a checkout nobody has initialised');
+  assert.match(m, /`hkb init --import`/, 'a board still on the retired GitHub store');
+  assert.match(m, /`hkb sync`/, 'a clone that has not fetched it');
+  assert.match(m, /ADR-006/, 'and it says which decision took the old store away');
+
+  // the tier passes its own ref through, so a board on another slug is not told about `default`
+  assert.match(noBoardHere({ ref: 'refs/kb/boards/beta', root: '/r' }), /no board at refs\/kb\/boards\/beta in \/r/);
+  // callable with nothing: the defaults are the real board's, not placeholders
+  assert.match(noBoardHere(), /refs\/kb\/boards\/default/);
+  // and it does not send the reader to `git branch`, where a board has been invisible since #334
+  assert.doesNotMatch(noBoardHere(), /branch/);
 });

@@ -1,11 +1,11 @@
 // The forge: pull requests, branch protection, merges — everything hkb asks GitHub that is *not*
-// board state. The board half lives behind `src/store/` (`openStore`), and a non-GitHub store
-// (docs/local-first.md §6) replaces it wholesale; this file is deliberately left out of that seam
-// because a local board still opens its pull requests on a forge (§6.4, "The pull-request half is
-// **not** the store").
+// board state. The board lives behind `src/store/` (`openStore`) and is a branch in this repository
+// (docs/local-first.md §6); this file is deliberately outside that seam, because a local board still
+// opens its work as pull requests on a forge (§6.4, "The pull-request half is **not** the store").
 //
-// Every body here was moved as it was — from `src/tasks.js` (the PR reads and mutations) and from
-// `src/lifecycle.js` (`prNodeId`, `isGithubUser`, `finishPr`) — and still calls `src/gh.js`.
+// **The two are joined by the head branch name and nothing else.** `fillPrs` is that join: the store
+// answers with the card, this file answers with the pull request, and `taskBranchRe` (src/model.js)
+// is the one definition of "this card's branch".
 import { GhError, isOffline, graphql, rest, restRaw } from './gh.js';
 import { api } from './board.js';
 import { taskBranchRe, trackBranchName, trackBranchRoot } from './model.js';
@@ -15,10 +15,9 @@ import { taskBranchRe, trackBranchName, trackBranchRoot } from './model.js';
 // has to tell an offline write from a refused one.
 
 // ---------- the repository's own branches ----------
-// Not board state either: `baseSha` is the head every claim and every track branch is created at,
-// and `kb/track-<root>` is a branch on the forge. They moved here from `src/lock.js` with the rest
-// of what a store must not own, so `src/dispatch.js`, `src/doctor.js` and `src/gc.js` reach them
-// without importing a driver. `src/store/github.js` calls `baseSha`/`classifyClaimError` from here.
+// Not board state either: `baseSha` is the head every track branch is created at, and
+// `kb/track-<root>` is a branch on the forge. They live here rather than in a store, so
+// `src/dispatch.js`, `src/doctor.js` and `src/gc.js` reach them without importing a driver.
 
 /** One conditional read of a branch head. A 304 means "still `known`" and costs no rate limit. */
 async function readHead(ctx, branch, known) {
@@ -138,21 +137,38 @@ export async function listTrackBranches(ctx) {
  * request whatever the board's size rather than one per unlinked card.
  */
 export async function openPrsByHead(ctx) {
+  return prsByHead(ctx, { state: 'open' });
+}
+
+/**
+ * The listing itself. `state` is GitHub's: `open` (the guard's question) or `all` — the sweep's,
+ * because "is this checkout's work landed" is answered by a PR that is *closed*, and a listing of
+ * open ones can only say "not here", which is also what a card with no PR at all looks like.
+ *
+ * An `all` listing is ordered newest-updated first so a head branch that has carried more than one
+ * pull request resolves to the one that moved last.
+ * @param {any} ctx
+ * @param {{state?: 'open'|'all'}} [opts]
+ */
+export async function prsByHead(ctx, { state = 'open' } = {}) {
   const out = new Map();
+  const sort = state === 'all' ? '&sort=updated&direction=desc' : '';
   for (let page = 1; page <= 10; page++) {
-    const batch = await rest('GET', api(ctx, `/pulls?state=open&per_page=100&page=${page}`));
+    const batch = await rest('GET', api(ctx, `/pulls?state=${state}&per_page=100&page=${page}${sort}`));
     for (const p of batch || []) {
       const head = p.head?.ref;
-      if (!head) continue;
+      if (!head || out.has(head)) continue;
+      const merged = !!(p.merged_at || p.merged);
       out.set(head, {
         number: p.number,
         nodeId: p.node_id,
-        state: 'OPEN',
+        state: p.state === 'open' ? 'OPEN' : merged ? 'MERGED' : 'CLOSED',
         isDraft: !!p.draft,
         url: p.html_url,
         headRefName: head,
         baseRefName: p.base?.ref || null,
-        merged: false,
+        merged,
+        mergedAt: p.merged_at || null,
         autoMergeEnabled: !!p.auto_merge,
       });
     }
@@ -162,9 +178,34 @@ export async function openPrsByHead(ctx) {
 }
 
 /**
- * A task with no PR from GraphQL, matched against a board-wide open-PR listing by head branch. Pure
- * given the listing: never overrides a PR GitHub already linked, and never looks two tasks up in one
+ * Every *merged* PR on the repo, keyed by head branch — the reconcile pass's input.
+ *
+ * **Not its own request.** This reads the memoized `state: 'all'` listing (`prsByHeadCached`) and
+ * filters it, because a separate closed-PR listing was a second read of the same rows: `hkb gc`
+ * already asks for `all`, and a tick that ran both paid twice for one answer. The tick's own
+ * `active_pr` guard still wants `open` — a merged PR must not read as an open one on a card — so a
+ * gc tick is two listings, both memoized, and an ordinary tick that reconciles is one plus one.
+ *
+ * The `all` listing is newest-updated first, so a PR that merged since the last tick is on its
+ * first page. A PR that merged and then sat untouched while a thousand others moved falls off it —
+ * the card is then moved by `hkb merge` or by hand, and `hkb doctor` still names it.
+ */
+export async function mergedPrsByHead(ctx) {
+  const all = await prsByHeadCached(ctx, { state: 'all' });
+  const out = new Map();
+  for (const [head, pr] of all) if (pr.merged) out.set(head, pr);
+  return out;
+}
+
+/**
+ * A task with no PR of its own, matched against a board-wide PR listing by head branch. Pure given
+ * the listing: never overrides a PR the caller already has, and never looks two tasks up in one
  * call, so a card that legitimately has no PR still reports none.
+ *
+ * **The branch name is the link.** hkb's board has no issue for a pull request to be linked to, so
+ * `kb-<n>-<k>` (and the `worktree-`, `kb/<n>` and `kb/track-<n>` spellings hkb also creates) is what
+ * ties one to its card, here and in the reconcile pass. `taskBranchRe` is the one definition of that
+ * name.
  */
 export function branchFallbackPrs(task, openByHead) {
   if ((task.prs || []).length) return task.prs;
@@ -172,6 +213,98 @@ export function branchFallbackPrs(task, openByHead) {
   const found = [];
   for (const [head, pr] of openByHead) if (re.test(head)) found.push(pr);
   return found;
+}
+
+/**
+ * Fill `prs` on cards the **store** cannot answer for — one open-PR listing, board-wide, applied by
+ * head branch. Board state and pull requests are two different systems now (docs/local-first.md
+ * §6.4): the store knows the card, the forge knows the PR, and this is the join. Every read that
+ * goes on to judge a card by its PR — the tick's `active_pr` guard, the terminal verbs, `hkb show`,
+ * the web board — calls it on what the store handed back.
+ *
+ * One request per tick, never one per card (#234). The *promise* is memoized on `ctx._cache`, not
+ * its value, because `hkb create "x" --blocked-by 1,2,3` reads four cards with `Promise.all` and a
+ * value memo would still issue one listing each; a failed one is forgotten so the next read retries
+ * rather than replaying the error. The dispatcher drops the memo at the top of every tick
+ * (`dropPrCaches`), so a loop never judges a card on last tick's listing.
+ *
+ * `state: 'all'` is for the caller that has to see a PR after it merged — `hkb gc`, deciding whether
+ * a subagent's checkout is scrap, and the reconcile pass. It is memoized in its own slot, so a tick
+ * that wants both pays for one of each rather than one of whichever came first.
+ *
+ * **A forge that cannot be reached does not fail the board read.** The cards come from the local
+ * store, which needs no network at all — `hkb init` says out loud that the board "works with `gh`
+ * logged out, on a plane, and at no API cost", and that has to stay true now that this join is on
+ * the path of `hkb list`, `show`, `graph`, `track` and the tick itself. A pull request is an
+ * *enrichment* of a card, so a failed listing leaves `prs: []` and records why on the context
+ * (`prsUnavailable`), for the caller to print as a line rather than an exit code.
+ *
+ * `required: true` is the opposite contract, for the caller that cannot honestly act on "no PR":
+ * `hkb finish` would record a protocol violation for work that is sitting in a PR it could not see,
+ * and `hkb merge` would refuse a card whose PR is right there. Those throw.
+ *
+ * @template {any} T
+ * @param {any} ctx
+ * @param {T} tasks  one task or an array of them — returned as given, filled in place
+ * @param {{state?: 'open'|'all', required?: boolean}} [opts]
+ * @returns {Promise<T>}
+ */
+export async function fillPrs(ctx, tasks, { state = 'open', required = false } = {}) {
+  const list = (Array.isArray(tasks) ? tasks : [tasks]).filter(Boolean);
+  if (!list.some((t) => !(t.prs || []).length)) return tasks;
+  let openByHead;
+  try {
+    openByHead = await prsByHeadCached(ctx, { state });
+  } catch (e) {
+    if (required) throw e;
+    ctx._cache.prsUnavailable = /** @type {Error} */ (e).message || String(e);
+    for (const t of list) if (!Array.isArray(t.prs)) t.prs = [];
+    return tasks;
+  }
+  delete ctx._cache.prsUnavailable;
+  for (const t of list) t.prs = branchFallbackPrs(t, openByHead);
+  return tasks;
+}
+
+/**
+ * The memoized listing behind `fillPrs` and `mergedPrsByHead` — one slot per `state`, holding the
+ * *promise* so concurrent readers share one request, and forgetting a failed one so the next read
+ * retries rather than replaying the error.
+ * @param {any} ctx
+ * @param {{state?: 'open'|'all'}} [opts]
+ */
+export async function prsByHeadCached(ctx, { state = 'open' } = {}) {
+  const slot = state === 'all' ? 'prsByHeadAll' : 'prsByHead';
+  if (!ctx._cache[slot]) ctx._cache[slot] = prsByHead(ctx, { state });
+  const pending = ctx._cache[slot];
+  try {
+    return await pending;
+  } catch (e) {
+    if (ctx._cache[slot] === pending) delete ctx._cache[slot];
+    throw e;
+  }
+}
+
+/**
+ * Why the last `fillPrs` on this context came back without pull requests, or `null` when the forge
+ * answered. A caller prints it as a line ("cards shown without their pull requests: …") and, where
+ * the decision depends on PR state — the dispatcher's `active_pr` guard — declines to decide rather
+ * than reading the empty list as "no PR".
+ * @param {any} ctx
+ * @returns {string|null}
+ */
+export function prsUnavailable(ctx) { return ctx?._cache?.prsUnavailable || null; }
+
+/**
+ * Forget both listings. The dispatcher calls it at the top of every tick and `hkb serve` after any
+ * write that could have opened, merged or closed a PR — a read answered from the listing taken
+ * before the write is the divergence both exist to prevent.
+ * @param {any} ctx
+ */
+export function dropPrCaches(ctx) {
+  delete ctx._cache.prsByHead;
+  delete ctx._cache.prsByHeadAll;
+  delete ctx._cache.prsUnavailable;
 }
 
 /**

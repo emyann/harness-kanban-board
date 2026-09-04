@@ -7,23 +7,21 @@ audience: [dev]
 read_when: "adding a groom finding or action, changing the frozen groom --json shape, touching how blockers are filled, or wondering why hkb groom never promotes anything"
 covers:
   - path: src/model.js
-    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
+    sha: 9eceb576d8a0d25f07f89fc26aae3635d072bbc0
   - path: src/cli.js
-    sha: 9d7fc11ad734643205e89668a176d4f29115805f
+    sha: 2c842b6079cd6057056eef2a926edb85a8259d9d
   - path: src/lifecycle.js
-    sha: c3c49b90e80c7e68d44b4f8f999debcfa484de80
-  - path: src/store/github.js
-    sha: e2708642df0ef4599f450e643b9b67eeeb0b2ad5
+    sha: af197411d2798847fdc6707c39ae3b60989dc9ed
   - path: src/doctor.js
-    sha: 03a19a3c5f2cab7dcae844c9290ed34c03637b80
+    sha: 98a643807b3c0024e8a71313662af7b2f77578ca
   - path: skills/kanban/SKILL.md
-    sha: 386f0eebb9da5374092734e492e109f8f9ceed4e
+    sha: 19903b2bb06dee7ff7a606ff6878d77fe685c566
   - path: commands/groom.md
     sha: 4fc2dc2db984033fe8801e8d28b50e8e68fefddc
   - path: skills/kanban/references/protocol.md
-    sha: f17d592ac42cb294d688bf3b00470d02dccac121
-generated_at_commit: 237bb61
-last_refreshed: 2026-09-02
+    sha: 39ab6883a3e7d36b655feb0d79c0fea78a29ecfd
+generated_at_commit: 8aaffbf
+last_refreshed: 2026-09-03
 related: [features/planning-commands, features/operator-seat, features/path-overlap-guard, features/tracks]
 ---
 
@@ -88,9 +86,9 @@ These are the ones a later change is most likely to break:
   merge-conflict risk and nothing more.
 - **Unknown ≠ empty.** An empty `blockedBy` on a card nobody looked up is not "no blockers"; reporting it
   as such would be the silent wrong answer the values forbid. `fetchBoard(ctx, { blockers: 'all' })`
-  (`src/store/github.js`) REST-fills every open card on a repo without the GraphQL `Issue.blockedBy` field,
+  fills every open card's blockers,
   and the fill's provenance travels with the board and is read back through `blockersOf` / `blockersKnown`
-  (`src/store/github.js`). `unknown_blockers` is what a card outside the fill's scope gets. The same gate
+  (`blockersOf`, `src/model.js`). `unknown_blockers` is what a card the read did not fill gets. The same gate
   gets the ` ⇡ unblocked` nudge in `hkb list` right (`src/cli.js:359`): the marker is computed in memory
   from the same rule, and suppressed entirely when blockers were never filled.
 
@@ -117,22 +115,31 @@ token argument for the shape is `bodyText`, which is attached only to cards that
 then stops. Nothing is applied until a human says yes per row. What the approved batch may execute is
 deliberately short — `hkb comment`, `hkb create --triage --blocked-by`, `hkb link`, and one
 `hkb promote --triage-only` of cards that are already in triage, which skips and reports (rather than
-writes) a card that has moved on before the flag was applied. `hkb edit` now exists (below) but the
-procedure does not yet route `specify`-flagged findings through it — a body/`kb` rewrite still goes
-through the `/kanban:specify` PATCH recipe. Archive, supersede and close-as-duplicate stay **handed back
+writes) a card that has moved on before the flag was applied. `hkb edit` now covers the whole of a
+`specify`-flagged rewrite — `--body-file` for the prose as well as the kb flags — though the groom
+procedure still hands those rows to `/kanban:specify` rather than executing them itself.
+Archive, supersede and close-as-duplicate stay **handed back
 as pre-staged commands** rather than run, because the verbs that would make them safe do not exist yet
 (see the gaps below).
 
 This is also the one sanctioned exception to the operator's "never promote" rule: the human's per-row yes
 is what makes the promotion theirs rather than the agent's.
 
-## `hkb edit` — the write half of the kb block
+## `hkb edit` — the write half of a card
 
-`hkb edit <n>... [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]`
+`hkb edit <n>... [--body-file p|--body ".."] [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]`
 (`src/cli.js`, `case 'edit'`) sets exactly the kb keys a flag names, spreading
 them over the task's existing `kb` object and leaving every other key as read,
-then writes the block back with `updateBody` (`src/store/github.js`) — the same
-PATCH-the-body-block path `/kanban:specify` uses by hand. It takes multiple
+then writes the block back with `setKb` (the `Store` interface).
+
+`--body-file`/`--body` is the other half, and it arrived with #304 for a
+reason: `/kanban:specify` and `/kanban:decompose` used to rewrite a card's prose
+with `gh api repos/{o}/{r}/issues/<n> -X PATCH -F body=@…`, which was right
+while the board *was* GitHub Issues and edits the wrong object entirely now
+that the board is a branch. It goes through `updateBody`, which keeps the
+machine block whatever the driver keeps it in, so a body written by hand cannot
+lose the card's `kb` fields. It writes one card — naming several numbers with a
+body is refused rather than broadcast. It takes multiple
 task numbers, like `promote`/`archive`, because `priority_inversion`'s
 suggestion can name more than one blocker at once
 (`src/model.js:901`). `test/cli.test.js` pins it two ways: one test asserts a

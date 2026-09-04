@@ -1,6 +1,6 @@
-// A long-lived dispatcher must not back off for ever. Two halves, both against the in-memory
-// GitHub (test/fake-gh.js) or a hand-rolled transport — no `gh`, no network, no worker:
+// A long-lived dispatcher must not back off for ever. Two halves — no `gh`, no network, no worker:
 //   1. the base sha is re-resolved every tick, conditionally, so a stale one cannot outlive a tick
+//      (it is what a track's integration branch is cut at, `ensureTrackBranch`)
 //   2. a claim that keeps answering `unknown` drops this process's caches, then removes the process
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,17 +8,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loop, tick, noteClaimResult, dropCaches, installStamp, SELF_HEAL } from '../src/dispatch.js';
-import { baseSha, staleBaseSha } from '../src/lock.js';
+import { baseSha, staleBaseSha } from '../src/forge.js';
 import { DEFAULT_BOARD } from '../src/board.js';
 import { GhError, setTransport } from '../src/gh.js';
-import { FakeGh, kbIssue } from './fake-gh.js';
+import { installDoubles, kbIssue } from './fake-store.js';
 
 function harness({ dispatch = {}, board = 'default', host = 'test-host' } = {}) {
-  const gh = new FakeGh();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-selfheal-'));
   const cfg = {
     ...DEFAULT_BOARD,
-    repo: gh.nameWithOwner,
+    repo: 'acme/board',
     board,
     // The loop's once-a-day version notice asks npm. Nothing in this suite reaches the network:
     // that path has its own tests, with the registry stubbed (test/update.test.js).
@@ -29,7 +28,7 @@ function harness({ dispatch = {}, board = 'default', host = 'test-host' } = {}) 
   const ctx = {
     root,
     cfg,
-    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    repo: { owner: 'acme', repo: 'board', nameWithOwner: 'acme/board' },
     board,
     host,
     json: false,
@@ -37,10 +36,11 @@ function harness({ dispatch = {}, board = 'default', host = 'test-host' } = {}) 
     _cache: {},
     requireBoard() { return this; },
   };
-  const restore = gh.install();
+  const { gh, store, restore } = installDoubles(ctx, { board });
   const logs = [];
   return {
     gh,
+    store,
     ctx,
     root,
     logs,
@@ -108,20 +108,11 @@ test('a branch the API does not know falls back to the repo default, prefix matc
   assert.ok(seen.includes('repos/acme/board'), 'the repo read is what names the real default branch');
 });
 
-test('every tick claims at the sha the branch has now', async (t) => {
-  const h = harness();
-  t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 2, status: 'ready', agent: 'claude' }));
-
-  await h.tick({ max: 1 });
-  assert.equal(h.gh.refs.get('refs/kb/locks/1/1'), 'f'.repeat(40));
-
-  h.gh.refs.set('refs/heads/main', '9'.repeat(40)); // a PR merged while the loop was up
-  await h.tick({ max: 1 });
-
-  assert.equal(h.gh.refs.get('refs/kb/locks/2/1'), '9'.repeat(40), 'the sha of the first tick must not outlive it');
-});
+// `every tick claims at the sha the branch has now` was here. A claim used to be
+// `POST git/refs refs/kb/locks/<n>/<k>` at the default branch head, so a base sha that outlived a
+// tick made the dispatcher POST at a commit GitHub had forgotten (the #61 outage). A claim is a row
+// in the index now and is cut at nothing; the base sha is only what a *track branch* is created at,
+// and its per-tick revalidation is the two tests above.
 
 // ---------- 2. the self-heal ladder ----------
 
@@ -165,20 +156,20 @@ test('dropCaches forgets the base sha, its etag and the capability probe', () =>
 test('a transient unknown claim recovers on the next tick, with no cache drop and no restart', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
-  h.gh.fail({ method: 'POST', path: 'git/refs' }, { status: 404, message: 'Not Found', times: 1 });
+  h.store.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
+  h.store.fail('claim', { kind: 'notfound', message: 'the claim could not be classified', times: 1 });
 
   const first = await h.tick();
   assert.deepEqual(first.claimed, []);
   assert.deepEqual(first.self_heal, []);
   assert.equal(first.fatal, null);
-  assert.equal(h.gh.statusOf(1), 'ready', 'an unknown claim never moves the card');
+  assert.equal(h.store.statusOf(1), 'ready', 'an unknown claim never moves the card');
   assert.match(h.log(), /#1: claim result unknown \(notfound/);
 
   const second = await h.tick();
 
   assert.equal(second.claimed.length, 1, 'the tick after the upstream healed claims it — no bounce needed');
-  assert.equal(h.gh.statusOf(1), 'running');
+  assert.equal(h.store.statusOf(1), 'running');
   assert.deepEqual(second.self_heal, []);
   assert.equal(h.ctx._health.has(1), false, 'and the streak is forgotten');
   assert.doesNotMatch(h.log(), /self-heal/);
@@ -187,8 +178,8 @@ test('a transient unknown claim recovers on the next tick, with no cache drop an
 test('a persistent unknown claim drops the caches at tick 3 and exits the loop at tick 6', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, title: 'wedged', status: 'ready', agent: 'claude' }));
-  h.gh.fail({ method: 'POST', path: 'git/refs' }, { status: 404, message: 'Not Found', times: 99 });
+  h.store.addIssue(kbIssue({ number: 1, title: 'wedged', status: 'ready', agent: 'claude' }));
+  h.store.fail('claim', { kind: 'notfound', message: 'the claim could not be classified', times: 99 });
 
   let waits = 0;
   const sleeper = async () => { if (++waits > 20) throw new Error('the loop never gave up'); };
@@ -197,44 +188,34 @@ test('a persistent unknown claim drops the caches at tick 3 and exits the loop a
     (e) => {
       assert.equal(e.exitCode, 4, 'non-zero, so a supervisor restarts it');
       assert.match(e.message, /#1 claim came back unknown 6 ticks in a row/);
-      assert.match(e.message, /Last error: notfound: POST .*git\/refs failed \(404\): Not Found/);
+      assert.match(e.message, /Last error: notfound: the claim could not be classified/);
       return true;
     },
   );
 
   const log = h.log();
-  assert.equal(h.gh.requestsMatching('POST', 'git/refs').length, 6, 'it kept trying for six ticks, then stopped');
+  assert.equal(h.store.callsOf('claim').length, 6, 'it kept trying for six ticks, then stopped');
   assert.equal(waits, 5, 'and it did not sleep after the last one');
   assert.equal(log.split('self-heal: caches dropped').length - 1, 1, 'the caches are dropped once');
   assert.match(log, /#1: self-heal: caches dropped after 3 unknown claim results in a row \(notfound: /);
   assert.match(log, /#1: claim still unknown 6 ticks in, 3 of them after the cache drop/);
   assert.match(log, /FATAL dispatcher exiting: #1/);
-  assert.equal(h.gh.statusOf(1), 'ready', 'the card is left exactly where the next dispatcher can pick it up');
+  assert.equal(h.store.statusOf(1), 'ready', 'the card is left exactly where the next dispatcher can pick it up');
 
   // the drop landed on tick 3, not before: the two ticks before it left the cache alone
   const order = h.logs.map((l) => (/^tick: /.test(l) ? 'tick' : /self-heal: caches dropped/.test(l) ? 'drop' : null)).filter(Boolean);
   assert.deepEqual(order, ['tick', 'tick', 'drop', 'tick', 'tick', 'tick', 'tick']);
 });
 
-test('a base sha that will not resolve is an unknown claim, not a tick that died on the way', async (t) => {
-  const h = harness();
-  t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
-  h.gh.fail({ method: 'GET', path: 'git/ref/heads/main' }, { status: 404, message: 'Not Found', times: 99 });
-
-  const s = await h.tick(); // the reclaim, the promotion and the state write must all still happen
-  assert.deepEqual(s.claimed, []);
-  assert.equal(s.fatal, null);
-  assert.match(h.log(), /#1: claim result unknown \(notfound/);
-  assert.equal(h.ctx._health.get(1).streak, 1, 'and it counts on the same ladder');
-  assert.equal(h.gh.statusOf(1), 'ready');
-});
+// `a base sha that will not resolve is an unknown claim` was here for the same reason as the test
+// above it: `claim()` resolved the base sha first and reported a failure to do so as `unknown`, so
+// the ladder counted it. A claim asks the store, which has no branch head to resolve.
 
 test('an unreachable GitHub never escalates: waiting is the fix, restarting is not', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
-  h.gh.fail({ method: 'POST', path: 'git/refs' }, { status: 0, kind: 'network', message: 'dial tcp: no such host', times: 99 });
+  h.store.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude' }));
+  h.store.fail('claim', { kind: 'network', message: 'dial tcp: no such host', times: 99 });
 
   for (let i = 0; i < 8; i++) {
     const s = await h.tick();

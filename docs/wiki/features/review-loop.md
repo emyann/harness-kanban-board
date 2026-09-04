@@ -7,26 +7,24 @@ audience: [dev]
 read_when: "touching the active_pr guard, the claim loop's worktree creation, hkb request-changes, or the worker brief"
 covers:
   - path: src/model.js
-    sha: 27854e20c9e609f08ab2c49afd2f83eb0fdf08c1
+    sha: de323e59fae958580450c490eea7fa56520e28a5
   - path: src/dispatch.js
-    sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00
+    sha: 6a31798b86f2e330b93d1bf20f659e4843d6a022
   - path: src/board.js
-    sha: 0e4a4ad473531aaea01d951afa45c21be1839cc3
+    sha: 0337a17cf70442cac66fb457c880e4b27a52672e
   - path: src/context.js
-    sha: 0eecc3f46fa4d71d3fa12598b474c76e0bc7733d
+    sha: be28b4843c2a09afc0c835c4fe195706af86bb15
   - path: src/lifecycle.js
-    sha: c3c49b90e80c7e68d44b4f8f999debcfa484de80
+    sha: 29089f8c1ba2f46a320316634593773d1d2b67b0
   - path: src/gc.js
-    sha: 5c9f92377d47e7bca75c32fc675dfa50e617e7a5
+    sha: cc129d307e845211036472a76ed7e0f456be1329
   - path: src/cli.js
-    sha: 9d7fc11ad734643205e89668a176d4f29115805f
-  - path: src/store/github.js
-    sha: e2708642df0ef4599f450e643b9b67eeeb0b2ad5
+    sha: b183d59750a4bace38fb612026657ed3ded95708
   - path: src/forge.js
-    sha: 20dd384386ca63bc98d103b2e7728f29a95bc87c
+    sha: 1d9e17cd8fad3500b512ef10843d541cda2c65a4
 related: [features/auto-merge, features/tracks, architecture/overview, architecture/dispatcher-tick]
-generated_at_commit: 237bb61
-last_refreshed: 2026-09-02
+generated_at_commit: 53ecf5a
+last_refreshed: 2026-09-03
 ---
 
 # The review loop — `request-changes` and continuing one PR
@@ -169,31 +167,59 @@ ready (PR #147 stays open; the next attempt continues it)`.
 So `hkb log <n>` on a card that went round twice reads `review_requested →
 changes_requested → completed`, all against one PR number.
 
-## Finding the PR at all — the head-branch fallback
+## Finding the PR at all — the head branch *is* the link
 
-Everything above assumes `task.prs` already names the open PR. It comes from
-one place, `closedByPullRequestsReferences` (`ISSUE_FIELDS`, `src/store/github.js`), and that field
-only answers "would merging this PR close the issue" — which requires the PR
-to target the default branch, and (#228) came back empty at least once even
-then. When it does, `activePrGuard` never fires, `hkb finish` sees no PR and
-used to close the card as *done* with the branch left unmerged and nothing on
-the board chasing it (#227, #228 — see `features/tracks.md`'s branch-strategy
-section for the fuller incident).
+Everything above assumes `task.prs` names the open PR. Nothing on the forge's
+side puts it there: the board is a branch in this repository (ADR-006), so
+there is no issue for a pull request to reference and no field to read it out
+of. **A PR belongs to the card whose branch name it is on**, and that is the
+whole of the association.
 
-`fetchBoard`/`getTask` (`src/store/github.js`) now fall back to a **head**-branch
-match — `taskBranchRe(n)`, matching `kb/<n>`, `kb-<n>-<k>`,
-`worktree-kb-<n>-<k>` — whenever a card's own `prs` comes back empty: one
-board-wide `GET /pulls?state=open` (`openPrsByHead`, `src/forge.js`), read once per tick (or
-once per single-card read), never once per card. Because the guard, the merge
-policy and this page's whole loop all read `task.prs`, the fallback is
-invisible to them by design — a stacked or otherwise unlinked PR is simply
-*found*, and everything above behaves exactly as written. `hkb finish` also
-refuses to land a card in *done* with no PR found at all (protocol_violation,
-`src/lifecycle.js`'s `noPrDecision`), unless the worker says `--no-pr "why"` —
-so a PR the fallback still cannot place stops the card rather than closing it
-silently. `hkb doctor`'s `checkOrphanedPrs` catches what neither can: a card
-that already went to *done* before this existed, whose branch still carries
-an open PR that an open-issues board read never revisits.
+`fillPrs(ctx, tasks)` (`src/forge.js`) is the join, and every read that goes on
+to judge a card by its PR calls it: the tick's board read, the terminal verbs,
+`hkb show`, `hkb list`, `hkb serve`, `hkb gc`. It reads the repository's pull
+requests once — `openPrsByHead`, one `GET /pulls?state=open`, memoized on
+`ctx._cache` and dropped at the top of every tick — and matches them against
+`taskBranchRe(n)`: `kb/<n>`, `kb-<n>-<k>`, `worktree-kb-<n>-<k>`, and
+`kb/track-<n>` for a track root's own PR. One listing per tick, never one per
+card (#234).
+
+This started as a *fallback*. `closedByPullRequestsReferences` was the primary
+source while the board was GitHub Issues, and it answered a narrower question
+than hkb asked of it — "would merging this close the issue", which requires the
+PR to target the default branch, and (#228) came back empty at least once even
+then. A card whose PR it missed had `activePrGuard` never fire and `hkb finish`
+close it as *done* with the branch unmerged and nothing on the board chasing it
+(#227, #228 — see `features/tracks.md`'s branch-strategy section for the fuller
+incident). The head-branch match was added beside it; it is now the only path,
+which is *simpler* rather than weaker — one rule, stated in the worker's brief
+and in the track runner's, instead of two with a silent gap between them.
+
+Two consequences worth stating plainly:
+
+- **A PR on any other branch name is invisible to hkb.** `hkb finish` refuses to
+  land a card in *done* with no PR found (protocol_violation, `noPrDecision`,
+  `src/lifecycle.js`) unless the worker says `--no-pr "why"` — so an unplaceable
+  PR stops the card rather than closing it silently. The brief
+  (`src/context.js`) says the branch name is the link, in the step that tells
+  the worker to open the PR.
+- **`hkb doctor`'s `checkOrphanedPrs` is the other side.** It looks up each
+  hkb-shaped branch's card *through the store* and warns when a settled card
+  still has an open PR on its branch — the case a live read cannot reach,
+  because a card in *done* is not one anything revisits. A card it could not read
+  at all is named and suppresses the `ok`: the check swallowed those throws once,
+  and printed "all on cards still open" — a positive verdict derived from nothing
+  — on a board where every read was failing.
+- **A merged PR does not drag a reopened card back.** `hkb request-changes` on a
+  card whose PR has merged is exactly the fix line above, and the reconcile pass
+  has to honour it: a card whose `updatedAt` is newer than the PR's `mergedAt` is
+  left where the reviewer put it rather than forced to *done* by the next tick
+  (`reconcileDecision`, `src/dispatch.js`; see `features/auto-merge.md`).
+- **The join degrades rather than failing the read.** The cards are local and the
+  pull requests are the forge's, so a forge that cannot be reached leaves
+  `prs: []` and a line saying why (`prsUnavailable`, `src/forge.js`) — except in
+  `hkb finish`/`request-review`/`merge`, where "no PR" is a verdict about the
+  worker's work and must not be inferred from a listing that failed.
 
 ## Known gaps
 

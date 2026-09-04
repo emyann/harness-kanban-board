@@ -71,10 +71,6 @@ export const DEFAULT_PROFILES = {
   claude: {
     description: 'Claude Code on this machine as a background agent (free path): visible in `claude agents`, attachable with `claude attach <job>`, runs in a git worktree, opens a draft PR, finishes with one hkb terminal verb. The dispatcher stops the job once the attempt has ended.',
     mode: 'claude-bg',
-    // how its workers say "still alive": ref (CAS on the lock ref, free) · comment (a run-record
-    // write, floored at 10 min) · auto = ref, falling back to comment where git push cannot reach
-    // the repo. Cloud tiers that cannot push arbitrary refs set "comment".
-    heartbeat: 'auto',
     max_in_progress: 2,
     model: null,
     effort: null,
@@ -86,7 +82,6 @@ export const DEFAULT_PROFILES = {
     mode: 'claude-bg',
     track: true,
     track_agents: ['claude', 'claude-p', 'claude-track'],
-    heartbeat: 'auto',
     max_in_progress: 1,
     model: null,
     effort: null,
@@ -102,7 +97,6 @@ export const DEFAULT_PROFILES = {
   'claude-p': {
     description: 'Claude Code headless (`claude -p`): a plain process that exits when done. Not listed in `claude agents`; use it where no session daemon exists (CI, containers).',
     mode: 'process',
-    heartbeat: 'auto',
     max_in_progress: 2,
     model: null,
     effort: null,
@@ -113,7 +107,6 @@ export const DEFAULT_PROFILES = {
     description: 'GitHub Copilot CLI on this machine (included in Copilot Free, draws on the plan\'s AI credits). Run `hkb init --harness copilot` first: it writes the `kanban-worker` custom agent and the agentStop hook that enforces the terminal verb. Copilot CLI has no worktree flag, so `workspace: "worktree"` asks the dispatcher to create one. No structured-output flag — the attempt is recorded by the `hkb` calls the worker makes. max_in_progress is 1 because the free credit pool is small.',
     mode: 'process',
     workspace: 'worktree',
-    heartbeat: 'auto', // `git *` is allow-listed, so the worker can CAS the lock ref like a Claude one
     max_in_progress: 1,
     model: null,
     allowed_tools: COPILOT_TOOLS,
@@ -123,9 +116,6 @@ export const DEFAULT_PROFILES = {
     description: 'OpenAI Codex CLI on this machine (`codex exec`, draws on the ChatGPT or API plan). Run `hkb init --harness codex` first: it writes the `.codex/hooks.json` Stop nudge and the notes for the one-time trust Codex needs before it runs project hooks. Codex has no worktree flag, so `workspace: "worktree"` asks the dispatcher to create one and the launch hands it over as `-C`. The sandbox is the permission policy — `workspace-write` makes that worktree writable and everything else read-only — so there is no per-command allowlist. `--output-schema` makes the final message match the terminal-verb schema; the `hkb` verb the worker ran is still the source of truth. See docs/harnesses.md.',
     mode: 'process',
     workspace: 'worktree',
-    // `git *` runs inside the sandbox, so a Codex worker CASes the lock ref like a Claude one —
-    // but only once `network_access` is on for workspace-write (docs/harnesses.md).
-    heartbeat: 'auto',
     max_in_progress: 1,
     model: null,
     allowed_tools: null, // Codex has no per-command allowlist: `--sandbox` is the whole policy
@@ -211,9 +201,10 @@ export function repoRoot(cwd = process.cwd()) {
 
 // ---------- running git ----------
 // One helper, used by everything in hkb that shells out to git: the board's ref
-// (`src/store/git.js`) and the lock-ref heartbeat (`src/store/github.js`). They had a copy each,
-// with an undocumented drift in `gitSays`'s "which line is the loud one" regex, which meant the same
-// failure printed differently depending on which store hit it.
+// (`src/store/git.js`) and, until ADR-006 retired it, the GitHub store's lock-ref heartbeat. They
+// had a copy each, with an undocumented drift in `gitSays`'s "which line is the loud one" regex,
+// which meant the same failure printed differently depending on which store hit it. One outlived
+// the other, which is rather the point of their having been made one.
 
 // Module-private: `gitEnv` below is its only reader, and everything that shells out to git goes
 // through `runGit`. Exporting it invited a second spawn path that set the identity by hand and

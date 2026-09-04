@@ -1,14 +1,15 @@
 // Worker-facing verbs: heartbeat, complete, block, unblock, request-review, request-changes.
 // Every verb closes the open attempt in the run comment and releases the lock ref.
 import fs from 'node:fs';
-import { finishPr, prNodeId, prChecksState, mergePullRequest } from './forge.js';
+import { finishPr, prNodeId, prChecksState, mergePullRequest, fillPrs } from './forge.js';
 import { GhError, isOffline } from './gh.js';
 import { outboxFile, assertOnBoard } from './board.js';
 import { openStore } from './store/index.js';
 import { sessionForAttempt } from './hook.js';
+import { sweepTask, pidAlive } from './gc.js';
 import {
   openAttempt, computeReady, blockerDone, promoteDecision, serializeResultComment, hashReason,
-  heartbeatMode, BLOCK_KINDS, DEFAULT_KB, L, mergePolicy, mergeDecision,
+  BLOCK_KINDS, DEFAULT_KB, L, mergePolicy, mergeDecision,
 } from './model.js';
 import { resolveTrack } from './track.js';
 
@@ -81,10 +82,9 @@ async function finishAttempt(ctx, store, task, rec, flags, outcome, extra = {}) 
 /**
  * Where a claim lives, in words a person on *this* board can act on.
  *
- * `refs/kb/locks/42/1` on GitHub; on a local board the claim is a row in a table and has no name, so
- * the attempt number — which every store has — is the answer. This is `cli.js`'s `c.ref || \`attempt
- * ${k}\`` under one name, because the heartbeat and the LOCK_LOST error were still naming a ref no
- * local board has. A `store` is optional so the fallback needs no lookup.
+ * A claim is a row in a table and has no name, so the attempt number — which every store has — is
+ * the answer, and `lockRef` is on the interface for a store that does have one. This is `cli.js`'s
+ * `c.ref || \`attempt ${k}\`` under one name. A `store` is optional so the fallback needs no lookup.
  */
 const claimWhere = (store, n, k) => store?.lockRef?.(n, k) || `attempt ${k} of #${n}`;
 
@@ -95,7 +95,7 @@ function lockLost(n, k, why = 'is gone — the dispatcher reclaimed this task', 
   return e;
 }
 
-const refBeat = (store, n, k, cas, extra = {}) => ({ number: n, attempt: k, mode: 'ref', ref: store?.lockRef?.(n, k) ?? null, sha: cas.token, expected: cas.expected, ...extra });
+const refBeat = (store, n, k, cas, extra = {}) => ({ number: n, attempt: k, mode: 'claim', ref: store?.lockRef?.(n, k) ?? null, sha: cas.token, expected: cas.expected, ...extra });
 
 /**
  * A rejected lease is strong evidence but not proof: a push that lands while the local `update-ref`
@@ -118,11 +118,16 @@ async function resolveRejectedLease(store, n, k) {
 }
 
 /**
- * Say "still alive". Two ways, chosen by the attempt's profile (`heartbeat` in board.json):
- *   ref (default) — a compare-and-swap on the lock ref: no API call at all, and a reclaim is
- *                   detected atomically by the rejected lease.
- *   comment       — a floored write to the run record, for workers that cannot push refs.
- * A `--note` is content, so it always takes the comment path.
+ * Say "still alive". One mechanism, with one fallback:
+ *   claim  — a compare-and-swap on the claim the store holds: a reclaim is detected atomically by
+ *            the rejected lease, and the lease *is* the check, so a beat costs the store nothing.
+ *   record — a floored write to the run record, when the store could not make the swap at all.
+ * A `--note` is content, so it always takes the record path.
+ *
+ * There is no profile switch any more. `heartbeat: "comment"` existed for a worker that could not
+ * push to a lock ref on GitHub, which was the only way a *GitHub* board could hold a lease; a local
+ * board's claim is a row in a table every verb on this host can write, so the mode that existed to
+ * work around the ref is gone with it (docs/local-first.md 6.1).
  */
 /**
  * @param {any} ctx
@@ -135,7 +140,7 @@ export async function heartbeat(ctx, number, { note, attempt } = {}) {
 
   // Warm path: the lease *is* the check, so a worker that has beaten before costs the store nothing —
   // no task read, no run-record read, no write.
-  if (envK && !note && heartbeatMode(ctx.cfg, process.env.KB_PROFILE) !== 'comment') {
+  if (envK && !note) {
     const chain = store.beatToken(number, envK);
     const cas = chain ? await store.heartbeat(number, envK, chain) : null;
     if (cas?.result === 'ok') return refBeat(store, number, envK, cas);
@@ -153,10 +158,9 @@ export async function heartbeat(ctx, number, { note, attempt } = {}) {
   if (!a) { const e = new Error(`#${number} has no active attempt (status: ${task.status})`); e.exitCode = 2; throw e; }
 
   let fallback = null;
-  const mode = heartbeatMode(ctx.cfg, a.profile || process.env.KB_PROFILE);
-  if (mode !== 'comment' && !note) {
-    // the chain starts at the sha the dispatcher created the ref with, recorded on the attempt
-    const expected = store.beatToken(number, a.attempt) || a.lock_sha || (await store.lockToken(number, a.attempt));
+  if (!note) {
+    // the chain starts at the token the dispatcher's claim handed back
+    const expected = store.beatToken(number, a.attempt) || (await store.lockToken(number, a.attempt));
     if (!expected) throw lockLost(number, a.attempt, undefined, store);
     const cas = await store.heartbeat(number, a.attempt, expected);
     if (cas.result === 'ok') return refBeat(store, number, a.attempt, cas);
@@ -165,19 +169,19 @@ export async function heartbeat(ctx, number, { note, attempt } = {}) {
       if (beat) return beat;
       fallback = `the lease on ${claimWhere(store, number, a.attempt)} was rejected but the store still shows the claim`;
     } else fallback = cas.detail;
-    // a fallback is normal for `auto` and a misconfiguration for `ref`, but never silent either way
+    // the store could not make the swap at all — say so rather than record a beat as if it had
     process.stderr.write(`hkb: no lease heartbeat (${fallback}) — recording it on the run record instead\n`);
   }
 
   const held = (await store.lockToken(number, a.attempt)) !== null;
   if (!held) throw lockLost(number, a.attempt, undefined, store);
   const last = a.heartbeat_at ? new Date(a.heartbeat_at).getTime() : 0;
-  const floorMs = 10 * 60_000; // frugal: comment edits count as content writes; 10-min floor
-  if (Date.now() - last < floorMs && !note) return { number, attempt: a.attempt, mode: 'comment', skipped: true, fallback, next_in_s: Math.ceil((floorMs - (Date.now() - last)) / 1000) };
+  const floorMs = 10 * 60_000; // frugal: a run-record write is a real write; 10-min floor
+  if (Date.now() - last < floorMs && !note) return { number, attempt: a.attempt, mode: 'record', skipped: true, fallback, next_in_s: Math.ceil((floorMs - (Date.now() - last)) / 1000) };
   a.heartbeat_at = nowIso();
   if (note) a.note = String(note).slice(0, 200);
   await store.saveRun(number, rec);
-  return { number, attempt: a.attempt, mode: 'comment', heartbeat_at: a.heartbeat_at, fallback };
+  return { number, attempt: a.attempt, mode: 'record', heartbeat_at: a.heartbeat_at, fallback };
 }
 
 const SUMMARY_HINT = 'pass it with --summary ".." / --summary-file <path>, or as {"summary": ".."} on stdin with --from-stdin';
@@ -216,13 +220,13 @@ export const prAttemptFields = (decision) => (decision.pr ? { pr: decision.pr.nu
 /**
  * What a missing PR does to `complete`: naming the fix, never a silent `done`. Pure.
  *
- * A worker's brief says "open a draft PR that says Closes #n" — so a card `complete` reaches with no
- * PR (not even via the head-branch fallback `getTask` already tried) is either a protocol violation
- * or a card that genuinely needed no PR, and hkb cannot tell those apart from here (#234). Silently
- * picking "done" is the failure the values forbid — the two cases above shipped as *done* with the
- * work sitting in an unreferenced open PR. So without an explicit `noPr` override this refuses to
- * land in done: it records the attempt as `protocol_violation` and leaves the card where a human
- * (or the next attempt) will see it, instead of closing the issue out from under the missing work.
+ * A worker's brief says "open a draft PR on the `kb-<n>-<k>` branch" — so a card `complete` reaches
+ * with no PR (not even through the head-branch match `fillPrs` already tried) is either a protocol
+ * violation or a card that genuinely needed no PR, and hkb cannot tell those apart from here (#234).
+ * Silently picking "done" is the failure the values forbid — the two cases above shipped as *done*
+ * with the work sitting in an unreferenced open PR. So without an explicit `noPr` override this
+ * refuses to land in done: it records the attempt as `protocol_violation` and leaves the card where
+ * a human (or the next attempt) will see it, instead of closing it out from under the missing work.
  */
 /**
  * @param {number} number
@@ -232,11 +236,10 @@ export function noPrDecision(number, { noPr, noPrReason } = {}) {
   if (noPr) return { ok: true, no_pr_reason: noPrReason ? String(noPrReason).slice(0, 300) : null };
   return {
     ok: false,
-    reason: `no PR found for #${number} — closedByPullRequestsReferences and the head-branch fallback ` +
-      `(kb/${number}, kb-${number}-*, worktree-kb-${number}-*) both came up empty. A worker's brief says ` +
-      `"open a draft PR that says Closes #${number}". Open it (or retarget an existing one onto this task's ` +
-      `own branch or the default branch) and finish again, or if this card genuinely needed no PR, ` +
-      `finish again with --no-pr "<why>".`,
+    reason: `no PR found for #${number} — no open pull request on this card's own branch ` +
+      `(kb-${number}-*, worktree-kb-${number}-*, kb/${number}), which is the only thing that ties one to a ` +
+      `card. Open it, or rename an existing PR's head branch onto one of those, and finish again; or if ` +
+      `this card genuinely needed no PR, finish again with --no-pr "<why>".`,
   };
 }
 
@@ -251,6 +254,13 @@ export async function complete(ctx, number, { summary, metadata = {}, artifacts 
   const task = await store.getTask(number);
   assertOnBoard(ctx, task);
   const runRec = await store.loadRun(number);
+  // The card came from the store; its pull request comes from the forge, and the branch name is the
+  // join (`fillPrs`, src/forge.js). Nothing on GitHub's side links the two any more.
+  //
+  // `required`: an unreachable forge must not read here as "this card has no PR". That answer costs
+  // the worker its work — `noPrDecision` records a protocol violation and parks the card — for a
+  // pull request that is sitting there, unread. Fail with the forge's own error instead.
+  await fillPrs(ctx, task, { required: true });
   const decision = prReadyDecision(task.prs);
   if (!decision.pr) {
     const noPrCheck = noPrDecision(number, { noPr, noPrReason });
@@ -340,6 +350,9 @@ export async function requestReview(ctx, number, { summary, metadata = {}, revie
   const task = await store.getTask(number);
   assertOnBoard(ctx, task);
   const runRec = await store.loadRun(number);
+  // `required`: the attempt row names the PR this review is on, and `finishPr` below has to reach
+  // the forge anyway — a listing that failed must not record "reviewed, no PR".
+  await fillPrs(ctx, task, { required: true });
   const decision = prReadyDecision(task.prs);
   const a = await finishAttempt(ctx, store, task, runRec, { attempt }, 'review_requested', { summary: String(summary).slice(0, 400), ...prAttemptFields(decision) });
   const continued = !!(decision.pr && a.continues_pr === decision.pr.number);
@@ -379,6 +392,7 @@ export async function requestChanges(ctx, number, { reason } = {}) {
   if (task.state === 'CLOSED') await store.reopenTask(number);
   const target = computeReady(task) ? 'ready' : 'todo';
   await store.setStatus(task, target);
+  await fillPrs(ctx, task);
   const pr = (task.prs || []).find((p) => p && p.state === 'OPEN') || null;
   return {
     number,
@@ -408,6 +422,9 @@ export async function mergeCard(ctx, number, { summary } = {}) {
   assertOnBoard(ctx, task);
   const policy = mergePolicy(ctx.cfg);
   const runRec = await store.loadRun(number);
+  // `required`: `mergeDecision` refuses a card with no open PR, and "the listing failed" must not
+  // reach the operator wearing that refusal's wording.
+  await fillPrs(ctx, task, { required: true });
   const openPr = (task.prs || []).find((p) => p && p.state === 'OPEN') || null;
   let checksState = null;
   if (!policy.error && policy.mode === 'operator' && openPr) {
@@ -422,7 +439,25 @@ export async function mergeCard(ctx, number, { summary } = {}) {
   if (attempt) { attempt.merged_by = 'operator'; await store.saveRun(number, runRec); }
   const checksNote = policy.require.checks ? 'green' : 'not required';
   await store.addNote(number, `**Merged by the operator seat** — review: ${decision.reviewDetail || 'not required'}, checks: ${checksNote}, method: ${decision.method}`);
-  return { number, pr: decision.pr.number, method: decision.method, merged: true, merged_by: 'operator' };
+  // The merge is what finishes the card, and this call knows it happened — so it says so here rather
+  // than waiting for the reconcile pass to find the merged PR on the next tick. Nothing closes a
+  // card behind hkb's back any more (docs/local-first.md §6.4): a card is moved by a verb or by the
+  // tick, and this is the verb.
+  await store.setStatus(task, 'done', { remove: [L.needsHuman] });
+  if (task.state !== 'CLOSED') await store.closeTask(number, 'completed');
+  // ...and because it does, the tick's reconcile pass never sees this card again — `done` is not a
+  // `RECONCILE_STATUSES` status, and `sweepFinished` is driven by what that pass reconciled
+  // (src/dispatch.js). Cleanup used to arrive that way, one tick later; now it has to happen here,
+  // or a merged card's worktree and branch survive until the periodic full sweep — for ever on a
+  // board whose dispatcher is not running. Same call the tick makes, with the same `keep`: a live
+  // worker on this host keeps the checkout it is sitting in.
+  const keep = runRec.run.attempts.filter((a) => !a.ended_at && a.host === ctx.host && a.pid && pidAlive(a.pid)).map((a) => a.attempt);
+  let cleaned = null;
+  try {
+    const r = sweepTask(ctx, number, { keep });
+    if (r.worktrees || r.branches) cleaned = r;
+  } catch { /* local git only, and the next `hkb gc`/tick sweep retries it — never fail a merge on cleanup */ }
+  return { number, pr: decision.pr.number, method: decision.method, merged: true, merged_by: 'operator', status: 'done', cleaned };
 }
 
 // ---------- board verbs (create, link) ----------
@@ -505,9 +540,9 @@ export async function linkTask(ctx, parent, child, { unlink = false } = {}) {
 export async function promote(ctx, number, { triageOnly = false } = {}) {
   const n = Number(number);
   const store = await openStore(ctx);
-  const byNumber = new Map((await store.listTasks()).map((t) => [t.number, t]));
+  const byNumber = new Map((await fillPrs(ctx, await store.listTasks())).map((t) => [t.number, t]));
   let root = byNumber.get(n);
-  if (!root) { root = await store.getTask(n); byNumber.set(n, root); }
+  if (!root) { root = await fillPrs(ctx, await store.getTask(n)); byNumber.set(n, root); }
   assertOnBoard(ctx, root);
   if (triageOnly && root.status !== 'triage') {
     return [{ number: root.number, status: root.status, unchanged: true, skipped: true, reason: `not in triage — already ${root.status}` }];

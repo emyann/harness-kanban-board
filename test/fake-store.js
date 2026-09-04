@@ -22,9 +22,9 @@
 // (`gh.requestsMatching`). The two doubles compose — install both.
 import { setStore } from '../src/store/index.js';
 import {
-  DEFAULT_KB, L, RUN_MARKER, RESULT_MARKER, STATUSES,
-  emptyRun, isResultComment, parseBodyBlock, parseResultComment, parseRunComment,
-  pickRunComment, serializeBodyBlock, serializeRunComment,
+  DEFAULT_KB, L, RESULT_MARKER, STATUSES,
+  emptyRun, isResultComment, parseBodyBlock, parseResultComment,
+  serializeBodyBlock,
   statusOf, agentOf, boardOf, tagBlockers,
 } from '../src/model.js';
 import { normalizeCardGrants, loadBoard, saveBoard } from '../src/board.js';
@@ -134,7 +134,7 @@ export class FakeStore {
         // outcome cannot be classified is `unknown`, which is what the dispatcher backs off on), so
         // it takes its own from the queue.
         if (name !== 'claim') {
-          const injected = this.#takeFailure(name);
+          const injected = this.#takeFailure(name, args);
           if (injected) throw injected;
         }
         // The frame is what `#wrote()` marks. Every method here mutates in its synchronous
@@ -162,6 +162,9 @@ export class FakeStore {
     const rec = issueRecord(spec, { number, url: spec.url || this.urlOf(number) });
     for (const l of rec.labels) this.repoLabels.add(l);
     this.issues.set(number, rec);
+    // The run record is a *record*, not a comment: this store keeps it the way every store hkb
+    // ships does (one document per card), so a fixture seeded through `kbIssue({run})` lands as one.
+    rec.run = rec.run ? clone(rec.run) : null;
     for (const body of spec.comments || []) this.addComment(number, body);
     return rec;
   }
@@ -201,10 +204,7 @@ export class FakeStore {
   revisionOf(number) { return this.revisions.get(Number(number)) || 0; }
   stateOf(number) { const r = this.#rec(number); return { state: r.state, stateReason: r.stateReason }; }
   /** The run record as hkb would read it back, or null. */
-  runOf(number) {
-    const picked = pickRunComment(this.#rec(number).comments);
-    return picked.chosen ? parseRunComment(picked.chosen.body) : null;
-  }
+  runOf(number) { return this.#rec(number).run; }
   /**
    * The live claims as `"<n>/<k>"`, sorted. Async on purpose: `locksOf` reads any driver.
    *
@@ -374,9 +374,15 @@ export class FakeStore {
         }
         return tagBlockers(tasks, { source: 'fake', filled: true, scope: 'all' });
       },
-      async listClosedRecent({ first = 50 } = {}) {
+      async listClosedRecent({ first = 50, since = null } = {}) {
+        const cut = since ? Date.parse(since) : NaN;
+        const inWindow = (r) => {
+          if (!Number.isFinite(cut)) return true;
+          const d = Date.parse(r.updatedAt || '');
+          return !Number.isFinite(d) || d >= cut;
+        };
         return [...self.issues.values()]
-          .filter((r) => r.state === 'CLOSED' && r.labels.includes(L.board(self.boardSlug)))
+          .filter((r) => r.state === 'CLOSED' && r.labels.includes(L.board(self.boardSlug)) && inWindow(r))
           .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : b.number - a.number))
           .slice(0, first)
           .map((r) => self.#task(r));
@@ -397,11 +403,17 @@ export class FakeStore {
         self.#touch(rec);
         return self.#task(rec);
       },
-      async setKb(task, kb, bodyText = task.bodyText) {
+      // `bodyText` defaults to *the record's* prose, not the passed task's. Defaulting to
+      // `task.bodyText` modelled the GitHub driver, where kb and prose shared one body field and a
+      // caller could only write both; the one driver left reads the card it is about to patch, so a
+      // `setKb` on a task read before someone else rewrote the prose does not put the old prose
+      // back. The conformance scenario pins the pairing.
+      async setKb(task, kb, bodyText = undefined) {
         const rec = self.#of(task);
-        rec.body = serializeBodyBlock(kb, bodyText);
+        const prose = bodyText === undefined ? parseBodyBlock(rec.body).rest : bodyText;
+        rec.body = serializeBodyBlock(kb, prose);
         self.#touch(rec);
-        task.kb = kb; task.body = rec.body; task.bodyText = bodyText;
+        task.kb = kb; task.body = rec.body; task.bodyText = prose;
         return task;
       },
       async setStatus(task, status, { add = [], remove = [] } = {}) {
@@ -495,20 +507,19 @@ export class FakeStore {
       },
 
       // ---- runs, results, notes ----
+      // A copy out and a copy in, like every real driver: the caller mutates what it was handed
+      // and hands it back to `saveRun`, and a double that returned its own object would make that
+      // round trip invisible — every `saveRun` would already have "happened".
       async loadRun(n) {
-        const picked = pickRunComment(self.#comments(n));
-        if (!picked.chosen) return { id: null, run: emptyRun(), duplicates: [] };
-        return { id: picked.chosen.id, run: parseRunComment(picked.chosen.body) || emptyRun(), duplicates: picked.duplicates.map((c) => c.id) };
+        const card = self.#rec(n);
+        return { id: card.run ? n : null, run: card.run ? clone(card.run) : emptyRun(), duplicates: [] };
       },
       async saveRun(n, rec) {
         const card = self.#rec(n);
-        const body = serializeRunComment(rec.run);
-        const held = rec.id ? card.comments.find((c) => c.id === rec.id) : null;
-        if (held) { held.body = body; self.#touch(card); return held; }
-        const created = self.addComment(n, body);
-        rec.id = created.id;
+        card.run = clone(rec.run);
+        rec.id = n;
         self.#touch(card);
-        return created;
+        return card.run;
       },
       async latestResult(n) {
         const results = self.#comments(n)
@@ -533,7 +544,7 @@ export class FakeStore {
       },
       async listNotes(n) {
         return self.#comments(n)
-          .filter((c) => !String(c.body || '').startsWith(RUN_MARKER) && !isResultComment(c.body))
+          .filter((c) => !isResultComment(c.body))
           .map((c) => ({ id: c.id, at: c.created_at, actor: c.user?.login || null, text: c.body || '' }));
       },
 
@@ -620,15 +631,19 @@ export class FakeStore {
    * `FakeGh.fail({path})` — a test that wanted "the claim could not be classified" used to inject a
    * 500 on `POST git/refs`, which is a sentence about GitHub, not about the board.
    */
-  fail(name, { message = 'injected failure', times = 1, result = null, kind = null } = {}) {
+  fail(name, { message = 'injected failure', times = 1, result = null, kind = null, when = null } = {}) {
     this.failures = this.failures || [];
-    this.failures.push({ name, message, times, result, kind });
+    // `when(args)` narrows an injected failure to one *call* rather than one method: `sweep()` and
+    // the tick both call `listTasks`, and a test about the sweep's read failing must not take the
+    // tick's down with it.
+    this.failures.push({ name, message, times, result, kind, when });
     return this;
   }
 
-  #takeFailure(name) {
+  #takeFailure(name, args = []) {
     for (const f of this.failures || []) {
       if (f.name !== name || f.times <= 0) continue;
+      if (f.when && !f.when(...args)) continue;
       f.times--;
       const e = /** @type {any} */ (new Error(f.message));
       // `kind` is `src/gh.js`'s classification (`auth`, `server`, `notfound`, …) and the callers
@@ -642,6 +657,9 @@ export class FakeStore {
 }
 
 const key = (n, k) => `${Number(n)}/${Number(k)}`;
+
+/** A structural copy, so a record handed out and a record kept are never the same object. */
+const clone = (v) => (v === null || v === undefined ? v : JSON.parse(JSON.stringify(v)));
 
 /**
  * Which card a call was about. The interface addresses a card two ways — by number (`saveRun`,

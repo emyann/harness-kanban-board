@@ -5,7 +5,9 @@
 //   2. `auto` enables auto-merge ONCE per PR, and never asks GitHub for something it would refuse.
 //   3. `auto` on a branch with no gate is refused, by the tick and by doctor, with the fix named.
 // The mutation is only ever asserted against the fake (test/fake-gh.js); nothing here can reach a
-// live pull request.
+// live pull request. The card lives on the board double and the pull request on the forge double,
+// which is exactly how the two are kept apart in `src/`: `h.card()` seeds both and the head branch
+// is what joins them (`fillPrs`, src/forge.js).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -16,23 +18,22 @@ import { DEFAULT_BOARD } from '../src/board.js';
 import { checkMergePolicy, MERGE_CHECK } from '../src/doctor.js';
 import { mergePolicy, autoMergeDecision, mergeGate, mergeDecision, operatorReviewEvidence, emptyRun } from '../src/model.js';
 import { mergeCard } from '../src/lifecycle.js';
-import { FakeGh, kbIssue, runWith } from './fake-gh.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 function harness({ merge = null, board = 'default', allowAutoMerge = true } = {}) {
-  const gh = new FakeGh({ allowAutoMerge });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-merge-'));
   const cfg = {
     ...DEFAULT_BOARD,
-    repo: gh.nameWithOwner,
+    repo: 'acme/board',
     board,
-    default_branch: gh.defaultBranch,
+    default_branch: 'main',
     dispatch: { ...DEFAULT_BOARD.dispatch, ...(merge ? { merge } : {}) },
     profiles: { claude: { mode: 'process', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] } },
   };
   const ctx = {
     root,
     cfg,
-    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    repo: { owner: 'acme', repo: 'board', nameWithOwner: 'acme/board' },
     board,
     host: 'test-host',
     json: false,
@@ -40,14 +41,44 @@ function harness({ merge = null, board = 'default', allowAutoMerge = true } = {}
     _cache: {},
     requireBoard() { return this; },
   };
-  const restore = gh.install();
+  const { gh, store, restore } = installDoubles(ctx, { board });
+  gh.allowAutoMerge = allowAutoMerge;
   const logs = [];
   return {
     gh,
+    store,
     ctx,
     root,
     log: () => logs.join('\n'),
     tick: (opts = {}) => tick(ctx, { log: (m) => logs.push(m), ...opts }),
+    /**
+     * A card on the board and its pull request on the forge. Seeded separately on purpose: they are
+     * two systems, and the head branch (`kb/<n>` here) is the only thing that ties them together.
+     */
+    card(spec = {}) {
+      const { prs = [], ...rest } = spec;
+      // The card carries no pull request: the store does not know about them, and the tick has to
+      // find this one the way it finds every other — the forge's listing, matched by head branch.
+      // That is also what makes the auto-merge pass idempotent here, because the *forge* is where
+      // `autoMergeEnabled` changes.
+      const card = store.addIssue(kbIssue({ ...rest }));
+      for (const pr of prs) {
+        gh.addPull({
+          number: pr.number,
+          head: pr.head || `kb/${card.number}`,
+          base: pr.baseRefName || 'main',
+          draft: !!pr.isDraft,
+          state: pr.state || 'OPEN',
+          merged: !!pr.merged,
+          nodeId: pr.nodeId || `PR_kwFake${pr.number}`,
+          autoMerge: pr.autoMergeEnabled ? { enabledAt: '2026-08-26T02:00:00Z', mergeMethod: 'SQUASH' } : null,
+          mergeable: pr.mergeable ?? null,
+          mergeStateStatus: pr.mergeStateStatus ?? null,
+          checksState: pr.checksState,
+        });
+      }
+      return card;
+    },
     cleanup: () => { restore(); fs.rmSync(root, { recursive: true, force: true }); },
   };
 }
@@ -219,14 +250,14 @@ test('manual — the default — sends nothing at all: not a mutation, not even 
   const h = harness();
   t.after(h.cleanup);
   h.gh.protect('main', { checks: ['test'] });
-  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] }));
+  h.card({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] });
 
   const s = await h.tick();
 
   assert.deepEqual(s.auto_merge, []);
   assert.deepEqual(enables(h.gh), []);
   assert.deepEqual(gateReads(h.gh), []);
-  assert.equal(h.gh.statusOf(1), 'review');
+  assert.equal(h.store.statusOf(1), 'review');
   assert.equal(h.gh.autoMergeOf(100), null);
 });
 
@@ -234,7 +265,7 @@ test('auto on a protected branch enables auto-merge once, and the next tick send
   const h = harness({ merge: { mode: 'auto' } });
   t.after(h.cleanup);
   h.gh.protect('main', { checks: ['test', 'packed artifact'] });
-  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] }));
+  h.card({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] });
 
   const first = await h.tick();
   assert.deepEqual(first.auto_merge, [{ number: 1, pr: 100, base: 'main', method: 'squash', ok: true }]);
@@ -254,7 +285,7 @@ test('auto on a protected branch enables auto-merge once, and the next tick send
 test('auto on an unprotected branch refuses, every tick, with the fix — and merges nothing', async (t) => {
   const h = harness({ merge: { mode: 'auto' } });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] }));
+  h.card({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] });
 
   const s = await h.tick();
 
@@ -272,7 +303,7 @@ test('a ruleset is a gate too — and the only one a token without repo admin ca
   t.after(h.cleanup);
   h.gh.protect('main', { admin: false }); // the classic endpoint answers 403
   h.gh.ruleset('main', { checks: ['test'] });
-  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] }));
+  h.card({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] });
 
   const s = await h.tick();
 
@@ -284,7 +315,7 @@ test('protection it cannot read is a refusal, not an assumption', async (t) => {
   const h = harness({ merge: { mode: 'auto' } });
   t.after(h.cleanup);
   h.gh.protect('main', { admin: false }); // 403, and no ruleset to fall back on
-  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] }));
+  h.card({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] });
 
   const s = await h.tick();
 
@@ -297,7 +328,7 @@ test('a draft PR is never handed over — GitHub would refuse it, so hkb does no
   const h = harness({ merge: { mode: 'auto' } });
   t.after(h.cleanup);
   h.gh.protect('main', { checks: ['test'] });
-  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr({ isDraft: true })] }));
+  h.card({ number: 1, status: 'review', agent: 'claude', prs: [openPr({ isDraft: true })] });
 
   const s = await h.tick();
 
@@ -310,12 +341,12 @@ test('a card the active_pr guard moves to review is handed over on the same tick
   const h = harness({ merge: { mode: 'auto' } });
   t.after(h.cleanup);
   h.gh.protect('main', { checks: ['test'] });
-  h.gh.addIssue(kbIssue({ number: 1, status: 'ready', agent: 'claude', prs: [openPr()] }));
+  h.card({ number: 1, status: 'ready', agent: 'claude', prs: [openPr()] });
 
   const s = await h.tick();
 
   assert.deepEqual(s.guarded, [{ number: 1, guard: 'active_pr', pr: 100 }]);
-  assert.equal(h.gh.statusOf(1), 'review');
+  assert.equal(h.store.statusOf(1), 'review');
   assert.equal(enables(h.gh).length, 1);
   assert.equal(s.auto_merge[0].number, 1);
 });
@@ -324,8 +355,8 @@ test('the gate is read once a tick however many cards are waiting on the same br
   const h = harness({ merge: { mode: 'auto' } });
   t.after(h.cleanup);
   h.gh.protect('main', { checks: ['test'] });
-  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr({ number: 100 })] }));
-  h.gh.addIssue(kbIssue({ number: 2, status: 'review', agent: 'claude', prs: [openPr({ number: 101 })] }));
+  h.card({ number: 1, status: 'review', agent: 'claude', prs: [openPr({ number: 100 })] });
+  h.card({ number: 2, status: 'review', agent: 'claude', prs: [openPr({ number: 101 })] });
 
   const s = await h.tick();
 
@@ -338,7 +369,7 @@ test('a PR based on a branch of its own is gated on THAT branch, not on the defa
   const h = harness({ merge: { mode: 'auto' } });
   t.after(h.cleanup);
   h.gh.protect('main', { checks: ['test'] }); // main is fine; the PR does not target it
-  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr({ baseRefName: 'stack/base' })] }));
+  h.card({ number: 1, status: 'review', agent: 'claude', prs: [openPr({ baseRefName: 'stack/base' })] });
 
   const s = await h.tick();
 
@@ -351,7 +382,7 @@ test('--dry-run enables nothing and says what it would have done', async (t) => 
   const h = harness({ merge: { mode: 'auto' } });
   t.after(h.cleanup);
   h.gh.protect('main', { checks: ['test'] });
-  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] }));
+  h.card({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] });
 
   const s = await h.tick({ dryRun: true });
 
@@ -363,7 +394,7 @@ test('--dry-run enables nothing and says what it would have done', async (t) => 
 test('a policy hkb cannot read is reported and changes nothing', async (t) => {
   const h = harness({ merge: { mode: 'always' } });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] }));
+  h.card({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] });
 
   const s = await h.tick();
 
@@ -376,7 +407,7 @@ test('a mutation GitHub rejects is reported on the card, and the tick carries on
   const h = harness({ merge: { mode: 'auto' } });
   t.after(h.cleanup);
   h.gh.protect('main', { checks: ['test'] });
-  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] }));
+  h.card({ number: 1, status: 'review', agent: 'claude', prs: [openPr()] });
   h.gh.fail({ kind: 'graphql' }, { status: 422, message: 'Protected branch rules not configured for this branch' });
 
   const s = await autoMergePass(h.ctx, [{ number: 1, status: 'review', prs: [{ ...openPr(), nodeId: 'PR_kwFake100' }] }], { log: () => {} });
@@ -512,7 +543,7 @@ const mergeMutations = (gh) => gh.requests.filter((c) => c.kind === 'graphql' &&
 test('hkb merge refuses on a manual board, naming the mode — and merges nothing', async (t) => {
   const h = harness();
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [{ ...openPr(), checksState: 'SUCCESS' }] }));
+  h.card({ number: 1, status: 'review', agent: 'claude', prs: [{ ...openPr(), checksState: 'SUCCESS' }] });
 
   await assert.rejects(mergeCard(h.ctx, 1, { summary: 'checked it' }), /mode is "manual"/);
   assert.deepEqual(mergeMutations(h.gh), []);
@@ -521,7 +552,7 @@ test('hkb merge refuses on a manual board, naming the mode — and merges nothin
 test('hkb merge refuses an operator card with no review, naming the condition', async (t) => {
   const h = harness({ merge: { mode: 'operator' } });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [{ ...openPr(), checksState: 'SUCCESS' }] }));
+  h.card({ number: 1, status: 'review', agent: 'claude', prs: [{ ...openPr(), checksState: 'SUCCESS' }] });
 
   await assert.rejects(mergeCard(h.ctx, 1), /no review on #1/);
   assert.deepEqual(mergeMutations(h.gh), []);
@@ -530,7 +561,7 @@ test('hkb merge refuses an operator card with no review, naming the condition', 
 test('hkb merge refuses a red-check operator card even with a summary', async (t) => {
   const h = harness({ merge: { mode: 'operator' } });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 1, status: 'review', agent: 'claude', prs: [{ ...openPr(), checksState: 'FAILURE' }] }));
+  h.card({ number: 1, status: 'review', agent: 'claude', prs: [{ ...openPr(), checksState: 'FAILURE' }] });
 
   await assert.rejects(mergeCard(h.ctx, 1, { summary: 'looked at it' }), /checks are failure, not green/);
   assert.deepEqual(mergeMutations(h.gh), []);
@@ -539,11 +570,11 @@ test('hkb merge refuses a red-check operator card even with a summary', async (t
 test('hkb merge on an operator board merges once a summary is given, and writes the record', async (t) => {
   const h = harness({ merge: { mode: 'operator' } });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({
+  h.card({
     number: 1, status: 'review', agent: 'claude',
     prs: [{ ...openPr(), checksState: 'SUCCESS' }],
     run: runWith([{ attempt: 1, outcome: 'review_requested', pr: 100, ended_at: '2026-08-26T01:00:00Z' }]),
-  }));
+  });
 
   const r = await mergeCard(h.ctx, 1, { summary: 'ran the suite, checked Done-when #1-3' });
 
@@ -551,25 +582,29 @@ test('hkb merge on an operator board merges once a summary is given, and writes 
   assert.equal(r.pr, 100);
   assert.equal(r.merged_by, 'operator');
   assert.equal(mergeMutations(h.gh).length, 1);
-  assert.equal(h.gh.issues.get(1).prs[0].merged, true);
-  const comments = h.gh.issues.get(1).comments.map((c) => c.body);
+  assert.equal(h.gh.prOf(100).merged, true);
+  const comments = h.store.issues.get(1).comments.map((c) => c.body);
   assert.ok(comments.some((b) => /\*\*Merged by the operator seat\*\* — review: ran the suite.*checks: green, method: squash/.test(b)));
-  const run = h.gh.issues.get(1).comments.map((c) => c.body).join('');
-  assert.match(run, /"merged_by": "operator"/);
+  assert.equal(h.store.runOf(1).attempts[0].merged_by, 'operator');
+  // The merge is what finishes the card, and `hkb merge` says so itself rather than waiting for the
+  // next tick's reconcile pass to find the merged PR.
+  assert.equal(r.status, 'done');
+  assert.equal(h.store.statusOf(1), 'done');
+  assert.equal(h.store.stateOf(1).state, 'CLOSED');
 });
 
 test('hkb merge with a reviewer already on record needs no summary', async (t) => {
   const h = harness({ merge: { mode: 'operator' } });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({
+  h.card({
     number: 1, status: 'review', agent: 'claude',
     prs: [{ ...openPr(), checksState: 'SUCCESS' }],
     run: runWith([{ attempt: 1, outcome: 'review_requested', reviewer: 'alice', pr: 100, ended_at: '2026-08-26T01:00:00Z' }]),
-  }));
+  });
 
   const r = await mergeCard(h.ctx, 1);
 
   assert.equal(r.merged, true);
-  const comments = h.gh.issues.get(1).comments.map((c) => c.body);
+  const comments = h.store.issues.get(1).comments.map((c) => c.body);
   assert.ok(comments.some((b) => /review: review requested from alice \(attempt 1\)/.test(b)));
 });

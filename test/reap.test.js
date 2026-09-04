@@ -1,5 +1,5 @@
 // The reap step: which background agents a tick stops. The decision is pure, so it is unit-tested
-// first; then a whole tick runs against the in-memory GitHub (test/fake-gh.js) with `claude` itself
+// first; then a whole tick runs against the board double (test/fake-store.js) with `claude` itself
 // stubbed on PATH — `claude agents --json` lists the jobs the test wants and `claude stop <id>`
 // records what the dispatcher killed, so the assertion is on real `claude stop` calls.
 import { test } from 'node:test';
@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { tick, reapDecision } from '../src/dispatch.js';
 import { DEFAULT_BOARD } from '../src/board.js';
-import { FakeGh, kbIssue, runWith } from './fake-gh.js';
+import { installDoubles, kbIssue, runWith } from './fake-store.js';
 
 const ago = (seconds) => new Date(Date.now() - seconds * 1000).toISOString();
 
@@ -90,11 +90,10 @@ function stubClaude(root, jobs, failStop = []) {
 }
 
 function harness({ jobs = [], failStop = [], host = 'test-host' } = {}) {
-  const gh = new FakeGh();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-reap-'));
   const cfg = {
     ...DEFAULT_BOARD,
-    repo: gh.nameWithOwner,
+    repo: 'acme/board',
     board: 'default',
     // a `claude-bg` profile is what makes the tick list jobs at all; nothing is ever spawned here
     profiles: { claude: { mode: 'claude-bg', max_in_progress: 2, model: null, allowed_tools: [], launch: ['true'] } },
@@ -102,7 +101,7 @@ function harness({ jobs = [], failStop = [], host = 'test-host' } = {}) {
   const ctx = {
     root,
     cfg,
-    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
+    repo: { owner: 'acme', repo: 'board', nameWithOwner: 'acme/board' },
     board: 'default',
     host,
     json: false,
@@ -110,11 +109,12 @@ function harness({ jobs = [], failStop = [], host = 'test-host' } = {}) {
     _cache: {},
     requireBoard() { return this; },
   };
-  const restore = gh.install();
+  const { gh, store, restore } = installDoubles(ctx);
   const claude = stubClaude(root, jobs, failStop);
   const logs = [];
   return {
     gh,
+    store,
     ctx,
     stopped: claude.stopped,
     log: () => logs.join('\n'),
@@ -136,19 +136,19 @@ test('a tick stops the agents of closed and finished tasks — blocked or not �
     ],
   });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 8, status: 'done', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 9, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run: runWith([{ attempt: 1, host: 'test-host', started_at: ago(120), heartbeat_at: ago(30), bg: true, job: 'j9' }]) }));
-  h.gh.addIssue(kbIssue({ number: 10, status: 'review', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 11, status: 'ready', agent: 'claude' }));
-  h.gh.addIssue(kbIssue({ number: 12, status: 'done', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 8, status: 'done', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 9, status: 'running', agent: 'claude', kb: { max_runtime: 86_400 }, run: runWith([{ attempt: 1, host: 'test-host', started_at: ago(120), heartbeat_at: ago(30), bg: true, job: 'j9' }]) }));
+  h.store.addIssue(kbIssue({ number: 10, status: 'review', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 11, status: 'ready', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 12, status: 'done', agent: 'claude' }));
 
   const s = await h.tick();
 
   assert.deepEqual(h.stopped(), ['j11', 'j7', 'j8']);
   assert.deepEqual(s.reaped.map((r) => r.number).sort((a, b) => a - b), [7, 8, 11]);
   assert.deepEqual(s.reclaimed, []); // the live worker was not reclaimed either
-  assert.equal(h.gh.statusOf(9), 'running');
+  assert.equal(h.store.statusOf(9), 'running');
   assert.match(h.log(), /#7: stopped background agent j7 — its task is closed/);
   assert.match(h.log(), /#8: stopped background agent j8 — its task is done/);
 });
@@ -156,7 +156,7 @@ test('a tick stops the agents of closed and finished tasks — blocked or not �
 test('a stop that fails is reported, not counted, and left for the next tick', async (t) => {
   const h = harness({ jobs: [bgJob({ id: 'j7', task: 7, ...onPrompt })], failStop: ['j7'] });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude' }));
 
   const s = await h.tick();
 
@@ -168,7 +168,7 @@ test('a stop that fails is reported, not counted, and left for the next tick', a
 test('a dry run never stops anything', async (t) => {
   const h = harness({ jobs: [bgJob({ id: 'j7', task: 7, ...onPrompt })] });
   t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 7, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude' }));
+  h.store.addIssue(kbIssue({ number: 7, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', agent: 'claude' }));
 
   const s = await h.tick({ dryRun: true });
 

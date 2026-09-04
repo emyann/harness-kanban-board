@@ -3,7 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseIncluded, restRaw, setTransport } from '../src/gh.js';
-import { serializeRunComment, serializeResultComment, RESULT_MARKER } from '../src/model.js';
+import { serializeResultComment, RESULT_MARKER } from '../src/model.js';
+import { runComment as serializeRunComment } from './fake-gh.js';
 import {
   boardIndex, diffBoard, emptyWatchState, commentEvents, issueNumberOf, afterFloor,
   parseKinds, matchesKinds, resolveInterval, resolvePolls, describeEvent, formatEvent, sortEvents,

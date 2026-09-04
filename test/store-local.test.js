@@ -20,7 +20,8 @@ import { syncPass, loop, DURABLE_TICK_KEYS } from '../src/dispatch.js';
 import { invocationWritesBoard } from '../src/cli.js';
 import { DEFAULT_BOARD, hostId, readState, writeState, runGitAsync, storeGitDir } from '../src/board.js';
 import { indexFileIn } from '../src/store/sqlite.js';
-import { emptyRun, serializeResultComment, serializeRunComment, RESULT_MARKER } from '../src/model.js';
+import { emptyRun, serializeResultComment, RESULT_MARKER } from '../src/model.js';
+import { runComment as serializeRunComment } from './fake-gh.js';
 import { FakeGh, kbIssue, runWith } from './fake-gh.js';
 
 function git(cwd, ...args) {
@@ -69,55 +70,49 @@ async function board(t, opts = {}) {
 
 // ---------- the seam ----------
 
-test('the store is what board.json says, and a board ref never decides it', async (t) => {
-  // **The rule this file exists to hold now.** `storeKind` used to have a second rule — a repository
+test('there is one store, and a board.json that names the retired one says so', async (t) => {
+  // **The rule this file exists to hold.** `storeKind` used to have a second rule — a repository
   // with a board ref (local or remote-tracking) is a local board — so that a clone needed no
-  // config. It is gone, because a rule that reads the store off a *ref* is reachable by `git fetch`:
-  // another host's push, a colleague's experiment, a branch pulled in by accident, and the checkout
-  // flips onto the local store while `.kanban/board.json` still points every verb at GitHub. Three
-  // successive reviews found a different destructive interaction in that half-migrated state (an
-  // import that deleted live workers' lock refs; a gc that read `[]` and destroyed worker worktrees;
-  // collaborators refused every write verb on a board of issues they own). One cause, one fix.
-  const s = scratch(t);
-  const ctx = ctxAt(s.root, { store: undefined });
+  // config. It went first, because a rule that reads the store off a *ref* is reachable by `git
+  // fetch`; then the other store went too (ADR-006), so the key has one valid value and its absence
+  // means that value. What is left to hold is that a board.json still pinned to the GitHub store is
+  // *told*, by name and with the migration, rather than quietly opening something else.
+  const s2 = scratch(t);
+  const ctx = ctxAt(s2.root, { store: undefined });
   delete ctx.cfg.store;
-  assert.equal(storeKind(ctx), 'github', 'no declaration: the board is where it has always been');
+  assert.equal(storeKind(ctx), 'local', 'no declaration: there is one store');
 
   openGitTier(ctx).init('default');
-  assert.equal(storeKind(ctx), 'github', 'and a board ref appearing under the checkout does not move it');
-  // The invalidation that remains is about the memoized *tree*, not about a cached answer: there is
-  // no cached answer any more, because there is nothing to work out.
+  assert.equal(storeKind(ctx), 'local', 'and a board ref appearing under the checkout changes nothing either way');
   await forgetStore(ctx);
-  assert.equal(storeKind(ctx), 'github', 'still — only the key decides');
+  assert.equal(storeKind(ctx), 'local');
 
   ctx.cfg.store = 'local';
-  assert.equal(storeKind(ctx), 'local', 'the key, and nothing else');
-  ctx.cfg.store = 'github';
-  assert.equal(storeKind(ctx), 'github');
+  assert.equal(storeKind(ctx), 'local', 'the key, when it is there, says the same thing');
 
+  ctx.cfg.store = 'github';
+  assert.throws(() => storeKind(ctx), (e) => e.exitCode === 2 && /no longer has/.test(e.message) && /--import/.test(e.message));
   ctx.cfg.store = 'sqlite';
   assert.throws(() => storeKind(ctx), (e) => e.exitCode === 2 && /not a store/.test(e.message));
 });
 
-test('a fetched board ref cannot convert a collaborator, and cannot make gc destructive', async (t) => {
-  // The end-to-end shape of the finding above, on the two verbs it reached: one host publishes the
-  // board, everybody else fetches it, and on their checkouts nothing at all changes.
-  const s = scratch(t);
-  const ctx = ctxAt(s.root, { store: undefined });
+test('a clone needs no configuration: the ref is the board, wherever it was fetched from', async (t) => {
+  // One host publishes the board, everybody else fetches it, and every checkout reads the same
+  // board with nothing written into `.kanban/board.json` at all.
+  const s2 = scratch(t);
+  const ctx = ctxAt(s2.root, { store: undefined });
   delete ctx.cfg.store;
   // The board arrives the way it really would: on the remote-tracking ref, from a fetch.
-  const publisher = ctxAt(s.root, {});
+  const publisher = ctxAt(s2.root, {});
   openGitTier(publisher).init('default');
-  git(s.root, 'push', '-q', 'origin', `${BOARD_REF}:${BOARD_REF}`);
-  git(s.root, 'update-ref', trackingRefFor(BOARD_REF, 'origin'), git(s.root, 'rev-parse', BOARD_REF));
-  git(s.root, 'update-ref', '-d', BOARD_REF);
+  git(s2.root, 'push', '-q', 'origin', `${BOARD_REF}:${BOARD_REF}`);
+  git(s2.root, 'update-ref', trackingRefFor(BOARD_REF, 'origin'), git(s2.root, 'rev-parse', BOARD_REF));
+  git(s2.root, 'update-ref', '-d', BOARD_REF);
 
-  assert.equal(storeKind(ctx), 'github', 'a board on the remote is not a store');
+  assert.equal(storeKind(ctx), 'local');
   const store = await openStore(ctx);
-  assert.equal(store.kind, 'github', 'and openStore hands back the driver the verbs are using');
-  // The write guard follows: a collaborator is not refused `hkb create` on a board of issues they
-  // have always been able to write.
-  assert.equal(await assertOwningHost({ ...ctx, host: 'someone-elses-laptop' }, 'create'), null);
+  assert.equal(store.ref, BOARD_REF, 'the composed local store, opened with no key at all');
+  t.after(() => { try { store.close(); } catch { /* already closed */ } });
 });
 
 test('the local store composes both tiers: the branch is durable, the index is live', async (t) => {
@@ -317,10 +312,15 @@ test('sync pushes the branch, and a clone reads the same cards read-only', async
   assert.equal(storeKind(theirCtx), 'local', 'the tracked key says which store this is');
   const theirs = await openStore(theirCtx);
   t.after(() => theirs.close());
-  // Before the sync there is nothing to read: the board is not on a branch, so the clone did not
-  // bring it, and the board document is not there to be asked about either.
-  assert.deepEqual(theirs.listTasks(), [], 'a clone that has not synced has no cards');
-  assert.throws(() => theirs.board(), (e) => e.exitCode === 2 && /no board at refs\/kb\/boards\/default/.test(e.message));
+  // Before the sync there is nothing to read — and a read *says so* rather than answering `[]`.
+  // The clone did not bring the ref (a hidden ref is the cost), and an empty board and a missing one
+  // are different facts: while `listTasks` answered `[]` here, `hkb list` printed "(no tasks)" and
+  // exited 0 on a checkout that simply had not fetched yet.
+  for (const call of [() => theirs.listTasks(), () => theirs.board()]) {
+    assert.throws(call, (e) => e.exitCode === 2
+      && /no board at refs\/kb\/boards\/default/.test(e.message)
+      && /hkb sync/.test(e.message), 'and the sentence names the fetch that fixes it');
+  }
 
   // One command, on a clone whose config lacks the refspec: the fetch names it, and writes it.
   const restored = await theirs.sync({ push: false });
@@ -489,16 +489,17 @@ test('a board left on refs/heads/kb-board is named, not silently missed', async 
 });
 
 test('a board name a ref cannot hold is rejected where a ref is built, and nowhere else', async (t) => {
-  // `slugFile` *hashes* a board name, so `--board "my board"` has always been a usable GitHub board.
-  // Validating the ref name from a caller that then picks the GitHub store turned that into an exit
-  // 2 — and reached `hkb doctor` on a healthy GitHub board through `localBoardExists`.
+  // `slugFile` *hashes* a board name rather than rejecting it, so a name that cannot be a ref is
+  // still a usable index file name. A caller only *asking whether* there is a board here must
+  // therefore get an answer rather than an exit 2 — `hkb doctor` reaches this through
+  // `localBoardExists`, and a diagnosis that throws diagnoses nothing.
   const s = scratch(t);
-  const github = ctxAt(s.root, { store: 'github', repo: 'o/r', board: 'my board' });
-  assert.equal(findLocalBoardRef(github), null, 'no ref, no throw');
-  assert.equal(localBoardExists(github), false);
+  const odd = ctxAt(s.root, { repo: 'o/r', board: 'my board' });
+  assert.equal(findLocalBoardRef(odd), null, 'no ref, no throw');
+  assert.equal(localBoardExists(odd), false);
 
   // A local board does need a ref, and that is where the refusal belongs — naming a fix that runs.
-  assert.throws(() => boardRef('my board'), (e) => e.exitCode === 2 && /hkb init --board my-board --store local/.test(e.message));
+  assert.throws(() => boardRef('my board'), (e) => e.exitCode === 2 && /hkb init --board my-board/.test(e.message));
   assert.throws(() => boardRef('foo.'), (e) => e.exitCode === 2, 'a trailing dot is a ref name git refuses');
 });
 
@@ -596,9 +597,6 @@ test('an idle tick still stamps: liveness is about the process, not about what i
   store.git.forget();
   assert.equal(store.git.tip(), tip);
 
-  // A GitHub board gets none of this, and does not pay the two rev-parse to find that out twice.
-  const ghCtx = ctxAt(scratch(t, { name: 'gh' }).root, { store: 'github' });
-  await syncPass(ghCtx, empty, () => { assert.fail('a GitHub board has no branch to stamp'); });
 });
 
 test('init --import moves a GitHub board onto the branch: ids, statuses, blockers, run records', async (t) => {
@@ -993,26 +991,68 @@ test('a blocker that is not imported is dropped, said out loud, and does not blo
   assert.deepEqual(store.getTask(40).blockedBy, [], 'and #40 is not held back by a card that is not there');
 });
 
-test('the closed-card page is a cap, and the import says so rather than reading as the whole window', async (t) => {
+// ---------- the closed-card read pages to the window, not to a page ----------
+
+/** A board with `n` cards closed inside the window, plus whatever else the caller adds. */
+function closedBoard(t, { inWindow = 0, older = 0 } = {}) {
   const s = scratch(t);
   const ctx = ctxAt(s.root, { repo: 'o/r' });
   const gh = new FakeGh({ baseSha: '0'.repeat(40) });
   gh.addIssue(kbIssue({ number: 1, title: 'open', status: 'ready' }));
-  for (let i = 0; i < 100; i++) {
-    gh.addIssue(kbIssue({ number: 200 + i, title: `closed ${i}`, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', updatedAt: '2026-09-01T00:00:00Z' }));
+  for (let i = 0; i < inWindow; i++) {
+    gh.addIssue(kbIssue({ number: 200 + i, title: `closed ${i}`, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', updatedAt: `2026-09-01T00:00:${String(i % 60).padStart(2, '0')}Z` }));
   }
-  const restore = gh.install();
-  t.after(restore);
+  for (let i = 0; i < older; i++) {
+    gh.addIssue(kbIssue({ number: 100 + i, title: `ancient ${i}`, status: 'done', state: 'CLOSED', stateReason: 'COMPLETED', updatedAt: '2025-06-01T00:00:00Z' }));
+  }
+  t.after(gh.install());
   ctx.repo = { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner };
-
-  const lines = [];
   const store = openLocalStore(ctx, { reconcile: false });
   t.after(() => store.close());
+  return { ctx, gh, store };
+}
+
+test('every card closed inside the window is imported, however many pages that takes', async (t) => {
+  // The read was one query of 100 and the page size was the ceiling by accident. Measured on the
+  // board this migration was written for: 131 cards closed inside the 90-day window, of which 31
+  // would not have moved — their run records, results and handoffs left on GitHub while the local
+  // board became the source of truth without them, and `next_id` computed from the truncated set.
+  const { ctx, store } = closedBoard(t, { inWindow: 250, older: 3 });
+  const lines = [];
   const summary = await importGithubBoard(ctx, { store, log: (l) => lines.push(l), now: () => new Date('2026-09-03T00:00:00Z') });
+
+  assert.equal(summary.closed, 250, 'two and a half pages, all of them');
+  assert.equal(summary.cards, 251, 'and the open card');
+  assert.equal(summary.closed_capped, false, 'nothing was cut short, so nothing says it was');
+  assert.equal(lines.some((l) => /WARNING stopped at/.test(l)), false, lines.join(' | '));
+  assert.equal(store.listTasks({ states: ['CLOSED'] }).length, 250, 'and they are on the branch, not just in the summary');
+  assert.equal(store.git._read().cards.has(100), false, 'the 90-day window is still a window: what is outside it stays on GitHub');
+  assert.equal(summary.next_id, 450, 'computed after the whole read — 449 is the highest id imported');
+});
+
+test('closed_capped means a real ceiling was hit, with cards still inside the window behind it', async (t) => {
+  const { ctx, store } = closedBoard(t, { inWindow: 8 });
+  const lines = [];
+  const summary = await importGithubBoard(ctx, { store, closedMax: 5, log: (l) => lines.push(l), now: () => new Date('2026-09-03T00:00:00Z') });
+
+  assert.equal(summary.closed, 5, 'the ceiling holds');
   assert.equal(summary.closed_capped, true);
-  assert.equal(summary.closed_page, 100);
-  assert.ok(lines.some((l) => /WARNING/.test(l) && /one full page of 100/.test(l) && /there may be more/.test(l)),
-    `the cap is named, and named as a maybe — a full page says nothing about whether a next one exists: ${lines.join(' | ')}`);
+  assert.equal(summary.closed_max, 5);
+  assert.ok(lines.some((l) => /WARNING stopped at 5 closed card\(s\)/.test(l) && /NOT on the local board/.test(l)),
+    `and it is named flatly, because it is known rather than suspected: ${lines.join(' | ')}`);
+});
+
+test('a ceiling with nothing but history behind it is not a cap', async (t) => {
+  // The false positive the old read reported every time: a full page says nothing about what comes
+  // after it. Here the ceiling is reached exactly and every card past it is outside the window —
+  // which is the migration's scope, not a truncation of it — so nothing was left off.
+  const { ctx, store } = closedBoard(t, { inWindow: 5, older: 4 });
+  const lines = [];
+  const summary = await importGithubBoard(ctx, { store, closedMax: 5, log: (l) => lines.push(l), now: () => new Date('2026-09-03T00:00:00Z') });
+
+  assert.equal(summary.closed, 5);
+  assert.equal(summary.closed_capped, false, 'the cards behind the ceiling are history the window excluded, not cards that were dropped');
+  assert.equal(lines.some((l) => /WARNING stopped at/.test(l)), false, lines.join(' | '));
 });
 
 test('a lock ref that will not delete does not fail a migration that landed', async (t) => {
@@ -1300,11 +1340,11 @@ test('sync reads the exit status of every update-ref: a lost compare-and-swap is
 });
 
 test('a sync that creates the board ref changes nothing about which store this is', async (t) => {
-  // The old shape of this test asserted the opposite — that `hkb sync` creating the board ref under
-  // a running process flipped it onto the local store, and that `forgetStore` was what made that
-  // safe. It is not safe, and it is no longer possible: `storeKind` reads `"store"` in board.json
-  // and nothing else, so a ref arriving (a sync, a fetch, another host's push) leaves every verb
-  // exactly where it was. That inference is the one this round removed.
+  // The oldest shape of this test asserted that `hkb sync` creating the board ref under a running
+  // process *flipped* it onto the local store, and that `forgetStore` was what made that safe. It
+  // was not safe: a ref arriving over the network decided nothing about where a verb writes. With
+  // one store the question cannot even be posed, and a ref arriving is just the board's cards
+  // showing up.
   const { dir, origin, store } = await board(t);
   store.createTask({ title: 'published', status: 'ready' });
   await store.sync();
@@ -1314,13 +1354,12 @@ test('a sync that creates the board ref changes nothing about which store this i
   fs.mkdirSync(path.join(clone, '.kanban'), { recursive: true });
   const ctx = ctxAt(clone, { store: undefined });
   delete ctx.cfg.store;
-  assert.equal(storeKind(ctx), 'github', 'no key, no local board');
+  assert.equal(storeKind(ctx), 'local', 'no key is the one store, before the branch is even here');
 
   const theirs = openLocalStore(ctx, { reconcile: false });
   t.after(() => theirs.close());
-  assert.equal((await theirs.sync()).fastForwarded, true, 'the branch is fetched and created all the same');
-  assert.equal(storeKind(ctx), 'github', 'and the store did not move under the running process');
-  assert.equal((await openStore(ctx)).kind, 'github');
+  assert.equal((await theirs.sync()).fastForwarded, true, 'the branch is fetched and created');
+  assert.equal(storeKind(ctx), 'local', 'and nothing about the answer moved under the running process');
 });
 
 test('a clock corrected backwards throttles, and does not commit a stamp every tick', async (t) => {

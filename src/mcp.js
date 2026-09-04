@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { hkbOnPath } from './board.js';
 import { projectBinRel } from './init.js';
 import { openStore } from './store/index.js';
+import { fillPrs } from './forge.js';
 import { heartbeat, complete, block, unblock, requestReview, createTask, linkTask, withOutbox } from './lifecycle.js';
 import { readVersion, terminalArgv } from './cli.js';
 import { BLOCK_KINDS, isTrackRoot } from './model.js';
@@ -70,7 +71,7 @@ export const TOOLS = [
     properties: { task: TASK },
     run: async (ctx, n) => {
       const store = await openStore(ctx);
-      const t = await store.getTask(n);
+      const t = await fillPrs(ctx, await store.getTask(n));
       const { run } = await store.loadRun(n);
       const result = await store.latestResult(n);
       const parents = await store.parentResults(t);

@@ -159,21 +159,15 @@ test('a fresh board is seeded with exactly the profiles asked for (#72)', async 
   assert.ok(fs.existsSync(path.join(harness.root, '.codex', 'hooks.json')), 'and its generated files');
 });
 
-// `--store github`: the labels *are* the board on that store, so creating them is a board write and
-// goes through `openStore` like every other one (#325). A local board's labels are columns on a
-// card, so its driver creates none — which is why this test names the store it is about rather than
-// leaning on the default.
-test('the label set that reaches GitHub is the board\'s, and nothing else is written (#72)', async () => {
-  const { root, gh, printed } = await runInit(['--store', 'github']);
-  const want = [...STATUSES.map(L.status), L.board('default'), L.needsHuman, L.noTrack, L.agent('claude')];
+// The label step goes through `openStore` like every other board write (#325), and on the one store
+// hkb has there is nothing to create: a card's status is a column on the card. What #72 pinned — the
+// *set* init would ask for, and that it asks for nothing else — is now that it sends nothing at all.
+test('init writes no labels, and nothing else reaches the forge either (#72)', async () => {
+  const { root, gh, printed } = await runInit();
 
-  assert.deepEqual(created(gh).sort(), [...want].sort());
-  assert.equal(created(gh).length, 12, 'eight statuses + board + needs-human + no-track + one agent — the count is the regression');
-  assert.deepEqual(created(gh).filter((l) => l.startsWith('kb:agent:')), ['kb:agent:claude'], 'no labels for harnesses this repo will never install');
-  assert.ok(printed.some((l) => l.startsWith('created labels: ')));
-
-  const stray = gh.requests.filter((c) => !/\/labels(\?|$)/.test(c.path || ''));
-  assert.deepEqual(stray, [], 'init reads and writes labels; anything else is a call an adopter did not ask for');
+  assert.deepEqual(created(gh), [], 'a card\'s status is a column, so there are no labels to create');
+  assert.ok(printed.some((l) => l.startsWith('no kb:* labels to create')), printed.join('\n'));
+  assert.deepEqual(gh.writeRequests(), [], 'init writes nothing to the forge at all');
   assert.equal(board(root).repo, NWO);
   assert.equal(board(root).board, 'default');
   assert.equal(board(root).default_branch, 'main');
@@ -405,7 +399,7 @@ test('a second init changes nothing on disk and creates no labels', async () => 
 });
 
 test('a re-run is additive: a profile added by hand survives and gets its label', async () => {
-  const first = await runInit(['--store', 'github']); // the kb:agent label below is a GitHub-store label
+  const first = await runInit();
   const cfg = board(first.root);
   cfg.profiles.codex = { ...DEFAULT_PROFILES.codex, max_in_progress: 3 }; // the operator's own edit
   fs.writeFileSync(path.join(first.root, BOARD_FILE), JSON.stringify(cfg, null, 2) + '\n');
@@ -415,7 +409,6 @@ test('a re-run is additive: a profile added by hand survives and gets its label'
   const after = board(first.root);
   assert.deepEqual(Object.keys(after.profiles), ['claude', 'codex'], 're-running init must never silently delete work');
   assert.equal(after.profiles.codex.max_in_progress, 3, "and never overwrite the operator's edit");
-  assert.ok(created(first.gh).includes(L.agent('codex')), 'a profile on the board gets its kb:agent label');
 });
 
 // ---------- repairing a claude launch pinned before the hooks moved onto it (#144, #188) ----------
@@ -589,24 +582,23 @@ test('`hkb init --json` carries `registered`, and stdout is that object alone', 
     'added says what this run did, not what the list holds');
 });
 
-test('--no-labels says no to the flags that cannot be done offline, before writing anything', async () => {
-  for (const flag of ['--import', '--project=new']) {
-    const root = gitRepo();
-    await assert.rejects(() => runInit(['--no-labels', flag], { root }), (e) => {
-      assert.equal(e.exitCode, 2, 'a request that cannot be honoured is a usage error');
-      assert.match(e.message, new RegExp(`--${flag.replace(/^--|=.*$/g, '')} needs the API`));
-      assert.match(e.message, /Run `hkb init .*--no-labels` now/, 'and the message names both halves of the fix');
-      return true;
-    });
-    assert.equal(fs.existsSync(path.join(root, BOARD_FILE)), false, 'nothing was written on the way out');
-  }
+test('--no-labels says no to the one flag that cannot be done offline, before writing anything', async () => {
+  const root = gitRepo();
+  await assert.rejects(() => runInit(['--no-labels', '--import'], { root }), (e) => {
+    assert.equal(e.exitCode, 2, 'a request that cannot be honoured is a usage error');
+    assert.match(e.message, /--import reads the GitHub board it migrates from/);
+    assert.match(e.message, /Run `hkb init .*--no-labels` now/, 'and the message names both halves of the fix');
+    return true;
+  });
+  assert.equal(fs.existsSync(path.join(root, BOARD_FILE)), false, 'nothing was written on the way out');
 });
 
 // ---------- the store (docs/local-first.md §6, ADR-006) ----------
-// A new board is local: the cards live at `refs/kb/boards/default` in the repo init just ran in, and
-// the index beside it. The three things that must hold are that a *fresh* board gets that store, an
-// *existing* board never changes store by being re-inited, and `--store github` still works while
-// the GitHub driver is here.
+// There is one store: the cards live at `refs/kb/boards/default` in the repo init just ran in, and
+// the index beside it. What must hold is that a fresh board gets it, a second init adopts what is
+// there rather than recreating it, `--import` migrates a board that is still on GitHub Issues onto
+// it, and `--store github` — the flag for a store hkb no longer has — says so rather than being
+// ignored.
 
 const BOARD_REF = 'refs/kb/boards/default';
 const branchTip = (root) => spawnSync('git', ['rev-parse', '--verify', '--quiet', BOARD_REF], { cwd: root, encoding: 'utf8' }).stdout.trim();
@@ -631,22 +623,6 @@ test('a fresh init creates a local board: the ref, the index, and board.json say
   assert.equal(typeof doc.host, 'string', 'the board names its one writer');
 });
 
-test('a GitHub board may be named anything: a ref name is validated where a ref is built', async () => {
-  // `slugFile` *hashes* a board name rather than rejecting it, so `--board "my board"` has always
-  // been a usable GitHub board. Building `boardRef(board)` before the store was resolved turned that
-  // into an exit 2 on a name the store being chosen does not care about — and the fix the error
-  // named, `hkb init --board <name>`, was the command that had just failed.
-  const ok = await runInit(['--store', 'github', '--board', 'my board']);
-  assert.equal(ok.code, 0, ok.printed.join('\n'));
-  assert.equal(board(ok.root).store, 'github');
-
-  // The local store does need a ref, so there the name is refused — with a fix that runs.
-  const bad = await runInit(['--store', 'local', '--board', 'my board']).catch((e) => e);
-  assert.equal(bad.exitCode, 2);
-  assert.match(bad.message, /not a usable board name for the local store/);
-  assert.match(bad.message, /hkb init --board my-board --store local/);
-});
-
 test('a second init leaves the ref and the index exactly as they were', async () => {
   const first = await runInit();
   const tip = branchTip(first.root);
@@ -655,45 +631,37 @@ test('a second init leaves the ref and the index exactly as they were', async ()
   assert.ok(printed.some((l) => /^store: local — refs\/kb\/boards\/default at/.test(l)), printed.join('\n'));
 });
 
-test('--store github keeps the old behaviour, and an existing board keeps the store it has', async () => {
-  const gh = await runInit(['--store', 'github']);
-  assert.equal(board(gh.root).store, 'github');
-  assert.equal(branchTip(gh.root), '', 'no ref: the issues are the board');
-  assert.ok(gh.printed.some((l) => /^store: github/.test(l)));
+test('a board name that is not a ref name is refused, with a fix that runs', async () => {
+  // The board *is* a ref now (#334), so its name has to be one — and the message has to hand back a
+  // command rather than a rule: `hkb init --board "my board"` used to die four calls later inside
+  // `_land` with git's own `fatal: ... is not a valid ref name`.
+  const bad = await runInit(['--board', 'my board']).catch((e) => e);
+  assert.equal(bad.exitCode, 2);
+  assert.match(bad.message, /not a usable board name for the local store/);
+  assert.match(bad.message, /hkb init --board my-board/);
+});
 
-  // and a board that was set up before the local store existed is not moved by a re-run
+test('a board written before the store key existed is not moved by a re-run', async () => {
   const legacy = await runInit();
   const cfg = board(legacy.root);
   delete cfg.store;
   fs.writeFileSync(path.join(legacy.root, BOARD_FILE), JSON.stringify(cfg, null, 2));
-  spawnSync('git', ['update-ref', '-d', BOARD_REF], { cwd: legacy.root });
-  const again = await runInit([], legacy);
-  // The key is NOT written back. Nobody chose it — `resolveStore` read an absent key and answered
-  // with the default — and a plain re-init must not turn that into a line in a file the repository
-  // tracks. `|| store === 'local'` used to, which put `"store": "local"` into everybody's checkout
-  // as a side effect of a routine `hkb init`.
-  assert.equal(board(legacy.root).store, undefined, 'an unasked-for answer is not pinned into board.json');
-  assert.equal(branchTip(legacy.root), '', 'nothing created a board ref under it');
-  assert.ok(again.printed.some((l) => /^store: github/.test(l)));
 
-  // And a board ref appearing in the checkout — a fetch, another host's push, somebody's
-  // experiment — changes **nothing**: the store is the key, so an inert ref is reported in words
-  // and never acted on. That inference is what produced a destructive interaction in three
-  // successive reviews (see `storeKind`).
-  const { openGitTier } = await import('../src/store/git.js');
-  openGitTier(legacy.root).init('default');
-  const withBranch = await runInit([], legacy);
-  assert.equal(board(legacy.root).store, undefined, 'a ref cannot move a board onto the local store');
-  assert.ok(withBranch.printed.some((l) => /^store: github/.test(l)), withBranch.printed.join('\n'));
-  assert.ok(withBranch.printed.some((l) => /has a board at `refs\/kb\/boards\/default`, and this board is on the GitHub store/.test(l)),
-    'but the human is told the ref is there and inert');
+  const again = await runInit([], legacy);
+
+  // The key is NOT written back. Nobody chose it — `resolveStore` read an absent key and answered
+  // with the one store there is — and a plain re-init must not turn that into a line in a file the
+  // repository tracks. `|| store === 'local'` used to, which put `"store": "local"` into
+  // everybody's checkout as a side effect of a routine `hkb init`.
+  assert.equal(board(legacy.root).store, undefined, 'an unasked-for answer is not pinned into board.json');
+  assert.ok(again.printed.some((l) => /^store: local — refs\/kb\/boards\/default at/.test(l)), again.printed.join('\n'));
 });
 
 test('a plain re-init writes no store key into a board.json the repository tracks', async () => {
   // The write `--import` refuses to make without `--force`, made as a side effect of a routine
   // `hkb init`: `pinStore` carried `|| store === 'local'`, and on any older board a re-init put
   // `"store": "local"` into a tracked file — every collaborator's next `git pull`.
-  const legacy = await runInit(['--store', 'github']);
+  const legacy = await runInit();
   const cfg = board(legacy.root);
   delete cfg.store;
   fs.writeFileSync(path.join(legacy.root, BOARD_FILE), JSON.stringify(cfg, null, 2));
@@ -702,45 +670,165 @@ test('a plain re-init writes no store key into a board.json the repository track
   git('-c', 'user.email=hkb@local', '-c', 'user.name=hkb', 'commit', '-qm', 'board.json');
   const { boardFileTracked } = await import('../src/init.js');
   assert.equal(boardFileTracked(legacy.root), true, 'the file this init must not rewrite');
-  // …and the checkout has a board ref, which is the case that made this a defect rather
-  // than a tidiness point: the store was inferred from the ref, so a plain re-init resolved
-  // `local` and pinned it. The ref is inert now, and the re-init says so instead of acting.
-  const { openGitTier } = await import('../src/store/git.js');
-  openGitTier(legacy.root).init('default');
 
-  const again = await runInit([], legacy);
-  assert.ok(again.printed.some((l) => /has a board at `refs\/kb\/boards\/default`/.test(l)), again.printed.join('\n'));
-  assert.equal(board(legacy.root).store, undefined, 'a re-init did not move everybody onto the local store');
+  await runInit([], legacy);
+
+  assert.equal(board(legacy.root).store, undefined, 'a re-init did not write a key nobody asked for');
   // init rewrites the tracked file for its own reasons (profiles, skill version); what it must not
   // do is put a `store` line into everybody's copy.
   const diff = spawnSync('git', ['diff', '--', BOARD_FILE], { cwd: legacy.root, encoding: 'utf8' }).stdout;
   assert.equal(/^\+.*"store"/m.test(diff), false, `no store key was added to the tracked file:\n${diff}`);
 });
 
-test('--import means the migration even on a board that says github, unless the human says otherwise', async () => {
-  const legacy = await runInit(['--store', 'github']);
-  assert.equal(board(legacy.root).store, 'github');
-  const migrated = await runInit(['--import'], legacy);
-  // `--import` is the migration onto the local store (§6.3). Reading the pinned store first made it
-  // unreachable: the flag silently ran the old GitHub adopt loop instead, and the documented
-  // migration could only be spelled `--store local --import`, which nothing documents.
-  assert.ok(migrated.printed.some((l) => /^--import: migrating this board onto the local store/.test(l)), migrated.printed.join('\n'));
-  assert.equal(board(legacy.root).store, 'local');
-  assert.notEqual(branchTip(legacy.root), '', 'the branch the migration writes');
+test('a plain `hkb init` over a board still on the GitHub store refuses, and abandons nothing', async () => {
+  // **The command that would have destroyed this repository's own board.** `resolveStore` answered
+  // `local` from the flags alone, `pinStore` was true because the key was *there*, and a plain
+  // `hkb init` rewrote a git-tracked `"store": "github"` to `"store": "local"` and created an empty
+  // `kb-board` branch beside it. The next `hkb list` reported an empty board while every real card
+  // sat on GitHub, unreachable and unmentioned. The `--import` guard never fired (it needs
+  // `flags.import`) and `storeKind`'s refusal was never reached (`init` never called it).
+  const legacy = await runInit();
+  const cfg = board(legacy.root);
+  cfg.store = 'github';
+  fs.writeFileSync(path.join(legacy.root, BOARD_FILE), JSON.stringify(cfg, null, 2));
+  const tip = branchTip(legacy.root);
 
-  // and the human's own flag still wins, because that is a choice about this run
-  const kept = await runInit(['--store', 'github', '--import'], await runInit(['--store', 'github']));
-  assert.ok(!kept.printed.some((l) => /migrating this board onto the local store/.test(l)));
+  await assert.rejects(
+    () => runInit([], legacy),
+    (e) => e.exitCode === 2 && /GitHub store/.test(e.message) && /hkb init --import/.test(e.message),
+    'it refuses, and the message is the migration',
+  );
+
+  // Nothing was written: not the key, not the branch. A refusal that had already half-run would be
+  // the same bug wearing an error message.
+  assert.equal(board(legacy.root).store, 'github', 'the key that says where the cards are survives');
+  assert.equal(branchTip(legacy.root), tip, 'and no empty board was created over them');
+
+  // `--import` is the same board and the opposite answer: that flag *is* the human asking.
+  const imported = await runInit(['--import', '--force'], legacy);
+  assert.equal(board(imported.root).store, 'local', '--import is the migration, and pins the key it moved to');
 });
 
-test('--store takes local or github, and says so', async () => {
+// ---------- the *other* unmigrated board: the one that declares nothing ----------
+// `resolveStore` answers for `"store": "github"`. The board.json this repository actually has was
+// written before that key existed and declares nothing at all: `storeKind` resolves the absent key
+// to `local`, `pinStore` is false so nothing is written, and `setUpLocalBoard` created an empty
+// `kb-board` branch beside 188 cards still sitting on the forge. `hkb list` then printed an empty
+// board and said nothing — from the command an operator runs *because* `hkb list` went quiet.
+
+/** Put a board back the way an unmigrated one looks: no `store` key, no ref, no index. */
+const unmigrate = (root) => {
+  const cfg = board(root);
+  delete cfg.store;
+  fs.writeFileSync(path.join(root, BOARD_FILE), JSON.stringify(cfg, null, 2));
+  // Both refs a board can be on: the one it lives on now, and `refs/heads/kb-board`, where it lived
+  // before #334 — `findLocalBoardRef` looks at both, so leaving either behind means "there is
+  // already a board here" and the probe never runs.
+  spawnSync('git', ['update-ref', '-d', BOARD_REF], { cwd: root, encoding: 'utf8' });
+  spawnSync('git', ['branch', '-D', 'kb-board'], { cwd: root, encoding: 'utf8' });
+  fs.rmSync(path.join(root, '.git', 'hkb'), { recursive: true, force: true });
+};
+
+test('a plain `hkb init` over an unkeyed board.json with cards on the forge refuses, naming the count', async () => {
+  const legacy = await runInit();
+  unmigrate(legacy.root);
+  legacy.gh.addIssue({ number: 7, labels: [L.board('default'), L.status('todo')] });
+  legacy.gh.addIssue({ number: 8, labels: [L.board('default'), L.status('done')], state: 'CLOSED' });
+  legacy.gh.addIssue({ number: 9, labels: ['bug'] }); // not a card, and must not be counted
+
+  await assert.rejects(
+    () => runInit([], legacy),
+    (e) => e.exitCode === 2
+      && /still has 2 `kb:board:default` issue\(s\)/.test(e.message)
+      && /hkb init --import/.test(e.message),
+    'it refuses, names how many cards are out there, and names the migration',
+  );
+
+  // And nothing ran: the branch that would have shadowed them was never created, and the key that
+  // would have declared the empty board local was never written.
+  assert.equal(branchTip(legacy.root), '', 'no empty board was created over the cards');
+  assert.equal(board(legacy.root).store, undefined, 'and no key was written to say otherwise');
+});
+
+test('a repo with no kb cards on it inits clean, --no-labels included', async () => {
+  // A genuinely fresh repository is not an unmigrated board: the probe comes back reachable and
+  // empty, and init proceeds silently. This is the offline adoption path from the README, so it has
+  // to survive the guard above.
+  const legacy = await runInit();
+  unmigrate(legacy.root);
+  legacy.gh.addIssue({ number: 4, labels: ['enhancement'] }); // somebody's ordinary issues
+
+  const again = await runInit([], legacy);
+  assert.equal(again.code, 0);
+  assert.match(branchTip(legacy.root), /^[0-9a-f]{40}$/, 'the local board was created');
+  assert.ok(!again.printed.some((l) => /has not been migrated/.test(l)), again.printed.join('\n'));
+
+  const fresh = await runInit(['--no-labels']);
+  assert.equal(fresh.code, 0);
+  assert.match(branchTip(fresh.root), /^[0-9a-f]{40}$/, 'a fresh repo never probes at all — there is no board.json to be behind');
+});
+
+test('a forge that cannot be reached refuses with its own sentence, not the migration one', async () => {
+  const legacy = await runInit();
+  unmigrate(legacy.root);
+  legacy.gh.fail({ method: 'GET', path: 'issues' }, { status: 401, message: 'gh: not logged in', times: 5 });
+
+  await assert.rejects(
+    () => runInit([], legacy),
+    (e) => e.exitCode === 2
+      && /could not be reached to check/.test(e.message)
+      && /gh auth status/.test(e.message)
+      && !/still has \d+ `kb:board/.test(e.message),
+    'creating the branch is the irreversible half, so an unknown answer refuses too — and says which refusal it is',
+  );
+  assert.equal(branchTip(legacy.root), '', 'and it refuses *before* creating anything');
+});
+
+test('--force creates the local board anyway, and says what it is walking away from', async () => {
+  const legacy = await runInit();
+  unmigrate(legacy.root);
+  legacy.gh.addIssue({ number: 7, labels: [L.board('default')] });
+
+  const forced = await runInit(['--force'], legacy);
+  assert.equal(forced.code, 0);
+  assert.match(branchTip(legacy.root), /^[0-9a-f]{40}$/, '--force is the human saying "I know"');
+  assert.ok(
+    forced.printed.some((l) => /^store: .*still has 1 `kb:board:default` issue\(s\)/.test(l) && /stay on GitHub/.test(l)),
+    `--force must still name the cards it abandons:\n${forced.printed.join('\n')}`,
+  );
+});
+
+test('needsMigrationProbe and migrationVerdict: the four conditions and the three answers', async () => {
+  const { needsMigrationProbe, migrationVerdict } = await import('../src/init.js');
+
+  // Only an existing, unkeyed, un-branched board that is not already being migrated is asked about.
+  assert.equal(needsMigrationProbe({ existing: {} }), true);
+  assert.equal(needsMigrationProbe({ existing: null }), false, 'a fresh repo has nothing to strand');
+  assert.equal(needsMigrationProbe({ existing: { store: 'local' } }), false, 'a keyed board already answered');
+  assert.equal(needsMigrationProbe({ existing: { store: 'github' } }), false, 'resolveStore refused that one already');
+  assert.equal(needsMigrationProbe({ existing: {}, flags: { import: true } }), false, '--import *is* the migration');
+  assert.equal(needsMigrationProbe({ existing: {}, branchExists: true }), false, 'the board is already local');
+
+  assert.equal(migrationVerdict({ reachable: true, count: 0 }), null, 'no cards on the forge: proceed, silently');
+
+  const found = migrationVerdict({ label: 'kb:board:default', reachable: true, count: 3 });
+  assert.match(found.refuse, /still has 3 `kb:board:default` issue\(s\)/);
+  assert.match(found.refuse, /hkb init --import/);
+  const capped = migrationVerdict({ label: 'kb:board:default', reachable: true, count: 100, capped: true });
+  assert.match(capped.refuse, /at least 100/, 'a full page says "at least", never a number it does not know');
+
+  const dark = migrationVerdict({ label: 'kb:board:default', reachable: false, why: 'not logged in' });
+  assert.match(dark.refuse, /could not be reached to check \(not logged in\)/);
+
+  assert.match(migrationVerdict({ reachable: true, count: 3 }, { force: true }).proceed, /stay on GitHub/);
+  assert.match(migrationVerdict({ reachable: false, why: 'offline' }, { force: true }).proceed, /--force/);
+});
+
+test('--store github is refused by name, and names the migration instead', async () => {
+  await assert.rejects(() => runInit(['--store', 'github']), (e) => e.exitCode === 2 && /--store github is gone/.test(e.message));
+  await assert.rejects(() => runInit(['--store', 'github']), (e) => /hkb init --import/.test(e.message));
   await assert.rejects(() => runInit(['--store', 'sqlite']), (e) => e.exitCode === 2 && /--store takes "local"/.test(e.message));
   await assert.rejects(() => runInit(['--store']), (e) => e.exitCode === 2 && /--store needs a value/.test(e.message));
-});
-
-test('--take-over on a GitHub board is refused: there is no owning host to move', async () => {
-  const gh = await runInit(['--store', 'github']);
-  await assert.rejects(() => runInit(['--take-over'], gh), (e) => e.exitCode === 2 && /no owning host/.test(e.message));
 });
 
 test('--take-over moves the branch to this host, and init says whose it was', async () => {
@@ -758,22 +846,31 @@ test('--take-over moves the branch to this host, and init says whose it was', as
 
 // ---------- which store an init sets a board up on ----------
 
-test('resolveStore agrees with storeKind, and neither of them looks at a branch', () => {
-  // A fresh board is local by default (docs/local-first.md §6.1).
-  assert.equal(resolveStore({}, null), 'local');
-  assert.equal(resolveStore({ store: 'github' }, null), 'github');
+test('resolveStore agrees with storeKind: one store, and a board.json cannot name another', async () => {
+  const { storeKind } = await import('../src/store/index.js');
 
-  // An existing board keeps what it declares.
+  assert.equal(resolveStore({}), 'local');
+  assert.equal(resolveStore({ store: 'local' }), 'local');
+  // The same answer `storeKind` gives from the same input, for a board written before the key
+  // existed and for one that carries it.
+  assert.equal(storeKind({ cfg: {} }), 'local');
+  assert.equal(storeKind({ cfg: { store: 'local' } }), 'local');
+
+  // `github` is refused on both sides rather than half-honoured, and both name the way out.
+  assert.throws(() => resolveStore({ store: 'github' }), (e) => e.exitCode === 2 && /--store github is gone/.test(e.message));
+  assert.throws(() => storeKind({ cfg: { store: 'github' } }), (e) => e.exitCode === 2 && /hkb init --import/.test(e.message));
+
+  // `existing` is the second half of the question, and the reason it is an argument: a board.json
+  // that still names the GitHub store is refused whatever the flags say, because the alternative is
+  // rewriting the key that points at every card on it. `--import` is the one way through.
+  assert.throws(() => resolveStore({}, { store: 'github' }), (e) => e.exitCode === 2 && /hkb init --import/.test(e.message));
+  assert.throws(() => resolveStore({ store: 'local' }, { store: 'github' }), (e) => e.exitCode === 2 && /hkb init --import/.test(e.message));
+  assert.throws(() => resolveStore({}, { store: 'sqlite' }), (e) => e.exitCode === 2 && /is not a store/.test(e.message));
+  assert.equal(resolveStore({ import: true }, { store: 'github' }), 'local', '--import is the migration off it');
   assert.equal(resolveStore({}, { store: 'local' }), 'local');
-  assert.equal(resolveStore({}, { store: 'github' }), 'github');
+  assert.equal(resolveStore({}, {}), 'local', 'a board written before the key existed is local');
 
-  // And one written before the key existed is `github` — the same answer `storeKind` gives from the
-  // same input, because the key is the only input either of them has. The board's ref used to
-  // decide it, which meant a ref arriving over the network (another host's push, a colleague's
-  // experiment, a plain `git fetch`) could flip a checkout onto a store its verbs were not using.
-  // `hkb init` says the branch is there; nothing acts on it.
-  assert.equal(resolveStore({}, { repo: 'o/r' }), 'github', 'no key, no local board');
-
-  assert.throws(() => resolveStore({ store: 'sqlite' }, null, false), (e) => e.exitCode === 2 && /--store takes/.test(e.message));
-  assert.throws(() => resolveStore({ store: true }, null, false), (e) => e.exitCode === 2 && /--store needs a value/.test(e.message));
+  assert.throws(() => resolveStore({ store: 'sqlite' }), (e) => e.exitCode === 2 && /--store takes/.test(e.message));
+  assert.throws(() => resolveStore({ store: true }), (e) => e.exitCode === 2 && /--store needs a value/.test(e.message));
+  assert.throws(() => storeKind({ cfg: { store: 'sqlite' } }), (e) => e.exitCode === 2 && /is not a store/.test(e.message));
 });

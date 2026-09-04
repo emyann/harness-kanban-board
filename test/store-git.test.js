@@ -20,7 +20,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { GitTier, openGitTier, BOARD_REF, BOARD_REF_PREFIX, boardRef, trackingRefFor, boardFetchRefspec, fileJson, DURABLE_METHODS, isOwned, classifyRefWrite } from '../src/store/git.js';
 import { gitSays } from '../src/board.js';
-import { L, emptyRun, serializeResultComment, serializeRunComment, RESULT_MARKER } from '../src/model.js';
+import { L, emptyRun, serializeResultComment, RESULT_MARKER } from '../src/model.js';
+import { runComment as serializeRunComment } from './fake-gh.js';
 
 const ENV = {
   GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t',
@@ -399,6 +400,36 @@ test('git tier: a branch with no board.json says what to run, not TypeError', (t
   ]) {
     assert.throws(call, (e) => e.exitCode === 2 && /hkb init/.test(e.message));
   }
+});
+
+/**
+ * The window this release opens, and the sentence that closes it (#304).
+ *
+ * `storeKind` now reads an absent `"store"` key as `local`, so a repository whose board is still the
+ * retired GitHub Issues one resolves to a local board that was never created. The write path has
+ * always thrown here; the *read* path answered `[]`, which made `hkb list` print "(no tasks)" and
+ * exit 0 and made `hkb dispatch` tick over nothing for ever. An empty board and a missing one are
+ * different facts and a read has to be able to say which it found.
+ */
+test('git tier: reading a repository with no board says so, and names the migration', (t) => {
+  const s = scratch();
+  t.after(s.cleanup);
+  const tier = tierAt(s.wt);
+  assert.equal(tier.exists(), false);
+  for (const call of [() => tier.listTasks(), () => tier.getTask(1), () => tier.listClosedRecent()]) {
+    assert.throws(call, (e) => e.exitCode === 2
+      && /there is no board at refs\/kb\/boards\/default/.test(e.message)
+      // all three ways out, because all three are real: never initialised, still on the retired
+      // GitHub store, or simply not fetched yet
+      && /hkb init`/.test(e.message)
+      && /hkb init --import`/.test(e.message)
+      && /hkb sync`/.test(e.message));
+  }
+  // and a board that does exist still answers with its cards rather than the sentence
+  const made = board();
+  t.after(made.cleanup);
+  card(made.tier, { title: 'a real card' });
+  assert.equal(made.tier.listTasks().length, 1);
 });
 
 test('git tier: a clone with no local ref is read-only, and says how to make it writable', (t) => {
@@ -1095,7 +1126,7 @@ test('the board lives at refs/kb/boards/<slug>, invisible to git branch', (t) =>
   // and the fix in the message is a command that runs, not the one that just failed
   assert.match(
     (() => { try { boardRef('my board'); return ''; } catch (e) { return e.message; } })(),
-    /hkb init --board my-board --store local/,
+    /hkb init --board my-board/,
   );
 });
 

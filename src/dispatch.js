@@ -4,16 +4,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { enableAutoMerge, branchProtection, openPrsByHead, prMergeStates, staleBaseSha, ensureTrackBranch } from './forge.js';
+import { enableAutoMerge, branchProtection, openPrsByHead, mergedPrsByHead, prMergeStates, staleBaseSha, ensureTrackBranch, fillPrs, dropPrCaches, prsUnavailable } from './forge.js';
 import { openStore, closeStore } from './store/index.js';
 import { logsDir, outboxFile, readState, writeState, ensureLocalDirs, ensureWorktree, worktreeOnBranch, remoteName, pidFile, readPidFile, pidAlive, recordExit, clearExit, HOOK_SETTINGS_VAR } from './board.js';
 import { workerHookSettings, PKG_ROOT, packageVersion } from './init.js';
-import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, lockRef, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, authPauseReason, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, effectiveTools, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, isTrackRoot, trackBranchConflict, buildDeniedTools, deniedToolsUpdate } from './model.js';
+import { activePrGuard, computeReady, openAttempt, lastAttempt, lastSignalAt, sortForDispatch, slugify, L, taskBranchRe, classifyJob, parseBackgroundedId, parseSessionLog, sessionUpdate, formatSession, authPauseReason, worktreePath, mergePolicy, autoMergeDecision, mergeGate, mergeGateFix, scrubKbEnv, modelArgs, effectiveTools, pathOverlapGuard, pathHolders, pathCollisions, attemptIdle, isTrackRoot, trackBranchConflict, buildDeniedTools, deniedToolsUpdate } from './model.js';
 import { workerContext } from './context.js';
 import { planTracks, trackContext, trackPaths, trackAlreadyAttempted, trackFanout } from './track.js';
 import { GhError } from './gh.js';
 import { listKbJobs, readJobState, stopJob, matchJobByWorktree, jobSessionUpdate } from './jobs.js';
-import { isMirrorConfigured, syncProject, projectError } from './projects.js';
 import { tokenExpiryNotice, versionNotice } from './doctor.js';
 import { sweep, sweepTask } from './gc.js';
 import { deniedToolsFromTranscript } from './stats.js';
@@ -197,7 +196,7 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
   const env = profile.mode === 'claude-bg' ? scrubKbEnv(process.env) : {
     ...process.env,
     KB_TASK: String(task.number), KB_ATTEMPT: String(attempt), KB_BOARD: ctx.board, KB_REPO: ctx.repo.nameWithOwner,
-    KB_LOCK_REF: lockRef(task.number, attempt), KB_ROOT: ctx.root, KB_PROFILE: profileName,
+    KB_ROOT: ctx.root, KB_PROFILE: profileName,
   };
   if (dryRun) return { argv, pid: null, continued, tools_dropped: toolsDropped };
   ensureLocalDirs(ctx.root);
@@ -224,26 +223,43 @@ export async function spawnWorker(ctx, task, profileName, attempt, { dryRun = fa
   return { argv, pid: child.pid, child, wt, logFile, continued, tools_dropped: toolsDropped };
 }
 
-// ---------- reconcile closed issues ----------
-// `Closes #n` in a merged PR closes the issue behind the dispatcher's back: it drops out of the
-// open-board query still wearing kb:status:review. The label has to follow the state.
+// ---------- reconcile merged pull requests ----------
+// A merged PR is what finishes a card, and nothing tells hkb about it: the board is local, no issue
+// is linked to the pull request, and the merge happens on the forge — by `hkb merge`, by GitHub's
+// auto-merge, or by a person pressing the button. So the tick looks: one listing of merged PRs,
+// matched to cards by head branch, and a card still in a live status whose branch merged becomes
+// `done` here.
 
-/** Live statuses — an issue closed while wearing one of these is out of sync with GitHub. */
+/** Live statuses — a card wearing one of these whose PR has merged is behind the forge. */
 export const RECONCILE_STATUSES = ['triage', 'todo', 'ready', 'running', 'blocked', 'review'];
 
 /**
- * What a closed issue should become. Pure: `null` means "nothing to do".
- * Closed as completed → done; closed as not planned (or duplicate) → archived, same
- * reading of stateReason as `blockerDone`.
+ * What a merged PR does to its card. Pure: `null` means "nothing to do".
+ *
+ * `mergedByHead` is `mergedPrsByHead(ctx)` (src/forge.js) and the match is `taskBranchRe` — the same
+ * one definition of "this card's branch" the `active_pr` guard and the terminal verbs use. A card
+ * that is already `done` or `archived` is not in `RECONCILE_STATUSES` and is left alone, so the pass
+ * is idempotent: the second tick after a merge finds nothing to do.
+ *
+ * **A card that moved after the merge is a decision, not a lag.** While the board was GitHub Issues
+ * this pass required the *issue* to be closed, so a human who reopened one was believed. Nothing
+ * closes a card behind hkb's back now, and without a second rule a card whose PR merged and which a
+ * reviewer then sent back with `hkb request-changes` — the fix line `checkOrphanedPrs` itself
+ * recommends — would be forced to `done` again by the very next tick, for as long as that PR stayed
+ * in the listing. So a card whose own `updatedAt` is newer than the merge is left exactly where the
+ * human put it: the merge is old news, and something has happened to this card since.
  */
-export function reconcileDecision(task) {
-  if (!task || String(task.state || '').toUpperCase() !== 'CLOSED') return null;
-  if (!RECONCILE_STATUSES.includes(task.status)) return null;
-  const reason = String(task.stateReason || task.state_reason || '').toUpperCase();
-  if (reason === 'NOT_PLANNED' || reason === 'DUPLICATE') {
-    return { status: 'archived', outcome: 'blocked', reason: `issue closed as ${reason.toLowerCase().replace('_', ' ')}` };
+export function reconcileDecision(task, mergedByHead) {
+  if (!task || !RECONCILE_STATUSES.includes(task.status)) return null;
+  const re = taskBranchRe(task.number);
+  for (const [head, pr] of mergedByHead || []) {
+    if (!re.test(head)) continue;
+    if (task.updatedAt && pr.mergedAt && task.updatedAt > pr.mergedAt) {
+      return { status: null, reason: `PR #${pr.number} merged at ${pr.mergedAt}, but #${task.number} was moved to ${task.status} at ${task.updatedAt} — leaving it there`, pr, skip: 'moved_after_merge' };
+    }
+    return { status: 'done', outcome: 'completed', reason: `PR #${pr.number} merged (${head})`, pr };
   }
-  return { status: 'done', outcome: 'completed', reason: 'issue closed as completed' };
+  return null;
 }
 
 /**
@@ -281,34 +297,51 @@ export function shouldReconcile(tasks, cache) {
   return { run: false, why: 'nothing in flight and the board has not moved' };
 }
 
-async function reconcileClosed(ctx, tasks, state, { dryRun = false, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
+async function reconcileMerged(ctx, tasks, state, { dryRun = false, log = /** @type {(...a: any[]) => void} */ (() => {}) } = {}) {
   const gate = shouldReconcile(tasks, state.reconcile);
   if (!gate.run) return { skipped: gate.why, reconciled: [] };
-  // Capped at one page: a backlog larger than that drains a page per tick, because a tick
-  // that found something always makes the next one look again.
   const store = await openStore(ctx);
-  const closed = await store.listClosedRecent();
+  // One listing, whatever the board's size, and shared with `hkb gc`'s: `mergedPrsByHead` filters
+  // the memoized `state: 'all'` read rather than asking for the closed PRs a second time.
+  const mergedByHead = await mergedPrsByHead(ctx);
   const reconciled = [];
-  for (const t of closed) {
-    const d = reconcileDecision(t);
+  const skipped = [];
+  for (const t of tasks) {
+    const d = reconcileDecision(t, mergedByHead);
     if (!d) continue;
+    if (d.skip) { skipped.push({ number: t.number, why: d.skip, reason: d.reason }); log(`#${t.number}: ${d.reason}`); continue; }
+    const runRec = await store.loadRun(t.number);
+    // **Never take a claim away from a worker that is still in it.** `running` is a reconcilable
+    // status — a worker can die while its PR lands — but a reviewer merging a worker's PR mid-task,
+    // or auto-merge landing a node onto its track branch, must not make the tick stamp `ended_at`,
+    // release the lock and close the card underneath it: the worker's next heartbeat is LOCK_LOST
+    // and it exits 3 with no terminal verb, which is the one thing the protocol cannot recover
+    // from. `keep` further down protects the *worktree*; this protects the claim. The worker files
+    // its own terminal verb, and the next tick reconciles what is left.
+    const live = openAttempt(runRec.run);
+    if (live && live.host === ctx.host && live.pid && pidAlive(live.pid)) {
+      skipped.push({ number: t.number, why: 'worker_alive', attempt: live.attempt, pid: live.pid });
+      log(`#${t.number}: ${d.reason}, but attempt ${live.attempt} is still running here (pid ${live.pid}) — leaving its claim alone`);
+      continue;
+    }
     if (dryRun) { reconciled.push({ number: t.number, from: t.status, status: d.status, dry: true }); log(`#${t.number}: [dry-run] ${t.status} → ${d.status} (${d.reason})`); continue; }
     const from = t.status;
-    const runRec = await store.loadRun(t.number);
     const a = closeAttemptForReconcile(runRec.run, d, nowIso());
     if (a) {
       await store.saveRun(t.number, runRec);
       await store.release(t.number, a.attempt);
     }
     await store.setStatus(t, d.status, { remove: t.needsHuman ? [L.needsHuman] : [] });
-    const entry = { number: t.number, from, status: d.status, outcome: d.outcome, attempt: a?.attempt ?? null };
-    // The task is over, so its worktrees go — except one whose worker is somehow still alive here.
-    if (a && a.host === ctx.host && a.pid && pidAlive(a.pid)) entry.keep = [a.attempt];
-    reconciled.push(entry);
+    if (t.state !== 'CLOSED') await store.closeTask(t.number, 'completed');
+    // No `keep`: a card whose open attempt is still running on this host never reaches here — the
+    // live-worker check above leaves it, claim and worktree both, for the worker to finish.
+    reconciled.push({ number: t.number, from, status: d.status, outcome: d.outcome, attempt: a?.attempt ?? null, pr: d.pr?.number ?? null });
     log(`#${t.number}: ${from} → ${d.status} (${d.reason}${a ? `, attempt ${a.attempt} → ${d.outcome}` : ''})`);
   }
+  // A card left alone (a live worker, a human who moved it after the merge) is not "found": caching
+  // it as found would only make the next tick look again, which is exactly what should happen.
   if (!dryRun) state.reconcile = { checked_at: nowIso(), signature: boardSignature(tasks), found: reconciled.length };
-  return { skipped: null, reconciled };
+  return { skipped: null, reconciled, left: skipped };
 }
 
 // ---------- the last step: GitHub's auto-merge ----------
@@ -493,10 +526,10 @@ export function dropCaches(ctx) {
  */
 export function dropCommentCaches(ctx) {
   for (const key of Object.keys(ctx._cache)) if (key.startsWith('comments:')) delete ctx._cache[key];
-  // `prsByHead` is the same kind of thing: the open-PR listing behind `fillPrFallback`, memoized so
+  // `prsByHead` is the same kind of thing: the open-PR listing behind `fillPrs`, memoized so
   // a verb that reads several cards pays for one. It is a tick's worth of truth, never a loop's —
   // a PR opened by a worker last tick must be visible to this one.
-  delete ctx._cache.prsByHead;
+  dropPrCaches(ctx);
 }
 
 // ---------- tick ----------
@@ -563,7 +596,20 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   if (!dryRun) replayOutbox(ctx, log);
 
   const store = await openStore(ctx);
-  const tasks = await store.listTasks();
+  // The board comes from the store; the pull requests come from the forge and are joined to it by
+  // head branch (`fillPrs`, src/forge.js). One listing per tick, for the `active_pr` guard, the
+  // auto-merge pass and every card the tick renders.
+  const tasks = await fillPrs(ctx, await store.listTasks());
+  // A forge this host cannot reach does not stop the tick: the cards are local, and the reclaim,
+  // the reap, the promote pass and the sweeps are all local too. What it does stop is *claiming* —
+  // the `active_pr` guard's whole job is to not start a second attempt on a card whose PR is open,
+  // and an empty `prs` here means "not known", not "none". Deciding from it would open a duplicate
+  // PR, so the tick says so and leaves those cards for the next one.
+  const forgeDown = prsUnavailable(ctx);
+  if (forgeDown) {
+    summary.forge_error = forgeDown;
+    log(`pull requests unreachable (${forgeDown}) — cards are read without them, and nothing is claimed this tick (the active_pr guard cannot be judged)`);
+  }
   // **Where else is absence a verdict?** Two sweeps below decide from a card *not being here* — the
   // reap (`reapDecision(j, null)` stops a background agent and sweeps its checkout) and the orphan
   // lock sweep (a lock whose card is missing is released, and a worker whose lock ref disappears
@@ -582,11 +628,12 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
   const plan = planTracks(tasks, ctx.cfg, { board: ctx.board });
   const coveredBy = plan.covered;
 
-  // 0. reconcile issues GitHub closed behind our back (merged `Closes #n`). One extra query, gated.
+  // 0. reconcile the cards whose pull request merged on the forge. One extra request, gated.
   try {
-    const r = await reconcileClosed(ctx, tasks, state, { dryRun, log });
+    const r = await reconcileMerged(ctx, tasks, state, { dryRun, log });
     summary.reconciled = r.reconciled;
     if (r.skipped) summary.reconcile_skipped = r.skipped;
+    if (r.left?.length) summary.reconcile_left = r.left;
   } catch (e) {
     // never let a half-finished reconcile leave a clean cache behind: the next tick must look again
     delete state.reconcile;
@@ -724,7 +771,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       try { beat = await beatAtOf(t.number, a.attempt); } catch (e) { log(`#${t.number}: lock ref beat unreadable (${e.message}); using the run comment`); }
       lastSignal = lastSignalAt(a, beat);
       if (secondsSince(lastSignal) > d.stale_after) outcome = 'reclaimed';
-      else log(`#${t.number}: attempt ${a.attempt} beat on ${lockRef(t.number, a.attempt)} ${Math.round(secondsSince(lastSignal))}s ago — alive`);
+      else log(`#${t.number}: attempt ${a.attempt} beat on ${store.lockRef?.(t.number, a.attempt) || `claim ${t.number}/${a.attempt}`} ${Math.round(secondsSince(lastSignal))}s ago — alive`);
     }
     // A no-job, no-pid attempt (manual, or a bg job on another host) has nothing but its
     // heartbeat to ask, and the ref-CAS default never touches the run comment until the reclaim
@@ -880,6 +927,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     const t = cand.root;
     const note = (why, extra = {}) => { summary.tracks.push({ root: t.number, nodes: cand.track.nodes.map((x) => x.number), ok: false, why, mode: cand.mode || 'none', ...extra }); };
     if (!cand.ok) { note(cand.why); continue; }
+    if (forgeDown) { note(`pull requests unreachable (${forgeDown}) — the active_pr guard cannot be judged`); continue; }
     if (touchedRecently(t.number)) { note('touched recently (stale-read guard)'); continue; }
     if (budget <= 0) { note('no slot'); continue; }
     if ((state.spawned_today || 0) >= d.daily_spawn_cap) { note(`daily spawn cap ${d.daily_spawn_cap}`); continue; }
@@ -940,7 +988,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       note(`track branch: ${e.message}`);
       continue;
     }
-    const attempt = /** @type {HkbAttempt} */ ({ attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.token, pid: null, track: true, track_mode: cand.mode, track_nodes: nodes, track_branch: trackBranch });
+    const attempt = /** @type {HkbAttempt} */ ({ attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), pid: null, track: true, track_mode: cand.mode, track_nodes: nodes, track_branch: trackBranch });
     runRec.run.attempts.push(attempt);
     await store.saveRun(t.number, runRec);
     await store.setStatus(t, 'running', { remove: [L.needsHuman] });
@@ -986,6 +1034,7 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     if (summary.fatal) break; // the process is on its way out; claiming more would only orphan it
     if (t.status !== 'ready' || claimedTracks.has(t.number)) continue; // 3a took it: it is running its own track now
     if (coveredBy.has(t.number)) { summary.skipped.push({ number: t.number, why: `held for track #${coveredBy.get(t.number)}` }); continue; }
+    if (forgeDown) { summary.skipped.push({ number: t.number, why: `pull requests unreachable (${forgeDown}) — the active_pr guard cannot be judged` }); continue; }
     if (touchedRecently(t.number)) { summary.skipped.push({ number: t.number, why: 'touched recently (stale-read guard)' }); continue; }
     // active_pr guard first: it must apply even when there is no slot, and for a card with no PR it
     // costs nothing. The one exemption is the card `hkb request-changes` produced — its latest
@@ -1040,8 +1089,10 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
       if (c.error?.kind === 'ratelimit' || c.error?.kind === 'auth') break;
       continue;
     }
-    // lock_sha starts the worker's heartbeat chain: the first `hkb heartbeat` leases on it
-    const attempt = /** @type {HkbAttempt} */ ({ attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), lock_sha: c.token, pid: null, ...continues });
+    // The claim already seeded this host's beat chain (`claim` writes the local mirror `beatToken`
+    // reads), so the worker's first `hkb heartbeat` has a token to lease on without carrying one on
+    // the row — which is why the row no longer does.
+    const attempt = /** @type {HkbAttempt} */ ({ attempt: k, profile: profileName, host: ctx.host, started_at: nowIso(), heartbeat_at: nowIso(), pid: null, ...continues });
     runRec.run.attempts.push(attempt);
     await store.saveRun(t.number, runRec);
     await store.setStatus(t, 'running', { add: t.agent ? [] : [L.agent(profileName)], remove: [L.needsHuman] });
@@ -1107,19 +1158,10 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     log(`track conflict pass failed (the board is unaffected, and the next tick tries again): ${e.message}`);
   }
 
-  // 4. mirror the labels onto the linked Projects v2 board (opt-in, one-way, never fatal).
-  //    Last, so it sees every transition this tick: setStatus mutates the task objects in place.
-  if (isMirrorConfigured(ctx.cfg)) {
-    try {
-      const extra = {};
-      for (const r of summary.reconciled) if (r.status) extra[r.number] = r.status; // closed issues left `tasks`
-      summary.project = await syncProject(ctx, tasks, { dryRun, extra, state, log });
-    } catch (e) {
-      const x = projectError(e);
-      summary.project = { error: x.message, fix: x.fix };
-      log(`project mirror failed (the board is unaffected): ${x.message}${x.fix ? ` → ${x.fix}` : ''}`);
-    }
-  }
+  // 4. the Projects v2 mirror used to run here — one GraphQL read plus a mutation per transition,
+  //    mirroring `kb:status:*` labels onto a linked project. It went with the labels: a card's status
+  //    is a column on the card now, there is no issue to add to a project, and a one-way mirror of a
+  //    board GitHub cannot see is a bridge feature (docs/local-first.md §8), not a store one.
 
   // 5. every `gc_every_ticks`, the full sweep — the same `sweep()` `hkb gc --yes` runs, so what the
   //    dispatcher cleans and what a human cleans can never diverge. One board read, then local git.
@@ -1129,12 +1171,9 @@ export async function tick(ctx, { max = Infinity, dryRun = false, children = nul
     state.ticks_since_gc = (state.ticks_since_gc || 0) + 1;
     if (state.ticks_since_gc >= every) {
       state.ticks_since_gc = 0;
-      state.gc_scanned = state.gc_scanned || {};
       try {
-        // the memo (issue → updatedAt already scanned for duplicate run comments) rides in the
-        // state file the tick already writes, so a sweep of a quiet board reads no issue at all
-        summary.gc = await sweep(ctx, { yes: true, memo: state.gc_scanned, log });
-        log(`gc: ${summary.gc.worktrees} worktree(s), ${summary.gc.branches} branch(es), ${summary.gc.comments} duplicate comment(s), ${summary.gc.chains} beat chain(s), ${summary.gc.files} old file(s)`);
+        summary.gc = await sweep(ctx, { yes: true, log });
+        log(`gc: ${summary.gc.worktrees} worktree(s), ${summary.gc.branches} branch(es), ${summary.gc.track_branches} track branch(es), ${summary.gc.files} old file(s)`);
       } catch (e) {
         summary.gc = { error: e.message };
         log(`gc sweep skipped (retried in ${every} ticks): ${e.message}`);
@@ -1179,7 +1218,7 @@ function watchChild(ctx, number, k, child, children, state, profileName, log) {
         return;
       }
       a.exit_code = code;
-      const t = await store.getTask(number);
+      const t = await fillPrs(ctx, await store.getTask(number));
       const r = await failAttempt(ctx, store, t, runRec, 'protocol_violation', `worker exited (${code}) without a terminal verb`, { kill: false });
       log(`#${number}: attempt ${k} exited ${code} without complete/block → ${r}${session ? ` (${formatSession(a)})` : ''}`);
     } catch (e) { log(`#${number}: post-exit handling failed: ${e.message}`); }

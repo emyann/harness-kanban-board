@@ -1,5 +1,6 @@
 // `hkb context <n>` — exactly what a worker sees (Hermes `kanban_show` + protocol reminder).
 import { openStore } from './store/index.js';
+import { fillPrs } from './forge.js';
 import { activePrGuard, openAttempt, capabilityCommand, CAPABILITIES, RUN_MARKER, RESULT_MARKER, effectiveTools } from './model.js';
 
 // ---------- the comment thread as steering input (pure; tested in test/context.test.js) ----------
@@ -242,13 +243,17 @@ export async function workerContext(ctx, task, attempt, { continuePr = null, pro
       ? 'Work only in this worktree, on the branch of the PR you are continuing (see above).'
       : 'Work only in this worktree, on the current branch.';
   lines.push(`1. Run \`hkb show ${n} --json\` if you need more detail. ${where}`);
-  lines.push(`2. Every ~10 minutes of long work run \`hkb heartbeat ${n}\` — it is a free compare-and-swap on your lock ref; never push that ref yourself. If it prints LOCK_LOST, stop immediately: do not commit, do not file a terminal verb.`);
+  lines.push(`2. Every ~10 minutes of long work run \`hkb heartbeat ${n}\` — it is a free compare-and-swap on your claim. If it prints LOCK_LOST, stop immediately: do not commit, do not file a terminal verb.`);
   // a continued branch is already pushed, so rebasing it would need the force-push the protocol forbids
   const upToDate = cont ? `merge \`origin/${base}\` in (never rebase: this branch is already pushed)` : 'rebase on the default branch';
   lines.push(`3. Commit with clear, plain messages (no Co-Authored-By trailers, no "Generated with" lines — in commits or PR bodies). Never \`git push --force\`. Before finishing: ${upToDate} and run the project's lint/tests.`);
+  // The branch name is the link. hkb's board is local (docs/local-first.md §6): nothing on the
+  // forge's side associates a pull request with a card, so the tick and every terminal verb find
+  // this card's PR by matching the open-PR listing against `kb-<n>-<k>` (`taskBranchRe`,
+  // src/model.js). A PR on any other branch is invisible to hkb.
   lines.push(cont
-    ? `4. PR #${cont.number} already exists and already closes #${n} — push to its branch${cont.branch ? ` (\`${cont.branch}\`)` : ''} instead of opening one, and never \`--force\`.`
-    : `4. Push and open a draft PR whose body contains \`Closes #${n}\`: \`gh pr create --draft --fill --body "Closes #${n}"\` (add a real description).`);
+    ? `4. PR #${cont.number} already exists and is already this card's PR — push to its branch${cont.branch ? ` (\`${cont.branch}\`)` : ''} instead of opening one, and never \`--force\`.`
+    : `4. Push and open a draft PR: \`gh pr create --draft --fill\` (add a real description). **The branch name is what ties the PR to this card** — keep it \`kb-${n}-${k}\` (\`worktree-kb-${n}-${k}\` and \`kb/${n}\` are also recognised). That name is the *only* link: hkb has no issue for the PR to reference, and a PR on any other branch is one hkb cannot see.`);
   lines.push('5. Finish with EXACTLY ONE terminal verb, then stop. Send the payload as one JSON object on stdin — no JSON goes through shell quoting. Write the file, then redirect it:');
   lines.push('```bash');
   lines.push(`# write /tmp/kb-${n}.json with your editor tool:`);
@@ -267,6 +272,7 @@ export async function workerContext(ctx, task, attempt, { continuePr = null, pro
 }
 
 export async function contextCommand(ctx, number) {
-  const task = await (await openStore(ctx)).getTask(number);
+  // The continuation block reads the card's PR, which is the forge's answer and not the store's.
+  const task = await fillPrs(ctx, await (await openStore(ctx)).getTask(number));
   return workerContext(ctx, task);
 }

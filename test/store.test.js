@@ -1,8 +1,9 @@
 // The store conformance suite.
 //
-// One array of scenarios, run against every driver in `DRIVERS`. Today the list holds the GitHub
-// driver backed by `test/fake-gh.js`; the board-ref tier and the `.git/hkb/index.db` index
-// (docs/local-first.md §6) append theirs, and a driver is "done" when this file is green for it.
+// One array of scenarios, run against every driver in `DRIVERS`: the local store (docs/local-first.md
+// §6 — the `kb-board` branch and the `.git/hkb/index.db` index) and the in-memory double the rest of
+// the suite asserts board behaviour through. A driver is "done" when this file is green for it, and
+// that is what made retiring the GitHub one a deletion rather than a rewrite.
 //
 // A scenario may only touch the §6.4 interface (`src/store/index.js`, `STORE_METHODS`). Anything a
 // scenario needs that the interface does not offer — making a claim visible to whatever mechanism
@@ -12,8 +13,8 @@
 // the next driver cannot run it.
 //
 //   open()                  → { store, cleanup, settleClaim?, reclaim?, recordBeat? }
-//   settleClaim(n, k, tok)  make the claim real for the heartbeat's own transport (GitHub: push the
-//                           lock ref to the real `origin`; a local driver: nothing, the claim *is* real)
+//   settleClaim(n, k, tok)  make the claim real for the heartbeat's own transport (nothing on a
+//                           store that keeps its claims in a table: the claim *is* real)
 //   reclaim(n, k)           what a dispatcher reclaim looks like (default: store.release)
 //   recordBeat(n, k, at)    a beat landed at `at`, as `lockBeatAt` would read it back
 import { test } from 'node:test';
@@ -29,58 +30,10 @@ import { L, emptyRun, serializeResultComment, RESULT_MARKER, blockersOf, blocker
 import { FakeGh, kbIssue } from './fake-gh.js';
 import { FakeStore } from './fake-store.js';
 
-// ---------- the GitHub driver ----------
-
 function git(cwd, ...args) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
   if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr || r.stdout}`);
   return r.stdout.trim();
-}
-
-/**
- * The GitHub store over the in-memory GitHub, in a real checkout with a real `origin`.
- *
- * The checkout is not decoration: the GitHub driver's `heartbeat` is a `--force-with-lease` push,
- * and only git can say whether a lease really held. So the fake's base sha *is* this repo's HEAD,
- * and `settleClaim` pushes the lock ref the claim created into the real remote — which is exactly
- * what the dispatcher's claim does today (`POST git/refs` at the default branch head).
- */
-async function openGithubDriver() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-store-'));
-  const origin = path.join(dir, 'origin.git');
-  const root = path.join(dir, 'work');
-  git(dir, 'init', '-q', '--bare', '-b', 'main', origin);
-  git(dir, 'init', '-q', '-b', 'main', root);
-  fs.writeFileSync(path.join(root, 'a.txt'), 'hi\n');
-  git(root, 'add', 'a.txt');
-  git(root, 'commit', '-qm', 'init');
-  git(root, 'remote', 'add', 'origin', origin);
-  git(root, 'push', '-q', 'origin', 'main');
-  const base = git(root, 'rev-parse', 'HEAD');
-
-  const gh = new FakeGh({ baseSha: base });
-  // deep, as src/init.js does: a shallow spread shares `dispatch` and `profiles` with every other
-  // harness in the process, so one scenario mutating a nested key corrupts the rest.
-  const cfg = { ...JSON.parse(JSON.stringify(DEFAULT_BOARD)), repo: gh.nameWithOwner };
-  const ctx = {
-    root, cfg,
-    repo: { owner: gh.owner, repo: gh.repo, nameWithOwner: gh.nameWithOwner },
-    board: 'default', host: 'test-host', json: false, caps: {}, _cache: {},
-    requireBoard() { return this; },
-  };
-  const restore = gh.install();
-  const ref = (n, k) => `refs/kb/locks/${n}/${k}`;
-  return {
-    store: await openStore(ctx),
-    gh,
-    settleClaim: (n, k, token) => { git(root, 'push', '-q', 'origin', `${token}:${ref(n, k)}`); },
-    reclaim: async (store, n, k) => {
-      await store.release(n, k);
-      git(root, 'push', '-q', 'origin', '--delete', ref(n, k));
-    },
-    recordBeat: (n, k, at) => gh.beat(n, k, at),
-    cleanup: () => { restore(); fs.rmSync(dir, { recursive: true, force: true }); },
-  };
 }
 
 // ---------- the local driver ----------
@@ -150,7 +103,6 @@ async function openFakeDriver() {
 }
 
 const DRIVERS = [
-  { name: 'github', open: openGithubDriver },
   { name: 'local', open: openLocalDriver },
   { name: 'fake', open: openFakeDriver },
 ];
@@ -316,6 +268,22 @@ const SCENARIOS = [
     },
   },
   {
+    name: 'closed-recent: `since` is a window every driver honours, and `first` a total ceiling',
+    async run(h) {
+      // The migration reads the closed cards *by window* — the 90 days it is scoped to — and the
+      // drivers must mean the same thing by it, or the one that pages and the one that does not
+      // migrate different boards. `first` is the runaway stop above the window, never a page size.
+      const t = await card(h, { status: 'done' });
+      await h.store.closeTask(t.number, 'completed');
+      const inWindow = await h.store.listClosedRecent({ since: '2000-01-01T00:00:00Z' });
+      assert.ok(inWindow.some((x) => x.number === t.number), 'a card closed now is inside a window that opened in 2000');
+      const after = await h.store.listClosedRecent({ since: '2999-01-01T00:00:00Z' });
+      assert.ok(!after.some((x) => x.number === t.number), 'and outside one that has not opened yet');
+      assert.equal((await h.store.listClosedRecent({ first: 0 })).length, 0, '`first` bounds the answer');
+      assert.equal(!!(/** @type {any} */ (inWindow).capped), false, 'a read that was not cut short does not say it was');
+    },
+  },
+  {
     name: 'updateBody rewrites the prose and keeps every machine field',
     async run(h) {
       const kb = { priority: 5, paths: ['src/x.js'], max_runtime: 4242 };
@@ -456,6 +424,18 @@ const SCENARIOS = [
       const after = await h.store.getTask(t.number);
       assert.match(after.bodyText, /rewritten prose/);
       assert.equal(after.kb.priority, 3, 'updateBody must not drop the kb block');
+
+      // And the two compose in either order on a task read before the body moved — which is what
+      // `hkb edit <n> --body-file … --priority 2` does: one `getTask`, then both writes. A driver
+      // that took the prose off the *passed task* instead of off the card put `the why, in prose`
+      // back over `rewritten prose` here, silently undoing the edit that had just landed.
+      await h.store.setKb(t, { ...t.kb, priority: 4 });
+      const both = await h.store.getTask(t.number);
+      assert.equal(both.kb.priority, 4);
+      assert.match(both.bodyText, /rewritten prose/, 'setKb with no bodyText leaves the prose where it is');
+      // stating it the other way round too: an explicit bodyText is still honoured
+      await h.store.setKb(t, { ...t.kb, priority: 5 }, 'prose the caller chose');
+      assert.match((await h.store.getTask(t.number)).bodyText, /prose the caller chose/);
     },
   },
   {
@@ -725,16 +705,3 @@ function fakeCtx() {
     requireBoard() { return this; },
   };
 }
-
-// One assertion that is *about* the GitHub driver rather than about the interface: the seam moved
-// the bodies, it did not rewrite them, so a card seeded the old way still reads the old way.
-test('store[github]: a card seeded as an issue reads back through the interface', async (t) => {
-  const h = await openGithubDriver();
-  t.after(h.cleanup);
-  h.gh.addIssue(kbIssue({ number: 42, title: 'seeded', status: 'review', agent: 'claude', kb: { priority: 1 } }));
-  const task = await h.store.getTask(42);
-  assert.deepEqual(
-    [task.number, task.title, task.status, task.agent, task.kb.priority],
-    [42, 'seeded', 'review', 'claude', 1],
-  );
-});

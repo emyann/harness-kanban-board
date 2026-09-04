@@ -1,61 +1,78 @@
-// The reconcile decision: what a closed issue that still wears a live status label becomes,
-// and when the dispatcher pays for the extra closed-issues query.
+// The reconcile decision: which card a merged pull request finishes, and when the dispatcher pays
+// for the extra listing that finds one.
+//
+// Nothing tells hkb that a PR merged — the board is local, there is no issue for `Closes #n` to
+// close, and the merge happens on the forge (by `hkb merge`, by GitHub's auto-merge, or by a person
+// pressing the button). So the tick looks: one listing of merged PRs, matched to cards by head
+// branch, which is the same `taskBranchRe` the `active_pr` guard and the terminal verbs use.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { reconcileDecision, closeAttemptForReconcile, boardSignature, shouldReconcile } from '../src/dispatch.js';
 import { emptyRun } from '../src/model.js';
 
-const closed = (status, stateReason = 'COMPLETED') => ({ number: 1, status, state: 'CLOSED', stateReason });
+const pr = (number, head) => [head, { number, headRefName: head, state: 'MERGED', merged: true }];
+/** A merged-PR listing, keyed by head branch — what `mergedPrsByHead` (src/forge.js) hands back. */
+const merged = (...entries) => new Map(entries);
+const card = (status, number = 1) => ({ number, status, state: 'OPEN', stateReason: null });
 
-test('reconcile decision: closed as completed → done, not planned → archived', () => {
-  assert.deepEqual(reconcileDecision(closed('review')), { status: 'done', outcome: 'completed', reason: 'issue closed as completed' });
-  assert.equal(reconcileDecision(closed('running')).status, 'done');
-  assert.equal(reconcileDecision(closed('ready')).status, 'done');
-  assert.equal(reconcileDecision(closed('todo')).status, 'done');
-  assert.equal(reconcileDecision(closed('triage')).status, 'done');
-  assert.equal(reconcileDecision(closed('blocked')).status, 'done');
-  // GitHub leaves stateReason null on plenty of closes; that is a completed close
-  assert.equal(reconcileDecision(closed('review', null)).status, 'done');
-
-  const np = reconcileDecision(closed('running', 'NOT_PLANNED'));
-  assert.equal(np.status, 'archived');
-  assert.equal(np.outcome, 'blocked');
-  assert.match(np.reason, /not planned/);
-  assert.equal(reconcileDecision(closed('review', 'DUPLICATE')).status, 'archived');
+test('a merged PR on this card\'s branch finishes it, from any live status', () => {
+  const listing = merged(pr(90, 'kb-1-1'));
+  for (const status of ['triage', 'todo', 'ready', 'running', 'blocked', 'review']) {
+    const d = reconcileDecision(card(status), listing);
+    assert.equal(d.status, 'done', status);
+    assert.equal(d.outcome, 'completed');
+    assert.equal(d.pr.number, 90);
+    assert.match(d.reason, /PR #90 merged \(kb-1-1\)/);
+  }
 });
 
-test('reconcile decision: nothing to do for open issues or settled labels', () => {
-  assert.equal(reconcileDecision({ number: 1, status: 'review', state: 'OPEN', stateReason: null }), null);
-  assert.equal(reconcileDecision(closed('done')), null);
-  assert.equal(reconcileDecision(closed('archived')), null);
-  assert.equal(reconcileDecision(closed(null)), null); // no kb:status label at all
-  assert.equal(reconcileDecision(null), null);
+test('every branch name hkb makes for a card counts, and nobody else\'s does', () => {
+  for (const head of ['kb-1-1', 'kb-1-7', 'worktree-kb-1-2', 'kb/1']) {
+    assert.equal(reconcileDecision(card('review'), merged(pr(90, head)))?.status, 'done', head);
+  }
+  // #11's branch is not #1's, and a branch hkb never made belongs to nobody
+  for (const head of ['kb-11-1', 'kb/11', 'feature/whatever', 'main']) {
+    assert.equal(reconcileDecision(card('review'), merged(pr(90, head))), null, head);
+  }
 });
 
-test('reconcile decision: state and reason are read case-insensitively', () => {
-  assert.equal(reconcileDecision({ number: 2, status: 'review', state: 'closed', stateReason: 'completed' }).status, 'done');
-  assert.equal(reconcileDecision({ number: 2, status: 'review', state: 'closed', state_reason: 'not_planned' }).status, 'archived');
+test('nothing to do for a card that is already settled, or with no merged PR at all', () => {
+  assert.equal(reconcileDecision(card('done'), merged(pr(90, 'kb-1-1'))), null);
+  assert.equal(reconcileDecision(card('archived'), merged(pr(90, 'kb-1-1'))), null);
+  assert.equal(reconcileDecision(card(null), merged(pr(90, 'kb-1-1'))), null); // no status at all
+  assert.equal(reconcileDecision(null, merged(pr(90, 'kb-1-1'))), null);
+  assert.equal(reconcileDecision(card('review'), merged()), null);
+  assert.equal(reconcileDecision(card('review'), null), null, 'a listing that could not be read decides nothing');
+});
+
+test('the pass is idempotent: the card it moved is not in a live status the next time', () => {
+  const listing = merged(pr(90, 'kb-1-1'));
+  const first = reconcileDecision(card('review'), listing);
+  assert.equal(first.status, 'done');
+  assert.equal(reconcileDecision({ ...card('review'), status: first.status }, listing), null);
 });
 
 test('reconcile closes the open attempt with the decision outcome', () => {
   const run = emptyRun();
   run.attempts.push({ attempt: 1, profile: 'claude', host: 'h', started_at: '2026-08-26T10:00:00Z', ended_at: '2026-08-26T10:05:00Z', outcome: 'crashed' });
   run.attempts.push({ attempt: 2, profile: 'claude', host: 'h', started_at: '2026-08-26T10:06:00Z' });
-  const a = closeAttemptForReconcile(run, reconcileDecision(closed('running')), '2026-08-26T11:00:00Z');
+  const d = reconcileDecision(card('running'), merged(pr(90, 'kb-1-1')));
+  const a = closeAttemptForReconcile(run, d, '2026-08-26T11:00:00Z');
   assert.equal(a.attempt, 2);
   assert.equal(a.outcome, 'completed');
   assert.equal(a.ended_at, '2026-08-26T11:00:00Z');
-  assert.match(a.reason, /closed as completed/);
+  assert.match(a.reason, /PR #90 merged/);
   assert.equal(run.attempts[0].outcome, 'crashed'); // earlier attempts untouched
 });
 
 test('reconcile leaves an already-finished run alone', () => {
+  const d = reconcileDecision(card('review'), merged(pr(90, 'kb-1-1')));
   const run = emptyRun();
   run.attempts.push({ attempt: 1, profile: 'claude', host: 'h', started_at: '2026-08-26T10:00:00Z', ended_at: '2026-08-26T10:20:00Z', outcome: 'completed', summary: 'done' });
   const before = JSON.stringify(run);
-  assert.equal(closeAttemptForReconcile(run, reconcileDecision(closed('review')), '2026-08-26T11:00:00Z'), null);
+  assert.equal(closeAttemptForReconcile(run, d, '2026-08-26T11:00:00Z'), null);
   assert.equal(JSON.stringify(run), before);
-  assert.equal(closeAttemptForReconcile(emptyRun(), reconcileDecision(closed('review')), '2026-08-26T11:00:00Z'), null);
+  assert.equal(closeAttemptForReconcile(emptyRun(), d, '2026-08-26T11:00:00Z'), null);
 });
 
 test('board signature moves with the task count and the newest updatedAt', () => {

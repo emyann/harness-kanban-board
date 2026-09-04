@@ -57,7 +57,7 @@ header is pinned in `src/gh.js` so a server-side default bump cannot silently ch
 
 hkb runs its own board. The issues in this repository carry `kb:*` labels, the dependency graph between them is
 what the dispatcher promotes, and the features described in the README were built by workers that claimed those
-issues, opened `Closes #<n>` draft PRs and ended with a terminal verb — including the multi-node
+cards, opened draft PRs on their own branches and ended with a terminal verb — including the multi-node
 [tracks](../skills/kanban/references/protocol.md#tracks--the-second-execution-engine), which were first run on
 this repo's own decomposed work.
 

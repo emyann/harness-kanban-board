@@ -19,9 +19,9 @@ import {
   tallyDeniedTools, deniedToolsFinding, checkDeniedTools,
   CAPABILITIES_CHECK, checkCapabilityMap,
   TOOL_POSTURE_CHECK, checkToolPosture, CARD_GRANTS_CHECK, checkCardGrants, checkRemovedProfiles,
-  STORE_CHECK, BRANCH_CHECK, INDEX_CHECK, MOUNT_CHECK, REFSPEC_CHECK, checkLocalStore, PATH_OVERLAP_CHECK, doctor } from '../src/doctor.js';
+  STORE_CHECK, BRANCH_CHECK, INDEX_CHECK, MOUNT_CHECK, REFSPEC_CHECK, checkLocalStore, CLAIM_CHECK, checkClaimLock, PATH_OVERLAP_CHECK, doctor } from '../src/doctor.js';
 import { CAPABILITIES, capabilityGrants, effectiveTools, toolPosture } from '../src/model.js';
-import { normalizeCardGrants } from '../src/tasks.js';
+import { normalizeCardGrants } from '../src/board.js';
 import { setTransport, GhError } from '../src/gh.js';
 import { pidFile, writeServeUrl, DEFAULT_PROFILES, hostId } from '../src/board.js';
 import { spawnSync } from 'node:child_process';
@@ -1242,11 +1242,12 @@ async function probe(ctx, opts = {}) {
   return Object.fromEntries(rows.map((r) => [r.name, r]));
 }
 
-test('doctor on a GitHub board says which store it is and probes nothing else', async () => {
+test('a board.json still pinned to the retired GitHub store is told so, and named the migration', async () => {
   const rows = await probe({ root: '/tmp/none', cfg: { store: 'github', repo: 'o/r' }, board: 'default', _cache: {} });
-  assert.equal(rows[STORE_CHECK].ok, true);
-  assert.match(rows[STORE_CHECK].detail, /github — the board is the kb:\* issues on o\/r/);
-  assert.equal(rows[BRANCH_CHECK], undefined, 'there is no ref to be wrong about');
+  assert.equal(rows[STORE_CHECK].ok, false);
+  assert.match(rows[STORE_CHECK].detail, /GitHub store, which hkb no longer has/);
+  assert.match(rows[STORE_CHECK].detail, /hkb init --import/);
+  assert.equal(rows[BRANCH_CHECK], undefined, 'nothing else is probed against a store hkb cannot open');
   assert.equal(rows[MOUNT_CHECK], undefined);
 });
 
@@ -1365,14 +1366,6 @@ test('doctor names a board still on refs/heads/kb-board instead of reporting non
   assert.notEqual(rows[BRANCH_CHECK].fix, 'hkb init', 'which is the one fix that would lose the board');
 });
 
-test('doctor on a GitHub board whose name is not a ref path still reports it healthy', async () => {
-  // `slugFile` hashes a board name, so `--board "my board"` is a perfectly good GitHub board.
-  // Building its ref from `localBoardExists` turned that into a `bad` row about a board that is fine.
-  const rows = await probe({ root: '/tmp/none', cfg: { store: 'github', repo: 'o/r' }, board: 'my board', _cache: {} });
-  assert.equal(rows[STORE_CHECK].ok, true);
-  assert.match(rows[STORE_CHECK].detail, /github/);
-});
-
 test('doctor: a checkout with no board, an index that has fallen behind, and a foreign owner', async () => {
   const { ctx } = localBoard();
   const empty = await probe(ctx, { mounts: '/dev/null' });
@@ -1440,13 +1433,11 @@ test('a forge that is not there costs one line, not the whole report', async (t)
   // each probe fails under its own name.
   assert.equal(by.labels.ok, false, 'the labels probe answered for itself');
   assert.notEqual(by['rate limit']?.ok, true, `the checks after it still ran and none of them passed against a forge that is not there: ${Object.keys(by).join(', ')}`);
-  // `track branches` and `orphaned PRs` are the two that no longer ask the forge anything here, and
-  // they are `ok` because they were skipped, not because they passed — so each says which in words,
-  // the way `gc.js` speaks its own line for the identical sweep. A skipped check that reported a
-  // bare `ok` would be exactly the shape this test exists to refuse.
+  // `track branches` and `orphaned PRs` ask the forge on every board now — a track branch and a pull
+  // request live there whatever the cards live in — so with the forge unreachable they fail under
+  // their own names rather than being skipped with a reassuring `ok`.
   for (const name of ['track branches', 'orphaned PRs']) {
-    assert.equal(by[name].ok, true, `${name} is not a question a local board can answer`);
-    assert.match(by[name].detail, /local board/, `${name} says it was skipped and why: ${by[name].detail}`);
+    assert.equal(by[name].ok, false, `${name} asks the forge, and the forge is not there`);
   }
   // And the checks that need the *board* rather than the forge now answer on a local board, because
   // doctor reads it through `openStore` like every other verb (#325). They used to be the "could not
@@ -1461,7 +1452,9 @@ test('a forge that is not there costs one line, not the whole report', async (t)
     assert.equal(by[name]?.ok, true, `${name} answered from the local board: ${Object.keys(by).join(', ')}`);
     assert.doesNotMatch(by[name].detail || '', /could not read the board/, `${name}: ${by[name].detail}`);
   }
-  assert.ok(by['rate limit'] && by.GraphQL, 'and the probes after the board read still ran');
+  // `GraphQL` was here too: the capability probe went with the store that needed it (a card's
+  // blockers are a column now, not a schema question about `Issue.blockedBy`).
+  assert.ok(by['rate limit'], `and the probes after the board read still ran: ${Object.keys(by).join(', ')}`);
   assert.equal(by.github, undefined, 'and the whole half is no longer collapsed into one line');
 
   // and the check that reads `ctx.cfg` and nothing else is on the local side of that line. It sat
@@ -1489,4 +1482,63 @@ test('a malformed path_overlap guard is reported even when the forge is unreacha
   const by = Object.fromEntries(JSON.parse(out).map((r) => [r.name, r]));
   assert.equal(by[PATH_OVERLAP_CHECK].ok, false);
   assert.match(by[PATH_OVERLAP_CHECK].fix, /path_overlap/);
+});
+
+// ---------- `hkb doctor --api`'s claim probe (#304 review, items 7 and 8) ----------
+
+/**
+ * **A diagnosis does not create what it describes.** `s.index` is a lazy getter that opens a
+ * *writing* connection — it `mkdir`s the directory, creates the file and runs the schema — so on the
+ * board this check matters most for (one no verb has opened on this host yet, or one mid-migration)
+ * doctor was reporting on an index it had just made itself. `checkLocalStore` avoids that with
+ * `indexFileIn`; this check had not.
+ */
+test('the claim probe does not create the index it is diagnosing', async () => {
+  const { root, ctx } = localBoard();
+  const { indexFileIn } = await import('../src/store/sqlite.js');
+  const { storeGitDir } = await import('../src/board.js');
+  const file = indexFileIn(storeGitDir(ctx), 'default');
+  assert.equal(fs.existsSync(file), false, 'the fixture starts with no index, which is the case under test');
+  const rows = [];
+  const push = (ok) => (name, detail, fix) => rows.push({ name, ok, detail, fix });
+
+  await checkClaimLock(ctx, { ok: push(true), bad: push(false), warn: push(null) });
+
+  assert.equal(rows[0].name, CLAIM_CHECK);
+  assert.equal(rows[0].ok, null, 'a probe with nothing to probe is a warning, not a verdict');
+  assert.match(rows[0].detail, /is not there yet/);
+  assert.equal(fs.existsSync(file), false, 'and doctor did not conjure one to report on');
+  assert.ok(root);
+});
+
+test('the claim probe takes and releases the write lock on an index that is really there', async () => {
+  const { ctx } = localBoard();
+  // A verb opens the board, which is what builds the index — the state this probe is written for.
+  const { openLocalStore } = await import('../src/store/local.js');
+  const { openGitTier } = await import('../src/store/git.js');
+  openGitTier(ctx).init('default');
+  const store = openLocalStore(ctx);
+  store.createTask({ title: 'a card', status: 'ready' });
+  store.close();
+  const rows = [];
+  const push = (ok) => (name, detail, fix) => rows.push({ name, ok, detail, fix });
+
+  await checkClaimLock(ctx, { ok: push(true), bad: push(false), warn: push(null) });
+
+  assert.equal(rows[0].ok, true, rows[0].detail);
+  assert.match(rows[0].detail, /BEGIN IMMEDIATE taken and released/);
+  assert.match(rows[0].detail, /journal_mode WAL/);
+});
+
+/**
+ * Doctor's contract is that a skipped check is distinguishable from a passing one. `checkLocalStore`
+ * used to `return` bare when the store was not `local` — no `ok`, no `warn`, no `bad` — so the store
+ * check simply vanished from the report. `kind` is a caller-supplied override and the seam a second
+ * driver would arrive through.
+ */
+test('a store this check has nothing to say about still says so', async () => {
+  const rows = await probe({ root: '/tmp/none', cfg: { profiles: {} }, board: 'default', _cache: {} }, { kind: 'somebody-elses-driver' });
+  assert.equal(rows[STORE_CHECK].ok, null, 'a line, not a silence');
+  assert.match(rows[STORE_CHECK].detail, /nothing to say/);
+  assert.equal(rows[BRANCH_CHECK], undefined);
 });

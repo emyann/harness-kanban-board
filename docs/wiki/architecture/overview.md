@@ -7,90 +7,122 @@ audience: [dev]
 read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
 covers:
   - path: src/cli.js
-    sha: fc69279838602cde09a8e804e4c5456878b71eff
+    sha: b183d59750a4bace38fb612026657ed3ded95708
   - path: src/gh.js
     sha: 8154ea477e52ed3f769238f1c1bda588fd767798
   - path: src/model.js
-    sha: d3729c517eb72a690f7248b5769ea03d22f6d794
+    sha: de323e59fae958580450c490eea7fa56520e28a5
   - path: src/store/index.js
-    sha: 385621acfdf13c32e3477ef35325c763ee1bb6fd
-  - path: src/store/github.js
-    sha: 7b384d0c64870f7b33c209325359b8e2630856ad
+    sha: fed32f2f24ff0ecb5bbec064c26fcaa3f63fd7dc
   - path: src/forge.js
-    sha: 92bb85cf8c2730d347ad44c40a9b9e0e513261b4
+    sha: 1d9e17cd8fad3500b512ef10843d541cda2c65a4
   - path: src/lifecycle.js
-    sha: c1b743d8c3e6ef9dabd62ce11b5dbc18d6d9e4bf
+    sha: 29089f8c1ba2f46a320316634593773d1d2b67b0
   - path: src/dispatch.js
-    sha: db423b5e353e4257adeef46e9670148bf630acdb
+    sha: 6a31798b86f2e330b93d1bf20f659e4843d6a022
   - path: src/context.js
-    sha: dd52c78fc489f76891c2124f7842d543d580546d
+    sha: be28b4843c2a09afc0c835c4fe195706af86bb15
   - path: src/hook.js
     sha: 464c411be61b06c8513fd248847bf0eeceb3eef0
   - path: src/jobs.js
     sha: a5b255731602cb2363ff33745fa1039e211ffdd1
   - path: src/board.js
-    sha: 53192b4670920a4ead1181c925075285dc8ee105
+    sha: 0337a17cf70442cac66fb457c880e4b27a52672e
   - path: src/doctor.js
-    sha: 1f944284e5e63b03d83e0ca43c17a115aaafd7bb
-generated_at_commit: 103ecf4
+    sha: c29b0cd7856ca394203cb53b8755bf85e25bd239
+generated_at_commit: 53ecf5a
 last_refreshed: 2026-09-03
 related: [concepts/store, concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
 
 # hkb at a glance
 
-> hkb is a Hermes-style kanban that coding agents work autonomously, on a
-> board that lives either locally (the default) or as GitHub Issues. Every
-> structural choice below follows from one rule: **the store is the only
-> durable state**. Processes hold caches, never truth — so any process
-> (dispatcher, worker, a human's laptop) can crash at any moment and the
-> system re-derives itself from whatever `openStore(ctx)` answers.
+> hkb is a Hermes-style kanban that coding agents work autonomously, on a board
+> that lives **in the repository it drives**. Every structural choice below
+> follows from one rule: **the store is the only durable state**. Processes hold
+> caches, never truth — so any process (dispatcher, worker, a human's laptop) can
+> crash at any moment and the system re-derives itself from whatever
+> `openStore(ctx)` answers.
 
 ## The state model
 
-A board is whatever `openStore(ctx)` (`src/store/index.js`) answers, and a
-new board defaults to the **local** store: a card is a file on the board's
-git branch, `.git/hkb/index.db` (`node:sqlite`) indexes it and holds locks and
-the event log, and both are composed behind the interface by
-`src/store/local.js` (*concepts/store*, *architecture/local-store*). The
-**GitHub** store is still here — `--store github`, and this repository's own
-board runs on it — where a task is a GitHub issue wearing the board's labels
-(`kb:status:*`, `kb:agent:*`, `kb:board:*`), structured fields ride in an
-HTML-comment block in the issue body, and execution history rides in two
-structured comments (a run record and a result record), all parsed and
-serialized by pure functions in `src/model.js`
-(`src/store/github.js`). Which driver a board is on is decided once, by
-`storeKind(ctx)`, and nothing above the interface branches on it —
-`src/tasks.js` and `src/lock.js` are re-export shims nothing in `src/`
-imports, because every verb reaches board state through the same
-`openStore(ctx)` call whichever driver answers it
-(*architecture/store-seam*). Dependencies are edges between tasks
-(`blocked_by`), which makes the board a DAG, not a list — GitHub's native
-issue relations on that driver, rows in the index on the local one.
+A board is whatever `openStore(ctx)` (`src/store/index.js`) answers, and there
+is one store: a card is a file on the board's own git ref (`refs/kb/boards/<slug>`,
+outside `refs/heads` and so invisible to `git branch` —
+*architecture/board-ref*), `.git/hkb/index.db` (`node:sqlite`) indexes it and
+holds claims and the event log, and both are composed behind the interface by
+`src/store/local.js` (*concepts/store*, *architecture/local-store*). Structured fields ride in an
+HTML-comment block at the top of the card's body and execution history in a run
+record beside it, all parsed and serialized by pure functions in
+`src/model.js`. Dependencies are edges between cards (`blocked_by`), which makes
+the board a DAG, not a list.
+
+GitHub Issues was the other driver until ADR-006 retired it. The seam is what
+made that a deletion rather than a rewrite — no verb branches on the store, so
+`src/store/github.js` and the `src/tasks.js`/`src/lock.js` shims over it were
+removed with no caller changed (*architecture/store-seam*). What remains of it
+is `src/bridge/github-issues.js`, read-only, reachable only from
+`hkb init --import`.
+
+**A repository that has not crossed over says so.** Three refusals, because
+there are three ways to still be on the old store. A `.kanban/board.json` that
+names `"store": "github"` is told by `storeKind` (`src/store/index.js`) that the
+store is gone and how to migrate. A board.json with **no** `store` key resolves
+to *local*, and `hkb init` asks the forge before it creates anything: cards
+under `kb:board:<slug>` and no board ref here means an unmigrated board, and
+`refuseUnmigratedBoard` (`src/init.js`) names the count and `hkb init --import`
+rather than creating an empty board beside a real one. Anything else that reads
+a board that is not there gets `noBoardHere` (`src/model.js`) — one sentence
+naming `hkb init`, `hkb init --import` and `hkb sync`. Reads refuse as loudly as
+writes here on purpose: while `listTasks` answered `[]` for a board that was never created,
+`hkb list` printed "(no tasks)" and exited 0 and the dispatcher ticked over
+nothing indefinitely. An empty board and a missing one are different facts.
 
 ## The one atomic primitive
 
-GitHub offers exactly one cheap compare-and-swap: **git refs**. Claims are
-`refs/kb/locks/<n>/<k>` created via the API (`src/store/github.js`) — a 201 means the
-claim is yours, "already exists" means someone holds it, anything else means
-*unknown*, and callers must treat unknown as "back off", never as either
-success or failure. Worker heartbeats are CAS updates of the same ref; a
-rejected lease push is `LOCK_LOST` (exit 3) and the worker must stop.
+A claim is **one `BEGIN IMMEDIATE` transaction** on the index
+(`src/store/sqlite.js`): insert the lock under `UNIQUE(task_id, k)`, insert the
+attempt row, set the status. A row already there means someone holds it;
+anything else means *unknown*, and callers must treat unknown as "back off",
+never as either success or failure. A worker's heartbeat is a compare-and-swap
+on that row's token, leased on this host's own mirror of where it left the
+chain; zero rows updated is `LOCK_LOST` (exit 3) and the worker must stop.
 
 ## The dispatcher is deliberately dumb
 
 `src/dispatch.js` is a no-LLM loop. Each tick re-reads the whole board (one
-GraphQL query) and derives every action from it: replay unsent writes,
-reclaim crashed work, reap finished agents, promote cards whose blockers are
-done, then claim and spawn workers under guard rails, *ready* cards
-highest-`kb.priority` first and oldest issue first within a tie
+read) and derives every action from it: replay unsent writes, move the cards
+whose pull request merged on the forge, reclaim crashed work, reap finished
+agents, promote cards whose blockers are done, then claim and spawn workers
+under guard rails, *ready* cards highest-`kb.priority` first and oldest card
+first within a tie
 (`sortReady` in `src/model.js`). The number itself carries no enforced
 scale — `README.md` names a **priority band** (`0` unfiled default · `1`
 normal · `2` next up · `3` urgent) so two filers share a ruler, but
 `sortReady` only ever compares the raw integer. Its in-process memory
 is only an optimization — since the 2026-08-27 outage it drops its own caches
 and ultimately exits (code 4) when claims stop resolving, because a fresh
-process rebuilt from the board is always correct. Judgment (what to build,
+process rebuilt from the board is always correct.
+
+**One thing the tick cannot derive from the board: a pull request.** The board
+is local and nothing on the forge's side points back at a card, so the tick
+reads the repository's pull requests once and matches them to cards by *head
+branch* — `kb-<n>-<k>` and the other names hkb creates (`taskBranchRe`,
+`src/model.js`; `fillPrs`, `src/forge.js`). That join is what the `active_pr`
+guard, the terminal verbs and the reconcile pass all run on: a merged PR on a
+card's branch is what moves it to *done*, and `hkb merge` does the same at once
+rather than waiting for the next tick — including the cleanup the tick would
+have run, because a card it set to *done* itself is one the reconcile pass will
+never see again.
+
+It is a *join*, not a precondition. The cards are on a branch in this
+repository and cost nothing to read, so a forge that cannot be reached leaves
+`prs: []` and a line saying why rather than failing the read (`prsUnavailable`,
+`src/forge.js`) — `hkb list` on a plane prints the board. The tick degrades the
+same way with one refinement: it goes on doing its local work but claims
+nothing, because an empty `prs` there means "not known", not "none", and the
+`active_pr` guard exists precisely to not open a second pull request on a card
+that already has one. Judgment (what to build,
 whether a PR merges) lives outside the loop, in the seats described in
 `concepts/roles-and-seats`. The tick still never merges anything: a board on
 `dispatch.merge.mode: "auto"` has it enable *GitHub's* auto-merge on a
@@ -199,13 +231,13 @@ with no JSON result line to read a status from at all.
 ## The seams that keep it portable
 
 `src/gh.js` is the only file that shells out to `gh`, and it pins
-`X-GitHub-Api-Version`. Board state now sits behind one named interface —
-`openStore(ctx)` in `src/store/index.js`, with the GitHub bodies in
-`src/store/github.js` — and pull requests sit beside it rather than inside it,
+`X-GitHub-Api-Version`. Board state sits behind one named interface —
+`openStore(ctx)` in `src/store/index.js`, with the one driver's bodies in
+`src/store/local.js` — and pull requests sit beside it rather than inside it,
 in `src/forge.js`, because a board kept locally still opens its work on a
-forge. Everything above the seam speaks statuses, claims and attempts, so the
-local tiers arrive as further drivers rather than as an edit to every caller.
-See [the store seam](store-seam.md). Pure decision logic stays in
+forge. Everything above the seam speaks statuses, claims and attempts, which is
+why retiring a driver was a deletion rather than an edit to every caller. See
+[the store seam](store-seam.md). Pure decision logic stays in
 `src/model.js` (unit-tested, no I/O); `src/cli.js` only parses and routes.
 
 ## Related

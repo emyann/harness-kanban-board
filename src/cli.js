@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import { makeContext, makeHookContext, assertOnBoard } from './board.js';
 import { heartbeat, complete, block, unblock, requestReview, requestChanges, promote, archive, createTask, linkTask, withOutbox, envAttempt, mergeCard } from './lifecycle.js';
+import { fillPrs } from './forge.js';
 import { tick, loop, spawnWorker } from './dispatch.js';
 import { serve } from './serve.js';
 import { up, down } from './up.js';
@@ -264,8 +265,9 @@ const HELP = `hkb — a portable, frugal kanban for coding agents on GitHub Issu
               track <n> [--off|--on] [--json]   whether #n runs as ONE orchestrated session and why.
                     A card with unfinished children is a track by default; --off (kb:no-track) runs
                     them as cold nodes instead, --on undoes it, --agent <a track profile> forces one
-              edit <n>... [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]
-                    sets exactly the kb keys named — every other key is left as read; the write half of
+              edit <n>... [--body-file p|--body ".."] [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]
+                    --body-file/--body rewrites one card's prose and keeps its kb block — what
+                    /kanban:specify applies. The rest set exactly the kb keys named — every other key is left as read; the write half of
                     what hkb groom's unblocked/no_paths/malformed_kb/broad_path/priority_inversion suggest.
                     --paths "" or --goal "" clears that field. --priority must be an integer (0 unfiled ·
                     1 normal · 2 next up · 3 urgent); --scheduled-at must be a valid ISO instant. Both are
@@ -433,7 +435,7 @@ function refuseIfWorker(cmd) {
 
 /**
  * One line per card. `known` says whether this task's `blockedBy` is a real answer (`blockersKnown`,
- * src/tasks.js) — the ` ⇡ unblocked` nudge is computed here in memory, from the same rule
+ * src/model.js) — the ` ⇡ unblocked` nudge is computed here in memory, from the same rule
  * `groomBoard` uses (≥ 1 blocker, all done, not parked by `scheduled_at`), and is never guessed: on a
  * read that did not fill blockers an empty list means "not looked up", not "nothing blocks it".
  * No new field, no write, no extra request — a triage card whose blockers are all done says so.
@@ -531,7 +533,7 @@ async function runVerb(argv, keep) {
       return 0;
     }
     case 'list': {
-      const tasks = await (await openStore(ctx)).listTasks({ states: flags.all ? ['OPEN', 'CLOSED'] : ['OPEN'] });
+      const tasks = await fillPrs(ctx, await (await openStore(ctx)).listTasks({ states: flags.all ? ['OPEN', 'CLOSED'] : ['OPEN'] }));
       // The board's shape without its bodies: one read, no per-card lines — what an opening report
       // needs (is anything in flight, what is waiting on a human) that scanning `hkb list`'s rows or
       // paying for `hkb stats`'s 7-day history cannot answer any cheaper.
@@ -568,7 +570,7 @@ async function runVerb(argv, keep) {
       const tasks = await (await openStore(ctx)).listTasks({ states: o.all ? ['OPEN', 'CLOSED'] : ['OPEN'], blockers: 'all' });
       const rep = filterGroomLevel(groomBoard(tasks, {
         now: new Date(),
-        caps: ctx.caps,
+        blockersSource: blockersOf(tasks).source,
         pairs: o.pairs,
         statuses: o.statuses,
         board: ctx.board,
@@ -585,7 +587,7 @@ async function runVerb(argv, keep) {
       const [n] = nums(rest);
       if (!n) throw usage('hkb show <n>');
       const store = await openStore(ctx);
-      const t = await store.getTask(n);
+      const t = await fillPrs(ctx, await store.getTask(n));
       const { run } = await store.loadRun(n);
       const result = await store.latestResult(n);
       const parents = await store.parentResults(t);
@@ -627,7 +629,7 @@ async function runVerb(argv, keep) {
       const [n] = nums(rest);
       if (!n) throw usage('hkb graph <n> [--mermaid] [--json]');
       // one board read, then the same walk the dispatcher does: the root plus what is still blocking it
-      const tasks = await (await openStore(ctx)).listTasks();
+      const tasks = await fillPrs(ctx, await (await openStore(ctx)).listTasks());
       const track = resolveTrack(n, new Map(tasks.map((t) => [t.number, t])));
       if (!track.root) throw usage(`no open task #${n} on board "${ctx.board}" — \`hkb list\` shows what is there`);
       const g = trackGraph(track);
@@ -642,8 +644,8 @@ async function runVerb(argv, keep) {
       const [n] = nums(rest);
       if (!n) throw usage('hkb track <n> [--off] [--on] [--json]');
       const store = await openStore(ctx);
-      const tasks = await store.listTasks();
-      const t = tasks.find((x) => x.number === n) || await store.getTask(n);
+      const tasks = await fillPrs(ctx, await store.listTasks());
+      const t = tasks.find((x) => x.number === n) || await fillPrs(ctx, await store.getTask(n));
       if (flags.off || flags.on) {
         if (flags.off && flags.on) throw usage('hkb track <n> takes --off or --on, not both');
         if (flags.off) { await store.ensureLabels([L.noTrack]); await store.addLabels(t, [L.noTrack]); }
@@ -685,7 +687,7 @@ async function runVerb(argv, keep) {
     case 'edit': {
       const ns = nums(rest);
       if (!ns.length) {
-        throw usage('hkb edit <n>... [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]  ("" clears --paths or --goal)');
+        throw usage('hkb edit <n>... [--body-file p|--body ".."] [--paths a,b] [--goal ".."] [--scheduled-at ISO] [--priority N]  ("" clears --paths or --goal)');
       }
       // Validate every flag before touching any card (#243): a bad flag must reject the whole
       // command, not edit the first of several numbers and then fail on the second.
@@ -704,19 +706,49 @@ async function runVerb(argv, keep) {
         if (!parsed.ok) throw usage(parsed.error);
         fields.priority = parsed.value;
       }
-      if (!Object.keys(fields).length) {
-        throw usage('hkb edit <n>... needs at least one of --paths/--goal/--scheduled-at/--priority');
+      // The prose, from a file or inline. `/kanban:specify` and `/kanban:decompose` rewrite a card's
+      // body, and while the board was GitHub Issues they did it with `gh api issues/<n> -X PATCH`.
+      // The board is a branch now, so that request edits an issue that is not the card — silently,
+      // and on a repository whose issues may be something else entirely. `updateBody` was already on
+      // the interface with nothing above it reaching the verb; this is the verb.
+      let body = null;
+      if (flags['body-file'] !== undefined) {
+        const p = str(flags['body-file']);
+        if (!p) throw usage('--body-file needs a path');
+        try { body = fs.readFileSync(p, 'utf8'); } catch (e) {
+          throw usage(`--body-file: cannot read ${p} (${e.code || e.message}) — write the file first, or pass the text with --body`);
+        }
+      } else if (flags.body !== undefined) {
+        // `--body` with nothing after it is `true`, and `str(true)` is null — which used to fall
+        // through the "needs at least one of" guard whenever another flag was set and report
+        // success having silently dropped the prose. `--body-file` two lines above already refuses
+        // that shape; so does this. `--body ""` is a real value (it empties the card) and is kept.
+        body = str(flags.body);
+        if (body === null) throw usage('--body needs the text after it (--body "…"), or pass a path with --body-file');
+      }
+      if (body !== null && ns.length > 1) {
+        throw usage(`--body-file/--body writes one card's prose, and you named ${ns.length} — run it once per card`);
+      }
+      if (body === null && !Object.keys(fields).length) {
+        throw usage('hkb edit <n>... needs at least one of --body-file/--body/--paths/--goal/--scheduled-at/--priority');
       }
       for (const w of warnings) log(`warning: ${w}`);
       const res = [];
       const store = await openStore(ctx);
       for (const n of ns) {
         const t = await store.getTask(n);
+        // The prose first: `updateBody` keeps the machine block whatever the driver keeps it in, so
+        // a `--body` that repeats the `<!-- kb: … -->` line or leaves it out cannot lose the kb
+        // fields, and `setKb` below still wins on the keys it was given.
+        if (body !== null) await store.updateBody(n, body);
         const kb = { ...t.kb, ...fields };
-        await store.setKb(t, kb);
-        res.push({ number: n, kb });
+        if (Object.keys(fields).length) await store.setKb(t, kb);
+        res.push({ number: n, kb, body: body !== null });
       }
-      out(ctx, res, res.map((r) => `#${r.number} kb: ${Object.keys(fields).join(', ')} set`).join('\n'));
+      out(ctx, res, res.map((r) => {
+        const said = [r.body ? 'body' : null, Object.keys(fields).length ? `kb: ${Object.keys(fields).join(', ')}` : null].filter(Boolean);
+        return `#${r.number} ${said.join(', ')} set`;
+      }).join('\n'));
       return 0;
     }
     case 'archive': {
@@ -782,7 +814,7 @@ async function runVerb(argv, keep) {
       // whatever terms this board has for one.
       const on = r.ref ? ` on ${r.ref}` : '';
       const how = r.skipped ? `ok (recent heartbeat; next in ${r.next_in_s}s)`
-        : r.mode === 'ref' ? `#${n} attempt ${r.attempt}: lease held${on} → ${String(r.sha).slice(0, 7)}${r.resynced ? ' (chain resynced)' : ''}`
+        : r.mode === 'claim' ? `#${n} attempt ${r.attempt}: lease held${on} → ${String(r.sha).slice(0, 7)}${r.resynced ? ' (chain resynced)' : ''}`
           : `heartbeat recorded for #${n} attempt ${r.attempt}`;
       out(ctx, r, how);
       return 0;
@@ -840,7 +872,7 @@ async function runVerb(argv, keep) {
       const [n] = nums(rest);
       if (!n) throw usage('hkb claim <n> [--profile p] [--spawn]');
       const store = await openStore(ctx);
-      const t = await store.getTask(n);
+      const t = await fillPrs(ctx, await store.getTask(n));
       assertOnBoard(ctx, t);
       const runRec = await store.loadRun(n);
       const k = runRec.run.attempts.length + 1;
@@ -852,7 +884,7 @@ async function runVerb(argv, keep) {
       const c = await store.claim(n, k);
       if (c.result !== 'claimed') { out(ctx, c, `#${n}: ${c.result}${c.error ? ' — ' + c.error.message : ''}`); return c.result === 'held' ? 2 : 1; }
       const profile = flags.profile || t.agent || Object.keys(ctx.cfg.profiles)[0];
-      runRec.run.attempts.push({ attempt: k, profile, host: ctx.host, started_at: new Date().toISOString(), heartbeat_at: new Date().toISOString(), lock_sha: c.token, manual: !flags.spawn, ...(continuePr ? { continues_pr: continuePr.number } : {}) });
+      runRec.run.attempts.push({ attempt: k, profile, host: ctx.host, started_at: new Date().toISOString(), heartbeat_at: new Date().toISOString(), manual: !flags.spawn, ...(continuePr ? { continues_pr: continuePr.number } : {}) });
       await store.saveRun(n, runRec);
       // Claimed by hand from inside another task's session — a track runner working a node. Leave
       // the marker that tells this session's Stop hook to stamp that node with the session id too.
@@ -923,11 +955,11 @@ async function runVerb(argv, keep) {
     case 'mcp': { const { mcp } = await import('./mcp.js'); return mcp(ctx, flags); }
     case 'gc': return gc(ctx, flags, log);
     case 'sync': {
-      // Sync is git (docs/local-first.md §6.2), so there is nothing to sync on a board whose store
-      // *is* the network. Say which store this board is on rather than "unknown command".
-      if (storeKind(ctx) !== 'local') {
-        throw usage(`\`hkb sync\` is for a local board — the cards on this one are issues on ${ctx.cfg?.repo || 'GitHub'}, which is already the shared copy. \`hkb init --store local --import\` moves a board onto a ref in this repo.`);
-      }
+      // Sync is git (docs/local-first.md §6.2). This reaches the store directly rather than through
+      // `openStore`, so `storeKind` is called for its *refusal*: a board.json still naming the
+      // retired GitHub store gets that store's migration sentence here too, instead of `sync`
+      // silently operating on a board ref its cards were never written to.
+      storeKind(ctx);
       const { openLocalStore } = await import('./store/local.js');
       const store = openLocalStore(ctx, { reconcile: false });
       try {

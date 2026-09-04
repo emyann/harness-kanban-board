@@ -25,7 +25,7 @@ import path from 'node:path';
 import { storeRoot, hostId, runGit, gitSays as short, GIT_SHA_RE as SHA_RE, normalizeCardGrants } from '../board.js';
 import {
   DEFAULT_KB, L, STATUSES, emptyRun, parseResultComment, isResultComment, serializeBodyBlock,
-  RUN_MARKER, statusOf, agentOf, tagBlockers,
+  RUN_MARKER, statusOf, agentOf, tagBlockers, noBoardHere,
 } from '../model.js';
 
 /**
@@ -71,10 +71,11 @@ export function isBoardSlug(slug) {
 /**
  * `refs/kb/boards/<slug>` — the one place that spells the board's ref.
  *
- * **Only call this where a ref is actually needed.** A board on the GitHub store has no ref at all,
- * and its name is a label, not a path: `slugFile` *hashes* a slug rather than rejecting it, so
- * `hkb init --board "my board" --store github` has always worked and must keep working. Validating
- * here, from a caller that then picks the GitHub store, turned that into an exit 2.
+ * **Only call this where a ref is actually needed.** `slugFile` *hashes* a board name rather than
+ * rejecting it, so a name that is not a ref path is still a usable file name — a caller reaching for
+ * the *index* must not be made to exit 2 over a ref it is not building. (This mattered more when a
+ * board could be on a store that had no ref at all; it is still the rule, because the two names are
+ * still validated in different places.)
  */
 export function boardRef(slug = DEFAULT_BOARD_SLUG) {
   const s = String(slug || DEFAULT_BOARD_SLUG);
@@ -83,8 +84,7 @@ export function boardRef(slug = DEFAULT_BOARD_SLUG) {
       `"${s}" is not a usable board name for the local store: the board is a git ref at `
       + `${BOARD_REF_PREFIX}/<name>, so a name must be letters, digits, \`.\`, \`_\` or \`-\`, start with a `
       + 'letter or digit, not end in "." or ".lock", and hold no "..". '
-      + `Pick a name that fits — \`hkb init --board ${suggestSlug(s)} --store local\` — or keep this name on `
-      + 'the GitHub store, where a board name is a label rather than a path (`hkb init --store github`).',
+      + `Pick a name that fits: \`hkb init --board ${suggestSlug(s)}\`.`,
     );
   }
   return `${BOARD_REF_PREFIX}/${s}`;
@@ -273,7 +273,7 @@ function labelsOf(card, slug) {
 }
 
 /**
- * A card as `src/model.js` reads it — `fetchBoard`'s shape (`toTask` in src/store/github.js), so a
+ * A card as `src/model.js` reads it — the shape every caller above the seam expects, so a
  * caller cannot tell which store answered. `url` is null and `prs` empty: a local board has neither,
  * and the forge half (`src/forge.js`) is what knows about pull requests.
  */
@@ -508,7 +508,7 @@ export class GitTier {
     for (let attempt = 1; attempt <= MAX_CAS_RETRIES; attempt++) {
       const snap = this.readTree();
       if (!snap.tip && !allowMissing) {
-        throw fail(`there is no board at ${this.ref} in ${this.root} — run \`hkb init\` to create the board`);
+        throw fail(noBoardHere({ ref: this.ref, root: this.root }));
       }
       const tree = { board: snap.board, cards: snap.cards, runs: snap.runs };
       const value = mutate(tree);
@@ -718,7 +718,7 @@ export class GitTier {
   /** Move the board to this host. §6.2: the branch has one writer, and this is how the writer changes. */
   takeOver(host = this.host) {
     const r = this.commit((t) => {
-      if (!t.board) throw fail(`there is no board at ${this.ref} in ${this.root} — run \`hkb init\` first`);
+      if (!t.board) throw fail(noBoardHere({ ref: this.ref, root: this.root }));
       t.board.host = host;
     }, `hkb: board moved to host ${host}`, { allowForeignHost: true });
     return { host, changed: r.changed, tip: r.tip };
@@ -730,7 +730,7 @@ export class GitTier {
 
   board() {
     const b = this._read().board;
-    if (!b) throw fail(`there is no board at ${this.ref} in ${this.root} — run \`hkb init\` to create the board`);
+    if (!b) throw fail(noBoardHere({ ref: this.ref, root: this.root }));
     return {
       slug: b.slug,
       host: b.host ?? null,
@@ -742,7 +742,7 @@ export class GitTier {
 
   setBoard(patch = {}) {
     this.commit((t) => {
-      if (!t.board) throw fail(`there is no board at ${this.ref} in ${this.root} — run \`hkb init\` to create the board`);
+      if (!t.board) throw fail(noBoardHere({ ref: this.ref, root: this.root }));
       // `settings` merges, everything else is replaced: a caller patching one setting must not have
       // to read the whole document back and hand it in again.
       const { settings, ...rest } = patch;
@@ -761,6 +761,12 @@ export class GitTier {
       if (x !== 'OPEN' && x !== 'CLOSED') throw fail(`listTasks: unknown state "${x}" — a store knows OPEN and CLOSED`);
     }
     const snap = this._read();
+    // A repository with no branch has no board, and saying so is the whole of this card's
+    // migration story. Before this, a checkout whose board was still the retired GitHub one read
+    // as an *empty* board: `hkb list` printed "(no tasks)" and exited 0, and the dispatcher ticked
+    // over nothing for ever. An empty answer and a missing board are not the same fact, and only
+    // the read path could tell them apart — the write path has always thrown here.
+    if (!snap.tip) throw fail(noBoardHere({ ref: this.ref, root: this.root }));
     const slug = snap.board?.slug || 'default';
     const out = [...snap.cards.values()]
       .filter((c) => c && want.includes(String(c.state || 'OPEN').toUpperCase()))
@@ -777,14 +783,26 @@ export class GitTier {
     return tagBlockers(out, { source: 'local', filled: true, scope: 'all' });
   }
 
-  listClosedRecent({ first = 50 } = {}) {
+  /**
+   * `first` is a ceiling and `since` a window, the same two the interface gives every driver. A
+   * branch has no pages to walk, so nothing here is ever `capped`: the whole board was read.
+   * @param {{first?: number, since?: string|null}} [opts]
+   */
+  listClosedRecent({ first = 50, since = null } = {}) {
+    const cut = since ? Date.parse(since) : NaN;
     return this.listTasks({ states: ['CLOSED'] })
+      .filter((t) => {
+        if (!Number.isFinite(cut)) return true;
+        const d = Date.parse(t.updatedAt || '');
+        return !Number.isFinite(d) || d >= cut;
+      })
       .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
       .slice(0, first);
   }
 
   getTask(n) {
     const snap = this._read();
+    if (!snap.tip) throw fail(noBoardHere({ ref: this.ref, root: this.root }));
     const card = snap.cards.get(Number(n));
     if (!card) throw fail(`card #${n} is not on the board at ${this.ref} in ${this.root} — \`hkb list\` shows what is`);
     return toTask(structuredClone(card), snap.board?.slug || 'default', snap.cards);
@@ -796,7 +814,7 @@ export class GitTier {
     if (!STATUSES.includes(status)) throw fail(`createTask: invalid status "${status}" — one of ${STATUSES.join(', ')}`);
     const at = this.now().toISOString();
     const { value: id } = this.commit((t) => {
-      if (!t.board) throw fail(`there is no board.json on ${this.ref} in ${this.root} — run \`hkb init\` to create the board`);
+      if (!t.board) throw fail(noBoardHere({ ref: this.ref, root: this.root }));
       const next = nextId(t.board, t.cards);
       t.board.next_id = next + 1;
       const { rest, priority, paths, goal, scheduled_at } = splitKb(kb);

@@ -1,38 +1,34 @@
 ---
 title: The store seam
-summary: "One named interface over board state — openStore(ctx), which every verb in src/ now goes through — plus src/forge.js for the pull-request half that is deliberately not part of it, and a driver-parametrised conformance suite that says when a new driver is done."
+summary: "One named interface over board state — openStore(ctx), which every verb in src/ goes through — plus src/forge.js for the pull-request half that is deliberately not part of it and is joined to it by branch name, and a driver-parametrised conformance suite that outlived the driver it was written to retire."
 category: architecture
 kind: explanation
 audience: [dev]
-read_when: "writing a verb that reads or writes board state, adding a store driver, or wondering why tasks.js and lock.js are two lines long"
+read_when: "writing a verb that reads or writes board state, adding a store driver, or working out where a card's pull request comes from"
 covers:
   - path: src/store/index.js
-    sha: 385621acfdf13c32e3477ef35325c763ee1bb6fd
-  - path: src/store/github.js
-    sha: 7b384d0c64870f7b33c209325359b8e2630856ad
+    sha: fed32f2f24ff0ecb5bbec064c26fcaa3f63fd7dc
   - path: src/forge.js
-    sha: 92bb85cf8c2730d347ad44c40a9b9e0e513261b4
-  - path: src/tasks.js
-    sha: a135544bc265b07a25bd5ea2cd5d2235687bac2f
-  - path: src/lock.js
-    sha: 09b174cdbf77c62984549b3d0df4ab3e67e98be5
+    sha: 1d9e17cd8fad3500b512ef10843d541cda2c65a4
+  - path: src/bridge/github-issues.js
+    sha: e056157db3df620b291733ee9be4f9dd2d453b27
   - path: src/board.js
-    sha: 53192b4670920a4ead1181c925075285dc8ee105
+    sha: 0337a17cf70442cac66fb457c880e4b27a52672e
   - path: src/store/git.js
-    sha: ffcc9df59f85f18b58875350cffa057ef8d31681
+    sha: 756d59b84516862697b6d7d7cef20210878ca0ea
   - path: src/store/local.js
-    sha: 74fc6228a29d959c65472b83ba99e6e343fc8099
+    sha: b11fe32cf346862b8423450d43680708d70eb37a
   - path: src/cli.js
-    sha: fc69279838602cde09a8e804e4c5456878b71eff
+    sha: b183d59750a4bace38fb612026657ed3ded95708
   - path: src/lifecycle.js
-    sha: c1b743d8c3e6ef9dabd62ce11b5dbc18d6d9e4bf
+    sha: 29089f8c1ba2f46a320316634593773d1d2b67b0
   - path: src/dispatch.js
-    sha: db423b5e353e4257adeef46e9670148bf630acdb
+    sha: 6a31798b86f2e330b93d1bf20f659e4843d6a022
   - path: src/gc.js
-    sha: 387c7e3da22fb00d1d070903abc12e7f64dfc7cf
+    sha: cc129d307e845211036472a76ed7e0f456be1329
   - path: src/init.js
-    sha: fb4b0eb97192e874591ed4940a1e2f32775c1429
-generated_at_commit: f7072ce
+    sha: 6c2d6f8f10fb6f11cde8554f31fbd8f23da717fd
+generated_at_commit: 53ecf5a
 last_refreshed: 2026-09-03
 related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-and-leases, concepts/board-protocol]
 ---
@@ -40,54 +36,55 @@ related: [architecture/overview, decisions/adr-006-local-store, concepts/claims-
 # The store seam
 
 > `openStore(ctx)` is the only way board state is reached — not a rule the code
-> aspires to, a fact you can grep for: `from './tasks.js'` and `from './lock.js'`
-> appear nowhere in `src/` outside `src/store/`. Behind it are two drivers: the
-> GitHub one, and the local one — a `refs/kb/boards/<slug>` git ref plus a `node:sqlite`
-> index, composed in `src/store/local.js` (`architecture/local-store`,
-> `decisions/adr-006-local-store`). The seam exists so that the verbs written
-> between them are written **once**.
+> aspires to, a fact you can grep for. Behind it is one driver: the local store
+> — a `refs/kb/boards/<slug>` git ref plus a `node:sqlite` index, composed in
+> `src/store/local.js` (`architecture/local-store`,
+> `decisions/adr-006-local-store`). The seam is what let the *other* driver be
+> deleted without editing a verb.
+
+**The seam outlived the second driver, which is what it was for.** For one
+release there were two: GitHub Issues and the local store, and every verb was
+written once, against `STORE_METHODS`, rather than twice. Retiring the GitHub
+one (ADR-006) was then a deletion — `src/store/github.js` and the
+`src/tasks.js` / `src/lock.js` shims over it — with no caller changed. Keep the
+seam for the same reason it existed: the *bridge* comes back through it.
 
 **Which driver, and where that is decided.** `storeKind(ctx)` reads `store` in
-`.kanban/board.json` (`"local"` | `"github"`) and **nothing else**. An absent
-key is `github`. Nothing in hkb branches on the store anywhere else, and there
-is no way to force a driver at the call site: `hkb init --import`, which reads
-GitHub and writes local, opens each driver by name for exactly that reason. A
-new board is local; an existing board keeps what it has.
-
-That default is what routing the verbs bought back. It was flipped to `github`
-for one commit (`96c4892`) with a note on `resolveStore` saying to flip it back,
-because a `local` board the verbs cannot write is a board `hkb create` fails on
-— and at that point the verbs still read GitHub through the shims. They no
-longer do, so the default is `local` again (`resolveStore`, `src/init.js`).
+`.kanban/board.json` and **nothing else**. `"local"` and an absent key both mean
+the local store; `"github"` is refused **by name**, with the migration
+(`hkb init --import`) in the message, because a board still on
+issues is a real thing somebody may have on disk and "silently open something
+else" is the one answer that helps nobody. Anything else is a usage error.
 
 There used to be a second rule — *a repository with a board ref (local or
 remote-tracking) is a local board* — so that a clone needed no
 configuration. It was removed in A6's sixth review round, because a rule that
 reads the store off a **ref** can be reached by `git fetch`, and the checkout
-then runs on the local store while board.json still points every verb at
+then ran on the local store while board.json still pointed every verb at
 GitHub. That half-migrated state produced a different destructive interaction in
 three successive rounds: an `--import` that deleted live workers' lock refs; a
 `gc.sweep` that read `[]` from the wrong store, concluded every card was
 finished and destroyed worker worktrees with uncommitted work in them,
 unattended, from the dispatcher's own `gc_every_ticks`; and one host's push
 converting every collaborator's checkout on their next fetch, after which every
-mutating verb was refused on a board of issues they had always owned. The key
-cannot arrive over the network, cannot be written by another host, and cannot
-disagree with what the verbs do. A clone still needs no configuration — the key
-rides in the tracked `board.json` — and a checkout that has the branch but not
-the key is told so in words by `hkb init` and `hkb doctor`, which is a message
-and never a behaviour.
+mutating verb was refused on a board of issues they had always owned. With one
+store the question cannot be posed at all, and a clone still needs no
+configuration.
 
 There is no cache: the answer is a property read. `forgetStore(ctx)` remains,
 and drops the memoized git *tiers* for a context — `hkb init` calls it because
 it creates the branch under its own feet.
 
 `hkb init` never writes back an answer nobody asked for: the `store` key appears
-when the human passed `--store`, when the board is new (the default *is* the
-decision), when it was already there, or when `--import` migrates. A plain
+when the human passed `--store local`, when the board is new (the default *is*
+the decision), when it was already there, or when `--import` migrates. A plain
 re-init writes nothing — it used to write `"store": "local"` into a git-tracked
 board.json as a side effect, which is the same change `--import` refuses to make
-without `--force`.
+without `--force`. Writing nothing is not the same as *assuming* nothing, though:
+before it creates the branch, an init over a board.json that carries no `store`
+key asks the forge whether the cards are still there (`needsMigrationProbe` /
+`migrationVerdict`, `src/init.js`; see *architecture/local-store*, "Which store a
+board is on").
 
 A verb that writes is refused on a host that is not `board.host`
 (`assertOwningHost`) — and the test is on the *invocation*, not the verb name:
@@ -104,11 +101,23 @@ store swap would have had to touch. The verbs of the control plane (the
 against `src/tasks.js` and then migrated — twice the work and twice the chance
 of a behavioural drift nobody notices.
 
-So the bodies **moved, and were not rewritten**. `src/store/github.js` is
-`src/tasks.js` plus `src/lock.js`, verbatim, with one wrapper at the bottom;
-`src/tasks.js` and `src/lock.js` are re-export shims, which is why this landed
-with no test edited and no caller changed beyond import lines. A shim is
-deleted when its last importer is, not before.
+So the bodies **moved, and were not rewritten**: `src/store/github.js` was
+`src/tasks.js` plus `src/lock.js` verbatim with one wrapper at the bottom, and
+the two originals became re-export shims, which is why the seam landed with no
+test edited and no caller changed beyond import lines. All three are gone now —
+a shim is deleted when its last importer is, and the last importer went with the
+driver.
+
+What survives of GitHub Issues is `src/bridge/github-issues.js`: the **read**
+half, and only that — `fetchBoard`, `fetchClosedRecent`, `listComments`,
+`loadRun`, `countBoardIssues`, and the `refs/kb/locks/*` reads the migration
+sweeps up afterwards. It has no writes, no claims and no `openStore` branch, and
+its callers are `importGithubBoard` (`src/store/local.js`) and `hkb init`'s
+pre-branch probe. `countBoardIssues` is the one read that never throws: it
+answers "reachable, N cards" or "could not be asked", and what to do with the
+second belongs to the caller. It lives under `src/bridge/` because
+that is where the bridge adapter goes when it comes back (`docs/local-first.md`
+§8) — this is its read half, arrived early.
 
 ## Routing the verbs, and the three kinds of caller it sorted out
 
@@ -129,19 +138,20 @@ before writing a verb:
    still cuts its work from a forge, so these are not store methods and a second
    driver never has to implement them.
 3. **The GitHub store, by name.** Two `hkb gc` sweeps (duplicate run comments,
-   dead local beat chains) and the `hkb doctor --api` probes import
-   `src/store/github.js` directly. They are *about* that driver — a run record
-   kept as a comment can have duplicates; "can this token create a lock ref" has
-   no store-neutral spelling — and `gc.sweepOpen` already skips the sweeps when
-   `storeKind(ctx) !== 'github'`. Routing them through the interface would put
-   methods on it that only one driver could ever mean anything by. They are
-   deleted with the driver (C2).
+   dead local beat chains) and the `hkb doctor --api` lock-ref probe imported
+   `src/store/github.js` directly, because they were *about* that driver. All
+   three went with it: a run record is one document, so there is no second
+   comment to be a duplicate of; a claim is a row, so there is no beat chain to
+   go stale; and "can this host take the write lock" is now
+   `BEGIN IMMEDIATE` + WAL + the mount check (`checkClaimLock`,
+   `src/doctor.js`). The category is worth remembering even though it is empty:
+   a check that is about *one* driver does not belong on the interface.
 
 Five things that read nothing moved out of `src/store/github.js` on the way,
 because a caller that needs them must not have to import a driver: `blockersOf`,
 `blockersKnown` and `tagBlockers` to `src/model.js`, `assertOnBoard` and
-`remoteName` to `src/board.js`. The driver re-exports all five, so the shims
-still resolve.
+`remoteName` to `src/board.js`. That move is why deleting the driver later cost
+nothing.
 
 ### What the routing added to the interface
 
@@ -157,7 +167,7 @@ for adding one at all:
 | `beatToken(n, k)` | the heartbeat's warm path: what this host's next beat leases on, read locally, never throwing |
 | `resyncBeat` / `dropBeat` | reconciling that local state after a rejected lease, and forgetting it when an attempt ends |
 | `lockRef(n, k)` | `hkb heartbeat` and the LOCK_LOST error — where the claim lives *in words*, or `null` on a store that keeps its claims in a table. The same `ref` `claim`/`listLocks` already carried, asked for a claim the caller did not just make |
-| `taskEvents(n)` | `hkb log` — one card's history. Unlike `events()` it is **never refused**: GitHub has no board log, but it does keep an issue timeline |
+| `taskEvents(n)` | `hkb log` — one card's history. Unlike `events()` it is **never refused**: a driver with no log answers with whatever it does have |
 
 `heartbeat` now answers `{result, token, expected, detail}`. `detail` is there
 because `hkb heartbeat` prints *why* a beat could not be made before it falls
@@ -185,6 +195,12 @@ moved by `resyncBeat`, forgotten by `dropBeat` — and it deliberately outlives 
 released row, because a claim released and re-taken by somebody else is the
 reclaim it exists to catch.
 
+The attempt row carries **no copy of the token**. `lock_sha` used to ride there
+so a worker's first heartbeat had something to lease on; the claim seeds
+`beatToken` on the host that made it, and the store is authoritative for the
+rest, so a second place for the same value is a second place for it to be wrong.
+`KB_LOCK_REF` went the same way — a worker never needed the name.
+
 ### One handle per context
 
 `openStore(ctx)` memoizes on the context and `closeStore(ctx)` is what lets go
@@ -205,7 +221,6 @@ true, timeout: 0}`, the connection `src/store/sqlite.js` names as *"`hkb serve`'
 … the one that may not write"*. It fails a busy lock fast rather than parking a
 request behind the dispatcher's write transaction, and it lives in its own slot
 so the lifecycle verbs a drag on the web board runs still get a writable store.
-On GitHub there is no such distinction and it is `openStore`.
 
 ### The driver disagreement it found
 
@@ -241,20 +256,20 @@ the driver updates in place so a create is followed by updates and never by a
 second create.
 
 `capabilities()` is how a caller asks what a driver can do rather than assuming.
-Today it carries one flag, `events`: GitHub has no log hkb can tail, so its
-`events()` **refuses with exit 2** instead of answering an empty list. "Nothing
-happened" and "I cannot tell you what happened" are different answers, and
-`hkb serve` picks its feed on the difference.
+Today it carries one flag, `events`: a driver with no log hkb can tail
+**refuses with exit 2** instead of answering an empty list. "Nothing happened"
+and "I cannot tell you what happened" are different answers, and `hkb serve`
+picks its feed on the difference. The local store has a log, so it answers.
 
 ## Importing the seam must not require a node that has SQLite
 
-`src/store/index.js` imports the local store so `openStore(ctx)` can pick it,
+`src/store/index.js` reaches the local store so `openStore(ctx)` can open it,
 and `openStore` is on the path of every command — including `hkb hook pretool`,
 whose whole contract is to stand aside rather than throw onto a worker's tool
 call. A static `import { DatabaseSync } from 'node:sqlite'` in
 `src/store/sqlite.js` therefore made that entire graph fail to load with
-`ERR_UNKNOWN_BUILTIN_MODULE` on a node built `--without-sqlite`, on a **GitHub**
-board that never opens an index at all.
+`ERR_UNKNOWN_BUILTIN_MODULE` on a node built `--without-sqlite` — before
+`main()` ran, rather than where the board is read.
 
 The builtin is resolved on first use instead (`sqlite()`, via
 `process.getBuiltinModule` — the synchronous form, since `openIndex` and
@@ -265,23 +280,63 @@ every entry point at once. A test asserts both halves: the source carries no
 static import, and a child process that loads `store/index.js`, `doctor.js` and
 `cli.js` has nothing matching `sqlite` in `process.moduleLoadList`.
 
-## What is deliberately *not* in the store
+## What is deliberately *not* in the store — and how it is joined to it
 
-Pull requests. `src/forge.js` holds `openPrsByHead`, `branchFallbackPrs`,
-`prMergeStates`, `enableAutoMerge`, `branchProtection`, `mergePullRequest`,
-`prChecksState`, `prNodeId`, `isGithubUser` and `finishPr`, and goes on calling
-`src/gh.js` whatever the board is kept in — a board that lives in a git branch
-on your laptop still opens its work as a PR on a forge. Putting them behind the
-store would have forced every future driver to implement a forge it does not
-have.
+Pull requests. `src/forge.js` holds `prsByHead`/`openPrsByHead`,
+`mergedPrsByHead`, `branchFallbackPrs`, `fillPrs`, `prMergeStates`,
+`enableAutoMerge`, `branchProtection`, `mergePullRequest`, `prChecksState`,
+`prNodeId`, `isGithubUser` and `finishPr`, and calls `src/gh.js` — a board that
+lives in a git branch on your laptop still opens its work as a PR on a forge.
+Putting them behind the store would force every future driver to implement a
+forge it does not have.
+
+**`fillPrs` is the join, and the head branch is the key.** The store answers
+with `prs: []` (`src/store/git.js`); `fillPrs(ctx, tasks)` reads the
+repository's pull requests once and matches them against `taskBranchRe`
+(`src/model.js`) — `kb-<n>-<k>`, `worktree-kb-<n>-<k>`, `kb/<n>`, and
+`kb/track-<n>` for a track root's own PR. That is the *only* link: nothing on
+GitHub's side associates a pull request with an hkb card, and the worker brief
+(`src/context.js`) and the track brief (`src/track.js`) both say so in the
+prompt. Two rules follow for callers:
+
+- **A read that will judge a card by its PR must call `fillPrs` on it.** The tick
+  does it on its board read, and the terminal verbs, `hkb show`, `hkb list`,
+  `hkb gc` and `hkb serve` each do it on theirs. It is one listing per context,
+  memoized on `ctx._cache` and dropped at the top of every tick (`dropPrCaches`),
+  never one per card (#234).
+- **`state: 'all'` is a different question.** `openPrsByHead` lists open PRs —
+  the `active_pr` guard's question. `hkb gc` asks *"has this checkout's work
+  landed"*, which only a **closed** PR answers, so it fills with `state: 'all'`
+  into its own memo slot. A listing of open PRs can only say "not here", which
+  is also what a card with no PR at all looks like.
+- **The forge is an enrichment, never a precondition for reading the board.**
+  This is the rule most easily lost, because `fillPrs` sits on the path of every
+  read: a store that needs no network at all was made to need one the moment the
+  join went in front of it, and `hkb list` on a plane exited non-zero instead of
+  printing the board. A failed listing leaves `prs: []` and records why on the
+  context (`prsUnavailable`, `src/forge.js`); the caller prints that as a line.
+  Only the callers that cannot honestly act on "this card has no PR" —
+  `complete`, `requestReview`, `mergeCard` (`src/lifecycle.js`) — pass
+  `required: true` and still throw, because a silent "no PR" there records a
+  protocol violation for work sitting in a pull request nobody could see.
+  The tick's own answer is the third one: it degrades but declines to *decide*,
+  claiming nothing while the `active_pr` guard cannot be judged, since an empty
+  `prs` means "not known", not "none" (`src/dispatch.js`).
+
+The reconcile pass is the same key read the other way: `mergedPrsByHead`, which
+filters the memoized `state: 'all'` listing rather than paying for a second one,
+and a card in a live status whose branch is in it becomes `done`
+(`reconcileDecision`, `src/dispatch.js`). Two preconditions keep that from
+undoing a decision somebody else made: a card whose open attempt is still running
+on this host is left alone, claim and all, and a card whose `updatedAt` is newer
+than the merge is left where the human who moved it put it.
 
 `src/forge.js` is also where `GhError` and `isOffline` are re-exported from, so
 the two files that only *classify* a transport failure — `src/lifecycle.js`'s
 outbox and `src/dispatch.js`'s reclaim clock — stop being direct `src/gh.js`
-importers. After this the whole `src/` tree imports `gh.js` from exactly seven
-files: the store, the forge, and the five that talk to GitHub about something
-other than the board (`doctor.js`, `projects.js`, `init.js`, `watch.js`,
-`board.js`).
+importers. After this the whole `src/` tree imports `gh.js` from a handful of files: the
+forge, the bridge, and the ones that talk to GitHub about something other than
+the board (`doctor.js`, `watch.js`, `board.js`).
 
 ## `storeRoot`, and the worktree trap
 
@@ -290,35 +345,33 @@ board lives under, and it resolves through `mainWorktree` — the *common* git
 directory's parent — never `git rev-parse --show-toplevel`. In a linked
 worktree (`.claude/worktrees/kb-99-1`) the toplevel is the throwaway checkout,
 so a worker beating from one and the loop ticking in the main checkout would
-open two boards that happen to share a name. The GitHub driver ignores the
-value — its board is the repo on GitHub — but it is settled here so the local
-tiers cannot get it wrong independently.
+open two boards that happen to share a name. It is settled here so the two tiers
+cannot get it wrong independently.
 
 ## The conformance suite is what says a driver is done
 
 `test/store.test.js` is one `SCENARIOS` array run against every entry in
 `DRIVERS`, and a driver is finished when this file is green for it. `DRIVERS`
-holds two: the GitHub driver backed by `test/fake-gh.js`, and the **composed
-local** driver — a scratch repository whose `.kanban/board.json` says
-`"store": "local"`, opened through `openStore` so the seam itself is under test.
+holds the **composed local** driver — a scratch repository opened through
+`openStore`, so the seam itself is under test — and the in-memory double.
 Neither local *tier* is registered on its own, and that is deliberate: a tier
 has half the interface, so it would fail fifteen scenarios that are not about
 it. A scenario may only touch the interface — that is what keeps it portable.
 
+That portability is not a claim: the suite ran green against the GitHub driver
+until the day it was deleted, and the deletion was one entry out of `DRIVERS`.
+
 Three things a scenario legitimately needs but the interface does not offer are
 asked of the *harness* instead, as optional hooks: `settleClaim` (make a claim
-real for whatever transport the driver's heartbeat leases on — for GitHub,
-push the lock ref to the real `origin`), `reclaim` (what a dispatcher reclaim
+real for whatever transport the driver's heartbeat leases on — nothing on a
+store that keeps its claims in a table), `reclaim` (what a dispatcher reclaim
 looks like; defaults to `release`), and `recordBeat` (a beat somebody else
-landed, as `lockBeatAt` reads it back). The GitHub harness therefore runs
-against a **real** git repository with a real remote: only git can say whether
-a `--force-with-lease` really held, so the heartbeat scenario would be theatre
-without one.
+landed, as `lockBeatAt` reads it back).
 
 The invariant the local drivers exist to satisfy — *every mutating call appends
-an event* — is in the array already, guarded by `capabilities().events`. For
-GitHub it asserts the refusal; for a driver with a log it asserts one event per
-mutation, id-ordered, with an exclusive `after` cursor.
+an event* — is in the array, guarded by `capabilities().events`: one event per
+mutation, id-ordered, with an exclusive `after` cursor, and for a driver without
+a log it asserts the refusal instead.
 
 A scenario asserts the **interface's** shape, never a tier's. The local store
 widens what `src/store/sqlite.js`'s `heartbeat` returns to the §6.4 four fields
@@ -337,14 +390,14 @@ the real drivers turns every assertion made through it into a lie that passes.
 `setTransport` (`src/gh.js`) does. Production never sets it; it exists for
 `test/fake-store.js`.
 
-The problem it solves is `docs/local-first.md` §11: 121 assertion sites in 21
+The problem it solved is `docs/local-first.md` §11: 121 assertion sites in 21
 test files found out things the protocol states in its own words — *the lock was
 released*, *the run record was not rewritten*, *a check with nothing to check
 costs nothing* — by reading the in-memory GitHub's REST log (`gh.calls`,
 `gh.lockRefs()`). Every one of them pinned `src/store/github.js` in place, so
-nothing under it could be deleted (§10, track C). Through the interface the same
-sentences are `store.writes()`, `await store.locks()` and
-`store.callsOf('listTasks')`, and they are true of any driver.
+nothing under it could be deleted. Through the interface the same sentences are
+`store.writes()`, `await store.locks()` and `store.callsOf('listTasks')`, and
+they are true of any driver — which is what made the deletion possible.
 
 The override answers **inside** the handle memo, not in front of it: `openStore`
 looks in `ctx._store` first, and only then asks the override, so the double it
@@ -358,9 +411,17 @@ Two deliberate limits. The override is **not** consulted by `storeKind`: what a
 board is kept in is still `"store"` in `.kanban/board.json` and nothing else, so
 a test that swaps the store does not also change what `hkb doctor`, `hkb gc` and
 `hkb init` say the board *is*. And the double covers board state only — a pull
-request is `src/forge.js` on every board, so a test that asserts on one installs
-`test/fake-gh.js` underneath and reads `gh.requestsMatching(...)`. The two
-doubles compose.
+request is `src/forge.js` on every board, so a test that asserts on one seeds it
+on `test/fake-gh.js` and reads it back there.
+
+**The two doubles are split the way `src/` is**, and `installDoubles(makeCtx)`
+(`test/fake-store.js`) installs both with one LIFO teardown, because almost every
+harness needs both: the tick joins cards to pull requests on every board, so a
+suite with no forge double under it reaches a real `gh`. `test/fake-gh.js` is
+now the **forge** — `pulls`, protection, rulesets, auto-merge, merges, the
+repository's own branches — plus the bridge's read half, kept for the migration's
+own tests and labelled as such. A card seeded there is a card the migration
+reads, never a card the board has.
 
 `test/verbs-portable.test.js` is the other half: the scenarios the migrated
 files rewrote — a promote, a claim and its run record, a live worker left alone,
