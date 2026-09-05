@@ -165,9 +165,40 @@ strand its worktree, while one that declines to start another is only a decision
 (`gateClaim`, `src/limits.ts`). In order: the board's kill switch, then a
 concurrency limit, then a rolling-24-hour USD ceiling.
 
-The budget is judged against what the Job **could** cost — `spent24h + jobBudgetUsd`
-— not against what it has cost. A cap that only notices after the money is gone is a
-report, not a ceiling.
+The budget is judged against what the Job **could** cost — `spent24h + committedUsd +
+jobBudgetUsd` — not against what it has cost. A cap that only notices after the money
+is gone is a report, not a ceiling. `committedUsd` is the same rule applied to the runs
+already going: an attempt with no `endedAt` has reported no cost, so without it a board
+running several Jobs at once could commit its ceiling several times over in the time the
+first one takes to finish.
+
+## `maxConcurrent` is a parallelism setting
+
+One reconcile pass starts up to `maxConcurrent` Jobs and waits for them together. For one
+release it did not: the loop awaited each run in turn, so the ceiling only ever bound
+*between* reconcilers, and an operator raising it from 1 to 2 got exactly what they had.
+
+The cheap fix was to rename it an admission ceiling and document that throughput comes
+from running more reconcilers. That is not the Kubernetes shape, and the giveaway is one
+table over: `Controller` is keyed `@@id(boardId)`, so `acquireBoard` elects **one leader
+per board** and a second daemon on the same board is refused. Kubernetes scales controllers
+for availability, never throughput; the throughput knob on a Kubernetes Job is
+`parallelism`, honoured by starting that many Pods. "Run more reconcilers" would have
+documented something the leader election forbids.
+
+What that costs, all of it in `src/controller.ts`:
+
+- **Admission stays serial.** The gate, the compare-and-swap and the worktree happen one
+  Job at a time; only the run overlaps. Two claims can never read the same `liveLeases`.
+- **A ceiling the pass is itself filling is not a refusal.** It waits for one of its own
+  runs to end and asks again. `ClaimLimit` (`src/limits.ts`) is what tells "somebody else
+  holds the slots" apart from "we do" — a stopped board is never waited out.
+- **Every operator-facing line is tagged `#<job>`.** Indentation grouped lines under a
+  claim, which only reads as grouping while one Job is speaking. The daemon already tags
+  per board, so a busy log reads `[board] #12 …`.
+- **Shutdown stops all of them.** One `AbortSignal` reaches every run in flight, and the
+  pass does not return until each has recorded its own attempt — each `stopped`, which
+  spends no retry.
 
 `gateClaim` is pure, and that is deliberate: every guard in this system that turned
 out to be silently inert was inert because nothing tested that it *refused*.

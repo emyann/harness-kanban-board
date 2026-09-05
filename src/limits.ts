@@ -10,7 +10,18 @@
  * worker would strand its worktree, while one that declines to start another is only a decision.
  */
 
-export type ClaimGate = { ok: true } | { ok: false; why: string };
+/**
+ * Which ceiling said no.
+ *
+ * Named, not just described, because the caller has to treat them differently: a `stopped` board
+ * will not un-stop by waiting, while `concurrency` and `budget` are both walls a reconciler can be
+ * standing at *because of its own runs in flight* — and a refusal it caused itself is not news to
+ * report, it is a reason to wait for a slot. `src/controller.ts` makes exactly that distinction,
+ * and it cannot make it by matching on prose.
+ */
+export type ClaimLimit = 'stopped' | 'concurrency' | 'budget';
+
+export type ClaimGate = { ok: true } | { ok: false; limit: ClaimLimit; why: string };
 
 export type ClaimInputs = {
   /** The board's kill switch. */
@@ -18,9 +29,20 @@ export type ClaimInputs = {
   pausedBy: string | null;
   /** Leases held right now, on this board, by anyone. */
   liveLeases: number;
+  /** How many Jobs may hold a lease on this board at once, across every reconciler. */
   maxConcurrent: number;
-  /** Spent on this board in the last rolling 24 hours. */
+  /** Spent on this board in the last rolling 24 hours, by attempts that have ENDED. */
   spent24h: number;
+  /**
+   * Promised to attempts on this board that are still open, and so have reported no cost yet.
+   *
+   * Without this the budget ceiling stopped meaning anything the moment two Jobs could run at once:
+   * `spent24h` only moves when an attempt ends, so N concurrent claims would each be judged against
+   * a spend none of them had yet contributed to, and the board could commit N × its ceiling in the
+   * time it takes the first one to finish. It is the same rule the ceiling already used for the
+   * claimant — charge what a run *could* cost — applied to the runs already going.
+   */
+  committedUsd: number;
   /** The board's ceiling, or null for no ceiling. */
   dailyBudgetUsd: number | null;
   /** What this Job could cost if it runs to its own cap. */
@@ -30,25 +52,38 @@ export type ClaimInputs = {
 export function gateClaim(i: ClaimInputs): ClaimGate {
   if (i.pausedAt) {
     const by = i.pausedBy ? ` by ${i.pausedBy}` : '';
-    return { ok: false, why: `the board is stopped${by} since ${i.pausedAt.toISOString()} — \`kb start\` to resume` };
+    return {
+      ok: false,
+      limit: 'stopped',
+      why: `the board is stopped${by} since ${i.pausedAt.toISOString()} — \`kb start\` to resume`,
+    };
   }
 
   if (i.liveLeases >= i.maxConcurrent) {
     return {
       ok: false,
-      why: `${i.liveLeases} of ${i.maxConcurrent} concurrent slots are in use — raise maxConcurrent or wait`,
+      limit: 'concurrency',
+      why: `${i.liveLeases} of ${i.maxConcurrent} concurrent slots are in use — `
+        + '`kb boards set <slug> --max-concurrent <n>` raises the ceiling, or wait for a run to finish',
     };
   }
 
   if (i.dailyBudgetUsd !== null) {
     // The ceiling is checked against what this Job *could* cost, not what it has cost. A cap that
     // only notices after the money is gone is a report, not a ceiling.
-    const projected = i.spent24h + i.jobBudgetUsd;
+    const projected = i.spent24h + i.committedUsd + i.jobBudgetUsd;
     if (projected > i.dailyBudgetUsd) {
+      const inFlight = i.committedUsd > 0
+        ? ` plus $${i.committedUsd.toFixed(2)} committed to runs in flight` : '';
+      const wait = i.committedUsd > 0
+        ? 'raise it, or wait for a run to finish or the window to roll'
+        : 'raise it or wait for the window to roll';
       return {
         ok: false,
-        why: `board budget: $${i.spent24h.toFixed(2)} spent in 24h and this Job may cost $${i.jobBudgetUsd.toFixed(2)}, `
-          + `over the $${i.dailyBudgetUsd.toFixed(2)} ceiling — raise it or wait for the window to roll`,
+        limit: 'budget',
+        why: `board budget: $${i.spent24h.toFixed(2)} spent in 24h${inFlight} `
+          + `and this Job may cost $${i.jobBudgetUsd.toFixed(2)}, `
+          + `over the $${i.dailyBudgetUsd.toFixed(2)} ceiling — ${wait}`,
       };
     }
   }

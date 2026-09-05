@@ -172,7 +172,13 @@ export type BoardStatus = {
   stopped: boolean;
   stoppedAt: Date | null;
   stoppedBy: string | null;
+  /** How many Jobs this board runs at once — the real ceiling one reconcile pass works up to. */
   maxConcurrent: number;
+  /**
+   * How many of those slots are taken right now, so the number above reads as a ceiling with a
+   * level under it rather than a capacity nobody can tell is being used.
+   */
+  liveLeases: number;
   dailyBudgetUsd: number | null;
   /** Spent on this board inside the same rolling window the gate charges against. */
   spent24h: number;
@@ -210,6 +216,13 @@ export async function status(board?: string, now = Date.now()): Promise<BoardSta
     costs.set(a.job.boardId, (costs.get(a.job.boardId) ?? 0) + (a.costUsd ?? 0));
   }
 
+  // Slots in use, by the same count the gate compares against `maxConcurrent`. Grouped in one
+  // query for the same reason the spend is: a per-row count would be N+1 for a column.
+  const held = new Map<number, number>();
+  for (const l of await db.lease.findMany({ select: { job: { select: { boardId: true } } } })) {
+    held.set(l.job.boardId, (held.get(l.job.boardId) ?? 0) + 1);
+  }
+
   return boards.map((b) => {
     const c = (b.controller ?? null) as ControllerRow | null;
     const live = !!c && controllerIsLive(c, new Date(now));
@@ -231,6 +244,7 @@ export async function status(board?: string, now = Date.now()): Promise<BoardSta
       stoppedAt: b.pausedAt,
       stoppedBy: b.pausedBy,
       maxConcurrent: b.maxConcurrent,
+      liveLeases: held.get(b.id) ?? 0,
       dailyBudgetUsd: b.dailyBudgetUsd,
       spent24h: costs.get(b.id) ?? 0,
     };

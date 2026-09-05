@@ -5,7 +5,7 @@ import {
 } from './worktree.ts';
 import { prForBranch } from './pulls.ts';
 import { withProtocol } from './brief.ts';
-import { gateClaim, windowStart } from './limits.ts';
+import { gateClaim, windowStart, type ClaimGate } from './limits.ts';
 import { holderId, holderLiveness } from './liveness.ts';
 import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
 
@@ -25,6 +25,43 @@ import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
  * second half is ADR-008's, and it is still not a judgement: a declared path is present or it is
  * not, and nothing here has to believe the agent. Whether the outcome is any *good* remains a
  * judgement, and judgements belong to a kind that has a reviewer in it.
+ * ## Why one pass runs several Jobs at once
+ *
+ * It did not, and `maxConcurrent` was the lie that came of it: this loop awaited each run inside
+ * the `for`, so a pass ran Jobs strictly one at a time and the ceiling only ever bound *between*
+ * reconcilers. An operator raising it from 1 to 2 got exactly what they had.
+ *
+ * The tempting fix was the cheap one — rename it `maxAdmitted`, document that throughput comes
+ * from running more reconcilers, and call that the Kubernetes shape. It is not the Kubernetes
+ * shape, and the giveaway is one table over: `Controller` is keyed `@@id(boardId)`, so
+ * `acquireBoard` elects **one leader per board** and a second daemon on the same board is refused.
+ * Kubernetes scales controllers for availability, never for throughput; the throughput knob on a
+ * Kubernetes Job is `parallelism`, which the Job controller honours by starting that many Pods.
+ * Documenting "run more reconcilers" would therefore have documented something the leader election
+ * forbids, leaving the only supported way to use the ceiling a `kb run` racing the daemon — which
+ * is a workaround, not a design. A setting whose only honest value is 1 is a setting to delete,
+ * and deleting it would have taken the one ceiling an operator most obviously wants with it.
+ *
+ * So the ceiling is made real, and this is what that costs:
+ *
+ *   - **Admission stays serial.** The gate, the compare-and-swap and the worktree happen one Job
+ *     at a time; only the run itself is concurrent. Two claims can therefore never read the same
+ *     `liveLeases` count, and `createWorktree` is never re-entered (it is `spawnSync` anyway, so
+ *     in-process it could not be).
+ *   - **Our own runs are not "contention".** A gate that refuses because this very pass filled the
+ *     board is not a refusal to report — it is a reason to wait for a slot. `ClaimLimit` is what
+ *     lets the two be told apart.
+ *   - **The budget ceiling learned about work in flight.** `spent24h` only moves when an attempt
+ *     ends, so concurrency would have let N claims each be judged against a spend none of them had
+ *     contributed to yet. See `committedUsd` in `src/limits.ts`.
+ *   - **Every operator-facing line is tagged `#<job>`.** Indentation grouped lines under a claim,
+ *     which only reads as grouping while one Job is speaking. `src/daemon.ts` already does the
+ *     same thing per board, so a busy log reads `[board] #12 …`.
+ *   - **Shutdown stops all of them.** One `AbortSignal` reaches every in-flight run, and the pass
+ *     does not return until each has recorded its own attempt.
+ *
+ * The CAS is still the thing that makes it safe. The gate refuses contention it can see; the
+ * lease insert refuses the contention it cannot.
  */
 
 export type ControllerDeps = {
@@ -201,7 +238,7 @@ async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report
     // because the machine was asleep, not because anything failed, and taking it would start a
     // second worker on a Job that already has one.
     if (holderLiveness(l.holder, l.acquiredAt) === 'alive') {
-      log?.(`  #${l.jobId}: lease from ${l.holder} lapsed, but that process is alive — not reclaiming`);
+      log?.(`#${l.jobId} lease from ${l.holder} lapsed, but that process is alive — not reclaiming`);
       continue;
     }
 
@@ -227,7 +264,7 @@ async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report
     });
     await db.event.create({ data: { kind: 'reclaimed', jobId: l.jobId, actor: l.holder } });
     report.reclaimed.push(l.jobId);
-    log?.(`reclaim #${l.jobId} (lease from ${l.holder} expired)`);
+    log?.(`#${l.jobId} reclaimed (the lease from ${l.holder} expired)`);
   }
 }
 
@@ -257,18 +294,33 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     orderBy: { id: 'asc' },
   });
 
+  /**
+   * The runs this pass started and has not yet finished.
+   *
+   * Held as a set of settled-when-done promises rather than a counter, because the pass needs two
+   * things from it: how full the board is *because of us*, and something to await when it is full.
+   * Nothing in here ever rejects — a failure is recorded in `failure` and re-thrown once, at the
+   * end, so that a throw from one run cannot leave the others unawaited or unhandled.
+   */
+  const inFlight = new Set<Promise<void>>();
+  let failure: unknown = null;
+  /** Wait for the next run to end. Every iteration shrinks `inFlight`, so a caller cannot spin. */
+  const settleOne = () => Promise.race([...inFlight]);
+
+  /** One Job's own log lines. The tag is the only grouping that survives interleaving. */
+  const sayFor = (jobId: number) => (line: string) => deps.onEvent?.(`#${jobId} ${line}`);
+
   for (const job of wanted) {
     // A shutdown stops claiming immediately. Whatever is already running is dealt with below, in
     // the pass that started it — this only refuses to open new work.
     if (deps.signal?.aborted) break;
+    const say = sayFor(job.id);
 
-    // ---- the ceilings, checked before every claim rather than once per pass: a run that just
-    // finished has moved the spend, and the next Job must be judged against that, not against
-    // what was true when the pass started.
     const board = await db.board.findFirst({
       where: deps.board ? { slug: deps.board } : { id: job.boardId },
       select: { pausedAt: true, pausedBy: true, maxConcurrent: true, dailyBudgetUsd: true, id: true, repoPath: true },
     });
+    const boardId = board?.id ?? job.boardId;
     // The repository this Job runs in. On the Board because a Board is the Namespace and the
     // ceilings above are already per-repo facts; on nothing at all is an error worth naming, since
     // the alternative is cutting a worktree of whatever directory the daemon happened to start in.
@@ -279,22 +331,52 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         + '`kb boards add <slug> --repo <path>` points a board at a repository',
       );
     }
-    const [liveLeases, spend] = await Promise.all([
-      db.lease.count({ where: { job: { boardId: board?.id ?? job.boardId } } }),
-      db.attempt.aggregate({
-        _sum: { costUsd: true },
-        where: { job: { boardId: board?.id ?? job.boardId }, startedAt: { gte: windowStart(now()) } },
-      }),
-    ]);
-    const gate = gateClaim({
-      pausedAt: board?.pausedAt ?? null,
-      pausedBy: board?.pausedBy ?? null,
-      liveLeases,
-      maxConcurrent: board?.maxConcurrent ?? 1,
-      spent24h: spend._sum.costUsd ?? 0,
-      dailyBudgetUsd: board?.dailyBudgetUsd ?? null,
-      jobBudgetUsd: job.maxBudgetUsd,
-    });
+
+    // ---- the ceilings, checked before every claim rather than once per pass: a run that just
+    // finished has moved the spend, and the next Job must be judged against that, not against
+    // what was true when the pass started.
+    //
+    // Asked in a loop, because two of the three answers can change without anything else happening:
+    // a slot and a budget are both freed by one of THIS pass's own runs ending. Waiting for that is
+    // the difference between a ceiling and a stall — a pass that reported "2 of 2 slots in use"
+    // while both of those slots were its own would end early and blame the operator for it.
+    let gate: ClaimGate;
+    for (;;) {
+      const [liveLeases, spend, open] = await Promise.all([
+        db.lease.count({ where: { job: { boardId } } }),
+        db.attempt.aggregate({
+          _sum: { costUsd: true },
+          where: { job: { boardId }, startedAt: { gte: windowStart(now()) } },
+        }),
+        // What the runs already going could still cost. An attempt with no `endedAt` has reported
+        // no cost, so it is invisible to the aggregate above; charging its Job's cap keeps the
+        // budget a ceiling rather than a report. An orphaned attempt whose holder died is counted
+        // too, which over-charges — in the safe direction, and only until the reclaim at the top
+        // of the next pass closes it.
+        db.attempt.findMany({
+          where: { job: { boardId }, endedAt: null },
+          select: { job: { select: { maxBudgetUsd: true } } },
+        }),
+      ]);
+      const answer = gateClaim({
+        pausedAt: board?.pausedAt ?? null,
+        pausedBy: board?.pausedBy ?? null,
+        liveLeases,
+        maxConcurrent: board?.maxConcurrent ?? 1,
+        spent24h: spend._sum.costUsd ?? 0,
+        committedUsd: open.reduce((sum, a) => sum + a.job.maxBudgetUsd, 0),
+        dailyBudgetUsd: board?.dailyBudgetUsd ?? null,
+        jobBudgetUsd: job.maxBudgetUsd,
+      });
+      gate = answer;
+      if (answer.ok !== false) break;
+      // A wall of our own making is not news. A stopped board is: no amount of waiting un-stops it.
+      if (answer.limit === 'stopped' || inFlight.size === 0) break;
+      await settleOne();
+      if (deps.signal?.aborted) break;
+    }
+
+    if (deps.signal?.aborted) break;
     if (gate.ok === false) {
       // Loudly, and once: the whole pass stops, because every remaining Job faces the same wall.
       //
@@ -305,7 +387,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       // logs the answer only when it changes, had that dedup silently undone by this one line.
       report.refused = gate.why;
       await db.event.create({
-        data: { kind: 'refused', jobId: job.id, boardId: board?.id ?? job.boardId, actor: host, payload: { why: gate.why } },
+        data: { kind: 'refused', jobId: job.id, boardId, actor: host, payload: { why: gate.why } },
       });
       break;
     }
@@ -338,7 +420,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     await db.attempt.create({ data: { jobId: job.id, k, host, runtime: deps.runtime.name, startedAt: now() } });
     await db.event.create({ data: { kind: 'claimed', jobId: job.id, boardId: job.boardId, actor: host, payload: { k } } });
     report.claimed.push(job.id);
-    deps.onEvent?.(`claim   #${job.id} k=${k} ${job.name}`);
+    say(`claim     k=${k} ${job.name}`);
 
     // ---- isolate. The SDK has no isolation option for a top-level query, so the checkout is
     // ours to make.
@@ -351,6 +433,9 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // edit the same files at the same time with no lock between them. Isolated is the default
     // because those are the properties a reviewer needs, not because writing is forbidden without
     // them. It also decides what this Job's subagents may do — see `isolated` on the spec below.
+    //
+    // Still on the serial side of the pass, deliberately: cutting a worktree is fast, and doing it
+    // before the run is dispatched keeps every git invocation in this file one-at-a-time.
     let wt: Worktree | null = null;
     if (job.isolate) {
       try {
@@ -361,18 +446,20 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // Held for the length of the run. The daemon's sweep is a second remover, in a second
         // process, and without this it could take the checkout a worker is standing in.
         lockWorktree(cwd, wt, host);
-        deps.onEvent?.(resuming
-          ? `  resuming in ${wt.branch} (the checkout attempt ${k - 1} left)`
-          : `  worktree ${wt.branch} from ${wt.baseLabel}`);
+        say(resuming
+          ? `resuming in ${wt.branch} (the checkout attempt ${k - 1} left)`
+          : `worktree ${wt.branch} from ${wt.baseLabel}`);
       } catch (e) {
         // A checkout we could not make is a spawn failure, not a worker failure. Say so, release,
         // and leave the Job pending rather than burning a retry on our own plumbing.
+        const why = (e as Error).message;
+        say(`no checkout — ${why.slice(0, 200)}; left pending, the next pass will try again`);
         await db.lease.delete({ where: { jobId: job.id } });
         await db.attempt.update({
           where: { jobId_k: { jobId: job.id, k } },
-          data: { endedAt: now(), outcome: 'crashed', reason: (e as Error).message.slice(0, 300) },
+          data: { endedAt: now(), outcome: 'crashed', reason: why.slice(0, 300) },
         });
-        await db.job.update({ where: { id: job.id }, data: { phase: 'pending', lastError: (e as Error).message } });
+        await db.job.update({ where: { id: job.id }, data: { phase: 'pending', lastError: why } });
         await db.event.create({
           data: { kind: 'spawn_failed', jobId: job.id, boardId: job.boardId, actor: host, payload: { k } },
         });
@@ -380,6 +467,40 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         continue;
       }
     }
+
+    // ---- and now let it go. Everything past this point is the run and the record of it, and it
+    // is the only part that overlaps with another Job's.
+    const done$: Promise<void> = runAndRecord({ job, k, charged, token, leaseMs, cwd, wt, say })
+      .catch((e: unknown) => { failure ??= e; })
+      .finally(() => { inFlight.delete(done$); });
+    inFlight.add(done$);
+  }
+
+  // Nothing returns until every run this pass started has recorded its own attempt — including on
+  // shutdown, where they are all aborting at once rather than one being interrupted and the rest
+  // never starting.
+  while (inFlight.size) await settleOne();
+  if (failure) throw failure;
+
+  // Completion order is not id order once runs overlap, and a report whose contents depend on which
+  // worker finished first is a report nothing can assert on.
+  for (const list of [report.claimed, report.succeeded, report.failed, report.retrying,
+    report.reclaimed, report.skipped, report.stopped]) list.sort((a, b) => a - b);
+
+  return report;
+
+  /** One claimed Job: run it, then write down what happened. Concurrent with its siblings. */
+  async function runAndRecord(c: {
+    job: (typeof wanted)[number];
+    k: number;
+    charged: number;
+    token: string;
+    leaseMs: number;
+    cwd: string;
+    wt: Worktree | null;
+    say: (line: string) => void;
+  }): Promise<void> {
+    const { job, k, charged, token, leaseMs, cwd, wt, say } = c;
 
     // ---- renew while the run is in flight. Deriving the lifetime already makes expiry-while-alive
     // impossible; renewal is what makes a DEAD holder cheap to reclaim — without it a host that dies
@@ -401,7 +522,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         .then((r) => {
           if (r.count === 0) {
             heldToTheEnd = false;
-            deps.onEvent?.(`  lease lost on #${job.id} — another holder has it`);
+            say('lease lost — another holder has it');
           }
         })
         .catch(() => { /* a renewal that could not be written is retried by the next tick */ });
@@ -494,10 +615,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // already opened. Measured: #12 opened PR 366 at 12:41 on attempt 1 and recorded null at 13:39
     // on attempt 2.
     const pr = wt && deps.readPr !== false ? prForBranch(cwd, wt.branch, job.createdAt) : null;
-    if (pr) deps.onEvent?.(`  ${pr.isDraft ? 'draft ' : ''}PR #${pr.number} ${pr.url}`);
+    if (pr) say(`${pr.isDraft ? 'draft ' : ''}PR #${pr.number} ${pr.url}`);
     // Said out loud. A run that committed and pushed but opened no pull request has produced
     // something a human still has to find, and silence here is what let job #4 look finished.
-    else if (wt && deps.readPr !== false) deps.onEvent?.(`  no pull request on ${wt.branch}`);
+    else if (wt && deps.readPr !== false) say(`no pull request on ${wt.branch}`);
 
     await db.attempt.update({
       where: { jobId_k: { jobId: job.id, k } },
@@ -522,13 +643,13 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // The attempt row is ours whatever happened — it is keyed (jobId, k) and no other holder uses
     // our k. The JOB row is the contended one, so only a holder that kept its lease may write it.
     if (!heldToTheEnd) {
-      deps.onEvent?.(`  #${job.id}: lease was taken mid-run — recording the attempt, leaving the Job alone`);
+      say('lease was taken mid-run — recording the attempt, leaving the Job alone');
       await db.event.create({
         data: { kind: 'lease_lost', jobId: job.id, boardId: job.boardId, actor: host, payload: { k } },
       });
       report.skipped.push(job.id);
       if (wt) removeWorktree(cwd, wt);
-      continue;
+      return;
     }
 
     await db.job.update({
@@ -559,14 +680,14 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     if (wt) {
       if (decision.resumable && decision.phase === 'pending') {
         unlockWorktree(cwd, wt);
-        deps.onEvent?.(`  kept ${wt.path} — attempt ${k + 1} resumes in it`);
+        say(`kept ${wt.path} — attempt ${k + 1} resumes in it`);
       } else {
         // Everything this Job said it would produce is now in the repository, so whatever is left
         // in the checkout is undeclared — litter, in ADR-008's sense, and the one case where a
         // dirty tree is not evidence of work worth keeping. `removeWorktree` still refuses to take
         // unpushed commits; see the note there for what this waives and what it does not.
         const gone = removeWorktree(cwd, wt, { exported: !!exported && !shortfall });
-        if (!gone.removed) deps.onEvent?.(`  kept ${wt.path} — ${gone.why}`);
+        if (!gone.removed) say(`kept ${wt.path} — ${gone.why}`);
       }
     }
 
@@ -574,10 +695,8 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     else if (decision.phase === 'failed') report.failed.push(job.id);
     else if (decision.outcome === 'stopped') report.stopped.push(job.id);
     else report.retrying.push(job.id);
-    deps.onEvent?.(`  ${decision.phase.padEnd(9)} #${job.id} ${decision.outcome}${decision.resumable ? ' (resumable)' : ''}`);
+    say(`${decision.phase.padEnd(9)} ${decision.outcome}${decision.resumable ? ' (resumable)' : ''}`);
   }
-
-  return report;
 }
 
 /** Reconcile until nothing moves. The controller is idempotent, so this just runs it to a fixpoint. */
