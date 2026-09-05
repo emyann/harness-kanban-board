@@ -6,13 +6,15 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # 22 is the floor `engines` claims, 24 is the recommended line. Two floors is a real signal — a
-    # syntax or API that only exists on 24 has to fail somewhere — so this one is a matrix where the
-    # single-version job above it was not.
+    # `22.18.0` is the EXACT floor `engines` claims, and it is in the matrix because a floor nothing
+    # runs is a guess. It is the first release that strips types without a flag (22.17.1 fails with
+    # ERR_UNKNOWN_FILE_EXTENSION), which `bin/kb.ts` needs because a shebang cannot pass one.
+    # `22` catches a regression later in that line, `24` is the recommended one — a syntax or API
+    # that only exists on 24 has to fail somewhere.
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22, 24]
+        node-version: ['22.18.0', '22', '24']
     name: test (node ${{ matrix.node-version }})
     steps:
       - uses: actions/checkout@v7
@@ -26,8 +28,9 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           package-manager-cache: false
-      # The only dependency is `typescript`, and only `npm run lint`'s type check needs it. `npm test`
-      # and the CLI itself run with an empty node_modules — that is the point of the smoke job.
+      # Dependencies are no longer zero (ADR-007): Prisma, the better-sqlite3 adapter and the Agent
+      # SDK are runtime dependencies, and `typescript` is what `npm run lint` and the publish
+      # transpile both need.
       - run: npm install --no-audit --no-fund
       - run: npm run lint
       # Two runs in one job rather than a matrix: same signal, half the runners. UTC is what Actions
@@ -58,13 +61,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22, 26]
+        node-version: ['22.18.0', '26']
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           package-manager-cache: false
+      # `npm pack` runs `prepack`, which runs `tsc`. Without an install there is no `tsc` and the
+      # pack fails before it has packed anything — the published `kb` is the dist transpile, so this
+      # step is what makes the artifact exist at all.
+      - run: npm install --no-audit --no-fund
       - run: node scripts/smoke-pack.mjs
 
   # The two checks branch protection requires by name. A matrix cannot produce a single check — it

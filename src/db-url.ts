@@ -15,13 +15,13 @@ import path from 'node:path';
  * checkouts. A per-repo database is still reachable through `HKB_DATABASE_URL`, and tests use
  * exactly that.
  */
-const REPO_ROOT = path.resolve(import.meta.dirname, '..');
+import { PACKAGE_ROOT } from './paths.ts';
 
 /** `~/.hkb/board.db` — the machine's board. */
 export const MACHINE_DB_PATH = path.join(os.homedir(), '.hkb', 'board.db');
 
 /** The pre-machine-board location, kept only so `kb` can point at it when it finds one. */
-export const REPO_DB_PATH = path.join(REPO_ROOT, '.kanban', 'board.db');
+export const REPO_DB_PATH = path.join(PACKAGE_ROOT, '.kanban', 'board.db');
 
 export function databaseUrl(): string {
   return process.env.HKB_DATABASE_URL || `file:${MACHINE_DB_PATH}`;

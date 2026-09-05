@@ -26,3 +26,6 @@ package-lock.json
 
 # Per-attempt checkouts the controller makes. Contents are branches, not files to track.
 .kanban/worktrees/
+
+# The publish transpile. Development runs the .ts directly; `npm pack` regenerates this.
+/dist/

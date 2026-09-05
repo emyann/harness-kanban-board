@@ -17,8 +17,10 @@ import { createRequire } from 'node:module';
  * than a parallel one.
  */
 
+import { migrationsDir } from './paths.ts';
+
 const require = createRequire(import.meta.url);
-const MIGRATIONS_DIR = path.resolve(import.meta.dirname, '..', 'prisma', 'migrations');
+const MIGRATIONS_DIR = migrationsDir();
 
 /** The migrations this build knows about, in the order Prisma applies them (lexical = temporal). */
 export function knownMigrations(dir = MIGRATIONS_DIR): string[] {

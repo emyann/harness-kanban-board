@@ -6,9 +6,10 @@
  * binary keeps that honest: nothing here reaches into `src/cli.js`, and `src/cli.js` does not know
  * this exists. It is renamed to `hkb` when the old one is deleted, not before.
  *
- * Not in `package.json`'s `bin` yet — that waits until the Node floor is settled, because these
- * sources are TypeScript that Node runs natively and `engines` still says `>=22.13`
- * (docs/rebuild-plan.md, "Debt this plan does not pay"). Run it as `node bin/kb.ts`.
+ * This file is what a checkout runs (`node bin/kb.ts`) and what an `npm link` install runs, because
+ * a symlinked bin's realpath is the checkout. It is NOT what a published install runs: Node refuses
+ * to strip types under `node_modules`, so `bin.kb` points at `dist/bin/kb.js`, which `prepack`
+ * transpiles from this. See docs/wiki/concepts/node-floor-and-type-check.
  */
 import { run } from '../src/kb.ts';
 

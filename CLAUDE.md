@@ -74,10 +74,22 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 - Every command returns a stable object under `--json`; human output is a one-liner per item.
 - Errors: throw `Error` with `.exitCode` (2 = usage/state, 3 = LOCK_LOST, 4 = the dispatcher loop
   giving itself up for a supervisor to restart) and a message that names the fix.
-- Run `npm run lint && npm test` before finishing. **No build step, but there is a codegen step**: Node 24 runs the
-  `.ts` sources natively (`importFileExtension = "ts"` is what makes the generated Prisma client resolve without a
-  compile), and `src/generated/` is committed because `npm run smoke` packs with an empty `node_modules`. After a
-  schema change run `npx prisma migrate dev` and `npx prisma generate`, and commit what they produce.
+- Run `npm run lint && npm test` before finishing. `npm run test:core` is the ADR-007 suite (`test/*.test.ts`) and
+  the only number that says anything about the rebuild; `test:legacy` is the pre-ADR-007 system, which shares no
+  test and no source with it.
+- **No build step for development; one at publish.** Node runs the `.ts` sources natively
+  (`importFileExtension = "ts"` is what makes the generated Prisma client resolve without a compile), so a checkout
+  never builds. But **Node refuses to strip types under `node_modules`** — `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`,
+  on every version, by design — so a published `kb` must be JavaScript. `prepack` runs `npm run build`
+  (`tsconfig.build.json` → `dist/`, ~1s) and `bin.kb` points at `dist/bin/kb.js`. An `npm link` install still runs the
+  `.ts`, because the bin's realpath is the checkout.
+- **Node floor is `>=22.18.0`, and it is measured, not inferred**: 22.17.1 fails with
+  `ERR_UNKNOWN_FILE_EXTENSION`, 22.18.0 is the first release with type stripping unflagged. A shebang cannot pass
+  flags, so unflagged is the requirement. `npm run test:core` passes identically on 22.18.0 and 24.x.
+- Anything the CLI reads out of the package at runtime must be in `files` **and** proven by `npm run smoke`, which
+  runs the installed binaries. `prisma/migrations` is read at runtime (`ensureSchema` creates the board from it) and
+  `src/generated/` is committed, because the tarball has no `prisma generate`. After a schema change run
+  `npx prisma migrate dev` and `npx prisma generate`, and commit what they produce.
 - Touching `files` in `package.json`, or anything the CLI reads from the package at runtime? Run `npm run smoke`
   too — it packs, installs and runs the tarball. Releasing: `docs/releasing.md`.
 
