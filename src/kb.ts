@@ -138,6 +138,25 @@ export async function resolveBoard(
 const PHASES = ['pending', 'running', 'succeeded', 'failed', 'suspended'] as const;
 type Phase = (typeof PHASES)[number];
 
+/**
+ * How long something took, compact enough to sit on an attempt line beside the cost.
+ *
+ * A cost with no duration beside it hides the difference between a run that finished in four
+ * seconds and one that burned an hour of wall clock — today they print identically.
+ *
+ * The unit steps at a minute and at an hour, and truncates rather than rounds: a second short of
+ * an hour must read `59m`, never `60m`, which is an hour that has not happened yet.
+ */
+export function formatDuration(ms: number): string {
+  // Clock skew between the host that wrote `startedAt` and the one that wrote `endedAt` can put the
+  // end before the start. A negative duration is not a fact worth printing.
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`;
+}
+
 const num = (v: unknown, flag: string): number | undefined => {
   if (v === undefined) return undefined;
   const n = Number(v);
@@ -272,7 +291,11 @@ export async function main(argv: string[]): Promise<number> {
         if (!job.attempts.length) console.log('  attempts (none yet)');
         for (const a of job.attempts) {
           const cost = a.costUsd ? ` $${a.costUsd.toFixed(4)}` : '';
-          console.log(`  k=${a.k}      ${(a.outcome ?? 'running').padEnd(11)}${cost}  ${a.sessionId ?? '—'}`);
+          // An attempt in flight has no `endedAt`, and elapsed-so-far is exactly what you want to
+          // know about one: the trailing `+` says the number is still climbing.
+          const took = formatDuration((a.endedAt ?? new Date()).getTime() - a.startedAt.getTime())
+            + (a.endedAt ? '' : '+');
+          console.log(`  k=${a.k}      ${(a.outcome ?? 'running').padEnd(11)}${took.padStart(7)}${cost}  ${a.sessionId ?? '—'}`);
           // The reviewable artifact. It is the point of the run, so it gets its own line rather
           // than being something you go and look for.
           if (a.prUrl) console.log(`           PR #${a.prNumber}  ${a.prUrl}`);
