@@ -581,3 +581,71 @@ test('ls --all on a machine with no jobs at all says so', async () => {
     fs.rmSync(empty, { recursive: true, force: true });
   }
 });
+// ---------------------------------------------------------------- boards rm
+//
+// Removing a board cascades to every Job, Attempt, Lease and Event on it, and the operator who
+// runs this may be a worker with nobody to answer a confirmation prompt. So both tests below are
+// refusals: what matters is not that the delete works, it is that it declines to.
+
+test('kb boards rm removes an empty board, and says so in the log', async () => {
+  const r = scratchRepo('rm-empty');
+  await kb('boards', 'add', 'rm-empty', '--repo', r);
+  const out = json((await kb('boards', 'rm', 'rm-empty', '--json')).out);
+  assert.equal(out.removed, 'rm-empty');
+  assert.equal(await db.board.findUnique({ where: { slug: 'rm-empty' } }), null);
+  const ev = await db.event.findFirst({ where: { kind: 'board_removed' }, orderBy: { id: 'desc' } });
+  assert.equal(ev?.boardId, null, 'a boardId would have cascaded away with the board it names');
+  assert.equal((ev?.payload as { slug: string }).slug, 'rm-empty');
+});
+
+test('kb boards rm refuses a board with jobs on it until --force', async () => {
+  const r = scratchRepo('rm-busy');
+  await kb('boards', 'add', 'rm-busy', '--repo', r);
+  const j = json((await kb('new', 'still here', '--brief', 'b', '--board', 'rm-busy', '--json')).out);
+
+  await assert.rejects(
+    () => main(['boards', 'rm', 'rm-busy']),
+    (e: Error & { exitCode?: number }) => {
+      assert.equal(e.exitCode, 2);
+      assert.match(e.message, /has 1 job\b/);
+      assert.match(e.message, /--force/, 'a refusal that does not say how to proceed is a dead end');
+      return true;
+    },
+  );
+  assert.ok(await db.job.findUnique({ where: { id: j.id } }), 'and the job is untouched');
+
+  await kb('boards', 'rm', 'rm-busy', '--force');
+  assert.equal(await db.board.findUnique({ where: { slug: 'rm-busy' } }), null);
+  assert.equal(await db.job.findUnique({ where: { id: j.id } }), null, 'the jobs went with it');
+});
+
+test('kb boards rm refuses a board a daemon is leading, --force or not', async () => {
+  const r = scratchRepo('rm-led');
+  await kb('boards', 'add', 'rm-led', '--repo', r);
+  const board = await db.board.findUniqueOrThrow({ where: { slug: 'rm-led' } });
+  // This process is alive and this is its hostname, so the row reads as live the same way a real
+  // daemon's does — no clock to wind forward.
+  await db.controller.create({
+    data: {
+      boardId: board.id,
+      holder: `${os.hostname()}/${process.pid}@daemon`,
+      intervalMs: 60_000,
+      version: 'v-test',
+      expiresAt: new Date(Date.now() + 60 * 60_000),
+    },
+  });
+  try {
+    await assert.rejects(
+      () => main(['boards', 'rm', 'rm-led', '--force']),
+      (e: Error & { exitCode?: number }) => {
+        assert.equal(e.exitCode, 2);
+        assert.match(e.message, /kb down/, '`--force` is not a way to delete a board out from under a running controller');
+        return true;
+      },
+    );
+    assert.ok(await db.board.findUnique({ where: { slug: 'rm-led' } }), 'and the board is still there');
+  } finally {
+    await db.controller.deleteMany({ where: { boardId: board.id } });
+  }
+});
+

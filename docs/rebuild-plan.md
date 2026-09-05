@@ -245,7 +245,7 @@ a query.
 | `Controller` row replacing the pid file | Done |
 | `~/.hkb/board.db` default, self-migrating on first touch | Done |
 | `kb up` serves every board; `--board` narrows it | Done |
-| `kb boards`, `kb boards add <slug> --repo <path>` | Done |
+| `kb boards`, `kb boards add <slug> --repo <path>`, `kb boards rm <slug> [--force]` | Done |
 | The board inferred from the repository you are standing in | Done |
 | Schema-version guard, and a stale-daemon line in `kb up --status` | Done |
 

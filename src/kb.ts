@@ -58,6 +58,7 @@ const HELP = `kb — run one agent against one brief
 
   kb boards                every board on this machine
   kb boards add <slug>     point a board at a repository       [--repo <path>]
+  kb boards rm <slug>      remove a board and everything on it [--force]
 
 The board is ~/.hkb/board.db — one per machine, a Board per repository, the way one
 cluster holds a namespace per project. \`--board\` picks one; without it the repository
@@ -220,6 +221,7 @@ export async function main(argv: string[]): Promise<number> {
       json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
       fake: { type: 'boolean' },
+      force: { type: 'boolean' },
       'no-isolate': { type: 'boolean' },
       brief: { type: 'string' },
       'brief-file': { type: 'string' },
@@ -551,7 +553,38 @@ export async function main(argv: string[]): Promise<number> {
           console.log(`${board.slug} -> ${abs}`));
         return 0;
       }
-      if (rest[0]) throw usage(`kb boards has no subcommand "${rest[0]}" — try \`kb boards\` or \`kb boards add <slug>\``);
+      if (rest[0] === 'rm') {
+        const name = rest[1];
+        if (!name) throw usage('kb boards rm <slug> [--force] — which board?');
+        const board = await db.board.findUnique({
+          where: { slug: name },
+          include: { controller: true, _count: { select: { jobs: true } } },
+        });
+        if (!board) throw usage(`no board "${name}" — \`kb boards\` lists the ones on this machine`);
+
+        // No `--force` past this one, deliberately. A daemon holding this board is reconciling it
+        // right now, and the delete cascades to the Leases it is holding and the Jobs it is
+        // running: the worker would keep going with nothing left to report to. Stopping the
+        // daemon is a thing the operator can do, so make them do it.
+        if (board.controller && daemon.controllerIsLive(board.controller as daemon.ControllerRow)) {
+          throw usage(`${name} is led by ${board.controller.holder} — run \`kb down --board ${name}\` first, then remove it`);
+        }
+        const jobs = board._count.jobs;
+        if (jobs && !values.force) {
+          throw usage(`${name} has ${jobs} job${jobs === 1 ? '' : 's'}, and removing a board deletes its jobs, attempts, leases and events with it — pass --force to mean it`);
+        }
+
+        await db.board.delete({ where: { id: board.id } });
+        // `boardId` would cascade away with the board it names, so this Event carries none and the
+        // slug in the payload is the whole record. The same trade `kb rm` makes for a Job.
+        await db.event.create({
+          data: { kind: 'board_removed', actor: whoami(), payload: { slug: name, repoPath: board.repoPath, jobs } },
+        });
+        emit(out, { removed: name, jobs }, () =>
+          console.log(`removed ${name}${jobs ? ` and ${jobs} job${jobs === 1 ? '' : 's'}` : ''}`));
+        return 0;
+      }
+      if (rest[0]) throw usage(`kb boards has no subcommand "${rest[0]}" — try \`kb boards\`, \`kb boards add <slug>\` or \`kb boards rm <slug>\``);
 
       const serving = await daemon.status();
       const boards = await db.board.findMany({ orderBy: { slug: 'asc' }, include: { jobs: { select: { phase: true } } } });
