@@ -133,6 +133,19 @@ test('show is the one screen: spec, phase and attempts', async () => {
   assert.match(r.out, /attempts \(none yet\)/);
 });
 
+test('show names the board and the checkout the Job runs in', async () => {
+  await db.board.create({ data: { slug: 'accounting', repoPath: '/srv/accounting' } });
+  const j = json((await kb('new', 'ledger', '--board', 'accounting', '--brief', 'b', '--json')).out);
+  const r = await kb('show', String(j.id));
+  assert.match(r.out, /board\s+accounting\s+\/srv\/accounting/);
+
+  // A board with no repoPath has nowhere to cut a worktree, so the line has to say that outright
+  // rather than print a blank column that reads like "here".
+  await db.board.create({ data: { slug: 'homeless' } });
+  const k = json((await kb('new', 'adrift', '--board', 'homeless', '--brief', 'b', '--json')).out);
+  assert.match((await kb('show', String(k.id))).out, /board\s+homeless\s+\(no repo — `kb boards add homeless --repo <path>`\)/);
+});
+
 test('show on a missing id points at ls', async () => {
   await assert.rejects(() => kb('show', '99999'), /no Job #99999.*kb ls/s);
 });
