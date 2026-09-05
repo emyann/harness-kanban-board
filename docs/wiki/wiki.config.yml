@@ -153,6 +153,9 @@ pages:
   - slug: decisions/adr-007-workload-scheduler
     summary: "hkb is a workload scheduler: one SQLite board behind Prisma, a runtime seam over the Claude Agent SDK, Job as the first kind with a reconcile loop and an admission gate; the DAG becomes a second kind; zero-dependency and no-build-step end."
     status: seeded
+  - slug: decisions/adr-008-declared-outputs
+    summary: "A Job declares its outputs — `results` for small structured values, `exports` for paths copied out of the worktree before teardown — and an undeclared output is litter; a declared output that is not produced fails the attempt."
+    status: seeded
   - slug: architecture/job-kind
     summary: "The first workload kind — one agent, one brief, run to completion — mapped onto Job/Pod/Lease/Namespace, with one reconcile pass and a pure retry decision."
     status: seeded

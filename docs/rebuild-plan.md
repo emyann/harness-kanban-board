@@ -461,6 +461,13 @@ Every item below was found by running the thing, not by reading it.
    fix is reclaim rather than slimming: with cleanup the cost is bounded by
    `maxConcurrent × repo size` instead of `jobs-ever-run × repo size`.
 
+   **Superseded in part by ADR-008.** Declared outputs make the sweep able to tell work
+   that matters from litter — copy the declared ones out, then delete unconditionally —
+   which is a better fix than any narrower keep-test. The rest of this entry still holds,
+   and note that the ancestry test below does NOT work here: this repository squash-merges,
+   so a merged branch's commits are never ancestors of `main`. What proved safety during
+   the Phase 5 cleanup was PR state `MERGED` plus the remote branch being gone.
+
    **The bug is one word.** `worktreeHasWork` asks whether the branch is *ahead of its
    base*, which is true for every successful Job. Claude Code's own sweep asks whether
    there are **unpushed** commits — "there is work here" versus "this work exists only
