@@ -23,6 +23,20 @@ export * from './enums.ts';
  */
 export type Board = Prisma.BoardModel
 /**
+ * Model Controller
+ * Who is reconciling a board right now — leader election, one leader per Board.
+ * 
+ * This is a Lease by another name, and deliberately so: the compare-and-swap is `@@id`, staleness
+ * is `expiresAt` plus `holderLiveness`, and both were already written and tested for `Lease`. It
+ * replaces a pid file, which was a second source of truth living outside the store and re-deriving
+ * the same rules — badly, in one case: the pid file recorded a hostname and never read it back, so
+ * on a shared filesystem it asked the wrong machine's process table.
+ * 
+ * A daemon serving every board holds one row per board. A daemon scoped to one board takes only
+ * that row, and the two cannot both serve it — which is the whole reason the key is the board.
+ */
+export type Controller = Prisma.ControllerModel
+/**
  * Model Job
  * The primitive kind: run one agent against one brief until it is done.
  */

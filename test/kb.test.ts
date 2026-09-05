@@ -18,11 +18,25 @@ const db = openBoard();
 
 test.after(async () => { await closeBoard(); fs.rmSync(dir, { recursive: true, force: true }); });
 
-/** Run a verb and capture what it printed, so `--json` is asserted on its real output. */
+/**
+ * Run a verb and capture what it printed, so `--json` is asserted on its real output.
+ *
+ * The runner's own frames have to be filtered out. `node --test` multiplexes its reporter protocol
+ * (`test:enqueue`, `test:pass`, …) over this very stream as v8-serialized binary, so anything that
+ * patches `process.stdout.write` captures whatever the runner happened to emit in the same window.
+ * That made this harness quietly timing-dependent: it passed for as long as no frame landed mid-verb,
+ * and failed with `Unexpected token '\uFFFD'` the moment one did.
+ */
+const RUNNER_FRAME = /\btest:(enqueue|dequeue|start|pass|fail|plan|diagnostic|complete|coverage|stderr|stdout|watch)\b/;
+
 async function kb(...argv: string[]): Promise<{ code: number; out: string }> {
   const chunks: string[] = [];
   const write = process.stdout.write.bind(process.stdout);
-  (process.stdout as { write: unknown }).write = (s: string) => { chunks.push(String(s)); return true; };
+  (process.stdout as { write: unknown }).write = (s: string) => {
+    const text = String(s);
+    if (!RUNNER_FRAME.test(text)) chunks.push(text);
+    return true;
+  };
   try {
     const code = await main(argv);
     return { code, out: chunks.join('') };
@@ -218,3 +232,110 @@ test('--interval has a floor: a sub-second tick is a mistake, not a preference',
     );
   }
 });
+
+// ---------------------------------------------------------------- one machine, many repositories
+
+const { resolveBoard, gitRoot } = await import('../src/kb.ts');
+
+/** A throwaway repository, so "which board does this cwd mean" can be asked somewhere real. */
+function scratchRepo(name: string): string {
+  const root = path.join(dir, name);
+  fs.mkdirSync(root, { recursive: true });
+  const git = (...a: string[]) => execFileSync('git', a, { cwd: root, stdio: 'ignore' });
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 's@t');
+  git('config', 'user.name', 's');
+  fs.writeFileSync(path.join(root, 'README.md'), '# scratch\n');
+  git('add', '-A');
+  git('commit', '-qm', 'base');
+  return fs.realpathSync(root);
+}
+
+test('--board wins over where you are standing', async () => {
+  const s = await resolveBoard(db, 'explicit', REPO);
+  assert.equal(s.slug, 'explicit');
+});
+
+test('a repository with a board resolves to that board, whatever it is called', async () => {
+  const root = scratchRepo('named-repo');
+  await db.board.create({ data: { slug: 'nothing-like-the-directory', repoPath: root } });
+  const s = await resolveBoard(db, undefined, root);
+  assert.equal(s.slug, 'nothing-like-the-directory', 'matched on repoPath, not on the folder name');
+  assert.equal(s.known, true);
+});
+
+test('a repository with no board resolves to one named after it, ready to be created', async () => {
+  const root = scratchRepo('unregistered');
+  const s = await resolveBoard(db, undefined, root);
+  assert.equal(s.slug, 'unregistered');
+  assert.equal(s.repoPath, root);
+  assert.equal(s.known, false, 'reading verbs find nothing, which is the truth');
+});
+
+test('outside a repository there is nothing to infer, so it is `default`', async () => {
+  const notARepo = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-bare-'));
+  try {
+    assert.equal(gitRoot(notARepo), null);
+    const s = await resolveBoard(db, undefined, notARepo);
+    assert.equal(s.slug, 'default');
+    assert.equal(s.repoPath, null);
+  } finally {
+    fs.rmSync(notARepo, { recursive: true, force: true });
+  }
+});
+
+test('filing work in a repository points its new board at that checkout', async () => {
+  // Without this a machine-level daemon would have nowhere to cut the worktree — the whole reason
+  // `repoPath` is a column rather than the daemon's cwd.
+  const root = scratchRepo('files-work');
+  const before = process.cwd();
+  process.chdir(root);
+  try {
+    const j = json((await kb('new', 'from here', '--brief', 'b', '--json')).out);
+    assert.equal(j.board, 'files-work');
+    const board = await db.board.findUniqueOrThrow({ where: { slug: 'files-work' } });
+    assert.equal(board.repoPath, root);
+  } finally {
+    process.chdir(before);
+  }
+});
+
+test('kb boards add refuses a path that is not a repository, and says why', async () => {
+  const notARepo = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-nope-'));
+  try {
+    await assert.rejects(
+      () => main(['boards', 'add', 'bogus', '--repo', notARepo]),
+      (e: Error & { exitCode?: number }) => {
+        assert.equal(e.exitCode, 2);
+        assert.match(e.message, /not a git repository/);
+        return true;
+      },
+    );
+    assert.equal(await db.board.findUnique({ where: { slug: 'bogus' } }), null, 'and nothing was created');
+  } finally {
+    fs.rmSync(notARepo, { recursive: true, force: true });
+  }
+});
+
+test('kb boards add points a board at a repository, and re-pointing is not an error', async () => {
+  const a = scratchRepo('target-a');
+  const b = scratchRepo('target-b');
+  await kb('boards', 'add', 'moved', '--repo', a);
+  assert.equal((await db.board.findUniqueOrThrow({ where: { slug: 'moved' } })).repoPath, a);
+  await kb('boards', 'add', 'moved', '--repo', b);
+  assert.equal((await db.board.findUniqueOrThrow({ where: { slug: 'moved' } })).repoPath, b,
+    'repositories move; a board should not have to be recreated when one does');
+});
+
+test('kb boards lists every board on the machine with its repository', async () => {
+  const rows = json((await kb('boards', '--json')).out);
+  const moved = rows.find((r: { board: string }) => r.board === 'moved');
+  assert.ok(moved, 'the cluster view is one query, not a hunt across checkouts');
+  assert.equal(moved.daemon, 'down');
+  assert.equal(typeof moved.spent24h, 'number');
+});
+
+test('kb boards rejects a subcommand it does not have, rather than listing anyway', async () => {
+  await assert.rejects(() => main(['boards', 'remove', 'x']), /no subcommand "remove"/);
+});
+

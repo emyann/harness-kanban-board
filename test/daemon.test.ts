@@ -32,7 +32,27 @@ const daemon = await import('../src/daemon.ts');
 const db = openBoard();
 const HERE = os.hostname();
 
+/**
+ * A second, throwaway repository — the whole point of `Board.repoPath`. A machine-level daemon has
+ * no meaningful cwd of its own, so "which checkout does this Job run in" has to be a fact on the
+ * board, and the way to prove it is a board pointing somewhere the daemon has never stood.
+ */
+const elsewhere = path.join(dir, 'elsewhere');
+fs.mkdirSync(elsewhere);
+const git = (args: string[]) => spawnSync('git', args, { cwd: elsewhere, encoding: 'utf8' });
+git(['init', '-q', '-b', 'main']);
+git(['config', 'user.email', 'e@test']);
+git(['config', 'user.name', 'e']);
+fs.writeFileSync(path.join(elsewhere, 'ELSEWHERE.md'), '# a different repository\n');
+git(['add', '-A']);
+git(['commit', '-qm', 'base']);
+
 test.after(async () => { await closeBoard(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+// A controller row is daemon state, not board state: it outlives the test that made it and every
+// holder here shares this process's pid, so without this each leadership test inherits the last
+// one's leases. (Phase 3's lesson, one table over.)
+test.beforeEach(async () => { await db.controller.deleteMany({}); });
 
 // Phase 3's lesson: a shared board leaks state between tests the moment one of them fails.
 let n = 0;
@@ -266,72 +286,194 @@ test('a tick that throws does not take the loop with it', async () => {
   assert.ok(calls >= 1);
 });
 
-// ---------------------------------------------------------------- pid files
+// ---------------------------------------------------------------- leadership
 
-test('no pid file means no daemon, and says where the log would be', () => {
-  const st = daemon.status('nobody-here');
-  assert.equal(st.running, false);
-  assert.equal(st.stale, false);
-  assert.equal(st.daemon, null);
-  assert.match(st.log, /kb-nobody-here\.log$/);
-  assert.equal(path.dirname(st.pidFile), dir, 'beside the board, not in the real .kanban/');
+test('a board with no controller row has no daemon', async () => {
+  const board = await freshBoard();
+  const [s] = await daemon.status(board.slug);
+  assert.equal(s.running, false);
+  assert.equal(s.stale, false);
+  assert.equal(s.holder, null);
 });
 
-test('a pid file naming a dead process is stale, not running', () => {
+test('the second daemon does not get the board, and that is a normal outcome', async () => {
+  const board = await freshBoard();
+  const now = () => new Date();
+  const first = await daemon.acquireBoard(db, board.id, holderId('daemon', process.pid, HERE), 1000, 'v1', now);
+  const second = await daemon.acquireBoard(db, board.id, holderId('daemon', process.pid + 1, HERE), 1000, 'v1', now);
+  assert.equal(first, true);
+  assert.equal(second, false, 'the insert is the compare-and-swap; losing is not an error');
+  assert.equal((await db.controller.findUniqueOrThrow({ where: { boardId: board.id } })).version, 'v1');
+});
+
+test('the same daemon renewing keeps the board and pushes its expiry out', async () => {
+  const board = await freshBoard();
+  const me = holderId('daemon', process.pid, HERE);
+  const t0 = new Date('2026-09-05T10:00:00Z');
+  await daemon.acquireBoard(db, board.id, me, 1000, 'v1', () => t0);
+  const first = await db.controller.findUniqueOrThrow({ where: { boardId: board.id } });
+  const t1 = new Date('2026-09-05T10:01:00Z');
+  assert.equal(await daemon.acquireBoard(db, board.id, me, 1000, 'v1', () => t1), true);
+  const after = await db.controller.findUniqueOrThrow({ where: { boardId: board.id } });
+  assert.ok(after.expiresAt > first.expiresAt, 'renewed, not re-taken');
+  assert.deepEqual(after.startedAt, first.startedAt, 'and it is still the same daemon');
+});
+
+test('a board led by a dead process is taken over without waiting for the clock', async () => {
+  const board = await freshBoard();
   const done = spawnSync(process.execPath, ['-e', '0']);
-  fs.writeFileSync(daemon.pidPath('ghost'), JSON.stringify({
-    pid: done.pid, board: 'ghost', intervalMs: 1000, startedAt: new Date().toISOString(), holder: 'x',
-  }));
-  const st = daemon.status('ghost');
-  assert.equal(st.running, false);
-  assert.equal(st.stale, true);
+  const ghost = holderId('daemon', done.pid as number, HERE);
+  const far = new Date(Date.now() + 60 * 60_000);
+  await db.controller.create({
+    data: { boardId: board.id, holder: ghost, intervalMs: 1000, version: 'v0', expiresAt: far },
+  });
+  assert.equal(daemon.controllerIsLive({ ...(await db.controller.findUniqueOrThrow({ where: { boardId: board.id } })) } as never), false,
+    'its lease has an hour left, and its process does not exist');
+
+  const me = holderId('daemon', process.pid, HERE);
+  assert.equal(await daemon.acquireBoard(db, board.id, me, 1000, 'v1', () => new Date()), true);
+  assert.equal((await db.controller.findUniqueOrThrow({ where: { boardId: board.id } })).holder, me);
 });
 
-test('a pid file from before this boot is stale even if something now holds that pid', () => {
-  // The reboot case. Without it a recycled pid keeps `kb up` refusing for ever, which is the
-  // failure that teaches people to delete pid files by hand.
-  fs.writeFileSync(daemon.pidPath('rebooted'), JSON.stringify({
-    pid: process.pid, board: 'rebooted', intervalMs: 1000,
-    startedAt: new Date(Date.now() - 400 * 24 * 3600_000).toISOString(), holder: 'x',
-  }));
-  const st = daemon.status('rebooted');
-  assert.equal(st.running, false, 'our own live pid, and still correctly stale');
-  assert.equal(st.stale, true);
+test('a board led from another machine is left alone until its lease lapses', async () => {
+  const board = await freshBoard();
+  const elsewhere = holderId('daemon', 4242, 'some-other-laptop');
+  await db.controller.create({
+    data: {
+      boardId: board.id, holder: elsewhere, intervalMs: 1000, version: 'v0',
+      expiresAt: new Date(Date.now() + 60 * 60_000),
+    },
+  });
+  const me = holderId('daemon', process.pid, HERE);
+  assert.equal(await daemon.acquireBoard(db, board.id, me, 1000, 'v1', () => new Date()), false,
+    'we cannot see that host, so the clock is all there is — and it says the lease is good');
+
+  await db.controller.update({
+    where: { boardId: board.id }, data: { expiresAt: new Date(Date.now() - 1000) },
+  });
+  assert.equal(await daemon.acquireBoard(db, board.id, me, 1000, 'v1', () => new Date()), true, 'lapsed, so takeover');
 });
 
-test('a live pid file reads as running, with an uptime', () => {
-  daemon.claimPidFile('live', 1000);
-  const st = daemon.status('live');
-  assert.equal(st.running, true);
-  assert.equal(st.daemon.pid, process.pid);
-  assert.ok(st.uptimeMs >= 0);
-  daemon.releasePidFile('live');
-  assert.equal(daemon.status('live').daemon, null);
+test('status says a daemon is behind when the checkout has moved past it', async () => {
+  const board = await freshBoard();
+  await daemon.acquireBoard(db, board.id, holderId('daemon', process.pid, HERE), 1000, 'deadbee', () => new Date());
+  const [s] = await daemon.status(board.slug);
+  assert.equal(s.running, true);
+  assert.equal(s.version, 'deadbee');
+  assert.equal(s.behind, daemon.buildVersion(), 'a daemon quietly serving old code is a line you can read');
 });
 
-test('releasing does not delete a pid file that now belongs to somebody else', () => {
-  const p = daemon.pidPath('handover');
-  fs.writeFileSync(p, JSON.stringify({
-    pid: process.pid + 1, board: 'handover', intervalMs: 1000, startedAt: new Date().toISOString(), holder: 'x',
-  }));
-  daemon.releasePidFile('handover');
-  assert.equal(fs.existsSync(p), true, 'that file is the replacement daemons, not ours to remove');
-  fs.rmSync(p);
+test('status does not cry stale for a daemon running this build', async () => {
+  const board = await freshBoard();
+  await daemon.acquireBoard(db, board.id, holderId('daemon', process.pid, HERE), 1000, daemon.buildVersion(), () => new Date());
+  const [s] = await daemon.status(board.slug);
+  assert.equal(s.behind, null);
 });
 
-test('kb down on a stale pid file clears it and says so rather than pretending it stopped one', async () => {
-  const done = spawnSync(process.execPath, ['-e', '0']);
-  fs.writeFileSync(daemon.pidPath('leftover'), JSON.stringify({
-    pid: done.pid, board: 'leftover', intervalMs: 1000, startedAt: new Date().toISOString(), holder: 'x',
-  }));
-  const res = await daemon.stop('leftover');
-  assert.equal(res.stopped, false);
-  assert.match(res.why as string, /stale/);
-  assert.equal(fs.existsSync(daemon.pidPath('leftover')), false);
+test('releasing gives up every board this daemon led, and only those', async () => {
+  const a = await freshBoard();
+  const b = await freshBoard();
+  const me = holderId('daemon', process.pid, HERE);
+  const other = holderId('daemon', process.pid + 1, HERE);
+  const now = () => new Date();
+  await daemon.acquireBoard(db, a.id, me, 1000, 'v', now);
+  await daemon.acquireBoard(db, b.id, other, 1000, 'v', now);
+  assert.equal(await daemon.releaseBoards(db, me), 1);
+  assert.equal(await db.controller.findUnique({ where: { boardId: a.id } }), null);
+  assert.ok(await db.controller.findUnique({ where: { boardId: b.id } }), 'not ours to release');
 });
 
-test('kb down with nothing to stop is not an error story, just a fact', async () => {
-  const res = await daemon.stop('never-existed');
+test('kb down with nothing to stop is a fact, not an error story', async () => {
+  const res = await daemon.stop({ board: (await freshBoard()).slug });
   assert.equal(res.stopped, false);
   assert.equal(res.why, 'no daemon running');
+});
+
+test('kb down clears a controller row whose daemon is gone', async () => {
+  const board = await freshBoard();
+  const done = spawnSync(process.execPath, ['-e', '0']);
+  await db.controller.create({
+    data: {
+      boardId: board.id, holder: holderId('daemon', done.pid as number, HERE),
+      intervalMs: 1000, version: 'v', expiresAt: new Date(Date.now() + 3600_000),
+    },
+  });
+  const res = await daemon.stop({ board: board.slug });
+  assert.equal(res.stopped, false);
+  assert.match(res.why as string, /stale/);
+  assert.equal(await db.controller.findUnique({ where: { boardId: board.id } }), null);
+});
+
+test('kb down refuses to reach across the network at a daemon on another machine', async () => {
+  const board = await freshBoard();
+  await db.controller.create({
+    data: {
+      boardId: board.id, holder: holderId('daemon', 4242, 'some-other-laptop'),
+      intervalMs: 1000, version: 'v', expiresAt: new Date(Date.now() + 3600_000),
+    },
+  });
+  const res = await daemon.stop({ board: board.slug });
+  assert.equal(res.stopped, false);
+  assert.match(res.why as string, /another machine/);
+  await db.controller.deleteMany({ where: { boardId: board.id } });
+});
+
+// ---------------------------------------------------------------- many boards, one daemon
+
+test('one daemon serves every board, the way one controller-manager serves every namespace', async () => {
+  const a = await freshBoard();
+  const b = await freshBoard();
+  await mkJob(a.id);
+  await mkJob(b.id);
+  const stopper = new AbortController();
+  const lines: string[] = [];
+  await daemon.loop({
+    runtime: fakeRuntime(), cwd: REPO, intervalMs: 5,
+    signal: stopper.signal, maxTicks: 2, log: (l) => lines.push(l),
+  });
+  for (const board of [a, b]) {
+    const jobs = await db.job.findMany({ where: { boardId: board.id } });
+    assert.ok(jobs.every((j) => j.phase === 'succeeded'), `${board.slug} was served`);
+    const kinds = (await db.event.findMany({ where: { boardId: board.id } })).map((e) => e.kind);
+    assert.ok(kinds.includes('daemon_up'), `${board.slug} recorded the daemon taking it`);
+    assert.ok(kinds.includes('daemon_down'), `${board.slug} recorded it letting go`);
+  }
+  assert.ok(lines.some((l) => l.includes(`[${a.slug}]`)), 'lines say which board they came from');
+  assert.equal(await db.controller.count(), 0, 'and it let go of both on the way out');
+});
+
+test('a board created after the daemon started is picked up without a restart', async () => {
+  const stopper = new AbortController();
+  let later: { id: number; slug: string } | null = null;
+  await daemon.loop({
+    runtime: fakeRuntime(), cwd: REPO, intervalMs: 5,
+    signal: stopper.signal, maxTicks: 2, log: () => {},
+    sleep: async () => {
+      if (later) return;
+      later = await freshBoard();
+      await mkJob(later.id);
+    },
+  });
+  const jobs = await db.job.findMany({ where: { boardId: later!.id } });
+  assert.ok(jobs.length && jobs.every((j) => j.phase === 'succeeded'),
+    'a controller re-reads the world; only a launcher needs restarting');
+});
+
+test('the Job runs in the repository its BOARD names, not wherever the daemon started', async () => {
+  // The reason `repoPath` exists: a machine-level daemon has no meaningful cwd of its own.
+  const board = await db.board.create({
+    data: { slug: `repo${++n}`, repoPath: elsewhere },
+  });
+  const job = await db.job.create({
+    data: { boardId: board.id, name: 'in its own repo', brief: 'x', isolate: true, maxRetries: 0 },
+  });
+  await reconcile({ runtime: fakeRuntime(), cwd: REPO, board: board.slug, readPr: false });
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts[0].branch, `kb-${job.id}-1`);
+  assert.ok(fs.existsSync(path.join(elsewhere, 'ELSEWHERE.md')),
+    'sanity: the other repository is the one with this file in it');
+  const wt = path.join(elsewhere, '.kanban', 'worktrees');
+  assert.equal(fs.existsSync(path.join(REPO, '.kanban', 'worktrees', `kb-${job.id}-1`)), false,
+    'and no worktree was cut in the daemon-cwd repository');
+  void wt;
 });

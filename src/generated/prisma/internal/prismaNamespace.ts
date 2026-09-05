@@ -398,6 +398,7 @@ type FieldRefInputType<Model, FieldType> = Model extends never ? never : FieldRe
 
 export const ModelName = {
   Board: 'Board',
+  Controller: 'Controller',
   Job: 'Job',
   Attempt: 'Attempt',
   Lease: 'Lease',
@@ -417,7 +418,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "board" | "job" | "attempt" | "lease" | "event"
+    modelProps: "board" | "controller" | "job" | "attempt" | "lease" | "event"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -492,6 +493,80 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         count: {
           args: Prisma.BoardCountArgs<ExtArgs>
           result: runtime.Types.Utils.Optional<Prisma.BoardCountAggregateOutputType> | number
+        }
+      }
+    }
+    Controller: {
+      payload: Prisma.$ControllerPayload<ExtArgs>
+      fields: Prisma.ControllerFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.ControllerFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ControllerPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.ControllerFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ControllerPayload>
+        }
+        findFirst: {
+          args: Prisma.ControllerFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ControllerPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.ControllerFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ControllerPayload>
+        }
+        findMany: {
+          args: Prisma.ControllerFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ControllerPayload>[]
+        }
+        create: {
+          args: Prisma.ControllerCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ControllerPayload>
+        }
+        createMany: {
+          args: Prisma.ControllerCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.ControllerCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ControllerPayload>[]
+        }
+        delete: {
+          args: Prisma.ControllerDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ControllerPayload>
+        }
+        update: {
+          args: Prisma.ControllerUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ControllerPayload>
+        }
+        deleteMany: {
+          args: Prisma.ControllerDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.ControllerUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.ControllerUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ControllerPayload>[]
+        }
+        upsert: {
+          args: Prisma.ControllerUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ControllerPayload>
+        }
+        aggregate: {
+          args: Prisma.ControllerAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateController>
+        }
+        groupBy: {
+          args: Prisma.ControllerGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.ControllerGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.ControllerCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.ControllerCountAggregateOutputType> | number
         }
       }
     }
@@ -830,6 +905,7 @@ export type TransactionIsolationLevel = (typeof TransactionIsolationLevel)[keyof
 export const BoardScalarFieldEnum = {
   id: 'id',
   slug: 'slug',
+  repoPath: 'repoPath',
   pausedAt: 'pausedAt',
   pausedBy: 'pausedBy',
   dailyBudgetUsd: 'dailyBudgetUsd',
@@ -839,6 +915,19 @@ export const BoardScalarFieldEnum = {
 } as const
 
 export type BoardScalarFieldEnum = (typeof BoardScalarFieldEnum)[keyof typeof BoardScalarFieldEnum]
+
+
+export const ControllerScalarFieldEnum = {
+  boardId: 'boardId',
+  holder: 'holder',
+  intervalMs: 'intervalMs',
+  version: 'version',
+  startedAt: 'startedAt',
+  renewedAt: 'renewedAt',
+  expiresAt: 'expiresAt'
+} as const
+
+export type ControllerScalarFieldEnum = (typeof ControllerScalarFieldEnum)[keyof typeof ControllerScalarFieldEnum]
 
 
 export const JobScalarFieldEnum = {
@@ -1172,6 +1261,7 @@ export interface PrismaClientOptionsWithAdapter extends PrismaClientBaseOptions 
 export type PrismaClientOptions = PrismaClientOptionsWithAccelerateUrl | PrismaClientOptionsWithAdapter
 export type GlobalOmitConfig = {
   board?: Prisma.BoardOmit
+  controller?: Prisma.ControllerOmit
   job?: Prisma.JobOmit
   attempt?: Prisma.AttemptOmit
   lease?: Prisma.LeaseOmit

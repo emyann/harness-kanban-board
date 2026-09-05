@@ -20,6 +20,8 @@
   ],
   "scripts": {
     "test": "node --test",
+    "test:core": "node --test test/*.test.ts",
+    "test:legacy": "node --test test/*.test.js",
     "lint": "for f in $(find bin src scripts -name '*.js' -o -name '*.mjs'); do node --check \"$f\" || exit 1; done && npm run typecheck",
     "typecheck": "if [ -x node_modules/.bin/tsc ]; then node_modules/.bin/tsc --noEmit; else echo 'hkb: type check skipped \u2014 no local typescript. Run `npm install` first (a devDependency; hkb itself still runs with an empty node_modules).' >&2; fi",
     "smoke": "node scripts/smoke-pack.mjs"

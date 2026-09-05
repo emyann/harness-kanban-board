@@ -52,6 +52,7 @@ export const AnyNull = runtime.AnyNull
 
 export const ModelName = {
   Board: 'Board',
+  Controller: 'Controller',
   Job: 'Job',
   Attempt: 'Attempt',
   Lease: 'Lease',
@@ -74,6 +75,7 @@ export type TransactionIsolationLevel = (typeof TransactionIsolationLevel)[keyof
 export const BoardScalarFieldEnum = {
   id: 'id',
   slug: 'slug',
+  repoPath: 'repoPath',
   pausedAt: 'pausedAt',
   pausedBy: 'pausedBy',
   dailyBudgetUsd: 'dailyBudgetUsd',
@@ -83,6 +85,19 @@ export const BoardScalarFieldEnum = {
 } as const
 
 export type BoardScalarFieldEnum = (typeof BoardScalarFieldEnum)[keyof typeof BoardScalarFieldEnum]
+
+
+export const ControllerScalarFieldEnum = {
+  boardId: 'boardId',
+  holder: 'holder',
+  intervalMs: 'intervalMs',
+  version: 'version',
+  startedAt: 'startedAt',
+  renewedAt: 'renewedAt',
+  expiresAt: 'expiresAt'
+} as const
+
+export type ControllerScalarFieldEnum = (typeof ControllerScalarFieldEnum)[keyof typeof ControllerScalarFieldEnum]
 
 
 export const JobScalarFieldEnum = {

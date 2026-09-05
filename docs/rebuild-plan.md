@@ -228,6 +228,49 @@ the half that needs a loop. Revisit when latency is a complaint.
 
 ---
 
+## Phase 4b — One board per machine
+
+Done between Phase 4 and Phase 5, because doing it after would have meant ten
+unattended runs producing evidence about machinery already replaced.
+
+The board moved from `<repo>/.kanban/board.db` to `~/.hkb/board.db`: one board per
+machine, a `Board` row per repository, one daemon serving all of them. Boards were
+already Namespaces in the ADR-007 mapping; they were just each sitting in their own
+cluster, which is the one shape in which "what is running on this machine" cannot be
+a query.
+
+| | |
+|---|---|
+| `Board.repoPath`, and `reconcile` takes its checkout from it | Done |
+| `Controller` row replacing the pid file | Done |
+| `~/.hkb/board.db` default, self-migrating on first touch | Done |
+| `kb up` serves every board; `--board` narrows it | Done |
+| `kb boards`, `kb boards add <slug> --repo <path>` | Done |
+| The board inferred from the repository you are standing in | Done |
+| Schema-version guard, and a stale-daemon line in `kb up --status` | Done |
+
+**Why the pid file had to go.** It was a second source of truth outside the store,
+re-deriving staleness rules `Lease` already owned — and getting one wrong: it recorded
+a hostname and never read it back, so on a shared filesystem it asked the wrong
+machine's process table. The `Controller` row is the same compare-and-swap as `Lease`
+and reuses `holderLiveness`, which is tested. It is also leader election rather than
+exclusion, which is what Kubernetes actually does — three controller-managers, one
+`Lease`, not a lock.
+
+**Two things found while doing it, neither in scope.** `--interval` had no floor:
+`--interval 0` ran 2221 passes in three seconds (fixed, #347). And `test/kb.test.ts`
+patches `process.stdout.write` to capture CLI output, while `node --test` multiplexes
+its own reporter frames over that stream — so the harness was quietly
+timing-dependent and started failing with `Unexpected token '\uFFFD'` when this work
+shifted the timing. Frames are filtered now.
+
+**Bootstrap, answered.** "hkb builds hkb while hkb runs pipao" needs no version
+juggling, because an ADR-007 worker never invokes `kb` — `src/brief.ts` asks for a
+commit, a push and a draft PR, and the controller records the outcome from the SDK
+result. The old protocol's terminal verbs were what made the CLI a worker dependency.
+
+---
+
 ## Phase 5 — The dogfood gate
 
 **Goal:** decide, on evidence, whether the board can carry hkb's own work.
