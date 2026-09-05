@@ -12,7 +12,7 @@ covers:
     sha: bfa931e90aafe981aed30a83e270659b368f4448
   - path: src/runtime/fake.ts
     sha: 2812e6a707094da8bebbcb8b32388922e6d2aae0
-generated_at_commit: 7186a44
+generated_at_commit: 83282ad
 last_refreshed: 2026-09-05
 related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, concepts/worker-identity]
 ---
@@ -97,5 +97,14 @@ make the suite cost money and stop being deterministic.
 - No wall-clock timeout, and no cancellation. `interrupt()` requires the SDK's
   streaming-input mode (an `AsyncIterable` prompt); the driver uses single-message
   input, so a hung run can only be bounded by the Job's lease expiry.
+- **Single-message input is an open, structural decision**, not a driver setting.
+  A Job is batch — it terminates, which is what lets a lease replace a heartbeat and
+  what makes the phase model mean anything. A streaming session stays up and takes
+  input over time, which is a Deployment rather than a Job and reconciles toward a
+  steady state instead of completion. Three of the four things streaming buys have
+  single-mode answers (timeout → `AbortController`; images → materialise into the
+  worktree; multi-turn → `resume`); only *steering a live run* needs it, and that is
+  most likely a second kind rather than a change to this one. See
+  `docs/rebuild-plan.md`, "Open decision".
 - Only one real driver. The seam is shaped for a second one, but nothing proves it
   is the right shape until a second exists.

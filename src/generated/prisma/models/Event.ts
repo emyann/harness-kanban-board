@@ -422,14 +422,6 @@ export type EventUncheckedUpdateManyWithoutJobNestedInput = {
   deleteMany?: Prisma.EventScalarWhereInput | Prisma.EventScalarWhereInput[]
 }
 
-export type NullableIntFieldUpdateOperationsInput = {
-  set?: number | null
-  increment?: number
-  decrement?: number
-  multiply?: number
-  divide?: number
-}
-
 export type EventCreateWithoutJobInput = {
   at?: Date | string
   kind: string

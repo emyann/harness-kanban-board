@@ -1,4 +1,7 @@
 import { openBoard } from './db.ts';
+import { createWorktree, removeWorktree, type Worktree } from './worktree.ts';
+import { prForBranch } from './pulls.ts';
+import { withProtocol } from './brief.ts';
 import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
 
 /**
@@ -34,6 +37,8 @@ export type ControllerDeps = {
    * every namespace on the host — which is what `kb run --board other` silently did before.
    */
   board?: string;
+  /** Read the pull request back from the forge after a run. Off in tests, which have no forge. */
+  readPr?: boolean;
 };
 
 export type ReconcileReport = {
@@ -145,14 +150,36 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     report.claimed.push(job.id);
     deps.onEvent?.(`claim   #${job.id} k=${k} ${job.name}`);
 
+    // ---- isolate. The SDK has no isolation option for a top-level query, so the checkout is
+    // ours to make. `isolate: false` is the escape hatch for a read-only job and is not the
+    // default: a worker that edits the operator's tree is the failure this exists to prevent.
+    let wt: Worktree | null = null;
+    if (job.isolate) {
+      try {
+        wt = createWorktree(deps.cwd, job.id, k);
+        deps.onEvent?.(`  worktree ${wt.branch} from ${wt.baseLabel}`);
+      } catch (e) {
+        // A checkout we could not make is a spawn failure, not a worker failure. Say so, release,
+        // and leave the Job pending rather than burning a retry on our own plumbing.
+        await db.lease.delete({ where: { jobId: job.id } });
+        await db.attempt.update({
+          where: { jobId_k: { jobId: job.id, k } },
+          data: { endedAt: now(), outcome: 'crashed', reason: (e as Error).message.slice(0, 300) },
+        });
+        await db.job.update({ where: { id: job.id }, data: { phase: 'pending', lastError: (e as Error).message } });
+        report.retrying.push(job.id);
+        continue;
+      }
+    }
+
     // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
     // starting cold, which is the whole reason that column exists.
     const outcome = await deps.runtime
       .run({
         taskId: job.id,
         attempt: k,
-        cwd: deps.cwd,
-        prompt: job.brief,
+        cwd: wt ? wt.path : deps.cwd,
+        prompt: wt ? withProtocol(job.brief, wt.branch) : job.brief,
         model: job.model ?? undefined,
         effort: (job.effort as 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined) ?? undefined,
         maxTurns: job.maxTurns,
@@ -163,6 +190,11 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     const decision = nextPhase(outcome, k, job.maxRetries);
 
+    // ---- what landed on the forge. One read, by head branch: the board and the forge are two
+    // systems and this is the only thing that joins them.
+    const pr = wt && deps.readPr !== false ? prForBranch(deps.cwd, wt.branch) : null;
+    if (pr) deps.onEvent?.(`  ${pr.isDraft ? 'draft ' : ''}PR #${pr.number} ${pr.url}`);
+
     await db.attempt.update({
       where: { jobId_k: { jobId: job.id, k } },
       data: {
@@ -172,6 +204,9 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         summary: outcome?.text?.slice(0, 2000) ?? null,
         reason: outcome?.error?.slice(0, 300) ?? null,
         costUsd: outcome?.costUsd ?? null,
+        branch: wt?.branch ?? null,
+        prNumber: pr?.number ?? null,
+        prUrl: pr?.url ?? null,
       },
     });
 
@@ -190,6 +225,13 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       data: { kind: decision.outcome, jobId: job.id, actor: host, payload: { k, phase: decision.phase } },
     });
     await db.lease.delete({ where: { jobId: job.id } });
+
+    // ---- tidy. Never forced: a worktree that still holds work is the only copy of it if the
+    // push failed, so it stays and the operator is told where.
+    if (wt) {
+      const gone = removeWorktree(deps.cwd, wt);
+      if (!gone.removed) deps.onEvent?.(`  kept ${wt.path} — ${gone.why}`);
+    }
 
     if (decision.phase === 'succeeded') report.succeeded.push(job.id);
     else if (decision.phase === 'failed') report.failed.push(job.id);

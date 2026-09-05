@@ -23,3 +23,6 @@ package-lock.json
 .kanban/*.db
 .kanban/*.db-shm
 .kanban/*.db-wal
+
+# Per-attempt checkouts the controller makes. Contents are branches, not files to track.
+.kanban/worktrees/

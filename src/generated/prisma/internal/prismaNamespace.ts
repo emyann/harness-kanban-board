@@ -872,6 +872,9 @@ export const AttemptScalarFieldEnum = {
   sessionId: 'sessionId',
   summary: 'summary',
   reason: 'reason',
+  branch: 'branch',
+  prNumber: 'prNumber',
+  prUrl: 'prUrl',
   costUsd: 'costUsd'
 } as const
 

@@ -892,6 +892,8 @@ export const GITIGNORE_LINES = [
   '.kanban/*.db',
   '.kanban/*.db-shm',
   '.kanban/*.db-wal',
+  // A checkout per attempt. Contents are branches, not files to track.
+  '.kanban/worktrees/',
   '.claude/worktrees/',
   '.claude/settings.local.json',
 ];

@@ -108,6 +108,12 @@ model Attempt {
   sessionId String?
   summary   String?
   reason    String?
+
+  // What this attempt produced on the forge. A fact about what happened, so it is history and
+  // belongs here; the PR's *state* (open, merged, conflicted) is live and stays on GitHub.
+  branch    String?
+  prNumber  Int?
+  prUrl     String?
   /// Reported for the operator's benefit only — the SDK can always recompute it from the session.
   costUsd   Float?
 
