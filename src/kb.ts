@@ -179,6 +179,10 @@ export async function main(argv: string[]): Promise<number> {
         for (const a of job.attempts) {
           const cost = a.costUsd ? ` $${a.costUsd.toFixed(4)}` : '';
           console.log(`  k=${a.k}      ${(a.outcome ?? 'running').padEnd(11)}${cost}  ${a.sessionId ?? '—'}`);
+          // The reviewable artifact. It is the point of the run, so it gets its own line rather
+          // than being something you go and look for.
+          if (a.prUrl) console.log(`           PR #${a.prNumber}  ${a.prUrl}`);
+          else if (a.branch) console.log(`           branch ${a.branch} — no pull request found`);
           if (a.reason) console.log(`           ${a.reason.slice(0, 100)}`);
         }
       });

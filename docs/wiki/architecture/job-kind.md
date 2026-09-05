@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "adding a workload kind, changing retry or lease behaviour, or wondering why the DAG is not in the core"
 covers:
   - path: prisma/schema.prisma
-    sha: ad64832b62693fca2c4237a03dc399a6c2f78cf7
+    sha: 7e7fb06ba5e5f252b5e1f02cc656063295e30433
   - path: src/controller.ts
-    sha: eac19c8cff520d199a360145ae4452c557b917da
+    sha: 4693922ed0c9a22e12cbbbf64881a9d62f1da74f
   - path: src/db.ts
     sha: bf646fb9e9310a7550ad610aba36fdc0d00fb787
-generated_at_commit: 7186a44
+generated_at_commit: 83282ad
 last_refreshed: 2026-09-05
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control]
 ---
@@ -55,10 +55,21 @@ Attempt.
 ## One reconcile pass
 
 `reconcile()` (`src/controller.ts`) is the whole control plane for this kind:
-reclaim expired leases, read `pending` jobs, compare-and-swap a lease, run,
-record, release. It is a reconciler rather than a queue consumer, which is what
-makes it safe to run repeatedly, safe to interrupt, and safe to run while another
-host runs it.
+reclaim expired leases, read `pending` jobs, compare-and-swap a lease, make the
+attempt's checkout, run, read back what landed on the forge, record, release,
+tidy. It is a reconciler rather than a queue consumer, which is what makes it safe
+to run repeatedly, safe to interrupt, and safe to run while another host runs it.
+
+**A worker never touches the operator's checkout.** `Job.isolate` (default on) makes
+a git worktree per attempt on `kb-<jobId>-<k>`, and that is the controller's job
+because the SDK has no isolation option for a top-level `query()` —
+`isolation: "worktree"` is a parameter of the `Agent` tool and only reaches
+subagents (`src/worktree.ts`). The brief gains a fixed protocol on top: commit on
+the branch, push, open a **draft** pull request, never merge (`src/brief.ts`). The
+human merges, which is what keeps this kind dumb.
+
+A checkout that still holds work is never removed — if the push failed, that
+directory is the only copy.
 
 **The claim is the `@@id` on `Lease`.** A second holder's insert fails against the
 primary key, and that failure *is* the answer — the loser is recorded in

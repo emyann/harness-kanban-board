@@ -29,12 +29,14 @@ export type AggregateAttempt = {
 export type AttemptAvgAggregateOutputType = {
   jobId: number | null
   k: number | null
+  prNumber: number | null
   costUsd: number | null
 }
 
 export type AttemptSumAggregateOutputType = {
   jobId: number | null
   k: number | null
+  prNumber: number | null
   costUsd: number | null
 }
 
@@ -49,6 +51,9 @@ export type AttemptMinAggregateOutputType = {
   sessionId: string | null
   summary: string | null
   reason: string | null
+  branch: string | null
+  prNumber: number | null
+  prUrl: string | null
   costUsd: number | null
 }
 
@@ -63,6 +68,9 @@ export type AttemptMaxAggregateOutputType = {
   sessionId: string | null
   summary: string | null
   reason: string | null
+  branch: string | null
+  prNumber: number | null
+  prUrl: string | null
   costUsd: number | null
 }
 
@@ -77,6 +85,9 @@ export type AttemptCountAggregateOutputType = {
   sessionId: number
   summary: number
   reason: number
+  branch: number
+  prNumber: number
+  prUrl: number
   costUsd: number
   _all: number
 }
@@ -85,12 +96,14 @@ export type AttemptCountAggregateOutputType = {
 export type AttemptAvgAggregateInputType = {
   jobId?: true
   k?: true
+  prNumber?: true
   costUsd?: true
 }
 
 export type AttemptSumAggregateInputType = {
   jobId?: true
   k?: true
+  prNumber?: true
   costUsd?: true
 }
 
@@ -105,6 +118,9 @@ export type AttemptMinAggregateInputType = {
   sessionId?: true
   summary?: true
   reason?: true
+  branch?: true
+  prNumber?: true
+  prUrl?: true
   costUsd?: true
 }
 
@@ -119,6 +135,9 @@ export type AttemptMaxAggregateInputType = {
   sessionId?: true
   summary?: true
   reason?: true
+  branch?: true
+  prNumber?: true
+  prUrl?: true
   costUsd?: true
 }
 
@@ -133,6 +152,9 @@ export type AttemptCountAggregateInputType = {
   sessionId?: true
   summary?: true
   reason?: true
+  branch?: true
+  prNumber?: true
+  prUrl?: true
   costUsd?: true
   _all?: true
 }
@@ -234,6 +256,9 @@ export type AttemptGroupByOutputType = {
   sessionId: string | null
   summary: string | null
   reason: string | null
+  branch: string | null
+  prNumber: number | null
+  prUrl: string | null
   costUsd: number | null
   _count: AttemptCountAggregateOutputType | null
   _avg: AttemptAvgAggregateOutputType | null
@@ -271,6 +296,9 @@ export type AttemptWhereInput = {
   sessionId?: Prisma.StringNullableFilter<"Attempt"> | string | null
   summary?: Prisma.StringNullableFilter<"Attempt"> | string | null
   reason?: Prisma.StringNullableFilter<"Attempt"> | string | null
+  branch?: Prisma.StringNullableFilter<"Attempt"> | string | null
+  prNumber?: Prisma.IntNullableFilter<"Attempt"> | number | null
+  prUrl?: Prisma.StringNullableFilter<"Attempt"> | string | null
   costUsd?: Prisma.FloatNullableFilter<"Attempt"> | number | null
   job?: Prisma.XOR<Prisma.JobScalarRelationFilter, Prisma.JobWhereInput>
 }
@@ -286,6 +314,9 @@ export type AttemptOrderByWithRelationInput = {
   sessionId?: Prisma.SortOrderInput | Prisma.SortOrder
   summary?: Prisma.SortOrderInput | Prisma.SortOrder
   reason?: Prisma.SortOrderInput | Prisma.SortOrder
+  branch?: Prisma.SortOrderInput | Prisma.SortOrder
+  prNumber?: Prisma.SortOrderInput | Prisma.SortOrder
+  prUrl?: Prisma.SortOrderInput | Prisma.SortOrder
   costUsd?: Prisma.SortOrderInput | Prisma.SortOrder
   job?: Prisma.JobOrderByWithRelationInput
 }
@@ -305,6 +336,9 @@ export type AttemptWhereUniqueInput = Prisma.AtLeast<{
   sessionId?: Prisma.StringNullableFilter<"Attempt"> | string | null
   summary?: Prisma.StringNullableFilter<"Attempt"> | string | null
   reason?: Prisma.StringNullableFilter<"Attempt"> | string | null
+  branch?: Prisma.StringNullableFilter<"Attempt"> | string | null
+  prNumber?: Prisma.IntNullableFilter<"Attempt"> | number | null
+  prUrl?: Prisma.StringNullableFilter<"Attempt"> | string | null
   costUsd?: Prisma.FloatNullableFilter<"Attempt"> | number | null
   job?: Prisma.XOR<Prisma.JobScalarRelationFilter, Prisma.JobWhereInput>
 }, "jobId_k">
@@ -320,6 +354,9 @@ export type AttemptOrderByWithAggregationInput = {
   sessionId?: Prisma.SortOrderInput | Prisma.SortOrder
   summary?: Prisma.SortOrderInput | Prisma.SortOrder
   reason?: Prisma.SortOrderInput | Prisma.SortOrder
+  branch?: Prisma.SortOrderInput | Prisma.SortOrder
+  prNumber?: Prisma.SortOrderInput | Prisma.SortOrder
+  prUrl?: Prisma.SortOrderInput | Prisma.SortOrder
   costUsd?: Prisma.SortOrderInput | Prisma.SortOrder
   _count?: Prisma.AttemptCountOrderByAggregateInput
   _avg?: Prisma.AttemptAvgOrderByAggregateInput
@@ -342,6 +379,9 @@ export type AttemptScalarWhereWithAggregatesInput = {
   sessionId?: Prisma.StringNullableWithAggregatesFilter<"Attempt"> | string | null
   summary?: Prisma.StringNullableWithAggregatesFilter<"Attempt"> | string | null
   reason?: Prisma.StringNullableWithAggregatesFilter<"Attempt"> | string | null
+  branch?: Prisma.StringNullableWithAggregatesFilter<"Attempt"> | string | null
+  prNumber?: Prisma.IntNullableWithAggregatesFilter<"Attempt"> | number | null
+  prUrl?: Prisma.StringNullableWithAggregatesFilter<"Attempt"> | string | null
   costUsd?: Prisma.FloatNullableWithAggregatesFilter<"Attempt"> | number | null
 }
 
@@ -355,6 +395,9 @@ export type AttemptCreateInput = {
   sessionId?: string | null
   summary?: string | null
   reason?: string | null
+  branch?: string | null
+  prNumber?: number | null
+  prUrl?: string | null
   costUsd?: number | null
   job: Prisma.JobCreateNestedOneWithoutAttemptsInput
 }
@@ -370,6 +413,9 @@ export type AttemptUncheckedCreateInput = {
   sessionId?: string | null
   summary?: string | null
   reason?: string | null
+  branch?: string | null
+  prNumber?: number | null
+  prUrl?: string | null
   costUsd?: number | null
 }
 
@@ -383,6 +429,9 @@ export type AttemptUpdateInput = {
   sessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   summary?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  branch?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  prNumber?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  prUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   job?: Prisma.JobUpdateOneRequiredWithoutAttemptsNestedInput
 }
@@ -398,6 +447,9 @@ export type AttemptUncheckedUpdateInput = {
   sessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   summary?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  branch?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  prNumber?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  prUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
 }
 
@@ -412,6 +464,9 @@ export type AttemptCreateManyInput = {
   sessionId?: string | null
   summary?: string | null
   reason?: string | null
+  branch?: string | null
+  prNumber?: number | null
+  prUrl?: string | null
   costUsd?: number | null
 }
 
@@ -425,6 +480,9 @@ export type AttemptUpdateManyMutationInput = {
   sessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   summary?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  branch?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  prNumber?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  prUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
 }
 
@@ -439,6 +497,9 @@ export type AttemptUncheckedUpdateManyInput = {
   sessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   summary?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  branch?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  prNumber?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  prUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
 }
 
@@ -468,12 +529,16 @@ export type AttemptCountOrderByAggregateInput = {
   sessionId?: Prisma.SortOrder
   summary?: Prisma.SortOrder
   reason?: Prisma.SortOrder
+  branch?: Prisma.SortOrder
+  prNumber?: Prisma.SortOrder
+  prUrl?: Prisma.SortOrder
   costUsd?: Prisma.SortOrder
 }
 
 export type AttemptAvgOrderByAggregateInput = {
   jobId?: Prisma.SortOrder
   k?: Prisma.SortOrder
+  prNumber?: Prisma.SortOrder
   costUsd?: Prisma.SortOrder
 }
 
@@ -488,6 +553,9 @@ export type AttemptMaxOrderByAggregateInput = {
   sessionId?: Prisma.SortOrder
   summary?: Prisma.SortOrder
   reason?: Prisma.SortOrder
+  branch?: Prisma.SortOrder
+  prNumber?: Prisma.SortOrder
+  prUrl?: Prisma.SortOrder
   costUsd?: Prisma.SortOrder
 }
 
@@ -502,12 +570,16 @@ export type AttemptMinOrderByAggregateInput = {
   sessionId?: Prisma.SortOrder
   summary?: Prisma.SortOrder
   reason?: Prisma.SortOrder
+  branch?: Prisma.SortOrder
+  prNumber?: Prisma.SortOrder
+  prUrl?: Prisma.SortOrder
   costUsd?: Prisma.SortOrder
 }
 
 export type AttemptSumOrderByAggregateInput = {
   jobId?: Prisma.SortOrder
   k?: Prisma.SortOrder
+  prNumber?: Prisma.SortOrder
   costUsd?: Prisma.SortOrder
 }
 
@@ -557,6 +629,14 @@ export type NullableEnumOutcomeFieldUpdateOperationsInput = {
   set?: $Enums.Outcome | null
 }
 
+export type NullableIntFieldUpdateOperationsInput = {
+  set?: number | null
+  increment?: number
+  decrement?: number
+  multiply?: number
+  divide?: number
+}
+
 export type NullableFloatFieldUpdateOperationsInput = {
   set?: number | null
   increment?: number
@@ -575,6 +655,9 @@ export type AttemptCreateWithoutJobInput = {
   sessionId?: string | null
   summary?: string | null
   reason?: string | null
+  branch?: string | null
+  prNumber?: number | null
+  prUrl?: string | null
   costUsd?: number | null
 }
 
@@ -588,6 +671,9 @@ export type AttemptUncheckedCreateWithoutJobInput = {
   sessionId?: string | null
   summary?: string | null
   reason?: string | null
+  branch?: string | null
+  prNumber?: number | null
+  prUrl?: string | null
   costUsd?: number | null
 }
 
@@ -630,6 +716,9 @@ export type AttemptScalarWhereInput = {
   sessionId?: Prisma.StringNullableFilter<"Attempt"> | string | null
   summary?: Prisma.StringNullableFilter<"Attempt"> | string | null
   reason?: Prisma.StringNullableFilter<"Attempt"> | string | null
+  branch?: Prisma.StringNullableFilter<"Attempt"> | string | null
+  prNumber?: Prisma.IntNullableFilter<"Attempt"> | number | null
+  prUrl?: Prisma.StringNullableFilter<"Attempt"> | string | null
   costUsd?: Prisma.FloatNullableFilter<"Attempt"> | number | null
 }
 
@@ -643,6 +732,9 @@ export type AttemptCreateManyJobInput = {
   sessionId?: string | null
   summary?: string | null
   reason?: string | null
+  branch?: string | null
+  prNumber?: number | null
+  prUrl?: string | null
   costUsd?: number | null
 }
 
@@ -656,6 +748,9 @@ export type AttemptUpdateWithoutJobInput = {
   sessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   summary?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  branch?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  prNumber?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  prUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
 }
 
@@ -669,6 +764,9 @@ export type AttemptUncheckedUpdateWithoutJobInput = {
   sessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   summary?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  branch?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  prNumber?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  prUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
 }
 
@@ -682,6 +780,9 @@ export type AttemptUncheckedUpdateManyWithoutJobInput = {
   sessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   summary?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  branch?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  prNumber?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  prUrl?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
 }
 
@@ -698,6 +799,9 @@ export type AttemptSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs 
   sessionId?: boolean
   summary?: boolean
   reason?: boolean
+  branch?: boolean
+  prNumber?: boolean
+  prUrl?: boolean
   costUsd?: boolean
   job?: boolean | Prisma.JobDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["attempt"]>
@@ -713,6 +817,9 @@ export type AttemptSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Exten
   sessionId?: boolean
   summary?: boolean
   reason?: boolean
+  branch?: boolean
+  prNumber?: boolean
+  prUrl?: boolean
   costUsd?: boolean
   job?: boolean | Prisma.JobDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["attempt"]>
@@ -728,6 +835,9 @@ export type AttemptSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Exten
   sessionId?: boolean
   summary?: boolean
   reason?: boolean
+  branch?: boolean
+  prNumber?: boolean
+  prUrl?: boolean
   costUsd?: boolean
   job?: boolean | Prisma.JobDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["attempt"]>
@@ -743,10 +853,13 @@ export type AttemptSelectScalar = {
   sessionId?: boolean
   summary?: boolean
   reason?: boolean
+  branch?: boolean
+  prNumber?: boolean
+  prUrl?: boolean
   costUsd?: boolean
 }
 
-export type AttemptOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"jobId" | "k" | "host" | "runtime" | "startedAt" | "endedAt" | "outcome" | "sessionId" | "summary" | "reason" | "costUsd", ExtArgs["result"]["attempt"]>
+export type AttemptOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"jobId" | "k" | "host" | "runtime" | "startedAt" | "endedAt" | "outcome" | "sessionId" | "summary" | "reason" | "branch" | "prNumber" | "prUrl" | "costUsd", ExtArgs["result"]["attempt"]>
 export type AttemptInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   job?: boolean | Prisma.JobDefaultArgs<ExtArgs>
 }
@@ -776,6 +889,9 @@ export type $AttemptPayload<ExtArgs extends runtime.Types.Extensions.InternalArg
     sessionId: string | null
     summary: string | null
     reason: string | null
+    branch: string | null
+    prNumber: number | null
+    prUrl: string | null
     /**
      * Reported for the operator's benefit only — the SDK can always recompute it from the session.
      */
@@ -1214,6 +1330,9 @@ export interface AttemptFieldRefs {
   readonly sessionId: Prisma.FieldRef<"Attempt", 'String'>
   readonly summary: Prisma.FieldRef<"Attempt", 'String'>
   readonly reason: Prisma.FieldRef<"Attempt", 'String'>
+  readonly branch: Prisma.FieldRef<"Attempt", 'String'>
+  readonly prNumber: Prisma.FieldRef<"Attempt", 'Int'>
+  readonly prUrl: Prisma.FieldRef<"Attempt", 'String'>
   readonly costUsd: Prisma.FieldRef<"Attempt", 'Float'>
 }
     

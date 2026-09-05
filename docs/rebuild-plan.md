@@ -131,9 +131,9 @@ bounds are tested.
   per-board daily ceiling the controller checks *before* claiming, and a
   concurrency limit. Both refuse loudly rather than silently skipping.
 - **A wall-clock timeout.** The one gap the runtime page already names: a hung
-  session holds its lease until `expiresAt` and nothing stops it. Either bound the
-  run with an `AbortController`, or move the driver to streaming-input mode so
-  `interrupt()` becomes available. Decide which; do not do both.
+  session holds its lease until `expiresAt` and nothing stops it. Bound the run
+  with an `AbortController` — **not** by moving to streaming input for
+  `interrupt()`. That move is structural and has its own decision below.
 - **Resume, proved.** `nextPhase()` already keeps `lastSessionId` for the two
   resumable stops, and `reconcile()` already passes `resume`. Nothing has
   exercised it against the real SDK. Add one integration test that hits a turn cap
@@ -216,6 +216,51 @@ In this order, and each one only when the previous is boring:
 5. **Integration.** A dependent card cannot see a sibling's unmerged work; no
    `worktree.baseRef` setting fixes that. The old design's `kb/track-<root>`
    integration branch is the shape that does. Do not start the DAG kind without it.
+
+---
+
+## Open decision: single-message vs streaming input
+
+**Status: undecided. Do not settle it inside a phase — it is structural.**
+
+The runtime uses **single-message input**: `prompt` is a string, the session runs to
+completion, the result comes back. That is deliberate and it is what makes the Job
+kind a Job. It is also what forecloses four things, and the reason this is an open
+decision rather than a task is that only one of them actually needs streaming:
+
+| Wanted | Single-mode answer |
+|---|---|
+| A wall-clock timeout | `AbortController` around the run (Phase 3) |
+| Images from outside the repo | materialise them into the worktree; the brief names the paths, `Read` renders them |
+| Multi-turn continuation | `resume: <sessionId>` — already works, already used by the two resumable stops |
+| **Steering a run while it is running** | **none. This is the one that requires streaming.** |
+
+### Why it is structural, and not a driver detail
+
+The Kubernetes mapping this core is built on depends on a Job *terminating*:
+
+- **A Job is batch.** It has a completion condition, a retry budget, and a phase
+  model (`pending → running → succeeded`) that assumes an end. A streaming session
+  is a process that stays up and accepts input over time — that is a Deployment,
+  not a Job, and it reconciles toward a *steady state* rather than toward
+  completion. Different controller shape, not a different flag.
+- **The lease stops meaning what it means.** A Job's lease covers one bounded run,
+  which is why it could replace the heartbeat that ADR-007 deleted. A long-lived
+  session's liveness is a heartbeat again, and that is the invariant the reset
+  spent the most effort simplifying.
+- **"Store what survives the runtime process" was justified by brevity.** A short
+  run makes in-memory state cheap to lose. A session held open for hours makes it
+  expensive, which reopens what belongs in the store.
+
+### The likely answer, stated as a hypothesis
+
+Steering a live agent is probably **a second kind** — an attended/interactive one —
+rather than a change to this one. That would keep the Job batch-shaped and give the
+streaming session its own controller, its own phases and its own liveness rule,
+which is what the k8s mapping would predict.
+
+Investigate before Phase 4 (the loop), because a loop built for batch Jobs and a
+loop supervising long-lived sessions are not the same loop.
 
 ---
 

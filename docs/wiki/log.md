@@ -259,3 +259,6 @@ history.
 ## 2026-09-05 — refreshed architecture/runtime-layer (permissionMode is dontAsk, and the tool surface is enforced in the hook)
 ## 2026-09-05 — refreshed architecture/job-kind (controller gained board scoping and a single-job filter; claims re-verified)
 ## 2026-09-05 — refreshed decisions/adr-007-workload-scheduler (implementation moved, decision unchanged: re-verified, not superseded)
+## 2026-09-05 — refreshed architecture/runtime-layer (single-message input recorded as a structural open decision, not a driver setting)
+## 2026-09-05 — refreshed architecture/job-kind (Phase 2: worktree per attempt, the brief protocol, the forge read-back)
+## 2026-09-05 — refreshed decisions/adr-007-workload-scheduler (schema grew forge history; decision unchanged, so re-verified rather than superseded)

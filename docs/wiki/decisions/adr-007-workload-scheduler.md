@@ -11,18 +11,18 @@ supersedes: decisions/adr-006-local-store
 superseded_by: ~
 covers:
   - path: prisma/schema.prisma
-    sha: ad64832b62693fca2c4237a03dc399a6c2f78cf7
+    sha: 7e7fb06ba5e5f252b5e1f02cc656063295e30433
   - path: src/db.ts
     sha: bf646fb9e9310a7550ad610aba36fdc0d00fb787
   - path: src/controller.ts
-    sha: eac19c8cff520d199a360145ae4452c557b917da
+    sha: 4693922ed0c9a22e12cbbbf64881a9d62f1da74f
   - path: src/admission.ts
     sha: 964084be7460a43be49db9819665a6269f6a252f
   - path: src/runtime/index.ts
     sha: 4dc87ff6c62f6a481e54a10206a0329eb90dcd85
   - path: package.json
     sha: fdb07ef571e5af4a0540eb8215d2e3bb699c5c12
-generated_at_commit: 7186a44
+generated_at_commit: 83282ad
 last_refreshed: 2026-09-05
 related: [decisions/adr-006-local-store, architecture/job-kind, architecture/runtime-layer, concepts/admission-control, architecture/store-seam]
 ---
@@ -117,6 +117,14 @@ returns the messages, `getSessionInfo()` the prompt, cwd and branch).
 - **Two systems in one repo until the migration lands.** 193 cards, 151 run
   records, 155 results and 173 notes remain on `refs/kb/boards/default`, reachable
   only by the old code.
+
+**What has moved since, without changing the decision.** `Attempt` gained `branch`,
+`prNumber` and `prUrl`: what a run produced on the forge is a fact about what
+happened, so it is history and belongs on the row — while the pull request's *state*
+stays on GitHub, because that is live and a copy could only go stale. The
+admission gate moved from `canUseTool` to a `PreToolUse` hook, which is an
+implementation of decision 6 rather than a change to it
+(`concepts/admission-control`).
 
 **What we deliberately did not decide.** No generic `Workload` table. The second
 kind — most cheaply `/kanban:groom`, because it is a one-shot with a human gate and
