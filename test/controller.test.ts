@@ -197,7 +197,7 @@ test('a genuine race is lost at the compare-and-swap, not at the gate', async ()
 test('an expired lease is reclaimed and its orphaned attempt is marked lost', async () => {
   const job = await mkJob('abandoned');
   await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
-  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'dead-host' } });
+  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'dead-host', maxBudgetUsd: 1 } });
   await db.lease.create({
     data: { jobId: job.id, holder: 'dead-host', token: 't', expiresAt: new Date(Date.now() - 1000) },
   });
@@ -400,4 +400,130 @@ test('an export path that escapes the worktree is refused at the copy too, not o
   assert.equal(a.outcome, 'no_output');
   assert.match(a.reason ?? '', /escapes the worktree/);
   assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).phase, 'failed');
+});
+
+// ---------------------------------------------------------------- board spec defaults
+//
+// Three levels answer five questions (`src/spec.ts`), and the precedence table is unit-tested in
+// `test/spec.test.ts`. What is worth an integration test is the two places the resolved value has
+// to arrive: the runtime, and the admission gate — which used to read the raw column and would now
+// read null for every Job that inherits its cap.
+
+/** A runtime that records the spec it was handed, and completes for free. */
+function specSpy() {
+  const seen: Record<string, unknown>[] = [];
+  const runtime = {
+    name: 'spec-spy',
+    async run(s: Record<string, unknown>) {
+      seen.push({ ...s });
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+  return { seen, runtime };
+}
+
+test('a board default reaches the runtime, and a Job that spoke for itself outranks it', async () => {
+  const b = await db.board.upsert({
+    where: { slug: 'cheap' },
+    update: { defaultModel: 'claude-haiku-4-5', defaultMaxTurns: 6, defaultMaxRetries: 0 },
+    create: { slug: 'cheap', defaultModel: 'claude-haiku-4-5', defaultMaxTurns: 6, defaultMaxRetries: 0 },
+  });
+  const file = (name: string, extra: Record<string, unknown> = {}) =>
+    db.job.create({ data: { boardId: b.id, name, brief: `do ${name}`, isolate: false, ...extra } });
+  const { seen, runtime } = specSpy();
+
+  await file('says-nothing');
+  await reconcile({ runtime, cwd, board: 'cheap', readPr: false });
+  assert.equal(seen[0].model, 'claude-haiku-4-5', 'the board answered a question the Job did not');
+  assert.equal(seen[0].maxTurns, 6);
+
+  await file('says-so-itself', { model: 'claude-opus-4-6', maxTurns: 40 });
+  await reconcile({ runtime, cwd, board: 'cheap', readPr: false });
+  assert.equal(seen[1].model, 'claude-opus-4-6', 'and it must not override one the Job asked for');
+  assert.equal(seen[1].maxTurns, 40);
+});
+
+test('the budget gate judges a Job against the cap it would really run under', async () => {
+  // The regression this whole card had to design around: `maxBudgetUsd` is null on the Job, so a
+  // gate reading the column would compare `null` with the ceiling and wave the Job through.
+  const b = await db.board.upsert({
+    where: { slug: 'inherited-cap' },
+    update: { defaultMaxBudgetUsd: 9, dailyBudgetUsd: 5 },
+    create: { slug: 'inherited-cap', defaultMaxBudgetUsd: 9, dailyBudgetUsd: 5 },
+  });
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'expensive-by-inheritance', brief: 'do it', isolate: false },
+  });
+  assert.equal(job.maxBudgetUsd, null, 'the Job itself says nothing about money');
+
+  const { seen, runtime } = specSpy();
+  const r = await reconcile({ runtime, cwd, board: 'inherited-cap', readPr: false });
+  assert.equal(seen.length, 0, 'nothing ran');
+  assert.match(r.refused ?? '', /may cost \$9\.00/, 'the refusal names the inherited cap, not $0.00');
+  assert.match(r.refused ?? '', /\$5\.00 ceiling/);
+});
+
+test('the cap is FROZEN onto the attempt, so a board edited mid-flight cannot rewrite it', async () => {
+  // The reason the gate reads `Attempt.maxBudgetUsd` rather than re-resolving the Job's spec. A
+  // live run is bound by the number it was spawned with; lowering the board's default afterwards
+  // must not tell the gate that run is now cheap, because that admits work the board cannot afford.
+  const b = await db.board.upsert({
+    where: { slug: 'frozen' },
+    update: { defaultMaxBudgetUsd: 3, dailyBudgetUsd: null, maxConcurrent: 5 },
+    create: { slug: 'frozen', defaultMaxBudgetUsd: 3, dailyBudgetUsd: null, maxConcurrent: 5 },
+  });
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'claimed-at-three', brief: 'do it', isolate: false },
+  });
+  const { runtime } = specSpy();
+  await reconcile({ runtime, cwd, board: 'frozen', readPr: false });
+
+  const a = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } });
+  assert.equal(a.maxBudgetUsd, 3, 'the attempt records the cap it was claimed under');
+
+  // The operator changes their mind. The attempt keeps the promise that was made for it.
+  await db.board.update({ where: { id: b.id }, data: { defaultMaxBudgetUsd: 0.1 } });
+  const still = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } });
+  assert.equal(still.maxBudgetUsd, 3, 'and re-resolving the spec today would have said $0.10');
+});
+
+test('an open attempt is charged its own frozen cap, not the board\'s current default', async () => {
+  const b = await db.board.upsert({
+    where: { slug: 'committed' },
+    update: { defaultMaxBudgetUsd: 0.1, dailyBudgetUsd: 8, maxConcurrent: 5 },
+    create: { slug: 'committed', defaultMaxBudgetUsd: 0.1, dailyBudgetUsd: 8, maxConcurrent: 5 },
+  });
+  // Somebody else's run, claimed while the board's default was $7. It is still going.
+  const theirs = await db.job.create({ data: { boardId: b.id, name: 'theirs', brief: 'x', phase: 'running' } });
+  await db.attempt.create({ data: { jobId: theirs.id, k: 1, host: 'another-host', maxBudgetUsd: 7 } });
+
+  const { seen, runtime } = specSpy();
+  await db.job.create({ data: { boardId: b.id, name: 'mine', brief: 'x', isolate: false, maxBudgetUsd: 2 } });
+  const r = await reconcile({ runtime, cwd, board: 'committed', readPr: false });
+
+  assert.equal(seen.length, 0, 'refused: $7 in flight plus $2 is over the $8 ceiling');
+  assert.match(r.refused ?? '', /\$7\.00 committed to runs in flight/,
+    'the promise made at claim, not the $0.10 the board would resolve to now');
+});
+
+test('a board\'s maxRetries default is the retry budget actually spent', async () => {
+  const b = await db.board.upsert({
+    where: { slug: 'one-shot' },
+    update: { defaultMaxRetries: 0 },
+    create: { slug: 'one-shot', defaultMaxRetries: 0 },
+  });
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'crashes', brief: 'x', isolate: false },
+  });
+  const crashing = {
+    name: 'crashing',
+    async run() { return { status: 'error', ok: false, sessionId: null, text: '', costUsd: 0, turns: 0,
+                           durationMs: 0, stopReason: 'error', denials: 0, error: 'boom' }; },
+  } as never;
+  await reconcileToRest({ runtime: crashing, cwd, board: 'one-shot', readPr: false });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts.length, 1, 'one attempt — the board said no retries, and it was heard');
+  assert.equal(after.phase, 'failed');
 });

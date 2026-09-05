@@ -910,6 +910,11 @@ export const BoardScalarFieldEnum = {
   pausedBy: 'pausedBy',
   dailyBudgetUsd: 'dailyBudgetUsd',
   maxConcurrent: 'maxConcurrent',
+  defaultModel: 'defaultModel',
+  defaultEffort: 'defaultEffort',
+  defaultMaxTurns: 'defaultMaxTurns',
+  defaultMaxBudgetUsd: 'defaultMaxBudgetUsd',
+  defaultMaxRetries: 'defaultMaxRetries',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 } as const
@@ -969,6 +974,7 @@ export const AttemptScalarFieldEnum = {
   sessionId: 'sessionId',
   summary: 'summary',
   reason: 'reason',
+  maxBudgetUsd: 'maxBudgetUsd',
   branch: 'branch',
   prNumber: 'prNumber',
   prUrl: 'prUrl',

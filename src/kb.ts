@@ -8,6 +8,7 @@ import { reconcile } from './controller.ts';
 import { checkExportPath } from './worktree.ts';
 import { fakeRuntime } from './runtime/fake.ts';
 import * as daemon from './daemon.ts';
+import { EFFORTS, boardDefaults, hasDefaults, resolveSpec, type SpecSource } from './spec.ts';
 import type { Runtime } from './runtime/index.ts';
 
 /**
@@ -69,9 +70,15 @@ const HELP = `kb — run one agent against one brief
   kb boards                every board on this machine
   kb boards add <slug>     point a board at a repository       [--repo <path>]
   kb boards rm <slug>      remove a board and everything on it [--force]
-  kb boards set <slug>     the ceilings, without SQL
+  kb boards set <slug>     the ceilings and the spec defaults, without SQL
        --max-concurrent <n>  how many Jobs the board runs at once (0 drains it)
        --daily-budget <usd>|none
+       --model <m>|none  --effort <e>|none  --max-turns <n>|none
+       --max-budget <usd>|none  --max-retries <n>|none
+
+A board's defaults fill in what a Job did not say: the Job's own value wins, the board's
+default fills a null, the built-in is the last resort. \`none\` clears a default rather
+than setting it to the word, and \`kb show\` names the source of every resolved field.
 
 The board is ~/.hkb/board.db — one per machine, a Board per repository, the way one
 cluster holds a namespace per project. \`--board\` picks one; without it the repository
@@ -200,6 +207,25 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`;
 }
 
+/**
+ * A board's spec defaults on one line, for the human output.
+ *
+ * Only what is set: a row of `model=— effort=— maxTurns=—` is five columns of nothing, and the
+ * absence of the line is the same information with none of the noise. `(none)` when the board has
+ * no opinion at all, because `kb boards set` prints this unconditionally and a blank tail there
+ * would read as truncated output rather than as an answer.
+ */
+export function describeDefaults(d: ReturnType<typeof boardDefaults>): string {
+  const parts = [
+    d.model !== null ? `model=${d.model}` : null,
+    d.effort !== null ? `effort=${d.effort}` : null,
+    d.maxTurns !== null ? `maxTurns=${d.maxTurns}` : null,
+    d.maxBudgetUsd !== null ? `maxBudget=$${d.maxBudgetUsd}` : null,
+    d.maxRetries !== null ? `maxRetries=${d.maxRetries}` : null,
+  ].filter((p): p is string => p !== null);
+  return parts.length ? parts.join(' ') : '(none)';
+}
+
 const num = (v: unknown, flag: string): number | undefined => {
   if (v === undefined) return undefined;
   const n = Number(v);
@@ -308,8 +334,8 @@ export async function main(argv: string[]): Promise<number> {
         create: { slug, repoPath: scope.repoPath },
       });
       const effort = values.effort as string | undefined;
-      if (effort && !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) {
-        throw usage(`--effort must be one of low|medium|high|xhigh|max, got ${effort}`);
+      if (effort && !(EFFORTS as readonly string[]).includes(effort)) {
+        throw usage(`--effort must be one of ${EFFORTS.join('|')}, got ${effort}`);
       }
       // Checked here, at admission, rather than when the copy runs: an export path that escapes the
       // worktree is an illegal request, and an illegal request should never become state. The same
@@ -325,9 +351,12 @@ export async function main(argv: string[]): Promise<number> {
           model: (values.model as string) ?? null,
           effort: effort ?? null,
           isolate: !values['no-isolate'],
-          maxTurns: num(values['max-turns'], '--max-turns'),
-          maxBudgetUsd: num(values['max-budget'], '--max-budget'),
-          maxRetries: num(values['max-retries'], '--max-retries'),
+          // Null, not a number, when the flag was not given. A Job that recorded 20 turns because
+          // nobody said otherwise would outrank its board's default for ever — "unset" staying
+          // legible is the whole reason these columns are nullable. See `src/spec.ts`.
+          maxTurns: num(values['max-turns'], '--max-turns') ?? null,
+          maxBudgetUsd: num(values['max-budget'], '--max-budget') ?? null,
+          maxRetries: num(values['max-retries'], '--max-retries') ?? null,
         },
       });
       await db.event.create({
@@ -379,7 +408,11 @@ export async function main(argv: string[]): Promise<number> {
         include: { attempts: { orderBy: { k: 'asc' } }, lease: true, board: true },
       });
       if (!job) throw usage(`no Job #${id} — \`kb ls\` shows what is on the board`);
-      emit(out, job, () => {
+      // What this Job will run with, and where each value came from. The raw columns are on the
+      // object too, but most of them are null now, and a null `model` is not an answer to "which
+      // model does this run on" — the board may have answered it.
+      const spec = resolveSpec(job, job.board);
+      emit(out, { ...job, spec }, () => {
         console.log(`#${job.id} ${job.name}`);
         // One board per machine, one Board per repository: a Job you did not expect is usually a
         // Job on a board you were not thinking about. Which board, and which checkout it will run
@@ -397,8 +430,25 @@ export async function main(argv: string[]): Promise<number> {
           console.log(`  ended    by ${job.endedBy}${job.finishedAt ? `, ${job.finishedAt.toISOString()}` : ''}`);
           console.log(`           ${job.endedFor}`);
         }
-        console.log(`  spec     agent=${job.agent} model=${job.model ?? 'default'} effort=${job.effort ?? 'default'}`);
-        console.log(`           maxTurns=${job.maxTurns} maxBudget=$${job.maxBudgetUsd} maxRetries=${job.maxRetries} isolate=${job.isolate}`);
+        console.log(`  spec     agent=${job.agent} isolate=${job.isolate} timeoutMs=${job.timeoutMs}`);
+        // One line per resolved field, with its source named. Three levels answer these five
+        // questions, and printing only the winner turns "why did this run on Opus" into
+        // archaeology across two tables — a spec you cannot trace is worse than one you repeat.
+        const where = (from: SpecSource) =>
+          from === 'job' ? 'set on the Job'
+            : from === 'board' ? `from board ${job.board.slug}`
+            : 'built-in default';
+        const traced: [string, string, SpecSource][] = [
+          ['model', spec.model.value ?? '(the harness default)', spec.model.from],
+          ['effort', spec.effort.value ?? '(the harness default)', spec.effort.from],
+          ['maxTurns', String(spec.maxTurns.value), spec.maxTurns.from],
+          ['maxBudget', `$${spec.maxBudgetUsd.value}`, spec.maxBudgetUsd.from],
+          ['maxRetries', String(spec.maxRetries.value), spec.maxRetries.from],
+        ];
+        const vw = Math.max(...traced.map(([, v]) => v.length));
+        for (const [k, v, from] of traced) {
+          console.log(`           ${k.padEnd(10)} ${v.padEnd(vw)}  ${where(from)}`);
+        }
         // What it must produce, beside how it runs — the half of the spec ADR-008 added, and the
         // one that decides whether a completed session counts as a success.
         if (Array.isArray(job.exports) && job.exports.length) console.log(`  exports  ${job.exports.join(', ')}`);
@@ -407,7 +457,16 @@ export async function main(argv: string[]): Promise<number> {
         console.log(`  brief    ${job.brief.split('\n')[0].slice(0, 88)}${job.brief.length > 88 ? ' …' : ''}`);
         if (!job.attempts.length) console.log('  attempts (none yet)');
         for (const a of job.attempts) {
-          const cost = a.costUsd ? ` $${a.costUsd.toFixed(4)}` : '';
+          // Spent, against the cap this attempt was frozen at. The frozen number and not today's
+          // resolution, which is what makes the pair readable at all: an attempt that stopped on
+          // `max_budget` says so only next to the cap that stopped it, and the board's default may
+          // have moved since — possibly *because* of this attempt.
+          //
+          // `!= null` and not a truthiness test: an attempt that really cost $0.0000 has reported
+          // a cost, and "up to $0.50" would describe it as still owing money it will never spend.
+          const cost = a.costUsd != null
+            ? ` $${a.costUsd.toFixed(4)} of $${a.maxBudgetUsd.toFixed(2)}`
+            : ` up to $${a.maxBudgetUsd.toFixed(2)}`;
           // An attempt in flight has no `endedAt`, and elapsed-so-far is exactly what you want to
           // know about one: the trailing `+` says the number is still climbing.
           const took = formatDuration((a.endedAt ?? new Date()).getTime() - a.startedAt.getTime())
@@ -483,7 +542,10 @@ export async function main(argv: string[]): Promise<number> {
       if (!id) throw usage('kb retry <id> — which Job? `kb ls --phase failed` shows the candidates');
       const job = await db.job.findUnique({
         where: { id },
-        include: { lease: true, attempts: { where: { endedAt: { not: null } }, orderBy: { k: 'desc' }, take: 1 } },
+        include: {
+          lease: true, board: true,
+          attempts: { where: { endedAt: { not: null } }, orderBy: { k: 'desc' }, take: 1 },
+        },
       });
       if (!job) throw usage(`no Job #${id} — \`kb ls\` shows what is on the board`);
       if (job.lease) {
@@ -497,13 +559,25 @@ export async function main(argv: string[]): Promise<number> {
       const budget = num(values['max-budget'], '--max-budget');
       const turns = num(values['max-turns'], '--max-turns');
       const retries = num(values['max-retries'], '--max-retries');
-      // The guard. Re-queueing a budget-capped Job under its own cap buys exactly what the
+      // Two different caps, and conflating them is how this guard gets it wrong now that a board
+      // can supply one. `ranUnder` is what the failed attempt was frozen at — the number that
+      // actually stopped it, read off the Attempt because the Job's column is null for every Job
+      // that inherited its cap, and because the board's default may have moved since. `wouldGet`
+      // is what the next attempt gets, which is today's resolution unless `--max-budget` overrides
+      // it. They differ exactly when the board was raised after the failure, and there the retry
+      // genuinely buys something: refusing it would send an operator to override a limit that is
+      // no longer in the way.
+      const last = job.attempts[0];
+      const resolved = resolveSpec(job, job.board).maxBudgetUsd.value;
+      const ranUnder = last?.maxBudgetUsd ?? resolved;
+      const wouldGet = budget ?? resolved;
+      // The guard. Re-queueing a budget-capped Job under the same cap buys exactly what the
       // automatic retry used to: the same run, the same stopping point, the same bill.
-      if (job.attempts[0]?.outcome === 'max_budget' && !(budget !== undefined && budget > job.maxBudgetUsd)) {
+      if (last?.outcome === 'max_budget' && !(wouldGet > ranUnder)) {
         throw usage(
-          `#${id} spent its whole $${job.maxBudgetUsd.toFixed(2)} budget and stopped with work left — running it `
-          + 'again under the same cap stops in the same place, at the same price. Give it a bigger one: '
-          + `\`kb retry ${id} --max-budget ${(job.maxBudgetUsd * 2).toFixed(2)}\`, or file a smaller brief.`,
+          `#${id} spent its whole $${ranUnder.toFixed(2)} budget and stopped with work left — running it `
+          + `again under $${wouldGet.toFixed(2)} stops in the same place, at the same price. Give it a bigger `
+          + `one: \`kb retry ${id} --max-budget ${(ranUnder * 2).toFixed(2)}\`, or file a smaller brief.`,
         );
       }
       if (budget !== undefined && !(budget > 0)) {
@@ -523,8 +597,8 @@ export async function main(argv: string[]): Promise<number> {
       });
       // Recorded, because "the cap was raised, by whom, from what" is the one fact that makes a
       // second $2 attempt legible six weeks later.
-      const raise = budget !== undefined && budget !== job.maxBudgetUsd
-        ? { maxBudgetUsd: { from: job.maxBudgetUsd, to: budget } } : {};
+      const raise = budget !== undefined && budget !== ranUnder
+        ? { maxBudgetUsd: { from: ranUnder, to: budget } } : {};
       await db.event.create({
         data: {
           kind: 'requeued', jobId: id, boardId: job.boardId, actor: whoami(),
@@ -532,10 +606,10 @@ export async function main(argv: string[]): Promise<number> {
         },
       });
       emit(out, {
-        id, phase: 'pending', maxBudgetUsd: budget ?? job.maxBudgetUsd, resume: job.lastSessionId, ...raise,
+        id, phase: 'pending', maxBudgetUsd: budget ?? wouldGet, resume: job.lastSessionId, ...raise,
       }, () => {
-        const cap = budget !== undefined && budget !== job.maxBudgetUsd
-          ? `  maxBudget $${job.maxBudgetUsd.toFixed(2)} → $${budget.toFixed(2)}` : '';
+        const cap = budget !== undefined && budget !== ranUnder
+          ? `  maxBudget $${ranUnder.toFixed(2)} → $${budget.toFixed(2)}` : '';
         // A resumed Job does not start over, and an operator about to watch it needs to know that
         // before they wonder why the branch already has commits on it.
         const from = job.lastSessionId ? `  (resumes ${job.lastSessionId})` : '  (starts cold)';
@@ -779,11 +853,47 @@ export async function main(argv: string[]): Promise<number> {
       }
       if (rest[0] === 'set') {
         const name = rest[1] ?? named;
-        if (!name) throw usage('kb boards set <slug> --max-concurrent <n> --daily-budget <usd> — which board?');
+        if (!name) throw usage('kb boards set <slug> --max-concurrent <n> --daily-budget <usd> --model <m> — which board?');
         const board = await db.board.findUnique({ where: { slug: name } });
         if (!board) throw usage(`no board "${name}" — \`kb boards\` lists the ones on this machine`);
 
         const data: Record<string, unknown> = {};
+
+        // ---- the spec defaults. `none` clears one, the same word `--daily-budget none` already
+        // uses: an unset default and a default of zero are different configurations, and a flag
+        // that could only ever set a value would leave no way back to "no opinion".
+        const CLEAR = 'none';
+        /** A `--flag <value>|none` that stores a string. */
+        const setString = (flag: string, column: string, check?: (v: string) => void) => {
+          if (values[flag] === undefined) return;
+          const raw = String(values[flag]).trim();
+          if (!raw) throw usage(`--${flag} was given nothing — pass a value, or "${CLEAR}" to clear the default`);
+          if (raw === CLEAR) { data[column] = null; return; }
+          check?.(raw);
+          data[column] = raw;
+        };
+        /** A `--flag <number>|none`. `ok` is what the number has to be, and `want` must say so. */
+        const setNumber = (flag: string, column: string, ok: (n: number) => boolean, want: string) => {
+          if (values[flag] === undefined) return;
+          const raw = String(values[flag]).trim();
+          if (raw === CLEAR) { data[column] = null; return; }
+          const n = num(raw, `--${flag}`) as number;
+          if (!ok(n)) throw usage(`--${flag} wants ${want}, or "${CLEAR}" to clear the default — got ${raw}`);
+          data[column] = n;
+        };
+
+        setString('model', 'defaultModel');
+        setString('effort', 'defaultEffort', (v) => {
+          if (!(EFFORTS as readonly string[]).includes(v)) {
+            throw usage(`--effort must be one of ${EFFORTS.join('|')}, or "${CLEAR}" to clear the default — got ${v}`);
+          }
+        });
+        // A Job needs at least one turn to do anything, so 0 turns is a Job that cannot run rather
+        // than a board that runs cheaply. `maxRetries` 0 IS meaningful — one attempt, no retries.
+        setNumber('max-turns', 'defaultMaxTurns', (n) => Number.isInteger(n) && n >= 1, 'a whole number of turns, 1 or more');
+        setNumber('max-budget', 'defaultMaxBudgetUsd', (n) => n > 0, 'dollars above zero');
+        setNumber('max-retries', 'defaultMaxRetries', (n) => Number.isInteger(n) && n >= 0, 'a whole number of retries, 0 or more');
+
         if (values['max-concurrent'] !== undefined) {
           const n = num(values['max-concurrent'], '--max-concurrent') as number;
           // 0 is meaningful — it drains a board without stopping it — but a negative is a typo,
@@ -801,18 +911,31 @@ export async function main(argv: string[]): Promise<number> {
           }
         }
         if (!Object.keys(data).length) {
-          throw usage('kb boards set needs something to set — --max-concurrent <n> or --daily-budget <usd>|none');
+          throw usage(
+            'kb boards set needs something to set — a ceiling (--max-concurrent <n>, --daily-budget <usd>|none)'
+            + ' or a spec default (--model, --effort, --max-turns, --max-budget, --max-retries; "none" clears one)',
+          );
         }
 
         const after = await db.board.update({ where: { id: board.id }, data });
+        // Still `ceilings_set`, though it now records defaults too. That kind is what `kb log`
+        // already shows for this command, and the payload names exactly which columns moved;
+        // renaming it would break every board's existing history to fix a word.
         await db.event.create({
           data: { kind: 'ceilings_set', boardId: board.id, actor: whoami(), payload: data as never },
         });
+        const defaults = boardDefaults(after);
         emit(out, {
           board: after.slug, maxConcurrent: after.maxConcurrent, dailyBudgetUsd: after.dailyBudgetUsd,
-        }, () => console.log(
-          `${after.slug} — ${after.dailyBudgetUsd === null ? 'no ceiling' : `$${after.dailyBudgetUsd}/24h`}, `
-          + `runs up to ${after.maxConcurrent} at once`));
+          defaults,
+        }, () => {
+          console.log(
+            `${after.slug} — ${after.dailyBudgetUsd === null ? 'no ceiling' : `$${after.dailyBudgetUsd}/24h`}, `
+            + `runs up to ${after.maxConcurrent} at once`);
+          // Printed whenever the board has any, not only when this command changed one: the
+          // question after `kb boards set --model` is what the board now says, not what moved.
+          console.log(`  defaults  ${describeDefaults(defaults)}`);
+        });
         return 0;
       }
 
@@ -873,6 +996,10 @@ export async function main(argv: string[]): Promise<number> {
           spent24h: spend._sum.costUsd ?? 0,
           maxConcurrent: b.maxConcurrent,
           dailyBudgetUsd: b.dailyBudgetUsd,
+          // Always in `--json`, set or not: a consumer that has to infer a missing default from a
+          // missing key is reading a shape rather than a record.
+          defaults: boardDefaults(b),
+          hasDefaults: hasDefaults(b),
         };
       }));
       emit(out, rows, () => {
@@ -889,6 +1016,9 @@ export async function main(argv: string[]): Promise<number> {
             + `${('$' + r.spent24h.toFixed(2)).padStart(7)}  `
             + `${r.repoPath ?? '(no repo — `kb boards add ' + r.board + ' --repo <path>`)'}`,
           );
+          // A continuation line rather than five more columns: the table is already at the width
+          // of a terminal, and a board with no defaults — which is most of them — pays nothing.
+          if (r.hasDefaults) console.log(`${' '.repeat(w)}  defaults  ${describeDefaults(r.defaults)}`);
         }
       });
       return 0;

@@ -41,11 +41,22 @@ export type ClaimInputs = {
    * a spend none of them had yet contributed to, and the board could commit N × its ceiling in the
    * time it takes the first one to finish. It is the same rule the ceiling already used for the
    * claimant — charge what a run *could* cost — applied to the runs already going.
+   *
+   * The caller sums `Attempt.maxBudgetUsd`, the cap each live run was CLAIMED under, and not
+   * whatever the Job's spec resolves to today. Those differ exactly when someone edits a board's
+   * `defaultMaxBudgetUsd` while work is in flight, and a re-resolving caller would then hand this
+   * gate a number no running attempt is bound by — lower than the truth if the default was lowered,
+   * which admits work that takes the board past its ceiling. The freeze is argued on
+   * `Attempt.maxBudgetUsd` in `prisma/schema.prisma`; what matters here is only that this input is
+   * a promise already made, never a promise recomputed.
    */
   committedUsd: number;
   /** The board's ceiling, or null for no ceiling. */
   dailyBudgetUsd: number | null;
-  /** What this Job could cost if it runs to its own cap. */
+  /**
+   * What this Job could cost if it runs to its own cap — resolved through `src/spec.ts`, since the
+   * Job's own column is null whenever it takes the board's default or the built-in.
+   */
   jobBudgetUsd: number;
 };
 

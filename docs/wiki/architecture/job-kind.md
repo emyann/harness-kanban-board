@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "adding a workload kind, changing retry or lease behaviour, or wondering why the DAG is not in the core"
 covers:
   - path: prisma/schema.prisma
-    sha: 7ddf7cc64bdec434ada83af9301a0d835f9d5af1
+    sha: f4b3adeb799b04102e4ee64b961b9490c955fbd9
   - path: src/controller.ts
-    sha: 4bec802ac597bdbba089915e9ddb4124acc8394f
+    sha: 61161cdd0e157f14112adc1f8ebc69108ce8dec9
   - path: src/db.ts
     sha: db126410edbcadf02b1d7ac200771620d1195d70
-generated_at_commit: f0b5bbd
+generated_at_commit: f2c0a72
 last_refreshed: 2026-09-05
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control]
 ---
@@ -196,6 +196,61 @@ is gone is a report, not a ceiling. `committedUsd` is the same rule applied to t
 already going: an attempt with no `endedAt` has reported no cost, so without it a board
 running several Jobs at once could commit its ceiling several times over in the time the
 first one takes to finish.
+
+## Defaults, and why they are not ceilings
+
+A Board carries **spec defaults** beside its ceilings: `defaultModel`, `defaultEffort`,
+`defaultMaxTurns`, `defaultMaxBudgetUsd`, `defaultMaxRetries`. A board that runs cheap,
+high-volume work can say so once instead of on every `kb new`.
+
+They are separate columns from the ceilings, and the reason is who wins. A **ceiling** is a
+limit a Job may not exceed, enforced in `gateClaim`. A **default** is a value a Job may
+freely override, resolved in `src/spec.ts`, in three levels:
+
+1. the Job's own value wins — `kb new --model …`
+2. the Board's default fills a null — `kb boards set <slug> --model …`
+3. the built-in is the last resort — `BUILT_IN` in `src/spec.ts`
+
+That order only works if "unset" is legible, which is why `Job.maxTurns`, `maxBudgetUsd`
+and `maxRetries` are nullable with no database default. A column that defaults to `20`
+cannot tell *"the operator asked for 20"* from *"the operator said nothing"*, and under
+that ambiguity every Job ever filed outranks its board — which is not a default at all.
+
+`resolveSpec` returns each value tagged with where it came from, and `kb show` prints the
+tag. A spec you cannot trace is worse than one you have to repeat.
+
+### The cap is frozen onto the Attempt
+
+`committedUsd` above sums, over every attempt still open, what those runs could still cost.
+Once `Job.maxBudgetUsd` is nullable that sum cannot read the Job's column — it is null for
+exactly the Jobs that inherit their cap. Three ways out: resolve the spec per open attempt,
+join the board's defaults into that query, or **freeze the resolved cap onto the Attempt at
+claim time**. It is frozen, in `Attempt.maxBudgetUsd`, `Float` and not nullable.
+
+The first two differ from the third only when a board's default changes while work is in
+flight, and there they are both wrong. A live run is bound by the number handed to the
+runtime when it was spawned; nothing re-reads it. So an operator who lowers
+`defaultMaxBudgetUsd` mid-flight would have told the gate that three live runs have
+committed a tenth of what they may actually still spend — and the gate would admit work
+that takes the board past its ceiling, which is the exact failure `committedUsd` exists to
+prevent.
+
+It is also the shape one table over. Admission stamps a Pod with the limits a LimitRange
+supplied; the scheduler then reads the Pod, and a LimitRange edited afterwards does not
+rewrite what is already running. An Attempt is this system's Pod, and it already records
+what *happened* — `costUsd`, `sessionId`, `branch`, `outcome` — rather than what is
+configured.
+
+The cost is that `kb show` reports the frozen number for a past attempt rather than what
+resolution says today. That is the feature: an attempt that stopped on `max_budget` is
+only legible against the cap that actually stopped it, and `kb retry`'s refusal — "the same
+cap stops it in the same place" — is a claim about the failed attempt that no amount of
+re-resolving can recover once the board has moved on. `kb retry` therefore reads both: the
+frozen cap for what happened, and today's resolution for what a retry would get, so a board
+default raised after the failure is a real raise and is allowed through.
+
+Only the budget is frozen. `maxTurns`, `model` and `effort` are read once, by the run
+itself; nothing outside that run asks about them while it is live.
 
 ## `maxConcurrent` is a parallelism setting
 

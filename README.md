@@ -51,6 +51,12 @@ kb show 1                                  # phase, spec, and every attempt: out
   `--max-budget` is *not* retried automatically — the retry would get the same cap and stop in the same place, at
   the same price — so this is where you raise it: `kb retry 6 --max-budget 4`, and the raise is on the event log.
 - **`kb boards`** lists every board on this machine; `kb boards add <slug> --repo <path>` points one at a repository.
+- **`kb boards set <slug>`** carries the board's ceilings (`--max-concurrent`, `--daily-budget`) *and* its **spec
+  defaults** — `--model`, `--effort`, `--max-turns`, `--max-budget`, `--max-retries` — so a board that runs cheap,
+  high-volume work says so once instead of on every `kb new`. Resolution is: the Job's own value wins, the board's
+  default fills what the Job left unset, the built-in is the last resort. `none` clears a default rather than
+  setting the word, and `kb show` names which of the three answered each field. A default is not a ceiling: a Job
+  may freely override `--model`, and may not exceed `--daily-budget`.
 - **`kb done <id> "<why>"`** and **`kb cancel <id> "<why>"`** end a Job the machinery cannot end itself — a Job
   whose pull request was reviewed and merged while it sat `pending` on a spent budget, or one nobody wants any
   more. Two verbs because they are two statements about the work; both take a reason, both record the person who
