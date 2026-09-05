@@ -95,6 +95,11 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 
 ## Commits and PRs
 
+- **Everything goes through a pull request, including documentation.** `main` is protected and
+  requires two status checks; an admin can push past that and GitHub records it as
+  `Bypassed rule violations`. Do not. "It's only docs" is the reasoning that turns a protection
+  rule into a suggestion, and the checks are cheap — the wiki tooling, the smoke test and the type
+  check all run on doc-only changes and all have caught real breakage in them.
 - Plain, human-style messages: a short imperative subject, an optional body explaining why.
 - Never add `Co-Authored-By: Claude ...` trailers, a `Claude-Session:` URL, or "🤖 Generated with Claude Code" to a
   commit message or a PR body. These are public repositories — a session URL published in a commit leaks a private
