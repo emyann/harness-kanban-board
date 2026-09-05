@@ -28,7 +28,8 @@ export const Outcome = {
   refused: 'refused',
   crashed: 'crashed',
   lost: 'lost',
-  stopped: 'stopped'
+  stopped: 'stopped',
+  missing_output: 'missing_output'
 } as const
 
 export type Outcome = (typeof Outcome)[keyof typeof Outcome]

@@ -2,6 +2,7 @@ import { openBoard } from './db.ts';
 import { createWorktree, existingWorktree, removeWorktree, type Worktree } from './worktree.ts';
 import { prForBranch } from './pulls.ts';
 import { withProtocol } from './brief.ts';
+import { exportOutputs, exportsOk, parseExports, type ExportResult } from './exports.ts';
 import { gateClaim, windowStart } from './limits.ts';
 import { holderId, holderLiveness } from './liveness.ts';
 import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
@@ -91,7 +92,7 @@ const LEASE_GRACE_MS = 5 * 60_000;
  */
 export type Decision = {
   phase: 'succeeded' | 'failed' | 'pending';
-  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped';
+  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'missing_output';
   resumable: boolean;
 };
 
@@ -117,6 +118,36 @@ export function nextPhase(
     outcome: mapped,
     // The three stops that left a session worth continuing. A crash and a refusal did not.
     resumable: mapped === 'max_turns' || mapped === 'max_budget' || mapped === 'timed_out',
+  };
+}
+
+/**
+ * Fold the declared outputs into the decision the session earned.
+ *
+ * ADR-008's load-bearing rule: **a declared output that is not produced fails the attempt.** A run
+ * that ended cleanly without writing what it was asked to write did not do the job, and letting it
+ * read as `succeeded` is exactly the silent success the declaration exists to make impossible.
+ *
+ * Pure, and separate from `nextPhase`, because the two answer different questions — "how did the
+ * session end" and "did it produce what it promised" — and only the second one needs a filesystem.
+ *
+ * A session that already failed keeps its own outcome: `max_turns` is a better account of a run
+ * that ran out of turns than "it did not write dist/report.json", and it is also the resumable one.
+ */
+export function withDeclaredOutputs(
+  decision: Decision,
+  problems: string[],
+  attempt: number,
+  maxRetries: number,
+): Decision {
+  if (!problems.length || decision.phase !== 'succeeded') return decision;
+  return {
+    phase: attempt <= maxRetries ? 'pending' : 'failed',
+    outcome: 'missing_output',
+    // Not resumable. The session ended believing it was finished, so continuing that transcript
+    // would re-send the same brief to a model that already thinks it complied; a cold attempt at
+    // least starts from a clean checkout.
+    resumable: false,
   };
 }
 
@@ -343,7 +374,9 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         taskId: job.id,
         attempt: k,
         cwd: wt ? wt.path : cwd,
-        prompt: wt ? withProtocol(job.brief, wt.branch) : job.brief,
+        // The declared outputs go in the prompt as well as being checked on disk: the controller
+        // fails the attempt over a missing one, and a contract nobody was shown is a trap.
+        prompt: wt ? withProtocol(job.brief, wt.branch, parseExports(job.exports).paths) : job.brief,
         model: job.model ?? undefined,
         effort: (job.effort as 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined) ?? undefined,
         maxTurns: job.maxTurns,
@@ -366,9 +399,29 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // The operator's intent outranks whatever the runtime made of being cut off. A stopped run
     // reports `timeout` or `error` depending on where the abort landed, and recording either would
     // be a lie about why it ended AND would spend a retry on it.
-    const decision: Decision = deps.signal?.aborted
+    const ran: Decision = deps.signal?.aborted
       ? { phase: 'pending', outcome: 'stopped', resumable: true }
       : nextPhase(outcome, charged, job.maxRetries);
+
+    // ---- the declared outputs, out of the sandbox before anything tears it down (ADR-008).
+    //
+    // Bazel's ordering, and the order is the whole design: move the known outputs into the execroot
+    // FIRST, then delete the sandbox. Done the other way round — or not at all — a Job whose
+    // deliverable is an uncommitted file has no correct outcome, because `removeWorktree` either
+    // deletes the artifact with the checkout or refuses for ever and strands it. Only after a
+    // session that ended cleanly: there is nothing to collect from a run that crashed, and reading
+    // a half-written artifact out of one would be worse than reading none.
+    const shipped: ExportResult | null = wt && ran.phase === 'succeeded'
+      ? exportOutputs(wt.path, cwd, job.exports)
+      : null;
+    if (shipped) {
+      for (const p of shipped.copied) deps.onEvent?.(`  exported ${p} -> ${cwd}`);
+      for (const why of shipped.problems) deps.onEvent?.(`  export refused: ${why}`);
+    }
+    const decision = withDeclaredOutputs(ran, shipped?.problems ?? [], charged, job.maxRetries);
+    // Why the attempt ended, in the words the operator needs. A missing declared output leaves the
+    // runtime with no error of its own to report, so without this the row would say nothing at all.
+    const reason = shipped && !exportsOk(shipped) ? shipped.problems.join('; ') : outcome?.error;
 
     // ---- what landed on the forge. One read, by head branch: the board and the forge are two
     // systems and this is the only thing that joins them.
@@ -385,11 +438,14 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         outcome: decision.outcome,
         sessionId: outcome?.sessionId ?? null,
         summary: outcome?.text?.slice(0, 2000) ?? null,
-        reason: outcome?.error?.slice(0, 300) ?? null,
+        reason: reason?.slice(0, 300) ?? null,
         costUsd: outcome?.costUsd ?? null,
         branch: wt?.branch ?? null,
         prNumber: pr?.number ?? null,
         prUrl: pr?.url ?? null,
+        // What left the sandbox. The worktree is gone by the time anyone reads this row, so this
+        // is the only record that the artifact in the repository came from this attempt.
+        exported: shipped?.copied.length ? JSON.stringify(shipped.copied) : null,
       },
     });
 
@@ -411,7 +467,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         phase: decision.phase,
         // Keep the session only while continuing it would help; a cold retry must start clean.
         lastSessionId: decision.resumable ? (outcome?.sessionId ?? null) : null,
-        lastError: decision.phase === 'succeeded' ? null : (outcome?.error ?? decision.outcome),
+        lastError: decision.phase === 'succeeded' ? null : (reason ?? decision.outcome),
         finishedAt: decision.phase === 'pending' ? null : now(),
       },
     });
@@ -420,10 +476,17 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       data: { kind: decision.outcome, jobId: job.id, boardId: job.boardId, actor: host, payload: { k, phase: decision.phase } },
     });
 
-    // ---- tidy. Never forced: a worktree that still holds work is the only copy of it if the
-    // push failed, so it stays and the operator is told where.
+    // ---- tidy. Never forced on our own judgement: a worktree that still holds work is the only
+    // copy of it if the push failed, so it stays and the operator is told where.
+    //
+    // The exception is the one ADR-008 buys: when the Job declared what it produces and every
+    // declared path was copied out, whatever is left uncommitted is litter by definition, and the
+    // checkout goes. Commits are still kept — a declaration covers the files it names, and an
+    // unpushed commit is the only copy of itself whatever else came out of the tree.
     if (wt) {
-      const gone = removeWorktree(cwd, wt);
+      const gone = removeWorktree(cwd, wt, {
+        discardUncommitted: !!shipped && !!shipped.copied.length && exportsOk(shipped),
+      });
       if (!gone.removed) deps.onEvent?.(`  kept ${wt.path} — ${gone.why}`);
     }
 

@@ -20,7 +20,7 @@ fs.writeFileSync(path.join(repo, 'README.md'), '# base\n');
 git(['add', '-A']);
 git(['commit', '-qm', 'base']);
 
-const { createWorktree, existingWorktree, removeWorktree, worktreeHasWork, branchFor, baseRef, freeBranch } =
+const { createWorktree, existingWorktree, removeWorktree, worktreeHasWork, worktreeIsAhead, branchFor, baseRef, freeBranch } =
   await import('../src/worktree.ts');
 
 test.after(() => fs.rmSync(repo, { recursive: true, force: true }));
@@ -68,6 +68,37 @@ test('a worktree holding a commit is kept too, even though the tree is clean', (
   assert.equal(git(['status', '--porcelain'], wt.path).stdout.trim(), '', 'tree is clean');
   assert.equal(worktreeHasWork(repo, wt), true, 'but it is ahead of its base');
   assert.equal(removeWorktree(repo, wt).removed, false);
+});
+
+// ---------------------------------------------------------------- once the outputs are out
+// ADR-008 reverses the finding above for exactly one case: a Job that DECLARED what it produces
+// and had it copied out. `removeWorktree` refuses a dirty tree today because it cannot tell work
+// that matters from litter; a declaration is what tells it, and refusing anyway is how Phase 5
+// left 6.1 GB of stranded checkouts.
+
+test('a dirty worktree is removed once its declared outputs are out', () => {
+  const wt = createWorktree(repo, 8, 1);
+  fs.writeFileSync(path.join(wt.path, 'report.json'), '{}');
+  assert.equal(removeWorktree(repo, wt).removed, false, 'not on its own judgement');
+
+  const r = removeWorktree(repo, wt, { discardUncommitted: true });
+  assert.equal(r.removed, true);
+  assert.match(r.why, /declared outputs are out/);
+  assert.equal(fs.existsSync(wt.path), false, 'the sandbox goes, the way Bazel deletes one');
+});
+
+test('a commit is NOT litter, even once the declared outputs are out', () => {
+  const wt = createWorktree(repo, 9, 1);
+  fs.writeFileSync(path.join(wt.path, 'committed.txt'), 'work');
+  git(['add', '-A'], wt.path);
+  git(['commit', '-qm', 'worker commit'], wt.path);
+  fs.writeFileSync(path.join(wt.path, 'scratch.txt'), 'litter');
+
+  assert.equal(worktreeIsAhead(repo, wt), true);
+  const r = removeWorktree(repo, wt, { discardUncommitted: true });
+  assert.equal(r.removed, false, 'a declaration covers the files it names, not an unpushed commit');
+  assert.match(r.why, /commits that are not on its base/);
+  assert.equal(fs.existsSync(path.join(wt.path, 'committed.txt')), true);
 });
 
 test('creating twice returns the same checkout — a resumed attempt lands where it left off', () => {

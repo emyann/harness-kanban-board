@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import type { Runtime, WorkerOutcome, WorkerSpec } from '../src/runtime/index.ts';
 
 // A scratch database per run, migrated the same way production is.
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-ctl-'));
@@ -14,7 +15,7 @@ execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate',
 });
 
 const { openBoard, closeBoard } = await import('../src/db.ts');
-const { reconcile, reconcileToRest, nextPhase } = await import('../src/controller.ts');
+const { reconcile, reconcileToRest, nextPhase, withDeclaredOutputs } = await import('../src/controller.ts');
 const { fakeRuntime } = await import('../src/runtime/fake.ts');
 const { admissionCallback } = await import('../src/admission.ts');
 
@@ -147,6 +148,131 @@ test('reconcile is idempotent: a second pass on a settled board does nothing', a
   const r = await reconcile({ runtime: fakeRuntime(), cwd });
   assert.deepEqual(r.claimed, []);
   assert.deepEqual(r.reclaimed, []);
+});
+
+// ---------------------------------------------------------------- declared outputs (ADR-008)
+
+test('withDeclaredOutputs: a completed run that skipped a declared output does not succeed', () => {
+  const d = withDeclaredOutputs({ phase: 'succeeded', outcome: 'completed', resumable: false }, ['gone'], 1, 2);
+  assert.equal(d.phase, 'pending', 'a retry remains');
+  assert.equal(d.outcome, 'missing_output');
+  assert.equal(withDeclaredOutputs({ phase: 'succeeded', outcome: 'completed', resumable: false }, ['gone'], 3, 2).phase,
+    'failed', 'and out of retries it is a failure, not a success');
+});
+
+test('withDeclaredOutputs: nothing missing changes nothing', () => {
+  const ok = { phase: 'succeeded', outcome: 'completed', resumable: false } as const;
+  assert.deepEqual(withDeclaredOutputs(ok, [], 1, 2), ok);
+});
+
+test('withDeclaredOutputs: a session that already failed keeps its own account of why', () => {
+  const capped = { phase: 'pending', outcome: 'max_turns', resumable: true } as const;
+  assert.deepEqual(withDeclaredOutputs(capped, ['gone'], 1, 2), capped,
+    '"it ran out of turns" beats "it did not write the file", and it is the resumable one');
+});
+
+/**
+ * A real repository for the export path, because every interesting part of it is git's or the
+ * filesystem's: the worktree is cut for real, the worker writes for real, and the worktree is torn
+ * down for real. A double would agree with whatever the code did.
+ */
+const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-exp-repo-'));
+const g = (args: string[], at = repo) => spawnSync('git', args, { cwd: at, encoding: 'utf8' });
+g(['init', '-q', '-b', 'main']);
+g(['config', 'user.email', 'exp@test']);
+g(['config', 'user.name', 'exp']);
+fs.writeFileSync(path.join(repo, 'README.md'), '# base\n');
+g(['add', '-A']);
+g(['commit', '-qm', 'base']);
+const exportBoard = await db.board.create({ data: { slug: 'exporting', repoPath: repo } });
+test.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+
+/** A worker that writes the files it is given into its own checkout, and nothing else. */
+const writes = (files: Record<string, string>): Runtime => ({
+  name: 'writer',
+  async run(spec: WorkerSpec): Promise<WorkerOutcome> {
+    for (const [rel, body] of Object.entries(files)) {
+      const p = path.join(spec.cwd, rel);
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, body);
+    }
+    return {
+      status: 'completed', ok: true, sessionId: `w-${spec.taskId}`, text: 'done',
+      costUsd: 0, turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+    };
+  },
+});
+
+const wtDir = (jobId: number, k: number) => path.join(repo, '.kanban', 'worktrees', `kb-${jobId}-${k}`);
+
+test('a declared export lands in the board repository, and the worktree is then removed', async () => {
+  const job = await db.job.create({
+    data: {
+      boardId: exportBoard.id, name: 'exporter', brief: 'write the report',
+      exports: JSON.stringify(['out/report.json']),
+    },
+  });
+
+  const r = await reconcile({
+    runtime: writes({ 'out/report.json': '{"ok":true}' }), board: 'exporting', readPr: false,
+  });
+  assert.deepEqual(r.succeeded, [job.id], 'it produced what it declared');
+
+  assert.equal(fs.readFileSync(path.join(repo, 'out', 'report.json'), 'utf8'), '{"ok":true}',
+    'the artifact is in the execroot, not stranded in a sandbox');
+  assert.equal(fs.existsSync(wtDir(job.id, 1)), false,
+    'and the sandbox is gone — the 6.1 GB Phase 5 left came from refusing this');
+
+  const a = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } });
+  assert.equal(a.outcome, 'completed');
+  assert.deepEqual(JSON.parse(a.exported ?? 'null'), ['out/report.json'],
+    'the worktree is gone, so nothing else can say where this file came from');
+});
+
+test('a declared export the worker did not produce fails the attempt', async () => {
+  const job = await db.job.create({
+    data: {
+      boardId: exportBoard.id, name: 'forgetful', brief: 'write the report', maxRetries: 0,
+      exports: JSON.stringify(['out/promised.json']),
+    },
+  });
+
+  const r = await reconcile({
+    runtime: writes({ 'something-else.txt': 'not what was asked for' }),
+    board: 'exporting', readPr: false,
+  });
+  assert.deepEqual(r.failed, [job.id], 'a session that ended is not a job that was done');
+  assert.deepEqual(r.succeeded, []);
+
+  const a = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } });
+  assert.equal(a.outcome, 'missing_output');
+  assert.match(a.reason ?? '', /was not produced/, 'and the row says which path');
+  assert.equal(a.exported, null);
+  assert.equal(fs.existsSync(path.join(repo, 'something-else.txt')), false,
+    'an undeclared output is litter — it does not come out with the declared ones');
+});
+
+test('a declared path that escapes the worktree is refused, not copied', async () => {
+  // Written straight onto the row: `kb new --export` refuses this at the door, so the only way to
+  // get here is past the CLI — and the guard that matters is the one the controller enforces.
+  const job = await db.job.create({
+    data: {
+      boardId: exportBoard.id, name: 'escapee', brief: 'reach outside', maxRetries: 0,
+      exports: JSON.stringify(['../../stolen.txt']),
+    },
+  });
+
+  const r = await reconcile({
+    runtime: writes({ '../../stolen.txt': 'reached out of the sandbox' }),
+    board: 'exporting', readPr: false,
+  });
+  assert.deepEqual(r.failed, [job.id]);
+
+  const a = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } });
+  assert.equal(a.outcome, 'missing_output');
+  assert.match(a.reason ?? '', /escapes the worktree/);
+  assert.equal(fs.existsSync(path.join(repo, 'stolen.txt')), false,
+    'a declared output is not a licence to write anywhere');
 });
 
 // ---------------------------------------------------------------- admission
