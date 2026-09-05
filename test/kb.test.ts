@@ -137,6 +137,40 @@ test('show on a missing id points at ls', async () => {
   await assert.rejects(() => kb('show', '99999'), /no Job #99999.*kb ls/s);
 });
 
+// ---------------------------------------------------------------- how long it took
+
+const { formatDuration } = await import('../src/kb.ts');
+
+test('formatDuration steps at a minute and at an hour, and truncates at both', () => {
+  assert.equal(formatDuration(0), '0s');
+  assert.equal(formatDuration(4_000), '4s');
+  assert.equal(formatDuration(59_000), '59s');
+  assert.equal(formatDuration(60_000), '1m');
+  // A second short of an hour is 59 minutes. Rounding would print `60m` — an hour that has not
+  // happened yet — which is the one number this must never say.
+  assert.equal(formatDuration(3_599_000), '59m');
+  assert.equal(formatDuration(3_600_000), '1h00m');
+  assert.equal(formatDuration(3_840_000), '1h04m');
+  // Two hosts, two clocks: the end can land before the start.
+  assert.equal(formatDuration(-5_000), '0s');
+});
+
+test('show prints how long each attempt took, and marks one still running', async () => {
+  const j = json((await kb('new', 'timed', '--brief', 'b', '--json')).out);
+  const started = new Date('2026-09-05T10:00:00Z');
+  await db.attempt.create({
+    data: {
+      jobId: j.id, k: 1, startedAt: started, endedAt: new Date(started.getTime() + 3_840_000),
+      outcome: 'completed', costUsd: 0.4,
+    },
+  });
+  await db.attempt.create({ data: { jobId: j.id, k: 2, startedAt: new Date(Date.now() - 90_000) } });
+  const r = await kb('show', String(j.id));
+  // $0.40 means very little without "and it took an hour" beside it.
+  assert.match(r.out, /completed\s+1h04m \$0\.4000/);
+  assert.match(r.out, /running\s+1m\+/, 'an attempt in flight shows elapsed-so-far, not nothing');
+});
+
 // ---------------------------------------------------------------- run
 
 test('run on an empty board is a no-op that exits 0', async () => {
