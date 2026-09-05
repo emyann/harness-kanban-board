@@ -165,6 +165,9 @@ pages:
   - slug: concepts/admission-control
     summary: "Why worktree isolation and dependency ordering are injected or denied in a canUseTool gate rather than asked for in a prompt — and the measured run where the prompt was silently ignored."
     status: seeded
+  - slug: howto/running-the-daemon
+    summary: "Keep `kb up` alive across reboots — a systemd user unit or a launchd agent around `kb up --foreground`, where the log goes, and the restart-after-upgrade rule."
+    status: seeded
   - slug: gotchas/long-lived-process-rot
     summary: "The #61 outage: a 90-minute-old loop 404ing on every claim while a fresh process succeeded — why caches are per-tick and the loop exits 4."
     status: planned

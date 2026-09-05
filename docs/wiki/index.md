@@ -47,6 +47,10 @@
 - [ADR-006: The source of truth is local and travels with a clone — a git branch plus a SQLite index; GitHub becomes a bridge later](./decisions/adr-006-local-store.md): The board's state moves off GitHub into two local tiers (durable content on a dedicated git branch, live state and an index in node:sqlite under the common git dir); a board has one control plane; the Actions runner is removed; the GitHub store is retired and returns later as a bridge adapter under a strict direction rule; the Node floor becomes 22.13 and TypeScript ships transpiled.
 - [ADR-007: hkb is a workload scheduler — one SQLite board behind Prisma, a runtime seam over the Agent SDK, and Job as the first kind](./decisions/adr-007-workload-scheduler.md): The two-tier store of ADR-006 collapses into one SQLite file behind Prisma; the kb block becomes columns; workers run on the Claude Agent SDK behind a runtime seam; the first workload kind is a Job (one agent, one brief, run to completion) with a reconcile loop and an admission gate; the kanban DAG becomes a second kind that does not exist yet; zero-dependency and the no-build-step rule end.
 
+## Howto
+
+- [Running the daemon under a supervisor](./howto/running-the-daemon.md): Keep `kb up` alive across reboots — a systemd user unit or a launchd agent around `kb up --foreground`, where the log goes, and the restart-after-upgrade rule.
+
 ## Planned (not yet written)
 
 - architecture/dispatcher-tick: The tick pipeline (outbox, reclaim, reap, orphan sweep, reconcile, promote, tracks, guards, claim+spawn) and the live incident behind each stage.
