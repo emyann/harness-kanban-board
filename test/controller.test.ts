@@ -1,0 +1,158 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+
+// A scratch database per run, migrated the same way production is.
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-ctl-'));
+process.env.HKB_DATABASE_URL = `file:${path.join(dir, 'test.db')}`;
+const REPO = path.resolve(import.meta.dirname, '..');
+execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate', 'deploy'], {
+  cwd: REPO, env: process.env, stdio: 'ignore',
+});
+
+const { openBoard, closeBoard } = await import('../src/db.ts');
+const { reconcile, reconcileToRest, nextPhase } = await import('../src/controller.ts');
+const { fakeRuntime } = await import('../src/runtime/fake.ts');
+const { admissionController } = await import('../src/admission.ts');
+
+const db = openBoard();
+const board = await db.board.upsert({ where: { slug: 'test' }, update: {}, create: { slug: 'test' } });
+const cwd = REPO;
+
+const mkJob = (name: string, extra: Record<string, unknown> = {}) =>
+  db.job.create({ data: { boardId: board.id, name, brief: `do ${name}`, ...extra } });
+
+test.after(async () => { await closeBoard(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+// ---------------------------------------------------------------- the pure decision
+
+test('nextPhase: a completed run succeeds and is not resumable', () => {
+  const d = nextPhase({ status: 'completed' } as never, 1, 2);
+  assert.equal(d.phase, 'succeeded');
+  assert.equal(d.resumable, false);
+});
+
+test('nextPhase: a turn cap is resumable and retries while budget remains', () => {
+  const d = nextPhase({ status: 'max_turns' } as never, 1, 2);
+  assert.equal(d.phase, 'pending');
+  assert.equal(d.outcome, 'max_turns');
+  assert.equal(d.resumable, true, 'a turn cap left a session worth continuing');
+});
+
+test('nextPhase: maxRetries 2 means three attempts, then failed', () => {
+  assert.equal(nextPhase({ status: 'crashed' } as never, 1, 2).phase, 'pending');
+  assert.equal(nextPhase({ status: 'crashed' } as never, 2, 2).phase, 'pending');
+  assert.equal(nextPhase({ status: 'crashed' } as never, 3, 2).phase, 'failed', 'out of retries');
+});
+
+test('nextPhase: a refusal never retries — the same brief gets the same answer', () => {
+  const d = nextPhase({ status: 'refused' } as never, 1, 5);
+  assert.equal(d.phase, 'failed');
+  assert.equal(d.resumable, false);
+});
+
+test('nextPhase: a runtime that threw is a crash, not a success', () => {
+  assert.equal(nextPhase(null, 1, 2).outcome, 'crashed');
+});
+
+// ---------------------------------------------------------------- the loop
+
+test('a pending job runs, succeeds, and records the session pointer', async () => {
+  const job = await mkJob('happy');
+  const r = await reconcile({ runtime: fakeRuntime(), cwd });
+  assert.deepEqual(r.succeeded, [job.id]);
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'succeeded');
+  assert.equal(after.attempts.length, 1);
+  assert.ok(after.attempts[0].sessionId, 'the session id is the one SDK fact we keep');
+  assert.equal(after.finishedAt !== null, true);
+});
+
+test('the lease is released when the attempt ends', async () => {
+  const job = await mkJob('lease-released');
+  await reconcile({ runtime: fakeRuntime(), cwd });
+  assert.equal(await db.lease.findUnique({ where: { jobId: job.id } }), null);
+});
+
+test('a failing job retries up to maxRetries, then fails', async () => {
+  const job = await mkJob('flaky', { maxRetries: 2 });
+  await reconcileToRest({ runtime: fakeRuntime({ failTasks: [job.id] }), cwd });
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'failed');
+  assert.equal(after.attempts.length, 3, '1 initial + 2 retries');
+});
+
+test('a second holder loses the lease and skips, rather than double-running', async () => {
+  const job = await mkJob('contended');
+  // somebody else got there first and still holds it
+  await db.lease.create({
+    data: { jobId: job.id, holder: 'other-host', token: 't', expiresAt: new Date(Date.now() + 600_000) },
+  });
+  const r = await reconcile({ runtime: fakeRuntime(), cwd });
+  assert.ok(r.skipped.includes(job.id), 'the loser skips');
+  assert.ok(!r.claimed.includes(job.id));
+  assert.equal((await db.attempt.count({ where: { jobId: job.id } })), 0, 'and runs nothing');
+  await db.lease.delete({ where: { jobId: job.id } });
+});
+
+test('an expired lease is reclaimed and its orphaned attempt is marked lost', async () => {
+  const job = await mkJob('abandoned');
+  await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
+  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'dead-host' } });
+  await db.lease.create({
+    data: { jobId: job.id, holder: 'dead-host', token: 't', expiresAt: new Date(Date.now() - 1000) },
+  });
+
+  const r = await reconcile({ runtime: fakeRuntime(), cwd });
+  assert.ok(r.reclaimed.includes(job.id));
+  const orphan = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } });
+  assert.equal(orphan.outcome, 'lost', 'nobody ever reported it');
+  assert.ok(orphan.endedAt);
+});
+
+test('reconcile is idempotent: a second pass on a settled board does nothing', async () => {
+  await mkJob('settle-me');
+  await reconcileToRest({ runtime: fakeRuntime(), cwd });
+  const r = await reconcile({ runtime: fakeRuntime(), cwd });
+  assert.deepEqual(r.claimed, []);
+  assert.deepEqual(r.reclaimed, []);
+});
+
+// ---------------------------------------------------------------- admission
+
+test('admission injects isolation onto an Agent spawn that omitted it', async () => {
+  const gate = admissionController({});
+  const r = await gate('Agent', { prompt: 'go', subagent_type: 'worker' }, {} as never);
+  assert.equal(r.behavior, 'allow');
+  assert.equal((r as { updatedInput: Record<string, unknown> }).updatedInput.isolation, 'worktree',
+    'not asked for in a prompt — injected');
+});
+
+test('admission leaves an already-isolated spawn alone', async () => {
+  const gate = admissionController({});
+  const r = await gate('Agent', { prompt: 'go', isolation: 'worktree' }, {} as never);
+  assert.equal(r.behavior, 'allow');
+  assert.equal((r as { updatedInput?: unknown }).updatedInput, undefined);
+});
+
+test('a policy can refuse a spawn, and the model is told why', async () => {
+  const gate = admissionController({
+    admitSpawn: (input) => (String(input.description ?? '').includes('#2') ? '#2 is blocked by #1' : null),
+  });
+  const denied = await gate('Agent', { description: '#2 do the join' }, {} as never);
+  assert.equal(denied.behavior, 'deny');
+  assert.match((denied as { message: string }).message, /blocked by #1/);
+
+  const allowed = await gate('Agent', { description: '#1 do the root' }, {} as never);
+  assert.equal(allowed.behavior, 'allow');
+});
+
+test('admission denies a tool the workload may never use', async () => {
+  const gate = admissionController({ deny: ['WebFetch'] });
+  assert.equal((await gate('WebFetch', {}, {} as never)).behavior, 'deny');
+  assert.equal((await gate('Read', {}, {} as never)).behavior, 'allow');
+});

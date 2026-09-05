@@ -12,7 +12,14 @@
     "target": "es2022",
     "lib": ["es2023"],
     "strict": false,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    // `.ts` import specifiers are what let Node run the sources with no build step
+    // (Node does not remap `./x.js` onto `x.ts`), so tsc has to accept them too.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true
   },
-  "include": ["bin/**/*.js", "src/**/*.js", "scripts/**/*.mjs", "types/**/*.d.ts"]
+  "include": ["bin/**/*.js", "src/**/*.js", "src/**/*.ts", "scripts/**/*.mjs", "types/**/*.d.ts", "prisma.config.ts"],
+  // The Prisma client is generated, ships `@ts-nocheck`, and is checked by Prisma's own
+  // release process — type-checking 788K of it on every `npm run lint` buys nothing.
+  "exclude": ["node_modules", "src/generated"]
 }

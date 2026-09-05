@@ -15,3 +15,11 @@ package-lock.json
 *.log
 .claude/worktrees/
 .claude/settings.local.json
+
+# The board itself. Durable state, but a binary SQLite file has no business in git:
+# it cannot be merged, and every write would be a diff nobody can read. Back it up by
+# copying the file. (This is the property the old `refs/kb/boards/<slug>` tier bought
+# and this design deliberately gives up.)
+.kanban/*.db
+.kanban/*.db-shm
+.kanban/*.db-wal

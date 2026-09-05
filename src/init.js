@@ -887,6 +887,11 @@ export const GITIGNORE_LINES = [
   '.kanban/cache.json',
   '.kanban/nudges/',
   '.kanban/sessions/',
+  // The board database. Durable state, but a binary SQLite file cannot be merged and every
+  // write would be an unreadable diff, so it is backed up by copying the file, not by git.
+  '.kanban/*.db',
+  '.kanban/*.db-shm',
+  '.kanban/*.db-wal',
   '.claude/worktrees/',
   '.claude/settings.local.json',
 ];

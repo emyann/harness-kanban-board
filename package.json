@@ -1,7 +1,7 @@
 {
   "name": "hkb-cli",
   "version": "0.2.2",
-  "description": "hkb — harness kanban board. A portable, frugal Hermes-style kanban for coding agents; GitHub Issues is the default backend, any harness (Claude Code, Copilot CLI, Codex) is a worker.",
+  "description": "hkb \u2014 harness kanban board. A portable, frugal Hermes-style kanban for coding agents; GitHub Issues is the default backend, any harness (Claude Code, Copilot CLI, Codex) is a worker.",
   "type": "module",
   "bin": {
     "hkb": "bin/hkb.js"
@@ -21,11 +21,12 @@
   "scripts": {
     "test": "node --test",
     "lint": "for f in $(find bin src scripts -name '*.js' -o -name '*.mjs'); do node --check \"$f\" || exit 1; done && npm run typecheck",
-    "typecheck": "if [ -x node_modules/.bin/tsc ]; then node_modules/.bin/tsc --noEmit; else echo 'hkb: type check skipped — no local typescript. Run `npm install` first (a devDependency; hkb itself still runs with an empty node_modules).' >&2; fi",
+    "typecheck": "if [ -x node_modules/.bin/tsc ]; then node_modules/.bin/tsc --noEmit; else echo 'hkb: type check skipped \u2014 no local typescript. Run `npm install` first (a devDependency; hkb itself still runs with an empty node_modules).' >&2; fi",
     "smoke": "node scripts/smoke-pack.mjs"
   },
   "devDependencies": {
     "@types/node": "22.20.1",
+    "prisma": "7.10.0",
     "typescript": "5.9.3"
   },
   "engines": {
@@ -55,5 +56,10 @@
   "publishConfig": {
     "access": "public",
     "provenance": true
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.261",
+    "@prisma/adapter-better-sqlite3": "7.10.0",
+    "@prisma/client": "7.10.0"
   }
 }
