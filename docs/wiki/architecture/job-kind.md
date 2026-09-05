@@ -9,10 +9,10 @@ covers:
   - path: prisma/schema.prisma
     sha: f4b3adeb799b04102e4ee64b961b9490c955fbd9
   - path: src/controller.ts
-    sha: 61161cdd0e157f14112adc1f8ebc69108ce8dec9
+    sha: e4db1f7d58cc0a761998f1d2a3bb0d78aadea5a8
   - path: src/db.ts
-    sha: db126410edbcadf02b1d7ac200771620d1195d70
-generated_at_commit: f2c0a72
+    sha: c759afb94b34e93ecefdb0384e06924bd772e836
+generated_at_commit: 54ad569
 last_refreshed: 2026-09-05
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control]
 ---
@@ -129,7 +129,7 @@ Everything interesting is there:
   Raising the cap is a change to the Job's **spec**, which belongs to whoever filed
   it and never to the controller, so the Job stops here with `lastError` naming the
   cap and the command that changes it. It stays **resumable**, which is what keeps
-  `lastSessionId`: `kb retry <id> --max-budget <usd>` re-queues it with a bigger cap,
+  `lastSessionId`: `hkb retry <id> --max-budget <usd>` re-queues it with a bigger cap,
   records the raise on the event stream, and continues the session rather than
   re-buying what the first attempt already paid for.
 - anything else → `crashed`, retried while budget remains.
@@ -159,16 +159,16 @@ pending" is a state no runtime can report and no session can hold.
 
 ## The two phases a human writes
 
-`done` and `cancelled` are the only states an operator asks for directly (`kb done`,
-`kb cancel`, `src/kb.ts`). They exist because the machinery cannot conclude every Job
+`done` and `cancelled` are the only states an operator asks for directly (`hkb done`,
+`hkb cancel`, `src/hkb.ts`). They exist because the machinery cannot conclude every Job
 it starts: a Job whose pull request was reviewed and merged while it sat `pending` on
 a spent budget is finished, and nothing observable says so — the next reconcile would
 spend the whole cap redoing merged work. The only verb that used to stop it was
-`kb rm`, which deletes the Job, its attempts and its events, so the choice was
+`hkb rm`, which deletes the Job, its attempts and its events, so the choice was
 between re-running landed work and destroying the record of it.
 
 They are **not** `suspended`. That state is a *wait* — something is expected to happen
-and then the Job goes on — so `kb ls --phase suspended` is an inbox, and a Job
+and then the Job goes on — so `hkb ls --phase suspended` is an inbox, and a Job
 concluded by hand would sit in it for ever. The reasons even read in opposite tenses:
 `suspendedFor` is what someone must still do, `endedFor` is what already happened.
 
@@ -180,7 +180,7 @@ of the operator's decision.
 Both are recorded transitions, never silent updates: an Event whose actor is a person
 rather than a `host/pid` holder, carrying the phase it moved from and the reason. Both
 refuse a Job that is currently leased — that is a running worker — with the same rule
-and the same way out as `kb rm`.
+and the same way out as `hkb rm`.
 
 ## Ceilings, and where they are checked
 
@@ -201,14 +201,14 @@ first one takes to finish.
 
 A Board carries **spec defaults** beside its ceilings: `defaultModel`, `defaultEffort`,
 `defaultMaxTurns`, `defaultMaxBudgetUsd`, `defaultMaxRetries`. A board that runs cheap,
-high-volume work can say so once instead of on every `kb new`.
+high-volume work can say so once instead of on every `hkb new`.
 
 They are separate columns from the ceilings, and the reason is who wins. A **ceiling** is a
 limit a Job may not exceed, enforced in `gateClaim`. A **default** is a value a Job may
 freely override, resolved in `src/spec.ts`, in three levels:
 
-1. the Job's own value wins — `kb new --model …`
-2. the Board's default fills a null — `kb boards set <slug> --model …`
+1. the Job's own value wins — `hkb new --model …`
+2. the Board's default fills a null — `hkb boards set <slug> --model …`
 3. the built-in is the last resort — `BUILT_IN` in `src/spec.ts`
 
 That order only works if "unset" is legible, which is why `Job.maxTurns`, `maxBudgetUsd`
@@ -216,7 +216,7 @@ and `maxRetries` are nullable with no database default. A column that defaults t
 cannot tell *"the operator asked for 20"* from *"the operator said nothing"*, and under
 that ambiguity every Job ever filed outranks its board — which is not a default at all.
 
-`resolveSpec` returns each value tagged with where it came from, and `kb show` prints the
+`resolveSpec` returns each value tagged with where it came from, and `hkb show` prints the
 tag. A spec you cannot trace is worse than one you have to repeat.
 
 ### The cap is frozen onto the Attempt
@@ -241,11 +241,11 @@ rewrite what is already running. An Attempt is this system's Pod, and it already
 what *happened* — `costUsd`, `sessionId`, `branch`, `outcome` — rather than what is
 configured.
 
-The cost is that `kb show` reports the frozen number for a past attempt rather than what
+The cost is that `hkb show` reports the frozen number for a past attempt rather than what
 resolution says today. That is the feature: an attempt that stopped on `max_budget` is
-only legible against the cap that actually stopped it, and `kb retry`'s refusal — "the same
+only legible against the cap that actually stopped it, and `hkb retry`'s refusal — "the same
 cap stops it in the same place" — is a claim about the failed attempt that no amount of
-re-resolving can recover once the board has moved on. `kb retry` therefore reads both: the
+re-resolving can recover once the board has moved on. `hkb retry` therefore reads both: the
 frozen cap for what happened, and today's resolution for what a retry would get, so a board
 default raised after the failure is a real raise and is allowed through.
 

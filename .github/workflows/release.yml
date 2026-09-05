@@ -155,7 +155,8 @@ jobs:
             if out="$(npx -y "hkb-cli@${VERSION}" version 2>&1)"; then
               echo "$out"
               # `hkb version` prints "hkb <version>" and nothing after it, so match the tail — a
-              # substring match would let hkb-cli@1.4.10 pass for a 1.4.1 release.
+              # substring match would let hkb-cli@1.4.10 pass for a 1.4.1 release. That verb opens
+              # no board on purpose: this runner has no repository and wants no ~/.hkb left behind.
               case "$out" in
                 *" ${VERSION}")
                   npx -y "hkb-cli@${VERSION}" help

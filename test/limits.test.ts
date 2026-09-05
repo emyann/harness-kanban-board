@@ -29,7 +29,7 @@ test('a stopped board refuses, and names who stopped it and when', () => {
   assert.equal(g.ok, false);
   assert.match(why(g), /stopped by yrnd1@1234/);
   assert.match(why(g), /2026-09-05T05:00:00/);
-  assert.match(why(g), /kb start/, 'an error says what to do next');
+  assert.match(why(g), /hkb start/, 'an error says what to do next');
 });
 
 test('the kill switch outranks having room and budget', () => {
@@ -55,7 +55,7 @@ test('maxConcurrent 0 refuses everything, which is a usable way to drain a board
 
 test('a full board says how to make it less full', () => {
   const g = gateClaim({ ...open, liveLeases: 2, maxConcurrent: 2 });
-  assert.match(why(g), /kb boards set <slug> --max-concurrent <n>/,
+  assert.match(why(g), /hkb boards set <slug> --max-concurrent <n>/,
     'the old advice was "raise maxConcurrent", which named a column and not a verb');
 });
 

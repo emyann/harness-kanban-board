@@ -1,31 +1,18 @@
 node_modules/
-# `typescript` is the only dependency and it is dev-only, so no lock file is committed — nothing
-# ships from node_modules and `npm install` has nothing to pin for a user. CI installs plain and
-# every setup-node keeps `package-manager-cache: false`, which needs a lock file to be absent.
+# No lock file is committed: nothing ships from node_modules, and every setup-node keeps
+# `package-manager-cache: false`, which needs a lock file to be absent.
 package-lock.json
-.kanban/logs/
-.kanban/outbox.jsonl
-.kanban/state.json
-.kanban/dispatch.pid
-.kanban/serve.pid
-.kanban/serve.url
-.kanban/cache.json
-.kanban/nudges/
-.kanban/sessions/
 *.log
+
+# The repository's own hkb directory — per-attempt worktrees, and a board file if
+# HKB_DATABASE_URL points at one here. All of it is local runtime state: a checkout is
+# expensive but reproducible, and a binary SQLite board cannot be merged and would be a
+# diff nobody can read. The default board is ~/.hkb/board.db, machine-level and outside
+# any repository; back it up by copying the file.
+.hkb/
+
 .claude/worktrees/
 .claude/settings.local.json
-
-# The board itself. Durable state, but a binary SQLite file has no business in git:
-# it cannot be merged, and every write would be a diff nobody can read. Back it up by
-# copying the file. (This is the property the old `refs/kb/boards/<slug>` tier bought
-# and this design deliberately gives up.)
-.kanban/*.db
-.kanban/*.db-shm
-.kanban/*.db-wal
-
-# Per-attempt checkouts the controller makes. Contents are branches, not files to track.
-.kanban/worktrees/
 
 # The publish transpile. Development runs the .ts directly; `npm pack` regenerates this.
 /dist/

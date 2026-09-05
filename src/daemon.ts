@@ -15,7 +15,7 @@ import type { Runtime } from './runtime/index.ts';
 /**
  * The loop — and only now.
  *
- * Phase 1 shipped `kb run`, a foreground command, on purpose: a daemon built first would have hidden
+ * Phase 1 shipped `hkb run`, a foreground command, on purpose: a daemon built first would have hidden
  * every failure the foreground runs surfaced, and it did (the admission gate, the worktree base and
  * the lease were all silently inert, and all three were found by watching a run happen). What is
  * left is the half a human at a keyboard genuinely cannot do — **time**.
@@ -29,7 +29,7 @@ import type { Runtime } from './runtime/index.ts';
  *   - a worktree becomes safe to reclaim, because its pull request landed somewhere else and
  *     nothing here was told. That one is a sweep, on its own slower timer: see `SWEEP_EVERY_MS`.
  *
- * The change-driven half — "a Job was just filed, run it" — is always one `kb run` away, so it does
+ * The change-driven half — "a Job was just filed, run it" — is always one `hkb run` away, so it does
  * not need a loop and does not set the cadence. All three of the above have minute-scale tolerances,
  * so 45 seconds is generous and the cost of a tick is one indexed query against a local file.
  *
@@ -64,11 +64,11 @@ const SLEEP_SLACK_MS = 30_000;
 const controllerLeaseMs = (intervalMs: number) => Math.max(3 * intervalMs, 90_000);
 
 /** One log per board for a `--board`-scoped daemon; one for the machine otherwise. */
-export const logPath = (board: string, url?: string) => path.join(boardDir(url), `kb-${board}.log`);
-export const machineLogPath = (url?: string) => path.join(boardDir(url), 'kb.log');
+export const logPath = (board: string, url?: string) => path.join(boardDir(url), `hkb-${board}.log`);
+export const machineLogPath = (url?: string) => path.join(boardDir(url), 'hkb.log');
 
 /**
- * What this daemon is running, for `kb up --status` to compare against the checkout.
+ * What this daemon is running, for `hkb up --status` to compare against the checkout.
  *
  * A daemon runs the code it was started with: edit the controller and the running one keeps the old
  * behaviour until restarted. The previous dispatcher had the same hazard and it was managed by
@@ -188,7 +188,7 @@ export type BoardStatus = {
  * Who is serving what.
  *
  * One query with a join, which is the point of moving this out of a pid file: the old shape needed
- * a glob over `kb-*.pid`, then a stat and a boot-time check per file, and still could not answer
+ * a glob over `hkb-*.pid`, then a stat and a boot-time check per file, and still could not answer
  * "and what has that board spent" in the same breath.
  */
 export async function status(board?: string, now = Date.now()): Promise<BoardStatus[]> {
@@ -201,7 +201,7 @@ export async function status(board?: string, now = Date.now()): Promise<BoardSta
   const here = buildVersion();
 
   // The spend for every board in one pass, summed here rather than per board: an aggregate per
-  // row would make `kb up --status` cost N+1 queries to answer a question the join already holds.
+  // row would make `hkb up --status` cost N+1 queries to answer a question the join already holds.
   // Same window as the gate, from the same function — a status that disagreed with the refusal it
   // is meant to explain would be worse than not printing it.
   const costs = new Map<number, number>();
@@ -297,7 +297,7 @@ function nap(ms: number, signal: AbortSignal): Promise<void> {
 /**
  * Reconcile every board this daemon leads, on an interval, until stopped.
  *
- * Runs in the foreground of whatever process calls it — `kb up` detaches by spawning a second
+ * Runs in the foreground of whatever process calls it — `hkb up` detaches by spawning a second
  * process that calls this, so the loop itself has no opinion about daemonising and can be tested
  * in-process.
  */
@@ -361,7 +361,7 @@ export async function loop(deps: LoopDeps): Promise<number> {
           data: boards.map((b) => ({ kind: 'woke', boardId: b.id, actor: holder, payload: { driftMs: drift } })),
         });
       }
-      announce('empty', boards.length ? null : 'no boards yet — `kb new` inside a repository creates one');
+      announce('empty', boards.length ? null : 'no boards yet — `hkb new` inside a repository creates one');
 
       for (const b of boards) {
         if (deps.signal.aborted) break;
@@ -549,6 +549,6 @@ export async function stop(
     pid: parsed.pid,
     waitedMs: Date.now() - began,
     why: `pid ${parsed.pid} is still shutting down after ${Math.round(timeoutMs / 1000)}s — it is interrupting a worker. `
-      + 'Check `kb up --status`; it will exit on its own.',
+      + 'Check `hkb up --status`; it will exit on its own.',
   };
 }

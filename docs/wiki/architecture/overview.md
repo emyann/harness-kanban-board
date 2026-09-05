@@ -1,268 +1,131 @@
 ---
 title: hkb at a glance
-summary: "The pre-ADR-007 system, which still runs: CLI, board protocol, dispatcher loop, workers, and the rule that the store is the only state. Points at the new core for anything written since."
+summary: "The moving parts of a workload scheduler: a CLI over one SQLite board, a level-triggered controller that claims a Job under a lease and runs it inline, a runtime seam over the Agent SDK, and a git worktree as the sandbox. Where state lives, and what is deliberately not here."
 category: architecture
 kind: explanation
 audience: [dev]
-read_when: "your first session in this repo, or changing how state, dispatch, and workers fit together"
+read_when: "your first session in this repo, or changing how state, reconciliation and workers fit together"
 covers:
-  - path: src/cli.js
-    sha: b183d59750a4bace38fb612026657ed3ded95708
-  - path: src/gh.js
-    sha: 8154ea477e52ed3f769238f1c1bda588fd767798
-  - path: src/model.js
-    sha: de323e59fae958580450c490eea7fa56520e28a5
-  - path: src/store/index.js
-    sha: fed32f2f24ff0ecb5bbec064c26fcaa3f63fd7dc
-  - path: src/forge.js
-    sha: 1d9e17cd8fad3500b512ef10843d541cda2c65a4
-  - path: src/lifecycle.js
-    sha: 29089f8c1ba2f46a320316634593773d1d2b67b0
-  - path: src/dispatch.js
-    sha: 6a31798b86f2e330b93d1bf20f659e4843d6a022
-  - path: src/context.js
-    sha: be28b4843c2a09afc0c835c4fe195706af86bb15
-  - path: src/hook.js
-    sha: 464c411be61b06c8513fd248847bf0eeceb3eef0
-  - path: src/jobs.js
-    sha: a5b255731602cb2363ff33745fa1039e211ffdd1
-  - path: src/board.js
-    sha: 0337a17cf70442cac66fb457c880e4b27a52672e
-  - path: src/doctor.js
-    sha: c29b0cd7856ca394203cb53b8755bf85e25bd239
-generated_at_commit: fc5452a
+  - path: bin/hkb.ts
+    sha: 698dd0e673a442929b7314d6bb409f87f89b8251
+  - path: src/hkb.ts
+    sha: d55a39ca200df4bb57d6c3fcd55c6539cbeed7d4
+  - path: src/controller.ts
+    sha: e4db1f7d58cc0a761998f1d2a3bb0d78aadea5a8
+  - path: src/daemon.ts
+    sha: 114665116363d28f7aeecf23e293f0fff050eadc
+  - path: src/db.ts
+    sha: c759afb94b34e93ecefdb0384e06924bd772e836
+  - path: src/db-url.ts
+    sha: 075e55c592c972b3505f106ac670a277996f0615
+  - path: src/worktree.ts
+    sha: 8cba275c6c1379e1a0dae4f67acc299d7024536b
+  - path: src/pulls.ts
+    sha: a27f00a986f576c2d3ed035902c0a1c9f9a9300c
+  - path: prisma/schema.prisma
+    sha: f4b3adeb799b04102e4ee64b961b9490c955fbd9
+related:
+  [
+    architecture/job-kind,
+    architecture/the-loop,
+    architecture/runtime-layer,
+    concepts/admission-control,
+    decisions/adr-007-workload-scheduler,
+    decisions/adr-009-retiring-the-first-system,
+  ]
+generated_at_commit: 54ad569
 last_refreshed: 2026-09-05
-related: [concepts/store, concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
 
 # hkb at a glance
 
-> **Read this first: there are two systems in this repository.** ADR-007 reframed
-> hkb as a *workload scheduler* — a thing that takes a workload and executes it —
-> and built a new core beside the old one without migrating it. This page
-> describes the **pre-ADR-007 system**, which still runs: the board on
-> `refs/kb/boards/<slug>`, the CLI verbs, the dispatcher tick, the worker
-> protocol. It is where the 193 real cards still live.
->
-> For the new core — one SQLite board behind Prisma, a runtime seam over the
-> Claude Agent SDK, and `Job` as the first and only workload kind — start at
-> `decisions/adr-007-workload-scheduler`, then `architecture/job-kind`,
-> `architecture/runtime-layer` and `concepts/admission-control`.
->
-> The two share no code. Which one you are reading about is decided by whether the
-> file is `.js` (old) or `.ts` (new).
+hkb takes a **workload** and executes it. There is one workload kind — a **Job**: one agent, one brief,
+run to completion — and everything here exists to get one of those started, keep exactly one of it
+running, and record what happened. [ADR-007](../decisions/adr-007-workload-scheduler.md) decided that
+shape; [ADR-009](../decisions/adr-009-retiring-the-first-system.md) deleted the GitHub-Issues kanban that
+preceded it, so anything in the git history about `refs/kb/boards/<slug>`, a dispatcher tick, a store
+seam or 36 CLI verbs is describing code that is gone.
 
-## The old system
+## The pieces
 
-> hkb is a Hermes-style kanban that coding agents work autonomously, on a board
-> that lives **in the repository it drives**. Every structural choice below
-> follows from one rule: **the store is the only durable state**. Processes hold
-> caches, never truth — so any process (dispatcher, worker, a human's laptop) can
-> crash at any moment and the system re-derives itself from whatever
-> `openStore(ctx)` answers.
+| | |
+|---|---|
+| `bin/hkb.ts` → `src/hkb.ts` | the CLI: parse, resolve a board, run one verb, print |
+| `prisma/schema.prisma` + `src/db.ts` | the board — one SQLite file, one memoized client handle |
+| `src/controller.ts` | `reconcile()` — one level-triggered pass over one board |
+| `src/daemon.ts` | that pass on a timer, detached, over *every* board |
+| `src/worktree.ts` | the sandbox: cut a checkout, carry declared files in, get outputs out, sweep |
+| `src/runtime/` | the seam a worker runs behind — the Agent SDK, or a fake that spends nothing |
+| `src/admission.ts` | the `PreToolUse` gate that makes isolation an invariant rather than an instruction |
+| `src/pulls.ts` | the only thing that shells out to `gh` |
 
-## The state model
+## State lives in the board, and only there
 
-A board is whatever `openStore(ctx)` (`src/store/index.js`) answers, and there
-is one store: a card is a file on the board's own git ref (`refs/kb/boards/<slug>`,
-outside `refs/heads` and so invisible to `git branch` —
-*architecture/board-ref*), `.git/hkb/index.db` (`node:sqlite`) indexes it and
-holds claims and the event log, and both are composed behind the interface by
-`src/store/local.js` (*concepts/store*, *architecture/local-store*). Structured fields ride in an
-HTML-comment block at the top of the card's body and execution history in a run
-record beside it, all parsed and serialized by pure functions in
-`src/model.js`. Dependencies are edges between cards (`blocked_by`), which makes
-the board a DAG, not a list.
+The board is **`~/.hkb/board.db`** (`src/db-url.ts`) — SQLite behind Prisma, one file per *machine*
+with a `Board` row per *repository*, the way one Kubernetes cluster holds a namespace per project. That
+default is the reason "show me everything running here" is a query rather than a hunt across checkouts.
+`HKB_DATABASE_URL` points at a different file, and the test suite uses exactly that.
 
-GitHub Issues was the other driver until ADR-006 retired it. The seam is what
-made that a deletion rather than a rewrite — no verb branches on the store, so
-`src/store/github.js` and the `src/tasks.js`/`src/lock.js` shims over it were
-removed with no caller changed (*architecture/store-seam*). What remains of it
-is `src/bridge/github-issues.js`, read-only, reachable only from
-`hkb init --import`.
+It creates and migrates itself on first touch (`src/schema.ts`), from the committed SQL in
+`prisma/migrations`, writing the rows Prisma itself writes — so `prisma migrate dev` in a checkout keeps
+working against the same history. The reverse direction is a refusal: a board carrying migrations this
+build does not know about belongs to a newer `hkb`, and opening it would fail somewhere deep in Prisma
+with a message naming a column rather than a cause.
 
-**A repository that has not crossed over says so.** Three refusals, because
-there are three ways to still be on the old store. A `.kanban/board.json` that
-names `"store": "github"` is told by `storeKind` (`src/store/index.js`) that the
-store is gone and how to migrate. A board.json with **no** `store` key resolves
-to *local*, and `hkb init` asks the forge before it creates anything: cards
-under `kb:board:<slug>` and no board ref here means an unmigrated board, and
-`refuseUnmigratedBoard` (`src/init.js`) names the count and `hkb init --import`
-rather than creating an empty board beside a real one. Anything else that reads
-a board that is not there gets `noBoardHere` (`src/model.js`) — one sentence
-naming `hkb init`, `hkb init --import` and `hkb sync`. Reads refuse as loudly as
-writes here on purpose: while `listTasks` answered `[]` for a board that was never created,
-`hkb list` printed "(no tasks)" and exited 0 and the dispatcher ticked over
-nothing indefinitely. An empty board and a missing one are different facts.
+No process holds truth. A daemon caches nothing across passes, and a verb reads the board and exits.
 
-## The one atomic primitive
+## The shape is a controller, not a queue consumer
 
-A claim is **one `BEGIN IMMEDIATE` transaction** on the index
-(`src/store/sqlite.js`): insert the lock under `UNIQUE(task_id, k)`, insert the
-attempt row, set the status. A row already there means someone holds it;
-anything else means *unknown*, and callers must treat unknown as "back off",
-never as either success or failure. A worker's heartbeat is a compare-and-swap
-on that row's token, leased on this host's own mirror of where it left the
-chain; zero rows updated is `LOCK_LOST` (exit 3) and the worker must stop.
+`reconcile()` (`src/controller.ts`) reads observed state, compares it to desired state and takes **one
+step**. It is safe to run repeatedly, to interrupt, and to run while another host runs it. Nothing may
+depend on having seen an event — which is why `src/daemon.ts` is a resync loop rather than a
+subscription, and why a guard that only fires on a *transition* is a guard that is wrong after a restart.
 
-## The dispatcher is deliberately dumb
+The Kubernetes mapping is deliberate and it is load-bearing rather than decorative:
 
-`src/dispatch.js` is a no-LLM loop. Each tick re-reads the whole board (one
-read) and derives every action from it: replay unsent writes, move the cards
-whose pull request merged on the forge, reclaim crashed work, reap finished
-agents, promote cards whose blockers are done, then claim and spawn workers
-under guard rails, *ready* cards highest-`kb.priority` first and oldest card
-first within a tie
-(`sortReady` in `src/model.js`). The number itself carries no enforced
-scale — `README.md` names a **priority band** (`0` unfiled default · `1`
-normal · `2` next up · `3` urgent) so two filers share a ruler, but
-`sortReady` only ever compares the raw integer. Its in-process memory
-is only an optimization — since the 2026-08-27 outage it drops its own caches
-and ultimately exits (code 4) when claims stop resolving, because a fresh
-process rebuilt from the board is always correct.
+| hkb | Kubernetes |
+|---|---|
+| `Job` | Job |
+| `Attempt` | Pod |
+| `Lease` | Lease |
+| `Board` | Namespace |
+| `Controller` row | leader election |
+| `hkb up` | a resync loop, not a watch |
 
-**One thing the tick cannot derive from the board: a pull request.** The board
-is local and nothing on the forge's side points back at a card, so the tick
-reads the repository's pull requests once and matches them to cards by *head
-branch* — `kb-<n>-<k>` and the other names hkb creates (`taskBranchRe`,
-`src/model.js`; `fillPrs`, `src/forge.js`). That join is what the `active_pr`
-guard, the terminal verbs and the reconcile pass all run on: a merged PR on a
-card's branch is what moves it to *done*, and `hkb merge` does the same at once
-rather than waiting for the next tick — including the cleanup the tick would
-have run, because a card it set to *done* itself is one the reconcile pass will
-never see again.
+The one place hkb departs from it: it **fuses the controller-manager and the kubelet**. There is no node
+to schedule onto — the process that decides a Job should run is the process that runs it, inline.
 
-It is a *join*, not a precondition. The cards are on a branch in this
-repository and cost nothing to read, so a forge that cannot be reached leaves
-`prs: []` and a line saying why rather than failing the read (`prsUnavailable`,
-`src/forge.js`) — `hkb list` on a plane prints the board. The tick degrades the
-same way with one refinement: it goes on doing its local work but claims
-nothing, because an empty `prs` there means "not known", not "none", and the
-`active_pr` guard exists precisely to not open a second pull request on a card
-that already has one. Judgment (what to build,
-whether a PR merges) lives outside the loop, in the seats described in
-`concepts/roles-and-seats`. The tick still never merges anything: a board on
-`dispatch.merge.mode: "auto"` has it enable *GitHub's* auto-merge on a
-reviewed card's PR and walk away, which delegates the mechanical last step
-without moving the judgment inside the loop — see `features/auto-merge`.
+## What a pass does
 
-The loop does two things a tick does not, both at most once a day and both
-outside `tick()` because they write `.kanban/state.json`: warn before KB_TOKEN
-expires, and say when npm has moved past the hkb running it
-(`tokenExpiryNotice`/`versionNotice`, `src/doctor.js`; see
-`features/update-notice`). Neither is a decision and neither can fail a tick —
-an unreachable probe is silent and simply retried.
+Claim under a lease, run, record. The interesting parts are the refusals:
 
-Modules load once, at process start, so a loop that has been up for hours
-keeps running the code it imported even after a merge to `main` changes the
-checkout the global `hkb` symlinks into (#140). Every tick, `loop` compares
-`installStamp()` — the checkout's own `git rev-parse HEAD` when it has one,
-the package version otherwise, both read fresh off disk, never cached — against
-the stamp it captured at startup. A mismatch is exit 4, the same code the
-self-heal ladder above uses: `hkb: this loop is running <old>, the installed
-hkb is <new> — restarting`. It is a local `git` call, not a GitHub read, so a
-board where the loop is current pays nothing per tick for it.
+- **The ceilings are checked before a claim and never during a run** (`src/limits.ts`). A ceiling that
+  could stop a running worker would strand its worktree; one that declines to start another is only a
+  decision. That is also why the module is pure — a decision with no I/O can be tested exhaustively
+  against the refusing case, which is the case that matters.
+- **A lapsed lease is evidence, not proof.** Reclaim goes through `src/liveness.ts`, which answers
+  `alive | dead | unknown` — and `unknown` is a real answer, because a holder on another host cannot be
+  probed and a wall-clock expiry means nothing across a laptop suspend.
+- **Isolation is enforced, not requested.** `src/admission.ts` is a `PreToolUse` gate that rewrites or
+  denies; the prompt asking a worker to stay in its worktree was measured being ignored. See
+  *concepts/admission-control*.
 
-## Workers are any harness
+## The forge is not the board
 
-A worker is whatever a profile in `src/board.js` can launch — Claude Code,
-Copilot CLI, Codex, or a harness someone wrote a `launch` array for — pointed
-at one card. Its
-contract is small: the verbs in `src/lifecycle.js` (complete / block /
-request-review), a prompt assembled from the card by `src/context.js`, and
-guard rails on the launch line itself. The protocol is what a worker follows;
-the harness is interchangeable.
+GitHub holds pull requests. It holds nothing else. `src/pulls.ts` shells out to `gh` to read them back
+and joins them to a Job by **branch name** — `kb-<jobId>-<k>`, which `src/worktree.ts` derives so nothing
+has to remember it. The worker opens its own *draft* PR and a human merges; `succeeded` means the session
+ended, not that the work is good.
 
-**The launch line is the permission policy.** `--permission-mode dontAsk` with
-an `--allowedTools` / `--disallowedTools` pair (`CLAUDE_TOOLS` and
-`CLAUDE_DENY`, `src/board.js`) is the layer that is live on every profile,
-including the `claude --bg` default where the `KB_TASK`-gated PreToolUse hook
-never fires. So what a worker must never run is said there — `Bash(hkb
-dispatch*)` beside the force-push patterns — and hkb's own `preToolHook`
-(`src/hook.js`) is deliberately **deny-or-silent**: it can subtract from that
-list and never widen it, because a hook `allow` overrides Claude Code's own
-checks and would let one profile's worker run what the identical worker beside
-it is refused. A denial names the way out rather than inviting a workaround:
-`hkb block <n> "needs …" --kind capability`.
+A Job can also declare **exports** (`--export <path>`): paths the board copies out of the worktree into
+the repository before the checkout is torn down, and a declared path the run did not produce fails the
+attempt. Everything else left in the checkout is litter and goes with it
+([ADR-008](../decisions/adr-008-declared-outputs.md)).
 
-**The launch line also carries the hooks** (`{hook_settings}` in the Claude
-launches, `src/board.js`; `workerHookSettings`, `src/init.js`). Both of hkb's
-Claude Code hooks are `matcher: "*"` and both are inert outside a worker, so a
-settings file — read by every session in the repo — bought other sessions a
-process per tool call and, once its command stopped resolving, a failure per
-tool call. `--settings` is a per-launch source, forwarded into the `--bg`
-session daemon, so the hooks reach only sessions hkb started and `hkb init`
-writes no settings file (`--shared-hooks` remains the opt-in). See
-[hook install shapes](../features/hook-install-shapes.md).
+## What is deliberately not here
 
-*Which* card is the subtle part, and it is not always the environment. The
-dispatcher exports `KB_TASK`/`KB_ATTEMPT` on the launch (`src/dispatch.js`),
-which answers it for any harness run as a child process — but not for a
-background agent: `claude --bg` hands the request to a long-lived session
-daemon and exits, so that environment stops at the CLI and never reaches the
-session doing the work. The default profile is one of those. `whichAttempt`
-(`src/hook.js`) therefore falls back to the `kb-<n>-<k>` checkout the launch
-names, which is already the identity the tick matches a running job by
-(`matchJobByWorktree`, `src/jobs.js`). And when the two *disagree* the checkout
-wins: an environment can be inherited — a session daemon a `claude --bg` launch
-cold-started keeps that launch's `KB_TASK` for life and hands it to every
-session it hosts — where a directory cannot, so hkb no longer passes any `KB_*`
-on that launch and a hook that finds a contradicted one stands aside
-(`attemptIdentity`, `src/model.js`; see *concepts/worker-identity*).
-
-Session identity travels the same asymmetry. What session a worker *is*
-(`CLAUDE_CODE_SESSION_ID`, plus the job record `currentSession` reads in
-`src/jobs.js`, which names the transcript on disk) is recorded onto the attempt
-row by the **terminal verb**, not by the Stop hook — the verb is the one thing
-every worker runs, and it is already writing that row. Which is why the verb has
-to be a command the worker can actually type: `complete` is a bash builtin, and
-Claude Code's worktree-isolated sessions refuse it (and refuse heredocs) before
-hkb sees the line, so `VERB_ALIASES` (`src/cli.js`) resolves `finish` to
-`complete` ahead of routing and everything a worker reads names `finish`. `sessionForAttempt`
-(`src/hook.js`) stamps only an attempt this session actually ran: its own, or a
-node it claimed in-session, so a track's nodes carry the runner's transcript
-while an operator's own terminal records nothing. That is what leaves
-`hkb stats` something to price when the harness itself reports no cost.
-
-The attempts that never reach a verb — crashed, timed out, written off as a
-protocol violation — are exactly the ones a human reopens, so the tick fills
-those from the other end. It has already matched the background job to decide
-whether the attempt is alive, and that job names a record on disk;
-`jobSessionUpdate` (`src/jobs.js`) turns it into the same fields, one tick after
-the launch (`src/dispatch.js`). Blanks only: a row a verb has stamped is left
-exactly as it is, and a resumed job's record is never half-merged into one. A
-pid-mode attempt has no job record, but the same worker log `parseSessionLog`
-already reads for session and cost, so the tick backfills it from there too,
-the tick just before it calls `failAttempt` (`src/dispatch.js`).
-
-`parseSessionLog` (`src/model.js`) reads the whole result `claude -p
---output-format json` signs off with, not just what to bill: `terminal_reason`
-and `api_error_status` say why the run ended, `model_usage` (read off the
-result's own `modelUsage`, the one camelCase field in an otherwise snake_case
-object) breaks cost down per model, and `permission_denials` is the tool calls
-the harness refused before the worker ever saw a prompt. `watchChild`
-(`src/dispatch.js`) reads `api_error_status` off that result to pause a
-profile on a 401/429, falling back to scanning the raw log tail only for a log
-with no JSON result line to read a status from at all.
-
-## The seams that keep it portable
-
-`src/gh.js` is the only file that shells out to `gh`, and it pins
-`X-GitHub-Api-Version`. Board state sits behind one named interface —
-`openStore(ctx)` in `src/store/index.js`, with the one driver's bodies in
-`src/store/local.js` — and pull requests sit beside it rather than inside it,
-in `src/forge.js`, because a board kept locally still opens its work on a
-forge. Everything above the seam speaks statuses, claims and attempts, which is
-why retiring a driver was a deletion rather than an edit to every caller. See
-[the store seam](store-seam.md). Pure decision logic stays in
-`src/model.js` (unit-tested, no I/O); `src/cli.js` only parses and routes.
-
-## Related
-
-- [store](../concepts/store.md)
-- [board-protocol](../concepts/board-protocol.md)
-- [claims-and-leases](../concepts/claims-and-leases.md)
-- [dispatcher-tick](../architecture/dispatcher-tick.md)
-- [roles-and-seats](../concepts/roles-and-seats.md)
-- [Telling an adopter their hkb is old](../features/update-notice.md)
-- [Where a hook command may say hkb is](../features/hook-install-shapes.md)
+- **A dependency graph.** Cards that depend on cards is a *second workload kind* that does not exist yet;
+  its controller will create Jobs the way a CronJob creates Jobs, and its ordering rule belongs in the
+  admission gate rather than in a prompt. `docs/rebuild-plan.md` holds the order.
+- **An LLM anywhere in the controller.** The reconcile pass is arithmetic and SQL.
+- **A merge.** hkb never merges. That is the one step a human keeps.

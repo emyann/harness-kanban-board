@@ -5,10 +5,10 @@ category: decisions
 kind: decision
 audience: [dev]
 read_when: "naming roles in docs or worker prompts, changing dispatch/reclaim behaviour, or designing the manual-mode adoption path"
-status: accepted
+status: superseded
 date: 2026-08-27
 supersedes: ~
-superseded_by: ~
+superseded_by: decisions/adr-009-retiring-the-first-system
 covers:
   - path: src/dispatch.js
     sha: 90ed0ce8799b29e82a2e96f4cde8f0bb98c6dc00

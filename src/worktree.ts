@@ -14,8 +14,8 @@ import { holderLiveness } from './liveness.ts';
  *
  *   1. **A worktree is a checkout of a commit.** Uncommitted work in the operator's tree is
  *      invisible inside it, whatever base is chosen. A worker sees committed state only.
- *   2. **Gitignored files do not come across.** `.kanban/*.db` is gitignored, so the board is
- *      invisible from a worker. That is by design — the controller owns every store write — and
+ *   2. **Gitignored files do not come across.** `.hkb/` is gitignored, so a board file kept in the
+ *      repository is invisible from a worker. That is by design — the controller owns every store write — and
  *      it must stay that way: copying the board in would give each worktree a divergent copy.
  *
  * Property 2 is also the feature's cost. A repository whose tests need a gitignored `.env` passes
@@ -24,7 +24,7 @@ import { holderLiveness } from './liveness.ts';
  *
  * A third property is why `sweepWorktrees` exists: **a checkout is expensive**. A worker installs
  * the *target repository's* dependency tree in order to run its tests, so Phase 5's ten Jobs left
- * 6.1 GB in `.kanban/worktrees` — 614 MB each. Reclaim is what bounds that by
+ * 6.1 GB in `.hkb/worktrees` — 614 MB each. Reclaim is what bounds that by
  * `maxConcurrent × repo size` instead of by `jobs-ever-run × repo size`, and reclaim cannot happen
  * at the end of a run: **"safe to delete" is a state a worktree enters later**, when its pull
  * request lands. So removal is a sweep, on the daemon's tick, and the run only ever tidies away a
@@ -129,7 +129,7 @@ export function baseRef(root: string): string {
 export function createWorktree(root: string, jobId: number, k: number): Worktree {
   // The DIRECTORY keeps the deterministic name so `existingWorktree` can find it without being
   // told; only the BRANCH disambiguates, and the attempt row records which one it got.
-  const dir = path.join(root, '.kanban', 'worktrees', branchFor(jobId, k));
+  const dir = path.join(root, '.hkb', 'worktrees', branchFor(jobId, k));
   const branch = freeBranch(root, jobId, k);
   const baseLabel = baseRef(root);
   const base = resolveBase(root, baseLabel);
@@ -158,13 +158,15 @@ export function createWorktree(root: string, jobId: number, k: number): Worktree
 export const INCLUDE_FILE = '.worktreeinclude';
 
 /**
- * The board's own directory, and the one thing no pattern may reach.
+ * The repository's own hkb directory, and the one thing no pattern may reach.
  *
- * `.kanban/` holds `board.db`, its WAL, the daemon's pid files and the worktrees themselves. The
- * controller owns every store write; a worker with a copy of the board would read state that stops
- * being true the moment the controller moves, and write into a file nothing ever reads back.
+ * `.hkb/` holds the worktrees themselves, and a board file when `HKB_DATABASE_URL` points at one
+ * here rather than at the machine board. The controller owns every store write; a worker with a
+ * copy of the board would read state that stops being true the moment the controller moves, and
+ * write into a file nothing ever reads back. And a worktree that copied the worktrees in would be
+ * copying itself.
  */
-const BOARD_DIR = '.kanban';
+const BOARD_DIR = '.hkb';
 
 const nulList = (s: string) => s.split('\0').filter(Boolean);
 
@@ -193,7 +195,7 @@ export function includedFiles(root: string): string[] {
 
   const matched = lsFiles(root, `--exclude-from=${declaration}`, `read ${INCLUDE_FILE}`);
   if (!matched.length) return [];
-  // The second question is asked only about the paths the first one named: `.kanban/worktrees/` is
+  // The second question is asked only about the paths the first one named: `.hkb/worktrees/` is
   // itself gitignored, so an unbounded listing walks every earlier attempt's checkout — `node_modules`
   // and all — to answer a question about three files. The exception is a declaration broad enough
   // that naming its matches would overflow argv, where the walk is the cheaper of the two.
@@ -226,7 +228,7 @@ function lsFiles(root: string, rule: string, doing: string, paths: string[] = []
  * Refuse a declaration that would carry the board into a worker's checkout.
  *
  * Refuse, rather than quietly drop the offending path: a pattern broad enough to catch `board.db`
- * — `*.db`, `.kanban/**`, a bare globstar — is a pattern whose author did not mean what they
+ * — `*.db`, `.hkb/**`, a bare globstar — is a pattern whose author did not mean what they
  * wrote, and the copy it produces is somebody's afternoon. The guard is on the resolved *paths*,
  * not on the pattern text, so it holds however the pattern is spelled.
  */
@@ -274,7 +276,7 @@ export function copyIncluded(root: string, dest: string, files: string[] = inclu
  * rest is litter. A declaration is therefore a thing the board acts on with the operator's
  * authority: it names a source inside the worktree AND a destination inside the repository, and the
  * copy happens with no agent in the loop to sanity-check it. So the syntax is checked before it is
- * ever used — `..` and an absolute path are the two spellings of "somewhere else", and `.kanban/`
+ * ever used — `..` and an absolute path are the two spellings of "somewhere else", and `.hkb/`
  * is the board's own directory, where a copy would land on top of the worktrees and the board file
  * itself.
  *
@@ -438,7 +440,7 @@ function refuseOutside(root: string, p: string, rel: string): void {
  * as "ahead" when it is not — which errs toward keeping it, and keeping is the safe direction.
  */
 export function existingWorktree(root: string, jobId: number, k: number): Worktree | null {
-  const dir = path.join(root, '.kanban', 'worktrees', branchFor(jobId, k));
+  const dir = path.join(root, '.hkb', 'worktrees', branchFor(jobId, k));
   if (!fs.existsSync(dir)) return null;
   // Read the branch off the checkout rather than deriving it: a collision on the remote may have
   // given the first attempt a suffixed name, and resuming onto the derived one would put the
@@ -542,18 +544,18 @@ export function whyKept(wt: Worktree, held: Held): string {
 // ---------------------------------------------------------------- a run holds its checkout
 
 /** A lock this module set, as opposed to one a human set by hand. The rest is the holder id. */
-const LOCK_PREFIX = 'kb:';
+const LOCK_PREFIX = 'hkb:';
 
 /**
  * Say that a run is using this checkout, so a sweep cannot take it out from under a live worker.
  *
  * Until there was a sweep, the controller was the only thing that removed a worktree and no lock
  * was needed. That stopped being true the moment a second remover existed — and the two are not
- * even in the same process, since `kb run` in a checkout and `kb up` on a timer both reconcile the
+ * even in the same process, since `hkb run` in a checkout and `hkb up` on a timer both reconcile the
  * same board. `git worktree remove` refuses a locked worktree without `--force`, and this module
  * never forces, so the lock is a real fence rather than a note.
  *
- * A `kb:` lock left by a process that is gone is taken over rather than respected: a daemon killed
+ * A `hkb:` lock left by a process that is gone is taken over rather than respected: a daemon killed
  * mid-run would otherwise leave a checkout no sweep could ever reclaim, which is the bug this
  * whole file is about. A lock somebody set by hand is left alone, and the sweep says so.
  */
@@ -658,7 +660,7 @@ function remoteBranches(root: string): Set<string> | null {
  */
 export function sweepWorktrees(root: string, opts: { now?: () => Date } = {}): SweepResult[] {
   const now = opts.now ?? (() => new Date());
-  const home = path.join(root, '.kanban', 'worktrees');
+  const home = path.join(root, '.hkb', 'worktrees');
   const results: SweepResult[] = [];
   // Only ours. A worktree the operator made elsewhere is not this module's to reason about.
   const mine = listWorktrees(root).filter((w) => samePath(path.dirname(w.path), home));

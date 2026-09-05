@@ -11,7 +11,7 @@ import { ensureSchema, assertNotFromTheFuture, knownMigrations } from '../src/sc
  *
  * Both matter more since the board became machine-level. The first command on a fresh machine has
  * to work, and "go and run a migration" is the answer this project treats as a bug report. And one
- * shared board means a global `kb` and a dev checkout genuinely can meet on the same file, which
+ * shared board means a global `hkb` and a dev checkout genuinely can meet on the same file, which
  * used to be theoretical.
  */
 
@@ -107,7 +107,7 @@ test('a board migrated by a newer build is refused, and the message says what to
     (e: Error & { exitCode?: number }) => {
       assert.equal(e.exitCode, 2, 'a state error, not a crash');
       assert.match(e.message, /29990101000000_a_column_we_do_not_know_about/, 'names the migration it does not have');
-      assert.match(e.message, /run the newer `kb`/);
+      assert.match(e.message, /run the newer `hkb`/);
       assert.match(e.message, /HKB_DATABASE_URL/, 'and the other way out');
       return true;
     },

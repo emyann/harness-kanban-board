@@ -7,10 +7,10 @@ audience: [dev]
 read_when: "adding a rule an agent must obey, reviewing anything that says 'the prompt tells it to', or wiring a new workload kind's constraints"
 covers:
   - path: src/admission.ts
-    sha: 0d5701bdc558d4ff6b719ba6249e3b44094aedd0
+    sha: aab84ccd1178b085cea79d2c4566149145027b9e
   - path: src/runtime/claude.ts
-    sha: 5ae950e19d9727e51a7b765cea7a206005d79e35
-generated_at_commit: c5326c0
+    sha: d39e329417d327e2e6ec2ae169018aaf4fcde3e5
+generated_at_commit: 54ad569
 last_refreshed: 2026-09-05
 related: [architecture/runtime-layer, architecture/job-kind, decisions/adr-007-workload-scheduler, gotchas/prompt-is-not-a-guarantee]
 ---

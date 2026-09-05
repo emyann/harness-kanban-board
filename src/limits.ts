@@ -66,7 +66,7 @@ export function gateClaim(i: ClaimInputs): ClaimGate {
     return {
       ok: false,
       limit: 'stopped',
-      why: `the board is stopped${by} since ${i.pausedAt.toISOString()} — \`kb start\` to resume`,
+      why: `the board is stopped${by} since ${i.pausedAt.toISOString()} — \`hkb start\` to resume`,
     };
   }
 
@@ -75,7 +75,7 @@ export function gateClaim(i: ClaimInputs): ClaimGate {
       ok: false,
       limit: 'concurrency',
       why: `${i.liveLeases} of ${i.maxConcurrent} concurrent slots are in use — `
-        + '`kb boards set <slug> --max-concurrent <n>` raises the ceiling, or wait for a run to finish',
+        + '`hkb boards set <slug> --max-concurrent <n>` raises the ceiling, or wait for a run to finish',
     };
   }
 

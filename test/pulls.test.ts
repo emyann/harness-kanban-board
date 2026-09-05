@@ -26,7 +26,7 @@ test('a pull request older than the attempt is not the attempt output', () => {
 });
 
 test('and with nothing else on the branch, null is the honest answer', () => {
-  // Better than a wrong number: `kb show` then says "no pull request on kb-4-1", which sends a
+  // Better than a wrong number: `hkb show` then says "no pull request on kb-4-1", which sends a
   // human looking instead of at a dead link.
   assert.equal(pickPr([], 'kb-4-1', attemptStarted), null);
 });

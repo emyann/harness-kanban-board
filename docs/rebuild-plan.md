@@ -609,9 +609,12 @@ Every item below was found by running the thing, not by reading it.
 In this order, and each one only when the previous is boring:
 
 1. **File hkb's own work on the board.** This is the point.
-2. **Retire the old system.** Delete `src/store/*`, `src/dispatch.js`,
-   `src/cli.js`'s 36 verbs; rename `kb` to `hkb`. Keep `refs/kb/boards/default` as
-   an archive — it is history, and it costs nothing.
+2. ~~**Retire the old system.**~~ **Done, 2026-09-05.** The pre-ADR-007 CLI, its
+   store, its dispatcher and everything only it read are deleted; `kb` is `hkb`
+   again and the per-repo directory is `.hkb/`. `refs/kb/boards/default` is kept
+   as an archive, and the `kb-<jobId>-<k>` branch prefix is unchanged so existing
+   branches and worktrees still resolve. The record is
+   [ADR-009](wiki/decisions/adr-009-retiring-the-first-system.md).
 3. **The second kind: groom.** A one-shot with a human gate (propose → approve →
    apply). It is the *most different* from a Job, which is why it is next: what
    generalises between them is real. `Phase.suspended` already exists for it.

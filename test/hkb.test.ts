@@ -6,21 +6,21 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-kb-'));
-process.env.HKB_DATABASE_URL = `file:${path.join(dir, 'kb.db')}`;
+process.env.HKB_DATABASE_URL = `file:${path.join(dir, 'hkb.db')}`;
 const REPO = path.resolve(import.meta.dirname, '..');
 execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate', 'deploy'], {
   cwd: REPO, env: process.env, stdio: 'ignore',
 });
 
-const { main } = await import('../src/kb.ts');
+const { main } = await import('../src/hkb.ts');
 const { openBoard, closeBoard } = await import('../src/db.ts');
 const db = openBoard();
 
 /**
  * The whole suite runs from a throwaway repository, not the one you are working in.
  *
- * `kb new` defaults `isolate` to true and `kb run` reconciles in `process.cwd()`, so a single
- * un-flagged `kb run` in these tests cut a 620 MB worktree into the developer's own checkout and
+ * `hkb new` defaults `isolate` to true and `hkb run` reconciles in `process.cwd()`, so a single
+ * un-flagged `hkb run` in these tests cut a 620 MB worktree into the developer's own checkout and
  * left it. Boards created here take their `repoPath` from wherever we are standing, so standing
  * somewhere disposable fixes it for every test at once rather than one `--no-isolate` at a time.
  * The two tests that chdir for their own reasons still restore to here.
@@ -60,7 +60,7 @@ test.after(async () => {
  */
 const RUNNER_FRAME = /\btest:(enqueue|dequeue|start|pass|fail|plan|diagnostic|complete|coverage|stderr|stdout|watch)\b/;
 
-async function kb(...argv: string[]): Promise<{ code: number; out: string }> {
+async function hkb(...argv: string[]): Promise<{ code: number; out: string }> {
   const chunks: string[] = [];
   const write = process.stdout.write.bind(process.stdout);
   (process.stdout as { write: unknown }).write = (s: string) => {
@@ -84,19 +84,19 @@ const json = (s: string) => JSON.parse(s);
 // ---------------------------------------------------------------- shape
 
 test('no verb prints help and exits 0', async () => {
-  const r = await kb();
+  const r = await hkb();
   assert.equal(r.code, 0);
-  assert.match(r.out, /kb — run one agent against one brief/);
+  assert.match(r.out, /hkb — run one agent against one brief/);
 });
 
 test('an unknown verb names the ones that exist', async () => {
-  await assert.rejects(() => kb('frobnicate'), /unknown verb.*new, ls, show, run, retry, done, cancel, rm/s);
+  await assert.rejects(() => hkb('frobnicate'), /unknown verb.*new, ls, show, run, retry, done, cancel, rm/s);
 });
 
 // ---------------------------------------------------------------- new
 
 test('new files a Job and returns its id', async () => {
-  const r = await kb('new', 'first', '--brief', 'do the thing', '--json');
+  const r = await hkb('new', 'first', '--brief', 'do the thing', '--json');
   const j = json(r.out);
   assert.equal(j.phase, 'pending');
   assert.equal(j.name, 'first');
@@ -107,26 +107,26 @@ test('new files a Job and returns its id', async () => {
 });
 
 test('new refuses without a brief, and says how to give one', async () => {
-  await assert.rejects(() => kb('new', 'no brief'), /--brief|--brief-file/);
+  await assert.rejects(() => hkb('new', 'no brief'), /--brief|--brief-file/);
 });
 
 test('new reads a brief from a file', async () => {
   const p = path.join(dir, 'brief.md');
   fs.writeFileSync(p, '  from a file  ');
-  const j = json((await kb('new', 'filed', '--brief-file', p, '--json')).out);
+  const j = json((await hkb('new', 'filed', '--brief-file', p, '--json')).out);
   assert.equal((await db.job.findUniqueOrThrow({ where: { id: j.id } })).brief, 'from a file');
 });
 
 test('new names a missing brief file rather than failing obscurely', async () => {
-  await assert.rejects(() => kb('new', 'x', '--brief-file', '/nope/nothing.md'), /no such file/);
+  await assert.rejects(() => hkb('new', 'x', '--brief-file', '/nope/nothing.md'), /no such file/);
 });
 
 test('new validates effort against the closed set', async () => {
-  await assert.rejects(() => kb('new', 'x', '--brief', 'b', '--effort', 'turbo'), /low\|medium\|high/);
+  await assert.rejects(() => hkb('new', 'x', '--brief', 'b', '--effort', 'turbo'), /low\|medium\|high/);
 });
 
 test('new carries the spec flags onto the row', async () => {
-  const j = json((await kb('new', 'specced', '--brief', 'b', '--json',
+  const j = json((await hkb('new', 'specced', '--brief', 'b', '--json',
     '--model', 'claude-opus-5', '--effort', 'high', '--max-turns', '3',
     '--max-budget', '0.25', '--max-retries', '0', '--no-isolate')).out);
   const row = await db.job.findUniqueOrThrow({ where: { id: j.id } });
@@ -139,7 +139,7 @@ test('new carries the spec flags onto the row', async () => {
 });
 
 test('new records the paths a Job must produce', async () => {
-  const j = json((await kb('new', 'skill-card', '--brief', 'b', '--json',
+  const j = json((await hkb('new', 'skill-card', '--brief', 'b', '--json',
     '--export', '.claude/skills/sdk-docs/', '--export', 'NOTES.md')).out);
   const row = await db.job.findUniqueOrThrow({ where: { id: j.id } });
   assert.deepEqual(row.exports, ['.claude/skills/sdk-docs', 'NOTES.md'],
@@ -148,7 +148,7 @@ test('new records the paths a Job must produce', async () => {
 });
 
 test('a Job that declares nothing stores null, not an empty declaration', async () => {
-  const j = json((await kb('new', 'declares-nothing', '--brief', 'b', '--json')).out);
+  const j = json((await hkb('new', 'declares-nothing', '--brief', 'b', '--json')).out);
   assert.equal((await db.job.findUniqueOrThrow({ where: { id: j.id } })).exports, null,
     '"produces no file" and "produced none of the files it promised" are different facts');
 });
@@ -160,38 +160,38 @@ test('new REFUSES an export path that escapes the repository, and files nothing'
   for (const [bad, why] of [
     ['../elsewhere', /escapes the worktree/],
     ['/etc/passwd', /absolute/],
-    ['.kanban/board.db', /board's own directory/],
+    ['.hkb/board.db', /board's own directory/],
   ] as [string, RegExp][]) {
-    await assert.rejects(() => kb('new', 'sneaky', '--brief', 'b', '--export', bad), why);
+    await assert.rejects(() => hkb('new', 'sneaky', '--brief', 'b', '--export', bad), why);
   }
   assert.equal(await db.job.count(), before, 'and no half-filed Job is left behind');
 });
 
 test('a numeric flag given a non-number says so', async () => {
-  await assert.rejects(() => kb('new', 'x', '--brief', 'b', '--max-turns', 'lots'), /wants a number/);
+  await assert.rejects(() => hkb('new', 'x', '--brief', 'b', '--max-turns', 'lots'), /wants a number/);
 });
 
 // ---------------------------------------------------------------- ls / show
 
 test('ls is empty-safe and says so', async () => {
-  const r = await kb('ls', '--board', 'nothing-here');
+  const r = await hkb('ls', '--board', 'nothing-here');
   assert.equal(r.code, 0);
   assert.match(r.out, /no jobs on nothing-here/);
 });
 
 test('ls --json lists what is on the board', async () => {
-  const rows = json((await kb('ls', '--json')).out);
+  const rows = json((await hkb('ls', '--json')).out);
   assert.ok(rows.length >= 3);
   assert.ok(rows.every((r: { phase: string }) => r.phase === 'pending'));
 });
 
 test('ls --phase rejects a phase that is not one', async () => {
-  await assert.rejects(() => kb('ls', '--phase', 'nearly'), /pending\|running/);
+  await assert.rejects(() => hkb('ls', '--phase', 'nearly'), /pending\|running/);
 });
 
 test('show is the one screen: spec, phase and attempts', async () => {
-  const j = json((await kb('new', 'showme', '--brief', 'b', '--json')).out);
-  const r = await kb('show', String(j.id));
+  const j = json((await hkb('new', 'showme', '--brief', 'b', '--json')).out);
+  const r = await hkb('show', String(j.id));
   assert.match(r.out, /phase\s+pending/);
   assert.match(r.out, /maxBudget/);
   assert.match(r.out, /attempts \(none yet\)/);
@@ -199,24 +199,24 @@ test('show is the one screen: spec, phase and attempts', async () => {
 
 test('show names the board and the checkout the Job runs in', async () => {
   await db.board.create({ data: { slug: 'accounting', repoPath: '/srv/accounting' } });
-  const j = json((await kb('new', 'ledger', '--board', 'accounting', '--brief', 'b', '--json')).out);
-  const r = await kb('show', String(j.id));
+  const j = json((await hkb('new', 'ledger', '--board', 'accounting', '--brief', 'b', '--json')).out);
+  const r = await hkb('show', String(j.id));
   assert.match(r.out, /board\s+accounting\s+\/srv\/accounting/);
 
   // A board with no repoPath has nowhere to cut a worktree, so the line has to say that outright
   // rather than print a blank column that reads like "here".
   await db.board.create({ data: { slug: 'homeless' } });
-  const k = json((await kb('new', 'adrift', '--board', 'homeless', '--brief', 'b', '--json')).out);
-  assert.match((await kb('show', String(k.id))).out, /board\s+homeless\s+\(no repo — `kb boards add homeless --repo <path>`\)/);
+  const k = json((await hkb('new', 'adrift', '--board', 'homeless', '--brief', 'b', '--json')).out);
+  assert.match((await hkb('show', String(k.id))).out, /board\s+homeless\s+\(no repo — `hkb boards add homeless --repo <path>`\)/);
 });
 
 test('show on a missing id points at ls', async () => {
-  await assert.rejects(() => kb('show', '99999'), /no Job #99999.*kb ls/s);
+  await assert.rejects(() => hkb('show', '99999'), /no Job #99999.*hkb ls/s);
 });
 
 // ---------------------------------------------------------------- how long it took
 
-const { formatDuration } = await import('../src/kb.ts');
+const { formatDuration } = await import('../src/hkb.ts');
 
 test('formatDuration steps at a minute and at an hour, and truncates at both', () => {
   assert.equal(formatDuration(0), '0s');
@@ -233,7 +233,7 @@ test('formatDuration steps at a minute and at an hour, and truncates at both', (
 });
 
 test('show prints how long each attempt took, and marks one still running', async () => {
-  const j = json((await kb('new', 'timed', '--brief', 'b', '--json')).out);
+  const j = json((await hkb('new', 'timed', '--brief', 'b', '--json')).out);
   const started = new Date('2026-09-05T10:00:00Z');
   await db.attempt.create({
     data: {
@@ -242,7 +242,7 @@ test('show prints how long each attempt took, and marks one still running', asyn
     },
   });
   await db.attempt.create({ data: { jobId: j.id, k: 2, startedAt: new Date(Date.now() - 90_000), maxBudgetUsd: 1 } });
-  const r = await kb('show', String(j.id));
+  const r = await hkb('show', String(j.id));
   // $0.40 means very little without "and it took an hour" beside it.
   assert.match(r.out, /completed\s+1h04m \$0\.4000/);
   assert.match(r.out, /running\s+1m\+ up to \$1\.00/,
@@ -252,14 +252,14 @@ test('show prints how long each attempt took, and marks one still running', asyn
 // ---------------------------------------------------------------- run
 
 test('run on an empty board is a no-op that exits 0', async () => {
-  const r = await kb('run', '--board', 'nothing-here', '--fake');
+  const r = await hkb('run', '--board', 'nothing-here', '--fake');
   assert.equal(r.code, 0);
   assert.match(r.out, /nothing pending/);
 });
 
 test('run --fake works a Job to succeeded and records the session pointer', async () => {
-  const j = json((await kb('new', 'runme', '--brief', 'b', '--json')).out);
-  await kb('run', String(j.id), '--fake');
+  const j = json((await hkb('new', 'runme', '--brief', 'b', '--json')).out);
+  await hkb('run', String(j.id), '--fake');
   const row = await db.job.findUniqueOrThrow({ where: { id: j.id }, include: { attempts: true } });
   assert.equal(row.phase, 'succeeded');
   assert.equal(row.attempts.length, 1);
@@ -267,30 +267,30 @@ test('run --fake works a Job to succeeded and records the session pointer', asyn
 });
 
 test('run <id> touches only that Job', async () => {
-  const a = json((await kb('new', 'only-a', '--brief', 'b', '--json')).out);
-  const b = json((await kb('new', 'not-b', '--brief', 'b', '--json')).out);
-  await kb('run', String(a.id), '--fake');
+  const a = json((await hkb('new', 'only-a', '--brief', 'b', '--json')).out);
+  const b = json((await hkb('new', 'not-b', '--brief', 'b', '--json')).out);
+  await hkb('run', String(a.id), '--fake');
   assert.equal((await db.job.findUniqueOrThrow({ where: { id: a.id } })).phase, 'succeeded');
   assert.equal((await db.job.findUniqueOrThrow({ where: { id: b.id } })).phase, 'pending');
 });
 
 test('run on a Job that is not pending says so rather than pretending', async () => {
-  const j = json((await kb('new', 'settled', '--brief', 'b', '--json')).out);
-  await kb('run', String(j.id), '--fake');
-  const r = await kb('run', String(j.id), '--fake');
+  const j = json((await hkb('new', 'settled', '--brief', 'b', '--json')).out);
+  await hkb('run', String(j.id), '--fake');
+  const r = await hkb('run', String(j.id), '--fake');
   assert.match(r.out, new RegExp(`#${j.id} is not pending`));
 });
 
 test('run on a missing id refuses before spending anything', async () => {
-  await assert.rejects(() => kb('run', '99999', '--fake'), /no Job #99999/);
+  await assert.rejects(() => hkb('run', '99999', '--fake'), /no Job #99999/);
 });
 
 // ---------------------------------------------------------------- rm
 
 test('rm deletes a Job and its attempts', async () => {
-  const j = json((await kb('new', 'goner', '--brief', 'b', '--json')).out);
-  await kb('run', String(j.id), '--fake');
-  await kb('rm', String(j.id));
+  const j = json((await hkb('new', 'goner', '--brief', 'b', '--json')).out);
+  await hkb('run', String(j.id), '--fake');
+  await hkb('rm', String(j.id));
   assert.equal(await db.job.findUnique({ where: { id: j.id } }), null);
   assert.equal(await db.attempt.count({ where: { jobId: j.id } }), 0, 'cascaded');
 });
@@ -299,11 +299,11 @@ test('rm deletes a Job and its attempts', async () => {
 //
 // The gap: a Job whose pull request was reviewed and merged while it sat `pending` on a spent
 // budget. Until these verbs the only thing that stopped the next reconcile from spending the whole
-// cap again was `kb rm`, which deletes the record that the work happened.
+// cap again was `hkb rm`, which deletes the record that the work happened.
 
 test('done ends a Job the runtime could not, and records who said so and why', async () => {
-  const j = json((await kb('new', 'merged-elsewhere', '--brief', 'b', '--board', 'byhand', '--json')).out);
-  const r = await kb('done', String(j.id), 'PR #364 was reviewed and merged', '--board', 'byhand', '--json');
+  const j = json((await hkb('new', 'merged-elsewhere', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  const r = await hkb('done', String(j.id), 'PR #364 was reviewed and merged', '--board', 'byhand', '--json');
   assert.equal(r.code, 0);
   const said = json(r.out);
   assert.equal(said.phase, 'done');
@@ -319,30 +319,30 @@ test('done ends a Job the runtime could not, and records who said so and why', a
 });
 
 test('a Job ended by hand is not claimed again — the whole point', async () => {
-  const j = json((await kb('new', 'do-not-redo', '--brief', 'b', '--board', 'byhand', '--json')).out);
-  await kb('done', String(j.id), 'landed as PR #364', '--board', 'byhand');
-  const r = await kb('run', '--board', 'byhand', '--fake');
+  const j = json((await hkb('new', 'do-not-redo', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  await hkb('done', String(j.id), 'landed as PR #364', '--board', 'byhand');
+  const r = await hkb('run', '--board', 'byhand', '--fake');
   assert.match(r.out, /nothing pending/);
   assert.equal(await db.attempt.count({ where: { jobId: j.id } }), 0, 'and nothing was spent redoing it');
 });
 
 test('cancel is a different statement from done, and ls can ask for either', async () => {
-  const j = json((await kb('new', 'not-wanted', '--brief', 'b', '--board', 'byhand', '--json')).out);
-  await kb('cancel', String(j.id), 'superseded by ADR-008', '--board', 'byhand');
-  const rows = json((await kb('ls', '--phase', 'cancelled', '--board', 'byhand', '--json')).out);
+  const j = json((await hkb('new', 'not-wanted', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  await hkb('cancel', String(j.id), 'superseded by ADR-008', '--board', 'byhand');
+  const rows = json((await hkb('ls', '--phase', 'cancelled', '--board', 'byhand', '--json')).out);
   assert.deepEqual(rows.map((x: { id: number }) => x.id), [j.id]);
-  const done = json((await kb('ls', '--phase', 'done', '--board', 'byhand', '--json')).out);
+  const done = json((await hkb('ls', '--phase', 'done', '--board', 'byhand', '--json')).out);
   assert.ok(!done.some((x: { id: number }) => x.id === j.id), 'cancelled is not done, and the board keeps them apart');
 });
 
 test('done refuses without a reason, and says what to type instead', async () => {
-  const j = json((await kb('new', 'no-reason', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  const j = json((await hkb('new', 'no-reason', '--brief', 'b', '--board', 'byhand', '--json')).out);
   await assert.rejects(
-    () => kb('done', String(j.id), '--board', 'byhand'),
+    () => hkb('done', String(j.id), '--board', 'byhand'),
     (e: Error & { exitCode?: number }) => {
       assert.equal(e.exitCode, 2);
       assert.match(e.message, /needs a reason/);
-      assert.match(e.message, /kb done \d+ "/, 'and shows the shape of one');
+      assert.match(e.message, /hkb done \d+ "/, 'and shows the shape of one');
       return true;
     },
   );
@@ -350,18 +350,18 @@ test('done refuses without a reason, and says what to type instead', async () =>
 });
 
 test('done REFUSES a leased Job — that is a running worker — and says how to stop it', async () => {
-  const j = json((await kb('new', 'still-running', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  const j = json((await hkb('new', 'still-running', '--brief', 'b', '--board', 'byhand', '--json')).out);
   await db.lease.create({
     data: { jobId: j.id, holder: 'host/9@daemon', token: 't', expiresAt: new Date(Date.now() + 60_000) },
   });
   try {
     for (const verb of ['done', 'cancel']) {
       await assert.rejects(
-        () => kb(verb, String(j.id), 'because', '--board', 'byhand'),
+        () => hkb(verb, String(j.id), 'because', '--board', 'byhand'),
         (e: Error & { exitCode?: number }) => {
           assert.equal(e.exitCode, 2);
           assert.match(e.message, /leased by host\/9@daemon/);
-          assert.match(e.message, /kb down/, 'and names the way out');
+          assert.match(e.message, /hkb down/, 'and names the way out');
           assert.match(e.message, /wait/, 'or the other way out');
           return true;
         },
@@ -374,23 +374,23 @@ test('done REFUSES a leased Job — that is a running worker — and says how to
 });
 
 test('done refuses a Job the runtime already concluded', async () => {
-  const j = json((await kb('new', 'ran-fine', '--brief', 'b', '--board', 'byhand', '--json')).out);
-  await kb('run', String(j.id), '--board', 'byhand', '--fake');
+  const j = json((await hkb('new', 'ran-fine', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  await hkb('run', String(j.id), '--board', 'byhand', '--fake');
   await assert.rejects(
-    () => kb('done', String(j.id), 'redundant', '--board', 'byhand'),
+    () => hkb('done', String(j.id), 'redundant', '--board', 'byhand'),
     /already succeeded/,
   );
 });
 
 test('saying the same thing twice is refused; correcting done to cancelled is not', async () => {
-  const j = json((await kb('new', 'mistyped', '--brief', 'b', '--board', 'byhand', '--json')).out);
-  await kb('done', String(j.id), 'thought it landed', '--board', 'byhand');
+  const j = json((await hkb('new', 'mistyped', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  await hkb('done', String(j.id), 'thought it landed', '--board', 'byhand');
   await assert.rejects(
-    () => kb('done', String(j.id), 'again', '--board', 'byhand'),
+    () => hkb('done', String(j.id), 'again', '--board', 'byhand'),
     /already done/,
   );
-  // The escape from a mistyped verb must not be `kb rm` — that is the trap this verb removes.
-  await kb('cancel', String(j.id), 'actually it never landed', '--board', 'byhand');
+  // The escape from a mistyped verb must not be `hkb rm` — that is the trap this verb removes.
+  await hkb('cancel', String(j.id), 'actually it never landed', '--board', 'byhand');
   const row = await db.job.findUniqueOrThrow({ where: { id: j.id } });
   assert.equal(row.phase, 'cancelled');
   assert.equal(row.endedFor, 'actually it never landed');
@@ -398,21 +398,21 @@ test('saying the same thing twice is refused; correcting done to cancelled is no
   assert.deepEqual(kinds, ['created', 'done', 'cancelled'], 'and the log keeps both statements, in order');
 });
 
-test('the transition is recorded with the person as the actor, so kb log reads differently', async () => {
-  const j = json((await kb('new', 'logged', '--brief', 'b', '--board', 'byhand', '--json')).out);
-  await kb('done', String(j.id), 'merged by hand', '--board', 'byhand');
+test('the transition is recorded with the person as the actor, so hkb log reads differently', async () => {
+  const j = json((await hkb('new', 'logged', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  await hkb('done', String(j.id), 'merged by hand', '--board', 'byhand');
   const ev = await db.event.findFirstOrThrow({ where: { jobId: j.id, kind: 'done' } });
   assert.deepEqual(ev.payload, { from: 'pending', reason: 'merged by hand' });
   assert.ok(ev.actor && !/@cli$/.test(ev.actor), 'a human decision is not attributed to a process');
-  const out = (await kb('log', String(j.id), '--board', 'byhand')).out;
+  const out = (await hkb('log', String(j.id), '--board', 'byhand')).out;
   assert.match(out, /done/);
   assert.match(out, /merged by hand/);
 });
 
 test('show makes the human decision visible rather than leaving it to be inferred', async () => {
-  const j = json((await kb('new', 'visible', '--brief', 'b', '--board', 'byhand', '--json')).out);
-  await kb('done', String(j.id), 'PR #364 was reviewed and merged', '--board', 'byhand');
-  const out = (await kb('show', String(j.id), '--board', 'byhand')).out;
+  const j = json((await hkb('new', 'visible', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  await hkb('done', String(j.id), 'PR #364 was reviewed and merged', '--board', 'byhand');
+  const out = (await hkb('show', String(j.id), '--board', 'byhand')).out;
   assert.match(out, /phase +done/);
   assert.match(out, /ended +by /, 'who');
   assert.match(out, /PR #364 was reviewed and merged/, 'and why');
@@ -422,10 +422,10 @@ test('show makes the human decision visible rather than leaving it to be inferre
 test('an attempt still open on an unleased Job is closed, not left climbing for ever', async () => {
   // How a Job gets here: a holder died between releasing its lease and writing the Job row. No
   // lease is left for the reclaim to find, so the operator is the only thing that can conclude it.
-  const j = json((await kb('new', 'stranded', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  const j = json((await hkb('new', 'stranded', '--brief', 'b', '--board', 'byhand', '--json')).out);
   await db.job.update({ where: { id: j.id }, data: { phase: 'running' } });
   await db.attempt.create({ data: { jobId: j.id, k: 1, host: 'host/9@daemon', maxBudgetUsd: 1 } });
-  await kb('done', String(j.id), 'the PR it opened was merged', '--board', 'byhand');
+  await hkb('done', String(j.id), 'the PR it opened was merged', '--board', 'byhand');
   const a = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: j.id, k: 1 } } });
   assert.ok(a.endedAt, 'closed');
   assert.equal(a.outcome, 'lost', 'never heard from again is exactly what happened to it');
@@ -434,36 +434,36 @@ test('an attempt still open on an unleased Job is closed, not left climbing for 
 // ---------------------------------------------------------------- stop / start
 
 test('stop is the kill switch: it refuses to claim and says who stopped it', async () => {
-  await kb('new', 'blocked-by-stop', '--brief', 'b', '--board', 'switch', '--json');
-  await kb('stop', '--board', 'switch');
-  const r = await kb('run', '--board', 'switch', '--fake');
+  await hkb('new', 'blocked-by-stop', '--brief', 'b', '--board', 'switch', '--json');
+  await hkb('stop', '--board', 'switch');
+  const r = await hkb('run', '--board', 'switch', '--fake');
   assert.match(r.out, /refused:.*stopped/);
-  assert.match(r.out, /kb start/, 'and says what to do about it');
+  assert.match(r.out, /hkb start/, 'and says what to do about it');
 });
 
 test('a stopped board leaves its Jobs pending, not failed', async () => {
-  const rows = json((await kb('ls', '--board', 'switch', '--json')).out);
+  const rows = json((await hkb('ls', '--board', 'switch', '--json')).out);
   assert.ok(rows.every((j: { phase: string; attempts: number }) => j.phase === 'pending' && j.attempts === 0),
     'refusing to start is not failing');
 });
 
 test('start clears it and reports the ceilings', async () => {
-  const r = await kb('start', '--board', 'switch');
+  const r = await hkb('start', '--board', 'switch');
   assert.match(r.out, /started/);
   // "1 concurrent" was a capacity; "runs up to 1 at once" is what the board actually does.
   assert.match(r.out, /no ceiling, runs up to 1 at once/);
-  const after = await kb('run', '--board', 'switch', '--fake');
+  const after = await hkb('run', '--board', 'switch', '--fake');
   assert.match(after.out, /1 succeeded/);
 });
 
 test('rm refuses a leased Job rather than orphaning a running worker', async () => {
   // Named, not inferred: `switch` above pointed a second board at this checkout, so from here on
   // bare resolution refuses rather than choosing between them.
-  const j = json((await kb('new', 'leased', '--brief', 'b', '--board', 'switch', '--json')).out);
+  const j = json((await hkb('new', 'leased', '--brief', 'b', '--board', 'switch', '--json')).out);
   await db.lease.create({
     data: { jobId: j.id, holder: 'someone-else', token: 't', expiresAt: new Date(Date.now() + 60_000) },
   });
-  await assert.rejects(() => kb('rm', String(j.id), '--board', 'switch'), /leased by someone-else/);
+  await assert.rejects(() => hkb('rm', String(j.id), '--board', 'switch'), /leased by someone-else/);
   await db.lease.delete({ where: { jobId: j.id } });
 });
 
@@ -486,7 +486,7 @@ test('--interval has a floor: a sub-second tick is a mistake, not a preference',
 
 // ---------------------------------------------------------------- log --since
 
-const { parseDuration } = await import('../src/kb.ts');
+const { parseDuration } = await import('../src/hkb.ts');
 
 test('parseDuration reads the four units', () => {
   assert.equal(parseDuration('90s'), 90_000);
@@ -540,7 +540,7 @@ test('parseDuration names the flag it was given, so the message fits the caller'
 });
 
 test('log --since keeps only what is newer, and drops what is older', async () => {
-  const j = json((await kb('new', 'lunchtime', '--brief', 'b', '--board', 'window', '--json')).out);
+  const j = json((await hkb('new', 'lunchtime', '--brief', 'b', '--board', 'window', '--json')).out);
   const board = await db.board.findUniqueOrThrow({ where: { slug: 'window' } });
   await db.event.create({
     data: { kind: 'ancient', jobId: j.id, boardId: board.id, at: new Date(Date.now() - 6 * 3_600_000) },
@@ -548,19 +548,19 @@ test('log --since keeps only what is newer, and drops what is older', async () =
   await db.event.create({
     data: { kind: 'justnow', jobId: j.id, boardId: board.id, at: new Date(Date.now() - 60_000) },
   });
-  const kinds = json((await kb('log', '--board', 'window', '--since', '1h', '--json')).out)
+  const kinds = json((await hkb('log', '--board', 'window', '--since', '1h', '--json')).out)
     .map((e: { kind: string }) => e.kind);
   assert.ok(kinds.includes('justnow'));
   assert.ok(!kinds.includes('ancient'), 'six hours ago is not in the last hour');
 });
 
 test('log --since composes with -n and with a Job id', async () => {
-  const other = json((await kb('new', 'not-in-the-window', '--brief', 'b', '--board', 'window', '--json')).out);
-  const both = json((await kb('log', String(other.id), '--board', 'window', '--since', '1h', '--json')).out);
+  const other = json((await hkb('new', 'not-in-the-window', '--brief', 'b', '--board', 'window', '--json')).out);
+  const both = json((await hkb('log', String(other.id), '--board', 'window', '--since', '1h', '--json')).out);
   assert.ok(both.length >= 1);
   assert.ok(both.every((e: { jobId: number }) => e.jobId === other.id), '--since narrows, it does not widen');
 
-  const capped = json((await kb('log', '--board', 'window', '--since', '1h', '-n', '1', '--json')).out);
+  const capped = json((await hkb('log', '--board', 'window', '--since', '1h', '-n', '1', '--json')).out);
   assert.equal(capped.length, 1, 'both apply: the window narrows, the count caps');
 });
 
@@ -570,9 +570,9 @@ test('log --since says the window was empty rather than that the log is', async 
   await db.event.create({
     data: { kind: 'long_ago', boardId: board.id, at: new Date(Date.now() - 30 * 86_400_000) },
   });
-  const r = await kb('log', '--board', 'quiet', '--since', '2h');
+  const r = await hkb('log', '--board', 'quiet', '--since', '2h');
   assert.match(r.out, /nothing on quiet in the last 2h/);
-  assert.match((await kb('log', '--board', 'quiet')).out, /long_ago/, 'and the log itself is not empty');
+  assert.match((await hkb('log', '--board', 'quiet')).out, /long_ago/, 'and the log itself is not empty');
 });
 
 test('log --since refuses a bad duration before it queries anything', async () => {
@@ -581,7 +581,7 @@ test('log --since refuses a bad duration before it queries anything', async () =
 
 // ---------------------------------------------------------------- one machine, many repositories
 
-const { resolveBoard, gitRoot } = await import('../src/kb.ts');
+const { resolveBoard, gitRoot } = await import('../src/hkb.ts');
 
 /** A throwaway repository, so "which board does this cwd mean" can be asked somewhere real. */
 function scratchRepo(name: string): string {
@@ -611,7 +611,7 @@ test('a repository with a board resolves to that board, whatever it is called', 
 });
 
 test('two boards on one repository refuses instead of picking one, and names both', async () => {
-  // `kb boards add` allows this deliberately — different budgets for different work — so both
+  // `hkb boards add` allows this deliberately — different budgets for different work — so both
   // answers are valid and neither is inferable. Silently taking the older one is the bug.
   const root = scratchRepo('two-boards');
   await db.board.create({ data: { slug: 'zeta-budget', repoPath: root } });
@@ -657,7 +657,7 @@ test('filing work in a repository points its new board at that checkout', async 
   const before = process.cwd();
   process.chdir(root);
   try {
-    const j = json((await kb('new', 'from here', '--brief', 'b', '--json')).out);
+    const j = json((await hkb('new', 'from here', '--brief', 'b', '--json')).out);
     assert.equal(j.board, 'files-work');
     const board = await db.board.findUniqueOrThrow({ where: { slug: 'files-work' } });
     assert.equal(board.repoPath, root);
@@ -666,7 +666,7 @@ test('filing work in a repository points its new board at that checkout', async 
   }
 });
 
-test('kb boards add refuses a path that is not a repository, and says why', async () => {
+test('hkb boards add refuses a path that is not a repository, and says why', async () => {
   const notARepo = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-nope-'));
   try {
     await assert.rejects(
@@ -683,18 +683,18 @@ test('kb boards add refuses a path that is not a repository, and says why', asyn
   }
 });
 
-test('kb boards add points a board at a repository, and re-pointing is not an error', async () => {
+test('hkb boards add points a board at a repository, and re-pointing is not an error', async () => {
   const a = scratchRepo('target-a');
   const b = scratchRepo('target-b');
-  await kb('boards', 'add', 'moved', '--repo', a);
+  await hkb('boards', 'add', 'moved', '--repo', a);
   assert.equal((await db.board.findUniqueOrThrow({ where: { slug: 'moved' } })).repoPath, a);
-  await kb('boards', 'add', 'moved', '--repo', b);
+  await hkb('boards', 'add', 'moved', '--repo', b);
   assert.equal((await db.board.findUniqueOrThrow({ where: { slug: 'moved' } })).repoPath, b,
     'repositories move; a board should not have to be recreated when one does');
 });
 
-test('kb boards lists every board on the machine with its repository', async () => {
-  const rows = json((await kb('boards', '--json')).out);
+test('hkb boards lists every board on the machine with its repository', async () => {
+  const rows = json((await hkb('boards', '--json')).out);
   const moved = rows.find((r: { board: string }) => r.board === 'moved');
   assert.ok(moved, 'the cluster view is one query, not a hunt across checkouts');
   assert.equal(moved.daemon, 'down');
@@ -703,23 +703,23 @@ test('kb boards lists every board on the machine with its repository', async () 
 
 // ---------------------------------------------------------------- the ceilings, without SQL
 
-test('kb boards set changes the ceilings, and none removes one', async () => {
+test('hkb boards set changes the ceilings, and none removes one', async () => {
   // Phase 5 set these with a Prisma one-liner. For a system whose exit criterion is "safe to
   // leave alone", the safety limits being reachable only through SQL is not a small gap.
   const r = scratchRepo('ceilings');
-  await kb('boards', 'add', 'ceilings', '--repo', r);
-  const set = json((await kb('boards', 'set', 'ceilings', '--max-concurrent', '3', '--daily-budget', '40', '--json')).out);
+  await hkb('boards', 'add', 'ceilings', '--repo', r);
+  const set = json((await hkb('boards', 'set', 'ceilings', '--max-concurrent', '3', '--daily-budget', '40', '--json')).out);
   assert.equal(set.maxConcurrent, 3);
   assert.equal(set.dailyBudgetUsd, 40);
 
-  const off = json((await kb('boards', 'set', 'ceilings', '--daily-budget', 'none', '--json')).out);
+  const off = json((await hkb('boards', 'set', 'ceilings', '--daily-budget', 'none', '--json')).out);
   assert.equal(off.dailyBudgetUsd, null, 'a board with no ceiling is a real configuration, not an unset one');
   assert.equal(off.maxConcurrent, 3, 'and setting one ceiling does not clear the other');
 });
 
-test('kb boards set refuses a nonsense ceiling rather than storing it', async () => {
+test('hkb boards set refuses a nonsense ceiling rather than storing it', async () => {
   const r = scratchRepo('bad-ceilings');
-  await kb('boards', 'add', 'bad-ceilings', '--repo', r);
+  await hkb('boards', 'add', 'bad-ceilings', '--repo', r);
   for (const [flag, value, why] of [
     ['--max-concurrent', '-1', /whole number of slots/],
     ['--max-concurrent', '1.5', /whole number of slots/],
@@ -735,20 +735,20 @@ test('kb boards set refuses a nonsense ceiling rather than storing it', async ()
   assert.equal(b.maxConcurrent, 1, 'and nothing was written');
 });
 
-test('kb boards set with nothing to set says so, instead of a silent no-op', async () => {
+test('hkb boards set with nothing to set says so, instead of a silent no-op', async () => {
   const r = scratchRepo('empty-set');
-  await kb('boards', 'add', 'empty-set', '--repo', r);
+  await hkb('boards', 'add', 'empty-set', '--repo', r);
   await assert.rejects(() => main(['boards', 'set', 'empty-set']), /needs something to set/);
 });
 
 test('maxConcurrent 0 is allowed — it drains a board without stopping it', async () => {
   const r = scratchRepo('draining');
-  await kb('boards', 'add', 'draining', '--repo', r);
-  const set = json((await kb('boards', 'set', 'draining', '--max-concurrent', '0', '--json')).out);
+  await hkb('boards', 'add', 'draining', '--repo', r);
+  const set = json((await hkb('boards', 'set', 'draining', '--max-concurrent', '0', '--json')).out);
   assert.equal(set.maxConcurrent, 0);
 });
 
-test('kb boards rejects a subcommand it does not have, rather than listing anyway', async () => {
+test('hkb boards rejects a subcommand it does not have, rather than listing anyway', async () => {
   await assert.rejects(() => main(['boards', 'remove', 'x']), /no subcommand "remove"/);
   await assert.rejects(() => main(['boards', 'remove', 'x']), /boards set/, 'and lists the ones it does');
 });
@@ -756,8 +756,8 @@ test('kb boards rejects a subcommand it does not have, rather than listing anywa
 // ---------------------------------------------------------------- ls --all
 
 test('ls --all lists Jobs from every board, and says which board each is on', async () => {
-  await kb('new', 'far off', '--brief', 'b', '--board', 'far-away');
-  const rows = json((await kb('ls', '--all', '--json')).out);
+  await hkb('new', 'far off', '--brief', 'b', '--board', 'far-away');
+  const rows = json((await hkb('ls', '--all', '--json')).out);
   const boards = new Set(rows.map((r: { board: string }) => r.board));
   assert.ok(boards.has('far-away'));
   assert.ok(boards.has('switch'), 'a board nobody is standing in still shows up');
@@ -765,7 +765,7 @@ test('ls --all lists Jobs from every board, and says which board each is on', as
 });
 
 test('ls --all still filters by phase', async () => {
-  const rows = json((await kb('ls', '--all', '--phase', 'succeeded', '--json')).out);
+  const rows = json((await hkb('ls', '--all', '--phase', 'succeeded', '--json')).out);
   assert.ok(rows.length > 0, 'something has succeeded by now');
   assert.ok(rows.every((r: { phase: string }) => r.phase === 'succeeded'));
   assert.ok(rows.every((r: { board: string }) => r.board), 'and every row still names its board');
@@ -774,15 +774,15 @@ test('ls --all still filters by phase', async () => {
 test('ls --json carries the board whether or not --all is given', async () => {
   // A stable shape beats a conditional one: a consumer should not have to remember which flags it
   // passed to know which fields it got.
-  const rows = json((await kb('ls', '--board', 'far-away', '--json')).out);
+  const rows = json((await hkb('ls', '--board', 'far-away', '--json')).out);
   assert.ok(rows.length > 0);
   assert.ok(rows.every((r: { board: string }) => r.board === 'far-away'));
 });
 
 test('the BOARD column appears only with --all', async () => {
-  const all = await kb('ls', '--all');
+  const all = await hkb('ls', '--all');
   assert.match(all.out, /^far-away\s+#\d+\s+pending/m, 'a column, padded to the longest slug');
-  const one = await kb('ls', '--board', 'far-away');
+  const one = await hkb('ls', '--board', 'far-away');
   assert.match(one.out, /^#\d+\s+pending/m, 'scoped output is unchanged — the board is not news');
 });
 
@@ -797,7 +797,7 @@ test('ls --all does not resolve a board it will not read', async () => {
   process.chdir(root);
   try {
     await assert.rejects(() => main(['ls']), /boards point at/, 'a scoped ls still refuses, as it should');
-    const rows = json((await kb('ls', '--all', '--json')).out);
+    const rows = json((await hkb('ls', '--all', '--json')).out);
     assert.ok(rows.length > 0, 'and --all is unaffected, because it asked for no board');
   } finally {
     process.chdir(before);
@@ -822,7 +822,7 @@ test('ls --all on a machine with no jobs at all says so', async () => {
   process.env.HKB_DATABASE_URL = `file:${path.join(empty, 'other.db')}`;
   try {
     await closeBoard();
-    const r = await kb('ls', '--all');
+    const r = await hkb('ls', '--all');
     assert.equal(r.code, 0);
     assert.match(r.out, /no jobs on any board/);
   } finally {
@@ -837,10 +837,10 @@ test('ls --all on a machine with no jobs at all says so', async () => {
 // runs this may be a worker with nobody to answer a confirmation prompt. So both tests below are
 // refusals: what matters is not that the delete works, it is that it declines to.
 
-test('kb boards rm removes an empty board, and says so in the log', async () => {
+test('hkb boards rm removes an empty board, and says so in the log', async () => {
   const r = scratchRepo('rm-empty');
-  await kb('boards', 'add', 'rm-empty', '--repo', r);
-  const out = json((await kb('boards', 'rm', 'rm-empty', '--json')).out);
+  await hkb('boards', 'add', 'rm-empty', '--repo', r);
+  const out = json((await hkb('boards', 'rm', 'rm-empty', '--json')).out);
   assert.equal(out.removed, 'rm-empty');
   assert.equal(await db.board.findUnique({ where: { slug: 'rm-empty' } }), null);
   const ev = await db.event.findFirst({ where: { kind: 'board_removed' }, orderBy: { id: 'desc' } });
@@ -848,10 +848,10 @@ test('kb boards rm removes an empty board, and says so in the log', async () => 
   assert.equal((ev?.payload as { slug: string }).slug, 'rm-empty');
 });
 
-test('kb boards rm refuses a board with jobs on it until --force', async () => {
+test('hkb boards rm refuses a board with jobs on it until --force', async () => {
   const r = scratchRepo('rm-busy');
-  await kb('boards', 'add', 'rm-busy', '--repo', r);
-  const j = json((await kb('new', 'still here', '--brief', 'b', '--board', 'rm-busy', '--json')).out);
+  await hkb('boards', 'add', 'rm-busy', '--repo', r);
+  const j = json((await hkb('new', 'still here', '--brief', 'b', '--board', 'rm-busy', '--json')).out);
 
   await assert.rejects(
     () => main(['boards', 'rm', 'rm-busy']),
@@ -864,14 +864,14 @@ test('kb boards rm refuses a board with jobs on it until --force', async () => {
   );
   assert.ok(await db.job.findUnique({ where: { id: j.id } }), 'and the job is untouched');
 
-  await kb('boards', 'rm', 'rm-busy', '--force');
+  await hkb('boards', 'rm', 'rm-busy', '--force');
   assert.equal(await db.board.findUnique({ where: { slug: 'rm-busy' } }), null);
   assert.equal(await db.job.findUnique({ where: { id: j.id } }), null, 'the jobs went with it');
 });
 
-test('kb boards rm refuses a board a daemon is leading, --force or not', async () => {
+test('hkb boards rm refuses a board a daemon is leading, --force or not', async () => {
   const r = scratchRepo('rm-led');
-  await kb('boards', 'add', 'rm-led', '--repo', r);
+  await hkb('boards', 'add', 'rm-led', '--repo', r);
   const board = await db.board.findUniqueOrThrow({ where: { slug: 'rm-led' } });
   // This process is alive and this is its hostname, so the row reads as live the same way a real
   // daemon's does — no clock to wind forward.
@@ -889,7 +889,7 @@ test('kb boards rm refuses a board a daemon is leading, --force or not', async (
       () => main(['boards', 'rm', 'rm-led', '--force']),
       (e: Error & { exitCode?: number }) => {
         assert.equal(e.exitCode, 2);
-        assert.match(e.message, /kb down/, '`--force` is not a way to delete a board out from under a running controller');
+        assert.match(e.message, /hkb down/, '`--force` is not a way to delete a board out from under a running controller');
         return true;
       },
     );
@@ -903,13 +903,13 @@ test('kb boards rm refuses a board a daemon is leading, --force or not', async (
 // ---------------------------------------------------------------- the spec defaults
 //
 // A board that runs cheap, high-volume work should say so once. What has to be true for that to be
-// safe: the Job still wins, `none` gets you back to "no opinion", and `kb show` can tell you which
+// safe: the Job still wins, `none` gets you back to "no opinion", and `hkb show` can tell you which
 // level answered — a spec you cannot trace is worse than one you must repeat.
 
-test('kb boards set carries the spec defaults, and none clears one', async () => {
+test('hkb boards set carries the spec defaults, and none clears one', async () => {
   const r = scratchRepo('defaults');
-  await kb('boards', 'add', 'defaults', '--repo', r);
-  const set = json((await kb(
+  await hkb('boards', 'add', 'defaults', '--repo', r);
+  const set = json((await hkb(
     'boards', 'set', 'defaults', '--model', 'claude-haiku-4-5', '--effort', 'low',
     '--max-turns', '8', '--max-budget', '0.25', '--max-retries', '0', '--json',
   )).out);
@@ -917,15 +917,15 @@ test('kb boards set carries the spec defaults, and none clears one', async () =>
     model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
   });
 
-  const cleared = json((await kb('boards', 'set', 'defaults', '--model', 'none', '--json')).out);
+  const cleared = json((await hkb('boards', 'set', 'defaults', '--model', 'none', '--json')).out);
   assert.equal(cleared.defaults.model, null, 'none clears the default rather than setting the word');
   assert.equal(cleared.defaults.maxTurns, 8, 'and clearing one leaves the others alone');
   assert.equal(cleared.defaults.maxRetries, 0, 'including a default of zero, which is a real answer');
 });
 
-test('kb boards set refuses a nonsense default rather than storing it', async () => {
+test('hkb boards set refuses a nonsense default rather than storing it', async () => {
   const r = scratchRepo('bad-defaults');
-  await kb('boards', 'add', 'bad-defaults', '--repo', r);
+  await hkb('boards', 'add', 'bad-defaults', '--repo', r);
   for (const [flag, value, why] of [
     ['--effort', 'turbo', /low\|medium\|high\|xhigh\|max/],
     ['--max-turns', '0', /turns, 1 or more/],
@@ -958,8 +958,8 @@ test('a Job filed without a flag records null, so the board can still answer', a
   // The whole mechanism turns on this. A Job that recorded 20 turns because nobody said otherwise
   // would outrank its board's default for ever, and the default would be dead on arrival.
   const repo = scratchRepo('unset');
-  await kb('boards', 'add', 'unset', '--repo', repo);
-  const r = await kb('new', 'says-nothing', '--brief', 'x', '--board', 'unset', '--json');
+  await hkb('boards', 'add', 'unset', '--repo', repo);
+  const r = await hkb('new', 'says-nothing', '--brief', 'x', '--board', 'unset', '--json');
   const row = await db.job.findUniqueOrThrow({ where: { id: json(r.out).id } });
   assert.equal(row.maxTurns, null);
   assert.equal(row.maxBudgetUsd, null);
@@ -967,31 +967,31 @@ test('a Job filed without a flag records null, so the board can still answer', a
   assert.equal(row.model, null);
 });
 
-test('kb show names the source of every resolved field', async () => {
+test('hkb show names the source of every resolved field', async () => {
   const repo = scratchRepo('traced');
-  await kb('boards', 'add', 'traced', '--repo', repo);
-  await kb('boards', 'set', 'traced', '--model', 'claude-haiku-4-5', '--max-turns', '8');
-  const id = json((await kb('new', 'traced-job', '--brief', 'x', '--board', 'traced',
+  await hkb('boards', 'add', 'traced', '--repo', repo);
+  await hkb('boards', 'set', 'traced', '--model', 'claude-haiku-4-5', '--max-turns', '8');
+  const id = json((await hkb('new', 'traced-job', '--brief', 'x', '--board', 'traced',
     '--max-budget', '2', '--json')).out).id;
 
-  const out = (await kb('show', String(id), '--board', 'traced')).out;
+  const out = (await hkb('show', String(id), '--board', 'traced')).out;
   assert.match(out, /model\s+claude-haiku-4-5\s+from board traced/);
   assert.match(out, /maxTurns\s+8\s+from board traced/);
   assert.match(out, /maxBudget\s+\$2\s+set on the Job/);
   assert.match(out, /maxRetries\s+2\s+built-in default/, 'the last resort says so too');
 
   // And in --json, where a consumer needs the provenance without parsing a table.
-  const j = json((await kb('show', String(id), '--board', 'traced', '--json')).out);
+  const j = json((await hkb('show', String(id), '--board', 'traced', '--json')).out);
   assert.deepEqual(j.spec.model, { value: 'claude-haiku-4-5', from: 'board' });
   assert.deepEqual(j.spec.maxBudgetUsd, { value: 2, from: 'job' });
   assert.deepEqual(j.spec.maxRetries, { value: 2, from: 'built-in' });
 });
 
-test('kb show reports the cap an attempt was FROZEN at, not what the board says today', async () => {
+test('hkb show reports the cap an attempt was FROZEN at, not what the board says today', async () => {
   const repo = scratchRepo('frozen-show');
-  await kb('boards', 'add', 'frozen-show', '--repo', repo);
-  await kb('boards', 'set', 'frozen-show', '--max-budget', '3');
-  const id = json((await kb('new', 'ran-at-three', '--brief', 'x', '--board', 'frozen-show', '--json')).out).id;
+  await hkb('boards', 'add', 'frozen-show', '--repo', repo);
+  await hkb('boards', 'set', 'frozen-show', '--max-budget', '3');
+  const id = json((await hkb('new', 'ran-at-three', '--brief', 'x', '--board', 'frozen-show', '--json')).out).id;
   await db.attempt.create({
     data: {
       jobId: id, k: 1, startedAt: new Date(), endedAt: new Date(),
@@ -999,22 +999,22 @@ test('kb show reports the cap an attempt was FROZEN at, not what the board says 
     },
   });
   // The operator reacts to the bill by lowering the board's default. The attempt is history.
-  await kb('boards', 'set', 'frozen-show', '--max-budget', '0.5');
+  await hkb('boards', 'set', 'frozen-show', '--max-budget', '0.5');
 
-  const out = (await kb('show', String(id), '--board', 'frozen-show')).out;
+  const out = (await hkb('show', String(id), '--board', 'frozen-show')).out;
   assert.match(out, /max_budget\s+\S+\s+\$3\.0000 of \$3\.00/,
     'spent against the cap that actually stopped it — re-resolving would print $0.50');
   assert.match(out, /maxBudget\s+\$0\.5\s+from board frozen-show/,
     'while the spec block shows what the NEXT attempt would get, which is the other question');
 });
 
-test('kb retry does not crash on a Job whose cap came from the board', async () => {
+test('hkb retry does not crash on a Job whose cap came from the board', async () => {
   // `job.maxBudgetUsd` is null for the commonest Job there is — one filed with no `--max-budget`.
   // Read raw, the guard that exists to refuse a pointless re-queue threw instead of refusing.
   const repo = scratchRepo('retry-inherited');
-  await kb('boards', 'add', 'retry-inherited', '--repo', repo);
-  await kb('boards', 'set', 'retry-inherited', '--max-budget', '3');
-  const id = json((await kb('new', 'spent-it', '--brief', 'x', '--board', 'retry-inherited', '--json')).out).id;
+  await hkb('boards', 'add', 'retry-inherited', '--repo', repo);
+  await hkb('boards', 'set', 'retry-inherited', '--max-budget', '3');
+  const id = json((await hkb('new', 'spent-it', '--brief', 'x', '--board', 'retry-inherited', '--json')).out).id;
   await db.attempt.create({
     data: {
       jobId: id, k: 1, startedAt: new Date(), endedAt: new Date(),
@@ -1035,25 +1035,51 @@ test('kb retry does not crash on a Job whose cap came from the board', async () 
 
   // Raising the BOARD's default is also a real raise: the next attempt genuinely gets more, so
   // refusing that retry would send an operator to override a limit no longer in the way.
-  await kb('boards', 'set', 'retry-inherited', '--max-budget', '10');
-  const ok = json((await kb('retry', String(id), '--board', 'retry-inherited', '--json')).out);
+  await hkb('boards', 'set', 'retry-inherited', '--max-budget', '10');
+  const ok = json((await hkb('retry', String(id), '--board', 'retry-inherited', '--json')).out);
   assert.equal(ok.maxBudgetUsd, 10, 'the retry runs under the board\'s new default');
   assert.equal((await db.job.findUniqueOrThrow({ where: { id } })).maxBudgetUsd, null,
     'and nothing was written onto the Job — it still has no opinion of its own');
 });
 
-test('kb boards prints a defaults line only for the boards that have one', async () => {
+test('hkb boards prints a defaults line only for the boards that have one', async () => {
   const repo = scratchRepo('listed-defaults');
-  await kb('boards', 'add', 'listed-defaults', '--repo', repo);
-  await kb('boards', 'set', 'listed-defaults', '--model', 'claude-haiku-4-5');
-  const out = (await kb('boards')).out;
+  await hkb('boards', 'add', 'listed-defaults', '--repo', repo);
+  await hkb('boards', 'set', 'listed-defaults', '--model', 'claude-haiku-4-5');
+  const out = (await hkb('boards')).out;
   assert.match(out, /defaults\s+model=claude-haiku-4-5/);
 
-  const rows = json((await kb('boards', '--json')).out) as { board: string; hasDefaults: boolean; defaults: unknown }[];
+  const rows = json((await hkb('boards', '--json')).out) as { board: string; hasDefaults: boolean; defaults: unknown }[];
   const mine = rows.find((r) => r.board === 'listed-defaults');
   assert.equal(mine?.hasDefaults, true);
   const bare = rows.find((r) => r.board !== 'listed-defaults' && !r.hasDefaults);
   assert.ok(bare, 'a board with no defaults exists in this suite');
   assert.deepEqual(bare.defaults, { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null },
     '--json carries the key either way: a consumer inferring absence from a missing key reads a shape, not a record');
+});
+
+/**
+ * `hkb version`, and the one thing about it that is not cosmetic.
+ *
+ * The release workflow installs the freshly published tarball on a clean runner and matches this
+ * output's tail against the tag, so a build that cannot say what it is fails the release rather
+ * than shipping. Written as a refusal: run it in a subprocess pointed at a board file that does
+ * not exist, and prove the file is STILL not there afterwards. Every other verb creates and
+ * migrates the board on first touch, and a version check that did the same would leave a database
+ * behind on a machine whose owner only asked what they had installed.
+ */
+test('hkb version prints the package version, and opens no board doing it', () => {
+  const home = fs.mkdtempSync(path.join(dir, 'version-'));
+  const board = path.join(home, 'never-created.db');
+  const env = { ...process.env, HKB_DATABASE_URL: `file:${board}` };
+  const entry = path.join(REPO, 'bin', 'hkb.ts');
+  const expected = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')).version;
+
+  const out = execFileSync(process.execPath, [entry, 'version'], { env, cwd: home, encoding: 'utf8' });
+  assert.equal(out, `hkb ${expected}\n`, 'the release verify matches this against the tag, tail-anchored');
+  assert.equal(fs.existsSync(board), false, 'asking what is installed must not create a board');
+
+  const asJson = JSON.parse(execFileSync(process.execPath, [entry, 'version', '--json'], { env, cwd: home, encoding: 'utf8' }));
+  assert.deepEqual(asJson, { version: expected });
+  assert.equal(fs.existsSync(board), false);
 });

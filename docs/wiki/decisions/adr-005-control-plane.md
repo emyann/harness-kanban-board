@@ -5,10 +5,10 @@ category: decisions
 kind: decision
 audience: [dev]
 read_when: "adding an operator verb, touching how the tick judges liveness, adding a profile mode, or explaining hkb to someone who knows Kubernetes"
-status: accepted
+status: superseded
 date: 2026-09-02
 supersedes: ~
-superseded_by: ~
+superseded_by: decisions/adr-009-retiring-the-first-system
 covers:
   - path: src/dispatch.js
     sha: 492b6362444d3589e4fc0989cf89cd58aad93ccb
