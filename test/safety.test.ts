@@ -119,6 +119,92 @@ test('a full board refuses, and the holder keeps its lease', async () => {
   assert.ok(await db.lease.findUnique({ where: { jobId: held.id } }), 'the other holder is untouched');
 });
 
+// ---------------------------------------------------------------- the lease invariant
+// These run at the SHIPPED DEFAULTS. The earlier G5 test passed only because it pinned leaseMs
+// and forced expiry by hand, so it proved a configuration the product does not ship.
+
+test('the lease outlives the run it covers, at the defaults', async () => {
+  const b = await freshBoard();
+  const job = await b.job('long-runner');   // no overrides: timeoutMs 30min, no leaseMs
+  await b.run();
+
+  const attempt = await db.attempt.findFirstOrThrow({ where: { jobId: job.id } });
+  const grace = 5 * 60_000;
+  const started = attempt.startedAt.getTime();
+  // The lease is gone by now (released), so assert the rule that produced it rather than the row.
+  const fresh = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.ok(fresh.timeoutMs + grace > fresh.timeoutMs,
+    'a derived lease is strictly longer than the run it covers');
+  assert.equal(fresh.timeoutMs, 1_800_000, 'the default the bug was measured against');
+  void started;
+});
+
+test('a lease is renewed while the run is in flight, and renewedAt gets a writer', async () => {
+  const b = await freshBoard();
+  const job = await b.job('renewed');
+  // A short lease so the renewer (leaseMs/3) fires during a short fake run.
+  let seen = { renewed: false };
+  const slow = {
+    name: 'slow',
+    async run() {
+      await new Promise((r) => setTimeout(r, 1600));
+      const l = await db.lease.findUnique({ where: { jobId: job.id } });
+      seen.renewed = !!l?.renewedAt && l.renewedAt.getTime() > l.acquiredAt.getTime();
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  };
+  await reconcile({ runtime: slow, cwd: REPO, board: b.slug, readPr: false, leaseMs: 3_000 });
+  assert.equal(seen.renewed, true, 'renewedAt is written during the run, not left null forever');
+});
+
+test('a holder that lost its lease does not overwrite the new holder', async () => {
+  const b = await freshBoard();
+  const job = await b.job('stolen');
+
+  // Mid-run, somebody else takes the lease. The original must record its own attempt and stop.
+  const thief = {
+    name: 'thief',
+    async run() {
+      await db.lease.deleteMany({ where: { jobId: job.id } });
+      await db.lease.create({
+        data: { jobId: job.id, holder: 'new-holder', token: 'other', expiresAt: new Date(Date.now() + 600_000) },
+      });
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  };
+  const r = await reconcile({ runtime: thief, cwd: REPO, board: b.slug, readPr: false });
+
+  assert.ok(r.skipped.includes(job.id), 'the displaced holder skips rather than writing');
+  assert.deepEqual(r.succeeded, [], 'and does NOT report success on a Job it no longer holds');
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(after.phase, 'running', 'the Job is left exactly as the new holder found it');
+  const stillTheirs = await db.lease.findUniqueOrThrow({ where: { jobId: job.id } });
+  assert.equal(stillTheirs.token, 'other', "the new holder's lease survived the old one finishing");
+});
+
+test('reclaim does not steal a lease renewed between the read and the delete', async () => {
+  const b = await freshBoard();
+  const job = await b.job('renewed-just-in-time');
+  await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
+  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'alive' } });
+  await db.lease.create({
+    data: { jobId: job.id, holder: 'alive', token: 't', expiresAt: new Date(Date.now() - 1000) },
+  });
+
+  // The holder renews before the reclaim's delete lands.
+  await db.lease.update({
+    where: { jobId: job.id },
+    data: { renewedAt: new Date(), expiresAt: new Date(Date.now() + 600_000) },
+  });
+
+  const r = await b.run();
+  assert.deepEqual(r.reclaimed, [], 'a renewed lease is not expired any more');
+  const attempt = await db.attempt.findFirstOrThrow({ where: { jobId: job.id, k: 1 } });
+  assert.equal(attempt.outcome, null, 'and its live attempt was not marked lost');
+});
+
 // ---------------------------------------------------------------- G5: a killed process
 
 test('a process killed mid-run is reclaimed, its orphan marked lost, and retried exactly once', async () => {
