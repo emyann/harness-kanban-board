@@ -47,6 +47,9 @@ kb show 1                                  # phase, spec, and every attempt: out
 - **`kb up`** runs that same reconcile pass on a timer in a detached process, serving every board on the machine —
   `--interval <s>` to change the period, `--status` to see what is up.
 - **`kb down`** stops it cleanly, leaving no lease held.
+- **`kb retry <id>`** puts a Job that stopped back on the board, resuming its session. A Job that spent its whole
+  `--max-budget` is *not* retried automatically — the retry would get the same cap and stop in the same place, at
+  the same price — so this is where you raise it: `kb retry 6 --max-budget 4`, and the raise is on the event log.
 - **`kb boards`** lists every board on this machine; `kb boards add <slug> --repo <path>` points one at a repository.
 
 Everything from [Quickstart](#quickstart) down describes the **pre-ADR-007 system** — the `hkb` CLI, the board on
