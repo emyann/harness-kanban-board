@@ -20,7 +20,24 @@ const { admissionCallback } = await import('../src/admission.ts');
 
 const db = openBoard();
 const board = await db.board.upsert({ where: { slug: 'test' }, update: {}, create: { slug: 'test' } });
-const cwd = REPO;
+/**
+ * A throwaway repository, not the one you are working in.
+ *
+ * `mkJob` lets `isolate` default to true, so every Job here cuts a real worktree — and pointed at
+ * `REPO` that meant this suite wrote 620 MB checkouts into the developer's own tree and left them.
+ * The same defect was fixed in `test/safety.test.ts`; this is the other half of it.
+ */
+const cwd = path.join(dir, 'scratch-repo');
+fs.mkdirSync(cwd);
+{
+  const g = (...a: string[]) => execFileSync('git', a, { cwd, stdio: 'ignore' });
+  g('init', '-q', '-b', 'main');
+  g('config', 'user.email', 'c@test');
+  g('config', 'user.name', 'c');
+  fs.writeFileSync(path.join(cwd, 'README.md'), '# scratch\n');
+  g('add', '-A');
+  g('commit', '-qm', 'base');
+}
 
 const mkJob = (name: string, extra: Record<string, unknown> = {}) =>
   db.job.create({ data: { boardId: board.id, name, brief: `do ${name}`, ...extra } });

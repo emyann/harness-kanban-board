@@ -16,7 +16,34 @@ const { main } = await import('../src/kb.ts');
 const { openBoard, closeBoard } = await import('../src/db.ts');
 const db = openBoard();
 
-test.after(async () => { await closeBoard(); fs.rmSync(dir, { recursive: true, force: true }); });
+/**
+ * The whole suite runs from a throwaway repository, not the one you are working in.
+ *
+ * `kb new` defaults `isolate` to true and `kb run` reconciles in `process.cwd()`, so a single
+ * un-flagged `kb run` in these tests cut a 620 MB worktree into the developer's own checkout and
+ * left it. Boards created here take their `repoPath` from wherever we are standing, so standing
+ * somewhere disposable fixes it for every test at once rather than one `--no-isolate` at a time.
+ * The two tests that chdir for their own reasons still restore to here.
+ */
+const HOME_REPO = path.join(dir, 'suite-repo');
+fs.mkdirSync(HOME_REPO);
+{
+  const g = (...a: string[]) => execFileSync('git', a, { cwd: HOME_REPO, stdio: 'ignore' });
+  g('init', '-q', '-b', 'main');
+  g('config', 'user.email', 'k@test');
+  g('config', 'user.name', 'k');
+  fs.writeFileSync(path.join(HOME_REPO, 'README.md'), '# suite\n');
+  g('add', '-A');
+  g('commit', '-qm', 'base');
+}
+const LAUNCHED_FROM = process.cwd();
+process.chdir(HOME_REPO);
+
+test.after(async () => {
+  process.chdir(LAUNCHED_FROM);
+  await closeBoard();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 
 /**
  * Run a verb and capture what it printed, so `--json` is asserted on its real output.

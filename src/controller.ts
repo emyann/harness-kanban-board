@@ -271,10 +271,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     }
 
     await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
-    // Remembered, because it is the fence the forge read uses: a pull request that existed before
-    // this attempt began is not this attempt's output, however its branch is named.
-    const claimedAt = now();
-    await db.attempt.create({ data: { jobId: job.id, k, host, runtime: deps.runtime.name, startedAt: claimedAt } });
+    await db.attempt.create({ data: { jobId: job.id, k, host, runtime: deps.runtime.name, startedAt: now() } });
     await db.event.create({ data: { kind: 'claimed', jobId: job.id, boardId: job.boardId, actor: host, payload: { k } } });
     report.claimed.push(job.id);
     deps.onEvent?.(`claim   #${job.id} k=${k} ${job.name}`);
@@ -372,7 +369,14 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     // ---- what landed on the forge. One read, by head branch: the board and the forge are two
     // systems and this is the only thing that joins them.
-    const pr = wt && deps.readPr !== false ? prForBranch(cwd, wt.branch, claimedAt) : null;
+    // Fenced on the JOB, not on this attempt. A pull request that existed before the Job did
+    // cannot be its output — that is the stale-branch case, where a name this database invented
+    // was already taken on the remote. But one opened by an EARLIER ATTEMPT of this Job is very
+    // much its output: a resumed attempt continues onto the same branch, which is the whole point
+    // of resuming, and dating the fence from the attempt made a Job lose the pull request it had
+    // already opened. Measured: #12 opened PR 366 at 12:41 on attempt 1 and recorded null at 13:39
+    // on attempt 2.
+    const pr = wt && deps.readPr !== false ? prForBranch(cwd, wt.branch, job.createdAt) : null;
     if (pr) deps.onEvent?.(`  ${pr.isDraft ? 'draft ' : ''}PR #${pr.number} ${pr.url}`);
     // Said out loud. A run that committed and pushed but opened no pull request has produced
     // something a human still has to find, and silence here is what let job #4 look finished.

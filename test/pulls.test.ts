@@ -69,6 +69,20 @@ test('with no fence, the newest on the branch is still the answer', () => {
   assert.equal(pickPr(rows, 'kb-4-1')?.number, 2);
 });
 
+test('a pull request an EARLIER ATTEMPT opened is still this Job output', () => {
+  // The fence dates from the Job, not the attempt, and this is why. A resumed attempt continues
+  // onto the same branch — that is what resuming means — so a pull request opened by attempt 1 is
+  // the Job's. Dating from the attempt made #12 record null at 13:39 for the PR it opened at 12:41.
+  const jobCreated = new Date('2026-09-05T12:06:25Z');
+  const openedByAttempt1 = [row({ number: 366, createdAt: '2026-09-05T12:41:37Z' })];
+  assert.equal(pickPr(openedByAttempt1, 'kb-4-1', jobCreated)?.number, 366);
+
+  // And the case the fence exists for still holds: a branch name this database invented was
+  // already taken on the remote, with a pull request predating the Job entirely.
+  const strangers = [row({ number: 341, createdAt: '2026-09-05T05:38:55Z', state: 'CLOSED' })];
+  assert.equal(pickPr(strangers, 'kb-4-1', jobCreated), null);
+});
+
 test('a merged pull request is a legitimate answer, a closed one is not special-cased', () => {
   // State is deliberately not filtered: what disqualifies #341 is its age, not that it is closed.
   // A worker can legitimately have its pull request closed by a human while the attempt records it.
