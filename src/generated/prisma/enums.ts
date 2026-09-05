@@ -14,7 +14,9 @@ export const Phase = {
   running: 'running',
   succeeded: 'succeeded',
   failed: 'failed',
-  suspended: 'suspended'
+  suspended: 'suspended',
+  done: 'done',
+  cancelled: 'cancelled'
 } as const
 
 export type Phase = (typeof Phase)[keyof typeof Phase]

@@ -26,14 +26,36 @@ datasource db {
   provider = "sqlite"
 }
 
-/// Where a Job is in its lifecycle. Observed state, never asked for directly.
+/// Where a Job is in its lifecycle. Observed state, never asked for directly — except for the last
+/// three, which are the states only a human can put a Job in.
 enum Phase {
   pending    // wants to run, nothing holds it
   running    // a lease is held and an attempt is live
-  succeeded  // terminal
+  succeeded  // terminal: the session completed
   failed     // terminal: out of retries
   suspended  // waiting on a human — the one state no runtime can report
+  done       // terminal: an operator says the aim was achieved by other means
+  cancelled  // terminal: an operator says stop, this is not wanted
 }
+// `done` and `cancelled` are two values rather than one, and neither is `suspended`. Both arguments
+// were made when they were added, and both are worth keeping here because the pull is to collapse
+// them later:
+//
+// NOT `suspended`. That state is a *wait*: something is expected to happen and then the Job goes on
+// — "waiting for an answer, resumable, with a proposal pending" is the shape it was put in the
+// schema for. `kb ls --phase suspended` is therefore an inbox, the list of what still needs a
+// human, and it is the one query the state exists to answer. A Job concluded by hand would sit in
+// that inbox for ever, because nothing is ever going to take it out: the list stops meaning "what
+// needs me" the first time it is used this way. The reasons even read in opposite tenses —
+// `suspendedFor` is what someone must still do, `endedFor` is what already happened.
+//
+// TWO values, not one `ended` with the statement in a column. This enum already splits its terminal
+// states by what happened — `succeeded` and `failed` are both "never claim this again", and are
+// separate because the difference is what an operator reads. The difference between "the PR was
+// merged, this is finished" and "we do not want this" is at least that large, it is the entire
+// content of the operator's decision, and putting it in a column would make these the only terminal
+// phases whose name has to be read together with a second field to mean anything. `kb ls --phase
+// cancelled` also comes free, off an index that already exists.
 
 /// How one attempt ended. The three resumable ones are why this is not a boolean.
 enum Outcome {
@@ -152,6 +174,15 @@ model Job {
   lastError     String?
   /// Why this Job is suspended, when it is. Not derivable from any runtime.
   suspendedFor  String?
+  /// Who ended this Job by hand, and why they said they did — `done` and `cancelled` only.
+  ///
+  /// The pair `pausedBy`/`pausedAt` already is on Board, for the same kind of fact: a decision a
+  /// person made, which nothing can recompute. `finishedAt` carries the when. It is denormalised
+  /// out of the Event deliberately — `kb ls --json` and `kb show` must be able to say who concluded
+  /// a Job without joining the whole stream, and an operator who reaches for `kb log` to find out
+  /// why a Job is terminal is reaching one level deeper than the question deserves.
+  endedBy       String?
+  endedFor      String?
 
   attempts Attempt[]
   lease    Lease?

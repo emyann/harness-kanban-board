@@ -61,6 +61,8 @@ export type JobMinAggregateOutputType = {
   lastSessionId: string | null
   lastError: string | null
   suspendedFor: string | null
+  endedBy: string | null
+  endedFor: string | null
   createdAt: Date | null
   updatedAt: Date | null
   finishedAt: Date | null
@@ -83,6 +85,8 @@ export type JobMaxAggregateOutputType = {
   lastSessionId: string | null
   lastError: string | null
   suspendedFor: string | null
+  endedBy: string | null
+  endedFor: string | null
   createdAt: Date | null
   updatedAt: Date | null
   finishedAt: Date | null
@@ -106,6 +110,8 @@ export type JobCountAggregateOutputType = {
   lastSessionId: number
   lastError: number
   suspendedFor: number
+  endedBy: number
+  endedFor: number
   createdAt: number
   updatedAt: number
   finishedAt: number
@@ -148,6 +154,8 @@ export type JobMinAggregateInputType = {
   lastSessionId?: true
   lastError?: true
   suspendedFor?: true
+  endedBy?: true
+  endedFor?: true
   createdAt?: true
   updatedAt?: true
   finishedAt?: true
@@ -170,6 +178,8 @@ export type JobMaxAggregateInputType = {
   lastSessionId?: true
   lastError?: true
   suspendedFor?: true
+  endedBy?: true
+  endedFor?: true
   createdAt?: true
   updatedAt?: true
   finishedAt?: true
@@ -193,6 +203,8 @@ export type JobCountAggregateInputType = {
   lastSessionId?: true
   lastError?: true
   suspendedFor?: true
+  endedBy?: true
+  endedFor?: true
   createdAt?: true
   updatedAt?: true
   finishedAt?: true
@@ -303,6 +315,8 @@ export type JobGroupByOutputType = {
   lastSessionId: string | null
   lastError: string | null
   suspendedFor: string | null
+  endedBy: string | null
+  endedFor: string | null
   createdAt: Date
   updatedAt: Date
   finishedAt: Date | null
@@ -349,6 +363,8 @@ export type JobWhereInput = {
   lastSessionId?: Prisma.StringNullableFilter<"Job"> | string | null
   lastError?: Prisma.StringNullableFilter<"Job"> | string | null
   suspendedFor?: Prisma.StringNullableFilter<"Job"> | string | null
+  endedBy?: Prisma.StringNullableFilter<"Job"> | string | null
+  endedFor?: Prisma.StringNullableFilter<"Job"> | string | null
   createdAt?: Prisma.DateTimeFilter<"Job"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Job"> | Date | string
   finishedAt?: Prisma.DateTimeNullableFilter<"Job"> | Date | string | null
@@ -376,6 +392,8 @@ export type JobOrderByWithRelationInput = {
   lastSessionId?: Prisma.SortOrderInput | Prisma.SortOrder
   lastError?: Prisma.SortOrderInput | Prisma.SortOrder
   suspendedFor?: Prisma.SortOrderInput | Prisma.SortOrder
+  endedBy?: Prisma.SortOrderInput | Prisma.SortOrder
+  endedFor?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   finishedAt?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -406,6 +424,8 @@ export type JobWhereUniqueInput = Prisma.AtLeast<{
   lastSessionId?: Prisma.StringNullableFilter<"Job"> | string | null
   lastError?: Prisma.StringNullableFilter<"Job"> | string | null
   suspendedFor?: Prisma.StringNullableFilter<"Job"> | string | null
+  endedBy?: Prisma.StringNullableFilter<"Job"> | string | null
+  endedFor?: Prisma.StringNullableFilter<"Job"> | string | null
   createdAt?: Prisma.DateTimeFilter<"Job"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Job"> | Date | string
   finishedAt?: Prisma.DateTimeNullableFilter<"Job"> | Date | string | null
@@ -433,6 +453,8 @@ export type JobOrderByWithAggregationInput = {
   lastSessionId?: Prisma.SortOrderInput | Prisma.SortOrder
   lastError?: Prisma.SortOrderInput | Prisma.SortOrder
   suspendedFor?: Prisma.SortOrderInput | Prisma.SortOrder
+  endedBy?: Prisma.SortOrderInput | Prisma.SortOrder
+  endedFor?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   finishedAt?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -464,6 +486,8 @@ export type JobScalarWhereWithAggregatesInput = {
   lastSessionId?: Prisma.StringNullableWithAggregatesFilter<"Job"> | string | null
   lastError?: Prisma.StringNullableWithAggregatesFilter<"Job"> | string | null
   suspendedFor?: Prisma.StringNullableWithAggregatesFilter<"Job"> | string | null
+  endedBy?: Prisma.StringNullableWithAggregatesFilter<"Job"> | string | null
+  endedFor?: Prisma.StringNullableWithAggregatesFilter<"Job"> | string | null
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"Job"> | Date | string
   updatedAt?: Prisma.DateTimeWithAggregatesFilter<"Job"> | Date | string
   finishedAt?: Prisma.DateTimeNullableWithAggregatesFilter<"Job"> | Date | string | null
@@ -485,6 +509,8 @@ export type JobCreateInput = {
   lastSessionId?: string | null
   lastError?: string | null
   suspendedFor?: string | null
+  endedBy?: string | null
+  endedFor?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -512,6 +538,8 @@ export type JobUncheckedCreateInput = {
   lastSessionId?: string | null
   lastError?: string | null
   suspendedFor?: string | null
+  endedBy?: string | null
+  endedFor?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -536,6 +564,8 @@ export type JobUpdateInput = {
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suspendedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -563,6 +593,8 @@ export type JobUncheckedUpdateInput = {
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suspendedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -589,6 +621,8 @@ export type JobCreateManyInput = {
   lastSessionId?: string | null
   lastError?: string | null
   suspendedFor?: string | null
+  endedBy?: string | null
+  endedFor?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -610,6 +644,8 @@ export type JobUpdateManyMutationInput = {
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suspendedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -633,6 +669,8 @@ export type JobUncheckedUpdateManyInput = {
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suspendedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -666,6 +704,8 @@ export type JobCountOrderByAggregateInput = {
   lastSessionId?: Prisma.SortOrder
   lastError?: Prisma.SortOrder
   suspendedFor?: Prisma.SortOrder
+  endedBy?: Prisma.SortOrder
+  endedFor?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   finishedAt?: Prisma.SortOrder
@@ -697,6 +737,8 @@ export type JobMaxOrderByAggregateInput = {
   lastSessionId?: Prisma.SortOrder
   lastError?: Prisma.SortOrder
   suspendedFor?: Prisma.SortOrder
+  endedBy?: Prisma.SortOrder
+  endedFor?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   finishedAt?: Prisma.SortOrder
@@ -719,6 +761,8 @@ export type JobMinOrderByAggregateInput = {
   lastSessionId?: Prisma.SortOrder
   lastError?: Prisma.SortOrder
   suspendedFor?: Prisma.SortOrder
+  endedBy?: Prisma.SortOrder
+  endedFor?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   finishedAt?: Prisma.SortOrder
@@ -861,6 +905,8 @@ export type JobCreateWithoutBoardInput = {
   lastSessionId?: string | null
   lastError?: string | null
   suspendedFor?: string | null
+  endedBy?: string | null
+  endedFor?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -886,6 +932,8 @@ export type JobUncheckedCreateWithoutBoardInput = {
   lastSessionId?: string | null
   lastError?: string | null
   suspendedFor?: string | null
+  endedBy?: string | null
+  endedFor?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -940,6 +988,8 @@ export type JobScalarWhereInput = {
   lastSessionId?: Prisma.StringNullableFilter<"Job"> | string | null
   lastError?: Prisma.StringNullableFilter<"Job"> | string | null
   suspendedFor?: Prisma.StringNullableFilter<"Job"> | string | null
+  endedBy?: Prisma.StringNullableFilter<"Job"> | string | null
+  endedFor?: Prisma.StringNullableFilter<"Job"> | string | null
   createdAt?: Prisma.DateTimeFilter<"Job"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Job"> | Date | string
   finishedAt?: Prisma.DateTimeNullableFilter<"Job"> | Date | string | null
@@ -961,6 +1011,8 @@ export type JobCreateWithoutAttemptsInput = {
   lastSessionId?: string | null
   lastError?: string | null
   suspendedFor?: string | null
+  endedBy?: string | null
+  endedFor?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -987,6 +1039,8 @@ export type JobUncheckedCreateWithoutAttemptsInput = {
   lastSessionId?: string | null
   lastError?: string | null
   suspendedFor?: string | null
+  endedBy?: string | null
+  endedFor?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -1026,6 +1080,8 @@ export type JobUpdateWithoutAttemptsInput = {
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suspendedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -1052,6 +1108,8 @@ export type JobUncheckedUpdateWithoutAttemptsInput = {
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suspendedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -1075,6 +1133,8 @@ export type JobCreateWithoutLeaseInput = {
   lastSessionId?: string | null
   lastError?: string | null
   suspendedFor?: string | null
+  endedBy?: string | null
+  endedFor?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -1101,6 +1161,8 @@ export type JobUncheckedCreateWithoutLeaseInput = {
   lastSessionId?: string | null
   lastError?: string | null
   suspendedFor?: string | null
+  endedBy?: string | null
+  endedFor?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -1140,6 +1202,8 @@ export type JobUpdateWithoutLeaseInput = {
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suspendedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -1166,6 +1230,8 @@ export type JobUncheckedUpdateWithoutLeaseInput = {
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suspendedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -1189,6 +1255,8 @@ export type JobCreateWithoutEventsInput = {
   lastSessionId?: string | null
   lastError?: string | null
   suspendedFor?: string | null
+  endedBy?: string | null
+  endedFor?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -1215,6 +1283,8 @@ export type JobUncheckedCreateWithoutEventsInput = {
   lastSessionId?: string | null
   lastError?: string | null
   suspendedFor?: string | null
+  endedBy?: string | null
+  endedFor?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -1254,6 +1324,8 @@ export type JobUpdateWithoutEventsInput = {
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suspendedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -1280,6 +1352,8 @@ export type JobUncheckedUpdateWithoutEventsInput = {
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suspendedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -1304,6 +1378,8 @@ export type JobCreateManyBoardInput = {
   lastSessionId?: string | null
   lastError?: string | null
   suspendedFor?: string | null
+  endedBy?: string | null
+  endedFor?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   finishedAt?: Date | string | null
@@ -1325,6 +1401,8 @@ export type JobUpdateWithoutBoardInput = {
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suspendedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -1350,6 +1428,8 @@ export type JobUncheckedUpdateWithoutBoardInput = {
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suspendedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -1375,6 +1455,8 @@ export type JobUncheckedUpdateManyWithoutBoardInput = {
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suspendedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  endedFor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   finishedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -1438,6 +1520,8 @@ export type JobSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = ru
   lastSessionId?: boolean
   lastError?: boolean
   suspendedFor?: boolean
+  endedBy?: boolean
+  endedFor?: boolean
   createdAt?: boolean
   updatedAt?: boolean
   finishedAt?: boolean
@@ -1466,6 +1550,8 @@ export type JobSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extension
   lastSessionId?: boolean
   lastError?: boolean
   suspendedFor?: boolean
+  endedBy?: boolean
+  endedFor?: boolean
   createdAt?: boolean
   updatedAt?: boolean
   finishedAt?: boolean
@@ -1490,6 +1576,8 @@ export type JobSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extension
   lastSessionId?: boolean
   lastError?: boolean
   suspendedFor?: boolean
+  endedBy?: boolean
+  endedFor?: boolean
   createdAt?: boolean
   updatedAt?: boolean
   finishedAt?: boolean
@@ -1514,12 +1602,14 @@ export type JobSelectScalar = {
   lastSessionId?: boolean
   lastError?: boolean
   suspendedFor?: boolean
+  endedBy?: boolean
+  endedFor?: boolean
   createdAt?: boolean
   updatedAt?: boolean
   finishedAt?: boolean
 }
 
-export type JobOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "boardId" | "name" | "brief" | "agent" | "model" | "effort" | "maxTurns" | "timeoutMs" | "maxBudgetUsd" | "isolate" | "maxRetries" | "exports" | "phase" | "lastSessionId" | "lastError" | "suspendedFor" | "createdAt" | "updatedAt" | "finishedAt", ExtArgs["result"]["job"]>
+export type JobOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "boardId" | "name" | "brief" | "agent" | "model" | "effort" | "maxTurns" | "timeoutMs" | "maxBudgetUsd" | "isolate" | "maxRetries" | "exports" | "phase" | "lastSessionId" | "lastError" | "suspendedFor" | "endedBy" | "endedFor" | "createdAt" | "updatedAt" | "finishedAt", ExtArgs["result"]["job"]>
 export type JobInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   board?: boolean | Prisma.BoardDefaultArgs<ExtArgs>
   attempts?: boolean | Prisma.Job$attemptsArgs<ExtArgs>
@@ -1582,6 +1672,17 @@ export type $JobPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
      * Why this Job is suspended, when it is. Not derivable from any runtime.
      */
     suspendedFor: string | null
+    /**
+     * Who ended this Job by hand, and why they said they did — `done` and `cancelled` only.
+     * 
+     * The pair `pausedBy`/`pausedAt` already is on Board, for the same kind of fact: a decision a
+     * person made, which nothing can recompute. `finishedAt` carries the when. It is denormalised
+     * out of the Event deliberately — `kb ls --json` and `kb show` must be able to say who concluded
+     * a Job without joining the whole stream, and an operator who reaches for `kb log` to find out
+     * why a Job is terminal is reaching one level deeper than the question deserves.
+     */
+    endedBy: string | null
+    endedFor: string | null
     createdAt: Date
     updatedAt: Date
     finishedAt: Date | null
@@ -2029,6 +2130,8 @@ export interface JobFieldRefs {
   readonly lastSessionId: Prisma.FieldRef<"Job", 'String'>
   readonly lastError: Prisma.FieldRef<"Job", 'String'>
   readonly suspendedFor: Prisma.FieldRef<"Job", 'String'>
+  readonly endedBy: Prisma.FieldRef<"Job", 'String'>
+  readonly endedFor: Prisma.FieldRef<"Job", 'String'>
   readonly createdAt: Prisma.FieldRef<"Job", 'DateTime'>
   readonly updatedAt: Prisma.FieldRef<"Job", 'DateTime'>
   readonly finishedAt: Prisma.FieldRef<"Job", 'DateTime'>

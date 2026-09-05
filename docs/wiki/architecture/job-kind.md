@@ -157,6 +157,31 @@ should be extracted from two or three working controllers, not guessed from one.
 both stop for a human, and "waiting for an answer, resumable, with a proposal
 pending" is a state no runtime can report and no session can hold.
 
+## The two phases a human writes
+
+`done` and `cancelled` are the only states an operator asks for directly (`kb done`,
+`kb cancel`, `src/kb.ts`). They exist because the machinery cannot conclude every Job
+it starts: a Job whose pull request was reviewed and merged while it sat `pending` on
+a spent budget is finished, and nothing observable says so — the next reconcile would
+spend the whole cap redoing merged work. The only verb that used to stop it was
+`kb rm`, which deletes the Job, its attempts and its events, so the choice was
+between re-running landed work and destroying the record of it.
+
+They are **not** `suspended`. That state is a *wait* — something is expected to happen
+and then the Job goes on — so `kb ls --phase suspended` is an inbox, and a Job
+concluded by hand would sit in it for ever. The reasons even read in opposite tenses:
+`suspendedFor` is what someone must still do, `endedFor` is what already happened.
+
+They are **two** values rather than one `ended` plus a column, because this enum
+already splits its terminal states by what happened (`succeeded`, `failed`), and the
+difference between "the PR was merged" and "we do not want this" is the entire content
+of the operator's decision.
+
+Both are recorded transitions, never silent updates: an Event whose actor is a person
+rather than a `host/pid` holder, carrying the phase it moved from and the reason. Both
+refuse a Job that is currently leased — that is a running worker — with the same rule
+and the same way out as `kb rm`.
+
 ## Ceilings, and where they are checked
 
 Three rules decide whether another Job may start, and they are checked **before a
