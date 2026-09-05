@@ -274,3 +274,4 @@ history.
 ## 2026-09-05 — refreshed architecture/the-loop (machine-level board; Controller row replaces the pid file; Board.repoPath; self-migrating open)
 ## 2026-09-05 — refreshed architecture/job-kind (Board.repoPath decides the checkout; Controller row for leadership)
 ## 2026-09-05 — refreshed concepts/node-floor-and-type-check (floor measured at 22.18.0; the publish transpile and why a published kb cannot be TypeScript)
+## 2026-09-05 — added howto/running-the-daemon (a supervisor around `kb up --foreground`; systemd user unit, launchd agent, linger, logs, and the restart-on-upgrade rule)
