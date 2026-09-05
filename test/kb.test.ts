@@ -103,6 +103,28 @@ test('new carries the spec flags onto the row', async () => {
   assert.equal(row.isolate, false);
 });
 
+test('new records declared exports, repeatably and in one spelling', async () => {
+  const j = json((await kb('new', 'exporter', '--brief', 'b', '--json',
+    '--export', './dist/report.json', '--export', '.claude/skills/sdk-docs/')).out);
+  const row = await db.job.findUniqueOrThrow({ where: { id: j.id } });
+  assert.deepEqual(JSON.parse(row.exports ?? 'null'), ['dist/report.json', '.claude/skills/sdk-docs'],
+    'normalised once, at the door, so nothing downstream compares two spellings of one path');
+});
+
+test('a Job that declares nothing stores nothing — null, not an empty list', async () => {
+  const j = json((await kb('new', 'declares-nothing', '--brief', 'b', '--json')).out);
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: j.id } })).exports, null);
+});
+
+test('new refuses an export that escapes the checkout, and says what to do', async () => {
+  await assert.rejects(() => kb('new', 'x', '--brief', 'b', '--export', '../outside.txt'),
+    /escapes the worktree.*remove the "\.\."/s);
+});
+
+test('new refuses an absolute export — a declaration is not a licence to write anywhere', async () => {
+  await assert.rejects(() => kb('new', 'x', '--brief', 'b', '--export', '/etc/passwd'), /absolute path/);
+});
+
 test('a numeric flag given a non-number says so', async () => {
   await assert.rejects(() => kb('new', 'x', '--brief', 'b', '--max-turns', 'lots'), /wants a number/);
 });

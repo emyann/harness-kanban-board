@@ -139,25 +139,51 @@ function resolveBase(root: string, ref: string): string {
   return ref;
 }
 
-/** Did the worker leave anything behind — changes, untracked files, or commits of its own? */
-export function worktreeHasWork(root: string, wt: Worktree): boolean {
-  const dirty = git(wt.path, ['status', '--porcelain']);
-  if (dirty.status === 0 && dirty.stdout.trim()) return true;
+/** Commits the worker made that its base does not have — the part of a worktree git can lose. */
+export function worktreeIsAhead(root: string, wt: Worktree): boolean {
   const ahead = git(wt.path, ['rev-list', '--count', `${wt.base}..HEAD`]);
   return ahead.status === 0 && Number(ahead.stdout.trim() || 0) > 0;
 }
 
+/** Did the worker leave anything behind — changes, untracked files, or commits of its own? */
+export function worktreeHasWork(root: string, wt: Worktree): boolean {
+  const dirty = git(wt.path, ['status', '--porcelain']);
+  if (dirty.status === 0 && dirty.stdout.trim()) return true;
+  return worktreeIsAhead(root, wt);
+}
+
+export type RemoveOpts = {
+  /**
+   * The Job's declared outputs are already out of the sandbox, so what is left uncommitted in it is
+   * litter (ADR-008, and Bazel's rule: move the known outputs to the execroot, *then* delete the
+   * sandbox). Only the controller sets this, and only after every declared export was copied.
+   *
+   * It deliberately does NOT discard commits. A declaration covers the files it names; a commit
+   * that was never pushed is still the only copy of itself, and no export makes that untrue.
+   */
+  discardUncommitted?: boolean;
+};
+
 /**
  * Remove the checkout when it holds nothing, and say so when it does.
  *
- * Never `--force`. A worktree with work in it is the one thing here worth more than tidiness: if a
- * worker committed and the push failed, that directory is the only copy.
+ * Never `--force` on its own judgement. A worktree with work in it is the one thing here worth more
+ * than tidiness: if a worker committed and the push failed, that directory is the only copy. The
+ * one thing that changes that is a Job that *declared* what it produces and had it copied out —
+ * then the leftovers are litter by definition, and refusing to delete them is how Phase 5 left
+ * 6.1 GB of stranded checkouts.
  */
-export function removeWorktree(root: string, wt: Worktree): { removed: boolean; why: string } {
+export function removeWorktree(root: string, wt: Worktree, opts: RemoveOpts = {}): { removed: boolean; why: string } {
   if (!fs.existsSync(wt.path)) return { removed: true, why: 'already gone' };
-  if (worktreeHasWork(root, wt)) return { removed: false, why: 'it still holds work' };
-  const r = git(root, ['worktree', 'remove', wt.path]);
+  const kept = opts.discardUncommitted
+    ? (worktreeIsAhead(root, wt) ? 'it holds commits that are not on its base' : null)
+    : (worktreeHasWork(root, wt) ? 'it still holds work' : null);
+  if (kept) return { removed: false, why: kept };
+  // `--force` only ever follows the check above: it is how git is told about a decision already
+  // made here, not a way of skipping one.
+  const args = ['worktree', 'remove', ...(opts.discardUncommitted ? ['--force'] : []), wt.path];
+  const r = git(root, args);
   if (r.status !== 0) return { removed: false, why: short(r.stderr) || 'git refused' };
   git(root, ['branch', '-D', wt.branch]);
-  return { removed: true, why: 'clean' };
+  return { removed: true, why: opts.discardUncommitted ? 'its declared outputs are out' : 'clean' };
 }

@@ -47,6 +47,9 @@ enum Outcome {
   stopped     // the operator stopped the daemon mid-run. Resumable, and it does NOT spend a retry:
               // `kb down` is not a failure of the work, and charging one would mean a Job could be
               // exhausted by nothing but being turned off.
+  missing_output // the session completed and a path the Job declared in `exports` was not there.
+                 // ADR-008: a declared output that is not produced fails the attempt, which is what
+                 // stops `succeeded` from meaning only that a session ended.
 }
 
 model Board {
@@ -129,6 +132,22 @@ model Job {
   /// Run in its own git worktree. Enforced at admission, not requested in a prompt.
   isolate      Boolean @default(true)
   maxRetries   Int     @default(2)
+  /// What this Job must produce on disk: a JSON array of paths, relative to the checkout root.
+  ///
+  /// The first spec field that is about the *output* rather than the run (ADR-008). Each path is
+  /// copied out of the worktree into `Board.repoPath` before the checkout is torn down — Bazel's
+  /// rule, where the sandbox is the worktree and the execroot is the board's repository: move the
+  /// known outputs out, then delete the sandbox. Without it a Job whose deliverable is an
+  /// uncommitted file has no correct outcome, because `git push` is the only artifact store hkb
+  /// has and an uncommitted file is not in it.
+  ///
+  /// **A declared export the worker did not produce fails the attempt.** That is what makes the
+  /// declaration worth writing down rather than a copy loop with extra steps.
+  ///
+  /// A string rather than a relation because SQLite has no array type and a table for a list of
+  /// paths nothing joins on would be a table for its own sake. Null and `[]` both mean "nothing on
+  /// disk", which is the honest default for a Job whose output is a pull request.
+  exports      String?
 
   // ---- status: what is happening. Written only by the controller.
   phase         Phase   @default(pending)
@@ -171,6 +190,11 @@ model Attempt {
   branch    String?
   prNumber  Int?
   prUrl     String?
+  /// The declared exports this attempt actually copied out, as a JSON array of paths.
+  ///
+  /// History, like `branch` and `prUrl` beside it: what left the sandbox before it was deleted.
+  /// The worktree is gone by the time anyone reads this, so nothing can recompute it.
+  exported  String?
   /// Reported for the operator's benefit only — the SDK can always recompute it from the session.
   costUsd   Float?
 

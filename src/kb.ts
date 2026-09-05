@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import { openBoard, closeBoard } from './db.ts';
 import { reconcile } from './controller.ts';
 import { fakeRuntime } from './runtime/fake.ts';
+import { normalizeExportPath, parseExports, refuseExportPath } from './exports.ts';
 import * as daemon from './daemon.ts';
 import type { Runtime } from './runtime/index.ts';
 
@@ -37,6 +38,9 @@ const HELP = `kb — run one agent against one brief
        --brief <text> | --brief-file <path> | --brief - (stdin)
        --agent <a>  --model <m>  --effort low|medium|high|xhigh|max
        --max-turns <n>  --max-budget <usd>  --max-retries <n>
+       --export <path>  a path the Job must produce, copied out of the worktree into the
+                        board's repository before the checkout is torn down. Repeatable;
+                        directories recurse. A declared path that is missing fails the attempt.
        --no-isolate     run in the current checkout instead of its own worktree
        --board <slug>   default: default
 
@@ -227,6 +231,9 @@ export async function main(argv: string[]): Promise<number> {
       'no-isolate': { type: 'boolean' },
       brief: { type: 'string' },
       'brief-file': { type: 'string' },
+      // Repeatable: a Job may produce more than one thing, and `--export a --export b` is the
+      // spelling that does not need a separator nobody can put in a filename.
+      export: { type: 'string', multiple: true },
       agent: { type: 'string' },
       model: { type: 'string' },
       effort: { type: 'string' },
@@ -283,12 +290,26 @@ export async function main(argv: string[]): Promise<number> {
       if (effort && !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) {
         throw usage(`--effort must be one of low|medium|high|xhigh|max, got ${effort}`);
       }
+      // Refused here, at the door, rather than when the worktree is torn down half an hour later:
+      // a declared output is a promise about a path inside the checkout, and a path that escapes it
+      // is not a promise this board can keep. Admission control, in the Kubernetes sense — an
+      // illegal request never becomes state.
+      const declared = (Array.isArray(values.export) ? values.export : []).map(String);
+      for (const p of declared) {
+        const why = refuseExportPath(p);
+        if (why) throw usage(`--export ${why}`);
+      }
+      const exports = declared.map(normalizeExportPath);
+
       const job = await db.job.create({
         data: {
           boardId: board.id, name, brief,
           agent: (values.agent as string) ?? undefined,
           model: (values.model as string) ?? null,
           effort: effort ?? null,
+          // Null rather than `[]`: "declares nothing" and "declares an empty list" are the same
+          // fact, and one spelling of it means nothing downstream has to handle two.
+          exports: exports.length ? JSON.stringify(exports) : null,
           isolate: !values['no-isolate'],
           maxTurns: num(values['max-turns'], '--max-turns'),
           maxBudgetUsd: num(values['max-budget'], '--max-budget'),
@@ -298,8 +319,10 @@ export async function main(argv: string[]): Promise<number> {
       await db.event.create({
         data: { kind: 'created', jobId: job.id, boardId: board.id, actor: whoami(), payload: { name } },
       });
-      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug }, () =>
-        console.log(`#${job.id} ${job.name}  [${job.phase}]  on ${slug}`));
+      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports }, () => {
+        console.log(`#${job.id} ${job.name}  [${job.phase}]  on ${slug}`);
+        if (exports.length) console.log(`  must produce: ${exports.join(', ')}`);
+      });
       return 0;
     }
 
@@ -355,6 +378,11 @@ export async function main(argv: string[]): Promise<number> {
         console.log(`  phase    ${job.phase}${job.lease ? `  (leased by ${job.lease.holder} until ${job.lease.expiresAt.toISOString()})` : ''}`);
         console.log(`  spec     agent=${job.agent} model=${job.model ?? 'default'} effort=${job.effort ?? 'default'}`);
         console.log(`           maxTurns=${job.maxTurns} maxBudget=$${job.maxBudgetUsd} maxRetries=${job.maxRetries} isolate=${job.isolate}`);
+        // What the Job must produce, beside how it is run — the one spec line that is about the
+        // output, and the one that decides whether a completed session counts as a success.
+        const declared = parseExports(job.exports);
+        if (declared.paths.length) console.log(`  exports  ${declared.paths.join(', ')}`);
+        for (const why of declared.problems) console.log(`  exports  UNUSABLE — ${why}`);
         if (job.lastError) console.log(`  error    ${job.lastError}`);
         if (job.lastSessionId) console.log(`  resume   ${job.lastSessionId}`);
         console.log(`  brief    ${job.brief.split('\n')[0].slice(0, 88)}${job.brief.length > 88 ? ' …' : ''}`);
@@ -370,6 +398,9 @@ export async function main(argv: string[]): Promise<number> {
           // than being something you go and look for.
           if (a.prUrl) console.log(`           PR #${a.prNumber}  ${a.prUrl}`);
           else if (a.branch) console.log(`           branch ${a.branch} — no pull request found`);
+          // The other reviewable artifact, and the only record of it: the worktree it came out of
+          // no longer exists, so nothing can recompute this line.
+          if (a.exported) console.log(`           exported ${parseExports(a.exported).paths.join(', ')}`);
           if (a.reason) console.log(`           ${a.reason.slice(0, 100)}`);
         }
       });

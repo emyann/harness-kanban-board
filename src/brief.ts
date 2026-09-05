@@ -9,10 +9,26 @@
  * Stated as a protocol rather than a hope. The two rules a worker could plausibly break — pushing
  * to the default branch, and merging its own work — are named explicitly, because "do not" is
  * cheaper here than discovering it afterwards.
+ *
+ * `exports` are the Job's declared outputs (ADR-008). They are named here because the controller
+ * *fails the attempt* when one is missing, and a contract enforced against someone who was never
+ * shown it is a trap rather than a contract. The paths themselves are still checked on disk — this
+ * tells the worker what is expected, it does not ask it to report back.
  */
-export function withProtocol(brief: string, branch: string): string {
+export function withProtocol(brief: string, branch: string, exports: string[] = []): string {
+  const declared = exports.length
+    ? [
+      '',
+      'This job must produce these paths, relative to the root of your checkout:',
+      ...exports.map((p) => `  - \`${p}\``),
+      '',
+      'The board copies them out of this worktree when you are done, so they do not need to be',
+      'committed — but a path that is not there when you finish fails the attempt.',
+    ]
+    : [];
   return [
     brief.trim(),
+    ...declared,
     '',
     '---',
     '',
