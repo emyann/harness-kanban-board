@@ -461,7 +461,16 @@ Every item below was found by running the thing, not by reading it.
 6. **~~The refusal is logged every tick.~~ FIXED by Phase 5's own job #10 (PR #359).** Original: `reconcile` calls `onEvent` unconditionally,
    defeating the daemon's `announce` dedup — measured 4 lines where 1 was intended.
    (Job #10's brief was about exactly this behaviour, one layer up.)
-7. **Worktrees are never reclaimed: 6.1 GB for ten Jobs.** Each carries **614 MB of
+7. **~~Worktrees are never reclaimed: 6.1 GB for ten Jobs.~~ FIXED.** The keep-test now asks
+   whether commits are **unpushed** rather than whether the branch is ahead of its base, and
+   removal happens on a sweep in the daemon's tick (`sweepWorktrees`, every 10 minutes) rather
+   than once at the end of the run. A checkout goes when its tree is clean, nothing on it is
+   unpushed, **and** its branch is gone from the remote — the two halves that proved safety
+   during the Phase 5 cleanup, and the only ones that work here: the ancestry test below is
+   false for every squash-merged branch, which a test now asserts out loud. A run in flight
+   `git worktree lock`s its checkout so the sweep cannot take it, and a lock left by a process
+   that is gone is taken over rather than respected. Everything else stays, and says what to do
+   about it. Original: Each carries **614 MB of
    `node_modules`**, because a worker installs the *target repository's* dependency
    tree to run its tests. Note whose: not hkb's shipped dependencies — bundling hkb for
    distribution would not change this number at all. It reads as Prisma and the SDK

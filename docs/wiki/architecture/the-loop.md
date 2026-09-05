@@ -7,11 +7,13 @@ audience: [dev]
 read_when: "changing the daemon, the reclaim rule, or anything that decides whether a lease may be taken"
 covers:
   - path: src/daemon.ts
-    sha: dd5c89bdaf5b226f214bd3db91a99c308952c368
+    sha: 62cd7ecc08e260b1e16ce8e2850d84e432043775
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: 455fc87adf4f4853fb1ef183b75f3552ccc79e60
+    sha: 61c8a9db2596bc576f19ec2b589581a54b551e2c
+  - path: src/worktree.ts
+    sha: dc607bf5a12b0c4bd8b3779fd28e2a689400afb4
   - path: src/db-url.ts
     sha: 0c4f3e6e1ac4a1253ec6d2397c195ce0bd53d36b
   - path: src/schema.ts
@@ -66,10 +68,45 @@ what is unusual in this file:
 
 ## Why the interval is slow
 
-Only three things are genuinely time-driven, and none has a sub-minute tolerance:
-a lease expiring, a run passing its wall clock, and scheduled work (a kind that
-does not exist yet). The change-driven half — *a Job was filed, run it* — is
-always one `kb run` away, so it does not set the cadence.
+Only four things are genuinely time-driven, and none has a sub-minute tolerance:
+a lease expiring, a run passing its wall clock, scheduled work (a kind that
+does not exist yet), and a worktree becoming safe to reclaim. The change-driven
+half — *a Job was filed, run it* — is always one `kb run` away, so it does not
+set the cadence.
+
+## The sweep: reclaim is a later question
+
+A worker installs the target repository's dependency tree to run its tests, so a
+checkout costs about as much as the repository does — Phase 5 left **6.1 GB** for
+ten Jobs. The end of a run cannot be where that is reclaimed, because it is the
+one moment the work is definitionally freshest: the pull request has just been
+opened. **"Safe to delete" is a state a worktree enters later, when its pull
+request lands**, and nothing tells hkb that happened. Only asking again does,
+which is what makes this the loop's business (`sweepWorktrees`, every 10 minutes,
+after `reconcile` rather than before it).
+
+A checkout is removed when three things are true, and kept — loudly, with what to
+do about it — when any of them is not:
+
+- its tree is clean;
+- nothing on its branch is **unpushed**. Not *ahead of its base*, which is true of
+  every successful Job; the question is whether this work exists **only here**.
+  `git push` writes `refs/remotes/origin/<branch>` locally and the forge deleting
+  the branch does not remove it, so the record survives the merge;
+- its branch is gone from the remote. A remote that cannot be reached has not said
+  anything, and the sweep keeps everything until it can be asked.
+
+**The obvious safety test does not work here.** "Every commit is already on the
+default branch" is false for every merged branch in a repository that
+squash-merges: the squash is a new commit, so the branch's own commits are
+ancestors of nothing and `git cherry` calls them unmerged. A sweep built on
+ancestry would keep every merged checkout for ever — the bug it is meant to fix.
+`test/worktree.test.ts` asserts that failure alongside the rule that replaces it.
+
+The run in flight `git worktree lock`s its checkout, because the controller stopped
+being the only remover the moment a sweep existed and the two are not even in the
+same process. A `kb:` lock whose holder is provably gone is taken over rather than
+respected; a lock set by hand is left alone.
 
 ## A lapsed lease is evidence, not proof
 

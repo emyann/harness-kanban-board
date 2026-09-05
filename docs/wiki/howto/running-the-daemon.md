@@ -192,6 +192,55 @@ live one and the attempt is recorded `crashed` with git's "already used by
 worktree" as its reason (`src/worktree.ts:64-79`). One board per repository until
 that is fixed.
 
+## The tick also reclaims worktrees, and that needs the remote
+
+A worker installs the target repository's dependencies to run its tests, so each
+attempt's checkout costs about what that repository costs — Phase 5 left 6.1 GB
+for ten Jobs. The daemon takes them back: every 10 minutes, after reconciling
+each board, it sweeps `<repoPath>/.kanban/worktrees` (`src/daemon.ts:54`,
+`src/daemon.ts:384-403`). The first tick sweeps, so a restart reclaims
+immediately rather than ten minutes later. Steady-state disk is therefore
+bounded by `maxConcurrent × repo size`, not by `jobs-ever-run × repo size`.
+
+Two kinds of line come out of it, into the same log as everything else:
+
+```
+swept /home/you/src/thing/.kanban/worktrees/kb-12-1 — kb-12-1 is gone from the remote and the checkout was clean
+kept  /home/you/src/thing/.kanban/worktrees/kb-9-1 — it holds 2 commits that exist nowhere else — push them with `git -C … push origin kb-9-1`
+```
+
+A `kept` line is printed **once**, not every ten minutes, the same way a refusal
+is (`src/daemon.ts:401`) — so it reappears only when the reason changes. Each one
+says what to do about it; doing that is what lets the next sweep take the
+directory. Nothing is ever forced: a checkout with unpushed commits or a dirty
+tree stays, and so does one a run is holding. Why those are the rules, and why
+the obvious "already merged into main" test is not one of them, is
+[architecture/the-loop](../architecture/the-loop.md).
+
+⚠️ **Under a supervisor, check the remote is actually reachable.** The sweep's
+proof is that the branch is gone from `origin`, which is one `git ls-remote`
+(`src/worktree.ts:427`). A systemd user unit does not inherit the `SSH_AUTH_SOCK`
+your interactive shell has — with `enable-linger` there is no session to inherit
+one from — so a daemon that works perfectly in a terminal can be unable to read
+the remote at all under the unit. It fails rather than hangs (the sweep runs with
+`GIT_TERMINAL_PROMPT=0` and a 20s timeout), and says so:
+
+```
+kept  …/kb-12-1 — could not ask the remote whether kb-12-1 still exists — `git ls-remote --heads origin` in this repository says why; the checkout stays until it can be asked
+```
+
+Treat that line as an early warning about more than disk: the workers push over
+the same transport, so a daemon that cannot read the remote is a daemon whose
+Jobs cannot open pull requests either. Give the unit credentials that do not
+depend on a login session — an HTTPS remote with a credential helper, or a fixed
+agent socket passed in with `Environment=SSH_AUTH_SOCK=…` — and confirm with:
+
+```bash
+systemd-run --user --pipe --wait git -C /home/you/src/thing ls-remote --heads origin
+```
+
+which runs the same read in the same environment the unit gets.
+
 ## The gotcha: a daemon runs the code it started with
 
 Upgrading `kb` does **not** upgrade the running daemon. It has the old

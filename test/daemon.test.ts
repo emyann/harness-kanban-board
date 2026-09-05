@@ -577,6 +577,75 @@ test('a board created after the daemon started is picked up without a restart', 
     'a controller re-reads the world; only a launcher needs restarting');
 });
 
+// ---------------------------------------------------------------- reclaiming the checkouts
+
+type Rt = Parameters<typeof reconcile>[0]['runtime'];
+
+test('a resumable stop keeps its checkout — the next attempt resumes IN it', async () => {
+  const board = await db.board.create({ data: { slug: `resume${++n}`, repoPath: elsewhere } });
+  const job = await db.job.create({
+    data: { boardId: board.id, name: 'hits its turn cap', brief: 'x', isolate: true, maxRetries: 1 },
+  });
+  const capped: Rt = {
+    name: 'fake',
+    async run(spec) {
+      return {
+        status: 'max_turns', ok: false, sessionId: `fake-${spec.taskId}-${spec.attempt}`, text: '',
+        costUsd: 0, turns: 1, durationMs: 0, stopReason: 'max_turns', denials: 0, error: 'turn cap',
+      };
+    },
+  };
+  await reconcile({ runtime: capped, cwd: REPO, board: board.slug, readPr: false });
+
+  // The worker left nothing behind, so the keep-test alone would have taken this directory — and
+  // the next attempt would then be cut fresh from origin, on a branch reset to base, with the
+  // resumed session convinced it was still in the tree it had been working in.
+  assert.equal(fs.existsSync(path.join(elsewhere, '.kanban', 'worktrees', `kb-${job.id}-1`)), true,
+    'resume is not restart, on disk as well as in the transcript');
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(after.phase, 'pending');
+  assert.ok(after.lastSessionId, 'and there is a session to resume');
+});
+
+test('the tick reclaims a checkout whose branch has landed — a sweep, not a step of the run', async () => {
+  // A repository with a real remote: the sweep's proof is a fact about what the remote still has.
+  const repo = path.join(dir, 'landed');
+  const remote = path.join(dir, 'landed-remote.git');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
+  fs.mkdirSync(repo);
+  const g = (args: string[], cwd = repo) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+  g(['init', '-q', '-b', 'main']);
+  g(['config', 'user.email', 'l@test']);
+  g(['config', 'user.name', 'l']);
+  fs.writeFileSync(path.join(repo, 'README.md'), '# landed\n');
+  g(['add', '-A']);
+  g(['commit', '-qm', 'base']);
+  g(['remote', 'add', 'origin', remote]);
+  g(['push', '-q', '-u', 'origin', 'main']);
+
+  // What an earlier run left: a checkout whose work is pushed and whose pull request has since
+  // been squash-merged and its branch deleted. Nothing tells hkb that happened — only asking does.
+  const { createWorktree } = await import('../src/worktree.ts');
+  const wt = createWorktree(repo, 99, 1);
+  fs.writeFileSync(path.join(wt.path, 'work.txt'), 'the Job did this\n');
+  g(['add', '-A'], wt.path);
+  g(['commit', '-qm', 'the Job'], wt.path);
+  g(['push', '-q', '-u', 'origin', wt.branch], wt.path);
+  execFileSync('git', ['--git-dir', remote, 'update-ref', '-d', `refs/heads/${wt.branch}`]);
+
+  const board = await db.board.create({ data: { slug: `landed${++n}`, repoPath: repo } });
+  const lines: string[] = [];
+  await daemon.loop({
+    runtime: fakeRuntime(), cwd: REPO, board: board.slug, intervalMs: 5,
+    signal: new AbortController().signal, maxTicks: 1, log: (l) => lines.push(l),
+  });
+
+  assert.equal(fs.existsSync(wt.path), false, 'the tick took it back');
+  assert.ok(lines.some((l) => l.includes('swept') && l.includes(wt.branch)), lines.join('\n'));
+  const swept = await db.event.findFirst({ where: { boardId: board.id, kind: 'swept' } });
+  assert.ok(swept, 'and it is on the record, like every other thing the loop does');
+});
+
 test('the Job runs in the repository its BOARD names, not wherever the daemon started', async () => {
   // The reason `repoPath` exists: a machine-level daemon has no meaningful cwd of its own.
   const board = await db.board.create({
