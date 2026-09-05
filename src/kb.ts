@@ -44,6 +44,10 @@ const HELP = `kb — run one agent against one brief
        --all               every board on this machine, with a BOARD column
   kb show <id>             one screen: spec, phase, every attempt
   kb run [<id>]            reconcile once, in the foreground   [--fake]
+  kb retry <id>            re-queue a Job that stopped, resuming its session
+       --max-budget <usd>  required when it stopped on max_budget: the same cap
+                           would stop it in the same place
+       --max-turns <n>  --max-retries <n>
   kb rm <id>               delete a Job and its attempts
   kb stop                  the kill switch: claim nothing on this board  [--board s]
   kb start                 clear it, and show the ceilings
@@ -420,6 +424,78 @@ export async function main(argv: string[]): Promise<number> {
       return 0;
     }
 
+    // ---------------------------------------------------------------- retry
+    // The deliberate re-queue. `nextPhase` retries what a retry could plausibly change and stops
+    // at what it cannot — a Job that spent its whole budget gets the same cap next time, so the
+    // controller fails it rather than making the same wall again. Raising the cap is a change to
+    // the Job's spec, which belongs to whoever filed it: this is where they make it, in one
+    // command, and the raise goes on the event stream so the extra money has a name against it.
+    case 'retry': {
+      const id = num(rest[0], 'kb retry <id>');
+      if (!id) throw usage('kb retry <id> — which Job? `kb ls --phase failed` shows the candidates');
+      const job = await db.job.findUnique({
+        where: { id },
+        include: { lease: true, attempts: { where: { endedAt: { not: null } }, orderBy: { k: 'desc' }, take: 1 } },
+      });
+      if (!job) throw usage(`no Job #${id} — \`kb ls\` shows what is on the board`);
+      if (job.lease) {
+        throw usage(`#${id} is leased by ${job.lease.holder} — it is running now. Wait for it, or let the lease expire.`);
+      }
+      if (job.phase === 'pending') throw usage(`#${id} is already pending — \`kb run ${id}\` works it now`);
+      if (job.phase === 'running') {
+        throw usage(`#${id} says running with no lease — \`kb run\` reclaims it, and re-queueing it by hand would race that`);
+      }
+
+      const budget = num(values['max-budget'], '--max-budget');
+      const turns = num(values['max-turns'], '--max-turns');
+      const retries = num(values['max-retries'], '--max-retries');
+      // The guard. Re-queueing a budget-capped Job under its own cap buys exactly what the
+      // automatic retry used to: the same run, the same stopping point, the same bill.
+      if (job.attempts[0]?.outcome === 'max_budget' && !(budget !== undefined && budget > job.maxBudgetUsd)) {
+        throw usage(
+          `#${id} spent its whole $${job.maxBudgetUsd.toFixed(2)} budget and stopped with work left — running it `
+          + 'again under the same cap stops in the same place, at the same price. Give it a bigger one: '
+          + `\`kb retry ${id} --max-budget ${(job.maxBudgetUsd * 2).toFixed(2)}\`, or file a smaller brief.`,
+        );
+      }
+      if (budget !== undefined && !(budget > 0)) {
+        throw usage(`--max-budget wants dollars above zero, got ${budget} — a Job with no budget cannot run at all`);
+      }
+
+      await db.job.update({
+        where: { id },
+        data: {
+          phase: 'pending',
+          finishedAt: null,
+          lastError: null,
+          ...(budget !== undefined ? { maxBudgetUsd: budget } : {}),
+          ...(turns !== undefined ? { maxTurns: turns } : {}),
+          ...(retries !== undefined ? { maxRetries: retries } : {}),
+        },
+      });
+      // Recorded, because "the cap was raised, by whom, from what" is the one fact that makes a
+      // second $2 attempt legible six weeks later.
+      const raise = budget !== undefined && budget !== job.maxBudgetUsd
+        ? { maxBudgetUsd: { from: job.maxBudgetUsd, to: budget } } : {};
+      await db.event.create({
+        data: {
+          kind: 'requeued', jobId: id, boardId: job.boardId, actor: whoami(),
+          payload: { was: job.phase, ...raise, resume: job.lastSessionId },
+        },
+      });
+      emit(out, {
+        id, phase: 'pending', maxBudgetUsd: budget ?? job.maxBudgetUsd, resume: job.lastSessionId, ...raise,
+      }, () => {
+        const cap = budget !== undefined && budget !== job.maxBudgetUsd
+          ? `  maxBudget $${job.maxBudgetUsd.toFixed(2)} → $${budget.toFixed(2)}` : '';
+        // A resumed Job does not start over, and an operator about to watch it needs to know that
+        // before they wonder why the branch already has commits on it.
+        const from = job.lastSessionId ? `  (resumes ${job.lastSessionId})` : '  (starts cold)';
+        console.log(`#${id} pending again${cap}${from}`);
+      });
+      return 0;
+    }
+
     // ---------------------------------------------------------------- stop / start
     case 'stop':
     case 'start': {
@@ -713,7 +789,7 @@ export async function main(argv: string[]): Promise<number> {
     }
 
     default:
-      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, rm, stop, start, up, down, log, boards`);
+      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, retry, rm, stop, start, up, down, log, boards`);
   }
 }
 

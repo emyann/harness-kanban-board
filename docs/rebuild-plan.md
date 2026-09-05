@@ -452,8 +452,14 @@ Every item below was found by running the thing, not by reading it.
    with no matching pull request now says so out loud rather than silently recording null.
    Original: `src/brief.ts` asks; the machinery trusts. The
    branch is "the only thing that ties a PR to its card" and it breaks in silence.
-4. **A `max_budget` retry re-spends the cap.** Either raise the cap on resume, or stop
-   retrying an outcome the retry cannot change.
+4. **~~A `max_budget` retry re-spends the cap.~~ FIXED** — `nextPhase` no longer retries it,
+   on the reasoning `refused` already used: a retry gets the same cap and stops in the same
+   place, so it is not a transient fault. The Job's `lastError` names the cap it hit and the
+   command that changes it, and the outcome stays *resumable*, so `lastSessionId` survives for
+   that raise to continue rather than start cold. The raise itself is `kb retry <id>
+   --max-budget <usd>`, which refuses to re-queue a budget-capped Job under the same cap and
+   records `from → to` on the event stream — the controller never edits a Job's spec.
+   Original: Either raise the cap on resume, or stop retrying an outcome the retry cannot change.
 5. **~~No verb sets a board's ceilings.~~ FIXED** — `kb boards set <slug> --max-concurrent <n>
    --daily-budget <usd>|none`. Original: `maxConcurrent` and `dailyBudgetUsd` were set
    for this run with a Prisma one-liner. For a system whose gate is "safe to leave

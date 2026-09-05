@@ -93,30 +93,66 @@ export type Decision = {
   phase: 'succeeded' | 'failed' | 'pending';
   outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped';
   resumable: boolean;
+  /**
+   * What to write on the Job's `lastError`, when the reason it stopped is something a *human* has
+   * to change before it could go any differently. Null when the outcome speaks for itself and the
+   * runtime's own error text is the better line.
+   */
+  lastError: string | null;
 };
+
+/**
+ * What a Job that spent its whole cap needs said to it. It is the only outcome this controller
+ * declines to retry *while retries remain*, so it owes the operator the reason and the next move.
+ */
+function budgetAdvice(maxBudgetUsd?: number): string {
+  const cap = maxBudgetUsd === undefined ? 'its whole budget' : `its whole $${maxBudgetUsd.toFixed(2)} budget`;
+  const bigger = maxBudgetUsd === undefined ? '<usd>' : (maxBudgetUsd * 2).toFixed(2);
+  return `spent ${cap} and stopped with work left. Not retried — a retry gets the same cap and `
+    + `stops in the same place. Raise it and re-queue: \`kb retry <id> --max-budget ${bigger}\`, `
+    + 'or file a smaller brief. The session is kept, so that retry resumes rather than starting cold.';
+}
 
 export function nextPhase(
   outcome: WorkerOutcome | null,
   /** How many attempts have spent a retry, including this one. 1-based. */
   attempt: number,
   maxRetries: number,
+  /** The cap this attempt ran under — which is precisely the cap a retry would get. */
+  maxBudgetUsd?: number,
 ): Decision {
   if (outcome?.status === 'completed') {
-    return { phase: 'succeeded', outcome: 'completed', resumable: false };
+    return { phase: 'succeeded', outcome: 'completed', resumable: false, lastError: null };
   }
   const mapped = outcome?.status === 'max_turns' ? 'max_turns'
     : outcome?.status === 'max_budget' ? 'max_budget'
     : outcome?.status === 'timeout' ? 'timed_out'
     : outcome?.status === 'refused' ? 'refused'
     : 'crashed';
-  // A refusal is not a transient fault: trying the same brief again gets the same answer.
+  // Two outcomes are not transient faults, and a retry that cannot change anything is only money
+  // spent to arrive at the same place:
+  //
+  //   `refused`    — the same brief gets the same answer.
+  //   `max_budget` — the same brief gets the same CAP. Resuming is right in principle: the next
+  //                  attempt continues where this one stopped, so it helps whenever the work left
+  //                  is smaller than the cap. Nothing checks that, and when it is false the retry
+  //                  makes the identical wall at full price. Measured at the shipped defaults:
+  //                  job #6 spent $2.05, was retried, spent $2.02 stopping in the same place, and
+  //                  its third attempt was refused by the board's daily ceiling — $4.07 for
+  //                  nothing. Raising the cap is a change to the Job's SPEC, and the spec belongs
+  //                  to whoever filed it, never to this controller; so the Job fails here with the
+  //                  advice above, and `kb retry <id> --max-budget <usd>` is the deliberate raise.
+  //                  It stays `resumable`, which is what keeps `lastSessionId` for that retry.
+  //
   // `maxRetries: 2` means two retries AFTER the first go, so three attempts in total.
-  const worthRetrying = mapped !== 'refused' && attempt <= maxRetries;
+  const transient = mapped !== 'refused' && mapped !== 'max_budget';
+  const worthRetrying = transient && attempt <= maxRetries;
   return {
     phase: worthRetrying ? 'pending' : 'failed',
     outcome: mapped,
     // The three stops that left a session worth continuing. A crash and a refusal did not.
     resumable: mapped === 'max_turns' || mapped === 'max_budget' || mapped === 'timed_out',
+    lastError: mapped === 'max_budget' ? budgetAdvice(maxBudgetUsd) : null,
   };
 }
 
@@ -367,8 +403,8 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // reports `timeout` or `error` depending on where the abort landed, and recording either would
     // be a lie about why it ended AND would spend a retry on it.
     const decision: Decision = deps.signal?.aborted
-      ? { phase: 'pending', outcome: 'stopped', resumable: true }
-      : nextPhase(outcome, charged, job.maxRetries);
+      ? { phase: 'pending', outcome: 'stopped', resumable: true, lastError: null }
+      : nextPhase(outcome, charged, job.maxRetries, job.maxBudgetUsd);
 
     // ---- what landed on the forge. One read, by head branch: the board and the forge are two
     // systems and this is the only thing that joins them.
@@ -411,7 +447,9 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         phase: decision.phase,
         // Keep the session only while continuing it would help; a cold retry must start clean.
         lastSessionId: decision.resumable ? (outcome?.sessionId ?? null) : null,
-        lastError: decision.phase === 'succeeded' ? null : (outcome?.error ?? decision.outcome),
+        // The decision's own line wins where it has one: for a stop only a human can undo, "what
+        // to change" is worth more than whatever the runtime called it.
+        lastError: decision.phase === 'succeeded' ? null : (decision.lastError ?? outcome?.error ?? decision.outcome),
         finishedAt: decision.phase === 'pending' ? null : now(),
       },
     });
