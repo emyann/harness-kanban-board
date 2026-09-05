@@ -1,0 +1,141 @@
+// The core: one kind, and the three tables it needs.
+//
+// The kind is a **Job** — one agent, one brief, run to completion, with a retry budget. It is the
+// hkb equivalent of a Kubernetes Job, and the mapping is close enough to be worth stating in the
+// schema itself, because it is what keeps the next kind from being invented twice:
+//
+//   Job       a Kubernetes Job     what should happen, and how many times we may try
+//   Attempt   a Pod                one execution of it — this is the thing that dies
+//   Lease     a Lease              who holds it right now, and until when
+//   Board     a Namespace          a name to group jobs under
+//   Event     the event stream     what happened, in order
+//
+// The DAG is deliberately NOT here. A dependency graph is a *second* kind whose controller
+// creates Jobs, the way a CronJob creates Jobs — so `Link`, and the todo/ready/blocked vocabulary
+// that only a graph needs, come back with it rather than sitting in a core that cannot use them.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  runtime             = "nodejs"
+  moduleFormat        = "esm"
+  importFileExtension = "ts"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+/// Where a Job is in its lifecycle. Observed state, never asked for directly.
+enum Phase {
+  pending    // wants to run, nothing holds it
+  running    // a lease is held and an attempt is live
+  succeeded  // terminal
+  failed     // terminal: out of retries
+  suspended  // waiting on a human — the one state no runtime can report
+}
+
+/// How one attempt ended. The three resumable ones are why this is not a boolean.
+enum Outcome {
+  completed
+  max_turns   // resumable: it did work and left a session
+  max_budget  // resumable: same
+  refused
+  crashed
+  lost        // the lease expired with nobody reporting — the attempt was never heard from again
+}
+
+model Board {
+  id    Int    @id @default(autoincrement())
+  slug  String @unique
+  jobs  Job[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// The primitive kind: run one agent against one brief until it is done.
+model Job {
+  id      Int    @id @default(autoincrement())
+  boardId Int
+  board   Board  @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  // ---- spec: what should happen. Set by whoever created the Job; never written by the controller.
+  name         String
+  brief        String
+  /// Which agent definition to run. The image name — see `.claude/agents/<agent>.md`.
+  agent        String  @default("worker")
+  model        String?
+  effort       String?
+  maxTurns     Int     @default(20)
+  maxBudgetUsd Float   @default(1)
+  /// Run in its own git worktree. Enforced at admission, not requested in a prompt.
+  isolate      Boolean @default(true)
+  maxRetries   Int     @default(2)
+
+  // ---- status: what is happening. Written only by the controller.
+  phase         Phase   @default(pending)
+  /// The session to resume, when the last attempt left one. The one SDK fact worth a column.
+  lastSessionId String?
+  lastError     String?
+  /// Why this Job is suspended, when it is. Not derivable from any runtime.
+  suspendedFor  String?
+
+  attempts Attempt[]
+  lease    Lease?
+  events   Event[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  finishedAt  DateTime?
+
+  @@index([boardId, phase])
+  @@index([phase])
+}
+
+/// One execution of a Job. The Pod: it is what actually dies.
+model Attempt {
+  jobId Int
+  k     Int
+  job   Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  host      String?
+  runtime   String?
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+  outcome   Outcome?
+  /// The pointer. The transcript, the token counts and the turn count all hang off it in the SDK.
+  sessionId String?
+  summary   String?
+  reason    String?
+  /// Reported for the operator's benefit only — the SDK can always recompute it from the session.
+  costUsd   Float?
+
+  @@id([jobId, k])
+  @@index([endedAt])
+}
+
+/// Who holds a Job right now. The compare-and-swap is `@@id`: a second holder's insert fails,
+/// and that failure is the answer. `expiresAt` is what makes a dead holder reclaimable.
+model Lease {
+  jobId     Int      @id
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  holder    String
+  token     String
+  acquiredAt DateTime @default(now())
+  renewedAt  DateTime @default(now())
+  expiresAt  DateTime
+}
+
+/// What happened, in order. With no git ref, this is the history.
+model Event {
+  id      Int      @id @default(autoincrement())
+  at      DateTime @default(now())
+  kind    String
+  jobId   Int?
+  job     Job?     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  actor   String?
+  payload Json?
+
+  @@index([jobId, id])
+}
