@@ -31,8 +31,19 @@ import type { HookCallbackMatcher, HookInput, HookJSONOutput } from '@anthropic-
  */
 
 export type AdmissionPolicy = {
-  /** Force `isolation: "worktree"` onto every Agent spawn. */
-  forceIsolation?: boolean;
+  /**
+   * What happens to `isolation` on an Agent spawn. It has to follow the PARENT's isolation,
+   * because a subagent worktree is only worth anything if there is a parent worktree to bring it
+   * back to:
+   *
+   *   - `'force'` (the default, and what an isolated workload wants): `isolation: "worktree"` is
+   *     injected onto every spawn, so a parent that forgets to ask for it still cannot skip it.
+   *   - `'forbid'`: the workload is running in the operator's own checkout — it has no worktree,
+   *     so a spawn that asks for one would do its work in a throwaway checkout that nothing reads
+   *     and nothing merges. The spawn is refused rather than quietly sent there. Spawns that ask
+   *     for nothing are left alone: they inherit the parent's cwd, which is where the work belongs.
+   */
+  subagentIsolation?: 'force' | 'forbid';
   /**
    * Called for every Agent spawn. Return a reason to refuse it, or null to let it through.
    * This is where a graph kind puts its dependency rule: ordering stops being something the
@@ -93,7 +104,17 @@ export function admissionCallback(policy: AdmissionPolicy = {}) {
       return deny(refusal);
     }
 
-    if (policy.forceIsolation !== false && toolInput.isolation !== 'worktree') {
+    if ((policy.subagentIsolation ?? 'force') === 'forbid') {
+      if (toolInput.isolation === 'worktree') {
+        policy.onDecision?.('deny Agent — isolation requested by a workload that has none');
+        return deny(
+          'This workload runs in the operator\'s own checkout, so a subagent worktree would leave its '
+          + 'work in a throwaway checkout nobody reads. Spawn it again without `isolation` — it will '
+          + 'run where this session is running. If the work needs a branch of its own, the Job has to '
+          + 'ask for one: file it with `kb new` and without `--no-isolate`.',
+        );
+      }
+    } else if (toolInput.isolation !== 'worktree') {
       policy.onDecision?.(`mutate Agent — isolation injected (was ${JSON.stringify(toolInput.isolation ?? null)})`);
       return mutate({ ...toolInput, isolation: 'worktree' });
     }

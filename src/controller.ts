@@ -280,8 +280,16 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     deps.onEvent?.(`claim   #${job.id} k=${k} ${job.name}`);
 
     // ---- isolate. The SDK has no isolation option for a top-level query, so the checkout is
-    // ours to make. `isolate: false` is the escape hatch for a read-only job and is not the
-    // default: a worker that edits the operator's tree is the failure this exists to prevent.
+    // ours to make.
+    //
+    // `isolate: false` is not a read-only escape hatch, and calling it one was wrong: a Job whose
+    // deliverable IS an uncommitted change in the operator's working tree is the case it exists
+    // for, and the code has always let such a Job write. What it gives up is everything a branch
+    // buys — there is no diff to read, no branch to open a pull request from, nothing to revert
+    // when the answer is no, and no safety at `maxConcurrent > 1`, where two un-isolated attempts
+    // edit the same files at the same time with no lock between them. Isolated is the default
+    // because those are the properties a reviewer needs, not because writing is forbidden without
+    // them. It also decides what this Job's subagents may do — see `isolated` on the spec below.
     let wt: Worktree | null = null;
     if (job.isolate) {
       try {
@@ -343,6 +351,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         taskId: job.id,
         attempt: k,
         cwd: wt ? wt.path : cwd,
+        // Derived from the checkout we actually made, not from `job.isolate`, so it cannot
+        // disagree with `cwd` above. The runtime turns it into the subagent isolation policy: a
+        // Job running in the operator's tree has no worktree to bring a subagent's work back to.
+        isolated: wt !== null,
         prompt: wt ? withProtocol(job.brief, wt.branch) : job.brief,
         model: job.model ?? undefined,
         effort: (job.effort as 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined) ?? undefined,

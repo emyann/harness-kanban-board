@@ -277,3 +277,4 @@ history.
 ## 2026-09-05 — added howto/running-the-daemon (a supervisor around `kb up --foreground`; systemd user unit, launchd agent, linger, logs, and the restart-on-upgrade rule)
 ## 2026-09-05 — refreshed howto/running-the-daemon (added the HKB_DATABASE_URL worktree-collision note; one FINDINGS line for the collision itself)
 ## 2026-09-05 — added decisions/adr-008-declared-outputs (a Job declares its outputs; the board gets them out of the sandbox)
+## 2026-09-05 — refreshed concepts/admission-control + architecture/job-kind + GLOSSARY (the subagent isolation policy follows the parent's own isolation; `isolate: false` is not a read-only escape hatch)
