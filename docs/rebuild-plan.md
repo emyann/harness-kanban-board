@@ -704,10 +704,17 @@ loop supervising long-lived sessions are not the same loop.
 
 Named so it is not mistaken for forgotten:
 
-- **`package-lock.json` is gitignored** with a comment saying TypeScript is the
-  only dependency. Direct deps are pinned exactly; transitives are not. Fixing it
-  needs a CI change (`package-manager-cache: false` currently requires the lockfile
-  to be absent).
+- ~~**`package-lock.json` is gitignored.**~~ **PAID, 2026-09-05.** The lock file is
+  committed and CI installs with `npm ci`; **276 packages** are pinned where three
+  direct dependencies were. The reason recorded here for not paying it was simply
+  wrong — `package-manager-cache: false` does not *require* the lock file to be
+  absent, it was set *because* it was absent, and the flag only disables caching.
+  ADR-007's consequences list carries the same misreading ("fixing it needs a CI
+  change too"); it is an accepted record, so it stands as history rather than being
+  edited. What actually changed is the premise: the comment claimed TypeScript was
+  the only dependency, which was true under the zero-dependency rule and became
+  false with ADR-007. A published, provenance-signed package resolving 144
+  transitive packages fresh on every release is a different proposition.
 - **19 wiki pages are stale.** They describe the pre-ADR-007 system, which still
   runs. Refresh them when the migration moves that code, or retire them with it.
 - **`engines: >=22.13`** while the sources are `.ts` run natively. CI's node 22 job
