@@ -261,9 +261,9 @@ The original reasoning is kept below because two of its rows were wrong in instr
 
 | Wanted | What is actually true |
 |---|---|
-| A wall-clock timeout | `interrupt()` then abort. `AbortController` alone kills before a result arrives, so a stalled run reports `costUsd: 0` and contributes nothing to the budget ceiling |
+| A wall-clock timeout | **Done.** `interrupt()` then abort after a grace window. Measured: a 20s clock returned `$0.085` over 12 turns with a surviving session, where an abort had returned `$0` |
 | Images from outside the repo | **No materialising needed.** A worker under `dontAsk` read an absolute path outside its cwd and got an image block, zero denials |
-| Multi-turn continuation | `resume` works, but is **strained when isolated**: attempt `k+1` cuts a *new* worktree, so a resumed session wakes on a different branch with none of its own commits |
+| Multi-turn continuation | **Done.** A resumed attempt continues in the checkout the previous one left, on the branch its PR is already on. A first attempt that did nothing leaves nothing to resume into, and a fresh worktree is then equivalent |
 | Steering a live run | Delivery already works in single mode (a `Stop` hook's `decision:'block'` made a worker rewrite its output). Only *authority* needs streaming |
 
 ### The original reasoning, superseded

@@ -265,3 +265,5 @@ history.
 ## 2026-09-05 — refreshed architecture/job-kind (Phase 3: the three ceilings, why they are pre-claim, and the gate/CAS split)
 ## 2026-09-05 — refreshed architecture/runtime-layer (Phase 3: the wall clock is an AbortController, and a timeout is resumable)
 ## 2026-09-05 — refreshed concepts/admission-control (claude.ts gained the wall clock; no claim on this page touches it — re-verified, no edit)
+## 2026-09-05 — refreshed architecture/runtime-layer (the wall clock interrupts before aborting, so a timed-out run reports real spend)
+## 2026-09-05 — refreshed architecture/job-kind (a resumed attempt continues in the checkout the previous one left)

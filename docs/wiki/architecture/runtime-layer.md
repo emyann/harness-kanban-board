@@ -9,10 +9,10 @@ covers:
   - path: src/runtime/index.ts
     sha: 7bfb2d64a13533a6ca760c7c2ee8e8fbb92a22dd
   - path: src/runtime/claude.ts
-    sha: f5942c4fd5803c592b70338580251b4a9ddfbd11
+    sha: ad92cae8665801d7e23d65682a03199a8dccc22b
   - path: src/runtime/fake.ts
     sha: 2812e6a707094da8bebbcb8b32388922e6d2aae0
-generated_at_commit: c6e6f2e
+generated_at_commit: 51fcf3d
 last_refreshed: 2026-09-05
 related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, concepts/worker-identity]
 ---
@@ -94,11 +94,22 @@ make the suite cost money and stop being deterministic.
 
 ## Known gaps
 
-- Cancellation is an `AbortController`, not `interrupt()`. A `timeoutMs` on the spec
-  aborts the run and reports `timeout`, which the controller maps to a **resumable**
-  `timed_out` — the clock ran out, not the work, so the session is worth continuing.
-  `interrupt()` would be gentler but needs streaming input, and that is a structural
-  change with its own decision rather than a driver setting.
+- Cancellation is **interrupt, then abort**. Aborting alone killed the transport before
+  any result arrived, so `total_cost_usd` was never reported and a stalled run
+  contributed nothing to the board's spend ceiling — a hole in the guard that exists
+  for exactly that case. An interrupt ends the turn properly: measured, a 20s clock on
+  a long read produced `status: timeout` with **$0.085 over 12 turns** and a surviving
+  session id, where an abort had produced `$0`.
+
+  `interrupt()` is attempted, never depended on. The SDK's own comment says control
+  requests are "only supported when streaming input/output is used", but it was
+  measured working on a string prompt — stdin closes only at the first result, so the
+  control channel stays writable. The abort still lands after a grace window, so an SDK
+  that stops honouring this degrades to the old behaviour rather than to a hang.
+
+  `statusOf` reads `terminal_reason` **first**: an interrupted turn can return
+  `subtype: 'success'`, which would otherwise be recorded as `completed` — the worst
+  failure available on a board whose whole claim is that `succeeded` means something.
 - **Single-message input is an open, structural decision**, not a driver setting.
   A Job is batch — it terminates, which is what lets a lease replace a heartbeat and
   what makes the phase model mean anything. A streaming session stays up and takes

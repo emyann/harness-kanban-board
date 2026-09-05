@@ -20,7 +20,7 @@ fs.writeFileSync(path.join(repo, 'README.md'), '# base\n');
 git(['add', '-A']);
 git(['commit', '-qm', 'base']);
 
-const { createWorktree, removeWorktree, worktreeHasWork, branchFor, baseRef } =
+const { createWorktree, existingWorktree, removeWorktree, worktreeHasWork, branchFor, baseRef } =
   await import('../src/worktree.ts');
 
 test.after(() => fs.rmSync(repo, { recursive: true, force: true }));
@@ -88,6 +88,24 @@ test('the worker never sees the board: a gitignored file does not cross into a w
   const wt = createWorktree(repo, 6, 1);
   assert.equal(fs.existsSync(path.join(wt.path, '.kanban', 'board.db')), false,
     'the controller owns every store write — a worktree copy would diverge');
+});
+
+test('a resumed attempt finds the checkout the previous one left', () => {
+  const first = createWorktree(repo, 20, 1);
+  fs.writeFileSync(path.join(first.path, 'in-progress.txt'), 'half done');
+
+  const found = existingWorktree(repo, 20, 1);
+  assert.ok(found, 'attempt 2 can find attempt 1s checkout');
+  assert.equal(found.path, first.path);
+  assert.equal(found.branch, 'kb-20-1', 'and it is still on attempt 1s branch, where the PR is');
+  assert.equal(fs.readFileSync(path.join(found.path, 'in-progress.txt'), 'utf8'), 'half done',
+    'resume is not restart — the work is still there');
+});
+
+test('there is nothing to resume into when the previous checkout was clean and removed', () => {
+  const wt = createWorktree(repo, 21, 1);
+  removeWorktree(repo, wt);
+  assert.equal(existingWorktree(repo, 21, 1), null, 'so a fresh one is cut instead');
 });
 
 test('uncommitted operator work is invisible to a worker', () => {
