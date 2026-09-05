@@ -499,8 +499,56 @@ test('kb boards lists every board on the machine with its repository', async () 
   assert.equal(typeof moved.spent24h, 'number');
 });
 
+// ---------------------------------------------------------------- the ceilings, without SQL
+
+test('kb boards set changes the ceilings, and none removes one', async () => {
+  // Phase 5 set these with a Prisma one-liner. For a system whose exit criterion is "safe to
+  // leave alone", the safety limits being reachable only through SQL is not a small gap.
+  const r = scratchRepo('ceilings');
+  await kb('boards', 'add', 'ceilings', '--repo', r);
+  const set = json((await kb('boards', 'set', 'ceilings', '--max-concurrent', '3', '--daily-budget', '40', '--json')).out);
+  assert.equal(set.maxConcurrent, 3);
+  assert.equal(set.dailyBudgetUsd, 40);
+
+  const off = json((await kb('boards', 'set', 'ceilings', '--daily-budget', 'none', '--json')).out);
+  assert.equal(off.dailyBudgetUsd, null, 'a board with no ceiling is a real configuration, not an unset one');
+  assert.equal(off.maxConcurrent, 3, 'and setting one ceiling does not clear the other');
+});
+
+test('kb boards set refuses a nonsense ceiling rather than storing it', async () => {
+  const r = scratchRepo('bad-ceilings');
+  await kb('boards', 'add', 'bad-ceilings', '--repo', r);
+  for (const [flag, value, why] of [
+    ['--max-concurrent', '-1', /whole number of slots/],
+    ['--max-concurrent', '1.5', /whole number of slots/],
+    ['--daily-budget', '-5', /dollars, 0 or more/],
+  ] as [string, string, RegExp][]) {
+    await assert.rejects(
+      () => main(['boards', 'set', 'bad-ceilings', flag, value]),
+      (e: Error & { exitCode?: number }) => { assert.equal(e.exitCode, 2); assert.match(e.message, why); return true; },
+      `${flag} ${value} should be refused`,
+    );
+  }
+  const b = await db.board.findUniqueOrThrow({ where: { slug: 'bad-ceilings' } });
+  assert.equal(b.maxConcurrent, 1, 'and nothing was written');
+});
+
+test('kb boards set with nothing to set says so, instead of a silent no-op', async () => {
+  const r = scratchRepo('empty-set');
+  await kb('boards', 'add', 'empty-set', '--repo', r);
+  await assert.rejects(() => main(['boards', 'set', 'empty-set']), /needs something to set/);
+});
+
+test('maxConcurrent 0 is allowed — it drains a board without stopping it', async () => {
+  const r = scratchRepo('draining');
+  await kb('boards', 'add', 'draining', '--repo', r);
+  const set = json((await kb('boards', 'set', 'draining', '--max-concurrent', '0', '--json')).out);
+  assert.equal(set.maxConcurrent, 0);
+});
+
 test('kb boards rejects a subcommand it does not have, rather than listing anyway', async () => {
   await assert.rejects(() => main(['boards', 'remove', 'x']), /no subcommand "remove"/);
+  await assert.rejects(() => main(['boards', 'remove', 'x']), /boards set/, 'and lists the ones it does');
 });
 
 // ---------------------------------------------------------------- ls --all

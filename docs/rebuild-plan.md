@@ -437,19 +437,28 @@ remaining is smaller than the cap; nothing checks that.
 
 Every item below was found by running the thing, not by reading it.
 
-1. **Branch names collide across boards.** `kb-<jobId>-<k>` is unique per *database*,
+1. **~~Branch names collide across boards.~~ FIXED.** `freeBranch` checks the remote before
+   using a name and steps aside when it is taken by unrelated history; the worktree directory
+   stays derivable so resume still finds it, and `existingWorktree` reads the branch off the
+   checkout rather than deriving one the attempt could not have.
+   Original: `kb-<jobId>-<k>` is unique per *database*,
    and job ids restart at 1 on a new board — so a fresh board collides with every
    `kb-N-K` left on the remote. Guaranteed, not a corner case. Root cause of #4.
-2. **`prForBranch` accepts a closed PR.** It should prefer an open one, and never
+2. **~~`prForBranch` accepts a closed PR.~~ FIXED.** The lookup is now fenced on the attempt's
+   start: a pull request created before the attempt began cannot be its output. The selection is
+   a pure `pickPr`, tested without a network. Original: It should prefer an open one, and never
    record a PR that predates the attempt.
-3. **Nothing verifies the PR's head.** `src/brief.ts` asks; the machinery trusts. The
+3. **~~Nothing verifies the PR's head.~~ FIXED.** `pickPr` asserts `headRefName`, and a branch
+   with no matching pull request now says so out loud rather than silently recording null.
+   Original: `src/brief.ts` asks; the machinery trusts. The
    branch is "the only thing that ties a PR to its card" and it breaks in silence.
 4. **A `max_budget` retry re-spends the cap.** Either raise the cap on resume, or stop
    retrying an outcome the retry cannot change.
-5. **No verb sets a board's ceilings.** `maxConcurrent` and `dailyBudgetUsd` were set
+5. **~~No verb sets a board's ceilings.~~ FIXED** — `kb boards set <slug> --max-concurrent <n>
+   --daily-budget <usd>|none`. Original: `maxConcurrent` and `dailyBudgetUsd` were set
    for this run with a Prisma one-liner. For a system whose gate is "safe to leave
    alone", the safety limits being SQL-only is a real gap.
-6. **The refusal is logged every tick.** `reconcile` calls `onEvent` unconditionally,
+6. **~~The refusal is logged every tick.~~ FIXED by Phase 5's own job #10 (PR #359).** Original: `reconcile` calls `onEvent` unconditionally,
    defeating the daemon's `announce` dedup — measured 4 lines where 1 was intended.
    (Job #10's brief was about exactly this behaviour, one layer up.)
 7. **Worktrees are never reclaimed: 6.1 GB for ten Jobs.** Each carries **614 MB of

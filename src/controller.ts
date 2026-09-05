@@ -271,7 +271,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     }
 
     await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
-    await db.attempt.create({ data: { jobId: job.id, k, host, runtime: deps.runtime.name } });
+    // Remembered, because it is the fence the forge read uses: a pull request that existed before
+    // this attempt began is not this attempt's output, however its branch is named.
+    const claimedAt = now();
+    await db.attempt.create({ data: { jobId: job.id, k, host, runtime: deps.runtime.name, startedAt: claimedAt } });
     await db.event.create({ data: { kind: 'claimed', jobId: job.id, boardId: job.boardId, actor: host, payload: { k } } });
     report.claimed.push(job.id);
     deps.onEvent?.(`claim   #${job.id} k=${k} ${job.name}`);
@@ -369,8 +372,11 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     // ---- what landed on the forge. One read, by head branch: the board and the forge are two
     // systems and this is the only thing that joins them.
-    const pr = wt && deps.readPr !== false ? prForBranch(cwd, wt.branch) : null;
+    const pr = wt && deps.readPr !== false ? prForBranch(cwd, wt.branch, claimedAt) : null;
     if (pr) deps.onEvent?.(`  ${pr.isDraft ? 'draft ' : ''}PR #${pr.number} ${pr.url}`);
+    // Said out loud. A run that committed and pushed but opened no pull request has produced
+    // something a human still has to find, and silence here is what let job #4 look finished.
+    else if (wt && deps.readPr !== false) deps.onEvent?.(`  no pull request on ${wt.branch}`);
 
     await db.attempt.update({
       where: { jobId_k: { jobId: job.id, k } },
