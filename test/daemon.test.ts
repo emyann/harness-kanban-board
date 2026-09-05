@@ -370,6 +370,43 @@ test('status does not cry stale for a daemon running this build', async () => {
   assert.equal(s.behind, null);
 });
 
+// ---------------------------------------------------------------- ceilings
+
+test('status reports the ceilings and only the spend inside the rolling window', async () => {
+  const board = await db.board.create({
+    data: { slug: `d${++n}`, maxConcurrent: 3, dailyBudgetUsd: 10 },
+  });
+  const job = await mkJob(board.id);
+  const now = Date.now();
+  await db.attempt.create({
+    data: { jobId: job.id, k: 1, costUsd: 0.25, startedAt: new Date(now - 60_000) },
+  });
+  // Outside the window `gateClaim` charges against, so it must not count here either: a status
+  // that explained a refusal with a number the refusal never saw would be worse than no status.
+  await db.attempt.create({
+    data: { jobId: job.id, k: 2, costUsd: 9.5, startedAt: new Date(now - 25 * 60 * 60_000) },
+  });
+
+  const [s] = await daemon.status(board.slug, now);
+  assert.equal(s.maxConcurrent, 3);
+  assert.equal(s.dailyBudgetUsd, 10);
+  assert.equal(s.spent24h, 0.25, 'the rolled-off attempt is not held against the board');
+  assert.equal(s.stopped, false);
+});
+
+test('a stopped board says so even while its daemon is up', async () => {
+  const board = await freshBoard();
+  const at = new Date('2026-09-05T10:00:00Z');
+  await db.board.update({ where: { id: board.id }, data: { pausedAt: at, pausedBy: 'yann@42' } });
+  await daemon.acquireBoard(db, board.id, holderId('daemon', process.pid, HERE), 1000, 'v1', () => new Date());
+
+  const [s] = await daemon.status(board.slug);
+  assert.equal(s.running, true, 'a live controller, so the daemon line alone reads as "fine"');
+  assert.equal(s.stopped, true, 'and it will claim nothing — the answer to "why is nothing running"');
+  assert.deepEqual(s.stoppedAt, at);
+  assert.equal(s.stoppedBy, 'yann@42', 'because the next question is who stopped it');
+});
+
 test('releasing gives up every board this daemon led, and only those', async () => {
   const a = await freshBoard();
   const b = await freshBoard();

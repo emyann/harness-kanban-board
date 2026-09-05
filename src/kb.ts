@@ -48,7 +48,8 @@ const HELP = `kb — run one agent against one brief
   kb start                 clear it, and show the ceilings
 
   kb up                    reconcile every board on a timer, detached  [--interval <s>]
-       --status            which boards are served, by what, since when
+       --status            which boards are served, by what, since when — and what
+                           each may still spend and claim
        --foreground        run the loop here instead of detaching (what a supervisor runs)
   kb down                  stop it, cleanly                    [--timeout <s>]
   kb log [<id>]            what happened, in order             [-n <count>]
@@ -371,10 +372,21 @@ export async function main(argv: string[]): Promise<number> {
               ? `up    ${r.holder}  ${Math.round((r.uptimeMs ?? 0) / 60_000)} min, every ${Math.round((r.intervalMs ?? 0) / 1000)}s`
               : r.stale ? `down  (a stale controller row from ${r.holder} was left behind)` : 'down';
             console.log(`${r.slug.padEnd(w)}  ${who}`);
-            if (r.repoPath) console.log(`${' '.repeat(w)}  repo    ${r.repoPath}`);
+            const pad = ' '.repeat(w);
+            // First, because it is the answer to "why is nothing running" more often than any
+            // ceiling is, and a stopped board with a healthy daemon reads as fine without it.
+            if (r.stopped) {
+              console.log(`${pad}  STOPPED ${r.stoppedBy ? `by ${r.stoppedBy}, ` : ''}`
+                + `since ${r.stoppedAt!.toISOString()} — \`kb start --board ${r.slug}\` to resume`);
+            }
+            const ceiling = r.dailyBudgetUsd === null
+              ? `$${r.spent24h.toFixed(2)} spent in 24h, no ceiling`
+              : `$${r.spent24h.toFixed(2)} of $${r.dailyBudgetUsd.toFixed(2)} spent in 24h`;
+            console.log(`${pad}  limits  ${r.maxConcurrent} concurrent, ${ceiling}`);
+            if (r.repoPath) console.log(`${pad}  repo    ${r.repoPath}`);
             // A daemon runs the code it started with. Saying so beats discovering it.
             if (r.behind) {
-              console.log(`${' '.repeat(w)}  BEHIND  started from ${r.version}; the checkout is now ${r.behind}`
+              console.log(`${pad}  BEHIND  started from ${r.version}; the checkout is now ${r.behind}`
                 + ' — `kb down && kb up` to pick it up');
             }
           }
