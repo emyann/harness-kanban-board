@@ -226,7 +226,17 @@ test('reclaim does not steal a lease renewed between the read and the delete', a
   assert.equal(attempt.outcome, null, 'and its live attempt was not marked lost');
 });
 
+/** What is in the real repository's worktree directory, so a test can prove it added nothing. */
+const worktreesIn = (root: string): string[] => {
+  try {
+    return fs.readdirSync(path.join(root, '.kanban', 'worktrees')).sort();
+  } catch {
+    return [];
+  }
+};
+
 test('a resumable stop keeps the session, and the retry runs in the same checkout', async () => {
+  const worktreesBefore = worktreesIn(REPO);
   const b = await freshBoard();
   const job = await b.job('resumes', { isolate: true, maxRetries: 2 });
   const dirs: string[] = [];
@@ -268,7 +278,12 @@ test('a resumable stop keeps the session, and the retry runs in the same checkou
   // repository when `test.after` removes the whole temp directory.
   const { existingWorktree } = await import('../src/worktree.ts');
   assert.ok(existingWorktree(SCRATCH, job.id, 1), 'and the checkout it resumed into is still there');
-  assert.equal(existingWorktree(REPO, job.id, 1), null, 'and none of it landed in the repo under test');
+
+  // Compared as a SET, not by name. This used to assert `existingWorktree(REPO, job.id, 1)` was
+  // null — but `job.id` comes from a scratch database and the path is in the real repository, and
+  // those two numbering schemes are independent. A real `kb-13-1` worktree from an actual Job made
+  // a passing test fail for a reason that had nothing to do with it.
+  assert.deepEqual(worktreesIn(REPO), worktreesBefore, 'and this test added nothing to the repo under test');
 });
 
 // ---------------------------------------------------------------- G5: a killed process
