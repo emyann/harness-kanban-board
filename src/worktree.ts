@@ -40,6 +40,35 @@ export type Worktree = {
 export const branchFor = (jobId: number, k: number) => `kb-${jobId}-${k}`;
 
 /**
+ * A branch name this attempt can actually push to.
+ *
+ * `Job.id` is an autoincrement per *database*, not per remote, so `kb-4-1` is not a name this
+ * repository owns — it is a name the next fresh `board.db` will also produce. A remote that has
+ * ever run hkb already has some, and pushing onto one with unrelated history is rejected as
+ * non-fast-forward. A worker told never to force-push then has no move, which is exactly what
+ * happened to Phase 5's job #4: it pushed under a name of its own and the board recorded a
+ * different, closed pull request as its output.
+ *
+ * So the name is checked before it is used. A remote branch whose tip is an ancestor of our base
+ * is ours to continue — a resumed attempt, or one already merged. Anything else is somebody
+ * else's history, and we take the next free suffix rather than fight it.
+ */
+export function freeBranch(root: string, jobId: number, k: number): string {
+  const wanted = branchFor(jobId, k);
+  for (let n = 1; n < 50; n++) {
+    const name = n === 1 ? wanted : `${wanted}-${n}`;
+    const ls = git(root, ['ls-remote', '--heads', 'origin', name]);
+    // No remote, or the call failed: nothing can be proved, and the deterministic name is right.
+    if (ls.status !== 0) return name;
+    if (!ls.stdout.trim()) return name;
+    const sha = ls.stdout.trim().split(/\s+/)[0];
+    // Ours to continue: already contained in what we are branching from.
+    if (git(root, ['merge-base', '--is-ancestor', sha, 'HEAD']).status === 0) return name;
+  }
+  return wanted;
+}
+
+/**
  * What a new branch is cut from.
  *
  * `origin/<default>` when there is one, so a worker starts from what the remote agrees on rather
@@ -60,8 +89,10 @@ export function baseRef(root: string): string {
  * retry that resumes a session should land in the tree that session was working in.
  */
 export function createWorktree(root: string, jobId: number, k: number): Worktree {
-  const branch = branchFor(jobId, k);
-  const dir = path.join(root, '.kanban', 'worktrees', branch);
+  // The DIRECTORY keeps the deterministic name so `existingWorktree` can find it without being
+  // told; only the BRANCH disambiguates, and the attempt row records which one it got.
+  const dir = path.join(root, '.kanban', 'worktrees', branchFor(jobId, k));
+  const branch = freeBranch(root, jobId, k);
   const baseLabel = baseRef(root);
   const base = resolveBase(root, baseLabel);
   if (fs.existsSync(dir)) return { path: dir, branch, baseLabel, base };
@@ -90,9 +121,13 @@ export function createWorktree(root: string, jobId: number, k: number): Worktree
  * as "ahead" when it is not — which errs toward keeping it, and keeping is the safe direction.
  */
 export function existingWorktree(root: string, jobId: number, k: number): Worktree | null {
-  const branch = branchFor(jobId, k);
-  const dir = path.join(root, '.kanban', 'worktrees', branch);
+  const dir = path.join(root, '.kanban', 'worktrees', branchFor(jobId, k));
   if (!fs.existsSync(dir)) return null;
+  // Read the branch off the checkout rather than deriving it: a collision on the remote may have
+  // given the first attempt a suffixed name, and resuming onto the derived one would put the
+  // session on a branch its own commits are not on.
+  const on = git(dir, ['branch', '--show-current']);
+  const branch = on.status === 0 && on.stdout.trim() ? on.stdout.trim() : branchFor(jobId, k);
   const baseLabel = baseRef(root);
   return { path: dir, branch, baseLabel, base: resolveBase(root, baseLabel) };
 }

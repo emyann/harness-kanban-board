@@ -20,7 +20,7 @@ fs.writeFileSync(path.join(repo, 'README.md'), '# base\n');
 git(['add', '-A']);
 git(['commit', '-qm', 'base']);
 
-const { createWorktree, existingWorktree, removeWorktree, worktreeHasWork, branchFor, baseRef } =
+const { createWorktree, existingWorktree, removeWorktree, worktreeHasWork, branchFor, baseRef, freeBranch } =
   await import('../src/worktree.ts');
 
 test.after(() => fs.rmSync(repo, { recursive: true, force: true }));
@@ -106,6 +106,47 @@ test('there is nothing to resume into when the previous checkout was clean and r
   const wt = createWorktree(repo, 21, 1);
   removeWorktree(repo, wt);
   assert.equal(existingWorktree(repo, 21, 1), null, 'so a fresh one is cut instead');
+});
+
+// ---------------------------------------------------------------- the name is not ours to assume
+
+test('a remote branch with unrelated history does not get pushed onto — the name moves aside', () => {
+  // Phase 5's job #4, exactly. `Job.id` is an autoincrement per DATABASE, so `kb-4-1` is a name
+  // the next fresh board.db produces too, and a repo that has run hkb before already has one.
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-remote-'));
+  spawnSync('git', ['init', '-q', '--bare', remote]);
+  git(['remote', 'add', 'origin', remote]);
+  git(['push', '-q', 'origin', 'main']);
+
+  // Somebody else's `kb-40-1`, on history this checkout does not contain.
+  const stranger = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-stranger-'));
+  spawnSync('git', ['clone', '-q', remote, stranger]);
+  const sg = (a: string[]) => spawnSync('git', a, { cwd: stranger, encoding: 'utf8' });
+  sg(['config', 'user.email', 's@t']); sg(['config', 'user.name', 's']);
+  sg(['checkout', '-q', '-b', 'kb-40-1']);
+  fs.writeFileSync(path.join(stranger, 'theirs.txt'), 'not ours\n');
+  sg(['add', '-A']); sg(['commit', '-qm', 'an experiment from months ago']);
+  sg(['push', '-q', 'origin', 'kb-40-1']);
+  git(['fetch', '-q', 'origin']);
+
+  assert.equal(freeBranch(repo, 40, 1), 'kb-40-1-2',
+    'the taken name is stepped over rather than fought — a worker told never to force-push has no other move');
+  const wt = createWorktree(repo, 40, 1);
+  assert.equal(wt.branch, 'kb-40-1-2', 'and the checkout is on the name it can actually push');
+  assert.ok(wt.path.endsWith('kb-40-1'), 'while the DIRECTORY stays derivable, so resume still finds it');
+
+  const found = existingWorktree(repo, 40, 1);
+  assert.equal(found?.branch, 'kb-40-1-2',
+    'and resume reads the branch off the checkout rather than deriving the one it could not have');
+
+  removeWorktree(repo, wt);
+  fs.rmSync(stranger, { recursive: true, force: true });
+  fs.rmSync(remote, { recursive: true, force: true });
+  git(['remote', 'remove', 'origin']);
+});
+
+test('a free name is used as-is — the check costs nothing when nothing is in the way', () => {
+  assert.equal(freeBranch(repo, 41, 1), 'kb-41-1', 'no remote at all, so nothing can be proved');
 });
 
 test('uncommitted operator work is invisible to a worker', () => {

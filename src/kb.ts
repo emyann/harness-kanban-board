@@ -59,6 +59,8 @@ const HELP = `kb — run one agent against one brief
   kb boards                every board on this machine
   kb boards add <slug>     point a board at a repository       [--repo <path>]
   kb boards rm <slug>      remove a board and everything on it [--force]
+  kb boards set <slug>     the ceilings, without SQL
+       --max-concurrent <n>  --daily-budget <usd>|none
 
 The board is ~/.hkb/board.db — one per machine, a Board per repository, the way one
 cluster holds a namespace per project. \`--board\` picks one; without it the repository
@@ -234,6 +236,8 @@ export async function main(argv: string[]): Promise<number> {
       'max-turns': { type: 'string' },
       'max-budget': { type: 'string' },
       'max-retries': { type: 'string' },
+      'max-concurrent': { type: 'string' },
+      'daily-budget': { type: 'string' },
       status: { type: 'boolean' },
       repo: { type: 'string' },
       foreground: { type: 'boolean' },
@@ -553,6 +557,45 @@ export async function main(argv: string[]): Promise<number> {
           console.log(`${board.slug} -> ${abs}`));
         return 0;
       }
+      if (rest[0] === 'set') {
+        const name = rest[1] ?? named;
+        if (!name) throw usage('kb boards set <slug> --max-concurrent <n> --daily-budget <usd> — which board?');
+        const board = await db.board.findUnique({ where: { slug: name } });
+        if (!board) throw usage(`no board "${name}" — \`kb boards\` lists the ones on this machine`);
+
+        const data: Record<string, unknown> = {};
+        if (values['max-concurrent'] !== undefined) {
+          const n = num(values['max-concurrent'], '--max-concurrent') as number;
+          // 0 is meaningful — it drains a board without stopping it — but a negative is a typo,
+          // and a fractional one silently floors somewhere far from here.
+          if (!Number.isInteger(n) || n < 0) throw usage(`--max-concurrent wants a whole number of slots, 0 or more, got ${n}`);
+          data.maxConcurrent = n;
+        }
+        if (values['daily-budget'] !== undefined) {
+          const raw = String(values['daily-budget']);
+          if (raw === 'none') data.dailyBudgetUsd = null;
+          else {
+            const v = num(raw, '--daily-budget') as number;
+            if (!(v >= 0)) throw usage(`--daily-budget wants dollars, 0 or more, or "none" for no ceiling — got ${raw}`);
+            data.dailyBudgetUsd = v;
+          }
+        }
+        if (!Object.keys(data).length) {
+          throw usage('kb boards set needs something to set — --max-concurrent <n> or --daily-budget <usd>|none');
+        }
+
+        const after = await db.board.update({ where: { id: board.id }, data });
+        await db.event.create({
+          data: { kind: 'ceilings_set', boardId: board.id, actor: whoami(), payload: data as never },
+        });
+        emit(out, {
+          board: after.slug, maxConcurrent: after.maxConcurrent, dailyBudgetUsd: after.dailyBudgetUsd,
+        }, () => console.log(
+          `${after.slug} — ${after.dailyBudgetUsd === null ? 'no ceiling' : `$${after.dailyBudgetUsd}/24h`}, `
+          + `${after.maxConcurrent} concurrent`));
+        return 0;
+      }
+
       if (rest[0] === 'rm') {
         const name = rest[1];
         if (!name) throw usage('kb boards rm <slug> [--force] — which board?');
@@ -584,7 +627,7 @@ export async function main(argv: string[]): Promise<number> {
           console.log(`removed ${name}${jobs ? ` and ${jobs} job${jobs === 1 ? '' : 's'}` : ''}`));
         return 0;
       }
-      if (rest[0]) throw usage(`kb boards has no subcommand "${rest[0]}" — try \`kb boards\`, \`kb boards add <slug>\` or \`kb boards rm <slug>\``);
+      if (rest[0]) throw usage(`kb boards has no subcommand "${rest[0]}" — try \`kb boards\`, \`kb boards add <slug>\`, \`kb boards set <slug>\` or \`kb boards rm <slug>\``);
 
       const serving = await daemon.status();
       const boards = await db.board.findMany({ orderBy: { slug: 'asc' }, include: { jobs: { select: { phase: true } } } });
