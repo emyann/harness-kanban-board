@@ -117,6 +117,10 @@ export type Scope = { slug: string; repoPath: string | null; known: boolean };
  *
  * A repository with no board yet still resolves — to a slug named after it, which `kb new` will
  * create and point at the checkout. Reading verbs simply find nothing, which is the truth.
+ *
+ * Two boards on one checkout is a supported arrangement — `kb boards add` allows it so different
+ * work can run under different budgets — so when the cwd matches more than one there is no answer
+ * to infer, only a choice the operator has to make. It is asked for rather than guessed.
  */
 export async function resolveBoard(
   db: ReturnType<typeof openBoard>,
@@ -132,8 +136,16 @@ export async function resolveBoard(
     const b = await db.board.findUnique({ where: { slug: 'default' } });
     return { slug: 'default', repoPath: b?.repoPath ?? null, known: !!b };
   }
-  const here = await db.board.findFirst({ where: { repoPath: root }, orderBy: { id: 'asc' } });
-  if (here) return { slug: here.slug, repoPath: here.repoPath, known: true };
+  // By slug, not by id: the listing in the error below is something an operator reads and then
+  // types back, so it is ordered the way `kb boards` orders it.
+  const here = await db.board.findMany({ where: { repoPath: root }, orderBy: { slug: 'asc' } });
+  if (here.length > 1) {
+    throw usage(
+      `${here.length} boards point at ${root}: ${here.map((b) => b.slug).join(', ')}`
+      + ' — pass --board <slug> to say which one you mean',
+    );
+  }
+  if (here.length === 1) return { slug: here[0].slug, repoPath: here[0].repoPath, known: true };
   return { slug: path.basename(root), repoPath: root, known: false };
 }
 
