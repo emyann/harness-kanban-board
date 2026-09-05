@@ -1,0 +1,193 @@
+import { openBoard } from './db.ts';
+import type { Runtime, WorkerOutcome } from './runtime/index.ts';
+
+/**
+ * The controller for the Job kind.
+ *
+ * One reconcile pass: read the Jobs that want to run, acquire a lease on each, run it, record what
+ * happened. It is deliberately the whole of the control plane for this kind — if it grows a second
+ * concern, that concern is a second kind.
+ *
+ * The shape is a reconciler, not a queue consumer: it reads observed state, compares it to desired
+ * state, and takes one step. That means it is safe to run repeatedly, safe to interrupt, and safe
+ * to run while another host is running it — the lease is what makes the last one true.
+ *
+ * What it deliberately does NOT do: decide whether the work was any good. A Job is `succeeded` when
+ * its agent's session completed, which is a fact about the process. Whether the *outcome* is
+ * acceptable is a judgement, and judgements belong to a kind that has a reviewer in it.
+ */
+
+export type ControllerDeps = {
+  runtime: Runtime;
+  cwd: string;
+  host?: string;
+  /** How long a lease is good for. A holder that dies without releasing is reclaimable after this. */
+  leaseMs?: number;
+  now?: () => Date;
+  onEvent?: (line: string) => void;
+};
+
+export type ReconcileReport = {
+  claimed: number[];
+  succeeded: number[];
+  failed: number[];
+  retrying: number[];
+  reclaimed: number[];
+  skipped: number[];
+};
+
+const nowDefault = () => new Date();
+
+/**
+ * Decide what a Job's next phase is, given how its attempt ended and what it has left.
+ *
+ * Pure, so it is the part worth testing exhaustively: everything interesting about retry, resume
+ * and giving up is decided here, and nothing here touches a database or a model.
+ */
+export function nextPhase(
+  outcome: WorkerOutcome | null,
+  /** The attempt number that just ran, 1-based. */
+  attempt: number,
+  maxRetries: number,
+): { phase: 'succeeded' | 'failed' | 'pending'; outcome: 'completed' | 'max_turns' | 'max_budget' | 'refused' | 'crashed'; resumable: boolean } {
+  if (outcome?.status === 'completed') {
+    return { phase: 'succeeded', outcome: 'completed', resumable: false };
+  }
+  const mapped = outcome?.status === 'max_turns' ? 'max_turns'
+    : outcome?.status === 'max_budget' ? 'max_budget'
+    : outcome?.status === 'refused' ? 'refused'
+    : 'crashed';
+  // A refusal is not a transient fault: trying the same brief again gets the same answer.
+  // `maxRetries: 2` means two retries AFTER the first go, so three attempts in total.
+  const worthRetrying = mapped !== 'refused' && attempt <= maxRetries;
+  return {
+    phase: worthRetrying ? 'pending' : 'failed',
+    outcome: mapped,
+    // Only the two budget stops left a session that continuing would build on.
+    resumable: mapped === 'max_turns' || mapped === 'max_budget',
+  };
+}
+
+/** Reclaim Jobs whose holder died: the lease expired and nobody reported an outcome. */
+async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report: ReconcileReport, log?: (s: string) => void) {
+  const dead = await db.lease.findMany({ where: { expiresAt: { lt: at } }, select: { jobId: true, holder: true } });
+  for (const l of dead) {
+    await db.lease.delete({ where: { jobId: l.jobId } });
+    const open = await db.attempt.findFirst({ where: { jobId: l.jobId, endedAt: null }, orderBy: { k: 'desc' } });
+    if (open) {
+      await db.attempt.update({
+        where: { jobId_k: { jobId: l.jobId, k: open.k } },
+        data: { endedAt: at, outcome: 'lost', reason: `lease held by ${l.holder} expired` },
+      });
+    }
+    const job = await db.job.findUnique({ where: { id: l.jobId }, select: { maxRetries: true } });
+    const spent = await db.attempt.count({ where: { jobId: l.jobId, endedAt: { not: null } } });
+    await db.job.update({
+      where: { id: l.jobId },
+      data: { phase: spent < (job?.maxRetries ?? 0) + 1 ? 'pending' : 'failed', lastError: 'lease expired' },
+    });
+    await db.event.create({ data: { kind: 'reclaimed', jobId: l.jobId, actor: l.holder } });
+    report.reclaimed.push(l.jobId);
+    log?.(`reclaim #${l.jobId} (lease from ${l.holder} expired)`);
+  }
+}
+
+/** One pass. Returns what it did, so a caller can loop until nothing changes. */
+export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> {
+  const db = openBoard();
+  const now = deps.now ?? nowDefault;
+  const host = deps.host ?? `${process.pid}@${deps.runtime.name}`;
+  const leaseMs = deps.leaseMs ?? 15 * 60_000;
+  const report: ReconcileReport = { claimed: [], succeeded: [], failed: [], retrying: [], reclaimed: [], skipped: [] };
+
+  await reclaimExpired(db, now(), report, deps.onEvent);
+
+  const wanted = await db.job.findMany({ where: { phase: 'pending' }, orderBy: { id: 'asc' } });
+
+  for (const job of wanted) {
+    const spent = await db.attempt.count({ where: { jobId: job.id, endedAt: { not: null } } });
+    const k = spent + 1;
+
+    // ---- acquire. `@@id(jobId)` on Lease is the compare-and-swap: a second holder loses here,
+    // and losing is a normal outcome, not an error.
+    const token = `${host}:${k}:${now().getTime()}`;
+    try {
+      await db.lease.create({
+        data: { jobId: job.id, holder: host, token, expiresAt: new Date(now().getTime() + leaseMs) },
+      });
+    } catch {
+      report.skipped.push(job.id);
+      continue;
+    }
+
+    await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
+    await db.attempt.create({ data: { jobId: job.id, k, host, runtime: deps.runtime.name } });
+    await db.event.create({ data: { kind: 'claimed', jobId: job.id, actor: host, payload: { k } } });
+    report.claimed.push(job.id);
+    deps.onEvent?.(`claim   #${job.id} k=${k} ${job.name}`);
+
+    // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
+    // starting cold, which is the whole reason that column exists.
+    const outcome = await deps.runtime
+      .run({
+        taskId: job.id,
+        attempt: k,
+        cwd: deps.cwd,
+        prompt: job.brief,
+        model: job.model ?? undefined,
+        effort: (job.effort as 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined) ?? undefined,
+        maxTurns: job.maxTurns,
+        maxBudgetUsd: job.maxBudgetUsd,
+        resume: job.lastSessionId ?? undefined,
+      })
+      .catch((): null => null);
+
+    const decision = nextPhase(outcome, k, job.maxRetries);
+
+    await db.attempt.update({
+      where: { jobId_k: { jobId: job.id, k } },
+      data: {
+        endedAt: now(),
+        outcome: decision.outcome,
+        sessionId: outcome?.sessionId ?? null,
+        summary: outcome?.text?.slice(0, 2000) ?? null,
+        reason: outcome?.error?.slice(0, 300) ?? null,
+        costUsd: outcome?.costUsd ?? null,
+      },
+    });
+
+    await db.job.update({
+      where: { id: job.id },
+      data: {
+        phase: decision.phase,
+        // Keep the session only while continuing it would help; a cold retry must start clean.
+        lastSessionId: decision.resumable ? (outcome?.sessionId ?? null) : null,
+        lastError: decision.phase === 'succeeded' ? null : (outcome?.error ?? decision.outcome),
+        finishedAt: decision.phase === 'pending' ? null : now(),
+      },
+    });
+
+    await db.event.create({
+      data: { kind: decision.outcome, jobId: job.id, actor: host, payload: { k, phase: decision.phase } },
+    });
+    await db.lease.delete({ where: { jobId: job.id } });
+
+    if (decision.phase === 'succeeded') report.succeeded.push(job.id);
+    else if (decision.phase === 'failed') report.failed.push(job.id);
+    else report.retrying.push(job.id);
+    deps.onEvent?.(`  ${decision.phase.padEnd(9)} #${job.id} ${decision.outcome}${decision.resumable ? ' (resumable)' : ''}`);
+  }
+
+  return report;
+}
+
+/** Reconcile until nothing moves. The controller is idempotent, so this just runs it to a fixpoint. */
+export async function reconcileToRest(deps: ControllerDeps, maxPasses = 20): Promise<ReconcileReport[]> {
+  const passes: ReconcileReport[] = [];
+  for (let i = 0; i < maxPasses; i++) {
+    const r = await reconcile(deps);
+    passes.push(r);
+    if (!r.claimed.length && !r.reclaimed.length) break;
+  }
+  return passes;
+}
