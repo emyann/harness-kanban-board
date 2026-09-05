@@ -286,6 +286,87 @@ test('a tick that throws does not take the loop with it', async () => {
   assert.ok(calls >= 1);
 });
 
+// ---------------------------------------------------------------- the stopped board
+
+/**
+ * `kb stop` against a running daemon, which is the only interesting shape of a kill switch: the loop
+ * keeps ticking, so the guard is asked the same question every 45 seconds and has to give the same
+ * answer without turning the log into a wall. Both halves are refusals — the Jobs are *still*
+ * pending after four ticks, and the second, third and fourth refusals are *not* in the log.
+ */
+test('a stopped board keeps its Jobs pending, tick after tick — refusing to start is not failing', async () => {
+  const board = await freshBoard();
+  const a = await mkJob(board.id);
+  const b = await mkJob(board.id);
+  await db.board.update({
+    where: { id: board.id }, data: { pausedAt: new Date(), pausedBy: 'someone@1' },
+  });
+
+  const stopper = new AbortController();
+  const lines: string[] = [];
+  await daemon.loop({
+    runtime: fakeRuntime(), cwd: REPO, board: board.slug, intervalMs: 5,
+    signal: stopper.signal, maxTicks: 4, log: (l) => lines.push(l),
+  });
+
+  for (const j of [a, b]) {
+    assert.equal((await db.job.findUniqueOrThrow({ where: { id: j.id } })).phase, 'pending',
+      'a stopped board holds work back; it does not fail it, and `kb start` is all it takes');
+  }
+  assert.equal(await db.attempt.count({ where: { jobId: { in: [a.id, b.id] } } }), 0,
+    'and nothing was even attempted — the gate is checked before the claim, not after the run');
+  assert.equal(await db.lease.count({ where: { job: { boardId: board.id } } }), 0);
+});
+
+test('the refusal is logged once across the ticks, not once per tick', async () => {
+  const board = await freshBoard();
+  await mkJob(board.id);
+  await db.board.update({
+    where: { id: board.id }, data: { pausedAt: new Date(), pausedBy: 'someone@1' },
+  });
+
+  const stopper = new AbortController();
+  const lines: string[] = [];
+  await daemon.loop({
+    runtime: fakeRuntime(), cwd: REPO, board: board.slug, intervalMs: 5,
+    signal: stopper.signal, maxTicks: 4, log: (l) => lines.push(l),
+  });
+
+  const refusals = lines.filter((l) => l.includes('refused'));
+  assert.equal(refusals.length, 1,
+    `a line that repeats every 45 seconds is a line nobody reads, got:\n${lines.join('\n')}`);
+  assert.match(refusals[0], /the board is stopped by someone@1 .*`kb start` to resume/,
+    'and it says what to do next, not merely that something was refused');
+});
+
+test('a board started again mid-run is claimed on a later tick, without a restart', async () => {
+  const board = await freshBoard();
+  const job = await mkJob(board.id);
+  await db.board.update({
+    where: { id: board.id }, data: { pausedAt: new Date(), pausedBy: 'someone@1' },
+  });
+
+  // `kb start` where it actually happens: while the daemon is between ticks. The gate is re-read
+  // every pass, so the loop that refused a moment ago claims this Job — the difference between a
+  // controller and a launcher, in the one place an operator notices it.
+  let started = false;
+  const stopper = new AbortController();
+  const lines: string[] = [];
+  await daemon.loop({
+    runtime: fakeRuntime(), cwd: REPO, board: board.slug, intervalMs: 5,
+    signal: stopper.signal, maxTicks: 3, log: (l) => lines.push(l),
+    sleep: async () => {
+      if (started) return;
+      started = true;
+      await db.board.update({ where: { id: board.id }, data: { pausedAt: null, pausedBy: null } });
+    },
+  });
+
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).phase, 'succeeded',
+    'the daemon picked the board back up on its own');
+  assert.ok(lines.some((l) => l.includes('refused')), 'sanity: it did refuse first');
+});
+
 // ---------------------------------------------------------------- leadership
 
 test('a board with no controller row has no daemon', async () => {

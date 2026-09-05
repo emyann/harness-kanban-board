@@ -233,8 +233,13 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     });
     if (gate.ok === false) {
       // Loudly, and once: the whole pass stops, because every remaining Job faces the same wall.
+      //
+      // Not narrated through `onEvent`. That stream is what the pass *did*, and it is replayed
+      // verbatim by every caller; a refusal is the pass's *outcome*, which is why it is on the
+      // report. Saying it here as well takes the choice of how often to say it away from the
+      // caller — and the daemon, which asks this same question every 45 seconds and deliberately
+      // logs the answer only when it changes, had that dedup silently undone by this one line.
       report.refused = gate.why;
-      deps.onEvent?.(`refused  ${gate.why}`);
       await db.event.create({
         data: { kind: 'refused', jobId: job.id, boardId: board?.id ?? job.boardId, actor: host, payload: { why: gate.why } },
       });
