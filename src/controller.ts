@@ -55,6 +55,10 @@ export type ReconcileReport = {
 
 const nowDefault = () => new Date();
 
+/** Teardown after an abort is not instant (measured: an 8s timeout ended at ~10s). Five minutes
+ *  is far more than that costs, and it is the margin by which a lease outlives its run. */
+const LEASE_GRACE_MS = 5 * 60_000;
+
 /**
  * Decide what a Job's next phase is, given how its attempt ended and what it has left.
  *
@@ -93,7 +97,11 @@ async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report
     select: { jobId: true, holder: true },
   });
   for (const l of dead) {
-    await db.lease.delete({ where: { jobId: l.jobId } });
+    // Fenced on the expiry too: between the read above and this delete, the holder may have
+    // renewed. Deleting unconditionally would take a live claim — the very thing reclaim exists
+    // to avoid doing.
+    const taken = await db.lease.deleteMany({ where: { jobId: l.jobId, expiresAt: { lt: at } } });
+    if (taken.count === 0) continue;
     const open = await db.attempt.findFirst({ where: { jobId: l.jobId, endedAt: null }, orderBy: { k: 'desc' } });
     if (open) {
       await db.attempt.update({
@@ -118,7 +126,12 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
   const db = openBoard();
   const now = deps.now ?? nowDefault;
   const host = deps.host ?? `${process.pid}@${deps.runtime.name}`;
-  const leaseMs = deps.leaseMs ?? 15 * 60_000;
+  // A lease is derived from the run it covers, never chosen independently. A fixed 15 minutes
+  // against a 30-minute `timeoutMs` meant every long Job had its lease expire WHILE ALIVE: the
+  // reclaim then marked the live attempt `lost` and re-queued the Job — a double run, at the
+  // shipped defaults. The invariant is "the lease outlives the run", so it is computed from the
+  // run's own hard bound plus enough grace for teardown and the record writes.
+  const leaseFor = (timeoutMs: number) => deps.leaseMs ?? timeoutMs + LEASE_GRACE_MS;
   const report: ReconcileReport = { refused: null, claimed: [], succeeded: [], failed: [], retrying: [], reclaimed: [], skipped: [] };
 
   await reclaimExpired(db, now(), report, deps.board, deps.onEvent);
@@ -169,6 +182,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // ---- acquire. `@@id(jobId)` on Lease is the compare-and-swap: a second holder loses here,
     // and losing is a normal outcome, not an error.
     const token = `${host}:${k}:${now().getTime()}`;
+    const leaseMs = leaseFor(job.timeoutMs);
     try {
       await db.lease.create({
         data: { jobId: job.id, holder: host, token, expiresAt: new Date(now().getTime() + leaseMs) },
@@ -206,6 +220,33 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       }
     }
 
+    // ---- renew while the run is in flight. Deriving the lifetime already makes expiry-while-alive
+    // impossible; renewal is what makes a DEAD holder cheap to reclaim — without it a host that dies
+    // one minute into a thirty-minute Job holds the claim for the full thirty-five.
+    //
+    // Fenced on the token: `updateMany ... where token` writes nothing if somebody else now holds
+    // the lease, and that is how this host learns it lost one. `renewedAt` finally has a writer.
+    let heldToTheEnd = true;
+    // A third of the lease is the usual cadence — two renewals may fail before anything expires.
+    // Floored at a second only to stop a pathologically short lease hammering the database; at the
+    // real default (35 min) this is ~12 minutes, so the floor never binds in production.
+    const renewEvery = Math.max(1_000, Math.floor(leaseMs / 3));
+    const renewer = setInterval(() => {
+      void db.lease
+        .updateMany({
+          where: { jobId: job.id, token },
+          data: { renewedAt: now(), expiresAt: new Date(now().getTime() + leaseMs) },
+        })
+        .then((r) => {
+          if (r.count === 0) {
+            heldToTheEnd = false;
+            deps.onEvent?.(`  lease lost on #${job.id} — another holder has it`);
+          }
+        })
+        .catch(() => { /* a renewal that could not be written is retried by the next tick */ });
+    }, renewEvery);
+    if (typeof renewer.unref === 'function') renewer.unref();
+
     // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
     // starting cold, which is the whole reason that column exists.
     const outcome = await deps.runtime
@@ -222,6 +263,15 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         resume: job.lastSessionId ?? undefined,
       }, deps.onRuntimeEvent)
       .catch((): null => null);
+
+    clearInterval(renewer);
+
+    // ---- release, fenced. `delete({ where: { jobId } })` deleted whoever's lease was there, so a
+    // stale holder finishing late removed the NEW holder's claim and then overwrote its outcome.
+    // The token was written at claim and never read; now it is the fence. Released BEFORE the
+    // Job row is touched, because the count is what says whether we may touch it at all.
+    const released = await db.lease.deleteMany({ where: { jobId: job.id, token } });
+    if (released.count === 0) heldToTheEnd = false;
 
     const decision = nextPhase(outcome, k, job.maxRetries);
 
@@ -245,6 +295,18 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       },
     });
 
+    // The attempt row is ours whatever happened — it is keyed (jobId, k) and no other holder uses
+    // our k. The JOB row is the contended one, so only a holder that kept its lease may write it.
+    if (!heldToTheEnd) {
+      deps.onEvent?.(`  #${job.id}: lease was taken mid-run — recording the attempt, leaving the Job alone`);
+      await db.event.create({
+        data: { kind: 'lease_lost', jobId: job.id, actor: host, payload: { k } },
+      });
+      report.skipped.push(job.id);
+      if (wt) removeWorktree(deps.cwd, wt);
+      continue;
+    }
+
     await db.job.update({
       where: { id: job.id },
       data: {
@@ -259,7 +321,6 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     await db.event.create({
       data: { kind: decision.outcome, jobId: job.id, actor: host, payload: { k, phase: decision.phase } },
     });
-    await db.lease.delete({ where: { jobId: job.id } });
 
     // ---- tidy. Never forced: a worktree that still holds work is the only copy of it if the
     // push failed, so it stays and the operator is told where.

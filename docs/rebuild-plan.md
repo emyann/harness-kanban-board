@@ -237,9 +237,36 @@ In this order, and each one only when the previous is boring:
 
 ---
 
-## Open decision: single-message vs streaming input
+## Decided: single-message input stays
 
-**Status: undecided. Do not settle it inside a phase — it is structural.**
+**Settled 2026-09-05 by a 22-agent investigation, and the premise turned out to be false.**
+
+`interrupt()` does **not** require streaming input on SDK 0.3.261. `query()` closes stdin only when
+the *first result* arrives, so control requests are writable for the whole run — measured, by firing
+`interrupt()` at t=15s on a string prompt and getting a receipt at t=16.07s. The comment in
+`src/runtime/claude.ts` that claimed otherwise is what made this look like a decision at all.
+
+What streaming uniquely buys is **authority**, not delivery: an `SDKUserMessage` carries
+`role:"user"`, whereas hook-delivered text was refused by a worker as untrusted. A Job has no human
+present to author an authoritative instruction, so the one thing streaming adds is the one thing
+this kind cannot use. The k8s mapping is untouched.
+
+The axis that will separate a future attended kind is **attendedness**, not input mode. Kubernetes
+agrees: `exec`/`attach` are Pod *subresources*, and the one declarative mid-life control is
+`Job.spec.suspend` — a field, not a kind, which is what `Phase.suspended` already is.
+
+The original reasoning is kept below because two of its rows were wrong in instructive ways.
+
+### The table, corrected
+
+| Wanted | What is actually true |
+|---|---|
+| A wall-clock timeout | `interrupt()` then abort. `AbortController` alone kills before a result arrives, so a stalled run reports `costUsd: 0` and contributes nothing to the budget ceiling |
+| Images from outside the repo | **No materialising needed.** A worker under `dontAsk` read an absolute path outside its cwd and got an image block, zero denials |
+| Multi-turn continuation | `resume` works, but is **strained when isolated**: attempt `k+1` cuts a *new* worktree, so a resumed session wakes on a different branch with none of its own commits |
+| Steering a live run | Delivery already works in single mode (a `Stop` hook's `decision:'block'` made a worker rewrite its output). Only *authority* needs streaming |
+
+### The original reasoning, superseded
 
 The runtime uses **single-message input**: `prompt` is a string, the session runs to
 completion, the result comes back. That is deliberate and it is what makes the Job
