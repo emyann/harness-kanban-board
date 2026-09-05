@@ -27,6 +27,7 @@ export const Outcome = {
   timed_out: 'timed_out',
   refused: 'refused',
   crashed: 'crashed',
+  no_output: 'no_output',
   lost: 'lost',
   stopped: 'stopped'
 } as const

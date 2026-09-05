@@ -1,5 +1,8 @@
 import { openBoard } from './db.ts';
-import { createWorktree, existingWorktree, lockWorktree, removeWorktree, unlockWorktree, type Worktree } from './worktree.ts';
+import {
+  createWorktree, exportOutputs, existingWorktree, lockWorktree, removeWorktree, unlockWorktree,
+  type Worktree,
+} from './worktree.ts';
 import { prForBranch } from './pulls.ts';
 import { withProtocol } from './brief.ts';
 import { gateClaim, windowStart } from './limits.ts';
@@ -18,8 +21,10 @@ import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
  * to run while another host is running it — the lease is what makes the last one true.
  *
  * What it deliberately does NOT do: decide whether the work was any good. A Job is `succeeded` when
- * its agent's session completed, which is a fact about the process. Whether the *outcome* is
- * acceptable is a judgement, and judgements belong to a kind that has a reviewer in it.
+ * its agent's session completed AND everything the Job *declared* it would produce is there — the
+ * second half is ADR-008's, and it is still not a judgement: a declared path is present or it is
+ * not, and nothing here has to believe the agent. Whether the outcome is any *good* remains a
+ * judgement, and judgements belong to a kind that has a reviewer in it.
  */
 
 export type ControllerDeps = {
@@ -91,7 +96,7 @@ const LEASE_GRACE_MS = 5 * 60_000;
  */
 export type Decision = {
   phase: 'succeeded' | 'failed' | 'pending';
-  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped';
+  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output';
   resumable: boolean;
   /**
    * What to write on the Job's `lastError`, when the reason it stopped is something a *human* has
@@ -111,6 +116,29 @@ function budgetAdvice(maxBudgetUsd?: number): string {
   return `spent ${cap} and stopped with work left. Not retried — a retry gets the same cap and `
     + `stops in the same place. Raise it and re-queue: \`kb retry <id> --max-budget ${bigger}\`, `
     + 'or file a smaller brief. The session is kept, so that retry resumes rather than starting cold.';
+}
+
+/**
+ * The paths a Job declared, read back out of its JSON column.
+ *
+ * Defensive about the shape because a Json column is not a type: `kb new --export` validates every
+ * path before it is stored, but nothing stops a hand-written row, and a malformed declaration must
+ * not take the reconcile pass down with it. An entry that is not a usable path is dropped here and
+ * refused again by `checkExportPath` if it somehow survives.
+ */
+function declaredExports(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((v): v is string => typeof v === 'string' && v.trim() !== '').map((v) => v.trim());
+}
+
+/** What a Job that declared an output and did not produce it owes the operator. */
+function missingOutputs(id: number, missing: string[]): string {
+  const one = missing.length === 1;
+  return `#${id} declared ${missing.map((m) => `\`${m}\``).join(', ')} and the run left ${one ? 'it' : 'them'} `
+    + `unwritten, so the attempt failed: a declared output that is not there is not work that was done. `
+    + `Look in the attempt's summary for what it did instead, then either fix the brief so it produces `
+    + `that exact path, or re-file the Job with the path the work really writes. \`kb retry ${id}\` `
+    + 'runs it again once one of those is true.';
 }
 
 export function nextPhase(
@@ -414,9 +442,47 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // The operator's intent outranks whatever the runtime made of being cut off. A stopped run
     // reports `timeout` or `error` depending on where the abort landed, and recording either would
     // be a lie about why it ended AND would spend a retry on it.
-    const decision: Decision = deps.signal?.aborted
+    const ran: Decision = deps.signal?.aborted
       ? { phase: 'pending', outcome: 'stopped', resumable: true, lastError: null }
       : nextPhase(outcome, charged, job.maxRetries, job.maxBudgetUsd);
+
+    // ---- the declared outputs, out of the sandbox BEFORE it is torn down. The order is the whole
+    // design: a worktree is the pod filesystem and dies with the run, so an artifact still inside it
+    // when the checkout goes was never produced. ADR-008, and Bazel's rule verbatim — move the known
+    // outputs to the execroot, then delete the sandbox.
+    //
+    // Only after a run that otherwise succeeded. A crashed or capped attempt has not finished the
+    // work, so half its outputs being absent is a description of the stop it already reported, not a
+    // second finding; and copying what it did leave would overwrite the repository from a run
+    // nobody is going to accept.
+    const declared = declaredExports(job.exports);
+    let exported: string[] | null = null;
+    let shortfall: string | null = null;
+    // `heldToTheEnd` gates it for the same reason it gates the Job row: the repository is contended
+    // state too, and a holder that lost its lease mid-run must not write into a checkout the new
+    // holder is working in. Its worktree is kept below, so the artifact is not destroyed either.
+    if (declared.length && ran.phase === 'succeeded' && heldToTheEnd) {
+      try {
+        const got = exportOutputs(wt ? wt.path : cwd, cwd, declared);
+        exported = got.exported;
+        if (got.missing.length) shortfall = missingOutputs(job.id, got.missing);
+        else if (exported.length) deps.onEvent?.(`  exported ${exported.length} path${exported.length === 1 ? '' : 's'} into ${cwd}`);
+      } catch (e) {
+        // An illegal declaration — escaping, absolute, or a symlink out of the checkout. It is a
+        // fault in the Job's spec rather than in the run, and it stops the copy dead: nothing is
+        // written outside the repository on the strength of a path we refused.
+        shortfall = (e as Error).message;
+      }
+      if (shortfall) deps.onEvent?.(`  ${shortfall}`);
+    }
+    // A declared output that is not there fails the attempt, and that rule is what makes the
+    // declaration worth writing down: without it `succeeded` still means only that a session ended.
+    // Not retried — the session's own account is that it finished, so a resumed attempt wakes up
+    // done and a cold one re-buys the same run. `kb retry <id>` is the deliberate second go, once a
+    // human has read which path is missing and decided whose mistake it was.
+    const decision: Decision = shortfall
+      ? { phase: 'failed', outcome: 'no_output', resumable: false, lastError: shortfall }
+      : ran;
 
     // ---- what landed on the forge. One read, by head branch: the board and the forge are two
     // systems and this is the only thing that joins them.
@@ -440,11 +506,16 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         outcome: decision.outcome,
         sessionId: outcome?.sessionId ?? null,
         summary: outcome?.text?.slice(0, 2000) ?? null,
-        reason: outcome?.error?.slice(0, 300) ?? null,
+        // The shortfall wins: when a declared output is missing, that is why this attempt ended as
+        // it did, and the runtime has no error of its own to report — it thinks it succeeded.
+        reason: (shortfall ?? outcome?.error)?.slice(0, 300) ?? null,
         costUsd: outcome?.costUsd ?? null,
         branch: wt?.branch ?? null,
         prNumber: pr?.number ?? null,
         prUrl: pr?.url ?? null,
+        // Omitted rather than nulled: a Job that declared nothing has no fact to record here, and
+        // Prisma's Json null needs a sentinel to say which of the two nulls it means.
+        ...(exported ? { exported } : {}),
       },
     });
 
@@ -490,7 +561,11 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         unlockWorktree(cwd, wt);
         deps.onEvent?.(`  kept ${wt.path} — attempt ${k + 1} resumes in it`);
       } else {
-        const gone = removeWorktree(cwd, wt);
+        // Everything this Job said it would produce is now in the repository, so whatever is left
+        // in the checkout is undeclared — litter, in ADR-008's sense, and the one case where a
+        // dirty tree is not evidence of work worth keeping. `removeWorktree` still refuses to take
+        // unpushed commits; see the note there for what this waives and what it does not.
+        const gone = removeWorktree(cwd, wt, { exported: !!exported && !shortfall });
         if (!gone.removed) deps.onEvent?.(`  kept ${wt.path} — ${gone.why}`);
       }
     }

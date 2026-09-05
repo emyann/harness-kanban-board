@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { openBoard, closeBoard } from './db.ts';
 import { reconcile } from './controller.ts';
+import { checkExportPath } from './worktree.ts';
 import { fakeRuntime } from './runtime/fake.ts';
 import * as daemon from './daemon.ts';
 import type { Runtime } from './runtime/index.ts';
@@ -38,6 +39,9 @@ const HELP = `kb — run one agent against one brief
        --agent <a>  --model <m>  --effort low|medium|high|xhigh|max
        --max-turns <n>  --max-budget <usd>  --max-retries <n>
        --no-isolate     run in the current checkout instead of its own worktree
+       --export <path>  a file or directory the Job must produce, repo-relative. It is
+                        copied into the repository before the worktree is torn down, and
+                        a declared path the run did not write fails the attempt. Repeatable.
        --board <slug>   default: default
 
   kb ls                    what is on the board        [--phase p] [--board s]
@@ -229,6 +233,9 @@ export async function main(argv: string[]): Promise<number> {
       fake: { type: 'boolean' },
       force: { type: 'boolean' },
       'no-isolate': { type: 'boolean' },
+      // Repeatable: a Job with two deliverables declares two paths, and the alternative — one
+      // comma-separated string — makes a filename containing a comma undeclarable.
+      export: { type: 'string', multiple: true },
       brief: { type: 'string' },
       'brief-file': { type: 'string' },
       agent: { type: 'string' },
@@ -287,9 +294,16 @@ export async function main(argv: string[]): Promise<number> {
       if (effort && !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) {
         throw usage(`--effort must be one of low|medium|high|xhigh|max, got ${effort}`);
       }
+      // Checked here, at admission, rather than when the copy runs: an export path that escapes the
+      // worktree is an illegal request, and an illegal request should never become state. The same
+      // check runs again at copy time, because a row can arrive by other routes than this one.
+      const exports = ((values.export as string[] | undefined) ?? []).map(checkExportPath);
       const job = await db.job.create({
         data: {
           boardId: board.id, name, brief,
+          // Null rather than `[]` for a Job that declares nothing: "produces no file" and "produced
+          // none of the files it promised" are different facts, and only the second is a failure.
+          ...(exports.length ? { exports } : {}),
           agent: (values.agent as string) ?? undefined,
           model: (values.model as string) ?? null,
           effort: effort ?? null,
@@ -302,8 +316,9 @@ export async function main(argv: string[]): Promise<number> {
       await db.event.create({
         data: { kind: 'created', jobId: job.id, boardId: board.id, actor: whoami(), payload: { name } },
       });
-      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug }, () =>
-        console.log(`#${job.id} ${job.name}  [${job.phase}]  on ${slug}`));
+      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports }, () =>
+        console.log(`#${job.id} ${job.name}  [${job.phase}]  on ${slug}`
+          + (exports.length ? `\n  must produce  ${exports.join(', ')}` : '')));
       return 0;
     }
 
@@ -359,6 +374,9 @@ export async function main(argv: string[]): Promise<number> {
         console.log(`  phase    ${job.phase}${job.lease ? `  (leased by ${job.lease.holder} until ${job.lease.expiresAt.toISOString()})` : ''}`);
         console.log(`  spec     agent=${job.agent} model=${job.model ?? 'default'} effort=${job.effort ?? 'default'}`);
         console.log(`           maxTurns=${job.maxTurns} maxBudget=$${job.maxBudgetUsd} maxRetries=${job.maxRetries} isolate=${job.isolate}`);
+        // What it must produce, beside how it runs — the half of the spec ADR-008 added, and the
+        // one that decides whether a completed session counts as a success.
+        if (Array.isArray(job.exports) && job.exports.length) console.log(`  exports  ${job.exports.join(', ')}`);
         if (job.lastError) console.log(`  error    ${job.lastError}`);
         if (job.lastSessionId) console.log(`  resume   ${job.lastSessionId}`);
         console.log(`  brief    ${job.brief.split('\n')[0].slice(0, 88)}${job.brief.length > 88 ? ' …' : ''}`);
@@ -374,6 +392,9 @@ export async function main(argv: string[]): Promise<number> {
           // than being something you go and look for.
           if (a.prUrl) console.log(`           PR #${a.prNumber}  ${a.prUrl}`);
           else if (a.branch) console.log(`           branch ${a.branch} — no pull request found`);
+          // The other reviewable artifact, and the one that is not on a forge: what this attempt
+          // took out of its checkout and left in the repository.
+          if (Array.isArray(a.exported) && a.exported.length) console.log(`           exported ${a.exported.join(', ')}`);
           if (a.reason) console.log(`           ${a.reason.slice(0, 100)}`);
         }
       });
