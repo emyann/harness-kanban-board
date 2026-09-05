@@ -24,6 +24,7 @@ export const Outcome = {
   completed: 'completed',
   max_turns: 'max_turns',
   max_budget: 'max_budget',
+  timed_out: 'timed_out',
   refused: 'refused',
   crashed: 'crashed',
   lost: 'lost'

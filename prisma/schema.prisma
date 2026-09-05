@@ -40,6 +40,7 @@ enum Outcome {
   completed
   max_turns   // resumable: it did work and left a session
   max_budget  // resumable: same
+  timed_out   // resumable: the wall clock ran out, not the model
   refused
   crashed
   lost        // the lease expired with nobody reporting — the attempt was never heard from again
@@ -49,6 +50,17 @@ model Board {
   id    Int    @id @default(autoincrement())
   slug  String @unique
   jobs  Job[]
+
+  /// The kill switch. While this is set nothing is claimed; a run already going is left alone,
+  /// because stopping a board should not destroy work in flight.
+  pausedAt DateTime?
+  pausedBy String?
+
+  /// Ceilings, checked BEFORE a claim and never mid-run. A ceiling that could stop a running
+  /// worker would strand its worktree; one that refuses to start another is just a decision.
+  /// `dailyBudgetUsd` is a rolling 24 hours, not a calendar day — there is no timezone to get wrong.
+  dailyBudgetUsd Float?
+  maxConcurrent  Int   @default(1)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -68,6 +80,8 @@ model Job {
   model        String?
   effort       String?
   maxTurns     Int     @default(20)
+  /// Wall clock. The model's own caps (turns, budget) cannot stop a session that has stalled.
+  timeoutMs    Int     @default(1800000)
   maxBudgetUsd Float   @default(1)
   /// Run in its own git worktree. Enforced at admission, not requested in a prompt.
   isolate      Boolean @default(true)

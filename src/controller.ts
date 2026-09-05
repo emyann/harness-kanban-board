@@ -2,6 +2,7 @@ import { openBoard } from './db.ts';
 import { createWorktree, removeWorktree, type Worktree } from './worktree.ts';
 import { prForBranch } from './pulls.ts';
 import { withProtocol } from './brief.ts';
+import { gateClaim, windowStart } from './limits.ts';
 import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
 
 /**
@@ -42,6 +43,8 @@ export type ControllerDeps = {
 };
 
 export type ReconcileReport = {
+  /** Why claiming stopped, when a ceiling or the kill switch stopped it. */
+  refused: string | null;
   claimed: number[];
   succeeded: number[];
   failed: number[];
@@ -63,12 +66,13 @@ export function nextPhase(
   /** The attempt number that just ran, 1-based. */
   attempt: number,
   maxRetries: number,
-): { phase: 'succeeded' | 'failed' | 'pending'; outcome: 'completed' | 'max_turns' | 'max_budget' | 'refused' | 'crashed'; resumable: boolean } {
+): { phase: 'succeeded' | 'failed' | 'pending'; outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed'; resumable: boolean } {
   if (outcome?.status === 'completed') {
     return { phase: 'succeeded', outcome: 'completed', resumable: false };
   }
   const mapped = outcome?.status === 'max_turns' ? 'max_turns'
     : outcome?.status === 'max_budget' ? 'max_budget'
+    : outcome?.status === 'timeout' ? 'timed_out'
     : outcome?.status === 'refused' ? 'refused'
     : 'crashed';
   // A refusal is not a transient fault: trying the same brief again gets the same answer.
@@ -77,8 +81,8 @@ export function nextPhase(
   return {
     phase: worthRetrying ? 'pending' : 'failed',
     outcome: mapped,
-    // Only the two budget stops left a session that continuing would build on.
-    resumable: mapped === 'max_turns' || mapped === 'max_budget',
+    // The three stops that left a session worth continuing. A crash and a refusal did not.
+    resumable: mapped === 'max_turns' || mapped === 'max_budget' || mapped === 'timed_out',
   };
 }
 
@@ -115,7 +119,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
   const now = deps.now ?? nowDefault;
   const host = deps.host ?? `${process.pid}@${deps.runtime.name}`;
   const leaseMs = deps.leaseMs ?? 15 * 60_000;
-  const report: ReconcileReport = { claimed: [], succeeded: [], failed: [], retrying: [], reclaimed: [], skipped: [] };
+  const report: ReconcileReport = { refused: null, claimed: [], succeeded: [], failed: [], retrying: [], reclaimed: [], skipped: [] };
 
   await reclaimExpired(db, now(), report, deps.board, deps.onEvent);
 
@@ -129,6 +133,36 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
   });
 
   for (const job of wanted) {
+    // ---- the ceilings, checked before every claim rather than once per pass: a run that just
+    // finished has moved the spend, and the next Job must be judged against that, not against
+    // what was true when the pass started.
+    const board = await db.board.findFirst({
+      where: deps.board ? { slug: deps.board } : { id: job.boardId },
+      select: { pausedAt: true, pausedBy: true, maxConcurrent: true, dailyBudgetUsd: true, id: true },
+    });
+    const [liveLeases, spend] = await Promise.all([
+      db.lease.count({ where: { job: { boardId: board?.id ?? job.boardId } } }),
+      db.attempt.aggregate({
+        _sum: { costUsd: true },
+        where: { job: { boardId: board?.id ?? job.boardId }, startedAt: { gte: windowStart(now()) } },
+      }),
+    ]);
+    const gate = gateClaim({
+      pausedAt: board?.pausedAt ?? null,
+      pausedBy: board?.pausedBy ?? null,
+      liveLeases,
+      maxConcurrent: board?.maxConcurrent ?? 1,
+      spent24h: spend._sum.costUsd ?? 0,
+      dailyBudgetUsd: board?.dailyBudgetUsd ?? null,
+      jobBudgetUsd: job.maxBudgetUsd,
+    });
+    if (gate.ok === false) {
+      // Loudly, and once: the whole pass stops, because every remaining Job faces the same wall.
+      report.refused = gate.why;
+      deps.onEvent?.(`refused  ${gate.why}`);
+      break;
+    }
+
     const spent = await db.attempt.count({ where: { jobId: job.id, endedAt: { not: null } } });
     const k = spent + 1;
 
@@ -184,6 +218,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         effort: (job.effort as 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined) ?? undefined,
         maxTurns: job.maxTurns,
         maxBudgetUsd: job.maxBudgetUsd,
+        timeoutMs: job.timeoutMs,
         resume: job.lastSessionId ?? undefined,
       }, deps.onRuntimeEvent)
       .catch((): null => null);

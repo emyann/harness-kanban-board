@@ -24,6 +24,11 @@ export type WorkerSpec = {
   maxTurns?: number;
   /** Hard spend ceiling in USD, subagent spend included. The runaway-cost stop. */
   maxBudgetUsd?: number;
+  /**
+   * Wall clock, in milliseconds. The model's own caps cannot stop a session that has stalled —
+   * a turn that never returns burns no turns and spends no budget.
+   */
+  timeoutMs?: number;
   /** Reasoning depth. `low` is the right default for read-only cards. */
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   allowedTools?: string[];
@@ -45,6 +50,7 @@ export type RunStatus =
   | 'completed'    // the loop finished on its own
   | 'max_turns'    // hit maxTurns — resumable
   | 'max_budget'   // hit maxBudgetUsd — resumable
+  | 'timeout'      // the wall clock ran out — resumable, and it is OUR stop, not the model's
   | 'refused'      // the model declined
   | 'error';       // the loop broke
 

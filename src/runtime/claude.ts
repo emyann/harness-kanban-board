@@ -29,7 +29,10 @@ import { admissionHooks } from '../admission.ts';
 const DEFAULT_TOOLS = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'WebFetch', 'WebSearch', 'TodoWrite'];
 
 /** Map the SDK's terminal states onto ours. The three resumable ones are the point. */
-function statusOf(result: SDKResultMessage | null, threw: boolean): RunStatus {
+function statusOf(result: SDKResultMessage | null, threw: boolean, timedOut: boolean): RunStatus {
+  // Our own stop wins over whatever the SDK reported on the way out: an aborted run may or may
+  // not have produced a result, and either way the reason it ended is the clock.
+  if (timedOut) return 'timeout';
   if (!result) return 'error';
   if (result.subtype === 'success') {
     return 'stop_reason' in result && result.stop_reason === 'refusal' ? 'refused' : 'completed';
@@ -45,11 +48,19 @@ export const claudeRuntime: Runtime = {
 
   async run(spec: WorkerSpec, onEvent?: (e: RuntimeEvent) => void): Promise<WorkerOutcome> {
     let sessionId: string | null = null;
+    let timedOut = false;
     let announced = false;
     let result: SDKResultMessage | null = null;
     let error: string | null = null;
 
     const tools = spec.allowedTools ?? DEFAULT_TOOLS;
+    // The wall-clock stop. `interrupt()` would be gentler but needs streaming input, which is a
+    // structural change with its own open decision (docs/rebuild-plan.md); an AbortController
+    // bounds the run without touching the input mode.
+    const abortController = new AbortController();
+    const timer = spec.timeoutMs
+      ? setTimeout(() => { timedOut = true; abortController.abort(); }, spec.timeoutMs)
+      : null;
     const stream = query({
       prompt: spec.prompt,
       options: {
@@ -64,6 +75,7 @@ export const claudeRuntime: Runtime = {
         // exactly the call admission exists to mutate, so it must reach the callback.
         allowedTools: tools,
         resume: spec.resume,
+        abortController,
         // Admission control, not instruction: every Agent spawn gets `isolation: "worktree"`
         // injected here, so a parent that forgets to ask for it still cannot skip it.
         hooks: admissionHooks({ forceIsolation: true, allow: tools, ...spec.admission }),
@@ -116,9 +128,11 @@ export const claudeRuntime: Runtime = {
       }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
 
-    const status = statusOf(result, error !== null);
+    const status = statusOf(result, error !== null, timedOut);
     onEvent?.({ kind: 'ended', taskId: spec.taskId, status });
 
     return {
@@ -132,7 +146,7 @@ export const claudeRuntime: Runtime = {
       durationMs: result?.duration_ms ?? 0,
       stopReason: result && 'stop_reason' in result ? (result.stop_reason ?? null) : null,
       denials: result?.permission_denials?.length ?? 0,
-      error,
+      error: timedOut ? `wall clock: ${spec.timeoutMs}ms` : error,
     };
   },
 };

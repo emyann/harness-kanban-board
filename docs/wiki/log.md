@@ -262,3 +262,6 @@ history.
 ## 2026-09-05 — refreshed architecture/runtime-layer (single-message input recorded as a structural open decision, not a driver setting)
 ## 2026-09-05 — refreshed architecture/job-kind (Phase 2: worktree per attempt, the brief protocol, the forge read-back)
 ## 2026-09-05 — refreshed decisions/adr-007-workload-scheduler (schema grew forge history; decision unchanged, so re-verified rather than superseded)
+## 2026-09-05 — refreshed architecture/job-kind (Phase 3: the three ceilings, why they are pre-claim, and the gate/CAS split)
+## 2026-09-05 — refreshed architecture/runtime-layer (Phase 3: the wall clock is an AbortController, and a timeout is resumable)
+## 2026-09-05 — refreshed concepts/admission-control (claude.ts gained the wall clock; no claim on this page touches it — re-verified, no edit)

@@ -48,6 +48,13 @@ test('nextPhase: maxRetries 2 means three attempts, then failed', () => {
   assert.equal(nextPhase({ status: 'crashed' } as never, 3, 2).phase, 'failed', 'out of retries');
 });
 
+test('nextPhase: a wall-clock timeout is OUR stop, and it is resumable', () => {
+  const d = nextPhase({ status: 'timeout' } as never, 1, 2);
+  assert.equal(d.outcome, 'timed_out');
+  assert.equal(d.phase, 'pending');
+  assert.equal(d.resumable, true, 'the clock ran out, not the work — the session is worth continuing');
+});
+
 test('nextPhase: a refusal never retries — the same brief gets the same answer', () => {
   const d = nextPhase({ status: 'refused' } as never, 1, 5);
   assert.equal(d.phase, 'failed');
@@ -86,17 +93,37 @@ test('a failing job retries up to maxRetries, then fails', async () => {
   assert.equal(after.attempts.length, 3, '1 initial + 2 retries');
 });
 
-test('a second holder loses the lease and skips, rather than double-running', async () => {
+test('known contention is refused by the gate before any claim is attempted', async () => {
   const job = await mkJob('contended');
-  // somebody else got there first and still holds it
+  // somebody else got there first and still holds it; maxConcurrent is 1
   await db.lease.create({
     data: { jobId: job.id, holder: 'other-host', token: 't', expiresAt: new Date(Date.now() + 600_000) },
   });
-  const r = await reconcile({ runtime: fakeRuntime(), cwd });
-  assert.ok(r.skipped.includes(job.id), 'the loser skips');
+  const r = await reconcile({ runtime: fakeRuntime(), cwd, board: 'test' });
+  assert.match(r.refused ?? '', /concurrent slots/, 'the cheap check catches it first');
   assert.ok(!r.claimed.includes(job.id));
   assert.equal((await db.attempt.count({ where: { jobId: job.id } })), 0, 'and runs nothing');
   await db.lease.delete({ where: { jobId: job.id } });
+});
+
+test('a genuine race is lost at the compare-and-swap, not at the gate', async () => {
+  // Room to spare, so the gate admits — and the lease insert is then the only thing standing
+  // between two processes and a double run. This is the path the gate cannot cover: two hosts
+  // that both read "one slot free" in the same instant.
+  const board = await db.board.findFirstOrThrow({ where: { slug: 'test' } });
+  await db.board.update({ where: { id: board.id }, data: { maxConcurrent: 5 } });
+  const job = await mkJob('raced');
+  await db.lease.create({
+    data: { jobId: job.id, holder: 'won-the-race', token: 't', expiresAt: new Date(Date.now() + 600_000) },
+  });
+
+  const r = await reconcile({ runtime: fakeRuntime(), cwd, board: 'test' });
+  assert.equal(r.refused, null, 'the gate had no objection');
+  assert.ok(r.skipped.includes(job.id), 'the loser skips rather than throwing');
+  assert.equal((await db.attempt.count({ where: { jobId: job.id } })), 0, 'and runs nothing');
+
+  await db.lease.delete({ where: { jobId: job.id } });
+  await db.board.update({ where: { id: board.id }, data: { maxConcurrent: 1 } });
 });
 
 test('an expired lease is reclaimed and its orphaned attempt is marked lost', async () => {

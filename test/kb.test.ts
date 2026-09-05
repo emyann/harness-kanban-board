@@ -169,6 +169,30 @@ test('rm deletes a Job and its attempts', async () => {
   assert.equal(await db.attempt.count({ where: { jobId: j.id } }), 0, 'cascaded');
 });
 
+// ---------------------------------------------------------------- stop / start
+
+test('stop is the kill switch: it refuses to claim and says who stopped it', async () => {
+  await kb('new', 'blocked-by-stop', '--brief', 'b', '--board', 'switch', '--json');
+  await kb('stop', '--board', 'switch');
+  const r = await kb('run', '--board', 'switch', '--fake');
+  assert.match(r.out, /refused:.*stopped/);
+  assert.match(r.out, /kb start/, 'and says what to do about it');
+});
+
+test('a stopped board leaves its Jobs pending, not failed', async () => {
+  const rows = json((await kb('ls', '--board', 'switch', '--json')).out);
+  assert.ok(rows.every((j: { phase: string; attempts: number }) => j.phase === 'pending' && j.attempts === 0),
+    'refusing to start is not failing');
+});
+
+test('start clears it and reports the ceilings', async () => {
+  const r = await kb('start', '--board', 'switch');
+  assert.match(r.out, /started/);
+  assert.match(r.out, /no ceiling, 1 concurrent/);
+  const after = await kb('run', '--board', 'switch', '--fake');
+  assert.match(after.out, /1 succeeded/);
+});
+
 test('rm refuses a leased Job rather than orphaning a running worker', async () => {
   const j = json((await kb('new', 'leased', '--brief', 'b', '--json')).out);
   await db.lease.create({

@@ -830,6 +830,10 @@ export type TransactionIsolationLevel = (typeof TransactionIsolationLevel)[keyof
 export const BoardScalarFieldEnum = {
   id: 'id',
   slug: 'slug',
+  pausedAt: 'pausedAt',
+  pausedBy: 'pausedBy',
+  dailyBudgetUsd: 'dailyBudgetUsd',
+  maxConcurrent: 'maxConcurrent',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 } as const
@@ -846,6 +850,7 @@ export const JobScalarFieldEnum = {
   model: 'model',
   effort: 'effort',
   maxTurns: 'maxTurns',
+  timeoutMs: 'timeoutMs',
   maxBudgetUsd: 'maxBudgetUsd',
   isolate: 'isolate',
   maxRetries: 'maxRetries',
