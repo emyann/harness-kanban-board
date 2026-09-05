@@ -330,3 +330,74 @@ test('the runtime is told whether this attempt has a worktree, per Job', async (
   assert.equal(seen[1].isolated, true);
   assert.notEqual(seen[1].cwd, cwd, 'and this one really does have a checkout of its own');
 });
+
+// ---------------------------------------------------------------- declared outputs (ADR-008)
+//
+// A Job that produces an uncommitted file had no correct outcome: the artifact was deleted with
+// the checkout, or it stranded one. The declaration is what lets the board move it out first.
+
+/** A worker that writes exactly these files, wherever the controller put it, and then says it is done. */
+const writes = (files: Record<string, string>) => ({
+  name: 'writes',
+  async run(s: { cwd: string }) {
+    for (const [rel, body] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(s.cwd, rel)), { recursive: true });
+      fs.writeFileSync(path.join(s.cwd, rel), body);
+    }
+    return { status: 'completed', ok: true, sessionId: 'sess', text: 'wrote what I was asked',
+             costUsd: 0, turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+  },
+} as never);
+
+const checkoutOf = (jobId: number) => path.join(cwd, '.kanban', 'worktrees', `kb-${jobId}-1`);
+
+test('a declared export lands in the board\'s repository, and the checkout goes with the litter', async () => {
+  const job = await mkJob('produces-a-skill', { exports: ['.claude/skills/sdk-docs'] });
+  const r = await reconcile({
+    runtime: writes({
+      '.claude/skills/sdk-docs/SKILL.md': '# sdk docs\n',
+      'node_modules/dep/index.js': 'the 614 MB, gitignored and undeclared\n',
+    }),
+    cwd, readPr: false,
+  });
+  assert.deepEqual(r.succeeded, [job.id]);
+  assert.equal(fs.readFileSync(path.join(cwd, '.claude', 'skills', 'sdk-docs', 'SKILL.md'), 'utf8'), '# sdk docs\n',
+    'the artifact outlived the sandbox it was made in');
+
+  const a = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } });
+  assert.deepEqual(a.exported, ['.claude/skills/sdk-docs/SKILL.md'], 'and the attempt records what it handed over');
+  assert.equal(fs.existsSync(checkoutOf(job.id)), false,
+    'what was left was undeclared, which is litter by definition — no `kb` verb needed to reclaim it');
+  fs.rmSync(path.join(cwd, '.claude'), { recursive: true, force: true });
+});
+
+test('a declared export the worker did not produce FAILS the attempt', async () => {
+  // Without this rule the declaration is a copy loop rather than a contract, and `succeeded` goes
+  // back to meaning only that a session ended.
+  const job = await mkJob('promises-more-than-it-writes', { exports: ['REPORT.md'], maxRetries: 2 });
+  await reconcileToRest({ runtime: writes({ 'notes-to-self.md': 'not what was asked for\n' }), cwd, readPr: false });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'failed', 'the session completed; the contract did not');
+  assert.equal(after.attempts.length, 1, 'and it is not retried — the session\'s own account is that it finished');
+  assert.equal(after.attempts[0].outcome, 'no_output', 'not a crash and not a refusal: it ran, and produced nothing declared');
+  assert.match(after.attempts[0].reason ?? '', /REPORT\.md/, 'the attempt row names the path that is missing');
+  assert.match(after.lastError ?? '', /REPORT\.md/);
+  assert.match(after.lastError ?? '', /kb retry/, 'and says what a human does next');
+  assert.deepEqual(after.attempts[0].exported, [], 'it declared, and handed over nothing — which is not the same fact as null');
+  assert.equal(fs.existsSync(path.join(cwd, 'notes-to-self.md')), false, 'and nothing undeclared was copied out');
+  assert.equal(fs.existsSync(checkoutOf(job.id)), true,
+    'the checkout stays, because what the run did instead is now the only copy of itself');
+});
+
+test('an export path that escapes the worktree is refused at the copy too, not only at `kb new`', async () => {
+  // `kb new` validates the declaration, so reaching this needs a row written another way — which is
+  // exactly why the check is here as well. The copy runs with the operator's authority.
+  const job = await mkJob('escape-artist', { exports: ['../../etc/passwd'] });
+  await reconcile({ runtime: writes({ 'harmless.txt': 'x\n' }), cwd, readPr: false });
+
+  const a = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } });
+  assert.equal(a.outcome, 'no_output');
+  assert.match(a.reason ?? '', /escapes the worktree/);
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).phase, 'failed');
+});

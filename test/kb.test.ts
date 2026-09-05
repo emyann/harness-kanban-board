@@ -135,6 +135,35 @@ test('new carries the spec flags onto the row', async () => {
   assert.equal(row.isolate, false);
 });
 
+test('new records the paths a Job must produce', async () => {
+  const j = json((await kb('new', 'skill-card', '--brief', 'b', '--json',
+    '--export', '.claude/skills/sdk-docs/', '--export', 'NOTES.md')).out);
+  const row = await db.job.findUniqueOrThrow({ where: { id: j.id } });
+  assert.deepEqual(row.exports, ['.claude/skills/sdk-docs', 'NOTES.md'],
+    'repeatable, and normalised — a trailing slash is how a directory is written, not part of the path');
+  assert.deepEqual(j.exports, ['.claude/skills/sdk-docs', 'NOTES.md']);
+});
+
+test('a Job that declares nothing stores null, not an empty declaration', async () => {
+  const j = json((await kb('new', 'declares-nothing', '--brief', 'b', '--json')).out);
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: j.id } })).exports, null,
+    '"produces no file" and "produced none of the files it promised" are different facts');
+});
+
+test('new REFUSES an export path that escapes the repository, and files nothing', async () => {
+  // Admission, in the Kubernetes sense: an illegal request must not become state. The board does
+  // this copy itself, with the operator's authority and no agent in the loop to notice.
+  const before = await db.job.count();
+  for (const [bad, why] of [
+    ['../elsewhere', /escapes the worktree/],
+    ['/etc/passwd', /absolute/],
+    ['.kanban/board.db', /board's own directory/],
+  ] as [string, RegExp][]) {
+    await assert.rejects(() => kb('new', 'sneaky', '--brief', 'b', '--export', bad), why);
+  }
+  assert.equal(await db.job.count(), before, 'and no half-filed Job is left behind');
+});
+
 test('a numeric flag given a non-number says so', async () => {
   await assert.rejects(() => kb('new', 'x', '--brief', 'b', '--max-turns', 'lots'), /wants a number/);
 });

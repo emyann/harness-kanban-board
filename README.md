@@ -52,6 +52,12 @@ kb show 1                                  # phase, spec, and every attempt: out
   the same price — so this is where you raise it: `kb retry 6 --max-budget 4`, and the raise is on the event log.
 - **`kb boards`** lists every board on this machine; `kb boards add <slug> --repo <path>` points one at a repository.
 
+A pull request is not the only thing a Job can produce. `--export <path>` on `kb new` (repeatable) declares a file
+or directory the Job must write: the board copies it out of the worktree into the repository *before* the checkout
+is torn down, and a declared path the run did not produce **fails the attempt** — see
+[ADR-008](docs/wiki/decisions/adr-008-declared-outputs.md). An undeclared file left in the checkout is litter, and
+is deleted with it.
+
 Everything from [Quickstart](#quickstart) down describes the **pre-ADR-007 system** — the `hkb` CLI, the board on
 `refs/kb/boards/<name>`, the dispatcher tick. It still runs alongside `kb`, and it is the system being replaced.
 

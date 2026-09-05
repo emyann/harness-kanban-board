@@ -23,6 +23,7 @@ git(['commit', '-qm', 'base']);
 const {
   createWorktree, existingWorktree, removeWorktree, worktreeHasWork, branchFor, baseRef, freeBranch,
   includedFiles, sweepWorktrees, lockWorktree, listWorktrees, heldWork,
+  checkExportPath, exportOutputs,
 } = await import('../src/worktree.ts');
 
 test.after(() => fs.rmSync(repo, { recursive: true, force: true }));
@@ -454,4 +455,137 @@ test('the board never crosses even when the declaration is legitimate', () => {
   assert.equal(fs.existsSync(path.join(wt.path, '.kanban', 'board.db')), false,
     'and the board did not ride along with it');
   noInclude();
+});
+
+// ------------------------------------------------- exports — what a Job takes back out (ADR-008)
+//
+// The mirror of `.worktreeinclude`: those are the files that cross INTO a checkout, these are the
+// ones that have to come out of it before it dies. Bazel's rule, which is the one the ADR adopts:
+// move the known outputs to the execroot, THEN delete the sandbox. Order is the design.
+
+const rmFromRepo = (...rels: string[]) =>
+  rels.forEach((r) => fs.rmSync(path.join(repo, r), { recursive: true, force: true }));
+
+test('a declared file is copied into the repository, and a declared directory recurses', () => {
+  const wt = createWorktree(repo, 70, 1);
+  fs.writeFileSync(path.join(wt.path, 'NOTES.md'), 'the artifact\n');
+  fs.mkdirSync(path.join(wt.path, '.claude', 'skills', 'sdk-docs', 'ref'), { recursive: true });
+  fs.writeFileSync(path.join(wt.path, '.claude', 'skills', 'sdk-docs', 'SKILL.md'), '# skill\n');
+  fs.writeFileSync(path.join(wt.path, '.claude', 'skills', 'sdk-docs', 'ref', 'api.md'), '# api\n');
+
+  // The trailing slash is how a directory is usually written and means nothing to the copy.
+  const r = exportOutputs(wt.path, repo, ['NOTES.md', '.claude/skills/sdk-docs/']);
+  assert.deepEqual(r.missing, []);
+  assert.deepEqual(r.exported.slice().sort(), [
+    '.claude/skills/sdk-docs/SKILL.md', '.claude/skills/sdk-docs/ref/api.md', 'NOTES.md',
+  ].sort(), 'a directory is recorded as the files it stood for');
+  assert.equal(fs.readFileSync(path.join(repo, 'NOTES.md'), 'utf8'), 'the artifact\n');
+  assert.equal(fs.readFileSync(path.join(repo, '.claude', 'skills', 'sdk-docs', 'ref', 'api.md'), 'utf8'), '# api\n',
+    'the parents are created on the way');
+
+  removeWorktree(repo, wt, { exported: true });
+  rmFromRepo('NOTES.md', '.claude');
+});
+
+test('a declared path the run did not produce is missing — and NOTHING is copied', () => {
+  const wt = createWorktree(repo, 71, 1);
+  fs.writeFileSync(path.join(wt.path, 'produced.txt'), 'here\n');
+
+  const r = exportOutputs(wt.path, repo, ['produced.txt', 'promised.txt']);
+  assert.deepEqual(r.missing, ['promised.txt']);
+  assert.deepEqual(r.exported, [], 'the attempt is going to fail, so half of it must not land in the tree');
+  assert.equal(fs.existsSync(path.join(repo, 'produced.txt')), false,
+    'an artifact from a run nobody accepted, mixed into the repository with no mark on it, is worse than none');
+
+  removeWorktree(repo, wt, { exported: true });
+});
+
+test('an export path that leaves the worktree is REFUSED, however it is spelled', () => {
+  // A declared output is not a licence to write anywhere: the board does this copy with the
+  // operator's authority and no agent in the loop to notice where it landed.
+  for (const bad of ['../elsewhere.txt', 'a/../../b.txt', '/etc/passwd', '']) {
+    assert.throws(() => checkExportPath(bad), (e: Error & { exitCode?: number }) => {
+      assert.equal(e.exitCode, 2);
+      assert.match(e.message, /Declare a path inside the repository/, 'and says what to do next');
+      return true;
+    }, `${JSON.stringify(bad)} must be refused`);
+  }
+  assert.throws(() => checkExportPath('.kanban/board.db'), /board's own directory/,
+    'including the one directory a copy must never land in');
+  assert.throws(() => checkExportPath('.git/config'), /repository's own plumbing/,
+    'and the other one — in a worktree `.git` is a file, and copying it over a real one breaks the checkout');
+  assert.throws(() => checkExportPath('./'), /names the whole checkout/);
+  assert.equal(checkExportPath('.claude/skills/x/'), '.claude/skills/x', 'and a legal one is normalised');
+});
+
+test('a symlink out of the checkout is refused rather than followed', () => {
+  // The half a syntax rule cannot make: `exports: ["out"]` looks innocent, and `out -> /somewhere`
+  // would copy somebody else's files into the repository.
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-elsewhere-'));
+  fs.writeFileSync(path.join(elsewhere, 'secret.txt'), 'not the Job\'s to take\n');
+  const wt = createWorktree(repo, 72, 1);
+  fs.symlinkSync(elsewhere, path.join(wt.path, 'out'));
+
+  assert.throws(() => exportOutputs(wt.path, repo, ['out']), /outside the checkout/);
+  assert.equal(fs.existsSync(path.join(repo, 'out')), false);
+
+  fs.rmSync(path.join(wt.path, 'out'));
+  removeWorktree(repo, wt, { exported: true });
+  fs.rmSync(elsewhere, { recursive: true, force: true });
+});
+
+test('an un-isolated Job checks its declaration where the work already is', () => {
+  fs.writeFileSync(path.join(repo, 'in-place.txt'), 'written in the operator\'s own tree\n');
+  assert.deepEqual(exportOutputs(repo, repo, ['in-place.txt']), { exported: ['in-place.txt'], missing: [] },
+    'nothing to move — the declaration is a check that it is there');
+  assert.deepEqual(exportOutputs(repo, repo, ['never-written.txt']).missing, ['never-written.txt']);
+  rmFromRepo('in-place.txt');
+});
+
+// ------------------------------------------------- and what that lets the removal say
+
+test('once the declared outputs are out, the rest of the checkout is litter and it goes', () => {
+  const wt = createWorktree(repo, 73, 1);
+  fs.writeFileSync(path.join(wt.path, 'skill.md'), 'the deliverable\n');
+  // The 614 MB per checkout, and the reason `git worktree remove` needs --force here.
+  fs.mkdirSync(path.join(wt.path, 'node_modules', 'dep'), { recursive: true });
+  fs.writeFileSync(path.join(wt.path, 'node_modules', 'dep', 'index.js'), 'module.exports = 1\n');
+
+  assert.deepEqual(exportOutputs(wt.path, repo, ['skill.md']).missing, []);
+  const gone = removeWorktree(repo, wt, { exported: true });
+  assert.equal(gone.removed, true, gone.why);
+  assert.equal(fs.existsSync(wt.path), false);
+  assert.equal(fs.readFileSync(path.join(repo, 'skill.md'), 'utf8'), 'the deliverable\n',
+    'and the artifact outlived the sandbox, which is the whole point of the order');
+  rmFromRepo('skill.md');
+});
+
+test('the same checkout, having declared nothing, is KEPT — the guard is not weakened for everyone else', () => {
+  const wt = createWorktree(repo, 74, 1);
+  fs.writeFileSync(path.join(wt.path, 'skill.md'), 'the deliverable\n');
+
+  const gone = removeWorktree(repo, wt);
+  assert.equal(gone.removed, false, 'with no declaration, nothing can tell this file from an artifact');
+  assert.match(gone.why, /uncommitted changes or untracked files/);
+  assert.equal(fs.existsSync(path.join(wt.path, 'skill.md')), true);
+});
+
+test('an exported checkout still keeps a commit that exists nowhere else', () => {
+  const wt = createWorktree(repo, 75, 1);
+  fs.writeFileSync(path.join(wt.path, 'out.txt'), 'declared\n');
+  assert.deepEqual(exportOutputs(wt.path, repo, ['out.txt']).missing, []);
+  // Committed AND dirty: the flag waives the dirty half only.
+  fs.writeFileSync(path.join(wt.path, 'src.txt'), 'work\n');
+  git(['add', '-A'], wt.path);
+  git(['commit', '-qm', 'a worker commit'], wt.path);
+  fs.writeFileSync(path.join(wt.path, 'scratch.txt'), 'undeclared\n');
+
+  const gone = removeWorktree(repo, wt, { exported: true });
+  assert.equal(gone.removed, false, 'a commit is not litter — it is work whose own channel, a push, never happened');
+  assert.match(gone.why, /never been pushed/);
+  assert.doesNotMatch(gone.why, /uncommitted changes/, 'and the untracked file is not why it stayed');
+  assert.equal(fs.existsSync(wt.path), true);
+
+  rmFromRepo('out.txt');
+  git(['worktree', 'remove', '--force', wt.path]);
 });

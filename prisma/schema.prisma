@@ -43,6 +43,9 @@ enum Outcome {
   timed_out   // resumable: the wall clock ran out, not the model
   refused
   crashed
+  no_output   // the session ended, but a path the Job DECLARED is not there. Not a crash and not a
+              // refusal: the process did what it was asked and the contract still was not met, which
+              // is the outcome ADR-008 exists to make expressible.
   lost        // the lease expired with nobody reporting — the attempt was never heard from again
   stopped     // the operator stopped the daemon mid-run. Resumable, and it does NOT spend a retry:
               // `kb down` is not a failure of the work, and charging one would mean a Job could be
@@ -129,6 +132,12 @@ model Job {
   /// Run in its own git worktree. Enforced at admission, not requested in a prompt.
   isolate      Boolean @default(true)
   maxRetries   Int     @default(2)
+  /// What this Job must produce on disk: a JSON array of repository-relative paths, copied out of
+  /// the worktree into `Board.repoPath` before the checkout is released (ADR-008). Directories
+  /// recurse. A declared path the run did not produce fails the attempt — that rule is the whole
+  /// reason the declaration is worth writing down, and without it this is a copy loop rather than a
+  /// contract. Null, not `[]`, for a Job that produces nothing outside git.
+  exports      Json?
 
   // ---- status: what is happening. Written only by the controller.
   phase         Phase   @default(pending)
@@ -171,6 +180,11 @@ model Attempt {
   branch    String?
   prNumber  Int?
   prUrl     String?
+  /// What this attempt handed over: the paths that actually arrived in the repository, expanded
+  /// from the Job's declaration (a declared directory becomes the files under it). Null when the
+  /// Job declared nothing — an empty array would say "declared, produced none", which is a
+  /// different fact and one that fails the attempt.
+  exported  Json?
   /// Reported for the operator's benefit only — the SDK can always recompute it from the session.
   costUsd   Float?
 

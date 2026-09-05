@@ -943,6 +943,7 @@ export const JobScalarFieldEnum = {
   maxBudgetUsd: 'maxBudgetUsd',
   isolate: 'isolate',
   maxRetries: 'maxRetries',
+  exports: 'exports',
   phase: 'phase',
   lastSessionId: 'lastSessionId',
   lastError: 'lastError',
@@ -969,6 +970,7 @@ export const AttemptScalarFieldEnum = {
   branch: 'branch',
   prNumber: 'prNumber',
   prUrl: 'prUrl',
+  exported: 'exported',
   costUsd: 'costUsd'
 } as const
 
@@ -1083,20 +1085,6 @@ export type BooleanFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel,
 
 
 /**
- * Reference to a field of type 'Phase'
- */
-export type EnumPhaseFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'Phase'>
-    
-
-
-/**
- * Reference to a field of type 'Outcome'
- */
-export type EnumOutcomeFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'Outcome'>
-    
-
-
-/**
  * Reference to a field of type 'Json'
  */
 export type JsonFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'Json'>
@@ -1107,6 +1095,20 @@ export type JsonFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'J
  * Reference to a field of type 'QueryMode'
  */
 export type EnumQueryModeFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'QueryMode'>
+    
+
+
+/**
+ * Reference to a field of type 'Phase'
+ */
+export type EnumPhaseFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'Phase'>
+    
+
+
+/**
+ * Reference to a field of type 'Outcome'
+ */
+export type EnumOutcomeFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'Outcome'>
     
 
 /**
