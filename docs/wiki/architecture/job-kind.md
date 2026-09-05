@@ -9,10 +9,10 @@ covers:
   - path: prisma/schema.prisma
     sha: 5c28188e805303dd55ada9c009656afd29bbe246
   - path: src/controller.ts
-    sha: c80cd9b51e5f2c18d0c9e409b1c81207355c0453
+    sha: ceb3a81e55c436d8ea55aaff1d2eafba77e4cbb3
   - path: src/db.ts
     sha: bf646fb9e9310a7550ad610aba36fdc0d00fb787
-generated_at_commit: c6e6f2e
+generated_at_commit: 51fcf3d
 last_refreshed: 2026-09-05
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control]
 ---
@@ -69,7 +69,10 @@ the branch, push, open a **draft** pull request, never merge (`src/brief.ts`). T
 human merges, which is what keeps this kind dumb.
 
 A checkout that still holds work is never removed — if the push failed, that
-directory is the only copy.
+directory is the only copy. It is also what a **resumed** attempt continues in: a
+resumed session believes it is in the directory it was working in, so cutting a fresh
+`kb-<jobId>-<k>` would wake it on a different branch with none of its own commits.
+Resume is not restart, and that has to be true of the filesystem too.
 
 **The claim is the `@@id` on `Lease`.** A second holder's insert fails against the
 primary key, and that failure *is* the answer — the loser is recorded in

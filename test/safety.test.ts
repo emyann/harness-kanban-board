@@ -205,6 +205,48 @@ test('reclaim does not steal a lease renewed between the read and the delete', a
   assert.equal(attempt.outcome, null, 'and its live attempt was not marked lost');
 });
 
+test('a resumable stop keeps the session, and the retry runs in the same checkout', async () => {
+  const b = await freshBoard();
+  const job = await b.job('resumes', { isolate: true, maxRetries: 2 });
+  const dirs: string[] = [];
+
+  // First attempt hits its turn cap; second completes. Both record where they ran.
+  let n = 0;
+  const capThenFinish = {
+    name: 'cap-then-finish',
+    async run(spec: { cwd: string }) {
+      dirs.push(spec.cwd);
+      n += 1;
+      // A worker that runs out of turns has usually done partial work, and that is what keeps its
+      // checkout from being swept as clean. A first attempt that did nothing leaves nothing to
+      // resume INTO, and a fresh worktree is then equivalent — there is no work to lose.
+      if (n === 1) fs.writeFileSync(path.join(spec.cwd, 'wip.txt'), 'partial');
+      return n === 1
+        ? { status: 'max_turns', ok: false, sessionId: 'sess-1', text: '', costUsd: 0, turns: 1,
+            durationMs: 0, stopReason: null, denials: 0, error: null }
+        : { status: 'completed', ok: true, sessionId: 'sess-1', text: 'done', costUsd: 0, turns: 2,
+            durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  };
+
+  await reconcile({ runtime: capThenFinish, cwd: REPO, board: b.slug, readPr: false });
+  const mid = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(mid.lastSessionId, 'sess-1', 'a turn cap is resumable, so the session is kept');
+
+  await reconcile({ runtime: capThenFinish, cwd: REPO, board: b.slug, readPr: false });
+
+  assert.equal(dirs.length, 2);
+  assert.equal(dirs[1], dirs[0], 'the retry resumed in the SAME checkout, not a fresh one');
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: { orderBy: { k: 'asc' } } } });
+  assert.equal(after.phase, 'succeeded');
+  assert.equal(after.attempts[1].branch, `kb-${job.id}-1`, 'and on the branch where its PR already is');
+
+  const { removeWorktree, existingWorktree } = await import('../src/worktree.ts');
+  const left = existingWorktree(REPO, job.id, 1);
+  if (left) removeWorktree(REPO, left);
+});
+
 // ---------------------------------------------------------------- G5: a killed process
 
 test('a process killed mid-run is reclaimed, its orphan marked lost, and retried exactly once', async () => {

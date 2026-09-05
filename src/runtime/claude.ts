@@ -28,11 +28,21 @@ import { admissionHooks } from '../admission.ts';
  */
 const DEFAULT_TOOLS = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'WebFetch', 'WebSearch', 'TodoWrite'];
 
-/** Map the SDK's terminal states onto ours. The three resumable ones are the point. */
+/** How long an interrupted turn is given to wind down and report before the transport is killed. */
+const INTERRUPT_GRACE_MS = 20_000;
+
+/**
+ * Map the SDK's terminal states onto ours. The three resumable ones are the point.
+ *
+ * `terminal_reason` is read FIRST and it is not decoration. An interrupted turn can come back with
+ * `subtype: 'success'` — which would be recorded as `completed`, the worst failure available on a
+ * board whose entire claim is that `succeeded` means something. `aborted_streaming` / `aborted_tools`
+ * are how the SDK says "this ended because somebody stopped it".
+ */
 function statusOf(result: SDKResultMessage | null, threw: boolean, timedOut: boolean): RunStatus {
-  // Our own stop wins over whatever the SDK reported on the way out: an aborted run may or may
-  // not have produced a result, and either way the reason it ended is the clock.
-  if (timedOut) return 'timeout';
+  const aborted = result && 'terminal_reason' in result
+    && (result.terminal_reason === 'aborted_streaming' || result.terminal_reason === 'aborted_tools');
+  if (aborted || timedOut) return 'timeout';
   if (!result) return 'error';
   if (result.subtype === 'success') {
     return 'stop_reason' in result && result.stop_reason === 'refusal' ? 'refused' : 'completed';
@@ -54,12 +64,32 @@ export const claudeRuntime: Runtime = {
     let error: string | null = null;
 
     const tools = spec.allowedTools ?? DEFAULT_TOOLS;
-    // The wall-clock stop. `interrupt()` would be gentler but needs streaming input, which is a
-    // structural change with its own open decision (docs/rebuild-plan.md); an AbortController
-    // bounds the run without touching the input mode.
+    // The wall-clock stop, in two stages: ask, then insist.
+    //
+    // Aborting alone kills the transport before any result arrives, so `total_cost_usd` is never
+    // reported and a stalled thirty-minute run contributed **nothing** to the board's spend
+    // ceiling — a hole in the exact guard that exists for it. An interrupt ends the turn properly:
+    // a result comes back, with real cost and a resumable session id.
+    //
+    // `interrupt()` is attempted, never depended on. The SDK's own comment says control requests
+    // are "only supported when streaming input/output is used", but it was measured working on a
+    // string prompt (stdin closes only at the first result, so the control channel stays writable).
+    // Either way the abort still lands after the grace window, so an SDK that stops honouring this
+    // degrades to exactly today's behaviour rather than to a hang.
     const abortController = new AbortController();
+    let insist: ReturnType<typeof setTimeout> | null = null;
     const timer = spec.timeoutMs
-      ? setTimeout(() => { timedOut = true; abortController.abort(); }, spec.timeoutMs)
+      ? setTimeout(() => {
+          timedOut = true;
+          onEvent?.({ kind: 'text', taskId: spec.taskId, text: `wall clock reached — interrupting` });
+          void Promise.resolve()
+            .then(() => stream.interrupt())
+            .catch(() => { /* unsupported, or the turn already ended */ })
+            .finally(() => {
+              insist = setTimeout(() => abortController.abort(), INTERRUPT_GRACE_MS);
+              if (typeof insist.unref === 'function') insist.unref();
+            });
+        }, spec.timeoutMs)
       : null;
     const stream = query({
       prompt: spec.prompt,
@@ -130,6 +160,7 @@ export const claudeRuntime: Runtime = {
       error = e instanceof Error ? e.message : String(e);
     } finally {
       if (timer) clearTimeout(timer);
+      if (insist) clearTimeout(insist);
     }
 
     const status = statusOf(result, error !== null, timedOut);
@@ -146,7 +177,10 @@ export const claudeRuntime: Runtime = {
       durationMs: result?.duration_ms ?? 0,
       stopReason: result && 'stop_reason' in result ? (result.stop_reason ?? null) : null,
       denials: result?.permission_denials?.length ?? 0,
-      error: timedOut ? `wall clock: ${spec.timeoutMs}ms` : error,
+      // A timed-out run that still reported keeps its real cost, which is the point of interrupting
+      // rather than aborting: `costUsd` above comes from the result, and that is what reaches the
+      // board's spend ceiling.
+      error: timedOut ? `wall clock: ${spec.timeoutMs}ms${result ? ' (interrupted, reported)' : ' (aborted)'}` : error,
     };
   },
 };

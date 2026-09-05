@@ -78,6 +78,25 @@ export function createWorktree(root: string, jobId: number, k: number): Worktree
   return { path: dir, branch, baseLabel, base };
 }
 
+/**
+ * The checkout an earlier attempt left behind, or null.
+ *
+ * A resumed session continues its transcript, so it believes it is in the directory it was working
+ * in — and cutting a fresh `kb-<jobId>-<k>` from origin would wake it on a different branch with
+ * none of its own commits, while the brief told it to push to the new one. Resume is not restart,
+ * and that has to be true of the filesystem as well as of the session.
+ *
+ * `base` is resolved fresh rather than remembered. If origin has moved since, the worktree may read
+ * as "ahead" when it is not — which errs toward keeping it, and keeping is the safe direction.
+ */
+export function existingWorktree(root: string, jobId: number, k: number): Worktree | null {
+  const branch = branchFor(jobId, k);
+  const dir = path.join(root, '.kanban', 'worktrees', branch);
+  if (!fs.existsSync(dir)) return null;
+  const baseLabel = baseRef(root);
+  return { path: dir, branch, baseLabel, base: resolveBase(root, baseLabel) };
+}
+
 /** Resolve a ref to a commit **in the root repo**, never in the worktree. See `Worktree.base`. */
 function resolveBase(root: string, ref: string): string {
   const r = git(root, ['rev-parse', '--verify', `${ref}^{commit}`]);

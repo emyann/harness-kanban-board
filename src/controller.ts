@@ -1,5 +1,5 @@
 import { openBoard } from './db.ts';
-import { createWorktree, removeWorktree, type Worktree } from './worktree.ts';
+import { createWorktree, existingWorktree, removeWorktree, type Worktree } from './worktree.ts';
 import { prForBranch } from './pulls.ts';
 import { withProtocol } from './brief.ts';
 import { gateClaim, windowStart } from './limits.ts';
@@ -204,8 +204,13 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     let wt: Worktree | null = null;
     if (job.isolate) {
       try {
-        wt = createWorktree(deps.cwd, job.id, k);
-        deps.onEvent?.(`  worktree ${wt.branch} from ${wt.baseLabel}`);
+        // A resumed session continues where it left off, on disk as well as in its transcript.
+        // The previous attempt's checkout is kept whenever it held work, so it is usually there.
+        const resuming = job.lastSessionId ? existingWorktree(deps.cwd, job.id, k - 1) : null;
+        wt = resuming ?? createWorktree(deps.cwd, job.id, k);
+        deps.onEvent?.(resuming
+          ? `  resuming in ${wt.branch} (the checkout attempt ${k - 1} left)`
+          : `  worktree ${wt.branch} from ${wt.baseLabel}`);
       } catch (e) {
         // A checkout we could not make is a spawn failure, not a worker failure. Say so, release,
         // and leave the Job pending rather than burning a retry on our own plumbing.
