@@ -280,6 +280,101 @@ test('--interval has a floor: a sub-second tick is a mistake, not a preference',
   }
 });
 
+// ---------------------------------------------------------------- log --since
+
+const { parseDuration } = await import('../src/kb.ts');
+
+test('parseDuration reads the four units', () => {
+  assert.equal(parseDuration('90s'), 90_000);
+  assert.equal(parseDuration('30m'), 1_800_000);
+  assert.equal(parseDuration('2h'), 7_200_000);
+  assert.equal(parseDuration('3d'), 259_200_000);
+  assert.equal(parseDuration('  2h  '), 7_200_000, 'a shell that leaves whitespace is not a mistake');
+});
+
+test('parseDuration refuses a bare number and names the units', () => {
+  // The whole point of the guard: `sleep` means seconds, `find -mtime` means days, so a bare `30`
+  // is off by 1440 half the time and silently — a too-wide window still prints plausible events.
+  for (const bad of ['30', '0', '1.5']) {
+    assert.throws(
+      () => parseDuration(bad),
+      (e: Error & { exitCode?: number }) => {
+        assert.equal(e.exitCode, 2, 'a usage error, not a crash');
+        assert.match(e.message, /has no unit/);
+        assert.match(e.message, /m \(minutes\)/, 'and says which units exist');
+        return true;
+      },
+      `--since ${bad} should be refused`,
+    );
+  }
+});
+
+test('parseDuration refuses a unit it does not have', () => {
+  assert.throws(() => parseDuration('2w'), /does not know the unit "w".*d \(days\)/s);
+  assert.throws(() => parseDuration('2ms'), /does not know the unit "ms"/);
+});
+
+test('parseDuration refuses empty, and says what one looks like', () => {
+  assert.throws(() => parseDuration(''), /wants a duration like 30m/);
+  assert.throws(() => parseDuration('   '), /wants a duration like 30m/);
+});
+
+test('parseDuration refuses a duration that points forwards', () => {
+  // `--since` reads backwards from now, so a negative one has no meaning to fall back on.
+  assert.throws(() => parseDuration('-30m'), /positive duration, got -30m/);
+  assert.throws(() => parseDuration('0m'), /positive duration/);
+});
+
+test('parseDuration refuses what is not a duration at all', () => {
+  for (const bad of ['lunch', 'm', '1h30m', '--json']) {
+    assert.throws(() => parseDuration(bad), /does not understand|has no unit/, `${bad} should be refused`);
+  }
+});
+
+test('parseDuration names the flag it was given, so the message fits the caller', () => {
+  assert.throws(() => parseDuration('30', '--within'), /--within 30 has no unit/);
+});
+
+test('log --since keeps only what is newer, and drops what is older', async () => {
+  const j = json((await kb('new', 'lunchtime', '--brief', 'b', '--board', 'window', '--json')).out);
+  const board = await db.board.findUniqueOrThrow({ where: { slug: 'window' } });
+  await db.event.create({
+    data: { kind: 'ancient', jobId: j.id, boardId: board.id, at: new Date(Date.now() - 6 * 3_600_000) },
+  });
+  await db.event.create({
+    data: { kind: 'justnow', jobId: j.id, boardId: board.id, at: new Date(Date.now() - 60_000) },
+  });
+  const kinds = json((await kb('log', '--board', 'window', '--since', '1h', '--json')).out)
+    .map((e: { kind: string }) => e.kind);
+  assert.ok(kinds.includes('justnow'));
+  assert.ok(!kinds.includes('ancient'), 'six hours ago is not in the last hour');
+});
+
+test('log --since composes with -n and with a Job id', async () => {
+  const other = json((await kb('new', 'not-in-the-window', '--brief', 'b', '--board', 'window', '--json')).out);
+  const both = json((await kb('log', String(other.id), '--board', 'window', '--since', '1h', '--json')).out);
+  assert.ok(both.length >= 1);
+  assert.ok(both.every((e: { jobId: number }) => e.jobId === other.id), '--since narrows, it does not widen');
+
+  const capped = json((await kb('log', '--board', 'window', '--since', '1h', '-n', '1', '--json')).out);
+  assert.equal(capped.length, 1, 'both apply: the window narrows, the count caps');
+});
+
+test('log --since says the window was empty rather than that the log is', async () => {
+  // "nothing recorded yet" on a board with a month of history reads as data loss.
+  const board = await db.board.create({ data: { slug: 'quiet' } });
+  await db.event.create({
+    data: { kind: 'long_ago', boardId: board.id, at: new Date(Date.now() - 30 * 86_400_000) },
+  });
+  const r = await kb('log', '--board', 'quiet', '--since', '2h');
+  assert.match(r.out, /nothing on quiet in the last 2h/);
+  assert.match((await kb('log', '--board', 'quiet')).out, /long_ago/, 'and the log itself is not empty');
+});
+
+test('log --since refuses a bad duration before it queries anything', async () => {
+  await assert.rejects(() => main(['log', '--board', 'window', '--since', '30']), /has no unit/);
+});
+
 // ---------------------------------------------------------------- one machine, many repositories
 
 const { resolveBoard, gitRoot } = await import('../src/kb.ts');

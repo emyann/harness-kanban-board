@@ -53,6 +53,7 @@ const HELP = `kb — run one agent against one brief
        --foreground        run the loop here instead of detaching (what a supervisor runs)
   kb down                  stop it, cleanly                    [--timeout <s>]
   kb log [<id>]            what happened, in order             [-n <count>]
+       --since <dur>       only what is newer than 90s, 30m, 2h, 3d
 
   kb boards                every board on this machine
   kb boards add <slug>     point a board at a repository       [--repo <path>]
@@ -165,6 +166,38 @@ const num = (v: unknown, flag: string): number | undefined => {
   return n;
 };
 
+const UNIT_MS: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+const UNITS = 's (seconds), m (minutes), h (hours) or d (days)';
+
+/**
+ * A short duration — `90s`, `30m`, `2h`, `3d` — as milliseconds.
+ *
+ * A bare number is refused rather than assumed. Every tool that guesses picks a different unit
+ * (`sleep` seconds, `at` minutes, `find -mtime` days), so `--since 30` reads as thirty of whatever
+ * the reader last used; being wrong by a factor of 1440 is silent, because a window that is too
+ * wide still prints plausible-looking events. The unit is one character and it removes the whole
+ * question, so it is required.
+ *
+ * Pure: it throws usage errors and touches nothing else, which is what makes it testable alone.
+ */
+export function parseDuration(input: string, flag = '--since'): number {
+  const raw = input.trim();
+  if (!raw) throw usage(`${flag} wants a duration like 30m, 2h or 3d — it was empty`);
+  const m = /^(-?\d+(?:\.\d+)?)\s*([a-zA-Z]*)$/.exec(raw);
+  if (!m) throw usage(`${flag} does not understand ${JSON.stringify(raw)} — it wants a number and a unit, like 30m, 2h or 3d`);
+  const [, digits, unit] = m;
+  if (!unit) {
+    throw usage(`${flag} ${digits} has no unit — write ${digits}m for minutes, or use ${UNITS}`);
+  }
+  const ms = UNIT_MS[unit];
+  if (ms === undefined) throw usage(`${flag} does not know the unit "${unit}" — use ${UNITS}`);
+  const n = Number(digits);
+  if (!(n > 0)) {
+    throw usage(`${flag} wants a positive duration, got ${raw} — it means "newer than this long ago", so it only points backwards`);
+  }
+  return n * ms;
+}
+
 export async function main(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -192,6 +225,7 @@ export async function main(argv: string[]): Promise<number> {
       interval: { type: 'string' },
       timeout: { type: 'string' },
       limit: { type: 'string', short: 'n' },
+      since: { type: 'string' },
     },
   });
 
@@ -534,6 +568,10 @@ export async function main(argv: string[]): Promise<number> {
     case 'log': {
       const id = rest[0] ? num(rest[0], 'kb log <id>') : undefined;
       const limit = values.limit !== undefined ? (num(values.limit, '-n') as number) : 50;
+      // `-n` is the wrong axis for "what happened while I was at lunch": a count answers how much
+      // to read, not how far back. The two compose — the window narrows first, the count caps it.
+      const window = values.since !== undefined ? parseDuration(String(values.since)) : undefined;
+      const since = window !== undefined ? new Date(Date.now() - window) : undefined;
       if (id && !(await db.job.findUnique({ where: { id } }))) {
         throw usage(`no Job #${id} — \`kb ls\` shows what is on the board`);
       }
@@ -542,13 +580,23 @@ export async function main(argv: string[]): Promise<number> {
       // Newest first out of the database so the limit keeps the RECENT events, then reversed for
       // reading: a log you read top to bottom that silently drops its tail is a trap.
       const rows = await db.event.findMany({
-        where: id ? { jobId: id } : { OR: [{ boardId: board.id }, { job: { boardId: board.id } }] },
+        where: {
+          ...(id ? { jobId: id } : { OR: [{ boardId: board.id }, { job: { boardId: board.id } }] }),
+          ...(since ? { at: { gte: since } } : {}),
+        },
         orderBy: { id: 'desc' },
         take: limit,
       });
       rows.reverse();
       emit(out, rows, () => {
-        if (!rows.length) return console.log(id ? `nothing recorded for #${id} yet` : `nothing recorded on ${slug} yet`);
+        if (!rows.length) {
+          const what = id ? `for #${id}` : `on ${slug}`;
+          // An empty window is not an empty log, and saying "nothing recorded yet" when the board
+          // has a month of history would read as data loss.
+          return console.log(since
+            ? `nothing ${what} in the last ${values.since}`
+            : `nothing recorded ${what} yet`);
+        }
         for (const e of rows) {
           const who = e.actor ? `  ${e.actor}` : '';
           const extra = e.payload && Object.keys(e.payload as object).length
