@@ -208,11 +208,13 @@ test('start clears it and reports the ceilings', async () => {
 });
 
 test('rm refuses a leased Job rather than orphaning a running worker', async () => {
-  const j = json((await kb('new', 'leased', '--brief', 'b', '--json')).out);
+  // Named, not inferred: `switch` above pointed a second board at this checkout, so from here on
+  // bare resolution refuses rather than choosing between them.
+  const j = json((await kb('new', 'leased', '--brief', 'b', '--board', 'switch', '--json')).out);
   await db.lease.create({
     data: { jobId: j.id, holder: 'someone-else', token: 't', expiresAt: new Date(Date.now() + 60_000) },
   });
-  await assert.rejects(() => kb('rm', String(j.id)), /leased by someone-else/);
+  await assert.rejects(() => kb('rm', String(j.id), '--board', 'switch'), /leased by someone-else/);
   await db.lease.delete({ where: { jobId: j.id } });
 });
 
@@ -262,6 +264,26 @@ test('a repository with a board resolves to that board, whatever it is called', 
   const s = await resolveBoard(db, undefined, root);
   assert.equal(s.slug, 'nothing-like-the-directory', 'matched on repoPath, not on the folder name');
   assert.equal(s.known, true);
+});
+
+test('two boards on one repository refuses instead of picking one, and names both', async () => {
+  // `kb boards add` allows this deliberately — different budgets for different work — so both
+  // answers are valid and neither is inferable. Silently taking the older one is the bug.
+  const root = scratchRepo('two-boards');
+  await db.board.create({ data: { slug: 'zeta-budget', repoPath: root } });
+  await db.board.create({ data: { slug: 'alpha-budget', repoPath: root } });
+  await assert.rejects(
+    () => resolveBoard(db, undefined, root),
+    (e: Error & { exitCode?: number }) => {
+      assert.equal(e.exitCode, 2, 'a usage error, not a crash');
+      assert.match(e.message, /alpha-budget/);
+      assert.match(e.message, /zeta-budget/);
+      assert.match(e.message, /--board <slug>/, 'an error says what to do next');
+      return true;
+    },
+  );
+  // And naming one still resolves: the refusal is about the guess, not about the repository.
+  assert.equal((await resolveBoard(db, 'zeta-budget', root)).slug, 'zeta-budget');
 });
 
 test('a repository with no board resolves to one named after it, ready to be created', async () => {
