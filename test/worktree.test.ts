@@ -20,7 +20,7 @@ fs.writeFileSync(path.join(repo, 'README.md'), '# base\n');
 git(['add', '-A']);
 git(['commit', '-qm', 'base']);
 
-const { createWorktree, existingWorktree, removeWorktree, worktreeHasWork, branchFor, baseRef, freeBranch } =
+const { createWorktree, existingWorktree, removeWorktree, worktreeHasWork, branchFor, baseRef, freeBranch, includedFiles } =
   await import('../src/worktree.ts');
 
 test.after(() => fs.rmSync(repo, { recursive: true, force: true }));
@@ -155,4 +155,133 @@ test('uncommitted operator work is invisible to a worker', () => {
   assert.equal(fs.existsSync(path.join(wt.path, 'dirty.txt')), false,
     'a worktree is a checkout of a commit, not of a working tree');
   fs.rmSync(path.join(repo, 'dirty.txt'));
+});
+
+// ------------------------------------------------- .worktreeinclude — what the repo asks to carry
+//
+// A worktree is a fresh checkout, so a repository whose tests need a gitignored `.env` fails in a
+// worker and passes for the human, and it fails in a way that reads as the worker's fault.
+
+const wroteInclude = (text: string) => fs.writeFileSync(path.join(repo, '.worktreeinclude'), text);
+const noInclude = () => fs.rmSync(path.join(repo, '.worktreeinclude'), { force: true });
+
+/**
+ * The declaration and the ignore rules the group below shares. `.gitignore` is committed, because
+ * only a gitignored file is a candidate — that is the half of the rule that keeps a tracked file
+ * from being duplicated into the checkout that already has it.
+ */
+test('setup: the repo ignores an env file, a secrets dir, and the board', () => {
+  fs.writeFileSync(path.join(repo, '.gitignore'), '.kanban/*.db\n.env\nsecrets/\n');
+  git(['add', '.gitignore']);
+  git(['commit', '-qm', 'ignore env and secrets too']);
+
+  fs.writeFileSync(path.join(repo, '.env'), 'TOKEN=from-the-operator\n');
+  fs.mkdirSync(path.join(repo, 'secrets', 'deep'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'secrets', 'deep', 'key.json'), '{"k":1}\n');
+  fs.mkdirSync(path.join(repo, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.kanban', 'board.db'), 'pretend-sqlite');
+
+  assert.equal(git(['check-ignore', '-q', '.env']).status, 0, 'the env file is gitignored');
+  assert.equal(git(['check-ignore', '-q', '.kanban/board.db']).status, 0, 'and so is the board');
+});
+
+test('a declared gitignored file arrives in the worktree', () => {
+  wroteInclude('.env\nsecrets/**/*.json\n');
+  const wt = createWorktree(repo, 30, 1);
+  assert.equal(fs.readFileSync(path.join(wt.path, '.env'), 'utf8'), 'TOKEN=from-the-operator\n',
+    'the worker gets the file its tests need');
+  assert.equal(fs.readFileSync(path.join(wt.path, 'secrets', 'deep', 'key.json'), 'utf8'), '{"k":1}\n',
+    'including one inside a wholly-ignored directory — the parent is created on the way');
+  noInclude();
+});
+
+test('with no .worktreeinclude nothing is carried, and the board still does not cross', () => {
+  noInclude();
+  assert.deepEqual(includedFiles(repo), []);
+  const wt = createWorktree(repo, 31, 1);
+  assert.equal(fs.existsSync(path.join(wt.path, '.env')), false, 'undeclared is uncarried');
+  assert.equal(fs.existsSync(path.join(wt.path, '.kanban', 'board.db')), false);
+});
+
+test('a tracked file is not duplicated, even when a pattern names it', () => {
+  // The operator has uncommitted edits to a TRACKED file. If `.worktreeinclude` could carry tracked
+  // files, this is what a worker would wake up holding — an edit nobody committed, in a checkout
+  // that is supposed to be a commit.
+  fs.writeFileSync(path.join(repo, 'README.md'), '# edited, not committed\n');
+  wroteInclude('README.md\n');
+
+  assert.deepEqual(includedFiles(repo), [], 'a tracked file is not a candidate at all');
+  const wt = createWorktree(repo, 32, 1);
+  assert.equal(fs.readFileSync(path.join(wt.path, 'README.md'), 'utf8'), '# base\n',
+    'the checkout put it there, and the copy did not overwrite it');
+
+  fs.writeFileSync(path.join(repo, 'README.md'), '# base\n');
+  noInclude();
+});
+
+test('matching the pattern is not enough — the file must be gitignored too', () => {
+  fs.writeFileSync(path.join(repo, 'scratch.txt'), 'untracked but not ignored');
+  wroteInclude('scratch.txt\n.env\n');
+
+  assert.deepEqual(includedFiles(repo), ['.env'], 'both halves of the rule, or neither');
+  const wt = createWorktree(repo, 33, 1);
+  assert.equal(fs.existsSync(path.join(wt.path, 'scratch.txt')), false,
+    'untracked-and-unignored is work in progress, not configuration');
+
+  fs.rmSync(path.join(repo, 'scratch.txt'));
+  noInclude();
+});
+
+test('the copy happens on creation, not on resume into a checkout that already exists', () => {
+  wroteInclude('.env\n');
+  const first = createWorktree(repo, 34, 1);
+  fs.writeFileSync(path.join(first.path, '.env'), 'TOKEN=the-worker-changed-it\n');
+
+  const again = createWorktree(repo, 34, 1);
+  assert.equal(again.path, first.path);
+  assert.equal(fs.readFileSync(path.join(again.path, '.env'), 'utf8'), 'TOKEN=the-worker-changed-it\n',
+    'resume is not restart — re-copying would overwrite what the session has been living with');
+  noInclude();
+});
+
+// --------------------------------------------------------------- and the one thing it may not do
+
+test('a pattern that would carry the board in is REFUSED, however it is written', () => {
+  // Not "quietly skipped". A pattern this broad is one whose author did not mean what they wrote,
+  // and a worker holding a copy of board.db writes into a file nothing ever reads back.
+  for (const pattern of ['.kanban/*.db', '*.db', '**/board.db', '*']) {
+    wroteInclude(`${pattern}\n`);
+    assert.throws(() => includedFiles(repo), /never crosses into a worktree/,
+      `pattern ${pattern} must be refused`);
+  }
+  noInclude();
+});
+
+test('the refusal happens before the checkout is made, and says what to do next', () => {
+  wroteInclude('.kanban/*.db\n.env\n');
+  const dir = path.join(repo, '.kanban', 'worktrees', branchFor(35, 1));
+
+  let e: (Error & { exitCode?: number }) | null = null;
+  try {
+    createWorktree(repo, 35, 1);
+  } catch (err) {
+    e = err as Error & { exitCode?: number };
+  }
+  assert.ok(e, 'it refused');
+  assert.match(e.message, /\.kanban\/board\.db/, 'it names the file it refused');
+  assert.match(e.message, /Narrow the pattern/, 'and the fix, not just the complaint');
+  assert.equal(e.exitCode, 2);
+  assert.equal(fs.existsSync(dir), false,
+    'and no half-made worktree is left for the operator to clean up');
+
+  noInclude();
+});
+
+test('the board never crosses even when the declaration is legitimate', () => {
+  wroteInclude('.env\n');
+  const wt = createWorktree(repo, 36, 1);
+  assert.equal(fs.existsSync(path.join(wt.path, '.env')), true, 'the declared file arrived');
+  assert.equal(fs.existsSync(path.join(wt.path, '.kanban', 'board.db')), false,
+    'and the board did not ride along with it');
+  noInclude();
 });
