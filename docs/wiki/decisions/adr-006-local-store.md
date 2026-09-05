@@ -5,23 +5,23 @@ category: decisions
 kind: decision
 audience: [dev]
 read_when: "touching the store seam, the board's location on disk, the Node floor, the release build, or proposing any sync with GitHub"
-status: accepted
+status: superseded
 date: 2026-09-02
 supersedes: ~
-superseded_by: ~
+superseded_by: decisions/adr-007-workload-scheduler
 covers:
   - path: src/store/index.js
-    sha: bf81d3c348f76a5146931ab57d1af34be05aef18
+    sha: fed32f2f24ff0ecb5bbec064c26fcaa3f63fd7dc
   - path: src/bridge/github-issues.js
-    sha: 55b3b9a708e5d00bdc2cd02a221c0867b10aaea3
+    sha: e056157db3df620b291733ee9be4f9dd2d453b27
   - path: src/forge.js
-    sha: 0e424d2844bee9b0fdd2f809f7e9ae4314d69e74
+    sha: 1d9e17cd8fad3500b512ef10843d541cda2c65a4
   - path: src/board.js
-    sha: 53192b4670920a4ead1181c925075285dc8ee105
+    sha: 0337a17cf70442cac66fb457c880e4b27a52672e
   - path: package.json
-    sha: a69a02319ae1e2c0181b11ae544c3b646d98832d
-generated_at_commit: e16f166
-last_refreshed: 2026-09-03
+    sha: fdb07ef571e5af4a0540eb8215d2e3bb699c5c12
+generated_at_commit: fc5452a
+last_refreshed: 2026-09-05
 related: [decisions/adr-005-control-plane, decisions/adr-004-roles-and-adoption, architecture/overview, features/web-board, features/up-and-down]
 ---
 

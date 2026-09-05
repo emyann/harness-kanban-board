@@ -150,6 +150,18 @@ pages:
   - slug: decisions/adr-006-local-store
     summary: "The source of truth is local and travels with a clone — a dedicated git ref for the board (`refs/kb/boards/<slug>`, written `kb-board` when the ADR was accepted) plus a node:sqlite index; one control plane per board; the Actions runner removed; GitHub retired as a store and kept as a later bridge; Node floor 22.13; TypeScript transpiled at publish."
     status: seeded
+  - slug: decisions/adr-007-workload-scheduler
+    summary: "hkb is a workload scheduler: one SQLite board behind Prisma, a runtime seam over the Claude Agent SDK, Job as the first kind with a reconcile loop and an admission gate; the DAG becomes a second kind; zero-dependency and no-build-step end."
+    status: seeded
+  - slug: architecture/job-kind
+    summary: "The first workload kind — one agent, one brief, run to completion — mapped onto Job/Pod/Lease/Namespace, with one reconcile pass and a pure retry decision."
+    status: seeded
+  - slug: architecture/runtime-layer
+    summary: "run(spec) -> WorkerOutcome, with the Agent SDK as the first driver and a fake for tests; what the SDK stores so the board does not, and the three SDK behaviours that each cost a bug."
+    status: seeded
+  - slug: concepts/admission-control
+    summary: "Why worktree isolation and dependency ordering are injected or denied in a canUseTool gate rather than asked for in a prompt — and the measured run where the prompt was silently ignored."
+    status: seeded
   - slug: gotchas/long-lived-process-rot
     summary: "The #61 outage: a 90-minute-old loop 404ing on every claim while a fresh process succeeded — why caches are per-tick and the loop exits 4."
     status: planned

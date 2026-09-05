@@ -1,6 +1,6 @@
 ---
 title: hkb at a glance
-summary: "The moving parts: CLI, board protocol, dispatcher loop, workers — and the one rule that shapes them all: the store is the only state."
+summary: "The pre-ADR-007 system, which still runs: CLI, board protocol, dispatcher loop, workers, and the rule that the store is the only state. Points at the new core for anything written since."
 category: architecture
 kind: explanation
 audience: [dev]
@@ -30,12 +30,29 @@ covers:
     sha: 0337a17cf70442cac66fb457c880e4b27a52672e
   - path: src/doctor.js
     sha: c29b0cd7856ca394203cb53b8755bf85e25bd239
-generated_at_commit: 53ecf5a
-last_refreshed: 2026-09-03
+generated_at_commit: fc5452a
+last_refreshed: 2026-09-05
 related: [concepts/store, concepts/board-protocol, concepts/claims-and-leases, concepts/worker-identity, architecture/dispatcher-tick, concepts/roles-and-seats, features/update-notice, features/hook-install-shapes]
 ---
 
 # hkb at a glance
+
+> **Read this first: there are two systems in this repository.** ADR-007 reframed
+> hkb as a *workload scheduler* — a thing that takes a workload and executes it —
+> and built a new core beside the old one without migrating it. This page
+> describes the **pre-ADR-007 system**, which still runs: the board on
+> `refs/kb/boards/<slug>`, the CLI verbs, the dispatcher tick, the worker
+> protocol. It is where the 193 real cards still live.
+>
+> For the new core — one SQLite board behind Prisma, a runtime seam over the
+> Claude Agent SDK, and `Job` as the first and only workload kind — start at
+> `decisions/adr-007-workload-scheduler`, then `architecture/job-kind`,
+> `architecture/runtime-layer` and `concepts/admission-control`.
+>
+> The two share no code. Which one you are reading about is decided by whether the
+> file is `.js` (old) or `.ts` (new).
+
+## The old system
 
 > hkb is a Hermes-style kanban that coding agents work autonomously, on a board
 > that lives **in the repository it drives**. Every structural choice below
