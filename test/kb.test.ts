@@ -201,3 +201,20 @@ test('rm refuses a leased Job rather than orphaning a running worker', async () 
   await assert.rejects(() => kb('rm', String(j.id)), /leased by someone-else/);
   await db.lease.delete({ where: { jobId: j.id } });
 });
+
+test('--interval has a floor: a sub-second tick is a mistake, not a preference', async () => {
+  // It had none, and `--interval 0` ran 2221 passes in three seconds against the board. The loop
+  // is time-driven and nothing it watches has a sub-minute tolerance.
+  for (const bad of ['0', '-5', '0.5']) {
+    await assert.rejects(
+      () => main(['up', '--foreground', '--interval', bad, '--board', 'nope']),
+      (e: Error & { exitCode?: number }) => {
+        assert.equal(e.exitCode, 2, 'a usage error, not a crash');
+        assert.match(e.message, /at least 1/);
+        assert.match(e.message, /the default is 45/, 'an error says what to do next');
+        return true;
+      },
+      `--interval ${bad} should be refused`,
+    );
+  }
+});
