@@ -7,9 +7,9 @@ audience: [dev, ops]
 read_when: "a worker fails on a repository whose tests pass locally, or you are touching the copy step or the board guard in src/worktree.ts"
 covers:
   - path: src/worktree.ts
-    sha: c2952d1d9be9885c198bef296e3bfc92208fca8a
+    sha: 8cba275c6c1379e1a0dae4f67acc299d7024536b
 related: [architecture/job-kind, concepts/admission-control]
-generated_at_commit: 3a5e8cf
+generated_at_commit: 54ad569
 last_refreshed: 2026-09-05
 ---
 
@@ -57,20 +57,22 @@ Two consequences worth knowing:
   Code's own matcher has a documented restriction there; git has none, so an
   operator does not need to know a matcher quirk to write a working pattern.
 - The second `ls-files` is narrowed to the paths the first one named, with
-  `:(literal)` pathspecs. `.kanban/worktrees/` is itself gitignored, so an
+  `:(literal)` pathspecs. `.hkb/worktrees/` is itself gitignored, so an
   unbounded listing would walk every earlier attempt's checkout —
   `node_modules` and all — to answer a question about three files.
 
 ## The board is not carriable, however the pattern is written
 
-`.kanban/` holds `board.db`, its WAL, the daemon's pid files, and the
-worktrees. The controller owns every store write; a worker holding a copy would
-read state that stops being true the moment the controller moves, and write
-into a file nothing ever reads back.
+`.hkb/` holds the worktrees, and a board file when `HKB_DATABASE_URL` points at
+one in the repository rather than at the machine board at `~/.hkb/board.db`
+(`src/db-url.ts`). The controller owns every store write; a worker holding a copy
+would read state that stops being true the moment the controller moves, and write
+into a file nothing ever reads back. And a worktree that carried the worktrees in
+would be copying itself.
 
 So `refuseTheBoard` (`src/worktree.ts`) **refuses** — it does not quietly drop
 the offending path. A pattern broad enough to catch `board.db` (`*.db`,
-`.kanban/**`, a bare globstar) is a pattern whose author did not mean what they
+`.hkb/**`, a bare globstar) is a pattern whose author did not mean what they
 wrote, and silently obeying the rest of it hides that. The check is on the
 resolved paths rather than the pattern text, which is why it holds however the
 pattern is spelled; `test/worktree.test.ts` runs four spellings through it and
@@ -93,11 +95,11 @@ commit tracks that path.
 
 - Nothing changes for a repository without a `.worktreeinclude`; the file is
   optional and its absence is a no-op.
-- If an attempt dies at creation with a message about `.kanban/`, the fix is in
+- If an attempt dies at creation with a message about `.hkb/`, the fix is in
   your `.worktreeinclude`, not in the board: name the directory you meant
   (`config/secrets.json`) rather than a pattern that sweeps the tree.
 - A secret listed here is copied into every attempt's checkout under
-  `.kanban/worktrees/`. That is the point, and it is also the blast radius —
+  `.hkb/worktrees/`. That is the point, and it is also the blast radius —
   declare the files the tests need, not the whole of `~/.config`.
 
 ## Related

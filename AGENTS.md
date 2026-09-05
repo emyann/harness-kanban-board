@@ -1,15 +1,9 @@
-<!-- hkb:start -->
-## Kanban (hkb)
+## If you are an hkb worker
 
-Tasks are cards on the board's git ref (`refs/kb/boards/<name>`) in this repository. If `KB_TASK` is set you are a worker: run
-`hkb show $KB_TASK --json` first, work only in this worktree, open a draft PR **on this worktree's own branch**
-(`kb-$KB_TASK-<attempt>` — the branch name is the only thing that ties a PR to its card), and finish with
-**exactly one** of
-`hkb finish <n> --summary "..."`, `hkb block <n> "why" --kind needs_input`, or `hkb request-review <n> --summary "..."`.
-(`finish` is `complete` under a name no shell claims — `complete` is a bash builtin, and a harness that vets your
-command line word by word will refuse it. Redirect a file rather than using a heredoc, for the same reason.)
-Never `git push --force`. Full protocol: `.agents/skills/kanban/SKILL.md`.
-<!-- hkb:end -->
+You were launched by hkb's controller with a brief and your own git worktree, already checked out on a branch named
+`kb-<jobId>-<attempt>`. Work only in that worktree. Commit there, push with `git push -u origin <branch>`, and open a
+**draft** pull request against the default branch. Never push to the default branch, never merge, and never
+`git push --force`. A human reviews and merges. The exact protocol you were given is in `src/brief.ts`.
 
 ## Project wiki (LLM-maintained)
 

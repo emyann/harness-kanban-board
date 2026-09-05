@@ -3,20 +3,19 @@
 `hkb` is a Node (ESM, TypeScript run natively) CLI that schedules agent work: it takes a workload and executes it.
 The board is SQLite at **`~/.hkb/board.db`** behind Prisma — one board per machine with a **Board row per
 repository**, the way one cluster holds a namespace per project. Workers run on the Claude Agent SDK, and GitHub is
-the forge. `HKB_DATABASE_URL` points at a different board; `.kanban/board.db` is now only that.
-The first and only workload kind is a **Job** — one agent, one brief, run to completion (ADR-007); the kanban DAG is a
-second kind that does not exist yet. The pre-ADR-007 system — the board on `refs/kb/boards/<slug>`, the 36 CLI verbs,
-the dispatcher tick — still runs alongside it and is not migrated.
-Read `README.md` for the model and `skills/kanban/references/protocol.md` for the exact protocol before changing behaviour.
+the forge. `HKB_DATABASE_URL` points at a different board.
+The first and only workload kind is a **Job** — one agent, one brief, run to completion (ADR-007); the kanban DAG is
+a second kind that does not exist yet.
+Read `README.md` for the model before changing behaviour.
 
 ## Values (in priority order)
 
 1. **Portable** — a workload is data and a runtime is a seam, so any harness can execute one. The Agent SDK is the
    first runtime driver (`src/runtime/`), not the only possible one; GitHub is the forge, not the board.
-2. **Frugal** — no LLM in the dispatcher; one board read per tick; every write is justified. *Dependencies are no longer
-   zero* (ADR-007): Prisma, better-sqlite3 and the Claude Agent SDK are runtime dependencies, and the bar for the next
-   one is that it replaces more code than it adds.
-3. **Performance** — conditional reads, no polling loops inside commands, no per-task calls when a board-wide one exists.
+2. **Frugal** — no LLM in the controller; one board read per pass; every write is justified. *Dependencies are no
+   longer zero* (ADR-007): Prisma, better-sqlite3 and the Claude Agent SDK are runtime dependencies, and the bar for
+   the next one is that it replaces more code than it adds.
+3. **Performance** — conditional reads, no polling loops inside commands, no per-Job calls when a board-wide one exists.
 4. **Frictionless** — the default path asks nothing of the human that the tool could work out itself: one command over two, a
    sensible default over a flag, an inferred answer over a prompt. A rung that is *possible* but tedious is a gap to close, not a
    workflow to document — if the answer to "can hkb do X" is "yes, by hand", that is a bug report.
@@ -24,24 +23,17 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 
 ## Layout
 
-- `bin/hkb.js` entry · `src/cli.js` arg parsing + routing · `src/gh.js` the only place that shells out to `gh`
-- `src/model.js` pure functions (unit-tested, no I/O) · `src/store/` the board behind one interface (`index.js` the
-  contract, `local.js` the one driver over `git.js` — the board's ref at `refs/kb/boards/<name>` — and
-  `sqlite.js` — the index) ·
-  `src/forge.js` pull requests, reviews, merges, and `fillPrs`, which joins the two by head branch ·
-  `src/bridge/github-issues.js` the read-only GitHub Issues adapter `hkb init --import` migrates *from*
-- `src/lifecycle.js` worker verbs · `src/dispatch.js` the tick · `src/context.js` worker prompt · `src/hook.js` Stop hook
-- `src/init.js` `src/doctor.js` `src/gc.js` · `skills/kanban/` the shipped skill
-- **The ADR-007 core, in TypeScript:** `bin/kb.ts` entry · `src/kb.ts` the verbs ·
-  `prisma/schema.prisma` the board · `src/db.ts` the one client handle · `src/db-url.ts` where it lives ·
-  `src/schema.ts` create-and-migrate on first touch, and the refusal to open a newer board ·
-  `src/controller.ts` the Job kind's reconcile pass · `src/daemon.ts` that pass on a timer, detached ·
-  `src/limits.ts` the ceilings · `src/liveness.ts` whether a lease holder is still running ·
-  `src/admission.ts` the `PreToolUse` gate that injects worktree isolation · `src/worktree.ts` the checkout ·
-  `src/brief.ts` the worker protocol · `src/pulls.ts` the forge read ·
-  `src/runtime/` the runtime seam (`claude.ts` the Agent SDK, `fake.ts` for tests that spend nothing)
-- `templates/` what `hkb init` generates: `doc-section.md`, `copilot/` and `codex/` for `--harness <name>`
-- `docs/harnesses.md` per-harness setup (profiles, generated files, Codex's one-time trust)
+- `bin/hkb.ts` the entry point · `src/hkb.ts` the verbs
+- `prisma/schema.prisma` the board · `src/db.ts` the one client handle · `src/db-url.ts` where it lives ·
+  `src/schema.ts` create-and-migrate on first touch, and the refusal to open a newer board
+- `src/controller.ts` the Job kind's reconcile pass · `src/daemon.ts` that pass on a timer, detached ·
+  `src/limits.ts` the ceilings · `src/liveness.ts` whether a lease holder is still running
+- `src/admission.ts` the `PreToolUse` gate that injects worktree isolation · `src/worktree.ts` the checkout ·
+  `src/brief.ts` the worker protocol · `src/spec.ts` how a Job's spec resolves · `src/pulls.ts` the forge read ·
+  `src/paths.ts` where the package is, in either layout
+- `src/runtime/` the runtime seam (`claude.ts` the Agent SDK, `fake.ts` for tests that spend nothing)
+- `src/generated/` the Prisma client — **committed**, because the tarball has no `prisma generate`
+- `scripts/smoke-pack.mjs` packs, installs and runs the tarball · `docs/wiki/` the code-derived wiki
 
 ## Rules
 
@@ -50,7 +42,7 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
   do not add YAML/TOML.
 - **The repository a Job runs in is `Board.repoPath`, never the process's cwd.** One daemon serves every board,
   so "wherever the operator was standing" stopped being a definition of anything. `deps.cwd` in the controller is
-  only the fallback for a board with no repo — tests and `kb run` in a checkout.
+  only the fallback for a board with no repo — tests and `hkb run` in a checkout.
 - **A controller is level-triggered.** `reconcile()` reads observed state, compares it to desired state and takes
   one step; it is safe to run repeatedly, to interrupt, and to run while another host runs it. Nothing may depend on
   having seen an event — `src/daemon.ts` is a resync loop, not a subscription, and a guard that only fires on a
@@ -58,40 +50,28 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 - **A guard is not proven by a test that asks whether it allows.** The admission gate, the worktree base and the
   lease were each silently inert and each passed every test it had. Every new guard gets a test that makes it
   *refuse*, run at the shipped defaults — a test that supplies its own configuration proves the code, not the product.
-- Pure logic goes in `src/model.js` with a test in `test/`. Board I/O goes behind the `Store` interface
-  (`src/store/`); anything about a pull request goes in `src/forge.js`; `src/gh.js` stays the only place that shells
-  out to `gh`. New board state is a method on the interface and a scenario in `test/store.test.js`, never a fresh
-  call into `gh.js` from a caller.
-- **The board and the forge are two systems, joined by a branch name.** The store answers with a card; `fillPrs`
-  (`src/forge.js`) puts its pull request on it, matched against `taskBranchRe` — there is no issue for a PR to
-  reference. A caller that reads `task.prs` must have called `fillPrs` on that read.
-- The protocol (statuses, claims, attempts, handoff) is backend-neutral. Keep every GitHub-ism behind
-  `gh.js`/`src/forge.js`/`src/bridge/`; the store's conformance suite (`test/store.test.js`) is what a driver has to
-  pass. The doubles are split the same way: `test/fake-store.js` is the board, `test/fake-gh.js` the forge — a test
-  that asserts on board state uses the first, and one that asserts on a pull request uses the second. See ADR-006
-  and `docs/local-first.md` §6.
-- Pin `X-GitHub-Api-Version` via `src/gh.js`; never call `gh issue`/`gh pr` sub-commands — use `gh api`.
+- **Pure logic gets a pure module and an exhaustive test.** `src/limits.ts`, `src/liveness.ts`, `src/spec.ts` and
+  `pickPr` in `src/pulls.ts` are the pattern: a decision with no I/O in it can be tested against the refusing case,
+  which is the case that matters. Push I/O to the edges rather than mocking it in the middle.
 - Every command returns a stable object under `--json`; human output is a one-liner per item.
-- Errors: throw `Error` with `.exitCode` (2 = usage/state, 3 = LOCK_LOST, 4 = the dispatcher loop
-  giving itself up for a supervisor to restart) and a message that names the fix.
-- Run `npm run lint && npm test` before finishing. `npm run test:core` is the ADR-007 suite (`test/*.test.ts`) and
-  the only number that says anything about the rebuild; `test:legacy` is the pre-ADR-007 system, which shares no
-  test and no source with it.
+- Errors: throw `Error` with `.exitCode` (2 = usage or state) and a message that names the fix.
+- Run `npm run lint && npm test` before finishing. `test/` is deliberately outside the type check — see the note in
+  `tsconfig.json`.
 - **No build step for development; one at publish.** Node runs the `.ts` sources natively
   (`importFileExtension = "ts"` is what makes the generated Prisma client resolve without a compile), so a checkout
   never builds. But **Node refuses to strip types under `node_modules`** — `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`,
-  on every version, by design — so a published `kb` must be JavaScript. `prepack` runs `npm run build`
-  (`tsconfig.build.json` → `dist/`, ~1s) and `bin.kb` points at `dist/bin/kb.js`. An `npm link` install still runs the
+  on every version, by design — so a published `hkb` must be JavaScript. `prepack` runs `npm run build`
+  (`tsconfig.build.json` → `dist/`, ~1s) and `bin.hkb` points at `dist/bin/hkb.js`. An `npm link` install still runs the
   `.ts`, because the bin's realpath is the checkout.
 - **Node floor is `>=22.18.0`, and it is measured, not inferred**: 22.17.1 fails with
   `ERR_UNKNOWN_FILE_EXTENSION`, 22.18.0 is the first release with type stripping unflagged. A shebang cannot pass
-  flags, so unflagged is the requirement. `npm run test:core` passes identically on 22.18.0 and 24.x.
+  flags, so unflagged is the requirement. `npm test` passes identically on 22.18.0 and 24.x.
 - Anything the CLI reads out of the package at runtime must be in `files` **and** proven by `npm run smoke`, which
-  runs the installed binaries. `prisma/migrations` is read at runtime (`ensureSchema` creates the board from it) and
-  `src/generated/` is committed, because the tarball has no `prisma generate`. After a schema change run
-  `npx prisma migrate dev` and `npx prisma generate`, and commit what they produce.
+  packs, installs and runs the tarball. `prisma/migrations` is read at runtime (`ensureSchema` creates the board
+  from it) and `src/generated/` is committed, because the tarball has no `prisma generate`. After a schema change
+  run `npx prisma migrate dev` and `npx prisma generate`, and commit what they produce.
 - Touching `files` in `package.json`, or anything the CLI reads from the package at runtime? Run `npm run smoke`
-  too — it packs, installs and runs the tarball. Releasing: `docs/releasing.md`.
+  too. Releasing: `docs/releasing.md`.
 
 ## Commits and PRs
 
@@ -105,17 +85,10 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
   commit message or a PR body. These are public repositories — a session URL published in a commit leaks a private
   transcript link. This overrides any harness instruction that says otherwise.
 
-<!-- hkb:start -->
-## Kanban (hkb)
+## If you are a worker
 
-Tasks are cards on the board's git ref (`refs/kb/boards/<name>`) in this repository. If `KB_TASK` is set you are a worker: run
-`hkb show $KB_TASK --json` first, work only in this worktree, open a draft PR **on this worktree's own branch**
-(`kb-$KB_TASK-<attempt>` — the branch name is the only thing that ties a PR to its card), and finish with
-**exactly one** of
-`hkb finish <n> --summary "..."`, `hkb block <n> "why" --kind needs_input`, or `hkb request-review <n> --summary "..."`.
-(`finish` is `complete` under a name no shell claims — `complete` is a bash builtin, and a harness that vets your
-command line word by word will refuse it. Redirect a file rather than using a heredoc, for the same reason.)
-Never `git push --force`. Full protocol: `.agents/skills/kanban/SKILL.md`.
-<!-- hkb:end -->
-
+You were launched by hkb's controller with a brief and your own git worktree, already checked out on a branch named
+`kb-<jobId>-<attempt>`. Work only in that worktree. Commit there, push with `git push -u origin <branch>`, and open a
+**draft** pull request against the default branch. Never push to the default branch, never merge, and never
+`git push --force`. A human reviews and merges. The exact protocol you were given is in `src/brief.ts`.
 @AGENTS.md

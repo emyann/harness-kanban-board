@@ -1,31 +1,31 @@
 ---
 title: The loop — a level-triggered daemon, and why the clock is not enough
-summary: kb up runs reconcile on a 45s timer over every board on the machine. Why a controller is level-triggered rather than event-driven, why a lapsed lease is evidence and not proof, why leadership is a row rather than a pid file, and why an operator stop is its own outcome.
+summary: hkb up runs reconcile on a 45s timer over every board on the machine. Why a controller is level-triggered rather than event-driven, why a lapsed lease is evidence and not proof, why leadership is a row rather than a pid file, and why an operator stop is its own outcome.
 category: architecture
 kind: explanation
 audience: [dev]
 read_when: "changing the daemon, the reclaim rule, or anything that decides whether a lease may be taken"
 covers:
   - path: src/daemon.ts
-    sha: 62cd7ecc08e260b1e16ce8e2850d84e432043775
+    sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: 61c8a9db2596bc576f19ec2b589581a54b551e2c
+    sha: e4db1f7d58cc0a761998f1d2a3bb0d78aadea5a8
   - path: src/worktree.ts
-    sha: dc607bf5a12b0c4bd8b3779fd28e2a689400afb4
+    sha: 8cba275c6c1379e1a0dae4f67acc299d7024536b
   - path: src/db-url.ts
-    sha: 0c4f3e6e1ac4a1253ec6d2397c195ce0bd53d36b
+    sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/schema.ts
-    sha: f0cd177f7fe80512ab3e16fefd5f463fb88f6cd2
-generated_at_commit: 741b855
+    sha: 36a37ef8d4d26ee1226e44c664f25ba57d78387e
+generated_at_commit: 54ad569
 last_refreshed: 2026-09-05
 related: [architecture/job-kind, architecture/runtime-layer, decisions/adr-007-workload-scheduler, concepts/worker-identity]
 ---
 
 # The loop
 
-`kb run` reconciles once, in the foreground. `kb up` runs the same pass on a timer
+`hkb run` reconciles once, in the foreground. `hkb up` runs the same pass on a timer
 in a detached process (`src/daemon.ts`). Nothing about the pass changes — the
 daemon is a caller, not a second control plane.
 
@@ -64,14 +64,14 @@ what is unusual in this file:
 
 1. A "tick" can last thirty minutes, where a Kubernetes sync is sub-millisecond.
 2. The lease has to outlive the run it covers, not the pass.
-3. `kb down` has to reach in and interrupt a worker. A controller would just exit.
+3. `hkb down` has to reach in and interrupt a worker. A controller would just exit.
 
 ## Why the interval is slow
 
 Only four things are genuinely time-driven, and none has a sub-minute tolerance:
 a lease expiring, a run passing its wall clock, scheduled work (a kind that
 does not exist yet), and a worktree becoming safe to reclaim. The change-driven
-half — *a Job was filed, run it* — is always one `kb run` away, so it does not
+half — *a Job was filed, run it* — is always one `hkb run` away, so it does not
 set the cadence.
 
 ## The sweep: reclaim is a later question
@@ -105,7 +105,7 @@ ancestry would keep every merged checkout for ever — the bug it is meant to fi
 
 The run in flight `git worktree lock`s its checkout, because the controller stopped
 being the only remover the moment a sweep existed and the two are not even in the
-same process. A `kb:` lock whose holder is provably gone is taken over rather than
+same process. A `hkb:` lock whose holder is provably gone is taken over rather than
 respected; a lock set by hand is left alone.
 
 ## A lapsed lease is evidence, not proof
@@ -139,7 +139,7 @@ once anything lands on that pid — the Job never reclaims at all.
 
 ## An operator stop is not a failure
 
-`kb down` sends SIGTERM; the handler **does not exit**. It aborts the run in
+`hkb down` sends SIGTERM; the handler **does not exit**. It aborts the run in
 flight and lets the pass unwind, because the fenced release is written on the way
 out — exiting is precisely what would leave a lease held.
 
@@ -149,7 +149,7 @@ ended), and it **does not spend a retry**: a Job with `maxRetries: 0` could
 otherwise be made permanently unrunnable by nothing but being turned off. The
 attempt number `k` still advances — it is half the Attempt's primary key — so the
 retry budget is counted separately from the attempt count. The session id is kept,
-so `kb up` after `kb down` resumes rather than restarts.
+so `hkb up` after `hkb down` resumes rather than restarts.
 
 ## Leadership is a row, not a lock
 
@@ -181,7 +181,7 @@ one branch, one pull request) and because the ceilings beside it are already per
 facts: *this repository's PR workflows are expensive, run one at a time*.
 
 `deps.cwd` in the controller survives only as the fallback for a board with no repo —
-which is `kb run` in a checkout, and every test.
+which is `hkb run` in a checkout, and every test.
 
 ## The board bootstraps itself
 
@@ -193,5 +193,5 @@ would fail twice over: it is the "yes, by hand" answer this project treats as a 
 report, and `prisma` is a devDependency a global install does not have.
 
 The opposite direction cannot be repaired, so it is refused with a real message: a
-board carrying migrations this build does not know about belongs to a newer `kb`.
+board carrying migrations this build does not know about belongs to a newer `hkb`.
 One shared board makes that reachable rather than theoretical.

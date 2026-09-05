@@ -55,7 +55,7 @@ Never narrate runtime behaviour you have not read in the code.
 
 ## Scope
 
-The runtime the CLI ships: bin, src, the kanban skill, hooks, harness templates, release/smoke scripts and the serve dashboard. Excluded by policy: test/ (the suite documents itself), docs/ (prose, not source), board-local state (.kanban) and package plumbing.
+The runtime the CLI ships: bin, src, the Prisma schema and its migrations, and the release/smoke scripts. Excluded by policy: test/ (the suite documents itself), docs/ (prose, not source), src/generated/ (the Prisma client — generated, `@ts-nocheck`, not ours to explain) and repository-local state (.hkb).
 
 See `wiki.config.yml` for the authoritative include/exclude globs and the page
 plan. That file is machine-read by the check scripts — keep it accurate.

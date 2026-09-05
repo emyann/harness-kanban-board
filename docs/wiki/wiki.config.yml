@@ -13,22 +13,21 @@ wiki:
 # categories: [architecture, concepts, features, flows, decisions, gotchas, howto]
 
 repo_notes: |
-  hkb (npm: hkb-cli) is a zero-dependency Node >= 20 ESM CLI that turns GitHub Issues into a Hermes-style kanban for coding agents. The protocol is backend-neutral (labels, issue dependencies, git-ref locks, structured comments); GitHub is the default adapter behind src/gh.js. A no-LLM dispatcher loop claims ready cards and spawns harness workers (Claude Code, Copilot CLI, Codex); pure decision logic lives in src/model.js, I/O at the edges. Values in priority order: portable, frugal, performance, flawless experience.
+  hkb (npm: hkb-cli) is a Node >= 22.18 ESM CLI, written in TypeScript that Node runs natively, that schedules agent work. The board is one SQLite file per machine behind Prisma (~/.hkb/board.db) with a Board row per repository. The only workload kind is a Job — one agent, one brief, run to completion — claimed under a lease by a level-triggered controller (src/controller.ts) that runs it inline in a git worktree, behind a runtime seam over the Claude Agent SDK (src/runtime/). Isolation is enforced in a PreToolUse admission gate, not asked for in a prompt. GitHub is the forge (pull requests only, read through src/pulls.ts), never the board. The pre-ADR-007 GitHub-Issues kanban was deleted by ADR-009: anything in git history about refs/kb/boards, a dispatcher tick or a store seam describes code that is gone. Values in priority order: portable, frugal, performance, frictionless, flawless experience.
 
 # Files the wiki may be distilled from. Drives wiki-coverage.mjs.
 scope:
   include:
     - "bin/**"
     - "src/**"
-    - "skills/**"
-    - "commands/**"
-    - "hooks/**"
-    - "templates/**"
+    - "prisma/**"
     - "scripts/**"
-    - "web/**"
   exclude:
     - "test/**"
     - "docs/**"
+    # The Prisma client: generated, ships @ts-nocheck, not ours to explain. (A trailing
+    # comment on the item itself is silently dropped by configLists in lib.mjs.)
+    - "src/generated/**"
 
 # Coverage tunables — uncomment to override the defaults baked into
 # wiki-coverage.mjs (shown there in full).
@@ -49,134 +48,59 @@ coverage:
 # The LLM may add pages not listed here; when it does, it adds them back.
 pages:
   - slug: architecture/overview
-    summary: "The moving parts: CLI, board protocol, dispatcher loop, workers, and where state lives (the board, never the process)."
+    summary: "The moving parts: a CLI over one SQLite board, a level-triggered controller that claims a Job under a lease and runs it inline, a runtime seam, and a worktree as the sandbox."
     status: seeded
-  - slug: architecture/dispatcher-tick
-    summary: "The tick pipeline (outbox, reclaim, reap, orphan sweep, reconcile, promote, tracks, guards, claim+spawn) and the live incident behind each stage."
+  - slug: architecture/job-kind
+    summary: "The first workload kind — one agent, one brief, run to completion — mapped onto Job/Pod/Lease/Namespace, with one reconcile pass and a pure retry decision."
+    status: seeded
+  - slug: architecture/the-loop
+    summary: "hkb up runs reconcile on a 45s timer; why a controller is level-triggered rather than event-driven, why a lapsed lease is evidence and not proof, and why an operator stop is its own outcome."
+    status: seeded
+  - slug: architecture/runtime-layer
+    summary: "run(spec) -> WorkerOutcome, with the Agent SDK as the first driver and a fake for tests; what the SDK stores so the board does not, and the three SDK behaviours that each cost a bug."
+    status: seeded
+  - slug: architecture/the-board
+    summary: "The schema as a model: what a row of each table means, why the spec columns are nullable, what is frozen onto an Attempt at claim time and why, and the self-bootstrapping migration path."
     status: planned
-  - slug: architecture/store-seam
-    summary: "One named interface over board state — openStore(ctx) with the GitHub bodies behind it — plus src/forge.js for the pull-request half that is deliberately not part of it, and a driver-parametrised conformance suite that says when a new driver is done."
-    status: seeded
-  - slug: architecture/board-ref
-    summary: "The durable half of a local board lives at refs/kb/boards/<slug> — a git ref outside refs/heads, invisible to git branch — written with plumbing only, with update-ref as the compare-and-swap and a retry that replays the mutation."
-    status: seeded
-  - slug: architecture/local-store
-    summary: "How the board ref and the .git/hkb index compose into one Store: what open() reconciles, the commit-index-wake order every durable verb follows, which reads go to which tier, and the one-writer rule that makes a clone a reader."
-    status: seeded
-  - slug: concepts/store
-    summary: "The concept underneath both drivers: a board is whatever openStore(ctx) answers, one of two tiers on the local driver does the writing and the other does the indexing, and a process holds a cache, never the truth."
-    status: seeded
-  - slug: concepts/board-protocol
-    summary: "Statuses, kb:* labels, the body block, run/result comments, terminal verbs — the backend-neutral contract every harness drives through gh."
-    status: planned
-  - slug: concepts/claims-and-leases
-    summary: "Git refs as the only atomic CAS on GitHub: claim classification (created/held/unknown), heartbeats, LOCK_LOST, and the self-heal ladder."
-    status: planned
-  - slug: concepts/worker-identity
-    summary: "The three answers to \"which attempt is this session?\" (launch environment, checkout, job record), the order of trust between them, and why a `claude --bg` launch must hand over none of them."
-    status: seeded
-  - slug: concepts/capability-portability
-    summary: "The portability contract behind a profile's `capabilities`: a closed vocabulary of intents, a local binding, an unmapped intent as prose, and the permission derived from the binding."
-    status: seeded
-  - slug: concepts/tool-grant-ceiling
-    summary: "The ceiling rule for a worker's permissions: the board's profile grants, kb.tools/kb.mcp on a card only lower it, and nothing raises it but a human editing board.json — with where it is enforced and where doctor prints it."
-    status: seeded
-  - slug: features/worker-tool-posture
-    summary: "What power an unattended worker holds and who decided it: the inherit/curate posture, the mcp key that whitelists at one end and subtracts at the other, one derivation in effectiveTools, and what doctor prints."
-    status: seeded
-  - slug: features/capability-map
-    summary: "How a profile came to say what it reaches for inside a session: the intent vocabulary, the board-local binding, the brief that names it, the tool grant derived from it, and the doctor check that proves the two agree."
+  - slug: concepts/admission-control
+    summary: "Why worktree isolation and dependency ordering are injected or denied in a PreToolUse gate rather than asked for in a prompt — and the measured run where the prompt was silently ignored."
     status: seeded
   - slug: concepts/node-floor-and-type-check
-    summary: "Why the floor moved to 22.13 and what it bought — node:sqlite for the local store, one warning silenced at the entry point without silencing any other, a type check over the JSDoc the code already carried, and a CI matrix that tests the floor and the current line."
+    summary: "The floor is >=22.18.0, measured; why a published hkb must be JavaScript, how the publish transpile works, and what the CI matrix is for."
     status: seeded
-  - slug: concepts/roles-and-seats
-    summary: "Operator, supervisor, dispatcher, workers: who decides, who judges, who loops, who codes — and which seats are optional."
+  - slug: concepts/leases-and-liveness
+    summary: "Why a lapsed lease is evidence and not proof: the three-valued alive/dead/unknown answer, the boot-time check, and why a wall clock cannot decide this across a suspend."
     status: planned
-  - slug: features/tracks
-    summary: "One session orchestrates a whole DAG subgraph: a wave of siblings as one isolated subagent each, per-node claims as checkpoints, stacked node PRs, fallback to node-by-node."
-    status: seeded
+  - slug: concepts/ceilings
+    summary: "The three claim-time refusals (stopped, concurrency, budget), why none of them may stop a running worker, and why committed-but-unspent budget has to be counted."
+    status: planned
   - slug: features/worktree-includes
     summary: "A worktree is a fresh checkout, so the .env the tests need is not in it — .worktreeinclude declares what to carry across, git answers both halves of the match rule (matched AND gitignored), and no pattern may reach the board."
     status: seeded
-  - slug: features/harness-profiles
-    summary: "The shipped profiles (claude, claude-p, claude-track, copilot-cli, codex): modes, permissions, models, and what each harness can and cannot do."
-    status: planned
-  - slug: features/up-and-down
-    summary: "The two long-running processes as one idempotent verb: pid files as the whole protocol, why the child gets no KB_*, and the line between reporting exit 4 and supervising it."
-    status: seeded
-  - slug: features/web-board
-    summary: "One local server, one inline page, N repos: how the board is read, how a drag becomes a verb, and how every request is routed to the board it names."
-    status: seeded
-  - slug: features/planning-commands
-    summary: "The three board operations that need a model and so cannot be `hkb` verbs — one command source, registered twice, delegating to one procedure in SKILL.md."
-    status: seeded
-  - slug: features/backlog-grooming
-    summary: "The triage lane as a report: the arithmetic computed without a model from the one board read, the judgment left to the skill, and the human yes that is the only thing that writes."
-    status: seeded
-  - slug: features/operator-seat
-    summary: "The third slash command — why the one seat hkb cannot enforce got a written brief instead, where its reaction table's vocabulary comes from, and what keeps the two in sync."
-    status: seeded
-  - slug: features/update-notice
-    summary: "Updates are pull-only, so something has to say there is something to pull — one npm GET a day, in doctor and the dispatcher loop, and why a stale CLI hides a stale skill."
-    status: seeded
-  - slug: features/hook-install-shapes
-    summary: "A `matcher:\"*\"` hook that cannot resolve breaks every tool call in a repo — so what `hkb init` writes depends on where the running hkb lives, and only one that lives inside the repo earns the tracked settings file."
-    status: seeded
-  - slug: features/auto-merge
-    summary: "Why hkb never merges, how a board hands the last step to GitHub's auto-merge, and the branch-protection gate that is the only thing making that safe."
-    status: seeded
-  - slug: features/review-loop
-    summary: "How a reviewed card goes back for another round on the same PR: the one exemption to the active_pr guard, the checkout on the PR's branch, and the block in the brief that stops a second PR."
-    status: seeded
-  - slug: features/path-overlap-guard
-    summary: "The off/running/unmerged modes and their merge.mode defaults, and how idleness — job, pid, or lock-ref beat — keeps the guard from holding a card hostage behind a stuck session."
-    status: seeded
-  - slug: features/denied-tools-ledger
-    summary: "Under --permission-mode dontAsk a denial is never a prompt, just a silent workaround — the ledger reads a worker's transcript for the three shapes a refusal takes and turns the worst one into the exact allowed_tools edit."
-    status: seeded
-  - slug: decisions/adr-001-github-native-backend
-    summary: "GitHub Issues + native dependencies + ref locks won over MCP-first and repo-native designs; stacked PRs rejected for board sequencing."
-    status: planned
-  - slug: decisions/adr-002-zero-npm-dependencies
-    summary: "The CLI ships with zero npm dependencies; presentation may use Node built-ins only. What would justify revisiting."
-    status: planned
-  - slug: decisions/adr-003-npm-trusted-publishing
-    summary: "Releases publish via npm trusted publishing (OIDC) from release.yml only; no npm token exists anywhere."
+  - slug: features/declared-exports
+    summary: "--export as a spec field: what is copied out before teardown, why an undeclared output is litter, and the path syntax that is refused before a checkout is ever made."
     status: planned
   - slug: decisions/adr-004-roles-and-adoption
-    summary: "The canonical seat taxonomy (operator/supervisor/dispatcher/worker) and the adoption ladder for workflows simpler than the full DAG."
+    summary: "The canonical seat taxonomy (operator/supervisor/dispatcher/worker) and the adoption ladder. SUPERSEDED by ADR-009: the dispatcher seat is gone."
     status: seeded
   - slug: decisions/adr-005-control-plane
-    summary: "hkb is a control plane: a board is a namespace, a host is the node, a pause lives on its object; start/pause/resume/stop at worker and board level; the runtime seam; the sleep-aware tick."
+    summary: "hkb is a control plane: a board is a namespace, a pause lives on its object, the runtime is a seam, the tick is sleep-aware. SUPERSEDED by ADR-009 for its CLI vocabulary; the model carried into ADR-007."
     status: seeded
   - slug: decisions/adr-006-local-store
-    summary: "The source of truth is local and travels with a clone — a dedicated git ref for the board (`refs/kb/boards/<slug>`, written `kb-board` when the ADR was accepted) plus a node:sqlite index; one control plane per board; the Actions runner removed; GitHub retired as a store and kept as a later bridge; Node floor 22.13; TypeScript transpiled at publish."
+    summary: "The two-tier local store (a git ref plus a SQLite index). SUPERSEDED by ADR-007."
     status: seeded
   - slug: decisions/adr-007-workload-scheduler
     summary: "hkb is a workload scheduler: one SQLite board behind Prisma, a runtime seam over the Claude Agent SDK, Job as the first kind with a reconcile loop and an admission gate; the DAG becomes a second kind; zero-dependency and no-build-step end."
     status: seeded
   - slug: decisions/adr-008-declared-outputs
-    summary: "A Job declares its outputs — `results` for small structured values, `exports` for paths copied out of the worktree before teardown — and an undeclared output is litter; a declared output that is not produced fails the attempt."
+    summary: "A Job declares its outputs — results for small structured values, exports for paths copied out of the worktree before teardown — and an undeclared output is litter."
     status: seeded
-  - slug: architecture/job-kind
-    summary: "The first workload kind — one agent, one brief, run to completion — mapped onto Job/Pod/Lease/Namespace, with one reconcile pass and a pure retry decision."
-    status: seeded
-  - slug: architecture/runtime-layer
-    summary: "run(spec) -> WorkerOutcome, with the Agent SDK as the first driver and a fake for tests; what the SDK stores so the board does not, and the three SDK behaviours that each cost a bug."
-    status: seeded
-  - slug: architecture/the-loop
-    summary: "kb up runs reconcile on a 45s timer; why a controller is level-triggered rather than event-driven, why a lapsed lease is evidence and not proof, and why an operator stop is its own outcome."
-    status: seeded
-  - slug: concepts/admission-control
-    summary: "Why worktree isolation and dependency ordering are injected or denied in a canUseTool gate rather than asked for in a prompt — and the measured run where the prompt was silently ignored."
+  - slug: decisions/adr-009-retiring-the-first-system
+    summary: "The pre-ADR-007 GitHub-Issues kanban is deleted rather than migrated; kb is renamed hkb, the per-repo directory becomes .hkb/, and the tarball ships only the transpile."
     status: seeded
   - slug: howto/running-the-daemon
-    summary: "Keep `kb up` alive across reboots — a systemd user unit or a launchd agent around `kb up --foreground`, where the log goes, and the restart-after-upgrade rule."
+    summary: "Keep `hkb up` alive across reboots — a systemd user unit or a launchd agent around `hkb up --foreground`, where the log goes, and the restart-after-upgrade rule."
     status: seeded
-  - slug: gotchas/long-lived-process-rot
-    summary: "The #61 outage: a 90-minute-old loop 404ing on every claim while a fresh process succeeded — why caches are per-tick and the loop exits 4."
-    status: planned
-  - slug: gotchas/github-api-quirks
-    summary: "422 'already exists' means held, ref GETs prefix-match into arrays, 304s are free, GITHUB_ACTIONS env reroutes gh — the traps the code already survived."
+  - slug: gotchas/merge-composition
+    summary: "Four collisions where every PR was individually correct and CI-green: what parallel workers on one base actually collide on (shared invariants, not shared files), and why briefing fixed it where machinery could not."
     status: planned

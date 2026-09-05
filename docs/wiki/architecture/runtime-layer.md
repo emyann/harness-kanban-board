@@ -9,10 +9,10 @@ covers:
   - path: src/runtime/index.ts
     sha: 767c2f6c45fd95a7d30430b029ff6dfe48a82b49
   - path: src/runtime/claude.ts
-    sha: 5ae950e19d9727e51a7b765cea7a206005d79e35
+    sha: d39e329417d327e2e6ec2ae169018aaf4fcde3e5
   - path: src/runtime/fake.ts
-    sha: 129055e0e4d9e24946e7ba4d0fc7ed9a0bfc06b5
-generated_at_commit: c5326c0
+    sha: 94f9f21ab7c9702506ae625dff37ac15ecfdbcce
+generated_at_commit: 54ad569
 last_refreshed: 2026-09-05
 related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, concepts/worker-identity]
 ---
@@ -112,7 +112,7 @@ make the suite cost money and stop being deterministic.
   control channel stays writable. The abort still lands after a grace window, so an SDK
   that stops honouring this degrades to the old behaviour rather than to a hang.
 
-  The operator's stop (`WorkerSpec.signal`, from `kb down`) escalates the same two
+  The operator's stop (`WorkerSpec.signal`, from `hkb down`) escalates the same two
   stages for the same reason — a shutdown that abandons the transport loses the cost
   of everything the worker just did, from the ceiling as well as from the record. The
   controller, not the runtime, decides that such a run is `stopped`: a runtime reports

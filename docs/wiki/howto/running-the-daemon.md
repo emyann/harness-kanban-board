@@ -1,32 +1,32 @@
 ---
 title: Running the daemon under a supervisor
-summary: Keep `kb up` alive across reboots — a systemd user unit or a launchd agent around `kb up --foreground`, where the log goes, and the restart-after-upgrade rule.
+summary: Keep `hkb up` alive across reboots — a systemd user unit or a launchd agent around `hkb up --foreground`, where the log goes, and the restart-after-upgrade rule.
 category: howto
 kind: how-to
 audience: [dev]
-read_when: "installing kb on a machine that should keep reconciling without somebody logged in at a terminal"
+read_when: "installing hkb on a machine that should keep reconciling without somebody logged in at a terminal"
 covers:
   - path: src/daemon.ts
-    sha: bc52944c00d0abf3bf340f39f94c07031276d8b8
-  - path: src/kb.ts
-    sha: 02e4527afcfe3565dd5e4503b03dbb3cd0e03384
+    sha: 114665116363d28f7aeecf23e293f0fff050eadc
+  - path: src/hkb.ts
+    sha: d55a39ca200df4bb57d6c3fcd55c6539cbeed7d4
   - path: src/worktree.ts
-    sha: 977a6c51879e48dcedebecaac79f42dc0d0872f0
+    sha: 8cba275c6c1379e1a0dae4f67acc299d7024536b
   - path: src/db-url.ts
-    sha: 83ad1e24bb34864843b0c731f9680c6cbc7de1ea
-generated_at_commit: 4ffa9e1
+    sha: 075e55c592c972b3505f106ac670a277996f0615
+generated_at_commit: 54ad569
 last_refreshed: 2026-09-05
 related: [architecture/the-loop, architecture/job-kind, decisions/adr-007-workload-scheduler]
 ---
 
 # Running the daemon under a supervisor
 
-`kb up` detaches on its own: it spawns this same binary with `up --foreground`
+`hkb up` detaches on its own: it spawns this same binary with `up --foreground`
 and returns (`src/daemon.ts:360-388`). That is enough for a laptop and nothing
 more — the child dies with the machine, and nothing brings it back.
 
-`kb up --foreground` exists for the other case. It runs the loop in *this*
-process (`src/kb.ts:388-409`), so a supervisor owns the lifecycle: it starts the
+`hkb up --foreground` exists for the other case. It runs the loop in *this*
+process (`src/hkb.ts:818-838`), so a supervisor owns the lifecycle: it starts the
 process, restarts it, captures its output, and stops it with a signal. This page
 is the recipe. Why the loop looks the way it does — level-triggered, 45 seconds,
 leadership as a row — is [architecture/the-loop](../architecture/the-loop.md);
@@ -41,29 +41,29 @@ restart. You want **one** unit, not one per repository.
 
 **Point each board at its checkout.** A Job runs in `Board.repoPath`; the
 daemon's own cwd is only the fallback for a board that has none
-(`src/daemon.ts:195-196`, `src/kb.ts:405-407`). Run `kb boards add <slug> --repo
+(`src/daemon.ts:195-196`, `src/hkb.ts:834-836`). Run `hkb boards add <slug> --repo
 <path>` once per repository and the unit needs no meaningful working directory.
 
-**Use an absolute path to `kb`.** A user service does not inherit the PATH your
-shell builds — under nvm in particular, `kb` is on PATH only inside an
-interactive shell. Take the answer from `command -v kb` and paste it in. `kb`
+**Use an absolute path to `hkb`.** A user service does not inherit the PATH your
+shell builds — under nvm in particular, `hkb` is on PATH only inside an
+interactive shell. Take the answer from `command -v hkb` and paste it in. `hkb`
 needs Node >= 22.18.0 (`package.json`), so if the unit runs a system Node that
 is older, invoke the Node you mean by absolute path too.
 
 ## systemd (Linux), as a user unit
 
 A user unit, not a system one: the board is `~/.hkb/board.db`
-(`src/db-url.ts:20-28`) and workers run against your checkouts, your git
-credentials and your agent auth. Write `~/.config/systemd/user/kb.service`:
+(`src/db-url.ts:19-24`) and workers run against your checkouts, your git
+credentials and your agent auth. Write `~/.config/systemd/user/hkb.service`:
 
 ```ini
 [Unit]
-Description=kb — reconcile every board on this machine
+Description=hkb — reconcile every board on this machine
 After=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/home/you/.local/share/nvm/versions/node/v22.18.0/bin/kb up --foreground
+ExecStart=/home/you/.local/share/nvm/versions/node/v22.18.0/bin/hkb up --foreground
 Restart=on-failure
 RestartSec=30
 TimeoutStopSec=180
@@ -74,30 +74,30 @@ WantedBy=default.target
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now kb.service
-systemctl --user status kb.service
+systemctl --user enable --now hkb.service
+systemctl --user status hkb.service
 ```
 
 Four choices in there are load-bearing:
 
 - **`Type=simple`** — `--foreground` never forks or writes a pid file. The
-  process systemd starts is the process that runs the loop (`src/kb.ts:405-408`).
+  process systemd starts is the process that runs the loop (`src/hkb.ts:818`, `src/hkb.ts:834-837`).
 - **No `ExecStop`.** SIGTERM is already the clean stop, and it is a *stop*, not a
   kill: the handler aborts the run in flight and deliberately does not exit,
   because the lease release is written on the way out of `reconcile`
-  (`src/kb.ts:394-403`). The loop then unwinds, records `daemon_down` and
+  (`src/hkb.ts:823-832`). The loop then unwinds, records `daemon_down` and
   releases its controller rows (`src/daemon.ts:335-342`). systemd's default kill
   action sends exactly that signal to the main process, so anything you add here
   can only make it worse.
 - **`TimeoutStopSec` generous.** A clean stop includes interrupting a worker,
-  which is not instant — `kb down` waits 60s by default and deliberately never
+  which is not instant — `hkb down` waits 60s by default and deliberately never
   escalates to SIGKILL, because killing a daemon mid-unwind trades a slow stop
   for a lost attempt row (`src/daemon.ts:436-455`). Give systemd at least as
-  long before it does the escalation `kb down` refuses to do.
+  long before it does the escalation `hkb down` refuses to do.
 - **`Restart=on-failure`, not `always`.** A tick that throws is caught and logged
   and the loop carries on (`src/daemon.ts:322-327`), so an actual exit means
-  something structural. A clean SIGTERM exits 0 (`src/kb.ts:408`), and
-  `on-failure` leaves `systemctl --user stop kb` meaning stop.
+  something structural. A clean SIGTERM exits 0 (`src/hkb.ts:837`), and
+  `on-failure` leaves `systemctl --user stop hkb` meaning stop.
 
 Add `--board <slug>` to `ExecStart` only if you deliberately want this daemon to
 serve one board and leave the rest unserved.
@@ -117,7 +117,7 @@ makes `WantedBy=default.target` mean "at boot" rather than "at next login".
 ## launchd (macOS)
 
 The equivalent is a LaunchAgent at
-`~/Library/LaunchAgents/dev.hkb.kb.plist`. `RunAtLoad` + `KeepAlive` with
+`~/Library/LaunchAgents/dev.hkb.hkb.plist`. `RunAtLoad` + `KeepAlive` with
 `SuccessfulExit=false` is launchd's `Restart=on-failure`; a LaunchAgent is
 already per-user, so there is no linger to enable.
 
@@ -127,10 +127,10 @@ already per-user, so there is no linger to enable.
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>dev.hkb.kb</string>
+  <key>Label</key><string>dev.hkb.hkb</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/opt/homebrew/bin/kb</string>
+    <string>/opt/homebrew/bin/hkb</string>
     <string>up</string>
     <string>--foreground</string>
   </array>
@@ -138,16 +138,16 @@ already per-user, so there is no linger to enable.
   <key>KeepAlive</key>
   <dict><key>SuccessfulExit</key><false/></dict>
   <key>ExitTimeOut</key><integer>180</integer>
-  <key>StandardOutPath</key><string>/Users/you/.hkb/kb.log</string>
-  <key>StandardErrorPath</key><string>/Users/you/.hkb/kb.log</string>
+  <key>StandardOutPath</key><string>/Users/you/.hkb/hkb.log</string>
+  <key>StandardErrorPath</key><string>/Users/you/.hkb/hkb.log</string>
 </dict>
 </plist>
 ```
 
 ```bash
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.hkb.kb.plist
-launchctl print gui/$(id -u)/dev.hkb.kb
-launchctl bootout  gui/$(id -u)/dev.hkb.kb   # stop; SIGTERM, same clean path
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.hkb.hkb.plist
+launchctl print gui/$(id -u)/dev.hkb.hkb
+launchctl bootout  gui/$(id -u)/dev.hkb.hkb   # stop; SIGTERM, same clean path
 ```
 
 `ExitTimeOut` is the launchd counterpart of `TimeoutStopSec`, and it matters for
@@ -160,36 +160,36 @@ reclaim for exactly that pass ([architecture/the-loop](../architecture/the-loop.
 
 Two different places, depending on who started the loop, and this trips people up:
 
-- **`kb up` (detached).** The parent opens a file and hands it to the child as
-  stdout and stderr (`src/daemon.ts:364-384`): `<boardDir>/kb.log` for a
+- **`hkb up` (detached).** The parent opens a file and hands it to the child as
+  stdout and stderr (`src/daemon.ts:364-384`): `<boardDir>/hkb.log` for a
   machine-wide daemon, `<boardDir>/kb-<slug>.log` when `--board` was given
   (`src/daemon.ts:52-54`).
-- **`kb up --foreground` (under a supervisor).** The loop writes lines to
+- **`hkb up --foreground` (under a supervisor).** The loop writes lines to
   stdout (`src/daemon.ts:242`), so the log is wherever your supervisor puts
   stdout — the journal for systemd, `StandardOutPath` for launchd.
 
 `<boardDir>` is the directory holding the board file — `~/.hkb` unless
-`HKB_DATABASE_URL` points elsewhere (`src/db-url.ts:20-32`) — and `kb up
---status` prints it for you when anything is running (`src/kb.ts:383`):
+`HKB_DATABASE_URL` points elsewhere (`src/db-url.ts:19-24`) — and `hkb up
+--status` prints it for you when anything is running (`src/hkb.ts:810-812`):
 
 ```bash
-kb up --status              # names the log directory
-journalctl --user -u kb -f  # systemd: the foreground loop's own output
-tail -f ~/.hkb/kb.log       # launchd, or a detached `kb up`
+hkb up --status              # names the log directory
+journalctl --user -u hkb -f  # systemd: the foreground loop's own output
+tail -f ~/.hkb/hkb.log       # launchd, or a detached `hkb up`
 ```
 
-`kb up --status` exits 1 when no board is being served (`src/kb.ts:385`), so it
+`hkb up --status` exits 1 when no board is being served (`src/hkb.ts:814`), so it
 doubles as a health check in a script.
 
 If your unit sets `Environment=HKB_DATABASE_URL=...`, remember that it moves the
-log directory with the board (`src/db-url.ts:26-32`) — and that your shell,
+log directory with the board (`src/db-url.ts:26-29`) — and that your shell,
 without that variable, is then looking at a different board entirely.
 
 ⚠️ Two boards over the **same repository** is not currently safe. An attempt's
-checkout is `kb-<jobId>-<k>` (`src/worktree.ts:38`) and job ids are unique only
+checkout is `kb-<jobId>-<k>` (`src/worktree.ts:74-75`) and job ids are unique only
 within one database, so the second board cuts a worktree over the first board's
 live one and the attempt is recorded `crashed` with git's "already used by
-worktree" as its reason (`src/worktree.ts:64-79`). One board per repository until
+worktree" as its reason (`src/worktree.ts:91-105`). One board per repository until
 that is fixed.
 
 ## The tick also reclaims worktrees, and that needs the remote
@@ -197,7 +197,7 @@ that is fixed.
 A worker installs the target repository's dependencies to run its tests, so each
 attempt's checkout costs about what that repository costs — Phase 5 left 6.1 GB
 for ten Jobs. The daemon takes them back: every 10 minutes, after reconciling
-each board, it sweeps `<repoPath>/.kanban/worktrees` (`src/daemon.ts:54`,
+each board, it sweeps `<repoPath>/.hkb/worktrees` (`src/daemon.ts:54`,
 `src/daemon.ts:384-403`). The first tick sweeps, so a restart reclaims
 immediately rather than ten minutes later. Steady-state disk is therefore
 bounded by `maxConcurrent × repo size`, not by `jobs-ever-run × repo size`.
@@ -205,8 +205,8 @@ bounded by `maxConcurrent × repo size`, not by `jobs-ever-run × repo size`.
 Two kinds of line come out of it, into the same log as everything else:
 
 ```
-swept /home/you/src/thing/.kanban/worktrees/kb-12-1 — kb-12-1 is gone from the remote and the checkout was clean
-kept  /home/you/src/thing/.kanban/worktrees/kb-9-1 — it holds 2 commits that exist nowhere else — push them with `git -C … push origin kb-9-1`
+swept /home/you/src/thing/.hkb/worktrees/kb-12-1 — kb-12-1 is gone from the remote and the checkout was clean
+kept  /home/you/src/thing/.hkb/worktrees/kb-9-1 — it holds 2 commits that exist nowhere else — push them with `git -C … push origin kb-9-1`
 ```
 
 A `kept` line is printed **once**, not every ten minutes, the same way a refusal
@@ -219,7 +219,7 @@ the obvious "already merged into main" test is not one of them, is
 
 ⚠️ **Under a supervisor, check the remote is actually reachable.** The sweep's
 proof is that the branch is gone from `origin`, which is one `git ls-remote`
-(`src/worktree.ts:427`). A systemd user unit does not inherit the `SSH_AUTH_SOCK`
+(`src/worktree.ts:632`). A systemd user unit does not inherit the `SSH_AUTH_SOCK`
 your interactive shell has — with `enable-linger` there is no session to inherit
 one from — so a daemon that works perfectly in a terminal can be unable to read
 the remote at all under the unit. It fails rather than hangs (the sweep runs with
@@ -243,27 +243,27 @@ which runs the same read in the same environment the unit gets.
 
 ## The gotcha: a daemon runs the code it started with
 
-Upgrading `kb` does **not** upgrade the running daemon. It has the old
+Upgrading `hkb` does **not** upgrade the running daemon. It has the old
 controller, the old admission gate, the old runtime, until it is restarted. The
 previous dispatcher had the same hazard and it was managed by remembering, which
 is not a mechanism (`src/daemon.ts:56-71`).
 
-So the daemon records the build it started from, and `kb up --status` compares
+So the daemon records the build it started from, and `hkb up --status` compares
 that against the checkout and prints a line when they differ
-(`src/daemon.ts:184-185`, `src/kb.ts:376-379`):
+(`src/daemon.ts:184-185`, `src/hkb.ts:804-808`):
 
 ```
 default  up    host/12345@daemon  87 min, every 45s
          repo    /home/you/src/thing
-         BEHIND  started from 741b855; the checkout is now a1b2c3d — `kb down && kb up` to pick it up
+         BEHIND  started from 741b855; the checkout is now a1b2c3d — `hkb down && hkb up` to pick it up
 ```
 
-Under a supervisor the fix is the supervisor's restart, not `kb down && kb up`
+Under a supervisor the fix is the supervisor's restart, not `hkb down && hkb up`
 (which would leave systemd to restart it anyway, or launchd to race you):
 
 ```bash
-systemctl --user restart kb.service           # Linux
-launchctl kickstart -k gui/$(id -u)/dev.hkb.kb  # macOS
+systemctl --user restart hkb.service           # Linux
+launchctl kickstart -k gui/$(id -u)/dev.hkb.hkb  # macOS
 ```
 
 **Make it part of the upgrade**, immediately after `npm i -g hkb-cli@latest` or
