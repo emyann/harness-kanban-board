@@ -368,6 +368,44 @@ and the last refusal.
 
 **All ten PRs are green on all seven CI legs and report `MERGEABLE`.**
 
+### All ten merged
+
+Reviewed and merged 2026-09-05, in this order: the three that touched no shared file
+(#357, #355, #359), then the seven that all edit `src/kb.ts`. Nine went in without a
+textual conflict. #353 needed a rebase — both because it sits on the renamed branch and
+because it edits this file.
+
+Two needed repair, and **neither PR was wrong**:
+
+- **#4 / #353** — rebased onto `main` and its test file re-merged by hand. Both sides
+  appended tests at the same point; keeping both was the whole resolution.
+- **#350 + #354 together** — see below. Fixed in #361.
+
+`npm run test:core` is **161 pass, 1 skipped** on `main` afterwards, up from 130: the ten
+Jobs contributed 31 tests of their own. `npm run smoke` green.
+
+### The failure that only existed in the combination
+
+`#350` added `kb ls --all`, which ignores the board scope. `#354` made `resolveBoard`
+refuse when several boards point at one checkout instead of silently taking the lowest
+id. Each is correct. Each passed all seven CI legs on its own branch. Merged together,
+three of `#350`'s tests fail:
+
+```
+Error: 4 boards point at /home/…/harness-kanban-board: far-away, harness-kanban-board,
+switch, window — pass --board <slug> to say which one you mean
+```
+
+The underlying defect predates both: `main` resolves the board scope for **every** verb
+before the switch runs, so `ls --all` resolved a board and discarded it. Harmless while
+resolution could not fail; a refusal the moment it could.
+
+**Nothing in the machinery could have caught this.** Each branch is cut from `origin/main`
+at claim time and never rebased, CI runs per branch, and no step compares one Job's diff
+against another's. Ten agents working in parallel from one base produce work that is
+individually green and jointly broken — and with `maxConcurrent: 1` they did not even run
+concurrently, so serialising execution does not help. Only integration finds it.
+
 ### Verdict: 8 of 10 — the gate passes, exactly at its threshold
 
 - **Cost: $18.48 against $6.00 predicted — 3.1× over.** Inside the order of magnitude
@@ -444,6 +482,24 @@ Every item below was found by running the thing, not by reading it.
    — hkb's own tests need no such file — which is exactly why it is worth writing down.
 8. **Cost estimation needs a real method.** Recorded here so the next prediction is
    made from these ten measurements rather than from one read-only run.
+
+10. **Per-PR CI does not compose, and nothing integrates.** #350 and #354 were both green
+    alone and broken together. Every branch is cut from `origin/main` at claim time and
+    never rebased, so the further a batch runs the more each Job's base diverges from
+    what will actually be merged. The cheap half is a rebase-and-test before the PR is
+    called ready; the honest half is admitting a Job cannot verify a claim about a tree
+    it has never seen.
+
+11. **`succeeded` does not mean "produced anything".** Nothing in the machinery requires a
+    pull request: `withProtocol` (`src/brief.ts`) *asks* for one in prose, is only applied
+    when `isolate` is true, and `nextPhase` decides `succeeded` purely from the runtime's
+    status. `prForBranch` is a read after the fact, and a Job with no PR simply records
+    null. That separation is deliberate — "I investigated and there is nothing to change"
+    is a real outcome — but the *absence* should be loud. `kb show` says
+    `branch kb-N-1 — no pull request found` per attempt; nothing aggregates it, so a board
+    of fifty succeeded Jobs where five produced nothing looks uniform in `kb ls`. This is
+    also the general case of finding 3: nothing verifies the PR's head because nothing
+    verifies there is a PR.
 
 ---
 
