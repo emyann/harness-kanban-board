@@ -273,3 +273,4 @@ history.
 ## 2026-09-05 — refreshed concepts/admission-control (re-stamp only; the claude.ts diff touched the abort machinery, not the gate)
 ## 2026-09-05 — refreshed architecture/the-loop (machine-level board; Controller row replaces the pid file; Board.repoPath; self-migrating open)
 ## 2026-09-05 — refreshed architecture/job-kind (Board.repoPath decides the checkout; Controller row for leadership)
+## 2026-09-05 — refreshed concepts/node-floor-and-type-check (floor measured at 22.18.0; the publish transpile and why a published kb cannot be TypeScript)

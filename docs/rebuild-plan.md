@@ -271,6 +271,36 @@ result. The old protocol's terminal verbs were what made the CLI a worker depend
 
 ---
 
+## Phase 4c — `kb` is a real binary
+
+The Node floor was the last thing standing between the machine-level board and
+actually typing `kb`. Settled by measurement rather than release notes:
+**`>=22.18.0`** — 22.17.1 fails with `ERR_UNKNOWN_FILE_EXTENSION`, 22.18.0 is the
+first release with type stripping unflagged, and a shebang cannot ask for a flag.
+`test:core` passes identically there and on 24.x, so the floor covers Prisma and the
+native binding, not just the parser.
+
+**What this turned up, which was not on anyone's list.** Node refuses to strip types
+for any file under `node_modules` — `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`, on
+every version, by design. So `bin: { kb: "bin/kb.ts" }` produces a binary that cannot
+start from a registry install, while working perfectly in a checkout and under
+`npm link` (whose realpath is the checkout). ADR-006 had already decided "TypeScript
+transpiled at publish" and it had never been implemented, because nothing published
+needed it. `prepack` now runs a ~1s `tsc` into `dist/`, and `bin.kb` points there.
+
+Development is unchanged: no build, `node bin/kb.ts` still works, `dist/` is ignored.
+
+**Also caught: `prisma/` was not in `files`.** `ensureSchema` reads
+`prisma/migrations/*.sql` at runtime to create a board on a fresh machine, so a
+published `kb` could not have made one.
+
+Neither bug is findable by checking that files are in the tarball — the first passes
+every such check. So `npm run smoke` now **runs the installed `kb`**: `--help`, then
+`kb new`, which creates and migrates a board from the packaged migrations. Both
+failures were reproduced deliberately to confirm the check fails on them.
+
+---
+
 ## Phase 5 — The dogfood gate
 
 **Goal:** decide, on evidence, whether the board can carry hkb's own work.

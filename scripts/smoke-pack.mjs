@@ -30,6 +30,15 @@ const REPO = fileURLToPath(new URL('..', import.meta.url));
 const MUST_SHIP = [
   ['bin/hkb.js', 'the bin npm links as `hkb`'],
   ['src/cli.js', 'the CLI itself'],
+  // The ADR-007 core. `kb` is the second bin, and unlike `hkb` it reads two things out of the
+  // package at runtime that are easy to forget in `files`.
+  ['bin/kb.ts', 'the bin npm links as `kb` — TypeScript, run natively (engines >= 22.18)'],
+  ['src/kb.ts', 'the verbs'],
+  ['src/daemon.ts', '`kb up`'],
+  ['src/schema.ts', 'creates and migrates the board on first touch'],
+  ['src/generated/prisma/client.ts', 'the generated Prisma client — committed, because this tarball has no `prisma generate`'],
+  ['prisma/schema.prisma', 'the schema the migrations were generated from'],
+  ['prisma/migrations', 'READ AT RUNTIME: ensureSchema applies these SQL files to make ~/.hkb/board.db exist'],
   ['package.json', '`hkb version` reads its own version out of it'],
   ['skills/kanban/SKILL.md', '`hkb init` copies the skill from here (src/init.js packageSkillDir)'],
   ['skills/kanban/references/protocol.md', 'the skill links to it; a half-copied skill is worse than none'],
@@ -168,6 +177,51 @@ function checkRuns(bin, root, cwd) {
   const hook = run(bin, ['hook', 'stop'], { cwd, env, input: '' });
   if (hook.status !== 0) bad(`\`hkb hook stop\` with no KB_TASK exited ${hook.status}: ${hook.out}`, 'the Stop hook must be inert outside a worker — see src/hook.js');
   else ok('hkb hook stop (no KB_TASK) → exit 0');
+}
+
+/**
+ * The second bin, and the check that would have caught the mistake this file exists for.
+ *
+ * `kb` is authored in TypeScript, and **Node refuses to strip types under `node_modules`** —
+ * `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`, on every version, by design. A checkout runs the
+ * `.ts` directly and so does an `npm link`, because the realpath is the checkout; a registry install
+ * does not. So the published bin points at the `prepack` transpile, and nothing but running the
+ * installed binary proves it. Pointing `bin` at `bin/kb.ts` passed every content check here and
+ * produced a binary that could not start.
+ *
+ * It also runs a verb that reads `prisma/migrations` out of the package at runtime, since a board on
+ * a fresh machine is created from those SQL files and `files` has forgotten a directory before.
+ */
+function checkKbRuns(root, cwd) {
+  const bin = path.join(root, '..', '.bin', 'kb');
+  if (!fs.existsSync(bin)) {
+    return bad('npm linked no `kb` binary', 'check the `bin` map in package.json');
+  }
+  log('running kb (the ADR-007 core), from the installed package');
+  const board = path.join(cwd, 'smoke-board.db');
+  const env = { ...cleanEnv(), HKB_DATABASE_URL: `file:${board}` };
+
+  const help = run(bin, ['--help'], { cwd, env });
+  if (help.status !== 0) {
+    return bad(`\`kb --help\` exited ${help.status}: ${help.out}`,
+      'the installed kb cannot start — if this is ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING, `bin.kb` is pointing at TypeScript instead of the dist transpile');
+  }
+  ok(`kb --help → ${help.out.split('\n').length} lines`);
+
+  // Creates and migrates a board that does not exist, which only works if prisma/migrations shipped.
+  const filed = run(bin, ['new', 'smoke', '--brief', 'x', '--board', 'smoke', '--no-isolate', '--json'], { cwd, env });
+  if (filed.status !== 0) {
+    return bad(`\`kb new\` exited ${filed.status}: ${filed.out}`,
+      'the board could not be created — check that `prisma` is in `files`, since ensureSchema reads prisma/migrations at runtime');
+  }
+  if (!fs.existsSync(board)) return bad('`kb new` exited 0 but wrote no board file', `expected ${board}`);
+  ok('kb new → created and migrated a board from the packaged prisma/migrations');
+
+  const boards = run(bin, ['boards', '--json'], { cwd, env });
+  if (boards.status !== 0 || !boards.out.includes('"smoke"')) {
+    return bad(`\`kb boards\` did not list the board just created: ${boards.out}`, 'check src/kb.ts boards');
+  }
+  ok('kb boards → lists it');
 }
 
 /**
@@ -387,6 +441,8 @@ try {
   log('');
   checkRuns(bin, root, cwd);
   log('');
+  checkKbRuns(root, cwd);
+  log('');
   checkInitOffline(bin, root);
   log('');
   checkInitDevDependency(root);
@@ -399,7 +455,7 @@ try {
     for (const f of failures) process.stderr.write(`  - ${f.msg}\n    fix: ${f.fix}\n`);
     process.exit(1);
   }
-  log(`smoke-pack: the packed artifact installs, runs, and initialises a repo — from outside it, as a devDependency of it, and as the checkout itself. ${MUST_SHIP.length + MUST_NOT_SHIP.length} content checks, 3 command checks, ${FROM_PACKAGE.length + 4} init checks, 6 inside-the-repo checks.`);
+  log(`smoke-pack: the packed artifact installs, runs, and initialises a repo — from outside it, as a devDependency of it, and as the checkout itself. ${MUST_SHIP.length + MUST_NOT_SHIP.length} content checks, 3 command checks, ${FROM_PACKAGE.length + 4} init checks, 3 kb checks, 6 inside-the-repo checks.`);
 } finally {
   if (!keep) fs.rmSync(configHome, { recursive: true, force: true });
   if (dir && !keep) fs.rmSync(dir, { recursive: true, force: true });

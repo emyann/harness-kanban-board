@@ -7,6 +7,7 @@ import { boardDir } from './db-url.ts';
 export { boardDir };
 import { reconcile } from './controller.ts';
 import { holderId, holderLiveness, parseHolder, pidIsAlive } from './liveness.ts';
+import { cliEntry, PACKAGE_ROOT } from './paths.ts';
 import type { Runtime } from './runtime/index.ts';
 
 /**
@@ -59,7 +60,7 @@ export const machineLogPath = (url?: string) => path.join(boardDir(url), 'kb.log
  * behaviour until restarted. The previous dispatcher had the same hazard and it was managed by
  * remembering to restart. Recording the build turns silent staleness into a line somebody can read.
  */
-export function buildVersion(cwd = path.resolve(import.meta.dirname, '..')): string {
+export function buildVersion(cwd = PACKAGE_ROOT): string {
   try {
     return execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
       cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
@@ -363,7 +364,7 @@ export function start(
   const lp = opts.board ? logPath(opts.board, opts.url) : machineLogPath(opts.url);
   fs.mkdirSync(path.dirname(lp), { recursive: true });
   const out = fs.openSync(lp, 'a');
-  const entry = opts.execPath ?? path.resolve(import.meta.dirname, '..', 'bin', 'kb.ts');
+  const entry = opts.execPath ?? cliEntry();
 
   try {
     const child = spawn(

@@ -1,0 +1,27 @@
+// Emit, for publishing only. `tsc --noEmit` (tsconfig.json) is the check; this is the transpile.
+//
+// It exists because Node REFUSES to strip types under node_modules — `ERR_UNSUPPORTED_NODE_MODULES_
+// TYPE_STRIPPING`, on every version, by design. A checkout runs `.ts` directly and a symlinked
+// (`npm link`) install does too, because the realpath is the checkout; a registry install does not.
+// So the published `kb` has to be JavaScript. ADR-006 decided this ("TypeScript transpiled at
+// publish") and it was never implemented, because nothing was published that needed it until `kb`
+// became a bin.
+//
+// Development is unaffected: no build to run, `node bin/kb.ts` still works, and `dist/` is ignored.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": false,
+    "sourceMap": false,
+    "allowJs": false,
+    "checkJs": false,
+    // The generated client ships `@ts-nocheck` and is checked by Prisma's own release process; it
+    // is excluded from the type check but must still be EMITTED, or dist/src/db.js imports nothing.
+    "skipLibCheck": true
+  },
+  "include": ["bin/kb.ts", "src/**/*.ts"],
+  "exclude": ["node_modules", "test", "dist"]
+}
