@@ -10,9 +10,11 @@ covers:
     sha: bc52944c00d0abf3bf340f39f94c07031276d8b8
   - path: src/kb.ts
     sha: 02e4527afcfe3565dd5e4503b03dbb3cd0e03384
+  - path: src/worktree.ts
+    sha: 977a6c51879e48dcedebecaac79f42dc0d0872f0
   - path: src/db-url.ts
     sha: 83ad1e24bb34864843b0c731f9680c6cbc7de1ea
-generated_at_commit: ae722cb
+generated_at_commit: 4ffa9e1
 last_refreshed: 2026-09-05
 related: [architecture/the-loop, architecture/job-kind, decisions/adr-007-workload-scheduler]
 ---
@@ -182,6 +184,13 @@ doubles as a health check in a script.
 If your unit sets `Environment=HKB_DATABASE_URL=...`, remember that it moves the
 log directory with the board (`src/db-url.ts:26-32`) — and that your shell,
 without that variable, is then looking at a different board entirely.
+
+⚠️ Two boards over the **same repository** is not currently safe. An attempt's
+checkout is `kb-<jobId>-<k>` (`src/worktree.ts:38`) and job ids are unique only
+within one database, so the second board cuts a worktree over the first board's
+live one and the attempt is recorded `crashed` with git's "already used by
+worktree" as its reason (`src/worktree.ts:64-79`). One board per repository until
+that is fixed.
 
 ## The gotcha: a daemon runs the code it started with
 
