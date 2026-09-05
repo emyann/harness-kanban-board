@@ -272,4 +272,4 @@ history.
 ## 2026-09-05 — refreshed architecture/runtime-layer (WorkerSpec.signal: the operator stop escalates like the wall clock)
 ## 2026-09-05 — refreshed concepts/admission-control (re-stamp only; the claude.ts diff touched the abort machinery, not the gate)
 ## 2026-09-05 — refreshed architecture/the-loop (machine-level board; Controller row replaces the pid file; Board.repoPath; self-migrating open)
-
+## 2026-09-05 — refreshed architecture/job-kind (Board.repoPath decides the checkout; Controller row for leadership)

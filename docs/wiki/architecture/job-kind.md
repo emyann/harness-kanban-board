@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "adding a workload kind, changing retry or lease behaviour, or wondering why the DAG is not in the core"
 covers:
   - path: prisma/schema.prisma
-    sha: 53cacd64db65b93cdb1dec8d2ab771363a2d46c0
+    sha: 7ddf7cc64bdec434ada83af9301a0d835f9d5af1
   - path: src/controller.ts
-    sha: 67a1aba83797f8b1f39e6e50e39f654f53dcf0b8
+    sha: 455fc87adf4f4853fb1ef183b75f3552ccc79e60
   - path: src/db.ts
-    sha: bf646fb9e9310a7550ad610aba36fdc0d00fb787
-generated_at_commit: c5326c0
+    sha: db126410edbcadf02b1d7ac200771620d1195d70
+generated_at_commit: a659306
 last_refreshed: 2026-09-05
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control]
 ---
@@ -85,6 +85,13 @@ leaves a lease with a past `expiresAt`; `reclaimExpired()` deletes it, marks the
 orphaned attempt `lost`, and returns the Job to `pending` if it has retries left.
 The `lost` outcome exists precisely to distinguish "nobody ever reported this"
 from a reported failure.
+
+**Where a Job runs is `Board.repoPath`, not anyone's cwd.** One daemon serves every
+board on the machine (`~/.hkb/board.db`), so the repository has to be a fact on the
+Board — which is also where it belongs, since a Job is inherently single-repo and the
+Board's ceilings are already per-repo policy. `deps.cwd` in the controller is the
+fallback for a board with no repo. Leadership of a board is a `Controller` row, the
+same shape as `Lease`; see `architecture/the-loop`.
 
 **But expiry alone does not authorise a reclaim.** A lapsed lease whose holder is
 still a running process on this host is left alone (`src/liveness.ts`,
