@@ -23,8 +23,10 @@ import { admissionHooks } from '../admission.ts';
  * headless agent ("a fixed, explicit tool surface … a hard deny over silent reliance").
  *
  * `Agent` is deliberately absent. Phase 1 runs one agent against one brief; a worker that could
- * fan out would spawn work nothing has claimed. The admission gate that forces `isolation:
- * "worktree"` onto a spawn stays wired and tested for when a later kind allows it.
+ * fan out would spawn work nothing has claimed. The admission gate's isolation rule stays wired
+ * and tested for the kind that allows it, and it reads `spec.isolated` rather than a constant —
+ * so adding `Agent` to a kind's tool surface is the whole change, not the change plus the
+ * discovery that the rule was only ever right for isolated Jobs.
  */
 const DEFAULT_TOOLS = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'WebFetch', 'WebSearch', 'TodoWrite'];
 
@@ -119,9 +121,17 @@ export const claudeRuntime: Runtime = {
         allowedTools: tools,
         resume: spec.resume,
         abortController,
-        // Admission control, not instruction: every Agent spawn gets `isolation: "worktree"`
-        // injected here, so a parent that forgets to ask for it still cannot skip it.
-        hooks: admissionHooks({ forceIsolation: true, allow: tools, ...spec.admission }),
+        // Admission control, not instruction — and it follows the parent's own isolation rather
+        // than being a constant. An isolated workload gets `isolation: "worktree"` injected onto
+        // every Agent spawn, so a parent that forgets to ask for it still cannot skip it. A
+        // workload running in the operator's checkout has no worktree to bring a subagent's work
+        // back to, so there the gate refuses a spawn that asks for one instead of forcing every
+        // spawn into a checkout that would be thrown away with its work still in it.
+        hooks: admissionHooks({
+          subagentIsolation: spec.isolated === false ? 'forbid' : 'force',
+          allow: tools,
+          ...spec.admission,
+        }),
         // **`dontAsk`, not `bypassPermissions`.** A worker has nobody to answer a prompt, so both
         // modes avoid prompting — but they are not equivalent:
         //

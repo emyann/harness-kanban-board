@@ -7,9 +7,9 @@ audience: [dev]
 read_when: "adding a rule an agent must obey, reviewing anything that says 'the prompt tells it to', or wiring a new workload kind's constraints"
 covers:
   - path: src/admission.ts
-    sha: 964084be7460a43be49db9819665a6269f6a252f
+    sha: 0d5701bdc558d4ff6b719ba6249e3b44094aedd0
   - path: src/runtime/claude.ts
-    sha: b334fb2e536580b900e527b9ebf8585d17f93400
+    sha: 5ae950e19d9727e51a7b765cea7a206005d79e35
 generated_at_commit: c5326c0
 last_refreshed: 2026-09-05
 related: [architecture/runtime-layer, architecture/job-kind, decisions/adr-007-workload-scheduler, gotchas/prompt-is-not-a-guarantee]
@@ -83,6 +83,25 @@ be decoration.
   `isolation: "worktree"` is not requested and not checked; it is **injected**.
   A parent that omits it cannot skip it. Verified against the real SDK: a spawn
   with no isolation parameter came back `mutate Agent — isolation injected`.
+
+## The isolation rule follows the parent
+
+`subagentIsolation` is `'force'` or `'forbid'`, and the runtime derives it from
+whether *this attempt* got a worktree (`WorkerSpec.isolated`, set from the same
+`wt` that produced `cwd`). It is not a constant, and it was one:
+
+- **`'force'`** — the isolated case above. Every spawn is given a worktree.
+- **`'forbid'`** — the Job runs in the operator's own checkout (`isolate: false`),
+  so there is no parent worktree to bring a subagent's work back to. Injecting one
+  would put that work in a checkout nothing reads and nothing merges, and say
+  nothing about it. A spawn that asks for `isolation: "worktree"` is **denied**,
+  with a reason that says to spawn it without one; a spawn that asks for nothing is
+  left alone and inherits the parent's cwd, which is where the work belongs.
+
+The constant was unreachable — `Agent` is not in the runtime's `DEFAULT_TOOLS`, so
+nothing could spawn at all — and it would have become reachable the day anyone
+allowlisted `Agent` for a kind. A guard that is wrong while it is inert is a guard
+that is wrong on the day it is switched on.
 
 ## Where this generalises
 
