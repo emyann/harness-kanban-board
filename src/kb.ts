@@ -256,6 +256,13 @@ export async function main(argv: string[]): Promise<number> {
       if (!job) throw usage(`no Job #${id} — \`kb ls\` shows what is on the board`);
       emit(out, job, () => {
         console.log(`#${job.id} ${job.name}`);
+        // One board per machine, one Board per repository: a Job you did not expect is usually a
+        // Job on a board you were not thinking about. Which board, and which checkout it will run
+        // in, comes before anything about the Job itself.
+        console.log(
+          `  board    ${job.board.slug}  `
+          + `${job.board.repoPath ?? '(no repo — `kb boards add ' + job.board.slug + ' --repo <path>`)'}`,
+        );
         console.log(`  phase    ${job.phase}${job.lease ? `  (leased by ${job.lease.holder} until ${job.lease.expiresAt.toISOString()})` : ''}`);
         console.log(`  spec     agent=${job.agent} model=${job.model ?? 'default'} effort=${job.effort ?? 'default'}`);
         console.log(`           maxTurns=${job.maxTurns} maxBudget=$${job.maxBudgetUsd} maxRetries=${job.maxRetries} isolate=${job.isolate}`);
