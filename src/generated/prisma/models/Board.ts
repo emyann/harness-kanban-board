@@ -28,15 +28,23 @@ export type AggregateBoard = {
 
 export type BoardAvgAggregateOutputType = {
   id: number | null
+  dailyBudgetUsd: number | null
+  maxConcurrent: number | null
 }
 
 export type BoardSumAggregateOutputType = {
   id: number | null
+  dailyBudgetUsd: number | null
+  maxConcurrent: number | null
 }
 
 export type BoardMinAggregateOutputType = {
   id: number | null
   slug: string | null
+  pausedAt: Date | null
+  pausedBy: string | null
+  dailyBudgetUsd: number | null
+  maxConcurrent: number | null
   createdAt: Date | null
   updatedAt: Date | null
 }
@@ -44,6 +52,10 @@ export type BoardMinAggregateOutputType = {
 export type BoardMaxAggregateOutputType = {
   id: number | null
   slug: string | null
+  pausedAt: Date | null
+  pausedBy: string | null
+  dailyBudgetUsd: number | null
+  maxConcurrent: number | null
   createdAt: Date | null
   updatedAt: Date | null
 }
@@ -51,6 +63,10 @@ export type BoardMaxAggregateOutputType = {
 export type BoardCountAggregateOutputType = {
   id: number
   slug: number
+  pausedAt: number
+  pausedBy: number
+  dailyBudgetUsd: number
+  maxConcurrent: number
   createdAt: number
   updatedAt: number
   _all: number
@@ -59,15 +75,23 @@ export type BoardCountAggregateOutputType = {
 
 export type BoardAvgAggregateInputType = {
   id?: true
+  dailyBudgetUsd?: true
+  maxConcurrent?: true
 }
 
 export type BoardSumAggregateInputType = {
   id?: true
+  dailyBudgetUsd?: true
+  maxConcurrent?: true
 }
 
 export type BoardMinAggregateInputType = {
   id?: true
   slug?: true
+  pausedAt?: true
+  pausedBy?: true
+  dailyBudgetUsd?: true
+  maxConcurrent?: true
   createdAt?: true
   updatedAt?: true
 }
@@ -75,6 +99,10 @@ export type BoardMinAggregateInputType = {
 export type BoardMaxAggregateInputType = {
   id?: true
   slug?: true
+  pausedAt?: true
+  pausedBy?: true
+  dailyBudgetUsd?: true
+  maxConcurrent?: true
   createdAt?: true
   updatedAt?: true
 }
@@ -82,6 +110,10 @@ export type BoardMaxAggregateInputType = {
 export type BoardCountAggregateInputType = {
   id?: true
   slug?: true
+  pausedAt?: true
+  pausedBy?: true
+  dailyBudgetUsd?: true
+  maxConcurrent?: true
   createdAt?: true
   updatedAt?: true
   _all?: true
@@ -176,6 +208,10 @@ export type BoardGroupByArgs<ExtArgs extends runtime.Types.Extensions.InternalAr
 export type BoardGroupByOutputType = {
   id: number
   slug: string
+  pausedAt: Date | null
+  pausedBy: string | null
+  dailyBudgetUsd: number | null
+  maxConcurrent: number
   createdAt: Date
   updatedAt: Date
   _count: BoardCountAggregateOutputType | null
@@ -206,6 +242,10 @@ export type BoardWhereInput = {
   NOT?: Prisma.BoardWhereInput | Prisma.BoardWhereInput[]
   id?: Prisma.IntFilter<"Board"> | number
   slug?: Prisma.StringFilter<"Board"> | string
+  pausedAt?: Prisma.DateTimeNullableFilter<"Board"> | Date | string | null
+  pausedBy?: Prisma.StringNullableFilter<"Board"> | string | null
+  dailyBudgetUsd?: Prisma.FloatNullableFilter<"Board"> | number | null
+  maxConcurrent?: Prisma.IntFilter<"Board"> | number
   createdAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   jobs?: Prisma.JobListRelationFilter
@@ -214,6 +254,10 @@ export type BoardWhereInput = {
 export type BoardOrderByWithRelationInput = {
   id?: Prisma.SortOrder
   slug?: Prisma.SortOrder
+  pausedAt?: Prisma.SortOrderInput | Prisma.SortOrder
+  pausedBy?: Prisma.SortOrderInput | Prisma.SortOrder
+  dailyBudgetUsd?: Prisma.SortOrderInput | Prisma.SortOrder
+  maxConcurrent?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   jobs?: Prisma.JobOrderByRelationAggregateInput
@@ -225,6 +269,10 @@ export type BoardWhereUniqueInput = Prisma.AtLeast<{
   AND?: Prisma.BoardWhereInput | Prisma.BoardWhereInput[]
   OR?: Prisma.BoardWhereInput[]
   NOT?: Prisma.BoardWhereInput | Prisma.BoardWhereInput[]
+  pausedAt?: Prisma.DateTimeNullableFilter<"Board"> | Date | string | null
+  pausedBy?: Prisma.StringNullableFilter<"Board"> | string | null
+  dailyBudgetUsd?: Prisma.FloatNullableFilter<"Board"> | number | null
+  maxConcurrent?: Prisma.IntFilter<"Board"> | number
   createdAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   jobs?: Prisma.JobListRelationFilter
@@ -233,6 +281,10 @@ export type BoardWhereUniqueInput = Prisma.AtLeast<{
 export type BoardOrderByWithAggregationInput = {
   id?: Prisma.SortOrder
   slug?: Prisma.SortOrder
+  pausedAt?: Prisma.SortOrderInput | Prisma.SortOrder
+  pausedBy?: Prisma.SortOrderInput | Prisma.SortOrder
+  dailyBudgetUsd?: Prisma.SortOrderInput | Prisma.SortOrder
+  maxConcurrent?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   _count?: Prisma.BoardCountOrderByAggregateInput
@@ -248,12 +300,20 @@ export type BoardScalarWhereWithAggregatesInput = {
   NOT?: Prisma.BoardScalarWhereWithAggregatesInput | Prisma.BoardScalarWhereWithAggregatesInput[]
   id?: Prisma.IntWithAggregatesFilter<"Board"> | number
   slug?: Prisma.StringWithAggregatesFilter<"Board"> | string
+  pausedAt?: Prisma.DateTimeNullableWithAggregatesFilter<"Board"> | Date | string | null
+  pausedBy?: Prisma.StringNullableWithAggregatesFilter<"Board"> | string | null
+  dailyBudgetUsd?: Prisma.FloatNullableWithAggregatesFilter<"Board"> | number | null
+  maxConcurrent?: Prisma.IntWithAggregatesFilter<"Board"> | number
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"Board"> | Date | string
   updatedAt?: Prisma.DateTimeWithAggregatesFilter<"Board"> | Date | string
 }
 
 export type BoardCreateInput = {
   slug: string
+  pausedAt?: Date | string | null
+  pausedBy?: string | null
+  dailyBudgetUsd?: number | null
+  maxConcurrent?: number
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobCreateNestedManyWithoutBoardInput
@@ -262,6 +322,10 @@ export type BoardCreateInput = {
 export type BoardUncheckedCreateInput = {
   id?: number
   slug: string
+  pausedAt?: Date | string | null
+  pausedBy?: string | null
+  dailyBudgetUsd?: number | null
+  maxConcurrent?: number
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobUncheckedCreateNestedManyWithoutBoardInput
@@ -269,6 +333,10 @@ export type BoardUncheckedCreateInput = {
 
 export type BoardUpdateInput = {
   slug?: Prisma.StringFieldUpdateOperationsInput | string
+  pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
+  maxConcurrent?: Prisma.IntFieldUpdateOperationsInput | number
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUpdateManyWithoutBoardNestedInput
@@ -277,6 +345,10 @@ export type BoardUpdateInput = {
 export type BoardUncheckedUpdateInput = {
   id?: Prisma.IntFieldUpdateOperationsInput | number
   slug?: Prisma.StringFieldUpdateOperationsInput | string
+  pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
+  maxConcurrent?: Prisma.IntFieldUpdateOperationsInput | number
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUncheckedUpdateManyWithoutBoardNestedInput
@@ -285,12 +357,20 @@ export type BoardUncheckedUpdateInput = {
 export type BoardCreateManyInput = {
   id?: number
   slug: string
+  pausedAt?: Date | string | null
+  pausedBy?: string | null
+  dailyBudgetUsd?: number | null
+  maxConcurrent?: number
   createdAt?: Date | string
   updatedAt?: Date | string
 }
 
 export type BoardUpdateManyMutationInput = {
   slug?: Prisma.StringFieldUpdateOperationsInput | string
+  pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
+  maxConcurrent?: Prisma.IntFieldUpdateOperationsInput | number
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -298,6 +378,10 @@ export type BoardUpdateManyMutationInput = {
 export type BoardUncheckedUpdateManyInput = {
   id?: Prisma.IntFieldUpdateOperationsInput | number
   slug?: Prisma.StringFieldUpdateOperationsInput | string
+  pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
+  maxConcurrent?: Prisma.IntFieldUpdateOperationsInput | number
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -305,17 +389,27 @@ export type BoardUncheckedUpdateManyInput = {
 export type BoardCountOrderByAggregateInput = {
   id?: Prisma.SortOrder
   slug?: Prisma.SortOrder
+  pausedAt?: Prisma.SortOrder
+  pausedBy?: Prisma.SortOrder
+  dailyBudgetUsd?: Prisma.SortOrder
+  maxConcurrent?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
 }
 
 export type BoardAvgOrderByAggregateInput = {
   id?: Prisma.SortOrder
+  dailyBudgetUsd?: Prisma.SortOrder
+  maxConcurrent?: Prisma.SortOrder
 }
 
 export type BoardMaxOrderByAggregateInput = {
   id?: Prisma.SortOrder
   slug?: Prisma.SortOrder
+  pausedAt?: Prisma.SortOrder
+  pausedBy?: Prisma.SortOrder
+  dailyBudgetUsd?: Prisma.SortOrder
+  maxConcurrent?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
 }
@@ -323,12 +417,18 @@ export type BoardMaxOrderByAggregateInput = {
 export type BoardMinOrderByAggregateInput = {
   id?: Prisma.SortOrder
   slug?: Prisma.SortOrder
+  pausedAt?: Prisma.SortOrder
+  pausedBy?: Prisma.SortOrder
+  dailyBudgetUsd?: Prisma.SortOrder
+  maxConcurrent?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
 }
 
 export type BoardSumOrderByAggregateInput = {
   id?: Prisma.SortOrder
+  dailyBudgetUsd?: Prisma.SortOrder
+  maxConcurrent?: Prisma.SortOrder
 }
 
 export type BoardScalarRelationFilter = {
@@ -340,8 +440,20 @@ export type StringFieldUpdateOperationsInput = {
   set?: string
 }
 
-export type DateTimeFieldUpdateOperationsInput = {
-  set?: Date | string
+export type NullableDateTimeFieldUpdateOperationsInput = {
+  set?: Date | string | null
+}
+
+export type NullableStringFieldUpdateOperationsInput = {
+  set?: string | null
+}
+
+export type NullableFloatFieldUpdateOperationsInput = {
+  set?: number | null
+  increment?: number
+  decrement?: number
+  multiply?: number
+  divide?: number
 }
 
 export type IntFieldUpdateOperationsInput = {
@@ -350,6 +462,10 @@ export type IntFieldUpdateOperationsInput = {
   decrement?: number
   multiply?: number
   divide?: number
+}
+
+export type DateTimeFieldUpdateOperationsInput = {
+  set?: Date | string
 }
 
 export type BoardCreateNestedOneWithoutJobsInput = {
@@ -368,6 +484,10 @@ export type BoardUpdateOneRequiredWithoutJobsNestedInput = {
 
 export type BoardCreateWithoutJobsInput = {
   slug: string
+  pausedAt?: Date | string | null
+  pausedBy?: string | null
+  dailyBudgetUsd?: number | null
+  maxConcurrent?: number
   createdAt?: Date | string
   updatedAt?: Date | string
 }
@@ -375,6 +495,10 @@ export type BoardCreateWithoutJobsInput = {
 export type BoardUncheckedCreateWithoutJobsInput = {
   id?: number
   slug: string
+  pausedAt?: Date | string | null
+  pausedBy?: string | null
+  dailyBudgetUsd?: number | null
+  maxConcurrent?: number
   createdAt?: Date | string
   updatedAt?: Date | string
 }
@@ -397,6 +521,10 @@ export type BoardUpdateToOneWithWhereWithoutJobsInput = {
 
 export type BoardUpdateWithoutJobsInput = {
   slug?: Prisma.StringFieldUpdateOperationsInput | string
+  pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
+  maxConcurrent?: Prisma.IntFieldUpdateOperationsInput | number
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -404,6 +532,10 @@ export type BoardUpdateWithoutJobsInput = {
 export type BoardUncheckedUpdateWithoutJobsInput = {
   id?: Prisma.IntFieldUpdateOperationsInput | number
   slug?: Prisma.StringFieldUpdateOperationsInput | string
+  pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
+  maxConcurrent?: Prisma.IntFieldUpdateOperationsInput | number
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -442,6 +574,10 @@ export type BoardCountOutputTypeCountJobsArgs<ExtArgs extends runtime.Types.Exte
 export type BoardSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
   id?: boolean
   slug?: boolean
+  pausedAt?: boolean
+  pausedBy?: boolean
+  dailyBudgetUsd?: boolean
+  maxConcurrent?: boolean
   createdAt?: boolean
   updatedAt?: boolean
   jobs?: boolean | Prisma.Board$jobsArgs<ExtArgs>
@@ -451,6 +587,10 @@ export type BoardSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
 export type BoardSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
   id?: boolean
   slug?: boolean
+  pausedAt?: boolean
+  pausedBy?: boolean
+  dailyBudgetUsd?: boolean
+  maxConcurrent?: boolean
   createdAt?: boolean
   updatedAt?: boolean
 }, ExtArgs["result"]["board"]>
@@ -458,6 +598,10 @@ export type BoardSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensi
 export type BoardSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
   id?: boolean
   slug?: boolean
+  pausedAt?: boolean
+  pausedBy?: boolean
+  dailyBudgetUsd?: boolean
+  maxConcurrent?: boolean
   createdAt?: boolean
   updatedAt?: boolean
 }, ExtArgs["result"]["board"]>
@@ -465,11 +609,15 @@ export type BoardSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensi
 export type BoardSelectScalar = {
   id?: boolean
   slug?: boolean
+  pausedAt?: boolean
+  pausedBy?: boolean
+  dailyBudgetUsd?: boolean
+  maxConcurrent?: boolean
   createdAt?: boolean
   updatedAt?: boolean
 }
 
-export type BoardOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "slug" | "createdAt" | "updatedAt", ExtArgs["result"]["board"]>
+export type BoardOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "slug" | "pausedAt" | "pausedBy" | "dailyBudgetUsd" | "maxConcurrent" | "createdAt" | "updatedAt", ExtArgs["result"]["board"]>
 export type BoardInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   jobs?: boolean | Prisma.Board$jobsArgs<ExtArgs>
   _count?: boolean | Prisma.BoardCountOutputTypeDefaultArgs<ExtArgs>
@@ -485,6 +633,19 @@ export type $BoardPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs 
   scalars: runtime.Types.Extensions.GetPayloadResult<{
     id: number
     slug: string
+    /**
+     * The kill switch. While this is set nothing is claimed; a run already going is left alone,
+     * because stopping a board should not destroy work in flight.
+     */
+    pausedAt: Date | null
+    pausedBy: string | null
+    /**
+     * Ceilings, checked BEFORE a claim and never mid-run. A ceiling that could stop a running
+     * worker would strand its worktree; one that refuses to start another is just a decision.
+     * `dailyBudgetUsd` is a rolling 24 hours, not a calendar day — there is no timezone to get wrong.
+     */
+    dailyBudgetUsd: number | null
+    maxConcurrent: number
     createdAt: Date
     updatedAt: Date
   }, ExtArgs["result"]["board"]>
@@ -913,6 +1074,10 @@ export interface Prisma__BoardClient<T, Null = never, ExtArgs extends runtime.Ty
 export interface BoardFieldRefs {
   readonly id: Prisma.FieldRef<"Board", 'Int'>
   readonly slug: Prisma.FieldRef<"Board", 'String'>
+  readonly pausedAt: Prisma.FieldRef<"Board", 'DateTime'>
+  readonly pausedBy: Prisma.FieldRef<"Board", 'String'>
+  readonly dailyBudgetUsd: Prisma.FieldRef<"Board", 'Float'>
+  readonly maxConcurrent: Prisma.FieldRef<"Board", 'Int'>
   readonly createdAt: Prisma.FieldRef<"Board", 'DateTime'>
   readonly updatedAt: Prisma.FieldRef<"Board", 'DateTime'>
 }

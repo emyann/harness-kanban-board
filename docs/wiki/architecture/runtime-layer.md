@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "changing how a worker is launched, deciding what to persist about a run, or adding a second runtime"
 covers:
   - path: src/runtime/index.ts
-    sha: 4dc87ff6c62f6a481e54a10206a0329eb90dcd85
+    sha: 7bfb2d64a13533a6ca760c7c2ee8e8fbb92a22dd
   - path: src/runtime/claude.ts
-    sha: bfa931e90aafe981aed30a83e270659b368f4448
+    sha: f5942c4fd5803c592b70338580251b4a9ddfbd11
   - path: src/runtime/fake.ts
     sha: 2812e6a707094da8bebbcb8b32388922e6d2aae0
-generated_at_commit: 83282ad
+generated_at_commit: c6e6f2e
 last_refreshed: 2026-09-05
 related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, concepts/worker-identity]
 ---
@@ -94,9 +94,11 @@ make the suite cost money and stop being deterministic.
 
 ## Known gaps
 
-- No wall-clock timeout, and no cancellation. `interrupt()` requires the SDK's
-  streaming-input mode (an `AsyncIterable` prompt); the driver uses single-message
-  input, so a hung run can only be bounded by the Job's lease expiry.
+- Cancellation is an `AbortController`, not `interrupt()`. A `timeoutMs` on the spec
+  aborts the run and reports `timeout`, which the controller maps to a **resumable**
+  `timed_out` — the clock ran out, not the work, so the session is worth continuing.
+  `interrupt()` would be gentler but needs streaming input, and that is a structural
+  change with its own decision rather than a driver setting.
 - **Single-message input is an open, structural decision**, not a driver setting.
   A Job is batch — it terminates, which is what lets a lease replace a heartbeat and
   what makes the phase model mean anything. A streaming session stays up and takes

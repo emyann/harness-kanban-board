@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "adding a workload kind, changing retry or lease behaviour, or wondering why the DAG is not in the core"
 covers:
   - path: prisma/schema.prisma
-    sha: 7e7fb06ba5e5f252b5e1f02cc656063295e30433
+    sha: 5c28188e805303dd55ada9c009656afd29bbe246
   - path: src/controller.ts
-    sha: 4693922ed0c9a22e12cbbbf64881a9d62f1da74f
+    sha: c80cd9b51e5f2c18d0c9e409b1c81207355c0453
   - path: src/db.ts
     sha: bf646fb9e9310a7550ad610aba36fdc0d00fb787
-generated_at_commit: 83282ad
+generated_at_commit: c6e6f2e
 last_refreshed: 2026-09-05
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control]
 ---
@@ -112,12 +112,27 @@ should be extracted from two or three working controllers, not guessed from one.
 both stop for a human, and "waiting for an answer, resumable, with a proposal
 pending" is a state no runtime can report and no session can hold.
 
+## Ceilings, and where they are checked
+
+Three rules decide whether another Job may start, and they are checked **before a
+claim and never during a run** — a ceiling that could stop a running worker would
+strand its worktree, while one that declines to start another is only a decision
+(`gateClaim`, `src/limits.ts`). In order: the board's kill switch, then a
+concurrency limit, then a rolling-24-hour USD ceiling.
+
+The budget is judged against what the Job **could** cost — `spent24h + jobBudgetUsd`
+— not against what it has cost. A cap that only notices after the money is gone is a
+report, not a ceiling.
+
+`gateClaim` is pure, and that is deliberate: every guard in this system that turned
+out to be silently inert was inert because nothing tested that it *refused*.
+
+The gate refuses contention it can see, before the compare-and-swap is attempted.
+The CAS is still there for the race it cannot see — two hosts that both read "one
+slot free" in the same instant — so both paths exist and both are tested.
+
 ## Known gaps
 
 - The controller marks a Job `succeeded` when the *session* completed. Whether the
   work is any good is a judgement it does not make; a kind with a reviewer step
   would be where that goes.
-- `reconcile()` has no wall-clock timeout on a run. A hung session holds its lease
-  until `expiresAt`, which bounds the damage but does not stop it — and
-  `interrupt()` needs the SDK's streaming input mode, which
-  `src/runtime/claude.ts` does not use.

@@ -39,6 +39,8 @@ const HELP = `kb — run one agent against one brief
   kb show <id>             one screen: spec, phase, every attempt
   kb run [<id>]            reconcile once, in the foreground   [--fake]
   kb rm <id>               delete a Job and its attempts
+  kb stop                  the kill switch: claim nothing on this board  [--board s]
+  kb start                 clear it, and show the ceilings
 
   --json on every verb. Exit 2 is usage or state.
 `;
@@ -209,7 +211,8 @@ export async function main(argv: string[]): Promise<number> {
       });
       const moved = report.claimed.length + report.reclaimed.length;
       emit(out, report, () => {
-        if (!moved) console.log(only ? `#${only} is not pending — nothing to do` : 'nothing pending');
+        if (report.refused) console.log(`refused: ${report.refused}`);
+        else if (!moved) console.log(only ? `#${only} is not pending — nothing to do` : 'nothing pending');
         else console.log(`${report.succeeded.length} succeeded, ${report.failed.length} failed, ${report.retrying.length} to retry`);
       });
       return 0;
@@ -227,8 +230,33 @@ export async function main(argv: string[]): Promise<number> {
       return 0;
     }
 
+    // ---------------------------------------------------------------- stop / start
+    case 'stop':
+    case 'start': {
+      const stopping = verb === 'stop';
+      const board = await db.board.upsert({ where: { slug }, update: {}, create: { slug } });
+      const updated = await db.board.update({
+        where: { id: board.id },
+        data: stopping
+          ? { pausedAt: new Date(), pausedBy: `${process.env.USER ?? 'someone'}@${process.pid}` }
+          : { pausedAt: null, pausedBy: null },
+      });
+      emit(out, {
+        board: slug, stopped: !!updated.pausedAt, pausedBy: updated.pausedBy,
+        maxConcurrent: updated.maxConcurrent, dailyBudgetUsd: updated.dailyBudgetUsd,
+      }, () => {
+        if (stopping) {
+          console.log(`${slug} stopped — nothing new will be claimed. A run already going is left alone.`);
+        } else {
+          const cap = updated.dailyBudgetUsd === null ? 'no ceiling' : `$${updated.dailyBudgetUsd}/24h`;
+          console.log(`${slug} started — ${cap}, ${updated.maxConcurrent} concurrent`);
+        }
+      });
+      return 0;
+    }
+
     default:
-      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, rm`);
+      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, rm, stop, start`);
   }
 }
 

@@ -9,8 +9,8 @@ covers:
   - path: src/admission.ts
     sha: 964084be7460a43be49db9819665a6269f6a252f
   - path: src/runtime/claude.ts
-    sha: bfa931e90aafe981aed30a83e270659b368f4448
-generated_at_commit: cb57f8a
+    sha: f5942c4fd5803c592b70338580251b4a9ddfbd11
+generated_at_commit: c6e6f2e
 last_refreshed: 2026-09-05
 related: [architecture/runtime-layer, architecture/job-kind, decisions/adr-007-workload-scheduler, gotchas/prompt-is-not-a-guarantee]
 ---

@@ -143,10 +143,28 @@ bounds are tested.
 - **Crash safety, proved.** Kill the process mid-run and assert the next reconcile
   reclaims the lease, marks the orphan `lost`, and retries exactly once.
 
-**Exit criteria**
+**Exit criteria — met 2026-09-05**
 
-- G4 and G5 hold, each with a test.
-- A budget-exhausted board refuses to claim and says which ceiling it hit.
+- **G4 holds.** `gateClaim()` (`src/limits.ts`) is pure and has thirteen tests, every one of
+  which proves a *refusal*. The board-level checks are the kill switch, a concurrency
+  limit, and a rolling-24h USD ceiling judged against what a Job **could** cost rather
+  than what it has cost — a cap that only notices after the money is gone is a report.
+- **G5 holds.** A real child process takes a real lease, is `SIGKILL`ed, and the assertions
+  are that a *live* lease is not stolen (that would be the double-run) and that an expired
+  one produces exactly one reclaim, one `lost` orphan and one retry.
+- The wall clock aborts a real run: measured `status: timeout` at 10s against an 8s
+  ceiling, with the session id surviving so the retry can resume.
+- Resume is proved against the real SDK in `test/resume.live.test.ts` — the retry's
+  session id equals the first attempt's. Skipped unless `HKB_LIVE_SDK=1`, because CI
+  must stay free and deterministic.
+
+**Two things Phase 3 changed that were not planned**
+
+- `kb` is seven verbs now, not five: `stop` and `start` are the kill switch.
+- The concurrency gate refuses *before* the compare-and-swap, so known contention no
+  longer reaches it. Both paths are kept and tested separately: the gate for contention
+  it can see, the CAS for the race it cannot — two hosts that both read "one slot free"
+  in the same instant.
 
 ---
 
