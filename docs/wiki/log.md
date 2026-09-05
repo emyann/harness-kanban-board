@@ -255,3 +255,7 @@ history.
 ## 2026-09-05 — added concepts/admission-control (invariants at the tool boundary, not in the prompt)
 ## 2026-09-05 — superseded decisions/adr-006-local-store (two-tier store replaced by one SQLite file)
 ## 2026-09-05 — refreshed architecture/overview (banner: two systems coexist; this page is the pre-ADR-007 one)
+## 2026-09-05 — refreshed concepts/admission-control (the gate is a PreToolUse hook: canUseTool and the permission mode were each measured not to hold)
+## 2026-09-05 — refreshed architecture/runtime-layer (permissionMode is dontAsk, and the tool surface is enforced in the hook)
+## 2026-09-05 — refreshed architecture/job-kind (controller gained board scoping and a single-job filter; claims re-verified)
+## 2026-09-05 — refreshed decisions/adr-007-workload-scheduler (implementation moved, decision unchanged: re-verified, not superseded)

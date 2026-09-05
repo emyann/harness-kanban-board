@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "changing how a worker is launched, deciding what to persist about a run, or adding a second runtime"
 covers:
   - path: src/runtime/index.ts
-    sha: cfdf28fd7555fd7c553e188eaa1dd828a6d93049
+    sha: 4dc87ff6c62f6a481e54a10206a0329eb90dcd85
   - path: src/runtime/claude.ts
-    sha: 0f00b8f535d8514e814e15df693c45e7c7d29592
+    sha: bfa931e90aafe981aed30a83e270659b368f4448
   - path: src/runtime/fake.ts
     sha: 2812e6a707094da8bebbcb8b32388922e6d2aae0
-generated_at_commit: fc5452a
+generated_at_commit: 7186a44
 last_refreshed: 2026-09-05
 related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, concepts/worker-identity]
 ---
@@ -66,8 +66,16 @@ cost, usage and `session_id` but no result text.
 
 ## Options that are not negotiable per-run
 
-`permissionMode: 'bypassPermissions'` because a worker has nobody to answer a
-prompt, and `settingSources: []` so a worker does not inherit the operator's
+`permissionMode: 'dontAsk'` — **not** `bypassPermissions`. Both avoid prompting,
+which a worker needs since nobody is there to answer, but they are not equivalent:
+`allowedTools` does not constrain bypass (the docs are explicit that listing `Read`
+alongside it still approves `Bash`, `Write` and `Edit`), and subagents inherit
+bypass without being able to override it. `dontAsk` denies the unlisted instead,
+which is the documented pairing for a headless agent. The tool surface is *also*
+enforced in the admission hook, because the mode alone was measured not to hold —
+see `concepts/admission-control`.
+
+And `settingSources: []` so a worker does not inherit the operator's
 `CLAUDE.md` — the brief is the brief. That second choice has a real cost recorded
 in the code: compaction summarises older history, so on a long run the acceptance
 criteria in the opening prompt can be summarised away, whereas `CLAUDE.md` is

@@ -27,6 +27,8 @@ export type WorkerSpec = {
   /** Reasoning depth. `low` is the right default for read-only cards. */
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   allowedTools?: string[];
+  /** Extra admission policy for this run — merged over `forceIsolation`. */
+  admission?: { deny?: string[]; admitSpawn?: (input: Record<string, unknown>) => Promise<string | null> | (string | null); onDecision?: (d: string) => void };
   /** Resume a previous session instead of starting cold — the retry path. */
   resume?: string;
 };

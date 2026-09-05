@@ -1,6 +1,6 @@
 import { query, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { Runtime, RunStatus, RuntimeEvent, WorkerOutcome, WorkerSpec } from './index.ts';
-import { admissionController } from '../admission.ts';
+import { admissionHooks } from '../admission.ts';
 
 /**
  * The Claude Agent SDK driver.
@@ -16,6 +16,17 @@ import { admissionController } from '../admission.ts';
  * runtime dies mid-run the iterator dies with it, and `resume: <sessionId>` is the only way back
  * to the work. The session id must be in hand before the run ends, not after it.
  */
+
+/**
+ * A worker's whole tool surface. Paired with `permissionMode: 'dontAsk'` this is a real allowlist:
+ * anything not here is denied outright rather than prompted, which is the documented pairing for a
+ * headless agent ("a fixed, explicit tool surface … a hard deny over silent reliance").
+ *
+ * `Agent` is deliberately absent. Phase 1 runs one agent against one brief; a worker that could
+ * fan out would spawn work nothing has claimed. The admission gate that forces `isolation:
+ * "worktree"` onto a spawn stays wired and tested for when a later kind allows it.
+ */
+const DEFAULT_TOOLS = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'WebFetch', 'WebSearch', 'TodoWrite'];
 
 /** Map the SDK's terminal states onto ours. The three resumable ones are the point. */
 function statusOf(result: SDKResultMessage | null, threw: boolean): RunStatus {
@@ -38,6 +49,7 @@ export const claudeRuntime: Runtime = {
     let result: SDKResultMessage | null = null;
     let error: string | null = null;
 
+    const tools = spec.allowedTools ?? DEFAULT_TOOLS;
     const stream = query({
       prompt: spec.prompt,
       options: {
@@ -48,14 +60,28 @@ export const claudeRuntime: Runtime = {
         // card ("improve this codebase") has no ceiling but the turn count.
         maxBudgetUsd: spec.maxBudgetUsd,
         effort: spec.effort,
-        allowedTools: spec.allowedTools,
+        // Auto-approved without consulting the gate. `Agent` is deliberately absent: a spawn is
+        // exactly the call admission exists to mutate, so it must reach the callback.
+        allowedTools: tools,
         resume: spec.resume,
         // Admission control, not instruction: every Agent spawn gets `isolation: "worktree"`
         // injected here, so a parent that forgets to ask for it still cannot skip it.
-        canUseTool: admissionController({ forceIsolation: true }),
-        // A worker has nobody to answer a prompt, so the grant has to be complete up front.
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
+        hooks: admissionHooks({ forceIsolation: true, allow: tools, ...spec.admission }),
+        // **`dontAsk`, not `bypassPermissions`.** A worker has nobody to answer a prompt, so both
+        // modes avoid prompting — but they are not equivalent:
+        //
+        //   - `allowedTools` does NOT constrain `bypassPermissions`. The docs are explicit: listing
+        //     Read alongside bypass "still approves every tool, including Bash, Write, and Edit".
+        //     The allowlist above would be decoration.
+        //   - Subagents inherit the parent's mode, and a definition cannot override `bypassPermissions`
+        //     — so bypass would hand every future subagent full autonomous system access.
+        //   - `dontAsk` denies anything unlisted instead of prompting, which is the documented
+        //     pairing for a headless agent and what a denial should look like: visible in
+        //     `permission_denials`, not a silent approval.
+        //
+        // The gate is unaffected either way: hooks run FIRST in the evaluation order, before deny
+        // rules, ask rules, the mode and allow rules.
+        permissionMode: 'dontAsk',
         // Do not inherit the operator's CLAUDE.md / settings into a worker: the card is the brief.
         // The cost of that choice is real and worth knowing — compaction summarises older history,
         // so on a long card the acceptance criteria in the opening prompt can be summarised away,
