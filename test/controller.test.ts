@@ -55,6 +55,44 @@ test('nextPhase: a wall-clock timeout is OUR stop, and it is resumable', () => {
   assert.equal(d.resumable, true, 'the clock ran out, not the work — the session is worth continuing');
 });
 
+// The shipped defaults, so these say what a real Job gets rather than what a fixture does.
+const DEFAULT_RETRIES = 2;
+const DEFAULT_BUDGET = 1;
+
+test('nextPhase: a spent budget REFUSES to retry, though two retries remain', () => {
+  // The measured failure: job #6 spent $2.05, was retried into the same cap, spent $2.02 stopping
+  // in the same place, and its third attempt was refused by the board ceiling. $4.07 for nothing.
+  const d = nextPhase({ status: 'max_budget' } as never, 1, DEFAULT_RETRIES, DEFAULT_BUDGET);
+  assert.equal(d.phase, 'failed', 'the first attempt is also the last: the retry would get the same cap');
+  assert.equal(d.outcome, 'max_budget');
+});
+
+test('nextPhase: a spent budget stays resumable, so a raised retry continues', () => {
+  // `failed` and `resumable` are not in tension: the work up to the wall is real, and the
+  // controller keeps `lastSessionId` on exactly this flag. Losing it would make `kb retry
+  // --max-budget` start cold and re-buy everything the $2 already paid for.
+  const d = nextPhase({ status: 'max_budget' } as never, 1, DEFAULT_RETRIES, DEFAULT_BUDGET);
+  assert.equal(d.resumable, true);
+});
+
+test('nextPhase: the budget failure tells a human the cap, and what to do about it', () => {
+  const d = nextPhase({ status: 'max_budget' } as never, 1, DEFAULT_RETRIES, DEFAULT_BUDGET);
+  assert.match(d.lastError ?? '', /\$1\.00/, 'the cap it hit, in dollars');
+  assert.match(d.lastError ?? '', /kb retry <id> --max-budget 2\.00/, 'the command that changes the answer');
+  assert.match(d.lastError ?? '', /session is kept/, 'and that the raise resumes rather than restarts');
+});
+
+test('nextPhase: with no cap to name, the advice still names the move', () => {
+  const d = nextPhase({ status: 'max_budget' } as never, 1, DEFAULT_RETRIES);
+  assert.match(d.lastError ?? '', /--max-budget <usd>/, 'a placeholder, never a fabricated number');
+});
+
+test('nextPhase: only max_budget carries advice — the rest have the runtime\'s own error', () => {
+  assert.equal(nextPhase({ status: 'max_turns' } as never, 1, DEFAULT_RETRIES).lastError, null);
+  assert.equal(nextPhase({ status: 'refused' } as never, 1, DEFAULT_RETRIES).lastError, null);
+  assert.equal(nextPhase({ status: 'completed' } as never, 1, DEFAULT_RETRIES).lastError, null);
+});
+
 test('nextPhase: a refusal never retries — the same brief gets the same answer', () => {
   const d = nextPhase({ status: 'refused' } as never, 1, 5);
   assert.equal(d.phase, 'failed');
@@ -91,6 +129,19 @@ test('a failing job retries up to maxRetries, then fails', async () => {
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(after.phase, 'failed');
   assert.equal(after.attempts.length, 3, '1 initial + 2 retries');
+});
+
+test('a Job that spends its whole budget stops after one attempt, and says what to change', async () => {
+  const job = await mkJob('bigger-than-its-budget', { maxRetries: 2, maxBudgetUsd: 1 });
+  await reconcileToRest({ runtime: fakeRuntime({ capTasks: [job.id] }), cwd });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'failed');
+  assert.equal(after.attempts.length, 1, 'two retries remained, and both would have made the same wall');
+  assert.equal(after.attempts[0].outcome, 'max_budget');
+  assert.ok(after.lastSessionId, 'the session survives, so `kb retry --max-budget` resumes rather than restarts');
+  assert.match(after.lastError ?? '', /\$1\.00/);
+  assert.match(after.lastError ?? '', /kb retry <id> --max-budget/, 'the row says what a human should do next');
 });
 
 test('known contention is refused by the gate before any claim is attempted', async () => {

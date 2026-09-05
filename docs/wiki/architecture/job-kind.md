@@ -9,7 +9,7 @@ covers:
   - path: prisma/schema.prisma
     sha: 7ddf7cc64bdec434ada83af9301a0d835f9d5af1
   - path: src/controller.ts
-    sha: 455fc87adf4f4853fb1ef183b75f3552ccc79e60
+    sha: a94dd0f78617d68af8e58255ff7f8c7a7e47daf9
   - path: src/db.ts
     sha: db126410edbcadf02b1d7ac200771620d1195d70
 generated_at_commit: a659306
@@ -107,11 +107,22 @@ retry budget, and returns the next phase — with no database and no model in it
 Everything interesting is there:
 
 - `completed` → `succeeded`, not resumable.
-- `max_turns` / `max_budget` → retry, and **resumable**: those two left a session
-  worth continuing, so `lastSessionId` is kept and the next attempt resumes rather
-  than starting cold.
+- `max_turns` → retry, and **resumable**: it left a session worth continuing, so
+  `lastSessionId` is kept and the next attempt resumes rather than starting cold.
 - `refused` → `failed` immediately, never retried. The same brief gets the same
   answer, so a retry only spends money.
+- `max_budget` → `failed` immediately as well, and for the same reason one level
+  down: the same brief gets the same **cap**. Resuming is right in principle — the
+  next attempt continues where this one stopped — but it only helps when the work
+  left is smaller than the cap, and nothing checks that. Measured at the shipped
+  defaults: job #6 spent $2.05, was retried, spent $2.02 stopping in the same place,
+  and its third attempt was refused by the board's daily ceiling. $4.07 for nothing.
+  Raising the cap is a change to the Job's **spec**, which belongs to whoever filed
+  it and never to the controller, so the Job stops here with `lastError` naming the
+  cap and the command that changes it. It stays **resumable**, which is what keeps
+  `lastSessionId`: `kb retry <id> --max-budget <usd>` re-queues it with a bigger cap,
+  records the raise on the event stream, and continues the session rather than
+  re-buying what the first attempt already paid for.
 - anything else → `crashed`, retried while budget remains.
 
 `maxRetries: 2` means two retries *after* the first go — three attempts in total.
