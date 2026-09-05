@@ -347,6 +347,83 @@ machinery that exists.
 
 ---
 
+## Phase 5 — the results
+
+Ten briefs, filed 2026-09-05 09:34 UTC, run by one daemon at `--interval 30` with
+`maxConcurrent 1`. **Zero interventions**: nothing was touched between the first claim
+and the last refusal.
+
+| # | Brief | Phase | k | Cost | Wall | PR | Mergeable without repair? |
+|---|---|---|---|---|---|---|---|
+| 1 | `kb ls --all` | succeeded | 1 | $2.00 | 271s | [#350](https://github.com/emyann/harness-kanban-board/pull/350) +78/-6 | **yes** |
+| 2 | `kb show` names its board | succeeded | 1 | $1.09 | 190s | [#351](https://github.com/emyann/harness-kanban-board/pull/351) +20/-0 | **yes** |
+| 3 | `kb log --since` | succeeded | 1 | $1.84 | 229s | [#352](https://github.com/emyann/harness-kanban-board/pull/352) +145/-2 | **yes** |
+| 4 | `kb boards rm` | succeeded | 1 | $1.87 | 213s | board says **#341 (closed)**; work is at [#353](https://github.com/emyann/harness-kanban-board/pull/353) | **no — machinery** |
+| 5 | Two boards, one repo | succeeded | 1 | $1.20 | 187s | [#354](https://github.com/emyann/harness-kanban-board/pull/354) +38/-4 | **yes** |
+| 6 | Daemon howto | **pending** | 2 | $4.07 | 386s | [#355](https://github.com/emyann/harness-kanban-board/pull/355) +245/-0 | **no — never finished** |
+| 7 | Attempt duration | succeeded | 1 | $1.23 | 201s | [#356](https://github.com/emyann/harness-kanban-board/pull/356) +58/-1 | **yes** |
+| 8 | README section | succeeded | 1 | $1.63 | 234s | [#357](https://github.com/emyann/harness-kanban-board/pull/357) +105/-0 | **yes** |
+| 9 | `--status` ceilings | succeeded | 1 | $1.93 | 219s | [#358](https://github.com/emyann/harness-kanban-board/pull/358) +88/-3 | **yes** |
+| 10 | Refusal logged once | succeeded | 1 | $1.63 | 225s | [#359](https://github.com/emyann/harness-kanban-board/pull/359) +87/-1 | **yes** |
+
+**All ten PRs are green on all seven CI legs and report `MERGEABLE`.**
+
+### Verdict: 8 of 10 — the gate passes, exactly at its threshold
+
+- **Cost: $18.48 against $6.00 predicted — 3.1× over.** Inside the order of magnitude
+  the gate allows, so the criterion passes, but the *method* was wrong: extrapolating
+  from a read-only measurement (12 turns, $0.0851) to tasks that read, edit, run a
+  test suite, commit, push and open a PR. Reading is the cheap part. Mean $1.85, range
+  $1.09–$2.00, and **five of ten came within 10% of the $2.00 per-Job cap**, which is
+  not a comfortable distribution.
+- **Wall clock: 39 minutes** for ten Jobs, 187–271s each, remarkably tight.
+- **The merges are the human's.** Every PR is a draft; nothing was merged by the
+  machinery, which is the design.
+
+### What the two failures were, precisely
+
+**#4 — the branch/PR join broke silently.** `origin/kb-4-1` was a *stale branch from a
+Phase 2 smoke test*, unrelated to this Job. The worker's push was correctly rejected as
+non-fast-forward, it obeyed "never force-push", and it worked around a broken
+precondition by pushing under another name. Then `prForBranch` matched the **closed** PR
+sitting on that stale branch and recorded it as the attempt's output. Three defects
+compounding, none of them the worker's fault.
+
+**#6 — a brief bigger than its budget burns every retry making the same wall.**
+`max_budget` is classed resumable, and resuming is the right idea, but the retry gets
+the *same* cap. Attempt 1 spent $2.05, attempt 2 spent $2.02, both stopped in the same
+place, and the third was refused by the board ceiling. Resuming only helps when the work
+remaining is smaller than the cap; nothing checks that.
+
+### Phase 5b — the honest backlog
+
+Every item below was found by running the thing, not by reading it.
+
+1. **Branch names collide across boards.** `kb-<jobId>-<k>` is unique per *database*,
+   and job ids restart at 1 on a new board — so a fresh board collides with every
+   `kb-N-K` left on the remote. Guaranteed, not a corner case. Root cause of #4.
+2. **`prForBranch` accepts a closed PR.** It should prefer an open one, and never
+   record a PR that predates the attempt.
+3. **Nothing verifies the PR's head.** `src/brief.ts` asks; the machinery trusts. The
+   branch is "the only thing that ties a PR to its card" and it breaks in silence.
+4. **A `max_budget` retry re-spends the cap.** Either raise the cap on resume, or stop
+   retrying an outcome the retry cannot change.
+5. **No verb sets a board's ceilings.** `maxConcurrent` and `dailyBudgetUsd` were set
+   for this run with a Prisma one-liner. For a system whose gate is "safe to leave
+   alone", the safety limits being SQL-only is a real gap.
+6. **The refusal is logged every tick.** `reconcile` calls `onEvent` unconditionally,
+   defeating the daemon's `announce` dedup — measured 4 lines where 1 was intended.
+   (Job #10's brief was about exactly this behaviour, one layer up.)
+7. **Worktrees are never reclaimed: 6.1 GB for ten Jobs.** `worktreeHasWork` is true
+   for anything ahead of its base, which is every successful Job, so nothing is ever
+   removed — and each worktree carries **614 MB of `node_modules`**, because a worker
+   installs its own tree to run the tests. In the zero-dependency era a worktree was a
+   few MB; ADR-007's dependencies made this the run's largest operational cost.
+8. **Cost estimation needs a real method.** Recorded here so the next prediction is
+   made from these ten measurements rather than from one read-only run.
+
+---
+
 ## After the gate
 
 In this order, and each one only when the previous is boring:
