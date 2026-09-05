@@ -7,9 +7,9 @@ audience: [dev]
 read_when: "changing how a worker is launched, deciding what to persist about a run, or adding a second runtime"
 covers:
   - path: src/runtime/index.ts
-    sha: f2ee9524d73d47eafb102c0db69ae1ea852d35d2
+    sha: 767c2f6c45fd95a7d30430b029ff6dfe48a82b49
   - path: src/runtime/claude.ts
-    sha: b334fb2e536580b900e527b9ebf8585d17f93400
+    sha: 5ae950e19d9727e51a7b765cea7a206005d79e35
   - path: src/runtime/fake.ts
     sha: 129055e0e4d9e24946e7ba4d0fc7ed9a0bfc06b5
 generated_at_commit: c5326c0
@@ -83,6 +83,11 @@ re-injected on every request. If runs start going long, that is the line to
 revisit.
 
 `maxBudgetUsd` is the runaway-cost stop and it covers subagent spend.
+
+One thing in that hook *is* per-run: the subagent isolation policy, which reads
+`WorkerSpec.isolated` — did this attempt get a worktree, or is it running in the
+operator's checkout? A parent with no worktree has nowhere to bring a subagent's
+work back to, so spawns are not forced into one there (`concepts/admission-control`).
 
 ## Why there is a fake
 

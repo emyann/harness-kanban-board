@@ -9,10 +9,10 @@ covers:
   - path: prisma/schema.prisma
     sha: 7ddf7cc64bdec434ada83af9301a0d835f9d5af1
   - path: src/controller.ts
-    sha: a94dd0f78617d68af8e58255ff7f8c7a7e47daf9
+    sha: 4bec802ac597bdbba089915e9ddb4124acc8394f
   - path: src/db.ts
     sha: db126410edbcadf02b1d7ac200771620d1195d70
-generated_at_commit: a659306
+generated_at_commit: f0b5bbd
 last_refreshed: 2026-09-05
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control]
 ---
