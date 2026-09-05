@@ -6,6 +6,7 @@ import {
 import { prForBranch } from './pulls.ts';
 import { withProtocol } from './brief.ts';
 import { gateClaim, windowStart, type ClaimGate } from './limits.ts';
+import { resolveSpec } from './spec.ts';
 import { holderId, holderLiveness } from './liveness.ts';
 import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
 
@@ -254,13 +255,21 @@ async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report
         data: { endedAt: at, outcome: 'lost', reason: `lease held by ${l.holder} expired` },
       });
     }
-    const job = await db.job.findUnique({ where: { id: l.jobId }, select: { maxRetries: true } });
+    // Through `resolveSpec`, not off the column: `maxRetries` is nullable now, and a board that
+    // says "retry these three times" has to be heard here too. Read raw, the `?? 0` below would
+    // have given every inheriting Job exactly one attempt — so a Job whose holder died would be
+    // given up on sooner than an identical one that merely failed.
+    const job = await db.job.findUnique({
+      where: { id: l.jobId },
+      select: { maxRetries: true, board: { select: { defaultMaxRetries: true } } },
+    });
+    const maxRetries = resolveSpec(job, job?.board).maxRetries.value;
     const spent = await db.attempt.count({
       where: { jobId: l.jobId, endedAt: { not: null }, outcome: { not: 'stopped' } },
     });
     await db.job.update({
       where: { id: l.jobId },
-      data: { phase: spent < (job?.maxRetries ?? 0) + 1 ? 'pending' : 'failed', lastError: 'lease expired' },
+      data: { phase: spent < maxRetries + 1 ? 'pending' : 'failed', lastError: 'lease expired' },
     });
     await db.event.create({ data: { kind: 'reclaimed', jobId: l.jobId, actor: l.holder } });
     report.reclaimed.push(l.jobId);
@@ -318,8 +327,19 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     const board = await db.board.findFirst({
       where: deps.board ? { slug: deps.board } : { id: job.boardId },
-      select: { pausedAt: true, pausedBy: true, maxConcurrent: true, dailyBudgetUsd: true, id: true, repoPath: true },
+      select: {
+        pausedAt: true, pausedBy: true, maxConcurrent: true, dailyBudgetUsd: true, id: true,
+        repoPath: true,
+        defaultModel: true, defaultEffort: true, defaultMaxTurns: true, defaultMaxBudgetUsd: true,
+        defaultMaxRetries: true,
+      },
     });
+    // The spec this Job actually runs with, resolved once and used for everything below: the gate,
+    // the cap frozen onto the Attempt, the runtime call and the retry decision. Once, because the
+    // alternative is four resolutions of the same three levels that can disagree with each other —
+    // and the first of them is a ceiling check, where disagreeing means admitting work the board
+    // could not afford.
+    const spec = resolveSpec(job, board);
     const boardId = board?.id ?? job.boardId;
     // The repository this Job runs in. On the Board because a Board is the Namespace and the
     // ceilings above are already per-repo facts; on nothing at all is an error worth naming, since
@@ -349,13 +369,18 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
           where: { job: { boardId }, startedAt: { gte: windowStart(now()) } },
         }),
         // What the runs already going could still cost. An attempt with no `endedAt` has reported
-        // no cost, so it is invisible to the aggregate above; charging its Job's cap keeps the
-        // budget a ceiling rather than a report. An orphaned attempt whose holder died is counted
-        // too, which over-charges — in the safe direction, and only until the reclaim at the top
-        // of the next pass closes it.
-        db.attempt.findMany({
+        // no cost, so it is invisible to the aggregate above; charging the cap it was claimed
+        // under keeps the budget a ceiling rather than a report. An orphaned attempt whose holder
+        // died is counted too, which over-charges — in the safe direction, and only until the
+        // reclaim at the top of the next pass closes it.
+        //
+        // Off the Attempt's own frozen column, which is why this is a `_sum` and not N rows to add
+        // up in JavaScript: the number each live run may still spend is a fact about that run, and
+        // freezing it at claim is what keeps it both non-null and unable to drift when someone
+        // edits the board's default mid-flight. The argument is on `Attempt.maxBudgetUsd`.
+        db.attempt.aggregate({
+          _sum: { maxBudgetUsd: true },
           where: { job: { boardId }, endedAt: null },
-          select: { job: { select: { maxBudgetUsd: true } } },
         }),
       ]);
       const answer = gateClaim({
@@ -364,9 +389,11 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         liveLeases,
         maxConcurrent: board?.maxConcurrent ?? 1,
         spent24h: spend._sum.costUsd ?? 0,
-        committedUsd: open.reduce((sum, a) => sum + a.job.maxBudgetUsd, 0),
+        committedUsd: open._sum.maxBudgetUsd ?? 0,
         dailyBudgetUsd: board?.dailyBudgetUsd ?? null,
-        jobBudgetUsd: job.maxBudgetUsd,
+        // Resolved, not raw: this column is null for every Job that inherits its cap, and a gate
+        // judging a null against the ceiling would wave through the commonest Job there is.
+        jobBudgetUsd: spec.maxBudgetUsd.value,
       });
       gate = answer;
       if (answer.ok !== false) break;
@@ -417,7 +444,15 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     }
 
     await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
-    await db.attempt.create({ data: { jobId: job.id, k, host, runtime: deps.runtime.name, startedAt: now() } });
+    // The cap is frozen onto the attempt here, in the same breath as the claim and from the same
+    // `spec` the gate was just judged against — so what the next gate check charges this run is
+    // exactly what this run was admitted for. See `Attempt.maxBudgetUsd` in the schema.
+    await db.attempt.create({
+      data: {
+        jobId: job.id, k, host, runtime: deps.runtime.name, startedAt: now(),
+        maxBudgetUsd: spec.maxBudgetUsd.value,
+      },
+    });
     await db.event.create({ data: { kind: 'claimed', jobId: job.id, boardId: job.boardId, actor: host, payload: { k } } });
     report.claimed.push(job.id);
     say(`claim     k=${k} ${job.name}`);
@@ -470,7 +505,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     // ---- and now let it go. Everything past this point is the run and the record of it, and it
     // is the only part that overlaps with another Job's.
-    const done$: Promise<void> = runAndRecord({ job, k, charged, token, leaseMs, cwd, wt, say })
+    const done$: Promise<void> = runAndRecord({ job, spec, k, charged, token, leaseMs, cwd, wt, say })
       .catch((e: unknown) => { failure ??= e; })
       .finally(() => { inFlight.delete(done$); });
     inFlight.add(done$);
@@ -492,6 +527,8 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
   /** One claimed Job: run it, then write down what happened. Concurrent with its siblings. */
   async function runAndRecord(c: {
     job: (typeof wanted)[number];
+    /** What the Job runs with once the board's defaults have filled its nulls. */
+    spec: ReturnType<typeof resolveSpec>;
     k: number;
     charged: number;
     token: string;
@@ -500,7 +537,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     wt: Worktree | null;
     say: (line: string) => void;
   }): Promise<void> {
-    const { job, k, charged, token, leaseMs, cwd, wt, say } = c;
+    const { job, spec, k, charged, token, leaseMs, cwd, wt, say } = c;
 
     // ---- renew while the run is in flight. Deriving the lifetime already makes expiry-while-alive
     // impossible; renewal is what makes a DEAD holder cheap to reclaim — without it a host that dies
@@ -541,10 +578,12 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // Job running in the operator's tree has no worktree to bring a subagent's work back to.
         isolated: wt !== null,
         prompt: wt ? withProtocol(job.brief, wt.branch) : job.brief,
-        model: job.model ?? undefined,
-        effort: (job.effort as 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined) ?? undefined,
-        maxTurns: job.maxTurns,
-        maxBudgetUsd: job.maxBudgetUsd,
+        // All four from the resolved spec: a Job that named none of them still has to run on
+        // something, and the board is now allowed to be the one that says what.
+        model: spec.model.value ?? undefined,
+        effort: spec.effort.value ?? undefined,
+        maxTurns: spec.maxTurns.value,
+        maxBudgetUsd: spec.maxBudgetUsd.value,
         timeoutMs: job.timeoutMs,
         resume: job.lastSessionId ?? undefined,
         signal: deps.signal,
@@ -565,7 +604,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // be a lie about why it ended AND would spend a retry on it.
     const ran: Decision = deps.signal?.aborted
       ? { phase: 'pending', outcome: 'stopped', resumable: true, lastError: null }
-      : nextPhase(outcome, charged, job.maxRetries, job.maxBudgetUsd);
+      // Both from the resolved spec, so the budget advice names the cap this attempt actually ran
+      // under — which may be the board's. Quoting the raw column would print `$0.00` and send the
+      // operator to raise a limit that was never the one they hit.
+      : nextPhase(outcome, charged, spec.maxRetries.value, spec.maxBudgetUsd.value);
 
     // ---- the declared outputs, out of the sandbox BEFORE it is torn down. The order is the whole
     // design: a worktree is the pod filesystem and dies with the run, so an artifact still inside it

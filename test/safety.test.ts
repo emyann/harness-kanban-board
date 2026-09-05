@@ -96,7 +96,7 @@ test('spend already recorded counts against the ceiling', async () => {
   const b = await freshBoard();
   const spent = await b.job('already-spent');
   await db.attempt.create({
-    data: { jobId: spent.id, k: 1, startedAt: new Date(), endedAt: new Date(), outcome: 'completed', costUsd: 4 },
+    data: { jobId: spent.id, k: 1, startedAt: new Date(), endedAt: new Date(), outcome: 'completed', costUsd: 4, maxBudgetUsd: 4 },
   });
   await db.job.update({ where: { id: spent.id }, data: { phase: 'succeeded' } });
 
@@ -113,7 +113,7 @@ test('spend outside the rolling window does not count', async () => {
   const old = await b.job('yesterday');
   const longAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
   await db.attempt.create({
-    data: { jobId: old.id, k: 1, startedAt: longAgo, endedAt: longAgo, outcome: 'completed', costUsd: 99 },
+    data: { jobId: old.id, k: 1, startedAt: longAgo, endedAt: longAgo, outcome: 'completed', costUsd: 99, maxBudgetUsd: 99 },
   });
   await db.job.update({ where: { id: old.id }, data: { phase: 'succeeded' } });
 
@@ -275,7 +275,9 @@ test('money promised to ANOTHER host\'s run in flight refuses, and names it', as
   await b.set({ dailyBudgetUsd: 10, maxConcurrent: 5 });
   // Their attempt is open, so it has reported no cost — but its Job may still cost $6.
   const theirs = await b.job('theirs', { maxBudgetUsd: 6 });
-  await db.attempt.create({ data: { jobId: theirs.id, k: 1, host: 'another-host' } });
+  // The cap is on the ATTEMPT, frozen when another host claimed it — that is the number this gate
+  // charges, and it is why the refusal below can name $6 without re-resolving anyone's spec.
+  await db.attempt.create({ data: { jobId: theirs.id, k: 1, host: 'another-host', maxBudgetUsd: 6 } });
   await db.job.update({ where: { id: theirs.id }, data: { phase: 'running' } });
 
   const mine = await b.job('mine', { maxBudgetUsd: 6 });
@@ -386,7 +388,7 @@ test('reclaim does not steal a lease renewed between the read and the delete', a
   const b = await freshBoard();
   const job = await b.job('renewed-just-in-time');
   await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
-  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'alive' } });
+  await db.attempt.create({ data: { jobId: job.id, k: 1, host: 'alive', maxBudgetUsd: 1 } });
   await db.lease.create({
     data: { jobId: job.id, holder: 'alive', token: 't', expiresAt: new Date(Date.now() - 1000) },
   });
@@ -478,7 +480,7 @@ test('a process killed mid-run is reclaimed, its orphan marked lost, and retried
     await db.lease.create({ data: { jobId: ${job.id}, holder: 'doomed-child', token: 'tok',
       expiresAt: new Date(Date.now() + 600000) } });
     await db.job.update({ where: { id: ${job.id} }, data: { phase: 'running' } });
-    await db.attempt.create({ data: { jobId: ${job.id}, k: 1, host: 'doomed-child' } });
+    await db.attempt.create({ data: { jobId: ${job.id}, k: 1, host: 'doomed-child', maxBudgetUsd: 1 } });
     process.send?.('claimed');
     await new Promise(() => {});
   `);
@@ -508,9 +510,9 @@ test('reclaiming does not resurrect a Job that is out of retries', async () => {
   const b = await freshBoard();
   const job = await b.job('exhausted', { maxRetries: 0 });
   await db.attempt.create({
-    data: { jobId: job.id, k: 1, startedAt: new Date(), endedAt: new Date(), outcome: 'crashed' },
+    data: { jobId: job.id, k: 1, startedAt: new Date(), endedAt: new Date(), outcome: 'crashed', maxBudgetUsd: 1 },
   });
-  await db.attempt.create({ data: { jobId: job.id, k: 2, host: 'dead' } });
+  await db.attempt.create({ data: { jobId: job.id, k: 2, host: 'dead', maxBudgetUsd: 1 } });
   await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
   await db.lease.create({
     data: { jobId: job.id, holder: 'dead', token: 't', expiresAt: new Date(Date.now() - 1000) },

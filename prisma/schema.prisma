@@ -107,6 +107,22 @@ model Board {
   /// why this comment exists. 0 drains the board without stopping it.
   maxConcurrent  Int   @default(1)
 
+  /// Spec defaults for the Jobs filed on this board. Null means "no opinion — ask the next level".
+  ///
+  /// The same kind of fact as the ceilings above. A board that runs cheap, high-volume work knows
+  /// which model that work wants, and saying so once beats `--model` on every `kb new`. What keeps
+  /// them separate columns rather than one is that a ceiling and a default are opposites in who
+  /// wins: a Job may not exceed `dailyBudgetUsd`, and it may freely override `defaultModel`.
+  ///
+  /// Resolution is in `src/spec.ts`: the Job's own value wins, the Board's default fills a null,
+  /// the built-in is the last resort. `timeoutMs` deliberately has no twin here — nothing has asked
+  /// for one, and each default costs a column, a flag and a line of provenance in `kb show`.
+  defaultModel        String?
+  defaultEffort       String?
+  defaultMaxTurns     Int?
+  defaultMaxBudgetUsd Float?
+  defaultMaxRetries   Int?
+
   events Event[]
 
   controller Controller?
@@ -151,15 +167,21 @@ model Job {
   brief        String
   /// Which agent definition to run. The image name — see `.claude/agents/<agent>.md`.
   agent        String  @default("worker")
+  /// Null on all five of these means "nobody said": the Board's default answers, and failing that
+  /// `BUILT_IN` in `src/spec.ts` does. They carry no database default on purpose — a column that
+  /// defaults to 20 cannot tell "the operator asked for 20" from "the operator said nothing", and
+  /// without that distinction a Board default is outranked by every Job that ever existed, which is
+  /// not a default at all. The built-in numbers moved to `src/spec.ts`, now the one place they are
+  /// written down.
   model        String?
   effort       String?
-  maxTurns     Int     @default(20)
+  maxTurns     Int?
   /// Wall clock. The model's own caps (turns, budget) cannot stop a session that has stalled.
   timeoutMs    Int     @default(1800000)
-  maxBudgetUsd Float   @default(1)
+  maxBudgetUsd Float?
   /// Run in its own git worktree. Enforced at admission, not requested in a prompt.
   isolate      Boolean @default(true)
-  maxRetries   Int     @default(2)
+  maxRetries   Int?
   /// What this Job must produce on disk: a JSON array of repository-relative paths, copied out of
   /// the worktree into `Board.repoPath` before the checkout is released (ADR-008). Directories
   /// recurse. A declared path the run did not produce fails the attempt — that rule is the whole
@@ -211,6 +233,53 @@ model Attempt {
   sessionId String?
   summary   String?
   reason    String?
+
+  /// The budget cap this attempt was claimed under, frozen at claim time. Never null, never
+  /// re-derived.
+  ///
+  /// ## Why the cap is copied here rather than looked up
+  ///
+  /// `Job.maxBudgetUsd` is nullable now, because that is what makes `defaultMaxBudgetUsd` above
+  /// mean anything. But one reader of that column is not the run itself: `gateClaim` sums, over
+  /// every attempt with no `endedAt`, what the runs already in flight could still cost, and
+  /// subtracts nothing for the fact that they have reported no cost yet (`committedUsd` in
+  /// `src/limits.ts`). Reading the raw column there would read null for exactly the Jobs that
+  /// inherit their cap. Three ways out, and this is the third:
+  ///
+  ///   1. resolve the spec per open attempt — an extra query per open attempt, per gate check,
+  ///      in a loop that already runs once per claim;
+  ///   2. join the board's defaults into that one query — cheap, and still *wrong* in the way (1)
+  ///      is wrong;
+  ///   3. freeze the resolved cap here.
+  ///
+  /// (1) and (2) differ from (3) only when a board's default changes while work is in flight, and
+  /// there they are both wrong in the same direction. An attempt that started under a $1 cap runs
+  /// under $1 for its whole life — the number was handed to the runtime at spawn and nothing
+  /// re-reads it. So when an operator lowers `defaultMaxBudgetUsd` to $0.10 mid-flight, (1) and (2)
+  /// tell the gate that three live runs have committed $0.30 when they may in fact still spend
+  /// $3.00, and the gate admits work that takes the board past its ceiling. That is the exact
+  /// failure `committedUsd` was added to prevent, reintroduced by the lookup. Raising the default
+  /// is wrong in the harmless direction — over-charging, so the gate merely stalls — but a ceiling
+  /// that is only correct when nobody edits the board is not a ceiling.
+  ///
+  /// It is also the Kubernetes shape one table over from where it already is. Admission stamps a
+  /// Pod with the limits a LimitRange supplied; the scheduler then reads the Pod, never the
+  /// namespace, and a LimitRange edited afterwards does not retroactively rewrite what is running.
+  /// An Attempt is this system's Pod, and it already records what *happened* rather than what is
+  /// configured — `costUsd`, `sessionId`, `branch`, `outcome`. The cap it ran under is that same
+  /// kind of fact, and it is the one an operator most wants beside `costUsd`.
+  ///
+  /// What it costs: `kb show` reports the frozen number for a past attempt, not what resolution
+  /// would say today. That is the feature. An attempt that stopped on `max_budget` is only legible
+  /// against the cap that actually stopped it, and `kb retry`'s refusal — "the same cap stops it in
+  /// the same place" — is a claim about the failed attempt, which no amount of re-resolving can
+  /// recover once the board has moved on.
+  ///
+  /// Only the budget is frozen. `maxTurns`, `model` and `effort` are read once, by the run itself,
+  /// and nothing outside that run asks about them while it is live; a column each would be four
+  /// facts kept in two places to answer no question. This one is here because another process
+  /// reads it about someone else's attempt.
+  maxBudgetUsd Float
 
   // What this attempt produced on the forge. A fact about what happened, so it is history and
   // belongs here; the PR's *state* (open, merged, conflicted) is live and stays on GitHub.

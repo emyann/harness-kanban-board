@@ -238,14 +238,15 @@ test('show prints how long each attempt took, and marks one still running', asyn
   await db.attempt.create({
     data: {
       jobId: j.id, k: 1, startedAt: started, endedAt: new Date(started.getTime() + 3_840_000),
-      outcome: 'completed', costUsd: 0.4,
+      outcome: 'completed', costUsd: 0.4, maxBudgetUsd: 1,
     },
   });
-  await db.attempt.create({ data: { jobId: j.id, k: 2, startedAt: new Date(Date.now() - 90_000) } });
+  await db.attempt.create({ data: { jobId: j.id, k: 2, startedAt: new Date(Date.now() - 90_000), maxBudgetUsd: 1 } });
   const r = await kb('show', String(j.id));
   // $0.40 means very little without "and it took an hour" beside it.
   assert.match(r.out, /completed\s+1h04m \$0\.4000/);
-  assert.match(r.out, /running\s+1m\+/, 'an attempt in flight shows elapsed-so-far, not nothing');
+  assert.match(r.out, /running\s+1m\+ up to \$1\.00/,
+    'an attempt in flight shows elapsed-so-far and the cap it is running under, not nothing');
 });
 
 // ---------------------------------------------------------------- run
@@ -423,7 +424,7 @@ test('an attempt still open on an unleased Job is closed, not left climbing for 
   // lease is left for the reclaim to find, so the operator is the only thing that can conclude it.
   const j = json((await kb('new', 'stranded', '--brief', 'b', '--board', 'byhand', '--json')).out);
   await db.job.update({ where: { id: j.id }, data: { phase: 'running' } });
-  await db.attempt.create({ data: { jobId: j.id, k: 1, host: 'host/9@daemon' } });
+  await db.attempt.create({ data: { jobId: j.id, k: 1, host: 'host/9@daemon', maxBudgetUsd: 1 } });
   await kb('done', String(j.id), 'the PR it opened was merged', '--board', 'byhand');
   const a = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: j.id, k: 1 } } });
   assert.ok(a.endedAt, 'closed');
@@ -898,3 +899,161 @@ test('kb boards rm refuses a board a daemon is leading, --force or not', async (
   }
 });
 
+
+// ---------------------------------------------------------------- the spec defaults
+//
+// A board that runs cheap, high-volume work should say so once. What has to be true for that to be
+// safe: the Job still wins, `none` gets you back to "no opinion", and `kb show` can tell you which
+// level answered — a spec you cannot trace is worse than one you must repeat.
+
+test('kb boards set carries the spec defaults, and none clears one', async () => {
+  const r = scratchRepo('defaults');
+  await kb('boards', 'add', 'defaults', '--repo', r);
+  const set = json((await kb(
+    'boards', 'set', 'defaults', '--model', 'claude-haiku-4-5', '--effort', 'low',
+    '--max-turns', '8', '--max-budget', '0.25', '--max-retries', '0', '--json',
+  )).out);
+  assert.deepEqual(set.defaults, {
+    model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
+  });
+
+  const cleared = json((await kb('boards', 'set', 'defaults', '--model', 'none', '--json')).out);
+  assert.equal(cleared.defaults.model, null, 'none clears the default rather than setting the word');
+  assert.equal(cleared.defaults.maxTurns, 8, 'and clearing one leaves the others alone');
+  assert.equal(cleared.defaults.maxRetries, 0, 'including a default of zero, which is a real answer');
+});
+
+test('kb boards set refuses a nonsense default rather than storing it', async () => {
+  const r = scratchRepo('bad-defaults');
+  await kb('boards', 'add', 'bad-defaults', '--repo', r);
+  for (const [flag, value, why] of [
+    ['--effort', 'turbo', /low\|medium\|high\|xhigh\|max/],
+    ['--max-turns', '0', /turns, 1 or more/],
+    ['--max-turns', '2.5', /turns, 1 or more/],
+    ['--max-budget', '0', /dollars above zero/],
+    ['--max-budget', '-1', /dollars above zero/],
+    ['--max-retries', '-1', /retries, 0 or more/],
+    ['--max-retries', '1.5', /retries, 0 or more/],
+    ['--model', '', /pass a value/],
+  ] as [string, string, RegExp][]) {
+    await assert.rejects(
+      () => main(['boards', 'set', 'bad-defaults', flag, value]),
+      (e: Error & { exitCode?: number }) => {
+        assert.equal(e.exitCode, 2);
+        assert.match(e.message, why);
+        // Every one of these has to name the way out, or an operator who typed a bad value has no
+        // way to learn that "no opinion" is even expressible.
+        assert.match(e.message, /none/, `${flag} ${value} must name "none" as the way to clear it`);
+        return true;
+      },
+      `${flag} ${value} should be refused`,
+    );
+  }
+  const b = await db.board.findUniqueOrThrow({ where: { slug: 'bad-defaults' } });
+  assert.equal(b.defaultModel, null, 'and nothing was written');
+  assert.equal(b.defaultMaxTurns, null);
+});
+
+test('a Job filed without a flag records null, so the board can still answer', async () => {
+  // The whole mechanism turns on this. A Job that recorded 20 turns because nobody said otherwise
+  // would outrank its board's default for ever, and the default would be dead on arrival.
+  const repo = scratchRepo('unset');
+  await kb('boards', 'add', 'unset', '--repo', repo);
+  const r = await kb('new', 'says-nothing', '--brief', 'x', '--board', 'unset', '--json');
+  const row = await db.job.findUniqueOrThrow({ where: { id: json(r.out).id } });
+  assert.equal(row.maxTurns, null);
+  assert.equal(row.maxBudgetUsd, null);
+  assert.equal(row.maxRetries, null);
+  assert.equal(row.model, null);
+});
+
+test('kb show names the source of every resolved field', async () => {
+  const repo = scratchRepo('traced');
+  await kb('boards', 'add', 'traced', '--repo', repo);
+  await kb('boards', 'set', 'traced', '--model', 'claude-haiku-4-5', '--max-turns', '8');
+  const id = json((await kb('new', 'traced-job', '--brief', 'x', '--board', 'traced',
+    '--max-budget', '2', '--json')).out).id;
+
+  const out = (await kb('show', String(id), '--board', 'traced')).out;
+  assert.match(out, /model\s+claude-haiku-4-5\s+from board traced/);
+  assert.match(out, /maxTurns\s+8\s+from board traced/);
+  assert.match(out, /maxBudget\s+\$2\s+set on the Job/);
+  assert.match(out, /maxRetries\s+2\s+built-in default/, 'the last resort says so too');
+
+  // And in --json, where a consumer needs the provenance without parsing a table.
+  const j = json((await kb('show', String(id), '--board', 'traced', '--json')).out);
+  assert.deepEqual(j.spec.model, { value: 'claude-haiku-4-5', from: 'board' });
+  assert.deepEqual(j.spec.maxBudgetUsd, { value: 2, from: 'job' });
+  assert.deepEqual(j.spec.maxRetries, { value: 2, from: 'built-in' });
+});
+
+test('kb show reports the cap an attempt was FROZEN at, not what the board says today', async () => {
+  const repo = scratchRepo('frozen-show');
+  await kb('boards', 'add', 'frozen-show', '--repo', repo);
+  await kb('boards', 'set', 'frozen-show', '--max-budget', '3');
+  const id = json((await kb('new', 'ran-at-three', '--brief', 'x', '--board', 'frozen-show', '--json')).out).id;
+  await db.attempt.create({
+    data: {
+      jobId: id, k: 1, startedAt: new Date(), endedAt: new Date(),
+      outcome: 'max_budget', costUsd: 3, maxBudgetUsd: 3,
+    },
+  });
+  // The operator reacts to the bill by lowering the board's default. The attempt is history.
+  await kb('boards', 'set', 'frozen-show', '--max-budget', '0.5');
+
+  const out = (await kb('show', String(id), '--board', 'frozen-show')).out;
+  assert.match(out, /max_budget\s+\S+\s+\$3\.0000 of \$3\.00/,
+    'spent against the cap that actually stopped it — re-resolving would print $0.50');
+  assert.match(out, /maxBudget\s+\$0\.5\s+from board frozen-show/,
+    'while the spec block shows what the NEXT attempt would get, which is the other question');
+});
+
+test('kb retry does not crash on a Job whose cap came from the board', async () => {
+  // `job.maxBudgetUsd` is null for the commonest Job there is — one filed with no `--max-budget`.
+  // Read raw, the guard that exists to refuse a pointless re-queue threw instead of refusing.
+  const repo = scratchRepo('retry-inherited');
+  await kb('boards', 'add', 'retry-inherited', '--repo', repo);
+  await kb('boards', 'set', 'retry-inherited', '--max-budget', '3');
+  const id = json((await kb('new', 'spent-it', '--brief', 'x', '--board', 'retry-inherited', '--json')).out).id;
+  await db.attempt.create({
+    data: {
+      jobId: id, k: 1, startedAt: new Date(), endedAt: new Date(),
+      outcome: 'max_budget', costUsd: 3, maxBudgetUsd: 3,
+    },
+  });
+  await db.job.update({ where: { id }, data: { phase: 'failed' } });
+
+  await assert.rejects(
+    () => main(['retry', String(id), '--board', 'retry-inherited']),
+    (e: Error & { exitCode?: number }) => {
+      assert.equal(e.exitCode, 2, 'a refusal, not a TypeError');
+      assert.match(e.message, /\$3\.00 budget/, 'and it names the cap the attempt really ran under');
+      assert.match(e.message, /--max-budget 6\.00/);
+      return true;
+    },
+  );
+
+  // Raising the BOARD's default is also a real raise: the next attempt genuinely gets more, so
+  // refusing that retry would send an operator to override a limit no longer in the way.
+  await kb('boards', 'set', 'retry-inherited', '--max-budget', '10');
+  const ok = json((await kb('retry', String(id), '--board', 'retry-inherited', '--json')).out);
+  assert.equal(ok.maxBudgetUsd, 10, 'the retry runs under the board\'s new default');
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id } })).maxBudgetUsd, null,
+    'and nothing was written onto the Job — it still has no opinion of its own');
+});
+
+test('kb boards prints a defaults line only for the boards that have one', async () => {
+  const repo = scratchRepo('listed-defaults');
+  await kb('boards', 'add', 'listed-defaults', '--repo', repo);
+  await kb('boards', 'set', 'listed-defaults', '--model', 'claude-haiku-4-5');
+  const out = (await kb('boards')).out;
+  assert.match(out, /defaults\s+model=claude-haiku-4-5/);
+
+  const rows = json((await kb('boards', '--json')).out) as { board: string; hasDefaults: boolean; defaults: unknown }[];
+  const mine = rows.find((r) => r.board === 'listed-defaults');
+  assert.equal(mine?.hasDefaults, true);
+  const bare = rows.find((r) => r.board !== 'listed-defaults' && !r.hasDefaults);
+  assert.ok(bare, 'a board with no defaults exists in this suite');
+  assert.deepEqual(bare.defaults, { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null },
+    '--json carries the key either way: a consumer inferring absence from a missing key reads a shape, not a record');
+});

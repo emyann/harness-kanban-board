@@ -64,27 +64,60 @@ export function ensureSchema(dbPath: string, dir = MIGRATIONS_DIR): SchemaResult
         .all() as { migration_name: string }[]).map((r) => r.migration_name),
     );
 
-    const applied: string[] = [];
-    for (const name of knownMigrations(dir)) {
-      if (done.has(name)) continue;
-      const sql = fs.readFileSync(path.join(dir, name, 'migration.sql'), 'utf8');
-      // Each migration is one unit: a half-applied schema is worse than an unapplied one, and
-      // SQLite gives us the transaction for free.
-      db.exec('BEGIN');
-      try {
-        db.exec(sql);
-        db.prepare(
-          `INSERT INTO _prisma_migrations (id, checksum, finished_at, migration_name, applied_steps_count)
-           VALUES (?, ?, current_timestamp, ?, 1)`,
-        ).run(crypto.randomUUID(), checksum(sql), name);
-        db.exec('COMMIT');
-      } catch (e) {
-        db.exec('ROLLBACK');
-        throw new Error(`could not apply migration ${name}: ${(e as Error).message}`);
+    const pending = knownMigrations(dir).filter((n) => !done.has(n));
+    if (!pending.length) return { applied: [], alreadyApplied: done.size };
+
+    // ---- foreign keys OFF, and *outside* the transaction, which is the only place saying so
+    // works. SQLite documents `PRAGMA foreign_keys` as a no-op within a transaction, and a no-op
+    // is what it silently was: every migration Prisma generates for a changed column is a
+    // "RedefineTables" block that copies a table, DROPs the original and renames the copy over it,
+    // and it opens with `PRAGMA foreign_keys=OFF` precisely because DROP TABLE performs an
+    // implicit DELETE that fires ON DELETE CASCADE on every child. Wrapped in BEGIN, that pragma
+    // did nothing, so redefining `Job` deleted every Attempt, Lease and Event on the board —
+    // cascaded away by a statement whose entire purpose was to leave the data alone.
+    //
+    // Nothing had noticed because the two migrations that redefine `Job` shipped before anyone
+    // had a board with rows in it. `test/schema.test.ts` now migrates a populated board and
+    // counts what survived, which is the only form of this that stays true.
+    //
+    // `defer_foreign_keys`, which those blocks also set, is not a substitute: it defers the
+    // *checking* of a violation to commit time, and a cascade is not a violation. Only OFF stops
+    // the delete.
+    db.pragma('foreign_keys = OFF');
+    try {
+      const applied: string[] = [];
+      for (const name of pending) {
+        const sql = fs.readFileSync(path.join(dir, name, 'migration.sql'), 'utf8');
+        // Each migration is one unit: a half-applied schema is worse than an unapplied one, and
+        // SQLite gives us the transaction for free.
+        db.exec('BEGIN');
+        try {
+          db.exec(sql);
+          // The price of turning enforcement off: a migration that leaves a row pointing at a
+          // parent that is gone commits silently and is found weeks later as a crash in a join.
+          // Checked before the commit, so the answer is still a rollback rather than a post-mortem.
+          const dangling = db.pragma('foreign_key_check') as unknown[];
+          if (dangling.length) {
+            throw new Error(
+              `it left ${dangling.length} row${dangling.length === 1 ? '' : 's'} referring to a parent that `
+              + 'is not there. Nothing was written — fix the migration, or the board it was run against',
+            );
+          }
+          db.prepare(
+            `INSERT INTO _prisma_migrations (id, checksum, finished_at, migration_name, applied_steps_count)
+             VALUES (?, ?, current_timestamp, ?, 1)`,
+          ).run(crypto.randomUUID(), checksum(sql), name);
+          db.exec('COMMIT');
+        } catch (e) {
+          db.exec('ROLLBACK');
+          throw new Error(`could not apply migration ${name}: ${(e as Error).message}`);
+        }
+        applied.push(name);
       }
-      applied.push(name);
+      return { applied, alreadyApplied: done.size };
+    } finally {
+      db.pragma('foreign_keys = ON');
     }
-    return { applied, alreadyApplied: done.size };
   } finally {
     db.close();
   }

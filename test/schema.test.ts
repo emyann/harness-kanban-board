@@ -123,3 +123,91 @@ test('a board this build is in step with is not refused', () => {
 test('a database file that does not exist yet is not from the future', () => {
   assert.doesNotThrow(() => assertNotFromTheFuture(scratch()));
 });
+
+/**
+ * The rows a migration must not take with it.
+ *
+ * Every Prisma migration that changes a column is a "RedefineTables" block: copy the table, DROP
+ * the original, rename the copy over it. DROP TABLE performs an implicit DELETE, which fires
+ * `ON DELETE CASCADE` on every child — so those blocks open with `PRAGMA foreign_keys=OFF`. SQLite
+ * makes that pragma a NO-OP inside a transaction, and `ensureSchema` runs each migration in one, so
+ * for six migrations the protection was not there: redefining `Job` would have deleted every
+ * Attempt, Lease and Event on the board.
+ *
+ * It had never fired because the two migrations that redefine `Job` shipped before any board had
+ * rows. This is the test that keeps it from firing later: it migrates a POPULATED board across the
+ * whole history and counts what came out the other side.
+ */
+test('migrating a populated board keeps its attempts, leases and events', () => {
+  const p = scratch();
+  const all = knownMigrations();
+  const MIGRATIONS = path.resolve(import.meta.dirname, '..', 'prisma', 'migrations');
+
+  // Apply the first migration only, then fill the board — so everything after it, including every
+  // table rebuild, runs against real rows.
+  const staged = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-staged-'));
+  dirs.push(staged);
+  fs.cpSync(path.join(MIGRATIONS, all[0]), path.join(staged, all[0]), { recursive: true });
+  ensureSchema(p, staged);
+
+  const seed = open(p);
+  seed.exec(`INSERT INTO "Board" ("slug", "updatedAt") VALUES ('populated', datetime('now'))`);
+  seed.exec(`INSERT INTO "Job" ("boardId", "name", "brief", "maxBudgetUsd", "maxTurns", "maxRetries", "updatedAt")
+             VALUES (1, 'old', 'a job filed before the migration', 3.5, 7, 4, datetime('now'))`);
+  seed.exec(`INSERT INTO "Attempt" ("jobId", "k", "host", "costUsd") VALUES (1, 1, 'a-host', 2.25)`);
+  seed.exec(`INSERT INTO "Lease" ("jobId", "holder", "token", "expiresAt") VALUES (1, 'a-host', 't', datetime('now'))`);
+  seed.exec(`INSERT INTO "Event" ("kind", "jobId") VALUES ('claimed', 1)`);
+  seed.close();
+
+  const r = ensureSchema(p);
+  assert.deepEqual(r.applied, all.slice(1), 'the rest of the history ran');
+
+  const db = open(p);
+  try {
+    const count = (t: string) => (db.prepare(`SELECT count(*) AS c FROM "${t}"`).get() as { c: number }).c;
+    assert.equal(count('Job'), 1, 'the Job survived');
+    assert.equal(count('Attempt'), 1, 'and so did its attempt — this is the one that used to vanish');
+    assert.equal(count('Lease'), 1);
+    assert.equal(count('Event'), 1);
+
+    // Values, not just rows: a rebuild that copies the wrong columns loses data as quietly as one
+    // that copies no rows.
+    const job = db.prepare('SELECT maxBudgetUsd, maxTurns, maxRetries FROM "Job" WHERE id = 1').get() as Record<string, number>;
+    assert.deepEqual(job, { maxBudgetUsd: 3.5, maxTurns: 7, maxRetries: 4 },
+      'a Job filed before the columns became nullable keeps the numbers it was filed with');
+
+    // The cap frozen onto the Attempt is NOT NULL, so every pre-existing attempt had to be
+    // backfilled from its Job — the admission gate sums this column and cannot be handed a null.
+    const attempt = db.prepare('SELECT costUsd, maxBudgetUsd FROM "Attempt" WHERE jobId = 1').get() as Record<string, number>;
+    assert.deepEqual(attempt, { costUsd: 2.25, maxBudgetUsd: 3.5 }, 'backfilled from the Job it ran for');
+  } finally {
+    db.close();
+  }
+});
+
+test('a migration that would leave a dangling reference is rolled back, not committed', () => {
+  // The price of turning foreign keys off for the duration: nothing else would notice. The check
+  // runs before the commit, so the answer is a refusal rather than a corrupt board.
+  const p = scratch();
+  ensureSchema(p);
+  const bad = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-bad-'));
+  dirs.push(bad);
+  fs.mkdirSync(path.join(bad, '99999999999999_orphan'));
+  fs.writeFileSync(
+    path.join(bad, '99999999999999_orphan', 'migration.sql'),
+    `INSERT INTO "Job" ("id", "boardId", "name", "brief", "updatedAt")
+     VALUES (1, 4242, 'orphan', 'points at a board that does not exist', datetime('now'));`,
+  );
+
+  assert.throws(
+    () => ensureSchema(p, bad),
+    /referring to a parent that is not there/,
+    'and the message says the board was left alone',
+  );
+  const db = open(p);
+  try {
+    assert.equal((db.prepare('SELECT count(*) AS c FROM "Job"').get() as { c: number }).c, 0, 'nothing was written');
+  } finally {
+    db.close();
+  }
+});
