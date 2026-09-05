@@ -41,6 +41,7 @@ const HELP = `kb — run one agent against one brief
        --board <slug>   default: default
 
   kb ls                    what is on the board        [--phase p] [--board s]
+       --all               every board on this machine, with a BOARD column
   kb show <id>             one screen: spec, phase, every attempt
   kb run [<id>]            reconcile once, in the foreground   [--fake]
   kb rm <id>               delete a Job and its attempts
@@ -180,6 +181,7 @@ export async function main(argv: string[]): Promise<number> {
       model: { type: 'string' },
       effort: { type: 'string' },
       board: { type: 'string' },
+      all: { type: 'boolean' },
       phase: { type: 'string' },
       'max-turns': { type: 'string' },
       'max-budget': { type: 'string' },
@@ -247,18 +249,28 @@ export async function main(argv: string[]): Promise<number> {
     case 'ls': {
       const phase = values.phase as Phase | undefined;
       if (phase && !PHASES.includes(phase)) throw usage(`--phase must be one of ${PHASES.join('|')}`);
+      // Two ways to say which board, meaning opposite things. Letting one silently win would make
+      // the same command line list one board or all of them depending on an order nobody can see.
+      const all = !!values.all;
+      if (all && named) {
+        throw usage(`--all is every board on this machine and --board ${named} is one — they contradict each other. Drop whichever you did not mean.`);
+      }
       const jobs = await db.job.findMany({
-        where: { board: { slug }, ...(phase ? { phase } : {}) },
-        orderBy: { id: 'asc' },
-        include: { _count: { select: { attempts: true } } },
+        where: { ...(all ? {} : { board: { slug } }), ...(phase ? { phase } : {}) },
+        orderBy: [{ board: { slug: 'asc' } }, { id: 'asc' }],
+        // The board is included whatever the scope, because `--json` carries it either way: a
+        // consumer that has to branch on the flags it passed is reading a shape, not a record.
+        include: { _count: { select: { attempts: true } }, board: { select: { slug: true } } },
       });
       emit(out, jobs.map((j) => ({
-        id: j.id, name: j.name, phase: j.phase, attempts: j._count.attempts,
+        id: j.id, board: j.board.slug, name: j.name, phase: j.phase, attempts: j._count.attempts,
         lastError: j.lastError, sessionId: j.lastSessionId,
       })), () => {
-        if (!jobs.length) return console.log(`no jobs on ${slug}`);
+        if (!jobs.length) return console.log(all ? 'no jobs on any board' : `no jobs on ${slug}`);
+        const w = all ? Math.max(...jobs.map((j) => j.board.slug.length)) : 0;
         for (const j of jobs) {
-          console.log(`#${String(j.id).padEnd(4)} ${j.phase.padEnd(9)} ${String(j._count.attempts).padStart(2)}× ${j.name.slice(0, 64)}`);
+          const board = all ? `${j.board.slug.padEnd(w)}  ` : '';
+          console.log(`${board}#${String(j.id).padEnd(4)} ${j.phase.padEnd(9)} ${String(j._count.attempts).padStart(2)}× ${j.name.slice(0, 64)}`);
         }
       });
       return 0;

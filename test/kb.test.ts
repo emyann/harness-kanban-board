@@ -386,3 +386,63 @@ test('kb boards rejects a subcommand it does not have, rather than listing anywa
   await assert.rejects(() => main(['boards', 'remove', 'x']), /no subcommand "remove"/);
 });
 
+// ---------------------------------------------------------------- ls --all
+
+test('ls --all lists Jobs from every board, and says which board each is on', async () => {
+  await kb('new', 'far off', '--brief', 'b', '--board', 'far-away');
+  const rows = json((await kb('ls', '--all', '--json')).out);
+  const boards = new Set(rows.map((r: { board: string }) => r.board));
+  assert.ok(boards.has('far-away'));
+  assert.ok(boards.has('switch'), 'a board nobody is standing in still shows up');
+  assert.ok(boards.size > 1, 'one query, not one run per board');
+});
+
+test('ls --all still filters by phase', async () => {
+  const rows = json((await kb('ls', '--all', '--phase', 'succeeded', '--json')).out);
+  assert.ok(rows.length > 0, 'something has succeeded by now');
+  assert.ok(rows.every((r: { phase: string }) => r.phase === 'succeeded'));
+  assert.ok(rows.every((r: { board: string }) => r.board), 'and every row still names its board');
+});
+
+test('ls --json carries the board whether or not --all is given', async () => {
+  // A stable shape beats a conditional one: a consumer should not have to remember which flags it
+  // passed to know which fields it got.
+  const rows = json((await kb('ls', '--board', 'far-away', '--json')).out);
+  assert.ok(rows.length > 0);
+  assert.ok(rows.every((r: { board: string }) => r.board === 'far-away'));
+});
+
+test('the BOARD column appears only with --all', async () => {
+  const all = await kb('ls', '--all');
+  assert.match(all.out, /^far-away\s+#\d+\s+pending/m, 'a column, padded to the longest slug');
+  const one = await kb('ls', '--board', 'far-away');
+  assert.match(one.out, /^#\d+\s+pending/m, 'scoped output is unchanged — the board is not news');
+});
+
+test('ls refuses --all together with --board rather than guessing which one wins', async () => {
+  await assert.rejects(
+    () => main(['ls', '--all', '--board', 'far-away']),
+    (e: Error & { exitCode?: number }) => {
+      assert.equal(e.exitCode, 2, 'a usage error, not a crash');
+      assert.match(e.message, /contradict/);
+      assert.match(e.message, /Drop whichever you did not mean/, 'an error says what to do next');
+      return true;
+    },
+  );
+});
+
+test('ls --all on a machine with no jobs at all says so', async () => {
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-empty-'));
+  const prev = process.env.HKB_DATABASE_URL;
+  process.env.HKB_DATABASE_URL = `file:${path.join(empty, 'other.db')}`;
+  try {
+    await closeBoard();
+    const r = await kb('ls', '--all');
+    assert.equal(r.code, 0);
+    assert.match(r.out, /no jobs on any board/);
+  } finally {
+    await closeBoard();
+    process.env.HKB_DATABASE_URL = prev;
+    fs.rmSync(empty, { recursive: true, force: true });
+  }
+});
