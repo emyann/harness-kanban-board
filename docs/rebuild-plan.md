@@ -532,6 +532,14 @@ Every item below was found by running the thing, not by reading it.
     also the general case of finding 3: nothing verifies the PR's head because nothing
     verifies there is a PR.
 
+12. **~~Nothing tells the board a Job is finished with.~~ FIXED** — `kb done <id> "<why>"` and
+    `kb cancel <id> "<why>"`, two terminal phases an operator writes. Found by being blocked by it:
+    job #6 ran out of budget twice and sat `pending`, while the pull request it had already opened
+    was reviewed and merged. The only verb that stopped the next reconcile from spending the whole
+    cap again was `kb rm`, which deletes the Job, its attempts and its events — so the choice was
+    between re-running work that had landed and destroying the record that it had, on a board whose
+    whole point is the record.
+
 ---
 
 ## After the gate

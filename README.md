@@ -51,6 +51,12 @@ kb show 1                                  # phase, spec, and every attempt: out
   `--max-budget` is *not* retried automatically — the retry would get the same cap and stop in the same place, at
   the same price — so this is where you raise it: `kb retry 6 --max-budget 4`, and the raise is on the event log.
 - **`kb boards`** lists every board on this machine; `kb boards add <slug> --repo <path>` points one at a repository.
+- **`kb done <id> "<why>"`** and **`kb cancel <id> "<why>"`** end a Job the machinery cannot end itself — a Job
+  whose pull request was reviewed and merged while it sat `pending` on a spent budget, or one nobody wants any
+  more. Two verbs because they are two statements about the work; both take a reason, both record the person who
+  made the call as an Event, and both refuse a Job a worker currently holds (stop the daemon, or wait). Neither is
+  `succeeded`, which means the session completed, and neither is `kb rm`, which deletes the record that any of it
+  happened.
 
 A pull request is not the only thing a Job can produce. `--export <path>` on `kb new` (repeatable) declares a file
 or directory the Job must write: the board copies it out of the worktree into the repository *before* the checkout

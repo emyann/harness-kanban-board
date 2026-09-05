@@ -48,7 +48,7 @@ test.after(async () => {
 /**
  * Run a verb and capture what it printed, so `--json` is asserted on its real output.
  *
- * The runner's own frames have to be filtered out. `node --test` multiplexes its reporter protocol
+ * The runner's own frames have to be kept out of the capture and passed through to the real stream. `node --test` multiplexes its reporter protocol
  * (`test:enqueue`, `test:pass`, …) over this very stream as v8-serialized binary, so anything that
  * patches `process.stdout.write` captures whatever the runner happened to emit in the same window.
  * That made this harness quietly timing-dependent: it passed for as long as no frame landed mid-verb,
@@ -65,6 +65,9 @@ async function kb(...argv: string[]): Promise<{ code: number; out: string }> {
   const write = process.stdout.write.bind(process.stdout);
   (process.stdout as { write: unknown }).write = (s: string) => {
     const text = String(s);
+    // Forwarded, not dropped. Swallowing a frame does not just lose a line: the parent process's
+    // reporter is a state machine over that stream, and a missing `test:start` crashes it
+    // (`assert(subtest.data.name === data.name)`) after every subtest has already passed.
     if (RUNNER_FRAME.test(text)) return write(s as never);
     chunks.push(text);
     return true;
@@ -87,7 +90,7 @@ test('no verb prints help and exits 0', async () => {
 });
 
 test('an unknown verb names the ones that exist', async () => {
-  await assert.rejects(() => kb('frobnicate'), /unknown verb.*new, ls, show, run, retry, rm/s);
+  await assert.rejects(() => kb('frobnicate'), /unknown verb.*new, ls, show, run, retry, done, cancel, rm/s);
 });
 
 // ---------------------------------------------------------------- new
@@ -291,79 +294,140 @@ test('rm deletes a Job and its attempts', async () => {
   assert.equal(await db.attempt.count({ where: { jobId: j.id } }), 0, 'cascaded');
 });
 
-// ---------------------------------------------------------------- retry
-// The controller refuses to retry a Job that spent its whole cap, because the retry would get the
-// same cap. This verb is the other half of that: the deliberate raise, by the person whose money
-// it is. So what it must do is REFUSE the re-queue that changes nothing.
+// ---------------------------------------------------------------- done / cancel
+//
+// The gap: a Job whose pull request was reviewed and merged while it sat `pending` on a spent
+// budget. Until these verbs the only thing that stopped the next reconcile from spending the whole
+// cap again was `kb rm`, which deletes the record that the work happened.
 
-/** A Job that stopped on its budget, as the controller would have left it. */
-async function capped(name: string, maxBudgetUsd = 2) {
-  const j = json((await kb('new', name, '--brief', 'b', '--max-budget', String(maxBudgetUsd), '--json')).out);
-  await db.job.update({
-    where: { id: j.id },
-    data: { phase: 'failed', lastSessionId: `sess-${j.id}`, lastError: 'spent its whole $2.00 budget', finishedAt: new Date() },
-  });
-  await db.attempt.create({
-    data: { jobId: j.id, k: 1, endedAt: new Date(), outcome: 'max_budget', costUsd: maxBudgetUsd, sessionId: `sess-${j.id}` },
-  });
-  return j.id as number;
-}
-
-test('retry refuses to re-queue a budget-capped Job under the same cap', async () => {
-  const id = await capped('capped-same');
-  await assert.rejects(() => kb('retry', String(id)), /spent its whole \$2\.00 budget/);
-  await assert.rejects(() => kb('retry', String(id)), /--max-budget 4\.00/);
-  assert.equal((await db.job.findUniqueOrThrow({ where: { id } })).phase, 'failed', 'still failed');
-});
-
-test('retry refuses a cap that is not bigger — including the same number, and a smaller one', async () => {
-  const id = await capped('capped-lower');
-  await assert.rejects(() => kb('retry', String(id), '--max-budget', '2'), /stops in the same place/);
-  await assert.rejects(() => kb('retry', String(id), '--max-budget', '1'), /stops in the same place/);
-  assert.equal((await db.job.findUniqueOrThrow({ where: { id } })).maxBudgetUsd, 2, 'and changes nothing');
-});
-
-test('retry with a bigger cap re-queues it, raises the spec, and records the raise', async () => {
-  const id = await capped('capped-raised');
-  const r = await kb('retry', String(id), '--max-budget', '5');
+test('done ends a Job the runtime could not, and records who said so and why', async () => {
+  const j = json((await kb('new', 'merged-elsewhere', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  const r = await kb('done', String(j.id), 'PR #364 was reviewed and merged', '--board', 'byhand', '--json');
   assert.equal(r.code, 0);
-  const after = await db.job.findUniqueOrThrow({ where: { id } });
-  assert.equal(after.phase, 'pending');
-  assert.equal(after.maxBudgetUsd, 5);
-  assert.equal(after.lastError, null, 'the advice was taken; it is not a standing error any more');
-  assert.equal(after.finishedAt, null);
-  assert.equal(after.lastSessionId, `sess-${id}`, 'kept: the raised attempt resumes');
-  assert.match(r.out, /\$2\.00 → \$5\.00/);
-  assert.match(r.out, new RegExp(`resumes sess-${id}`));
+  const said = json(r.out);
+  assert.equal(said.phase, 'done');
+  assert.equal(said.from, 'pending');
+  assert.equal(said.endedFor, 'PR #364 was reviewed and merged');
 
-  const ev = await db.event.findFirstOrThrow({ where: { jobId: id, kind: 'requeued' } });
-  assert.deepEqual((ev.payload as { maxBudgetUsd: unknown }).maxBudgetUsd, { from: 2, to: 5 },
-    'what the extra money was authorised against');
+  const row = await db.job.findUniqueOrThrow({ where: { id: j.id } });
+  assert.equal(row.phase, 'done');
+  assert.notEqual(row.phase, 'succeeded', 'succeeded means the session completed, and this one did not');
+  assert.ok(row.endedBy, 'a decision with no one attached to it is not a decision');
+  assert.equal(row.endedFor, 'PR #364 was reviewed and merged');
+  assert.ok(row.finishedAt, 'and it is finished');
 });
 
-test('retry does not demand a raise from a Job that failed for another reason', async () => {
-  const j = json((await kb('new', 'crashed-out', '--brief', 'b', '--json')).out);
-  await db.job.update({ where: { id: j.id }, data: { phase: 'failed', lastError: 'fake failure' } });
-  await db.attempt.create({ data: { jobId: j.id, k: 1, endedAt: new Date(), outcome: 'crashed' } });
-  await kb('retry', String(j.id));
-  assert.equal((await db.job.findUniqueOrThrow({ where: { id: j.id } })).phase, 'pending');
+test('a Job ended by hand is not claimed again — the whole point', async () => {
+  const j = json((await kb('new', 'do-not-redo', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  await kb('done', String(j.id), 'landed as PR #364', '--board', 'byhand');
+  const r = await kb('run', '--board', 'byhand', '--fake');
+  assert.match(r.out, /nothing pending/);
+  assert.equal(await db.attempt.count({ where: { jobId: j.id } }), 0, 'and nothing was spent redoing it');
 });
 
-test('retry refuses a Job that is already pending, and a Job that does not exist', async () => {
-  const j = json((await kb('new', 'still-pending', '--brief', 'b', '--json')).out);
-  await assert.rejects(() => kb('retry', String(j.id)), new RegExp(`#${j.id} is already pending`));
-  await assert.rejects(() => kb('retry', '99999'), /no Job #99999/);
-  await assert.rejects(() => kb('retry'), /which Job/);
+test('cancel is a different statement from done, and ls can ask for either', async () => {
+  const j = json((await kb('new', 'not-wanted', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  await kb('cancel', String(j.id), 'superseded by ADR-008', '--board', 'byhand');
+  const rows = json((await kb('ls', '--phase', 'cancelled', '--board', 'byhand', '--json')).out);
+  assert.deepEqual(rows.map((x: { id: number }) => x.id), [j.id]);
+  const done = json((await kb('ls', '--phase', 'done', '--board', 'byhand', '--json')).out);
+  assert.ok(!done.some((x: { id: number }) => x.id === j.id), 'cancelled is not done, and the board keeps them apart');
 });
 
-test('retry refuses a leased Job rather than queueing a second worker onto it', async () => {
-  const id = await capped('capped-leased');
+test('done refuses without a reason, and says what to type instead', async () => {
+  const j = json((await kb('new', 'no-reason', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  await assert.rejects(
+    () => kb('done', String(j.id), '--board', 'byhand'),
+    (e: Error & { exitCode?: number }) => {
+      assert.equal(e.exitCode, 2);
+      assert.match(e.message, /needs a reason/);
+      assert.match(e.message, /kb done \d+ "/, 'and shows the shape of one');
+      return true;
+    },
+  );
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: j.id } })).phase, 'pending', 'and nothing moved');
+});
+
+test('done REFUSES a leased Job — that is a running worker — and says how to stop it', async () => {
+  const j = json((await kb('new', 'still-running', '--brief', 'b', '--board', 'byhand', '--json')).out);
   await db.lease.create({
-    data: { jobId: id, holder: 'someone-else', token: 't', expiresAt: new Date(Date.now() + 60_000) },
+    data: { jobId: j.id, holder: 'host/9@daemon', token: 't', expiresAt: new Date(Date.now() + 60_000) },
   });
-  await assert.rejects(() => kb('retry', String(id), '--max-budget', '9'), /leased by someone-else/);
-  assert.equal((await db.job.findUniqueOrThrow({ where: { id } })).maxBudgetUsd, 2, 'the spec is untouched too');
-  await db.lease.delete({ where: { jobId: id } });
+  try {
+    for (const verb of ['done', 'cancel']) {
+      await assert.rejects(
+        () => kb(verb, String(j.id), 'because', '--board', 'byhand'),
+        (e: Error & { exitCode?: number }) => {
+          assert.equal(e.exitCode, 2);
+          assert.match(e.message, /leased by host\/9@daemon/);
+          assert.match(e.message, /kb down/, 'and names the way out');
+          assert.match(e.message, /wait/, 'or the other way out');
+          return true;
+        },
+      );
+    }
+    assert.equal((await db.job.findUniqueOrThrow({ where: { id: j.id } })).phase, 'pending', 'and it is untouched');
+  } finally {
+    await db.lease.delete({ where: { jobId: j.id } });
+  }
+});
+
+test('done refuses a Job the runtime already concluded', async () => {
+  const j = json((await kb('new', 'ran-fine', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  await kb('run', String(j.id), '--board', 'byhand', '--fake');
+  await assert.rejects(
+    () => kb('done', String(j.id), 'redundant', '--board', 'byhand'),
+    /already succeeded/,
+  );
+});
+
+test('saying the same thing twice is refused; correcting done to cancelled is not', async () => {
+  const j = json((await kb('new', 'mistyped', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  await kb('done', String(j.id), 'thought it landed', '--board', 'byhand');
+  await assert.rejects(
+    () => kb('done', String(j.id), 'again', '--board', 'byhand'),
+    /already done/,
+  );
+  // The escape from a mistyped verb must not be `kb rm` — that is the trap this verb removes.
+  await kb('cancel', String(j.id), 'actually it never landed', '--board', 'byhand');
+  const row = await db.job.findUniqueOrThrow({ where: { id: j.id } });
+  assert.equal(row.phase, 'cancelled');
+  assert.equal(row.endedFor, 'actually it never landed');
+  const kinds = (await db.event.findMany({ where: { jobId: j.id }, orderBy: { id: 'asc' } })).map((e) => e.kind);
+  assert.deepEqual(kinds, ['created', 'done', 'cancelled'], 'and the log keeps both statements, in order');
+});
+
+test('the transition is recorded with the person as the actor, so kb log reads differently', async () => {
+  const j = json((await kb('new', 'logged', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  await kb('done', String(j.id), 'merged by hand', '--board', 'byhand');
+  const ev = await db.event.findFirstOrThrow({ where: { jobId: j.id, kind: 'done' } });
+  assert.deepEqual(ev.payload, { from: 'pending', reason: 'merged by hand' });
+  assert.ok(ev.actor && !/@cli$/.test(ev.actor), 'a human decision is not attributed to a process');
+  const out = (await kb('log', String(j.id), '--board', 'byhand')).out;
+  assert.match(out, /done/);
+  assert.match(out, /merged by hand/);
+});
+
+test('show makes the human decision visible rather than leaving it to be inferred', async () => {
+  const j = json((await kb('new', 'visible', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  await kb('done', String(j.id), 'PR #364 was reviewed and merged', '--board', 'byhand');
+  const out = (await kb('show', String(j.id), '--board', 'byhand')).out;
+  assert.match(out, /phase +done/);
+  assert.match(out, /ended +by /, 'who');
+  assert.match(out, /PR #364 was reviewed and merged/, 'and why');
+  assert.doesNotMatch(out, /succeeded/, 'the session did not complete, and the screen must not say it did');
+});
+
+test('an attempt still open on an unleased Job is closed, not left climbing for ever', async () => {
+  // How a Job gets here: a holder died between releasing its lease and writing the Job row. No
+  // lease is left for the reclaim to find, so the operator is the only thing that can conclude it.
+  const j = json((await kb('new', 'stranded', '--brief', 'b', '--board', 'byhand', '--json')).out);
+  await db.job.update({ where: { id: j.id }, data: { phase: 'running' } });
+  await db.attempt.create({ data: { jobId: j.id, k: 1, host: 'host/9@daemon' } });
+  await kb('done', String(j.id), 'the PR it opened was merged', '--board', 'byhand');
+  const a = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: j.id, k: 1 } } });
+  assert.ok(a.endedAt, 'closed');
+  assert.equal(a.outcome, 'lost', 'never heard from again is exactly what happened to it');
 });
 
 // ---------------------------------------------------------------- stop / start

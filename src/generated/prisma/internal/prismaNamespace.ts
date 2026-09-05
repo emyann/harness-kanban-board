@@ -948,6 +948,8 @@ export const JobScalarFieldEnum = {
   lastSessionId: 'lastSessionId',
   lastError: 'lastError',
   suspendedFor: 'suspendedFor',
+  endedBy: 'endedBy',
+  endedFor: 'endedFor',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt',
   finishedAt: 'finishedAt'

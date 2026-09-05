@@ -25,13 +25,15 @@ const section = (() => {
 
 /** `kb --help`, captured. `main` prints it and returns before it opens a board, so there is none to make. */
 async function help(): Promise<string> {
-  // `node --test` multiplexes its own reporter frames over this stream; pass them through rather
-  // than capturing them, as test/kb.test.ts does — a swallowed frame takes the run's report with it.
+  // `node --test` multiplexes its own reporter frames over this stream; pass them through, as test/kb.test.ts does.
   const RUNNER_FRAME = /\btest:(enqueue|dequeue|start|pass|fail|plan|diagnostic|complete|coverage|stderr|stdout|watch)\b/;
   const chunks: string[] = [];
   const write = process.stdout.write.bind(process.stdout);
   (process.stdout as { write: unknown }).write = (s: string) => {
     const text = String(s);
+    // Forwarded, not dropped. Swallowing a frame does not just lose a line: the parent process's
+    // reporter is a state machine over that stream, and a missing `test:start` crashes it
+    // (`assert(subtest.data.name === data.name)`) after every subtest has already passed.
     if (RUNNER_FRAME.test(text)) return write(s as never);
     chunks.push(text);
     return true;

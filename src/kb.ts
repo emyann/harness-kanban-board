@@ -52,6 +52,8 @@ const HELP = `kb — run one agent against one brief
        --max-budget <usd>  required when it stopped on max_budget: the same cap
                            would stop it in the same place
        --max-turns <n>  --max-retries <n>
+  kb done <id> "<why>"     end it: the aim was achieved by other means
+  kb cancel <id> "<why>"   end it: stop, this is not wanted
   kb rm <id>               delete a Job and its attempts
   kb stop                  the kill switch: claim nothing on this board  [--board s]
   kb start                 clear it, and show the ceilings
@@ -106,6 +108,16 @@ async function readBrief(values: Record<string, unknown>): Promise<string> {
 
 /** Who did an operator-initiated thing. The same shape a lease holder uses, minus the runtime. */
 const whoami = () => `${os.hostname()}/${process.pid}@cli`;
+
+/**
+ * The *person*, for the one decision only a person can make.
+ *
+ * `whoami()` names a process, which is the right answer for everything a process decided. `kb done`
+ * and `kb cancel` decide nothing — a human did, and the process is only the typing. So the actor on
+ * those Events is a name rather than a pid, which is also what makes them read differently in
+ * `kb log` from the runtime's own transitions without anyone having to know which kinds are which.
+ */
+const operator = () => `${process.env.USER ?? process.env.USERNAME ?? 'someone'}@${os.hostname()}`;
 
 /** The repository containing a directory, or null if it is not in one. */
 export function gitRoot(cwd: string): string | null {
@@ -162,8 +174,12 @@ export async function resolveBoard(
   return { slug: path.basename(root), repoPath: root, known: false };
 }
 
-const PHASES = ['pending', 'running', 'succeeded', 'failed', 'suspended'] as const;
+const PHASES = ['pending', 'running', 'succeeded', 'failed', 'suspended', 'done', 'cancelled'] as const;
 type Phase = (typeof PHASES)[number];
+
+/** The two phases an operator writes, and the verb that writes each. */
+const BY_HAND = { done: 'done', cancel: 'cancelled' } as const;
+type ByHandVerb = keyof typeof BY_HAND;
 
 /**
  * How long something took, compact enough to sit on an attempt line beside the cost.
@@ -373,6 +389,14 @@ export async function main(argv: string[]): Promise<number> {
           + `${job.board.repoPath ?? '(no repo — `kb boards add ' + job.board.slug + ' --repo <path>`)'}`,
         );
         console.log(`  phase    ${job.phase}${job.lease ? `  (leased by ${job.lease.holder} until ${job.lease.expiresAt.toISOString()})` : ''}`);
+        // A phase a human wrote must say so, and say who and why. `done` next to a spent budget
+        // and two failed attempts is otherwise a contradiction the reader has to go and resolve in
+        // `kb log`, and `succeeded` is deliberately not reused for it: that word means the session
+        // completed, and this one did not.
+        if (job.endedBy) {
+          console.log(`  ended    by ${job.endedBy}${job.finishedAt ? `, ${job.finishedAt.toISOString()}` : ''}`);
+          console.log(`           ${job.endedFor}`);
+        }
         console.log(`  spec     agent=${job.agent} model=${job.model ?? 'default'} effort=${job.effort ?? 'default'}`);
         console.log(`           maxTurns=${job.maxTurns} maxBudget=$${job.maxBudgetUsd} maxRetries=${job.maxRetries} isolate=${job.isolate}`);
         // What it must produce, beside how it runs — the half of the spec ADR-008 added, and the
@@ -516,6 +540,100 @@ export async function main(argv: string[]): Promise<number> {
         // before they wonder why the branch already has commits on it.
         const from = job.lastSessionId ? `  (resumes ${job.lastSessionId})` : '  (starts cold)';
         console.log(`#${id} pending again${cap}${from}`);
+      });
+      return 0;
+    }
+
+    // ---------------------------------------------------------------- done / cancel
+    /**
+     * End a Job the machinery cannot end itself.
+     *
+     * The gap this closes: a Job whose pull request was reviewed and merged while it sat `pending`
+     * on a spent budget. The work is done; the board does not know, and the next reconcile spends
+     * the whole cap redoing merged work. Until this verb the only thing that stopped it was
+     * `kb rm`, which deletes the Job, its attempts and its events — so the choice was between
+     * re-running work that already landed and destroying the record that it did, on a board whose
+     * whole point is the record.
+     *
+     * TWO verbs, not one with a `--reason`. They are different statements about the work —
+     * "this achieved its aim by other means" and "stop, this is not wanted" — and the operator
+     * knows which one they mean at the moment they type it. A single verb would push that
+     * statement into free text, where it can be read by a person and by nothing else; `kb ls
+     * --phase cancelled` would have no answer. The reason is still required by both, because it
+     * says *what* landed or *why* it was dropped, which the phase never can.
+     *
+     * This is the one place a phase is asked for rather than observed, which is exactly what makes
+     * it an operator verb: it is recorded as a transition, with the person as the actor, and never
+     * as a silent update.
+     */
+    case 'done':
+    case 'cancel': {
+      const phase = BY_HAND[verb as ByHandVerb];
+      const id = num(rest[0], `kb ${verb} <id>`);
+      if (!id) throw usage(`kb ${verb} <id> "<reason>" — which Job?`);
+      // Joined the way `kb new` joins a name, so an unquoted reason is not silently truncated to
+      // its first word.
+      const reason = rest.slice(1).join(' ').trim();
+      if (!reason) {
+        throw usage(
+          `kb ${verb} ${id} needs a reason — ${verb === 'done'
+            ? 'what achieved the aim instead, e.g. `kb done ' + id + ' "PR #364 was reviewed and merged"`'
+            : 'why it is not wanted, e.g. `kb cancel ' + id + ' "superseded by #12"`'}`,
+        );
+      }
+
+      const job = await db.job.findUnique({ where: { id }, include: { lease: true } });
+      if (!job) throw usage(`no Job #${id} — \`kb ls\` shows what is on the board`);
+
+      // The same rule as `kb rm`, for the same reason: a lease is a worker that is running right
+      // now, and concluding its Job out from under it would leave it reporting to a record that
+      // says the question was already settled. The daemon is a thing the operator can stop, so
+      // say so rather than racing it.
+      if (job.lease) {
+        throw usage(
+          `#${id} is leased by ${job.lease.holder} — it is running. `
+          + `\`kb down\` stops the daemon, or wait for the run to finish (the lease lapses by `
+          + `${job.lease.expiresAt.toISOString()}), then \`kb ${verb} ${id}\` again.`,
+        );
+      }
+      if (job.phase === 'succeeded') {
+        throw usage(`#${id} already succeeded — the runtime concluded it, and \`kb ${verb}\` is for the Jobs it cannot. \`kb show ${id}\` has the attempts.`);
+      }
+      if (job.phase === phase) {
+        throw usage(`#${id} is already ${phase}${job.endedBy ? ` — ${job.endedBy} said so: ${job.endedFor}` : ''}`);
+      }
+      // Between `done` and `cancelled` a restatement IS allowed, and deliberately: they are both
+      // the operator's own word, a mistyped verb is easy, and the alternative escape is `kb rm` —
+      // the very trap this verb exists to remove. The correction is another Event, so the log
+      // keeps both statements in order rather than pretending the first never happened.
+
+      const at = new Date();
+      const by = operator();
+      const updated = await db.job.update({
+        where: { id },
+        data: { phase, endedBy: by, endedFor: reason, finishedAt: at },
+      });
+      // An attempt still open on a Job with no lease was never heard from again — `lost` is the
+      // Outcome that already means exactly that. Closing it is not cosmetic: `kb show` renders an
+      // open attempt as elapsed-so-far, so a terminal Job would print a duration that climbs for
+      // ever. Scoped to `endedAt: null`, so a finished attempt is never rewritten.
+      await db.attempt.updateMany({
+        where: { jobId: id, endedAt: null },
+        data: { endedAt: at, outcome: 'lost', reason: `#${id} was ${phase} by ${by} while this attempt was open` },
+      });
+      await db.event.create({
+        data: {
+          kind: phase, jobId: id, boardId: job.boardId, actor: by,
+          payload: { from: job.phase, reason },
+        },
+      });
+
+      emit(out, {
+        id, board: slug, name: job.name, phase: updated.phase, from: job.phase,
+        endedBy: by, endedFor: reason, finishedAt: at,
+      }, () => {
+        console.log(`#${id} ${phase} — ${job.name}  (was ${job.phase})`);
+        console.log(`  ${reason}`);
       });
       return 0;
     }
@@ -748,6 +866,10 @@ export async function main(argv: string[]): Promise<number> {
           paused: !!b.pausedAt,
           pending: by('pending'), running: by('running'),
           succeeded: by('succeeded'), failed: by('failed'),
+          // Separate in the JSON, one column in the table. A consumer that wants to tell a merged
+          // Job from an abandoned one can; a reader counting what is left to do only needs to know
+          // that neither is.
+          done: by('done'), cancelled: by('cancelled'),
           spent24h: spend._sum.costUsd ?? 0,
           maxConcurrent: b.maxConcurrent,
           dailyBudgetUsd: b.dailyBudgetUsd,
@@ -757,12 +879,13 @@ export async function main(argv: string[]): Promise<number> {
         if (!rows.length) return console.log('no boards yet — `kb new` inside a repository creates one');
         const w = Math.max(5, ...rows.map((r) => r.board.length));
         const d = Math.max(6, ...rows.map((r) => r.daemon.length + (r.paused ? 10 : 0)));
-        console.log(`${'BOARD'.padEnd(w)}  ${'DAEMON'.padEnd(d)}  PEND   RUN    OK  FAIL      24H  REPO`);
+        console.log(`${'BOARD'.padEnd(w)}  ${'DAEMON'.padEnd(d)}  PEND   RUN    OK  FAIL  ENDED      24H  REPO`);
         for (const r of rows) {
           const flag = r.paused ? ' (stopped)' : '';
           console.log(
             `${r.board.padEnd(w)}  ${(r.daemon + flag).padEnd(d)}  ${String(r.pending).padStart(4)}  `
             + `${String(r.running).padStart(4)}  ${String(r.succeeded).padStart(4)}  ${String(r.failed).padStart(4)}  `
+            + `${String(r.done + r.cancelled).padStart(5)}  `
             + `${('$' + r.spent24h.toFixed(2)).padStart(7)}  `
             + `${r.repoPath ?? '(no repo — `kb boards add ' + r.board + ' --repo <path>`)'}`,
           );
@@ -815,7 +938,7 @@ export async function main(argv: string[]): Promise<number> {
     }
 
     default:
-      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, retry, rm, stop, start, up, down, log, boards`);
+      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, retry, done, cancel, rm, stop, start, up, down, log, boards`);
   }
 }
 
