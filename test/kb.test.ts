@@ -536,6 +536,24 @@ test('the BOARD column appears only with --all', async () => {
   assert.match(one.out, /^#\d+\s+pending/m, 'scoped output is unchanged — the board is not news');
 });
 
+test('ls --all does not resolve a board it will not read', async () => {
+  // Two PRs that were each correct alone and wrong together: `--all` ignores the board scope, but
+  // resolution runs before the verb does, so once `resolveBoard` learned to refuse an ambiguous
+  // checkout, `ls --all` started refusing on a board it never looks at.
+  const root = scratchRepo('shared-checkout');
+  await db.board.create({ data: { slug: 'twin-a', repoPath: root } });
+  await db.board.create({ data: { slug: 'twin-b', repoPath: root } });
+  const before = process.cwd();
+  process.chdir(root);
+  try {
+    await assert.rejects(() => main(['ls']), /boards point at/, 'a scoped ls still refuses, as it should');
+    const rows = json((await kb('ls', '--all', '--json')).out);
+    assert.ok(rows.length > 0, 'and --all is unaffected, because it asked for no board');
+  } finally {
+    process.chdir(before);
+  }
+});
+
 test('ls refuses --all together with --board rather than guessing which one wins', async () => {
   await assert.rejects(
     () => main(['ls', '--all', '--board', 'far-away']),
