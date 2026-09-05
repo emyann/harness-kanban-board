@@ -318,6 +318,29 @@ failures were reproduced deliberately to confirm the check fails on them.
 repair of the machinery (the *code* may need review — the machinery may not), and
 total spend is within an order of magnitude of what was predicted.
 
+### The prediction, written before the first run
+
+Recorded 2026-09-05, before anything was claimed, because a prediction made after
+the fact measures nothing.
+
+The only hard datapoint is the interrupt measurement from Phase 4: **$0.0851 for 12
+turns** of reading files. These briefs are implement-plus-test-plus-PR, so 30–70
+turns with `Edit`/`Write`/`Bash` rather than reads. Scaling that gives roughly
+**$0.30–$1.20 each, mean $0.60**.
+
+> **Predicted total: $6.** An order of magnitude either way is $0.60 to $60.
+
+Ceilings set for the run: `maxBudgetUsd` **$2.00** per Job, board `dailyBudgetUsd`
+**$20**, `maxConcurrent` **1**, `maxTurns` 80, `timeoutMs` 30 min (default),
+`maxRetries` 2 (three attempts). The board cap is the backstop: ten Jobs each
+burning their full $2 would be $20, and the eleventh claim would be refused.
+
+**Predicted failure modes**, so the table can say whether they were the real ones:
+the wiki-tooling brief (#6) is the most procedural and the most likely to half-land;
+the README brief (#8) is the one most likely to produce a diff a human rejects on
+taste rather than on machinery — which the gate counts as a *pass*, since the gate
+is about the machinery, not the prose.
+
 **If it fails**, the failures are the plan for Phase 5b. They are also the first
 honest backlog — and unlike the 195 cards we just closed, they will describe
 machinery that exists.
