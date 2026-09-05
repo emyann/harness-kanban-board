@@ -1,5 +1,5 @@
 import { openBoard } from './db.ts';
-import { createWorktree, existingWorktree, removeWorktree, type Worktree } from './worktree.ts';
+import { createWorktree, existingWorktree, lockWorktree, removeWorktree, unlockWorktree, type Worktree } from './worktree.ts';
 import { prForBranch } from './pulls.ts';
 import { withProtocol } from './brief.ts';
 import { gateClaim, windowStart } from './limits.ts';
@@ -289,6 +289,9 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // The previous attempt's checkout is kept whenever it held work, so it is usually there.
         const resuming = job.lastSessionId ? existingWorktree(cwd, job.id, k - 1) : null;
         wt = resuming ?? createWorktree(cwd, job.id, k);
+        // Held for the length of the run. The daemon's sweep is a second remover, in a second
+        // process, and without this it could take the checkout a worker is standing in.
+        lockWorktree(cwd, wt, host);
         deps.onEvent?.(resuming
           ? `  resuming in ${wt.branch} (the checkout attempt ${k - 1} left)`
           : `  worktree ${wt.branch} from ${wt.baseLabel}`);
@@ -422,9 +425,20 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     // ---- tidy. Never forced: a worktree that still holds work is the only copy of it if the
     // push failed, so it stays and the operator is told where.
+    //
+    // This is not the reclaim path, and it cannot be: a run that just pushed a pull request is at
+    // the one moment its checkout is definitionally still needed. It removes the checkouts that
+    // never held anything; the daemon's sweep removes the rest, once their branches land. A
+    // resumable stop keeps its checkout unconditionally — the next attempt continues *in* it, and
+    // cutting a fresh worktree would reset the branch to base and strand what was already pushed.
     if (wt) {
-      const gone = removeWorktree(cwd, wt);
-      if (!gone.removed) deps.onEvent?.(`  kept ${wt.path} — ${gone.why}`);
+      if (decision.resumable && decision.phase === 'pending') {
+        unlockWorktree(cwd, wt);
+        deps.onEvent?.(`  kept ${wt.path} — attempt ${k + 1} resumes in it`);
+      } else {
+        const gone = removeWorktree(cwd, wt);
+        if (!gone.removed) deps.onEvent?.(`  kept ${wt.path} — ${gone.why}`);
+      }
     }
 
     if (decision.phase === 'succeeded') report.succeeded.push(job.id);
