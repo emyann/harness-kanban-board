@@ -60,13 +60,22 @@ attempt's checkout, run, read back what landed on the forge, record, release,
 tidy. It is a reconciler rather than a queue consumer, which is what makes it safe
 to run repeatedly, safe to interrupt, and safe to run while another host runs it.
 
-**A worker never touches the operator's checkout.** `Job.isolate` (default on) makes
-a git worktree per attempt on `kb-<jobId>-<k>`, and that is the controller's job
-because the SDK has no isolation option for a top-level `query()` —
-`isolation: "worktree"` is a parameter of the `Agent` tool and only reaches
-subagents (`src/worktree.ts`). The brief gains a fixed protocol on top: commit on
-the branch, push, open a **draft** pull request, never merge (`src/brief.ts`). The
-human merges, which is what keeps this kind dumb.
+**By default a worker works on a branch, not in the operator's checkout.**
+`Job.isolate` (default on) makes a git worktree per attempt on `kb-<jobId>-<k>`,
+and that is the controller's job because the SDK has no isolation option for a
+top-level `query()` — `isolation: "worktree"` is a parameter of the `Agent` tool
+and only reaches subagents (`src/worktree.ts`). The brief gains a fixed protocol on
+top: commit on the branch, push, open a **draft** pull request, never merge
+(`src/brief.ts`). The human merges, which is what keeps this kind dumb.
+
+`isolate: false` is a supported way to run, not a read-only escape hatch — a Job
+whose deliverable is an uncommitted change in the operator's working tree is what
+it is for. What it gives up is the branch and everything that hangs off it: no
+diff, no pull request, nothing to revert, and no safety at `maxConcurrent > 1`,
+where two un-isolated attempts edit the same files with no lock between them. It
+also changes what the Job's subagents may do — a workload with no worktree of its
+own cannot give one to a subagent, so admission refuses a spawn that asks for one
+(*concepts/admission-control*).
 
 A checkout that still holds work is never removed — if the push failed, that
 directory is the only copy. It is also what a **resumed** attempt continues in: a
