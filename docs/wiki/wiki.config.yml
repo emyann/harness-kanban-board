@@ -96,6 +96,9 @@ pages:
   - slug: features/tracks
     summary: "One session orchestrates a whole DAG subgraph: a wave of siblings as one isolated subagent each, per-node claims as checkpoints, stacked node PRs, fallback to node-by-node."
     status: seeded
+  - slug: features/worktree-includes
+    summary: "A worktree is a fresh checkout, so the .env the tests need is not in it — .worktreeinclude declares what to carry across, git answers both halves of the match rule (matched AND gitignored), and no pattern may reach the board."
+    status: seeded
   - slug: features/harness-profiles
     summary: "The shipped profiles (claude, claude-p, claude-track, copilot-cli, codex): modes, permissions, models, and what each harness can and cannot do."
     status: planned

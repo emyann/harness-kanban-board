@@ -16,6 +16,10 @@ import { spawnSync } from 'node:child_process';
  *   2. **Gitignored files do not come across.** `.kanban/*.db` is gitignored, so the board is
  *      invisible from a worker. That is by design — the controller owns every store write — and
  *      it must stay that way: copying the board in would give each worktree a divergent copy.
+ *
+ * Property 2 is also the feature's cost. A repository whose tests need a gitignored `.env` passes
+ * for the human and fails in a worker, and it fails in a way that reads as the worker's fault. So
+ * the repository may *declare* what it needs carried across: see `.worktreeinclude` below.
  */
 
 const git = (cwd: string, args: string[]) => spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -87,6 +91,9 @@ export function baseRef(root: string): string {
 /**
  * Make the attempt's checkout. Idempotent: an existing worktree at the path is reused, because a
  * retry that resumes a session should land in the tree that session was working in.
+ *
+ * Declared gitignored files are carried in on creation only. A resumed attempt lands in a tree the
+ * previous one has been living in; re-copying would overwrite whatever it did to its own `.env`.
  */
 export function createWorktree(root: string, jobId: number, k: number): Worktree {
   // The DIRECTORY keeps the deterministic name so `existingWorktree` can find it without being
@@ -97,6 +104,10 @@ export function createWorktree(root: string, jobId: number, k: number): Worktree
   const base = resolveBase(root, baseLabel);
   if (fs.existsSync(dir)) return { path: dir, branch, baseLabel, base };
 
+  // Resolved BEFORE the checkout exists, so a `.worktreeinclude` that reaches the board is refused
+  // without leaving half a worktree behind for the operator to clean up.
+  const carry = includedFiles(root);
+
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   // `-B` rather than `-b`: a branch left behind by a removed worktree must not fail the next
   // attempt. The branch is ours, named after the attempt, and nothing else may be on it.
@@ -106,7 +117,121 @@ export function createWorktree(root: string, jobId: number, k: number): Worktree
     e.exitCode = 2;
     throw e;
   }
+  copyIncluded(root, dir, carry);
   return { path: dir, branch, baseLabel, base };
+}
+
+// ------------------------------------------------------------- what a repository asks to carry in
+
+/** `.gitignore` syntax, at the repository root. Claude Code's name for the same idea, and its shape. */
+export const INCLUDE_FILE = '.worktreeinclude';
+
+/**
+ * The board's own directory, and the one thing no pattern may reach.
+ *
+ * `.kanban/` holds `board.db`, its WAL, the daemon's pid files and the worktrees themselves. The
+ * controller owns every store write; a worker with a copy of the board would read state that stops
+ * being true the moment the controller moves, and write into a file nothing ever reads back.
+ */
+const BOARD_DIR = '.kanban';
+
+const nulList = (s: string) => s.split('\0').filter(Boolean);
+
+/**
+ * The gitignored files this repository has declared it needs in a worktree.
+ *
+ * The rule is Claude Code's: a file is carried in only if it **matches a pattern in
+ * `.worktreeinclude` and is itself gitignored**, so a tracked file is never duplicated into the
+ * checkout that already contains it. Both halves are asked of git rather than reimplemented — a
+ * second `.gitignore` matcher in this repository would be a second set of bugs, and this one is
+ * exactly the matcher the patterns were written against:
+ *
+ *   - `--exclude-standard` lists the files git already considers ignored;
+ *   - `--exclude-from=.worktreeinclude` lists the untracked files the declaration matches;
+ *   - `--others` means neither list can contain a tracked file at all.
+ *
+ * The intersection is the answer. One deviation from the documented Claude Code behaviour, on
+ * purpose: there, a globstar-leading pattern reaches inside a wholly-ignored directory only when
+ * the first name after the globstar is one of that directory's own path segments. Git has no such
+ * rule, so a globstar pattern finds `vendor/deep/config.json` here, and the operator does not have
+ * to know a matcher quirk to write a pattern that works.
+ */
+export function includedFiles(root: string): string[] {
+  const declaration = path.join(root, INCLUDE_FILE);
+  if (!fs.existsSync(declaration)) return [];
+
+  const matched = lsFiles(root, `--exclude-from=${declaration}`, `read ${INCLUDE_FILE}`);
+  if (!matched.length) return [];
+  // The second question is asked only about the paths the first one named: `.kanban/worktrees/` is
+  // itself gitignored, so an unbounded listing walks every earlier attempt's checkout — `node_modules`
+  // and all — to answer a question about three files. The exception is a declaration broad enough
+  // that naming its matches would overflow argv, where the walk is the cheaper of the two.
+  // `:(literal)` because a path is a path: a file called `:weird` is not pathspec magic.
+  const narrow = matched.map((f) => `:(literal)${f}`);
+  const tooMany = narrow.reduce((n, s) => n + s.length + 1, 0) > 100_000;
+  const listed = lsFiles(root, '--exclude-standard', 'list the gitignored files', tooMany ? [] : narrow);
+  const wanted = new Set(matched);
+  const files = tooMany ? listed.filter((f) => wanted.has(f)) : listed;
+
+  refuseTheBoard(files);
+  return files;
+}
+
+/** Untracked files that `rule` selects, relative to `root`, in git's own ignore syntax. */
+function lsFiles(root: string, rule: string, doing: string, paths: string[] = []): string[] {
+  const r = git(root, ['ls-files', '-z', '--others', '--ignored', rule, ...(paths.length ? ['--', ...paths] : [])]);
+  if (r.status !== 0) {
+    const e = new Error(
+      `could not ${doing} in ${root}: ${short(r.stderr) || 'git failed'}. ` +
+        `Fix or remove ${INCLUDE_FILE} at the repository root, then retry.`,
+    ) as Error & { exitCode: number };
+    e.exitCode = 2;
+    throw e;
+  }
+  return nulList(r.stdout);
+}
+
+/**
+ * Refuse a declaration that would carry the board into a worker's checkout.
+ *
+ * Refuse, rather than quietly drop the offending path: a pattern broad enough to catch `board.db`
+ * — `*.db`, `.kanban/**`, a bare globstar — is a pattern whose author did not mean what they
+ * wrote, and the copy it produces is somebody's afternoon. The guard is on the resolved *paths*,
+ * not on the pattern text, so it holds however the pattern is spelled.
+ */
+function refuseTheBoard(files: string[]): void {
+  const reached = files.filter((f) => f === BOARD_DIR || f.startsWith(`${BOARD_DIR}/`));
+  if (!reached.length) return;
+  const e = new Error(
+    `${INCLUDE_FILE} matches ${reached[0]}${reached.length > 1 ? ` (and ${reached.length - 1} more)` : ''}, ` +
+      `inside ${BOARD_DIR}/ — the board's own state, which never crosses into a worktree: the controller owns ` +
+      `every store write, and a worker's copy would diverge from it the moment the controller moved. ` +
+      `Narrow the pattern in ${INCLUDE_FILE} so it cannot reach ${BOARD_DIR}/ — name the files you ` +
+      `meant, as in \`config/secrets.json\`, rather than a pattern that sweeps the tree — then retry.`,
+  ) as Error & { exitCode: number };
+  e.exitCode = 2;
+  throw e;
+}
+
+/**
+ * Copy the declared files into a fresh checkout. Returns what actually arrived.
+ *
+ * A destination that already exists is left alone. Nothing gitignored can be in a fresh checkout,
+ * so a collision means the base commit tracks that path — and overwriting it would be exactly the
+ * duplication the match rule exists to prevent.
+ */
+export function copyIncluded(root: string, dest: string, files: string[] = includedFiles(root)): string[] {
+  const arrived: string[] = [];
+  for (const rel of files) {
+    const to = path.join(dest, rel);
+    if (fs.existsSync(to)) continue;
+    const from = path.join(root, rel);
+    if (!fs.statSync(from, { throwIfNoEntry: false })?.isFile()) continue;
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.copyFileSync(from, to);
+    arrived.push(rel);
+  }
+  return arrived;
 }
 
 /**
