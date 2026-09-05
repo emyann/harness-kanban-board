@@ -24,7 +24,15 @@ import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
 
 export type ControllerDeps = {
   runtime: Runtime;
-  cwd: string;
+  /**
+   * Where to cut worktrees, when the Board does not say.
+   *
+   * The Board's `repoPath` is the real answer — a machine-level daemon has no meaningful cwd of
+   * its own, and "wherever the operator was standing" stopped being a usable definition of the
+   * repository the moment one process started serving several. This remains as the fallback for a
+   * board with no repo set, which is how `kb run` in a checkout and every test still works.
+   */
+  cwd?: string;
   host?: string;
   /** How long a lease is good for. A holder that dies without releasing is reclaimable after this. */
   leaseMs?: number;
@@ -195,8 +203,18 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // what was true when the pass started.
     const board = await db.board.findFirst({
       where: deps.board ? { slug: deps.board } : { id: job.boardId },
-      select: { pausedAt: true, pausedBy: true, maxConcurrent: true, dailyBudgetUsd: true, id: true },
+      select: { pausedAt: true, pausedBy: true, maxConcurrent: true, dailyBudgetUsd: true, id: true, repoPath: true },
     });
+    // The repository this Job runs in. On the Board because a Board is the Namespace and the
+    // ceilings above are already per-repo facts; on nothing at all is an error worth naming, since
+    // the alternative is cutting a worktree of whatever directory the daemon happened to start in.
+    const cwd = board?.repoPath ?? deps.cwd;
+    if (!cwd) {
+      throw new Error(
+        `board for #${job.id} has no repoPath and no cwd was given — `
+        + '`kb boards add <slug> --repo <path>` points a board at a repository',
+      );
+    }
     const [liveLeases, spend] = await Promise.all([
       db.lease.count({ where: { job: { boardId: board?.id ?? job.boardId } } }),
       db.attempt.aggregate({
@@ -261,8 +279,8 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       try {
         // A resumed session continues where it left off, on disk as well as in its transcript.
         // The previous attempt's checkout is kept whenever it held work, so it is usually there.
-        const resuming = job.lastSessionId ? existingWorktree(deps.cwd, job.id, k - 1) : null;
-        wt = resuming ?? createWorktree(deps.cwd, job.id, k);
+        const resuming = job.lastSessionId ? existingWorktree(cwd, job.id, k - 1) : null;
+        wt = resuming ?? createWorktree(cwd, job.id, k);
         deps.onEvent?.(resuming
           ? `  resuming in ${wt.branch} (the checkout attempt ${k - 1} left)`
           : `  worktree ${wt.branch} from ${wt.baseLabel}`);
@@ -316,7 +334,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       .run({
         taskId: job.id,
         attempt: k,
-        cwd: wt ? wt.path : deps.cwd,
+        cwd: wt ? wt.path : cwd,
         prompt: wt ? withProtocol(job.brief, wt.branch) : job.brief,
         model: job.model ?? undefined,
         effort: (job.effort as 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined) ?? undefined,
@@ -346,7 +364,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     // ---- what landed on the forge. One read, by head branch: the board and the forge are two
     // systems and this is the only thing that joins them.
-    const pr = wt && deps.readPr !== false ? prForBranch(deps.cwd, wt.branch) : null;
+    const pr = wt && deps.readPr !== false ? prForBranch(cwd, wt.branch) : null;
     if (pr) deps.onEvent?.(`  ${pr.isDraft ? 'draft ' : ''}PR #${pr.number} ${pr.url}`);
 
     await db.attempt.update({
@@ -372,7 +390,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         data: { kind: 'lease_lost', jobId: job.id, boardId: job.boardId, actor: host, payload: { k } },
       });
       report.skipped.push(job.id);
-      if (wt) removeWorktree(deps.cwd, wt);
+      if (wt) removeWorktree(cwd, wt);
       continue;
     }
 
@@ -394,7 +412,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // ---- tidy. Never forced: a worktree that still holds work is the only copy of it if the
     // push failed, so it stays and the operator is told where.
     if (wt) {
-      const gone = removeWorktree(deps.cwd, wt);
+      const gone = removeWorktree(cwd, wt);
       if (!gone.removed) deps.onEvent?.(`  kept ${wt.path} — ${gone.why}`);
     }
 

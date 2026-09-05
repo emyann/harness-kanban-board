@@ -9,6 +9,7 @@
  * 🟢 You can import this file directly.
  */
 export type * from './models/Board.ts'
+export type * from './models/Controller.ts'
 export type * from './models/Job.ts'
 export type * from './models/Attempt.ts'
 export type * from './models/Lease.ts'

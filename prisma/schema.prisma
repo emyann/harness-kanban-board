@@ -54,6 +54,17 @@ model Board {
   slug  String @unique
   jobs  Job[]
 
+  /// The repository this board's Jobs run in, as an absolute path on this machine.
+  ///
+  /// It lives here rather than on the Job because a Job is inherently single-repo — one worktree,
+  /// one branch, one pull request — and because a Board is the Namespace: the ceilings below are
+  /// already per-repo facts ("this repo's PR workflows are expensive, run one at a time"). Two
+  /// boards may share a repo if they want different budgets for different work.
+  ///
+  /// Nullable so a board can exist before it is pointed at anything, and so tests can supply a
+  /// checkout directly. A Job on a board with no repoPath falls back to the caller's cwd.
+  repoPath String?
+
   /// The kill switch. While this is set nothing is claimed; a run already going is left alone,
   /// because stopping a board should not destroy work in flight.
   pausedAt DateTime?
@@ -67,8 +78,35 @@ model Board {
 
   events Event[]
 
+  controller Controller?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+/// Who is reconciling a board right now — leader election, one leader per Board.
+///
+/// This is a Lease by another name, and deliberately so: the compare-and-swap is `@@id`, staleness
+/// is `expiresAt` plus `holderLiveness`, and both were already written and tested for `Lease`. It
+/// replaces a pid file, which was a second source of truth living outside the store and re-deriving
+/// the same rules — badly, in one case: the pid file recorded a hostname and never read it back, so
+/// on a shared filesystem it asked the wrong machine's process table.
+///
+/// A daemon serving every board holds one row per board. A daemon scoped to one board takes only
+/// that row, and the two cannot both serve it — which is the whole reason the key is the board.
+model Controller {
+  boardId Int   @id
+  board   Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  holder     String
+  intervalMs Int
+  /// What the daemon was running when it started. `kb up --status` compares it to the checkout so
+  /// a daemon quietly serving old code is a line you can read rather than a thing you discover.
+  version    String?
+
+  startedAt DateTime @default(now())
+  renewedAt DateTime @default(now())
+  expiresAt DateTime
 }
 
 /// The primitive kind: run one agent against one brief until it is done.

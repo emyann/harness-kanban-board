@@ -1,7 +1,9 @@
 # hkb — contributor guide
 
 `hkb` is a Node (ESM, TypeScript run natively) CLI that schedules agent work: it takes a workload and executes it.
-The board is SQLite at `.kanban/board.db` behind Prisma, workers run on the Claude Agent SDK, and GitHub is the forge.
+The board is SQLite at **`~/.hkb/board.db`** behind Prisma — one board per machine with a **Board row per
+repository**, the way one cluster holds a namespace per project. Workers run on the Claude Agent SDK, and GitHub is
+the forge. `HKB_DATABASE_URL` points at a different board; `.kanban/board.db` is now only that.
 The first and only workload kind is a **Job** — one agent, one brief, run to completion (ADR-007); the kanban DAG is a
 second kind that does not exist yet. The pre-ADR-007 system — the board on `refs/kb/boards/<slug>`, the 36 CLI verbs,
 the dispatcher tick — still runs alongside it and is not migrated.
@@ -30,8 +32,9 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
   `src/bridge/github-issues.js` the read-only GitHub Issues adapter `hkb init --import` migrates *from*
 - `src/lifecycle.js` worker verbs · `src/dispatch.js` the tick · `src/context.js` worker prompt · `src/hook.js` Stop hook
 - `src/init.js` `src/doctor.js` `src/gc.js` · `skills/kanban/` the shipped skill
-- **The ADR-007 core, in TypeScript:** `bin/kb.ts` entry · `src/kb.ts` the ten verbs ·
-  `prisma/schema.prisma` the board · `src/db.ts` the one client handle ·
+- **The ADR-007 core, in TypeScript:** `bin/kb.ts` entry · `src/kb.ts` the verbs ·
+  `prisma/schema.prisma` the board · `src/db.ts` the one client handle · `src/db-url.ts` where it lives ·
+  `src/schema.ts` create-and-migrate on first touch, and the refusal to open a newer board ·
   `src/controller.ts` the Job kind's reconcile pass · `src/daemon.ts` that pass on a timer, detached ·
   `src/limits.ts` the ceilings · `src/liveness.ts` whether a lease holder is still running ·
   `src/admission.ts` the `PreToolUse` gate that injects worktree isolation · `src/worktree.ts` the checkout ·
@@ -45,6 +48,9 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 - A new dependency needs a reason in a decision record. The zero-dependency rule ended with ADR-007 — the board is
   SQLite behind Prisma and workers run on the Agent SDK — but the *habit* it protected has not: prefer a builtin, and
   do not add YAML/TOML.
+- **The repository a Job runs in is `Board.repoPath`, never the process's cwd.** One daemon serves every board,
+  so "wherever the operator was standing" stopped being a definition of anything. `deps.cwd` in the controller is
+  only the fallback for a board with no repo — tests and `kb run` in a checkout.
 - **A controller is level-triggered.** `reconcile()` reads observed state, compares it to desired state and takes
   one step; it is safe to run repeatedly, to interrupt, and to run while another host runs it. Nothing may depend on
   having seen an event — `src/daemon.ts` is a resync loop, not a subscription, and a guard that only fires on a

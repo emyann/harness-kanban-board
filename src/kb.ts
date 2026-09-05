@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { openBoard, closeBoard } from './db.ts';
 import { reconcile } from './controller.ts';
@@ -45,11 +47,18 @@ const HELP = `kb — run one agent against one brief
   kb stop                  the kill switch: claim nothing on this board  [--board s]
   kb start                 clear it, and show the ceilings
 
-  kb up                    reconcile on a timer, detached      [--interval <s>] [--fake]
-       --status            is a daemon up? where is its log?
+  kb up                    reconcile every board on a timer, detached  [--interval <s>]
+       --status            which boards are served, by what, since when
        --foreground        run the loop here instead of detaching (what a supervisor runs)
   kb down                  stop it, cleanly                    [--timeout <s>]
   kb log [<id>]            what happened, in order             [-n <count>]
+
+  kb boards                every board on this machine
+  kb boards add <slug>     point a board at a repository       [--repo <path>]
+
+The board is ~/.hkb/board.db — one per machine, a Board per repository, the way one
+cluster holds a namespace per project. \`--board\` picks one; without it the repository
+you are standing in decides. HKB_DATABASE_URL points at a different board entirely.
 
   --json on every verb. Exit 2 is usage or state.
 `;
@@ -83,6 +92,49 @@ async function readBrief(values: Record<string, unknown>): Promise<string> {
 /** Who did an operator-initiated thing. The same shape a lease holder uses, minus the runtime. */
 const whoami = () => `${os.hostname()}/${process.pid}@cli`;
 
+/** The repository containing a directory, or null if it is not in one. */
+export function gitRoot(cwd: string): string | null {
+  try {
+    const out = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out ? fs.realpathSync(out) : null;
+  } catch {
+    return null;
+  }
+}
+
+export type Scope = { slug: string; repoPath: string | null; known: boolean };
+
+/**
+ * Which board a command means.
+ *
+ * With one board per machine and a Board per repository, `--board` on every command would be the
+ * tedious-but-possible rung this project treats as a bug report. So: the flag wins; otherwise the
+ * repository you are standing in decides, matched on `repoPath`; otherwise `default`.
+ *
+ * A repository with no board yet still resolves — to a slug named after it, which `kb new` will
+ * create and point at the checkout. Reading verbs simply find nothing, which is the truth.
+ */
+export async function resolveBoard(
+  db: ReturnType<typeof openBoard>,
+  explicit?: string,
+  cwd = process.cwd(),
+): Promise<Scope> {
+  if (explicit) {
+    const b = await db.board.findUnique({ where: { slug: explicit } });
+    return { slug: explicit, repoPath: b?.repoPath ?? gitRoot(cwd), known: !!b };
+  }
+  const root = gitRoot(cwd);
+  if (!root) {
+    const b = await db.board.findUnique({ where: { slug: 'default' } });
+    return { slug: 'default', repoPath: b?.repoPath ?? null, known: !!b };
+  }
+  const here = await db.board.findFirst({ where: { repoPath: root }, orderBy: { id: 'asc' } });
+  if (here) return { slug: here.slug, repoPath: here.repoPath, known: true };
+  return { slug: path.basename(root), repoPath: root, known: false };
+}
+
 const PHASES = ['pending', 'running', 'succeeded', 'failed', 'suspended'] as const;
 type Phase = (typeof PHASES)[number];
 
@@ -114,6 +166,7 @@ export async function main(argv: string[]): Promise<number> {
       'max-budget': { type: 'string' },
       'max-retries': { type: 'string' },
       status: { type: 'boolean' },
+      repo: { type: 'string' },
       foreground: { type: 'boolean' },
       interval: { type: 'string' },
       timeout: { type: 'string' },
@@ -126,7 +179,13 @@ export async function main(argv: string[]): Promise<number> {
   if (!verb || values.help) { process.stdout.write(HELP); return 0; }
 
   const db = openBoard();
-  const slug = (values.board as string) || 'default';
+  // `up`, `down` and `boards` are machine-wide when no board is named; everything else means the
+  // repository you are in. Resolving here keeps that one decision in one place.
+  const named = (values.board as string) || undefined;
+  const scope = ['up', 'down', 'boards'].includes(verb)
+    ? { slug: named ?? '', repoPath: null, known: false }
+    : await resolveBoard(db, named);
+  const slug = scope.slug;
 
   switch (verb) {
     // ---------------------------------------------------------------- new
@@ -134,7 +193,13 @@ export async function main(argv: string[]): Promise<number> {
       const name = rest.join(' ').trim();
       if (!name) throw usage('kb new <name> — a Job needs a name');
       const brief = await readBrief(values);
-      const board = await db.board.upsert({ where: { slug }, update: {}, create: { slug } });
+      const board = await db.board.upsert({
+        where: { slug },
+        update: {},
+        // A board created by filing work in a repository is pointed at that repository. Without it
+        // a machine-level daemon would have nowhere to cut the worktree.
+        create: { slug, repoPath: scope.repoPath },
+      });
       const effort = values.effort as string | undefined;
       if (effort && !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) {
         throw usage(`--effort must be one of low|medium|high|xhigh|max, got ${effort}`);
@@ -259,7 +324,9 @@ export async function main(argv: string[]): Promise<number> {
     case 'stop':
     case 'start': {
       const stopping = verb === 'stop';
-      const board = await db.board.upsert({ where: { slug }, update: {}, create: { slug } });
+      const board = await db.board.upsert({
+        where: { slug }, update: {}, create: { slug, repoPath: scope.repoPath },
+      });
       const updated = await db.board.update({
         where: { id: board.id },
         data: stopping
@@ -295,20 +362,27 @@ export async function main(argv: string[]): Promise<number> {
       const intervalMs = seconds !== undefined ? seconds * 1000 : daemon.DEFAULT_INTERVAL_MS;
 
       if (values.status) {
-        const st = daemon.status(slug);
-        emit(out, st, () => {
-          if (!st.running) {
-            console.log(`no daemon on ${slug}${st.stale ? ` (a stale pid file from pid ${st.daemon.pid} was left behind)` : ''}`);
-            console.log(`  log      ${st.log}`);
-            console.log(`  start it with \`kb up --board ${slug}\``);
-          } else {
-            const mins = Math.round(st.uptimeMs / 60_000);
-            console.log(`up on ${slug} — pid ${st.daemon.pid}, ${mins} min, every ${Math.round(st.daemon.intervalMs / 1000)}s`);
-            console.log(`  since    ${st.since.toISOString()}`);
-            console.log(`  log      ${st.log}`);
+        const rows = await daemon.status(named);
+        emit(out, rows, () => {
+          if (!rows.length) return console.log(named ? `no board "${named}"` : 'no boards yet');
+          const w = Math.max(...rows.map((r) => r.slug.length));
+          for (const r of rows) {
+            const who = r.running
+              ? `up    ${r.holder}  ${Math.round((r.uptimeMs ?? 0) / 60_000)} min, every ${Math.round((r.intervalMs ?? 0) / 1000)}s`
+              : r.stale ? `down  (a stale controller row from ${r.holder} was left behind)` : 'down';
+            console.log(`${r.slug.padEnd(w)}  ${who}`);
+            if (r.repoPath) console.log(`${' '.repeat(w)}  repo    ${r.repoPath}`);
+            // A daemon runs the code it started with. Saying so beats discovering it.
+            if (r.behind) {
+              console.log(`${' '.repeat(w)}  BEHIND  started from ${r.version}; the checkout is now ${r.behind}`
+                + ' — `kb down && kb up` to pick it up');
+            }
           }
+          // One line, because a daemon serving every board writes one log and a board-scoped one
+          // writes its own: naming a single file per row would be right only half the time.
+          if (rows.some((r) => r.running)) console.log(`\nlogs in ${daemon.boardDir()}`);
         });
-        return st.running ? 0 : 1;
+        return rows.some((r) => r.running) ? 0 : 1;
       }
 
       // The loop, in this process. `kb up` without `--foreground` spawns exactly this.
@@ -322,45 +396,96 @@ export async function main(argv: string[]): Promise<number> {
         // is to ask, and then to let the loop unwind on its own.
         const onSignal = (sig: string) => {
           if (stopper.signal.aborted) return;
-          process.stdout.write(`${new Date().toISOString().slice(0, 19).replace('T', ' ')} ${sig} — stopping after the run in flight
-`);
+          process.stdout.write(`${new Date().toISOString().slice(0, 19).replace('T', ' ')} ${sig} — stopping after the run in flight\n`);
           stopper.abort();
         };
         process.on('SIGTERM', () => onSignal('SIGTERM'));
         process.on('SIGINT', () => onSignal('SIGINT'));
 
-        const pidFile = daemon.claimPidFile(slug, intervalMs);
-        try {
-          await daemon.loop({
-            runtime, cwd: process.cwd(), board: slug, intervalMs, signal: stopper.signal,
-          });
-        } finally {
-          daemon.releasePidFile(slug);
-        }
-        if (out.json) process.stdout.write(JSON.stringify({ board: slug, pidFile, stopped: true }, null, 1) + '\n');
+        await daemon.loop({
+          runtime, cwd: process.cwd(), board: named, intervalMs, signal: stopper.signal,
+        });
         return 0;
       }
 
-      const started = daemon.start(slug, { intervalMs, fake: !!values.fake });
+      const started = daemon.start({ board: named, intervalMs, fake: !!values.fake });
       emit(out, started, () => {
-        if (!started.started) console.log(started.why);
-        else {
-          console.log(`up on ${slug} — pid ${started.pid}, every ${Math.round(intervalMs / 1000)}s`);
-          console.log(`  log      ${started.log}`);
-          console.log(`  stop it  kb down --board ${slug}`);
-        }
+        console.log(`up${named ? ` on ${named}` : ' on every board'} — pid ${started.pid}, every ${Math.round(intervalMs / 1000)}s`);
+        console.log(`  log      ${started.log}`);
+        console.log(`  status   kb up --status`);
       });
-      return started.started ? 0 : 2;
+      return 0;
     }
 
     case 'down': {
       const timeoutMs = values.timeout !== undefined ? (num(values.timeout, '--timeout') as number) * 1000 : undefined;
-      const res = await daemon.stop(slug, { timeoutMs });
+      const res = await daemon.stop({ board: named, timeoutMs });
       emit(out, res, () => {
         if (res.stopped) console.log(`down — pid ${res.pid} stopped in ${((res.waitedMs ?? 0) / 1000).toFixed(1)}s`);
         else console.log(res.why);
       });
       return res.stopped ? 0 : 1;
+    }
+
+    // ---------------------------------------------------------------- boards
+    case 'boards': {
+      if (rest[0] === 'add') {
+        const name = rest[1];
+        if (!name) throw usage('kb boards add <slug> [--repo <path>] — what is the board called?');
+        const repo = (values.repo as string) || gitRoot(process.cwd());
+        if (!repo) throw usage('kb boards add needs --repo <path>, or to be run inside a git repository');
+        const abs = path.resolve(repo);
+        if (!fs.existsSync(path.join(abs, '.git'))) {
+          throw usage(`${abs} is not a git repository — a board runs Jobs in a checkout, and workers need a branch to push`);
+        }
+        const board = await db.board.upsert({
+          where: { slug: name }, update: { repoPath: abs }, create: { slug: name, repoPath: abs },
+        });
+        await db.event.create({ data: { kind: 'board_added', boardId: board.id, actor: whoami(), payload: { repoPath: abs } } });
+        emit(out, { board: board.slug, repoPath: abs }, () =>
+          console.log(`${board.slug} -> ${abs}`));
+        return 0;
+      }
+      if (rest[0]) throw usage(`kb boards has no subcommand "${rest[0]}" — try \`kb boards\` or \`kb boards add <slug>\``);
+
+      const serving = await daemon.status();
+      const boards = await db.board.findMany({ orderBy: { slug: 'asc' }, include: { jobs: { select: { phase: true } } } });
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const rows = await Promise.all(boards.map(async (b) => {
+        const spend = await db.attempt.aggregate({
+          _sum: { costUsd: true },
+          where: { job: { boardId: b.id }, startedAt: { gte: since } },
+        });
+        const by = (ph: string) => b.jobs.filter((j) => j.phase === ph).length;
+        const d = serving.find((s) => s.slug === b.slug);
+        return {
+          board: b.slug,
+          repoPath: b.repoPath,
+          daemon: d?.running ? 'up' : 'down',
+          paused: !!b.pausedAt,
+          pending: by('pending'), running: by('running'),
+          succeeded: by('succeeded'), failed: by('failed'),
+          spent24h: spend._sum.costUsd ?? 0,
+          maxConcurrent: b.maxConcurrent,
+          dailyBudgetUsd: b.dailyBudgetUsd,
+        };
+      }));
+      emit(out, rows, () => {
+        if (!rows.length) return console.log('no boards yet — `kb new` inside a repository creates one');
+        const w = Math.max(5, ...rows.map((r) => r.board.length));
+        const d = Math.max(6, ...rows.map((r) => r.daemon.length + (r.paused ? 10 : 0)));
+        console.log(`${'BOARD'.padEnd(w)}  ${'DAEMON'.padEnd(d)}  PEND   RUN    OK  FAIL      24H  REPO`);
+        for (const r of rows) {
+          const flag = r.paused ? ' (stopped)' : '';
+          console.log(
+            `${r.board.padEnd(w)}  ${(r.daemon + flag).padEnd(d)}  ${String(r.pending).padStart(4)}  `
+            + `${String(r.running).padStart(4)}  ${String(r.succeeded).padStart(4)}  ${String(r.failed).padStart(4)}  `
+            + `${('$' + r.spent24h.toFixed(2)).padStart(7)}  `
+            + `${r.repoPath ?? '(no repo — `kb boards add ' + r.board + ' --repo <path>`)'}`,
+          );
+        }
+      });
+      return 0;
     }
 
     // ---------------------------------------------------------------- log
@@ -393,7 +518,7 @@ export async function main(argv: string[]): Promise<number> {
     }
 
     default:
-      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, rm, stop, start, up, down, log`);
+      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, rm, stop, start, up, down, log, boards`);
   }
 }
 

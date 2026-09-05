@@ -1,18 +1,22 @@
 ---
 title: The loop — a level-triggered daemon, and why the clock is not enough
-summary: kb up runs reconcile on a 45s timer; the loop exists for the time-driven half only. Why a controller is level-triggered rather than event-driven, why a lapsed lease is evidence and not proof, and why an operator stop is its own outcome.
+summary: kb up runs reconcile on a 45s timer over every board on the machine. Why a controller is level-triggered rather than event-driven, why a lapsed lease is evidence and not proof, why leadership is a row rather than a pid file, and why an operator stop is its own outcome.
 category: architecture
 kind: explanation
 audience: [dev]
 read_when: "changing the daemon, the reclaim rule, or anything that decides whether a lease may be taken"
 covers:
   - path: src/daemon.ts
-    sha: 6fb87b2191b486da936a2968e584a962090d8118
+    sha: dd5c89bdaf5b226f214bd3db91a99c308952c368
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: 67a1aba83797f8b1f39e6e50e39f654f53dcf0b8
-generated_at_commit: c5326c0
+    sha: 455fc87adf4f4853fb1ef183b75f3552ccc79e60
+  - path: src/db-url.ts
+    sha: 0c4f3e6e1ac4a1253ec6d2397c195ce0bd53d36b
+  - path: src/schema.ts
+    sha: f0cd177f7fe80512ab3e16fefd5f463fb88f6cd2
+generated_at_commit: 741b855
 last_refreshed: 2026-09-05
 related: [architecture/job-kind, architecture/runtime-layer, decisions/adr-007-workload-scheduler, concepts/worker-identity]
 ---
@@ -110,14 +114,47 @@ attempt number `k` still advances — it is half the Attempt's primary key — s
 retry budget is counted separately from the attempt count. The session id is kept,
 so `kb up` after `kb down` resumes rather than restarts.
 
-## The pid file
+## Leadership is a row, not a lock
 
-A pid file is a claim, not a fact, and gets the same two questions the lease does:
-is that pid running, and could it still be ours? A daemon recorded as starting
-before this machine booted cannot be, whatever holds that pid now. Without the
-boot check a stale file after a reboot makes `kb up` refuse for ever — the failure
-that teaches people to delete pid files by hand.
+The board is `~/.hkb/board.db` — one per machine, a `Board` per repository — and one
+daemon serves all of them, the way one controller-manager serves every namespace. So
+"who is in charge here" is per board, and it is a `Controller` row: the same
+compare-and-swap as `Lease` (`@@id`), the same staleness rule (`expiresAt` plus
+`holderLiveness`), the same three-valued answer for a holder on another machine.
 
-It lives beside the board (`HKB_DATABASE_URL`'s directory), not at a fixed repo
-path, so two boards in one checkout do not fight over one lock and a test with a
-scratch database cannot stop the operator's running daemon.
+This replaced a pid file, and the reason is worth keeping. A pid file is a second
+source of truth living outside the store, re-deriving rules `Lease` already owned —
+and it got one wrong: it recorded `<hostname>/<pid>` and **never read the hostname
+back**, checking only `pidIsAlive(pid)`. On a shared filesystem that asks the wrong
+machine's process table, in both directions. The careful three-valued check existed
+one file over and was not applied.
+
+It is also **leader election rather than exclusion**, which is what Kubernetes
+actually does: three controller-managers, one `Lease`, and the losers idle. A second
+daemon here is not refused — it takes the boards it can lead and says which it cannot.
+That makes standby behaviour a later change of policy rather than a redesign.
+
+## The repository is on the Board
+
+A `Job` runs in `Board.repoPath`, not in the daemon's cwd — a long-lived machine
+daemon has no meaningful cwd, and "wherever the operator was standing" stopped being
+a definition of anything the moment one process served several repositories. It is on
+the Board rather than the Job because a Job is inherently single-repo (one worktree,
+one branch, one pull request) and because the ceilings beside it are already per-repo
+facts: *this repository's PR workflows are expensive, run one at a time*.
+
+`deps.cwd` in the controller survives only as the fallback for a board with no repo —
+which is `kb run` in a checkout, and every test.
+
+## The board bootstraps itself
+
+A machine-level default is only frictionless if the first command on a fresh machine
+works, so `openBoard` creates and migrates the database on first touch
+(`src/schema.ts`), writing the same `_prisma_migrations` rows Prisma writes so
+`prisma migrate` keeps working in a checkout. Telling the operator to run a migration
+would fail twice over: it is the "yes, by hand" answer this project treats as a bug
+report, and `prisma` is a devDependency a global install does not have.
+
+The opposite direction cannot be repaired, so it is refused with a real message: a
+board carrying migrations this build does not know about belongs to a newer `kb`.
+One shared board makes that reachable rather than theoretical.

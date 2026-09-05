@@ -41,6 +41,7 @@ export type BoardSumAggregateOutputType = {
 export type BoardMinAggregateOutputType = {
   id: number | null
   slug: string | null
+  repoPath: string | null
   pausedAt: Date | null
   pausedBy: string | null
   dailyBudgetUsd: number | null
@@ -52,6 +53,7 @@ export type BoardMinAggregateOutputType = {
 export type BoardMaxAggregateOutputType = {
   id: number | null
   slug: string | null
+  repoPath: string | null
   pausedAt: Date | null
   pausedBy: string | null
   dailyBudgetUsd: number | null
@@ -63,6 +65,7 @@ export type BoardMaxAggregateOutputType = {
 export type BoardCountAggregateOutputType = {
   id: number
   slug: number
+  repoPath: number
   pausedAt: number
   pausedBy: number
   dailyBudgetUsd: number
@@ -88,6 +91,7 @@ export type BoardSumAggregateInputType = {
 export type BoardMinAggregateInputType = {
   id?: true
   slug?: true
+  repoPath?: true
   pausedAt?: true
   pausedBy?: true
   dailyBudgetUsd?: true
@@ -99,6 +103,7 @@ export type BoardMinAggregateInputType = {
 export type BoardMaxAggregateInputType = {
   id?: true
   slug?: true
+  repoPath?: true
   pausedAt?: true
   pausedBy?: true
   dailyBudgetUsd?: true
@@ -110,6 +115,7 @@ export type BoardMaxAggregateInputType = {
 export type BoardCountAggregateInputType = {
   id?: true
   slug?: true
+  repoPath?: true
   pausedAt?: true
   pausedBy?: true
   dailyBudgetUsd?: true
@@ -208,6 +214,7 @@ export type BoardGroupByArgs<ExtArgs extends runtime.Types.Extensions.InternalAr
 export type BoardGroupByOutputType = {
   id: number
   slug: string
+  repoPath: string | null
   pausedAt: Date | null
   pausedBy: string | null
   dailyBudgetUsd: number | null
@@ -242,6 +249,7 @@ export type BoardWhereInput = {
   NOT?: Prisma.BoardWhereInput | Prisma.BoardWhereInput[]
   id?: Prisma.IntFilter<"Board"> | number
   slug?: Prisma.StringFilter<"Board"> | string
+  repoPath?: Prisma.StringNullableFilter<"Board"> | string | null
   pausedAt?: Prisma.DateTimeNullableFilter<"Board"> | Date | string | null
   pausedBy?: Prisma.StringNullableFilter<"Board"> | string | null
   dailyBudgetUsd?: Prisma.FloatNullableFilter<"Board"> | number | null
@@ -250,11 +258,13 @@ export type BoardWhereInput = {
   updatedAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   jobs?: Prisma.JobListRelationFilter
   events?: Prisma.EventListRelationFilter
+  controller?: Prisma.XOR<Prisma.ControllerNullableScalarRelationFilter, Prisma.ControllerWhereInput> | null
 }
 
 export type BoardOrderByWithRelationInput = {
   id?: Prisma.SortOrder
   slug?: Prisma.SortOrder
+  repoPath?: Prisma.SortOrderInput | Prisma.SortOrder
   pausedAt?: Prisma.SortOrderInput | Prisma.SortOrder
   pausedBy?: Prisma.SortOrderInput | Prisma.SortOrder
   dailyBudgetUsd?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -263,6 +273,7 @@ export type BoardOrderByWithRelationInput = {
   updatedAt?: Prisma.SortOrder
   jobs?: Prisma.JobOrderByRelationAggregateInput
   events?: Prisma.EventOrderByRelationAggregateInput
+  controller?: Prisma.ControllerOrderByWithRelationInput
 }
 
 export type BoardWhereUniqueInput = Prisma.AtLeast<{
@@ -271,6 +282,7 @@ export type BoardWhereUniqueInput = Prisma.AtLeast<{
   AND?: Prisma.BoardWhereInput | Prisma.BoardWhereInput[]
   OR?: Prisma.BoardWhereInput[]
   NOT?: Prisma.BoardWhereInput | Prisma.BoardWhereInput[]
+  repoPath?: Prisma.StringNullableFilter<"Board"> | string | null
   pausedAt?: Prisma.DateTimeNullableFilter<"Board"> | Date | string | null
   pausedBy?: Prisma.StringNullableFilter<"Board"> | string | null
   dailyBudgetUsd?: Prisma.FloatNullableFilter<"Board"> | number | null
@@ -279,11 +291,13 @@ export type BoardWhereUniqueInput = Prisma.AtLeast<{
   updatedAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   jobs?: Prisma.JobListRelationFilter
   events?: Prisma.EventListRelationFilter
+  controller?: Prisma.XOR<Prisma.ControllerNullableScalarRelationFilter, Prisma.ControllerWhereInput> | null
 }, "id" | "slug">
 
 export type BoardOrderByWithAggregationInput = {
   id?: Prisma.SortOrder
   slug?: Prisma.SortOrder
+  repoPath?: Prisma.SortOrderInput | Prisma.SortOrder
   pausedAt?: Prisma.SortOrderInput | Prisma.SortOrder
   pausedBy?: Prisma.SortOrderInput | Prisma.SortOrder
   dailyBudgetUsd?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -303,6 +317,7 @@ export type BoardScalarWhereWithAggregatesInput = {
   NOT?: Prisma.BoardScalarWhereWithAggregatesInput | Prisma.BoardScalarWhereWithAggregatesInput[]
   id?: Prisma.IntWithAggregatesFilter<"Board"> | number
   slug?: Prisma.StringWithAggregatesFilter<"Board"> | string
+  repoPath?: Prisma.StringNullableWithAggregatesFilter<"Board"> | string | null
   pausedAt?: Prisma.DateTimeNullableWithAggregatesFilter<"Board"> | Date | string | null
   pausedBy?: Prisma.StringNullableWithAggregatesFilter<"Board"> | string | null
   dailyBudgetUsd?: Prisma.FloatNullableWithAggregatesFilter<"Board"> | number | null
@@ -313,6 +328,7 @@ export type BoardScalarWhereWithAggregatesInput = {
 
 export type BoardCreateInput = {
   slug: string
+  repoPath?: string | null
   pausedAt?: Date | string | null
   pausedBy?: string | null
   dailyBudgetUsd?: number | null
@@ -321,11 +337,13 @@ export type BoardCreateInput = {
   updatedAt?: Date | string
   jobs?: Prisma.JobCreateNestedManyWithoutBoardInput
   events?: Prisma.EventCreateNestedManyWithoutBoardInput
+  controller?: Prisma.ControllerCreateNestedOneWithoutBoardInput
 }
 
 export type BoardUncheckedCreateInput = {
   id?: number
   slug: string
+  repoPath?: string | null
   pausedAt?: Date | string | null
   pausedBy?: string | null
   dailyBudgetUsd?: number | null
@@ -334,10 +352,12 @@ export type BoardUncheckedCreateInput = {
   updatedAt?: Date | string
   jobs?: Prisma.JobUncheckedCreateNestedManyWithoutBoardInput
   events?: Prisma.EventUncheckedCreateNestedManyWithoutBoardInput
+  controller?: Prisma.ControllerUncheckedCreateNestedOneWithoutBoardInput
 }
 
 export type BoardUpdateInput = {
   slug?: Prisma.StringFieldUpdateOperationsInput | string
+  repoPath?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
@@ -346,11 +366,13 @@ export type BoardUpdateInput = {
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUpdateManyWithoutBoardNestedInput
   events?: Prisma.EventUpdateManyWithoutBoardNestedInput
+  controller?: Prisma.ControllerUpdateOneWithoutBoardNestedInput
 }
 
 export type BoardUncheckedUpdateInput = {
   id?: Prisma.IntFieldUpdateOperationsInput | number
   slug?: Prisma.StringFieldUpdateOperationsInput | string
+  repoPath?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
@@ -359,11 +381,13 @@ export type BoardUncheckedUpdateInput = {
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUncheckedUpdateManyWithoutBoardNestedInput
   events?: Prisma.EventUncheckedUpdateManyWithoutBoardNestedInput
+  controller?: Prisma.ControllerUncheckedUpdateOneWithoutBoardNestedInput
 }
 
 export type BoardCreateManyInput = {
   id?: number
   slug: string
+  repoPath?: string | null
   pausedAt?: Date | string | null
   pausedBy?: string | null
   dailyBudgetUsd?: number | null
@@ -374,6 +398,7 @@ export type BoardCreateManyInput = {
 
 export type BoardUpdateManyMutationInput = {
   slug?: Prisma.StringFieldUpdateOperationsInput | string
+  repoPath?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
@@ -385,6 +410,7 @@ export type BoardUpdateManyMutationInput = {
 export type BoardUncheckedUpdateManyInput = {
   id?: Prisma.IntFieldUpdateOperationsInput | number
   slug?: Prisma.StringFieldUpdateOperationsInput | string
+  repoPath?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
@@ -396,6 +422,7 @@ export type BoardUncheckedUpdateManyInput = {
 export type BoardCountOrderByAggregateInput = {
   id?: Prisma.SortOrder
   slug?: Prisma.SortOrder
+  repoPath?: Prisma.SortOrder
   pausedAt?: Prisma.SortOrder
   pausedBy?: Prisma.SortOrder
   dailyBudgetUsd?: Prisma.SortOrder
@@ -413,6 +440,7 @@ export type BoardAvgOrderByAggregateInput = {
 export type BoardMaxOrderByAggregateInput = {
   id?: Prisma.SortOrder
   slug?: Prisma.SortOrder
+  repoPath?: Prisma.SortOrder
   pausedAt?: Prisma.SortOrder
   pausedBy?: Prisma.SortOrder
   dailyBudgetUsd?: Prisma.SortOrder
@@ -424,6 +452,7 @@ export type BoardMaxOrderByAggregateInput = {
 export type BoardMinOrderByAggregateInput = {
   id?: Prisma.SortOrder
   slug?: Prisma.SortOrder
+  repoPath?: Prisma.SortOrder
   pausedAt?: Prisma.SortOrder
   pausedBy?: Prisma.SortOrder
   dailyBudgetUsd?: Prisma.SortOrder
@@ -452,12 +481,12 @@ export type StringFieldUpdateOperationsInput = {
   set?: string
 }
 
-export type NullableDateTimeFieldUpdateOperationsInput = {
-  set?: Date | string | null
-}
-
 export type NullableStringFieldUpdateOperationsInput = {
   set?: string | null
+}
+
+export type NullableDateTimeFieldUpdateOperationsInput = {
+  set?: Date | string | null
 }
 
 export type NullableFloatFieldUpdateOperationsInput = {
@@ -478,6 +507,20 @@ export type IntFieldUpdateOperationsInput = {
 
 export type DateTimeFieldUpdateOperationsInput = {
   set?: Date | string
+}
+
+export type BoardCreateNestedOneWithoutControllerInput = {
+  create?: Prisma.XOR<Prisma.BoardCreateWithoutControllerInput, Prisma.BoardUncheckedCreateWithoutControllerInput>
+  connectOrCreate?: Prisma.BoardCreateOrConnectWithoutControllerInput
+  connect?: Prisma.BoardWhereUniqueInput
+}
+
+export type BoardUpdateOneRequiredWithoutControllerNestedInput = {
+  create?: Prisma.XOR<Prisma.BoardCreateWithoutControllerInput, Prisma.BoardUncheckedCreateWithoutControllerInput>
+  connectOrCreate?: Prisma.BoardCreateOrConnectWithoutControllerInput
+  upsert?: Prisma.BoardUpsertWithoutControllerInput
+  connect?: Prisma.BoardWhereUniqueInput
+  update?: Prisma.XOR<Prisma.XOR<Prisma.BoardUpdateToOneWithWhereWithoutControllerInput, Prisma.BoardUpdateWithoutControllerInput>, Prisma.BoardUncheckedUpdateWithoutControllerInput>
 }
 
 export type BoardCreateNestedOneWithoutJobsInput = {
@@ -510,8 +553,79 @@ export type BoardUpdateOneWithoutEventsNestedInput = {
   update?: Prisma.XOR<Prisma.XOR<Prisma.BoardUpdateToOneWithWhereWithoutEventsInput, Prisma.BoardUpdateWithoutEventsInput>, Prisma.BoardUncheckedUpdateWithoutEventsInput>
 }
 
+export type BoardCreateWithoutControllerInput = {
+  slug: string
+  repoPath?: string | null
+  pausedAt?: Date | string | null
+  pausedBy?: string | null
+  dailyBudgetUsd?: number | null
+  maxConcurrent?: number
+  createdAt?: Date | string
+  updatedAt?: Date | string
+  jobs?: Prisma.JobCreateNestedManyWithoutBoardInput
+  events?: Prisma.EventCreateNestedManyWithoutBoardInput
+}
+
+export type BoardUncheckedCreateWithoutControllerInput = {
+  id?: number
+  slug: string
+  repoPath?: string | null
+  pausedAt?: Date | string | null
+  pausedBy?: string | null
+  dailyBudgetUsd?: number | null
+  maxConcurrent?: number
+  createdAt?: Date | string
+  updatedAt?: Date | string
+  jobs?: Prisma.JobUncheckedCreateNestedManyWithoutBoardInput
+  events?: Prisma.EventUncheckedCreateNestedManyWithoutBoardInput
+}
+
+export type BoardCreateOrConnectWithoutControllerInput = {
+  where: Prisma.BoardWhereUniqueInput
+  create: Prisma.XOR<Prisma.BoardCreateWithoutControllerInput, Prisma.BoardUncheckedCreateWithoutControllerInput>
+}
+
+export type BoardUpsertWithoutControllerInput = {
+  update: Prisma.XOR<Prisma.BoardUpdateWithoutControllerInput, Prisma.BoardUncheckedUpdateWithoutControllerInput>
+  create: Prisma.XOR<Prisma.BoardCreateWithoutControllerInput, Prisma.BoardUncheckedCreateWithoutControllerInput>
+  where?: Prisma.BoardWhereInput
+}
+
+export type BoardUpdateToOneWithWhereWithoutControllerInput = {
+  where?: Prisma.BoardWhereInput
+  data: Prisma.XOR<Prisma.BoardUpdateWithoutControllerInput, Prisma.BoardUncheckedUpdateWithoutControllerInput>
+}
+
+export type BoardUpdateWithoutControllerInput = {
+  slug?: Prisma.StringFieldUpdateOperationsInput | string
+  repoPath?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
+  maxConcurrent?: Prisma.IntFieldUpdateOperationsInput | number
+  createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  jobs?: Prisma.JobUpdateManyWithoutBoardNestedInput
+  events?: Prisma.EventUpdateManyWithoutBoardNestedInput
+}
+
+export type BoardUncheckedUpdateWithoutControllerInput = {
+  id?: Prisma.IntFieldUpdateOperationsInput | number
+  slug?: Prisma.StringFieldUpdateOperationsInput | string
+  repoPath?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
+  maxConcurrent?: Prisma.IntFieldUpdateOperationsInput | number
+  createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  jobs?: Prisma.JobUncheckedUpdateManyWithoutBoardNestedInput
+  events?: Prisma.EventUncheckedUpdateManyWithoutBoardNestedInput
+}
+
 export type BoardCreateWithoutJobsInput = {
   slug: string
+  repoPath?: string | null
   pausedAt?: Date | string | null
   pausedBy?: string | null
   dailyBudgetUsd?: number | null
@@ -519,11 +633,13 @@ export type BoardCreateWithoutJobsInput = {
   createdAt?: Date | string
   updatedAt?: Date | string
   events?: Prisma.EventCreateNestedManyWithoutBoardInput
+  controller?: Prisma.ControllerCreateNestedOneWithoutBoardInput
 }
 
 export type BoardUncheckedCreateWithoutJobsInput = {
   id?: number
   slug: string
+  repoPath?: string | null
   pausedAt?: Date | string | null
   pausedBy?: string | null
   dailyBudgetUsd?: number | null
@@ -531,6 +647,7 @@ export type BoardUncheckedCreateWithoutJobsInput = {
   createdAt?: Date | string
   updatedAt?: Date | string
   events?: Prisma.EventUncheckedCreateNestedManyWithoutBoardInput
+  controller?: Prisma.ControllerUncheckedCreateNestedOneWithoutBoardInput
 }
 
 export type BoardCreateOrConnectWithoutJobsInput = {
@@ -551,6 +668,7 @@ export type BoardUpdateToOneWithWhereWithoutJobsInput = {
 
 export type BoardUpdateWithoutJobsInput = {
   slug?: Prisma.StringFieldUpdateOperationsInput | string
+  repoPath?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
@@ -558,11 +676,13 @@ export type BoardUpdateWithoutJobsInput = {
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   events?: Prisma.EventUpdateManyWithoutBoardNestedInput
+  controller?: Prisma.ControllerUpdateOneWithoutBoardNestedInput
 }
 
 export type BoardUncheckedUpdateWithoutJobsInput = {
   id?: Prisma.IntFieldUpdateOperationsInput | number
   slug?: Prisma.StringFieldUpdateOperationsInput | string
+  repoPath?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
@@ -570,10 +690,12 @@ export type BoardUncheckedUpdateWithoutJobsInput = {
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   events?: Prisma.EventUncheckedUpdateManyWithoutBoardNestedInput
+  controller?: Prisma.ControllerUncheckedUpdateOneWithoutBoardNestedInput
 }
 
 export type BoardCreateWithoutEventsInput = {
   slug: string
+  repoPath?: string | null
   pausedAt?: Date | string | null
   pausedBy?: string | null
   dailyBudgetUsd?: number | null
@@ -581,11 +703,13 @@ export type BoardCreateWithoutEventsInput = {
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobCreateNestedManyWithoutBoardInput
+  controller?: Prisma.ControllerCreateNestedOneWithoutBoardInput
 }
 
 export type BoardUncheckedCreateWithoutEventsInput = {
   id?: number
   slug: string
+  repoPath?: string | null
   pausedAt?: Date | string | null
   pausedBy?: string | null
   dailyBudgetUsd?: number | null
@@ -593,6 +717,7 @@ export type BoardUncheckedCreateWithoutEventsInput = {
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobUncheckedCreateNestedManyWithoutBoardInput
+  controller?: Prisma.ControllerUncheckedCreateNestedOneWithoutBoardInput
 }
 
 export type BoardCreateOrConnectWithoutEventsInput = {
@@ -613,6 +738,7 @@ export type BoardUpdateToOneWithWhereWithoutEventsInput = {
 
 export type BoardUpdateWithoutEventsInput = {
   slug?: Prisma.StringFieldUpdateOperationsInput | string
+  repoPath?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
@@ -620,11 +746,13 @@ export type BoardUpdateWithoutEventsInput = {
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUpdateManyWithoutBoardNestedInput
+  controller?: Prisma.ControllerUpdateOneWithoutBoardNestedInput
 }
 
 export type BoardUncheckedUpdateWithoutEventsInput = {
   id?: Prisma.IntFieldUpdateOperationsInput | number
   slug?: Prisma.StringFieldUpdateOperationsInput | string
+  repoPath?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   pausedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   pausedBy?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   dailyBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
@@ -632,6 +760,7 @@ export type BoardUncheckedUpdateWithoutEventsInput = {
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUncheckedUpdateManyWithoutBoardNestedInput
+  controller?: Prisma.ControllerUncheckedUpdateOneWithoutBoardNestedInput
 }
 
 
@@ -677,6 +806,7 @@ export type BoardCountOutputTypeCountEventsArgs<ExtArgs extends runtime.Types.Ex
 export type BoardSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
   id?: boolean
   slug?: boolean
+  repoPath?: boolean
   pausedAt?: boolean
   pausedBy?: boolean
   dailyBudgetUsd?: boolean
@@ -685,12 +815,14 @@ export type BoardSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
   updatedAt?: boolean
   jobs?: boolean | Prisma.Board$jobsArgs<ExtArgs>
   events?: boolean | Prisma.Board$eventsArgs<ExtArgs>
+  controller?: boolean | Prisma.Board$controllerArgs<ExtArgs>
   _count?: boolean | Prisma.BoardCountOutputTypeDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["board"]>
 
 export type BoardSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
   id?: boolean
   slug?: boolean
+  repoPath?: boolean
   pausedAt?: boolean
   pausedBy?: boolean
   dailyBudgetUsd?: boolean
@@ -702,6 +834,7 @@ export type BoardSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensi
 export type BoardSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
   id?: boolean
   slug?: boolean
+  repoPath?: boolean
   pausedAt?: boolean
   pausedBy?: boolean
   dailyBudgetUsd?: boolean
@@ -713,6 +846,7 @@ export type BoardSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensi
 export type BoardSelectScalar = {
   id?: boolean
   slug?: boolean
+  repoPath?: boolean
   pausedAt?: boolean
   pausedBy?: boolean
   dailyBudgetUsd?: boolean
@@ -721,10 +855,11 @@ export type BoardSelectScalar = {
   updatedAt?: boolean
 }
 
-export type BoardOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "slug" | "pausedAt" | "pausedBy" | "dailyBudgetUsd" | "maxConcurrent" | "createdAt" | "updatedAt", ExtArgs["result"]["board"]>
+export type BoardOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "slug" | "repoPath" | "pausedAt" | "pausedBy" | "dailyBudgetUsd" | "maxConcurrent" | "createdAt" | "updatedAt", ExtArgs["result"]["board"]>
 export type BoardInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   jobs?: boolean | Prisma.Board$jobsArgs<ExtArgs>
   events?: boolean | Prisma.Board$eventsArgs<ExtArgs>
+  controller?: boolean | Prisma.Board$controllerArgs<ExtArgs>
   _count?: boolean | Prisma.BoardCountOutputTypeDefaultArgs<ExtArgs>
 }
 export type BoardIncludeCreateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {}
@@ -735,10 +870,23 @@ export type $BoardPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs 
   objects: {
     jobs: Prisma.$JobPayload<ExtArgs>[]
     events: Prisma.$EventPayload<ExtArgs>[]
+    controller: Prisma.$ControllerPayload<ExtArgs> | null
   }
   scalars: runtime.Types.Extensions.GetPayloadResult<{
     id: number
     slug: string
+    /**
+     * The repository this board's Jobs run in, as an absolute path on this machine.
+     * 
+     * It lives here rather than on the Job because a Job is inherently single-repo — one worktree,
+     * one branch, one pull request — and because a Board is the Namespace: the ceilings below are
+     * already per-repo facts ("this repo's PR workflows are expensive, run one at a time"). Two
+     * boards may share a repo if they want different budgets for different work.
+     * 
+     * Nullable so a board can exist before it is pointed at anything, and so tests can supply a
+     * checkout directly. A Job on a board with no repoPath falls back to the caller's cwd.
+     */
+    repoPath: string | null
     /**
      * The kill switch. While this is set nothing is claimed; a run already going is left alone,
      * because stopping a board should not destroy work in flight.
@@ -1150,6 +1298,7 @@ export interface Prisma__BoardClient<T, Null = never, ExtArgs extends runtime.Ty
   readonly [Symbol.toStringTag]: "PrismaPromise"
   jobs<T extends Prisma.Board$jobsArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.Board$jobsArgs<ExtArgs>>): Prisma.PrismaPromise<runtime.Types.Result.GetResult<Prisma.$JobPayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
   events<T extends Prisma.Board$eventsArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.Board$eventsArgs<ExtArgs>>): Prisma.PrismaPromise<runtime.Types.Result.GetResult<Prisma.$EventPayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
+  controller<T extends Prisma.Board$controllerArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.Board$controllerArgs<ExtArgs>>): Prisma.Prisma__ControllerClient<runtime.Types.Result.GetResult<Prisma.$ControllerPayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions> | null, null, ExtArgs, GlobalOmitOptions>
   /**
    * Attaches callbacks for the resolution and/or rejection of the Promise.
    * @param onfulfilled The callback to execute when the Promise is resolved.
@@ -1181,6 +1330,7 @@ export interface Prisma__BoardClient<T, Null = never, ExtArgs extends runtime.Ty
 export interface BoardFieldRefs {
   readonly id: Prisma.FieldRef<"Board", 'Int'>
   readonly slug: Prisma.FieldRef<"Board", 'String'>
+  readonly repoPath: Prisma.FieldRef<"Board", 'String'>
   readonly pausedAt: Prisma.FieldRef<"Board", 'DateTime'>
   readonly pausedBy: Prisma.FieldRef<"Board", 'String'>
   readonly dailyBudgetUsd: Prisma.FieldRef<"Board", 'Float'>
@@ -1623,6 +1773,25 @@ export type Board$eventsArgs<ExtArgs extends runtime.Types.Extensions.InternalAr
   take?: number
   skip?: number
   distinct?: Prisma.EventScalarFieldEnum | Prisma.EventScalarFieldEnum[]
+}
+
+/**
+ * Board.controller
+ */
+export type Board$controllerArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  /**
+   * Select specific fields to fetch from the Controller
+   */
+  select?: Prisma.ControllerSelect<ExtArgs> | null
+  /**
+   * Omit specific fields from the Controller
+   */
+  omit?: Prisma.ControllerOmit<ExtArgs> | null
+  /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.ControllerInclude<ExtArgs> | null
+  where?: Prisma.ControllerWhereInput
 }
 
 /**

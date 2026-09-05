@@ -12,7 +12,7 @@
 - [hkb at a glance](./architecture/overview.md): The pre-ADR-007 system, which still runs: CLI, board protocol, dispatcher loop, workers, and the rule that the store is the only state. Points at the new core for anything written since.
 - [The runtime layer — running a worker on the Agent SDK](./architecture/runtime-layer.md): One seam, run(spec) -> WorkerOutcome, with the Claude Agent SDK as the first driver and a fake for tests; what the SDK stores for us (so the board does not), and the three SDK behaviours that each cost a bug to learn.
 - [The store seam](./architecture/store-seam.md): One named interface over board state — openStore(ctx), which every verb in src/ goes through — plus src/forge.js for the pull-request half that is deliberately not part of it and is joined to it by branch name, and a driver-parametrised conformance suite that outlived the driver it was written to retire.
-- [The loop — a level-triggered daemon, and why the clock is not enough](./architecture/the-loop.md): kb up runs reconcile on a 45s timer; the loop exists for the time-driven half only. Why a controller is level-triggered rather than event-driven, why a lapsed lease is evidence and not proof, and why an operator stop is its own outcome.
+- [The loop — a level-triggered daemon, and why the clock is not enough](./architecture/the-loop.md): kb up runs reconcile on a 45s timer over every board on the machine. Why a controller is level-triggered rather than event-driven, why a lapsed lease is evidence and not proof, why leadership is a row rather than a pid file, and why an operator stop is its own outcome.
 
 ## Concepts
 
