@@ -9,10 +9,10 @@ covers:
   - path: prisma/schema.prisma
     sha: 16810047426b39467d37ca6018e654adb3ed2f7c
   - path: src/controller.ts
-    sha: c1b049f80d9458a1b41425f57dc41871aace4265
+    sha: 0d9f4c24e6242f40f8305e982abbcb37fa880847
   - path: src/db.ts
     sha: db126410edbcadf02b1d7ac200771620d1195d70
-generated_at_commit: a659306
+generated_at_commit: f0b5bbd
 last_refreshed: 2026-09-05
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control]
 ---
@@ -60,13 +60,22 @@ attempt's checkout, run, read back what landed on the forge, record, release,
 tidy. It is a reconciler rather than a queue consumer, which is what makes it safe
 to run repeatedly, safe to interrupt, and safe to run while another host runs it.
 
-**A worker never touches the operator's checkout.** `Job.isolate` (default on) makes
-a git worktree per attempt on `kb-<jobId>-<k>`, and that is the controller's job
-because the SDK has no isolation option for a top-level `query()` —
-`isolation: "worktree"` is a parameter of the `Agent` tool and only reaches
-subagents (`src/worktree.ts`). The brief gains a fixed protocol on top: commit on
-the branch, push, open a **draft** pull request, never merge (`src/brief.ts`). The
-human merges, which is what keeps this kind dumb.
+**By default a worker works on a branch, not in the operator's checkout.**
+`Job.isolate` (default on) makes a git worktree per attempt on `kb-<jobId>-<k>`,
+and that is the controller's job because the SDK has no isolation option for a
+top-level `query()` — `isolation: "worktree"` is a parameter of the `Agent` tool
+and only reaches subagents (`src/worktree.ts`). The brief gains a fixed protocol on
+top: commit on the branch, push, open a **draft** pull request, never merge
+(`src/brief.ts`). The human merges, which is what keeps this kind dumb.
+
+`isolate: false` is a supported way to run, not a read-only escape hatch — a Job
+whose deliverable is an uncommitted change in the operator's working tree is what
+it is for. What it gives up is the branch and everything that hangs off it: no
+diff, no pull request, nothing to revert, and no safety at `maxConcurrent > 1`,
+where two un-isolated attempts edit the same files with no lock between them. It
+also changes what the Job's subagents may do — a workload with no worktree of its
+own cannot give one to a subagent, so admission refuses a spawn that asks for one
+(*concepts/admission-control*).
 
 A checkout that still holds work is never removed — if the push failed, that
 directory is the only copy. It is also what a **resumed** attempt continues in: a
@@ -107,11 +116,22 @@ retry budget, and returns the next phase — with no database and no model in it
 Everything interesting is there:
 
 - `completed` → `succeeded`, not resumable.
-- `max_turns` / `max_budget` → retry, and **resumable**: those two left a session
-  worth continuing, so `lastSessionId` is kept and the next attempt resumes rather
-  than starting cold.
+- `max_turns` → retry, and **resumable**: it left a session worth continuing, so
+  `lastSessionId` is kept and the next attempt resumes rather than starting cold.
 - `refused` → `failed` immediately, never retried. The same brief gets the same
   answer, so a retry only spends money.
+- `max_budget` → `failed` immediately as well, and for the same reason one level
+  down: the same brief gets the same **cap**. Resuming is right in principle — the
+  next attempt continues where this one stopped — but it only helps when the work
+  left is smaller than the cap, and nothing checks that. Measured at the shipped
+  defaults: job #6 spent $2.05, was retried, spent $2.02 stopping in the same place,
+  and its third attempt was refused by the board's daily ceiling. $4.07 for nothing.
+  Raising the cap is a change to the Job's **spec**, which belongs to whoever filed
+  it and never to the controller, so the Job stops here with `lastError` naming the
+  cap and the command that changes it. It stays **resumable**, which is what keeps
+  `lastSessionId`: `kb retry <id> --max-budget <usd>` re-queues it with a bigger cap,
+  records the raise on the event stream, and continues the session rather than
+  re-buying what the first attempt already paid for.
 - anything else → `crashed`, retried while budget remains.
 
 `maxRetries: 2` means two retries *after* the first go — three attempts in total.

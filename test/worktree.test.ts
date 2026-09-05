@@ -20,8 +20,10 @@ fs.writeFileSync(path.join(repo, 'README.md'), '# base\n');
 git(['add', '-A']);
 git(['commit', '-qm', 'base']);
 
-const { createWorktree, existingWorktree, removeWorktree, worktreeHasWork, branchFor, baseRef, freeBranch } =
-  await import('../src/worktree.ts');
+const {
+  createWorktree, existingWorktree, removeWorktree, worktreeHasWork, branchFor, baseRef, freeBranch,
+  includedFiles, sweepWorktrees, lockWorktree, listWorktrees, heldWork,
+} = await import('../src/worktree.ts');
 
 test.after(() => fs.rmSync(repo, { recursive: true, force: true }));
 
@@ -56,18 +58,22 @@ test('a worktree holding uncommitted work is kept, and says why', () => {
   assert.equal(worktreeHasWork(repo, wt), true);
   const r = removeWorktree(repo, wt);
   assert.equal(r.removed, false, 'never forced — this may be the only copy');
-  assert.match(r.why, /still holds work/);
+  assert.match(r.why, /uncommitted changes/);
+  assert.match(r.why, /git -C/, 'and the message says what to do next');
   assert.equal(fs.existsSync(path.join(wt.path, 'unpushed.txt')), true);
 });
 
-test('a worktree holding a commit is kept too, even though the tree is clean', () => {
+test('a worktree holding a commit that was never pushed is kept too, though the tree is clean', () => {
   const wt = createWorktree(repo, 4, 1);
   fs.writeFileSync(path.join(wt.path, 'committed.txt'), 'work');
   git(['add', '-A'], wt.path);
   git(['commit', '-qm', 'worker commit'], wt.path);
   assert.equal(git(['status', '--porcelain'], wt.path).stdout.trim(), '', 'tree is clean');
-  assert.equal(worktreeHasWork(repo, wt), true, 'but it is ahead of its base');
-  assert.equal(removeWorktree(repo, wt).removed, false);
+  assert.equal(worktreeHasWork(repo, wt), true, 'but that commit exists nowhere else');
+  assert.equal(heldWork(repo, wt).pushedAt, null, 'nothing here has ever seen the branch on a remote');
+  const r = removeWorktree(repo, wt);
+  assert.equal(r.removed, false);
+  assert.match(r.why, /never been pushed/);
 });
 
 test('creating twice returns the same checkout — a resumed attempt lands where it left off', () => {
@@ -149,10 +155,303 @@ test('a free name is used as-is — the check costs nothing when nothing is in t
   assert.equal(freeBranch(repo, 41, 1), 'kb-41-1', 'no remote at all, so nothing can be proved');
 });
 
+// ---------------------------------------------------------------------------------- the sweep
+//
+// Its own repository, with a real remote: everything interesting about reclaim is a fact about
+// what the remote does or does not still have, and the tests are written as refusals — a checkout
+// that survives a sweep it had every superficial reason to be taken by.
+
+const srepo = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-sweep-'));
+const sremote = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-sweep-remote-'));
+spawnSync('git', ['init', '-q', '--bare', '-b', 'main', sremote]);
+const sgit = (args: string[], cwd = srepo) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+spawnSync('git', ['init', '-q', '-b', 'main', srepo]);
+sgit(['config', 'user.email', 'sw@test']);
+sgit(['config', 'user.name', 'sw']);
+fs.writeFileSync(path.join(srepo, '.gitignore'), 'node_modules/\n');
+fs.writeFileSync(path.join(srepo, 'README.md'), '# sweep\n');
+sgit(['add', '-A']);
+sgit(['commit', '-qm', 'base']);
+sgit(['remote', 'add', 'origin', sremote]);
+sgit(['push', '-q', '-u', 'origin', 'main']);
+
+test.after(() => {
+  fs.rmSync(srepo, { recursive: true, force: true });
+  fs.rmSync(sremote, { recursive: true, force: true });
+});
+
+/** Two commits, because one squashes into an identical patch and this must be honest. See below. */
+function commitTwo(dir: string, tag: string) {
+  for (const n of [1, 2]) {
+    fs.writeFileSync(path.join(dir, `${tag}-${n}.txt`), `${tag} ${n}\n`);
+    spawnSync('git', ['add', '-A'], { cwd: dir });
+    spawnSync('git', ['commit', '-qm', `${tag} ${n}`], { cwd: dir });
+  }
+}
+
+/** The forge deletes a branch when its pull request lands. It does not touch our local refs. */
+const deleteOnRemote = (branch: string) =>
+  spawnSync('git', ['--git-dir', sremote, 'update-ref', '-d', `refs/heads/${branch}`], { encoding: 'utf8' });
+
+const findSwept = (results: ReturnType<typeof sweepWorktrees>, wtPath: string) => {
+  const r = results.find((x) => x.path === wtPath);
+  assert.ok(r, `the sweep considered ${wtPath}`);
+  return r;
+};
+
+test('a worktree holding unpushed commits survives a sweep, and says how to push them', () => {
+  const wt = createWorktree(srepo, 60, 1);
+  commitTwo(wt.path, 'unpushed');
+
+  const r = findSwept(sweepWorktrees(srepo), wt.path);
+  assert.equal(r.removed, false, 'this work exists only here');
+  assert.match(r.why, /never been pushed/);
+  assert.match(r.why, new RegExp(`push -u origin ${wt.branch}`), 'and the message says what to do next');
+  assert.equal(fs.existsSync(path.join(wt.path, 'unpushed-2.txt')), true);
+});
+
+test('a worktree with a dirty tree survives a sweep, even once its branch has landed', () => {
+  const wt = createWorktree(srepo, 61, 1);
+  commitTwo(wt.path, 'pushed');
+  sgit(['push', '-q', '-u', 'origin', wt.branch], wt.path);
+  deleteOnRemote(wt.branch);
+  // Everything about the branch says "reclaim me"; the tree says otherwise, and the tree wins.
+  fs.writeFileSync(path.join(wt.path, 'notes.md'), 'the artifact the Job actually produced\n');
+
+  const r = findSwept(sweepWorktrees(srepo), wt.path);
+  assert.equal(r.removed, false, 'an uncommitted file is the only copy of itself');
+  assert.match(r.why, /uncommitted changes or untracked files/);
+  assert.equal(fs.readFileSync(path.join(wt.path, 'notes.md'), 'utf8'), 'the artifact the Job actually produced\n');
+});
+
+test('a worktree whose branch is gone from the remote and whose tree is clean is removed', () => {
+  const wt = createWorktree(srepo, 62, 1);
+  commitTwo(wt.path, 'landed');
+  sgit(['push', '-q', '-u', 'origin', wt.branch], wt.path);
+  // The 614 MB per checkout: gitignored, so `status` never sees it, and it is why this matters.
+  fs.mkdirSync(path.join(wt.path, 'node_modules', 'dep'), { recursive: true });
+  fs.writeFileSync(path.join(wt.path, 'node_modules', 'dep', 'index.js'), 'module.exports = 1\n');
+
+  // The forge squash-merges, then deletes the branch.
+  sgit(['merge', '-q', '--squash', wt.branch]);
+  sgit(['commit', '-qm', `squashed ${wt.branch} (#1)`]);
+  deleteOnRemote(wt.branch);
+
+  // BEWARE THE OBVIOUS TEST. This repository squash-merges, so the branch's own commits are
+  // ancestors of nothing and a sweep built on ancestry would keep every merged checkout for ever.
+  assert.notEqual(sgit(['merge-base', '--is-ancestor', wt.branch, 'main']).status, 0,
+    'the merged branch is NOT an ancestor of main');
+  assert.match(sgit(['cherry', 'main', wt.branch]).stdout.trim(), /^\+/,
+    'and `git cherry` calls its commits unmerged too');
+  // What is true instead, and what the sweep uses:
+  assert.equal(sgit(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${wt.branch}`]).status, 0,
+    'the local remote-tracking ref survives the forge deleting the branch — so "unpushed" is still answerable');
+  assert.equal(heldWork(srepo, wt).unpushed, 0);
+
+  const r = findSwept(sweepWorktrees(srepo), wt.path);
+  assert.equal(r.removed, true, r.why);
+  assert.equal(fs.existsSync(wt.path), false, 'and the node_modules with it');
+  assert.equal(sgit(['rev-parse', '--verify', '--quiet', wt.branch]).status, 1, 'branch gone too');
+});
+
+test('a sweep that cannot reach the remote removes nothing — silence is not proof', () => {
+  const wt = createWorktree(srepo, 63, 1);
+  commitTwo(wt.path, 'landed');
+  sgit(['push', '-q', '-u', 'origin', wt.branch], wt.path);
+  deleteOnRemote(wt.branch);
+  sgit(['remote', 'set-url', 'origin', path.join(sremote, 'does-not-exist')]);
+
+  const r = findSwept(sweepWorktrees(srepo), wt.path);
+  assert.equal(r.removed, false, 'a remote that cannot be asked has not said the branch is gone');
+  assert.match(r.why, /could not ask the remote/);
+  assert.equal(fs.existsSync(wt.path), true);
+
+  sgit(['remote', 'set-url', 'origin', sremote]);
+  assert.equal(findSwept(sweepWorktrees(srepo), wt.path).removed, true, 'and it goes once the remote can be asked');
+});
+
+test('a worktree a live run holds is not swept out from under it', () => {
+  const wt = createWorktree(srepo, 64, 1);
+  commitTwo(wt.path, 'inflight');
+  sgit(['push', '-q', '-u', 'origin', wt.branch], wt.path);
+  deleteOnRemote(wt.branch);
+  // Every other test would remove this one. The lock is the whole difference.
+  assert.equal(lockWorktree(srepo, wt, `${os.hostname()}/${process.pid}@daemon`), true);
+  assert.match(listWorktrees(srepo).find((w) => w.path === wt.path)!.locked!, /^kb:/);
+
+  const r = findSwept(sweepWorktrees(srepo), wt.path);
+  assert.equal(r.removed, false, 'the controller is running in there');
+  assert.match(r.why, /a run holds it/);
+  assert.equal(fs.existsSync(wt.path), true);
+});
+
+test('a lock left by a process that is gone does not strand the checkout for ever', () => {
+  const wt = createWorktree(srepo, 65, 1);
+  commitTwo(wt.path, 'orphan');
+  sgit(['push', '-q', '-u', 'origin', wt.branch], wt.path);
+  deleteOnRemote(wt.branch);
+  // A daemon killed mid-run. Respecting this lock would recreate the bug the sweep exists to fix.
+  lockWorktree(srepo, wt, `${os.hostname()}/4294967294@daemon`);
+
+  assert.equal(findSwept(sweepWorktrees(srepo), wt.path).removed, true);
+  assert.equal(fs.existsSync(wt.path), false);
+});
+
+test('a lock somebody set by hand is left alone, and the sweep says how to release it', () => {
+  const wt = createWorktree(srepo, 66, 1);
+  commitTwo(wt.path, 'byhand');
+  sgit(['push', '-q', '-u', 'origin', wt.branch], wt.path);
+  deleteOnRemote(wt.branch);
+  sgit(['worktree', 'lock', '--reason', 'debugging-this-one', wt.path]);
+
+  const r = findSwept(sweepWorktrees(srepo), wt.path);
+  assert.equal(r.removed, false);
+  assert.match(r.why, /locked by hand/);
+  assert.match(r.why, /worktree unlock/, 'and says what to do next');
+});
+
+test('the sweep only touches checkouts hkb made', () => {
+  const outside = path.join(srepo, 'not-ours');
+  sgit(['worktree', 'add', '-q', '-b', 'somebody-elses', outside, 'HEAD']);
+  assert.equal(sweepWorktrees(srepo).some((r) => r.path === outside), false,
+    'a worktree outside .kanban/worktrees is not this module\'s to reason about');
+  assert.equal(fs.existsSync(outside), true);
+  sgit(['worktree', 'remove', outside]);
+});
+
 test('uncommitted operator work is invisible to a worker', () => {
   fs.writeFileSync(path.join(repo, 'dirty.txt'), 'not committed');
   const wt = createWorktree(repo, 7, 1);
   assert.equal(fs.existsSync(path.join(wt.path, 'dirty.txt')), false,
     'a worktree is a checkout of a commit, not of a working tree');
   fs.rmSync(path.join(repo, 'dirty.txt'));
+});
+
+// ------------------------------------------------- .worktreeinclude — what the repo asks to carry
+//
+// A worktree is a fresh checkout, so a repository whose tests need a gitignored `.env` fails in a
+// worker and passes for the human, and it fails in a way that reads as the worker's fault.
+
+const wroteInclude = (text: string) => fs.writeFileSync(path.join(repo, '.worktreeinclude'), text);
+const noInclude = () => fs.rmSync(path.join(repo, '.worktreeinclude'), { force: true });
+
+/**
+ * The declaration and the ignore rules the group below shares. `.gitignore` is committed, because
+ * only a gitignored file is a candidate — that is the half of the rule that keeps a tracked file
+ * from being duplicated into the checkout that already has it.
+ */
+test('setup: the repo ignores an env file, a secrets dir, and the board', () => {
+  fs.writeFileSync(path.join(repo, '.gitignore'), '.kanban/*.db\n.env\nsecrets/\n');
+  git(['add', '.gitignore']);
+  git(['commit', '-qm', 'ignore env and secrets too']);
+
+  fs.writeFileSync(path.join(repo, '.env'), 'TOKEN=from-the-operator\n');
+  fs.mkdirSync(path.join(repo, 'secrets', 'deep'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'secrets', 'deep', 'key.json'), '{"k":1}\n');
+  fs.mkdirSync(path.join(repo, '.kanban'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.kanban', 'board.db'), 'pretend-sqlite');
+
+  assert.equal(git(['check-ignore', '-q', '.env']).status, 0, 'the env file is gitignored');
+  assert.equal(git(['check-ignore', '-q', '.kanban/board.db']).status, 0, 'and so is the board');
+});
+
+test('a declared gitignored file arrives in the worktree', () => {
+  wroteInclude('.env\nsecrets/**/*.json\n');
+  const wt = createWorktree(repo, 30, 1);
+  assert.equal(fs.readFileSync(path.join(wt.path, '.env'), 'utf8'), 'TOKEN=from-the-operator\n',
+    'the worker gets the file its tests need');
+  assert.equal(fs.readFileSync(path.join(wt.path, 'secrets', 'deep', 'key.json'), 'utf8'), '{"k":1}\n',
+    'including one inside a wholly-ignored directory — the parent is created on the way');
+  noInclude();
+});
+
+test('with no .worktreeinclude nothing is carried, and the board still does not cross', () => {
+  noInclude();
+  assert.deepEqual(includedFiles(repo), []);
+  const wt = createWorktree(repo, 31, 1);
+  assert.equal(fs.existsSync(path.join(wt.path, '.env')), false, 'undeclared is uncarried');
+  assert.equal(fs.existsSync(path.join(wt.path, '.kanban', 'board.db')), false);
+});
+
+test('a tracked file is not duplicated, even when a pattern names it', () => {
+  // The operator has uncommitted edits to a TRACKED file. If `.worktreeinclude` could carry tracked
+  // files, this is what a worker would wake up holding — an edit nobody committed, in a checkout
+  // that is supposed to be a commit.
+  fs.writeFileSync(path.join(repo, 'README.md'), '# edited, not committed\n');
+  wroteInclude('README.md\n');
+
+  assert.deepEqual(includedFiles(repo), [], 'a tracked file is not a candidate at all');
+  const wt = createWorktree(repo, 32, 1);
+  assert.equal(fs.readFileSync(path.join(wt.path, 'README.md'), 'utf8'), '# base\n',
+    'the checkout put it there, and the copy did not overwrite it');
+
+  fs.writeFileSync(path.join(repo, 'README.md'), '# base\n');
+  noInclude();
+});
+
+test('matching the pattern is not enough — the file must be gitignored too', () => {
+  fs.writeFileSync(path.join(repo, 'scratch.txt'), 'untracked but not ignored');
+  wroteInclude('scratch.txt\n.env\n');
+
+  assert.deepEqual(includedFiles(repo), ['.env'], 'both halves of the rule, or neither');
+  const wt = createWorktree(repo, 33, 1);
+  assert.equal(fs.existsSync(path.join(wt.path, 'scratch.txt')), false,
+    'untracked-and-unignored is work in progress, not configuration');
+
+  fs.rmSync(path.join(repo, 'scratch.txt'));
+  noInclude();
+});
+
+test('the copy happens on creation, not on resume into a checkout that already exists', () => {
+  wroteInclude('.env\n');
+  const first = createWorktree(repo, 34, 1);
+  fs.writeFileSync(path.join(first.path, '.env'), 'TOKEN=the-worker-changed-it\n');
+
+  const again = createWorktree(repo, 34, 1);
+  assert.equal(again.path, first.path);
+  assert.equal(fs.readFileSync(path.join(again.path, '.env'), 'utf8'), 'TOKEN=the-worker-changed-it\n',
+    'resume is not restart — re-copying would overwrite what the session has been living with');
+  noInclude();
+});
+
+// --------------------------------------------------------------- and the one thing it may not do
+
+test('a pattern that would carry the board in is REFUSED, however it is written', () => {
+  // Not "quietly skipped". A pattern this broad is one whose author did not mean what they wrote,
+  // and a worker holding a copy of board.db writes into a file nothing ever reads back.
+  for (const pattern of ['.kanban/*.db', '*.db', '**/board.db', '*']) {
+    wroteInclude(`${pattern}\n`);
+    assert.throws(() => includedFiles(repo), /never crosses into a worktree/,
+      `pattern ${pattern} must be refused`);
+  }
+  noInclude();
+});
+
+test('the refusal happens before the checkout is made, and says what to do next', () => {
+  wroteInclude('.kanban/*.db\n.env\n');
+  const dir = path.join(repo, '.kanban', 'worktrees', branchFor(35, 1));
+
+  let e: (Error & { exitCode?: number }) | null = null;
+  try {
+    createWorktree(repo, 35, 1);
+  } catch (err) {
+    e = err as Error & { exitCode?: number };
+  }
+  assert.ok(e, 'it refused');
+  assert.match(e.message, /\.kanban\/board\.db/, 'it names the file it refused');
+  assert.match(e.message, /Narrow the pattern/, 'and the fix, not just the complaint');
+  assert.equal(e.exitCode, 2);
+  assert.equal(fs.existsSync(dir), false,
+    'and no half-made worktree is left for the operator to clean up');
+
+  noInclude();
+});
+
+test('the board never crosses even when the declaration is legitimate', () => {
+  wroteInclude('.env\n');
+  const wt = createWorktree(repo, 36, 1);
+  assert.equal(fs.existsSync(path.join(wt.path, '.env')), true, 'the declared file arrived');
+  assert.equal(fs.existsSync(path.join(wt.path, '.kanban', 'board.db')), false,
+    'and the board did not ride along with it');
+  noInclude();
 });

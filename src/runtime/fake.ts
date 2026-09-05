@@ -10,8 +10,16 @@ import type { Runtime, RuntimeEvent, WorkerOutcome, WorkerSpec } from './index.t
  * It answers the same `WorkerOutcome` shape as the real driver, including a session id, so the
  * store never learns which runtime ran the card.
  */
-export function fakeRuntime(opts: { failTasks?: number[]; delayMs?: number } = {}): Runtime {
+export function fakeRuntime(
+  opts: {
+    failTasks?: number[];
+    /** Jobs that spend their whole cap and stop with work left — the stop a retry cannot change. */
+    capTasks?: number[];
+    delayMs?: number;
+  } = {},
+): Runtime {
   const fail = new Set(opts.failTasks ?? []);
+  const capped = new Set(opts.capTasks ?? []);
   return {
     name: 'fake',
     async run(spec: WorkerSpec, onEvent?: (e: RuntimeEvent) => void): Promise<WorkerOutcome> {
@@ -36,6 +44,17 @@ export function fakeRuntime(opts: { failTasks?: number[]; delayMs?: number } = {
         return {
           status: 'timeout', ok: false, sessionId, text: '', costUsd: 0, turns: 0,
           durationMs: 0, stopReason: 'aborted', denials: 0, error: 'stopped by the operator',
+        };
+      }
+      if (capped.has(spec.taskId)) {
+        // The whole cap, and no `error`: the SDK stopping a session on its own budget is not a
+        // fault it reports a message for. Whatever the operator reads afterwards is the
+        // controller's own words.
+        onEvent?.({ kind: 'ended', taskId: spec.taskId, status: 'max_budget' });
+        return {
+          status: 'max_budget', ok: false, sessionId, text: `got partway through #${spec.taskId}`,
+          costUsd: spec.maxBudgetUsd ?? 0, turns: 1, durationMs: 0, stopReason: 'max_budget',
+          denials: 0, error: null,
         };
       }
       onEvent?.({ kind: 'tool', taskId: spec.taskId, name: 'Edit' });

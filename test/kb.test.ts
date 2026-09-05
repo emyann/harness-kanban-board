@@ -16,7 +16,34 @@ const { main } = await import('../src/kb.ts');
 const { openBoard, closeBoard } = await import('../src/db.ts');
 const db = openBoard();
 
-test.after(async () => { await closeBoard(); fs.rmSync(dir, { recursive: true, force: true }); });
+/**
+ * The whole suite runs from a throwaway repository, not the one you are working in.
+ *
+ * `kb new` defaults `isolate` to true and `kb run` reconciles in `process.cwd()`, so a single
+ * un-flagged `kb run` in these tests cut a 620 MB worktree into the developer's own checkout and
+ * left it. Boards created here take their `repoPath` from wherever we are standing, so standing
+ * somewhere disposable fixes it for every test at once rather than one `--no-isolate` at a time.
+ * The two tests that chdir for their own reasons still restore to here.
+ */
+const HOME_REPO = path.join(dir, 'suite-repo');
+fs.mkdirSync(HOME_REPO);
+{
+  const g = (...a: string[]) => execFileSync('git', a, { cwd: HOME_REPO, stdio: 'ignore' });
+  g('init', '-q', '-b', 'main');
+  g('config', 'user.email', 'k@test');
+  g('config', 'user.name', 'k');
+  fs.writeFileSync(path.join(HOME_REPO, 'README.md'), '# suite\n');
+  g('add', '-A');
+  g('commit', '-qm', 'base');
+}
+const LAUNCHED_FROM = process.cwd();
+process.chdir(HOME_REPO);
+
+test.after(async () => {
+  process.chdir(LAUNCHED_FROM);
+  await closeBoard();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 
 /**
  * Run a verb and capture what it printed, so `--json` is asserted on its real output.
@@ -26,6 +53,10 @@ test.after(async () => { await closeBoard(); fs.rmSync(dir, { recursive: true, f
  * patches `process.stdout.write` captures whatever the runner happened to emit in the same window.
  * That made this harness quietly timing-dependent: it passed for as long as no frame landed mid-verb,
  * and failed with `Unexpected token '\uFFFD'` the moment one did.
+ *
+ * A frame is PASSED THROUGH, never merely skipped. Dropping one loses an event the parent process
+ * reconstructs the test tree from, and its reporter then dies on a `test:pass` for a subtest it
+ * never saw start \u2014 the whole run, taken down by the harness, on a timing nobody controls.
  */
 const RUNNER_FRAME = /\btest:(enqueue|dequeue|start|pass|fail|plan|diagnostic|complete|coverage|stderr|stdout|watch)\b/;
 
@@ -34,7 +65,8 @@ async function kb(...argv: string[]): Promise<{ code: number; out: string }> {
   const write = process.stdout.write.bind(process.stdout);
   (process.stdout as { write: unknown }).write = (s: string) => {
     const text = String(s);
-    if (!RUNNER_FRAME.test(text)) chunks.push(text);
+    if (RUNNER_FRAME.test(text)) return write(s as never);
+    chunks.push(text);
     return true;
   };
   try {
@@ -55,7 +87,7 @@ test('no verb prints help and exits 0', async () => {
 });
 
 test('an unknown verb names the ones that exist', async () => {
-  await assert.rejects(() => kb('frobnicate'), /unknown verb.*new, ls, show, run, rm/s);
+  await assert.rejects(() => kb('frobnicate'), /unknown verb.*new, ls, show, run, retry, rm/s);
 });
 
 // ---------------------------------------------------------------- new
@@ -228,6 +260,110 @@ test('rm deletes a Job and its attempts', async () => {
   await kb('rm', String(j.id));
   assert.equal(await db.job.findUnique({ where: { id: j.id } }), null);
   assert.equal(await db.attempt.count({ where: { jobId: j.id } }), 0, 'cascaded');
+});
+
+// ---------------------------------------------------------------- retry
+// The controller refuses to retry a Job that spent its whole cap, because the retry would get the
+// same cap. This verb is the other half of that: the deliberate raise, by the person whose money
+// it is. So what it must do is REFUSE the re-queue that changes nothing.
+
+/** A Job that stopped on its budget, as the controller would have left it. */
+async function capped(name: string, maxBudgetUsd = 2) {
+  const j = json((await kb('new', name, '--brief', 'b', '--max-budget', String(maxBudgetUsd), '--json')).out);
+  await db.job.update({
+    where: { id: j.id },
+    data: { phase: 'failed', lastSessionId: `sess-${j.id}`, lastError: 'spent its whole $2.00 budget', finishedAt: new Date() },
+  });
+  await db.attempt.create({
+    data: { jobId: j.id, k: 1, endedAt: new Date(), outcome: 'max_budget', costUsd: maxBudgetUsd, sessionId: `sess-${j.id}` },
+  });
+  return j.id as number;
+}
+
+test('retry refuses to re-queue a budget-capped Job under the same cap', async () => {
+  const id = await capped('capped-same');
+  await assert.rejects(() => kb('retry', String(id)), /spent its whole \$2\.00 budget/);
+  await assert.rejects(() => kb('retry', String(id)), /--max-budget 4\.00/);
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id } })).phase, 'failed', 'still failed');
+});
+
+test('retry names the cap a Job with no cap of its own actually ran under', async () => {
+  // The regression: `Job.maxBudgetUsd` is null whenever the Job took the board's default or the
+  // built-in — which is the commonest Job there is, since `kb new` without `--max-budget` leaves
+  // it null. Reading that column raw threw `Cannot read properties of null (reading 'toFixed')`
+  // and the operator got a stack trace instead of the one number they needed.
+  const r = scratchRepo('inherited-cap');
+  await kb('boards', 'add', 'inherited-cap', '--repo', r);
+  await kb('boards', 'set', 'inherited-cap', '--max-budget', '3');
+  const j = json((await kb('new', 'no cap of its own', '--board', 'inherited-cap', '--brief', 'b', '--json')).out);
+  await db.job.update({ where: { id: j.id }, data: { phase: 'failed', finishedAt: new Date() } });
+  await db.attempt.create({ data: { jobId: j.id, k: 1, endedAt: new Date(), outcome: 'max_budget' } });
+
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: j.id } })).maxBudgetUsd, null, 'nothing on the Job');
+  await assert.rejects(
+    () => kb('retry', String(j.id), '--board', 'inherited-cap'),
+    (e: Error & { exitCode?: number }) => {
+      assert.equal(e.exitCode, 2, 'a refusal, not a crash');
+      assert.match(e.message, /spent its whole \$3\.00 budget/, "the board's cap, which is the one it hit");
+      assert.match(e.message, /--max-budget 6\.00/, 'and a raise computed from that same number');
+      return true;
+    },
+  );
+  // And the raise still lands on the Job, where it outranks the board next time round.
+  await kb('retry', String(j.id), '--board', 'inherited-cap', '--max-budget', '6');
+  const after = await db.job.findUniqueOrThrow({ where: { id: j.id } });
+  assert.equal(after.maxBudgetUsd, 6);
+  assert.equal(after.phase, 'pending');
+});
+
+test('retry refuses a cap that is not bigger — including the same number, and a smaller one', async () => {
+  const id = await capped('capped-lower');
+  await assert.rejects(() => kb('retry', String(id), '--max-budget', '2'), /stops in the same place/);
+  await assert.rejects(() => kb('retry', String(id), '--max-budget', '1'), /stops in the same place/);
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id } })).maxBudgetUsd, 2, 'and changes nothing');
+});
+
+test('retry with a bigger cap re-queues it, raises the spec, and records the raise', async () => {
+  const id = await capped('capped-raised');
+  const r = await kb('retry', String(id), '--max-budget', '5');
+  assert.equal(r.code, 0);
+  const after = await db.job.findUniqueOrThrow({ where: { id } });
+  assert.equal(after.phase, 'pending');
+  assert.equal(after.maxBudgetUsd, 5);
+  assert.equal(after.lastError, null, 'the advice was taken; it is not a standing error any more');
+  assert.equal(after.finishedAt, null);
+  assert.equal(after.lastSessionId, `sess-${id}`, 'kept: the raised attempt resumes');
+  assert.match(r.out, /\$2\.00 → \$5\.00/);
+  assert.match(r.out, new RegExp(`resumes sess-${id}`));
+
+  const ev = await db.event.findFirstOrThrow({ where: { jobId: id, kind: 'requeued' } });
+  assert.deepEqual((ev.payload as { maxBudgetUsd: unknown }).maxBudgetUsd, { from: 2, to: 5 },
+    'what the extra money was authorised against');
+});
+
+test('retry does not demand a raise from a Job that failed for another reason', async () => {
+  const j = json((await kb('new', 'crashed-out', '--brief', 'b', '--json')).out);
+  await db.job.update({ where: { id: j.id }, data: { phase: 'failed', lastError: 'fake failure' } });
+  await db.attempt.create({ data: { jobId: j.id, k: 1, endedAt: new Date(), outcome: 'crashed' } });
+  await kb('retry', String(j.id));
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: j.id } })).phase, 'pending');
+});
+
+test('retry refuses a Job that is already pending, and a Job that does not exist', async () => {
+  const j = json((await kb('new', 'still-pending', '--brief', 'b', '--json')).out);
+  await assert.rejects(() => kb('retry', String(j.id)), new RegExp(`#${j.id} is already pending`));
+  await assert.rejects(() => kb('retry', '99999'), /no Job #99999/);
+  await assert.rejects(() => kb('retry'), /which Job/);
+});
+
+test('retry refuses a leased Job rather than queueing a second worker onto it', async () => {
+  const id = await capped('capped-leased');
+  await db.lease.create({
+    data: { jobId: id, holder: 'someone-else', token: 't', expiresAt: new Date(Date.now() + 60_000) },
+  });
+  await assert.rejects(() => kb('retry', String(id), '--max-budget', '9'), /leased by someone-else/);
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id } })).maxBudgetUsd, 2, 'the spec is untouched too');
+  await db.lease.delete({ where: { jobId: id } });
 });
 
 // ---------------------------------------------------------------- stop / start

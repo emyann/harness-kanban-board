@@ -20,7 +20,24 @@ const { admissionCallback } = await import('../src/admission.ts');
 
 const db = openBoard();
 const board = await db.board.upsert({ where: { slug: 'test' }, update: {}, create: { slug: 'test' } });
-const cwd = REPO;
+/**
+ * A throwaway repository, not the one you are working in.
+ *
+ * `mkJob` lets `isolate` default to true, so every Job here cuts a real worktree — and pointed at
+ * `REPO` that meant this suite wrote 620 MB checkouts into the developer's own tree and left them.
+ * The same defect was fixed in `test/safety.test.ts`; this is the other half of it.
+ */
+const cwd = path.join(dir, 'scratch-repo');
+fs.mkdirSync(cwd);
+{
+  const g = (...a: string[]) => execFileSync('git', a, { cwd, stdio: 'ignore' });
+  g('init', '-q', '-b', 'main');
+  g('config', 'user.email', 'c@test');
+  g('config', 'user.name', 'c');
+  fs.writeFileSync(path.join(cwd, 'README.md'), '# scratch\n');
+  g('add', '-A');
+  g('commit', '-qm', 'base');
+}
 
 const mkJob = (name: string, extra: Record<string, unknown> = {}) =>
   db.job.create({ data: { boardId: board.id, name, brief: `do ${name}`, ...extra } });
@@ -53,6 +70,44 @@ test('nextPhase: a wall-clock timeout is OUR stop, and it is resumable', () => {
   assert.equal(d.outcome, 'timed_out');
   assert.equal(d.phase, 'pending');
   assert.equal(d.resumable, true, 'the clock ran out, not the work — the session is worth continuing');
+});
+
+// The shipped defaults, so these say what a real Job gets rather than what a fixture does.
+const DEFAULT_RETRIES = 2;
+const DEFAULT_BUDGET = 1;
+
+test('nextPhase: a spent budget REFUSES to retry, though two retries remain', () => {
+  // The measured failure: job #6 spent $2.05, was retried into the same cap, spent $2.02 stopping
+  // in the same place, and its third attempt was refused by the board ceiling. $4.07 for nothing.
+  const d = nextPhase({ status: 'max_budget' } as never, 1, DEFAULT_RETRIES, DEFAULT_BUDGET);
+  assert.equal(d.phase, 'failed', 'the first attempt is also the last: the retry would get the same cap');
+  assert.equal(d.outcome, 'max_budget');
+});
+
+test('nextPhase: a spent budget stays resumable, so a raised retry continues', () => {
+  // `failed` and `resumable` are not in tension: the work up to the wall is real, and the
+  // controller keeps `lastSessionId` on exactly this flag. Losing it would make `kb retry
+  // --max-budget` start cold and re-buy everything the $2 already paid for.
+  const d = nextPhase({ status: 'max_budget' } as never, 1, DEFAULT_RETRIES, DEFAULT_BUDGET);
+  assert.equal(d.resumable, true);
+});
+
+test('nextPhase: the budget failure tells a human the cap, and what to do about it', () => {
+  const d = nextPhase({ status: 'max_budget' } as never, 1, DEFAULT_RETRIES, DEFAULT_BUDGET);
+  assert.match(d.lastError ?? '', /\$1\.00/, 'the cap it hit, in dollars');
+  assert.match(d.lastError ?? '', /kb retry <id> --max-budget 2\.00/, 'the command that changes the answer');
+  assert.match(d.lastError ?? '', /session is kept/, 'and that the raise resumes rather than restarts');
+});
+
+test('nextPhase: with no cap to name, the advice still names the move', () => {
+  const d = nextPhase({ status: 'max_budget' } as never, 1, DEFAULT_RETRIES);
+  assert.match(d.lastError ?? '', /--max-budget <usd>/, 'a placeholder, never a fabricated number');
+});
+
+test('nextPhase: only max_budget carries advice — the rest have the runtime\'s own error', () => {
+  assert.equal(nextPhase({ status: 'max_turns' } as never, 1, DEFAULT_RETRIES).lastError, null);
+  assert.equal(nextPhase({ status: 'refused' } as never, 1, DEFAULT_RETRIES).lastError, null);
+  assert.equal(nextPhase({ status: 'completed' } as never, 1, DEFAULT_RETRIES).lastError, null);
 });
 
 test('nextPhase: a refusal never retries — the same brief gets the same answer', () => {
@@ -91,6 +146,19 @@ test('a failing job retries up to maxRetries, then fails', async () => {
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(after.phase, 'failed');
   assert.equal(after.attempts.length, 3, '1 initial + 2 retries');
+});
+
+test('a Job that spends its whole budget stops after one attempt, and says what to change', async () => {
+  const job = await mkJob('bigger-than-its-budget', { maxRetries: 2, maxBudgetUsd: 1 });
+  await reconcileToRest({ runtime: fakeRuntime({ capTasks: [job.id] }), cwd });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'failed');
+  assert.equal(after.attempts.length, 1, 'two retries remained, and both would have made the same wall');
+  assert.equal(after.attempts[0].outcome, 'max_budget');
+  assert.ok(after.lastSessionId, 'the session survives, so `kb retry --max-budget` resumes rather than restarts');
+  assert.match(after.lastError ?? '', /\$1\.00/);
+  assert.match(after.lastError ?? '', /kb retry <id> --max-budget/, 'the row says what a human should do next');
 });
 
 // ---------------------------------------------------------------- the board's spec defaults
@@ -229,6 +297,26 @@ test('admission injects isolation onto an Agent spawn that omitted it', async ()
     'not asked for in a prompt — injected');
 });
 
+// The other half of the same rule, and the one that was wrong: a workload with no worktree of its
+// own cannot give one to a subagent. Forcing isolation there sends the subagent's work to a
+// checkout the parent never sees and the controller never merges, and it is silent about it.
+
+test('a workload running in the operator\'s tree REFUSES to isolate a subagent', async () => {
+  const gate = admissionCallback({ subagentIsolation: 'forbid' });
+  const o = spec(await gate(pre('Agent', { prompt: 'go', isolation: 'worktree' })));
+  assert.equal(o.permissionDecision, 'deny', 'a worktree here is work thrown away, not work done');
+  const why = String(o.permissionDecisionReason);
+  assert.match(why, /without `isolation`/, 'an error says what to do next');
+  assert.match(why, /--no-isolate/, 'and what to change on the Job if the work really needs a branch');
+});
+
+test('and it does not inject one either — the subagent stays where the parent is', async () => {
+  const gate = admissionCallback({ subagentIsolation: 'forbid' });
+  const o = spec(await gate(pre('Agent', { prompt: 'go' })));
+  assert.equal(o.permissionDecision, 'allow');
+  assert.equal(o.updatedInput, undefined, 'no worktree to send it to, so nothing is injected');
+});
+
 test('admission leaves an already-isolated spawn alone', async () => {
   const gate = admissionCallback({});
   const o = spec(await gate(pre('Agent', { prompt: 'go', isolation: 'worktree' })));
@@ -273,4 +361,34 @@ test('a non-PreToolUse event is not the gate\'s business', async () => {
   const gate = admissionCallback({ deny: ['Read'] });
   const r = await gate({ hook_event_name: 'PostToolUse', tool_name: 'Read' } as never);
   assert.deepEqual(r, {}, 'no opinion, rather than a wrong one');
+});
+
+// ---------------------------------------------------------------- the join
+// A gate is only as good as what it is told. The policy was passed as a constant, so an
+// un-isolated Job's subagents would have been forced into worktrees it does not have — unreachable
+// only because `Agent` is off the tool surface, and reachable again the day anyone adds it.
+
+test('the runtime is told whether this attempt has a worktree, per Job', async () => {
+  const wired = await db.board.upsert({ where: { slug: 'wired' }, update: {}, create: { slug: 'wired' } });
+  const seen: { isolated?: boolean; cwd: string }[] = [];
+  const spy = {
+    name: 'spy',
+    async run(s: { cwd: string; isolated?: boolean }) {
+      seen.push({ isolated: s.isolated, cwd: s.cwd });
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+  const file = (name: string, extra: Record<string, unknown> = {}) =>
+    db.job.create({ data: { boardId: wired.id, name, brief: `do ${name}`, ...extra } });
+
+  await file('in-the-operators-tree', { isolate: false });
+  await reconcile({ runtime: spy, cwd, board: 'wired', readPr: false });
+  assert.equal(seen[0].isolated, false, 'no worktree — and the runtime must not pretend otherwise');
+  assert.equal(seen[0].cwd, cwd, 'it really is the operator\'s checkout');
+
+  await file('in-a-worktree');   // isolate defaults true
+  await reconcile({ runtime: spy, cwd, board: 'wired', readPr: false });
+  assert.equal(seen[1].isolated, true);
+  assert.notEqual(seen[1].cwd, cwd, 'and this one really does have a checkout of its own');
 });

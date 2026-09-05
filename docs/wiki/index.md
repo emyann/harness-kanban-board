@@ -39,6 +39,7 @@
 - [Telling an adopter their hkb is old](./features/update-notice.md): Updates are pull-only, so something has to say there is something to pull — one npm GET a day, in doctor and the dispatcher loop, and why a stale CLI hides a stale skill.
 - [The web board (`hkb serve`)](./features/web-board.md): One local server, one inline page, N repos — where the board list comes from and who maintains it, how the board is read, how a drag becomes a verb, how every request is routed to the board it names, and how the drawer draws a card's dependency subgraph from the payload it already has.
 - [Worker tool posture — what power an unattended worker holds, and who decided it](./features/worker-tool-posture.md): The board states whether a profile inherits the session's tools or curates its own list, names the MCP servers that answer covers, and lets a card lower the ceiling — one posture, derived in one place, printed by doctor.
+- [Carrying gitignored files into a worktree (`.worktreeinclude`)](./features/worktree-includes.md): A worktree is a fresh checkout, so the `.env` the tests need is not in it — a repository declares what to carry across, git answers both halves of the match rule, and no pattern may reach the board.
 
 ## Decisions
 

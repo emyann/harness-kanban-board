@@ -1,5 +1,5 @@
 import { openBoard } from './db.ts';
-import { createWorktree, existingWorktree, removeWorktree, type Worktree } from './worktree.ts';
+import { createWorktree, existingWorktree, lockWorktree, removeWorktree, unlockWorktree, type Worktree } from './worktree.ts';
 import { prForBranch } from './pulls.ts';
 import { withProtocol } from './brief.ts';
 import { gateClaim, windowStart } from './limits.ts';
@@ -94,30 +94,66 @@ export type Decision = {
   phase: 'succeeded' | 'failed' | 'pending';
   outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped';
   resumable: boolean;
+  /**
+   * What to write on the Job's `lastError`, when the reason it stopped is something a *human* has
+   * to change before it could go any differently. Null when the outcome speaks for itself and the
+   * runtime's own error text is the better line.
+   */
+  lastError: string | null;
 };
+
+/**
+ * What a Job that spent its whole cap needs said to it. It is the only outcome this controller
+ * declines to retry *while retries remain*, so it owes the operator the reason and the next move.
+ */
+function budgetAdvice(maxBudgetUsd?: number): string {
+  const cap = maxBudgetUsd === undefined ? 'its whole budget' : `its whole $${maxBudgetUsd.toFixed(2)} budget`;
+  const bigger = maxBudgetUsd === undefined ? '<usd>' : (maxBudgetUsd * 2).toFixed(2);
+  return `spent ${cap} and stopped with work left. Not retried — a retry gets the same cap and `
+    + `stops in the same place. Raise it and re-queue: \`kb retry <id> --max-budget ${bigger}\`, `
+    + 'or file a smaller brief. The session is kept, so that retry resumes rather than starting cold.';
+}
 
 export function nextPhase(
   outcome: WorkerOutcome | null,
   /** How many attempts have spent a retry, including this one. 1-based. */
   attempt: number,
   maxRetries: number,
+  /** The cap this attempt ran under — which is precisely the cap a retry would get. */
+  maxBudgetUsd?: number,
 ): Decision {
   if (outcome?.status === 'completed') {
-    return { phase: 'succeeded', outcome: 'completed', resumable: false };
+    return { phase: 'succeeded', outcome: 'completed', resumable: false, lastError: null };
   }
   const mapped = outcome?.status === 'max_turns' ? 'max_turns'
     : outcome?.status === 'max_budget' ? 'max_budget'
     : outcome?.status === 'timeout' ? 'timed_out'
     : outcome?.status === 'refused' ? 'refused'
     : 'crashed';
-  // A refusal is not a transient fault: trying the same brief again gets the same answer.
+  // Two outcomes are not transient faults, and a retry that cannot change anything is only money
+  // spent to arrive at the same place:
+  //
+  //   `refused`    — the same brief gets the same answer.
+  //   `max_budget` — the same brief gets the same CAP. Resuming is right in principle: the next
+  //                  attempt continues where this one stopped, so it helps whenever the work left
+  //                  is smaller than the cap. Nothing checks that, and when it is false the retry
+  //                  makes the identical wall at full price. Measured at the shipped defaults:
+  //                  job #6 spent $2.05, was retried, spent $2.02 stopping in the same place, and
+  //                  its third attempt was refused by the board's daily ceiling — $4.07 for
+  //                  nothing. Raising the cap is a change to the Job's SPEC, and the spec belongs
+  //                  to whoever filed it, never to this controller; so the Job fails here with the
+  //                  advice above, and `kb retry <id> --max-budget <usd>` is the deliberate raise.
+  //                  It stays `resumable`, which is what keeps `lastSessionId` for that retry.
+  //
   // `maxRetries: 2` means two retries AFTER the first go, so three attempts in total.
-  const worthRetrying = mapped !== 'refused' && attempt <= maxRetries;
+  const transient = mapped !== 'refused' && mapped !== 'max_budget';
+  const worthRetrying = transient && attempt <= maxRetries;
   return {
     phase: worthRetrying ? 'pending' : 'failed',
     outcome: mapped,
     // The three stops that left a session worth continuing. A crash and a refusal did not.
     resumable: mapped === 'max_turns' || mapped === 'max_budget' || mapped === 'timed_out',
+    lastError: mapped === 'max_budget' ? budgetAdvice(maxBudgetUsd) : null,
   };
 }
 
@@ -287,17 +323,22 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     }
 
     await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
-    // Remembered, because it is the fence the forge read uses: a pull request that existed before
-    // this attempt began is not this attempt's output, however its branch is named.
-    const claimedAt = now();
-    await db.attempt.create({ data: { jobId: job.id, k, host, runtime: deps.runtime.name, startedAt: claimedAt } });
+    await db.attempt.create({ data: { jobId: job.id, k, host, runtime: deps.runtime.name, startedAt: now() } });
     await db.event.create({ data: { kind: 'claimed', jobId: job.id, boardId: job.boardId, actor: host, payload: { k } } });
     report.claimed.push(job.id);
     deps.onEvent?.(`claim   #${job.id} k=${k} ${job.name}`);
 
     // ---- isolate. The SDK has no isolation option for a top-level query, so the checkout is
-    // ours to make. `isolate: false` is the escape hatch for a read-only job and is not the
-    // default: a worker that edits the operator's tree is the failure this exists to prevent.
+    // ours to make.
+    //
+    // `isolate: false` is not a read-only escape hatch, and calling it one was wrong: a Job whose
+    // deliverable IS an uncommitted change in the operator's working tree is the case it exists
+    // for, and the code has always let such a Job write. What it gives up is everything a branch
+    // buys — there is no diff to read, no branch to open a pull request from, nothing to revert
+    // when the answer is no, and no safety at `maxConcurrent > 1`, where two un-isolated attempts
+    // edit the same files at the same time with no lock between them. Isolated is the default
+    // because those are the properties a reviewer needs, not because writing is forbidden without
+    // them. It also decides what this Job's subagents may do — see `isolated` on the spec below.
     let wt: Worktree | null = null;
     if (job.isolate) {
       try {
@@ -305,6 +346,9 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // The previous attempt's checkout is kept whenever it held work, so it is usually there.
         const resuming = job.lastSessionId ? existingWorktree(cwd, job.id, k - 1) : null;
         wt = resuming ?? createWorktree(cwd, job.id, k);
+        // Held for the length of the run. The daemon's sweep is a second remover, in a second
+        // process, and without this it could take the checkout a worker is standing in.
+        lockWorktree(cwd, wt, host);
         deps.onEvent?.(resuming
           ? `  resuming in ${wt.branch} (the checkout attempt ${k - 1} left)`
           : `  worktree ${wt.branch} from ${wt.baseLabel}`);
@@ -359,6 +403,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         taskId: job.id,
         attempt: k,
         cwd: wt ? wt.path : cwd,
+        // Derived from the checkout we actually made, not from `job.isolate`, so it cannot
+        // disagree with `cwd` above. The runtime turns it into the subagent isolation policy: a
+        // Job running in the operator's tree has no worktree to bring a subagent's work back to.
+        isolated: wt !== null,
         prompt: wt ? withProtocol(job.brief, wt.branch) : job.brief,
         model: spec.model.value ?? undefined,
         effort: spec.effort.value ?? undefined,
@@ -383,12 +431,22 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // reports `timeout` or `error` depending on where the abort landed, and recording either would
     // be a lie about why it ended AND would spend a retry on it.
     const decision: Decision = deps.signal?.aborted
-      ? { phase: 'pending', outcome: 'stopped', resumable: true }
-      : nextPhase(outcome, charged, spec.maxRetries.value);
+      ? { phase: 'pending', outcome: 'stopped', resumable: true, lastError: null }
+      // Both from the resolved spec, so the budget advice names the cap this attempt actually ran
+      // under — which may be the board's default. Quoting the null column would print `$0.00` and
+      // send the operator to raise a limit that was never the one it hit.
+      : nextPhase(outcome, charged, spec.maxRetries.value, spec.maxBudgetUsd.value);
 
     // ---- what landed on the forge. One read, by head branch: the board and the forge are two
     // systems and this is the only thing that joins them.
-    const pr = wt && deps.readPr !== false ? prForBranch(cwd, wt.branch, claimedAt) : null;
+    // Fenced on the JOB, not on this attempt. A pull request that existed before the Job did
+    // cannot be its output — that is the stale-branch case, where a name this database invented
+    // was already taken on the remote. But one opened by an EARLIER ATTEMPT of this Job is very
+    // much its output: a resumed attempt continues onto the same branch, which is the whole point
+    // of resuming, and dating the fence from the attempt made a Job lose the pull request it had
+    // already opened. Measured: #12 opened PR 366 at 12:41 on attempt 1 and recorded null at 13:39
+    // on attempt 2.
+    const pr = wt && deps.readPr !== false ? prForBranch(cwd, wt.branch, job.createdAt) : null;
     if (pr) deps.onEvent?.(`  ${pr.isDraft ? 'draft ' : ''}PR #${pr.number} ${pr.url}`);
     // Said out loud. A run that committed and pushed but opened no pull request has produced
     // something a human still has to find, and silence here is what let job #4 look finished.
@@ -427,7 +485,9 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         phase: decision.phase,
         // Keep the session only while continuing it would help; a cold retry must start clean.
         lastSessionId: decision.resumable ? (outcome?.sessionId ?? null) : null,
-        lastError: decision.phase === 'succeeded' ? null : (outcome?.error ?? decision.outcome),
+        // The decision's own line wins where it has one: for a stop only a human can undo, "what
+        // to change" is worth more than whatever the runtime called it.
+        lastError: decision.phase === 'succeeded' ? null : (decision.lastError ?? outcome?.error ?? decision.outcome),
         finishedAt: decision.phase === 'pending' ? null : now(),
       },
     });
@@ -438,9 +498,20 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     // ---- tidy. Never forced: a worktree that still holds work is the only copy of it if the
     // push failed, so it stays and the operator is told where.
+    //
+    // This is not the reclaim path, and it cannot be: a run that just pushed a pull request is at
+    // the one moment its checkout is definitionally still needed. It removes the checkouts that
+    // never held anything; the daemon's sweep removes the rest, once their branches land. A
+    // resumable stop keeps its checkout unconditionally — the next attempt continues *in* it, and
+    // cutting a fresh worktree would reset the branch to base and strand what was already pushed.
     if (wt) {
-      const gone = removeWorktree(cwd, wt);
-      if (!gone.removed) deps.onEvent?.(`  kept ${wt.path} — ${gone.why}`);
+      if (decision.resumable && decision.phase === 'pending') {
+        unlockWorktree(cwd, wt);
+        deps.onEvent?.(`  kept ${wt.path} — attempt ${k + 1} resumes in it`);
+      } else {
+        const gone = removeWorktree(cwd, wt);
+        if (!gone.removed) deps.onEvent?.(`  kept ${wt.path} — ${gone.why}`);
+      }
     }
 
     if (decision.phase === 'succeeded') report.succeeded.push(job.id);

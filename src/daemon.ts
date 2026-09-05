@@ -6,6 +6,7 @@ import { boardDir } from './db-url.ts';
 
 export { boardDir };
 import { reconcile } from './controller.ts';
+import { sweepWorktrees } from './worktree.ts';
 import { holderId, holderLiveness, parseHolder, pidIsAlive } from './liveness.ts';
 import { windowStart } from './limits.ts';
 import { cliEntry, PACKAGE_ROOT } from './paths.ts';
@@ -19,12 +20,14 @@ import type { Runtime } from './runtime/index.ts';
  * the lease were all silently inert, and all three were found by watching a run happen). What is
  * left is the half a human at a keyboard genuinely cannot do — **time**.
  *
- * That is the whole justification for this file, and it is why the interval is slow. Three things
+ * That is the whole justification for this file, and it is why the interval is slow. Four things
  * here are time-driven and nothing else is:
  *
  *   - a lease expires, because its holder died without releasing it;
  *   - a run passes its wall clock (the runtime's own timer, but only while something is watching it);
- *   - work scheduled for later becomes due — a kind that does not exist yet.
+ *   - work scheduled for later becomes due — a kind that does not exist yet;
+ *   - a worktree becomes safe to reclaim, because its pull request landed somewhere else and
+ *     nothing here was told. That one is a sweep, on its own slower timer: see `SWEEP_EVERY_MS`.
  *
  * The change-driven half — "a Job was just filed, run it" — is always one `kb run` away, so it does
  * not need a loop and does not set the cadence. All three of the above have minute-scale tolerances,
@@ -39,6 +42,16 @@ import type { Runtime } from './runtime/index.ts';
 
 /** Slow on purpose. See above: nothing time-driven here has a sub-minute tolerance. */
 export const DEFAULT_INTERVAL_MS = 45_000;
+
+/**
+ * How often the tick reclaims worktrees. Much slower than the tick itself.
+ *
+ * This is the fourth time-driven thing, and it belongs here for the same reason as the other
+ * three: a checkout becomes safe to delete *later*, when its pull request lands, and nothing tells
+ * us when that happened. Only a clock can ask again. It is rare because the answer changes on the
+ * scale of a code review, and because asking costs one `ls-remote`.
+ */
+export const SWEEP_EVERY_MS = 10 * 60_000;
 
 /**
  * How far the wall clock may run past a tick before we call it a suspend rather than a slow pass.
@@ -238,6 +251,10 @@ export type LoopDeps = {
   now?: () => number;
   /** Stop after this many ticks. Tests only — a loop with no exit is not a thing to unit test. */
   maxTicks?: number;
+  /** Reclaim worktrees on the tick. Default on; off for a caller that wants no remote reads. */
+  sweep?: boolean;
+  /** How often to sweep. Defaults to `SWEEP_EVERY_MS`; a test that wants every tick passes 0. */
+  sweepEveryMs?: number;
   readPr?: boolean;
   /**
    * The wait between ticks. Injectable because a suspend happens *during* it — a test that models
@@ -279,6 +296,7 @@ export async function loop(deps: LoopDeps): Promise<number> {
   const sleep = deps.sleep ?? nap;
   const holder = holderId('daemon');
   const version = buildVersion();
+  const sweepEvery = Math.max(1, Math.round((deps.sweepEveryMs ?? SWEEP_EVERY_MS) / intervalMs));
 
   log(`up${deps.board ? ` on ${deps.board}` : ' on every board'} — every ${Math.round(intervalMs / 1000)}s, `
     + `pid ${process.pid}, build ${version}`);
@@ -308,6 +326,11 @@ export async function loop(deps: LoopDeps): Promise<number> {
     // Reclaim is skipped for exactly that pass. It is belt and braces — `holderLiveness` already
     // refuses to take a lease off a running local process — but it is the half that also covers a
     // holder on another machine, which no pid check here can see.
+    // The first tick sweeps, then one tick in every `sweepEvery`. A daemon started to clean up
+    // should not have to wait ten minutes to do it, and a daemon left running should not ask the
+    // remote every 45 seconds.
+    const sweeping = deps.sweep !== false && (ticks - 1) % sweepEvery === 0;
+
     const slept = ticks > 1 && drift > intervalMs * SLEEP_FACTOR + SLEEP_SLACK_MS;
     if (slept) log(`woke — ${Math.round(drift / 1000)}s of wall clock passed since the last tick, skipping reclaim`);
 
@@ -316,7 +339,7 @@ export async function loop(deps: LoopDeps): Promise<number> {
       // restart, which is the difference between a controller and a launcher.
       const boards = await db.board.findMany({
         where: deps.board ? { slug: deps.board } : {},
-        select: { id: true, slug: true },
+        select: { id: true, slug: true, repoPath: true },
         orderBy: { slug: 'asc' },
       });
       if (slept && boards.length) {
@@ -354,6 +377,32 @@ export async function loop(deps: LoopDeps): Promise<number> {
           onEvent: (l) => log(boards.length > 1 ? `[${b.slug}] ${l}` : l),
         });
         announce(`refused:${b.slug}`, report.refused ? `refused  ${b.slug}: ${report.refused}` : null);
+
+        // ---- reclaim the checkouts of work that has landed. After reconcile, never before: a
+        // pass that claimed a Job has just locked that Job's worktree, and the sweep must see the
+        // lock rather than race it.
+        if (sweeping) {
+          const repo = b.repoPath ?? deps.cwd;
+          if (repo) {
+            for (const swept of sweepWorktrees(repo)) {
+              const where = boards.length > 1 ? `[${b.slug}] ` : '';
+              if (swept.removed) {
+                log(`${where}swept ${swept.path} — ${swept.why}`);
+                said.delete(`kept:${swept.path}`);
+                await db.event.create({
+                  data: {
+                    kind: 'swept', boardId: b.id, actor: holder,
+                    payload: { path: swept.path, branch: swept.branch, why: swept.why },
+                  },
+                });
+              } else {
+                // Once, not every ten minutes: a checkout kept for the same reason all week is one
+                // line of log, the same way a refusal is.
+                announce(`kept:${swept.path}`, `${where}kept  ${swept.path} — ${swept.why}`);
+              }
+            }
+          }
+        }
       }
     } catch (e) {
       // A pass that throws must not take the loop with it: the next tick is 45 seconds away and
