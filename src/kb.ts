@@ -247,10 +247,15 @@ export async function main(argv: string[]): Promise<number> {
   if (!verb || values.help) { process.stdout.write(HELP); return 0; }
 
   const db = openBoard();
-  // `up`, `down` and `boards` are machine-wide when no board is named; everything else means the
-  // repository you are in. Resolving here keeps that one decision in one place.
+  // `up`, `down` and `boards` are machine-wide when no board is named, and so is `ls --all`;
+  // everything else means the repository you are in. Resolving here keeps that one decision in one
+  // place — but it also means resolution happens BEFORE the verb runs, so a verb that wants no
+  // board has to say so here rather than by ignoring the answer. `ls --all` ignored it, and once
+  // `resolveBoard` learned to refuse an ambiguous checkout it started refusing for a board that
+  // command never reads.
   const named = (values.board as string) || undefined;
-  const scope = ['up', 'down', 'boards'].includes(verb)
+  const machineWide = ['up', 'down', 'boards'].includes(verb) || (verb === 'ls' && !!values.all);
+  const scope = machineWide
     ? { slug: named ?? '', repoPath: null, known: false }
     : await resolveBoard(db, named);
   const slug = scope.slug;
