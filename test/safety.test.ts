@@ -140,6 +140,183 @@ test('a full board refuses, and the holder keeps its lease', async () => {
   assert.ok(await db.lease.findUnique({ where: { jobId: held.id } }), 'the other holder is untouched');
 });
 
+// ---------------------------------------------------------------- maxConcurrent means it
+
+/**
+ * A runtime that blocks until it is released, and says when it started.
+ *
+ * This is the only shape that can tell real parallelism from a fast serial loop: with runs that
+ * return immediately, "two Jobs ran" is true either way. Holding both open and then asking the
+ * database how many leases exist asks the question the operator is actually asking.
+ */
+function blocking() {
+  const started: number[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const arrived: Array<() => void> = [];
+  const waitFor = (n: number) => new Promise<void>((r) => {
+    const check = () => { if (started.length >= n) r(); else arrived.push(check); };
+    check();
+  });
+  return {
+    started,
+    release,
+    waitFor,
+    runtime: {
+      name: 'blocking',
+      async run(spec: { taskId: number }) {
+        started.push(spec.taskId);
+        for (const f of arrived.splice(0)) f();
+        await gate;
+        return { status: 'completed', ok: true, sessionId: `s-${spec.taskId}`, text: '', costUsd: 0,
+                 turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+      },
+    },
+  };
+}
+
+test('maxConcurrent 2 runs two Jobs at once — both hold a lease at the same time', async () => {
+  const b = await freshBoard();
+  await b.set({ maxConcurrent: 2 });
+  const one = await b.job('first');
+  const two = await b.job('second');
+
+  const w = blocking();
+  const pass = b.run({ runtime: w.runtime });
+
+  // Both must be inside their run before anything is released. If the loop were still awaiting each
+  // run in turn, this would time the test out rather than fail it — which is the honest signal.
+  await w.waitFor(2);
+  const heldTogether = await db.lease.findMany({
+    where: { job: { boardId: b.id } }, select: { jobId: true }, orderBy: { jobId: 'asc' },
+  });
+  assert.deepEqual(heldTogether.map((l) => l.jobId), [one.id, two.id],
+    'two leases at the same instant — the ceiling is a real parallelism setting, not a spelling of 1');
+
+  w.release();
+  const r = await pass;
+  assert.deepEqual(r.succeeded, [one.id, two.id], 'and the pass does not return until both are recorded');
+  assert.deepEqual(w.started, [one.id, two.id]);
+  assert.equal(await db.lease.count({ where: { job: { boardId: b.id } } }), 0, 'both released');
+});
+
+test('a third Job is refused while two of two slots are held by another host', async () => {
+  const b = await freshBoard();
+  await b.set({ maxConcurrent: 2 });
+  // Somebody else's two runs, so the refusal is contention this pass did not cause: a wall of our
+  // own making is waited out instead, which the test above is what proves.
+  const held = [await b.job('theirs-1'), await b.job('theirs-2')];
+  for (const j of held) {
+    await db.lease.create({
+      data: { jobId: j.id, holder: 'another-host', token: `t${j.id}`, expiresAt: new Date(Date.now() + 600_000) },
+    });
+    await db.job.update({ where: { id: j.id }, data: { phase: 'running' } });
+  }
+  const third = await b.job('mine');
+
+  const r = await b.run();
+  assert.match(r.refused ?? '', /2 of 2 concurrent slots/);
+  assert.deepEqual(r.claimed, [], 'a third does not squeeze in');
+  assert.equal(await db.attempt.count({ where: { jobId: third.id } }), 0);
+  assert.equal(await db.lease.count({ where: { job: { boardId: b.id } } }), 2, 'and their leases are untouched');
+});
+
+test('more Jobs than slots: a pass waits for one of its own to finish rather than refusing', async () => {
+  const b = await freshBoard();
+  await b.set({ maxConcurrent: 2 });
+  const ids = [await b.job('a'), await b.job('b'), await b.job('c')].map((j) => j.id);
+
+  // Never more than two inside `run` at once, and all three get their turn in one pass.
+  let live = 0;
+  let peak = 0;
+  const staggered = {
+    name: 'staggered',
+    async run(spec: { taskId: number }) {
+      live += 1;
+      peak = Math.max(peak, live);
+      await new Promise((r) => setTimeout(r, 30));
+      live -= 1;
+      return { status: 'completed', ok: true, sessionId: `s-${spec.taskId}`, text: '', costUsd: 0,
+               turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  };
+
+  const r = await b.run({ runtime: staggered });
+  assert.equal(r.refused, null, 'a ceiling this pass is itself filling is not a refusal to report');
+  assert.deepEqual(r.succeeded, ids, 'all three, in one pass');
+  assert.equal(peak, 2, 'and never three at once');
+});
+
+test('the budget ceiling counts runs in flight, so two concurrent Jobs cannot both blow it', async () => {
+  const b = await freshBoard();
+  await b.set({ maxConcurrent: 3, dailyBudgetUsd: 10 });
+  const ids = [await b.job('pricey-1', { maxBudgetUsd: 6 }), await b.job('pricey-2', { maxBudgetUsd: 6 })]
+    .map((j) => j.id);
+
+  const w = blocking();
+  const pass = b.run({ runtime: w.runtime });
+  await w.waitFor(1);
+  // The first is running and has reported no cost yet, so its $6 is still only promised. Three
+  // slots are free, and the ONLY thing that may stop the second $6 Job is the money — $12 against
+  // a $10 ceiling. Before `committedUsd` it would have been waved through against a $0 spend.
+  await new Promise((r) => setTimeout(r, 60));
+  assert.deepEqual(w.started, [ids[0]], 'the second is held back by the budget, not by a free slot');
+
+  w.release();
+  const r = await pass;
+  // Held back, not refused: the first run's real cost replaces its projection, and the pass then
+  // has room. Refusing would have blamed the operator for a wall this pass was building itself.
+  assert.deepEqual(r.succeeded, ids, 'both ran in the end — one after the other');
+  assert.equal(r.refused, null);
+});
+
+test('money promised to ANOTHER host\'s run in flight refuses, and names it', async () => {
+  const b = await freshBoard();
+  await b.set({ dailyBudgetUsd: 10, maxConcurrent: 5 });
+  // Their attempt is open, so it has reported no cost — but its Job may still cost $6.
+  const theirs = await b.job('theirs', { maxBudgetUsd: 6 });
+  await db.attempt.create({ data: { jobId: theirs.id, k: 1, host: 'another-host' } });
+  await db.job.update({ where: { id: theirs.id }, data: { phase: 'running' } });
+
+  const mine = await b.job('mine', { maxBudgetUsd: 6 });
+  const r = await b.run();
+  assert.match(r.refused ?? '', /\$6\.00 committed to runs in flight/);
+  assert.match(r.refused ?? '', /wait for a run to finish/, 'an error says what to do next');
+  assert.equal(await db.attempt.count({ where: { jobId: mine.id } }), 0, 'no money was spent finding out');
+});
+
+test('a shutdown mid-pass stops every run, not just one, and none of them spends a retry', async () => {
+  const b = await freshBoard();
+  await b.set({ maxConcurrent: 2 });
+  const ids = [await b.job('long-1', { maxRetries: 0 }), await b.job('long-2', { maxRetries: 0 })]
+    .map((j) => j.id);
+
+  const ac = new AbortController();
+  const started: number[] = [];
+  const interruptible = {
+    name: 'interruptible',
+    async run(spec: { taskId: number; signal?: AbortSignal }) {
+      started.push(spec.taskId);
+      await new Promise<void>((r) => spec.signal?.addEventListener('abort', () => r(), { once: true }));
+      return { status: 'error', ok: false, sessionId: `s-${spec.taskId}`, text: '', costUsd: 0,
+               turns: 1, durationMs: 0, stopReason: null, denials: 0, error: 'interrupted' };
+    },
+  };
+
+  const pass = b.run({ runtime: interruptible, signal: ac.signal });
+  while (started.length < 2) await new Promise((r) => setTimeout(r, 5));
+  ac.abort();
+  const r = await pass;
+
+  assert.deepEqual(r.stopped, ids, 'both, and `stopped` is the operator, not the work');
+  assert.deepEqual(r.failed, [], 'a Job with no retries left is not failed by being turned off');
+  for (const id of ids) {
+    const after = await db.job.findUniqueOrThrow({ where: { id } });
+    assert.equal(after.phase, 'pending', `#${id} is queued again`);
+  }
+  assert.equal(await db.lease.count({ where: { job: { boardId: b.id } } }), 0, 'and nothing is left held');
+});
+
 // ---------------------------------------------------------------- the lease invariant
 // These run at the SHIPPED DEFAULTS. The earlier G5 test passed only because it pinned leaseMs
 // and forced expiry by hand, so it proved a configuration the product does not ship.

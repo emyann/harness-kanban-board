@@ -76,7 +76,13 @@ model Board {
   /// Ceilings, checked BEFORE a claim and never mid-run. A ceiling that could stop a running
   /// worker would strand its worktree; one that refuses to start another is just a decision.
   /// `dailyBudgetUsd` is a rolling 24 hours, not a calendar day — there is no timezone to get wrong.
+  /// It is charged against what running work *could* cost, in-flight attempts included, so that a
+  /// board running several Jobs at once cannot commit its ceiling several times over.
   dailyBudgetUsd Float?
+  /// How many Jobs this board runs at once. Really at once: one reconcile pass starts up to this
+  /// many and waits for them together (`src/controller.ts`). It is a ceiling on *leases*, so it
+  /// also binds across reconcilers — but it is not only that, and it was for one release, which is
+  /// why this comment exists. 0 drains the board without stopping it.
   maxConcurrent  Int   @default(1)
 
   events Event[]

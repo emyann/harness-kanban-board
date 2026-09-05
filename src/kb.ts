@@ -68,7 +68,8 @@ const HELP = `kb — run one agent against one brief
   kb boards add <slug>     point a board at a repository       [--repo <path>]
   kb boards rm <slug>      remove a board and everything on it [--force]
   kb boards set <slug>     the ceilings, without SQL
-       --max-concurrent <n>  --daily-budget <usd>|none
+       --max-concurrent <n>  how many Jobs the board runs at once (0 drains it)
+       --daily-budget <usd>|none
 
 The board is ~/.hkb/board.db — one per machine, a Board per repository, the way one
 cluster holds a namespace per project. \`--board\` picks one; without it the repository
@@ -414,9 +415,11 @@ export async function main(argv: string[]): Promise<number> {
       const report = await reconcile({
         runtime, cwd: process.cwd(), only, board: slug,
         onEvent: out.json ? undefined : (l) => console.log(l),
+        // Tagged with the Job for the same reason the controller's own lines are: a board that
+        // runs two at once interleaves these, and `taskId` is the only thing that untangles them.
         onRuntimeEvent: out.json ? undefined : (e) => {
-          if (e.kind === 'tool') console.log(`         -> ${e.name}`);
-          if (e.kind === 'text') console.log(`          : ${e.text}`);
+          if (e.kind === 'tool') console.log(`#${e.taskId}   -> ${e.name}`);
+          if (e.kind === 'text') console.log(`#${e.taskId}    : ${e.text}`);
         },
       });
       const moved = report.claimed.length + report.reclaimed.length;
@@ -541,7 +544,7 @@ export async function main(argv: string[]): Promise<number> {
           console.log(`${slug} stopped — nothing new will be claimed. A run already going is left alone.`);
         } else {
           const cap = updated.dailyBudgetUsd === null ? 'no ceiling' : `$${updated.dailyBudgetUsd}/24h`;
-          console.log(`${slug} started — ${cap}, ${updated.maxConcurrent} concurrent`);
+          console.log(`${slug} started — ${cap}, runs up to ${updated.maxConcurrent} at once`);
         }
       });
       return 0;
@@ -578,7 +581,9 @@ export async function main(argv: string[]): Promise<number> {
             const ceiling = r.dailyBudgetUsd === null
               ? `$${r.spent24h.toFixed(2)} spent in 24h, no ceiling`
               : `$${r.spent24h.toFixed(2)} of $${r.dailyBudgetUsd.toFixed(2)} spent in 24h`;
-            console.log(`${pad}  limits  ${r.maxConcurrent} concurrent, ${ceiling}`);
+            // "N concurrent" alone told an operator a capacity and not whether any of it was in
+            // use — and, before the ceiling was real, not even whether it could be.
+            console.log(`${pad}  limits  ${r.liveLeases} of ${r.maxConcurrent} slots running, ${ceiling}`);
             if (r.repoPath) console.log(`${pad}  repo    ${r.repoPath}`);
             // A daemon runs the code it started with. Saying so beats discovering it.
             if (r.behind) {
@@ -689,7 +694,7 @@ export async function main(argv: string[]): Promise<number> {
           board: after.slug, maxConcurrent: after.maxConcurrent, dailyBudgetUsd: after.dailyBudgetUsd,
         }, () => console.log(
           `${after.slug} — ${after.dailyBudgetUsd === null ? 'no ceiling' : `$${after.dailyBudgetUsd}/24h`}, `
-          + `${after.maxConcurrent} concurrent`));
+          + `runs up to ${after.maxConcurrent} at once`));
         return 0;
       }
 

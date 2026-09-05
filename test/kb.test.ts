@@ -385,7 +385,8 @@ test('a stopped board leaves its Jobs pending, not failed', async () => {
 test('start clears it and reports the ceilings', async () => {
   const r = await kb('start', '--board', 'switch');
   assert.match(r.out, /started/);
-  assert.match(r.out, /no ceiling, 1 concurrent/);
+  // "1 concurrent" was a capacity; "runs up to 1 at once" is what the board actually does.
+  assert.match(r.out, /no ceiling, runs up to 1 at once/);
   const after = await kb('run', '--board', 'switch', '--fake');
   assert.match(after.out, /1 succeeded/);
 });
