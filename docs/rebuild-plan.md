@@ -414,11 +414,34 @@ Every item below was found by running the thing, not by reading it.
 6. **The refusal is logged every tick.** `reconcile` calls `onEvent` unconditionally,
    defeating the daemon's `announce` dedup — measured 4 lines where 1 was intended.
    (Job #10's brief was about exactly this behaviour, one layer up.)
-7. **Worktrees are never reclaimed: 6.1 GB for ten Jobs.** `worktreeHasWork` is true
-   for anything ahead of its base, which is every successful Job, so nothing is ever
-   removed — and each worktree carries **614 MB of `node_modules`**, because a worker
-   installs its own tree to run the tests. In the zero-dependency era a worktree was a
-   few MB; ADR-007's dependencies made this the run's largest operational cost.
+7. **Worktrees are never reclaimed: 6.1 GB for ten Jobs.** Each carries **614 MB of
+   `node_modules`**, because a worker installs the *target repository's* dependency
+   tree to run its tests. Note whose: not hkb's shipped dependencies — bundling hkb for
+   distribution would not change this number at all. It reads as Prisma and the SDK
+   only because the repository being worked on is hkb; a worker on any other repo
+   installs that repo's tree instead. So the size is a property of the target, and the
+   fix is reclaim rather than slimming: with cleanup the cost is bounded by
+   `maxConcurrent × repo size` instead of `jobs-ever-run × repo size`.
+
+   **The bug is one word.** `worktreeHasWork` asks whether the branch is *ahead of its
+   base*, which is true for every successful Job. Claude Code's own sweep asks whether
+   there are **unpushed** commits — "there is work here" versus "this work exists only
+   here". Four things to take from `code.claude.com/docs/en/worktrees#clean-up-worktrees`:
+
+   - change the keep-test to unpushed-or-dirty;
+   - **remove on a later sweep, not at the end of the run.** Right now the only attempt
+     happens at the one moment the work is definitionally freshest. "Safe to delete" is
+     a state a worktree enters after its PR lands;
+   - the merged-branch test, which needs no forge call: the remote branch it pushed to
+     no longer exists, and every commit is already on the default branch;
+   - `git worktree lock` while a Job runs, so a sweep cannot take a live checkout —
+     hkb relies on the controller being the only remover, which stops being true the
+     moment a sweep exists.
+
+9. **A worktree has no gitignored files, and nothing carries them in.** A target repo
+   whose tests need a `.env` fails in a worker and passes for the human. Claude Code
+   solves this with `.worktreeinclude`; hkb has no equivalent. Not observed in this run
+   — hkb's own tests need no such file — which is exactly why it is worth writing down.
 8. **Cost estimation needs a real method.** Recorded here so the next prediction is
    made from these ten measurements rather than from one read-only run.
 
