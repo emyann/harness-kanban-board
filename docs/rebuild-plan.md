@@ -433,6 +433,46 @@ the *same* cap. Attempt 1 spent $2.05, attempt 2 spent $2.02, both stopped in th
 place, and the third was refused by the board ceiling. Resuming only helps when the work
 remaining is smaller than the cap; nothing checks that.
 
+### The second round — the findings, worked as cards
+
+Phase 5 proved the board could carry hkb's own work. This is that being used: the
+Phase 5b findings filed as cards and run by the board itself, 2026-09-05.
+
+**Thirteen cards, twelve shipped, $124 total.** Eight in the first batch (four merged,
+three blocked on the board ceiling and finished after a raise, one unmergeable), then
+five more.
+
+| Card | Shipped as | Note |
+|---|---|---|
+| exports (ADR-008) | #375 | second attempt; the first (#370) was correct but collided with the sweep |
+| worktree sweep | #366 | `.kanban/worktrees` now reclaims itself — 4 KB where it was 6.1 GB |
+| `max_budget` not retried | #367 | added `kb retry <id> --max-budget` |
+| `.worktreeinclude` | #368 | |
+| subagent isolation follows the Job | #369 | the latent inversion, fixed rather than documented |
+| `kb done` / `kb cancel` | #373 | two verbs, argued: they are different statements |
+| `maxConcurrent` made real | #374 | rejected the cheap option; added `committedUsd` |
+| board spec defaults | #377 | second attempt; freezes the resolved cap onto the Attempt |
+
+**Two workers argued the brief and were right.** #374 was offered "rename it and document that
+throughput comes from more reconcilers" and refused: `Controller` is `@@id(boardId)`, so
+`acquireBoard` elects one leader per board and the alternative is forbidden by our own election.
+It then found the bug concurrency would have introduced — `spent24h` only moves when an attempt
+*ends*, so N concurrent claims would each be judged against a spend none had contributed to.
+#367 refused to let the controller raise a Job's own cap, on the grounds that the spec belongs to
+whoever filed it.
+
+**What fixed the composition problem was briefing, not machinery.** #370 and #372 could not merge —
+each was correct alone and collided with something merged in between (#366's `removeWorktree`,
+#374's `committedUsd`). Both were re-run with the collision *in the brief*, and both landed:
+#375 wrote exports on top of the sweep, and #377 chose to freeze the cap onto the Attempt and
+argued the cost into a feature. That is finding #10's mitigation in practice, and it is a
+briefing practice — worth remembering when the DAG kind makes it tempting to solve in the graph.
+
+**Two bugs of mine that the run found**, both shipped that morning: the pull-request fence dated
+from the attempt rather than the Job, so a resumed attempt lost the PR it had already opened; and
+three test files cut 620 MB worktrees into the developer's own checkout because `isolate` defaults
+to true and they reconciled with `cwd` pointing at the real repository.
+
 ### Phase 5b — the honest backlog
 
 Every item below was found by running the thing, not by reading it.
