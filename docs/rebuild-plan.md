@@ -511,8 +511,17 @@ Every item below was found by running the thing, not by reading it.
    whose tests need a `.env` fails in a worker and passes for the human. Claude Code
    solves this with `.worktreeinclude`; hkb has no equivalent. Not observed in this run
    — hkb's own tests need no such file — which is exactly why it is worth writing down.
-8. **Cost estimation needs a real method.** Recorded here so the next prediction is
-   made from these ten measurements rather than from one read-only run.
+8. **Cost estimation needs a real method. DECIDED 2026-09-05: not yet — run generously
+   and let the data accumulate.** A per-Job cap set by feel is a guard chosen by guessing,
+   and both predictions so far were wrong by ~3x in the same direction (extrapolating from
+   a *read-only* measurement to work that also edits, tests, pushes and opens a pull
+   request). But the answer is not a better guess: it is a generous per-Job cap with the
+   *board* ceiling as the real guard, which only became honest when #374 added
+   `committedUsd` — before that the ceiling counted finished attempts and was blind to work
+   in flight. Twelve cards now sit in the board at $77.47 with the shape visible (small
+   briefs ~$1.85, larger ~$5.24, five of eight capped), and every Attempt already carries
+   cost, wall clock, outcome, attempt number and the brief that produced it. That is the
+   training set for a predictor; collecting it is the work, not modelling it yet.
 
 10. **Per-PR CI does not compose, and nothing integrates.** #350 and #354 were both green
     alone and broken together. Every branch is cut from `origin/main` at claim time and
@@ -520,6 +529,19 @@ Every item below was found by running the thing, not by reading it.
     what will actually be merged. The cheap half is a rebase-and-test before the PR is
     called ready; the honest half is admitting a Job cannot verify a claim about a tree
     it has never seen.
+
+    **DECIDED 2026-09-05: the DAG kind is the answer, and this waits for it.** A dependent
+    node based on its predecessor's *merged* work turns "two agents from one base" into
+    "one agent from the other's result", which is the fix rather than a mitigation — and it
+    is already the integration item below. Two things to carry into that design rather than
+    rediscover: **siblings are still parallel and still share a base**, so the guarantee only
+    covers edges the decomposition actually draws; and what collides is not shared *files*
+    but shared **invariants**. #372 and #374 read as unrelated — "board defaults" and
+    "parallelism" — and collided because both touch the budget gate, which only reading
+    `gateClaim` reveals. A decomposer that splits by area reproduces this exactly.
+
+    Until then the practice that has actually worked is briefing: tell the second attempt
+    what the first collided with. #19 and #20 were re-run that way and #19 landed clean.
 
 11. **`succeeded` does not mean "produced anything".** Nothing in the machinery requires a
     pull request: `withProtocol` (`src/brief.ts`) *asks* for one in prose, is only applied
