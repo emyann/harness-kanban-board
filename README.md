@@ -17,6 +17,41 @@ no server, no database and no npm dependencies.
 > read the release notes before upgrading. Issues and questions are welcome; treat anything here as subject
 > to change until this notice is gone.
 
+## `kb` — the workload scheduler
+
+**`kb` is what replaces everything below.** [ADR-007](docs/wiki/decisions/adr-007-workload-scheduler.md) reset hkb
+into a scheduler for agent work, and its first and only workload kind is a **Job**: one agent, one brief, run to
+completion. A Job runs in a git worktree of its own, then commits, pushes and opens a **draft** pull request — a
+human reviews and merges. The kanban DAG, cards that depend on cards, is a *second kind that does not exist yet*.
+
+The board is **`~/.hkb/board.db`** — SQLite behind Prisma, one board per machine with a **Board row per
+repository**, the way one cluster holds a namespace per project. It is created and migrated the first time
+anything touches it. Commands take the board from the repository you are standing in; `--board <slug>` names one
+instead, and `HKB_DATABASE_URL` points at a different board file entirely.
+
+`kb` ships as a second binary in the same package as `hkb` (`npm i -g hkb-cli`); in a checkout it is
+`node bin/kb.ts`. Node **>= 22.18.0**.
+
+```bash
+cd ~/code/my-project                       # the repository you are in decides which board you mean
+kb new "Add a --dry-run flag" \
+  --brief "Add --dry-run to the export command, with a test. Keep it small."
+#> #1 Add a --dry-run flag  [pending]  on my-project
+
+kb run                                     # reconcile once, in the foreground, watching it work
+kb show 1                                  # phase, spec, and every attempt: outcome, cost, session, PR URL
+```
+
+`--brief-file <path>` and `--brief -` (stdin) take a brief too long to type, and `--json` works on every verb.
+
+- **`kb up`** runs that same reconcile pass on a timer in a detached process, serving every board on the machine —
+  `--interval <s>` to change the period, `--status` to see what is up.
+- **`kb down`** stops it cleanly, leaving no lease held.
+- **`kb boards`** lists every board on this machine; `kb boards add <slug> --repo <path>` points one at a repository.
+
+Everything from [Quickstart](#quickstart) down describes the **pre-ADR-007 system** — the `hkb` CLI, the board on
+`refs/kb/boards/<name>`, the dispatcher tick. It still runs alongside `kb`, and it is the system being replaced.
+
 ## Quickstart
 
 **Before you start**, three things have to be on the machine:
