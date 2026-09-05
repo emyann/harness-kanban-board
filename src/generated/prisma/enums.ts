@@ -27,7 +27,8 @@ export const Outcome = {
   timed_out: 'timed_out',
   refused: 'refused',
   crashed: 'crashed',
-  lost: 'lost'
+  lost: 'lost',
+  stopped: 'stopped'
 } as const
 
 export type Outcome = (typeof Outcome)[keyof typeof Outcome]

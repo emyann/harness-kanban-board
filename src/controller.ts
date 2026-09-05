@@ -3,6 +3,7 @@ import { createWorktree, existingWorktree, removeWorktree, type Worktree } from 
 import { prForBranch } from './pulls.ts';
 import { withProtocol } from './brief.ts';
 import { gateClaim, windowStart } from './limits.ts';
+import { holderId, holderLiveness } from './liveness.ts';
 import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
 
 /**
@@ -40,6 +41,19 @@ export type ControllerDeps = {
   board?: string;
   /** Read the pull request back from the forge after a run. Off in tests, which have no forge. */
   readPr?: boolean;
+  /**
+   * Reclaim leases whose holder is gone. Default on.
+   *
+   * The daemon turns it off for exactly one pass after it notices the wall clock jumped, because
+   * every lease on the board looks expired at that instant and none of them expired for a reason
+   * anyone chose. See `src/daemon.ts`.
+   */
+  reclaim?: boolean;
+  /**
+   * The operator is shutting down. Claiming stops, and the run in flight is stopped rather than
+   * left to finish: `kb down` that took thirty minutes to return would not be a stop.
+   */
+  signal?: AbortSignal;
 };
 
 export type ReconcileReport = {
@@ -51,6 +65,8 @@ export type ReconcileReport = {
   retrying: number[];
   reclaimed: number[];
   skipped: number[];
+  /** Attempts ended by the operator, not by the work. They are pending again and cost no retry. */
+  stopped: number[];
 };
 
 const nowDefault = () => new Date();
@@ -65,12 +81,18 @@ const LEASE_GRACE_MS = 5 * 60_000;
  * Pure, so it is the part worth testing exhaustively: everything interesting about retry, resume
  * and giving up is decided here, and nothing here touches a database or a model.
  */
+export type Decision = {
+  phase: 'succeeded' | 'failed' | 'pending';
+  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped';
+  resumable: boolean;
+};
+
 export function nextPhase(
   outcome: WorkerOutcome | null,
-  /** The attempt number that just ran, 1-based. */
+  /** How many attempts have spent a retry, including this one. 1-based. */
   attempt: number,
   maxRetries: number,
-): { phase: 'succeeded' | 'failed' | 'pending'; outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed'; resumable: boolean } {
+): Decision {
   if (outcome?.status === 'completed') {
     return { phase: 'succeeded', outcome: 'completed', resumable: false };
   }
@@ -90,13 +112,27 @@ export function nextPhase(
   };
 }
 
-/** Reclaim Jobs whose holder died: the lease expired and nobody reported an outcome. */
+/**
+ * Reclaim Jobs whose holder died: the lease expired and nobody reported an outcome.
+ *
+ * Two independent things have to be true before a lease is taken — the clock says it lapsed, AND
+ * the holder is not observably running. Expiry alone is not enough, because the clock a lease
+ * expires on is not the clock a run times out on: see `src/liveness.ts`.
+ */
 async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report: ReconcileReport, board?: string, log?: (s: string) => void) {
   const dead = await db.lease.findMany({
     where: { expiresAt: { lt: at }, ...(board ? { job: { board: { slug: board } } } : {}) },
-    select: { jobId: true, holder: true },
+    select: { jobId: true, holder: true, acquiredAt: true },
   });
   for (const l of dead) {
+    // The proof, where it can be had. `alive` is a local process still running: its lease lapsed
+    // because the machine was asleep, not because anything failed, and taking it would start a
+    // second worker on a Job that already has one.
+    if (holderLiveness(l.holder, l.acquiredAt) === 'alive') {
+      log?.(`  #${l.jobId}: lease from ${l.holder} lapsed, but that process is alive — not reclaiming`);
+      continue;
+    }
+
     // Fenced on the expiry too: between the read above and this delete, the holder may have
     // renewed. Deleting unconditionally would take a live claim — the very thing reclaim exists
     // to avoid doing.
@@ -110,7 +146,9 @@ async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report
       });
     }
     const job = await db.job.findUnique({ where: { id: l.jobId }, select: { maxRetries: true } });
-    const spent = await db.attempt.count({ where: { jobId: l.jobId, endedAt: { not: null } } });
+    const spent = await db.attempt.count({
+      where: { jobId: l.jobId, endedAt: { not: null }, outcome: { not: 'stopped' } },
+    });
     await db.job.update({
       where: { id: l.jobId },
       data: { phase: spent < (job?.maxRetries ?? 0) + 1 ? 'pending' : 'failed', lastError: 'lease expired' },
@@ -125,16 +163,18 @@ async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report
 export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> {
   const db = openBoard();
   const now = deps.now ?? nowDefault;
-  const host = deps.host ?? `${process.pid}@${deps.runtime.name}`;
+  // The holder string is parsed on the way back in, so its shape is load-bearing: a bare pid
+  // cannot be checked for liveness, because a pid without a host is a number with no referent.
+  const host = deps.host ?? holderId(deps.runtime.name);
   // A lease is derived from the run it covers, never chosen independently. A fixed 15 minutes
   // against a 30-minute `timeoutMs` meant every long Job had its lease expire WHILE ALIVE: the
   // reclaim then marked the live attempt `lost` and re-queued the Job — a double run, at the
   // shipped defaults. The invariant is "the lease outlives the run", so it is computed from the
   // run's own hard bound plus enough grace for teardown and the record writes.
   const leaseFor = (timeoutMs: number) => deps.leaseMs ?? timeoutMs + LEASE_GRACE_MS;
-  const report: ReconcileReport = { refused: null, claimed: [], succeeded: [], failed: [], retrying: [], reclaimed: [], skipped: [] };
+  const report: ReconcileReport = { refused: null, claimed: [], succeeded: [], failed: [], retrying: [], reclaimed: [], skipped: [], stopped: [] };
 
-  await reclaimExpired(db, now(), report, deps.board, deps.onEvent);
+  if (deps.reclaim !== false) await reclaimExpired(db, now(), report, deps.board, deps.onEvent);
 
   const wanted = await db.job.findMany({
     where: {
@@ -146,6 +186,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
   });
 
   for (const job of wanted) {
+    // A shutdown stops claiming immediately. Whatever is already running is dealt with below, in
+    // the pass that started it — this only refuses to open new work.
+    if (deps.signal?.aborted) break;
+
     // ---- the ceilings, checked before every claim rather than once per pass: a run that just
     // finished has moved the spend, and the next Job must be judged against that, not against
     // what was true when the pass started.
@@ -173,11 +217,22 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       // Loudly, and once: the whole pass stops, because every remaining Job faces the same wall.
       report.refused = gate.why;
       deps.onEvent?.(`refused  ${gate.why}`);
+      await db.event.create({
+        data: { kind: 'refused', jobId: job.id, boardId: board?.id ?? job.boardId, actor: host, payload: { why: gate.why } },
+      });
       break;
     }
 
-    const spent = await db.attempt.count({ where: { jobId: job.id, endedAt: { not: null } } });
-    const k = spent + 1;
+    // Two different counts, and conflating them was a bug waiting to happen. `k` numbers the
+    // attempt and must never repeat — it is half the Attempt's primary key. `charged` is how many
+    // attempts spent a retry, and an attempt the operator stopped did not: `kb down` three times
+    // would otherwise exhaust a Job that never once failed.
+    const done = await db.attempt.findMany({
+      where: { jobId: job.id, endedAt: { not: null } },
+      select: { outcome: true },
+    });
+    const k = done.length + 1;
+    const charged = done.filter((a) => a.outcome !== 'stopped').length + 1;
 
     // ---- acquire. `@@id(jobId)` on Lease is the compare-and-swap: a second holder loses here,
     // and losing is a normal outcome, not an error.
@@ -194,7 +249,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     await db.job.update({ where: { id: job.id }, data: { phase: 'running' } });
     await db.attempt.create({ data: { jobId: job.id, k, host, runtime: deps.runtime.name } });
-    await db.event.create({ data: { kind: 'claimed', jobId: job.id, actor: host, payload: { k } } });
+    await db.event.create({ data: { kind: 'claimed', jobId: job.id, boardId: job.boardId, actor: host, payload: { k } } });
     report.claimed.push(job.id);
     deps.onEvent?.(`claim   #${job.id} k=${k} ${job.name}`);
 
@@ -220,6 +275,9 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
           data: { endedAt: now(), outcome: 'crashed', reason: (e as Error).message.slice(0, 300) },
         });
         await db.job.update({ where: { id: job.id }, data: { phase: 'pending', lastError: (e as Error).message } });
+        await db.event.create({
+          data: { kind: 'spawn_failed', jobId: job.id, boardId: job.boardId, actor: host, payload: { k } },
+        });
         report.retrying.push(job.id);
         continue;
       }
@@ -266,6 +324,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         maxBudgetUsd: job.maxBudgetUsd,
         timeoutMs: job.timeoutMs,
         resume: job.lastSessionId ?? undefined,
+        signal: deps.signal,
       }, deps.onRuntimeEvent)
       .catch((): null => null);
 
@@ -278,7 +337,12 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     const released = await db.lease.deleteMany({ where: { jobId: job.id, token } });
     if (released.count === 0) heldToTheEnd = false;
 
-    const decision = nextPhase(outcome, k, job.maxRetries);
+    // The operator's intent outranks whatever the runtime made of being cut off. A stopped run
+    // reports `timeout` or `error` depending on where the abort landed, and recording either would
+    // be a lie about why it ended AND would spend a retry on it.
+    const decision: Decision = deps.signal?.aborted
+      ? { phase: 'pending', outcome: 'stopped', resumable: true }
+      : nextPhase(outcome, charged, job.maxRetries);
 
     // ---- what landed on the forge. One read, by head branch: the board and the forge are two
     // systems and this is the only thing that joins them.
@@ -305,7 +369,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     if (!heldToTheEnd) {
       deps.onEvent?.(`  #${job.id}: lease was taken mid-run — recording the attempt, leaving the Job alone`);
       await db.event.create({
-        data: { kind: 'lease_lost', jobId: job.id, actor: host, payload: { k } },
+        data: { kind: 'lease_lost', jobId: job.id, boardId: job.boardId, actor: host, payload: { k } },
       });
       report.skipped.push(job.id);
       if (wt) removeWorktree(deps.cwd, wt);
@@ -324,7 +388,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     });
 
     await db.event.create({
-      data: { kind: decision.outcome, jobId: job.id, actor: host, payload: { k, phase: decision.phase } },
+      data: { kind: decision.outcome, jobId: job.id, boardId: job.boardId, actor: host, payload: { k, phase: decision.phase } },
     });
 
     // ---- tidy. Never forced: a worktree that still holds work is the only copy of it if the
@@ -336,6 +400,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     if (decision.phase === 'succeeded') report.succeeded.push(job.id);
     else if (decision.phase === 'failed') report.failed.push(job.id);
+    else if (decision.outcome === 'stopped') report.stopped.push(job.id);
     else report.retrying.push(job.id);
     deps.onEvent?.(`  ${decision.phase.padEnd(9)} #${job.id} ${decision.outcome}${decision.resumable ? ' (resumable)' : ''}`);
   }
@@ -349,6 +414,7 @@ export async function reconcileToRest(deps: ControllerDeps, maxPasses = 20): Pro
   for (let i = 0; i < maxPasses; i++) {
     const r = await reconcile(deps);
     passes.push(r);
+    if (deps.signal?.aborted) break;
     if (!r.claimed.length && !r.reclaimed.length) break;
   }
   return passes;

@@ -30,9 +30,13 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
   `src/bridge/github-issues.js` the read-only GitHub Issues adapter `hkb init --import` migrates *from*
 - `src/lifecycle.js` worker verbs · `src/dispatch.js` the tick · `src/context.js` worker prompt · `src/hook.js` Stop hook
 - `src/init.js` `src/doctor.js` `src/gc.js` · `skills/kanban/` the shipped skill
-- **The ADR-007 core, in TypeScript:** `prisma/schema.prisma` the board · `src/db.ts` the one client handle ·
-  `src/controller.ts` the Job kind's reconcile loop · `src/admission.ts` the `canUseTool` gate that injects worktree
-  isolation · `src/runtime/` the runtime seam (`claude.ts` the Agent SDK, `fake.ts` for tests that spend nothing)
+- **The ADR-007 core, in TypeScript:** `bin/kb.ts` entry · `src/kb.ts` the ten verbs ·
+  `prisma/schema.prisma` the board · `src/db.ts` the one client handle ·
+  `src/controller.ts` the Job kind's reconcile pass · `src/daemon.ts` that pass on a timer, detached ·
+  `src/limits.ts` the ceilings · `src/liveness.ts` whether a lease holder is still running ·
+  `src/admission.ts` the `PreToolUse` gate that injects worktree isolation · `src/worktree.ts` the checkout ·
+  `src/brief.ts` the worker protocol · `src/pulls.ts` the forge read ·
+  `src/runtime/` the runtime seam (`claude.ts` the Agent SDK, `fake.ts` for tests that spend nothing)
 - `templates/` what `hkb init` generates: `doc-section.md`, `copilot/` and `codex/` for `--harness <name>`
 - `docs/harnesses.md` per-harness setup (profiles, generated files, Codex's one-time trust)
 
@@ -41,6 +45,13 @@ Read `README.md` for the model and `skills/kanban/references/protocol.md` for th
 - A new dependency needs a reason in a decision record. The zero-dependency rule ended with ADR-007 — the board is
   SQLite behind Prisma and workers run on the Agent SDK — but the *habit* it protected has not: prefer a builtin, and
   do not add YAML/TOML.
+- **A controller is level-triggered.** `reconcile()` reads observed state, compares it to desired state and takes
+  one step; it is safe to run repeatedly, to interrupt, and to run while another host runs it. Nothing may depend on
+  having seen an event — `src/daemon.ts` is a resync loop, not a subscription, and a guard that only fires on a
+  transition is a guard that is wrong after a restart.
+- **A guard is not proven by a test that asks whether it allows.** The admission gate, the worktree base and the
+  lease were each silently inert and each passed every test it had. Every new guard gets a test that makes it
+  *refuse*, run at the shipped defaults — a test that supplies its own configuration proves the code, not the product.
 - Pure logic goes in `src/model.js` with a test in `test/`. Board I/O goes behind the `Store` interface
   (`src/store/`); anything about a pull request goes in `src/forge.js`; `src/gh.js` stays the only place that shells
   out to `gh`. New board state is a method on the interface and a scenario in `test/store.test.js`, never a fresh

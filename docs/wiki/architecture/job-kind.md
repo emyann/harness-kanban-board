@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "adding a workload kind, changing retry or lease behaviour, or wondering why the DAG is not in the core"
 covers:
   - path: prisma/schema.prisma
-    sha: 5c28188e805303dd55ada9c009656afd29bbe246
+    sha: 53cacd64db65b93cdb1dec8d2ab771363a2d46c0
   - path: src/controller.ts
-    sha: ceb3a81e55c436d8ea55aaff1d2eafba77e4cbb3
+    sha: 67a1aba83797f8b1f39e6e50e39f654f53dcf0b8
   - path: src/db.ts
     sha: bf646fb9e9310a7550ad610aba36fdc0d00fb787
-generated_at_commit: 51fcf3d
+generated_at_commit: c5326c0
 last_refreshed: 2026-09-05
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control]
 ---
@@ -86,6 +86,13 @@ orphaned attempt `lost`, and returns the Job to `pending` if it has retries left
 The `lost` outcome exists precisely to distinguish "nobody ever reported this"
 from a reported failure.
 
+**But expiry alone does not authorise a reclaim.** A lapsed lease whose holder is
+still a running process on this host is left alone (`src/liveness.ts`,
+`reclaimExpired` in `src/controller.ts`) — a lease expires on the wall clock and a
+run times out on a monotonic one, and across a laptop suspend those disagree. See
+`architecture/the-loop` for the full rule, including why the answer is three-valued
+rather than a boolean.
+
 ## The decision table is pure
 
 `nextPhase()` (`src/controller.ts`) takes an outcome, the attempt number and the
@@ -101,6 +108,14 @@ Everything interesting is there:
 - anything else → `crashed`, retried while budget remains.
 
 `maxRetries: 2` means two retries *after* the first go — three attempts in total.
+
+Two outcomes are decided *outside* `nextPhase`, because neither is a fact about how
+the work went: `lost` (the reclaim path above) and `stopped` (the operator stopped
+the daemon mid-run). **`stopped` does not spend a retry** — the attempt number `k`
+still advances, being half the Attempt's primary key, so `reconcile` counts the
+retry budget separately from the attempt count (`src/controller.ts`). Without that
+split a Job with `maxRetries: 0` could be made permanently unrunnable by nothing
+but being turned off.
 
 ## Why there is no graph here
 

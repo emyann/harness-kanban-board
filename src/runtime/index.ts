@@ -36,6 +36,12 @@ export type WorkerSpec = {
   admission?: { deny?: string[]; admitSpawn?: (input: Record<string, unknown>) => Promise<string | null> | (string | null); onDecision?: (d: string) => void };
   /** Resume a previous session instead of starting cold — the retry path. */
   resume?: string;
+  /**
+   * The operator is stopping. Separate from `timeoutMs`, which is the run's own bound: this one
+   * arrives from outside and means "stop now", so a runtime must end the session promptly and
+   * still report the session id — the whole point of stopping cleanly is being able to resume.
+   */
+  signal?: AbortSignal;
 };
 
 /**
