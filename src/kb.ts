@@ -285,9 +285,14 @@ export async function main(argv: string[]): Promise<number> {
 
     // ---------------------------------------------------------------- up / down
     case 'up': {
-      const intervalMs = values.interval !== undefined
-        ? (num(values.interval, '--interval') as number) * 1000
-        : daemon.DEFAULT_INTERVAL_MS;
+      // A floor, because there was not one: `--interval 0` ran 2221 passes in three seconds,
+      // hammering the board. The loop is time-driven and nothing it watches has a sub-minute
+      // tolerance, so a sub-second interval is always a mistake rather than a preference.
+      const seconds = num(values.interval, '--interval');
+      if (seconds !== undefined && !(seconds >= 1)) {
+        throw usage(`--interval is in seconds and must be at least 1, got ${seconds} — the default is ${daemon.DEFAULT_INTERVAL_MS / 1000}`);
+      }
+      const intervalMs = seconds !== undefined ? seconds * 1000 : daemon.DEFAULT_INTERVAL_MS;
 
       if (values.status) {
         const st = daemon.status(slug);
