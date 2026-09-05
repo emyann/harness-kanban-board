@@ -24,6 +24,27 @@ const { fakeRuntime } = await import('../src/runtime/fake.ts');
 const db = openBoard();
 
 /**
+ * A throwaway repository for the one test here that isolates.
+ *
+ * It used to cut that worktree in the checkout you are working in, and leave it: the test does
+ * clean up after itself, but it also writes an untracked `wip.txt` to model a half-finished
+ * attempt, so `removeWorktree` correctly refuses a tree that still holds work and 5.3 MB stayed
+ * behind on every run. Nothing about the behaviour under test needs it to be *this* repository,
+ * and a test suite has no business writing into the tree it is being run from.
+ */
+const SCRATCH = path.join(dir, 'scratch-repo');
+fs.mkdirSync(SCRATCH);
+{
+  const git = (...a: string[]) => execFileSync('git', a, { cwd: SCRATCH, stdio: 'ignore' });
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 's@test');
+  git('config', 'user.name', 's');
+  fs.writeFileSync(path.join(SCRATCH, 'README.md'), '# scratch\n');
+  git('add', '-A');
+  git('commit', '-qm', 'base');
+}
+
+/**
  * One board per test. These tests deliberately leave boards in bad states — stopped, over budget,
  * holding a dead lease — and a shared board makes each failure cascade into the next test as a
  * phantom bug. A namespace per test is what a Namespace is for.
@@ -229,11 +250,11 @@ test('a resumable stop keeps the session, and the retry runs in the same checkou
     },
   };
 
-  await reconcile({ runtime: capThenFinish, cwd: REPO, board: b.slug, readPr: false });
+  await reconcile({ runtime: capThenFinish, cwd: SCRATCH, board: b.slug, readPr: false });
   const mid = await db.job.findUniqueOrThrow({ where: { id: job.id } });
   assert.equal(mid.lastSessionId, 'sess-1', 'a turn cap is resumable, so the session is kept');
 
-  await reconcile({ runtime: capThenFinish, cwd: REPO, board: b.slug, readPr: false });
+  await reconcile({ runtime: capThenFinish, cwd: SCRATCH, board: b.slug, readPr: false });
 
   assert.equal(dirs.length, 2);
   assert.equal(dirs[1], dirs[0], 'the retry resumed in the SAME checkout, not a fresh one');
@@ -242,9 +263,12 @@ test('a resumable stop keeps the session, and the retry runs in the same checkou
   assert.equal(after.phase, 'succeeded');
   assert.equal(after.attempts[1].branch, `kb-${job.id}-1`, 'and on the branch where its PR already is');
 
-  const { removeWorktree, existingWorktree } = await import('../src/worktree.ts');
-  const left = existingWorktree(REPO, job.id, 1);
-  if (left) removeWorktree(REPO, left);
+  // Left where it is on purpose: it holds the `wip.txt` the first attempt wrote, and
+  // `removeWorktree` is right to refuse a tree that still holds work. It goes with the scratch
+  // repository when `test.after` removes the whole temp directory.
+  const { existingWorktree } = await import('../src/worktree.ts');
+  assert.ok(existingWorktree(SCRATCH, job.id, 1), 'and the checkout it resumed into is still there');
+  assert.equal(existingWorktree(REPO, job.id, 1), null, 'and none of it landed in the repo under test');
 });
 
 // ---------------------------------------------------------------- G5: a killed process
