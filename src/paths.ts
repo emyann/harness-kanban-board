@@ -31,14 +31,14 @@ export const PACKAGE_ROOT = findRoot(import.meta.dirname);
 export const migrationsDir = (): string => path.join(PACKAGE_ROOT, 'prisma', 'migrations');
 
 /**
- * The entry point `kb up` re-executes to detach.
+ * The entry point `hkb up` re-executes to detach.
  *
  * Resolved beside *this* module rather than from the package root, so the daemon re-executes the
- * layout it is already running: `dist/bin/kb.js` from `dist/src/`, `bin/kb.ts` from `src/`. Rooting
+ * layout it is already running: `dist/bin/hkb.js` from `dist/src/`, `bin/hkb.ts` from `src/`. Rooting
  * it would make a checkout that happens to have a stale `dist/` spawn the stale one.
  */
 export function cliEntry(): string {
   const beside = path.resolve(import.meta.dirname, '..', 'bin');
-  const built = path.join(beside, 'kb.js');
-  return fs.existsSync(built) ? built : path.join(beside, 'kb.ts');
+  const built = path.join(beside, 'hkb.js');
+  return fs.existsSync(built) ? built : path.join(beside, 'hkb.ts');
 }

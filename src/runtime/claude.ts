@@ -79,7 +79,7 @@ export const claudeRuntime: Runtime = {
     // Either way the abort still lands after the grace window, so an SDK that stops honouring this
     // degrades to exactly today's behaviour rather than to a hang.
     //
-    // The operator's stop (`spec.signal`, from `kb down`) takes the same two stages, for the same
+    // The operator's stop (`spec.signal`, from `hkb down`) takes the same two stages, for the same
     // reason: a shutdown that abandons the transport loses the cost of everything the worker just
     // did, and loses it from the ceiling as well as from the record.
     const abortController = new AbortController();

@@ -1,8 +1,15 @@
 {
-  // Not a build. `tsc --noEmit` reads the JSDoc the sources already carry and checks it — nothing is
-  // compiled and nothing is emitted, so hkb stays dependency-free at runtime: `node bin/hkb.js` in a
-  // fresh clone works with no `npm install`. Track C turns the sources into `.ts`; this file grows
-  // into that config rather than being replaced.
+  // The check, not a build: `tsc --noEmit` over the sources Node runs directly. Emitting is
+  // `tsconfig.build.json`, and it happens once, at publish — see the note there for why a published
+  // `hkb` has to be JavaScript when a checkout's is not.
+  //
+  // `allowJs`/`checkJs` survive the retirement of the JavaScript system for one file: the smoke
+  // script is `.mjs` (it must run against an installed package with nothing built), and checking its
+  // JSDoc here is stronger than the `node --check` it used to get.
+  //
+  // `test/` is deliberately NOT in `include`, as it never was. The suite's fake runtimes build
+  // outcome objects inline and would need real annotation to pass; type-checking them is worth
+  // doing and is its own change, not a side effect of deleting the old system.
   "compilerOptions": {
     "allowJs": true,
     "checkJs": true,
@@ -18,7 +25,7 @@
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true
   },
-  "include": ["bin/**/*.js", "src/**/*.js", "src/**/*.ts", "scripts/**/*.mjs", "types/**/*.d.ts", "prisma.config.ts"],
+  "include": ["bin/**/*.ts", "src/**/*.ts", "scripts/**/*.mjs", "prisma.config.ts"],
   // The Prisma client is generated, ships `@ts-nocheck`, and is checked by Prisma's own
   // release process — type-checking 788K of it on every `npm run lint` buys nothing.
   "exclude": ["node_modules", "src/generated"]

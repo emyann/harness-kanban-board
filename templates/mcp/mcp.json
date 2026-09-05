@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "kanban": {
-      "type": "stdio",
-      "command": "hkb",
-      "args": ["mcp"]
-    }
-  }
-}

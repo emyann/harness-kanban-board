@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     # `22.18.0` is the EXACT floor `engines` claims, and it is in the matrix because a floor nothing
     # runs is a guess. It is the first release that strips types without a flag (22.17.1 fails with
-    # ERR_UNKNOWN_FILE_EXTENSION), which `bin/kb.ts` needs because a shebang cannot pass one.
+    # ERR_UNKNOWN_FILE_EXTENSION), which `bin/hkb.ts` needs because a shebang cannot pass one.
     # `22` catches a regression later in that line, `24` is the recommended one — a syntax or API
     # that only exists on 24 has to fail somewhere.
     strategy:
@@ -20,16 +20,16 @@ jobs:
       - uses: actions/checkout@v7
       # `package-manager-cache: false` on every setup-node with a checkout behind it. v5 turned
       # caching on by default and v6 narrowed it to "package.json names npm in
-      # packageManager/devEngines"; hkb has no dependencies and ships no lock file, so a cache would
-      # have nothing to restore — and the restore *fails* the step when it finds no lock file. A
-      # package.json edit is not supposed to be able to break CI, so this is pinned off rather than
-      # left to depend on a field nothing else here cares about.
+      # packageManager/devEngines"; hkb ships no lock file, so a cache has nothing to restore — and
+      # the restore *fails* the step when it finds none. A package.json edit is not supposed to be
+      # able to break CI, so this is pinned off rather than left to depend on a field nothing else
+      # here cares about.
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           package-manager-cache: false
-      # Dependencies are no longer zero (ADR-007): Prisma, the better-sqlite3 adapter and the Agent
-      # SDK are runtime dependencies, and `typescript` is what `npm run lint` and the publish
+      # Prisma, the better-sqlite3 adapter and the Agent SDK are runtime dependencies (ADR-007
+      # ended the zero-dependency rule), and `typescript` is what `npm run lint` and the publish
       # transpile both need.
       - run: npm install --no-audit --no-fund
       - run: npm run lint
@@ -46,7 +46,7 @@ jobs:
 
   # `npm test` proves the source is right; this proves the tarball is. It packs hkb, installs the
   # tarball into an empty directory and runs the CLI from there, so a `files` entry that stops
-  # shipping `skills/` or `templates/` fails here rather than on a stranger's first `npx hkb-cli init`.
+  # shipping `prisma/migrations` fails here rather than on a stranger's first `npx hkb-cli`.
   # It runs beside `test` rather than after it: two independent signals, and neither waits.
   #
   # On 22 and 26 on purpose: the floor `engines` claims and the current line — the two ends nothing
@@ -69,7 +69,7 @@ jobs:
           node-version: ${{ matrix.node-version }}
           package-manager-cache: false
       # `npm pack` runs `prepack`, which runs `tsc`. Without an install there is no `tsc` and the
-      # pack fails before it has packed anything — the published `kb` is the dist transpile, so this
+      # pack fails before it has packed anything — the published `hkb` IS the dist transpile, so this
       # step is what makes the artifact exist at all.
       - run: npm install --no-audit --no-fund
       - run: node scripts/smoke-pack.mjs

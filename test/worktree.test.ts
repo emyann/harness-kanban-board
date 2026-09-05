@@ -86,14 +86,14 @@ test('creating twice returns the same checkout — a resumed attempt lands where
 });
 
 test('the worker never sees the board: a gitignored file does not cross into a worktree', () => {
-  fs.mkdirSync(path.join(repo, '.kanban'), { recursive: true });
-  fs.writeFileSync(path.join(repo, '.gitignore'), '.kanban/*.db\n');
-  fs.writeFileSync(path.join(repo, '.kanban', 'board.db'), 'pretend-sqlite');
+  fs.mkdirSync(path.join(repo, '.hkb'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.gitignore'), '.hkb/*.db\n');
+  fs.writeFileSync(path.join(repo, '.hkb', 'board.db'), 'pretend-sqlite');
   git(['add', '.gitignore']);
   git(['commit', '-qm', 'ignore the board']);
 
   const wt = createWorktree(repo, 6, 1);
-  assert.equal(fs.existsSync(path.join(wt.path, '.kanban', 'board.db')), false,
+  assert.equal(fs.existsSync(path.join(wt.path, '.hkb', 'board.db')), false,
     'the controller owns every store write — a worktree copy would diverge');
 });
 
@@ -278,7 +278,7 @@ test('a worktree a live run holds is not swept out from under it', () => {
   deleteOnRemote(wt.branch);
   // Every other test would remove this one. The lock is the whole difference.
   assert.equal(lockWorktree(srepo, wt, `${os.hostname()}/${process.pid}@daemon`), true);
-  assert.match(listWorktrees(srepo).find((w) => w.path === wt.path)!.locked!, /^kb:/);
+  assert.match(listWorktrees(srepo).find((w) => w.path === wt.path)!.locked!, /^hkb:/);
 
   const r = findSwept(sweepWorktrees(srepo), wt.path);
   assert.equal(r.removed, false, 'the controller is running in there');
@@ -315,7 +315,7 @@ test('the sweep only touches checkouts hkb made', () => {
   const outside = path.join(srepo, 'not-ours');
   sgit(['worktree', 'add', '-q', '-b', 'somebody-elses', outside, 'HEAD']);
   assert.equal(sweepWorktrees(srepo).some((r) => r.path === outside), false,
-    'a worktree outside .kanban/worktrees is not this module\'s to reason about');
+    'a worktree outside .hkb/worktrees is not this module\'s to reason about');
   assert.equal(fs.existsSync(outside), true);
   sgit(['worktree', 'remove', outside]);
 });
@@ -342,18 +342,18 @@ const noInclude = () => fs.rmSync(path.join(repo, '.worktreeinclude'), { force: 
  * from being duplicated into the checkout that already has it.
  */
 test('setup: the repo ignores an env file, a secrets dir, and the board', () => {
-  fs.writeFileSync(path.join(repo, '.gitignore'), '.kanban/*.db\n.env\nsecrets/\n');
+  fs.writeFileSync(path.join(repo, '.gitignore'), '.hkb/*.db\n.env\nsecrets/\n');
   git(['add', '.gitignore']);
   git(['commit', '-qm', 'ignore env and secrets too']);
 
   fs.writeFileSync(path.join(repo, '.env'), 'TOKEN=from-the-operator\n');
   fs.mkdirSync(path.join(repo, 'secrets', 'deep'), { recursive: true });
   fs.writeFileSync(path.join(repo, 'secrets', 'deep', 'key.json'), '{"k":1}\n');
-  fs.mkdirSync(path.join(repo, '.kanban'), { recursive: true });
-  fs.writeFileSync(path.join(repo, '.kanban', 'board.db'), 'pretend-sqlite');
+  fs.mkdirSync(path.join(repo, '.hkb'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.hkb', 'board.db'), 'pretend-sqlite');
 
   assert.equal(git(['check-ignore', '-q', '.env']).status, 0, 'the env file is gitignored');
-  assert.equal(git(['check-ignore', '-q', '.kanban/board.db']).status, 0, 'and so is the board');
+  assert.equal(git(['check-ignore', '-q', '.hkb/board.db']).status, 0, 'and so is the board');
 });
 
 test('a declared gitignored file arrives in the worktree', () => {
@@ -371,7 +371,7 @@ test('with no .worktreeinclude nothing is carried, and the board still does not 
   assert.deepEqual(includedFiles(repo), []);
   const wt = createWorktree(repo, 31, 1);
   assert.equal(fs.existsSync(path.join(wt.path, '.env')), false, 'undeclared is uncarried');
-  assert.equal(fs.existsSync(path.join(wt.path, '.kanban', 'board.db')), false);
+  assert.equal(fs.existsSync(path.join(wt.path, '.hkb', 'board.db')), false);
 });
 
 test('a tracked file is not duplicated, even when a pattern names it', () => {
@@ -420,7 +420,7 @@ test('the copy happens on creation, not on resume into a checkout that already e
 test('a pattern that would carry the board in is REFUSED, however it is written', () => {
   // Not "quietly skipped". A pattern this broad is one whose author did not mean what they wrote,
   // and a worker holding a copy of board.db writes into a file nothing ever reads back.
-  for (const pattern of ['.kanban/*.db', '*.db', '**/board.db', '*']) {
+  for (const pattern of ['.hkb/*.db', '*.db', '**/board.db', '*']) {
     wroteInclude(`${pattern}\n`);
     assert.throws(() => includedFiles(repo), /never crosses into a worktree/,
       `pattern ${pattern} must be refused`);
@@ -429,8 +429,8 @@ test('a pattern that would carry the board in is REFUSED, however it is written'
 });
 
 test('the refusal happens before the checkout is made, and says what to do next', () => {
-  wroteInclude('.kanban/*.db\n.env\n');
-  const dir = path.join(repo, '.kanban', 'worktrees', branchFor(35, 1));
+  wroteInclude('.hkb/*.db\n.env\n');
+  const dir = path.join(repo, '.hkb', 'worktrees', branchFor(35, 1));
 
   let e: (Error & { exitCode?: number }) | null = null;
   try {
@@ -439,7 +439,7 @@ test('the refusal happens before the checkout is made, and says what to do next'
     e = err as Error & { exitCode?: number };
   }
   assert.ok(e, 'it refused');
-  assert.match(e.message, /\.kanban\/board\.db/, 'it names the file it refused');
+  assert.match(e.message, /\.hkb\/board\.db/, 'it names the file it refused');
   assert.match(e.message, /Narrow the pattern/, 'and the fix, not just the complaint');
   assert.equal(e.exitCode, 2);
   assert.equal(fs.existsSync(dir), false,
@@ -452,7 +452,7 @@ test('the board never crosses even when the declaration is legitimate', () => {
   wroteInclude('.env\n');
   const wt = createWorktree(repo, 36, 1);
   assert.equal(fs.existsSync(path.join(wt.path, '.env')), true, 'the declared file arrived');
-  assert.equal(fs.existsSync(path.join(wt.path, '.kanban', 'board.db')), false,
+  assert.equal(fs.existsSync(path.join(wt.path, '.hkb', 'board.db')), false,
     'and the board did not ride along with it');
   noInclude();
 });
@@ -510,7 +510,7 @@ test('an export path that leaves the worktree is REFUSED, however it is spelled'
       return true;
     }, `${JSON.stringify(bad)} must be refused`);
   }
-  assert.throws(() => checkExportPath('.kanban/board.db'), /board's own directory/,
+  assert.throws(() => checkExportPath('.hkb/board.db'), /board's own directory/,
     'including the one directory a copy must never land in');
   assert.throws(() => checkExportPath('.git/config'), /repository's own plumbing/,
     'and the other one — in a worktree `.git` is a file, and copying it over a real one breaks the checkout');

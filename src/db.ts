@@ -9,9 +9,9 @@ export type { PrismaClient } from './generated/prisma/client.ts';
 /**
  * The board.
  *
- * One handle per process, memoized — the same rule `openStore` had, and for the same reason:
- * `hkb serve` opens several stores per request and `hkb doctor` twenty per run, so "close it
- * in a finally" has to be written correctly at forty call sites or the handle leak comes back
+ * One handle per process, memoized — the same rule the retired store had, and for the same reason:
+ * its web server opened several stores per request and its doctor twenty per run, so "close it
+ * in a finally" had to be written correctly at forty call sites or the handle leak came back
  * at the one that forgot.
  */
 let handle: PrismaClient | null = null;

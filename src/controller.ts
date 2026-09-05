@@ -39,7 +39,7 @@ import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
  * Kubernetes scales controllers for availability, never for throughput; the throughput knob on a
  * Kubernetes Job is `parallelism`, which the Job controller honours by starting that many Pods.
  * Documenting "run more reconcilers" would therefore have documented something the leader election
- * forbids, leaving the only supported way to use the ceiling a `kb run` racing the daemon — which
+ * forbids, leaving the only supported way to use the ceiling a `hkb run` racing the daemon — which
  * is a workaround, not a design. A setting whose only honest value is 1 is a setting to delete,
  * and deleting it would have taken the one ceiling an operator most obviously wants with it.
  *
@@ -73,7 +73,7 @@ export type ControllerDeps = {
    * The Board's `repoPath` is the real answer — a machine-level daemon has no meaningful cwd of
    * its own, and "wherever the operator was standing" stopped being a usable definition of the
    * repository the moment one process started serving several. This remains as the fallback for a
-   * board with no repo set, which is how `kb run` in a checkout and every test still works.
+   * board with no repo set, which is how `hkb run` in a checkout and every test still works.
    */
   cwd?: string;
   host?: string;
@@ -83,11 +83,11 @@ export type ControllerDeps = {
   onEvent?: (line: string) => void;
   /** The runtime's own stream — tool calls and text, for an operator watching a foreground run. */
   onRuntimeEvent?: (e: RuntimeEvent) => void;
-  /** Reconcile exactly one Job instead of every pending one. `kb run <id>`. */
+  /** Reconcile exactly one Job instead of every pending one. `hkb run <id>`. */
   only?: number;
   /**
    * Scope to one board. A Board is the namespace, and a controller that ignores it reaches across
-   * every namespace on the host — which is what `kb run --board other` silently did before.
+   * every namespace on the host — which is what `hkb run --board other` silently did before.
    */
   board?: string;
   /** Read the pull request back from the forge after a run. Off in tests, which have no forge. */
@@ -102,7 +102,7 @@ export type ControllerDeps = {
   reclaim?: boolean;
   /**
    * The operator is shutting down. Claiming stops, and the run in flight is stopped rather than
-   * left to finish: `kb down` that took thirty minutes to return would not be a stop.
+   * left to finish: `hkb down` that took thirty minutes to return would not be a stop.
    */
   signal?: AbortSignal;
 };
@@ -152,14 +152,14 @@ function budgetAdvice(maxBudgetUsd?: number): string {
   const cap = maxBudgetUsd === undefined ? 'its whole budget' : `its whole $${maxBudgetUsd.toFixed(2)} budget`;
   const bigger = maxBudgetUsd === undefined ? '<usd>' : (maxBudgetUsd * 2).toFixed(2);
   return `spent ${cap} and stopped with work left. Not retried — a retry gets the same cap and `
-    + `stops in the same place. Raise it and re-queue: \`kb retry <id> --max-budget ${bigger}\`, `
+    + `stops in the same place. Raise it and re-queue: \`hkb retry <id> --max-budget ${bigger}\`, `
     + 'or file a smaller brief. The session is kept, so that retry resumes rather than starting cold.';
 }
 
 /**
  * The paths a Job declared, read back out of its JSON column.
  *
- * Defensive about the shape because a Json column is not a type: `kb new --export` validates every
+ * Defensive about the shape because a Json column is not a type: `hkb new --export` validates every
  * path before it is stored, but nothing stops a hand-written row, and a malformed declaration must
  * not take the reconcile pass down with it. An entry that is not a usable path is dropped here and
  * refused again by `checkExportPath` if it somehow survives.
@@ -175,7 +175,7 @@ function missingOutputs(id: number, missing: string[]): string {
   return `#${id} declared ${missing.map((m) => `\`${m}\``).join(', ')} and the run left ${one ? 'it' : 'them'} `
     + `unwritten, so the attempt failed: a declared output that is not there is not work that was done. `
     + `Look in the attempt's summary for what it did instead, then either fix the brief so it produces `
-    + `that exact path, or re-file the Job with the path the work really writes. \`kb retry ${id}\` `
+    + `that exact path, or re-file the Job with the path the work really writes. \`hkb retry ${id}\` `
     + 'runs it again once one of those is true.';
 }
 
@@ -207,7 +207,7 @@ export function nextPhase(
   //                  its third attempt was refused by the board's daily ceiling — $4.07 for
   //                  nothing. Raising the cap is a change to the Job's SPEC, and the spec belongs
   //                  to whoever filed it, never to this controller; so the Job fails here with the
-  //                  advice above, and `kb retry <id> --max-budget <usd>` is the deliberate raise.
+  //                  advice above, and `hkb retry <id> --max-budget <usd>` is the deliberate raise.
   //                  It stays `resumable`, which is what keeps `lastSessionId` for that retry.
   //
   // `maxRetries: 2` means two retries AFTER the first go, so three attempts in total.
@@ -348,7 +348,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     if (!cwd) {
       throw new Error(
         `board for #${job.id} has no repoPath and no cwd was given — `
-        + '`kb boards add <slug> --repo <path>` points a board at a repository',
+        + '`hkb boards add <slug> --repo <path>` points a board at a repository',
       );
     }
 
@@ -421,7 +421,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     // Two different counts, and conflating them was a bug waiting to happen. `k` numbers the
     // attempt and must never repeat — it is half the Attempt's primary key. `charged` is how many
-    // attempts spent a retry, and an attempt the operator stopped did not: `kb down` three times
+    // attempts spent a retry, and an attempt the operator stopped did not: `hkb down` three times
     // would otherwise exhaust a Job that never once failed.
     const done = await db.attempt.findMany({
       where: { jobId: job.id, endedAt: { not: null } },
@@ -641,7 +641,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // A declared output that is not there fails the attempt, and that rule is what makes the
     // declaration worth writing down: without it `succeeded` still means only that a session ended.
     // Not retried — the session's own account is that it finished, so a resumed attempt wakes up
-    // done and a cold one re-buys the same run. `kb retry <id>` is the deliberate second go, once a
+    // done and a cold one re-buys the same run. `hkb retry <id>` is the deliberate second go, once a
     // human has read which path is missing and decided whose mistake it was.
     const decision: Decision = shortfall
       ? { phase: 'failed', outcome: 'no_output', resumable: false, lastError: shortfall }

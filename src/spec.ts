@@ -3,13 +3,13 @@
  *
  * Three levels, and the order is the whole of it:
  *
- *     1. the Job's own value wins          — `kb new --model …`
- *     2. the Board's default fills a null  — `kb boards set <slug> --model …`
+ *     1. the Job's own value wins          — `hkb new --model …`
+ *     2. the Board's default fills a null  — `hkb boards set <slug> --model …`
  *     3. the built-in is the last resort   — `BUILT_IN`, below
  *
  * A Board already carries policy — `maxConcurrent`, `dailyBudgetUsd`, `pausedAt` — and a default
  * model is the same kind of fact: a board that runs cheap, high-volume work should be able to say
- * so once instead of on every `kb new`. The difference between the two is worth keeping straight,
+ * so once instead of on every `hkb new`. The difference between the two is worth keeping straight,
  * because it decides who wins: a *ceiling* is a limit a Job may not exceed, and it is enforced in
  * `src/limits.ts`; a *default* is a value a Job may freely override, and it is resolved here.
  *
@@ -20,7 +20,7 @@
  * built around.
  *
  * `from` rides along with every value because a spec you cannot trace is worse than one you must
- * repeat: `kb show` prints it, and "why did this Job run on Opus" stops being archaeology across
+ * repeat: `hkb show` prints it, and "why did this Job run on Opus" stops being archaeology across
  * two tables.
  */
 
@@ -98,8 +98,8 @@ export function resolveSpec(
   const b = board ?? {};
   return {
     model: pick(j.model, b.defaultModel, BUILT_IN.model as string | null),
-    // Cast rather than validate: the closed set is enforced at the two write points (`kb new` and
-    // `kb boards set`), so a value that is not an Effort got into the database by hand, and
+    // Cast rather than validate: the closed set is enforced at the two write points (`hkb new` and
+    // `hkb boards set`), so a value that is not an Effort got into the database by hand, and
     // refusing to run it here would strand the Job with no way to see why.
     effort: pick(
       j.effort as Effort | null | undefined,
@@ -112,7 +112,7 @@ export function resolveSpec(
   };
 }
 
-/** Whether a board says anything at all. `kb boards` only prints a defaults line when it does. */
+/** Whether a board says anything at all. `hkb boards` only prints a defaults line when it does. */
 export function hasDefaults(b: BoardDefaults): boolean {
   return b.defaultModel != null || b.defaultEffort != null || b.defaultMaxTurns != null
     || b.defaultMaxBudgetUsd != null || b.defaultMaxRetries != null;

@@ -408,7 +408,7 @@ test('reclaim does not steal a lease renewed between the read and the delete', a
 /** What is in the real repository's worktree directory, so a test can prove it added nothing. */
 const worktreesIn = (root: string): string[] => {
   try {
-    return fs.readdirSync(path.join(root, '.kanban', 'worktrees')).sort();
+    return fs.readdirSync(path.join(root, '.hkb', 'worktrees')).sort();
   } catch {
     return [];
   }

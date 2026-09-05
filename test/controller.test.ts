@@ -86,7 +86,7 @@ test('nextPhase: a spent budget REFUSES to retry, though two retries remain', ()
 
 test('nextPhase: a spent budget stays resumable, so a raised retry continues', () => {
   // `failed` and `resumable` are not in tension: the work up to the wall is real, and the
-  // controller keeps `lastSessionId` on exactly this flag. Losing it would make `kb retry
+  // controller keeps `lastSessionId` on exactly this flag. Losing it would make `hkb retry
   // --max-budget` start cold and re-buy everything the $2 already paid for.
   const d = nextPhase({ status: 'max_budget' } as never, 1, DEFAULT_RETRIES, DEFAULT_BUDGET);
   assert.equal(d.resumable, true);
@@ -95,7 +95,7 @@ test('nextPhase: a spent budget stays resumable, so a raised retry continues', (
 test('nextPhase: the budget failure tells a human the cap, and what to do about it', () => {
   const d = nextPhase({ status: 'max_budget' } as never, 1, DEFAULT_RETRIES, DEFAULT_BUDGET);
   assert.match(d.lastError ?? '', /\$1\.00/, 'the cap it hit, in dollars');
-  assert.match(d.lastError ?? '', /kb retry <id> --max-budget 2\.00/, 'the command that changes the answer');
+  assert.match(d.lastError ?? '', /hkb retry <id> --max-budget 2\.00/, 'the command that changes the answer');
   assert.match(d.lastError ?? '', /session is kept/, 'and that the raise resumes rather than restarts');
 });
 
@@ -156,9 +156,9 @@ test('a Job that spends its whole budget stops after one attempt, and says what 
   assert.equal(after.phase, 'failed');
   assert.equal(after.attempts.length, 1, 'two retries remained, and both would have made the same wall');
   assert.equal(after.attempts[0].outcome, 'max_budget');
-  assert.ok(after.lastSessionId, 'the session survives, so `kb retry --max-budget` resumes rather than restarts');
+  assert.ok(after.lastSessionId, 'the session survives, so `hkb retry --max-budget` resumes rather than restarts');
   assert.match(after.lastError ?? '', /\$1\.00/);
-  assert.match(after.lastError ?? '', /kb retry <id> --max-budget/, 'the row says what a human should do next');
+  assert.match(after.lastError ?? '', /hkb retry <id> --max-budget/, 'the row says what a human should do next');
 });
 
 test('known contention is refused by the gate before any claim is attempted', async () => {
@@ -349,7 +349,7 @@ const writes = (files: Record<string, string>) => ({
   },
 } as never);
 
-const checkoutOf = (jobId: number) => path.join(cwd, '.kanban', 'worktrees', `kb-${jobId}-1`);
+const checkoutOf = (jobId: number) => path.join(cwd, '.hkb', 'worktrees', `kb-${jobId}-1`);
 
 test('a declared export lands in the board\'s repository, and the checkout goes with the litter', async () => {
   const job = await mkJob('produces-a-skill', { exports: ['.claude/skills/sdk-docs'] });
@@ -367,7 +367,7 @@ test('a declared export lands in the board\'s repository, and the checkout goes 
   const a = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: job.id, k: 1 } } });
   assert.deepEqual(a.exported, ['.claude/skills/sdk-docs/SKILL.md'], 'and the attempt records what it handed over');
   assert.equal(fs.existsSync(checkoutOf(job.id)), false,
-    'what was left was undeclared, which is litter by definition — no `kb` verb needed to reclaim it');
+    'what was left was undeclared, which is litter by definition — no `hkb` verb needed to reclaim it');
   fs.rmSync(path.join(cwd, '.claude'), { recursive: true, force: true });
 });
 
@@ -383,15 +383,15 @@ test('a declared export the worker did not produce FAILS the attempt', async () 
   assert.equal(after.attempts[0].outcome, 'no_output', 'not a crash and not a refusal: it ran, and produced nothing declared');
   assert.match(after.attempts[0].reason ?? '', /REPORT\.md/, 'the attempt row names the path that is missing');
   assert.match(after.lastError ?? '', /REPORT\.md/);
-  assert.match(after.lastError ?? '', /kb retry/, 'and says what a human does next');
+  assert.match(after.lastError ?? '', /hkb retry/, 'and says what a human does next');
   assert.deepEqual(after.attempts[0].exported, [], 'it declared, and handed over nothing — which is not the same fact as null');
   assert.equal(fs.existsSync(path.join(cwd, 'notes-to-self.md')), false, 'and nothing undeclared was copied out');
   assert.equal(fs.existsSync(checkoutOf(job.id)), true,
     'the checkout stays, because what the run did instead is now the only copy of itself');
 });
 
-test('an export path that escapes the worktree is refused at the copy too, not only at `kb new`', async () => {
-  // `kb new` validates the declaration, so reaching this needs a row written another way — which is
+test('an export path that escapes the worktree is refused at the copy too, not only at `hkb new`', async () => {
+  // `hkb new` validates the declaration, so reaching this needs a row written another way — which is
   // exactly why the check is here as well. The copy runs with the operator's authority.
   const job = await mkJob('escape-artist', { exports: ['../../etc/passwd'] });
   await reconcile({ runtime: writes({ 'harmless.txt': 'x\n' }), cwd, readPr: false });

@@ -111,7 +111,7 @@ export function admissionCallback(policy: AdmissionPolicy = {}) {
           'This workload runs in the operator\'s own checkout, so a subagent worktree would leave its '
           + 'work in a throwaway checkout nobody reads. Spawn it again without `isolation` — it will '
           + 'run where this session is running. If the work needs a branch of its own, the Job has to '
-          + 'ask for one: file it with `kb new` and without `--no-isolate`.',
+          + 'ask for one: file it with `hkb new` and without `--no-isolate`.',
         );
       }
     } else if (toolInput.isolation !== 'worktree') {

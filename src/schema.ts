@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 /**
  * Making the board exist, and refusing to open one from the future.
  *
- * A machine-level default only works if the first `kb` command on a fresh machine works. Telling
+ * A machine-level default only works if the first `hkb` command on a fresh machine works. Telling
  * the operator to go and run `prisma migrate deploy` fails that on two counts: it is the "yes, by
  * hand" answer this project treats as a bug report, and `prisma` is a devDependency that a global
  * install does not have. So the migrations are applied here, from the committed SQL, using the
@@ -127,7 +127,7 @@ export function ensureSchema(dbPath: string, dir = MIGRATIONS_DIR): SchemaResult
  * Refuse a board migrated by a newer build.
  *
  * The forward direction is handled by `ensureSchema` — an older database is simply brought up. The
- * backward one cannot be: a global `kb` opening a board that a dev checkout has already migrated
+ * backward one cannot be: a global `hkb` opening a board that a dev checkout has already migrated
  * would fail somewhere deep in Prisma with an error naming a column, not a cause. One machine-level
  * board makes this reachable rather than theoretical, so it gets a real message.
  */
@@ -147,7 +147,7 @@ export function assertNotFromTheFuture(dbPath: string, dir = MIGRATIONS_DIR): vo
       .filter((n) => !known.has(n));
     if (!ahead.length) return;
     const e = new Error(
-      `this board was migrated by a newer hkb (${ahead.join(', ')}) — run the newer \`kb\`, `
+      `this board was migrated by a newer hkb (${ahead.join(', ')}) — run the newer \`hkb\`, `
       + `or point HKB_DATABASE_URL at a different board`,
     ) as Error & { exitCode: number };
     e.exitCode = 2;

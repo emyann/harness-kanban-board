@@ -9,22 +9,22 @@ import { checkExportPath } from './worktree.ts';
 import { fakeRuntime } from './runtime/fake.ts';
 import * as daemon from './daemon.ts';
 import { EFFORTS, boardDefaults, hasDefaults, resolveSpec, type SpecSource } from './spec.ts';
+import { PACKAGE_ROOT } from './paths.ts';
 import type { Runtime } from './runtime/index.ts';
 
 /**
- * `kb` — the CLI for the ADR-007 core.
+ * `hkb` — the CLI.
  *
- * Ten verbs, and each one arrived because something concrete demanded it. The old CLI has
- * thirty-six and that is the shape this one is trying not to grow into.
+ * Every verb arrived because something concrete demanded it. The CLI this one replaced had
+ * thirty-six, and that is the shape it is trying not to grow back into.
  *
- * `kb run` is still the foreground tool — one reconcile, in this process, streaming what the
+ * `hkb run` is still the foreground tool — one reconcile, in this process, streaming what the
  * worker does — and it is still the one to reach for when something is wrong, because everything
- * it does is visible. `kb up` is the same pass on a timer in a detached process; it exists for the
- * work only a clock can notice (`src/daemon.ts`), not to make `kb run` obsolete.
+ * it does is visible. `hkb up` is the same pass on a timer in a detached process; it exists for the
+ * work only a clock can notice (`src/daemon.ts`), not to make `hkb run` obsolete.
  *
- * Argument parsing is `node:util`'s `parseArgs` rather than a hand-rolled one — the old CLI's
- * parser silently eats a value that begins with two dashes, and there is no reason to inherit
- * that.
+ * Argument parsing is `node:util`'s `parseArgs` rather than a hand-rolled one — the retired CLI's
+ * parser silently ate a value that began with two dashes, and there was no reason to inherit that.
  */
 
 const usage = (msg: string) => {
@@ -33,9 +33,9 @@ const usage = (msg: string) => {
   return e;
 };
 
-const HELP = `kb — run one agent against one brief
+const HELP = `hkb — run one agent against one brief
 
-  kb new <name>            file a Job
+  hkb new <name>            file a Job
        --brief <text> | --brief-file <path> | --brief - (stdin)
        --agent <a>  --model <m>  --effort low|medium|high|xhigh|max
        --max-turns <n>  --max-budget <usd>  --max-retries <n>
@@ -45,40 +45,42 @@ const HELP = `kb — run one agent against one brief
                         a declared path the run did not write fails the attempt. Repeatable.
        --board <slug>   default: default
 
-  kb ls                    what is on the board        [--phase p] [--board s]
+  hkb ls                    what is on the board        [--phase p] [--board s]
        --all               every board on this machine, with a BOARD column
-  kb show <id>             one screen: spec, phase, every attempt
-  kb run [<id>]            reconcile once, in the foreground   [--fake]
-  kb retry <id>            re-queue a Job that stopped, resuming its session
+  hkb show <id>             one screen: spec, phase, every attempt
+  hkb run [<id>]            reconcile once, in the foreground   [--fake]
+  hkb retry <id>            re-queue a Job that stopped, resuming its session
        --max-budget <usd>  required when it stopped on max_budget: the same cap
                            would stop it in the same place
        --max-turns <n>  --max-retries <n>
-  kb done <id> "<why>"     end it: the aim was achieved by other means
-  kb cancel <id> "<why>"   end it: stop, this is not wanted
-  kb rm <id>               delete a Job and its attempts
-  kb stop                  the kill switch: claim nothing on this board  [--board s]
-  kb start                 clear it, and show the ceilings
+  hkb done <id> "<why>"     end it: the aim was achieved by other means
+  hkb cancel <id> "<why>"   end it: stop, this is not wanted
+  hkb rm <id>               delete a Job and its attempts
+  hkb stop                  the kill switch: claim nothing on this board  [--board s]
+  hkb start                 clear it, and show the ceilings
 
-  kb up                    reconcile every board on a timer, detached  [--interval <s>]
+  hkb up                    reconcile every board on a timer, detached  [--interval <s>]
        --status            which boards are served, by what, since when — and what
                            each may still spend and claim
        --foreground        run the loop here instead of detaching (what a supervisor runs)
-  kb down                  stop it, cleanly                    [--timeout <s>]
-  kb log [<id>]            what happened, in order             [-n <count>]
+  hkb down                  stop it, cleanly                    [--timeout <s>]
+  hkb log [<id>]            what happened, in order             [-n <count>]
        --since <dur>       only what is newer than 90s, 30m, 2h, 3d
 
-  kb boards                every board on this machine
-  kb boards add <slug>     point a board at a repository       [--repo <path>]
-  kb boards rm <slug>      remove a board and everything on it [--force]
-  kb boards set <slug>     the ceilings and the spec defaults, without SQL
+  hkb boards                every board on this machine
+  hkb boards add <slug>     point a board at a repository       [--repo <path>]
+  hkb boards rm <slug>      remove a board and everything on it [--force]
+  hkb boards set <slug>     the ceilings and the spec defaults, without SQL
        --max-concurrent <n>  how many Jobs the board runs at once (0 drains it)
        --daily-budget <usd>|none
        --model <m>|none  --effort <e>|none  --max-turns <n>|none
        --max-budget <usd>|none  --max-retries <n>|none
 
+  hkb version               what this build is
+
 A board's defaults fill in what a Job did not say: the Job's own value wins, the board's
 default fills a null, the built-in is the last resort. \`none\` clears a default rather
-than setting it to the word, and \`kb show\` names the source of every resolved field.
+than setting it to the word, and \`hkb show\` names the source of every resolved field.
 
 The board is ~/.hkb/board.db — one per machine, a Board per repository, the way one
 cluster holds a namespace per project. \`--board\` picks one; without it the repository
@@ -86,6 +88,18 @@ you are standing in decides. HKB_DATABASE_URL points at a different board entire
 
   --json on every verb. Exit 2 is usage or state.
 `;
+
+/**
+ * The version, read out of the package the running code is actually in.
+ *
+ * `hkb version` is the one verb that must work before anything else does: the release workflow
+ * installs the freshly published tarball on a clean runner and matches this against the tag, so a
+ * build that cannot say what it is fails the release rather than shipping. It must therefore open
+ * no board — a fresh machine would otherwise get `~/.hkb/board.db` created by a version check.
+ */
+function packageVersion(): string {
+  return JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8')).version;
+}
 
 type Out = { json: boolean };
 function emit(out: Out, data: unknown, human: () => void) {
@@ -119,10 +133,10 @@ const whoami = () => `${os.hostname()}/${process.pid}@cli`;
 /**
  * The *person*, for the one decision only a person can make.
  *
- * `whoami()` names a process, which is the right answer for everything a process decided. `kb done`
- * and `kb cancel` decide nothing — a human did, and the process is only the typing. So the actor on
+ * `whoami()` names a process, which is the right answer for everything a process decided. `hkb done`
+ * and `hkb cancel` decide nothing — a human did, and the process is only the typing. So the actor on
  * those Events is a name rather than a pid, which is also what makes them read differently in
- * `kb log` from the runtime's own transitions without anyone having to know which kinds are which.
+ * `hkb log` from the runtime's own transitions without anyone having to know which kinds are which.
  */
 const operator = () => `${process.env.USER ?? process.env.USERNAME ?? 'someone'}@${os.hostname()}`;
 
@@ -147,10 +161,10 @@ export type Scope = { slug: string; repoPath: string | null; known: boolean };
  * tedious-but-possible rung this project treats as a bug report. So: the flag wins; otherwise the
  * repository you are standing in decides, matched on `repoPath`; otherwise `default`.
  *
- * A repository with no board yet still resolves — to a slug named after it, which `kb new` will
+ * A repository with no board yet still resolves — to a slug named after it, which `hkb new` will
  * create and point at the checkout. Reading verbs simply find nothing, which is the truth.
  *
- * Two boards on one checkout is a supported arrangement — `kb boards add` allows it so different
+ * Two boards on one checkout is a supported arrangement — `hkb boards add` allows it so different
  * work can run under different budgets — so when the cwd matches more than one there is no answer
  * to infer, only a choice the operator has to make. It is asked for rather than guessed.
  */
@@ -169,7 +183,7 @@ export async function resolveBoard(
     return { slug: 'default', repoPath: b?.repoPath ?? null, known: !!b };
   }
   // By slug, not by id: the listing in the error below is something an operator reads and then
-  // types back, so it is ordered the way `kb boards` orders it.
+  // types back, so it is ordered the way `hkb boards` orders it.
   const here = await db.board.findMany({ where: { repoPath: root }, orderBy: { slug: 'asc' } });
   if (here.length > 1) {
     throw usage(
@@ -212,7 +226,7 @@ export function formatDuration(ms: number): string {
  *
  * Only what is set: a row of `model=— effort=— maxTurns=—` is five columns of nothing, and the
  * absence of the line is the same information with none of the noise. `(none)` when the board has
- * no opinion at all, because `kb boards set` prints this unconditionally and a blank tail there
+ * no opinion at all, because `hkb boards set` prints this unconditionally and a blank tail there
  * would read as truncated output rather than as an answer.
  */
 export function describeDefaults(d: ReturnType<typeof boardDefaults>): string {
@@ -273,6 +287,7 @@ export async function main(argv: string[]): Promise<number> {
     options: {
       json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
+      version: { type: 'boolean' },
       fake: { type: 'boolean' },
       force: { type: 'boolean' },
       'no-isolate': { type: 'boolean' },
@@ -304,7 +319,16 @@ export async function main(argv: string[]): Promise<number> {
 
   const [verb, ...rest] = positionals;
   const out: Out = { json: !!values.json };
-  if (!verb || values.help) { process.stdout.write(HELP); return 0; }
+  // `help` as a verb as well as a flag: it is what a person types first, and answering "unknown
+  // verb: help" to it is the kind of small friction this project treats as a bug.
+  if (!verb || verb === 'help' || values.help) { process.stdout.write(HELP); return 0; }
+  // Before `openBoard()` on purpose — see packageVersion(). `--version` too, because that is what
+  // every other CLI answers to and being told "unknown verb" for it is a small, avoidable insult.
+  if (verb === 'version' || values.version) {
+    const version = packageVersion();
+    emit(out, { version }, () => process.stdout.write(`hkb ${version}\n`));
+    return 0;
+  }
 
   const db = openBoard();
   // `up`, `down` and `boards` are machine-wide when no board is named, and so is `ls --all`;
@@ -324,7 +348,7 @@ export async function main(argv: string[]): Promise<number> {
     // ---------------------------------------------------------------- new
     case 'new': {
       const name = rest.join(' ').trim();
-      if (!name) throw usage('kb new <name> — a Job needs a name');
+      if (!name) throw usage('hkb new <name> — a Job needs a name');
       const brief = await readBrief(values);
       const board = await db.board.upsert({
         where: { slug },
@@ -401,13 +425,13 @@ export async function main(argv: string[]): Promise<number> {
 
     // ---------------------------------------------------------------- show
     case 'show': {
-      const id = num(rest[0], 'kb show <id>');
-      if (!id) throw usage('kb show <id> — which Job?');
+      const id = num(rest[0], 'hkb show <id>');
+      if (!id) throw usage('hkb show <id> — which Job?');
       const job = await db.job.findUnique({
         where: { id },
         include: { attempts: { orderBy: { k: 'asc' } }, lease: true, board: true },
       });
-      if (!job) throw usage(`no Job #${id} — \`kb ls\` shows what is on the board`);
+      if (!job) throw usage(`no Job #${id} — \`hkb ls\` shows what is on the board`);
       // What this Job will run with, and where each value came from. The raw columns are on the
       // object too, but most of them are null now, and a null `model` is not an answer to "which
       // model does this run on" — the board may have answered it.
@@ -419,12 +443,12 @@ export async function main(argv: string[]): Promise<number> {
         // in, comes before anything about the Job itself.
         console.log(
           `  board    ${job.board.slug}  `
-          + `${job.board.repoPath ?? '(no repo — `kb boards add ' + job.board.slug + ' --repo <path>`)'}`,
+          + `${job.board.repoPath ?? '(no repo — `hkb boards add ' + job.board.slug + ' --repo <path>`)'}`,
         );
         console.log(`  phase    ${job.phase}${job.lease ? `  (leased by ${job.lease.holder} until ${job.lease.expiresAt.toISOString()})` : ''}`);
         // A phase a human wrote must say so, and say who and why. `done` next to a spent budget
         // and two failed attempts is otherwise a contradiction the reader has to go and resolve in
-        // `kb log`, and `succeeded` is deliberately not reused for it: that word means the session
+        // `hkb log`, and `succeeded` is deliberately not reused for it: that word means the session
         // completed, and this one did not.
         if (job.endedBy) {
           console.log(`  ended    by ${job.endedBy}${job.finishedAt ? `, ${job.finishedAt.toISOString()}` : ''}`);
@@ -487,9 +511,9 @@ export async function main(argv: string[]): Promise<number> {
 
     // ---------------------------------------------------------------- run
     case 'run': {
-      const only = rest[0] ? num(rest[0], 'kb run <id>') : undefined;
+      const only = rest[0] ? num(rest[0], 'hkb run <id>') : undefined;
       if (only && !(await db.job.findUnique({ where: { id: only } }))) {
-        throw usage(`no Job #${only} — \`kb ls\` shows what is on the board`);
+        throw usage(`no Job #${only} — \`hkb ls\` shows what is on the board`);
       }
       const runtime: Runtime = values.fake
         ? fakeRuntime()
@@ -516,8 +540,8 @@ export async function main(argv: string[]): Promise<number> {
 
     // ---------------------------------------------------------------- rm
     case 'rm': {
-      const id = num(rest[0], 'kb rm <id>');
-      if (!id) throw usage('kb rm <id> — which Job?');
+      const id = num(rest[0], 'hkb rm <id>');
+      if (!id) throw usage('hkb rm <id> — which Job?');
       const job = await db.job.findUnique({ where: { id }, include: { lease: true } });
       if (!job) throw usage(`no Job #${id} — nothing to remove`);
       if (job.lease) throw usage(`#${id} is leased by ${job.lease.holder} — it is running. Wait for it, or let the lease expire.`);
@@ -538,8 +562,8 @@ export async function main(argv: string[]): Promise<number> {
     // the Job's spec, which belongs to whoever filed it: this is where they make it, in one
     // command, and the raise goes on the event stream so the extra money has a name against it.
     case 'retry': {
-      const id = num(rest[0], 'kb retry <id>');
-      if (!id) throw usage('kb retry <id> — which Job? `kb ls --phase failed` shows the candidates');
+      const id = num(rest[0], 'hkb retry <id>');
+      if (!id) throw usage('hkb retry <id> — which Job? `hkb ls --phase failed` shows the candidates');
       const job = await db.job.findUnique({
         where: { id },
         include: {
@@ -547,13 +571,13 @@ export async function main(argv: string[]): Promise<number> {
           attempts: { where: { endedAt: { not: null } }, orderBy: { k: 'desc' }, take: 1 },
         },
       });
-      if (!job) throw usage(`no Job #${id} — \`kb ls\` shows what is on the board`);
+      if (!job) throw usage(`no Job #${id} — \`hkb ls\` shows what is on the board`);
       if (job.lease) {
         throw usage(`#${id} is leased by ${job.lease.holder} — it is running now. Wait for it, or let the lease expire.`);
       }
-      if (job.phase === 'pending') throw usage(`#${id} is already pending — \`kb run ${id}\` works it now`);
+      if (job.phase === 'pending') throw usage(`#${id} is already pending — \`hkb run ${id}\` works it now`);
       if (job.phase === 'running') {
-        throw usage(`#${id} says running with no lease — \`kb run\` reclaims it, and re-queueing it by hand would race that`);
+        throw usage(`#${id} says running with no lease — \`hkb run\` reclaims it, and re-queueing it by hand would race that`);
       }
 
       const budget = num(values['max-budget'], '--max-budget');
@@ -577,7 +601,7 @@ export async function main(argv: string[]): Promise<number> {
         throw usage(
           `#${id} spent its whole $${ranUnder.toFixed(2)} budget and stopped with work left — running it `
           + `again under $${wouldGet.toFixed(2)} stops in the same place, at the same price. Give it a bigger `
-          + `one: \`kb retry ${id} --max-budget ${(ranUnder * 2).toFixed(2)}\`, or file a smaller brief.`,
+          + `one: \`hkb retry ${id} --max-budget ${(ranUnder * 2).toFixed(2)}\`, or file a smaller brief.`,
         );
       }
       if (budget !== undefined && !(budget > 0)) {
@@ -625,14 +649,14 @@ export async function main(argv: string[]): Promise<number> {
      * The gap this closes: a Job whose pull request was reviewed and merged while it sat `pending`
      * on a spent budget. The work is done; the board does not know, and the next reconcile spends
      * the whole cap redoing merged work. Until this verb the only thing that stopped it was
-     * `kb rm`, which deletes the Job, its attempts and its events — so the choice was between
+     * `hkb rm`, which deletes the Job, its attempts and its events — so the choice was between
      * re-running work that already landed and destroying the record that it did, on a board whose
      * whole point is the record.
      *
      * TWO verbs, not one with a `--reason`. They are different statements about the work —
      * "this achieved its aim by other means" and "stop, this is not wanted" — and the operator
      * knows which one they mean at the moment they type it. A single verb would push that
-     * statement into free text, where it can be read by a person and by nothing else; `kb ls
+     * statement into free text, where it can be read by a person and by nothing else; `hkb ls
      * --phase cancelled` would have no answer. The reason is still required by both, because it
      * says *what* landed or *why* it was dropped, which the phase never can.
      *
@@ -643,41 +667,41 @@ export async function main(argv: string[]): Promise<number> {
     case 'done':
     case 'cancel': {
       const phase = BY_HAND[verb as ByHandVerb];
-      const id = num(rest[0], `kb ${verb} <id>`);
-      if (!id) throw usage(`kb ${verb} <id> "<reason>" — which Job?`);
-      // Joined the way `kb new` joins a name, so an unquoted reason is not silently truncated to
+      const id = num(rest[0], `hkb ${verb} <id>`);
+      if (!id) throw usage(`hkb ${verb} <id> "<reason>" — which Job?`);
+      // Joined the way `hkb new` joins a name, so an unquoted reason is not silently truncated to
       // its first word.
       const reason = rest.slice(1).join(' ').trim();
       if (!reason) {
         throw usage(
-          `kb ${verb} ${id} needs a reason — ${verb === 'done'
-            ? 'what achieved the aim instead, e.g. `kb done ' + id + ' "PR #364 was reviewed and merged"`'
-            : 'why it is not wanted, e.g. `kb cancel ' + id + ' "superseded by #12"`'}`,
+          `hkb ${verb} ${id} needs a reason — ${verb === 'done'
+            ? 'what achieved the aim instead, e.g. `hkb done ' + id + ' "PR #364 was reviewed and merged"`'
+            : 'why it is not wanted, e.g. `hkb cancel ' + id + ' "superseded by #12"`'}`,
         );
       }
 
       const job = await db.job.findUnique({ where: { id }, include: { lease: true } });
-      if (!job) throw usage(`no Job #${id} — \`kb ls\` shows what is on the board`);
+      if (!job) throw usage(`no Job #${id} — \`hkb ls\` shows what is on the board`);
 
-      // The same rule as `kb rm`, for the same reason: a lease is a worker that is running right
+      // The same rule as `hkb rm`, for the same reason: a lease is a worker that is running right
       // now, and concluding its Job out from under it would leave it reporting to a record that
       // says the question was already settled. The daemon is a thing the operator can stop, so
       // say so rather than racing it.
       if (job.lease) {
         throw usage(
           `#${id} is leased by ${job.lease.holder} — it is running. `
-          + `\`kb down\` stops the daemon, or wait for the run to finish (the lease lapses by `
-          + `${job.lease.expiresAt.toISOString()}), then \`kb ${verb} ${id}\` again.`,
+          + `\`hkb down\` stops the daemon, or wait for the run to finish (the lease lapses by `
+          + `${job.lease.expiresAt.toISOString()}), then \`hkb ${verb} ${id}\` again.`,
         );
       }
       if (job.phase === 'succeeded') {
-        throw usage(`#${id} already succeeded — the runtime concluded it, and \`kb ${verb}\` is for the Jobs it cannot. \`kb show ${id}\` has the attempts.`);
+        throw usage(`#${id} already succeeded — the runtime concluded it, and \`hkb ${verb}\` is for the Jobs it cannot. \`hkb show ${id}\` has the attempts.`);
       }
       if (job.phase === phase) {
         throw usage(`#${id} is already ${phase}${job.endedBy ? ` — ${job.endedBy} said so: ${job.endedFor}` : ''}`);
       }
       // Between `done` and `cancelled` a restatement IS allowed, and deliberately: they are both
-      // the operator's own word, a mistyped verb is easy, and the alternative escape is `kb rm` —
+      // the operator's own word, a mistyped verb is easy, and the alternative escape is `hkb rm` —
       // the very trap this verb exists to remove. The correction is another Event, so the log
       // keeps both statements in order rather than pretending the first never happened.
 
@@ -688,7 +712,7 @@ export async function main(argv: string[]): Promise<number> {
         data: { phase, endedBy: by, endedFor: reason, finishedAt: at },
       });
       // An attempt still open on a Job with no lease was never heard from again — `lost` is the
-      // Outcome that already means exactly that. Closing it is not cosmetic: `kb show` renders an
+      // Outcome that already means exactly that. Closing it is not cosmetic: `hkb show` renders an
       // open attempt as elapsed-so-far, so a terminal Job would print a duration that climbs for
       // ever. Scoped to `endedAt: null`, so a finished attempt is never rewritten.
       await db.attempt.updateMany({
@@ -768,7 +792,7 @@ export async function main(argv: string[]): Promise<number> {
             // ceiling is, and a stopped board with a healthy daemon reads as fine without it.
             if (r.stopped) {
               console.log(`${pad}  STOPPED ${r.stoppedBy ? `by ${r.stoppedBy}, ` : ''}`
-                + `since ${r.stoppedAt!.toISOString()} — \`kb start --board ${r.slug}\` to resume`);
+                + `since ${r.stoppedAt!.toISOString()} — \`hkb start --board ${r.slug}\` to resume`);
             }
             const ceiling = r.dailyBudgetUsd === null
               ? `$${r.spent24h.toFixed(2)} spent in 24h, no ceiling`
@@ -780,7 +804,7 @@ export async function main(argv: string[]): Promise<number> {
             // A daemon runs the code it started with. Saying so beats discovering it.
             if (r.behind) {
               console.log(`${pad}  BEHIND  started from ${r.version}; the checkout is now ${r.behind}`
-                + ' — `kb down && kb up` to pick it up');
+                + ' — `hkb down && hkb up` to pick it up');
             }
           }
           // One line, because a daemon serving every board writes one log and a board-scoped one
@@ -790,7 +814,7 @@ export async function main(argv: string[]): Promise<number> {
         return rows.some((r) => r.running) ? 0 : 1;
       }
 
-      // The loop, in this process. `kb up` without `--foreground` spawns exactly this.
+      // The loop, in this process. `hkb up` without `--foreground` spawns exactly this.
       if (values.foreground) {
         const runtime: Runtime = values.fake
           ? fakeRuntime()
@@ -817,7 +841,7 @@ export async function main(argv: string[]): Promise<number> {
       emit(out, started, () => {
         console.log(`up${named ? ` on ${named}` : ' on every board'} — pid ${started.pid}, every ${Math.round(intervalMs / 1000)}s`);
         console.log(`  log      ${started.log}`);
-        console.log(`  status   kb up --status`);
+        console.log(`  status   hkb up --status`);
       });
       return 0;
     }
@@ -836,9 +860,9 @@ export async function main(argv: string[]): Promise<number> {
     case 'boards': {
       if (rest[0] === 'add') {
         const name = rest[1];
-        if (!name) throw usage('kb boards add <slug> [--repo <path>] — what is the board called?');
+        if (!name) throw usage('hkb boards add <slug> [--repo <path>] — what is the board called?');
         const repo = (values.repo as string) || gitRoot(process.cwd());
-        if (!repo) throw usage('kb boards add needs --repo <path>, or to be run inside a git repository');
+        if (!repo) throw usage('hkb boards add needs --repo <path>, or to be run inside a git repository');
         const abs = path.resolve(repo);
         if (!fs.existsSync(path.join(abs, '.git'))) {
           throw usage(`${abs} is not a git repository — a board runs Jobs in a checkout, and workers need a branch to push`);
@@ -853,9 +877,9 @@ export async function main(argv: string[]): Promise<number> {
       }
       if (rest[0] === 'set') {
         const name = rest[1] ?? named;
-        if (!name) throw usage('kb boards set <slug> --max-concurrent <n> --daily-budget <usd> --model <m> — which board?');
+        if (!name) throw usage('hkb boards set <slug> --max-concurrent <n> --daily-budget <usd> --model <m> — which board?');
         const board = await db.board.findUnique({ where: { slug: name } });
-        if (!board) throw usage(`no board "${name}" — \`kb boards\` lists the ones on this machine`);
+        if (!board) throw usage(`no board "${name}" — \`hkb boards\` lists the ones on this machine`);
 
         const data: Record<string, unknown> = {};
 
@@ -912,13 +936,13 @@ export async function main(argv: string[]): Promise<number> {
         }
         if (!Object.keys(data).length) {
           throw usage(
-            'kb boards set needs something to set — a ceiling (--max-concurrent <n>, --daily-budget <usd>|none)'
+            'hkb boards set needs something to set — a ceiling (--max-concurrent <n>, --daily-budget <usd>|none)'
             + ' or a spec default (--model, --effort, --max-turns, --max-budget, --max-retries; "none" clears one)',
           );
         }
 
         const after = await db.board.update({ where: { id: board.id }, data });
-        // Still `ceilings_set`, though it now records defaults too. That kind is what `kb log`
+        // Still `ceilings_set`, though it now records defaults too. That kind is what `hkb log`
         // already shows for this command, and the payload names exactly which columns moved;
         // renaming it would break every board's existing history to fix a word.
         await db.event.create({
@@ -933,7 +957,7 @@ export async function main(argv: string[]): Promise<number> {
             `${after.slug} — ${after.dailyBudgetUsd === null ? 'no ceiling' : `$${after.dailyBudgetUsd}/24h`}, `
             + `runs up to ${after.maxConcurrent} at once`);
           // Printed whenever the board has any, not only when this command changed one: the
-          // question after `kb boards set --model` is what the board now says, not what moved.
+          // question after `hkb boards set --model` is what the board now says, not what moved.
           console.log(`  defaults  ${describeDefaults(defaults)}`);
         });
         return 0;
@@ -941,19 +965,19 @@ export async function main(argv: string[]): Promise<number> {
 
       if (rest[0] === 'rm') {
         const name = rest[1];
-        if (!name) throw usage('kb boards rm <slug> [--force] — which board?');
+        if (!name) throw usage('hkb boards rm <slug> [--force] — which board?');
         const board = await db.board.findUnique({
           where: { slug: name },
           include: { controller: true, _count: { select: { jobs: true } } },
         });
-        if (!board) throw usage(`no board "${name}" — \`kb boards\` lists the ones on this machine`);
+        if (!board) throw usage(`no board "${name}" — \`hkb boards\` lists the ones on this machine`);
 
         // No `--force` past this one, deliberately. A daemon holding this board is reconciling it
         // right now, and the delete cascades to the Leases it is holding and the Jobs it is
         // running: the worker would keep going with nothing left to report to. Stopping the
         // daemon is a thing the operator can do, so make them do it.
         if (board.controller && daemon.controllerIsLive(board.controller as daemon.ControllerRow)) {
-          throw usage(`${name} is led by ${board.controller.holder} — run \`kb down --board ${name}\` first, then remove it`);
+          throw usage(`${name} is led by ${board.controller.holder} — run \`hkb down --board ${name}\` first, then remove it`);
         }
         const jobs = board._count.jobs;
         if (jobs && !values.force) {
@@ -962,7 +986,7 @@ export async function main(argv: string[]): Promise<number> {
 
         await db.board.delete({ where: { id: board.id } });
         // `boardId` would cascade away with the board it names, so this Event carries none and the
-        // slug in the payload is the whole record. The same trade `kb rm` makes for a Job.
+        // slug in the payload is the whole record. The same trade `hkb rm` makes for a Job.
         await db.event.create({
           data: { kind: 'board_removed', actor: whoami(), payload: { slug: name, repoPath: board.repoPath, jobs } },
         });
@@ -970,7 +994,7 @@ export async function main(argv: string[]): Promise<number> {
           console.log(`removed ${name}${jobs ? ` and ${jobs} job${jobs === 1 ? '' : 's'}` : ''}`));
         return 0;
       }
-      if (rest[0]) throw usage(`kb boards has no subcommand "${rest[0]}" — try \`kb boards\`, \`kb boards add <slug>\`, \`kb boards set <slug>\` or \`kb boards rm <slug>\``);
+      if (rest[0]) throw usage(`hkb boards has no subcommand "${rest[0]}" — try \`hkb boards\`, \`hkb boards add <slug>\`, \`hkb boards set <slug>\` or \`hkb boards rm <slug>\``);
 
       const serving = await daemon.status();
       const boards = await db.board.findMany({ orderBy: { slug: 'asc' }, include: { jobs: { select: { phase: true } } } });
@@ -1003,7 +1027,7 @@ export async function main(argv: string[]): Promise<number> {
         };
       }));
       emit(out, rows, () => {
-        if (!rows.length) return console.log('no boards yet — `kb new` inside a repository creates one');
+        if (!rows.length) return console.log('no boards yet — `hkb new` inside a repository creates one');
         const w = Math.max(5, ...rows.map((r) => r.board.length));
         const d = Math.max(6, ...rows.map((r) => r.daemon.length + (r.paused ? 10 : 0)));
         console.log(`${'BOARD'.padEnd(w)}  ${'DAEMON'.padEnd(d)}  PEND   RUN    OK  FAIL  ENDED      24H  REPO`);
@@ -1014,7 +1038,7 @@ export async function main(argv: string[]): Promise<number> {
             + `${String(r.running).padStart(4)}  ${String(r.succeeded).padStart(4)}  ${String(r.failed).padStart(4)}  `
             + `${String(r.done + r.cancelled).padStart(5)}  `
             + `${('$' + r.spent24h.toFixed(2)).padStart(7)}  `
-            + `${r.repoPath ?? '(no repo — `kb boards add ' + r.board + ' --repo <path>`)'}`,
+            + `${r.repoPath ?? '(no repo — `hkb boards add ' + r.board + ' --repo <path>`)'}`,
           );
           // A continuation line rather than five more columns: the table is already at the width
           // of a terminal, and a board with no defaults — which is most of them — pays nothing.
@@ -1026,17 +1050,17 @@ export async function main(argv: string[]): Promise<number> {
 
     // ---------------------------------------------------------------- log
     case 'log': {
-      const id = rest[0] ? num(rest[0], 'kb log <id>') : undefined;
+      const id = rest[0] ? num(rest[0], 'hkb log <id>') : undefined;
       const limit = values.limit !== undefined ? (num(values.limit, '-n') as number) : 50;
       // `-n` is the wrong axis for "what happened while I was at lunch": a count answers how much
       // to read, not how far back. The two compose — the window narrows first, the count caps it.
       const window = values.since !== undefined ? parseDuration(String(values.since)) : undefined;
       const since = window !== undefined ? new Date(Date.now() - window) : undefined;
       if (id && !(await db.job.findUnique({ where: { id } }))) {
-        throw usage(`no Job #${id} — \`kb ls\` shows what is on the board`);
+        throw usage(`no Job #${id} — \`hkb ls\` shows what is on the board`);
       }
       const board = await db.board.findUnique({ where: { slug } });
-      if (!board) throw usage(`no board "${slug}" — \`kb new\` creates one`);
+      if (!board) throw usage(`no board "${slug}" — \`hkb new\` creates one`);
       // Newest first out of the database so the limit keeps the RECENT events, then reversed for
       // reading: a log you read top to bottom that silently drops its tail is a trap.
       const rows = await db.event.findMany({

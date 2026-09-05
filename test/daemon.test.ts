@@ -9,7 +9,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
  * The loop, and the two things Phase 4 exists to guarantee:
  *
  *   1. a laptop sleep does not turn a live run into two;
- *   2. `kb down` leaves no lease held.
+ *   2. `hkb down` leaves no lease held.
  *
  * Both are written as refusals. The first asserts a lease is *still there* after a pass that had
  * every clock-based reason to take it; the second asserts a lease is *gone* after a shutdown that
@@ -170,7 +170,7 @@ test('a shutdown mid-run releases the lease, and records a stop rather than a fa
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
   assert.equal(after.phase, 'pending', 'ready to go again, not out of retries');
   assert.equal(after.attempts[0].outcome, 'stopped');
-  assert.ok(after.lastSessionId, 'the session is kept, so `kb up` resumes rather than restarts');
+  assert.ok(after.lastSessionId, 'the session is kept, so `hkb up` resumes rather than restarts');
 });
 
 test('a stopped attempt does not spend a retry: the Job still runs to completion afterwards', async () => {
@@ -289,7 +289,7 @@ test('a tick that throws does not take the loop with it', async () => {
 // ---------------------------------------------------------------- the stopped board
 
 /**
- * `kb stop` against a running daemon, which is the only interesting shape of a kill switch: the loop
+ * `hkb stop` against a running daemon, which is the only interesting shape of a kill switch: the loop
  * keeps ticking, so the guard is asked the same question every 45 seconds and has to give the same
  * answer without turning the log into a wall. Both halves are refusals — the Jobs are *still*
  * pending after four ticks, and the second, third and fourth refusals are *not* in the log.
@@ -311,7 +311,7 @@ test('a stopped board keeps its Jobs pending, tick after tick — refusing to st
 
   for (const j of [a, b]) {
     assert.equal((await db.job.findUniqueOrThrow({ where: { id: j.id } })).phase, 'pending',
-      'a stopped board holds work back; it does not fail it, and `kb start` is all it takes');
+      'a stopped board holds work back; it does not fail it, and `hkb start` is all it takes');
   }
   assert.equal(await db.attempt.count({ where: { jobId: { in: [a.id, b.id] } } }), 0,
     'and nothing was even attempted — the gate is checked before the claim, not after the run');
@@ -335,7 +335,7 @@ test('the refusal is logged once across the ticks, not once per tick', async () 
   const refusals = lines.filter((l) => l.includes('refused'));
   assert.equal(refusals.length, 1,
     `a line that repeats every 45 seconds is a line nobody reads, got:\n${lines.join('\n')}`);
-  assert.match(refusals[0], /the board is stopped by someone@1 .*`kb start` to resume/,
+  assert.match(refusals[0], /the board is stopped by someone@1 .*`hkb start` to resume/,
     'and it says what to do next, not merely that something was refused');
 });
 
@@ -346,7 +346,7 @@ test('a board started again mid-run is claimed on a later tick, without a restar
     where: { id: board.id }, data: { pausedAt: new Date(), pausedBy: 'someone@1' },
   });
 
-  // `kb start` where it actually happens: while the daemon is between ticks. The gate is re-read
+  // `hkb start` where it actually happens: while the daemon is between ticks. The gate is re-read
   // every pass, so the loop that refused a moment ago claims this Job — the difference between a
   // controller and a launcher, in the one place an operator notices it.
   let started = false;
@@ -501,13 +501,13 @@ test('releasing gives up every board this daemon led, and only those', async () 
   assert.ok(await db.controller.findUnique({ where: { boardId: b.id } }), 'not ours to release');
 });
 
-test('kb down with nothing to stop is a fact, not an error story', async () => {
+test('hkb down with nothing to stop is a fact, not an error story', async () => {
   const res = await daemon.stop({ board: (await freshBoard()).slug });
   assert.equal(res.stopped, false);
   assert.equal(res.why, 'no daemon running');
 });
 
-test('kb down clears a controller row whose daemon is gone', async () => {
+test('hkb down clears a controller row whose daemon is gone', async () => {
   const board = await freshBoard();
   const done = spawnSync(process.execPath, ['-e', '0']);
   await db.controller.create({
@@ -522,7 +522,7 @@ test('kb down clears a controller row whose daemon is gone', async () => {
   assert.equal(await db.controller.findUnique({ where: { boardId: board.id } }), null);
 });
 
-test('kb down refuses to reach across the network at a daemon on another machine', async () => {
+test('hkb down refuses to reach across the network at a daemon on another machine', async () => {
   const board = await freshBoard();
   await db.controller.create({
     data: {
@@ -600,7 +600,7 @@ test('a resumable stop keeps its checkout — the next attempt resumes IN it', a
   // The worker left nothing behind, so the keep-test alone would have taken this directory — and
   // the next attempt would then be cut fresh from origin, on a branch reset to base, with the
   // resumed session convinced it was still in the tree it had been working in.
-  assert.equal(fs.existsSync(path.join(elsewhere, '.kanban', 'worktrees', `kb-${job.id}-1`)), true,
+  assert.equal(fs.existsSync(path.join(elsewhere, '.hkb', 'worktrees', `kb-${job.id}-1`)), true,
     'resume is not restart, on disk as well as in the transcript');
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
   assert.equal(after.phase, 'pending');
@@ -659,8 +659,8 @@ test('the Job runs in the repository its BOARD names, not wherever the daemon st
   assert.equal(after.attempts[0].branch, `kb-${job.id}-1`);
   assert.ok(fs.existsSync(path.join(elsewhere, 'ELSEWHERE.md')),
     'sanity: the other repository is the one with this file in it');
-  const wt = path.join(elsewhere, '.kanban', 'worktrees');
-  assert.equal(fs.existsSync(path.join(REPO, '.kanban', 'worktrees', `kb-${job.id}-1`)), false,
+  const wt = path.join(elsewhere, '.hkb', 'worktrees');
+  assert.equal(fs.existsSync(path.join(REPO, '.hkb', 'worktrees', `kb-${job.id}-1`)), false,
     'and no worktree was cut in the daemon-cwd repository');
   void wt;
 });
