@@ -267,3 +267,8 @@ history.
 ## 2026-09-05 — refreshed concepts/admission-control (claude.ts gained the wall clock; no claim on this page touches it — re-verified, no edit)
 ## 2026-09-05 — refreshed architecture/runtime-layer (the wall clock interrupts before aborting, so a timed-out run reports real spend)
 ## 2026-09-05 — refreshed architecture/job-kind (a resumed attempt continues in the checkout the previous one left)
+## 2026-09-05 — added architecture/the-loop (Phase 4: kb up/down, and why the reclaim rule needed two independent guards)
+## 2026-09-05 — refreshed architecture/job-kind (liveness-gated reclaim; `stopped` decided outside nextPhase and not charged a retry)
+## 2026-09-05 — refreshed architecture/runtime-layer (WorkerSpec.signal: the operator stop escalates like the wall clock)
+## 2026-09-05 — refreshed concepts/admission-control (re-stamp only; the claude.ts diff touched the abort machinery, not the gate)
+

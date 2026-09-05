@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "changing how a worker is launched, deciding what to persist about a run, or adding a second runtime"
 covers:
   - path: src/runtime/index.ts
-    sha: 7bfb2d64a13533a6ca760c7c2ee8e8fbb92a22dd
+    sha: f2ee9524d73d47eafb102c0db69ae1ea852d35d2
   - path: src/runtime/claude.ts
-    sha: ad92cae8665801d7e23d65682a03199a8dccc22b
+    sha: b334fb2e536580b900e527b9ebf8585d17f93400
   - path: src/runtime/fake.ts
-    sha: 2812e6a707094da8bebbcb8b32388922e6d2aae0
-generated_at_commit: 51fcf3d
+    sha: 129055e0e4d9e24946e7ba4d0fc7ed9a0bfc06b5
+generated_at_commit: c5326c0
 last_refreshed: 2026-09-05
 related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, concepts/worker-identity]
 ---
@@ -106,6 +106,12 @@ make the suite cost money and stop being deterministic.
   measured working on a string prompt — stdin closes only at the first result, so the
   control channel stays writable. The abort still lands after a grace window, so an SDK
   that stops honouring this degrades to the old behaviour rather than to a hang.
+
+  The operator's stop (`WorkerSpec.signal`, from `kb down`) escalates the same two
+  stages for the same reason — a shutdown that abandons the transport loses the cost
+  of everything the worker just did, from the ceiling as well as from the record. The
+  controller, not the runtime, decides that such a run is `stopped`: a runtime reports
+  what it saw happen, and only the caller knows it was the one that asked.
 
   `statusOf` reads `terminal_reason` **first**: an interrupted turn can return
   `subtype: 'success'`, which would otherwise be recorded as `completed` — the worst

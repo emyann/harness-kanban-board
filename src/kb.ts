@@ -1,19 +1,22 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import { parseArgs } from 'node:util';
 import { openBoard, closeBoard } from './db.ts';
 import { reconcile } from './controller.ts';
 import { fakeRuntime } from './runtime/fake.ts';
+import * as daemon from './daemon.ts';
 import type { Runtime } from './runtime/index.ts';
 
 /**
  * `kb` — the CLI for the ADR-007 core.
  *
- * Five verbs, and it stays five until something concrete demands a sixth. The old CLI has
+ * Ten verbs, and each one arrived because something concrete demanded it. The old CLI has
  * thirty-six and that is the shape this one is trying not to grow into.
  *
- * Deliberately a **foreground** tool: `kb run` reconciles once, in this process, streaming what
- * the worker does. There is no daemon yet, and building one first would hide the failures Phase 1
- * exists to surface (docs/rebuild-plan.md).
+ * `kb run` is still the foreground tool — one reconcile, in this process, streaming what the
+ * worker does — and it is still the one to reach for when something is wrong, because everything
+ * it does is visible. `kb up` is the same pass on a timer in a detached process; it exists for the
+ * work only a clock can notice (`src/daemon.ts`), not to make `kb run` obsolete.
  *
  * Argument parsing is `node:util`'s `parseArgs` rather than a hand-rolled one — the old CLI's
  * parser silently eats a value that begins with two dashes, and there is no reason to inherit
@@ -41,6 +44,12 @@ const HELP = `kb — run one agent against one brief
   kb rm <id>               delete a Job and its attempts
   kb stop                  the kill switch: claim nothing on this board  [--board s]
   kb start                 clear it, and show the ceilings
+
+  kb up                    reconcile on a timer, detached      [--interval <s>] [--fake]
+       --status            is a daemon up? where is its log?
+       --foreground        run the loop here instead of detaching (what a supervisor runs)
+  kb down                  stop it, cleanly                    [--timeout <s>]
+  kb log [<id>]            what happened, in order             [-n <count>]
 
   --json on every verb. Exit 2 is usage or state.
 `;
@@ -70,6 +79,9 @@ async function readBrief(values: Record<string, unknown>): Promise<string> {
   if (typeof values.brief === 'string' && values.brief.trim()) return values.brief.trim();
   throw usage('a Job needs a brief — pass --brief "…", --brief-file <path>, or --brief - to read stdin');
 }
+
+/** Who did an operator-initiated thing. The same shape a lease holder uses, minus the runtime. */
+const whoami = () => `${os.hostname()}/${process.pid}@cli`;
 
 const PHASES = ['pending', 'running', 'succeeded', 'failed', 'suspended'] as const;
 type Phase = (typeof PHASES)[number];
@@ -101,6 +113,11 @@ export async function main(argv: string[]): Promise<number> {
       'max-turns': { type: 'string' },
       'max-budget': { type: 'string' },
       'max-retries': { type: 'string' },
+      status: { type: 'boolean' },
+      foreground: { type: 'boolean' },
+      interval: { type: 'string' },
+      timeout: { type: 'string' },
+      limit: { type: 'string', short: 'n' },
     },
   });
 
@@ -133,6 +150,9 @@ export async function main(argv: string[]): Promise<number> {
           maxBudgetUsd: num(values['max-budget'], '--max-budget'),
           maxRetries: num(values['max-retries'], '--max-retries'),
         },
+      });
+      await db.event.create({
+        data: { kind: 'created', jobId: job.id, boardId: board.id, actor: whoami(), payload: { name } },
       });
       emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug }, () =>
         console.log(`#${job.id} ${job.name}  [${job.phase}]  on ${slug}`));
@@ -226,6 +246,11 @@ export async function main(argv: string[]): Promise<number> {
       if (!job) throw usage(`no Job #${id} — nothing to remove`);
       if (job.lease) throw usage(`#${id} is leased by ${job.lease.holder} — it is running. Wait for it, or let the lease expire.`);
       await db.job.delete({ where: { id } });
+      // `jobId` would cascade away with the Job it names, taking the record of the deletion with
+      // it. The board keeps this one.
+      await db.event.create({
+        data: { kind: 'removed', boardId: job.boardId, actor: whoami(), payload: { id, name: job.name } },
+      });
       emit(out, { removed: id }, () => console.log(`removed #${id}`));
       return 0;
     }
@@ -241,6 +266,9 @@ export async function main(argv: string[]): Promise<number> {
           ? { pausedAt: new Date(), pausedBy: `${process.env.USER ?? 'someone'}@${process.pid}` }
           : { pausedAt: null, pausedBy: null },
       });
+      await db.event.create({
+        data: { kind: stopping ? 'board_stopped' : 'board_started', boardId: board.id, actor: whoami() },
+      });
       emit(out, {
         board: slug, stopped: !!updated.pausedAt, pausedBy: updated.pausedBy,
         maxConcurrent: updated.maxConcurrent, dailyBudgetUsd: updated.dailyBudgetUsd,
@@ -255,8 +283,112 @@ export async function main(argv: string[]): Promise<number> {
       return 0;
     }
 
+    // ---------------------------------------------------------------- up / down
+    case 'up': {
+      const intervalMs = values.interval !== undefined
+        ? (num(values.interval, '--interval') as number) * 1000
+        : daemon.DEFAULT_INTERVAL_MS;
+
+      if (values.status) {
+        const st = daemon.status(slug);
+        emit(out, st, () => {
+          if (!st.running) {
+            console.log(`no daemon on ${slug}${st.stale ? ` (a stale pid file from pid ${st.daemon.pid} was left behind)` : ''}`);
+            console.log(`  log      ${st.log}`);
+            console.log(`  start it with \`kb up --board ${slug}\``);
+          } else {
+            const mins = Math.round(st.uptimeMs / 60_000);
+            console.log(`up on ${slug} — pid ${st.daemon.pid}, ${mins} min, every ${Math.round(st.daemon.intervalMs / 1000)}s`);
+            console.log(`  since    ${st.since.toISOString()}`);
+            console.log(`  log      ${st.log}`);
+          }
+        });
+        return st.running ? 0 : 1;
+      }
+
+      // The loop, in this process. `kb up` without `--foreground` spawns exactly this.
+      if (values.foreground) {
+        const runtime: Runtime = values.fake
+          ? fakeRuntime()
+          : (await import('./runtime/claude.ts')).claudeRuntime;
+        const stopper = new AbortController();
+        // SIGTERM does NOT exit here. Exiting is what would leave a lease held: the release is
+        // written after the worker stops, on the way out of `reconcile`, so the handler's only job
+        // is to ask, and then to let the loop unwind on its own.
+        const onSignal = (sig: string) => {
+          if (stopper.signal.aborted) return;
+          process.stdout.write(`${new Date().toISOString().slice(0, 19).replace('T', ' ')} ${sig} — stopping after the run in flight
+`);
+          stopper.abort();
+        };
+        process.on('SIGTERM', () => onSignal('SIGTERM'));
+        process.on('SIGINT', () => onSignal('SIGINT'));
+
+        const pidFile = daemon.claimPidFile(slug, intervalMs);
+        try {
+          await daemon.loop({
+            runtime, cwd: process.cwd(), board: slug, intervalMs, signal: stopper.signal,
+          });
+        } finally {
+          daemon.releasePidFile(slug);
+        }
+        if (out.json) process.stdout.write(JSON.stringify({ board: slug, pidFile, stopped: true }, null, 1) + '\n');
+        return 0;
+      }
+
+      const started = daemon.start(slug, { intervalMs, fake: !!values.fake });
+      emit(out, started, () => {
+        if (!started.started) console.log(started.why);
+        else {
+          console.log(`up on ${slug} — pid ${started.pid}, every ${Math.round(intervalMs / 1000)}s`);
+          console.log(`  log      ${started.log}`);
+          console.log(`  stop it  kb down --board ${slug}`);
+        }
+      });
+      return started.started ? 0 : 2;
+    }
+
+    case 'down': {
+      const timeoutMs = values.timeout !== undefined ? (num(values.timeout, '--timeout') as number) * 1000 : undefined;
+      const res = await daemon.stop(slug, { timeoutMs });
+      emit(out, res, () => {
+        if (res.stopped) console.log(`down — pid ${res.pid} stopped in ${((res.waitedMs ?? 0) / 1000).toFixed(1)}s`);
+        else console.log(res.why);
+      });
+      return res.stopped ? 0 : 1;
+    }
+
+    // ---------------------------------------------------------------- log
+    case 'log': {
+      const id = rest[0] ? num(rest[0], 'kb log <id>') : undefined;
+      const limit = values.limit !== undefined ? (num(values.limit, '-n') as number) : 50;
+      if (id && !(await db.job.findUnique({ where: { id } }))) {
+        throw usage(`no Job #${id} — \`kb ls\` shows what is on the board`);
+      }
+      const board = await db.board.findUnique({ where: { slug } });
+      if (!board) throw usage(`no board "${slug}" — \`kb new\` creates one`);
+      // Newest first out of the database so the limit keeps the RECENT events, then reversed for
+      // reading: a log you read top to bottom that silently drops its tail is a trap.
+      const rows = await db.event.findMany({
+        where: id ? { jobId: id } : { OR: [{ boardId: board.id }, { job: { boardId: board.id } }] },
+        orderBy: { id: 'desc' },
+        take: limit,
+      });
+      rows.reverse();
+      emit(out, rows, () => {
+        if (!rows.length) return console.log(id ? `nothing recorded for #${id} yet` : `nothing recorded on ${slug} yet`);
+        for (const e of rows) {
+          const who = e.actor ? `  ${e.actor}` : '';
+          const extra = e.payload && Object.keys(e.payload as object).length
+            ? `  ${JSON.stringify(e.payload)}` : '';
+          console.log(`${e.at.toISOString()}  ${(e.jobId ? `#${e.jobId}` : '—').padEnd(5)} ${e.kind.padEnd(13)}${who}${extra}`);
+        }
+      });
+      return 0;
+    }
+
     default:
-      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, rm, stop, start`);
+      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, rm, stop, start, up, down, log`);
   }
 }
 

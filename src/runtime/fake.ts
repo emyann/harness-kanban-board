@@ -17,7 +17,27 @@ export function fakeRuntime(opts: { failTasks?: number[]; delayMs?: number } = {
     async run(spec: WorkerSpec, onEvent?: (e: RuntimeEvent) => void): Promise<WorkerOutcome> {
       const sessionId = `fake-${spec.taskId}-${spec.attempt}`;
       onEvent?.({ kind: 'started', taskId: spec.taskId, sessionId });
-      if (opts.delayMs) await new Promise((r) => setTimeout(r, opts.delayMs));
+      // The delay is what makes a shutdown testable — something has to be in flight to interrupt.
+      if (opts.delayMs) {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(done, opts.delayMs);
+          function done() {
+            clearTimeout(timer);
+            spec.signal?.removeEventListener('abort', done);
+            resolve();
+          }
+          spec.signal?.addEventListener('abort', done, { once: true });
+        });
+      }
+      if (spec.signal?.aborted) {
+        // Stopped mid-run: still a session, because the controller resumes it. `status` is what a
+        // runtime saw happen, not why — the controller owns "why", and it knows it did this.
+        onEvent?.({ kind: 'ended', taskId: spec.taskId, status: 'timeout' });
+        return {
+          status: 'timeout', ok: false, sessionId, text: '', costUsd: 0, turns: 0,
+          durationMs: 0, stopReason: 'aborted', denials: 0, error: 'stopped by the operator',
+        };
+      }
       onEvent?.({ kind: 'tool', taskId: spec.taskId, name: 'Edit' });
       const ok = !fail.has(spec.taskId);
       const status = ok ? ('completed' as const) : ('error' as const);

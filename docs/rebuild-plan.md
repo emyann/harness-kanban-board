@@ -168,23 +168,58 @@ bounds are tested.
 
 ---
 
-## Phase 4 — Make it unattended
+## Phase 4 — Make it unattended — **DONE**
 
 **Goal:** a loop, and only now.
 
 **Deliverables**
 
-- `kb up` / `kb down`: a detached process that reconciles on an interval, with a
-  pid file and a log, plus `kb up --status`.
-- The loop does the **time-driven** half only — lease expiry, the wall-clock
-  timeout, scheduled work. The change-driven half is already a reconcile away, so
-  the interval can be slow (30–60s) without hurting latency.
-- Structured `Event` rows for every transition, and `kb log <id>` to read them.
+| | |
+|---|---|
+| `kb up` / `kb down` / `kb up --status`, pid file and log | Done — `src/daemon.ts` |
+| The loop does the time-driven half, on a slow interval | Done — 45s default |
+| Structured `Event` rows for every transition | Done — 13 kinds |
+| `kb log <id>` | Done, plus board-wide `kb log` |
 
-**Exit criteria**
+**Exit criteria — both met, and both tested as refusals**
 
-- The loop survives a laptop sleep without reclaiming a live run.
-- `kb down` stops it and leaves no lease held.
+- *The loop survives a laptop sleep without reclaiming a live run.* Two independent
+  guards, because the failure is a double run and one guard has been enough to be
+  wrong three times already. **Holder liveness:** the lease holder is now
+  `<host>/<pid>@<runtime>`, and a lapsed lease whose pid is still running on this
+  host is not taken — the pid is qualified by `acquiredAt` against the machine's
+  boot time, so a recycled pid after a reboot reads as dead rather than as alive
+  for ever. **Suspend detection:** the loop compares wall-clock drift against its
+  own interval and skips reclaim for exactly the pass after a jump, which is the
+  half that also covers a holder on another host, where no pid check can see.
+- *`kb down` stops it and leaves no lease held.* SIGTERM does not exit the process;
+  it aborts the run in flight and lets the pass unwind, because the release is
+  written on the way out. Measured end to end: `kb down` returned in 0.2s with zero
+  leases on the board.
+
+**What Phase 4 changed that was not planned**
+
+- **A new outcome, `stopped`.** An operator stop was recording as `crashed` or
+  `timed_out` — both lies, and both *spending a retry*. A Job with `maxRetries: 0`
+  could be made permanently unrunnable by nothing but being turned off three times.
+  `k` (half the Attempt's primary key) still advances; the retry budget is now
+  counted separately and a stop does not charge it. The session id is kept, so
+  `kb up` after `kb down` resumes rather than restarts.
+- **The loop's clock reaches the controller.** `reconcile` was deciding what had
+  expired against `new Date()` while the loop decided whether the machine had been
+  asleep against its own clock. One loop, one clock.
+- **`Event.boardId`.** A board stop, a daemon up, a Job removal are transitions with
+  no Job to hang off — and the removal's would have cascaded away with the Job it
+  recorded. Board-level events are what explain the gaps in a log.
+
+**Note.** The eventing experiment from this session is *not* in scope, and the
+Kubernetes comparison sharpens why. A controller there is **level-triggered**: the
+watch is a latency optimization over a loop that is correct without it — informers
+resync periodically regardless, and a watch event enqueues a *key*, after which the
+worker re-reads state and discards the event. `PRAGMA data_version` is structurally
+a `resourceVersion` — an opaque counter meaning "re-read", carrying no payload — so
+it would slot in as a hint that skips a wait, not as a change to how anything
+decides. Revisit when latency is a complaint.
 
 **Note.** The eventing experiment from this session is *not* in scope. Triggers +
 `fs.watch` on the WAL work (measured: ~1 ms cross-process, 2.3 µs per

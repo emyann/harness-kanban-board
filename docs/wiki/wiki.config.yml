@@ -159,6 +159,9 @@ pages:
   - slug: architecture/runtime-layer
     summary: "run(spec) -> WorkerOutcome, with the Agent SDK as the first driver and a fake for tests; what the SDK stores so the board does not, and the three SDK behaviours that each cost a bug."
     status: seeded
+  - slug: architecture/the-loop
+    summary: "kb up runs reconcile on a 45s timer; why a controller is level-triggered rather than event-driven, why a lapsed lease is evidence and not proof, and why an operator stop is its own outcome."
+    status: seeded
   - slug: concepts/admission-control
     summary: "Why worktree isolation and dependency ordering are injected or denied in a canUseTool gate rather than asked for in a prompt — and the measured run where the prompt was silently ignored."
     status: seeded

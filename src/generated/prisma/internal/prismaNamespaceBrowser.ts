@@ -147,6 +147,7 @@ export const EventScalarFieldEnum = {
   at: 'at',
   kind: 'kind',
   jobId: 'jobId',
+  boardId: 'boardId',
   actor: 'actor',
   payload: 'payload'
 } as const

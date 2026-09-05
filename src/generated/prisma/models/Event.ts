@@ -15,6 +15,11 @@ import type * as Prisma from "../internal/prismaNamespace.ts"
 /**
  * Model Event
  * What happened, in order. With no git ref, this is the history.
+ * 
+ * `jobId` is null for a transition that is not about one Job — a board stopped, a daemon up or
+ * down. Those still belong to a board, so `boardId` is carried separately rather than inferred
+ * through the Job: `kb log` with no id is a board's whole stream, and it would lose exactly the
+ * operator-level entries that explain the gaps in it.
  */
 export type EventModel = runtime.Types.Result.DefaultSelection<Prisma.$EventPayload>
 
@@ -29,11 +34,13 @@ export type AggregateEvent = {
 export type EventAvgAggregateOutputType = {
   id: number | null
   jobId: number | null
+  boardId: number | null
 }
 
 export type EventSumAggregateOutputType = {
   id: number | null
   jobId: number | null
+  boardId: number | null
 }
 
 export type EventMinAggregateOutputType = {
@@ -41,6 +48,7 @@ export type EventMinAggregateOutputType = {
   at: Date | null
   kind: string | null
   jobId: number | null
+  boardId: number | null
   actor: string | null
 }
 
@@ -49,6 +57,7 @@ export type EventMaxAggregateOutputType = {
   at: Date | null
   kind: string | null
   jobId: number | null
+  boardId: number | null
   actor: string | null
 }
 
@@ -57,6 +66,7 @@ export type EventCountAggregateOutputType = {
   at: number
   kind: number
   jobId: number
+  boardId: number
   actor: number
   payload: number
   _all: number
@@ -66,11 +76,13 @@ export type EventCountAggregateOutputType = {
 export type EventAvgAggregateInputType = {
   id?: true
   jobId?: true
+  boardId?: true
 }
 
 export type EventSumAggregateInputType = {
   id?: true
   jobId?: true
+  boardId?: true
 }
 
 export type EventMinAggregateInputType = {
@@ -78,6 +90,7 @@ export type EventMinAggregateInputType = {
   at?: true
   kind?: true
   jobId?: true
+  boardId?: true
   actor?: true
 }
 
@@ -86,6 +99,7 @@ export type EventMaxAggregateInputType = {
   at?: true
   kind?: true
   jobId?: true
+  boardId?: true
   actor?: true
 }
 
@@ -94,6 +108,7 @@ export type EventCountAggregateInputType = {
   at?: true
   kind?: true
   jobId?: true
+  boardId?: true
   actor?: true
   payload?: true
   _all?: true
@@ -190,6 +205,7 @@ export type EventGroupByOutputType = {
   at: Date
   kind: string
   jobId: number | null
+  boardId: number | null
   actor: string | null
   payload: runtime.JsonValue | null
   _count: EventCountAggregateOutputType | null
@@ -222,9 +238,11 @@ export type EventWhereInput = {
   at?: Prisma.DateTimeFilter<"Event"> | Date | string
   kind?: Prisma.StringFilter<"Event"> | string
   jobId?: Prisma.IntNullableFilter<"Event"> | number | null
+  boardId?: Prisma.IntNullableFilter<"Event"> | number | null
   actor?: Prisma.StringNullableFilter<"Event"> | string | null
   payload?: Prisma.JsonNullableFilter<"Event">
   job?: Prisma.XOR<Prisma.JobNullableScalarRelationFilter, Prisma.JobWhereInput> | null
+  board?: Prisma.XOR<Prisma.BoardNullableScalarRelationFilter, Prisma.BoardWhereInput> | null
 }
 
 export type EventOrderByWithRelationInput = {
@@ -232,9 +250,11 @@ export type EventOrderByWithRelationInput = {
   at?: Prisma.SortOrder
   kind?: Prisma.SortOrder
   jobId?: Prisma.SortOrderInput | Prisma.SortOrder
+  boardId?: Prisma.SortOrderInput | Prisma.SortOrder
   actor?: Prisma.SortOrderInput | Prisma.SortOrder
   payload?: Prisma.SortOrderInput | Prisma.SortOrder
   job?: Prisma.JobOrderByWithRelationInput
+  board?: Prisma.BoardOrderByWithRelationInput
 }
 
 export type EventWhereUniqueInput = Prisma.AtLeast<{
@@ -245,9 +265,11 @@ export type EventWhereUniqueInput = Prisma.AtLeast<{
   at?: Prisma.DateTimeFilter<"Event"> | Date | string
   kind?: Prisma.StringFilter<"Event"> | string
   jobId?: Prisma.IntNullableFilter<"Event"> | number | null
+  boardId?: Prisma.IntNullableFilter<"Event"> | number | null
   actor?: Prisma.StringNullableFilter<"Event"> | string | null
   payload?: Prisma.JsonNullableFilter<"Event">
   job?: Prisma.XOR<Prisma.JobNullableScalarRelationFilter, Prisma.JobWhereInput> | null
+  board?: Prisma.XOR<Prisma.BoardNullableScalarRelationFilter, Prisma.BoardWhereInput> | null
 }, "id">
 
 export type EventOrderByWithAggregationInput = {
@@ -255,6 +277,7 @@ export type EventOrderByWithAggregationInput = {
   at?: Prisma.SortOrder
   kind?: Prisma.SortOrder
   jobId?: Prisma.SortOrderInput | Prisma.SortOrder
+  boardId?: Prisma.SortOrderInput | Prisma.SortOrder
   actor?: Prisma.SortOrderInput | Prisma.SortOrder
   payload?: Prisma.SortOrderInput | Prisma.SortOrder
   _count?: Prisma.EventCountOrderByAggregateInput
@@ -272,6 +295,7 @@ export type EventScalarWhereWithAggregatesInput = {
   at?: Prisma.DateTimeWithAggregatesFilter<"Event"> | Date | string
   kind?: Prisma.StringWithAggregatesFilter<"Event"> | string
   jobId?: Prisma.IntNullableWithAggregatesFilter<"Event"> | number | null
+  boardId?: Prisma.IntNullableWithAggregatesFilter<"Event"> | number | null
   actor?: Prisma.StringNullableWithAggregatesFilter<"Event"> | string | null
   payload?: Prisma.JsonNullableWithAggregatesFilter<"Event">
 }
@@ -282,6 +306,7 @@ export type EventCreateInput = {
   actor?: string | null
   payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   job?: Prisma.JobCreateNestedOneWithoutEventsInput
+  board?: Prisma.BoardCreateNestedOneWithoutEventsInput
 }
 
 export type EventUncheckedCreateInput = {
@@ -289,6 +314,7 @@ export type EventUncheckedCreateInput = {
   at?: Date | string
   kind: string
   jobId?: number | null
+  boardId?: number | null
   actor?: string | null
   payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
 }
@@ -299,6 +325,7 @@ export type EventUpdateInput = {
   actor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   job?: Prisma.JobUpdateOneWithoutEventsNestedInput
+  board?: Prisma.BoardUpdateOneWithoutEventsNestedInput
 }
 
 export type EventUncheckedUpdateInput = {
@@ -306,6 +333,7 @@ export type EventUncheckedUpdateInput = {
   at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   kind?: Prisma.StringFieldUpdateOperationsInput | string
   jobId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  boardId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   actor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
 }
@@ -315,6 +343,7 @@ export type EventCreateManyInput = {
   at?: Date | string
   kind: string
   jobId?: number | null
+  boardId?: number | null
   actor?: string | null
   payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
 }
@@ -331,6 +360,7 @@ export type EventUncheckedUpdateManyInput = {
   at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   kind?: Prisma.StringFieldUpdateOperationsInput | string
   jobId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  boardId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   actor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
 }
@@ -350,6 +380,7 @@ export type EventCountOrderByAggregateInput = {
   at?: Prisma.SortOrder
   kind?: Prisma.SortOrder
   jobId?: Prisma.SortOrder
+  boardId?: Prisma.SortOrder
   actor?: Prisma.SortOrder
   payload?: Prisma.SortOrder
 }
@@ -357,6 +388,7 @@ export type EventCountOrderByAggregateInput = {
 export type EventAvgOrderByAggregateInput = {
   id?: Prisma.SortOrder
   jobId?: Prisma.SortOrder
+  boardId?: Prisma.SortOrder
 }
 
 export type EventMaxOrderByAggregateInput = {
@@ -364,6 +396,7 @@ export type EventMaxOrderByAggregateInput = {
   at?: Prisma.SortOrder
   kind?: Prisma.SortOrder
   jobId?: Prisma.SortOrder
+  boardId?: Prisma.SortOrder
   actor?: Prisma.SortOrder
 }
 
@@ -372,12 +405,56 @@ export type EventMinOrderByAggregateInput = {
   at?: Prisma.SortOrder
   kind?: Prisma.SortOrder
   jobId?: Prisma.SortOrder
+  boardId?: Prisma.SortOrder
   actor?: Prisma.SortOrder
 }
 
 export type EventSumOrderByAggregateInput = {
   id?: Prisma.SortOrder
   jobId?: Prisma.SortOrder
+  boardId?: Prisma.SortOrder
+}
+
+export type EventCreateNestedManyWithoutBoardInput = {
+  create?: Prisma.XOR<Prisma.EventCreateWithoutBoardInput, Prisma.EventUncheckedCreateWithoutBoardInput> | Prisma.EventCreateWithoutBoardInput[] | Prisma.EventUncheckedCreateWithoutBoardInput[]
+  connectOrCreate?: Prisma.EventCreateOrConnectWithoutBoardInput | Prisma.EventCreateOrConnectWithoutBoardInput[]
+  createMany?: Prisma.EventCreateManyBoardInputEnvelope
+  connect?: Prisma.EventWhereUniqueInput | Prisma.EventWhereUniqueInput[]
+}
+
+export type EventUncheckedCreateNestedManyWithoutBoardInput = {
+  create?: Prisma.XOR<Prisma.EventCreateWithoutBoardInput, Prisma.EventUncheckedCreateWithoutBoardInput> | Prisma.EventCreateWithoutBoardInput[] | Prisma.EventUncheckedCreateWithoutBoardInput[]
+  connectOrCreate?: Prisma.EventCreateOrConnectWithoutBoardInput | Prisma.EventCreateOrConnectWithoutBoardInput[]
+  createMany?: Prisma.EventCreateManyBoardInputEnvelope
+  connect?: Prisma.EventWhereUniqueInput | Prisma.EventWhereUniqueInput[]
+}
+
+export type EventUpdateManyWithoutBoardNestedInput = {
+  create?: Prisma.XOR<Prisma.EventCreateWithoutBoardInput, Prisma.EventUncheckedCreateWithoutBoardInput> | Prisma.EventCreateWithoutBoardInput[] | Prisma.EventUncheckedCreateWithoutBoardInput[]
+  connectOrCreate?: Prisma.EventCreateOrConnectWithoutBoardInput | Prisma.EventCreateOrConnectWithoutBoardInput[]
+  upsert?: Prisma.EventUpsertWithWhereUniqueWithoutBoardInput | Prisma.EventUpsertWithWhereUniqueWithoutBoardInput[]
+  createMany?: Prisma.EventCreateManyBoardInputEnvelope
+  set?: Prisma.EventWhereUniqueInput | Prisma.EventWhereUniqueInput[]
+  disconnect?: Prisma.EventWhereUniqueInput | Prisma.EventWhereUniqueInput[]
+  delete?: Prisma.EventWhereUniqueInput | Prisma.EventWhereUniqueInput[]
+  connect?: Prisma.EventWhereUniqueInput | Prisma.EventWhereUniqueInput[]
+  update?: Prisma.EventUpdateWithWhereUniqueWithoutBoardInput | Prisma.EventUpdateWithWhereUniqueWithoutBoardInput[]
+  updateMany?: Prisma.EventUpdateManyWithWhereWithoutBoardInput | Prisma.EventUpdateManyWithWhereWithoutBoardInput[]
+  deleteMany?: Prisma.EventScalarWhereInput | Prisma.EventScalarWhereInput[]
+}
+
+export type EventUncheckedUpdateManyWithoutBoardNestedInput = {
+  create?: Prisma.XOR<Prisma.EventCreateWithoutBoardInput, Prisma.EventUncheckedCreateWithoutBoardInput> | Prisma.EventCreateWithoutBoardInput[] | Prisma.EventUncheckedCreateWithoutBoardInput[]
+  connectOrCreate?: Prisma.EventCreateOrConnectWithoutBoardInput | Prisma.EventCreateOrConnectWithoutBoardInput[]
+  upsert?: Prisma.EventUpsertWithWhereUniqueWithoutBoardInput | Prisma.EventUpsertWithWhereUniqueWithoutBoardInput[]
+  createMany?: Prisma.EventCreateManyBoardInputEnvelope
+  set?: Prisma.EventWhereUniqueInput | Prisma.EventWhereUniqueInput[]
+  disconnect?: Prisma.EventWhereUniqueInput | Prisma.EventWhereUniqueInput[]
+  delete?: Prisma.EventWhereUniqueInput | Prisma.EventWhereUniqueInput[]
+  connect?: Prisma.EventWhereUniqueInput | Prisma.EventWhereUniqueInput[]
+  update?: Prisma.EventUpdateWithWhereUniqueWithoutBoardInput | Prisma.EventUpdateWithWhereUniqueWithoutBoardInput[]
+  updateMany?: Prisma.EventUpdateManyWithWhereWithoutBoardInput | Prisma.EventUpdateManyWithWhereWithoutBoardInput[]
+  deleteMany?: Prisma.EventScalarWhereInput | Prisma.EventScalarWhereInput[]
 }
 
 export type EventCreateNestedManyWithoutJobInput = {
@@ -422,17 +499,74 @@ export type EventUncheckedUpdateManyWithoutJobNestedInput = {
   deleteMany?: Prisma.EventScalarWhereInput | Prisma.EventScalarWhereInput[]
 }
 
+export type EventCreateWithoutBoardInput = {
+  at?: Date | string
+  kind: string
+  actor?: string | null
+  payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  job?: Prisma.JobCreateNestedOneWithoutEventsInput
+}
+
+export type EventUncheckedCreateWithoutBoardInput = {
+  id?: number
+  at?: Date | string
+  kind: string
+  jobId?: number | null
+  actor?: string | null
+  payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+}
+
+export type EventCreateOrConnectWithoutBoardInput = {
+  where: Prisma.EventWhereUniqueInput
+  create: Prisma.XOR<Prisma.EventCreateWithoutBoardInput, Prisma.EventUncheckedCreateWithoutBoardInput>
+}
+
+export type EventCreateManyBoardInputEnvelope = {
+  data: Prisma.EventCreateManyBoardInput | Prisma.EventCreateManyBoardInput[]
+}
+
+export type EventUpsertWithWhereUniqueWithoutBoardInput = {
+  where: Prisma.EventWhereUniqueInput
+  update: Prisma.XOR<Prisma.EventUpdateWithoutBoardInput, Prisma.EventUncheckedUpdateWithoutBoardInput>
+  create: Prisma.XOR<Prisma.EventCreateWithoutBoardInput, Prisma.EventUncheckedCreateWithoutBoardInput>
+}
+
+export type EventUpdateWithWhereUniqueWithoutBoardInput = {
+  where: Prisma.EventWhereUniqueInput
+  data: Prisma.XOR<Prisma.EventUpdateWithoutBoardInput, Prisma.EventUncheckedUpdateWithoutBoardInput>
+}
+
+export type EventUpdateManyWithWhereWithoutBoardInput = {
+  where: Prisma.EventScalarWhereInput
+  data: Prisma.XOR<Prisma.EventUpdateManyMutationInput, Prisma.EventUncheckedUpdateManyWithoutBoardInput>
+}
+
+export type EventScalarWhereInput = {
+  AND?: Prisma.EventScalarWhereInput | Prisma.EventScalarWhereInput[]
+  OR?: Prisma.EventScalarWhereInput[]
+  NOT?: Prisma.EventScalarWhereInput | Prisma.EventScalarWhereInput[]
+  id?: Prisma.IntFilter<"Event"> | number
+  at?: Prisma.DateTimeFilter<"Event"> | Date | string
+  kind?: Prisma.StringFilter<"Event"> | string
+  jobId?: Prisma.IntNullableFilter<"Event"> | number | null
+  boardId?: Prisma.IntNullableFilter<"Event"> | number | null
+  actor?: Prisma.StringNullableFilter<"Event"> | string | null
+  payload?: Prisma.JsonNullableFilter<"Event">
+}
+
 export type EventCreateWithoutJobInput = {
   at?: Date | string
   kind: string
   actor?: string | null
   payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  board?: Prisma.BoardCreateNestedOneWithoutEventsInput
 }
 
 export type EventUncheckedCreateWithoutJobInput = {
   id?: number
   at?: Date | string
   kind: string
+  boardId?: number | null
   actor?: string | null
   payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
 }
@@ -462,22 +596,46 @@ export type EventUpdateManyWithWhereWithoutJobInput = {
   data: Prisma.XOR<Prisma.EventUpdateManyMutationInput, Prisma.EventUncheckedUpdateManyWithoutJobInput>
 }
 
-export type EventScalarWhereInput = {
-  AND?: Prisma.EventScalarWhereInput | Prisma.EventScalarWhereInput[]
-  OR?: Prisma.EventScalarWhereInput[]
-  NOT?: Prisma.EventScalarWhereInput | Prisma.EventScalarWhereInput[]
-  id?: Prisma.IntFilter<"Event"> | number
-  at?: Prisma.DateTimeFilter<"Event"> | Date | string
-  kind?: Prisma.StringFilter<"Event"> | string
-  jobId?: Prisma.IntNullableFilter<"Event"> | number | null
-  actor?: Prisma.StringNullableFilter<"Event"> | string | null
-  payload?: Prisma.JsonNullableFilter<"Event">
+export type EventCreateManyBoardInput = {
+  id?: number
+  at?: Date | string
+  kind: string
+  jobId?: number | null
+  actor?: string | null
+  payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+}
+
+export type EventUpdateWithoutBoardInput = {
+  at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  kind?: Prisma.StringFieldUpdateOperationsInput | string
+  actor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  job?: Prisma.JobUpdateOneWithoutEventsNestedInput
+}
+
+export type EventUncheckedUpdateWithoutBoardInput = {
+  id?: Prisma.IntFieldUpdateOperationsInput | number
+  at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  kind?: Prisma.StringFieldUpdateOperationsInput | string
+  jobId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  actor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+}
+
+export type EventUncheckedUpdateManyWithoutBoardInput = {
+  id?: Prisma.IntFieldUpdateOperationsInput | number
+  at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  kind?: Prisma.StringFieldUpdateOperationsInput | string
+  jobId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  actor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
 }
 
 export type EventCreateManyJobInput = {
   id?: number
   at?: Date | string
   kind: string
+  boardId?: number | null
   actor?: string | null
   payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
 }
@@ -487,12 +645,14 @@ export type EventUpdateWithoutJobInput = {
   kind?: Prisma.StringFieldUpdateOperationsInput | string
   actor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  board?: Prisma.BoardUpdateOneWithoutEventsNestedInput
 }
 
 export type EventUncheckedUpdateWithoutJobInput = {
   id?: Prisma.IntFieldUpdateOperationsInput | number
   at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   kind?: Prisma.StringFieldUpdateOperationsInput | string
+  boardId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   actor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
 }
@@ -501,6 +661,7 @@ export type EventUncheckedUpdateManyWithoutJobInput = {
   id?: Prisma.IntFieldUpdateOperationsInput | number
   at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   kind?: Prisma.StringFieldUpdateOperationsInput | string
+  boardId?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   actor?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   payload?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
 }
@@ -512,9 +673,11 @@ export type EventSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
   at?: boolean
   kind?: boolean
   jobId?: boolean
+  boardId?: boolean
   actor?: boolean
   payload?: boolean
   job?: boolean | Prisma.Event$jobArgs<ExtArgs>
+  board?: boolean | Prisma.Event$boardArgs<ExtArgs>
 }, ExtArgs["result"]["event"]>
 
 export type EventSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
@@ -522,9 +685,11 @@ export type EventSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensi
   at?: boolean
   kind?: boolean
   jobId?: boolean
+  boardId?: boolean
   actor?: boolean
   payload?: boolean
   job?: boolean | Prisma.Event$jobArgs<ExtArgs>
+  board?: boolean | Prisma.Event$boardArgs<ExtArgs>
 }, ExtArgs["result"]["event"]>
 
 export type EventSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
@@ -532,9 +697,11 @@ export type EventSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensi
   at?: boolean
   kind?: boolean
   jobId?: boolean
+  boardId?: boolean
   actor?: boolean
   payload?: boolean
   job?: boolean | Prisma.Event$jobArgs<ExtArgs>
+  board?: boolean | Prisma.Event$boardArgs<ExtArgs>
 }, ExtArgs["result"]["event"]>
 
 export type EventSelectScalar = {
@@ -542,31 +709,37 @@ export type EventSelectScalar = {
   at?: boolean
   kind?: boolean
   jobId?: boolean
+  boardId?: boolean
   actor?: boolean
   payload?: boolean
 }
 
-export type EventOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "at" | "kind" | "jobId" | "actor" | "payload", ExtArgs["result"]["event"]>
+export type EventOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "at" | "kind" | "jobId" | "boardId" | "actor" | "payload", ExtArgs["result"]["event"]>
 export type EventInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   job?: boolean | Prisma.Event$jobArgs<ExtArgs>
+  board?: boolean | Prisma.Event$boardArgs<ExtArgs>
 }
 export type EventIncludeCreateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   job?: boolean | Prisma.Event$jobArgs<ExtArgs>
+  board?: boolean | Prisma.Event$boardArgs<ExtArgs>
 }
 export type EventIncludeUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   job?: boolean | Prisma.Event$jobArgs<ExtArgs>
+  board?: boolean | Prisma.Event$boardArgs<ExtArgs>
 }
 
 export type $EventPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "Event"
   objects: {
     job: Prisma.$JobPayload<ExtArgs> | null
+    board: Prisma.$BoardPayload<ExtArgs> | null
   }
   scalars: runtime.Types.Extensions.GetPayloadResult<{
     id: number
     at: Date
     kind: string
     jobId: number | null
+    boardId: number | null
     actor: string | null
     payload: runtime.JsonValue | null
   }, ExtArgs["result"]["event"]>
@@ -964,6 +1137,7 @@ readonly fields: EventFieldRefs;
 export interface Prisma__EventClient<T, Null = never, ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs, GlobalOmitOptions = {}> extends Prisma.PrismaPromise<T> {
   readonly [Symbol.toStringTag]: "PrismaPromise"
   job<T extends Prisma.Event$jobArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.Event$jobArgs<ExtArgs>>): Prisma.Prisma__JobClient<runtime.Types.Result.GetResult<Prisma.$JobPayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions> | null, null, ExtArgs, GlobalOmitOptions>
+  board<T extends Prisma.Event$boardArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.Event$boardArgs<ExtArgs>>): Prisma.Prisma__BoardClient<runtime.Types.Result.GetResult<Prisma.$BoardPayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions> | null, null, ExtArgs, GlobalOmitOptions>
   /**
    * Attaches callbacks for the resolution and/or rejection of the Promise.
    * @param onfulfilled The callback to execute when the Promise is resolved.
@@ -997,6 +1171,7 @@ export interface EventFieldRefs {
   readonly at: Prisma.FieldRef<"Event", 'DateTime'>
   readonly kind: Prisma.FieldRef<"Event", 'String'>
   readonly jobId: Prisma.FieldRef<"Event", 'Int'>
+  readonly boardId: Prisma.FieldRef<"Event", 'Int'>
   readonly actor: Prisma.FieldRef<"Event", 'String'>
   readonly payload: Prisma.FieldRef<"Event", 'Json'>
 }
@@ -1414,6 +1589,25 @@ export type Event$jobArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs 
    */
   include?: Prisma.JobInclude<ExtArgs> | null
   where?: Prisma.JobWhereInput
+}
+
+/**
+ * Event.board
+ */
+export type Event$boardArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  /**
+   * Select specific fields to fetch from the Board
+   */
+  select?: Prisma.BoardSelect<ExtArgs> | null
+  /**
+   * Omit specific fields from the Board
+   */
+  omit?: Prisma.BoardOmit<ExtArgs> | null
+  /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.BoardInclude<ExtArgs> | null
+  where?: Prisma.BoardWhereInput
 }
 
 /**

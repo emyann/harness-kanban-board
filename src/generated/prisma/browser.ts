@@ -41,5 +41,10 @@ export type Lease = Prisma.LeaseModel
 /**
  * Model Event
  * What happened, in order. With no git ref, this is the history.
+ * 
+ * `jobId` is null for a transition that is not about one Job — a board stopped, a daemon up or
+ * down. Those still belong to a board, so `boardId` is carried separately rather than inferred
+ * through the Job: `kb log` with no id is a board's whole stream, and it would lose exactly the
+ * operator-level entries that explain the gaps in it.
  */
 export type Event = Prisma.EventModel

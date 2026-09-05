@@ -44,6 +44,9 @@ enum Outcome {
   refused
   crashed
   lost        // the lease expired with nobody reporting — the attempt was never heard from again
+  stopped     // the operator stopped the daemon mid-run. Resumable, and it does NOT spend a retry:
+              // `kb down` is not a failure of the work, and charging one would mean a Job could be
+              // exhausted by nothing but being turned off.
 }
 
 model Board {
@@ -61,6 +64,8 @@ model Board {
   /// `dailyBudgetUsd` is a rolling 24 hours, not a calendar day — there is no timezone to get wrong.
   dailyBudgetUsd Float?
   maxConcurrent  Int   @default(1)
+
+  events Event[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -148,14 +153,22 @@ model Lease {
 }
 
 /// What happened, in order. With no git ref, this is the history.
+///
+/// `jobId` is null for a transition that is not about one Job — a board stopped, a daemon up or
+/// down. Those still belong to a board, so `boardId` is carried separately rather than inferred
+/// through the Job: `kb log` with no id is a board's whole stream, and it would lose exactly the
+/// operator-level entries that explain the gaps in it.
 model Event {
   id      Int      @id @default(autoincrement())
   at      DateTime @default(now())
   kind    String
   jobId   Int?
   job     Job?     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  boardId Int?
+  board   Board?   @relation(fields: [boardId], references: [id], onDelete: Cascade)
   actor   String?
   payload Json?
 
   @@index([jobId, id])
+  @@index([boardId, id])
 }

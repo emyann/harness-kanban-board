@@ -76,21 +76,34 @@ export const claudeRuntime: Runtime = {
     // string prompt (stdin closes only at the first result, so the control channel stays writable).
     // Either way the abort still lands after the grace window, so an SDK that stops honouring this
     // degrades to exactly today's behaviour rather than to a hang.
+    //
+    // The operator's stop (`spec.signal`, from `kb down`) takes the same two stages, for the same
+    // reason: a shutdown that abandons the transport loses the cost of everything the worker just
+    // did, and loses it from the ceiling as well as from the record.
     const abortController = new AbortController();
     let insist: ReturnType<typeof setTimeout> | null = null;
+    let stopping = false;
+    const stopNow = (why: string) => {
+      if (stopping) return;
+      stopping = true;
+      onEvent?.({ kind: 'text', taskId: spec.taskId, text: `${why} — interrupting` });
+      void Promise.resolve()
+        .then(() => stream.interrupt())
+        .catch(() => { /* unsupported, or the turn already ended */ })
+        .finally(() => {
+          insist = setTimeout(() => abortController.abort(), INTERRUPT_GRACE_MS);
+          if (typeof insist.unref === 'function') insist.unref();
+        });
+    };
     const timer = spec.timeoutMs
       ? setTimeout(() => {
           timedOut = true;
-          onEvent?.({ kind: 'text', taskId: spec.taskId, text: `wall clock reached — interrupting` });
-          void Promise.resolve()
-            .then(() => stream.interrupt())
-            .catch(() => { /* unsupported, or the turn already ended */ })
-            .finally(() => {
-              insist = setTimeout(() => abortController.abort(), INTERRUPT_GRACE_MS);
-              if (typeof insist.unref === 'function') insist.unref();
-            });
+          stopNow('wall clock reached');
         }, spec.timeoutMs)
       : null;
+    const onStop = () => stopNow('stopped by the operator');
+    if (spec.signal?.aborted) queueMicrotask(onStop);
+    else spec.signal?.addEventListener('abort', onStop, { once: true });
     const stream = query({
       prompt: spec.prompt,
       options: {
@@ -161,6 +174,9 @@ export const claudeRuntime: Runtime = {
     } finally {
       if (timer) clearTimeout(timer);
       if (insist) clearTimeout(insist);
+      // The caller's signal outlives this run — a daemon reuses one for its whole shutdown — so the
+      // listener has to come off, or every Job of a long-lived process leaks one onto it.
+      spec.signal?.removeEventListener('abort', onStop);
     }
 
     const status = statusOf(result, error !== null, timedOut);
