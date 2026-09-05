@@ -16,7 +16,7 @@ execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate',
 const { openBoard, closeBoard } = await import('../src/db.ts');
 const { reconcile, reconcileToRest, nextPhase } = await import('../src/controller.ts');
 const { fakeRuntime } = await import('../src/runtime/fake.ts');
-const { admissionController } = await import('../src/admission.ts');
+const { admissionCallback } = await import('../src/admission.ts');
 
 const db = openBoard();
 const board = await db.board.upsert({ where: { slug: 'test' }, update: {}, create: { slug: 'test' } });
@@ -123,36 +123,65 @@ test('reconcile is idempotent: a second pass on a settled board does nothing', a
 });
 
 // ---------------------------------------------------------------- admission
+// The gate is a PreToolUse hook, not canUseTool: `bypassPermissions` and bare `allowedTools`
+// entries both shadow canUseTool, and the SDK says so in a warning. Verified against the real
+// SDK: a parent that omits isolation gets it injected.
+
+const pre = (tool: string, input: Record<string, unknown>) =>
+  ({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, tool_use_id: 't1' }) as never;
+const spec = (r: Awaited<ReturnType<ReturnType<typeof admissionCallback>>>) =>
+  (r as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput ?? {};
 
 test('admission injects isolation onto an Agent spawn that omitted it', async () => {
-  const gate = admissionController({});
-  const r = await gate('Agent', { prompt: 'go', subagent_type: 'worker' }, {} as never);
-  assert.equal(r.behavior, 'allow');
-  assert.equal((r as { updatedInput: Record<string, unknown> }).updatedInput.isolation, 'worktree',
+  const gate = admissionCallback({});
+  const o = spec(await gate(pre('Agent', { prompt: 'go', subagent_type: 'worker' })));
+  assert.equal(o.permissionDecision, 'allow');
+  assert.equal((o.updatedInput as Record<string, unknown>).isolation, 'worktree',
     'not asked for in a prompt — injected');
 });
 
 test('admission leaves an already-isolated spawn alone', async () => {
-  const gate = admissionController({});
-  const r = await gate('Agent', { prompt: 'go', isolation: 'worktree' }, {} as never);
-  assert.equal(r.behavior, 'allow');
-  assert.equal((r as { updatedInput?: unknown }).updatedInput, undefined);
+  const gate = admissionCallback({});
+  const o = spec(await gate(pre('Agent', { prompt: 'go', isolation: 'worktree' })));
+  assert.equal(o.permissionDecision, 'allow');
+  assert.equal(o.updatedInput, undefined, 'nothing to change');
 });
 
 test('a policy can refuse a spawn, and the model is told why', async () => {
-  const gate = admissionController({
+  const gate = admissionCallback({
     admitSpawn: (input) => (String(input.description ?? '').includes('#2') ? '#2 is blocked by #1' : null),
   });
-  const denied = await gate('Agent', { description: '#2 do the join' }, {} as never);
-  assert.equal(denied.behavior, 'deny');
-  assert.match((denied as { message: string }).message, /blocked by #1/);
+  const denied = spec(await gate(pre('Agent', { description: '#2 do the join' })));
+  assert.equal(denied.permissionDecision, 'deny');
+  assert.match(String(denied.permissionDecisionReason), /blocked by #1/);
 
-  const allowed = await gate('Agent', { description: '#1 do the root' }, {} as never);
-  assert.equal(allowed.behavior, 'allow');
+  const allowed = spec(await gate(pre('Agent', { description: '#1 do the root' })));
+  assert.equal(allowed.permissionDecision, 'allow');
+});
+
+test('the allowlist is enforced by the hook, not by the permission mode', async () => {
+  // Measured: a nested session ran `Agent` under permissionMode dontAsk with Agent absent from
+  // allowedTools. Hooks run first and are client-side, so this is the layer that actually holds.
+  const gate = admissionCallback({ allow: ['Read', 'Bash'] });
+  const denied = spec(await gate(pre('Agent', { prompt: 'fan out' })));
+  assert.equal(denied.permissionDecision, 'deny');
+  assert.match(String(denied.permissionDecisionReason), /tool surface/);
+  assert.equal(spec(await gate(pre('Read', { file_path: 'x' }))).permissionDecision, 'allow');
+});
+
+test('no allowlist means the hook enforces none — the mode decides', async () => {
+  const gate = admissionCallback({});
+  assert.equal(spec(await gate(pre('Bash', { command: 'ls' }))).permissionDecision, 'allow');
 });
 
 test('admission denies a tool the workload may never use', async () => {
-  const gate = admissionController({ deny: ['WebFetch'] });
-  assert.equal((await gate('WebFetch', {}, {} as never)).behavior, 'deny');
-  assert.equal((await gate('Read', {}, {} as never)).behavior, 'allow');
+  const gate = admissionCallback({ deny: ['WebFetch'] });
+  assert.equal(spec(await gate(pre('WebFetch', {}))).permissionDecision, 'deny');
+  assert.equal(spec(await gate(pre('Read', {}))).permissionDecision, 'allow');
+});
+
+test('a non-PreToolUse event is not the gate\'s business', async () => {
+  const gate = admissionCallback({ deny: ['Read'] });
+  const r = await gate({ hook_event_name: 'PostToolUse', tool_name: 'Read' } as never);
+  assert.deepEqual(r, {}, 'no opinion, rather than a wrong one');
 });

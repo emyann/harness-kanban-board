@@ -255,3 +255,4 @@ history.
 ## 2026-09-05 — added concepts/admission-control (invariants at the tool boundary, not in the prompt)
 ## 2026-09-05 — superseded decisions/adr-006-local-store (two-tier store replaced by one SQLite file)
 ## 2026-09-05 — refreshed architecture/overview (banner: two systems coexist; this page is the pre-ADR-007 one)
+## 2026-09-05 — refreshed concepts/admission-control (the gate is a PreToolUse hook: canUseTool and the permission mode were each measured not to hold)

@@ -1,22 +1,33 @@
-import type { CanUseTool, PermissionResult } from '@anthropic-ai/claude-agent-sdk';
+import type { HookCallbackMatcher, HookInput, HookJSONOutput } from '@anthropic-ai/claude-agent-sdk';
 
 /**
  * Admission control.
  *
- * The Kubernetes piece this is named after, and the name is doing real work: an admission
- * controller validates or mutates a request *before* it is persisted, so an illegal request never
- * becomes state. Nobody enforces PodSecurityPolicy by writing "please don't run as root" in the
+ * The Kubernetes piece this is named after, and the name does real work: an admission controller
+ * validates or mutates a request *before* it is persisted, so an illegal request never becomes
+ * state. Nobody enforces PodSecurityPolicy by writing "please don't run as root" in the
  * container's README.
  *
- * We learned that the hard way. A previous fan-out told its parent, in the prompt, to spawn every
- * subagent with `isolation: "worktree"`. The run reported success and the subagents were not
- * isolated at all — they read files that exist only in the main checkout's working tree. The
- * instruction was followed exactly as reliably as an instruction can be, which is to say not
- * reliably enough to be an invariant.
+ * ---
  *
- * So: `isolate` is not asked for. It is **injected** into the tool input at admission, on the
- * `allow` branch. And a policy may refuse a spawn outright, which the model sees as a tool error
- * and must work around rather than ignore.
+ * **Why this is a `PreToolUse` hook and not `canUseTool`.**
+ *
+ * `canUseTool` is the obvious home for this and it does not work. Measured, twice, with the SDK
+ * saying so itself:
+ *
+ *   1. Under `permissionMode: 'bypassPermissions'` the SDK warns
+ *      `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED: canUseTool will not be invoked` — every call is
+ *      auto-approved before the callback is consulted.
+ *   2. Under `permissionMode: 'default'`, any **bare name in `allowedTools`** shadows the callback
+ *      for that tool, with the same warning naming each one.
+ *
+ * Both warnings end with the same instruction: *"To gate every tool call, use a PreToolUse hook."*
+ * A probe with no `allowedTools` at all and a deny-everything `canUseTool` still ran `Read` and
+ * never invoked the callback, so the hook is not a stylistic preference — it is the mechanism that
+ * fires.
+ *
+ * The hook's `hookSpecificOutput` carries both halves we need: `permissionDecision: 'deny'` is the
+ * validating gate, and `updatedInput` is the mutating one.
  */
 
 export type AdmissionPolicy = {
@@ -24,39 +35,76 @@ export type AdmissionPolicy = {
   forceIsolation?: boolean;
   /**
    * Called for every Agent spawn. Return a reason to refuse it, or null to let it through.
-   * This is where a graph kind puts its dependency rule: the ordering stops being something the
+   * This is where a graph kind puts its dependency rule: ordering stops being something the
    * parent is asked to respect and becomes something it cannot violate.
    */
   admitSpawn?: (input: Record<string, unknown>) => Promise<string | null> | (string | null);
   /** Tools nothing may ever call, whatever the prompt says. */
   deny?: string[];
+  /**
+   * The whole tool surface. A tool not on this list is denied *by the hook*, not by the permission
+   * mode — because the mode is not always in our hands. Measured: in a session nested inside another
+   * Claude Code process, `permissionMode: 'dontAsk'` with `Agent` absent from `allowedTools` still
+   * ran `Agent`. Hooks run first in the evaluation order and are client-side, so this is the one
+   * layer that held. Leave undefined to enforce nothing here and let the mode decide.
+   */
+  allow?: string[];
   onDecision?: (decision: string) => void;
 };
 
-export function admissionController(policy: AdmissionPolicy = {}): CanUseTool {
+const allow = (): HookJSONOutput => ({
+  hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' },
+});
+
+const deny = (reason: string): HookJSONOutput => ({
+  hookSpecificOutput: {
+    hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason,
+  },
+});
+
+const mutate = (input: Record<string, unknown>): HookJSONOutput => ({
+  hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', updatedInput: input },
+});
+
+/** The policy, as a callback. Exported for tests — production wires it via `admissionHooks`. */
+export function admissionCallback(policy: AdmissionPolicy = {}) {
   const denied = new Set(policy.deny ?? []);
 
-  return async (toolName: string, input: Record<string, unknown>): Promise<PermissionResult> => {
-    if (denied.has(toolName)) {
-      policy.onDecision?.(`deny ${toolName} (policy)`);
-      return { behavior: 'deny', message: `${toolName} is not available in this workload.` };
+  return async (input: HookInput): Promise<HookJSONOutput> => {
+    if (input.hook_event_name !== 'PreToolUse') return {};
+    const tool = input.tool_name;
+    const toolInput = (input.tool_input ?? {}) as Record<string, unknown>;
+
+    if (denied.has(tool)) {
+      policy.onDecision?.(`deny ${tool} (policy)`);
+      return deny(`${tool} is not available in this workload.`);
     }
 
-    if (toolName !== 'Agent') return { behavior: 'allow' };
+    if (policy.allow && !policy.allow.includes(tool)) {
+      policy.onDecision?.(`deny ${tool} (not on the allowlist)`);
+      return deny(`${tool} is not part of this workload's tool surface. Available: ${policy.allow.join(', ')}.`);
+    }
 
-    const refusal = await policy.admitSpawn?.(input);
+    if (tool !== 'Agent') return allow();
+
+    const refusal = await policy.admitSpawn?.(toolInput);
     if (refusal) {
       policy.onDecision?.(`deny Agent — ${refusal}`);
-      return { behavior: 'deny', message: refusal };
+      return deny(refusal);
     }
 
-    if (policy.forceIsolation !== false && input.isolation !== 'worktree') {
-      policy.onDecision?.(`mutate Agent — isolation injected (was ${JSON.stringify(input.isolation ?? null)})`);
-      // Mutating admission: the spawn is allowed, but not as it was requested.
-      return { behavior: 'allow', updatedInput: { ...input, isolation: 'worktree' } };
+    if (policy.forceIsolation !== false && toolInput.isolation !== 'worktree') {
+      policy.onDecision?.(`mutate Agent — isolation injected (was ${JSON.stringify(toolInput.isolation ?? null)})`);
+      return mutate({ ...toolInput, isolation: 'worktree' });
     }
 
     policy.onDecision?.('allow Agent');
-    return { behavior: 'allow' };
+    return allow();
   };
+}
+
+/** What goes in `Options.hooks`. One matcher, every tool, because a gate with holes is not a gate. */
+export function admissionHooks(policy: AdmissionPolicy = {}): { PreToolUse: HookCallbackMatcher[] } {
+  const cb = admissionCallback(policy);
+  return { PreToolUse: [{ hooks: [(input) => cb(input)] }] };
 }

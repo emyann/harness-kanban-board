@@ -15,7 +15,7 @@
 
 ## Concepts
 
-- [Admission control — an instruction is not an invariant](./concepts/admission-control.md): Why hkb enforces worktree isolation and (later) dependency ordering in a canUseTool gate that mutates or denies the tool call, rather than asking the model to comply in a prompt — and the measured failure that made the distinction non-negotiable.
+- [Admission control — an instruction is not an invariant](./concepts/admission-control.md): Why hkb enforces its tool surface, worktree isolation and (later) dependency ordering in a PreToolUse hook rather than in a prompt, a permission mode, or canUseTool — with the three measurements that ruled the other three out.
 - [The capability map — the intent travels, the binding is local](./concepts/capability-portability.md): The portability contract behind a profile's `capabilities`: hkb ships a closed vocabulary of intents, a board binds each one to what its own harness calls it, an unbound intent falls back to prose, and the permission a binding needs is derived from the binding rather than typed twice.
 - [The Node floor and the JSDoc type check](./concepts/node-floor-and-type-check.md): Why the floor moved to 22.13 and what it bought — `node:sqlite` for the local store, one warning silenced at the entry point without silencing any other, a type check over the JSDoc the code already carried, and a CI matrix that tests the floor and the current line rather than one version in the middle.
 - [The store — hkb's one piece of durable truth](./concepts/store.md): A board is whatever openStore(ctx) answers: one driver, two tiers — a git branch that records decisions and a local index that answers questions — and every other process holds a cache, never the truth.

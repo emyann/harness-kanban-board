@@ -1,5 +1,5 @@
 import { openBoard } from './db.ts';
-import type { Runtime, WorkerOutcome } from './runtime/index.ts';
+import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
 
 /**
  * The controller for the Job kind.
@@ -25,6 +25,15 @@ export type ControllerDeps = {
   leaseMs?: number;
   now?: () => Date;
   onEvent?: (line: string) => void;
+  /** The runtime's own stream — tool calls and text, for an operator watching a foreground run. */
+  onRuntimeEvent?: (e: RuntimeEvent) => void;
+  /** Reconcile exactly one Job instead of every pending one. `kb run <id>`. */
+  only?: number;
+  /**
+   * Scope to one board. A Board is the namespace, and a controller that ignores it reaches across
+   * every namespace on the host — which is what `kb run --board other` silently did before.
+   */
+  board?: string;
 };
 
 export type ReconcileReport = {
@@ -69,8 +78,11 @@ export function nextPhase(
 }
 
 /** Reclaim Jobs whose holder died: the lease expired and nobody reported an outcome. */
-async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report: ReconcileReport, log?: (s: string) => void) {
-  const dead = await db.lease.findMany({ where: { expiresAt: { lt: at } }, select: { jobId: true, holder: true } });
+async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report: ReconcileReport, board?: string, log?: (s: string) => void) {
+  const dead = await db.lease.findMany({
+    where: { expiresAt: { lt: at }, ...(board ? { job: { board: { slug: board } } } : {}) },
+    select: { jobId: true, holder: true },
+  });
   for (const l of dead) {
     await db.lease.delete({ where: { jobId: l.jobId } });
     const open = await db.attempt.findFirst({ where: { jobId: l.jobId, endedAt: null }, orderBy: { k: 'desc' } });
@@ -100,9 +112,16 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
   const leaseMs = deps.leaseMs ?? 15 * 60_000;
   const report: ReconcileReport = { claimed: [], succeeded: [], failed: [], retrying: [], reclaimed: [], skipped: [] };
 
-  await reclaimExpired(db, now(), report, deps.onEvent);
+  await reclaimExpired(db, now(), report, deps.board, deps.onEvent);
 
-  const wanted = await db.job.findMany({ where: { phase: 'pending' }, orderBy: { id: 'asc' } });
+  const wanted = await db.job.findMany({
+    where: {
+      phase: 'pending',
+      ...(deps.only ? { id: deps.only } : {}),
+      ...(deps.board ? { board: { slug: deps.board } } : {}),
+    },
+    orderBy: { id: 'asc' },
+  });
 
   for (const job of wanted) {
     const spent = await db.attempt.count({ where: { jobId: job.id, endedAt: { not: null } } });
@@ -139,7 +158,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         maxTurns: job.maxTurns,
         maxBudgetUsd: job.maxBudgetUsd,
         resume: job.lastSessionId ?? undefined,
-      })
+      }, deps.onRuntimeEvent)
       .catch((): null => null);
 
     const decision = nextPhase(outcome, k, job.maxRetries);

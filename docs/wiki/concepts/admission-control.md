@@ -1,16 +1,16 @@
 ---
 title: Admission control — an instruction is not an invariant
-summary: Why hkb enforces worktree isolation and (later) dependency ordering in a canUseTool gate that mutates or denies the tool call, rather than asking the model to comply in a prompt — and the measured failure that made the distinction non-negotiable.
+summary: Why hkb enforces its tool surface, worktree isolation and (later) dependency ordering in a PreToolUse hook rather than in a prompt, a permission mode, or canUseTool — with the three measurements that ruled the other three out.
 category: concepts
 kind: explanation
 audience: [dev]
 read_when: "adding a rule an agent must obey, reviewing anything that says 'the prompt tells it to', or wiring a new workload kind's constraints"
 covers:
   - path: src/admission.ts
-    sha: 8b1987ff3533ee61f4d73d4bc3234875f332f11c
+    sha: 964084be7460a43be49db9819665a6269f6a252f
   - path: src/runtime/claude.ts
-    sha: 0f00b8f535d8514e814e15df693c45e7c7d29592
-generated_at_commit: fc5452a
+    sha: bfa931e90aafe981aed30a83e270659b368f4448
+generated_at_commit: cb57f8a
 last_refreshed: 2026-09-05
 related: [architecture/runtime-layer, architecture/job-kind, decisions/adr-007-workload-scheduler, gotchas/prompt-is-not-a-guarantee]
 ---
@@ -43,22 +43,46 @@ The run's own order-checking reported clean, because it watched ordering and not
 isolation. An instruction was followed exactly as reliably as an instruction can
 be, which is to say not reliably enough to be an invariant.
 
+## Why a hook, and not the three obvious alternatives
+
+The SDK evaluates a tool call in six steps, and **hooks run first** — before deny
+rules, ask rules, the permission mode and allow rules. That ordering is the whole
+argument, and each alternative was tried and measured before landing here.
+
+**Not `canUseTool`.** It is shadowed twice over, and the SDK says so itself with a
+`CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` warning: once by
+`permissionMode: 'bypassPermissions'`, which approves every call before the
+callback is consulted, and again by every **bare name in `allowedTools`**, which
+does the same per tool. Both warnings end with the same instruction — *"To gate
+every tool call, use a PreToolUse hook."* A probe with no `allowedTools` at all and
+a deny-everything callback still ran `Read` and never invoked it.
+
+**Not the permission mode.** `dontAsk` paired with `allowedTools` is the
+documented locked-down pairing for a headless agent, and it is what
+`src/runtime/claude.ts` sets. But it cannot be relied on alone: measured, a session
+running nested inside another Claude Code process ran the `Agent` tool under
+`dontAsk` with `Agent` absent from `allowedTools`. The mode is not always in our
+hands; the hook is.
+
+**Not `allowedTools` under `bypassPermissions`.** The docs are explicit that the
+list does not constrain that mode — `allowedTools: ["Read"]` alongside bypass
+"still approves every tool, including Bash, Write, and Edit". The allowlist would
+be decoration.
+
 ## The shape
 
-`admissionController()` (`src/admission.ts`) returns a `CanUseTool` callback,
-passed to `query()` in `src/runtime/claude.ts`. The SDK's `PermissionResult` has
-two branches and both are useful:
+`admissionHooks()` (`src/admission.ts`) returns what goes in `Options.hooks`: one
+`PreToolUse` matcher over every tool, because a gate with holes is not a gate. Its
+`hookSpecificOutput` carries all three powers:
 
-- **`deny` with a `message`** — a validating gate. The model sees a tool error and
-  must work around it. This is where a graph kind's dependency rule goes: read the
-  card id from the tool input, check the store, refuse the spawn if a blocker has
-  not finished. Ordering stops being something the parent is asked to respect.
-- **`allow` with `updatedInput`** — a *mutating* gate, and the more interesting
-  one. `isolation: "worktree"` is not requested and not checked; it is **injected**
-  into the tool input. A parent that omits it still cannot skip it.
-
-`forceIsolation` defaults on, and `deny` lists tools a workload may never call
-whatever the prompt says.
+- **`permissionDecision: 'deny'`** — the validating gate, with a reason the model
+  sees. Two policies use it: `allow`, the workload's whole tool surface, enforced
+  here rather than by the mode; and `admitSpawn`, where a graph kind's dependency
+  rule will go, so ordering stops being something the parent is asked to respect.
+- **`updatedInput`** — the *mutating* gate, and the more interesting one.
+  `isolation: "worktree"` is not requested and not checked; it is **injected**.
+  A parent that omits it cannot skip it. Verified against the real SDK: a spawn
+  with no isolation parameter came back `mutate Agent — isolation injected`.
 
 ## Where this generalises
 
@@ -71,7 +95,11 @@ harness where it belongs.
 ## Known gaps
 
 - The gate only sees tool calls made through the session it was passed to. It
-  cannot police anything a worker does with a shell it was already granted.
+  cannot police anything a worker does with a shell it was already granted — a
+  `Bash` grant is a grant to the whole machine.
+- A hook `allow` does not override a deny rule or a critical-path `rm`; those are
+  evaluated after it and still apply. The gate can refuse more than the mode, never
+  less.
 - `AgentDefinition` in the SDK has no `isolation` field — isolation is a parameter
   of the `Agent` *tool call*, which is why injection at admission is the mechanism
   rather than configuration. A file-defined agent (`.claude/agents/<name>.md` with
