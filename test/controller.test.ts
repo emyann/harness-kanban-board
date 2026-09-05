@@ -93,6 +93,68 @@ test('a failing job retries up to maxRetries, then fails', async () => {
   assert.equal(after.attempts.length, 3, '1 initial + 2 retries');
 });
 
+// ---------------------------------------------------------------- the board's spec defaults
+
+/** A runtime that runs nothing and only remembers what it was asked for. */
+function recordingRuntime() {
+  const seen: import('../src/runtime/index.ts').WorkerSpec[] = [];
+  const inner = fakeRuntime();
+  return {
+    seen,
+    runtime: {
+      name: 'recording',
+      run: (s: import('../src/runtime/index.ts').WorkerSpec, on?: never) => { seen.push(s); return inner.run(s, on); },
+    } as import('../src/runtime/index.ts').Runtime,
+  };
+}
+
+test('a board default reaches the runtime, and a Job that said something outranks it', async () => {
+  const b = await db.board.create({
+    data: {
+      slug: 'defaults', defaultModel: 'board-model', defaultMaxTurns: 8, defaultMaxRetries: 4,
+      maxConcurrent: 5,
+    },
+  });
+  const quiet = await db.job.create({ data: { boardId: b.id, name: 'quiet', brief: 'x', isolate: false } });
+  const loud = await db.job.create({
+    data: { boardId: b.id, name: 'loud', brief: 'x', isolate: false, model: 'job-model', maxTurns: 2 },
+  });
+
+  const r = recordingRuntime();
+  await reconcile({ runtime: r.runtime, cwd, board: 'defaults' });
+
+  const forQuiet = r.seen.find((s) => s.taskId === quiet.id);
+  assert.equal(forQuiet?.model, 'board-model', 'the board answered what the Job did not');
+  assert.equal(forQuiet?.maxTurns, 8);
+
+  const forLoud = r.seen.find((s) => s.taskId === loud.id);
+  assert.equal(forLoud?.model, 'job-model', 'and did not answer what it did');
+  assert.equal(forLoud?.maxTurns, 2);
+});
+
+test('a board default for maxRetries is spent, not the built-in', async () => {
+  // The retry budget is decided in `nextPhase`, one level below the column, so it is the field
+  // most likely to be read raw and quietly fall back to 2. This board says 0: one attempt only.
+  const b = await db.board.create({ data: { slug: 'one-shot', defaultMaxRetries: 0, maxConcurrent: 5 } });
+  const job = await db.job.create({ data: { boardId: b.id, name: 'once', brief: 'x', isolate: false } });
+  await reconcileToRest({ runtime: fakeRuntime({ failTasks: [job.id] }), cwd, board: 'one-shot' });
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'failed');
+  assert.equal(after.attempts.length, 1, 'the board said one attempt, and one attempt is what it got');
+});
+
+test('the budget gate judges a Job against the board default it would actually run with', async () => {
+  // The refusing case: nothing on the Job says what it may cost, and reading the null column
+  // straight would gate it at $0 and let it through under any ceiling.
+  const b = await db.board.create({
+    data: { slug: 'costly-default', defaultMaxBudgetUsd: 50, dailyBudgetUsd: 10, maxConcurrent: 5 },
+  });
+  const job = await db.job.create({ data: { boardId: b.id, name: 'pricey', brief: 'x', isolate: false } });
+  const r = await reconcile({ runtime: fakeRuntime(), cwd, board: 'costly-default' });
+  assert.match(r.refused ?? '', /may cost \$50\.00/, 'the board default is what it may cost');
+  assert.equal(await db.attempt.count({ where: { jobId: job.id } }), 0, 'and nothing ran');
+});
+
 test('known contention is refused by the gate before any claim is attempted', async () => {
   const job = await mkJob('contended');
   // somebody else got there first and still holds it; maxConcurrent is 1

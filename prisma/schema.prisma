@@ -76,6 +76,23 @@ model Board {
   dailyBudgetUsd Float?
   maxConcurrent  Int   @default(1)
 
+  /// Spec defaults for the Jobs filed on this board. Null means "no opinion, ask the next level".
+  ///
+  /// The same kind of fact as the ceilings above: a board that runs cheap, high-volume work knows
+  /// which model that work wants, and saying so once beats `--model` on every `kb new`. A ceiling
+  /// is a limit the board imposes and a default is a value it supplies, so they are separate
+  /// columns rather than one — a Job may not exceed `dailyBudgetUsd`, but it may absolutely
+  /// override `defaultModel`.
+  ///
+  /// Resolution lives in `src/spec.ts` and is: the Job's own value wins, the Board's default
+  /// fills a null, the built-in is the last resort. `timeoutMs` is deliberately not here yet —
+  /// nothing has asked for it, and each default costs a column, a flag and a line of provenance.
+  defaultModel        String?
+  defaultEffort       String?
+  defaultMaxTurns     Int?
+  defaultMaxBudgetUsd Float?
+  defaultMaxRetries   Int?
+
   events Event[]
 
   controller Controller?
@@ -120,15 +137,21 @@ model Job {
   brief        String
   /// Which agent definition to run. The image name — see `.claude/agents/<agent>.md`.
   agent        String  @default("worker")
+  /// Null on all five of these means "nobody said" — the Board's default answers, and failing that
+  /// `BUILT_IN` in `src/spec.ts` does. They carry no database default on purpose: a column that
+  /// defaults to 20 cannot tell "the operator asked for 20" from "the operator said nothing", and
+  /// without that distinction a Board default is outranked by every Job that ever existed, which
+  /// is not a default at all. The built-in values moved into `src/spec.ts`, which is now the one
+  /// place they are written down.
   model        String?
   effort       String?
-  maxTurns     Int     @default(20)
+  maxTurns     Int?
   /// Wall clock. The model's own caps (turns, budget) cannot stop a session that has stalled.
   timeoutMs    Int     @default(1800000)
-  maxBudgetUsd Float   @default(1)
+  maxBudgetUsd Float?
   /// Run in its own git worktree. Enforced at admission, not requested in a prompt.
   isolate      Boolean @default(true)
-  maxRetries   Int     @default(2)
+  maxRetries   Int?
 
   // ---- status: what is happening. Written only by the controller.
   phase         Phase   @default(pending)

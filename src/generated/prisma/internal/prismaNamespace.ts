@@ -910,6 +910,11 @@ export const BoardScalarFieldEnum = {
   pausedBy: 'pausedBy',
   dailyBudgetUsd: 'dailyBudgetUsd',
   maxConcurrent: 'maxConcurrent',
+  defaultModel: 'defaultModel',
+  defaultEffort: 'defaultEffort',
+  defaultMaxTurns: 'defaultMaxTurns',
+  defaultMaxBudgetUsd: 'defaultMaxBudgetUsd',
+  defaultMaxRetries: 'defaultMaxRetries',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 } as const

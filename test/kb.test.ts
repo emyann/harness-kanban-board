@@ -551,6 +551,110 @@ test('kb boards rejects a subcommand it does not have, rather than listing anywa
   await assert.rejects(() => main(['boards', 'remove', 'x']), /boards set/, 'and lists the ones it does');
 });
 
+// ---------------------------------------------------------------- the spec defaults
+
+test('kb boards set stores the spec defaults, and none clears one', async () => {
+  const r = scratchRepo('cheap');
+  await kb('boards', 'add', 'cheap', '--repo', r);
+  const set = json((await kb('boards', 'set', 'cheap', '--json',
+    '--model', 'claude-haiku-4-5', '--effort', 'low', '--max-turns', '8',
+    '--max-budget', '0.2', '--max-retries', '0')).out);
+  assert.deepEqual(set.defaults, {
+    model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.2, maxRetries: 0,
+  });
+  assert.equal(set.maxConcurrent, 1, 'a default is not a ceiling — setting one leaves the other alone');
+
+  const off = json((await kb('boards', 'set', 'cheap', '--model', 'none', '--json')).out);
+  assert.equal(off.defaults.model, null, 'a board with no opinion is a real configuration');
+  assert.equal(off.defaults.maxTurns, 8, 'and clearing one default does not clear the rest');
+});
+
+test('kb boards set refuses a nonsense default rather than storing it', async () => {
+  const r = scratchRepo('bad-defaults');
+  await kb('boards', 'add', 'bad-defaults', '--repo', r);
+  for (const [flag, value, why] of [
+    ['--effort', 'turbo', /low\|medium\|high/],
+    ['--max-turns', '0', /1 or more/],
+    ['--max-turns', '2.5', /whole number of turns/],
+    ['--max-budget', '-1', /dollars, 0 or more/],
+    ['--max-retries', '-1', /whole number of retries/],
+    ['--max-retries', '1.5', /whole number of retries/],
+    ['--model', '', /pass a value/],
+  ] as [string, string, RegExp][]) {
+    await assert.rejects(
+      () => main(['boards', 'set', 'bad-defaults', flag, value]),
+      (e: Error & { exitCode?: number }) => {
+        assert.equal(e.exitCode, 2);
+        assert.match(e.message, why);
+        assert.match(e.message, /none/, 'and every one of them says how to clear the default instead');
+        return true;
+      },
+      `${flag} ${value} should be refused`,
+    );
+  }
+  const b = await db.board.findUniqueOrThrow({ where: { slug: 'bad-defaults' } });
+  assert.deepEqual(
+    [b.defaultEffort, b.defaultMaxTurns, b.defaultMaxBudgetUsd, b.defaultMaxRetries, b.defaultModel],
+    [null, null, null, null, null],
+    'and nothing was written',
+  );
+});
+
+test('kb boards set with nothing to set names the defaults as well as the ceilings', async () => {
+  const r = scratchRepo('nothing-set');
+  await kb('boards', 'add', 'nothing-set', '--repo', r);
+  await assert.rejects(() => main(['boards', 'set', 'nothing-set']), /--model/);
+});
+
+test('a board default fills a Job that said nothing, and never one that did', async () => {
+  const r = scratchRepo('inherits');
+  await kb('boards', 'add', 'inherits', '--repo', r);
+  await kb('boards', 'set', 'inherits', '--model', 'claude-haiku-4-5', '--max-turns', '8');
+
+  const quiet = json((await kb('new', 'quiet', '--board', 'inherits', '--brief', 'b', '--json')).out);
+  // `--board` because `kb show` resolves a scope before it runs, and this checkout has several.
+  const inherited = json((await kb('show', String(quiet.id), '--board', 'inherits', '--json')).out);
+  assert.equal(inherited.model, null, 'the column stays null — the Job did not ask for anything');
+  assert.equal(inherited.spec.model.value, 'claude-haiku-4-5');
+  assert.equal(inherited.spec.model.from, 'board');
+  assert.equal(inherited.spec.maxTurns.value, 8);
+  assert.equal(inherited.spec.maxRetries.from, 'built-in', 'what the board did not say either');
+
+  const loud = json((await kb('new', 'loud', '--board', 'inherits', '--brief', 'b', '--json',
+    '--model', 'claude-opus-5')).out);
+  const own = json((await kb('show', String(loud.id), '--board', 'inherits', '--json')).out);
+  assert.equal(own.spec.model.value, 'claude-opus-5', 'the Job asked, so the board does not answer');
+  assert.equal(own.spec.model.from, 'job');
+  assert.equal(own.spec.maxTurns.from, 'board', 'and the fields it did not ask about still inherit');
+});
+
+test('show names the source of every value in the spec', async () => {
+  const r = scratchRepo('traceable');
+  await kb('boards', 'add', 'traceable', '--repo', r);
+  await kb('boards', 'set', 'traceable', '--model', 'claude-haiku-4-5');
+  const j = json((await kb('new', 'traced', '--board', 'traceable', '--brief', 'b', '--json',
+    '--max-turns', '4')).out);
+  const out = (await kb('show', String(j.id), '--board', 'traceable')).out;
+  assert.match(out, /model\s+claude-haiku-4-5\s+from board traceable/);
+  assert.match(out, /maxTurns\s+4\s+set on the Job/);
+  assert.match(out, /maxRetries\s+2\s+built-in default/);
+});
+
+test('kb boards prints a board defaults line only for the boards that have one', async () => {
+  const rows = json((await kb('boards', '--json')).out);
+  const cheap = rows.find((b: { board: string }) => b.board === 'cheap');
+  assert.equal(cheap.defaults.maxTurns, 8);
+  const plain = rows.find((b: { board: string }) => b.board === 'moved');
+  assert.deepEqual(plain.defaults, {
+    model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null,
+  }, '--json carries the key either way, so a consumer never branches on which flags it passed');
+
+  const human = (await kb('boards')).out;
+  assert.match(human, /defaults\s+model=claude-haiku-4-5 maxTurns=8/, 'a board with defaults says so');
+  const moved = human.split('\n').findIndex((l) => l.startsWith('moved'));
+  assert.doesNotMatch(human.split('\n')[moved + 1] ?? '', /defaults/, 'and one without pays nothing');
+});
+
 // ---------------------------------------------------------------- ls --all
 
 test('ls --all lists Jobs from every board, and says which board each is on', async () => {

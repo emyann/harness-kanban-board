@@ -3,6 +3,7 @@ import { createWorktree, existingWorktree, removeWorktree, type Worktree } from 
 import { prForBranch } from './pulls.ts';
 import { withProtocol } from './brief.ts';
 import { gateClaim, windowStart } from './limits.ts';
+import { resolveSpec } from './spec.ts';
 import { holderId, holderLiveness } from './liveness.ts';
 import type { Runtime, RuntimeEvent, WorkerOutcome } from './runtime/index.ts';
 
@@ -153,13 +154,20 @@ async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report
         data: { endedAt: at, outcome: 'lost', reason: `lease held by ${l.holder} expired` },
       });
     }
-    const job = await db.job.findUnique({ where: { id: l.jobId }, select: { maxRetries: true } });
+    // Through `resolveSpec`, not off the column: `maxRetries` is nullable now, and a board that
+    // says "retry these three times" has to be heard on the reclaim path too — otherwise a Job
+    // whose holder died would be judged against a different retry budget than one that failed.
+    const job = await db.job.findUnique({
+      where: { id: l.jobId },
+      select: { maxRetries: true, board: { select: { defaultMaxRetries: true } } },
+    });
+    const maxRetries = resolveSpec(job, job?.board).maxRetries.value;
     const spent = await db.attempt.count({
       where: { jobId: l.jobId, endedAt: { not: null }, outcome: { not: 'stopped' } },
     });
     await db.job.update({
       where: { id: l.jobId },
-      data: { phase: spent < (job?.maxRetries ?? 0) + 1 ? 'pending' : 'failed', lastError: 'lease expired' },
+      data: { phase: spent < maxRetries + 1 ? 'pending' : 'failed', lastError: 'lease expired' },
     });
     await db.event.create({ data: { kind: 'reclaimed', jobId: l.jobId, actor: l.holder } });
     report.reclaimed.push(l.jobId);
@@ -203,8 +211,16 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // what was true when the pass started.
     const board = await db.board.findFirst({
       where: deps.board ? { slug: deps.board } : { id: job.boardId },
-      select: { pausedAt: true, pausedBy: true, maxConcurrent: true, dailyBudgetUsd: true, id: true, repoPath: true },
+      select: {
+        pausedAt: true, pausedBy: true, maxConcurrent: true, dailyBudgetUsd: true, id: true, repoPath: true,
+        defaultModel: true, defaultEffort: true, defaultMaxTurns: true, defaultMaxBudgetUsd: true,
+        defaultMaxRetries: true,
+      },
     });
+    // The spec this Job actually runs with. Resolved once, before the gate, because the budget
+    // ceiling is checked against `maxBudgetUsd` and that number may itself have come from the
+    // board — a gate reading the raw column would judge a null Job against a null budget.
+    const spec = resolveSpec(job, board);
     // The repository this Job runs in. On the Board because a Board is the Namespace and the
     // ceilings above are already per-repo facts; on nothing at all is an error worth naming, since
     // the alternative is cutting a worktree of whatever directory the daemon happened to start in.
@@ -229,7 +245,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       maxConcurrent: board?.maxConcurrent ?? 1,
       spent24h: spend._sum.costUsd ?? 0,
       dailyBudgetUsd: board?.dailyBudgetUsd ?? null,
-      jobBudgetUsd: job.maxBudgetUsd,
+      jobBudgetUsd: spec.maxBudgetUsd.value,
     });
     if (gate.ok === false) {
       // Loudly, and once: the whole pass stops, because every remaining Job faces the same wall.
@@ -344,10 +360,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         attempt: k,
         cwd: wt ? wt.path : cwd,
         prompt: wt ? withProtocol(job.brief, wt.branch) : job.brief,
-        model: job.model ?? undefined,
-        effort: (job.effort as 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined) ?? undefined,
-        maxTurns: job.maxTurns,
-        maxBudgetUsd: job.maxBudgetUsd,
+        model: spec.model.value ?? undefined,
+        effort: spec.effort.value ?? undefined,
+        maxTurns: spec.maxTurns.value,
+        maxBudgetUsd: spec.maxBudgetUsd.value,
         timeoutMs: job.timeoutMs,
         resume: job.lastSessionId ?? undefined,
         signal: deps.signal,
@@ -368,7 +384,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // be a lie about why it ended AND would spend a retry on it.
     const decision: Decision = deps.signal?.aborted
       ? { phase: 'pending', outcome: 'stopped', resumable: true }
-      : nextPhase(outcome, charged, job.maxRetries);
+      : nextPhase(outcome, charged, spec.maxRetries.value);
 
     // ---- what landed on the forge. One read, by head branch: the board and the forge are two
     // systems and this is the only thing that joins them.

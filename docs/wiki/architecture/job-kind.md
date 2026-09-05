@@ -7,9 +7,9 @@ audience: [dev]
 read_when: "adding a workload kind, changing retry or lease behaviour, or wondering why the DAG is not in the core"
 covers:
   - path: prisma/schema.prisma
-    sha: 7ddf7cc64bdec434ada83af9301a0d835f9d5af1
+    sha: 16810047426b39467d37ca6018e654adb3ed2f7c
   - path: src/controller.ts
-    sha: 455fc87adf4f4853fb1ef183b75f3552ccc79e60
+    sha: c1b049f80d9458a1b41425f57dc41871aace4265
   - path: src/db.ts
     sha: db126410edbcadf02b1d7ac200771620d1195d70
 generated_at_commit: a659306
@@ -155,6 +155,41 @@ out to be silently inert was inert because nothing tested that it *refused*.
 The gate refuses contention it can see, before the compare-and-swap is attempted.
 The CAS is still there for the race it cannot see — two hosts that both read "one
 slot free" in the same instant — so both paths exist and both are tested.
+
+## Defaults, and why they are not ceilings
+
+A Board carries two different kinds of policy and they must not be confused. A
+**ceiling** is a limit a Job may not exceed, enforced in `gateClaim` above. A
+**default** is a value a Job may freely override, resolved in `src/spec.ts`. They
+live in separate columns for that reason: a Job may not spend past
+`dailyBudgetUsd`, but it may absolutely run on a model other than `defaultModel`.
+
+Five fields resolve in three levels, and the order is the whole of it:
+
+1. the **Job's own value** wins — `kb new --model …`
+2. the **Board's default** fills a null — `kb boards set <slug> --model …`
+3. the **built-in** is the last resort — `BUILT_IN` in `src/spec.ts`
+
+This is why `Job.model`, `effort`, `maxTurns`, `maxBudgetUsd` and `maxRetries` are
+all **nullable with no database default**. A column that defaults to `20` cannot
+tell "the operator asked for 20" from "the operator said nothing", and without that
+distinction a Board default would be outranked by every Job ever filed — which is
+not a default at all. The built-in numbers moved out of the schema and into
+`src/spec.ts`, which is now the one place they are written down.
+
+The null check is `!= null` and never a truthiness test: `maxRetries: 0` ("one
+attempt, do not retry"), `maxTurns: 0` and `maxBudgetUsd: 0` are all values an
+operator can mean, and a falsy check would silently promote every one of them to
+the next level. That is the case `test/spec.test.ts` is built around, along with
+the failure that matters most — a Board default quietly winning over a value set on
+the Job, which is invisible because the Job still runs, just on the wrong model.
+
+`resolveSpec` returns each value with a `from` tag (`job` | `board` | `built-in`)
+rather than the value alone, because a spec you cannot trace is worse than one you
+have to repeat. `kb show` prints the source of every field, so "why did this Job run
+on Opus" stops being archaeology across two tables. The controller resolves once,
+**before** the gate — `maxBudgetUsd` may itself have come from the board, and a gate
+reading the raw column would judge a null Job against a null budget.
 
 ## Known gaps
 

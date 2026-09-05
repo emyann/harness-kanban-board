@@ -7,6 +7,7 @@ import { openBoard, closeBoard } from './db.ts';
 import { reconcile } from './controller.ts';
 import { fakeRuntime } from './runtime/fake.ts';
 import * as daemon from './daemon.ts';
+import { EFFORTS, boardDefaults, hasDefaults, resolveSpec, type SpecSource } from './spec.ts';
 import type { Runtime } from './runtime/index.ts';
 
 /**
@@ -59,8 +60,14 @@ const HELP = `kb — run one agent against one brief
   kb boards                every board on this machine
   kb boards add <slug>     point a board at a repository       [--repo <path>]
   kb boards rm <slug>      remove a board and everything on it [--force]
-  kb boards set <slug>     the ceilings, without SQL
+  kb boards set <slug>     the ceilings and the spec defaults, without SQL
        --max-concurrent <n>  --daily-budget <usd>|none
+       --model <m>|none  --effort <e>|none  --max-turns <n>|none
+       --max-budget <usd>|none  --max-retries <n>|none
+
+A board's defaults fill in what a Job did not say: the Job's own value wins, the board's
+default fills a null, the built-in is the last resort. \`kb show\` names the source of
+every one. \`none\` clears a default rather than setting it to the word.
 
 The board is ~/.hkb/board.db — one per machine, a Board per repository, the way one
 cluster holds a namespace per project. \`--board\` picks one; without it the repository
@@ -175,6 +182,25 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`;
 }
 
+/**
+ * A board's spec defaults on one line, for the human output.
+ *
+ * Only what is set: a row of `model=— effort=— maxTurns=—` is five columns of nothing, and the
+ * absence of the line is the same information with none of the noise. `(none)` when the board has
+ * no opinion at all, because `kb boards set` prints this unconditionally and a blank tail there
+ * would read as truncated output rather than as an answer.
+ */
+export function describeDefaults(d: ReturnType<typeof boardDefaults>): string {
+  const parts = [
+    d.model !== null ? `model=${d.model}` : null,
+    d.effort !== null ? `effort=${d.effort}` : null,
+    d.maxTurns !== null ? `maxTurns=${d.maxTurns}` : null,
+    d.maxBudgetUsd !== null ? `maxBudget=$${d.maxBudgetUsd}` : null,
+    d.maxRetries !== null ? `maxRetries=${d.maxRetries}` : null,
+  ].filter((p): p is string => p !== null);
+  return parts.length ? parts.join(' ') : '(none)';
+}
+
 const num = (v: unknown, flag: string): number | undefined => {
   if (v === undefined) return undefined;
   const n = Number(v);
@@ -280,8 +306,8 @@ export async function main(argv: string[]): Promise<number> {
         create: { slug, repoPath: scope.repoPath },
       });
       const effort = values.effort as string | undefined;
-      if (effort && !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) {
-        throw usage(`--effort must be one of low|medium|high|xhigh|max, got ${effort}`);
+      if (effort && !(EFFORTS as readonly string[]).includes(effort)) {
+        throw usage(`--effort must be one of ${EFFORTS.join('|')}, got ${effort}`);
       }
       const job = await db.job.create({
         data: {
@@ -290,9 +316,12 @@ export async function main(argv: string[]): Promise<number> {
           model: (values.model as string) ?? null,
           effort: effort ?? null,
           isolate: !values['no-isolate'],
-          maxTurns: num(values['max-turns'], '--max-turns'),
-          maxBudgetUsd: num(values['max-budget'], '--max-budget'),
-          maxRetries: num(values['max-retries'], '--max-retries'),
+          // Null, not a number, when the flag was not given. A Job that recorded 20 because
+          // nobody said otherwise would outrank its board's default forever — the whole point of
+          // these columns being nullable is that "unset" stays legible. See `src/spec.ts`.
+          maxTurns: num(values['max-turns'], '--max-turns') ?? null,
+          maxBudgetUsd: num(values['max-budget'], '--max-budget') ?? null,
+          maxRetries: num(values['max-retries'], '--max-retries') ?? null,
         },
       });
       await db.event.create({
@@ -343,7 +372,11 @@ export async function main(argv: string[]): Promise<number> {
         include: { attempts: { orderBy: { k: 'asc' } }, lease: true, board: true },
       });
       if (!job) throw usage(`no Job #${id} — \`kb ls\` shows what is on the board`);
-      emit(out, job, () => {
+      // What this Job will actually run with, and where each value came from. The columns are on
+      // the object too, but half of them are null now and a null `model` is not the answer to
+      // "which model does this run on" — the board may have answered it.
+      const spec = resolveSpec(job, job.board);
+      emit(out, { ...job, spec }, () => {
         console.log(`#${job.id} ${job.name}`);
         // One board per machine, one Board per repository: a Job you did not expect is usually a
         // Job on a board you were not thinking about. Which board, and which checkout it will run
@@ -353,8 +386,25 @@ export async function main(argv: string[]): Promise<number> {
           + `${job.board.repoPath ?? '(no repo — `kb boards add ' + job.board.slug + ' --repo <path>`)'}`,
         );
         console.log(`  phase    ${job.phase}${job.lease ? `  (leased by ${job.lease.holder} until ${job.lease.expiresAt.toISOString()})` : ''}`);
-        console.log(`  spec     agent=${job.agent} model=${job.model ?? 'default'} effort=${job.effort ?? 'default'}`);
-        console.log(`           maxTurns=${job.maxTurns} maxBudget=$${job.maxBudgetUsd} maxRetries=${job.maxRetries} isolate=${job.isolate}`);
+        console.log(`  spec     agent=${job.agent} isolate=${job.isolate} timeoutMs=${job.timeoutMs}`);
+        // One line per resolved field, with its source named. A spec you cannot trace is worse
+        // than one you have to repeat: three levels answer these five questions and printing the
+        // winner alone turns "why did this run on Opus" into archaeology across two tables.
+        const where = (from: SpecSource) =>
+          from === 'job' ? 'set on the Job'
+            : from === 'board' ? `from board ${job.board.slug}`
+            : 'built-in default';
+        const traced: [string, string, SpecSource][] = [
+          ['model', spec.model.value ?? '(the harness default)', spec.model.from],
+          ['effort', spec.effort.value ?? '(the harness default)', spec.effort.from],
+          ['maxTurns', String(spec.maxTurns.value), spec.maxTurns.from],
+          ['maxBudget', `$${spec.maxBudgetUsd.value}`, spec.maxBudgetUsd.from],
+          ['maxRetries', String(spec.maxRetries.value), spec.maxRetries.from],
+        ];
+        const vw = Math.max(...traced.map(([, v]) => v.length));
+        for (const [k, v, from] of traced) {
+          console.log(`           ${k.padEnd(10)} ${v.padEnd(vw)}  ${where(from)}`);
+        }
         if (job.lastError) console.log(`  error    ${job.lastError}`);
         if (job.lastSessionId) console.log(`  resume   ${job.lastSessionId}`);
         console.log(`  brief    ${job.brief.split('\n')[0].slice(0, 88)}${job.brief.length > 88 ? ' …' : ''}`);
@@ -559,11 +609,47 @@ export async function main(argv: string[]): Promise<number> {
       }
       if (rest[0] === 'set') {
         const name = rest[1] ?? named;
-        if (!name) throw usage('kb boards set <slug> --max-concurrent <n> --daily-budget <usd> — which board?');
+        if (!name) throw usage('kb boards set <slug> --max-concurrent <n> --daily-budget <usd> --model <m> — which board?');
         const board = await db.board.findUnique({ where: { slug: name } });
         if (!board) throw usage(`no board "${name}" — \`kb boards\` lists the ones on this machine`);
 
         const data: Record<string, unknown> = {};
+
+        // ---- the spec defaults. `none` clears one, the same word `--daily-budget none` already
+        // uses: an unset default and a default of zero are different configurations, and a flag
+        // that could only ever set a value would leave no way back to "no opinion".
+        const CLEAR = 'none';
+        /** A `--flag <value>|none` that stores a string. */
+        const setString = (flag: string, column: string, check?: (v: string) => void) => {
+          if (values[flag] === undefined) return;
+          const raw = String(values[flag]).trim();
+          if (!raw) throw usage(`--${flag} was given nothing — pass a value, or "${CLEAR}" to clear the default`);
+          if (raw === CLEAR) { data[column] = null; return; }
+          check?.(raw);
+          data[column] = raw;
+        };
+        /** A `--flag <number>|none`. `ok` is what the number has to be, and it must say so. */
+        const setNumber = (flag: string, column: string, ok: (n: number) => boolean, want: string) => {
+          if (values[flag] === undefined) return;
+          const raw = String(values[flag]).trim();
+          if (raw === CLEAR) { data[column] = null; return; }
+          const n = num(raw, `--${flag}`) as number;
+          if (!ok(n)) throw usage(`--${flag} wants ${want}, or "${CLEAR}" to clear the default — got ${raw}`);
+          data[column] = n;
+        };
+
+        setString('model', 'defaultModel');
+        setString('effort', 'defaultEffort', (v) => {
+          if (!(EFFORTS as readonly string[]).includes(v)) {
+            throw usage(`--effort must be one of ${EFFORTS.join('|')}, or "${CLEAR}" to clear the default — got ${v}`);
+          }
+        });
+        // A Job needs at least one turn to do anything, so 0 turns is a Job that cannot run
+        // rather than a board that runs cheaply. `maxRetries` 0 IS meaningful — one attempt.
+        setNumber('max-turns', 'defaultMaxTurns', (n) => Number.isInteger(n) && n >= 1, 'a whole number of turns, 1 or more');
+        setNumber('max-budget', 'defaultMaxBudgetUsd', (n) => n >= 0, 'dollars, 0 or more');
+        setNumber('max-retries', 'defaultMaxRetries', (n) => Number.isInteger(n) && n >= 0, 'a whole number of retries, 0 or more');
+
         if (values['max-concurrent'] !== undefined) {
           const n = num(values['max-concurrent'], '--max-concurrent') as number;
           // 0 is meaningful — it drains a board without stopping it — but a negative is a typo,
@@ -581,18 +667,31 @@ export async function main(argv: string[]): Promise<number> {
           }
         }
         if (!Object.keys(data).length) {
-          throw usage('kb boards set needs something to set — --max-concurrent <n> or --daily-budget <usd>|none');
+          throw usage(
+            'kb boards set needs something to set — a ceiling (--max-concurrent <n>, --daily-budget <usd>|none)'
+            + ' or a spec default (--model, --effort, --max-turns, --max-budget, --max-retries; "none" clears one)',
+          );
         }
 
         const after = await db.board.update({ where: { id: board.id }, data });
+        // Still `ceilings_set`, though it now records defaults too. The kind is what `kb log`
+        // already shows for this command and the payload names exactly which columns moved;
+        // renaming it would break every board's existing history to fix a word.
         await db.event.create({
           data: { kind: 'ceilings_set', boardId: board.id, actor: whoami(), payload: data as never },
         });
+        const defaults = boardDefaults(after);
         emit(out, {
           board: after.slug, maxConcurrent: after.maxConcurrent, dailyBudgetUsd: after.dailyBudgetUsd,
-        }, () => console.log(
-          `${after.slug} — ${after.dailyBudgetUsd === null ? 'no ceiling' : `$${after.dailyBudgetUsd}/24h`}, `
-          + `${after.maxConcurrent} concurrent`));
+          defaults,
+        }, () => {
+          console.log(
+            `${after.slug} — ${after.dailyBudgetUsd === null ? 'no ceiling' : `$${after.dailyBudgetUsd}/24h`}, `
+            + `${after.maxConcurrent} concurrent`);
+          // Printed whenever the board has any, not only when this command changed one: the
+          // question after `kb boards set --model` is what the board now says, not what moved.
+          console.log(`  defaults  ${describeDefaults(defaults)}`);
+        });
         return 0;
       }
 
@@ -649,6 +748,10 @@ export async function main(argv: string[]): Promise<number> {
           spent24h: spend._sum.costUsd ?? 0,
           maxConcurrent: b.maxConcurrent,
           dailyBudgetUsd: b.dailyBudgetUsd,
+          // Always in `--json`, whether set or not: a consumer that has to infer a missing key
+          // from a missing default is reading a shape, not a record.
+          defaults: boardDefaults(b),
+          hasDefaults: hasDefaults(b),
         };
       }));
       emit(out, rows, () => {
@@ -664,6 +767,9 @@ export async function main(argv: string[]): Promise<number> {
             + `${('$' + r.spent24h.toFixed(2)).padStart(7)}  `
             + `${r.repoPath ?? '(no repo — `kb boards add ' + r.board + ' --repo <path>`)'}`,
           );
+          // A continuation line rather than five more columns: the table is already at the width
+          // of a terminal, and a board with no defaults — which is most of them — pays nothing.
+          if (r.hasDefaults) console.log(`${' '.repeat(w)}  defaults  ${describeDefaults(r.defaults)}`);
         }
       });
       return 0;

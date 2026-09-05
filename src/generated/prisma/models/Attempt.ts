@@ -629,14 +629,6 @@ export type NullableEnumOutcomeFieldUpdateOperationsInput = {
   set?: $Enums.Outcome | null
 }
 
-export type NullableIntFieldUpdateOperationsInput = {
-  set?: number | null
-  increment?: number
-  decrement?: number
-  multiply?: number
-  divide?: number
-}
-
 export type AttemptCreateWithoutJobInput = {
   k: number
   host?: string | null

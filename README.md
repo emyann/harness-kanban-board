@@ -48,6 +48,11 @@ kb show 1                                  # phase, spec, and every attempt: out
   `--interval <s>` to change the period, `--status` to see what is up.
 - **`kb down`** stops it cleanly, leaving no lease held.
 - **`kb boards`** lists every board on this machine; `kb boards add <slug> --repo <path>` points one at a repository.
+- **`kb boards set <slug>`** carries a board's ceilings (`--max-concurrent`, `--daily-budget`) *and* its **spec
+  defaults** (`--model`, `--effort`, `--max-turns`, `--max-budget`, `--max-retries`; `none` clears one). A board
+  that runs cheap, high-volume work says `--model claude-haiku-4-5` once instead of on every `kb new`. The order
+  is: the Job's own value wins, the board's default fills a null, the built-in is the last resort — and `kb show`
+  names the source of each one, so a spec is always traceable to where it was set.
 
 Everything from [Quickstart](#quickstart) down describes the **pre-ADR-007 system** — the `hkb` CLI, the board on
 `refs/kb/boards/<name>`, the dispatcher tick. It still runs alongside `kb`, and it is the system being replaced.
