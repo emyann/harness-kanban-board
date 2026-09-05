@@ -32,7 +32,17 @@ export type WorkerSpec = {
   /** Reasoning depth. `low` is the right default for read-only cards. */
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   allowedTools?: string[];
-  /** Extra admission policy for this run — merged over `forceIsolation`. */
+  /**
+   * Is `cwd` a worktree cut for this attempt, or the operator's own checkout?
+   *
+   * The runtime needs this for the subagent isolation policy and for nothing else: forcing
+   * `isolation: "worktree"` onto the spawns of a parent that has no worktree would send their
+   * work to a checkout the parent never sees and nothing merges. The controller always sets it;
+   * omitted means isolated, so a caller that forgets the field gets the strict rule rather than
+   * a silently relaxed one.
+   */
+  isolated?: boolean;
+  /** Extra admission policy for this run. `isolated` above decides the isolation half. */
   admission?: { deny?: string[]; admitSpawn?: (input: Record<string, unknown>) => Promise<string | null> | (string | null); onDecision?: (d: string) => void };
   /** Resume a previous session instead of starting cold — the retry path. */
   resume?: string;

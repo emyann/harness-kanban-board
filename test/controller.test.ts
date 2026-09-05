@@ -167,6 +167,26 @@ test('admission injects isolation onto an Agent spawn that omitted it', async ()
     'not asked for in a prompt — injected');
 });
 
+// The other half of the same rule, and the one that was wrong: a workload with no worktree of its
+// own cannot give one to a subagent. Forcing isolation there sends the subagent's work to a
+// checkout the parent never sees and the controller never merges, and it is silent about it.
+
+test('a workload running in the operator\'s tree REFUSES to isolate a subagent', async () => {
+  const gate = admissionCallback({ subagentIsolation: 'forbid' });
+  const o = spec(await gate(pre('Agent', { prompt: 'go', isolation: 'worktree' })));
+  assert.equal(o.permissionDecision, 'deny', 'a worktree here is work thrown away, not work done');
+  const why = String(o.permissionDecisionReason);
+  assert.match(why, /without `isolation`/, 'an error says what to do next');
+  assert.match(why, /--no-isolate/, 'and what to change on the Job if the work really needs a branch');
+});
+
+test('and it does not inject one either — the subagent stays where the parent is', async () => {
+  const gate = admissionCallback({ subagentIsolation: 'forbid' });
+  const o = spec(await gate(pre('Agent', { prompt: 'go' })));
+  assert.equal(o.permissionDecision, 'allow');
+  assert.equal(o.updatedInput, undefined, 'no worktree to send it to, so nothing is injected');
+});
+
 test('admission leaves an already-isolated spawn alone', async () => {
   const gate = admissionCallback({});
   const o = spec(await gate(pre('Agent', { prompt: 'go', isolation: 'worktree' })));
@@ -211,4 +231,34 @@ test('a non-PreToolUse event is not the gate\'s business', async () => {
   const gate = admissionCallback({ deny: ['Read'] });
   const r = await gate({ hook_event_name: 'PostToolUse', tool_name: 'Read' } as never);
   assert.deepEqual(r, {}, 'no opinion, rather than a wrong one');
+});
+
+// ---------------------------------------------------------------- the join
+// A gate is only as good as what it is told. The policy was passed as a constant, so an
+// un-isolated Job's subagents would have been forced into worktrees it does not have — unreachable
+// only because `Agent` is off the tool surface, and reachable again the day anyone adds it.
+
+test('the runtime is told whether this attempt has a worktree, per Job', async () => {
+  const wired = await db.board.upsert({ where: { slug: 'wired' }, update: {}, create: { slug: 'wired' } });
+  const seen: { isolated?: boolean; cwd: string }[] = [];
+  const spy = {
+    name: 'spy',
+    async run(s: { cwd: string; isolated?: boolean }) {
+      seen.push({ isolated: s.isolated, cwd: s.cwd });
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+  const file = (name: string, extra: Record<string, unknown> = {}) =>
+    db.job.create({ data: { boardId: wired.id, name, brief: `do ${name}`, ...extra } });
+
+  await file('in-the-operators-tree', { isolate: false });
+  await reconcile({ runtime: spy, cwd, board: 'wired', readPr: false });
+  assert.equal(seen[0].isolated, false, 'no worktree — and the runtime must not pretend otherwise');
+  assert.equal(seen[0].cwd, cwd, 'it really is the operator\'s checkout');
+
+  await file('in-a-worktree');   // isolate defaults true
+  await reconcile({ runtime: spy, cwd, board: 'wired', readPr: false });
+  assert.equal(seen[1].isolated, true);
+  assert.notEqual(seen[1].cwd, cwd, 'and this one really does have a checkout of its own');
 });
