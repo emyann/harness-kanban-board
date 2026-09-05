@@ -18,20 +18,22 @@ jobs:
     name: test (node ${{ matrix.node-version }})
     steps:
       - uses: actions/checkout@v7
-      # `package-manager-cache: false` on every setup-node with a checkout behind it. v5 turned
-      # caching on by default and v6 narrowed it to "package.json names npm in
-      # packageManager/devEngines"; hkb ships no lock file, so a cache has nothing to restore — and
-      # the restore *fails* the step when it finds none. A package.json edit is not supposed to be
-      # able to break CI, so this is pinned off rather than left to depend on a field nothing else
-      # here cares about.
+      # `package-manager-cache: false` on every setup-node with a checkout behind it. It was
+      # originally off because there was no lock file to restore and the restore *fails* the step
+      # when it finds none. There is a lock file now, so this is no longer forced — it stays off
+      # because it is one fewer moving part between a push and a test result, and turning it on is
+      # a speed change to make deliberately and measure, not a side effect of committing a lock
+      # file. A package.json edit still cannot break CI through it.
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           package-manager-cache: false
-      # Prisma, the better-sqlite3 adapter and the Agent SDK are runtime dependencies (ADR-007
+      # `npm ci`, not `npm install`: it installs exactly the tree package-lock.json pins and fails
+      # rather than silently resolving a new one, which is the whole point of committing the lock
+      # file. Prisma, the better-sqlite3 adapter and the Agent SDK are runtime dependencies (ADR-007
       # ended the zero-dependency rule), and `typescript` is what `npm run lint` and the publish
       # transpile both need.
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
       - run: npm run lint
       # Two runs in one job rather than a matrix: same signal, half the runners. UTC is what Actions
       # gives us and what most CI everywhere gives us; America/New_York is a contributor's laptop,
@@ -71,7 +73,7 @@ jobs:
       # `npm pack` runs `prepack`, which runs `tsc`. Without an install there is no `tsc` and the
       # pack fails before it has packed anything — the published `hkb` IS the dist transpile, so this
       # step is what makes the artifact exist at all.
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
       - run: node scripts/smoke-pack.mjs
 
   # The two checks branch protection requires by name. A matrix cannot produce a single check — it

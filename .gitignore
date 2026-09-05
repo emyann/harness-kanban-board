@@ -1,7 +1,4 @@
 node_modules/
-# No lock file is committed: nothing ships from node_modules, and every setup-node keeps
-# `package-manager-cache: false`, which needs a lock file to be absent.
-package-lock.json
 *.log
 
 # The repository's own hkb directory — per-attempt worktrees, and a board file if
