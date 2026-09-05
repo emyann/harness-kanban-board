@@ -3,7 +3,7 @@
 Notable changes to hkb, newest first. `docs/wiki/decisions/` carries the design detail behind each
 entry, and `docs/rebuild-plan.md` the order the work is happening in.
 
-## Unreleased — 0.3.0
+## 0.3.0 — 2026-09-05
 
 ### hkb is a workload scheduler, and it is the only thing in this package
 
