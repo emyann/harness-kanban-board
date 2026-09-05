@@ -7,6 +7,7 @@ import { boardDir } from './db-url.ts';
 export { boardDir };
 import { reconcile } from './controller.ts';
 import { holderId, holderLiveness, parseHolder, pidIsAlive } from './liveness.ts';
+import { windowStart } from './limits.ts';
 import { cliEntry, PACKAGE_ROOT } from './paths.ts';
 import type { Runtime } from './runtime/index.ts';
 
@@ -150,6 +151,18 @@ export type BoardStatus = {
   behind: string | null;
   version: string | null;
   log: string;
+  /**
+   * Why a daemon that is up may still claim nothing. `running` answers "is there a controller";
+   * these answer "and will it take anything", which is the question that actually follows — and
+   * every one of them is an input to `gateClaim`, so they are the same four facts a refusal cites.
+   */
+  stopped: boolean;
+  stoppedAt: Date | null;
+  stoppedBy: string | null;
+  maxConcurrent: number;
+  dailyBudgetUsd: number | null;
+  /** Spent on this board inside the same rolling window the gate charges against. */
+  spent24h: number;
 };
 
 /**
@@ -167,6 +180,23 @@ export async function status(board?: string, now = Date.now()): Promise<BoardSta
     orderBy: { slug: 'asc' },
   });
   const here = buildVersion();
+
+  // The spend for every board in one pass, summed here rather than per board: an aggregate per
+  // row would make `kb up --status` cost N+1 queries to answer a question the join already holds.
+  // Same window as the gate, from the same function — a status that disagreed with the refusal it
+  // is meant to explain would be worse than not printing it.
+  const costs = new Map<number, number>();
+  const charged = await db.attempt.findMany({
+    where: {
+      startedAt: { gte: windowStart(new Date(now)) },
+      job: { boardId: { in: boards.map((b) => b.id) } },
+    },
+    select: { costUsd: true, job: { select: { boardId: true } } },
+  });
+  for (const a of charged) {
+    costs.set(a.job.boardId, (costs.get(a.job.boardId) ?? 0) + (a.costUsd ?? 0));
+  }
+
   return boards.map((b) => {
     const c = (b.controller ?? null) as ControllerRow | null;
     const live = !!c && controllerIsLive(c, new Date(now));
@@ -184,6 +214,12 @@ export async function status(board?: string, now = Date.now()): Promise<BoardSta
       behind: live && c!.version && c!.version !== 'unknown' && here !== 'unknown' && c!.version !== here
         ? here : null,
       log: logPath(b.slug),
+      stopped: !!b.pausedAt,
+      stoppedAt: b.pausedAt,
+      stoppedBy: b.pausedBy,
+      maxConcurrent: b.maxConcurrent,
+      dailyBudgetUsd: b.dailyBudgetUsd,
+      spent24h: costs.get(b.id) ?? 0,
     };
   });
 }
