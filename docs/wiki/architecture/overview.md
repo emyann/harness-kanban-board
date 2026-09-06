@@ -9,9 +9,9 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: c152f69d60b9294c937b6b56c36490c1799c7d83
+    sha: efbf4fbeac22955685d1ab9f680cb62e9f1dd6b7
   - path: src/controller.ts
-    sha: e4db1f7d58cc0a761998f1d2a3bb0d78aadea5a8
+    sha: 89144b5df92a2082662e9698cc5713d0d6db9691
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/db.ts
@@ -23,7 +23,7 @@ covers:
   - path: src/pulls.ts
     sha: a27f00a986f576c2d3ed035902c0a1c9f9a9300c
   - path: prisma/schema.prisma
-    sha: f4b3adeb799b04102e4ee64b961b9490c955fbd9
+    sha: d7176becc991e579b9c58e189a4cbcfa9453a707
 related:
   [
     architecture/job-kind,
@@ -33,7 +33,7 @@ related:
     decisions/adr-007-workload-scheduler,
     decisions/adr-009-retiring-the-first-system,
   ]
-generated_at_commit: cada2c0
+generated_at_commit: 5cc611e
 last_refreshed: 2026-09-05
 ---
 
@@ -56,7 +56,7 @@ seam or 36 CLI verbs is describing code that is gone.
 | `src/daemon.ts` | that pass on a timer, detached, over *every* board |
 | `src/worktree.ts` | the sandbox: cut a checkout, carry declared files in, get outputs out, sweep |
 | `src/runtime/` | the seam a worker runs behind — the Agent SDK, or a fake that spends nothing |
-| `src/admission.ts` | the `PreToolUse` gate that makes isolation an invariant rather than an instruction |
+| `src/admission.ts` | the `PreToolUse` gate that makes worktree isolation and the tool surface invariants rather than instructions |
 | `src/pulls.ts` | the only thing that shells out to `gh` |
 
 ## State lives in the board, and only there
@@ -106,9 +106,11 @@ Claim under a lease, run, record. The interesting parts are the refusals:
 - **A lapsed lease is evidence, not proof.** Reclaim goes through `src/liveness.ts`, which answers
   `alive | dead | unknown` — and `unknown` is a real answer, because a holder on another host cannot be
   probed and a wall-clock expiry means nothing across a laptop suspend.
-- **Isolation is enforced, not requested.** `src/admission.ts` is a `PreToolUse` gate that rewrites or
-  denies; the prompt asking a worker to stay in its worktree was measured being ignored. See
-  *concepts/admission-control*.
+- **Isolation and the tool surface are enforced, not requested.** `src/admission.ts` is a `PreToolUse`
+  gate that rewrites or denies; the prompt asking a worker to stay in its worktree was measured being
+  ignored. The same gate is built from the Job's resolved `allowedTools`, so a Job narrowed to `Read`
+  and `Grep` *cannot* write whatever its brief says — which is what makes a propose-then-approve gate
+  (ADR-010) a boundary rather than a hope. See *concepts/admission-control*.
 
 ## The forge is not the board
 

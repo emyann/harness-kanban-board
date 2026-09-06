@@ -85,6 +85,7 @@ export const BoardScalarFieldEnum = {
   defaultMaxTurns: 'defaultMaxTurns',
   defaultMaxBudgetUsd: 'defaultMaxBudgetUsd',
   defaultMaxRetries: 'defaultMaxRetries',
+  defaultAllowedTools: 'defaultAllowedTools',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 } as const
@@ -117,6 +118,7 @@ export const JobScalarFieldEnum = {
   timeoutMs: 'timeoutMs',
   maxBudgetUsd: 'maxBudgetUsd',
   isolate: 'isolate',
+  allowedTools: 'allowedTools',
   maxRetries: 'maxRetries',
   exports: 'exports',
   phase: 'phase',
@@ -196,14 +198,6 @@ export const NullableJsonNullValueInput = {
 export type NullableJsonNullValueInput = (typeof NullableJsonNullValueInput)[keyof typeof NullableJsonNullValueInput]
 
 
-export const NullsOrder = {
-  first: 'first',
-  last: 'last'
-} as const
-
-export type NullsOrder = (typeof NullsOrder)[keyof typeof NullsOrder]
-
-
 export const JsonNullValueFilter = {
   DbNull: DbNull,
   JsonNull: JsonNull,
@@ -219,4 +213,12 @@ export const QueryMode = {
 } as const
 
 export type QueryMode = (typeof QueryMode)[keyof typeof QueryMode]
+
+
+export const NullsOrder = {
+  first: 'first',
+  last: 'last'
+} as const
+
+export type NullsOrder = (typeof NullsOrder)[keyof typeof NullsOrder]
 

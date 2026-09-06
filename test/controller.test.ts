@@ -527,3 +527,119 @@ test('a board\'s maxRetries default is the retry budget actually spent', async (
   assert.equal(after.attempts.length, 1, 'one attempt — the board said no retries, and it was heard');
   assert.equal(after.phase, 'failed');
 });
+
+/**
+ * The tool surface, from the spec to the refusal.
+ *
+ * `WorkerSpec.allowedTools` existed and was honoured by the runtime for as long as nothing set it,
+ * so every Job on every board ran the same nine tools — `Write`, `Edit` and `Bash` unconditional.
+ * That is why ADR-010's motivating case (*propose the migration, let me look, then run it*) could
+ * not be enforced: the propose half could simply apply.
+ *
+ * Tested end to end rather than in halves, because the halves have each passed on their own for
+ * weeks. The gate is built FROM the resolved surface (`src/runtime/claude.ts`), so the thing worth
+ * asserting is that a narrowed Job produces a gate that DENIES — not that a column round-trips.
+ */
+test('a narrowed Job reaches the runtime narrowed, and the gate built from it refuses', async () => {
+  const b = await db.board.upsert({ where: { slug: 'narrow' }, update: {}, create: { slug: 'narrow' } });
+  const seen: (string[] | undefined)[] = [];
+  const spy = {
+    name: 'spy',
+    async run(s: { allowedTools?: string[] }) {
+      seen.push(s.allowedTools);
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+
+  await db.job.create({
+    data: { boardId: b.id, name: 'read only', brief: 'look, do not touch', isolate: false,
+            allowedTools: ['Read', 'Grep'] },
+  });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'narrow' });
+
+  assert.deepEqual(seen[0], ['Read', 'Grep'], 'the resolved surface reaches the runtime');
+
+  // The half that matters: the gate the runtime builds from exactly that list.
+  const gate = admissionCallback({ allow: seen[0] });
+  assert.equal(spec(await gate(pre('Bash', { command: 'rm -rf /' }))).permissionDecision, 'deny',
+    'a Job that may not write must be DENIED the tool that writes — this is the whole feature');
+  assert.equal(spec(await gate(pre('Write', { file_path: 'x' }))).permissionDecision, 'deny');
+  assert.equal(spec(await gate(pre('Read', { file_path: 'x' }))).permissionDecision, 'allow',
+    'and what it WAS granted still works, or the narrowing is just breakage');
+});
+
+test('a Job that named no surface gets the runtime default, which is not the same as none', async () => {
+  const b = await db.board.upsert({ where: { slug: 'wide' }, update: {}, create: { slug: 'wide' } });
+  const seen: (string[] | undefined)[] = [];
+  const spy = {
+    name: 'spy',
+    async run(s: { allowedTools?: string[] }) {
+      seen.push(s.allowedTools);
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+  await db.job.create({ data: { boardId: b.id, name: 'ordinary', brief: 'x', isolate: false } });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'wide' });
+  assert.equal(seen[0], undefined,
+    'undefined, not [] — an absent surface means the runtime decides, and [] would mean no tools at all');
+});
+
+test('an EMPTY surface is a value: the Job may call nothing, and the gate says so', async () => {
+  // The distinction `pick()` protects. `allowedTools: []` is reachable and it means what it says;
+  // if it were read as "unset", a Job deliberately given no tools would silently get all nine.
+  const b = await db.board.upsert({ where: { slug: 'nothing' }, update: {}, create: { slug: 'nothing' } });
+  const seen: (string[] | undefined)[] = [];
+  const spy = {
+    name: 'spy',
+    async run(s: { allowedTools?: string[] }) {
+      seen.push(s.allowedTools);
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+  await db.job.create({
+    data: { boardId: b.id, name: 'inert', brief: 'x', isolate: false, allowedTools: [] },
+  });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'nothing' });
+  assert.deepEqual(seen[0], [], 'an empty list survives resolution as an empty list');
+  const gate = admissionCallback({ allow: [] });
+  assert.equal(spec(await gate(pre('Read', {}))).permissionDecision, 'deny', 'and it denies everything');
+});
+
+test('a board default narrows every Job that named no surface of its own', async () => {
+  const b = await db.board.upsert({
+    where: { slug: 'narrow-board' },
+    update: { defaultAllowedTools: ['Read'] },
+    create: { slug: 'narrow-board', defaultAllowedTools: ['Read'] },
+  });
+  const seen: (string[] | undefined)[] = [];
+  const spy = {
+    name: 'spy',
+    async run(s: { allowedTools?: string[] }) {
+      seen.push(s.allowedTools);
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+  await db.job.create({ data: { boardId: b.id, name: 'inherits', brief: 'x', isolate: false } });
+  // A default is not a ceiling: a Job may name a WIDER list and get it. That is the line between
+  // `src/spec.ts` and `src/limits.ts`, and it is the one this could most easily get wrong.
+  await db.job.create({
+    data: { boardId: b.id, name: 'overrides', brief: 'x', isolate: false, allowedTools: ['Read', 'Bash'] },
+  });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'narrow-board' });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'narrow-board' });
+  assert.deepEqual(seen[0], ['Read'], 'the board answered for the Job that said nothing');
+  assert.deepEqual(seen[1], ['Read', 'Bash'], 'and the Job that spoke was not overridden by it');
+});
+
+test('the allowlist branch of the gate refuses, which nothing tested before', () => {
+  // `deny` had a test; `allow` did not, though it is the branch every narrowed Job goes through.
+  const gate = admissionCallback({ allow: ['Read', 'Grep'] });
+  return Promise.all([
+    gate(pre('Bash', {})).then((r) => assert.equal(spec(r).permissionDecision, 'deny')),
+    gate(pre('Read', {})).then((r) => assert.equal(spec(r).permissionDecision, 'allow')),
+  ]);
+});

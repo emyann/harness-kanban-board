@@ -911,10 +911,12 @@ test('hkb boards set carries the spec defaults, and none clears one', async () =
   await hkb('boards', 'add', 'defaults', '--repo', r);
   const set = json((await hkb(
     'boards', 'set', 'defaults', '--model', 'claude-haiku-4-5', '--effort', 'low',
-    '--max-turns', '8', '--max-budget', '0.25', '--max-retries', '0', '--json',
+    '--max-turns', '8', '--max-budget', '0.25', '--max-retries', '0',
+    '--allow-tools', 'Read,Grep', '--json',
   )).out);
   assert.deepEqual(set.defaults, {
     model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
+    allowedTools: ['Read', 'Grep'],
   });
 
   const cleared = json((await hkb('boards', 'set', 'defaults', '--model', 'none', '--json')).out);
@@ -1054,7 +1056,8 @@ test('hkb boards prints a defaults line only for the boards that have one', asyn
   assert.equal(mine?.hasDefaults, true);
   const bare = rows.find((r) => r.board !== 'listed-defaults' && !r.hasDefaults);
   assert.ok(bare, 'a board with no defaults exists in this suite');
-  assert.deepEqual(bare.defaults, { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null },
+  assert.deepEqual(bare.defaults,
+    { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null },
     '--json carries the key either way: a consumer inferring absence from a missing key reads a shape, not a record');
 });
 

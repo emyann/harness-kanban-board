@@ -24,6 +24,19 @@
  * two tables.
  */
 
+/**
+ * A tool list out of a `Json?` column, defensively.
+ *
+ * Null and "not a list of strings" both mean *unset*, so the next level answers — a malformed
+ * column must not silently narrow a Job's surface to nothing, which would look exactly like a
+ * deliberate read-only Job and fail in a way nobody could read.
+ */
+export function toolList(raw: unknown): string[] | null {
+  if (!Array.isArray(raw)) return null;
+  const names = raw.filter((t): t is string => typeof t === 'string' && t.length > 0);
+  return names.length === raw.length ? names : null;
+}
+
 /** Which level supplied a value. */
 export type SpecSource = 'job' | 'board' | 'built-in';
 
@@ -46,6 +59,12 @@ export const BUILT_IN = {
   maxTurns: 20,
   maxBudgetUsd: 1,
   maxRetries: 2,
+  /**
+   * Null for the same reason `model` is: the built-in answer is "say nothing and let the runtime
+   * pick its own surface", which is a real answer rather than a missing one. Naming the list here
+   * would move a runtime concern into the spec and give two modules an opinion that can drift.
+   */
+  allowedTools: null,
 } as const;
 
 /** The nullable half of a Job's spec — the fields a Board can supply a default for. */
@@ -55,6 +74,9 @@ export type JobSpec = {
   maxTurns?: number | null;
   maxBudgetUsd?: number | null;
   maxRetries?: number | null;
+  /** Raw, straight off the `Json?` column — `toolList` normalizes it here rather than at
+   * every call site, so a malformed value cannot narrow a surface by accident. */
+  allowedTools?: unknown;
 };
 
 /** The Board's side. Named `default*` so no call site has to guess what `board.model` would mean. */
@@ -64,6 +86,7 @@ export type BoardDefaults = {
   defaultMaxTurns?: number | null;
   defaultMaxBudgetUsd?: number | null;
   defaultMaxRetries?: number | null;
+  defaultAllowedTools?: unknown;
 };
 
 export type Traced<T> = { value: T; from: SpecSource };
@@ -74,6 +97,7 @@ export type ResolvedSpec = {
   maxTurns: Traced<number>;
   maxBudgetUsd: Traced<number>;
   maxRetries: Traced<number>;
+  allowedTools: Traced<string[] | null>;
 };
 
 /**
@@ -109,13 +133,18 @@ export function resolveSpec(
     maxTurns: pick(j.maxTurns, b.defaultMaxTurns, BUILT_IN.maxTurns),
     maxBudgetUsd: pick(j.maxBudgetUsd, b.defaultMaxBudgetUsd, BUILT_IN.maxBudgetUsd),
     maxRetries: pick(j.maxRetries, b.defaultMaxRetries, BUILT_IN.maxRetries),
+    // An EMPTY list is a value, not an absence: `allowedTools: []` means "this Job may call no
+    // tools at all", which is exactly what a read-only propose half might want. `pick` compares
+    // against null rather than truthiness precisely so that survives — the same reason
+    // `maxRetries: 0` does.
+    allowedTools: pick(toolList(j.allowedTools), toolList(b.defaultAllowedTools), BUILT_IN.allowedTools as string[] | null),
   };
 }
 
 /** Whether a board says anything at all. `hkb boards` only prints a defaults line when it does. */
 export function hasDefaults(b: BoardDefaults): boolean {
   return b.defaultModel != null || b.defaultEffort != null || b.defaultMaxTurns != null
-    || b.defaultMaxBudgetUsd != null || b.defaultMaxRetries != null;
+    || b.defaultMaxBudgetUsd != null || b.defaultMaxRetries != null || toolList(b.defaultAllowedTools) != null;
 }
 
 /** A board's defaults, under the names the Job knows them by. What `--json` carries. */
@@ -126,5 +155,6 @@ export function boardDefaults(b: BoardDefaults) {
     maxTurns: b.defaultMaxTurns ?? null,
     maxBudgetUsd: b.defaultMaxBudgetUsd ?? null,
     maxRetries: b.defaultMaxRetries ?? null,
+    allowedTools: toolList(b.defaultAllowedTools),
   };
 }

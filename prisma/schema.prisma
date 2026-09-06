@@ -122,6 +122,10 @@ model Board {
   defaultMaxTurns     Int?
   defaultMaxBudgetUsd Float?
   defaultMaxRetries   Int?
+  /// The board's default tool surface, filling a Job that named none. A default, not a ceiling:
+  /// a Job may name a *wider* list and get it. The ceiling a Job cannot exceed is
+  /// `dailyBudgetUsd`/`maxConcurrent` in `src/limits.ts`; this is `src/spec.ts` territory.
+  defaultAllowedTools Json?
 
   events Event[]
 
@@ -181,6 +185,12 @@ model Job {
   maxBudgetUsd Float?
   /// Run in its own git worktree. Enforced at admission, not requested in a prompt.
   isolate      Boolean @default(true)
+  /// The tool surface this Job may use: a JSON array of tool names, or null for the runtime's own
+  /// default. A **ceiling the board enforces**, not a request — `src/admission.ts` denies anything
+  /// absent from it in a `PreToolUse` hook, and hooks run before deny rules, ask rules, the
+  /// permission mode and allow rules. Narrowing it is the only way to make a Job that *cannot*
+  /// write, which is what a propose-then-approve gate needs in order to mean anything (ADR-010).
+  allowedTools Json?
   maxRetries   Int?
   /// What this Job must produce on disk: a JSON array of repository-relative paths, copied out of
   /// the worktree into `Board.repoPath` before the checkout is released (ADR-008). Directories
