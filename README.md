@@ -85,6 +85,27 @@ nothing**, and counts them at the end of the listing. It is a statement, not an 
 looked, and there is nothing to change" is a real outcome, and so is a `--no-isolate` Job — but a
 Job that left nothing behind should not read exactly like one that shipped a diff.
 
+### Stopping for a human: `--gate`
+
+A Job can be told to stop once it has produced what it declared, and wait:
+
+```bash
+hkb new "Migrate the sessions table" \
+  --brief "Write the migration. Do not run it." \
+  --result plan --gate "does this migration look right?"
+```
+
+It runs, produces its declared outputs, and goes **`suspended`** rather than finishing.
+`hkb show` prints what it is waiting for and what it proposed. Then:
+
+- **`hkb approve <id> ["…"]`** continues it **in the same session**, with your words as the prompt —
+  so it applies what it proposed rather than proposing again. Anything you add is an instruction it
+  is told to follow, because it is the more recent decision and it came from a person.
+- **`hkb reject <id> "<why>"`** ends it, recording who decided and why.
+
+The gate is **one-shot**: after an approval the Job finishes like any other. The approver need not be
+you — a delegated agent or an auto-approve policy writes the same record, and `hkb log` shows which.
+
 ### Retrying, and the one retry that is not automatic
 
 **`hkb retry <id>`** puts a Job that stopped back on the board, resuming its session. A Job that spent its

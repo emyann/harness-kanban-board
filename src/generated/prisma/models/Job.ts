@@ -56,6 +56,7 @@ export type JobMinAggregateOutputType = {
   maxBudgetUsd: number | null
   isolate: boolean | null
   maxRetries: number | null
+  gate: string | null
   phase: $Enums.Phase | null
   lastSessionId: string | null
   lastError: string | null
@@ -79,6 +80,7 @@ export type JobMaxAggregateOutputType = {
   maxBudgetUsd: number | null
   isolate: boolean | null
   maxRetries: number | null
+  gate: string | null
   phase: $Enums.Phase | null
   lastSessionId: string | null
   lastError: string | null
@@ -105,6 +107,7 @@ export type JobCountAggregateOutputType = {
   maxRetries: number
   exports: number
   results: number
+  gate: number
   phase: number
   lastSessionId: number
   lastError: number
@@ -148,6 +151,7 @@ export type JobMinAggregateInputType = {
   maxBudgetUsd?: true
   isolate?: true
   maxRetries?: true
+  gate?: true
   phase?: true
   lastSessionId?: true
   lastError?: true
@@ -171,6 +175,7 @@ export type JobMaxAggregateInputType = {
   maxBudgetUsd?: true
   isolate?: true
   maxRetries?: true
+  gate?: true
   phase?: true
   lastSessionId?: true
   lastError?: true
@@ -197,6 +202,7 @@ export type JobCountAggregateInputType = {
   maxRetries?: true
   exports?: true
   results?: true
+  gate?: true
   phase?: true
   lastSessionId?: true
   lastError?: true
@@ -310,6 +316,7 @@ export type JobGroupByOutputType = {
   maxRetries: number | null
   exports: runtime.JsonValue | null
   results: runtime.JsonValue | null
+  gate: string | null
   phase: $Enums.Phase
   lastSessionId: string | null
   lastError: string | null
@@ -359,6 +366,7 @@ export type JobWhereInput = {
   maxRetries?: Prisma.IntNullableFilter<"Job"> | number | null
   exports?: Prisma.JsonNullableFilter<"Job">
   results?: Prisma.JsonNullableFilter<"Job">
+  gate?: Prisma.StringNullableFilter<"Job"> | string | null
   phase?: Prisma.EnumPhaseFilter<"Job"> | $Enums.Phase
   lastSessionId?: Prisma.StringNullableFilter<"Job"> | string | null
   lastError?: Prisma.StringNullableFilter<"Job"> | string | null
@@ -389,6 +397,7 @@ export type JobOrderByWithRelationInput = {
   maxRetries?: Prisma.SortOrderInput | Prisma.SortOrder
   exports?: Prisma.SortOrderInput | Prisma.SortOrder
   results?: Prisma.SortOrderInput | Prisma.SortOrder
+  gate?: Prisma.SortOrderInput | Prisma.SortOrder
   phase?: Prisma.SortOrder
   lastSessionId?: Prisma.SortOrderInput | Prisma.SortOrder
   lastError?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -422,6 +431,7 @@ export type JobWhereUniqueInput = Prisma.AtLeast<{
   maxRetries?: Prisma.IntNullableFilter<"Job"> | number | null
   exports?: Prisma.JsonNullableFilter<"Job">
   results?: Prisma.JsonNullableFilter<"Job">
+  gate?: Prisma.StringNullableFilter<"Job"> | string | null
   phase?: Prisma.EnumPhaseFilter<"Job"> | $Enums.Phase
   lastSessionId?: Prisma.StringNullableFilter<"Job"> | string | null
   lastError?: Prisma.StringNullableFilter<"Job"> | string | null
@@ -452,6 +462,7 @@ export type JobOrderByWithAggregationInput = {
   maxRetries?: Prisma.SortOrderInput | Prisma.SortOrder
   exports?: Prisma.SortOrderInput | Prisma.SortOrder
   results?: Prisma.SortOrderInput | Prisma.SortOrder
+  gate?: Prisma.SortOrderInput | Prisma.SortOrder
   phase?: Prisma.SortOrder
   lastSessionId?: Prisma.SortOrderInput | Prisma.SortOrder
   lastError?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -486,6 +497,7 @@ export type JobScalarWhereWithAggregatesInput = {
   maxRetries?: Prisma.IntNullableWithAggregatesFilter<"Job"> | number | null
   exports?: Prisma.JsonNullableWithAggregatesFilter<"Job">
   results?: Prisma.JsonNullableWithAggregatesFilter<"Job">
+  gate?: Prisma.StringNullableWithAggregatesFilter<"Job"> | string | null
   phase?: Prisma.EnumPhaseWithAggregatesFilter<"Job"> | $Enums.Phase
   lastSessionId?: Prisma.StringNullableWithAggregatesFilter<"Job"> | string | null
   lastError?: Prisma.StringNullableWithAggregatesFilter<"Job"> | string | null
@@ -510,6 +522,7 @@ export type JobCreateInput = {
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: string | null
   phase?: $Enums.Phase
   lastSessionId?: string | null
   lastError?: string | null
@@ -540,6 +553,7 @@ export type JobUncheckedCreateInput = {
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: string | null
   phase?: $Enums.Phase
   lastSessionId?: string | null
   lastError?: string | null
@@ -567,6 +581,7 @@ export type JobUpdateInput = {
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -597,6 +612,7 @@ export type JobUncheckedUpdateInput = {
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -626,6 +642,7 @@ export type JobCreateManyInput = {
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: string | null
   phase?: $Enums.Phase
   lastSessionId?: string | null
   lastError?: string | null
@@ -650,6 +667,7 @@ export type JobUpdateManyMutationInput = {
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -676,6 +694,7 @@ export type JobUncheckedUpdateManyInput = {
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -712,6 +731,7 @@ export type JobCountOrderByAggregateInput = {
   maxRetries?: Prisma.SortOrder
   exports?: Prisma.SortOrder
   results?: Prisma.SortOrder
+  gate?: Prisma.SortOrder
   phase?: Prisma.SortOrder
   lastSessionId?: Prisma.SortOrder
   lastError?: Prisma.SortOrder
@@ -744,6 +764,7 @@ export type JobMaxOrderByAggregateInput = {
   maxBudgetUsd?: Prisma.SortOrder
   isolate?: Prisma.SortOrder
   maxRetries?: Prisma.SortOrder
+  gate?: Prisma.SortOrder
   phase?: Prisma.SortOrder
   lastSessionId?: Prisma.SortOrder
   lastError?: Prisma.SortOrder
@@ -767,6 +788,7 @@ export type JobMinOrderByAggregateInput = {
   maxBudgetUsd?: Prisma.SortOrder
   isolate?: Prisma.SortOrder
   maxRetries?: Prisma.SortOrder
+  gate?: Prisma.SortOrder
   phase?: Prisma.SortOrder
   lastSessionId?: Prisma.SortOrder
   lastError?: Prisma.SortOrder
@@ -904,6 +926,7 @@ export type JobCreateWithoutBoardInput = {
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: string | null
   phase?: $Enums.Phase
   lastSessionId?: string | null
   lastError?: string | null
@@ -932,6 +955,7 @@ export type JobUncheckedCreateWithoutBoardInput = {
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: string | null
   phase?: $Enums.Phase
   lastSessionId?: string | null
   lastError?: string | null
@@ -989,6 +1013,7 @@ export type JobScalarWhereInput = {
   maxRetries?: Prisma.IntNullableFilter<"Job"> | number | null
   exports?: Prisma.JsonNullableFilter<"Job">
   results?: Prisma.JsonNullableFilter<"Job">
+  gate?: Prisma.StringNullableFilter<"Job"> | string | null
   phase?: Prisma.EnumPhaseFilter<"Job"> | $Enums.Phase
   lastSessionId?: Prisma.StringNullableFilter<"Job"> | string | null
   lastError?: Prisma.StringNullableFilter<"Job"> | string | null
@@ -1013,6 +1038,7 @@ export type JobCreateWithoutAttemptsInput = {
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: string | null
   phase?: $Enums.Phase
   lastSessionId?: string | null
   lastError?: string | null
@@ -1042,6 +1068,7 @@ export type JobUncheckedCreateWithoutAttemptsInput = {
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: string | null
   phase?: $Enums.Phase
   lastSessionId?: string | null
   lastError?: string | null
@@ -1084,6 +1111,7 @@ export type JobUpdateWithoutAttemptsInput = {
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1113,6 +1141,7 @@ export type JobUncheckedUpdateWithoutAttemptsInput = {
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1139,6 +1168,7 @@ export type JobCreateWithoutLeaseInput = {
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: string | null
   phase?: $Enums.Phase
   lastSessionId?: string | null
   lastError?: string | null
@@ -1168,6 +1198,7 @@ export type JobUncheckedCreateWithoutLeaseInput = {
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: string | null
   phase?: $Enums.Phase
   lastSessionId?: string | null
   lastError?: string | null
@@ -1210,6 +1241,7 @@ export type JobUpdateWithoutLeaseInput = {
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1239,6 +1271,7 @@ export type JobUncheckedUpdateWithoutLeaseInput = {
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1265,6 +1298,7 @@ export type JobCreateWithoutEventsInput = {
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: string | null
   phase?: $Enums.Phase
   lastSessionId?: string | null
   lastError?: string | null
@@ -1294,6 +1328,7 @@ export type JobUncheckedCreateWithoutEventsInput = {
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: string | null
   phase?: $Enums.Phase
   lastSessionId?: string | null
   lastError?: string | null
@@ -1336,6 +1371,7 @@ export type JobUpdateWithoutEventsInput = {
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1365,6 +1401,7 @@ export type JobUncheckedUpdateWithoutEventsInput = {
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1392,6 +1429,7 @@ export type JobCreateManyBoardInput = {
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: string | null
   phase?: $Enums.Phase
   lastSessionId?: string | null
   lastError?: string | null
@@ -1416,6 +1454,7 @@ export type JobUpdateWithoutBoardInput = {
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1444,6 +1483,7 @@ export type JobUncheckedUpdateWithoutBoardInput = {
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1472,6 +1512,7 @@ export type JobUncheckedUpdateManyWithoutBoardInput = {
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
   lastSessionId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   lastError?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1538,6 +1579,7 @@ export type JobSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = ru
   maxRetries?: boolean
   exports?: boolean
   results?: boolean
+  gate?: boolean
   phase?: boolean
   lastSessionId?: boolean
   lastError?: boolean
@@ -1569,6 +1611,7 @@ export type JobSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extension
   maxRetries?: boolean
   exports?: boolean
   results?: boolean
+  gate?: boolean
   phase?: boolean
   lastSessionId?: boolean
   lastError?: boolean
@@ -1596,6 +1639,7 @@ export type JobSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extension
   maxRetries?: boolean
   exports?: boolean
   results?: boolean
+  gate?: boolean
   phase?: boolean
   lastSessionId?: boolean
   lastError?: boolean
@@ -1623,6 +1667,7 @@ export type JobSelectScalar = {
   maxRetries?: boolean
   exports?: boolean
   results?: boolean
+  gate?: boolean
   phase?: boolean
   lastSessionId?: boolean
   lastError?: boolean
@@ -1634,7 +1679,7 @@ export type JobSelectScalar = {
   finishedAt?: boolean
 }
 
-export type JobOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "boardId" | "name" | "brief" | "model" | "effort" | "maxTurns" | "timeoutMs" | "maxBudgetUsd" | "isolate" | "allowedTools" | "maxRetries" | "exports" | "results" | "phase" | "lastSessionId" | "lastError" | "suspendedFor" | "endedBy" | "endedFor" | "createdAt" | "updatedAt" | "finishedAt", ExtArgs["result"]["job"]>
+export type JobOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "boardId" | "name" | "brief" | "model" | "effort" | "maxTurns" | "timeoutMs" | "maxBudgetUsd" | "isolate" | "allowedTools" | "maxRetries" | "exports" | "results" | "gate" | "phase" | "lastSessionId" | "lastError" | "suspendedFor" | "endedBy" | "endedFor" | "createdAt" | "updatedAt" | "finishedAt", ExtArgs["result"]["job"]>
 export type JobInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   board?: boolean | Prisma.BoardDefaultArgs<ExtArgs>
   attempts?: boolean | Prisma.Job$attemptsArgs<ExtArgs>
@@ -1710,6 +1755,22 @@ export type $JobPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
      * hold a megabyte is a worse artifact store than the one `exports` already is.
      */
     results: runtime.JsonValue | null
+    /**
+     * What a human must decide before this Job goes on (ADR-010). Non-null makes the Job **gated**:
+     * an attempt that succeeds AND produced everything it declared does not go terminal — it goes
+     * `suspended`, carrying this text as `suspendedFor`, and waits.
+     * 
+     * **One-shot, and deliberately.** The gate fires only while no approval has been recorded, so a
+     * Job goes propose → approve → apply and then ends like any other. A re-entrant gate would delete
+     * the Job's completion condition: every success would suspend again, `succeeded` would be
+     * unreachable, and the only terminal states left would be `cancelled` and `done` — the last of
+     * which means something else entirely, over thirty lines of comment above.
+     * 
+     * Whether it has been approved is read off the Event stream rather than a flag cleared on use: a
+     * guard that only fires on a transition is wrong after a restart, and this controller is
+     * level-triggered.
+     */
+    gate: string | null
     phase: $Enums.Phase
     /**
      * The session to resume, when the last attempt left one. The one SDK fact worth a column.
@@ -2175,6 +2236,7 @@ export interface JobFieldRefs {
   readonly maxRetries: Prisma.FieldRef<"Job", 'Int'>
   readonly exports: Prisma.FieldRef<"Job", 'Json'>
   readonly results: Prisma.FieldRef<"Job", 'Json'>
+  readonly gate: Prisma.FieldRef<"Job", 'String'>
   readonly phase: Prisma.FieldRef<"Job", 'Phase'>
   readonly lastSessionId: Prisma.FieldRef<"Job", 'String'>
   readonly lastError: Prisma.FieldRef<"Job", 'String'>

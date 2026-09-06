@@ -1,10 +1,11 @@
 import { openBoard } from './db.ts';
 import {
-  createWorktree, exportOutputs, existingWorktree, lockWorktree, removeWorktree, unlockWorktree,
+  createWorktree, exportOutputs, existingWorktree, newestWorktree, lockWorktree, removeWorktree,
+  unlockWorktree,
   type Worktree,
 } from './worktree.ts';
 import { prForBranch } from './pulls.ts';
-import { withProtocol, withResults } from './brief.ts';
+import { approvedPrompt, withProtocol, withResults } from './brief.ts';
 import {
   declaredResults, resultPaths, ensureResultsDir, collectResults, clearResults, missingResults,
 } from './results.ts';
@@ -136,7 +137,7 @@ const LEASE_GRACE_MS = 5 * 60_000;
  * and giving up is decided here, and nothing here touches a database or a model.
  */
 export type Decision = {
-  phase: 'succeeded' | 'failed' | 'pending';
+  phase: 'succeeded' | 'failed' | 'pending' | 'suspended';
   outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output';
   resumable: boolean;
   /**
@@ -431,7 +432,11 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       select: { outcome: true },
     });
     const k = done.length + 1;
-    const charged = done.filter((a) => a.outcome !== 'stopped').length + 1;
+    // Neither a stop NOR a success spends one. `stopped` was already excluded; `completed` was
+    // harmless only while success was terminal, and the gate makes a Job survive its own successful
+    // attempt — at which point a three-step chain would arrive at step three with no retries left,
+    // having never once failed.
+    const charged = done.filter((a) => a.outcome !== 'stopped' && a.outcome !== 'completed').length + 1;
 
     // ---- acquire. `@@id(jobId)` on Lease is the compare-and-swap: a second holder loses here,
     // and losing is a normal outcome, not an error.
@@ -479,7 +484,12 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       try {
         // A resumed session continues where it left off, on disk as well as in its transcript.
         // The previous attempt's checkout is kept whenever it held work, so it is usually there.
-        const resuming = job.lastSessionId ? existingWorktree(cwd, job.id, k - 1) : null;
+        // The newest checkout this Job still has, not `k - 1`. `createWorktree` names the directory
+        // for the attempt that MADE it, so attempt 2 finds `kb-N-1` and attempt 3 asked for
+        // `kb-N-2`, found nothing, and cut a fresh worktree from base with the session resumed on
+        // top of it — the exact failure `existingWorktree` exists to prevent, reachable the moment a
+        // Job has three attempts.
+        const resuming = job.lastSessionId ? newestWorktree(cwd, job.id, k - 1) : null;
         wt = resuming ?? createWorktree(cwd, job.id, k);
         // Held for the length of the run. The daemon's sweep is a second remover, in a second
         // process, and without this it could take the checkout a worker is standing in.
@@ -569,6 +579,17 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     }, renewEvery);
     if (typeof renewer.unref === 'function') renewer.unref();
 
+    // ---- an approval this attempt is acting on, if any. Read from the Event stream rather than a
+    // column cleared on use: durable, never consumed, and legible afterwards — `hkb log` shows who
+    // approved what and in whose words. Only the most recent one matters; an earlier approval was
+    // already acted on by the attempt that followed it.
+    const approval = job.gate
+      ? await db.event.findFirst({
+        where: { jobId: job.id, kind: 'approved' }, orderBy: { id: 'desc' },
+      })
+      : null;
+    const approvalPrompt = approval ? approvedPrompt(approval.actor, (approval.payload as { note?: string } | null)?.note) : null;
+
     // ---- the results this attempt is asked for, and the directory it writes them to. Created
     // before the run because the paths go into the prompt; outside every checkout, so writing one
     // cannot land in the worker's diff (`src/results.ts`).
@@ -594,7 +615,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // `withProtocol` is the PULL REQUEST protocol and needs a branch, so it is for an isolated
         // Job only. Results are the opposite case — they matter most to a Job that produces no
         // commit — so they are appended either way.
-        prompt: withResults(wt ? withProtocol(job.brief, wt.branch) : job.brief, wantedResults),
+        // What this attempt is asked to do. Normally the brief; after an approval, the approver's
+        // own instruction — which is the whole of ADR-010 decision 4. A resumed attempt otherwise
+        // re-sends the same brief, so an approved Job would propose again instead of applying.
+        prompt: withResults(approvalPrompt ?? (wt ? withProtocol(job.brief, wt.branch) : job.brief), wantedResults),
         // All four from the resolved spec: a Job that named none of them still has to run on
         // something, and the board is now allowed to be the one that says what.
         model: spec.model.value ?? undefined,
@@ -690,9 +714,22 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // Not retried — the session's own account is that it finished, so a resumed attempt wakes up
     // done and a cold one re-buys the same run. `hkb retry <id>` is the deliberate second go, once a
     // human has read which path is missing and decided whose mistake it was.
+    // ---- the gate. A gated Job that succeeded AND produced everything it declared does not go
+    // terminal: it suspends, and waits for a human, a delegated agent, or an auto-approve policy
+    // (ADR-010). ORDER MATTERS — the ADR-008 shortfall is evaluated first and outranks it, because
+    // a run that did not produce what it promised has nothing worth approving.
+    //
+    // One-shot, and read off the Event stream rather than a flag cleared on use. A re-entrant gate
+    // would delete the Job's completion condition (`prisma/schema.prisma`, `Job.gate`), and a flag
+    // consumed on a transition is wrong after a restart in a controller that is level-triggered.
+    const approved = job.gate && ran.phase === 'succeeded' && !shortfall
+      ? await db.event.count({ where: { jobId: job.id, kind: 'approved' } })
+      : 0;
     const decision: Decision = shortfall
       ? { phase: 'failed', outcome: 'no_output', resumable: false, lastError: shortfall }
-      : ran;
+      : job.gate && ran.phase === 'succeeded' && approved === 0
+        ? { phase: 'suspended', outcome: 'completed', resumable: true, lastError: null }
+        : ran;
 
     // ---- what landed on the forge. One read, by head branch: the board and the forge are two
     // systems and this is the only thing that joins them.
@@ -750,12 +787,23 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       where: { id: job.id },
       data: {
         phase: decision.phase,
+        // Why it is waiting, in the operator's own words — not derivable from any runtime, which is
+        // why the column exists. Cleared on any other transition so a resumed Job does not keep
+        // claiming to be waiting for something that already happened.
+        suspendedFor: decision.phase === 'suspended' ? job.gate : null,
         // Keep the session only while continuing it would help; a cold retry must start clean.
+        // A gate fires on SUCCESS, and `nextPhase` calls a completed run not-resumable — so the
+        // suspended decision sets `resumable: true` itself, which is what keeps the session the
+        // approver's instruction is meant to continue. Without that the session would be discarded
+        // at the exact moment the Job suspends waiting for it.
         lastSessionId: decision.resumable ? (outcome?.sessionId ?? null) : null,
         // The decision's own line wins where it has one: for a stop only a human can undo, "what
         // to change" is worth more than whatever the runtime called it.
         lastError: decision.phase === 'succeeded' ? null : (decision.lastError ?? outcome?.error ?? decision.outcome),
-        finishedAt: decision.phase === 'pending' ? null : now(),
+        // Neither pending nor suspended is finished. A suspended Job is waiting on a person, which
+        // is the one state that can last days — stamping it finished would make every "how long did
+        // this take" answer include the time somebody spent deciding.
+        finishedAt: decision.phase === 'pending' || decision.phase === 'suspended' ? null : now(),
       },
     });
 
@@ -772,7 +820,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // resumable stop keeps its checkout unconditionally — the next attempt continues *in* it, and
     // cutting a fresh worktree would reset the branch to base and strand what was already pushed.
     if (wt) {
-      if (decision.resumable && decision.phase === 'pending') {
+      // A suspended Job keeps its checkout for the same reason a resumable one does: the approved
+      // attempt continues *in* it, and cutting a fresh worktree would reset the branch to base and
+      // strand whatever the propose half already pushed.
+      if ((decision.resumable && decision.phase === 'pending') || decision.phase === 'suspended') {
         unlockWorktree(cwd, wt);
         say(`kept ${wt.path} — attempt ${k + 1} resumes in it`);
       } else {

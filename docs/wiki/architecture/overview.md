@@ -9,9 +9,9 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: bccac3a895b8b84cb27a1e15a6684153e7edf681
+    sha: 511e04a35950ee21499a68a1984f55549e5d28ce
   - path: src/controller.ts
-    sha: ae2034b01315707358b26348380e117653caf510
+    sha: afc37030ee87b55e0f834a8ce689a68a47d8007f
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/db.ts
@@ -19,11 +19,11 @@ covers:
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/worktree.ts
-    sha: 8cba275c6c1379e1a0dae4f67acc299d7024536b
+    sha: e4094d7fae517cca708273ddff3007bfc508d10b
   - path: src/pulls.ts
     sha: a27f00a986f576c2d3ed035902c0a1c9f9a9300c
   - path: prisma/schema.prisma
-    sha: fd5d599273f0f0340a79043f6796b3f7f99cd73f
+    sha: 4eb9facdca09dab37cb69e7b9017e4451f298df2
 related:
   [
     architecture/job-kind,
@@ -33,7 +33,7 @@ related:
     decisions/adr-007-workload-scheduler,
     decisions/adr-009-retiring-the-first-system,
   ]
-generated_at_commit: 0903659
+generated_at_commit: af8c076
 last_refreshed: 2026-09-05
 ---
 
@@ -141,6 +141,28 @@ and guarantees nothing, because a downstream reader cannot rely on a key existin
 That pair is what a Job with nothing to commit produces. `hkb ls` marks a succeeded Job that opened no
 pull request and declared neither as **produced nothing** (`producedNothing`, `src/hkb.ts`); with a
 result declared, the same Job says what it found instead.
+
+## The gate — the one place a Job waits for a person
+
+A Job may carry a `gate`: an attempt that succeeds **and** produced everything it declared does not go
+terminal, it goes `suspended` and waits ([ADR-010](../decisions/adr-010-the-human-gate.md)). Approval
+resumes the *same session* with the approver's own instruction as the prompt, which is what makes it a
+gate rather than a pause — a resumed attempt otherwise re-sends the brief, and the Job would propose
+again instead of applying.
+
+Three properties are load-bearing and each has a test that makes it refuse:
+
+- **The shortfall outranks the gate.** A run that did not produce what it declared *fails*; there is
+  nothing worth putting in front of a human.
+- **It is one-shot.** Whether an approval exists is read off the `Event` stream, not a flag cleared on
+  use — a guard that fires on a transition is wrong after a restart. A re-entrant gate would delete
+  the Job's completion condition entirely.
+- **A suspended Job keeps its session and its checkout**, and is not `finishedAt`. It is waiting on a
+  person, which is the one state that can last days.
+
+The approver is a **seat**, not necessarily a person: a human, an agent delegated to, or an
+auto-approve policy. All three write the same `approved` event with an actor, and the controller does
+not know which answered.
 
 ## What is deliberately not here
 

@@ -780,3 +780,167 @@ test('a declared result the run did NOT write fails the attempt', async () => {
   assert.equal(after.phase, 'failed');
   assert.match(after.lastError ?? '', /`finding`/, 'and it names what is missing');
 });
+
+/**
+ * The gate (ADR-010): a Job that stops after producing, and waits for a person.
+ *
+ * Every assertion is a refusal, because a gate that only ever lets things through is the shape this
+ * project has shipped five times and had to delete. The four that matter:
+ *
+ *   - an UNGATED Job must not suspend;
+ *   - a gated Job must not go terminal on its first success;
+ *   - a gated Job that did not produce what it declared must FAIL rather than suspend — there is
+ *     nothing worth approving;
+ *   - and the gate must be ONE-SHOT: after an approval it ends like any other Job, or `succeeded`
+ *     becomes unreachable and the completion condition is gone.
+ */
+async function gatedBoard() {
+  return db.board.upsert({
+    where: { slug: 'gated' },
+    update: { dailyBudgetUsd: null, maxConcurrent: 5, pausedAt: null },
+    create: { slug: 'gated', dailyBudgetUsd: null, maxConcurrent: 5 },
+  });
+}
+const runGated = (r = fakeRuntime()) => reconcile({ runtime: r, cwd, board: 'gated', readPr: false });
+
+test('a gated Job suspends on success instead of finishing, and says what it waits for', async () => {
+  const b = await gatedBoard();
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'proposes', brief: 'propose it', isolate: false,
+      gate: 'does this migration look right?', maxBudgetUsd: 1,
+    },
+  });
+  await runGated();
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'suspended', 'not succeeded — nobody has looked at it yet');
+  assert.equal(after.suspendedFor, 'does this migration look right?');
+  assert.equal(after.finishedAt, null, 'and it is not finished: it is waiting on a person');
+  assert.ok(after.lastSessionId, 'the session survives, or the approval has nothing to continue');
+  assert.equal(after.attempts[0].outcome, 'completed', 'the RUN completed; the JOB is not done');
+});
+
+test('an ungated Job does not suspend — the gate is not on by default', async () => {
+  const b = await gatedBoard();
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'ungated', brief: 'just do it', isolate: false, maxBudgetUsd: 1 },
+  });
+  await runGated();
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).phase, 'succeeded');
+});
+
+test('a gated Job that did not produce what it declared FAILS rather than suspending', async () => {
+  // The ordering that matters: ADR-008's shortfall outranks the gate, because a run that broke its
+  // promise has nothing worth putting in front of a human.
+  const b = await gatedBoard();
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'gated-shortfall', brief: 'propose it', isolate: false,
+      gate: 'look at it', results: ['finding'], maxBudgetUsd: 1, maxRetries: 0,
+    },
+  });
+  await runGated();
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(after.phase, 'failed', 'not suspended');
+  assert.equal(after.suspendedFor, null);
+});
+
+test('approval resumes the SAME session and carries the approver\'s words as the prompt', async () => {
+  const b = await gatedBoard();
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'approved-job', brief: 'propose it', isolate: false,
+      gate: 'ok?', maxBudgetUsd: 1,
+    },
+  });
+  await runGated();
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).phase, 'suspended');
+
+  // What `hkb approve` writes: the event is the durable record, the phase is what the loop acts on.
+  await db.event.create({
+    data: { kind: 'approved', jobId: job.id, boardId: b.id, actor: 'ada', payload: { note: 'ship it, but rename the column' } },
+  });
+  await db.job.update({ where: { id: job.id }, data: { phase: 'pending', suspendedFor: null } });
+
+  let seen: { prompt: string; resume?: string } | null = null;
+  const spy: Runtime = {
+    name: 'spy',
+    async run(spec) {
+      seen = { prompt: spec.prompt, resume: spec.resume };
+      return {
+        status: 'completed', ok: true, sessionId: spec.resume ?? 'new', text: 'applied',
+        costUsd: 0.1, turns: 1, durationMs: 1, stopReason: 'end_turn', denials: 0, error: null,
+      };
+    },
+  };
+  await runGated(spy);
+
+  assert.ok(seen, 'the approved Job ran again');
+  assert.match(seen!.prompt, /approved it\. Carry it out now/, 'the instruction, not the brief again');
+  assert.match(seen!.prompt, /ada/, 'and who said so');
+  assert.match(seen!.prompt, /rename the column/, 'and in their words');
+  assert.doesNotMatch(seen!.prompt, /propose it/, 'the original brief is NOT re-sent — it would propose twice');
+  assert.ok(seen!.resume, 'continued, not started cold');
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(after.phase, 'succeeded', 'ONE-SHOT: it ends this time rather than suspending again');
+  assert.ok(after.finishedAt, 'and it is finished');
+});
+
+test('a successful attempt does not spend a retry, so a gated chain keeps its budget', async () => {
+  // Inert before the gate, because success was terminal. Live the moment a Job survives its own
+  // successful attempt: a two-step Job would arrive at the apply half having spent one of two
+  // retries without ever failing.
+  const b = await gatedBoard();
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'retry-budget', brief: 'x', isolate: false,
+      gate: 'ok?', maxBudgetUsd: 1, maxRetries: 0,
+    },
+  });
+  await runGated();
+  await db.event.create({ data: { kind: 'approved', jobId: job.id, boardId: b.id, actor: 'ada', payload: {} } });
+  await db.job.update({ where: { id: job.id }, data: { phase: 'pending', suspendedFor: null } });
+
+  // maxRetries 0 means one attempt's worth of budget. The apply half must still be allowed to run.
+  await runGated();
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts.length, 2, 'the approved half ran; the retry budget was not eaten by the success');
+  assert.equal(after.phase, 'succeeded');
+});
+
+test('a gated Job keeps its checkout while it waits, so the approved half continues in it', async () => {
+  // Isolated, so there is a real worktree. Cutting a fresh one on approval would reset the branch to
+  // base and strand whatever the propose half pushed.
+  const b = await gatedBoard();
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'keeps-checkout', brief: 'x', gate: 'ok?', maxBudgetUsd: 1 },
+  });
+  await runGated();
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'suspended');
+  assert.ok(fs.existsSync(path.join(cwd, '.hkb', 'worktrees', `kb-${job.id}-1`)),
+    'the checkout is still there — the approval continues in it');
+});
+
+test('the retry budget survives the propose half, so an approved run that FAILS may still retry', async () => {
+  // What `charged` counting a completed attempt would break: the apply half arrives having spent a
+  // retry the Job never used, so its first real failure is also its last.
+  const b = await gatedBoard();
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'retry-after-gate', brief: 'x', isolate: false,
+      gate: 'ok?', maxBudgetUsd: 1, maxRetries: 1,
+    },
+  });
+  await runGated();
+  await db.event.create({ data: { kind: 'approved', jobId: job.id, boardId: b.id, actor: 'ada', payload: {} } });
+  await db.job.update({ where: { id: job.id }, data: { phase: 'pending', suspendedFor: null } });
+
+  // The approved half fails. With the retry budget intact it goes back to pending for one more go.
+  await runGated(fakeRuntime({ failTasks: [job.id] }));
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(after.phase, 'pending', 'it may try again — the successful propose half spent nothing');
+});
