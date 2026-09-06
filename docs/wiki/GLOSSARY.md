@@ -32,10 +32,15 @@ meet one in the git history, that is what it was.
   Board's default fills a null, the built-in is the last resort (`resolveSpec`, `src/spec.ts`). A
   default is not a ceiling — a Job may override `--model` freely, and may not exceed
   `--daily-budget`.
-- **Ceiling** — a claim-time refusal, one of `stopped`, `concurrency` or `budget` (`ClaimLimit`,
-  `src/limits.ts`). Checked before a claim and never during a run: a ceiling that could stop a
-  running worker would strand its worktree, while one that declines to start another is only a
-  decision.
+- **Ceiling** — a limit a Job may not exceed, enforced as a claim-time refusal: one of `stopped`,
+  `concurrency` or `budget` (`ClaimLimit`, `src/limits.ts`). Checked before a claim and never during
+  a run — a ceiling that could stop a running worker would strand its worktree, while one that
+  declines to start another is only a decision. The opposite of a **board default**, which a Job may
+  freely override (*concepts/ceilings*).
+- **Committed budget** — what the runs already in flight could still spend: the sum of
+  `Attempt.maxBudgetUsd` over attempts with no `endedAt` (`committedUsd`, `src/limits.ts`). Counted
+  because `costUsd` only moves when an attempt *ends*, so without it N concurrent claims would each
+  be judged against a spend none of them had contributed to yet (*concepts/ceilings*).
 - **Control plane** — hkb read as Kubernetes reads itself: a Board is a namespace, a Job is a Job, an
   Attempt is a Pod, a Lease is a Lease, and the daemon is a controller-manager. The one departure is
   that hkb also *executes* — there is no node to schedule onto (*architecture/overview*,
@@ -137,6 +142,9 @@ meet one in the git history, that is what it was.
   previous watch stopped, and it never expires because events are append-only. Woken by `fs.watch` on the
   board's directory with a slow interval as the fallback, so a filesystem that cannot report changes makes
   it later and never wrong (*features/watch*).
+- **Rolling window** — the 24 hours the budget ceiling is measured over: `now - 24h`, never a
+  calendar day, because a calendar day has a timezone to get wrong (`windowStart`, `src/limits.ts`).
+  No midnight and no reset — spend ages out of it continuously (*concepts/ceilings*).
 - **Runtime** — the seam that runs a worker, `run(spec) -> WorkerOutcome` (`src/runtime/index.ts`).
   Two drivers: the Claude Agent SDK (`src/runtime/claude.ts`) and a fake that spends nothing
   (`src/runtime/fake.ts`) (*architecture/runtime-layer*).
