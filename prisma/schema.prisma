@@ -169,8 +169,6 @@ model Job {
   // ---- spec: what should happen. Set by whoever created the Job; never written by the controller.
   name         String
   brief        String
-  /// Which agent definition to run. The image name — see `.claude/agents/<agent>.md`.
-  agent        String  @default("worker")
   /// Null on all five of these means "nobody said": the Board's default answers, and failing that
   /// `BUILT_IN` in `src/spec.ts` does. They carry no database default on purpose — a column that
   /// defaults to 20 cannot tell "the operator asked for 20" from "the operator said nothing", and

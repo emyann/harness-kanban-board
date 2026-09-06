@@ -706,18 +706,51 @@ deny rules, ask rules, the mode and allow rules. So an allowlist genuinely refus
 
 **What is missing, precisely:**
 
-- **`allowedTools` is wired and never set.** It exists on `WorkerSpec` (`src/runtime/index.ts:34`) and
-  is honoured (`src/runtime/claude.ts:68`), but nothing in `src/controller.ts` ever sets it, so every
-  Job runs `DEFAULT_TOOLS` — `Write`, `Edit`, `Bash`, unconditional. This is why ADR-010's own
-  motivating case, *propose the migration, let me look, then run it*, cannot be enforced: the propose
-  half can simply apply. **This is the fourth declaration this project has shipped with no enforcement
-  behind it**, after the admission gate, the worktree base and the lease.
+- ~~**`allowedTools` is wired and never set.**~~ **DONE, 2026-09-05.** `Job.allowedTools` and
+  `Board.defaultAllowedTools` resolve through `src/spec.ts` and the controller passes the result to
+  the runtime, which builds the admission gate from it. Verified as a refusal by breaking it: dropping
+  the pass-through fails three tests, and reading `[]` as "unset" fails a fourth.
 - **MCP has no path at all.** Nothing passes `mcpServers` to `query()`. This is a missing capability
   before it is a permissions question.
-- **Skills are coupled to a guard.** `settingSources: []` (`src/runtime/claude.ts:155`) keeps the
-  operator's settings out of a worker on purpose — "the card is the brief". Enabling project skills
-  means flipping it, which **re-admits project-level hooks into a worker whose isolation rests entirely
-  on SDK-supplied hooks**. That is a guard change wearing a feature's clothes and needs its own record.
+- **Skills are coupled to a guard, and this was MEASURED rather than reasoned about.** The measurement
+  is below, and it reverses a correction: `Options.skills` alone does **not** reach a repository's own
+  skills. `settingSources: ['project']` does, and that re-admits project-level settings — including
+  hooks — into a worker whose isolation rests entirely on SDK-supplied hooks. The original coupling
+  claim was right.
+
+**What a worker can actually see, measured 2026-09-05.** Nobody had established this. The SDK's system
+`init` message carries `tools`, `skills`, `agents` and `mcp_servers` and arrives ahead of every other
+message, so it costs one process start and no model turn to read. Against hkb's exact options:
+
+| variant | skills seen |
+|---|---|
+| hkb today (`settingSources: []`, `skills` omitted) | **17** — every one of them the *operator's* user-level skills |
+| `skills: 'all'` | 17, unchanged |
+| `skills: []` | **17, unchanged** — this does not turn skills off |
+| `settingSources: ['project']` | **26** — the same 17 plus the repository's own 9 |
+
+Three things follow, and all three matter more than the feature did:
+
+1. **The repository's own skills need `settingSources: ['project']`.** Nothing else surfaces them, so
+   the operator's motivating case — hkb's workers using the Prisma skills this repo already carries
+   instead of rebuilding that knowledge from training data — cannot be had without the guard change.
+2. **A worker is already exposed to the operator's personal surface**: 17 user-level skills, 5 agents,
+   4 claude.ai MCP connectors and 52 slash commands, none of which `settingSources: []` excludes. It
+   is *advertised*, not *permitted* — the admission gate denies every one of those tools, and that was
+   re-verified — but it is context a worker pays for and can be confused by, on a board whose whole
+   claim is that the card is the brief.
+3. **`Options.skills` is a context filter, not a sandbox** ("unlisted skills … remain on disk and are
+   reachable via Read/Bash"), and in this SDK version it did not filter the advertised list at all.
+   Treat it as curation, never as a boundary.
+
+- **`Job.agent` was a fifth inert declaration, and is deleted.** It was written by `hkb new`, printed
+  by `hkb show`, and read by nothing — its comment pointed at `.claude/agents/<agent>.md`, a path a
+  worker cannot read under `settingSources: []`, and the measurement showed the five agents a worker
+  *does* see are ambient ones from the operator's environment. Wiring it would have meant inventing an
+  agent registry to be the source of `AgentDefinition`s; that is a new concept, and the honest move
+  next to a PR that removes the fourth inert declaration was not to leave a fifth. If a kind needs it
+  later, `Options.agents` takes definitions **programmatically** and needs no `settingSources` change —
+  worth recording so the option is not rediscovered.
 
 **The Kubernetes mapping is three objects, not one — and keeping them separate is the point.**
 
@@ -735,11 +768,17 @@ is where `src/admission.ts` already sits. Same answer arrived at twice.
 
 **Order, and do not design the map up front.**
 
-1. **Wire `allowedTools`** — one nullable column, one line, and a test that a narrowed Job is *denied*
-   the tool it did not get. This alone turns ADR-010's gate from a hope into a boundary.
-2. **MCP as config + grant.** The definition is ConfigMap-shaped, the credential Secret-shaped, the
-   enable per board and the grant per Job. This is the one that unblocks real work.
-3. **Skills, with their own ADR**, because of the `settingSources` coupling above.
+1. ~~**Wire `allowedTools`**~~ — **done.**
+2. **Skills, and they need their own ADR after all.** The decision is not "add a column": it is whether
+   a worker may see project settings at all. `settingSources: ['project']` is the only route to the
+   repository's skills and it re-admits project hooks, so the question is what hkb requires of a
+   repository before trusting its settings — and whether the answer differs for hkb building hkb
+   (where the project settings are hkb's own) from a worker on somebody else's repo. Do not ship a
+   `skills` spec column before that is decided; a column that cannot reach a project skill would be
+   the sixth inert declaration.
+3. **MCP as config + grant.** The definition is ConfigMap-shaped, the credential Secret-shaped, the
+   enable per board and the grant per Job. Still the one that unblocks real work, and still has no
+   path at all today.
 4. **Discovery last.** "List what this repo offers" is `kubectl api-resources`, not an object — a verb
    that reads the repository, worth having only once there is something to grant.
 

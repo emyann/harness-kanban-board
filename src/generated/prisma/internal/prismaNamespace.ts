@@ -941,7 +941,6 @@ export const JobScalarFieldEnum = {
   boardId: 'boardId',
   name: 'name',
   brief: 'brief',
-  agent: 'agent',
   model: 'model',
   effort: 'effort',
   maxTurns: 'maxTurns',

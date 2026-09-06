@@ -49,7 +49,6 @@ export type JobMinAggregateOutputType = {
   boardId: number | null
   name: string | null
   brief: string | null
-  agent: string | null
   model: string | null
   effort: string | null
   maxTurns: number | null
@@ -73,7 +72,6 @@ export type JobMaxAggregateOutputType = {
   boardId: number | null
   name: string | null
   brief: string | null
-  agent: string | null
   model: string | null
   effort: string | null
   maxTurns: number | null
@@ -97,7 +95,6 @@ export type JobCountAggregateOutputType = {
   boardId: number
   name: number
   brief: number
-  agent: number
   model: number
   effort: number
   maxTurns: number
@@ -143,7 +140,6 @@ export type JobMinAggregateInputType = {
   boardId?: true
   name?: true
   brief?: true
-  agent?: true
   model?: true
   effort?: true
   maxTurns?: true
@@ -167,7 +163,6 @@ export type JobMaxAggregateInputType = {
   boardId?: true
   name?: true
   brief?: true
-  agent?: true
   model?: true
   effort?: true
   maxTurns?: true
@@ -191,7 +186,6 @@ export type JobCountAggregateInputType = {
   boardId?: true
   name?: true
   brief?: true
-  agent?: true
   model?: true
   effort?: true
   maxTurns?: true
@@ -304,7 +298,6 @@ export type JobGroupByOutputType = {
   boardId: number
   name: string
   brief: string
-  agent: string
   model: string | null
   effort: string | null
   maxTurns: number | null
@@ -353,7 +346,6 @@ export type JobWhereInput = {
   boardId?: Prisma.IntFilter<"Job"> | number
   name?: Prisma.StringFilter<"Job"> | string
   brief?: Prisma.StringFilter<"Job"> | string
-  agent?: Prisma.StringFilter<"Job"> | string
   model?: Prisma.StringNullableFilter<"Job"> | string | null
   effort?: Prisma.StringNullableFilter<"Job"> | string | null
   maxTurns?: Prisma.IntNullableFilter<"Job"> | number | null
@@ -383,7 +375,6 @@ export type JobOrderByWithRelationInput = {
   boardId?: Prisma.SortOrder
   name?: Prisma.SortOrder
   brief?: Prisma.SortOrder
-  agent?: Prisma.SortOrder
   model?: Prisma.SortOrderInput | Prisma.SortOrder
   effort?: Prisma.SortOrderInput | Prisma.SortOrder
   maxTurns?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -416,7 +407,6 @@ export type JobWhereUniqueInput = Prisma.AtLeast<{
   boardId?: Prisma.IntFilter<"Job"> | number
   name?: Prisma.StringFilter<"Job"> | string
   brief?: Prisma.StringFilter<"Job"> | string
-  agent?: Prisma.StringFilter<"Job"> | string
   model?: Prisma.StringNullableFilter<"Job"> | string | null
   effort?: Prisma.StringNullableFilter<"Job"> | string | null
   maxTurns?: Prisma.IntNullableFilter<"Job"> | number | null
@@ -446,7 +436,6 @@ export type JobOrderByWithAggregationInput = {
   boardId?: Prisma.SortOrder
   name?: Prisma.SortOrder
   brief?: Prisma.SortOrder
-  agent?: Prisma.SortOrder
   model?: Prisma.SortOrderInput | Prisma.SortOrder
   effort?: Prisma.SortOrderInput | Prisma.SortOrder
   maxTurns?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -480,7 +469,6 @@ export type JobScalarWhereWithAggregatesInput = {
   boardId?: Prisma.IntWithAggregatesFilter<"Job"> | number
   name?: Prisma.StringWithAggregatesFilter<"Job"> | string
   brief?: Prisma.StringWithAggregatesFilter<"Job"> | string
-  agent?: Prisma.StringWithAggregatesFilter<"Job"> | string
   model?: Prisma.StringNullableWithAggregatesFilter<"Job"> | string | null
   effort?: Prisma.StringNullableWithAggregatesFilter<"Job"> | string | null
   maxTurns?: Prisma.IntNullableWithAggregatesFilter<"Job"> | number | null
@@ -504,7 +492,6 @@ export type JobScalarWhereWithAggregatesInput = {
 export type JobCreateInput = {
   name: string
   brief: string
-  agent?: string
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
@@ -534,7 +521,6 @@ export type JobUncheckedCreateInput = {
   boardId: number
   name: string
   brief: string
-  agent?: string
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
@@ -561,7 +547,6 @@ export type JobUncheckedCreateInput = {
 export type JobUpdateInput = {
   name?: Prisma.StringFieldUpdateOperationsInput | string
   brief?: Prisma.StringFieldUpdateOperationsInput | string
-  agent?: Prisma.StringFieldUpdateOperationsInput | string
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -591,7 +576,6 @@ export type JobUncheckedUpdateInput = {
   boardId?: Prisma.IntFieldUpdateOperationsInput | number
   name?: Prisma.StringFieldUpdateOperationsInput | string
   brief?: Prisma.StringFieldUpdateOperationsInput | string
-  agent?: Prisma.StringFieldUpdateOperationsInput | string
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -620,7 +604,6 @@ export type JobCreateManyInput = {
   boardId: number
   name: string
   brief: string
-  agent?: string
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
@@ -644,7 +627,6 @@ export type JobCreateManyInput = {
 export type JobUpdateManyMutationInput = {
   name?: Prisma.StringFieldUpdateOperationsInput | string
   brief?: Prisma.StringFieldUpdateOperationsInput | string
-  agent?: Prisma.StringFieldUpdateOperationsInput | string
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -670,7 +652,6 @@ export type JobUncheckedUpdateManyInput = {
   boardId?: Prisma.IntFieldUpdateOperationsInput | number
   name?: Prisma.StringFieldUpdateOperationsInput | string
   brief?: Prisma.StringFieldUpdateOperationsInput | string
-  agent?: Prisma.StringFieldUpdateOperationsInput | string
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -706,7 +687,6 @@ export type JobCountOrderByAggregateInput = {
   boardId?: Prisma.SortOrder
   name?: Prisma.SortOrder
   brief?: Prisma.SortOrder
-  agent?: Prisma.SortOrder
   model?: Prisma.SortOrder
   effort?: Prisma.SortOrder
   maxTurns?: Prisma.SortOrder
@@ -741,7 +721,6 @@ export type JobMaxOrderByAggregateInput = {
   boardId?: Prisma.SortOrder
   name?: Prisma.SortOrder
   brief?: Prisma.SortOrder
-  agent?: Prisma.SortOrder
   model?: Prisma.SortOrder
   effort?: Prisma.SortOrder
   maxTurns?: Prisma.SortOrder
@@ -765,7 +744,6 @@ export type JobMinOrderByAggregateInput = {
   boardId?: Prisma.SortOrder
   name?: Prisma.SortOrder
   brief?: Prisma.SortOrder
-  agent?: Prisma.SortOrder
   model?: Prisma.SortOrder
   effort?: Prisma.SortOrder
   maxTurns?: Prisma.SortOrder
@@ -900,7 +878,6 @@ export type JobUpdateOneWithoutEventsNestedInput = {
 export type JobCreateWithoutBoardInput = {
   name: string
   brief: string
-  agent?: string
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
@@ -928,7 +905,6 @@ export type JobUncheckedCreateWithoutBoardInput = {
   id?: number
   name: string
   brief: string
-  agent?: string
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
@@ -985,7 +961,6 @@ export type JobScalarWhereInput = {
   boardId?: Prisma.IntFilter<"Job"> | number
   name?: Prisma.StringFilter<"Job"> | string
   brief?: Prisma.StringFilter<"Job"> | string
-  agent?: Prisma.StringFilter<"Job"> | string
   model?: Prisma.StringNullableFilter<"Job"> | string | null
   effort?: Prisma.StringNullableFilter<"Job"> | string | null
   maxTurns?: Prisma.IntNullableFilter<"Job"> | number | null
@@ -1009,7 +984,6 @@ export type JobScalarWhereInput = {
 export type JobCreateWithoutAttemptsInput = {
   name: string
   brief: string
-  agent?: string
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
@@ -1038,7 +1012,6 @@ export type JobUncheckedCreateWithoutAttemptsInput = {
   boardId: number
   name: string
   brief: string
-  agent?: string
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
@@ -1080,7 +1053,6 @@ export type JobUpdateToOneWithWhereWithoutAttemptsInput = {
 export type JobUpdateWithoutAttemptsInput = {
   name?: Prisma.StringFieldUpdateOperationsInput | string
   brief?: Prisma.StringFieldUpdateOperationsInput | string
-  agent?: Prisma.StringFieldUpdateOperationsInput | string
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -1109,7 +1081,6 @@ export type JobUncheckedUpdateWithoutAttemptsInput = {
   boardId?: Prisma.IntFieldUpdateOperationsInput | number
   name?: Prisma.StringFieldUpdateOperationsInput | string
   brief?: Prisma.StringFieldUpdateOperationsInput | string
-  agent?: Prisma.StringFieldUpdateOperationsInput | string
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -1135,7 +1106,6 @@ export type JobUncheckedUpdateWithoutAttemptsInput = {
 export type JobCreateWithoutLeaseInput = {
   name: string
   brief: string
-  agent?: string
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
@@ -1164,7 +1134,6 @@ export type JobUncheckedCreateWithoutLeaseInput = {
   boardId: number
   name: string
   brief: string
-  agent?: string
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
@@ -1206,7 +1175,6 @@ export type JobUpdateToOneWithWhereWithoutLeaseInput = {
 export type JobUpdateWithoutLeaseInput = {
   name?: Prisma.StringFieldUpdateOperationsInput | string
   brief?: Prisma.StringFieldUpdateOperationsInput | string
-  agent?: Prisma.StringFieldUpdateOperationsInput | string
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -1235,7 +1203,6 @@ export type JobUncheckedUpdateWithoutLeaseInput = {
   boardId?: Prisma.IntFieldUpdateOperationsInput | number
   name?: Prisma.StringFieldUpdateOperationsInput | string
   brief?: Prisma.StringFieldUpdateOperationsInput | string
-  agent?: Prisma.StringFieldUpdateOperationsInput | string
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -1261,7 +1228,6 @@ export type JobUncheckedUpdateWithoutLeaseInput = {
 export type JobCreateWithoutEventsInput = {
   name: string
   brief: string
-  agent?: string
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
@@ -1290,7 +1256,6 @@ export type JobUncheckedCreateWithoutEventsInput = {
   boardId: number
   name: string
   brief: string
-  agent?: string
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
@@ -1332,7 +1297,6 @@ export type JobUpdateToOneWithWhereWithoutEventsInput = {
 export type JobUpdateWithoutEventsInput = {
   name?: Prisma.StringFieldUpdateOperationsInput | string
   brief?: Prisma.StringFieldUpdateOperationsInput | string
-  agent?: Prisma.StringFieldUpdateOperationsInput | string
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -1361,7 +1325,6 @@ export type JobUncheckedUpdateWithoutEventsInput = {
   boardId?: Prisma.IntFieldUpdateOperationsInput | number
   name?: Prisma.StringFieldUpdateOperationsInput | string
   brief?: Prisma.StringFieldUpdateOperationsInput | string
-  agent?: Prisma.StringFieldUpdateOperationsInput | string
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -1388,7 +1351,6 @@ export type JobCreateManyBoardInput = {
   id?: number
   name: string
   brief: string
-  agent?: string
   model?: string | null
   effort?: string | null
   maxTurns?: number | null
@@ -1412,7 +1374,6 @@ export type JobCreateManyBoardInput = {
 export type JobUpdateWithoutBoardInput = {
   name?: Prisma.StringFieldUpdateOperationsInput | string
   brief?: Prisma.StringFieldUpdateOperationsInput | string
-  agent?: Prisma.StringFieldUpdateOperationsInput | string
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -1440,7 +1401,6 @@ export type JobUncheckedUpdateWithoutBoardInput = {
   id?: Prisma.IntFieldUpdateOperationsInput | number
   name?: Prisma.StringFieldUpdateOperationsInput | string
   brief?: Prisma.StringFieldUpdateOperationsInput | string
-  agent?: Prisma.StringFieldUpdateOperationsInput | string
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -1468,7 +1428,6 @@ export type JobUncheckedUpdateManyWithoutBoardInput = {
   id?: Prisma.IntFieldUpdateOperationsInput | number
   name?: Prisma.StringFieldUpdateOperationsInput | string
   brief?: Prisma.StringFieldUpdateOperationsInput | string
-  agent?: Prisma.StringFieldUpdateOperationsInput | string
   model?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   effort?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   maxTurns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -1534,7 +1493,6 @@ export type JobSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = ru
   boardId?: boolean
   name?: boolean
   brief?: boolean
-  agent?: boolean
   model?: boolean
   effort?: boolean
   maxTurns?: boolean
@@ -1565,7 +1523,6 @@ export type JobSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extension
   boardId?: boolean
   name?: boolean
   brief?: boolean
-  agent?: boolean
   model?: boolean
   effort?: boolean
   maxTurns?: boolean
@@ -1592,7 +1549,6 @@ export type JobSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extension
   boardId?: boolean
   name?: boolean
   brief?: boolean
-  agent?: boolean
   model?: boolean
   effort?: boolean
   maxTurns?: boolean
@@ -1619,7 +1575,6 @@ export type JobSelectScalar = {
   boardId?: boolean
   name?: boolean
   brief?: boolean
-  agent?: boolean
   model?: boolean
   effort?: boolean
   maxTurns?: boolean
@@ -1640,7 +1595,7 @@ export type JobSelectScalar = {
   finishedAt?: boolean
 }
 
-export type JobOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "boardId" | "name" | "brief" | "agent" | "model" | "effort" | "maxTurns" | "timeoutMs" | "maxBudgetUsd" | "isolate" | "allowedTools" | "maxRetries" | "exports" | "phase" | "lastSessionId" | "lastError" | "suspendedFor" | "endedBy" | "endedFor" | "createdAt" | "updatedAt" | "finishedAt", ExtArgs["result"]["job"]>
+export type JobOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "boardId" | "name" | "brief" | "model" | "effort" | "maxTurns" | "timeoutMs" | "maxBudgetUsd" | "isolate" | "allowedTools" | "maxRetries" | "exports" | "phase" | "lastSessionId" | "lastError" | "suspendedFor" | "endedBy" | "endedFor" | "createdAt" | "updatedAt" | "finishedAt", ExtArgs["result"]["job"]>
 export type JobInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   board?: boolean | Prisma.BoardDefaultArgs<ExtArgs>
   attempts?: boolean | Prisma.Job$attemptsArgs<ExtArgs>
@@ -1668,10 +1623,6 @@ export type $JobPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
     boardId: number
     name: string
     brief: string
-    /**
-     * Which agent definition to run. The image name — see `.claude/agents/<agent>.md`.
-     */
-    agent: string
     /**
      * Null on all five of these means "nobody said": the Board's default answers, and failing that
      * `BUILT_IN` in `src/spec.ts` does. They carry no database default on purpose — a column that
@@ -2164,7 +2115,6 @@ export interface JobFieldRefs {
   readonly boardId: Prisma.FieldRef<"Job", 'Int'>
   readonly name: Prisma.FieldRef<"Job", 'String'>
   readonly brief: Prisma.FieldRef<"Job", 'String'>
-  readonly agent: Prisma.FieldRef<"Job", 'String'>
   readonly model: Prisma.FieldRef<"Job", 'String'>
   readonly effort: Prisma.FieldRef<"Job", 'String'>
   readonly maxTurns: Prisma.FieldRef<"Job", 'Int'>
