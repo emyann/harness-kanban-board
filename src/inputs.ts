@@ -37,7 +37,43 @@ import path from 'node:path';
  */
 
 /** One declared input: a name the prompt labels it with, and where its content comes from. */
-export type InputSpec = { name: string; source: string };
+/**
+ * One declared input, in the shape Kubernetes gives a container's `env`: a `name`, and then either
+ * a literal **`value`** or a **`valueFrom`** naming where to fetch one.
+ *
+ * The first cut of this was `{ name, source: "file:prisma/schema.prisma" }` — structured on the
+ * outside and stringly-typed on the inside. It works for three sources and stops working at the
+ * first source that needs a *second field*, which is not far off: `board` will want a filter,
+ * `file` may want a revision, a secret would need a key. A scheme prefix grows a query language
+ * inside a string, hand-parsed, with its own escaping. `valueFrom` being an object is exactly how
+ * k8s declined that, and the CLI keeps `--input name=file:path` as sugar over it.
+ */
+export type InputSpec =
+  | { name: string; value: string }
+  | { name: string; valueFrom: ValueFrom };
+
+/** Where a value comes from. Exactly one key, the way `valueFrom` holds exactly one `*Ref`. */
+export type ValueFrom =
+  | { file: { path: string } }
+  /** Empty today; a filter is the field it will grow, which is the whole reason it is an object. */
+  | { board: Record<string, never> }
+  | { jobRef: { field: JobField } };
+
+/**
+ * What a Job may read about **itself** — the downward API, and `fieldRef` is the model.
+ *
+ * A Pod can read `metadata.name`, `metadata.namespace`, `spec.nodeName`, `status.podIP`. A worker
+ * could read none of these about itself: it learned its branch from prose in `withProtocol` and
+ * nothing else, so a brief wanting the attempt number had to hardcode one, which is wrong on
+ * attempt 2.
+ *
+ * `slot` is the field that earns this. It is the only fact that answers *"which of the concurrent
+ * workers am I"* — `id` is unique but unbounded, and a run that needs a port, a display number or a
+ * database name needs a small integer bounded by how many runs there can be at once. Kubernetes
+ * gives every Pod its own IP and the question does not arise; hkb's workers share one machine.
+ */
+export const JOB_FIELDS = ['id', 'name', 'board', 'attempt', 'slot', 'branch', 'worktree', 'repo'] as const;
+export type JobField = (typeof JOB_FIELDS)[number];
 
 /** What an input actually resolved to, for the prompt and for the Attempt's catalogue. */
 export type ResolvedInput = { name: string; source: string; text: string };
@@ -58,14 +94,32 @@ export type ResolvedInputs = {
  */
 export const INPUT_MAX_BYTES = 64 * 1024;
 
-/** How many Jobs a `board:` input describes. A ceiling on rows as well as bytes, so the shape of the
+/** How many Jobs a `board` input describes. A ceiling on rows as well as bytes, so the shape of the
  * rendering does not depend on how busy the board happens to be. */
 export const BOARD_INPUT_ROWS = 50;
 
 const NAME = /^[A-Za-z0-9_-]{1,64}$/;
 
+/** One line naming where an input came from — the prompt label, `hkb show`, and the catalogue. */
+export function describeSource(spec: InputSpec): string {
+  if ('value' in spec) return 'value';
+  const vf = spec.valueFrom;
+  if ('file' in vf) return `file:${vf.file.path}`;
+  if ('jobRef' in vf) return `self:${vf.jobRef.field}`;
+  return 'board';
+}
+
+const refusal = (why: string): Error & { exitCode: number } => {
+  const e = new Error(
+    `${why} An input is \`name=source\`, where source is \`file:<repo-relative-path>\`, \`board\`,`
+    + ` \`self:<${JOB_FIELDS.join('|')}>\` or \`value:<literal>\` — as in \`--input schema=file:prisma/schema.prisma\`.`,
+  ) as Error & { exitCode: number };
+  e.exitCode = 2;
+  return e;
+};
+
 /**
- * `name=source`, checked — or a refusal.
+ * `name=source` from the command line, checked and widened into the union — or a refusal.
  *
  * Checked at file time, before a worktree exists, for the reason every other declaration is: this
  * one names a file the board will read with the operator's authority and put in front of a model, so
@@ -73,13 +127,7 @@ const NAME = /^[A-Za-z0-9_-]{1,64}$/;
  */
 export function checkInputSpec(raw: string): InputSpec {
   const text = String(raw ?? '').trim();
-  const refuse = (why: string): never => {
-    const e = new Error(
-      `${why} An input is \`name=source\`, where source is \`file:<repo-relative-path>\` or \`board\` — as in \`--input schema=file:prisma/schema.prisma\`.`,
-    ) as Error & { exitCode: number };
-    e.exitCode = 2;
-    throw e;
-  };
+  const refuse = (why: string): never => { throw refusal(why); };
   if (!text) refuse('an input is empty.');
   const eq = text.indexOf('=');
   if (eq < 1) refuse(`the input ${JSON.stringify(raw)} has no name — write \`name=source\`.`);
@@ -90,30 +138,42 @@ export function checkInputSpec(raw: string): InputSpec {
   }
   if (!source) refuse(`the input \`${name}\` names no source.`);
 
-  if (source === 'board') return { name, source };
+  if (source === 'board') return { name, valueFrom: { board: {} } };
+
+  if (source.startsWith('self:')) {
+    const field = source.slice(5).trim() as JobField;
+    if (!(JOB_FIELDS as readonly string[]).includes(field)) {
+      refuse(`the input \`${name}\` reads \`self:${field}\`, which is not a field a Job has. Fields: ${JOB_FIELDS.join(', ')}.`);
+    }
+    return { name, valueFrom: { jobRef: { field } } };
+  }
+
   // A literal, supplied by whoever filed the Job rather than fetched by the board. This is the
-  // **push** half, and without it the two sources above only cover what hkb can go and find: a
-  // caller with a payload — a webhook, a button, a controller applying a proposal — had nowhere to
-  // put it but string-formatted into the brief.
+  // **push** half, and without it the fetched sources only cover what hkb can go and find: a caller
+  // with a payload — a webhook, a button, a controller applying a proposal — had nowhere to put it
+  // but string-formatted into the brief.
   if (source.startsWith('value:')) {
     const body = source.slice(6);
     if (!body.trim()) refuse(`the input \`${name}\` is \`value:\` with nothing after it.`);
     if (Buffer.byteLength(body) > INPUT_MAX_BYTES) {
       refuse(`the input \`${name}\` is ${Buffer.byteLength(body)} bytes, over the ${INPUT_MAX_BYTES}-byte input cap.`);
     }
-    return { name, source };
+    return { name, value: body };
   }
+
   if (source.startsWith('file:')) {
     checkInputPath(source.slice(5), refuse);
-    return { name, source: `file:${normalizeInputPath(source.slice(5))}` };
+    return { name, valueFrom: { file: { path: normalizeInputPath(source.slice(5)) } } };
   }
+
   // Named explicitly rather than falling through to "unknown source", because the source everyone
   // reaches for first is the one that does not exist and is not going to.
   if (/^#?\d+\./.test(source) || source.startsWith('job:') || source.startsWith('result:')) {
     refuse(
       `the input \`${name}\` reads another Job's output, and hkb has no such source. An input that waits for a`
       + ' sibling Job is an ordering edge, and ordering between workloads belongs to a kind whose controller'
-      + ' creates them (ADR-007 decision 5) — it was rejected as a field, not deferred.',
+      + ' creates them (ADR-007 decision 5) — it was rejected as a field, not deferred.'
+      + ' `self:<field>` reads this Job, which is a different thing and is allowed.',
     );
   }
   return refuse(`the input \`${name}\` names the unknown source ${JSON.stringify(source)}.`);
@@ -139,22 +199,51 @@ function checkInputPath(rel: string, refuse: (why: string) => never): void {
 const normalizeInputPath = (rel: string): string =>
   path.normalize(String(rel).trim()).replace(/[\\/]+$/, '').split(path.sep).join('/');
 
-/** The specs a Job declared, off the `Json?` column, defensively. */
+/**
+ * The specs a Job declared, off the `Json?` column — validated, never trusted.
+ *
+ * Hand-written rather than schema-validated, and that is a judgement worth stating: `zod` is in the
+ * tree but only transitively (the Agent SDK pulls it), so using it means **declaring** a 7.9 MB
+ * dependency, which this project's rules say needs a reason in a decision record and a showing that
+ * it replaces more code than it adds. It would replace the twenty lines below and none of the
+ * refusal messages above, which are the part that took the work — and `declaredResults`,
+ * `declaredArtifacts` and `pluginList` are all already this shape. Consistency and no new dependency
+ * beat twenty lines.
+ */
 export function declaredInputs(value: unknown): InputSpec[] {
   if (!Array.isArray(value)) return [];
   const out: InputSpec[] = [];
   for (const v of value) {
+    // The CLI's own string form, so a hand-written row stays usable. Anything it refuses is skipped
+    // rather than thrown: one malformed row is not a reason to fail somebody else's attempt.
     if (typeof v === 'string') { try { out.push(checkInputSpec(v)); } catch { /* not ours to fail on */ } continue; }
-    if (v && typeof v === 'object') {
-      const { name, source } = v as { name?: unknown; source?: unknown };
-      if (typeof name === 'string' && typeof source === 'string' && NAME.test(name)) out.push({ name, source });
+    if (!v || typeof v !== 'object') continue;
+    const row = v as { name?: unknown; value?: unknown; valueFrom?: unknown; source?: unknown };
+    if (typeof row.name !== 'string' || !NAME.test(row.name)) continue;
+    if (typeof row.value === 'string') { out.push({ name: row.name, value: row.value }); continue; }
+    // The pre-union shape, so a board written by the previous build still reads. One line, and it
+    // costs less than a migration over a column nothing outside this file interprets.
+    if (typeof row.source === 'string') {
+      try { out.push(checkInputSpec(`${row.name}=${row.source}`)); } catch { /* skip */ }
+      continue;
+    }
+    const vf = row.valueFrom;
+    if (!vf || typeof vf !== 'object') continue;
+    const f = vf as { file?: unknown; board?: unknown; jobRef?: unknown };
+    if (f.file && typeof f.file === 'object' && typeof (f.file as { path?: unknown }).path === 'string') {
+      out.push({ name: row.name, valueFrom: { file: { path: (f.file as { path: string }).path } } });
+    } else if (f.board && typeof f.board === 'object') {
+      out.push({ name: row.name, valueFrom: { board: {} } });
+    } else if (f.jobRef && typeof f.jobRef === 'object'
+      && (JOB_FIELDS as readonly string[]).includes(String((f.jobRef as { field?: unknown }).field))) {
+      out.push({ name: row.name, valueFrom: { jobRef: { field: (f.jobRef as { field: JobField }).field } } });
     }
   }
   return out;
 }
 
 /**
- * One Job, as a `board:` input sees it. Deliberately the fields `hkb ls` already computes.
+ * One Job, as a `board` input sees it. Deliberately the fields `hkb ls` already computes.
  *
  * This is ADR-010 decision 5's *"board arithmetic"* — which Jobs have sat pending, which succeeded
  * and produced nothing, which keep capping on budget. **LLM-free, and one board read**, which is

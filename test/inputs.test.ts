@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const {
   checkInputSpec, declaredInputs, readFileInput, renderBoard, missingInputs, renderBrief,
-  INPUT_MAX_BYTES, BOARD_INPUT_ROWS,
+  describeSource, INPUT_MAX_BYTES, BOARD_INPUT_ROWS, JOB_FIELDS,
 } = await import('../src/inputs.ts');
 const { withInputs } = await import('../src/brief.ts');
 
@@ -30,10 +30,13 @@ test('an input that reads another Job is REFUSED, and the refusal says why', () 
 });
 
 test('a spec is name=source, and every other spelling is refused', () => {
+  // The stored shape is Kubernetes' `env`: a name, and either a literal `value` or a `valueFrom`
+  // naming where to fetch one. The CLI string is sugar over it.
   assert.deepEqual(checkInputSpec('schema=file:prisma/schema.prisma'),
-    { name: 'schema', source: 'file:prisma/schema.prisma' });
-  assert.deepEqual(checkInputSpec(' board = board '), { name: 'board', source: 'board' });
-  assert.deepEqual(checkInputSpec('a=file:./docs/x.md'), { name: 'a', source: 'file:docs/x.md' },
+    { name: 'schema', valueFrom: { file: { path: 'prisma/schema.prisma' } } });
+  assert.deepEqual(checkInputSpec(' board = board '), { name: 'board', valueFrom: { board: {} } });
+  assert.deepEqual(checkInputSpec('a=file:./docs/x.md'),
+    { name: 'a', valueFrom: { file: { path: 'docs/x.md' } } },
     'the path is normalised once, here, so two spellings of one file are one declaration');
 
   for (const bad of [
@@ -49,12 +52,22 @@ test('a spec is name=source, and every other spelling is refused', () => {
 });
 
 test('declaredInputs survives whatever is in the Json column', () => {
-  assert.deepEqual(declaredInputs([{ name: 'a', source: 'board' }]), [{ name: 'a', source: 'board' }]);
-  assert.deepEqual(declaredInputs(['a=board']), [{ name: 'a', source: 'board' }], 'the string form parses too');
+  assert.deepEqual(declaredInputs([{ name: 'a', valueFrom: { board: {} } }]),
+    [{ name: 'a', valueFrom: { board: {} } }]);
+  assert.deepEqual(declaredInputs([{ name: 'p', value: 'x' }]), [{ name: 'p', value: 'x' }]);
+  assert.deepEqual(declaredInputs(['a=board']), [{ name: 'a', valueFrom: { board: {} } }],
+    'the CLI string form parses too, so a hand-written row stays usable');
+  // The pre-union shape, so a board written by the previous build still reads.
+  assert.deepEqual(declaredInputs([{ name: 'a', source: 'file:x.md' }]),
+    [{ name: 'a', valueFrom: { file: { path: 'x.md' } } }]);
   assert.deepEqual(declaredInputs(null), []);
   assert.deepEqual(declaredInputs('a=board'), [], 'a bare string is not a list');
-  assert.deepEqual(declaredInputs([{ name: 'has space', source: 'board' }, 3, null]), [],
-    'and junk is dropped rather than failing somebody else\'s attempt');
+  assert.deepEqual(
+    declaredInputs([{ name: 'has space', valueFrom: { board: {} } }, 3, null, { name: 'x' },
+      { name: 'y', valueFrom: { jobRef: { field: 'nonsense' } } }]),
+    [],
+    'and every kind of junk is dropped rather than failing somebody else\'s attempt',
+  );
 });
 
 test('a file input is read from the repository, and a symlink out of it is REFUSED', () => {
@@ -139,8 +152,8 @@ test('an input that contains the fence cannot break out of it', () => {
  * brief. The interpolation rule carries the whole trust design, so most of these are refusals.
  */
 test('a value input is a literal the filer supplied, capped like any other', () => {
-  assert.deepEqual(checkInputSpec('pr=value:{"number":42}'), { name: 'pr', source: 'value:{"number":42}' });
-  assert.deepEqual(checkInputSpec('style=value:strict'), { name: 'style', source: 'value:strict' });
+  assert.deepEqual(checkInputSpec('pr=value:{"number":42}'), { name: 'pr', value: '{"number":42}' });
+  assert.deepEqual(checkInputSpec('style=value:strict'), { name: 'style', value: 'strict' });
   assert.throws(() => checkInputSpec('a=value:'), (e: Error & { exitCode?: number }) => e.exitCode === 2);
   assert.throws(
     () => checkInputSpec(`a=value:${'x'.repeat(INPUT_MAX_BYTES + 1)}`),
@@ -194,4 +207,34 @@ test('renderBrief reports what it consumed, so a value is never given twice', ()
   assert.deepEqual([...got.used], ['used']);
   // `spare` stays on the Job and arrives as a data block; `used` is already in the brief.
   assert.ok(!got.used.has('spare'));
+});
+
+/**
+ * The downward API (`self:<field>`) — `fieldRef` for a Job.
+ *
+ * A worker could read nothing about itself; it learned its branch from prose and no more. The field
+ * that earns the feature is `slot`, because it is the only one that answers "which of the concurrent
+ * workers am I" — the question a run assigning a port has to answer and could not.
+ */
+test('self: reads this Job, and every field is one the controller can answer', () => {
+  assert.deepEqual(checkInputSpec('me=self:slot'), { name: 'me', valueFrom: { jobRef: { field: 'slot' } } });
+  for (const f of JOB_FIELDS) {
+    assert.deepEqual(checkInputSpec(`x=self:${f}`), { name: 'x', valueFrom: { jobRef: { field: f } } });
+  }
+  assert.throws(() => checkInputSpec('x=self:podIP'),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2 && /not a field a Job has/.test(e.message),
+    'an unknown field is refused at file time, with the list — not rendered empty at run time');
+});
+
+test('reading ANOTHER Job is still refused, and the refusal points at the one that is allowed', () => {
+  assert.throws(() => checkInputSpec('plan=job:42'),
+    (e: Error) => /ordering edge/.test(e.message) && /`self:<field>` reads this Job/.test(e.message),
+    'the two are one keystroke apart, so the refusal has to name the difference');
+});
+
+test('describeSource labels every variant the same way the prompt and hkb show do', () => {
+  assert.equal(describeSource({ name: 'a', value: 'x' }), 'value');
+  assert.equal(describeSource({ name: 'a', valueFrom: { file: { path: 'x.md' } } }), 'file:x.md');
+  assert.equal(describeSource({ name: 'a', valueFrom: { board: {} } }), 'board');
+  assert.equal(describeSource({ name: 'a', valueFrom: { jobRef: { field: 'slot' } } }), 'self:slot');
 });

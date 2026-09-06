@@ -918,8 +918,8 @@ test('a Job queued with structured input stores the RENDERED brief, and refuses 
   )).out);
 
   // A value that went into the brief is not also handed over as a data block.
-  assert.deepEqual(filed.inputs, [{ name: 'schema', source: 'file:README.md' }],
-    'the consumed values are gone; the fetched source stays');
+  assert.deepEqual(filed.inputs, [{ name: 'schema', valueFrom: { file: { path: 'README.md' } } }],
+    'the consumed values are gone; the fetched source stays, in the k8s-shaped union');
 
   const shown = (await hkb('show', String(filed.id), '--board', 'structured')).out;
   assert.match(shown, /brief\s+Review PR 42 in example with a strict eye\./,

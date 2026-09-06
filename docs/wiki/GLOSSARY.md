@@ -58,15 +58,22 @@ meet one in the git history, that is what it was.
 - **Input** — content a Job *declares* it will be given (`--input <name>=<source>`), resolved by the
   controller before the run and placed in the prompt ahead of the brief (`src/inputs.ts`). Three sources,
   none of which waits: `file:<repo-relative-path>`, read from `Board.repoPath` and not the worktree;
-  `board`, the LLM-free board arithmetic; and `value:<literal>`, the one a caller *pushes* rather than
-  one hkb fetches. A `value:` may be interpolated into the brief and no other source may
-  (`renderBrief`). An input that cannot be read ends the attempt at
+  `board`, the LLM-free board arithmetic; `value:<literal>`, the one a caller *pushes* rather than one
+  hkb fetches; and `self:<field>`, the **downward API** — this Job's own `id`, `name`, `board`,
+  `attempt`, `slot`, `branch`, `worktree` or `repo`. A `value:` may be interpolated into the brief and
+  no other source may (`renderBrief`). Stored as k8s stores `env`: `name` plus either `value` or a
+  `valueFrom` object (*decisions/adr-007-workload-scheduler*). An input that cannot be read ends the attempt at
   `no_input` before the runtime is called. A source naming another Job's output is refused — that is an
   ordering edge (*decisions/adr-007-workload-scheduler*). Restriction comes from pairing it with a
   narrowed **tool surface**, not from the injection itself.
 - **Kind** — a workload's schema plus the controller that advances it. `Job` is the first and only
   one (`prisma/schema.prisma`, `src/controller.ts`); a new kind means a new controller, not just new
   data (*architecture/job-kind*).
+- **Slot** — the concurrency ordinal a lease holds: the lowest non-negative integer no other live
+  lease holds, machine-wide, released when the lease is (`Lease.slot`, frozen onto `Attempt.slot`).
+  It is the only fact answering *"which of the concurrent workers am I"*, which a run picking a port
+  or a database name needs and `id` cannot give — the StatefulSet ordinal, for workers that share one
+  machine's ports instead of getting a Pod IP each. Read by a Job as `--input me=self:slot`.
 - **Lease** — who holds a Job right now, with a `holder`, a `token` and an `expiresAt`; the `@@id` on
   it is the compare-and-swap, and an expired one is what makes a dead holder reclaimable
   (`prisma/schema.prisma`, `reclaimExpired`, `src/controller.ts`) (*architecture/job-kind*).

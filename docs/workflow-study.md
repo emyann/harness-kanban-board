@@ -254,6 +254,14 @@ arithmetic ADR-010 decision 5 described — and `value:<literal>`. The source ev
 another Job's output, is refused *by name* with a message pointing at §2, because it is `Job.after` with
 a payload.
 
+A fourth source, `self:<field>`, is the **downward API** — Kubernetes' `fieldRef`, where a Pod reads its
+own `metadata.name` or `status.podIP`. It arrived from reading how k8s shapes a container's input
+rather than from this study, and it carries the one fact nothing else could give a worker: `slot`, the
+lowest integer no other live run holds. Without it a suite running inside a worker cannot pick a port
+that concurrent workers will not collide on, which is a real thing that was tried and could not be
+done. k8s never needs it because every Pod gets an IP; hkb's workers share a machine, so the shape that
+fits is the StatefulSet ordinal.
+
 `value:` is the **push** half, and leaving it out was an omission this study's framing invited: Artic is
 about restricting what a step *reads*, so both of the first two sources are things hkb goes and fetches.
 But the trigger direction — a button, an API call, a controller filing work from a proposal — has a

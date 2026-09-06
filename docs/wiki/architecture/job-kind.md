@@ -89,6 +89,18 @@ primary key, and that failure *is* the answer — the loser is recorded in
 try/catch). This is ADR-004's compare-and-swap rule expressed as a table
 constraint rather than a ref update.
 
+The same insert now carries a second constraint doing the same job for a different
+question. `Lease.slot` is the **concurrency ordinal** — the lowest non-negative
+integer no other live lease holds, machine-wide — and it is `@unique`, so two
+daemons that read the same set and compute the same free number cannot both take
+it. The loser lands in the same catch, which is why adding it needed no new
+handling: a claim that fails for either reason is a claim somebody else got, and
+the next pass picks the Job up. It exists because a run needs to know *which of the
+concurrent workers it is* — for a port, a display number, a database name — and
+`jobId` is unique but unbounded. Kubernetes gives every Pod an IP and never asks;
+hkb's workers share one machine. Frozen onto `Attempt.slot`, so it survives the
+release and a past collision stays diagnosable.
+
 **Liveness is the lease, not a heartbeat.** A holder that dies without releasing
 leaves a lease with a past `expiresAt`; `reclaimExpired()` deletes it, marks the
 orphaned attempt `lost`, and returns the Job to `pending` if it has retries left.

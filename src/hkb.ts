@@ -9,7 +9,7 @@ import { checkExportPath } from './worktree.ts';
 import { checkResultName, RESULT_MAX_BYTES } from './results.ts';
 import { checkArtifactName, artifactsDir, bytes } from './artifacts.ts';
 import { checkPluginPath, pluginList } from './plugins.ts';
-import { checkInputSpec, declaredInputs, renderBrief } from './inputs.ts';
+import { checkInputSpec, declaredInputs, renderBrief, describeSource } from './inputs.ts';
 import { fakeRuntime } from './runtime/fake.ts';
 import * as daemon from './daemon.ts';
 import { EFFORTS, boardDefaults, hasDefaults, resolveSpec, type SpecSource } from './spec.ts';
@@ -58,13 +58,18 @@ const HELP = `hkb — run one agent against one brief
                         \`.claude\`. Resolved against the board's REPOSITORY, never the worktree,
                         so only a merge changes what it loads. Repeatable; it grants what a
                         worker may READ, and nothing about what it may do.
-       --input <n=src>  what the Job is GIVEN, repeatable. Three sources: \`file:<repo-path>\`,
-                        \`board\` (this board's Jobs, phases and outcomes), and \`value:<literal>\`
-                        for a caller that has a payload rather than a path. Read before the run
-                        and put in the prompt; an input the board cannot read fails the attempt
-                        without spending one. Narrow --allow-tool alongside it and the Job sees
-                        what it was given and no more.
-                        A \`value:\` input may also be interpolated into the brief as {{name}} or
+       --input <n=src>  what the Job is GIVEN, repeatable. Four sources:
+                          \`file:<repo-path>\`  a file in the board's repository
+                          \`board\`             this board's Jobs, phases and outcomes
+                          \`value:<literal>\`   a payload the caller pushes, not one hkb fetches
+                          \`self:<field>\`      this Job about itself — id, name, board, attempt,
+                                              slot, branch, worktree, repo
+                        Read before the run and put in the prompt; an input the board cannot read
+                        fails the attempt without spending one. Narrow --allow-tool alongside it
+                        and the Job sees what it was given and no more.
+                        \`self:slot\` is the one that answers "which concurrent worker am I" — a
+                        small integer no other live run holds, for a port or a database name.
+                        A \`value:\` may also be interpolated into the brief as {{name}} or
                         {{name.field}} — whichever way the brief arrived. Only \`value:\`, because
                         the brief is instruction and a fetched source is data.
        --result <name>  a named value the Job must produce — a finding, a decision, a URL.
@@ -471,7 +476,7 @@ export async function main(argv: string[]): Promise<number> {
       // what the run is given — `hkb show` and the prompt cannot disagree. It applies to whichever
       // way the brief arrived: `--brief`, `--brief-file` or stdin all land in one string above.
       const supplied = new Map(
-        inputs.filter((i) => i.source.startsWith('value:')).map((i) => [i.name, i.source.slice(6)]),
+        inputs.filter((i): i is { name: string; value: string } => 'value' in i).map((i) => [i.name, i.value]),
       );
       const rendered = renderBrief(brief, supplied, new Set(inputs.map((i) => i.name)));
       // A value that went into the brief does not also arrive as a data block. Dropping it here
@@ -518,7 +523,7 @@ export async function main(argv: string[]): Promise<number> {
           + (exports.length ? `\n  must produce  ${exports.join(', ')}` : '')
           + (results.length ? `\n  must report   ${results.join(', ')}` : '')
           + (artifacts.length ? `\n  must hand over ${artifacts.join(', ')}` : '')
-          + (inputs.length ? `\n  is given      ${inputs.map((i) => `${i.name}=${i.source}`).join(', ')}` : '')));
+          + (inputs.length ? `\n  is given      ${inputs.map((i) => `${i.name}=${describeSource(i)}`).join(', ')}` : '')));
       return 0;
     }
 
@@ -645,7 +650,7 @@ export async function main(argv: string[]): Promise<number> {
         // one that decides whether a completed session counts as a success.
         // Before the outputs, because that is the order the run sees them in.
         const given = declaredInputs(job.inputs);
-        if (given.length) console.log(`  inputs   ${given.map((i) => `${i.name}=${i.source}`).join(', ')}`);
+        if (given.length) console.log(`  inputs   ${given.map((i) => `${i.name}=${describeSource(i)}`).join(', ')}`);
         if (Array.isArray(job.exports) && job.exports.length) console.log(`  exports  ${job.exports.join(', ')}`);
         if (Array.isArray(job.results) && job.results.length) console.log(`  results  ${job.results.join(', ')}`);
         if (Array.isArray(job.artifacts) && job.artifacts.length) console.log(`  files    ${job.artifacts.join(', ')}`);

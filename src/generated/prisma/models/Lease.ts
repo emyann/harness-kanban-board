@@ -29,16 +29,19 @@ export type AggregateLease = {
 
 export type LeaseAvgAggregateOutputType = {
   jobId: number | null
+  slot: number | null
 }
 
 export type LeaseSumAggregateOutputType = {
   jobId: number | null
+  slot: number | null
 }
 
 export type LeaseMinAggregateOutputType = {
   jobId: number | null
   holder: string | null
   token: string | null
+  slot: number | null
   acquiredAt: Date | null
   renewedAt: Date | null
   expiresAt: Date | null
@@ -48,6 +51,7 @@ export type LeaseMaxAggregateOutputType = {
   jobId: number | null
   holder: string | null
   token: string | null
+  slot: number | null
   acquiredAt: Date | null
   renewedAt: Date | null
   expiresAt: Date | null
@@ -57,6 +61,7 @@ export type LeaseCountAggregateOutputType = {
   jobId: number
   holder: number
   token: number
+  slot: number
   acquiredAt: number
   renewedAt: number
   expiresAt: number
@@ -66,16 +71,19 @@ export type LeaseCountAggregateOutputType = {
 
 export type LeaseAvgAggregateInputType = {
   jobId?: true
+  slot?: true
 }
 
 export type LeaseSumAggregateInputType = {
   jobId?: true
+  slot?: true
 }
 
 export type LeaseMinAggregateInputType = {
   jobId?: true
   holder?: true
   token?: true
+  slot?: true
   acquiredAt?: true
   renewedAt?: true
   expiresAt?: true
@@ -85,6 +93,7 @@ export type LeaseMaxAggregateInputType = {
   jobId?: true
   holder?: true
   token?: true
+  slot?: true
   acquiredAt?: true
   renewedAt?: true
   expiresAt?: true
@@ -94,6 +103,7 @@ export type LeaseCountAggregateInputType = {
   jobId?: true
   holder?: true
   token?: true
+  slot?: true
   acquiredAt?: true
   renewedAt?: true
   expiresAt?: true
@@ -190,6 +200,7 @@ export type LeaseGroupByOutputType = {
   jobId: number
   holder: string
   token: string
+  slot: number | null
   acquiredAt: Date
   renewedAt: Date
   expiresAt: Date
@@ -222,6 +233,7 @@ export type LeaseWhereInput = {
   jobId?: Prisma.IntFilter<"Lease"> | number
   holder?: Prisma.StringFilter<"Lease"> | string
   token?: Prisma.StringFilter<"Lease"> | string
+  slot?: Prisma.IntNullableFilter<"Lease"> | number | null
   acquiredAt?: Prisma.DateTimeFilter<"Lease"> | Date | string
   renewedAt?: Prisma.DateTimeFilter<"Lease"> | Date | string
   expiresAt?: Prisma.DateTimeFilter<"Lease"> | Date | string
@@ -232,6 +244,7 @@ export type LeaseOrderByWithRelationInput = {
   jobId?: Prisma.SortOrder
   holder?: Prisma.SortOrder
   token?: Prisma.SortOrder
+  slot?: Prisma.SortOrderInput | Prisma.SortOrder
   acquiredAt?: Prisma.SortOrder
   renewedAt?: Prisma.SortOrder
   expiresAt?: Prisma.SortOrder
@@ -240,6 +253,7 @@ export type LeaseOrderByWithRelationInput = {
 
 export type LeaseWhereUniqueInput = Prisma.AtLeast<{
   jobId?: number
+  slot?: number
   AND?: Prisma.LeaseWhereInput | Prisma.LeaseWhereInput[]
   OR?: Prisma.LeaseWhereInput[]
   NOT?: Prisma.LeaseWhereInput | Prisma.LeaseWhereInput[]
@@ -249,12 +263,13 @@ export type LeaseWhereUniqueInput = Prisma.AtLeast<{
   renewedAt?: Prisma.DateTimeFilter<"Lease"> | Date | string
   expiresAt?: Prisma.DateTimeFilter<"Lease"> | Date | string
   job?: Prisma.XOR<Prisma.JobScalarRelationFilter, Prisma.JobWhereInput>
-}, "jobId">
+}, "jobId" | "slot">
 
 export type LeaseOrderByWithAggregationInput = {
   jobId?: Prisma.SortOrder
   holder?: Prisma.SortOrder
   token?: Prisma.SortOrder
+  slot?: Prisma.SortOrderInput | Prisma.SortOrder
   acquiredAt?: Prisma.SortOrder
   renewedAt?: Prisma.SortOrder
   expiresAt?: Prisma.SortOrder
@@ -272,6 +287,7 @@ export type LeaseScalarWhereWithAggregatesInput = {
   jobId?: Prisma.IntWithAggregatesFilter<"Lease"> | number
   holder?: Prisma.StringWithAggregatesFilter<"Lease"> | string
   token?: Prisma.StringWithAggregatesFilter<"Lease"> | string
+  slot?: Prisma.IntNullableWithAggregatesFilter<"Lease"> | number | null
   acquiredAt?: Prisma.DateTimeWithAggregatesFilter<"Lease"> | Date | string
   renewedAt?: Prisma.DateTimeWithAggregatesFilter<"Lease"> | Date | string
   expiresAt?: Prisma.DateTimeWithAggregatesFilter<"Lease"> | Date | string
@@ -280,6 +296,7 @@ export type LeaseScalarWhereWithAggregatesInput = {
 export type LeaseCreateInput = {
   holder: string
   token: string
+  slot?: number | null
   acquiredAt?: Date | string
   renewedAt?: Date | string
   expiresAt: Date | string
@@ -290,6 +307,7 @@ export type LeaseUncheckedCreateInput = {
   jobId: number
   holder: string
   token: string
+  slot?: number | null
   acquiredAt?: Date | string
   renewedAt?: Date | string
   expiresAt: Date | string
@@ -298,6 +316,7 @@ export type LeaseUncheckedCreateInput = {
 export type LeaseUpdateInput = {
   holder?: Prisma.StringFieldUpdateOperationsInput | string
   token?: Prisma.StringFieldUpdateOperationsInput | string
+  slot?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   acquiredAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   renewedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   expiresAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -308,6 +327,7 @@ export type LeaseUncheckedUpdateInput = {
   jobId?: Prisma.IntFieldUpdateOperationsInput | number
   holder?: Prisma.StringFieldUpdateOperationsInput | string
   token?: Prisma.StringFieldUpdateOperationsInput | string
+  slot?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   acquiredAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   renewedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   expiresAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -317,6 +337,7 @@ export type LeaseCreateManyInput = {
   jobId: number
   holder: string
   token: string
+  slot?: number | null
   acquiredAt?: Date | string
   renewedAt?: Date | string
   expiresAt: Date | string
@@ -325,6 +346,7 @@ export type LeaseCreateManyInput = {
 export type LeaseUpdateManyMutationInput = {
   holder?: Prisma.StringFieldUpdateOperationsInput | string
   token?: Prisma.StringFieldUpdateOperationsInput | string
+  slot?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   acquiredAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   renewedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   expiresAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -334,6 +356,7 @@ export type LeaseUncheckedUpdateManyInput = {
   jobId?: Prisma.IntFieldUpdateOperationsInput | number
   holder?: Prisma.StringFieldUpdateOperationsInput | string
   token?: Prisma.StringFieldUpdateOperationsInput | string
+  slot?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   acquiredAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   renewedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   expiresAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -348,6 +371,7 @@ export type LeaseCountOrderByAggregateInput = {
   jobId?: Prisma.SortOrder
   holder?: Prisma.SortOrder
   token?: Prisma.SortOrder
+  slot?: Prisma.SortOrder
   acquiredAt?: Prisma.SortOrder
   renewedAt?: Prisma.SortOrder
   expiresAt?: Prisma.SortOrder
@@ -355,12 +379,14 @@ export type LeaseCountOrderByAggregateInput = {
 
 export type LeaseAvgOrderByAggregateInput = {
   jobId?: Prisma.SortOrder
+  slot?: Prisma.SortOrder
 }
 
 export type LeaseMaxOrderByAggregateInput = {
   jobId?: Prisma.SortOrder
   holder?: Prisma.SortOrder
   token?: Prisma.SortOrder
+  slot?: Prisma.SortOrder
   acquiredAt?: Prisma.SortOrder
   renewedAt?: Prisma.SortOrder
   expiresAt?: Prisma.SortOrder
@@ -370,6 +396,7 @@ export type LeaseMinOrderByAggregateInput = {
   jobId?: Prisma.SortOrder
   holder?: Prisma.SortOrder
   token?: Prisma.SortOrder
+  slot?: Prisma.SortOrder
   acquiredAt?: Prisma.SortOrder
   renewedAt?: Prisma.SortOrder
   expiresAt?: Prisma.SortOrder
@@ -377,6 +404,7 @@ export type LeaseMinOrderByAggregateInput = {
 
 export type LeaseSumOrderByAggregateInput = {
   jobId?: Prisma.SortOrder
+  slot?: Prisma.SortOrder
 }
 
 export type LeaseCreateNestedOneWithoutJobInput = {
@@ -414,6 +442,7 @@ export type LeaseUncheckedUpdateOneWithoutJobNestedInput = {
 export type LeaseCreateWithoutJobInput = {
   holder: string
   token: string
+  slot?: number | null
   acquiredAt?: Date | string
   renewedAt?: Date | string
   expiresAt: Date | string
@@ -422,6 +451,7 @@ export type LeaseCreateWithoutJobInput = {
 export type LeaseUncheckedCreateWithoutJobInput = {
   holder: string
   token: string
+  slot?: number | null
   acquiredAt?: Date | string
   renewedAt?: Date | string
   expiresAt: Date | string
@@ -446,6 +476,7 @@ export type LeaseUpdateToOneWithWhereWithoutJobInput = {
 export type LeaseUpdateWithoutJobInput = {
   holder?: Prisma.StringFieldUpdateOperationsInput | string
   token?: Prisma.StringFieldUpdateOperationsInput | string
+  slot?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   acquiredAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   renewedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   expiresAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -454,6 +485,7 @@ export type LeaseUpdateWithoutJobInput = {
 export type LeaseUncheckedUpdateWithoutJobInput = {
   holder?: Prisma.StringFieldUpdateOperationsInput | string
   token?: Prisma.StringFieldUpdateOperationsInput | string
+  slot?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   acquiredAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   renewedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   expiresAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -465,6 +497,7 @@ export type LeaseSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
   jobId?: boolean
   holder?: boolean
   token?: boolean
+  slot?: boolean
   acquiredAt?: boolean
   renewedAt?: boolean
   expiresAt?: boolean
@@ -475,6 +508,7 @@ export type LeaseSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensi
   jobId?: boolean
   holder?: boolean
   token?: boolean
+  slot?: boolean
   acquiredAt?: boolean
   renewedAt?: boolean
   expiresAt?: boolean
@@ -485,6 +519,7 @@ export type LeaseSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensi
   jobId?: boolean
   holder?: boolean
   token?: boolean
+  slot?: boolean
   acquiredAt?: boolean
   renewedAt?: boolean
   expiresAt?: boolean
@@ -495,12 +530,13 @@ export type LeaseSelectScalar = {
   jobId?: boolean
   holder?: boolean
   token?: boolean
+  slot?: boolean
   acquiredAt?: boolean
   renewedAt?: boolean
   expiresAt?: boolean
 }
 
-export type LeaseOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"jobId" | "holder" | "token" | "acquiredAt" | "renewedAt" | "expiresAt", ExtArgs["result"]["lease"]>
+export type LeaseOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"jobId" | "holder" | "token" | "slot" | "acquiredAt" | "renewedAt" | "expiresAt", ExtArgs["result"]["lease"]>
 export type LeaseInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   job?: boolean | Prisma.JobDefaultArgs<ExtArgs>
 }
@@ -520,6 +556,30 @@ export type $LeasePayload<ExtArgs extends runtime.Types.Extensions.InternalArgs 
     jobId: number
     holder: string
     token: string
+    /**
+     * Which concurrency slot this holder occupies — the lowest non-negative integer no other LIVE
+     * lease holds, machine-wide, because one board file serves one machine.
+     * 
+     * It exists because a worker needs to know **which of the concurrent workers it is**, and no
+     * other fact answers that. `jobId` is unique but unbounded and grows for ever; a worker that
+     * wants a port, a display number or a database name needs a small integer bounded by how many
+     * runs there can be at once. This is the StatefulSet ordinal, and the Pod-per-IP escape
+     * Kubernetes has is exactly what hkb does not: workers share one machine's ports.
+     * 
+     * `@unique` is the allocator. Two daemons computing "the lowest free slot" from the same read
+     * would compute the same answer; the constraint makes the second `create` fail, and the claim
+     * path already treats a failed lease create as "somebody else got there" and moves on. The Job
+     * is picked up on the next pass, which is what level-triggered means.
+     * 
+     * Released with the lease, so a slot is only held while a run is live.
+     * 
+     * **Nullable, and that is a migration decision rather than a modelling one.** A required column
+     * added to this table makes Prisma emit `RedefineTables` — DROP and recreate — against a board
+     * a daemon may be holding leases in. Nullable is a plain `ADD COLUMN`, and SQLite treats NULLs
+     * as distinct under a unique index, so old rows coexist while every new lease still gets a slot
+     * no other live lease holds. A null here means "claimed by an hkb that predates slots".
+     */
+    slot: number | null
     acquiredAt: Date
     renewedAt: Date
     expiresAt: Date
@@ -950,6 +1010,7 @@ export interface LeaseFieldRefs {
   readonly jobId: Prisma.FieldRef<"Lease", 'Int'>
   readonly holder: Prisma.FieldRef<"Lease", 'String'>
   readonly token: Prisma.FieldRef<"Lease", 'String'>
+  readonly slot: Prisma.FieldRef<"Lease", 'Int'>
   readonly acquiredAt: Prisma.FieldRef<"Lease", 'DateTime'>
   readonly renewedAt: Prisma.FieldRef<"Lease", 'DateTime'>
   readonly expiresAt: Prisma.FieldRef<"Lease", 'DateTime'>

@@ -158,6 +158,7 @@ export const AttemptScalarFieldEnum = {
   exported: 'exported',
   costUsd: 'costUsd',
   results: 'results',
+  slot: 'slot',
   inputs: 'inputs',
   artifacts: 'artifacts',
   turns: 'turns',
@@ -171,6 +172,7 @@ export const LeaseScalarFieldEnum = {
   jobId: 'jobId',
   holder: 'holder',
   token: 'token',
+  slot: 'slot',
   acquiredAt: 'acquiredAt',
   renewedAt: 'renewedAt',
   expiresAt: 'expiresAt'

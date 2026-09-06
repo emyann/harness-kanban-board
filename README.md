@@ -178,8 +178,22 @@ in the prompt, ahead of the brief that is about it. Three sources, and none of t
 
 - **`file:<path>`** — a file in the repository, read from the board's repo rather than the worktree.
 - **`board`** — this board's other Jobs, their phases, attempt counts and outcomes. LLM-free, one read.
-- **`value:<literal>`** — a payload the caller supplies. The other two are things hkb goes and *fetches*;
+- **`value:<literal>`** — a payload the caller supplies. The others are things hkb goes and *fetches*;
   this is the one a webhook, a button or a controller filing work can *push*.
+- **`self:<field>`** — this Job about itself: `id`, `name`, `board`, `attempt`, `slot`, `branch`,
+  `worktree`, `repo`. Kubernetes' downward API, where a Pod reads its own `metadata.name` and
+  `status.podIP`.
+
+**`self:slot`** is the one that earns that list. It is a small integer no other *live* run holds,
+machine-wide — so a suite running inside a worker can pick a port, a display number or a database
+name that concurrent workers will not collide on. `id` is unique but unbounded and answers a
+different question. Kubernetes gives every Pod its own IP and never needs this; hkb's workers share
+one machine, so the shape that fits is the StatefulSet ordinal.
+
+Stored in the shape k8s gives `env` — a `name`, and then either a literal `value` or a `valueFrom`
+naming where to fetch one. The CLI string is sugar over it. A scheme prefix would have grown a query
+language inside a string the first time a source needed a second field, and `valueFrom` being an
+object is exactly how k8s declined that.
 
 A `value:` input may also be **interpolated into the brief**, as `{{name}}` or `{{name.field}}`, whichever
 way the brief arrived — `--brief`, `--brief-file` or stdin:

@@ -868,7 +868,7 @@ test('a declared input is read from the repository and reaches the prompt before
   const job = await db.job.create({
     data: {
       boardId: b.id, name: 'reads the licence', brief: 'Summarise it.', isolate: false,
-      inputs: [{ name: 'licence', source: 'file:LICENSE' }],
+      inputs: [{ name: 'licence', valueFrom: { file: { path: 'LICENSE' } } }],
     },
   });
   await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
@@ -900,7 +900,7 @@ test('a declared input the board cannot read fails the attempt WITHOUT calling t
   const job = await db.job.create({
     data: {
       boardId: b.id, name: 'reads a ghost', brief: 'x', isolate: false, maxRetries: 0,
-      inputs: [{ name: 'gone', source: 'file:no-such-file.md' }],
+      inputs: [{ name: 'gone', valueFrom: { file: { path: 'no-such-file.md' } } }],
     },
   });
   await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
@@ -929,7 +929,7 @@ test('a value input the brief did not consume still reaches the run, as data', a
   const job = await db.job.create({
     data: {
       boardId: b.id, name: 'given a payload', brief: 'Handle it.', isolate: false,
-      inputs: [{ name: 'pr', source: 'value:{"number":42}' }],
+      inputs: [{ name: 'pr', value: '{"number":42}' }],
     },
   });
   await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
@@ -940,6 +940,135 @@ test('a value input the brief did not consume still reaches the run, as data', a
   assert.match(seen[0], /\{"number":42\}/);
   const fed = after.attempts[0].inputs as { name: string; source: string }[];
   assert.deepEqual(fed.map((i) => i.source), ['value'], 'the catalogue records it too');
+});
+
+/**
+ * The downward API (`self:`) and the slot that earns it.
+ *
+ * The motivating case is concrete: an end-to-end suite running inside a worker needs a port, and
+ * concurrent workers on one machine need DIFFERENT ports. `id` is unique but unbounded; nothing
+ * else answered "which of the concurrent workers am I". Kubernetes gives every Pod its own IP and
+ * the question never arises — hkb's workers share a machine, so the StatefulSet ordinal is the
+ * shape that fits.
+ */
+test('self: hands a Job facts about itself, and slot is a small integer it can build a port from', async () => {
+  const b = await db.board.findUniqueOrThrow({ where: { slug: 'inputs' } });
+  const seen: string[] = [];
+  const spy = {
+    name: 'spy',
+    async run(spec: { prompt: string }) {
+      seen.push(spec.prompt);
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'runs e2e', brief: 'Serve on the port.', isolate: false,
+      inputs: [
+        { name: 'slot', valueFrom: { jobRef: { field: 'slot' } } },
+        { name: 'k', valueFrom: { jobRef: { field: 'attempt' } } },
+        { name: 'who', valueFrom: { jobRef: { field: 'name' } } },
+        { name: 'board', valueFrom: { jobRef: { field: 'board' } } },
+      ],
+    },
+  });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'succeeded');
+  assert.match(seen[0], /### `slot`  \(self:slot\)/);
+  assert.match(seen[0], /### `k`  \(self:attempt\)/);
+  assert.match(seen[0], /runs e2e/, 'its own name');
+  assert.match(seen[0], /inputs/, 'and the board it is on');
+  assert.equal(after.attempts[0].slot, 0,
+    'frozen onto the attempt, so a past run can still say which slot it held');
+});
+
+test('a self: field this Job does not have is REFUSED, not rendered empty', async () => {
+  const b = await db.board.findUniqueOrThrow({ where: { slug: 'inputs' } });
+  let called = 0;
+  const spy = {
+    name: 'spy',
+    async run() {
+      called += 1;
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+
+  // `--no-isolate`, so there is no branch. Rendering an empty string would put a Job in the position
+  // of acting on a fact that is not true, which is the failure every other declaration refuses.
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'no branch here', brief: 'x', isolate: false, maxRetries: 0,
+      inputs: [{ name: 'branch', valueFrom: { jobRef: { field: 'branch' } } }],
+    },
+  });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+
+  assert.equal(called, 0);
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts[0].outcome, 'no_input');
+  assert.match(after.lastError ?? '', /running without a worktree/, 'and it says why, not just that');
+});
+
+test('concurrent runs get DIFFERENT slots, and a slot is released with its lease', async () => {
+  const b = await db.board.upsert({
+    where: { slug: 'slots' },
+    update: { repoPath: REPO, maxConcurrent: 3, dailyBudgetUsd: null, pausedAt: null },
+    create: { slug: 'slots', repoPath: REPO, maxConcurrent: 3, dailyBudgetUsd: null },
+  });
+  // A barrier, and it is the test rather than an implementation detail: a slot is held only while a
+  // run is LIVE, so with an instant runtime the first lease is released before the second claim even
+  // reads. That is correct behaviour and it is also not the thing under test. Three runs that
+  // genuinely overlap is.
+  let started = 0;
+  let release!: () => void;
+  // Timed out rather than open-ended. If the allocator stops handing out distinct slots, the unique
+  // constraint refuses the second claim and only one run ever starts — an open barrier would then
+  // hang the suite instead of failing it, and a test that deadlocks on a regression reports nothing.
+  const allThree = Promise.race([
+    new Promise<void>((r) => { release = r; }),
+    new Promise<void>((r) => setTimeout(r, 3_000).unref()),
+  ]);
+  const spy = {
+    name: 'spy',
+    async run() {
+      if (++started === 3) release();
+      await allThree;
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+
+  const ids: number[] = [];
+  for (const n of [1, 2, 3]) {
+    const j = await db.job.create({ data: { boardId: b.id, name: `concurrent ${n}`, brief: 'x', isolate: false } });
+    ids.push(j.id);
+  }
+  await reconcile({ runtime: spy, cwd: REPO, board: 'slots', readPr: false });
+
+  const got = await db.attempt.findMany({ where: { jobId: { in: ids } }, select: { slot: true } });
+  const slots = got.map((a) => a.slot);
+  assert.equal(slots.length, 3);
+  assert.equal(new Set(slots).size, 3, 'three runs at once, three different slots — the whole point');
+  assert.deepEqual([...slots].sort(), [0, 1, 2], 'and they are small and dense, so a port base + slot works');
+
+  // Released with the lease, or the second batch on this board would start at slot 3 and climb.
+  assert.equal(await db.lease.count({ where: { job: { boardId: b.id } } }), 0);
+  const j4 = await db.job.create({ data: { boardId: b.id, name: 'later', brief: 'x', isolate: false } });
+  const quick = {
+    name: 'quick',
+    async run() {
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+  await reconcile({ runtime: quick, cwd: REPO, board: 'slots', readPr: false });
+  const a4 = await db.attempt.findFirstOrThrow({ where: { jobId: j4.id } });
+  assert.equal(a4.slot, 0, 'a freed slot is reused — otherwise the number is just `id` with extra steps');
 });
 
 test('the board input is the arithmetic hkb already computes, and never includes the reading Job', async () => {
@@ -957,7 +1086,7 @@ test('the board input is the arithmetic hkb already computes, and never includes
   const job = await db.job.create({
     data: {
       boardId: b.id, name: 'grooms', brief: 'Look at the board.', isolate: false,
-      inputs: [{ name: 'board', source: 'board' }],
+      inputs: [{ name: 'board', valueFrom: { board: {} } }],
     },
   });
   await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });

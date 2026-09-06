@@ -393,6 +393,10 @@ model Attempt {
   /// Job cannot say it noticed something nobody thought to ask about.
   results Json?
 
+  /// The concurrency slot this attempt held, copied off the Lease so it survives the release.
+  /// Null for an attempt claimed before slots existed. See `Lease.slot`.
+  slot Int?
+
   /// The catalogue of what this attempt was GIVEN, as `[{ name, source, bytes }]` — never the
   /// content, which is in the prompt and in the transcript the session id points at. Null for an
   /// attempt that declared none.
@@ -427,6 +431,28 @@ model Lease {
   job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
   holder    String
   token     String
+  /// Which concurrency slot this holder occupies — the lowest non-negative integer no other LIVE
+  /// lease holds, machine-wide, because one board file serves one machine.
+  ///
+  /// It exists because a worker needs to know **which of the concurrent workers it is**, and no
+  /// other fact answers that. `jobId` is unique but unbounded and grows for ever; a worker that
+  /// wants a port, a display number or a database name needs a small integer bounded by how many
+  /// runs there can be at once. This is the StatefulSet ordinal, and the Pod-per-IP escape
+  /// Kubernetes has is exactly what hkb does not: workers share one machine's ports.
+  ///
+  /// `@unique` is the allocator. Two daemons computing "the lowest free slot" from the same read
+  /// would compute the same answer; the constraint makes the second `create` fail, and the claim
+  /// path already treats a failed lease create as "somebody else got there" and moves on. The Job
+  /// is picked up on the next pass, which is what level-triggered means.
+  ///
+  /// Released with the lease, so a slot is only held while a run is live.
+  ///
+  /// **Nullable, and that is a migration decision rather than a modelling one.** A required column
+  /// added to this table makes Prisma emit `RedefineTables` — DROP and recreate — against a board
+  /// a daemon may be holding leases in. Nullable is a plain `ADD COLUMN`, and SQLite treats NULLs
+  /// as distinct under a unique index, so old rows coexist while every new lease still gets a slot
+  /// no other live lease holds. A null here means "claimed by an hkb that predates slots".
+  slot      Int?     @unique
   acquiredAt DateTime @default(now())
   renewedAt  DateTime @default(now())
   expiresAt  DateTime

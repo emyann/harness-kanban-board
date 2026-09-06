@@ -21,7 +21,7 @@ covers:
   - path: src/artifacts.ts
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
   - path: src/inputs.ts
-    sha: 9c657b130617161a66aa67aa7c5d0a9e80be9c25
+    sha: 5fa957ea2723d26e0a37cd67725d756bb6838469
   - path: src/brief.ts
     sha: e1326185ad6379bbb34cd6e4e02f0f89db393162
   - path: src/worktree.ts
@@ -158,11 +158,25 @@ nothing else holds it. That is why `hkb show` prints a size and a directory rath
 
 The other direction, and the half ADR-008 never had: `inputs` (`--input <name>=<source>`) are content
 the controller resolves **before the run** and puts in the prompt, ahead of the brief that is about
-them (`src/inputs.ts`, `src/brief.ts`). Three sources, and none of them waits — `file:<repo-relative>`
-reads the board's repository, `board` is the LLM-free board arithmetic, and `value:<literal>` is a
-payload the caller supplied. The first two are **pull**; `value:` is the **push** half, and it is what a
-webhook, a button or a Job-filing controller needs. An input the board cannot read ends the attempt at
-`no_input` **without calling the runtime**, which is the cheap mirror of `no_output`.
+them (`src/inputs.ts`, `src/brief.ts`). Four sources, and none of them waits — `file:<repo-relative>`
+reads the board's repository, `board` is the LLM-free board arithmetic, `value:<literal>` is a payload
+the caller supplied, and `self:<field>` is the **downward API**. The fetched ones are **pull**;
+`value:` is the **push** half, and it is what a webhook, a button or a Job-filing controller needs. An
+input the board cannot read ends the attempt at `no_input` **without calling the runtime**, which is
+the cheap mirror of `no_output`.
+
+The stored shape is Kubernetes' `env`: a `name`, and then either a literal `value` or a `valueFrom`
+object naming where to fetch one. The CLI string is sugar. A scheme prefix would have grown a query
+language inside a string at the first source needing a second field, which is what `valueFrom` being an
+object avoids.
+
+**`self:slot` is the field that earns the downward API.** A worker could read nothing about itself, so a
+brief wanting the attempt number had to hardcode one — wrong on attempt 2. `slot` goes further: it is
+the lowest integer no other *live* lease holds, machine-wide, so it is the only fact answering "which
+of the concurrent workers am I" — the question a run picking a port or a database name has to answer.
+Allocated beside the lease and released with it, with `Lease.slot @unique` as the allocator: two
+daemons compute the same free number, the constraint refuses the loser, and the claim path already
+treats a failed lease create as "somebody else got there" (`src/controller.ts`).
 
 A `value:` may also be interpolated into the brief (`{{name}}`, `{{name.field}}`), rendered at file time
 so the stored brief is the one that runs (`renderBrief`, `src/inputs.ts`). **Only `value:`** — a fetched
