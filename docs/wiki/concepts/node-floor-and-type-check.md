@@ -15,13 +15,13 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/paths.ts
-    sha: 3c4e482cf042b60a4356ec3dd994279b24fcb28d
+    sha: 58c79df19d23cce784b36dc7f462bd1d27d34338
   - path: scripts/smoke-pack.mjs
     sha: abccc0340f0034e8f40aa9a30796fac84655f603
   - path: .github/workflows/test.yml
     sha: dc92f1dac39f60b6cc056eca38c9daf0a56033b9
-generated_at_commit: cada2c0
-last_refreshed: 2026-09-05
+generated_at_commit: 39498a0
+last_refreshed: 2026-09-06
 related: [decisions/adr-009-retiring-the-first-system, decisions/adr-007-workload-scheduler, architecture/overview]
 ---
 

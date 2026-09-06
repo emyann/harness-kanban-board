@@ -17,7 +17,7 @@ import { createRequire } from 'node:module';
  * than a parallel one.
  */
 
-import { migrationsDir } from './paths.ts';
+import { IS_CHECKOUT, migrationsDir } from './paths.ts';
 
 const require = createRequire(import.meta.url);
 const MIGRATIONS_DIR = migrationsDir();
@@ -48,11 +48,52 @@ const CREATE_LEDGER = `CREATE TABLE IF NOT EXISTS "_prisma_migrations" (
 export type SchemaResult = { applied: string[]; alreadyApplied: number };
 
 /**
+ * May this build apply pending migrations to this board without being asked?
+ *
+ * Pure, because it is the whole of the decision and the failing case is silent. `ensureSchema` used
+ * to answer *yes, always*, and that cost the operator a board: running any command from a feature
+ * checkout wrote that branch's migrations into `~/.hkb/board.db`, after which every other checkout
+ * refused to open it (`this board was migrated by a newer hkb`). The refusal was guarded; the cause
+ * was not.
+ *
+ * Three inputs, and each is there for a reason:
+ *
+ * - **`isNew`** — a board with nothing applied is one nobody is using yet, and creating it is the
+ *   whole of "the first command on a fresh machine works". Refusing here would trade a real bug for
+ *   a worse one. This is also why the test suite is unaffected: every test makes its own board.
+ * - **`isCheckout`** — an installed `hkb` is a *release*, and a release migrating a board on upgrade
+ *   is ordinary. A checkout is whatever branch somebody has out, which is not a thing to migrate a
+ *   board you use with. `npm link` counts as a checkout, and that is the case that bit us.
+ * - **`asked`** — `hkb migrate` exists so the refusal has a way through. An operator who says the
+ *   words gets the migration.
+ */
+export function mayMigrate(o: { isNew: boolean; isCheckout: boolean; asked: boolean }): boolean {
+  return o.asked || o.isNew || !o.isCheckout;
+}
+
+/** What a board refuses when a checkout tries to migrate it out from under the operator. */
+export function refuseMigration(dbPath: string, pending: string[]): Error & { exitCode: number } {
+  const one = pending.length === 1;
+  const e = new Error(
+    `${dbPath} would gain ${pending.length} migration${one ? '' : 's'} this checkout has and it does not `
+    + `(${pending.join(', ')}) — and then every hkb without ${one ? 'it' : 'them'} would refuse to open it. `
+    + 'A checkout does not migrate a board you use. Run `hkb migrate` to apply '
+    + `${one ? 'it' : 'them'} deliberately, or point HKB_DATABASE_URL at a board you do not mind rewriting.`,
+  ) as Error & { exitCode: number };
+  e.exitCode = 2;
+  return e;
+}
+
+/**
  * Bring a database up to this build's schema, creating it if it does not exist.
  *
  * Idempotent, and safe to call on every open: with nothing to do it is one indexed read.
  */
-export function ensureSchema(dbPath: string, dir = MIGRATIONS_DIR): SchemaResult {
+export function ensureSchema(
+  dbPath: string,
+  dir = MIGRATIONS_DIR,
+  opts: { asked?: boolean; isCheckout?: boolean } = {},
+): SchemaResult {
   const Database = require('better-sqlite3') as typeof import('better-sqlite3');
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
@@ -66,6 +107,12 @@ export function ensureSchema(dbPath: string, dir = MIGRATIONS_DIR): SchemaResult
 
     const pending = knownMigrations(dir).filter((n) => !done.has(n));
     if (!pending.length) return { applied: [], alreadyApplied: done.size };
+
+    // Whose migration is this? See `mayMigrate`. The board is opened on every command, so this is
+    // the one place that can tell "creating the machine's board" from "rewriting it from a branch".
+    if (!mayMigrate({ isNew: done.size === 0, isCheckout: opts.isCheckout ?? IS_CHECKOUT, asked: !!opts.asked })) {
+      throw refuseMigration(dbPath, pending);
+    }
 
     // ---- foreign keys OFF, and *outside* the transaction, which is the only place saying so
     // works. SQLite documents `PRAGMA foreign_keys` as a no-op within a transaction, and a no-op

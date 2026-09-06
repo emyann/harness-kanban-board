@@ -118,6 +118,12 @@ meet one in the git history, that is what it was.
   `unknown` (`holderLiveness`, `src/liveness.ts`). `unknown` is a real answer — a holder on another
   host cannot be probed — and a holder whose lease predates this machine's boot is `dead` whatever
   the pid says (*concepts/leases-and-liveness*, *architecture/the-loop*).
+- **Migration guard** — the rule that a **checkout** may create a board and may not rewrite one
+  (`mayMigrate`, `src/schema.ts`). A new board is created and migrated unasked, an installed build
+  migrates on upgrade, and a checkout meeting an existing board refuses with the pending migrations
+  and `hkb migrate`. It exists because the forward direction was silent: a command run from a feature
+  branch used to migrate the machine's board, after which every other checkout refused it
+  (*architecture/the-board*).
 - **Operator** — the human seat: files Jobs, sets the ceilings, reviews and merges, and makes the two
   statements the machinery cannot (`hkb done`, `hkb cancel`, `src/hkb.ts`). "you", in a worker's
   brief.
