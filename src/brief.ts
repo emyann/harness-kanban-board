@@ -173,6 +173,36 @@ export function approvedPrompt(actor: string | null, note?: string | null): stri
  * that has to guess which fields are allowed will guess `isolate`, and finding out by having the
  * attempt fail costs a whole run (`src/proposals.ts` is what refuses).
  */
+/**
+ * What an isolated Job is told when its deliverable is **not a diff**.
+ *
+ * `withProtocol` above is the *pull request* protocol, and giving it to a Job that produces no
+ * commit is worse than giving it nothing: composed with the proposal contract, one prompt told a
+ * worker both to "commit and push what you have" and to "write the file and stop", which is not an
+ * instruction at all. Found by printing the prompt before spending a live run on it.
+ *
+ * The worktree is still worth naming. It is the sandbox — the reason the worker cannot touch the
+ * operator's checkout — and a worker that does not know it is in one will look for the repository
+ * somewhere else. So this says where it is standing and what that place is *for*, and nothing about
+ * commits.
+ *
+ * ADR-008 decided this generally: *"`isolate` returns to meaning one thing — where the work runs.
+ * The pull-request protocol becomes one declarable output shape among several, selected by the spec
+ * rather than implied by having a worktree."* That is still unimplemented for every other kind of
+ * output-only Job; this covers the one where the contradiction is explicit.
+ */
+export function withWorktree(brief: string, branch: string): string {
+  return [
+    brief.trimEnd(),
+    '',
+    '---',
+    '',
+    `You are working in a git worktree of your own, checked out on \`${branch}\`. It is a sandbox, not`,
+    'a deliverable: nothing you leave in it is collected, and you should not commit, push, or open a',
+    'pull request. Read and scratch freely; what you are asked to hand over is below.',
+  ].join('\n');
+}
+
 export function withProposal(brief: string, path: string, ceiling: number | null): string {
   return [
     brief.trimEnd(),

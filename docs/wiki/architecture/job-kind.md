@@ -9,10 +9,10 @@ covers:
   - path: prisma/schema.prisma
     sha: e4bac2046bd232c6656a59f4503e6a2ca32578f1
   - path: src/controller.ts
-    sha: bcdf1066a8cf0ea76fdce24e24ec8e43700108fd
+    sha: 6f97a4884c7d5774bec6e12c2451ecacb260a94a
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
-generated_at_commit: 5c28806
+generated_at_commit: 76d1a94
 last_refreshed: 2026-09-06
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control]
 ---
@@ -203,6 +203,12 @@ They are **not** `suspended`. That state is a *wait* — something is expected t
 and then the Job goes on — so `hkb ls --phase suspended` is an inbox, and a Job
 concluded by hand would sit in it for ever. The reasons even read in opposite tenses:
 `suspendedFor` is what someone must still do, `endedFor` is what already happened.
+
+The reconcile report carries that inbox too: a suspended Job goes in its own `suspended` list rather
+than into `retrying`, and `hkb run` ends with *"N waiting for you"* (`src/controller.ts`,
+`src/hkb.ts`). It was counted as a retry until a live run printed `1 to retry` about a Job nothing
+was ever going to pick up — the one state only a person can clear, reported as the one thing that
+needs nobody.
 
 They are **two** values rather than one `ended` plus a column, because this enum
 already splits its terminal states by what happened (`succeeded`, `failed`), and the

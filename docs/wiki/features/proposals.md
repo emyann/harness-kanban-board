@@ -9,14 +9,14 @@ covers:
   - path: src/proposals.ts
     sha: fd5e1eee8b847c9b4024d1bf5f635a85907baae4
   - path: src/controller.ts
-    sha: bcdf1066a8cf0ea76fdce24e24ec8e43700108fd
+    sha: 6f97a4884c7d5774bec6e12c2451ecacb260a94a
   - path: src/brief.ts
-    sha: a6f76aecf0487fc43076a4f582c022756d52357e
+    sha: a5f34b144962692f6cbaad42350961b507fced12
   - path: prisma/schema.prisma
     sha: e4bac2046bd232c6656a59f4503e6a2ca32578f1
   - path: src/hkb.ts
-    sha: 3f58cb1e30df71cb089c70fbb47c00e2e38145f8
-generated_at_commit: 0b6c04b
+    sha: 465e61ad1be9105804eddcbe8ef211ce89526277
+generated_at_commit: 76d1a94
 last_refreshed: 2026-09-06
 related:
   [
@@ -40,6 +40,18 @@ related:
 | Step | Who | Where |
 |---|---|---|
 | Ask | the worker | writes `proposal.json` into its artifact directory (`withProposal`, `src/brief.ts`) |
+
+An isolated proposing Job gets the **worktree note** rather than the pull-request protocol
+(`withWorktree`, `src/brief.ts`): the worktree is still the sandbox, but a proposal is not a diff,
+and a prompt that said both *commit and push what you have* and *write the file and stop* was not an
+instruction. ADR-008 decided this generally — the protocol should be selected by the spec rather than
+implied by having a worktree — and that half is still unimplemented for every other output-only Job
+(`FINDINGS.md`).
+
+And it does not **keep** that worktree once it suspends, where an ordinary gated Job does: a gated
+Job's approval resumes a session *in* its checkout, while a proposer's approval is applied by the
+controller and no session ever wakes up there (`src/controller.ts`). Keeping it would cost a whole
+repository on disk to hold work nothing will return to.
 | Refuse or accept | the controller, after the run | `checkProposal` (`src/proposals.ts`), stored on `Attempt.proposal` |
 | Decide | a person | `hkb approve <id>` / `hkb reject <id> "<why>"` — an `approved` event |
 | Apply | the controller, next pass | `applyProposals` (`src/controller.ts`), before anything is claimed |
@@ -148,9 +160,29 @@ kind of thing to propose. That is deliberate: ADR-011 decision 6 reads creation-
 arriving through the side door. `Job.proposes` is a string rather than a boolean so the closed set
 can grow without a schema change when there is a second member.
 
-> TODO-VERIFY: nothing here has been run against a live model — every test uses a fake runtime that
-> writes the file the prompt names. Whether a real worker reliably produces valid JSON at this
-> contract is unmeasured.
+## What one live run showed
+
+Measured 2026-09-06, on this repository's own board: a proposing Job asked to decompose the wiki's
+remaining page plan, given `wiki.config.yml` and `FINDINGS.md` as declared inputs.
+
+It read the authoring rules, researched the four planned pages across 26 turns, and wrote a
+**32 KB proposal of four Jobs** whose keys were exactly `name`, `brief` and `maxBudgetUsd` — valid
+first time, no refusal. `hkb approve` then filed all four with lineage, at $1.88 of a $2.00 cap. It
+also tried twice to spawn subagents and was denied by the admission gate, which is the gate doing its
+job rather than a fault.
+
+Four defects came out of that one run, all now fixed and all invisible to a fake runtime:
+
+| What the run showed | What was wrong |
+|---|---|
+| the prompt told it to open a draft PR *and* to write the file and stop | the pull-request protocol was applied to a Job that produces no diff |
+| `hkb run` said `1 to retry` | a suspended Job was counted as retrying — the machine will not pick it up, a person must |
+| `hkb show` said `error completed` | `lastError` fell through to the outcome word for every suspended Job |
+| `hkb ls` said `produced nothing` | a proposer only reaches `succeeded` once its rows are filed, which is not nothing |
+
+The general lesson is the one worth keeping: every one of those is a **prompt or a report**, and
+neither is reachable by a test that supplies its own runtime. The contract held; what did not hold
+was everything around it that only a person reading the output would notice.
 
 ## Related
 

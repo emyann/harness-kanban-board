@@ -1544,3 +1544,92 @@ test('a create failure that is NOT a duplicate stops the pass rather than being 
   await db.$executeRawUnsafe(`DELETE FROM "Job" WHERE id = ${job.id}`);
   await db.$executeRawUnsafe('PRAGMA foreign_keys=ON');
 });
+
+test('an isolated proposing Job is NOT told to open a pull request', async () => {
+  // The contradiction this pins, found by printing the prompt rather than by a failing test: an
+  // isolated Job gets the pull-request protocol, and a proposing one gets the proposal contract, so
+  // one prompt told a worker both to "commit and push what you have" and to "write the file and
+  // stop". A worker cannot obey both, and which one it picks is not something to leave to chance.
+  const b = await proposalBoard();
+  let seen = '';
+  const spy = {
+    name: 'spy',
+    async run(spec: { prompt: string }) {
+      seen = spec.prompt;
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'proposes from a worktree', brief: 'break it down',
+      proposes: 'jobs', gate: 'a proposal to review', maxBudgetUsd: 1, maxRetries: 0,
+    },
+  });
+  await reconcile({ runtime: spy, cwd, board: 'proposals', readPr: false });
+
+  assert.doesNotMatch(seen, /DRAFT pull request/, 'a proposal is not a diff and has nothing to open a PR for');
+  assert.doesNotMatch(seen, /git push/);
+  assert.match(seen, new RegExp(`worktree of your own, checked out on \`kb-${job.id}-1\``),
+    'it still has to know where it is standing — the worktree is the sandbox');
+  assert.match(seen, /Write the file and stop/, 'and the contract that replaced the protocol is the one it follows');
+
+  // An ordinary isolated Job is unchanged: this narrows the proposing case and nothing else.
+  const plain = await db.job.create({
+    data: { boardId: b.id, name: 'ordinary isolated', brief: 'do the work', maxBudgetUsd: 1, maxRetries: 0 },
+  });
+  await reconcile({ runtime: spy, cwd, only: plain.id, board: 'proposals', readPr: false });
+  assert.match(seen, /Open a DRAFT pull request/);
+});
+
+test('a suspended Job is reported as waiting, not as retrying, and carries no error', async () => {
+  // Both found by running a real one and reading `hkb run` and `hkb show`. A gated Job that
+  // suspended was counted in `retrying` — telling the operator the machine would pick it up again,
+  // when it is waiting for THEM — and `lastError` fell through to the outcome word, so every
+  // suspended Job displayed `error completed`.
+  const b = await proposalBoard();
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'waits for a person', brief: 'look into it', isolate: false,
+      gate: 'does this look right?', results: ['finding'], maxBudgetUsd: 1,
+    },
+  });
+  const report = await reconcile({
+    runtime: writing({ finding: 'it is fine' }), cwd, only: job.id, board: 'proposals', readPr: false,
+  });
+
+  assert.deepEqual(report.suspended, [job.id], 'waiting on a person is its own answer');
+  assert.deepEqual(report.retrying, [], 'and it is not a retry — nothing will pick this up on its own');
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(after.phase, 'suspended');
+  assert.equal(after.lastError, null, 'a Job that succeeded and is waiting has nothing wrong with it');
+  assert.equal(after.suspendedFor, 'does this look right?');
+});
+
+test('a suspended PROPOSER does not keep a checkout nothing will resume into', async () => {
+  // The gated Job beside it keeps its worktree because the approved attempt continues in it. A
+  // proposer's approval is applied by the controller — no session ever wakes up there — so the
+  // checkout is a whole repository on disk holding work nobody will return to, and the line saying
+  // "attempt 2 resumes in it" described an attempt that cannot happen.
+  const b = await proposalBoard();
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'proposes and lets go', brief: 'break it down',
+      proposes: 'jobs', gate: 'a proposal to review', maxBudgetUsd: 1, maxRetries: 0,
+    },
+  });
+  await reconcile({
+    runtime: proposing(JSON.stringify({ jobs: [{ name: 'follow-up', brief: 'do it' }] })),
+    cwd, only: job.id, board: 'proposals', readPr: false,
+  });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(after.phase, 'suspended', 'it is still waiting for a person');
+  assert.equal(fs.existsSync(path.join(cwd, '.hkb', 'worktrees', `kb-${job.id}-1`)), false,
+    'and its checkout is gone, because nothing will run in it again');
+  // The proposal itself is untouched by that: it lives beside the board, not in the checkout.
+  assert.ok(storedProposalOf(after.id));
+});
+
+const storedProposalOf = (id: number) => db.attempt.findFirst({ where: { jobId: id, k: 1 } });

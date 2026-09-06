@@ -1177,6 +1177,13 @@ test('producedNothing refuses every Job that left something behind', () => {
   assert.equal(producedNothing({ ...bare, results: ['finding'] }), false,
     'and so does a declared result — the output of a Job that makes no commit at all');
 
+  // A proposing Job only reaches `succeeded` once the controller has FILED what it proposed, so
+  // rows on the board are its output — the most concrete thing anything here produces. Marking it
+  // "produced nothing" was this complaint misreading its own answer, seen on a live run.
+  assert.equal(producedNothing({ ...bare, proposes: 'jobs' }), false,
+    'a proposer that succeeded has filed Jobs, which is not nothing');
+  assert.equal(producedNothing({ ...bare, proposes: null }), true, 'and the column being present changes nothing on its own');
+
   // Only `succeeded` is news. A failed Job with nothing to show is not a finding, and marking it
   // would be the noise that stops a signal being read.
   for (const phase of ['pending', 'running', 'failed', 'suspended', 'done', 'cancelled']) {

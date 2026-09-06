@@ -176,9 +176,17 @@ function packageVersion(): string {
  * is not news — marking those would be noise, which is how a signal stops being read.
  */
 export function producedNothing(
-  job: { phase: string; pr: string | null; exports: string[]; results?: string[]; artifacts?: string[] },
+  job: {
+    phase: string; pr: string | null; exports: string[];
+    results?: string[]; artifacts?: string[]; proposes?: string | null;
+  },
 ): boolean {
   if (job.phase !== 'succeeded') return false;
+  // A PROPOSING Job that reached `succeeded` had its proposal applied — the controller only writes
+  // that phase after filing the rows (`applyProposals`, `src/controller.ts`). Rows on the board are
+  // the most concrete output anything here produces, and calling it "produced nothing" was the
+  // complaint reading its own answer wrong.
+  if (job.proposes) return false;
   return !job.pr
     && job.exports.length === 0
     && (job.results?.length ?? 0) === 0
@@ -593,7 +601,7 @@ export async function main(argv: string[]): Promise<number> {
           // defaults either way: a consumer inferring absence from a missing key reads a shape,
           // not a record.
           pr, exports, results, artifacts,
-          producedNothing: producedNothing({ phase: j.phase, pr, exports, results, artifacts }),
+          producedNothing: producedNothing({ phase: j.phase, pr, exports, results, artifacts, proposes: j.proposes }),
         };
       });
       emit(out, rows, () => {
@@ -794,7 +802,10 @@ export async function main(argv: string[]): Promise<number> {
         else if (!moved) console.log(only ? `#${only} is not pending — nothing to do` : 'nothing pending');
         else {
           console.log(`${report.succeeded.length} succeeded, ${report.failed.length} failed, ${report.retrying.length} to retry`
-            + (report.filed.length ? `, ${report.filed.length} filed from a proposal` : ''));
+            + (report.filed.length ? `, ${report.filed.length} filed from a proposal` : '')
+            // Last and named, because it is the only one of these that is a request: the others say
+            // what the machine did, this one says what it now needs from a person.
+            + (report.suspended.length ? `, ${report.suspended.length} waiting for you` : ''));
         }
       });
       return 0;
