@@ -147,11 +147,21 @@ export const claudeRuntime: Runtime = {
         // The gate is unaffected either way: hooks run FIRST in the evaluation order, before deny
         // rules, ask rules, the mode and allow rules.
         permissionMode: 'dontAsk',
+        // The repository's own skills, granted rather than assumed (ADR-012). This is the half of
+        // `settingSources: ['project']` that is wanted, without the half that is not: measured at
+        // 0.3.261, a local plugin reaches the same skills with `settingSources` still empty, and a
+        // settings file would additionally hand the repository a shell command to run here.
+        ...(spec.plugins?.length ? { plugins: spec.plugins.map((p) => ({ type: 'local' as const, path: p })) } : {}),
         // Do not inherit the operator's CLAUDE.md / settings into a worker: the card is the brief.
         // The cost of that choice is real and worth knowing — compaction summarises older history,
         // so on a long card the acceptance criteria in the opening prompt can be summarised away,
         // whereas CLAUDE.md is re-injected on every request. If cards start running long, this is
         // the line to revisit.
+        //
+        // It is no longer the line that decides SKILLS, though, and that is ADR-012: the two were
+        // believed coupled and are not. What it still decides is CLAUDE.md — the SDK requires
+        // `'project'` for it — so this repository's contributor guide reaches a worker only
+        // insofar as `src/brief.ts` restates it. That cost is named in ADR-012 and unsolved.
         settingSources: [],
       },
     });

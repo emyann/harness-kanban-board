@@ -6,6 +6,7 @@ import {
 } from './worktree.ts';
 import { prForBranch } from './pulls.ts';
 import { approvedPrompt, withArtifacts, withProtocol, withResults } from './brief.ts';
+import { resolvePlugins } from './plugins.ts';
 import {
   declaredResults, resultPaths, ensureResultsDir, collectResults, clearResults, missingResults,
 } from './results.ts';
@@ -613,6 +614,15 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     const wantedArtifacts = wantedArtifactNames.length ? artifactPaths(job.id, k, wantedArtifactNames) : {};
     ensureArtifactsDir(job.id, k);
 
+    // ---- the plugin grants: the directories whose skills this worker may see. A directory that
+    // has gone is dropped rather than fatal — a board outlives the directories it names, and a Job
+    // that cannot run because a skill directory was deleted is a worse failure than one that runs
+    // without it. Said out loud, because a worker silently missing what it was granted is the same
+    // class of bug as a silently inert guard.
+    const granted = resolvePlugins(cwd, spec.pluginPaths.value);
+    const grantedPlugins = granted.paths.length ? granted.paths : undefined;
+    if (granted.dropped.length) say(`granted plugin path${granted.dropped.length === 1 ? '' : 's'} not found: ${granted.dropped.join(', ')}`);
+
     // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
     // starting cold, which is the whole reason that column exists.
     const outcome = await deps.runtime
@@ -645,6 +655,11 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // is what an absent value means. The admission gate is built from this same list
         // (`src/runtime/claude.ts`), so narrowing it here is what actually refuses.
         allowedTools: spec.allowedTools.value ?? undefined,
+        // Resolved against the BOARD'S REPOSITORY (`cwd` above), never the worktree — ADR-012,
+        // `src/plugins.ts`. A worker writes in its worktree, so a grant that resolved there would
+        // let a Job write a hook its own next attempt executes. Against the repository, a merge is
+        // the only way to change what a grant loads.
+        plugins: grantedPlugins,
         timeoutMs: job.timeoutMs,
         resume: job.lastSessionId ?? undefined,
         signal: deps.signal,

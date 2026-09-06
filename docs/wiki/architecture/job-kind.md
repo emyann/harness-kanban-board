@@ -200,13 +200,17 @@ first one takes to finish.
 ## Defaults, and why they are not ceilings
 
 A Board carries **spec defaults** beside its ceilings: `defaultModel`, `defaultEffort`,
-`defaultMaxTurns`, `defaultMaxBudgetUsd`, `defaultMaxRetries`, `defaultAllowedTools`. A board that
-runs cheap, high-volume work can say so once instead of on every `hkb new`.
+`defaultMaxTurns`, `defaultMaxBudgetUsd`, `defaultMaxRetries`, `defaultAllowedTools` and
+`defaultPluginPaths`. A board that runs cheap, high-volume work can say so once instead of on every
+`hkb new`.
 
-`defaultAllowedTools` is the one that is a *surface* rather than a number, and it is worth being
-clear about which side of the line it sits on: a board default a Job may **widen**. The narrowing
-itself is enforced — `src/admission.ts` denies anything absent from the resolved list — but what a
-board sets there is a default, not a ceiling. A Job that names a wider list gets it.
+The last two are the ones that are a *surface* rather than a number, and they point in opposite
+directions. `defaultAllowedTools` narrows what a Job may **do**, and it is a board default a Job may
+**widen**: the narrowing itself is enforced — `src/admission.ts` denies anything absent from the
+resolved list — but what a board sets there is a default, not a ceiling.
+`defaultPluginPaths` widens what a Job may **read**, granting the directories whose skills a worker
+sees (*decisions/adr-012-skills-by-grant-not-by-settings*). Neither touches the other: a granted
+skill is prose, and every tool it might suggest is still refused unless `allowedTools` admits it.
 
 They are separate columns from the ceilings, and the reason is who wins. A **ceiling** is a
 limit a Job may not exceed, enforced in `gateClaim`. A **default** is a value a Job may

@@ -126,6 +126,10 @@ model Board {
   /// a Job may name a *wider* list and get it. The ceiling a Job cannot exceed is
   /// `dailyBudgetUsd`/`maxConcurrent` in `src/limits.ts`; this is `src/spec.ts` territory.
   defaultAllowedTools Json?
+  /// The board's plugin grants, filling a null on the Job the way every other default does
+  /// (`src/spec.ts`). Board-wide is the common case — "every Job on this repository may see its
+  /// own skills" — and the per-Job column is for narrowing, not widening.
+  defaultPluginPaths  Json?
 
   events Event[]
 
@@ -189,6 +193,17 @@ model Job {
   /// permission mode and allow rules. Narrowing it is the only way to make a Job that *cannot*
   /// write, which is what a propose-then-approve gate needs in order to mean anything (ADR-010).
   allowedTools Json?
+  /// Directories, repository-relative, whose skills (and commands, and agents) this Job may see —
+  /// passed to the runtime as `plugins: [{ type: 'local', path }]` (ADR-012, `src/plugins.ts`).
+  ///
+  /// This is how a worker reaches the repository's OWN skills. The obvious route,
+  /// `settingSources: ['project']`, also loads `.claude/settings.json`, where a hook is a shell
+  /// command the repository author wrote — so hkb takes the half it wants and leaves settings
+  /// alone. Measured: the plugin route reaches the same skills with `settingSources` still empty.
+  ///
+  /// Named for what it grants rather than what it is wanted for. A plugin directory loads commands
+  /// and agents too, so a column called `skills` would say less than it does.
+  pluginPaths  Json?
   maxRetries   Int?
   /// What this Job must produce on disk: a JSON array of repository-relative paths, copied out of
   /// the worktree into `Board.repoPath` before the checkout is released (ADR-008). Directories

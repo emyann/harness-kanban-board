@@ -531,6 +531,66 @@ test('a board\'s maxRetries default is the retry budget actually spent', async (
 });
 
 /**
+ * Plugin grants, from the spec to the runtime (ADR-012).
+ *
+ * The unit tests in `test/plugins.test.ts` cover the two fences. What matters here is that a grant
+ * is resolved against the BOARD'S REPOSITORY rather than the worktree, because that is the whole
+ * security property: a worker writes in its worktree, so a grant resolved there would let a Job
+ * write a hook its own next attempt executes.
+ */
+test('a granted directory reaches the runtime absolute, resolved against the repository', async () => {
+  const b = await db.board.upsert({
+    where: { slug: 'granted' },
+    update: { repoPath: REPO },
+    create: { slug: 'granted', repoPath: REPO },
+  });
+  const seen: (string[] | undefined)[] = [];
+  const spy = {
+    name: 'spy',
+    async run(s: { plugins?: string[] }) {
+      seen.push(s.plugins);
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+
+  fs.mkdirSync(path.join(REPO, '.claude', 'skills'), { recursive: true });
+  await db.job.create({
+    data: { boardId: b.id, name: 'knows prisma', brief: 'x', isolate: false, pluginPaths: ['.claude'] },
+  });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'granted', readPr: false });
+
+  assert.deepEqual(seen[0], [path.join(fs.realpathSync(REPO), '.claude')],
+    'absolute, and under the repository — the runtime gets a path, never a policy');
+});
+
+test('a Job with no grant hands the runtime nothing, and a grant that has gone does not strand it', async () => {
+  const b = await db.board.findUniqueOrThrow({ where: { slug: 'granted' } });
+  const seen: (string[] | undefined)[] = [];
+  const spy = {
+    name: 'spy',
+    async run(s: { plugins?: string[] }) {
+      seen.push(s.plugins);
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+
+  await db.job.create({ data: { boardId: b.id, name: 'ungranted', brief: 'x', isolate: false } });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'granted', readPr: false });
+  assert.equal(seen[0], undefined, 'nothing granted, so the option is absent rather than empty');
+
+  // The refusal that must NOT be fatal: a board outlives the directories it names.
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'stale grant', brief: 'x', isolate: false, pluginPaths: ['no-such-dir'] },
+  });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'granted', readPr: false });
+  assert.equal(seen[1], undefined, 'a grant that has gone grants nothing');
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(after.phase, 'succeeded', 'and the Job still ran — a missing skill directory is not a failed attempt');
+});
+
+/**
  * The tool surface, from the spec to the refusal.
  *
  * `WorkerSpec.allowedTools` existed and was honoured by the runtime for as long as nothing set it,

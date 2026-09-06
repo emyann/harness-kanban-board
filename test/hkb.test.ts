@@ -912,17 +912,29 @@ test('hkb boards set carries the spec defaults, and none clears one', async () =
   const set = json((await hkb(
     'boards', 'set', 'defaults', '--model', 'claude-haiku-4-5', '--effort', 'low',
     '--max-turns', '8', '--max-budget', '0.25', '--max-retries', '0',
-    '--allow-tools', 'Read,Grep', '--json',
+    '--allow-tools', 'Read,Grep', '--default-plugin-dirs', '.claude', '--json',
   )).out);
   assert.deepEqual(set.defaults, {
     model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
-    allowedTools: ['Read', 'Grep'],
+    allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'],
   });
 
   const cleared = json((await hkb('boards', 'set', 'defaults', '--model', 'none', '--json')).out);
   assert.equal(cleared.defaults.model, null, 'none clears the default rather than setting the word');
   assert.equal(cleared.defaults.maxTurns, 8, 'and clearing one leaves the others alone');
   assert.equal(cleared.defaults.maxRetries, 0, 'including a default of zero, which is a real answer');
+  assert.deepEqual(cleared.defaults.pluginPaths, ['.claude'], 'and the board-wide grant survives clearing a model');
+
+  // The grant is a path the board acts on with the operator's authority, so a path that was never
+  // legal must not become state — the same fence `--export` sits behind (ADR-012).
+  await assert.rejects(
+    () => main(['boards', 'set', 'defaults', '--default-plugin-dirs', '../elsewhere']),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2 && /escapes the repository/.test(e.message),
+    'a grant that escapes the repository is refused at file time, not at run time',
+  );
+
+  const gone = json((await hkb('boards', 'set', 'defaults', '--default-plugin-dirs', 'none', '--json')).out);
+  assert.equal(gone.defaults.pluginPaths, null, 'and "none" gives the grant back');
 });
 
 test('hkb boards set refuses a nonsense default rather than storing it', async () => {
@@ -1057,7 +1069,7 @@ test('hkb boards prints a defaults line only for the boards that have one', asyn
   const bare = rows.find((r) => r.board !== 'listed-defaults' && !r.hasDefaults);
   assert.ok(bare, 'a board with no defaults exists in this suite');
   assert.deepEqual(bare.defaults,
-    { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null },
+    { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null },
     '--json carries the key either way: a consumer inferring absence from a missing key reads a shape, not a record');
 });
 

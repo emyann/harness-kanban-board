@@ -104,6 +104,9 @@ pages:
   - slug: decisions/adr-011-proposals-not-board-access
     summary: "A workload never writes to the board: it declares a proposal as an output, and the controller validates and applies it once an approval is recorded — which keeps the sandbox, makes the write retry-safe where an in-session API call is not, and leaves groom's apply half with the controller rather than making groom a kind."
     status: seeded
+  - slug: decisions/adr-012-skills-by-grant-not-by-settings
+    summary: "A worker gets a repository's skills as a granted plugin directory and never its settings: the two were measured to be separable, and a settings file is a shell command the repository author wrote."
+    status: seeded
   - slug: howto/running-the-daemon
     summary: "Keep `hkb up` alive across reboots — a systemd user unit or a launchd agent around `hkb up --foreground`, where the log goes, and the restart-after-upgrade rule."
     status: seeded

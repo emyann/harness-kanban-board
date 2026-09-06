@@ -86,6 +86,7 @@ export const BoardScalarFieldEnum = {
   defaultMaxBudgetUsd: 'defaultMaxBudgetUsd',
   defaultMaxRetries: 'defaultMaxRetries',
   defaultAllowedTools: 'defaultAllowedTools',
+  defaultPluginPaths: 'defaultPluginPaths',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 } as const
@@ -118,6 +119,7 @@ export const JobScalarFieldEnum = {
   maxBudgetUsd: 'maxBudgetUsd',
   isolate: 'isolate',
   allowedTools: 'allowedTools',
+  pluginPaths: 'pluginPaths',
   maxRetries: 'maxRetries',
   exports: 'exports',
   results: 'results',

@@ -73,6 +73,13 @@ meet one in the git history, that is what it was.
 - **Operator** — the human seat: files Jobs, sets the ceilings, reviews and merges, and makes the two
   statements the machinery cannot (`hkb done`, `hkb cancel`, `src/hkb.ts`). "you", in a worker's
   brief.
+- **Plugin grant** — a directory, repository-relative, whose skills (and commands, and agents) a
+  worker may see: `--plugin-dir`, `Job.pluginPaths`, `Board.defaultPluginPaths`, resolved through
+  `src/spec.ts` and passed as `plugins: [{ type: 'local', path }]` (`src/plugins.ts`). It is how a
+  repository's own skills reach a worker without `settingSources: ['project']`, which would also load
+  `.claude/settings.json` — where a hook is a shell command. Resolved against `Board.repoPath` and
+  never the worktree, so a merge is the only way to change what it loads. It widens what a worker may
+  **read** and nothing about what it may **do** (*decisions/adr-012-skills-by-grant-not-by-settings*).
 - **Phase** — a Job's lifecycle state: `pending`, `running`, `succeeded`, `failed`, `suspended`,
   `done`, `cancelled` (`prisma/schema.prisma`). Observed, except for the last three, which only a
   human can write. `suspended` exists for the workloads that block on a human — a state no runtime
