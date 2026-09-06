@@ -15,6 +15,7 @@
 ## Concepts
 
 - [Admission control — an instruction is not an invariant](./concepts/admission-control.md): Why hkb enforces its tool surface, worktree isolation and (later) dependency ordering in a PreToolUse hook rather than in a prompt, a permission mode, or canUseTool — with the three measurements that ruled the other three out.
+- [Ceilings — the three claim-time refusals](./concepts/ceilings.md): The three claim-time refusals (stopped, concurrency, budget), why none of them may stop a running worker, and why committed-but-unspent budget has to be counted.
 - [Leases and liveness — why a lapsed lease is evidence, not proof](./concepts/leases-and-liveness.md): Why a lapsed lease is evidence and not proof: the three-valued alive/dead/unknown answer, the boot-time check, and why a wall clock cannot decide this across a suspend.
 - [The Node floor and the type check](./concepts/node-floor-and-type-check.md): The floor is >=22.18.0, measured — the first release that strips types unflagged, which a shebang cannot ask for. Why a published hkb must be JavaScript (Node refuses to strip under node_modules), how the publish transpile works, and what the CI matrix is for.
 
@@ -43,7 +44,6 @@
 
 ## Planned (not yet written)
 
-- concepts/ceilings: The three claim-time refusals (stopped, concurrency, budget), why none of them may stop a running worker, and why committed-but-unspent budget has to be counted.
 - features/declared-outputs: The three declared outputs and the one rule over them: --export to the repository, --result onto the board as a value, --artifact beside the board as a file; why an undeclared output is litter, and the syntax each refuses before a checkout is ever made.
 - gotchas/merge-composition: Four collisions where every PR was individually correct and CI-green: what parallel workers on one base actually collide on (shared invariants, not shared files), and why briefing fixed it where machinery could not.
 
