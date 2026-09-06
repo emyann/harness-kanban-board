@@ -22,6 +22,7 @@ related:
   [
     decisions/adr-007-workload-scheduler,
     decisions/adr-008-declared-outputs,
+    decisions/adr-011-proposals-not-board-access,
     architecture/job-kind,
     architecture/overview,
   ]
