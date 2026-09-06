@@ -7,7 +7,7 @@ import {
 import { prForBranch } from './pulls.ts';
 import {
   approvedPrompt, withArtifacts, withGuide, withInputs, withProposal, withProtocol, withResults,
-  withWorktree,
+  withStandingRules, withWorktree,
 } from './brief.ts';
 import { resolvePlugins } from './plugins.ts';
 import { readGuide, missingGuide } from './guide.ts';
@@ -903,7 +903,11 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // The guide goes in FRONT of all of it, including an approval prompt: an approver's instruction
     // is the most recent word on what to do, and the repository's rules are the standing word on how
     // anything here is done. Neither replaces the other.
-    const guided = guide ? withGuide(opening, guide.text, spec.guide.value as string) : opening;
+    // The three rules every worker gets (ADR-014), between the task and the output contracts. Not
+    // conditional on anything: a rule that reaches only some Jobs is one nothing can rely on, and
+    // that includes a resumed attempt carrying an approver's instruction.
+    const ruled = withStandingRules(opening);
+    const guided = guide ? withGuide(ruled, guide.text, spec.guide.value as string) : ruled;
     const asked = withInputs(
       withArtifacts(withResults(guided, wantedResults), wantedArtifacts),
       readInputs,
