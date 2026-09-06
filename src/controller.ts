@@ -5,7 +5,9 @@ import {
   type Worktree,
 } from './worktree.ts';
 import { prForBranch } from './pulls.ts';
-import { approvedPrompt, withArtifacts, withInputs, withProposal, withProtocol, withResults } from './brief.ts';
+import {
+  approvedPrompt, withArtifacts, withInputs, withProposal, withProtocol, withResults, withWorktree,
+} from './brief.ts';
 import { resolvePlugins } from './plugins.ts';
 import {
   declaredInputs, readFileInput, renderBoard, missingInputs, describeSource,
@@ -858,11 +860,15 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
     // starting cold, which is the whole reason that column exists.
+    // The pull-request protocol, or the sandbox note, or neither. A PROPOSING Job produces no
+    // commit, so telling it to open a draft pull request contradicts the contract appended below —
+    // one prompt saying both "push what you have" and "write the file and stop" is not an
+    // instruction. It still needs to know it is standing in a worktree, which is what `withWorktree`
+    // says and all it says.
+    const opening = approvalPrompt
+      ?? (wt ? (job.proposes ? withWorktree(job.brief, wt.branch) : withProtocol(job.brief, wt.branch)) : job.brief);
     const asked = withInputs(
-      withArtifacts(
-        withResults(approvalPrompt ?? (wt ? withProtocol(job.brief, wt.branch) : job.brief), wantedResults),
-        wantedArtifacts,
-      ),
+      withArtifacts(withResults(opening, wantedResults), wantedArtifacts),
       readInputs,
     );
     const prompt = proposalPath && !approvalPrompt

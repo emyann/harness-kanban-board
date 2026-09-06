@@ -1544,3 +1544,40 @@ test('a create failure that is NOT a duplicate stops the pass rather than being 
   await db.$executeRawUnsafe(`DELETE FROM "Job" WHERE id = ${job.id}`);
   await db.$executeRawUnsafe('PRAGMA foreign_keys=ON');
 });
+
+test('an isolated proposing Job is NOT told to open a pull request', async () => {
+  // The contradiction this pins, found by printing the prompt rather than by a failing test: an
+  // isolated Job gets the pull-request protocol, and a proposing one gets the proposal contract, so
+  // one prompt told a worker both to "commit and push what you have" and to "write the file and
+  // stop". A worker cannot obey both, and which one it picks is not something to leave to chance.
+  const b = await proposalBoard();
+  let seen = '';
+  const spy = {
+    name: 'spy',
+    async run(spec: { prompt: string }) {
+      seen = spec.prompt;
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'proposes from a worktree', brief: 'break it down',
+      proposes: 'jobs', gate: 'a proposal to review', maxBudgetUsd: 1, maxRetries: 0,
+    },
+  });
+  await reconcile({ runtime: spy, cwd, board: 'proposals', readPr: false });
+
+  assert.doesNotMatch(seen, /DRAFT pull request/, 'a proposal is not a diff and has nothing to open a PR for');
+  assert.doesNotMatch(seen, /git push/);
+  assert.match(seen, new RegExp(`worktree of your own, checked out on \`kb-${job.id}-1\``),
+    'it still has to know where it is standing — the worktree is the sandbox');
+  assert.match(seen, /Write the file and stop/, 'and the contract that replaced the protocol is the one it follows');
+
+  // An ordinary isolated Job is unchanged: this narrows the proposing case and nothing else.
+  const plain = await db.job.create({
+    data: { boardId: b.id, name: 'ordinary isolated', brief: 'do the work', maxBudgetUsd: 1, maxRetries: 0 },
+  });
+  await reconcile({ runtime: spy, cwd, only: plain.id, board: 'proposals', readPr: false });
+  assert.match(seen, /Open a DRAFT pull request/);
+});

@@ -13,7 +13,7 @@ covers:
   - path: prisma/schema.prisma
     sha: e4bac2046bd232c6656a59f4503e6a2ca32578f1
   - path: src/controller.ts
-    sha: bcdf1066a8cf0ea76fdce24e24ec8e43700108fd
+    sha: a0ebf8771c9d8b06ffbf2de3dd9bdd852e402527
   - path: src/runtime/index.ts
     sha: 55007f26fe6b9e4ec107997eef5aba74ec4643e6
   - path: src/hkb.ts
@@ -28,7 +28,7 @@ related:
     architecture/job-kind,
     architecture/overview,
   ]
-generated_at_commit: 0b6c04b
+generated_at_commit: abb202f
 last_refreshed: 2026-09-06
 ---
 

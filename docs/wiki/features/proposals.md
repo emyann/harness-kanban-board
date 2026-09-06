@@ -9,14 +9,14 @@ covers:
   - path: src/proposals.ts
     sha: fd5e1eee8b847c9b4024d1bf5f635a85907baae4
   - path: src/controller.ts
-    sha: bcdf1066a8cf0ea76fdce24e24ec8e43700108fd
+    sha: a0ebf8771c9d8b06ffbf2de3dd9bdd852e402527
   - path: src/brief.ts
-    sha: a6f76aecf0487fc43076a4f582c022756d52357e
+    sha: a5f34b144962692f6cbaad42350961b507fced12
   - path: prisma/schema.prisma
     sha: e4bac2046bd232c6656a59f4503e6a2ca32578f1
   - path: src/hkb.ts
     sha: 3f58cb1e30df71cb089c70fbb47c00e2e38145f8
-generated_at_commit: 0b6c04b
+generated_at_commit: abb202f
 last_refreshed: 2026-09-06
 related:
   [
@@ -40,6 +40,13 @@ related:
 | Step | Who | Where |
 |---|---|---|
 | Ask | the worker | writes `proposal.json` into its artifact directory (`withProposal`, `src/brief.ts`) |
+
+An isolated proposing Job gets the **worktree note** rather than the pull-request protocol
+(`withWorktree`, `src/brief.ts`): the worktree is still the sandbox, but a proposal is not a diff,
+and a prompt that said both *commit and push what you have* and *write the file and stop* was not an
+instruction. ADR-008 decided this generally — the protocol should be selected by the spec rather than
+implied by having a worktree — and that half is still unimplemented for every other output-only Job
+(`FINDINGS.md`).
 | Refuse or accept | the controller, after the run | `checkProposal` (`src/proposals.ts`), stored on `Attempt.proposal` |
 | Decide | a person | `hkb approve <id>` / `hkb reject <id> "<why>"` — an `approved` event |
 | Apply | the controller, next pass | `applyProposals` (`src/controller.ts`), before anything is claimed |
