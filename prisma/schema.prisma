@@ -205,6 +205,20 @@ model Job {
   /// finding, a decision, a URL. Capped at 4 KB each (`src/results.ts`), because a handoff that can
   /// hold a megabyte is a worse artifact store than the one `exports` already is.
   results      Json?
+  /// What a human must decide before this Job goes on (ADR-010). Non-null makes the Job **gated**:
+  /// an attempt that succeeds AND produced everything it declared does not go terminal — it goes
+  /// `suspended`, carrying this text as `suspendedFor`, and waits.
+  ///
+  /// **One-shot, and deliberately.** The gate fires only while no approval has been recorded, so a
+  /// Job goes propose → approve → apply and then ends like any other. A re-entrant gate would delete
+  /// the Job's completion condition: every success would suspend again, `succeeded` would be
+  /// unreachable, and the only terminal states left would be `cancelled` and `done` — the last of
+  /// which means something else entirely, over thirty lines of comment above.
+  ///
+  /// Whether it has been approved is read off the Event stream rather than a flag cleared on use: a
+  /// guard that only fires on a transition is wrong after a restart, and this controller is
+  /// level-triggered.
+  gate         String?
 
   // ---- status: what is happening. Written only by the controller.
   phase         Phase   @default(pending)

@@ -643,6 +643,22 @@ In this order, and each one only when the previous is boring:
    Groom is then a brief plus board arithmetic. The record is
    [ADR-010](wiki/decisions/adr-010-the-human-gate.md), which also notes what would
    make groom a kind after all: an apply half that creates or modifies other Jobs.
+
+   **Shipped 2026-09-06.** `Job.gate`, `hkb approve` / `hkb reject`, approval as an
+   `Event` rather than a consumed column, and the approver as a seat that a human, a
+   delegated agent or an auto-approve policy can fill. It took four repairs that the
+   research found and the record had not: a successful attempt was spending a retry,
+   a suspended Job would have lost its session and its checkout, and the resume
+   lookup was pinned to `k - 1` while the worktree directory is named for the attempt
+   that made it — so a third attempt cut a fresh tree from base and resumed a session
+   on top of it. That last one was a live defect, not a consequence of the gate.
+
+   ADR-010's recorded risk — that an apply half creating Jobs would make groom a kind
+   — is answered rather than realised: **a controller is a workload**. In Kubernetes
+   the API server is dumb and controllers are ordinary pods that watch, reconcile and
+   create objects. A decomposer reacting to items arriving in triage is a controller
+   for a different concern, running as a Job, while the Job kind's own controller
+   stays arithmetic and SQL. See `docs/workflow-study.md` §8.
 4. **The third kind: the DAG.** Only now. Its controller creates Jobs, the way a
    CronJob creates Jobs, and its dependency rule lives in the admission gate —
    `admitSpawn` already takes the policy — so ordering is structural rather than

@@ -429,6 +429,24 @@ function refuseOutside(root: string, p: string, rel: string): void {
 }
 
 /**
+ * The newest checkout this Job still has at or below `upTo`, or null.
+ *
+ * `existingWorktree` asks about one exact attempt, and every caller that resumes wants a different
+ * question: *which checkout is still here*. The directory is named for the attempt that MADE it and
+ * a kept checkout is reused by every attempt after it, so attempt 3 asking for `kb-N-2` finds
+ * nothing while `kb-N-1` is sitting right there — and the caller then cuts a fresh worktree from
+ * base and resumes a session on top of a tree that has none of its work. Counting down is the whole
+ * fix, and it is bounded by the attempt number.
+ */
+export function newestWorktree(root: string, jobId: number, upTo: number): Worktree | null {
+  for (let k = upTo; k >= 1; k--) {
+    const found = existingWorktree(root, jobId, k);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
  * The checkout an earlier attempt left behind, or null.
  *
  * A resumed session continues its transcript, so it believes it is in the directory it was working

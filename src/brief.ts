@@ -66,3 +66,27 @@ export function withResults(brief: string, paths: Record<string, string>): strin
     'write that.',
   ].join('\n');
 }
+
+/**
+ * What an approved Job is told, in place of its brief.
+ *
+ * ADR-010 decision 4, and the piece that makes a gate work rather than merely pause: a resumed
+ * attempt otherwise re-sends `withProtocol(job.brief, branch)`, so an approved Job would propose
+ * again instead of applying. The session is continued (`lastSessionId`), so the agent already holds
+ * everything it proposed — this only has to say that a person said yes, and in whose words.
+ *
+ * Authority is why this is the *prompt* rather than a hook's text. An `SDKUserMessage` carries
+ * `role: "user"`; hook-delivered text has been measured being refused by a worker as untrusted, and
+ * an approval a worker may decline to believe is not a gate.
+ */
+export function approvedPrompt(actor: string | null, note?: string | null): string {
+  const who = actor ? `**${actor}**` : 'An approver';
+  return [
+    `${who} has reviewed what you proposed and approved it. Carry it out now.`,
+    ...(note?.trim() ? ['', 'They added:', '', note.trim().split('\n').map((l) => `> ${l}`).join('\n')] : []),
+    '',
+    'You are continuing the same session, so you still have everything you worked out. Apply the',
+    'proposal as approved. If the instruction above changes it, follow the instruction — it is the',
+    'more recent decision and it came from a person.',
+  ].join('\n');
+}

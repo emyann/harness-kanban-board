@@ -121,6 +121,7 @@ export const JobScalarFieldEnum = {
   maxRetries: 'maxRetries',
   exports: 'exports',
   results: 'results',
+  gate: 'gate',
   phase: 'phase',
   lastSessionId: 'lastSessionId',
   lastError: 'lastError',

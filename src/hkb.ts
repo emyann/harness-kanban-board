@@ -48,6 +48,9 @@ const HELP = `hkb — run one agent against one brief
        --export <path>  a file or directory the Job must produce, repo-relative. It is
                         copied into the repository before the worktree is torn down, and
                         a declared path the run did not write fails the attempt. Repeatable.
+       --gate <question>  stop after producing, and wait for a person. The Job suspends once it
+                        has produced what it declared; \`hkb approve <id>\` continues it in the
+                        same session with your instruction as the prompt, \`hkb reject\` ends it.
        --result <name>  a named value the Job must produce — a finding, a decision, a URL.
                         The board keeps it on the attempt and \`hkb show\` prints it, so a Job
                         that makes no commit still leaves something behind. Repeatable.
@@ -61,6 +64,8 @@ const HELP = `hkb — run one agent against one brief
        --max-budget <usd>  required when it stopped on max_budget: the same cap
                            would stop it in the same place
        --max-turns <n>  --max-retries <n>
+  hkb approve <id> ["…"]    let a gated Job go on, in the same session, with your words
+  hkb reject <id> "<why>"   end a gated Job: what it proposed is not wanted
   hkb done <id> "<why>"     end it: the aim was achieved by other means
   hkb cancel <id> "<why>"   end it: stop, this is not wanted
   hkb rm <id>               delete a Job and its attempts
@@ -336,6 +341,7 @@ export async function main(argv: string[]): Promise<number> {
       export: { type: 'string', multiple: true },
       // Repeatable for the same reason `--export` is: a Job with two named values declares two.
       result: { type: 'string', multiple: true },
+      gate: { type: 'string' },
       // Repeatable, for the same reason `--export` is: a tool name is a token, and one
       // comma-separated string makes the empty list ("this Job may call nothing") unsayable.
       'allow-tool': { type: 'string', multiple: true },
@@ -414,6 +420,8 @@ export async function main(argv: string[]): Promise<number> {
       // key is a fault in the spec, and finding it here costs nothing while finding it later costs
       // a run.
       const results = ((values.result as string[] | undefined) ?? []).map(checkResultName);
+      const gate = typeof values.gate === 'string' ? values.gate.trim() : undefined;
+      if (values.gate !== undefined && !gate) throw usage('--gate needs the question a human is being asked, as in --gate "does this migration look right?"');
       // Null when the flag was absent, so the board's default can answer. An EMPTY list is only
       // reachable through `--allow-tools ""`, and it means what it says: no tools at all.
       const allowedTools = values['allow-tool'] !== undefined
@@ -428,6 +436,7 @@ export async function main(argv: string[]): Promise<number> {
           // none of the files it promised" are different facts, and only the second is a failure.
           ...(exports.length ? { exports } : {}),
           ...(results.length ? { results } : {}),
+          ...(gate ? { gate } : {}),
           model: (values.model as string) ?? null,
           effort: effort ?? null,
           isolate: !values['no-isolate'],
@@ -567,6 +576,8 @@ export async function main(argv: string[]): Promise<number> {
         // one that decides whether a completed session counts as a success.
         if (Array.isArray(job.exports) && job.exports.length) console.log(`  exports  ${job.exports.join(', ')}`);
         if (Array.isArray(job.results) && job.results.length) console.log(`  results  ${job.results.join(', ')}`);
+        if (job.gate) console.log(`  gate     ${job.gate}`);
+        if (job.suspendedFor) console.log(`  waiting  ${job.suspendedFor} — \`hkb approve ${job.id}\` or \`hkb reject ${job.id} "…"\``);
         if (job.lastError) console.log(`  error    ${job.lastError}`);
         if (job.lastSessionId) console.log(`  resume   ${job.lastSessionId}`);
         console.log(`  brief    ${job.brief.split('\n')[0].slice(0, 88)}${job.brief.length > 88 ? ' …' : ''}`);
@@ -772,6 +783,64 @@ export async function main(argv: string[]): Promise<number> {
      * it an operator verb: it is recorded as a transition, with the person as the actor, and never
      * as a silent update.
      */
+    // ---------------------------------------------------------------- approve / reject
+    // The two ends of ADR-010's gate. `approve` is the only verb in this CLI that hands an agent an
+    // instruction, which is why it goes on the Event stream with an actor: an approval nobody can
+    // attribute is not a decision, it is a state change.
+    case 'approve':
+    case 'reject': {
+      const id = num(rest[0], `hkb ${verb} <id>`);
+      if (!id) throw usage(`hkb ${verb} <id> — which Job?`);
+      const note = rest.slice(1).join(' ').trim();
+      if (verb === 'reject' && !note) {
+        throw usage(`hkb reject ${id} "<why>" — a rejection without a reason tells the next reader nothing.`);
+      }
+      const job = await db.job.findUnique({ where: { id }, include: { lease: true } });
+      if (!job) throw usage(`no Job #${id}`);
+      // Refused rather than queued. A Job that is not waiting has nothing to approve, and saying so
+      // beats writing an approval that the next reconcile ignores.
+      if (job.phase !== 'suspended') {
+        throw usage(`#${id} is ${job.phase}, not suspended — there is nothing waiting to be decided. `
+          + `Only a gated Job that has produced what it declared waits here.`);
+      }
+      if (job.lease) {
+        throw usage(`#${id} is held by ${job.lease.holder} — wait for the run to end, or \`hkb down\`.`);
+      }
+      const actor = os.userInfo().username;
+
+      if (verb === 'reject') {
+        await db.$transaction([
+          db.job.update({
+            where: { id },
+            data: {
+              phase: 'cancelled', endedBy: actor, endedFor: note, finishedAt: new Date(),
+              suspendedFor: null,
+            },
+          }),
+          db.event.create({
+            data: { kind: 'rejected', jobId: id, boardId: job.boardId, actor, payload: { note } },
+          }),
+        ]);
+        emit(out, { id, phase: 'cancelled', by: actor, why: note }, () =>
+          console.log(`#${id} rejected by ${actor} — ${note}`));
+        return 0;
+      }
+
+      // The approval itself is the Event, durable and never consumed; the phase change is what the
+      // controller acts on. Both in one transaction, because a phase moved without the event that
+      // explains it would give the next attempt the brief again instead of the instruction.
+      await db.$transaction([
+        db.event.create({
+          data: { kind: 'approved', jobId: id, boardId: job.boardId, actor, payload: note ? { note } : {} },
+        }),
+        db.job.update({ where: { id }, data: { phase: 'pending', suspendedFor: null } }),
+      ]);
+      emit(out, { id, phase: 'pending', by: actor, note: note || null }, () =>
+        console.log(`#${id} approved by ${actor} — it resumes on the next pass`
+          + (note ? `, told: ${note}` : '')));
+      return 0;
+    }
+
     case 'done':
     case 'cancel': {
       const phase = BY_HAND[verb as ByHandVerb];
