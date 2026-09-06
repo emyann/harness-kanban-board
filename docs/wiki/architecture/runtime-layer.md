@@ -100,6 +100,15 @@ SDK to read a markdown file. A granted guide is read from `Board.repoPath` and
 prepended to the prompt (`src/guide.ts`), which also makes it portable: a guide
 in the prompt reaches any runtime, one the SDK loads reaches only this one.
 
+**`systemPrompt` is unset, and now on purpose** (*decisions/adr-014-no-preset-three-rules*). The
+omitted default is the SDK's minimal prompt, which measured 15,022 input tokens
+against the `claude_code` preset's 18,314 — so every worker has run without
+Claude Code's safety and tool-use guidance. Measured on two real Jobs, the preset
+changed no outcome and cost 20%, and it is written for a conversational agent a
+human steers rather than a batch job whose output is a diff. What it had that
+this file did not — a standing instruction for when the work itself is wrong — is
+`withStandingRules` in `src/brief.ts`, at about 150 tokens rather than 3,292.
+
 **`strictMcpConfig: true`, and it closes something that was open.** Reading the
 session's own `init` message with `settingSources: []`, a worker was offered four
 **claude.ai MCP connectors** — the operator's Gmail, Drive and Calendar among

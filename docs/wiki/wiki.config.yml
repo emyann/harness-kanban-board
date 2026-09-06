@@ -77,6 +77,9 @@ pages:
   - slug: decisions/adr-013-the-guide-is-read-not-loaded
     summary: "ADR-012 refused settingSources and named the cost; this reads the guide itself instead — a grant, from Board.repoPath, prepended as instruction — and stops workers inheriting the operator's MCP connectors."
     status: seeded
+  - slug: decisions/adr-014-no-preset-three-rules
+    summary: "The claude_code preset was measured and declined — hkb composes its own system prompt in the user message — and the one thing it had that this project did not becomes three standing rules."
+    status: seeded
   - slug: features/watch
     summary: "The third question about the board, after \"what is true now\" and \"what happened\": tell me when something happens. Cursors rather than state, woken by the filesystem rather than polled, and resumable because an id never expires."
     status: seeded

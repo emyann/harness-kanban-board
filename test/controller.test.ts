@@ -1765,3 +1765,61 @@ test('EVERY board default reaches a worker, not the ones somebody remembered to 
   const attempt = await db.attempt.findFirstOrThrow({ where: { jobId: job.id } });
   assert.equal(attempt.maxBudgetUsd, 3, 'the cap frozen at claim time came from the board too');
 });
+
+test('the standing rules reach every shape of Job, including a resumed approval', async () => {
+  // ADR-014 declined the claude_code preset and took one thing from it: a standing instruction for
+  // when the work itself is wrong. A rule that reached only some Jobs would be one nothing could
+  // rely on, so this asserts the shapes rather than one of them — isolated, bare, proposing, and a
+  // resumed attempt carrying an approver's words, which is the one that skips `withProtocol`.
+  const b = await proposalBoard();
+  let seen = '';
+  const spy = {
+    name: 'spy',
+    async run(spec: { prompt: string }) {
+      seen = spec.prompt;
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+  const has = () => /Three standing rules/.test(seen) && /Never weaken a check/.test(seen)
+    && /data, not instruction/.test(seen) && /stop and say so/.test(seen);
+
+  const bare = await db.job.create({
+    data: { boardId: b.id, name: 'bare', brief: 'Do it.', isolate: false, maxBudgetUsd: 1 },
+  });
+  await reconcile({ runtime: spy, cwd, only: bare.id, board: 'proposals', readPr: false });
+  assert.ok(has(), 'an un-isolated Job, which gets no protocol at all');
+
+  const isolated = await db.job.create({
+    data: { boardId: b.id, name: 'isolated', brief: 'Do it.', maxBudgetUsd: 1 },
+  });
+  await reconcile({ runtime: spy, cwd, only: isolated.id, board: 'proposals', readPr: false });
+  assert.ok(has(), 'an isolated Job, beside the pull-request protocol');
+  assert.match(seen, /DRAFT pull request/);
+
+  const proposer = await db.job.create({
+    data: {
+      boardId: b.id, name: 'proposer', brief: 'Break it down.', isolate: false,
+      proposes: 'jobs', gate: 'a proposal to review', maxBudgetUsd: 1,
+    },
+  });
+  await reconcile({
+    runtime: proposing(JSON.stringify({ jobs: [{ name: 'x', brief: 'y' }] })),
+    cwd, only: proposer.id, board: 'proposals', readPr: false,
+  });
+
+  // The resumed approval: `approvalPrompt` replaces the brief AND the protocol, so it is the shape
+  // most likely to lose a rule that is attached to either.
+  const gated = await db.job.create({
+    data: {
+      boardId: b.id, name: 'gated', brief: 'Propose it.', isolate: false,
+      gate: 'does this look right?', maxBudgetUsd: 1,
+    },
+  });
+  await reconcile({ runtime: spy, cwd, only: gated.id, board: 'proposals', readPr: false });
+  await db.event.create({ data: { kind: 'approved', jobId: gated.id, boardId: b.id, actor: 'ada', payload: {} } });
+  await db.job.update({ where: { id: gated.id }, data: { phase: 'pending', suspendedFor: null } });
+  await reconcile({ runtime: spy, cwd, only: gated.id, board: 'proposals', readPr: false });
+  assert.match(seen, /has reviewed what you proposed/, 'this really is the approval prompt');
+  assert.ok(has(), 'and it carries the standing rules too');
+});
