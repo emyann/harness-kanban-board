@@ -7,17 +7,17 @@ audience: [dev]
 read_when: "filing a batch of Jobs against one repository, reviewing several agent PRs cut from the same base, or designing how a graph kind would decompose work"
 covers:
   - path: src/controller.ts
-    sha: 6f97a4884c7d5774bec6e12c2451ecacb260a94a
+    sha: 2f8bd74273a5ba22754954edb3122193729c6ff3
   - path: src/worktree.ts
     sha: e4094d7fae517cca708273ddff3007bfc508d10b
   - path: src/limits.ts
     sha: 61b65c43e2fd7c28f952c403e02d073ca9907561
   - path: src/hkb.ts
-    sha: 465e61ad1be9105804eddcbe8ef211ce89526277
+    sha: 3267dc3d4472a1c813f4f668ee44428867c2915d
   - path: prisma/schema.prisma
-    sha: e4bac2046bd232c6656a59f4503e6a2ca32578f1
+    sha: af2155d3e5cfd330f259ae1e5b5cde91f732d109
 related: [architecture/job-kind, architecture/the-loop, concepts/ceilings, decisions/adr-007-workload-scheduler, decisions/adr-008-declared-outputs]
-generated_at_commit: 1542483
+generated_at_commit: be47d71
 last_refreshed: 2026-09-06
 ---
 
@@ -58,7 +58,7 @@ the moment it could (`docs/rebuild-plan.md:401-403`). The repair landed as `#361
 
 That shape is still visible in today's entry point, which now names the machine-wide
 verbs explicitly and carries the episode in its own comment
-(`src/hkb.ts:451-463`). The module was called `src/kb.ts` at the time; the rename
+(`src/hkb.ts:462-474`). The module was called `src/kb.ts` at the time; the rename
 came with ADR-009, so the file name in the record is history and the behaviour is
 not.
 
@@ -70,7 +70,7 @@ find (#362)"*, 2026-09-05:
 
 - Every branch is cut from the mainline at claim time and never rebased. The
   controller cuts the checkout on the serial side of the reconcile pass, at the
-  moment of the claim (`src/controller.ts:643-656`), from `origin/<default>` when
+  moment of the claim (`src/controller.ts:647-660`), from `origin/<default>` when
   there is one (`baseRef`, `src/worktree.ts:106-120`; `createWorktree`,
   `src/worktree.ts:129-153`). Nothing in `bin/`, `src/`, `scripts/` or `prisma/`
   contains the string `rebase`.
@@ -141,7 +141,7 @@ attempt chose to freeze the resolved cap onto the Attempt rather than re-derive
 it, and argued the cost into a feature (`docs/rebuild-plan.md:456`, `:469-470`);
 the doc-comment on `Attempt.maxBudgetUsd` sets out the three options and why the
 freeze is the only one that stays correct when an operator edits a board's default
-mid-flight (`prisma/schema.prisma:358-402`).
+mid-flight (`prisma/schema.prisma:379-423`).
 
 The recorded consequence: **what collides is not shared files but shared
 invariants**, and a decomposer that splits work by area reproduces this exactly
