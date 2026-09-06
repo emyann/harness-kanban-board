@@ -61,7 +61,7 @@ pages:
     status: seeded
   - slug: architecture/the-board
     summary: "The schema as a model: what a row of each table means, why the spec columns are nullable, what is frozen onto an Attempt at claim time and why, and the self-bootstrapping migration path."
-    status: planned
+    status: seeded
   - slug: concepts/admission-control
     summary: "Why worktree isolation and dependency ordering are injected or denied in a PreToolUse gate rather than asked for in a prompt — and the measured run where the prompt was silently ignored."
     status: seeded

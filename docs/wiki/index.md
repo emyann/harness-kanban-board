@@ -9,6 +9,7 @@
 - [The Job kind and its controller](./architecture/job-kind.md): The first and only workload kind — one agent, one brief, run to completion — with a Kubernetes-shaped mapping (Job/Pod/Lease/Namespace) and a single reconcile pass that is safe to run repeatedly, interrupt, or run concurrently with another host.
 - [hkb at a glance](./architecture/overview.md): The moving parts of a workload scheduler: a CLI over one SQLite board, a level-triggered controller that claims a Job under a lease and runs it inline, a runtime seam over the Agent SDK, and a git worktree as the sandbox. Where state lives, and what is deliberately not here.
 - [The runtime layer — running a worker on the Agent SDK](./architecture/runtime-layer.md): One seam, run(spec) -> WorkerOutcome, with the Claude Agent SDK as the first driver and a fake for tests; what the SDK stores for us (so the board does not), and the three SDK behaviours that each cost a bug to learn.
+- [The board — the schema as a model](./architecture/the-board.md): What a row of each table means, why nearly every spec column is nullable, what is frozen onto an Attempt at claim time and why, and the self-bootstrapping migration path that makes the first command on a fresh machine work.
 - [The loop — a level-triggered daemon, and why the clock is not enough](./architecture/the-loop.md): hkb up runs reconcile on a 45s timer over every board on the machine. Why a controller is level-triggered rather than event-driven, why a lapsed lease is evidence and not proof, why leadership is a row rather than a pid file, and why an operator stop is its own outcome.
 
 ## Concepts
@@ -39,7 +40,6 @@
 
 ## Planned (not yet written)
 
-- architecture/the-board: The schema as a model: what a row of each table means, why the spec columns are nullable, what is frozen onto an Attempt at claim time and why, and the self-bootstrapping migration path.
 - concepts/ceilings: The three claim-time refusals (stopped, concurrency, budget), why none of them may stop a running worker, and why committed-but-unspent budget has to be counted.
 - concepts/leases-and-liveness: Why a lapsed lease is evidence and not proof: the three-valued alive/dead/unknown answer, the boot-time check, and why a wall clock cannot decide this across a suspend.
 - features/declared-outputs: The three declared outputs and the one rule over them: --export to the repository, --result onto the board as a value, --artifact beside the board as a file; why an undeclared output is litter, and the syntax each refuses before a checkout is ever made.
