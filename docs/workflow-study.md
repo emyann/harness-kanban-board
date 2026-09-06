@@ -370,10 +370,13 @@ origin's default branch, with a graph's nodes cut from their parent's branch and
 This is the integration branch the plan already called for. New §4.1, and it closes the layer-3 hole in
 §4.
 
-**Q4 — Do we adopt Artic's read side? — conditional.** Depends on the design, on whether declared inputs
-sharpen what the hkb primitive is, and on how handoff works. Not decided; it belongs with §4.1, since
-declared inputs and the integration branch are both answers to *what can this step see* — one at the
-context level, one at the git level.
+**Q4 — Do we adopt Artic's read side? — conditional, and the condition was met.** It depended on whether
+declared inputs sharpen what the hkb primitive is. **ADR-011** (2026-09-06) says they do: a workload that
+proposes board changes has board state as its *input*, and today the only input a Job has is `job.brief`,
+a static string authored at file time. Declared inputs are therefore no longer an optimisation borrowed
+from a paper — they are a missing half of the primitive. It still belongs with §4.1, since declared
+inputs and the integration branch are both answers to *what can this step see* — one at the context
+level, one at the git level.
 
 **Q5 — is "a dynamic workflow elects its actor non-deterministically" the definition? — dissolved.** It
 was an illustration, not a proposed taxonomy: the point was that an agentic workflow can be *processed*
@@ -409,3 +412,19 @@ Together these make `producedNothing` (`src/hkb.ts`) honest. Today it can only s
 nothing*, which reads as failure. With a handoff object and telemetry it can say *no pull request, and
 here is what it found and what it cost* — which is the difference between a Job that investigated and a
 Job that stalled.
+
+## 12. What this study decided
+
+One record so far, and it came from a question the study did not ask.
+
+**ADR-011 — a workload proposes, the controller writes.** §8 recorded that Hermes lets a worker reach the
+board from inside, and left "where hkb must differ" as an open matter of taste. It is not taste. The
+operator's question — *can the input/output interface we deliberately put on top of a Job be used there as
+a transport?* — has an answer with a precedent: Argo's fan-out generator writes a file and the controller
+creates the work, holding no credentials at all. hkb already has that interface in ADR-008's `results`;
+what was missing was permission for the controller to act on one.
+
+That dissolves the risk ADR-010 recorded against itself — *if groom's apply half must create Jobs, groom is
+closer to the DAG than to a field* — because the apply half turns out to be the controller's either way.
+It also picks up §7's read side (see Q4 above) and leaves §6's contradiction exactly where it was:
+creation *without* ordering is `CronJob`-shaped and settles nothing about the DAG.

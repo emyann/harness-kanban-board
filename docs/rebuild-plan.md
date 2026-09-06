@@ -681,6 +681,14 @@ becomes an ADR. Two things in it are worth knowing without reading it: **the two
 representations were both killed** (a re-entrant gate, and a `Job.after` edge), and it found a
 **contradiction between ADR-007 decision 5 and ADR-010** that is still unresolved.
 
+It has produced one decision so far. **ADR-011** (`docs/wiki/decisions/adr-011-proposals-not-board-access.md`)
+settles how a workload affects the board: it does not. It declares a *proposal* as an output and the
+controller validates and applies it once an approval is recorded. That resolves the risk ADR-010 recorded
+against itself — groom's apply half is the controller's, so groom stays a field — and makes **declared
+inputs** a named missing half of the primitive rather than an optimisation from a paper (the study's Q4).
+Two things it needs do not exist: a channel for a proposal too large for a 4 KB result and too private for
+the repository, and declared inputs themselves. Nothing ships until the first one does.
+
 ---
 
 ## Parked, with the design done
