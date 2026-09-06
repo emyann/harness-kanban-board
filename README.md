@@ -117,11 +117,21 @@ would strand its worktree, while one that declines to start another is only a de
 
 ### What a Job produces
 
-A pull request, by default. `--export <path>` on `hkb new` (repeatable) declares a file or directory the Job
-must write as well: the board copies it out of the worktree into the repository *before* the checkout is torn
-down, and a declared path the run did not produce **fails the attempt** — see
-[ADR-008](docs/wiki/decisions/adr-008-declared-outputs.md). An undeclared file left in the checkout is litter,
-and is deleted with it.
+A pull request, by default — and a Job does not have to be coupled to one. Two declarations, one rule
+([ADR-008](docs/wiki/decisions/adr-008-declared-outputs.md)):
+
+- **`--export <path>`** — a file or directory the Job must write. The board copies it out of the worktree
+  into the repository *before* the checkout is torn down.
+- **`--result <name>`** — a named value the Job must report: a finding, a decision, a URL. The worker writes
+  it to a path the board gives it, the board keeps it on the attempt, and `hkb show` prints it. Capped at
+  4 KB each; anything larger is a file, which is what `--export` is for.
+
+Both are repeatable, and **a declared output the run did not produce fails the attempt** — which is what
+makes `succeeded` mean more than "the session ended". An undeclared file left in the checkout is litter and
+is deleted with it.
+
+`--result` is what a Job produces when it has no commit to make. *"I looked, and there is nothing to
+change"* is a real outcome; without somewhere to put it, such a Job succeeds and leaves only a session id.
 
 `--no-isolate` runs the Job in the current checkout rather than a worktree of its own, for work that has no
 business on a branch.

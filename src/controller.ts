@@ -4,7 +4,10 @@ import {
   type Worktree,
 } from './worktree.ts';
 import { prForBranch } from './pulls.ts';
-import { withProtocol } from './brief.ts';
+import { withProtocol, withResults } from './brief.ts';
+import {
+  declaredResults, resultPaths, ensureResultsDir, collectResults, clearResults, missingResults,
+} from './results.ts';
 import { gateClaim, windowStart, type ClaimGate } from './limits.ts';
 import { resolveSpec } from './spec.ts';
 import { holderId, holderLiveness } from './liveness.ts';
@@ -566,6 +569,13 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     }, renewEvery);
     if (typeof renewer.unref === 'function') renewer.unref();
 
+    // ---- the results this attempt is asked for, and the directory it writes them to. Created
+    // before the run because the paths go into the prompt; outside every checkout, so writing one
+    // cannot land in the worker's diff (`src/results.ts`).
+    const wantedNames = declaredResults(job.results);
+    const wantedResults = wantedNames.length ? resultPaths(job.id, k, wantedNames) : {};
+    if (wantedNames.length) ensureResultsDir(job.id, k);
+
     // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
     // starting cold, which is the whole reason that column exists.
     const outcome = await deps.runtime
@@ -577,7 +587,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // disagree with `cwd` above. The runtime turns it into the subagent isolation policy: a
         // Job running in the operator's tree has no worktree to bring a subagent's work back to.
         isolated: wt !== null,
-        prompt: wt ? withProtocol(job.brief, wt.branch) : job.brief,
+        // `withProtocol` is the PULL REQUEST protocol and needs a branch, so it is for an isolated
+        // Job only. Results are the opposite case — they matter most to a Job that produces no
+        // commit — so they are appended either way.
+        prompt: withResults(wt ? withProtocol(job.brief, wt.branch) : job.brief, wantedResults),
         // All four from the resolved spec: a Job that named none of them still has to run on
         // something, and the board is now allowed to be the one that says what.
         model: spec.model.value ?? undefined,
@@ -643,6 +656,26 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       }
       if (shortfall) deps.onEvent?.(`  ${shortfall}`);
     }
+    // ---- the declared RESULTS, read back before the collection directory goes. Same rule, same
+    // gate, different medium: `exports` are files the repository keeps, results are values the
+    // board keeps. A Job with no branch and no commit produces its work here or nowhere.
+    let produced: Record<string, string> | null = null;
+    if (wantedNames.length && ran.phase === 'succeeded' && heldToTheEnd) {
+      const got = collectResults(job.id, k, wantedNames);
+      produced = got.produced;
+      const owed = missingResults(job.id, got.missing, got.oversize);
+      // The export shortfall keeps precedence — it was found first, and reporting one cause is
+      // more use than concatenating two.
+      if (owed && !shortfall) shortfall = owed;
+      if (owed) deps.onEvent?.(`  ${owed}`);
+      else if (Object.keys(produced).length) {
+        deps.onEvent?.(`  produced ${Object.keys(produced).map((n) => `\`${n}\``).join(', ')}`);
+      }
+    }
+    // Removed whatever happened: the values are durable because they are on the Attempt row, not
+    // because the file survives, and a directory kept after a failure is litter nobody reads.
+    if (wantedNames.length) clearResults(job.id, k);
+
     // A declared output that is not there fails the attempt, and that rule is what makes the
     // declaration worth writing down: without it `succeeded` still means only that a session ended.
     // Not retried — the session's own account is that it finished, so a resumed attempt wakes up
@@ -688,6 +721,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // Omitted rather than nulled: a Job that declared nothing has no fact to record here, and
         // Prisma's Json null needs a sentinel to say which of the two nulls it means.
         ...(exported ? { exported } : {}),
+        ...(produced ? { results: produced } : {}),
       },
     });
 

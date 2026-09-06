@@ -120,6 +120,7 @@ export const JobScalarFieldEnum = {
   allowedTools: 'allowedTools',
   maxRetries: 'maxRetries',
   exports: 'exports',
+  results: 'results',
   phase: 'phase',
   lastSessionId: 'lastSessionId',
   lastError: 'lastError',
@@ -151,6 +152,7 @@ export const AttemptScalarFieldEnum = {
   prUrl: 'prUrl',
   exported: 'exported',
   costUsd: 'costUsd',
+  results: 'results',
   turns: 'turns',
   denials: 'denials'
 } as const

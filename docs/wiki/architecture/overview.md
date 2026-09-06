@@ -9,9 +9,9 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: 03dc0b6545ec1314199c87a131ef12c198612d89
+    sha: bccac3a895b8b84cb27a1e15a6684153e7edf681
   - path: src/controller.ts
-    sha: 89144b5df92a2082662e9698cc5713d0d6db9691
+    sha: 9f80e70897db4a7ff157064bb3899a296ddd6a8f
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/db.ts
@@ -23,7 +23,7 @@ covers:
   - path: src/pulls.ts
     sha: a27f00a986f576c2d3ed035902c0a1c9f9a9300c
   - path: prisma/schema.prisma
-    sha: a3305783d4f7c6df879a5e4394ce3f86a4524403
+    sha: a0a2b99ccf124d5abb3ff998ed4d4b530f713988
 related:
   [
     architecture/job-kind,
@@ -33,7 +33,7 @@ related:
     decisions/adr-007-workload-scheduler,
     decisions/adr-009-retiring-the-first-system,
   ]
-generated_at_commit: e8e7bea
+generated_at_commit: 6efab3c
 last_refreshed: 2026-09-05
 ---
 
@@ -57,6 +57,7 @@ seam or 36 CLI verbs is describing code that is gone.
 | `src/worktree.ts` | the sandbox: cut a checkout, carry declared files in, get outputs out, sweep |
 | `src/runtime/` | the seam a worker runs behind — the Agent SDK, or a fake that spends nothing |
 | `src/admission.ts` | the `PreToolUse` gate that makes worktree isolation and the tool surface invariants rather than instructions |
+| `src/results.ts` | the named values a Job hands on, when its output is not a diff |
 | `src/pulls.ts` | the only thing that shells out to `gh` |
 
 ## State lives in the board, and only there
@@ -119,13 +120,21 @@ and joins them to a Job by **branch name** — `kb-<jobId>-<k>`, which `src/work
 has to remember it. The worker opens its own *draft* PR and a human merges; `succeeded` means the session
 ended, not that the work is good — and not, on its own, that anything was produced. Nothing in the
 machinery *requires* a pull request, so `hkb ls` marks a succeeded Job that opened none and declared no
-exports as **produced nothing** (`producedNothing`, `src/hkb.ts`). It is stated rather than judged: "I
+outputs as **produced nothing** (`producedNothing`, `src/hkb.ts`). It is stated rather than judged: "I
 looked, and there is nothing to change" is a real outcome, and so is a `--no-isolate` Job.
 
-A Job can also declare **exports** (`--export <path>`): paths the board copies out of the worktree into
-the repository before the checkout is torn down, and a declared path the run did not produce fails the
-attempt. Everything else left in the checkout is litter and goes with it
-([ADR-008](../decisions/adr-008-declared-outputs.md)).
+A Job can also declare its outputs, which is how it stops being coupled to a commit at all
+([ADR-008](../decisions/adr-008-declared-outputs.md)). **`exports`** (`--export <path>`) are paths the
+board copies out of the worktree into the repository before the checkout is torn down. **`results`**
+(`--result <name>`) are named, small values the worker writes to a path the controller gives it and the
+board keeps on the Attempt — a finding, a decision, a URL, capped at 4 KB each (`src/results.ts`). One
+rule covers both: **a declared output the run did not produce fails the attempt**, which is what makes
+`succeeded` mean more than "a session ended". Everything else left in the checkout is litter and goes
+with it.
+
+That pair is what a Job with nothing to commit produces. `hkb ls` marks a succeeded Job that opened no
+pull request and declared neither as **produced nothing** (`producedNothing`, `src/hkb.ts`); with a
+result declared, the same Job says what it found instead.
 
 ## What is deliberately not here
 

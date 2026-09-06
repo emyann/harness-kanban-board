@@ -718,3 +718,65 @@ test('zero turns is recorded as zero, so null keeps meaning "not measured"', asy
   assert.equal(a.turns, 0, 'a measured zero survives as a zero');
   assert.equal(a.denials, 0);
 });
+
+/**
+ * `results` end to end: the value a Job produces when it is not coupled to a commit.
+ *
+ * The unit tests in `test/results.test.ts` cover the contract; these two cover the wiring, and both
+ * are refusals. A Job that declared a value and did not write it must FAIL — that rule is the whole
+ * reason the declaration is worth making, and without it `succeeded` still means only that a session
+ * ended.
+ */
+const writing = (values: Record<string, string>): Runtime => ({
+  name: 'writing',
+  async run(spec) {
+    // The worker's side of the contract: write each declared value to the path it was given. The
+    // paths are in the prompt, which is how a real worker learns them too.
+    for (const [name, body] of Object.entries(values)) {
+      const m = spec.prompt.match(new RegExp(`\`${name}\` → \`([^\`]+)\``));
+      if (m) fs.writeFileSync(m[1], body);
+    }
+    return {
+      status: 'completed', ok: true, sessionId: 'sess-r', text: 'done',
+      costUsd: 0.1, turns: 2, durationMs: 10, stopReason: 'end_turn', denials: 0, error: null,
+    };
+  },
+});
+
+test('a declared result the run wrote is kept on the attempt', async () => {
+  const b = await db.board.upsert({
+    where: { slug: 'results' },
+    update: { dailyBudgetUsd: null, maxConcurrent: 5, pausedAt: null },
+    create: { slug: 'results', dailyBudgetUsd: null, maxConcurrent: 5 },
+  });
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'reports', brief: 'look into it', isolate: false,
+      results: ['finding'], maxBudgetUsd: 1,
+    },
+  });
+  await reconcile({ runtime: writing({ finding: 'nothing to change here\n' }), cwd, board: 'results', readPr: false });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'succeeded');
+  assert.deepEqual(after.attempts[0].results, { finding: 'nothing to change here' },
+    'the value the run reported, trimmed, on the row — no commit, and still an output');
+});
+
+test('a declared result the run did NOT write fails the attempt', async () => {
+  const b = await db.board.findUniqueOrThrow({ where: { slug: 'results' } });
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'forgets', brief: 'look into it', isolate: false,
+      results: ['finding'], maxBudgetUsd: 1, maxRetries: 0,
+    },
+  });
+  // A runtime that succeeds and writes nothing — the exact shape ADR-008 exists to catch, because
+  // the session's own account is that it finished.
+  await reconcile({ runtime: writing({}), cwd, board: 'results', readPr: false });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts[0].outcome, 'no_output', 'the runtime said completed; the board disagreed');
+  assert.equal(after.phase, 'failed');
+  assert.match(after.lastError ?? '', /`finding`/, 'and it names what is missing');
+});
