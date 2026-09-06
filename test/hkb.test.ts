@@ -1083,3 +1083,95 @@ test('hkb version prints the package version, and opens no board doing it', () =
   assert.deepEqual(asJson, { version: expected });
   assert.equal(fs.existsSync(board), false);
 });
+
+/**
+ * Finding 11: `succeeded` does not mean "produced anything".
+ *
+ * The machinery never required a pull request — `withProtocol` asks for one in prose, only when the
+ * Job is isolated, and `nextPhase` reads the runtime's status alone. That is deliberate: "I looked,
+ * and there is nothing to change" is a real outcome. What was not acceptable is that such a Job read
+ * *identically* to one that shipped a diff, so a board of fifty succeeded Jobs where five produced
+ * nothing looked uniform.
+ *
+ * Tested as a refusal at both layers: the pure predicate must say no for every shape that DID
+ * produce something, and the listing must actually print the marker — a predicate nothing renders is
+ * the silently-inert guard this project has shipped three times.
+ */
+const { producedNothing, declaredExports } = await import('../src/hkb.ts');
+
+test('producedNothing refuses every Job that left something behind', () => {
+  const bare = { phase: 'succeeded', pr: null, exports: [] as string[] };
+  assert.equal(producedNothing(bare), true, 'succeeded, no PR, nothing declared — the case that matters');
+
+  assert.equal(producedNothing({ ...bare, pr: 'https://github.com/x/y/pull/1' }), false, 'a pull request is an artifact');
+  assert.equal(producedNothing({ ...bare, exports: ['docs/report.md'] }), false,
+    'a declared export counts without re-checking: a path the run did not write already failed the attempt');
+
+  // Only `succeeded` is news. A failed Job with nothing to show is not a finding, and marking it
+  // would be the noise that stops a signal being read.
+  for (const phase of ['pending', 'running', 'failed', 'suspended', 'done', 'cancelled']) {
+    assert.equal(producedNothing({ ...bare, phase }), false, `${phase} is not marked`);
+  }
+});
+
+test('declaredExports survives whatever is in the Json column', () => {
+  assert.deepEqual(declaredExports(['a', 'b']), ['a', 'b']);
+  assert.deepEqual(declaredExports(null), []);
+  assert.deepEqual(declaredExports(undefined), []);
+  assert.deepEqual(declaredExports('docs/x.md'), [], 'a bare string is not a list of paths');
+  assert.deepEqual(declaredExports([1, 'a', null]), ['a'], 'and non-strings are dropped rather than printed');
+});
+
+test('hkb ls says so when a succeeded Job produced nothing, and stays quiet when one did', async () => {
+  const repo = scratchRepo('produced-nothing');
+  await hkb('boards', 'add', 'produced-nothing', '--repo', repo);
+  const board = await db.board.findUniqueOrThrow({ where: { slug: 'produced-nothing' } });
+
+  const empty = await db.job.create({
+    data: { boardId: board.id, name: 'looked and found nothing', brief: 'x', phase: 'succeeded' },
+  });
+  const shipped = await db.job.create({
+    data: { boardId: board.id, name: 'opened a pull request', brief: 'x', phase: 'succeeded' },
+  });
+  await db.attempt.create({
+    data: {
+      jobId: shipped.id, k: 1, host: 'h', maxBudgetUsd: 1,
+      branch: `kb-${shipped.id}-1`, prNumber: 7, prUrl: 'https://github.com/x/y/pull/7',
+    },
+  });
+
+  const out = (await hkb('ls', '--board', 'produced-nothing')).out;
+  const line = (id: number) => out.split('\n').find((l) => l.includes(`#${id}`)) ?? '';
+  assert.match(line(empty.id), /produced nothing/, 'the absence is on the row, not only in `hkb show`');
+  assert.doesNotMatch(line(shipped.id), /produced nothing/, 'and a Job that shipped is not accused of it');
+  assert.match(out, /1 of 2 succeeded Jobs? produced no pull request and declared no exports\./,
+    'and the count is the aggregate the finding asked for');
+
+  const rows = json((await hkb('ls', '--board', 'produced-nothing', '--json')).out) as
+    { id: number; pr: string | null; exports: string[]; producedNothing: boolean }[];
+  const row = (id: number) => rows.find((r) => r.id === id)!;
+  assert.equal(row(empty.id).producedNothing, true);
+  assert.deepEqual([row(empty.id).pr, row(empty.id).exports], [null, []],
+    '--json carries the facts, not only the verdict');
+  assert.equal(row(shipped.id).producedNothing, false);
+  assert.equal(row(shipped.id).pr, 'https://github.com/x/y/pull/7');
+});
+
+test('a succeeded Job that declared an export is not marked, even with no pull request', async () => {
+  // The `--no-isolate` shape ADR-008 exists for: no branch, no PR, and a deliverable anyway.
+  const repo = scratchRepo('exported-only');
+  await hkb('boards', 'add', 'exported-only', '--repo', repo);
+  const board = await db.board.findUniqueOrThrow({ where: { slug: 'exported-only' } });
+  const job = await db.job.create({
+    data: {
+      boardId: board.id, name: 'wrote a report', brief: 'x', phase: 'succeeded',
+      isolate: false, exports: ['docs/report.md'],
+    },
+  });
+
+  const out = (await hkb('ls', '--board', 'exported-only')).out;
+  assert.doesNotMatch(out, /produced nothing/, 'a declared export IS the artifact');
+  const rows = json((await hkb('ls', '--board', 'exported-only', '--json')).out) as
+    { id: number; exports: string[]; producedNothing: boolean }[];
+  assert.deepEqual(rows.find((r) => r.id === job.id)?.exports, ['docs/report.md']);
+});

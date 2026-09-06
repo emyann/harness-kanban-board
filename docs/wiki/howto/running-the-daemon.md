@@ -9,12 +9,12 @@ covers:
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/hkb.ts
-    sha: d55a39ca200df4bb57d6c3fcd55c6539cbeed7d4
+    sha: c152f69d60b9294c937b6b56c36490c1799c7d83
   - path: src/worktree.ts
     sha: 8cba275c6c1379e1a0dae4f67acc299d7024536b
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
-generated_at_commit: 54ad569
+generated_at_commit: cada2c0
 last_refreshed: 2026-09-05
 related: [architecture/the-loop, architecture/job-kind, decisions/adr-007-workload-scheduler]
 ---
@@ -26,7 +26,7 @@ and returns (`src/daemon.ts:360-388`). That is enough for a laptop and nothing
 more — the child dies with the machine, and nothing brings it back.
 
 `hkb up --foreground` exists for the other case. It runs the loop in *this*
-process (`src/hkb.ts:818-838`), so a supervisor owns the lifecycle: it starts the
+process (`src/hkb.ts:871-891`), so a supervisor owns the lifecycle: it starts the
 process, restarts it, captures its output, and stops it with a signal. This page
 is the recipe. Why the loop looks the way it does — level-triggered, 45 seconds,
 leadership as a row — is [architecture/the-loop](../architecture/the-loop.md);
@@ -41,7 +41,7 @@ restart. You want **one** unit, not one per repository.
 
 **Point each board at its checkout.** A Job runs in `Board.repoPath`; the
 daemon's own cwd is only the fallback for a board that has none
-(`src/daemon.ts:195-196`, `src/hkb.ts:834-836`). Run `hkb boards add <slug> --repo
+(`src/daemon.ts:195-196`, `src/hkb.ts:887-889`). Run `hkb boards add <slug> --repo
 <path>` once per repository and the unit needs no meaningful working directory.
 
 **Use an absolute path to `hkb`.** A user service does not inherit the PATH your
@@ -81,11 +81,11 @@ systemctl --user status hkb.service
 Four choices in there are load-bearing:
 
 - **`Type=simple`** — `--foreground` never forks or writes a pid file. The
-  process systemd starts is the process that runs the loop (`src/hkb.ts:818`, `src/hkb.ts:834-837`).
+  process systemd starts is the process that runs the loop (`src/hkb.ts:871`, `src/hkb.ts:887-890`).
 - **No `ExecStop`.** SIGTERM is already the clean stop, and it is a *stop*, not a
   kill: the handler aborts the run in flight and deliberately does not exit,
   because the lease release is written on the way out of `reconcile`
-  (`src/hkb.ts:823-832`). The loop then unwinds, records `daemon_down` and
+  (`src/hkb.ts:876-885`). The loop then unwinds, records `daemon_down` and
   releases its controller rows (`src/daemon.ts:335-342`). systemd's default kill
   action sends exactly that signal to the main process, so anything you add here
   can only make it worse.
@@ -96,7 +96,7 @@ Four choices in there are load-bearing:
   long before it does the escalation `hkb down` refuses to do.
 - **`Restart=on-failure`, not `always`.** A tick that throws is caught and logged
   and the loop carries on (`src/daemon.ts:322-327`), so an actual exit means
-  something structural. A clean SIGTERM exits 0 (`src/hkb.ts:837`), and
+  something structural. A clean SIGTERM exits 0 (`src/hkb.ts:890`), and
   `on-failure` leaves `systemctl --user stop hkb` meaning stop.
 
 Add `--board <slug>` to `ExecStart` only if you deliberately want this daemon to
@@ -170,7 +170,7 @@ Two different places, depending on who started the loop, and this trips people u
 
 `<boardDir>` is the directory holding the board file — `~/.hkb` unless
 `HKB_DATABASE_URL` points elsewhere (`src/db-url.ts:19-24`) — and `hkb up
---status` prints it for you when anything is running (`src/hkb.ts:810-812`):
+--status` prints it for you when anything is running (`src/hkb.ts:863-865`):
 
 ```bash
 hkb up --status              # names the log directory
@@ -178,7 +178,7 @@ journalctl --user -u hkb -f  # systemd: the foreground loop's own output
 tail -f ~/.hkb/hkb.log       # launchd, or a detached `hkb up`
 ```
 
-`hkb up --status` exits 1 when no board is being served (`src/hkb.ts:814`), so it
+`hkb up --status` exits 1 when no board is being served (`src/hkb.ts:867`), so it
 doubles as a health check in a script.
 
 If your unit sets `Environment=HKB_DATABASE_URL=...`, remember that it moves the
@@ -250,7 +250,7 @@ is not a mechanism (`src/daemon.ts:56-71`).
 
 So the daemon records the build it started from, and `hkb up --status` compares
 that against the checkout and prints a line when they differ
-(`src/daemon.ts:184-185`, `src/hkb.ts:804-808`):
+(`src/daemon.ts:184-185`, `src/hkb.ts:857-861`):
 
 ```
 default  up    host/12345@daemon  87 min, every 45s

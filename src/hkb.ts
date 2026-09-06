@@ -101,6 +101,34 @@ function packageVersion(): string {
   return JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8')).version;
 }
 
+/**
+ * What a Job left behind, and whether that is anything at all.
+ *
+ * `succeeded` means the session ended. Nothing in the machinery requires it to have produced
+ * anything: `withProtocol` (`src/brief.ts`) *asks* for a pull request in prose, and only when the
+ * Job is isolated; `nextPhase` decides the phase from the runtime's status alone. That separation is
+ * deliberate — "I looked, and there is nothing to change" is a real outcome, and so is a Job that
+ * runs in the operator's own checkout. But the absence has to be legible, or a board of fifty
+ * succeeded Jobs where five produced nothing reads as uniform.
+ *
+ * Two things count, and they are the two ADR-008 names. A **pull request** on any attempt. And a
+ * **declared export** — which counts without being re-checked here, because a declared path the run
+ * did not write already fails the attempt (`checkExportPath`/`copyIncluded`, `src/worktree.ts`), so
+ * a Job that reached `succeeded` with exports declared produced them by construction.
+ *
+ * Pure, and asked only of a Job that succeeded. A failed, cancelled or `done` Job producing nothing
+ * is not news — marking those would be noise, which is how a signal stops being read.
+ */
+export function producedNothing(job: { phase: string; pr: string | null; exports: string[] }): boolean {
+  if (job.phase !== 'succeeded') return false;
+  return !job.pr && job.exports.length === 0;
+}
+
+/** A Job's declared exports, from the `Json?` column, defensively. */
+export function declaredExports(raw: unknown): string[] {
+  return Array.isArray(raw) ? raw.filter((e): e is string => typeof e === 'string') : [];
+}
+
 type Out = { json: boolean };
 function emit(out: Out, data: unknown, human: () => void) {
   if (out.json) process.stdout.write(JSON.stringify(data, null, 1) + '\n');
@@ -407,17 +435,42 @@ export async function main(argv: string[]): Promise<number> {
         orderBy: [{ board: { slug: 'asc' } }, { id: 'asc' }],
         // The board is included whatever the scope, because `--json` carries it either way: a
         // consumer that has to branch on the flags it passed is reading a shape, not a record.
-        include: { _count: { select: { attempts: true } }, board: { select: { slug: true } } },
+        //
+        // The attempts' pull requests come back with the listing rather than in a second query per
+        // row: a board-wide read already exists here, and "one board read per pass" is the rule
+        // this listing has always followed.
+        include: {
+          _count: { select: { attempts: true } },
+          board: { select: { slug: true } },
+          attempts: { select: { prUrl: true }, orderBy: { k: 'desc' } },
+        },
       });
-      emit(out, jobs.map((j) => ({
-        id: j.id, board: j.board.slug, name: j.name, phase: j.phase, attempts: j._count.attempts,
-        lastError: j.lastError, sessionId: j.lastSessionId,
-      })), () => {
-        if (!jobs.length) return console.log(all ? 'no jobs on any board' : `no jobs on ${slug}`);
-        const w = all ? Math.max(...jobs.map((j) => j.board.slug.length)) : 0;
-        for (const j of jobs) {
-          const board = all ? `${j.board.slug.padEnd(w)}  ` : '';
-          console.log(`${board}#${String(j.id).padEnd(4)} ${j.phase.padEnd(9)} ${String(j._count.attempts).padStart(2)}× ${j.name.slice(0, 64)}`);
+      const rows = jobs.map((j) => {
+        const exports = declaredExports(j.exports);
+        const pr = j.attempts.find((a) => a.prUrl)?.prUrl ?? null;
+        return {
+          id: j.id, board: j.board.slug, name: j.name, phase: j.phase, attempts: j._count.attempts,
+          lastError: j.lastError, sessionId: j.lastSessionId,
+          // Carried on every row, whatever the phase, for the reason `hkb boards` carries its
+          // defaults either way: a consumer inferring absence from a missing key reads a shape,
+          // not a record.
+          pr, exports, producedNothing: producedNothing({ phase: j.phase, pr, exports }),
+        };
+      });
+      emit(out, rows, () => {
+        if (!rows.length) return console.log(all ? 'no jobs on any board' : `no jobs on ${slug}`);
+        const w = all ? Math.max(...rows.map((r) => r.board.length)) : 0;
+        for (const r of rows) {
+          const board = all ? `${r.board.padEnd(w)}  ` : '';
+          // Stated, not judged. A Job that looked and found nothing to change is a real outcome —
+          // what is not acceptable is that it reads exactly like one that shipped a pull request.
+          const empty = r.producedNothing ? '  — produced nothing' : '';
+          console.log(`${board}#${String(r.id).padEnd(4)} ${r.phase.padEnd(9)} ${String(r.attempts).padStart(2)}× ${r.name.slice(0, 64)}${empty}`);
+        }
+        const empty = rows.filter((r) => r.producedNothing).length;
+        if (empty) {
+          console.log(`\n${empty} of ${rows.filter((r) => r.phase === 'succeeded').length} succeeded `
+            + `${empty === 1 ? 'Job' : 'Jobs'} produced no pull request and declared no exports.`);
         }
       });
       return 0;

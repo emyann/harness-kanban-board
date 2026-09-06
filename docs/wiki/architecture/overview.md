@@ -9,7 +9,7 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: d55a39ca200df4bb57d6c3fcd55c6539cbeed7d4
+    sha: c152f69d60b9294c937b6b56c36490c1799c7d83
   - path: src/controller.ts
     sha: e4db1f7d58cc0a761998f1d2a3bb0d78aadea5a8
   - path: src/daemon.ts
@@ -33,7 +33,7 @@ related:
     decisions/adr-007-workload-scheduler,
     decisions/adr-009-retiring-the-first-system,
   ]
-generated_at_commit: 54ad569
+generated_at_commit: cada2c0
 last_refreshed: 2026-09-05
 ---
 
@@ -115,7 +115,10 @@ Claim under a lease, run, record. The interesting parts are the refusals:
 GitHub holds pull requests. It holds nothing else. `src/pulls.ts` shells out to `gh` to read them back
 and joins them to a Job by **branch name** — `kb-<jobId>-<k>`, which `src/worktree.ts` derives so nothing
 has to remember it. The worker opens its own *draft* PR and a human merges; `succeeded` means the session
-ended, not that the work is good.
+ended, not that the work is good — and not, on its own, that anything was produced. Nothing in the
+machinery *requires* a pull request, so `hkb ls` marks a succeeded Job that opened none and declared no
+exports as **produced nothing** (`producedNothing`, `src/hkb.ts`). It is stated rather than judged: "I
+looked, and there is nothing to change" is a real outcome, and so is a `--no-isolate` Job.
 
 A Job can also declare **exports** (`--export <path>`): paths the board copies out of the worktree into
 the repository before the checkout is torn down, and a declared path the run did not produce fails the
