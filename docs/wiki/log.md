@@ -353,3 +353,4 @@ history.
 ## 2026-09-06 — added decisions/adr-014-no-preset-three-rules (the claude_code preset measured on two real Jobs and declined: no outcome changed, 20% more, and it is written for a conversational agent — hkb keeps composing its own prompt and takes three standing rules from it instead)
 ## 2026-09-06 — triage inbox: the [bug] about workers running on the SDK's minimal system prompt left by being decided — ADR-014 carries the measurement and the reasoning
 ## 2026-09-06 — refreshed architecture/runtime-layer (systemPrompt is unset on purpose now, with the number beside it)
+## 2026-09-06 — triage inbox: merged two independently-filed copies of the same finding (the pull-request protocol implied by a worktree) that a keep-both-sides merge resolution left side by side — one was mine, one was the worker that wrote features/declared-outputs
