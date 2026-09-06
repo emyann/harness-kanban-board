@@ -80,6 +80,11 @@ and what each board may still spend, and **`hkb down`** stops it cleanly, leavin
 To keep it alive across reboots, put `hkb up --foreground` under a supervisor:
 [docs/wiki/howto/running-the-daemon.md](docs/wiki/howto/running-the-daemon.md).
 
+`hkb ls` marks a succeeded Job that opened no pull request and declared no exports as **produced
+nothing**, and counts them at the end of the listing. It is a statement, not an accusation — "I
+looked, and there is nothing to change" is a real outcome, and so is a `--no-isolate` Job — but a
+Job that left nothing behind should not read exactly like one that shipped a diff.
+
 ### Retrying, and the one retry that is not automatic
 
 **`hkb retry <id>`** puts a Job that stopped back on the board, resuming its session. A Job that spent its

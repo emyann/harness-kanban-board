@@ -10,20 +10,25 @@ measurable criteria.
 dependency graph. No second kind. Those come after the gate, and only because the
 gate taught us something.
 
-## Where we actually are
+## Where we were when this plan was written
 
-838 lines of core exist and are tested (`src/controller.ts`, `src/admission.ts`,
-`src/runtime/`, `prisma/schema.prisma`, 15 tests). Three things are true and worth
+> **All three of these are fixed.** Kept because they are what the plan was written
+> against, and because the phases below only make sense next to them. For where
+> things actually stand, read the phase results and Phase 5b.
+
+838 lines of core existed and were tested (`src/controller.ts`, `src/admission.ts`,
+`src/runtime/`, `prisma/schema.prisma`, 15 tests). Three things were true and worth
 stating plainly before planning around them:
 
-- **Nothing drives it.** No entry point imports `reconcile()`. The only way to run
-  a Job today is a script you write yourself.
-- **`Job.isolate` is declared and unused.** `reconcile()` passes `deps.cwd`
-  straight to the runtime, so a worker would edit the live checkout.
-- **A Job produces no reviewable artifact.** It runs an agent and records that the
-  session ended. There is no branch, no commit, no pull request.
+- **Nothing drove it.** No entry point imported `reconcile()`. The only way to run a
+  Job was a script you wrote yourself. *(Phase 1: `bin/hkb.ts`.)*
+- **`Job.isolate` was declared and unused.** `reconcile()` passed `deps.cwd` straight
+  to the runtime, so a worker would edit the live checkout. *(Phase 2.)*
+- **A Job produced no reviewable artifact.** It ran an agent and recorded that the
+  session ended. No branch, no commit, no pull request. *(Phase 2 — and ADR-008
+  later made the deliverable part of the spec.)*
 
-Those three are Phases 1–2. Everything else is safety and patience.
+Those three were Phases 1–2. Everything else was safety and patience.
 
 ---
 
@@ -219,12 +224,9 @@ resync periodically regardless, and a watch event enqueues a *key*, after which 
 worker re-reads state and discards the event. `PRAGMA data_version` is structurally
 a `resourceVersion` — an opaque counter meaning "re-read", carrying no payload — so
 it would slot in as a hint that skips a wait, not as a change to how anything
-decides. Revisit when latency is a complaint.
-
-**Note.** The eventing experiment from this session is *not* in scope. Triggers +
-`fs.watch` on the WAL work (measured: ~1 ms cross-process, 2.3 µs per
-`data_version` poll), but they only replace the change-driven half, which is not
-the half that needs a loop. Revisit when latency is a complaint.
+decides. The mechanism works — triggers + `fs.watch` on the WAL measured ~1 ms
+cross-process and 2.3 µs per `data_version` poll — it just replaces the half that
+does not need a loop. Revisit when latency is a complaint.
 
 ---
 
@@ -547,10 +549,6 @@ Every item below was found by running the thing, not by reading it.
      hkb relies on the controller being the only remover, which stops being true the
      moment a sweep exists.
 
-9. **A worktree has no gitignored files, and nothing carries them in.** A target repo
-   whose tests need a `.env` fails in a worker and passes for the human. Claude Code
-   solves this with `.worktreeinclude`; hkb has no equivalent. Not observed in this run
-   — hkb's own tests need no such file — which is exactly why it is worth writing down.
 8. **Cost estimation needs a real method. DECIDED 2026-09-05: not yet — run generously
    and let the data accumulate.** A per-Job cap set by feel is a guard chosen by guessing,
    and both predictions so far were wrong by ~3x in the same direction (extrapolating from
@@ -562,6 +560,14 @@ Every item below was found by running the thing, not by reading it.
    briefs ~$1.85, larger ~$5.24, five of eight capped), and every Attempt already carries
    cost, wall clock, outcome, attempt number and the brief that produced it. That is the
    training set for a predictor; collecting it is the work, not modelling it yet.
+
+9. **~~A worktree has no gitignored files, and nothing carries them in.~~ FIXED** — shipped as
+   #368. A repository declares what to carry across in `.worktreeinclude` (`includedFiles`,
+   `src/worktree.ts`); git answers both halves of the match rule, so only a file that is both
+   matched **and** gitignored crosses, and no pattern may reach the board's own directory.
+   Original: A target repo whose tests need a `.env` fails in a worker and passes for the human.
+   Claude Code solves this with `.worktreeinclude`; hkb has no equivalent. Not observed in this run
+   — hkb's own tests need no such file — which is exactly why it is worth writing down.
 
 10. **Per-PR CI does not compose, and nothing integrates.** #350 and #354 were both green
     alone and broken together. Every branch is cut from `origin/main` at claim time and
@@ -583,16 +589,28 @@ Every item below was found by running the thing, not by reading it.
     Until then the practice that has actually worked is briefing: tell the second attempt
     what the first collided with. #19 and #20 were re-run that way and #19 landed clean.
 
-11. **`succeeded` does not mean "produced anything".** Nothing in the machinery requires a
-    pull request: `withProtocol` (`src/brief.ts`) *asks* for one in prose, is only applied
-    when `isolate` is true, and `nextPhase` decides `succeeded` purely from the runtime's
-    status. `prForBranch` is a read after the fact, and a Job with no PR simply records
-    null. That separation is deliberate — "I investigated and there is nothing to change"
-    is a real outcome — but the *absence* should be loud. `kb show` says
-    `branch kb-N-1 — no pull request found` per attempt; nothing aggregates it, so a board
-    of fifty succeeded Jobs where five produced nothing looks uniform in `kb ls`. This is
-    also the general case of finding 3: nothing verifies the PR's head because nothing
-    verifies there is a PR.
+11. **~~`succeeded` does not mean "produced anything".~~ FIXED** — the absence is loud now.
+    `hkb ls` marks a succeeded Job that opened no pull request and declared no exports as
+    *produced nothing*, and counts them under the listing; `--json` carries `pr`, `exports` and
+    `producedNothing` on every row. The decision is a pure `producedNothing()` predicate and both
+    halves are tested as refusals — neutering the predicate fails two tests, neutering the
+    renderer fails one, which is the check this project owes every guard after shipping three
+    inert ones.
+
+    **What is deliberately NOT changed:** the separation itself. Nothing in the machinery
+    *requires* a pull request — `withProtocol` (`src/brief.ts`) asks for one in prose, only when
+    `isolate` is true, and `nextPhase` decides `succeeded` from the runtime's status alone. "I
+    investigated and there is nothing to change" is a real outcome, and so is a `--no-isolate`
+    Job. ADR-008 already draws the line the marker respects: a **declared** export counts as an
+    artifact without being re-checked, because a declared path the run did not write already fails
+    the attempt. Only the undeclared, unproduced case is marked, and it is stated rather than
+    judged.
+
+    Original: `prForBranch` is a read after the fact, and a Job with no PR simply records null. …
+    the *absence* should be loud. `kb show` says `branch kb-N-1 — no pull request found` per
+    attempt; nothing aggregates it, so a board of fifty succeeded Jobs where five produced nothing
+    looks uniform in `kb ls`. This is also the general case of finding 3: nothing verifies the PR's
+    head because nothing verifies there is a PR.
 
 12. **~~Nothing tells the board a Job is finished with.~~ FIXED** — `kb done <id> "<why>"` and
     `kb cancel <id> "<why>"`, two terminal phases an operator writes. Found by being blocked by it:
@@ -715,11 +733,12 @@ Named so it is not mistaken for forgotten:
   the only dependency, which was true under the zero-dependency rule and became
   false with ADR-007. A published, provenance-signed package resolving 144
   transitive packages fresh on every release is a different proposition.
-- **19 wiki pages are stale.** They describe the pre-ADR-007 system, which still
-  runs. Refresh them when the migration moves that code, or retire them with it.
-- **`engines: >=22.13`** while the sources are `.ts` run natively. CI's node 22 job
-  passes, but the *floor* was set before native type stripping mattered.
-  > TODO-VERIFY: whether 22.13 specifically strips types, or whether the floor
-  > should rise.
+- ~~**19 wiki pages are stale.**~~ **RESOLVED by retirement, 2026-09-05.** They described the
+  pre-ADR-007 system; twenty of them were deleted with the code (ADR-009) and every surviving
+  page was refreshed rather than re-stamped. What is stale now is five *decision records*, and
+  that is correct — a record about deleted code is doing its job.
+- ~~**`engines: >=22.13`**~~ **ANSWERED by measurement in Phase 4c.** The floor is `>=22.18.0`:
+  22.17.1 fails with `ERR_UNKNOWN_FILE_EXTENSION` and 22.18.0 is the first release that strips
+  types unflagged, which a shebang cannot ask for. The CI matrix runs that exact floor.
 - **No migration of the old board.** Decided: the 195 cards are closed and the ref
   is kept as an archive. Nothing is coming back from it.

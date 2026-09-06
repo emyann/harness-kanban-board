@@ -290,3 +290,6 @@ history.
 ## 2026-09-05 — refreshed GLOSSARY (the retired system's vocabulary removed; ceiling, liveness, export, sweep, level-triggered, board defaults recorded)
 ## 2026-09-05 — triage departure: dismissed `hkb init` needs-a-forge finding (src/init.js was deleted by adr-009; the claim has no code left to be true of)
 ## 2026-09-05 — triage departure: re-affirmed the two-boards-one-repository worktree collision against current code (re-anchored to src/worktree.ts:74-105)
+## 2026-09-05 — refreshed architecture/overview (finding 11: `succeeded` no longer implies an artifact — `hkb ls` marks a Job that opened no PR and declared no exports, and the page says so where it explains the forge)
+## 2026-09-05 — refreshed howto/running-the-daemon (no-op re-stamp: the nine src/hkb.ts anchors all sit below the new producedNothing helpers and the ls rewrite, and every one was re-read at +53 — `up` moved 770 → 823. No claim on the page is about the listing)
+## 2026-09-05 — refreshed concepts/node-floor-and-type-check (no-op re-stamp: test.yml changed only from `npm install` to `npm ci`, which no claim on the page is about; `related` pruned of architecture/store-seam, deleted by adr-009)
