@@ -655,6 +655,18 @@ In this order, and each one only when the previous is boring:
 
 ---
 
+## The workflow study
+
+`docs/workflow-study.md` (2026-09-05) is the design study behind the next few decisions: how a
+multi-step workflow should be represented, where determinism lives, what Artic's artifact-driven
+compilation has that hkb does not, and whether orchestration can be delegated to a harness. It is a
+study rather than a decision — its §9 is a list of questions that need answering before any of it
+becomes an ADR. Two things in it are worth knowing without reading it: **the two obvious
+representations were both killed** (a re-entrant gate, and a `Job.after` edge), and it found a
+**contradiction between ADR-007 decision 5 and ADR-010** that is still unresolved.
+
+---
+
 ## Parked, with the design done
 
 Neither of these is next, and neither is debt. Both were designed in conversation on 2026-09-05, both
