@@ -138,6 +138,14 @@ export type ReconcileReport = {
   stopped: number[];
   /** Jobs CREATED this pass from an approved proposal — the controller's write, never a worker's. */
   filed: number[];
+  /**
+   * Jobs now waiting on a person (ADR-010's gate).
+   *
+   * Its own list because it was previously counted as `retrying`, which told the operator the
+   * machine would pick the Job up again when in fact it is waiting for *them* — the one state
+   * nothing but a person can clear, reported as the one thing that needs nobody.
+   */
+  suspended: number[];
 };
 
 const nowDefault = () => new Date();
@@ -423,7 +431,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
   // shipped defaults. The invariant is "the lease outlives the run", so it is computed from the
   // run's own hard bound plus enough grace for teardown and the record writes.
   const leaseFor = (timeoutMs: number) => deps.leaseMs ?? timeoutMs + LEASE_GRACE_MS;
-  const report: ReconcileReport = { refused: null, claimed: [], succeeded: [], failed: [], retrying: [], reclaimed: [], skipped: [], stopped: [], filed: [] };
+  const report: ReconcileReport = { refused: null, claimed: [], succeeded: [], failed: [], retrying: [], reclaimed: [], skipped: [], stopped: [], filed: [], suspended: [] };
 
   if (deps.reclaim !== false) await reclaimExpired(db, now(), report, deps.board, deps.onEvent);
 
@@ -688,7 +696,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
   // Completion order is not id order once runs overlap, and a report whose contents depend on which
   // worker finished first is a report nothing can assert on.
   for (const list of [report.claimed, report.succeeded, report.failed, report.retrying,
-    report.reclaimed, report.skipped, report.stopped, report.filed]) list.sort((a, b) => a - b);
+    report.reclaimed, report.skipped, report.stopped, report.filed, report.suspended]) list.sort((a, b) => a - b);
 
   return report;
 
@@ -1147,7 +1155,13 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         lastSessionId: decision.resumable ? (outcome?.sessionId ?? null) : null,
         // The decision's own line wins where it has one: for a stop only a human can undo, "what
         // to change" is worth more than whatever the runtime called it.
-        lastError: decision.phase === 'succeeded' ? null : (decision.lastError ?? outcome?.error ?? decision.outcome),
+        // Null for a Job that is waiting as well as one that finished. The gate fires only on a
+        // success that produced everything it declared, so there is no error to carry — and the
+        // fallback to `decision.outcome` put the word `completed` in the error column of every
+        // suspended Job, which `hkb show` printed as `error completed`.
+        lastError: decision.phase === 'succeeded' || decision.phase === 'suspended'
+          ? null
+          : (decision.lastError ?? outcome?.error ?? decision.outcome),
         // Neither pending nor suspended is finished. A suspended Job is waiting on a person, which
         // is the one state that can last days — stamping it finished would make every "how long did
         // this take" answer include the time somebody spent deciding.
@@ -1171,7 +1185,15 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       // A suspended Job keeps its checkout for the same reason a resumable one does: the approved
       // attempt continues *in* it, and cutting a fresh worktree would reset the branch to base and
       // strand whatever the propose half already pushed.
-      if ((decision.resumable && decision.phase === 'pending') || decision.phase === 'suspended') {
+      //
+      // A PROPOSING Job is the exception, and it is the exception because of what approval does to
+      // it: the controller files the rows and nothing ever wakes up in that checkout. Keeping it
+      // costs a whole repository on disk to hold work no session will return to, and the message
+      // said "attempt 2 resumes in it" about an attempt that cannot happen. `removeWorktree` still
+      // refuses to take unpushed commits, so a proposer that committed anyway keeps its tree.
+      const resumesHere = (decision.resumable && decision.phase === 'pending')
+        || (decision.phase === 'suspended' && !job.proposes);
+      if (resumesHere) {
         unlockWorktree(cwd, wt);
         say(`kept ${wt.path} — attempt ${k + 1} resumes in it`);
       } else {
@@ -1186,6 +1208,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     if (decision.phase === 'succeeded') report.succeeded.push(job.id);
     else if (decision.phase === 'failed') report.failed.push(job.id);
+    else if (decision.phase === 'suspended') report.suspended.push(job.id);
     else if (decision.outcome === 'stopped') report.stopped.push(job.id);
     else report.retrying.push(job.id);
     say(`${decision.phase.padEnd(9)} ${decision.outcome}${decision.resumable ? ' (resumable)' : ''}`);

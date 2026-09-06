@@ -15,7 +15,7 @@ covers:
   - path: src/results.ts
     sha: 0fc3dc145a1c515267534909aee79f034effa61b
   - path: src/controller.ts
-    sha: a0ebf8771c9d8b06ffbf2de3dd9bdd852e402527
+    sha: 6f97a4884c7d5774bec6e12c2451ecacb260a94a
   - path: src/runtime/claude.ts
     sha: e53fc9819d5fc7bb4b43d17b3f1a681cfe415618
   - path: src/brief.ts
@@ -35,7 +35,7 @@ related:
     architecture/job-kind,
     architecture/the-loop,
   ]
-generated_at_commit: abb202f
+generated_at_commit: 76d1a94
 last_refreshed: 2026-09-06
 ---
 
