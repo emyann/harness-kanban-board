@@ -66,6 +66,15 @@ what is unusual in this file:
 2. The lease has to outlive the run it covers, not the pass.
 3. `hkb down` has to reach in and interrupt a worker. A controller would just exit.
 
+## A stream out, and still no subscription in
+
+`hkb watch` follows the `Event` table as it is written (`features/watch`), which is the *outbound*
+half of what a watch means and changes nothing about this loop: the controller still reads desired
+state and takes a step, and nothing in it depends on having seen an event. The distinction is worth
+keeping straight, because "hkb has a watch now" would otherwise read as a claim about the daemon. It
+is a claim about everything else — a status line, a notifier, a second controller — which until now
+had to poll `hkb ls` and diff.
+
 ## One step that is pure controller
 
 `applyProposals` is the exception to the fusion above, and worth knowing about because it is the only

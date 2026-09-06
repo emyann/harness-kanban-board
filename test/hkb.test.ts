@@ -1283,3 +1283,26 @@ test('a run that only filed a proposal does not report "nothing pending"', async
   assert.match(r.out, /2 filed from a proposal/);
   assert.equal(await db.job.count({ where: { proposedByJobId: j.id } }), 2);
 });
+// ---------------------------------------------------------------- watch
+
+test('watch refuses the two ways of asking it two things at once', async () => {
+  await assert.rejects(() => hkb('watch', '--all', '--board', 'other'), /contradict/);
+  // Both name where to start and mean different things; picking one silently would make the same
+  // command line join the stream in two different places depending on flag order.
+  await assert.rejects(() => hkb('watch', '--board', 'suite-repo', '--after', '1', '--since', '5m'), /--after <id>.*--since <dur>/s);
+  await assert.rejects(() => hkb('watch', '--board', 'suite-repo', '999999'), /no Job #999999/);
+});
+
+test('watch streams NDJSON on stdout, one event per line, each carrying its cursor', async () => {
+  const j = json((await hkb('new', 'watched', '--brief', 'b', '--board', 'suite-repo', '--json')).out);
+  // `-n` bounds it so the test terminates; `--after 0` replays from the start of this board.
+  const r = await hkb('watch', String(j.id), '--board', 'suite-repo', '--after', '0', '-n', '1', '--json', '--timeout', '10');
+  assert.equal(r.code, 0);
+  const lines = r.out.trim().split('\n');
+  assert.equal(lines.length, 1, 'a stream is one object per line, not one object at the end');
+  const e = json(lines[0]);
+  assert.equal(e.kind, 'created');
+  assert.equal(e.jobId, j.id);
+  assert.ok(e.id > 0, 'and the id is what `--after` takes back');
+});
+

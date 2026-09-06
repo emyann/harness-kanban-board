@@ -20,6 +20,7 @@
 ## Features
 
 - [Proposals — how a workload files work without touching the board](./features/proposals.md): A proposing Job writes one JSON file, a person reads it, and the controller creates the rows — the transport, the refusals, the approval, and why applying it twice creates nothing twice.
+- [Watch — the board's event stream, followed](./features/watch.md): The third question about the board, after "what is true now" and "what happened": tell me when something happens. Cursors rather than state, woken by the filesystem rather than polled, and resumable because an id never expires.
 - [Carrying gitignored files into a worktree (`.worktreeinclude`)](./features/worktree-includes.md): A worktree is a fresh checkout, so the `.env` the tests need is not in it — a repository declares what to carry across, git answers both halves of the match rule, and no pattern may reach the board.
 
 ## Decisions

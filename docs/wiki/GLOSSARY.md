@@ -115,6 +115,11 @@ meet one in the git history, that is what it was.
 - **Resumable outcome** — a run that stopped on its turn or budget cap rather than breaking: it left
   a session worth continuing, so the next attempt resumes it instead of starting cold (`nextPhase`,
   `src/controller.ts`) (*architecture/runtime-layer*).
+- **Watch** — following the board's `Event` stream as it is written (`hkb watch`, `src/watch.ts`). Every
+  line leads with its event id, and that id is the resume token: `--after <id>` picks up exactly where a
+  previous watch stopped, and it never expires because events are append-only. Woken by `fs.watch` on the
+  board's directory with a slow interval as the fallback, so a filesystem that cannot report changes makes
+  it later and never wrong (*features/watch*).
 - **Runtime** — the seam that runs a worker, `run(spec) -> WorkerOutcome` (`src/runtime/index.ts`).
   Two drivers: the Claude Agent SDK (`src/runtime/claude.ts`) and a fake that spends nothing
   (`src/runtime/fake.ts`) (*architecture/runtime-layer*).

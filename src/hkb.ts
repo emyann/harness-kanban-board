@@ -9,6 +9,7 @@ import { checkExportPath } from './worktree.ts';
 import { checkResultName, RESULT_MAX_BYTES } from './results.ts';
 import { checkArtifactName, artifactsDir, bytes } from './artifacts.ts';
 import { PROPOSAL_ARTIFACT, describeProposal, storedProposal } from './proposals.ts';
+import { eventLine, watchEvents, watchWhere, WATCH_FALLBACK_MS } from './watch.ts';
 import { checkPluginPath, pluginList } from './plugins.ts';
 import { checkInputSpec, declaredInputs, renderBrief, describeSource } from './inputs.ts';
 import { fakeRuntime } from './runtime/fake.ts';
@@ -109,6 +110,14 @@ const HELP = `hkb — run one agent against one brief
   hkb down                  stop it, cleanly                    [--timeout <s>]
   hkb log [<id>]            what happened, in order             [-n <count>]
        --since <dur>       only what is newer than 90s, 30m, 2h, 3d
+  hkb watch [<id>]          follow the stream as it happens     [--all] [-n <count>]
+       --after <event>     resume exactly where a previous watch stopped — every line
+                           leads with the id to feed back, so a consumer that dies
+                           misses nothing
+       --since <dur>       start from a moment instead: 90s, 30m, 2h
+       --timeout <s>       stop after this long, for a script that waits for one thing
+                        \`--json\` streams one event per line; the header goes to stderr, so
+                        \`hkb watch --json | jq\` is exactly the events.
 
   hkb boards                every board on this machine
   hkb boards add <slug>     point a board at a repository       [--repo <path>]
@@ -412,6 +421,9 @@ export async function main(argv: string[]): Promise<number> {
       timeout: { type: 'string' },
       limit: { type: 'string', short: 'n' },
       since: { type: 'string' },
+      // The watch cursor. An id, not a duration — `--since` is "how far back", `--after` is
+      // "resume exactly here", and only the second one survives a restart without gaps.
+      after: { type: 'string' },
     },
   });
 
@@ -1424,18 +1436,82 @@ export async function main(argv: string[]): Promise<number> {
             ? `nothing ${what} in the last ${values.since}`
             : `nothing recorded ${what} yet`);
         }
-        for (const e of rows) {
-          const who = e.actor ? `  ${e.actor}` : '';
-          const extra = e.payload && Object.keys(e.payload as object).length
-            ? `  ${JSON.stringify(e.payload)}` : '';
-          console.log(`${e.at.toISOString()}  ${(e.jobId ? `#${e.jobId}` : '—').padEnd(5)} ${e.kind.padEnd(13)}${who}${extra}`);
-        }
+        // The same renderer `hkb watch` uses, so the two views of one stream cannot drift apart.
+        for (const e of rows) console.log(eventLine(e));
       });
       return 0;
     }
 
+    // ---------------------------------------------------------------- watch
+    // The third question about the board. `ls` answers what is true now and `log` answers what
+    // happened up to now; this one answers "tell me when something happens", which everything that
+    // wants to react to hkb has otherwise had to fake by polling one of the other two and diffing.
+    case 'watch': {
+      const id = rest[0] ? num(rest[0], 'hkb watch <id>') : undefined;
+      const all = !!values.all;
+      if (all && named) {
+        throw usage(`--all is every board on this machine and --board ${named} is one — they contradict each other. Drop whichever you did not mean.`);
+      }
+      if (values.after !== undefined && values.since !== undefined) {
+        throw usage('--after <id> resumes exactly where a previous watch stopped and --since <dur> starts from a moment — they answer the same question differently, so give one.');
+      }
+      if (id && !(await db.job.findUnique({ where: { id } }))) {
+        throw usage(`no Job #${id} — \`hkb ls\` shows what is on the board`);
+      }
+      const board = all || id ? null : await db.board.findUnique({ where: { slug } });
+      if (!all && !id && !board) throw usage(`no board "${slug}" — \`hkb new\` creates one`);
+      const scope = id ? { jobId: id } : board ? { boardId: board.id } : {};
+
+      // Where to join the stream. The default is the END of it — a watch is about what happens
+      // next, and replaying a month of history because somebody typed `hkb watch` would bury it.
+      let after: number;
+      if (values.after !== undefined) {
+        after = num(values.after, '--after') as number;
+      } else if (values.since !== undefined) {
+        const at = new Date(Date.now() - parseDuration(String(values.since)));
+        // The id just before the window, so the first event INSIDE it is the first one emitted.
+        const first = await db.event.findFirst({
+          where: { ...watchWhere(scope), at: { gte: at } }, orderBy: { id: 'asc' }, select: { id: true },
+        });
+        after = first ? first.id - 1 : ((await db.event.findFirst({ orderBy: { id: 'desc' }, select: { id: true } }))?.id ?? 0);
+      } else {
+        after = (await db.event.findFirst({
+          where: watchWhere(scope), orderBy: { id: 'desc' }, select: { id: true },
+        }))?.id ?? 0;
+      }
+
+      const limit = values.limit !== undefined ? (num(values.limit, '-n') as number) : undefined;
+      const seconds = values.timeout !== undefined ? num(values.timeout, '--timeout') : undefined;
+      const stop = new AbortController();
+      // Ctrl-C is the ordinary way out and must not read as a failure: a watch that was interrupted
+      // did its job. The cursor goes to stderr on the way out so the next one can resume.
+      const onSigint = () => stop.abort();
+      process.on('SIGINT', onSigint);
+      const timer = seconds ? setTimeout(() => stop.abort(), seconds * 1000) : null;
+
+      // stderr, not stdout, and in both modes. `--json` is a STREAM here — one event per line, not
+      // one object at the end, because a stream you have to wait for the end of is a list. Keeping
+      // the header off stdout is what lets `hkb watch --json | jq` be exactly the events.
+      const what = id ? `#${id}` : all ? 'every board' : slug;
+      process.stderr.write(`watching ${what} from event ${after}${seconds ? ` for ${seconds}s` : ''} — ctrl-c to stop\n`);
+
+      let cursor = after;
+      try {
+        cursor = await watchEvents({
+          db, scope, after, dir: daemon.boardDir(), signal: stop.signal, limit,
+          intervalMs: WATCH_FALLBACK_MS,
+          onEvent: (e) => console.log(out.json ? JSON.stringify(e) : eventLine(e, true)),
+        });
+      } finally {
+        if (timer) clearTimeout(timer);
+        process.off('SIGINT', onSigint);
+      }
+      process.stderr.write(`stopped at event ${cursor} — resume with \`hkb watch --after ${cursor}\`\n`);
+      return 0;
+    }
+
     default:
-      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, retry, done, cancel, rm, stop, start, up, down, log, boards`);
+      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, retry, done, cancel, rm, stop, start, up, down, log, watch, boards`);
   }
 }
 

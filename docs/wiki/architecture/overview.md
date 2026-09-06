@@ -24,6 +24,8 @@ covers:
     sha: 5fa957ea2723d26e0a37cd67725d756bb6838469
   - path: src/proposals.ts
     sha: fd5e1eee8b847c9b4024d1bf5f635a85907baae4
+  - path: src/watch.ts
+    sha: 992b53f9dc3ef4284c2a1bf0201794490afee393
   - path: src/brief.ts
     sha: a6f76aecf0487fc43076a4f582c022756d52357e
   - path: src/worktree.ts
@@ -70,6 +72,7 @@ seam or 36 CLI verbs is describing code that is gone.
 | `src/artifacts.ts` | the files a Job hands on that the board keeps and the repository does not |
 | `src/inputs.ts` | what a Job is given: the read side, resolved before the run |
 | `src/proposals.ts` | what a Job may ask the board to create, and every field it may not set |
+| `src/watch.ts` | the event stream, followed — what the outside world reacts to |
 | `src/pulls.ts` | the only thing that shells out to `gh` |
 
 ## State lives in the board, and only there

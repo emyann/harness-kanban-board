@@ -68,6 +68,7 @@ hkb show 1                                 # phase, spec, and every attempt: out
 | `hkb stop` · `hkb start` | the board's kill switch, and clearing it |
 | `hkb up` · `hkb down` | the same reconcile pass on a timer, detached |
 | `hkb log [<id>]` | what happened, in order |
+| `hkb watch [<id>]` | the same stream, as it happens |
 | `hkb boards` | every board on this machine, and what each one may spend |
 | `hkb version` | what this build is |
 
@@ -105,6 +106,44 @@ It runs, produces its declared outputs, and goes **`suspended`** rather than fin
 
 The gate is **one-shot**: after an approval the Job finishes like any other. The approver need not be
 you — a delegated agent or an auto-approve policy writes the same record, and `hkb log` shows which.
+
+### Proposing work instead of filing it: `--propose`
+
+A Job that decides what *other* Jobs should exist does not get to create them. It writes one JSON file
+and a person approves it:
+
+```bash
+hkb new "Break the migration down" --brief-file plan.md --propose
+```
+
+It runs, writes `proposal.json` into its artifact directory, and suspends saying how many Jobs it is
+asking for. `hkb show` prints the list. `hkb approve` then hands it to the **controller**, which
+creates the rows — the worker never touches the board, has no credential for it, and cannot be given
+one. A proposed Job may set `name`, `brief` and a `maxBudgetUsd` that is clamped down to what the
+proposer itself was allowed to spend; anything else — `isolate`, `allowedTools`, a plugin grant — is
+refused by name.
+
+The reason is not politeness about permissions. A run that files rows as a side effect **cannot be
+retried**: the second attempt re-does what the first already did, and nothing can tell the duplicates
+apart. A proposal is collected after the run returns, so a worker that dies mid-session leaves nothing
+applied, and applying the same approval twice creates nothing twice.
+
+### Watching the board: `hkb watch`
+
+`hkb ls` is what is true now and `hkb log` is what happened up to now. **`hkb watch`** is *tell me when
+something happens* — the same event stream, followed as it is written:
+
+```bash
+hkb watch                      # this board, from now on
+hkb watch 42 --json | jq       # one Job, one JSON object per line
+hkb watch --after 412          # resume exactly where the last one stopped
+```
+
+Every line leads with its event id, and that id is the whole contract: a consumer that dies comes back
+with `--after <id>` and misses nothing. The cursor never expires, because events are append-only. It is
+woken by the filesystem rather than polled — a change to the board file is a hint to re-read — with a
+slow interval underneath as the guarantee, so a filesystem that cannot report changes makes it later
+and never wrong. Measured at 5–14 ms from commit to line on Linux.
 
 ### Retrying, and the one retry that is not automatic
 
@@ -269,6 +308,7 @@ If you know Kubernetes, the shape is deliberate:
 | Board | Namespace |
 | `Controller` row | leader election |
 | `hkb up` | a resync loop, not a watch |
+| `hkb watch` | a watch, for everything *outside* hkb |
 
 The controller is **level-triggered**: it reads observed state, compares it to desired state and takes one
 step. It is safe to run repeatedly, to interrupt, and to run while another host runs it. Nothing depends on
