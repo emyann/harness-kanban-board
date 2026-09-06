@@ -42,6 +42,12 @@ meet one in the git history, that is what it was.
   `Attempt.maxBudgetUsd` over attempts with no `endedAt` (`committedUsd`, `src/limits.ts`). Counted
   because `costUsd` only moves when an attempt *ends*, so without it N concurrent claims would each
   be judged against a spend none of them had contributed to yet (*concepts/ceilings*).
+- **Composition failure** — two changes that are each correct, each green on their own branch, and
+  broken once both are on the mainline. Not a merge conflict (git reports none) and not a
+  concurrency bug: every branch is cut from the mainline at claim time and never rebased
+  (`createWorktree`, `src/worktree.ts`), so what parallel workers share is a **base**, not a clock.
+  What they collide on is a shared invariant rather than a shared file
+  (*gotchas/merge-composition*).
 - **Control plane** — hkb read as Kubernetes reads itself: a Board is a namespace, a Job is a Job, an
   Attempt is a Pod, a Lease is a Lease, and the daemon is a controller-manager. The one departure is
   that hkb also *executes* — there is no node to schedule onto (*architecture/overview*,
