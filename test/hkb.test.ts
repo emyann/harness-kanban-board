@@ -1245,3 +1245,41 @@ test('a succeeded Job that declared an export is not marked, even with no pull r
     { id: number; exports: string[]; producedNothing: boolean }[];
   assert.deepEqual(rows.find((r) => r.id === job.id)?.exports, ['docs/report.md']);
 });
+
+test('retry refuses a proposer whose proposal has already been filed', async () => {
+  const j = json((await hkb('new', 'already filed', '--brief', 'b', '--board', 'suite-repo', '--propose', '--json')).out);
+  // The state a real one reaches after `hkb approve` and one reconcile pass: succeeded, with an
+  // `applied` event. Retrying it would find the same approval, re-file rows the unique key already
+  // refuses, and finish it again without the worker ever running — a retry that quietly does
+  // nothing, which is the failure mode this project has shipped before.
+  await db.job.update({ where: { id: j.id }, data: { phase: 'succeeded' } });
+  await db.event.create({
+    data: { kind: 'applied', jobId: j.id, actor: 'ada', payload: { filed: [999], already: 0, attempt: 1 } },
+  });
+  await assert.rejects(() => hkb('retry', String(j.id), '--board', 'suite-repo'), /already been filed[\s\S]*file a new Job/);
+
+  // An ordinary Job in the same phase is still retryable: the refusal is about the proposal having
+  // been applied, not about the Job being finished.
+  const plain = json((await hkb('new', 'ordinary', '--brief', 'b', '--board', 'suite-repo', '--json')).out);
+  await db.job.update({ where: { id: plain.id }, data: { phase: 'succeeded' } });
+  assert.equal((await hkb('retry', String(plain.id), '--board', 'suite-repo')).code, 0);
+});
+
+test('a run that only filed a proposal does not report "nothing pending"', async () => {
+  const j = json((await hkb('new', 'proposes two', '--brief', 'b', '--board', 'suite-repo', '--propose', '--json')).out);
+  // The state after a proposing run and an approval, seeded directly: the fake runtime writes no
+  // files, and what is under test here is the reporting rather than the proposing.
+  await db.attempt.create({
+    data: {
+      jobId: j.id, k: 1, maxBudgetUsd: 1, outcome: 'completed', endedAt: new Date(),
+      proposal: { jobs: [{ name: 'first', brief: 'x' }, { name: 'second', brief: 'y' }], clamped: [] },
+    },
+  });
+  await db.event.create({ data: { kind: 'approved', jobId: j.id, actor: 'ada', payload: {} } });
+
+  const r = await hkb('run', String(j.id), '--fake', '--board', 'suite-repo');
+  assert.doesNotMatch(r.out, /nothing to do|nothing pending/,
+    'the pass created two Jobs — saying it did nothing is the opposite of what happened');
+  assert.match(r.out, /2 filed from a proposal/);
+  assert.equal(await db.job.count({ where: { proposedByJobId: j.id } }), 2);
+});

@@ -773,11 +773,17 @@ export async function main(argv: string[]): Promise<number> {
           if (e.kind === 'text') console.log(`#${e.taskId}    : ${e.text}`);
         },
       });
-      const moved = report.claimed.length + report.reclaimed.length;
+      // `filed` counts, because applying an approved proposal is work this pass did without
+      // claiming anything: a run that created three Jobs and reported "nothing pending" would be
+      // saying the opposite of what it just did.
+      const moved = report.claimed.length + report.reclaimed.length + report.filed.length;
       emit(out, report, () => {
         if (report.refused) console.log(`refused: ${report.refused}`);
         else if (!moved) console.log(only ? `#${only} is not pending — nothing to do` : 'nothing pending');
-        else console.log(`${report.succeeded.length} succeeded, ${report.failed.length} failed, ${report.retrying.length} to retry`);
+        else {
+          console.log(`${report.succeeded.length} succeeded, ${report.failed.length} failed, ${report.retrying.length} to retry`
+            + (report.filed.length ? `, ${report.filed.length} filed from a proposal` : ''));
+        }
       });
       return 0;
     }
@@ -822,6 +828,17 @@ export async function main(argv: string[]): Promise<number> {
       if (job.phase === 'pending') throw usage(`#${id} is already pending — \`hkb run ${id}\` works it now`);
       if (job.phase === 'running') {
         throw usage(`#${id} says running with no lease — \`hkb run\` reclaims it, and re-queueing it by hand would race that`);
+      }
+      // A proposing Job whose proposal has been applied has nothing left to do: the next pass would
+      // see the same approval, re-file rows the unique key already refuses, and finish it again
+      // without ever running the worker. Refused here rather than absorbed there, because a retry
+      // that quietly does nothing is the failure mode this project has shipped before.
+      if (job.proposes && await db.event.count({ where: { jobId: id, kind: 'applied' } })) {
+        throw usage(
+          `#${id} proposed work that has already been filed — retrying it would re-run nothing, `
+          + `because the approval it would find is the one that was already applied. `
+          + `\`hkb log ${id}\` shows what it filed; file a new Job to propose again.`,
+        );
       }
 
       const budget = num(values['max-budget'], '--max-budget');

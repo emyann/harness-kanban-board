@@ -1481,6 +1481,29 @@ test('a proposing Job that writes no proposal fails like any other declared outp
     'and the reason is the validator’s, because the validator is the only thing that looks');
 });
 
+test('a pass that only applied a proposal still reports that it did something', async () => {
+  // The report is what `hkb run` prints from, and `claimed + reclaimed` was the whole of "did this
+  // pass do anything". A pass that created three Jobs and said "nothing pending" would be telling
+  // the operator the opposite of what it had just done.
+  const b = await proposalBoard();
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'files two', brief: 'break it down', isolate: false,
+      proposes: 'jobs', gate: 'a proposal to review', maxBudgetUsd: 2,
+    },
+  });
+  await reconcile({
+    runtime: proposing(JSON.stringify({ jobs: [{ name: 'x', brief: 'x' }, { name: 'y', brief: 'y' }] })),
+    cwd, board: 'proposals', readPr: false,
+  });
+  await db.event.create({ data: { kind: 'approved', jobId: job.id, boardId: b.id, actor: 'ada', payload: {} } });
+  await db.job.update({ where: { id: job.id }, data: { phase: 'pending', suspendedFor: null } });
+
+  const report = await reconcile({ runtime: proposing('{}'), cwd, only: job.id, board: 'proposals', readPr: false });
+  assert.equal(report.claimed.length, 0, 'nothing was claimed — the proposer was applied, not run');
+  assert.equal(report.filed.length, 2, 'and the two rows it filed are in the report');
+});
+
 test('a create failure that is NOT a duplicate stops the pass rather than being swallowed', async () => {
   // The other half of the P2002 catch. A board that silently drops half a proposal because one row
   // hit an error nobody looked at is worse than one that stops and says so — and the difference is

@@ -295,7 +295,6 @@ async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report
   }
 }
 
-/** One pass. Returns what it did, so a caller can loop until nothing changes. */
 /**
  * Apply the proposals that have been approved, and finish the Jobs that made them.
  *
@@ -409,6 +408,7 @@ async function applyProposals(
   }
 }
 
+/** One pass. Returns what it did, so a caller can loop until nothing changes. */
 export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> {
   const db = openBoard();
   const now = deps.now ?? nowDefault;
