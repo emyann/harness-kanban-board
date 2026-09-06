@@ -323,3 +323,4 @@ history.
 ## 2026-09-06 — refreshed architecture/overview (the union: inputs stored as k8s stores `env` — name plus `value` or a `valueFrom` object — and the `self:` downward API, with `slot` as the fact that earns it)
 ## 2026-09-06 — refreshed architecture/job-kind (the claim now carries a second unique constraint: `Lease.slot`, the concurrency ordinal, refusing into the same catch the CAS already used)
 ## 2026-09-06 — refreshed architecture/the-loop + howto/running-the-daemon (no-op re-stamps: the lease gained a nullable column and the controller a resolver branch; neither page enumerates lease fields or claims anything about inputs)
+## 2026-09-06 — triage inbox: added one [bug] finding (ensureSchema migrates the live board from whatever branch is checked out, with no prompt and no way back)
