@@ -9,7 +9,7 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: efbf4fbeac22955685d1ab9f680cb62e9f1dd6b7
+    sha: 03dc0b6545ec1314199c87a131ef12c198612d89
   - path: src/controller.ts
     sha: 89144b5df92a2082662e9698cc5713d0d6db9691
   - path: src/daemon.ts
@@ -23,7 +23,7 @@ covers:
   - path: src/pulls.ts
     sha: a27f00a986f576c2d3ed035902c0a1c9f9a9300c
   - path: prisma/schema.prisma
-    sha: d7176becc991e579b9c58e189a4cbcfa9453a707
+    sha: a3305783d4f7c6df879a5e4394ce3f86a4524403
 related:
   [
     architecture/job-kind,
@@ -33,7 +33,7 @@ related:
     decisions/adr-007-workload-scheduler,
     decisions/adr-009-retiring-the-first-system,
   ]
-generated_at_commit: 5cc611e
+generated_at_commit: e8e7bea
 last_refreshed: 2026-09-05
 ---
 

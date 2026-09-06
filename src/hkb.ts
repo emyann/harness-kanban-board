@@ -37,7 +37,7 @@ const HELP = `hkb — run one agent against one brief
 
   hkb new <name>            file a Job
        --brief <text> | --brief-file <path> | --brief - (stdin)
-       --agent <a>  --model <m>  --effort low|medium|high|xhigh|max
+       --model <m>  --effort low|medium|high|xhigh|max
        --max-turns <n>  --max-budget <usd>  --max-retries <n>
        --no-isolate     run in the current checkout instead of its own worktree
        --allow-tool <t> the tool surface this Job may use, repeatable. Anything absent is
@@ -333,7 +333,6 @@ export async function main(argv: string[]): Promise<number> {
       'allow-tools': { type: 'string' },
       brief: { type: 'string' },
       'brief-file': { type: 'string' },
-      agent: { type: 'string' },
       model: { type: 'string' },
       effort: { type: 'string' },
       board: { type: 'string' },
@@ -415,7 +414,6 @@ export async function main(argv: string[]): Promise<number> {
           // Null rather than `[]` for a Job that declares nothing: "produces no file" and "produced
           // none of the files it promised" are different facts, and only the second is a failure.
           ...(exports.length ? { exports } : {}),
-          agent: (values.agent as string) ?? undefined,
           model: (values.model as string) ?? null,
           effort: effort ?? null,
           isolate: !values['no-isolate'],
@@ -524,7 +522,7 @@ export async function main(argv: string[]): Promise<number> {
           console.log(`  ended    by ${job.endedBy}${job.finishedAt ? `, ${job.finishedAt.toISOString()}` : ''}`);
           console.log(`           ${job.endedFor}`);
         }
-        console.log(`  spec     agent=${job.agent} isolate=${job.isolate} timeoutMs=${job.timeoutMs}`);
+        console.log(`  spec     isolate=${job.isolate} timeoutMs=${job.timeoutMs}`);
         // The surface the run will actually get. `(runtime default)` is an answer, not a blank:
         // it says nobody narrowed this Job, which is the difference between a Job that may write
         // and a Job that was deliberately stopped from writing.
