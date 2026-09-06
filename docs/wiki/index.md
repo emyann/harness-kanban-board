@@ -39,12 +39,10 @@
 - [ADR-012: A worker gets a repository''s skills by grant, and never its settings](./decisions/adr-012-skills-by-grant-not-by-settings.md): The coupling that blocked this is not real, and the measurement broke it: `plugins: [{type:'local', path}]` puts a repository's own skills in front of a worker with `settingSources` still empty. So hkb never loads `.claude/settings.json` — those hooks are shell commands the repository author writes and hkb would run on the operator's machine — and skills arrive instead as a directory the operator grants, per board or per Job, resolved against `Board.repoPath` so a human merge stays the boundary. The grant unit is a directory rather than a skill, because `Options.skills` was measured not to narrow anything.
 - [ADR-013: hkb reads the repository''s guide; it never loads the repository''s settings](./decisions/adr-013-the-guide-is-read-not-loaded.md): ADR-012 refused `settingSources` and named the cost: a worker could not read CLAUDE.md. The refusal stands — measurement confirms the SDK offers no other route — but the conclusion drawn from it does not, because nothing stops hkb reading the file itself. The guide becomes a grant (`--guide`, `Board.defaultGuide`), read from `Board.repoPath`, prepended as instruction, and fatal before the run when it is missing. The same measurement found workers inheriting the operator's claude.ai MCP connectors, which `strictMcpConfig` now stops.
 
+## Gotchas
+
+- [Per-PR CI does not compose](./gotchas/merge-composition.md): Four collisions where every PR was individually correct and CI-green: what parallel workers on one base actually collide on (shared invariants, not shared files), and why briefing fixed it where machinery could not.
+
 ## Howto
 
 - [Running the daemon under a supervisor](./howto/running-the-daemon.md): Keep `hkb up` alive across reboots — a systemd user unit or a launchd agent around `hkb up --foreground`, where the log goes, and the restart-after-upgrade rule.
-
-## Planned (not yet written)
-
-- gotchas/merge-composition: Four collisions where every PR was individually correct and CI-green: what parallel workers on one base actually collide on (shared invariants, not shared files), and why briefing fixed it where machinery could not.
-
-> Backlog from the page plan (`pages:` in `wiki.config.yml`) — draft on demand: "draft `<slug>` from the wiki plan".

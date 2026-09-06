@@ -121,4 +121,4 @@ pages:
     status: seeded
   - slug: gotchas/merge-composition
     summary: "Four collisions where every PR was individually correct and CI-green: what parallel workers on one base actually collide on (shared invariants, not shared files), and why briefing fixed it where machinery could not."
-    status: planned
+    status: seeded
