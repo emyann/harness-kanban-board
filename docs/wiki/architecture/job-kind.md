@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "adding a workload kind, changing retry or lease behaviour, or wondering why the DAG is not in the core"
 covers:
   - path: prisma/schema.prisma
-    sha: f4b3adeb799b04102e4ee64b961b9490c955fbd9
+    sha: d7176becc991e579b9c58e189a4cbcfa9453a707
   - path: src/controller.ts
-    sha: e4db1f7d58cc0a761998f1d2a3bb0d78aadea5a8
+    sha: 89144b5df92a2082662e9698cc5713d0d6db9691
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
-generated_at_commit: 54ad569
+generated_at_commit: 5cc611e
 last_refreshed: 2026-09-05
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control]
 ---
@@ -200,8 +200,13 @@ first one takes to finish.
 ## Defaults, and why they are not ceilings
 
 A Board carries **spec defaults** beside its ceilings: `defaultModel`, `defaultEffort`,
-`defaultMaxTurns`, `defaultMaxBudgetUsd`, `defaultMaxRetries`. A board that runs cheap,
-high-volume work can say so once instead of on every `hkb new`.
+`defaultMaxTurns`, `defaultMaxBudgetUsd`, `defaultMaxRetries`, `defaultAllowedTools`. A board that
+runs cheap, high-volume work can say so once instead of on every `hkb new`.
+
+`defaultAllowedTools` is the one that is a *surface* rather than a number, and it is worth being
+clear about which side of the line it sits on: a board default a Job may **widen**. The narrowing
+itself is enforced — `src/admission.ts` denies anything absent from the resolved list — but what a
+board sets there is a default, not a ceiling. A Job that names a wider list gets it.
 
 They are separate columns from the ceilings, and the reason is who wins. A **ceiling** is a
 limit a Job may not exceed, enforced in `gateClaim`. A **default** is a value a Job may

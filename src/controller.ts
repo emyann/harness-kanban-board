@@ -331,7 +331,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         pausedAt: true, pausedBy: true, maxConcurrent: true, dailyBudgetUsd: true, id: true,
         repoPath: true,
         defaultModel: true, defaultEffort: true, defaultMaxTurns: true, defaultMaxBudgetUsd: true,
-        defaultMaxRetries: true,
+        defaultMaxRetries: true, defaultAllowedTools: true,
       },
     });
     // The spec this Job actually runs with, resolved once and used for everything below: the gate,
@@ -584,6 +584,11 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         effort: spec.effort.value ?? undefined,
         maxTurns: spec.maxTurns.value,
         maxBudgetUsd: spec.maxBudgetUsd.value,
+        // The tool surface, resolved like everything else. Undefined — not null — when nobody
+        // named one, because `WorkerSpec.allowedTools` is optional and the runtime's own default
+        // is what an absent value means. The admission gate is built from this same list
+        // (`src/runtime/claude.ts`), so narrowing it here is what actually refuses.
+        allowedTools: spec.allowedTools.value ?? undefined,
         timeoutMs: job.timeoutMs,
         resume: job.lastSessionId ?? undefined,
         signal: deps.signal,

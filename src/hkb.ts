@@ -40,6 +40,10 @@ const HELP = `hkb — run one agent against one brief
        --agent <a>  --model <m>  --effort low|medium|high|xhigh|max
        --max-turns <n>  --max-budget <usd>  --max-retries <n>
        --no-isolate     run in the current checkout instead of its own worktree
+       --allow-tool <t> the tool surface this Job may use, repeatable. Anything absent is
+                        DENIED at admission, not merely discouraged. Without it the runtime's
+                        own default applies; --allow-tools Read,Grep says the same in one
+                        argument.
        --export <path>  a file or directory the Job must produce, repo-relative. It is
                         copied into the repository before the worktree is torn down, and
                         a declared path the run did not write fails the attempt. Repeatable.
@@ -75,6 +79,7 @@ const HELP = `hkb — run one agent against one brief
        --daily-budget <usd>|none
        --model <m>|none  --effort <e>|none  --max-turns <n>|none
        --max-budget <usd>|none  --max-retries <n>|none
+       --allow-tools <a,b>|none  the default tool surface for Jobs that name none
 
   hkb version               what this build is
 
@@ -322,6 +327,10 @@ export async function main(argv: string[]): Promise<number> {
       // Repeatable: a Job with two deliverables declares two paths, and the alternative — one
       // comma-separated string — makes a filename containing a comma undeclarable.
       export: { type: 'string', multiple: true },
+      // Repeatable, for the same reason `--export` is: a tool name is a token, and one
+      // comma-separated string makes the empty list ("this Job may call nothing") unsayable.
+      'allow-tool': { type: 'string', multiple: true },
+      'allow-tools': { type: 'string' },
       brief: { type: 'string' },
       'brief-file': { type: 'string' },
       agent: { type: 'string' },
@@ -393,6 +402,13 @@ export async function main(argv: string[]): Promise<number> {
       // worktree is an illegal request, and an illegal request should never become state. The same
       // check runs again at copy time, because a row can arrive by other routes than this one.
       const exports = ((values.export as string[] | undefined) ?? []).map(checkExportPath);
+      // Null when the flag was absent, so the board's default can answer. An EMPTY list is only
+      // reachable through `--allow-tools ""`, and it means what it says: no tools at all.
+      const allowedTools = values['allow-tool'] !== undefined
+        ? (values['allow-tool'] as string[]).map((t) => t.trim()).filter(Boolean)
+        : values['allow-tools'] !== undefined
+          ? String(values['allow-tools']).split(',').map((t) => t.trim()).filter(Boolean)
+          : null;
       const job = await db.job.create({
         data: {
           boardId: board.id, name, brief,
@@ -403,6 +419,7 @@ export async function main(argv: string[]): Promise<number> {
           model: (values.model as string) ?? null,
           effort: effort ?? null,
           isolate: !values['no-isolate'],
+          allowedTools,
           // Null, not a number, when the flag was not given. A Job that recorded 20 turns because
           // nobody said otherwise would outrank its board's default for ever — "unset" staying
           // legible is the whole reason these columns are nullable. See `src/spec.ts`.
@@ -508,6 +525,11 @@ export async function main(argv: string[]): Promise<number> {
           console.log(`           ${job.endedFor}`);
         }
         console.log(`  spec     agent=${job.agent} isolate=${job.isolate} timeoutMs=${job.timeoutMs}`);
+        // The surface the run will actually get. `(runtime default)` is an answer, not a blank:
+        // it says nobody narrowed this Job, which is the difference between a Job that may write
+        // and a Job that was deliberately stopped from writing.
+        console.log(`  tools    ${spec.allowedTools.value?.join(', ') ?? '(runtime default)'}`
+          + `  [${spec.allowedTools.from}]`);
         // One line per resolved field, with its source named. Three levels answer these five
         // questions, and printing only the winner turns "why did this run on Opus" into
         // archaeology across two tables — a spec you cannot trace is worse than one you repeat.
@@ -970,6 +992,14 @@ export async function main(argv: string[]): Promise<number> {
         setNumber('max-turns', 'defaultMaxTurns', (n) => Number.isInteger(n) && n >= 1, 'a whole number of turns, 1 or more');
         setNumber('max-budget', 'defaultMaxBudgetUsd', (n) => n > 0, 'dollars above zero');
         setNumber('max-retries', 'defaultMaxRetries', (n) => Number.isInteger(n) && n >= 0, 'a whole number of retries, 0 or more');
+        // A list, so it takes the comma-separated form rather than the repeatable one: `boards set`
+        // is a single statement about the board, and a repeatable flag here would read as adding to
+        // a list rather than replacing it.
+        if (values['allow-tools'] !== undefined) {
+          const raw = String(values['allow-tools']).trim();
+          if (!raw) throw usage(`--allow-tools was given nothing — pass a comma-separated list, or "${CLEAR}" to clear the default`);
+          data.defaultAllowedTools = raw === CLEAR ? null : raw.split(',').map((t) => t.trim()).filter(Boolean);
+        }
 
         if (values['max-concurrent'] !== undefined) {
           const n = num(values['max-concurrent'], '--max-concurrent') as number;

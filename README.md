@@ -126,6 +126,13 @@ and is deleted with it.
 `--no-isolate` runs the Job in the current checkout rather than a worktree of its own, for work that has no
 business on a branch.
 
+`--allow-tool <name>` (repeatable, or `--allow-tools Read,Grep`) narrows the tool surface a Job may use.
+This is a **ceiling the board enforces, not a request**: anything absent is denied in a `PreToolUse` hook
+that runs before every other permission rule, so a Job given `Read` and `Grep` *cannot* write, whatever its
+brief says. Without it, the runtime's own default applies. `hkb boards set <slug> --allow-tools …` sets the
+default for Jobs that name none — a default a Job may still widen, unlike `--daily-budget`, which it cannot
+exceed.
+
 ### Isolation, and the file the tests need
 
 A worktree is a fresh checkout of a commit, so two things are true of it and both matter: uncommitted work in
