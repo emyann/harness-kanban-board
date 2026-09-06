@@ -54,16 +54,12 @@ meet one in the git history, that is what it was.
   worktree into the repository before the checkout is torn down — the one of the three declared outputs
   whose destination is the repository rather than the board; a declared path the run did not
   produce fails the attempt, and everything undeclared is litter that goes with the checkout
-<<<<<<< HEAD
-  (`checkExportPath`/`copyIncluded`, `src/worktree.ts`; *decisions/adr-008-declared-outputs*).
+  (`checkExportPath`/`copyIncluded`, `src/worktree.ts`; *features/declared-outputs*,
+  *decisions/adr-008-declared-outputs*).
 - **Fence** — a value carried in a write's `where` clause so the write is a no-op when the world moved
   under it: `Lease.token` at renewal and at release, and the expiry re-read on the reclaim delete
   (`src/controller.ts`). It is how a holder learns it lost its lease, and why a stale holder finishing
   late cannot delete the new holder's claim (*concepts/leases-and-liveness*).
-=======
-  (`checkExportPath`/`copyIncluded`, `src/worktree.ts`; *features/declared-outputs*,
-  *decisions/adr-008-declared-outputs*).
->>>>>>> 9636c6b (Add features/declared-outputs to the wiki)
 - **Forge** — where pull requests live, deliberately not where the board lives. GitHub, read through
   one `gh` shell-out (`src/pulls.ts`) and joined to a Job by branch name. It holds no Job, no lease
   and no state hkb depends on.
