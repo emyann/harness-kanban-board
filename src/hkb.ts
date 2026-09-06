@@ -80,6 +80,11 @@ const HELP = `hkb — run one agent against one brief
        --artifact <name> a FILE the Job must produce, kept beside the board rather than
                         committed. Same contract as --result with no size limit: for a report,
                         a dataset, a proposal. A name may come back as a directory. Repeatable.
+       --guide <path>   the repository's contributor guide, repo-relative — usually CLAUDE.md.
+                        Read from the board's repository and put in FRONT of the brief as
+                        standing instruction, so a worker follows the rules the repository
+                        already writes down instead of the brief restating them. Follows one
+                        level of \`@import\`. Defaults to the board's --guide.
        --propose        this Job PROPOSES Jobs instead of filing them. It writes one JSON
                         file, you read it, and the controller creates the rows on approval —
                         so a worker that decomposes work needs no board access at all, and a
@@ -130,6 +135,8 @@ const HELP = `hkb — run one agent against one brief
        --allow-tools <a,b>|none  the default tool surface for Jobs that name none
        --default-plugin-dirs <a,b>|none  directories, repo-relative, whose skills every Job
                         on this board may see — \`.claude\` is the usual one
+       --guide <path>|none  the contributor guide every Job on this board reads, repo-relative
+                        — \`CLAUDE.md\` is the usual one
 
   hkb version               what this build is
 
@@ -338,6 +345,9 @@ export function describeDefaults(d: ReturnType<typeof boardDefaults>): string {
     // on this board may DO, and `pluginPaths` what every Job may READ (ADR-012).
     d.allowedTools !== null ? `allowTools=${d.allowedTools.join('|') || '(none)'}` : null,
     d.pluginPaths !== null ? `plugins=${d.pluginPaths.join('|') || '(none)'}` : null,
+    // And the third thing a board hands every worker: the document it reads as standing instruction
+    // (ADR-013). Same reasoning as the two above — a grant nobody can see becomes a surprise.
+    d.guide !== null ? `guide=${d.guide}` : null,
   ].filter((p): p is string => p !== null);
   return parts.length ? parts.join(' ') : '(none)';
 }
@@ -401,6 +411,7 @@ export async function main(argv: string[]): Promise<number> {
       artifact: { type: 'string', multiple: true },
       'plugin-dir': { type: 'string', multiple: true },
       'default-plugin-dirs': { type: 'string' },
+      guide: { type: 'string' },
       input: { type: 'string', multiple: true },
       gate: { type: 'string' },
       // A boolean, because the only thing that may be proposed is Jobs (ADR-011 decision 6). It
@@ -512,6 +523,12 @@ export async function main(argv: string[]): Promise<number> {
       // rather than remembering it keeps the run path with one rule: everything in `inputs` is
       // rendered, and nothing is rendered twice.
       inputs = inputs.filter((i) => !rendered.used.has(i.name));
+      // A repo-relative path, checked at file time like every other declaration and for the same
+      // reason as an input's: it names a file the BOARD will read with the operator's authority and
+      // put in front of a model, so a path that was never legal must not become state. Undefined
+      // when the flag is absent, so the board's grant answers.
+      const guide = values.guide !== undefined ? (String(values.guide).trim() || null) : undefined;
+      if (guide) checkExportPath(guide);
       let gate = typeof values.gate === 'string' ? values.gate.trim() : undefined;
       if (values.gate !== undefined && !gate) throw usage('--gate needs the question a human is being asked, as in --gate "does this migration look right?"');
       // A proposing Job is a gated Job, and not by convention: ADR-011 applies nothing without an
@@ -537,6 +554,7 @@ export async function main(argv: string[]): Promise<number> {
           ...(artifacts.length ? { artifacts } : {}),
           ...(inputs.length ? { inputs } : {}),
           ...(gate ? { gate } : {}),
+          ...(guide !== undefined ? { guide } : {}),
           proposes,
           model: (values.model as string) ?? null,
           effort: effort ?? null,
@@ -665,6 +683,9 @@ export async function main(argv: string[]): Promise<number> {
         // unchanged by it (ADR-012).
         console.log(`  plugins  ${spec.pluginPaths.value?.join(', ') || '(none granted)'}`
           + `  [${spec.pluginPaths.from}]`);
+        // The other document a worker reads with the operator's authority, beside the skills. Named
+        // even when absent, because "no guide" is the answer to "why did it not follow CLAUDE.md".
+        console.log(`  guide    ${spec.guide.value ?? '(none granted)'}  [${spec.guide.from}]`);
         // One line per resolved field, with its source named. Three levels answer these five
         // questions, and printing only the winner turns "why did this run on Opus" into
         // archaeology across two tables — a spec you cannot trace is worse than one you repeat.
@@ -1277,6 +1298,13 @@ export async function main(argv: string[]): Promise<number> {
             ? null
             : raw.split(',').map((v) => v.trim()).filter(Boolean).map(checkPluginPath);
         }
+        // One path, not a list: a repository has one contributor guide, and a second one would be
+        // two documents disagreeing about the same rules with no way to say which wins.
+        if (values.guide !== undefined) {
+          const raw = String(values.guide).trim();
+          if (!raw) throw usage(`--guide was given nothing — pass a repo-relative path like CLAUDE.md, or "${CLEAR}" to clear the grant`);
+          data.defaultGuide = raw === CLEAR ? null : checkExportPath(raw);
+        }
         if (values['allow-tools'] !== undefined) {
           const raw = String(values['allow-tools']).trim();
           if (!raw) throw usage(`--allow-tools was given nothing — pass a comma-separated list, or "${CLEAR}" to clear the default`);
@@ -1303,7 +1331,7 @@ export async function main(argv: string[]): Promise<number> {
           throw usage(
             'hkb boards set needs something to set — a ceiling (--max-concurrent <n>, --daily-budget <usd>|none)'
             + ' or a spec default (--model, --effort, --max-turns, --max-budget,'
-            + ' --max-retries, --allow-tools, --default-plugin-dirs; "none" clears one)',
+            + ' --max-retries, --allow-tools, --default-plugin-dirs, --guide; "none" clears one)',
           );
         }
 

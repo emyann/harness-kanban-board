@@ -37,6 +37,11 @@ export function toolList(raw: unknown): string[] | null {
   return names.length === raw.length ? names : null;
 }
 
+/** A string column, defensively: anything that is not a non-empty string reads as unset. */
+export function str(raw: unknown): string | null {
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+
 /** Which level supplied a value. */
 export type SpecSource = 'job' | 'board' | 'built-in';
 
@@ -69,6 +74,7 @@ export const BUILT_IN = {
   allowedTools: null,
   /** Nothing granted. A repository's skills reach a worker only when someone said so (ADR-012). */
   pluginPaths: null,
+  guide: null,
 } as const;
 
 /** The nullable half of a Job's spec — the fields a Board can supply a default for. */
@@ -83,6 +89,7 @@ export type JobSpec = {
   allowedTools?: unknown;
   /** Raw, off the `Json?` column. `pluginList` normalizes it here, not at each call site. */
   pluginPaths?: unknown;
+  guide?: unknown;
 };
 
 /** The Board's side. Named `default*` so no call site has to guess what `board.model` would mean. */
@@ -94,6 +101,7 @@ export type BoardDefaults = {
   defaultMaxRetries?: number | null;
   defaultAllowedTools?: unknown;
   defaultPluginPaths?: unknown;
+  defaultGuide?: unknown;
 };
 
 export type Traced<T> = { value: T; from: SpecSource };
@@ -106,6 +114,7 @@ export type ResolvedSpec = {
   maxRetries: Traced<number>;
   allowedTools: Traced<string[] | null>;
   pluginPaths: Traced<string[] | null>;
+  guide: Traced<string | null>;
 };
 
 /**
@@ -149,6 +158,10 @@ export function resolveSpec(
     // Same `pick`, and an empty list survives it for the same reason: `pluginPaths: []` on a Job is
     // "grant this one nothing", which is how a Job narrows a board that granted something.
     pluginPaths: pick(pluginList(j.pluginPaths), pluginList(b.defaultPluginPaths), BUILT_IN.pluginPaths as string[] | null),
+    // A path or nothing. The empty string is not a third state here the way `[]` is for a list —
+    // "no guide" is the absence, so a blank is normalised to it rather than becoming a Job that
+    // reads the repository root.
+    guide: pick(str(j.guide), str(b.defaultGuide), BUILT_IN.guide as string | null),
   };
 }
 
@@ -156,7 +169,7 @@ export function resolveSpec(
 export function hasDefaults(b: BoardDefaults): boolean {
   return b.defaultModel != null || b.defaultEffort != null || b.defaultMaxTurns != null
     || b.defaultMaxBudgetUsd != null || b.defaultMaxRetries != null || toolList(b.defaultAllowedTools) != null
-    || pluginList(b.defaultPluginPaths) != null;
+    || pluginList(b.defaultPluginPaths) != null || str(b.defaultGuide) != null;
 }
 
 /** A board's defaults, under the names the Job knows them by. What `--json` carries. */
@@ -169,5 +182,6 @@ export function boardDefaults(b: BoardDefaults) {
     maxRetries: b.defaultMaxRetries ?? null,
     allowedTools: toolList(b.defaultAllowedTools),
     pluginPaths: pluginList(b.defaultPluginPaths),
+    guide: str(b.defaultGuide),
   };
 }

@@ -9,14 +9,14 @@ covers:
   - path: src/proposals.ts
     sha: fd5e1eee8b847c9b4024d1bf5f635a85907baae4
   - path: src/controller.ts
-    sha: 6f97a4884c7d5774bec6e12c2451ecacb260a94a
+    sha: 2f8bd74273a5ba22754954edb3122193729c6ff3
   - path: src/brief.ts
-    sha: a5f34b144962692f6cbaad42350961b507fced12
+    sha: be4293816f4cc5f51a96199d87f2b689df846ab2
   - path: prisma/schema.prisma
-    sha: e4bac2046bd232c6656a59f4503e6a2ca32578f1
+    sha: af2155d3e5cfd330f259ae1e5b5cde91f732d109
   - path: src/hkb.ts
-    sha: 465e61ad1be9105804eddcbe8ef211ce89526277
-generated_at_commit: 76d1a94
+    sha: 3267dc3d4472a1c813f4f668ee44428867c2915d
+generated_at_commit: 1542483
 last_refreshed: 2026-09-06
 related:
   [

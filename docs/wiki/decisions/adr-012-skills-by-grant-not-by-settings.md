@@ -11,13 +11,13 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/runtime/claude.ts
-    sha: e53fc9819d5fc7bb4b43d17b3f1a681cfe415618
+    sha: 5ae775633cae411b71443add232b79f1325c4075
   - path: src/admission.ts
     sha: aab84ccd1178b085cea79d2c4566149145027b9e
   - path: src/spec.ts
-    sha: 8221afdcae17142059ba0a72f236b372988a4452
+    sha: df1e8d90a8b3070313b06dd4d47af39ec3f48ca7
   - path: prisma/schema.prisma
-    sha: e4bac2046bd232c6656a59f4503e6a2ca32578f1
+    sha: af2155d3e5cfd330f259ae1e5b5cde91f732d109
 related:
   [
     decisions/adr-007-workload-scheduler,
@@ -25,7 +25,7 @@ related:
     architecture/runtime-layer,
     architecture/overview,
   ]
-generated_at_commit: b05de11
+generated_at_commit: 1542483
 last_refreshed: 2026-09-06
 ---
 

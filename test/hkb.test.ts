@@ -965,11 +965,11 @@ test('hkb boards set carries the spec defaults, and none clears one', async () =
   const set = json((await hkb(
     'boards', 'set', 'defaults', '--model', 'claude-haiku-4-5', '--effort', 'low',
     '--max-turns', '8', '--max-budget', '0.25', '--max-retries', '0',
-    '--allow-tools', 'Read,Grep', '--default-plugin-dirs', '.claude', '--json',
+    '--allow-tools', 'Read,Grep', '--default-plugin-dirs', '.claude', '--guide', 'CLAUDE.md', '--json',
   )).out);
   assert.deepEqual(set.defaults, {
     model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
-    allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'],
+    allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md',
   });
 
   const cleared = json((await hkb('boards', 'set', 'defaults', '--model', 'none', '--json')).out);
@@ -977,6 +977,16 @@ test('hkb boards set carries the spec defaults, and none clears one', async () =
   assert.equal(cleared.defaults.maxTurns, 8, 'and clearing one leaves the others alone');
   assert.equal(cleared.defaults.maxRetries, 0, 'including a default of zero, which is a real answer');
   assert.deepEqual(cleared.defaults.pluginPaths, ['.claude'], 'and the board-wide grant survives clearing a model');
+  assert.equal(cleared.defaults.guide, 'CLAUDE.md', 'and so does the guide (ADR-013)');
+
+  // The guide is a path the BOARD reads with the operator's authority and puts in front of a model,
+  // so it sits behind the same fence the grant does.
+  await assert.rejects(
+    () => main(['boards', 'set', 'defaults', '--guide', '../elsewhere/CLAUDE.md']),
+    /outside|escape|\.\./,
+  );
+  const noGuide = json((await hkb('boards', 'set', 'defaults', '--guide', 'none', '--json')).out);
+  assert.equal(noGuide.defaults.guide, null, '"none" clears the grant rather than naming a file called none');
 
   // The grant is a path the board acts on with the operator's authority, so a path that was never
   // legal must not become state — the same fence `--export` sits behind (ADR-012).
@@ -1122,7 +1132,7 @@ test('hkb boards prints a defaults line only for the boards that have one', asyn
   const bare = rows.find((r) => r.board !== 'listed-defaults' && !r.hasDefaults);
   assert.ok(bare, 'a board with no defaults exists in this suite');
   assert.deepEqual(bare.defaults,
-    { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null },
+    { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null },
     '--json carries the key either way: a consumer inferring absence from a missing key reads a shape, not a record');
 });
 
@@ -1165,7 +1175,7 @@ test('hkb version prints the package version, and opens no board doing it', () =
  * produce something, and the listing must actually print the marker — a predicate nothing renders is
  * the silently-inert guard this project has shipped three times.
  */
-const { producedNothing, declaredExports } = await import('../src/hkb.ts');
+const { producedNothing, declaredExports, describeDefaults } = await import('../src/hkb.ts');
 
 test('producedNothing refuses every Job that left something behind', () => {
   const bare = { phase: 'succeeded', pr: null, exports: [] as string[] };
@@ -1311,4 +1321,27 @@ test('watch streams NDJSON on stdout, one event per line, each carrying its curs
   assert.equal(e.kind, 'created');
   assert.equal(e.jobId, j.id);
   assert.ok(e.id > 0, 'and the id is what `--after` takes back');
+});
+
+test('the board defaults line names every grant, including the ones nobody can otherwise see', () => {
+  // A board-wide grant that prints nothing is state that becomes a surprise: `allowTools` decides
+  // what every Job on the board may DO, `plugins` what it may READ, and `guide` what it is told to
+  // FOLLOW. This is the one line an operator reads to find out, so it is asserted whole rather than
+  // field by field — the same reason the resolved-spec test in test/spec.test.ts loops.
+  assert.equal(
+    describeDefaults({
+      model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
+      allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md',
+    }),
+    'model=claude-haiku-4-5 effort=low maxTurns=8 maxBudget=$0.25 maxRetries=0 allowTools=Read|Grep plugins=.claude guide=CLAUDE.md',
+  );
+  assert.equal(
+    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null }),
+    '(none)',
+  );
+  // An empty list is a value and says so; a null is an absence and says nothing.
+  assert.match(
+    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: [], pluginPaths: [], guide: null }),
+    /allowTools=\(none\) plugins=\(none\)/,
+  );
 });

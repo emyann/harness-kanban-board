@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "adding a column, deciding whether something belongs on the Job or the Attempt, writing a migration, or explaining why a board refuses to open"
 covers:
   - path: prisma/schema.prisma
-    sha: e4bac2046bd232c6656a59f4503e6a2ca32578f1
+    sha: af2155d3e5cfd330f259ae1e5b5cde91f732d109
   - path: src/schema.ts
     sha: 36a37ef8d4d26ee1226e44c664f25ba57d78387e
   - path: src/db.ts
@@ -15,8 +15,8 @@ covers:
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/spec.ts
-    sha: 8221afdcae17142059ba0a72f236b372988a4452
-generated_at_commit: 5a81e1b
+    sha: df1e8d90a8b3070313b06dd4d47af39ec3f48ca7
+generated_at_commit: 1542483
 last_refreshed: 2026-09-06
 related:
   [
@@ -118,6 +118,15 @@ database constraint can refuse, nothing in the code has to be right.**
 
 In every case the failure path is the same shape: catch, count it as *somebody else got there*, and
 let the next level-triggered pass sort it out.
+
+### The read that had the opposite problem
+
+Constraints refuse loudly; a hand-listed `select` fails silently. The controller used to read the
+Board through one, and every spec default the board gained had to be added to it — so when
+`defaultPluginPaths` was not, ADR-012's board-level grant resolved to `undefined`, fell through to
+the built-in, and reached no worker at all. Nothing errored. The grant just did not exist. It reads
+the whole row now (`src/controller.ts`), because a Board row is a handful of small scalars and a
+list somebody has to remember to extend is not a saving.
 
 ## Nullability is a migration decision as often as a modelling one
 
