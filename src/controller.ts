@@ -574,7 +574,11 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // cannot land in the worker's diff (`src/results.ts`).
     const wantedNames = declaredResults(job.results);
     const wantedResults = wantedNames.length ? resultPaths(job.id, k, wantedNames) : {};
-    if (wantedNames.length) ensureResultsDir(job.id, k);
+    // Always made, even when nothing is declared: a run may volunteer a value nobody asked for, and
+    // it needs somewhere to put it. The brief only names paths for the DECLARED ones — a volunteered
+    // value is the worker's own idea, and telling it where the directory is would make it an
+    // invitation, which is a different feature.
+    ensureResultsDir(job.id, k);
 
     // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
     // starting cold, which is the whole reason that column exists.
@@ -660,21 +664,26 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // gate, different medium: `exports` are files the repository keeps, results are values the
     // board keeps. A Job with no branch and no commit produces its work here or nowhere.
     let produced: Record<string, string> | null = null;
-    if (wantedNames.length && ran.phase === 'succeeded' && heldToTheEnd) {
+    if (ran.phase === 'succeeded' && heldToTheEnd) {
       const got = collectResults(job.id, k, wantedNames);
-      produced = got.produced;
+      // Null, not `{}`: a run that wrote nothing has no fact to record, and the column already
+      // distinguishes those two the way `exported` does.
+      produced = Object.keys(got.produced).length ? got.produced : null;
       const owed = missingResults(job.id, got.missing, got.oversize);
       // The export shortfall keeps precedence — it was found first, and reporting one cause is
       // more use than concatenating two.
       if (owed && !shortfall) shortfall = owed;
       if (owed) deps.onEvent?.(`  ${owed}`);
-      else if (Object.keys(produced).length) {
-        deps.onEvent?.(`  produced ${Object.keys(produced).map((n) => `\`${n}\``).join(', ')}`);
+      else if (Object.keys(got.produced).length) {
+        // Volunteered names are named as such: an operator reading the log should be able to tell
+        // what the board required from what the run decided to add.
+        const extra = got.volunteered.length ? ` (${got.volunteered.length} volunteered)` : '';
+        deps.onEvent?.(`  produced ${Object.keys(got.produced).map((n) => `\`${n}\``).join(', ')}${extra}`);
       }
     }
     // Removed whatever happened: the values are durable because they are on the Attempt row, not
     // because the file survives, and a directory kept after a failure is litter nobody reads.
-    if (wantedNames.length) clearResults(job.id, k);
+    clearResults(job.id, k);
 
     // A declared output that is not there fails the attempt, and that rule is what makes the
     // declaration worth writing down: without it `succeeded` still means only that a session ended.

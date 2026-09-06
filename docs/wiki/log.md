@@ -301,3 +301,5 @@ history.
 ## 2026-09-06 — refreshed architecture/overview (ADR-008's `results` shipped: the pair of declared outputs, the one rule that covers both, and what a Job with nothing to commit produces; src/results.ts added to covers)
 ## 2026-09-06 — refreshed howto/running-the-daemon (no-op re-stamp: the nine src/hkb.ts anchors all sit below the new `--result` flag and the results block, re-read at +55 — `up` moved 823 → 878. No claim on the page is about outputs)
 ## 2026-09-06 — refreshed architecture/job-kind + architecture/the-loop (no-op re-stamps: controller.ts and schema.prisma gained additive columns and a collection block; neither page makes a claim about what a Job declares)
+## 2026-09-06 — refreshed architecture/overview (the volunteered layer: a run may write a result nobody declared, kept and never required — the difference between the layers is what is enforced, not what is stored)
+## 2026-09-06 — refreshed architecture/job-kind + architecture/the-loop (no-op re-stamps: the controller's results block now reads the whole collection directory and always creates it; neither page claims anything about which files are read)

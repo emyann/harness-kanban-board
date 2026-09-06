@@ -321,9 +321,15 @@ model Attempt {
   ///
   /// Nullable because an attempt that never reached the runtime — refused at the gate, crashed
   /// before the call — has no measurement rather than a measurement of zero.
-  /// What this attempt produced, as `{ name: value }` — the values the Job declared in `results`,
-  /// read out of the collection directory before it is removed. Null, not `{}`, for an attempt that
-  /// declared nothing: the two are different facts and only one of them is a promise kept.
+  /// What this attempt produced, as `{ name: value }` — read out of the collection directory before
+  /// it is removed. Null, not `{}`, for an attempt that wrote nothing: the two are different facts
+  /// and only one of them is a promise kept.
+  ///
+  /// Two layers live here and the difference is who chose the field. A name the Job DECLARED is the
+  /// filer's requirement, and its absence fails the attempt. Anything else the run left behind is
+  /// VOLUNTEERED — kept and reported, never required. Hermes' handoff is the second layer alone,
+  /// which is richer and guarantees nothing; requiring everything is the opposite failure, where a
+  /// Job cannot say it noticed something nobody thought to ask about.
   results Json?
 
   turns   Int?

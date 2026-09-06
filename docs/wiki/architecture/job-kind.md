@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "adding a workload kind, changing retry or lease behaviour, or wondering why the DAG is not in the core"
 covers:
   - path: prisma/schema.prisma
-    sha: a0a2b99ccf124d5abb3ff998ed4d4b530f713988
+    sha: fd5d599273f0f0340a79043f6796b3f7f99cd73f
   - path: src/controller.ts
-    sha: 9f80e70897db4a7ff157064bb3899a296ddd6a8f
+    sha: ae2034b01315707358b26348380e117653caf510
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
-generated_at_commit: 6efab3c
+generated_at_commit: 0903659
 last_refreshed: 2026-09-05
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control]
 ---
