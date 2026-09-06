@@ -74,6 +74,9 @@ pages:
   - slug: concepts/ceilings
     summary: "The three claim-time refusals (stopped, concurrency, budget), why none of them may stop a running worker, and why committed-but-unspent budget has to be counted."
     status: planned
+  - slug: features/watch
+    summary: "The third question about the board, after \"what is true now\" and \"what happened\": tell me when something happens. Cursors rather than state, woken by the filesystem rather than polled, and resumable because an id never expires."
+    status: seeded
   - slug: features/proposals
     summary: "A proposing Job writes one JSON file, a person reads it, and the controller creates the rows — the transport, the refusals, the approval, and why applying it twice creates nothing twice."
     status: seeded
