@@ -1473,7 +1473,14 @@ export async function main(argv: string[]): Promise<number> {
         const first = await db.event.findFirst({
           where: { ...watchWhere(scope), at: { gte: at } }, orderBy: { id: 'asc' }, select: { id: true },
         });
-        after = first ? first.id - 1 : ((await db.event.findFirst({ orderBy: { id: 'desc' }, select: { id: true } }))?.id ?? 0);
+        // Nothing of ours in the window, so join at the end of OUR stream. Scoped like the branch
+        // below rather than reading the machine's newest event: the two cannot deliver different
+        // events (nothing of ours sits between them, or `first` would have found it), but only one
+        // of them is a position in this stream, and that is the number the header prints and the
+        // operator copies into `--after`.
+        after = first ? first.id - 1 : ((await db.event.findFirst({
+          where: watchWhere(scope), orderBy: { id: 'desc' }, select: { id: true },
+        }))?.id ?? 0);
       } else {
         after = (await db.event.findFirst({
           where: watchWhere(scope), orderBy: { id: 'desc' }, select: { id: true },

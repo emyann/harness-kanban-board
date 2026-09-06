@@ -1305,4 +1305,3 @@ test('watch streams NDJSON on stdout, one event per line, each carrying its curs
   assert.equal(e.jobId, j.id);
   assert.ok(e.id > 0, 'and the id is what `--after` takes back');
 });
-
