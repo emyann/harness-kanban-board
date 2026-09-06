@@ -241,6 +241,42 @@ The honest caveat on all of it: hkb's entire verification vocabulary is **presen
 `gh pr list --head`, a result present or missing. Presence is cheap, which is ADR-008's selling point,
 and it is exactly the wrong instrument for the outputs that make a multi-step workflow worth having.
 
+**The read side shipped, 2026-09-06, and building it settled one thing the paper leaves open: where the
+restriction is enforced.** Injecting declared content restricts nothing on its own — a worker with
+`Read` goes and finds whatever it likes, and this document's own layer table puts prompt text at layer
+6. What makes hkb's version a restriction is that it **composes with a layer that can refuse**: a Job
+declared with `--input` and an `--allow-tool` list that excludes `Read`, `Glob` and `Grep` sees exactly
+what it was given, because `src/admission.ts` denies the rest at layer 2. Neither half is the feature;
+the pair is. That is §4's rule applied to the read side rather than the write side.
+
+Three sources ship, and **none waits**: `file:<repo-relative-path>`, `board` — the LLM-free board
+arithmetic ADR-010 decision 5 described — and `value:<literal>`. The source everybody reaches for first,
+another Job's output, is refused *by name* with a message pointing at §2, because it is `Job.after` with
+a payload.
+
+A fourth source, `self:<field>`, is the **downward API** — Kubernetes' `fieldRef`, where a Pod reads its
+own `metadata.name` or `status.podIP`. It arrived from reading how k8s shapes a container's input
+rather than from this study, and it carries the one fact nothing else could give a worker: `slot`, the
+lowest integer no other live run holds. Without it a suite running inside a worker cannot pick a port
+that concurrent workers will not collide on, which is a real thing that was tried and could not be
+done. k8s never needs it because every Pod gets an IP; hkb's workers share a machine, so the shape that
+fits is the StatefulSet ordinal.
+
+`value:` is the **push** half, and leaving it out was an omission this study's framing invited: Artic is
+about restricting what a step *reads*, so both of the first two sources are things hkb goes and fetches.
+But the trigger direction — a button, an API call, a controller filing work from a proposal — has a
+*payload*, and without `value:` it had nowhere to put one but string-formatted into the brief. A
+`value:` may also be interpolated into the brief (`{{name}}`, `{{name.field}}`), rendered at file time
+so the stored brief is the one that runs.
+
+**Only `value:` interpolates**, and that is where §4's rule lands on this feature. The brief is the one
+field carrying *authority* — ADR-010 decision 4 turns on an approver's instruction becoming the prompt —
+while `withInputs` tells the worker to treat inputs as data. If a `file:` source could interpolate, a
+file in the repository would decide what the agent is instructed to do, which is what ADR-011 and
+ADR-012 both refuse. Kubernetes draws the same line letting `envFrom` fill `env` and never `command`.
+A `value:` is admitted because the filer supplied it *and* wrote the placeholder: the risk is per
+placeholder and visible in the brief, rather than ambient.
+
 ## 8. Hermes, the ancestor — what it solved and where hkb must differ
 
 hkb was originally described as a portable, frugal Hermes-style kanban, so Hermes is the one prior art
@@ -428,3 +464,13 @@ That dissolves the risk ADR-010 recorded against itself — *if groom's apply ha
 closer to the DAG than to a field* — because the apply half turns out to be the controller's either way.
 It also picks up §7's read side (see Q4 above) and leaves §6's contradiction exactly where it was:
 creation *without* ordering is `CronJob`-shaped and settles nothing about the DAG.
+
+**ADR-012 — a worker gets a repository's skills by grant, never its settings.** Not a question this
+study asked, and it belongs here because the answer came the same way the rest of §7 did: by measuring
+instead of reasoning. `plugins: [{type:'local', path}]` reaches a repository's own skills with
+`settingSources` still empty, so the coupling the rebuild plan recorded was never real.
+
+**And the read side itself, shipped rather than recorded.** `Job.inputs` — see §7 above. It needed no
+ADR: the study asked for it, Q4 answered it, and ADR-011 named it as its own missing half. The one
+boundary it draws was already drawn here in §2, and the code now enforces it with a refusal that cites
+this document.

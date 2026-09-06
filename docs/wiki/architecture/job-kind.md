@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "adding a workload kind, changing retry or lease behaviour, or wondering why the DAG is not in the core"
 covers:
   - path: prisma/schema.prisma
-    sha: 713414836890d87d69a39f4ce23b67420147e05f
+    sha: f80d0cf3a5de454978a06efbdf2be0bcc36ef6ee
   - path: src/controller.ts
-    sha: 95b546785246c0a7bf8a2960e1c5a6acb4c95aaf
+    sha: c90722f6a5d32796e996f23269eeb44dd883fc6f
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
-generated_at_commit: 2045af5
+generated_at_commit: 464bacd
 last_refreshed: 2026-09-06
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control]
 ---
@@ -89,6 +89,18 @@ primary key, and that failure *is* the answer — the loser is recorded in
 try/catch). This is ADR-004's compare-and-swap rule expressed as a table
 constraint rather than a ref update.
 
+The same insert now carries a second constraint doing the same job for a different
+question. `Lease.slot` is the **concurrency ordinal** — the lowest non-negative
+integer no other live lease holds, machine-wide — and it is `@unique`, so two
+daemons that read the same set and compute the same free number cannot both take
+it. The loser lands in the same catch, which is why adding it needed no new
+handling: a claim that fails for either reason is a claim somebody else got, and
+the next pass picks the Job up. It exists because a run needs to know *which of the
+concurrent workers it is* — for a port, a display number, a database name — and
+`jobId` is unique but unbounded. Kubernetes gives every Pod an IP and never asks;
+hkb's workers share one machine. Frozen onto `Attempt.slot`, so it survives the
+release and a past collision stays diagnosable.
+
 **Liveness is the lease, not a heartbeat.** A holder that dies without releasing
 leaves a lease with a past `expiresAt`; `reclaimExpired()` deletes it, marks the
 orphaned attempt `lost`, and returns the Job to `pending` if it has retries left.
@@ -136,9 +148,21 @@ Everything interesting is there:
 
 `maxRetries: 2` means two retries *after* the first go — three attempts in total.
 
-Two outcomes are decided *outside* `nextPhase`, because neither is a fact about how
-the work went: `lost` (the reclaim path above) and `stopped` (the operator stopped
-the daemon mid-run). **`stopped` does not spend a retry** — the attempt number `k`
+Four outcomes are decided *outside* `nextPhase`, because none of them is a fact about
+how the work went — the count was two when this page was written, and the declared
+inputs and outputs added the other pair:
+
+- `lost` — the reclaim path above; nobody ever reported this attempt.
+- `stopped` — the operator stopped the daemon mid-run.
+- `no_output` — the session ended and something the Job **declared** is not there
+  (ADR-008). The runtime thinks it succeeded; the board disagrees.
+- `no_input` — the run never started, because something the Job declared as an
+  **input** could not be read (`src/inputs.ts`). The mirror of `no_output` and the
+  cheap side of it: no session, no tokens. Terminal and not retried, because the same
+  read fails identically next time.
+
+`no_output` and `no_input` are the two that make `succeeded` mean more than "a session
+ended". **`stopped` does not spend a retry** — the attempt number `k`
 still advances, being half the Attempt's primary key, so `reconcile` counts the
 retry budget separately from the attempt count (`src/controller.ts`). Without that
 split a Job with `maxRetries: 0` could be made permanently unrunnable by nothing

@@ -107,6 +107,7 @@ export type JobCountAggregateOutputType = {
   pluginPaths: number
   maxRetries: number
   exports: number
+  inputs: number
   results: number
   artifacts: number
   gate: number
@@ -204,6 +205,7 @@ export type JobCountAggregateInputType = {
   pluginPaths?: true
   maxRetries?: true
   exports?: true
+  inputs?: true
   results?: true
   artifacts?: true
   gate?: true
@@ -320,6 +322,7 @@ export type JobGroupByOutputType = {
   pluginPaths: runtime.JsonValue | null
   maxRetries: number | null
   exports: runtime.JsonValue | null
+  inputs: runtime.JsonValue | null
   results: runtime.JsonValue | null
   artifacts: runtime.JsonValue | null
   gate: string | null
@@ -372,6 +375,7 @@ export type JobWhereInput = {
   pluginPaths?: Prisma.JsonNullableFilter<"Job">
   maxRetries?: Prisma.IntNullableFilter<"Job"> | number | null
   exports?: Prisma.JsonNullableFilter<"Job">
+  inputs?: Prisma.JsonNullableFilter<"Job">
   results?: Prisma.JsonNullableFilter<"Job">
   artifacts?: Prisma.JsonNullableFilter<"Job">
   gate?: Prisma.StringNullableFilter<"Job"> | string | null
@@ -405,6 +409,7 @@ export type JobOrderByWithRelationInput = {
   pluginPaths?: Prisma.SortOrderInput | Prisma.SortOrder
   maxRetries?: Prisma.SortOrderInput | Prisma.SortOrder
   exports?: Prisma.SortOrderInput | Prisma.SortOrder
+  inputs?: Prisma.SortOrderInput | Prisma.SortOrder
   results?: Prisma.SortOrderInput | Prisma.SortOrder
   artifacts?: Prisma.SortOrderInput | Prisma.SortOrder
   gate?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -441,6 +446,7 @@ export type JobWhereUniqueInput = Prisma.AtLeast<{
   pluginPaths?: Prisma.JsonNullableFilter<"Job">
   maxRetries?: Prisma.IntNullableFilter<"Job"> | number | null
   exports?: Prisma.JsonNullableFilter<"Job">
+  inputs?: Prisma.JsonNullableFilter<"Job">
   results?: Prisma.JsonNullableFilter<"Job">
   artifacts?: Prisma.JsonNullableFilter<"Job">
   gate?: Prisma.StringNullableFilter<"Job"> | string | null
@@ -474,6 +480,7 @@ export type JobOrderByWithAggregationInput = {
   pluginPaths?: Prisma.SortOrderInput | Prisma.SortOrder
   maxRetries?: Prisma.SortOrderInput | Prisma.SortOrder
   exports?: Prisma.SortOrderInput | Prisma.SortOrder
+  inputs?: Prisma.SortOrderInput | Prisma.SortOrder
   results?: Prisma.SortOrderInput | Prisma.SortOrder
   artifacts?: Prisma.SortOrderInput | Prisma.SortOrder
   gate?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -511,6 +518,7 @@ export type JobScalarWhereWithAggregatesInput = {
   pluginPaths?: Prisma.JsonNullableWithAggregatesFilter<"Job">
   maxRetries?: Prisma.IntNullableWithAggregatesFilter<"Job"> | number | null
   exports?: Prisma.JsonNullableWithAggregatesFilter<"Job">
+  inputs?: Prisma.JsonNullableWithAggregatesFilter<"Job">
   results?: Prisma.JsonNullableWithAggregatesFilter<"Job">
   artifacts?: Prisma.JsonNullableWithAggregatesFilter<"Job">
   gate?: Prisma.StringNullableWithAggregatesFilter<"Job"> | string | null
@@ -538,6 +546,7 @@ export type JobCreateInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
@@ -571,6 +580,7 @@ export type JobUncheckedCreateInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
@@ -601,6 +611,7 @@ export type JobUpdateInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -634,6 +645,7 @@ export type JobUncheckedUpdateInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -666,6 +678,7 @@ export type JobCreateManyInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
@@ -693,6 +706,7 @@ export type JobUpdateManyMutationInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -722,6 +736,7 @@ export type JobUncheckedUpdateManyInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -761,6 +776,7 @@ export type JobCountOrderByAggregateInput = {
   pluginPaths?: Prisma.SortOrder
   maxRetries?: Prisma.SortOrder
   exports?: Prisma.SortOrder
+  inputs?: Prisma.SortOrder
   results?: Prisma.SortOrder
   artifacts?: Prisma.SortOrder
   gate?: Prisma.SortOrder
@@ -958,6 +974,7 @@ export type JobCreateWithoutBoardInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
@@ -989,6 +1006,7 @@ export type JobUncheckedCreateWithoutBoardInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
@@ -1049,6 +1067,7 @@ export type JobScalarWhereInput = {
   pluginPaths?: Prisma.JsonNullableFilter<"Job">
   maxRetries?: Prisma.IntNullableFilter<"Job"> | number | null
   exports?: Prisma.JsonNullableFilter<"Job">
+  inputs?: Prisma.JsonNullableFilter<"Job">
   results?: Prisma.JsonNullableFilter<"Job">
   artifacts?: Prisma.JsonNullableFilter<"Job">
   gate?: Prisma.StringNullableFilter<"Job"> | string | null
@@ -1076,6 +1095,7 @@ export type JobCreateWithoutAttemptsInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
@@ -1108,6 +1128,7 @@ export type JobUncheckedCreateWithoutAttemptsInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
@@ -1153,6 +1174,7 @@ export type JobUpdateWithoutAttemptsInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1185,6 +1207,7 @@ export type JobUncheckedUpdateWithoutAttemptsInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1214,6 +1237,7 @@ export type JobCreateWithoutLeaseInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
@@ -1246,6 +1270,7 @@ export type JobUncheckedCreateWithoutLeaseInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
@@ -1291,6 +1316,7 @@ export type JobUpdateWithoutLeaseInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1323,6 +1349,7 @@ export type JobUncheckedUpdateWithoutLeaseInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1352,6 +1379,7 @@ export type JobCreateWithoutEventsInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
@@ -1384,6 +1412,7 @@ export type JobUncheckedCreateWithoutEventsInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
@@ -1429,6 +1458,7 @@ export type JobUpdateWithoutEventsInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1461,6 +1491,7 @@ export type JobUncheckedUpdateWithoutEventsInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1491,6 +1522,7 @@ export type JobCreateManyBoardInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
@@ -1518,6 +1550,7 @@ export type JobUpdateWithoutBoardInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1549,6 +1582,7 @@ export type JobUncheckedUpdateWithoutBoardInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1580,6 +1614,7 @@ export type JobUncheckedUpdateManyWithoutBoardInput = {
   pluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   maxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   exports?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1649,6 +1684,7 @@ export type JobSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = ru
   pluginPaths?: boolean
   maxRetries?: boolean
   exports?: boolean
+  inputs?: boolean
   results?: boolean
   artifacts?: boolean
   gate?: boolean
@@ -1683,6 +1719,7 @@ export type JobSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extension
   pluginPaths?: boolean
   maxRetries?: boolean
   exports?: boolean
+  inputs?: boolean
   results?: boolean
   artifacts?: boolean
   gate?: boolean
@@ -1713,6 +1750,7 @@ export type JobSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extension
   pluginPaths?: boolean
   maxRetries?: boolean
   exports?: boolean
+  inputs?: boolean
   results?: boolean
   artifacts?: boolean
   gate?: boolean
@@ -1743,6 +1781,7 @@ export type JobSelectScalar = {
   pluginPaths?: boolean
   maxRetries?: boolean
   exports?: boolean
+  inputs?: boolean
   results?: boolean
   artifacts?: boolean
   gate?: boolean
@@ -1757,7 +1796,7 @@ export type JobSelectScalar = {
   finishedAt?: boolean
 }
 
-export type JobOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "boardId" | "name" | "brief" | "model" | "effort" | "maxTurns" | "timeoutMs" | "maxBudgetUsd" | "isolate" | "allowedTools" | "pluginPaths" | "maxRetries" | "exports" | "results" | "artifacts" | "gate" | "phase" | "lastSessionId" | "lastError" | "suspendedFor" | "endedBy" | "endedFor" | "createdAt" | "updatedAt" | "finishedAt", ExtArgs["result"]["job"]>
+export type JobOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "boardId" | "name" | "brief" | "model" | "effort" | "maxTurns" | "timeoutMs" | "maxBudgetUsd" | "isolate" | "allowedTools" | "pluginPaths" | "maxRetries" | "exports" | "inputs" | "results" | "artifacts" | "gate" | "phase" | "lastSessionId" | "lastError" | "suspendedFor" | "endedBy" | "endedFor" | "createdAt" | "updatedAt" | "finishedAt", ExtArgs["result"]["job"]>
 export type JobInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   board?: boolean | Prisma.BoardDefaultArgs<ExtArgs>
   attempts?: boolean | Prisma.Job$attemptsArgs<ExtArgs>
@@ -1844,7 +1883,22 @@ export type $JobPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
      * `results` is for small structured values the board keeps and a later reader consumes — a
      * finding, a decision, a URL. Capped at 4 KB each (`src/results.ts`), because a handoff that can
      * hold a megabyte is a worse artifact store than the one `exports` already is.
+     * What this Job is GIVEN: a JSON array of `{ name, source }`, resolved by the controller before
+     * the run and rendered into the prompt (`src/inputs.ts`). ADR-008 declared what a Job produces
+     * and left what it consumes as `brief` — one static string.
+     * 
+     * Two sources, and neither of them waits: `file:<repo-relative-path>` reads the repository, and
+     * `board` is the LLM-free board arithmetic ADR-010 decision 5 described. An input that read
+     * another Job's output would be `Job.after` with a payload, and that was rejected rather than
+     * deferred (`docs/workflow-study.md` §2) — ordering between workloads belongs to a kind.
+     * 
+     * The point is **context restriction**, not convenience: paired with an `allowedTools` that
+     * excludes `Read`/`Glob`/`Grep`, a Job sees what it was given and cannot reach further, because
+     * the admission gate refuses the rest. Injection alone restricts nothing.
+     * 
+     * An input that cannot be read fails the attempt BEFORE the run — `Outcome.no_input`, no money.
      */
+    inputs: runtime.JsonValue | null
     results: runtime.JsonValue | null
     /**
      * The files this Job must produce: a JSON array of names, each one path segment. The third
@@ -2342,6 +2396,7 @@ export interface JobFieldRefs {
   readonly pluginPaths: Prisma.FieldRef<"Job", 'Json'>
   readonly maxRetries: Prisma.FieldRef<"Job", 'Int'>
   readonly exports: Prisma.FieldRef<"Job", 'Json'>
+  readonly inputs: Prisma.FieldRef<"Job", 'Json'>
   readonly results: Prisma.FieldRef<"Job", 'Json'>
   readonly artifacts: Prisma.FieldRef<"Job", 'Json'>
   readonly gate: Prisma.FieldRef<"Job", 'String'>

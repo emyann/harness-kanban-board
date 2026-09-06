@@ -843,6 +843,263 @@ test('a declared result the run did NOT write fails the attempt', async () => {
 });
 
 /**
+ * `inputs` end to end: the read side, resolved before anything is spent.
+ *
+ * `test/inputs.test.ts` covers the contract. The two here are the wiring, and the second is the one
+ * that pays for the feature — a declaration the board cannot satisfy must stop the attempt BEFORE
+ * the runtime is called, because finding out afterwards costs a session.
+ */
+test('a declared input is read from the repository and reaches the prompt before the brief', async () => {
+  const b = await db.board.upsert({
+    where: { slug: 'inputs' },
+    update: { repoPath: REPO, dailyBudgetUsd: null, maxConcurrent: 5, pausedAt: null },
+    create: { slug: 'inputs', repoPath: REPO, dailyBudgetUsd: null, maxConcurrent: 5 },
+  });
+  const seen: string[] = [];
+  const spy = {
+    name: 'spy',
+    async run(spec: { prompt: string }) {
+      seen.push(spec.prompt);
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'reads the licence', brief: 'Summarise it.', isolate: false,
+      inputs: [{ name: 'licence', valueFrom: { file: { path: 'LICENSE' } } }],
+    },
+  });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'succeeded');
+  assert.match(seen[0], /### `licence`  \(file:LICENSE\)/, 'the input is labelled by name and source');
+  assert.ok(seen[0].indexOf('MIT') < seen[0].indexOf('Summarise it.'),
+    'and it arrives BEFORE the brief that is about it');
+
+  const fed = after.attempts[0].inputs as { name: string; source: string; bytes: number }[];
+  assert.equal(fed.length, 1);
+  assert.equal(fed[0].name, 'licence');
+  assert.ok(fed[0].bytes > 0, 'the catalogue records what the run was fed, never the content');
+});
+
+test('a declared input the board cannot read fails the attempt WITHOUT calling the runtime', async () => {
+  const b = await db.board.findUniqueOrThrow({ where: { slug: 'inputs' } });
+  let called = 0;
+  const spy = {
+    name: 'spy',
+    async run() {
+      called += 1;
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'reads a ghost', brief: 'x', isolate: false, maxRetries: 0,
+      inputs: [{ name: 'gone', valueFrom: { file: { path: 'no-such-file.md' } } }],
+    },
+  });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+
+  assert.equal(called, 0, 'the whole point: an unreadable input costs no session');
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts[0].outcome, 'no_input');
+  assert.equal(after.phase, 'failed', 'terminal — the same read fails identically next time');
+  assert.match(after.lastError ?? '', /`gone`/, 'and it names which input');
+});
+
+test('a value input the brief did not consume still reaches the run, as data', async () => {
+  const b = await db.board.findUniqueOrThrow({ where: { slug: 'inputs' } });
+  const seen: string[] = [];
+  const spy = {
+    name: 'spy',
+    async run(spec: { prompt: string }) {
+      seen.push(spec.prompt);
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+
+  // `hkb new` drops a value it interpolated, so anything still on the Job was never consumed and
+  // has to arrive as a block — otherwise a caller's payload would silently vanish.
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'given a payload', brief: 'Handle it.', isolate: false,
+      inputs: [{ name: 'pr', value: '{"number":42}' }],
+    },
+  });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'succeeded', 'a literal cannot fail to resolve — there is nothing to fetch');
+  assert.match(seen[0], /### `pr`  \(value\)/, 'labelled by name, and by the source it came from');
+  assert.match(seen[0], /\{"number":42\}/);
+  const fed = after.attempts[0].inputs as { name: string; source: string }[];
+  assert.deepEqual(fed.map((i) => i.source), ['value'], 'the catalogue records it too');
+});
+
+/**
+ * The downward API (`self:`) and the slot that earns it.
+ *
+ * The motivating case is concrete: an end-to-end suite running inside a worker needs a port, and
+ * concurrent workers on one machine need DIFFERENT ports. `id` is unique but unbounded; nothing
+ * else answered "which of the concurrent workers am I". Kubernetes gives every Pod its own IP and
+ * the question never arises — hkb's workers share a machine, so the StatefulSet ordinal is the
+ * shape that fits.
+ */
+test('self: hands a Job facts about itself, and slot is a small integer it can build a port from', async () => {
+  const b = await db.board.findUniqueOrThrow({ where: { slug: 'inputs' } });
+  const seen: string[] = [];
+  const spy = {
+    name: 'spy',
+    async run(spec: { prompt: string }) {
+      seen.push(spec.prompt);
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'runs e2e', brief: 'Serve on the port.', isolate: false,
+      inputs: [
+        { name: 'slot', valueFrom: { jobRef: { field: 'slot' } } },
+        { name: 'k', valueFrom: { jobRef: { field: 'attempt' } } },
+        { name: 'who', valueFrom: { jobRef: { field: 'name' } } },
+        { name: 'board', valueFrom: { jobRef: { field: 'board' } } },
+      ],
+    },
+  });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'succeeded');
+  assert.match(seen[0], /### `slot`  \(self:slot\)/);
+  assert.match(seen[0], /### `k`  \(self:attempt\)/);
+  assert.match(seen[0], /runs e2e/, 'its own name');
+  assert.match(seen[0], /inputs/, 'and the board it is on');
+  assert.equal(after.attempts[0].slot, 0,
+    'frozen onto the attempt, so a past run can still say which slot it held');
+});
+
+test('a self: field this Job does not have is REFUSED, not rendered empty', async () => {
+  const b = await db.board.findUniqueOrThrow({ where: { slug: 'inputs' } });
+  let called = 0;
+  const spy = {
+    name: 'spy',
+    async run() {
+      called += 1;
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+
+  // `--no-isolate`, so there is no branch. Rendering an empty string would put a Job in the position
+  // of acting on a fact that is not true, which is the failure every other declaration refuses.
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'no branch here', brief: 'x', isolate: false, maxRetries: 0,
+      inputs: [{ name: 'branch', valueFrom: { jobRef: { field: 'branch' } } }],
+    },
+  });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+
+  assert.equal(called, 0);
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts[0].outcome, 'no_input');
+  assert.match(after.lastError ?? '', /running without a worktree/, 'and it says why, not just that');
+});
+
+test('concurrent runs get DIFFERENT slots, and a slot is released with its lease', async () => {
+  const b = await db.board.upsert({
+    where: { slug: 'slots' },
+    update: { repoPath: REPO, maxConcurrent: 3, dailyBudgetUsd: null, pausedAt: null },
+    create: { slug: 'slots', repoPath: REPO, maxConcurrent: 3, dailyBudgetUsd: null },
+  });
+  // A barrier, and it is the test rather than an implementation detail: a slot is held only while a
+  // run is LIVE, so with an instant runtime the first lease is released before the second claim even
+  // reads. That is correct behaviour and it is also not the thing under test. Three runs that
+  // genuinely overlap is.
+  let started = 0;
+  let release!: () => void;
+  // Timed out rather than open-ended. If the allocator stops handing out distinct slots, the unique
+  // constraint refuses the second claim and only one run ever starts — an open barrier would then
+  // hang the suite instead of failing it, and a test that deadlocks on a regression reports nothing.
+  const allThree = Promise.race([
+    new Promise<void>((r) => { release = r; }),
+    new Promise<void>((r) => setTimeout(r, 3_000).unref()),
+  ]);
+  const spy = {
+    name: 'spy',
+    async run() {
+      if (++started === 3) release();
+      await allThree;
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+
+  const ids: number[] = [];
+  for (const n of [1, 2, 3]) {
+    const j = await db.job.create({ data: { boardId: b.id, name: `concurrent ${n}`, brief: 'x', isolate: false } });
+    ids.push(j.id);
+  }
+  await reconcile({ runtime: spy, cwd: REPO, board: 'slots', readPr: false });
+
+  const got = await db.attempt.findMany({ where: { jobId: { in: ids } }, select: { slot: true } });
+  const slots = got.map((a) => a.slot);
+  assert.equal(slots.length, 3);
+  assert.equal(new Set(slots).size, 3, 'three runs at once, three different slots — the whole point');
+  assert.deepEqual([...slots].sort(), [0, 1, 2], 'and they are small and dense, so a port base + slot works');
+
+  // Released with the lease, or the second batch on this board would start at slot 3 and climb.
+  assert.equal(await db.lease.count({ where: { job: { boardId: b.id } } }), 0);
+  const j4 = await db.job.create({ data: { boardId: b.id, name: 'later', brief: 'x', isolate: false } });
+  const quick = {
+    name: 'quick',
+    async run() {
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+  await reconcile({ runtime: quick, cwd: REPO, board: 'slots', readPr: false });
+  const a4 = await db.attempt.findFirstOrThrow({ where: { jobId: j4.id } });
+  assert.equal(a4.slot, 0, 'a freed slot is reused — otherwise the number is just `id` with extra steps');
+});
+
+test('the board input is the arithmetic hkb already computes, and never includes the reading Job', async () => {
+  const b = await db.board.findUniqueOrThrow({ where: { slug: 'inputs' } });
+  const seen: string[] = [];
+  const spy = {
+    name: 'spy',
+    async run(spec: { prompt: string }) {
+      seen.push(spec.prompt);
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'grooms', brief: 'Look at the board.', isolate: false,
+      inputs: [{ name: 'board', valueFrom: { board: {} } }],
+    },
+  });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+
+  assert.match(seen[0], /### `board`  \(board\)/);
+  assert.match(seen[0], /#\d+\s+failed\s+.*reads a ghost/, 'the other Jobs on this board are there');
+  assert.doesNotMatch(seen[0], /grooms/,
+    'and the reading Job is not — a Job reasoning about the board should not find itself listed as running');
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(after.phase, 'succeeded');
+});
+
+/**
  * `artifacts` end to end (ADR-011): the output that is too big to be a result and must not be
  * committed. `test/artifacts.test.ts` covers the contract; these two cover the wiring, and the
  * second is the refusal — same rule as `exports` and `results`, third medium.

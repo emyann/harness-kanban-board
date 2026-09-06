@@ -9,6 +9,7 @@ import { checkExportPath } from './worktree.ts';
 import { checkResultName, RESULT_MAX_BYTES } from './results.ts';
 import { checkArtifactName, artifactsDir, bytes } from './artifacts.ts';
 import { checkPluginPath, pluginList } from './plugins.ts';
+import { checkInputSpec, declaredInputs, renderBrief, describeSource } from './inputs.ts';
 import { fakeRuntime } from './runtime/fake.ts';
 import * as daemon from './daemon.ts';
 import { EFFORTS, boardDefaults, hasDefaults, resolveSpec, type SpecSource } from './spec.ts';
@@ -57,6 +58,20 @@ const HELP = `hkb — run one agent against one brief
                         \`.claude\`. Resolved against the board's REPOSITORY, never the worktree,
                         so only a merge changes what it loads. Repeatable; it grants what a
                         worker may READ, and nothing about what it may do.
+       --input <n=src>  what the Job is GIVEN, repeatable. Four sources:
+                          \`file:<repo-path>\`  a file in the board's repository
+                          \`board\`             this board's Jobs, phases and outcomes
+                          \`value:<literal>\`   a payload the caller pushes, not one hkb fetches
+                          \`self:<field>\`      this Job about itself — id, name, board, attempt,
+                                              slot, branch, worktree, repo
+                        Read before the run and put in the prompt; an input the board cannot read
+                        fails the attempt without spending one. Narrow --allow-tool alongside it
+                        and the Job sees what it was given and no more.
+                        \`self:slot\` is the one that answers "which concurrent worker am I" — a
+                        small integer no other live run holds, for a port or a database name.
+                        A \`value:\` may also be interpolated into the brief as {{name}} or
+                        {{name.field}} — whichever way the brief arrived. Only \`value:\`, because
+                        the brief is instruction and a fetched source is data.
        --result <name>  a named value the Job must produce — a finding, a decision, a URL.
                         The board keeps it on the attempt and \`hkb show\` prints it, so a Job
                         that makes no commit still leaves something behind. Repeatable.
@@ -363,6 +378,7 @@ export async function main(argv: string[]): Promise<number> {
       artifact: { type: 'string', multiple: true },
       'plugin-dir': { type: 'string', multiple: true },
       'default-plugin-dirs': { type: 'string' },
+      input: { type: 'string', multiple: true },
       gate: { type: 'string' },
       // Repeatable, for the same reason `--export` is: a tool name is a token, and one
       // comma-separated string makes the empty list ("this Job may call nothing") unsayable.
@@ -452,6 +468,21 @@ export async function main(argv: string[]): Promise<number> {
       const pluginPaths = values['plugin-dir'] !== undefined
         ? (values['plugin-dir'] as string[]).map((v) => v.trim()).filter(Boolean).map(checkPluginPath)
         : null;
+      // Checked at file time like every other declaration, and for the sharpest version of the same
+      // reason: this one names a file the BOARD will read with the operator's authority and put in
+      // front of a model. A source that was never legal must not become state.
+      let inputs = ((values.input as string[] | undefined) ?? []).map(checkInputSpec);
+      // The brief is rendered HERE, against the `value:` inputs only, so what the board stores is
+      // what the run is given — `hkb show` and the prompt cannot disagree. It applies to whichever
+      // way the brief arrived: `--brief`, `--brief-file` or stdin all land in one string above.
+      const supplied = new Map(
+        inputs.filter((i): i is { name: string; value: string } => 'value' in i).map((i) => [i.name, i.value]),
+      );
+      const rendered = renderBrief(brief, supplied, new Set(inputs.map((i) => i.name)));
+      // A value that went into the brief does not also arrive as a data block. Dropping it here
+      // rather than remembering it keeps the run path with one rule: everything in `inputs` is
+      // rendered, and nothing is rendered twice.
+      inputs = inputs.filter((i) => !rendered.used.has(i.name));
       const gate = typeof values.gate === 'string' ? values.gate.trim() : undefined;
       if (values.gate !== undefined && !gate) throw usage('--gate needs the question a human is being asked, as in --gate "does this migration look right?"');
       // Null when the flag was absent, so the board's default can answer. An EMPTY list is only
@@ -463,12 +494,13 @@ export async function main(argv: string[]): Promise<number> {
           : null;
       const job = await db.job.create({
         data: {
-          boardId: board.id, name, brief,
+          boardId: board.id, name, brief: rendered.text,
           // Null rather than `[]` for a Job that declares nothing: "produces no file" and "produced
           // none of the files it promised" are different facts, and only the second is a failure.
           ...(exports.length ? { exports } : {}),
           ...(results.length ? { results } : {}),
           ...(artifacts.length ? { artifacts } : {}),
+          ...(inputs.length ? { inputs } : {}),
           ...(gate ? { gate } : {}),
           model: (values.model as string) ?? null,
           effort: effort ?? null,
@@ -486,11 +518,12 @@ export async function main(argv: string[]): Promise<number> {
       await db.event.create({
         data: { kind: 'created', jobId: job.id, boardId: board.id, actor: whoami(), payload: { name } },
       });
-      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results, artifacts }, () =>
+      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results, artifacts, inputs }, () =>
         console.log(`#${job.id} ${job.name}  [${job.phase}]  on ${slug}`
           + (exports.length ? `\n  must produce  ${exports.join(', ')}` : '')
           + (results.length ? `\n  must report   ${results.join(', ')}` : '')
-          + (artifacts.length ? `\n  must hand over ${artifacts.join(', ')}` : '')));
+          + (artifacts.length ? `\n  must hand over ${artifacts.join(', ')}` : '')
+          + (inputs.length ? `\n  is given      ${inputs.map((i) => `${i.name}=${describeSource(i)}`).join(', ')}` : '')));
       return 0;
     }
 
@@ -615,6 +648,9 @@ export async function main(argv: string[]): Promise<number> {
         }
         // What it must produce, beside how it runs — the half of the spec ADR-008 added, and the
         // one that decides whether a completed session counts as a success.
+        // Before the outputs, because that is the order the run sees them in.
+        const given = declaredInputs(job.inputs);
+        if (given.length) console.log(`  inputs   ${given.map((i) => `${i.name}=${describeSource(i)}`).join(', ')}`);
         if (Array.isArray(job.exports) && job.exports.length) console.log(`  exports  ${job.exports.join(', ')}`);
         if (Array.isArray(job.results) && job.results.length) console.log(`  results  ${job.results.join(', ')}`);
         if (Array.isArray(job.artifacts) && job.artifacts.length) console.log(`  files    ${job.artifacts.join(', ')}`);
@@ -663,6 +699,12 @@ export async function main(argv: string[]): Promise<number> {
           else if (a.branch) console.log(`           branch ${a.branch} — no pull request found`);
           // The other reviewable artifact, and the one that is not on a forge: what this attempt
           // took out of its checkout and left in the repository.
+          // What this attempt was FED, beside what it cost. The pair is the measurement — an input
+          // is paid for on every request of the run, so its size sits next to `turns` above.
+          if (Array.isArray(a.inputs) && a.inputs.length) {
+            const fed = a.inputs as { name: string; source: string; bytes: number }[];
+            console.log(`           given ${fed.map((i) => `${i.name} ${bytes(i.bytes)}`).join(', ')}`);
+          }
           if (Array.isArray(a.exported) && a.exported.length) console.log(`           exported ${a.exported.join(', ')}`);
           // The third one, and the only output whose location a human has to be told: an artifact
           // is deliberately not in the repository and not on a forge, so a line that named the

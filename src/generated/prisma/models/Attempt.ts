@@ -32,6 +32,7 @@ export type AttemptAvgAggregateOutputType = {
   maxBudgetUsd: number | null
   prNumber: number | null
   costUsd: number | null
+  slot: number | null
   turns: number | null
   denials: number | null
 }
@@ -42,6 +43,7 @@ export type AttemptSumAggregateOutputType = {
   maxBudgetUsd: number | null
   prNumber: number | null
   costUsd: number | null
+  slot: number | null
   turns: number | null
   denials: number | null
 }
@@ -62,6 +64,7 @@ export type AttemptMinAggregateOutputType = {
   prNumber: number | null
   prUrl: string | null
   costUsd: number | null
+  slot: number | null
   turns: number | null
   denials: number | null
 }
@@ -82,6 +85,7 @@ export type AttemptMaxAggregateOutputType = {
   prNumber: number | null
   prUrl: string | null
   costUsd: number | null
+  slot: number | null
   turns: number | null
   denials: number | null
 }
@@ -104,6 +108,8 @@ export type AttemptCountAggregateOutputType = {
   exported: number
   costUsd: number
   results: number
+  slot: number
+  inputs: number
   artifacts: number
   turns: number
   denials: number
@@ -117,6 +123,7 @@ export type AttemptAvgAggregateInputType = {
   maxBudgetUsd?: true
   prNumber?: true
   costUsd?: true
+  slot?: true
   turns?: true
   denials?: true
 }
@@ -127,6 +134,7 @@ export type AttemptSumAggregateInputType = {
   maxBudgetUsd?: true
   prNumber?: true
   costUsd?: true
+  slot?: true
   turns?: true
   denials?: true
 }
@@ -147,6 +155,7 @@ export type AttemptMinAggregateInputType = {
   prNumber?: true
   prUrl?: true
   costUsd?: true
+  slot?: true
   turns?: true
   denials?: true
 }
@@ -167,6 +176,7 @@ export type AttemptMaxAggregateInputType = {
   prNumber?: true
   prUrl?: true
   costUsd?: true
+  slot?: true
   turns?: true
   denials?: true
 }
@@ -189,6 +199,8 @@ export type AttemptCountAggregateInputType = {
   exported?: true
   costUsd?: true
   results?: true
+  slot?: true
+  inputs?: true
   artifacts?: true
   turns?: true
   denials?: true
@@ -299,6 +311,8 @@ export type AttemptGroupByOutputType = {
   exported: runtime.JsonValue | null
   costUsd: number | null
   results: runtime.JsonValue | null
+  slot: number | null
+  inputs: runtime.JsonValue | null
   artifacts: runtime.JsonValue | null
   turns: number | null
   denials: number | null
@@ -345,6 +359,8 @@ export type AttemptWhereInput = {
   exported?: Prisma.JsonNullableFilter<"Attempt">
   costUsd?: Prisma.FloatNullableFilter<"Attempt"> | number | null
   results?: Prisma.JsonNullableFilter<"Attempt">
+  slot?: Prisma.IntNullableFilter<"Attempt"> | number | null
+  inputs?: Prisma.JsonNullableFilter<"Attempt">
   artifacts?: Prisma.JsonNullableFilter<"Attempt">
   turns?: Prisma.IntNullableFilter<"Attempt"> | number | null
   denials?: Prisma.IntNullableFilter<"Attempt"> | number | null
@@ -369,6 +385,8 @@ export type AttemptOrderByWithRelationInput = {
   exported?: Prisma.SortOrderInput | Prisma.SortOrder
   costUsd?: Prisma.SortOrderInput | Prisma.SortOrder
   results?: Prisma.SortOrderInput | Prisma.SortOrder
+  slot?: Prisma.SortOrderInput | Prisma.SortOrder
+  inputs?: Prisma.SortOrderInput | Prisma.SortOrder
   artifacts?: Prisma.SortOrderInput | Prisma.SortOrder
   turns?: Prisma.SortOrderInput | Prisma.SortOrder
   denials?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -397,6 +415,8 @@ export type AttemptWhereUniqueInput = Prisma.AtLeast<{
   exported?: Prisma.JsonNullableFilter<"Attempt">
   costUsd?: Prisma.FloatNullableFilter<"Attempt"> | number | null
   results?: Prisma.JsonNullableFilter<"Attempt">
+  slot?: Prisma.IntNullableFilter<"Attempt"> | number | null
+  inputs?: Prisma.JsonNullableFilter<"Attempt">
   artifacts?: Prisma.JsonNullableFilter<"Attempt">
   turns?: Prisma.IntNullableFilter<"Attempt"> | number | null
   denials?: Prisma.IntNullableFilter<"Attempt"> | number | null
@@ -421,6 +441,8 @@ export type AttemptOrderByWithAggregationInput = {
   exported?: Prisma.SortOrderInput | Prisma.SortOrder
   costUsd?: Prisma.SortOrderInput | Prisma.SortOrder
   results?: Prisma.SortOrderInput | Prisma.SortOrder
+  slot?: Prisma.SortOrderInput | Prisma.SortOrder
+  inputs?: Prisma.SortOrderInput | Prisma.SortOrder
   artifacts?: Prisma.SortOrderInput | Prisma.SortOrder
   turns?: Prisma.SortOrderInput | Prisma.SortOrder
   denials?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -452,6 +474,8 @@ export type AttemptScalarWhereWithAggregatesInput = {
   exported?: Prisma.JsonNullableWithAggregatesFilter<"Attempt">
   costUsd?: Prisma.FloatNullableWithAggregatesFilter<"Attempt"> | number | null
   results?: Prisma.JsonNullableWithAggregatesFilter<"Attempt">
+  slot?: Prisma.IntNullableWithAggregatesFilter<"Attempt"> | number | null
+  inputs?: Prisma.JsonNullableWithAggregatesFilter<"Attempt">
   artifacts?: Prisma.JsonNullableWithAggregatesFilter<"Attempt">
   turns?: Prisma.IntNullableWithAggregatesFilter<"Attempt"> | number | null
   denials?: Prisma.IntNullableWithAggregatesFilter<"Attempt"> | number | null
@@ -474,6 +498,8 @@ export type AttemptCreateInput = {
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  slot?: number | null
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   turns?: number | null
   denials?: number | null
@@ -498,6 +524,8 @@ export type AttemptUncheckedCreateInput = {
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  slot?: number | null
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   turns?: number | null
   denials?: number | null
@@ -520,6 +548,8 @@ export type AttemptUpdateInput = {
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  slot?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   turns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   denials?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -544,6 +574,8 @@ export type AttemptUncheckedUpdateInput = {
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  slot?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   turns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   denials?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -567,6 +599,8 @@ export type AttemptCreateManyInput = {
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  slot?: number | null
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   turns?: number | null
   denials?: number | null
@@ -589,6 +623,8 @@ export type AttemptUpdateManyMutationInput = {
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  slot?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   turns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   denials?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -612,6 +648,8 @@ export type AttemptUncheckedUpdateManyInput = {
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  slot?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   turns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   denials?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -650,6 +688,8 @@ export type AttemptCountOrderByAggregateInput = {
   exported?: Prisma.SortOrder
   costUsd?: Prisma.SortOrder
   results?: Prisma.SortOrder
+  slot?: Prisma.SortOrder
+  inputs?: Prisma.SortOrder
   artifacts?: Prisma.SortOrder
   turns?: Prisma.SortOrder
   denials?: Prisma.SortOrder
@@ -661,6 +701,7 @@ export type AttemptAvgOrderByAggregateInput = {
   maxBudgetUsd?: Prisma.SortOrder
   prNumber?: Prisma.SortOrder
   costUsd?: Prisma.SortOrder
+  slot?: Prisma.SortOrder
   turns?: Prisma.SortOrder
   denials?: Prisma.SortOrder
 }
@@ -681,6 +722,7 @@ export type AttemptMaxOrderByAggregateInput = {
   prNumber?: Prisma.SortOrder
   prUrl?: Prisma.SortOrder
   costUsd?: Prisma.SortOrder
+  slot?: Prisma.SortOrder
   turns?: Prisma.SortOrder
   denials?: Prisma.SortOrder
 }
@@ -701,6 +743,7 @@ export type AttemptMinOrderByAggregateInput = {
   prNumber?: Prisma.SortOrder
   prUrl?: Prisma.SortOrder
   costUsd?: Prisma.SortOrder
+  slot?: Prisma.SortOrder
   turns?: Prisma.SortOrder
   denials?: Prisma.SortOrder
 }
@@ -711,6 +754,7 @@ export type AttemptSumOrderByAggregateInput = {
   maxBudgetUsd?: Prisma.SortOrder
   prNumber?: Prisma.SortOrder
   costUsd?: Prisma.SortOrder
+  slot?: Prisma.SortOrder
   turns?: Prisma.SortOrder
   denials?: Prisma.SortOrder
 }
@@ -786,6 +830,8 @@ export type AttemptCreateWithoutJobInput = {
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  slot?: number | null
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   turns?: number | null
   denials?: number | null
@@ -808,6 +854,8 @@ export type AttemptUncheckedCreateWithoutJobInput = {
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  slot?: number | null
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   turns?: number | null
   denials?: number | null
@@ -859,6 +907,8 @@ export type AttemptScalarWhereInput = {
   exported?: Prisma.JsonNullableFilter<"Attempt">
   costUsd?: Prisma.FloatNullableFilter<"Attempt"> | number | null
   results?: Prisma.JsonNullableFilter<"Attempt">
+  slot?: Prisma.IntNullableFilter<"Attempt"> | number | null
+  inputs?: Prisma.JsonNullableFilter<"Attempt">
   artifacts?: Prisma.JsonNullableFilter<"Attempt">
   turns?: Prisma.IntNullableFilter<"Attempt"> | number | null
   denials?: Prisma.IntNullableFilter<"Attempt"> | number | null
@@ -881,6 +931,8 @@ export type AttemptCreateManyJobInput = {
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  slot?: number | null
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   turns?: number | null
   denials?: number | null
@@ -903,6 +955,8 @@ export type AttemptUpdateWithoutJobInput = {
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  slot?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   turns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   denials?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -925,6 +979,8 @@ export type AttemptUncheckedUpdateWithoutJobInput = {
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  slot?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   turns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   denials?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -947,6 +1003,8 @@ export type AttemptUncheckedUpdateManyWithoutJobInput = {
   exported?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   costUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  slot?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   turns?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   denials?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
@@ -972,6 +1030,8 @@ export type AttemptSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs 
   exported?: boolean
   costUsd?: boolean
   results?: boolean
+  slot?: boolean
+  inputs?: boolean
   artifacts?: boolean
   turns?: boolean
   denials?: boolean
@@ -996,6 +1056,8 @@ export type AttemptSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Exten
   exported?: boolean
   costUsd?: boolean
   results?: boolean
+  slot?: boolean
+  inputs?: boolean
   artifacts?: boolean
   turns?: boolean
   denials?: boolean
@@ -1020,6 +1082,8 @@ export type AttemptSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Exten
   exported?: boolean
   costUsd?: boolean
   results?: boolean
+  slot?: boolean
+  inputs?: boolean
   artifacts?: boolean
   turns?: boolean
   denials?: boolean
@@ -1044,12 +1108,14 @@ export type AttemptSelectScalar = {
   exported?: boolean
   costUsd?: boolean
   results?: boolean
+  slot?: boolean
+  inputs?: boolean
   artifacts?: boolean
   turns?: boolean
   denials?: boolean
 }
 
-export type AttemptOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"jobId" | "k" | "host" | "runtime" | "startedAt" | "endedAt" | "outcome" | "sessionId" | "summary" | "reason" | "maxBudgetUsd" | "branch" | "prNumber" | "prUrl" | "exported" | "costUsd" | "results" | "artifacts" | "turns" | "denials", ExtArgs["result"]["attempt"]>
+export type AttemptOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"jobId" | "k" | "host" | "runtime" | "startedAt" | "endedAt" | "outcome" | "sessionId" | "summary" | "reason" | "maxBudgetUsd" | "branch" | "prNumber" | "prUrl" | "exported" | "costUsd" | "results" | "slot" | "inputs" | "artifacts" | "turns" | "denials", ExtArgs["result"]["attempt"]>
 export type AttemptInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   job?: boolean | Prisma.JobDefaultArgs<ExtArgs>
 }
@@ -1163,6 +1229,21 @@ export type $AttemptPayload<ExtArgs extends runtime.Types.Extensions.InternalArg
      * Job cannot say it noticed something nobody thought to ask about.
      */
     results: runtime.JsonValue | null
+    /**
+     * The concurrency slot this attempt held, copied off the Lease so it survives the release.
+     * Null for an attempt claimed before slots existed. See `Lease.slot`.
+     */
+    slot: number | null
+    /**
+     * The catalogue of what this attempt was GIVEN, as `[{ name, source, bytes }]` — never the
+     * content, which is in the prompt and in the transcript the session id points at. Null for an
+     * attempt that declared none.
+     * 
+     * Recorded because it is the measurement Artic's claim needs and hkb cannot otherwise make: what
+     * a run was fed, beside what it cost (`costUsd`, `turns`). Without it, "declared inputs reduce
+     * input tokens" stays a thing read in a paper.
+     */
+    inputs: runtime.JsonValue | null
     /**
      * The catalogue of what this attempt left in its artifact directory, as
      * `[{ name, kind, bytes }]` (ADR-011, `src/artifacts.ts`). Null, not `[]`, for an attempt that
@@ -1620,6 +1701,8 @@ export interface AttemptFieldRefs {
   readonly exported: Prisma.FieldRef<"Attempt", 'Json'>
   readonly costUsd: Prisma.FieldRef<"Attempt", 'Float'>
   readonly results: Prisma.FieldRef<"Attempt", 'Json'>
+  readonly slot: Prisma.FieldRef<"Attempt", 'Int'>
+  readonly inputs: Prisma.FieldRef<"Attempt", 'Json'>
   readonly artifacts: Prisma.FieldRef<"Attempt", 'Json'>
   readonly turns: Prisma.FieldRef<"Attempt", 'Int'>
   readonly denials: Prisma.FieldRef<"Attempt", 'Int'>

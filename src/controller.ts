@@ -5,8 +5,12 @@ import {
   type Worktree,
 } from './worktree.ts';
 import { prForBranch } from './pulls.ts';
-import { approvedPrompt, withArtifacts, withProtocol, withResults } from './brief.ts';
+import { approvedPrompt, withArtifacts, withInputs, withProtocol, withResults } from './brief.ts';
 import { resolvePlugins } from './plugins.ts';
+import {
+  declaredInputs, readFileInput, renderBoard, missingInputs, describeSource,
+  type ResolvedInput, type BoardRow,
+} from './inputs.ts';
 import {
   declaredResults, resultPaths, ensureResultsDir, collectResults, clearResults, missingResults,
 } from './results.ts';
@@ -143,7 +147,7 @@ const LEASE_GRACE_MS = 5 * 60_000;
  */
 export type Decision = {
   phase: 'succeeded' | 'failed' | 'pending' | 'suspended';
-  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output';
+  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output' | 'no_input';
   resumable: boolean;
   /**
    * What to write on the Job's `lastError`, when the reason it stopped is something a *human* has
@@ -338,7 +342,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       where: deps.board ? { slug: deps.board } : { id: job.boardId },
       select: {
         pausedAt: true, pausedBy: true, maxConcurrent: true, dailyBudgetUsd: true, id: true,
-        repoPath: true,
+        repoPath: true, slug: true,
         defaultModel: true, defaultEffort: true, defaultMaxTurns: true, defaultMaxBudgetUsd: true,
         defaultMaxRetries: true, defaultAllowedTools: true,
       },
@@ -447,9 +451,26 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // and losing is a normal outcome, not an error.
     const token = `${host}:${k}:${now().getTime()}`;
     const leaseMs = leaseFor(job.timeoutMs);
+    // The concurrency slot: the lowest non-negative integer no other LIVE lease holds. Machine-wide,
+    // because one board file serves one machine and ports do not respect board boundaries.
+    //
+    // It is what makes `self:slot` worth having. `id` is unique and unbounded; a run that wants a
+    // port, a display number or a database name needs a small integer bounded by how many runs
+    // there can be at once. Kubernetes gives every Pod its own IP and never has this problem;
+    // hkb's workers share one machine.
+    //
+    // Racy by construction and safe by constraint: two daemons reading the same set compute the
+    // same answer, `Lease.slot` is `@unique`, and the loser's create throws into the same catch a
+    // lost claim already lands in. Level-triggered — the Job is picked up on the next pass.
+    const heldSlots = new Set(
+      (await db.lease.findMany({ where: { expiresAt: { gt: now() } }, select: { slot: true } }))
+        .map((l) => l.slot).filter((n): n is number => n != null),
+    );
+    let slot = 0;
+    while (heldSlots.has(slot)) slot += 1;
     try {
       await db.lease.create({
-        data: { jobId: job.id, holder: host, token, expiresAt: new Date(now().getTime() + leaseMs) },
+        data: { jobId: job.id, holder: host, token, slot, expiresAt: new Date(now().getTime() + leaseMs) },
       });
     } catch {
       report.skipped.push(job.id);
@@ -464,6 +485,9 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       data: {
         jobId: job.id, k, host, runtime: deps.runtime.name, startedAt: now(),
         maxBudgetUsd: spec.maxBudgetUsd.value,
+        // Copied off the Lease so the fact survives the release — `hkb show` can say which slot a
+        // past attempt held, which is what makes a port collision diagnosable after the fact.
+        slot,
       },
     });
     await db.event.create({ data: { kind: 'claimed', jobId: job.id, boardId: job.boardId, actor: host, payload: { k } } });
@@ -523,7 +547,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     // ---- and now let it go. Everything past this point is the run and the record of it, and it
     // is the only part that overlaps with another Job's.
-    const done$: Promise<void> = runAndRecord({ job, spec, k, charged, token, leaseMs, cwd, wt, say })
+    const done$: Promise<void> = runAndRecord({ job, spec, k, charged, token, leaseMs, cwd, wt, say, boardSlug: board?.slug ?? null, slot })
       .catch((e: unknown) => { failure ??= e; })
       .finally(() => { inFlight.delete(done$); });
     inFlight.add(done$);
@@ -554,8 +578,11 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     cwd: string;
     wt: Worktree | null;
     say: (line: string) => void;
+    /** Both only for the downward API (`self:` inputs) — a Job reading facts about itself. */
+    boardSlug: string | null;
+    slot: number;
   }): Promise<void> {
-    const { job, spec, k, charged, token, leaseMs, cwd, wt, say } = c;
+    const { job, spec, k, charged, token, leaseMs, cwd, wt, say, boardSlug, slot } = c;
 
     // ---- renew while the run is in flight. Deriving the lifetime already makes expiry-while-alive
     // impossible; renewal is what makes a DEAD holder cheap to reclaim — without it a host that dies
@@ -622,10 +649,86 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     const granted = resolvePlugins(cwd, spec.pluginPaths.value);
     const grantedPlugins = granted.paths.length ? granted.paths : undefined;
     if (granted.dropped.length) say(`granted plugin path${granted.dropped.length === 1 ? '' : 's'} not found: ${granted.dropped.join(', ')}`);
+    // ---- the declared INPUTS, resolved before anything is spent. ADR-008 said what a Job produces
+    // and left what it consumes as one static string; this is the other half
+    // (`src/inputs.ts`, `docs/workflow-study.md` §7).
+    //
+    // Against `cwd` — the board's repository — and never the worktree, for the same reason a plugin
+    // grant is: the worktree carries this Job's own edits on a resumed attempt, and a Job that fed
+    // itself its own output would be reading a different document each time it woke up.
+    const wantedInputs = declaredInputs(job.inputs);
+    const readInputs: ResolvedInput[] = [];
+    const unread: { name: string; source: string; why: string }[] = [];
+    for (const want of wantedInputs) {
+      const source = describeSource(want);
+      // A literal, supplied at file time. Nothing to fetch and nothing that can fail. One that was
+      // interpolated into the brief is not here at all — `hkb new` drops it once consumed.
+      if ('value' in want) { readInputs.push({ name: want.name, source, text: want.value }); continue; }
+      const vf = want.valueFrom;
+
+      // The downward API. `fieldRef` lets a Pod read its own metadata; this lets a Job read its own,
+      // and `slot` is the field that earns it: the only fact answering "which of the concurrent
+      // workers am I", which is what a run picking a port or a database name needs.
+      if ('jobRef' in vf) {
+        const self: Record<string, string | null> = {
+          id: String(job.id),
+          name: job.name,
+          board: boardSlug,
+          attempt: String(k),
+          slot: String(slot),
+          branch: wt?.branch ?? null,
+          worktree: wt?.path ?? null,
+          repo: cwd,
+        };
+        const got = self[vf.jobRef.field];
+        // Null is a real answer for `branch` and `worktree` on an un-isolated Job, and a Job that
+        // declared one has asked for something that does not exist here. Refused rather than
+        // rendered empty, which is the same rule every other declaration follows.
+        if (got == null) {
+          unread.push({ name: want.name, source, why: `this Job has no \`${vf.jobRef.field}\`${vf.jobRef.field === 'branch' || vf.jobRef.field === 'worktree' ? ' — it is running without a worktree (`--no-isolate`)' : ''}` });
+        } else {
+          readInputs.push({ name: want.name, source, text: got });
+        }
+        continue;
+      }
+
+      if ('board' in vf) {
+        // One board read, no model, and the projection `hkb ls` already computes — ADR-010 decision
+        // 5's "board arithmetic". Every OTHER Job on this board, so a Job reasoning about the board
+        // is not confused by finding itself listed as `running`.
+        const others = await db.job.findMany({
+          where: { boardId: job.boardId, id: { not: job.id } },
+          orderBy: { id: 'asc' },
+          select: {
+            id: true, name: true, phase: true, exports: true, results: true, artifacts: true,
+            _count: { select: { attempts: true } },
+            attempts: { select: { prUrl: true, outcome: true }, orderBy: { k: 'desc' }, take: 1 },
+          },
+        });
+        const rows: BoardRow[] = others.map((o) => ({
+          id: o.id,
+          name: o.name,
+          phase: o.phase,
+          attempts: o._count.attempts,
+          lastOutcome: o.attempts[0]?.outcome ?? null,
+          producedNothing: o.phase === 'succeeded' && !o.attempts[0]?.prUrl
+            && !declaredExports(o.exports).length && !declaredExports(o.results).length
+            && !declaredExports(o.artifacts).length,
+        }));
+        readInputs.push({ name: want.name, source, text: renderBoard(rows) });
+        continue;
+      }
+
+      const got = readFileInput(cwd, vf.file.path);
+      if ('why' in got) unread.push({ name: want.name, source, why: got.why });
+      else readInputs.push({ name: want.name, source, text: got.text });
+    }
+    const inputShortfall = missingInputs(job.id, unread);
+    if (inputShortfall) deps.onEvent?.(`  ${inputShortfall}`);
 
     // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
     // starting cold, which is the whole reason that column exists.
-    const outcome = await deps.runtime
+    const outcome = inputShortfall ? null : await deps.runtime
       .run({
         taskId: job.id,
         attempt: k,
@@ -640,9 +743,12 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // What this attempt is asked to do. Normally the brief; after an approval, the approver's
         // own instruction — which is the whole of ADR-010 decision 4. A resumed attempt otherwise
         // re-sends the same brief, so an approved Job would propose again instead of applying.
-        prompt: withArtifacts(
-          withResults(approvalPrompt ?? (wt ? withProtocol(job.brief, wt.branch) : job.brief), wantedResults),
-          wantedArtifacts,
+        prompt: withInputs(
+          withArtifacts(
+            withResults(approvalPrompt ?? (wt ? withProtocol(job.brief, wt.branch) : job.brief), wantedResults),
+            wantedArtifacts,
+          ),
+          readInputs,
         ),
         // All four from the resolved spec: a Job that named none of them still has to run on
         // something, and the board is now allowed to be the one that says what.
@@ -678,7 +784,12 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // The operator's intent outranks whatever the runtime made of being cut off. A stopped run
     // reports `timeout` or `error` depending on where the abort landed, and recording either would
     // be a lie about why it ended AND would spend a retry on it.
-    const ran: Decision = deps.signal?.aborted
+    const ran: Decision = inputShortfall
+      // Terminal, and not retried, for the reason a missing declared OUTPUT is not: the same read
+      // fails identically next time. `hkb retry` is the deliberate second go, once a human has read
+      // which input is missing and decided whose mistake it was.
+      ? { phase: 'failed', outcome: 'no_input', resumable: false, lastError: inputShortfall }
+      : deps.signal?.aborted
       ? { phase: 'pending', outcome: 'stopped', resumable: true, lastError: null }
       // Both from the resolved spec, so the budget advice names the cap this attempt actually ran
       // under — which may be the board's. Quoting the raw column would print `$0.00` and send the
@@ -822,6 +933,12 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         ...(exported ? { exported } : {}),
         ...(produced ? { results: produced } : {}),
         ...(artifacts ? { artifacts } : {}),
+        // The catalogue, never the content — that is in the prompt and in the transcript the
+        // session id points at. It is what makes "declared inputs reduce input tokens" a thing this
+        // board can check rather than a thing read in a paper.
+        ...(readInputs.length
+          ? { inputs: readInputs.map((i) => ({ name: i.name, source: i.source, bytes: Buffer.byteLength(i.text) })) }
+          : {}),
       },
     });
 

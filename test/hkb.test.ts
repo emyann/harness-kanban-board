@@ -906,6 +906,39 @@ test('hkb boards rm refuses a board a daemon is leading, --force or not', async 
 // safe: the Job still wins, `none` gets you back to "no opinion", and `hkb show` can tell you which
 // level answered — a spec you cannot trace is worse than one you must repeat.
 
+test('a Job queued with structured input stores the RENDERED brief, and refuses a typo', async () => {
+  const r = scratchRepo('structured');
+  await hkb('boards', 'add', 'structured', '--repo', r);
+  const filed = json((await hkb(
+    'new', 'review a PR', '--board', 'structured', '--json',
+    '--brief', 'Review PR {{pr.number}} in {{pr.repo}} with a {{style}} eye.',
+    '--input', 'pr=value:{"number":42,"repo":"example"}',
+    '--input', 'style=value:strict',
+    '--input', 'schema=file:README.md',
+  )).out);
+
+  // A value that went into the brief is not also handed over as a data block.
+  assert.deepEqual(filed.inputs, [{ name: 'schema', valueFrom: { file: { path: 'README.md' } } }],
+    'the consumed values are gone; the fetched source stays, in the k8s-shaped union');
+
+  const shown = (await hkb('show', String(filed.id), '--board', 'structured')).out;
+  assert.match(shown, /brief\s+Review PR 42 in example with a strict eye\./,
+    'what the board stores is what the run is given — `hkb show` and the prompt cannot disagree');
+
+  // Refused where the operator is standing, not discovered by a worker.
+  await assert.rejects(
+    () => main(['new', 'typo', '--board', 'structured', '--brief', 'Look at {{prr}}.', '--input', 'pr=value:1']),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2 && /declares no `value:` input called `prr`/.test(e.message),
+  );
+
+  // And the line the design rests on: a fetched source may not reach the instruction.
+  await assert.rejects(
+    () => main(['new', 'nope', '--board', 'structured', '--brief', 'Use {{sch}}.', '--input', 'sch=file:README.md']),
+    (e: Error & { exitCode?: number }) =>
+      e.exitCode === 2 && /is not a `value:`/.test(e.message) && /reaches the run as data/.test(e.message),
+  );
+});
+
 test('hkb boards set carries the spec defaults, and none clears one', async () => {
   const r = scratchRepo('defaults');
   await hkb('boards', 'add', 'defaults', '--repo', r);

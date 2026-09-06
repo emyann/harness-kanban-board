@@ -171,6 +171,57 @@ prose to parse. It is also the only output a Job with no commit to make has — 
 nothing to change"* is a real outcome, and without somewhere to put it such a Job succeeds and leaves only
 a session id.
 
+### What a Job is given
+
+The other direction. **`--input <name>=<source>`** is content the board resolves *before* the run and puts
+in the prompt, ahead of the brief that is about it. Three sources, and none of them waits:
+
+- **`file:<path>`** — a file in the repository, read from the board's repo rather than the worktree.
+- **`board`** — this board's other Jobs, their phases, attempt counts and outcomes. LLM-free, one read.
+- **`value:<literal>`** — a payload the caller supplies. The others are things hkb goes and *fetches*;
+  this is the one a webhook, a button or a controller filing work can *push*.
+- **`self:<field>`** — this Job about itself: `id`, `name`, `board`, `attempt`, `slot`, `branch`,
+  `worktree`, `repo`. Kubernetes' downward API, where a Pod reads its own `metadata.name` and
+  `status.podIP`.
+
+**`self:slot`** is the one that earns that list. It is a small integer no other *live* run holds,
+machine-wide — so a suite running inside a worker can pick a port, a display number or a database
+name that concurrent workers will not collide on. `id` is unique but unbounded and answers a
+different question. Kubernetes gives every Pod its own IP and never needs this; hkb's workers share
+one machine, so the shape that fits is the StatefulSet ordinal.
+
+Stored in the shape k8s gives `env` — a `name`, and then either a literal `value` or a `valueFrom`
+naming where to fetch one. The CLI string is sugar over it. A scheme prefix would have grown a query
+language inside a string the first time a source needed a second field, and `valueFrom` being an
+object is exactly how k8s declined that.
+
+A `value:` input may also be **interpolated into the brief**, as `{{name}}` or `{{name.field}}`, whichever
+way the brief arrived — `--brief`, `--brief-file` or stdin:
+
+```sh
+hkb new "review a PR" \
+  --brief 'Review PR {{pr.number}} in {{pr.repo}} with a {{style}} eye.' \
+  --input 'pr=value:{"number":42,"repo":"example"}' \
+  --input style=value:strict
+```
+
+The brief is rendered **when the Job is filed**, so what `hkb show` prints is what the run is given, and
+a placeholder naming nothing is refused where the operator is standing rather than discovered by a
+worker. A value that went into the brief is not also handed over as a data block.
+
+Only `value:` interpolates. A `file:` or `board:` source reaches the run as *data* and never as
+*instruction* — otherwise a file in the repository would decide what the agent is told to do. It is the
+line Kubernetes draws when it lets `envFrom` fill `env` and never `command`.
+
+An input the board cannot read ends the attempt at `no_input` **without calling the model** — the cheap
+mirror of a missing declared output. A source that names another Job's output is refused: that is an
+ordering edge, and ordering between workloads belongs to a kind whose controller creates them.
+
+The point is not convenience, it is **restriction**. Content in a prompt restrains nothing by itself — a
+worker with `Read` finds whatever it likes. Pair `--input` with an `--allow-tool` list that leaves out
+`Read`, `Glob` and `Grep` and the Job sees exactly what it was given, because the admission gate refuses
+the rest. Neither half is the feature; the pair is.
+
 `--no-isolate` runs the Job in the current checkout rather than a worktree of its own, for work that has no
 business on a branch.
 

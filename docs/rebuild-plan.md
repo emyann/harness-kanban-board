@@ -681,13 +681,21 @@ becomes an ADR. Two things in it are worth knowing without reading it: **the two
 representations were both killed** (a re-entrant gate, and a `Job.after` edge), and it found a
 **contradiction between ADR-007 decision 5 and ADR-010** that is still unresolved.
 
-It has produced one decision so far. **ADR-011** (`docs/wiki/decisions/adr-011-proposals-not-board-access.md`)
+It has produced two decisions and one feature. **ADR-011** (`docs/wiki/decisions/adr-011-proposals-not-board-access.md`)
 settles how a workload affects the board: it does not. It declares a *proposal* as an output and the
 controller validates and applies it once an approval is recorded. That resolves the risk ADR-010 recorded
 against itself — groom's apply half is the controller's, so groom stays a field — and makes **declared
 inputs** a named missing half of the primitive rather than an optimisation from a paper (the study's Q4).
-Two things it needs do not exist: a channel for a proposal too large for a 4 KB result and too private for
-the repository, and declared inputs themselves. Nothing ships until the first one does.
+Both things it needed now exist: `--artifact` is the channel for a proposal too large for a 4 KB result
+and too private for the repository, and `--input` is the read side — content the controller resolves
+before the run and puts in the prompt, from a file in the repository or from the board itself. Neither
+source waits, because a source that read another Job's output would be `Job.after` with a payload, and
+the study rejected that rather than deferring it.
+
+That closes the study's **Q4** (Artic's read side) and leaves ADR-011 with nothing missing but the
+**proposal validator** — the part that turns a declared output into rows the controller creates.
+**ADR-012** settled the other side of least privilege: a repository's skills reach a worker as a granted
+plugin directory, never as its settings.
 
 ---
 
