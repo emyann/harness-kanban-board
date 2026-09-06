@@ -5,10 +5,14 @@ import {
   type Worktree,
 } from './worktree.ts';
 import { prForBranch } from './pulls.ts';
-import { approvedPrompt, withProtocol, withResults } from './brief.ts';
+import { approvedPrompt, withArtifacts, withProtocol, withResults } from './brief.ts';
 import {
   declaredResults, resultPaths, ensureResultsDir, collectResults, clearResults, missingResults,
 } from './results.ts';
+import {
+  declaredArtifacts, artifactPaths, ensureArtifactsDir, collectArtifacts, clearEmptyArtifacts,
+  missingArtifacts, bytes,
+} from './artifacts.ts';
 import { gateClaim, windowStart, type ClaimGate } from './limits.ts';
 import { resolveSpec } from './spec.ts';
 import { holderId, holderLiveness } from './liveness.ts';
@@ -601,6 +605,14 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // invitation, which is a different feature.
     ensureResultsDir(job.id, k);
 
+    // ---- the artifacts this attempt is asked for. Same two rules as results — declared names get
+    // a path in the prompt, and the directory is made either way so a run may volunteer — and one
+    // difference that is the point of the channel: nothing here is capped, and nothing here is
+    // removed (ADR-011, `src/artifacts.ts`).
+    const wantedArtifactNames = declaredArtifacts(job.artifacts);
+    const wantedArtifacts = wantedArtifactNames.length ? artifactPaths(job.id, k, wantedArtifactNames) : {};
+    ensureArtifactsDir(job.id, k);
+
     // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
     // starting cold, which is the whole reason that column exists.
     const outcome = await deps.runtime
@@ -618,7 +630,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // What this attempt is asked to do. Normally the brief; after an approval, the approver's
         // own instruction — which is the whole of ADR-010 decision 4. A resumed attempt otherwise
         // re-sends the same brief, so an approved Job would propose again instead of applying.
-        prompt: withResults(approvalPrompt ?? (wt ? withProtocol(job.brief, wt.branch) : job.brief), wantedResults),
+        prompt: withArtifacts(
+          withResults(approvalPrompt ?? (wt ? withProtocol(job.brief, wt.branch) : job.brief), wantedResults),
+          wantedArtifacts,
+        ),
         // All four from the resolved spec: a Job that named none of them still has to run on
         // something, and the board is now allowed to be the one that says what.
         model: spec.model.value ?? undefined,
@@ -709,6 +724,29 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // because the file survives, and a directory kept after a failure is litter nobody reads.
     clearResults(job.id, k);
 
+    // ---- the declared ARTIFACTS. Same rule and same gate again; the differences are that nothing
+    // is read (a catalogue goes onto the row, the file stays where the worker put it) and that the
+    // directory SURVIVES — for a failed attempt too, because a partial output is usually the most
+    // informative thing a failure leaves, and it is the only copy (ADR-011, `src/artifacts.ts`).
+    let artifacts: { name: string; kind: string; bytes: number }[] | null = null;
+    if (ran.phase === 'succeeded' && heldToTheEnd) {
+      const got = collectArtifacts(job.id, k, wantedArtifactNames);
+      artifacts = got.produced.length ? got.produced : null;
+      const owed = missingArtifacts(job.id, got.missing);
+      // Same precedence rule as results: the first cause found is the one reported, because two
+      // concatenated shortfalls read worse than one and mean the same thing.
+      if (owed && !shortfall) shortfall = owed;
+      if (owed) deps.onEvent?.(`  ${owed}`);
+      else if (got.produced.length) {
+        const extra = got.volunteered.length ? ` (${got.volunteered.length} volunteered)` : '';
+        deps.onEvent?.(`  kept ${got.produced.map((a) => `\`${a.name}\` ${bytes(a.bytes)}`).join(', ')}${extra}`);
+      }
+    }
+    // Only when it is empty, which is the common case: every attempt gets a directory because the
+    // path goes into the prompt, and a Job that declared nothing and volunteered nothing must not
+    // leave one behind per attempt for ever.
+    clearEmptyArtifacts(job.id, k);
+
     // A declared output that is not there fails the attempt, and that rule is what makes the
     // declaration worth writing down: without it `succeeded` still means only that a session ended.
     // Not retried — the session's own account is that it finished, so a resumed attempt wakes up
@@ -768,6 +806,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // Prisma's Json null needs a sentinel to say which of the two nulls it means.
         ...(exported ? { exported } : {}),
         ...(produced ? { results: produced } : {}),
+        ...(artifacts ? { artifacts } : {}),
       },
     });
 

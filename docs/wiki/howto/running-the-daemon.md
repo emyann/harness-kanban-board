@@ -9,13 +9,13 @@ covers:
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/hkb.ts
-    sha: 511e04a35950ee21499a68a1984f55549e5d28ce
+    sha: de87da9793947f13760dbb6118ab1b17b2d1b529
   - path: src/worktree.ts
     sha: e4094d7fae517cca708273ddff3007bfc508d10b
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
-generated_at_commit: af8c076
-last_refreshed: 2026-09-05
+generated_at_commit: 7787a6b
+last_refreshed: 2026-09-06
 related: [architecture/the-loop, architecture/job-kind, decisions/adr-007-workload-scheduler]
 ---
 

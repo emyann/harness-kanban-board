@@ -15,6 +15,11 @@ meet one in the git history, that is what it was.
   not (`src/admission.ts`). Not `canUseTool`, which is shadowed by both `bypassPermissions` and bare
   `allowedTools` entries. Named after the Kubernetes admission controller, and adopted after a
   prompt-level instruction was measurably ignored (*concepts/admission-control*).
+- **Artifact** — the third declared output: a file the *board* keeps, uncapped, written by the worker to
+  an absolute path outside every checkout (`--artifact <name>`, `src/artifacts.ts`). The gap between the
+  other two — too large to be a **result**, and no business in a commit the way an **export** is. A name
+  may come back as a directory. Only the catalogue (name, kind, size) lands on the Attempt, and nothing
+  removes the file, because nothing else holds it (*decisions/adr-011-proposals-not-board-access*).
 - **Attempt** — one execution of a Job — the Pod, the thing that dies (`prisma/schema.prisma`).
   Carries `sessionId`, the pointer that recovers everything the SDK already stores, and
   `maxBudgetUsd`, the cap it was *claimed* under, frozen so a past attempt stays legible against the
@@ -40,7 +45,8 @@ meet one in the git history, that is what it was.
   exclusion: a second daemon takes the boards it can and idles on the rest. It replaced a pid file,
   and it is what `hkb up --status` reads (*architecture/the-loop*, *howto/running-the-daemon*).
 - **Export** — a path a Job *declares* it will produce (`--export`, repeatable), copied out of the
-  worktree into the repository before the checkout is torn down; a declared path the run did not
+  worktree into the repository before the checkout is torn down — the one of the three declared outputs
+  whose destination is the repository rather than the board; a declared path the run did not
   produce fails the attempt, and everything undeclared is litter that goes with the checkout
   (`checkExportPath`/`copyIncluded`, `src/worktree.ts`; *decisions/adr-008-declared-outputs*).
 - **Forge** — where pull requests live, deliberately not where the board lives. GitHub, read through

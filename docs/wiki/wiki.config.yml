@@ -77,8 +77,8 @@ pages:
   - slug: features/worktree-includes
     summary: "A worktree is a fresh checkout, so the .env the tests need is not in it — .worktreeinclude declares what to carry across, git answers both halves of the match rule (matched AND gitignored), and no pattern may reach the board."
     status: seeded
-  - slug: features/declared-exports
-    summary: "--export as a spec field: what is copied out before teardown, why an undeclared output is litter, and the path syntax that is refused before a checkout is ever made."
+  - slug: features/declared-outputs
+    summary: "The three declared outputs and the one rule over them: --export to the repository, --result onto the board as a value, --artifact beside the board as a file; why an undeclared output is litter, and the syntax each refuses before a checkout is ever made."
     status: planned
   - slug: decisions/adr-004-roles-and-adoption
     summary: "The canonical seat taxonomy (operator/supervisor/dispatcher/worker) and the adoption ladder. SUPERSEDED by ADR-009: the dispatcher seat is gone."

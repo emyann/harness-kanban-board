@@ -9,21 +9,23 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: 511e04a35950ee21499a68a1984f55549e5d28ce
+    sha: de87da9793947f13760dbb6118ab1b17b2d1b529
   - path: src/controller.ts
-    sha: afc37030ee87b55e0f834a8ce689a68a47d8007f
+    sha: 302c0976e026fe77ccd61f9ad73b974cb379c0ce
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
+  - path: src/artifacts.ts
+    sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
   - path: src/worktree.ts
     sha: e4094d7fae517cca708273ddff3007bfc508d10b
   - path: src/pulls.ts
     sha: a27f00a986f576c2d3ed035902c0a1c9f9a9300c
   - path: prisma/schema.prisma
-    sha: 4eb9facdca09dab37cb69e7b9017e4451f298df2
+    sha: 09f03c15a96a688c8197c565dfdd9e78ccdfa4fb
 related:
   [
     architecture/job-kind,
@@ -32,9 +34,10 @@ related:
     concepts/admission-control,
     decisions/adr-007-workload-scheduler,
     decisions/adr-009-retiring-the-first-system,
+    decisions/adr-011-proposals-not-board-access,
   ]
-generated_at_commit: af8c076
-last_refreshed: 2026-09-05
+generated_at_commit: 7787a6b
+last_refreshed: 2026-09-06
 ---
 
 # hkb at a glance
@@ -58,6 +61,7 @@ seam or 36 CLI verbs is describing code that is gone.
 | `src/runtime/` | the seam a worker runs behind — the Agent SDK, or a fake that spends nothing |
 | `src/admission.ts` | the `PreToolUse` gate that makes worktree isolation and the tool surface invariants rather than instructions |
 | `src/results.ts` | the named values a Job hands on, when its output is not a diff |
+| `src/artifacts.ts` | the files a Job hands on that the board keeps and the repository does not |
 | `src/pulls.ts` | the only thing that shells out to `gh` |
 
 ## State lives in the board, and only there
@@ -124,23 +128,36 @@ outputs as **produced nothing** (`producedNothing`, `src/hkb.ts`). It is stated 
 looked, and there is nothing to change" is a real outcome, and so is a `--no-isolate` Job.
 
 A Job can also declare its outputs, which is how it stops being coupled to a commit at all
-([ADR-008](../decisions/adr-008-declared-outputs.md)). **`exports`** (`--export <path>`) are paths the
-board copies out of the worktree into the repository before the checkout is torn down. **`results`**
-(`--result <name>`) are named, small values the worker writes to a path the controller gives it and the
-board keeps on the Attempt — a finding, a decision, a URL, capped at 4 KB each (`src/results.ts`). One
-rule covers both: **a declared output the run did not produce fails the attempt**, which is what makes
-`succeeded` mean more than "a session ended". Everything else left in the checkout is litter and goes
-with it.
+([ADR-008](../decisions/adr-008-declared-outputs.md),
+[ADR-011](../decisions/adr-011-proposals-not-board-access.md)). There are three, and they differ only
+in **where the output goes**:
 
-A run may also **volunteer** a result: anything it writes beside the declared ones is kept and never
-required. The difference between the two layers is what is *enforced*, not what is stored — a
+| | goes to | shape | capped |
+|---|---|---|---|
+| **`exports`** (`--export <path>`) | the repository | paths, copied out of the worktree before the checkout is torn down | no |
+| **`results`** (`--result <name>`) | the board, as a value on the Attempt | a finding, a decision, a URL (`src/results.ts`) | 4 KB each |
+| **`artifacts`** (`--artifact <name>`) | the board, as a file beside it | a report, a dataset, a proposal (`src/artifacts.ts`) | no |
+
+One rule covers all three: **a declared output the run did not produce fails the attempt**, which is
+what makes `succeeded` mean more than "a session ended". Everything else left in the checkout is litter
+and goes with it.
+
+An **artifact** fills the gap the first two left: too large to be a result, and no business in a commit.
+Its path is handed to the worker absolute and outside every checkout — the same place a result is
+written and for the same stated reason — so an output that must not be committed is never in the tree to
+be committed by accident, and there is no copy step to get wrong. What lands on the Attempt is only the
+*catalogue* (name, kind, size); the file stays where the worker put it and **is never removed**, because
+nothing else holds it. That is why `hkb show` prints a size and a directory rather than a name alone.
+
+A run may also **volunteer** a result or an artifact: anything it writes beside the declared ones is kept
+and never required. The difference between the two layers is what is *enforced*, not what is stored — a
 declaration is the filer saying "this must exist", and a volunteered value is the Job saying "you did
 not ask, but you should know". Hermes' structured handoff is the second layer alone, which is richer
 and guarantees nothing, because a downstream reader cannot rely on a key existing.
 
-That pair is what a Job with nothing to commit produces. `hkb ls` marks a succeeded Job that opened no
-pull request and declared neither as **produced nothing** (`producedNothing`, `src/hkb.ts`); with a
-result declared, the same Job says what it found instead.
+Those three are what a Job with nothing to commit produces. `hkb ls` marks a succeeded Job that opened no
+pull request and declared none of them as **produced nothing** (`producedNothing`, `src/hkb.ts`); with a
+result or an artifact declared, the same Job says what it found instead.
 
 ## The gate — the one place a Job waits for a person
 

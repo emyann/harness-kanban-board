@@ -37,6 +37,39 @@ export function withProtocol(brief: string, branch: string): string {
 }
 
 /**
+ * The artifacts contract, appended the same way `withResults` is.
+ *
+ * Same shape, different medium and a different sentence to the worker: a result is a *value* the
+ * board reads, and an artifact is a *file* the board keeps. The path is absolute and outside every
+ * checkout (`src/artifacts.ts`), so the one thing a worker must be told plainly is that writing it
+ * is not the same as committing it — an artifact never appears in the diff, which is exactly why
+ * the channel exists (ADR-011).
+ *
+ * The cap is *not* stated, because there is not one. That is the sentence that distinguishes this
+ * from `withResults`, and leaving it implicit would invite a worker to summarise something it was
+ * asked to hand over whole.
+ */
+export function withArtifacts(brief: string, paths: Record<string, string>): string {
+  const names = Object.keys(paths);
+  if (!names.length) return brief;
+  return [
+    brief.trimEnd(),
+    '',
+    '---',
+    '',
+    `This Job must produce ${names.length === 1 ? 'one file' : `${names.length} files`}. Write each one at the`,
+    'exact path given, before you finish:',
+    '',
+    ...names.map((n) => `  - \`${n}\` → \`${paths[n]}\``),
+    '',
+    'These paths are outside your checkout: the board keeps them, and nothing you write there',
+    'appears in your diff or your pull request. There is no size limit — hand the whole thing over',
+    'rather than summarising it. A name may be a directory if you have more than one file to give.',
+    'A declared file you do not write fails the attempt.',
+  ].join('\n');
+}
+
+/**
  * The results contract, appended to whatever brief the Job already has.
  *
  * Separate from `withProtocol` on purpose: that one is the *pull request* protocol and is applied
