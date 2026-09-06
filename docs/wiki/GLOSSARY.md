@@ -49,9 +49,17 @@ meet one in the git history, that is what it was.
   whose destination is the repository rather than the board; a declared path the run did not
   produce fails the attempt, and everything undeclared is litter that goes with the checkout
   (`checkExportPath`/`copyIncluded`, `src/worktree.ts`; *decisions/adr-008-declared-outputs*).
+- **Fence** — a value carried in a write's `where` clause so the write is a no-op when the world moved
+  under it: `Lease.token` at renewal and at release, and the expiry re-read on the reclaim delete
+  (`src/controller.ts`). It is how a holder learns it lost its lease, and why a stale holder finishing
+  late cannot delete the new holder's claim (*concepts/leases-and-liveness*).
 - **Forge** — where pull requests live, deliberately not where the board lives. GitHub, read through
   one `gh` shell-out (`src/pulls.ts`) and joined to a Job by branch name. It holds no Job, no lease
   and no state hkb depends on.
+- **Holder** — who a lease or a `Controller` row belongs to, written as `<hostname>/<pid>@<runtime>`
+  and parsed back on the way in (`holderId`/`parseHolder`, `src/liveness.ts`). The hostname is not
+  decoration: a pid without a host is a number with no referent, so a bare pid cannot be checked for
+  **liveness** at all (*concepts/leases-and-liveness*).
 - **Job** — the primitive kind: one agent, one brief, run to completion, with a retry budget. Spec
   and status in one table; the controller writes only status — the one exception being that it
   *creates* Jobs from an approved **proposal**, which is a new row and never another Job's status
@@ -85,7 +93,9 @@ meet one in the git history, that is what it was.
   machine's ports instead of getting a Pod IP each. Read by a Job as `--input me=self:slot`.
 - **Lease** — who holds a Job right now, with a `holder`, a `token` and an `expiresAt`; the `@@id` on
   it is the compare-and-swap, and an expired one is what makes a dead holder reclaimable
-  (`prisma/schema.prisma`, `reclaimExpired`, `src/controller.ts`) (*architecture/job-kind*).
+  (`prisma/schema.prisma`, `reclaimExpired`, `src/controller.ts`). Its duration is derived from the
+  run it covers — `timeoutMs` plus a grace — never chosen independently
+  (*concepts/leases-and-liveness*, *architecture/job-kind*).
 - **Level-triggered** — the property that makes the controller safe: `reconcile()` reads observed
   state, compares it to desired state and takes one step, so it may be run repeatedly, interrupted,
   or run while another host runs it (`src/controller.ts`). Nothing may depend on having seen an
@@ -94,7 +104,7 @@ meet one in the git history, that is what it was.
 - **Liveness** — the three-valued answer to "is this lease holder still running": `alive`, `dead` or
   `unknown` (`holderLiveness`, `src/liveness.ts`). `unknown` is a real answer — a holder on another
   host cannot be probed — and a holder whose lease predates this machine's boot is `dead` whatever
-  the pid says (*architecture/the-loop*).
+  the pid says (*concepts/leases-and-liveness*, *architecture/the-loop*).
 - **Operator** — the human seat: files Jobs, sets the ceilings, reviews and merges, and makes the two
   statements the machinery cannot (`hkb done`, `hkb cancel`, `src/hkb.ts`). "you", in a worker's
   brief.
