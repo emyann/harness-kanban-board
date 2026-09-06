@@ -306,3 +306,4 @@ history.
 ## 2026-09-06 — refreshed architecture/overview (the gate is real: suspend on success, the shortfall outranking it, one-shot read off the Event stream, and the approver as a seat rather than a person)
 ## 2026-09-06 — refreshed architecture/job-kind + architecture/the-loop + features/worktree-includes (no-op re-stamps: Job gained a gate column, the controller gained a suspended decision and newestWorktree; none of these pages claims anything about either)
 ## 2026-09-06 — refreshed howto/running-the-daemon (no-op re-stamp: nine src/hkb.ts anchors re-read at +69 after the approve/reject verbs — `up` moved 878 → 947)
+## 2026-09-06 — added decisions/adr-011-proposals-not-board-access (a workload proposes and the controller writes: board mutation travels as a declared output, resolving the apply-half risk ADR-010 recorded)

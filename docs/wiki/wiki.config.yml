@@ -101,6 +101,9 @@ pages:
   - slug: decisions/adr-010-the-human-gate
     summary: "propose -> approve -> apply needs no second kind: a Job declares results, a gate suspends it once they exist, and approve resumes the session with the operator's instruction as the prompt."
     status: seeded
+  - slug: decisions/adr-011-proposals-not-board-access
+    summary: "A workload never writes to the board: it declares a proposal as an output, and the controller validates and applies it once an approval is recorded — which keeps the sandbox, makes the write retry-safe where an in-session API call is not, and leaves groom's apply half with the controller rather than making groom a kind."
+    status: seeded
   - slug: howto/running-the-daemon
     summary: "Keep `hkb up` alive across reboots — a systemd user unit or a launchd agent around `hkb up --foreground`, where the log goes, and the restart-after-upgrade rule."
     status: seeded
