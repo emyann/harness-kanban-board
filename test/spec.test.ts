@@ -36,7 +36,7 @@ test('a Job that says nothing takes the board default, and says so', () => {
 test('the Job wins over the board on every field — the failure that is otherwise invisible', () => {
   const job = {
     model: 'claude-opus-4-6', effort: 'max', maxTurns: 99, maxBudgetUsd: 12, maxRetries: 1,
-    allowedTools: ['Read'],
+    allowedTools: ['Read'], pluginPaths: ['.claude'],
   };
   const r = resolveSpec(job, board);
   assert.equal(r.model.value, 'claude-opus-4-6', 'the board must not override an explicit --model');
@@ -94,10 +94,33 @@ test('hasDefaults is false only when the board says nothing at all', () => {
 test('boardDefaults renames the columns to what a Job calls them, and keeps the nulls', () => {
   assert.deepEqual(boardDefaults(board), {
     model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 5,
-    allowedTools: ['Read', 'Grep'],
+    allowedTools: ['Read', 'Grep'], pluginPaths: null,
   });
   assert.deepEqual(boardDefaults({}), {
     model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null,
-    allowedTools: null,
+    allowedTools: null, pluginPaths: null,
   });
+});
+
+/**
+ * Plugin grants through the same three levels (ADR-012). Worth its own case because the value is a
+ * list, and the failure that matters is the silent one: a board-wide grant quietly outranking a Job
+ * that was deliberately given none.
+ */
+test('a plugin grant resolves job > board > nothing, and an empty list is a value', () => {
+  const board = { defaultPluginPaths: ['.claude'] };
+
+  assert.deepEqual(resolveSpec({}, board).pluginPaths, { value: ['.claude'], from: 'board' },
+    'a board that granted its own skills answers for every Job that says nothing');
+
+  assert.deepEqual(resolveSpec({ pluginPaths: ['tools/plugin'] }, board).pluginPaths,
+    { value: ['tools/plugin'], from: 'job' }, 'and a Job that named its own wins');
+
+  // The case a truthiness check would break, and the reason `pick` compares against null: a Job
+  // granted nothing on a board that grants something must stay granted nothing.
+  assert.deepEqual(resolveSpec({ pluginPaths: [] }, board).pluginPaths, { value: [], from: 'job' },
+    'an EMPTY grant is the operator saying "not this one", not the operator saying nothing');
+
+  assert.deepEqual(resolveSpec({}, {}).pluginPaths, { value: null, from: 'built-in' },
+    'and nothing is granted by default, including on hkb\'s own board');
 });

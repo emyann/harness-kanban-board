@@ -8,6 +8,7 @@ import { reconcile } from './controller.ts';
 import { checkExportPath } from './worktree.ts';
 import { checkResultName, RESULT_MAX_BYTES } from './results.ts';
 import { checkArtifactName, artifactsDir, bytes } from './artifacts.ts';
+import { checkPluginPath, pluginList } from './plugins.ts';
 import { fakeRuntime } from './runtime/fake.ts';
 import * as daemon from './daemon.ts';
 import { EFFORTS, boardDefaults, hasDefaults, resolveSpec, type SpecSource } from './spec.ts';
@@ -52,6 +53,10 @@ const HELP = `hkb — run one agent against one brief
        --gate <question>  stop after producing, and wait for a person. The Job suspends once it
                         has produced what it declared; \`hkb approve <id>\` continues it in the
                         same session with your instruction as the prompt, \`hkb reject\` ends it.
+       --plugin-dir <p> a directory, repo-relative, whose skills this Job may see — usually
+                        \`.claude\`. Resolved against the board's REPOSITORY, never the worktree,
+                        so only a merge changes what it loads. Repeatable; it grants what a
+                        worker may READ, and nothing about what it may do.
        --result <name>  a named value the Job must produce — a finding, a decision, a URL.
                         The board keeps it on the attempt and \`hkb show\` prints it, so a Job
                         that makes no commit still leaves something behind. Repeatable.
@@ -93,6 +98,8 @@ const HELP = `hkb — run one agent against one brief
        --model <m>|none  --effort <e>|none  --max-turns <n>|none
        --max-budget <usd>|none  --max-retries <n>|none
        --allow-tools <a,b>|none  the default tool surface for Jobs that name none
+       --default-plugin-dirs <a,b>|none  directories, repo-relative, whose skills every Job
+                        on this board may see — \`.claude\` is the usual one
 
   hkb version               what this build is
 
@@ -288,6 +295,11 @@ export function describeDefaults(d: ReturnType<typeof boardDefaults>): string {
     d.maxTurns !== null ? `maxTurns=${d.maxTurns}` : null,
     d.maxBudgetUsd !== null ? `maxBudget=$${d.maxBudgetUsd}` : null,
     d.maxRetries !== null ? `maxRetries=${d.maxRetries}` : null,
+    // The two list-valued defaults, which said nothing here until now. A board-wide grant nobody
+    // can see is the kind of state that becomes a surprise: `allowedTools` decides what every Job
+    // on this board may DO, and `pluginPaths` what every Job may READ (ADR-012).
+    d.allowedTools !== null ? `allowTools=${d.allowedTools.join('|') || '(none)'}` : null,
+    d.pluginPaths !== null ? `plugins=${d.pluginPaths.join('|') || '(none)'}` : null,
   ].filter((p): p is string => p !== null);
   return parts.length ? parts.join(' ') : '(none)';
 }
@@ -349,6 +361,8 @@ export async function main(argv: string[]): Promise<number> {
       // Repeatable for the same reason `--export` is: a Job with two named values declares two.
       result: { type: 'string', multiple: true },
       artifact: { type: 'string', multiple: true },
+      'plugin-dir': { type: 'string', multiple: true },
+      'default-plugin-dirs': { type: 'string' },
       gate: { type: 'string' },
       // Repeatable, for the same reason `--export` is: a tool name is a token, and one
       // comma-separated string makes the empty list ("this Job may call nothing") unsayable.
@@ -431,6 +445,13 @@ export async function main(argv: string[]): Promise<number> {
       // Same reasoning one medium over: a name that cannot be a single path segment is a fault in
       // the spec, and finding it here costs nothing while finding it after a run costs the run.
       const artifacts = ((values.artifact as string[] | undefined) ?? []).map(checkArtifactName);
+      // Checked at file time for the same reason an export path is: a grant is resolved into an
+      // absolute path with no agent in the loop, so a path that was never legal must not become
+      // state. Null when the flag was absent, so the board's grant can answer; an EMPTY list is
+      // only reachable through `--plugin-dir ""` and means "grant this Job nothing".
+      const pluginPaths = values['plugin-dir'] !== undefined
+        ? (values['plugin-dir'] as string[]).map((v) => v.trim()).filter(Boolean).map(checkPluginPath)
+        : null;
       const gate = typeof values.gate === 'string' ? values.gate.trim() : undefined;
       if (values.gate !== undefined && !gate) throw usage('--gate needs the question a human is being asked, as in --gate "does this migration look right?"');
       // Null when the flag was absent, so the board's default can answer. An EMPTY list is only
@@ -453,6 +474,7 @@ export async function main(argv: string[]): Promise<number> {
           effort: effort ?? null,
           isolate: !values['no-isolate'],
           allowedTools,
+          pluginPaths,
           // Null, not a number, when the flag was not given. A Job that recorded 20 turns because
           // nobody said otherwise would outrank its board's default for ever — "unset" staying
           // legible is the whole reason these columns are nullable. See `src/spec.ts`.
@@ -568,6 +590,11 @@ export async function main(argv: string[]): Promise<number> {
         // and a Job that was deliberately stopped from writing.
         console.log(`  tools    ${spec.allowedTools.value?.join(', ') ?? '(runtime default)'}`
           + `  [${spec.allowedTools.from}]`);
+        // What this Job may READ, as distinct from what it may DO. A granted directory widens the
+        // skills a worker sees and nothing about the tools it may call — the admission gate is
+        // unchanged by it (ADR-012).
+        console.log(`  plugins  ${spec.pluginPaths.value?.join(', ') || '(none granted)'}`
+          + `  [${spec.pluginPaths.from}]`);
         // One line per resolved field, with its source named. Three levels answer these five
         // questions, and printing only the winner turns "why did this run on Opus" into
         // archaeology across two tables — a spec you cannot trace is worse than one you repeat.
@@ -1121,6 +1148,15 @@ export async function main(argv: string[]): Promise<number> {
         // A list, so it takes the comma-separated form rather than the repeatable one: `boards set`
         // is a single statement about the board, and a repeatable flag here would read as adding to
         // a list rather than replacing it.
+        // Repeatable would read as adding to a list; `boards set` is one statement about the
+        // board, so this replaces — same reasoning as `--allow-tools` below.
+        if (values['default-plugin-dirs'] !== undefined) {
+          const raw = String(values['default-plugin-dirs']).trim();
+          if (!raw) throw usage(`--default-plugin-dirs was given nothing — pass a comma-separated list of repo-relative directories, or "${CLEAR}" to clear the grant`);
+          data.defaultPluginPaths = raw === CLEAR
+            ? null
+            : raw.split(',').map((v) => v.trim()).filter(Boolean).map(checkPluginPath);
+        }
         if (values['allow-tools'] !== undefined) {
           const raw = String(values['allow-tools']).trim();
           if (!raw) throw usage(`--allow-tools was given nothing — pass a comma-separated list, or "${CLEAR}" to clear the default`);
@@ -1146,7 +1182,8 @@ export async function main(argv: string[]): Promise<number> {
         if (!Object.keys(data).length) {
           throw usage(
             'hkb boards set needs something to set — a ceiling (--max-concurrent <n>, --daily-budget <usd>|none)'
-            + ' or a spec default (--model, --effort, --max-turns, --max-budget, --max-retries; "none" clears one)',
+            + ' or a spec default (--model, --effort, --max-turns, --max-budget,'
+            + ' --max-retries, --allow-tools, --default-plugin-dirs; "none" clears one)',
           );
         }
 

@@ -181,6 +181,20 @@ brief says. Without it, the runtime's own default applies. `hkb boards set <slug
 default for Jobs that name none — a default a Job may still widen, unlike `--daily-budget`, which it cannot
 exceed.
 
+`--plugin-dir <path>` (repeatable, or `hkb boards set <slug> --default-plugin-dirs .claude` for a whole
+board) grants a Job a directory whose **skills** it may see — usually `.claude`. Without it a worker sees
+none of the skills the repository carries, and rebuilds that knowledge from training data. This is the
+other half of least privilege and it points the other way: `--allow-tool` narrows what a worker may *do*,
+`--plugin-dir` widens what it may *read*, and neither touches the other — the admission gate still denies
+every tool a granted skill might suggest.
+
+Two properties worth knowing ([ADR-012](docs/wiki/decisions/adr-012-skills-by-grant-not-by-settings.md)).
+hkb **never loads a repository's settings** — `.claude/settings.json` hooks are shell commands the
+repository author wrote, and running them is executing the repository rather than reading it; the grant
+reaches the same skills without them. And a grant resolves against the board's **repository**, never the
+worktree, so changing what it loads takes a merge — which matters because the thing writing to the
+repository is the worker.
+
 ### Isolation, and the file the tests need
 
 A worktree is a fresh checkout of a commit, so two things are true of it and both matter: uncommitted work in

@@ -748,11 +748,14 @@ deny rules, ask rules, the mode and allow rules. So an allowlist genuinely refus
   the pass-through fails three tests, and reading `[]` as "unset" fails a fourth.
 - **MCP has no path at all.** Nothing passes `mcpServers` to `query()`. This is a missing capability
   before it is a permissions question.
-- **Skills are coupled to a guard, and this was MEASURED rather than reasoned about.** The measurement
-  is below, and it reverses a correction: `Options.skills` alone does **not** reach a repository's own
-  skills. `settingSources: ['project']` does, and that re-admits project-level settings — including
-  hooks — into a worker whose isolation rests entirely on SDK-supplied hooks. The original coupling
-  claim was right.
+- ~~**Skills are coupled to a guard.**~~ **DONE and WITHDRAWN, 2026-09-06 — ADR-012.** The measurement
+  below still holds where it says `Options.skills` alone does not reach a repository's skills. What it
+  got wrong is the conclusion that `settingSources: ['project']` is the only route, and therefore that
+  the guard change was the price. It is not: `plugins: [{ type: 'local', path: '<repo>/.claude' }]`
+  reaches exactly the same nine skills with `settingSources` still `[]` — measured. Skills and settings
+  are separable, and hkb takes the half it wants. `Job.pluginPaths` and `Board.defaultPluginPaths` ship
+  as the grant; settings stay unloaded, because a hook in a settings file is a shell command the
+  repository author wrote.
 
 **What a worker can actually see, measured 2026-09-05.** Nobody had established this. The SDK's system
 `init` message carries `tools`, `skills`, `agents` and `mcp_servers` and arrives ahead of every other
@@ -805,13 +808,14 @@ is where `src/admission.ts` already sits. Same answer arrived at twice.
 **Order, and do not design the map up front.**
 
 1. ~~**Wire `allowedTools`**~~ — **done.**
-2. **Skills, and they need their own ADR after all.** The decision is not "add a column": it is whether
-   a worker may see project settings at all. `settingSources: ['project']` is the only route to the
-   repository's skills and it re-admits project hooks, so the question is what hkb requires of a
-   repository before trusting its settings — and whether the answer differs for hkb building hkb
-   (where the project settings are hkb's own) from a worker on somebody else's repo. Do not ship a
-   `skills` spec column before that is decided; a column that cannot reach a project skill would be
-   the sixth inert declaration.
+2. ~~**Skills, and they need their own ADR after all.**~~ — **done: ADR-012.** The ADR was the right
+   call and its premise was wrong. The question *"what does hkb require of a repository before trusting
+   its settings"* has the answer **nothing, because it never trusts them** — the plugin route reaches
+   the skills without the settings. And the sub-question, whether hkb-builds-hkb differs, is answered
+   **no**, for a reason worth keeping: "it is our own repository" is not a trust boundary when the thing
+   writing to the repository is the worker. A grant therefore resolves against `Board.repoPath`, so a
+   human merge is the boundary. What is still true and now named as its own cost: a worker cannot read
+   this repository's CLAUDE.md, because that genuinely does require `settingSources: ['project']`.
 3. **MCP as config + grant.** The definition is ConfigMap-shaped, the credential Secret-shaped, the
    enable per board and the grant per Job. Still the one that unblocks real work, and still has no
    path at all today.

@@ -41,6 +41,8 @@ export function toolList(raw: unknown): string[] | null {
 export type SpecSource = 'job' | 'board' | 'built-in';
 
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+import { pluginList } from './plugins.ts';
+
 export type Effort = (typeof EFFORTS)[number];
 
 /**
@@ -65,6 +67,8 @@ export const BUILT_IN = {
    * would move a runtime concern into the spec and give two modules an opinion that can drift.
    */
   allowedTools: null,
+  /** Nothing granted. A repository's skills reach a worker only when someone said so (ADR-012). */
+  pluginPaths: null,
 } as const;
 
 /** The nullable half of a Job's spec — the fields a Board can supply a default for. */
@@ -77,6 +81,8 @@ export type JobSpec = {
   /** Raw, straight off the `Json?` column — `toolList` normalizes it here rather than at
    * every call site, so a malformed value cannot narrow a surface by accident. */
   allowedTools?: unknown;
+  /** Raw, off the `Json?` column. `pluginList` normalizes it here, not at each call site. */
+  pluginPaths?: unknown;
 };
 
 /** The Board's side. Named `default*` so no call site has to guess what `board.model` would mean. */
@@ -87,6 +93,7 @@ export type BoardDefaults = {
   defaultMaxBudgetUsd?: number | null;
   defaultMaxRetries?: number | null;
   defaultAllowedTools?: unknown;
+  defaultPluginPaths?: unknown;
 };
 
 export type Traced<T> = { value: T; from: SpecSource };
@@ -98,6 +105,7 @@ export type ResolvedSpec = {
   maxBudgetUsd: Traced<number>;
   maxRetries: Traced<number>;
   allowedTools: Traced<string[] | null>;
+  pluginPaths: Traced<string[] | null>;
 };
 
 /**
@@ -138,13 +146,17 @@ export function resolveSpec(
     // against null rather than truthiness precisely so that survives — the same reason
     // `maxRetries: 0` does.
     allowedTools: pick(toolList(j.allowedTools), toolList(b.defaultAllowedTools), BUILT_IN.allowedTools as string[] | null),
+    // Same `pick`, and an empty list survives it for the same reason: `pluginPaths: []` on a Job is
+    // "grant this one nothing", which is how a Job narrows a board that granted something.
+    pluginPaths: pick(pluginList(j.pluginPaths), pluginList(b.defaultPluginPaths), BUILT_IN.pluginPaths as string[] | null),
   };
 }
 
 /** Whether a board says anything at all. `hkb boards` only prints a defaults line when it does. */
 export function hasDefaults(b: BoardDefaults): boolean {
   return b.defaultModel != null || b.defaultEffort != null || b.defaultMaxTurns != null
-    || b.defaultMaxBudgetUsd != null || b.defaultMaxRetries != null || toolList(b.defaultAllowedTools) != null;
+    || b.defaultMaxBudgetUsd != null || b.defaultMaxRetries != null || toolList(b.defaultAllowedTools) != null
+    || pluginList(b.defaultPluginPaths) != null;
 }
 
 /** A board's defaults, under the names the Job knows them by. What `--json` carries. */
@@ -156,5 +168,6 @@ export function boardDefaults(b: BoardDefaults) {
     maxBudgetUsd: b.defaultMaxBudgetUsd ?? null,
     maxRetries: b.defaultMaxRetries ?? null,
     allowedTools: toolList(b.defaultAllowedTools),
+    pluginPaths: pluginList(b.defaultPluginPaths),
   };
 }

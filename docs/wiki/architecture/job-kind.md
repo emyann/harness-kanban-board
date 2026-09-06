@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "adding a workload kind, changing retry or lease behaviour, or wondering why the DAG is not in the core"
 covers:
   - path: prisma/schema.prisma
-    sha: 09f03c15a96a688c8197c565dfdd9e78ccdfa4fb
+    sha: 713414836890d87d69a39f4ce23b67420147e05f
   - path: src/controller.ts
-    sha: 302c0976e026fe77ccd61f9ad73b974cb379c0ce
+    sha: 95b546785246c0a7bf8a2960e1c5a6acb4c95aaf
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
-generated_at_commit: 7787a6b
+generated_at_commit: 2045af5
 last_refreshed: 2026-09-06
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control]
 ---
@@ -200,13 +200,17 @@ first one takes to finish.
 ## Defaults, and why they are not ceilings
 
 A Board carries **spec defaults** beside its ceilings: `defaultModel`, `defaultEffort`,
-`defaultMaxTurns`, `defaultMaxBudgetUsd`, `defaultMaxRetries`, `defaultAllowedTools`. A board that
-runs cheap, high-volume work can say so once instead of on every `hkb new`.
+`defaultMaxTurns`, `defaultMaxBudgetUsd`, `defaultMaxRetries`, `defaultAllowedTools` and
+`defaultPluginPaths`. A board that runs cheap, high-volume work can say so once instead of on every
+`hkb new`.
 
-`defaultAllowedTools` is the one that is a *surface* rather than a number, and it is worth being
-clear about which side of the line it sits on: a board default a Job may **widen**. The narrowing
-itself is enforced — `src/admission.ts` denies anything absent from the resolved list — but what a
-board sets there is a default, not a ceiling. A Job that names a wider list gets it.
+The last two are the ones that are a *surface* rather than a number, and they point in opposite
+directions. `defaultAllowedTools` narrows what a Job may **do**, and it is a board default a Job may
+**widen**: the narrowing itself is enforced — `src/admission.ts` denies anything absent from the
+resolved list — but what a board sets there is a default, not a ceiling.
+`defaultPluginPaths` widens what a Job may **read**, granting the directories whose skills a worker
+sees (*decisions/adr-012-skills-by-grant-not-by-settings*). Neither touches the other: a granted
+skill is prose, and every tool it might suggest is still refused unless `allowedTools` admits it.
 
 They are separate columns from the ceilings, and the reason is who wins. A **ceiling** is a
 limit a Job may not exceed, enforced in `gateClaim`. A **default** is a value a Job may

@@ -92,6 +92,7 @@ export type BoardCountAggregateOutputType = {
   defaultMaxBudgetUsd: number
   defaultMaxRetries: number
   defaultAllowedTools: number
+  defaultPluginPaths: number
   createdAt: number
   updatedAt: number
   _all: number
@@ -164,6 +165,7 @@ export type BoardCountAggregateInputType = {
   defaultMaxBudgetUsd?: true
   defaultMaxRetries?: true
   defaultAllowedTools?: true
+  defaultPluginPaths?: true
   createdAt?: true
   updatedAt?: true
   _all?: true
@@ -269,6 +271,7 @@ export type BoardGroupByOutputType = {
   defaultMaxBudgetUsd: number | null
   defaultMaxRetries: number | null
   defaultAllowedTools: runtime.JsonValue | null
+  defaultPluginPaths: runtime.JsonValue | null
   createdAt: Date
   updatedAt: Date
   _count: BoardCountAggregateOutputType | null
@@ -310,6 +313,7 @@ export type BoardWhereInput = {
   defaultMaxBudgetUsd?: Prisma.FloatNullableFilter<"Board"> | number | null
   defaultMaxRetries?: Prisma.IntNullableFilter<"Board"> | number | null
   defaultAllowedTools?: Prisma.JsonNullableFilter<"Board">
+  defaultPluginPaths?: Prisma.JsonNullableFilter<"Board">
   createdAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   jobs?: Prisma.JobListRelationFilter
@@ -331,6 +335,7 @@ export type BoardOrderByWithRelationInput = {
   defaultMaxBudgetUsd?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultMaxRetries?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultAllowedTools?: Prisma.SortOrderInput | Prisma.SortOrder
+  defaultPluginPaths?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   jobs?: Prisma.JobOrderByRelationAggregateInput
@@ -355,6 +360,7 @@ export type BoardWhereUniqueInput = Prisma.AtLeast<{
   defaultMaxBudgetUsd?: Prisma.FloatNullableFilter<"Board"> | number | null
   defaultMaxRetries?: Prisma.IntNullableFilter<"Board"> | number | null
   defaultAllowedTools?: Prisma.JsonNullableFilter<"Board">
+  defaultPluginPaths?: Prisma.JsonNullableFilter<"Board">
   createdAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"Board"> | Date | string
   jobs?: Prisma.JobListRelationFilter
@@ -376,6 +382,7 @@ export type BoardOrderByWithAggregationInput = {
   defaultMaxBudgetUsd?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultMaxRetries?: Prisma.SortOrderInput | Prisma.SortOrder
   defaultAllowedTools?: Prisma.SortOrderInput | Prisma.SortOrder
+  defaultPluginPaths?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   _count?: Prisma.BoardCountOrderByAggregateInput
@@ -402,6 +409,7 @@ export type BoardScalarWhereWithAggregatesInput = {
   defaultMaxBudgetUsd?: Prisma.FloatNullableWithAggregatesFilter<"Board"> | number | null
   defaultMaxRetries?: Prisma.IntNullableWithAggregatesFilter<"Board"> | number | null
   defaultAllowedTools?: Prisma.JsonNullableWithAggregatesFilter<"Board">
+  defaultPluginPaths?: Prisma.JsonNullableWithAggregatesFilter<"Board">
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"Board"> | Date | string
   updatedAt?: Prisma.DateTimeWithAggregatesFilter<"Board"> | Date | string
 }
@@ -419,6 +427,7 @@ export type BoardCreateInput = {
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobCreateNestedManyWithoutBoardInput
@@ -440,6 +449,7 @@ export type BoardUncheckedCreateInput = {
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobUncheckedCreateNestedManyWithoutBoardInput
@@ -460,6 +470,7 @@ export type BoardUpdateInput = {
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUpdateManyWithoutBoardNestedInput
@@ -481,6 +492,7 @@ export type BoardUncheckedUpdateInput = {
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUncheckedUpdateManyWithoutBoardNestedInput
@@ -502,6 +514,7 @@ export type BoardCreateManyInput = {
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
   updatedAt?: Date | string
 }
@@ -519,6 +532,7 @@ export type BoardUpdateManyMutationInput = {
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -537,6 +551,7 @@ export type BoardUncheckedUpdateManyInput = {
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -555,6 +570,7 @@ export type BoardCountOrderByAggregateInput = {
   defaultMaxBudgetUsd?: Prisma.SortOrder
   defaultMaxRetries?: Prisma.SortOrder
   defaultAllowedTools?: Prisma.SortOrder
+  defaultPluginPaths?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
 }
@@ -718,6 +734,7 @@ export type BoardCreateWithoutControllerInput = {
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobCreateNestedManyWithoutBoardInput
@@ -738,6 +755,7 @@ export type BoardUncheckedCreateWithoutControllerInput = {
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobUncheckedCreateNestedManyWithoutBoardInput
@@ -773,6 +791,7 @@ export type BoardUpdateWithoutControllerInput = {
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUpdateManyWithoutBoardNestedInput
@@ -793,6 +812,7 @@ export type BoardUncheckedUpdateWithoutControllerInput = {
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUncheckedUpdateManyWithoutBoardNestedInput
@@ -812,6 +832,7 @@ export type BoardCreateWithoutJobsInput = {
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
   updatedAt?: Date | string
   events?: Prisma.EventCreateNestedManyWithoutBoardInput
@@ -832,6 +853,7 @@ export type BoardUncheckedCreateWithoutJobsInput = {
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
   updatedAt?: Date | string
   events?: Prisma.EventUncheckedCreateNestedManyWithoutBoardInput
@@ -867,6 +889,7 @@ export type BoardUpdateWithoutJobsInput = {
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   events?: Prisma.EventUpdateManyWithoutBoardNestedInput
@@ -887,6 +910,7 @@ export type BoardUncheckedUpdateWithoutJobsInput = {
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   events?: Prisma.EventUncheckedUpdateManyWithoutBoardNestedInput
@@ -906,6 +930,7 @@ export type BoardCreateWithoutEventsInput = {
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobCreateNestedManyWithoutBoardInput
@@ -926,6 +951,7 @@ export type BoardUncheckedCreateWithoutEventsInput = {
   defaultMaxBudgetUsd?: number | null
   defaultMaxRetries?: number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Date | string
   updatedAt?: Date | string
   jobs?: Prisma.JobUncheckedCreateNestedManyWithoutBoardInput
@@ -961,6 +987,7 @@ export type BoardUpdateWithoutEventsInput = {
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUpdateManyWithoutBoardNestedInput
@@ -981,6 +1008,7 @@ export type BoardUncheckedUpdateWithoutEventsInput = {
   defaultMaxBudgetUsd?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   defaultMaxRetries?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   defaultAllowedTools?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  defaultPluginPaths?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   jobs?: Prisma.JobUncheckedUpdateManyWithoutBoardNestedInput
@@ -1041,6 +1069,7 @@ export type BoardSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
   defaultMaxBudgetUsd?: boolean
   defaultMaxRetries?: boolean
   defaultAllowedTools?: boolean
+  defaultPluginPaths?: boolean
   createdAt?: boolean
   updatedAt?: boolean
   jobs?: boolean | Prisma.Board$jobsArgs<ExtArgs>
@@ -1063,6 +1092,7 @@ export type BoardSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensi
   defaultMaxBudgetUsd?: boolean
   defaultMaxRetries?: boolean
   defaultAllowedTools?: boolean
+  defaultPluginPaths?: boolean
   createdAt?: boolean
   updatedAt?: boolean
 }, ExtArgs["result"]["board"]>
@@ -1081,6 +1111,7 @@ export type BoardSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensi
   defaultMaxBudgetUsd?: boolean
   defaultMaxRetries?: boolean
   defaultAllowedTools?: boolean
+  defaultPluginPaths?: boolean
   createdAt?: boolean
   updatedAt?: boolean
 }, ExtArgs["result"]["board"]>
@@ -1099,11 +1130,12 @@ export type BoardSelectScalar = {
   defaultMaxBudgetUsd?: boolean
   defaultMaxRetries?: boolean
   defaultAllowedTools?: boolean
+  defaultPluginPaths?: boolean
   createdAt?: boolean
   updatedAt?: boolean
 }
 
-export type BoardOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "slug" | "repoPath" | "pausedAt" | "pausedBy" | "dailyBudgetUsd" | "maxConcurrent" | "defaultModel" | "defaultEffort" | "defaultMaxTurns" | "defaultMaxBudgetUsd" | "defaultMaxRetries" | "defaultAllowedTools" | "createdAt" | "updatedAt", ExtArgs["result"]["board"]>
+export type BoardOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "slug" | "repoPath" | "pausedAt" | "pausedBy" | "dailyBudgetUsd" | "maxConcurrent" | "defaultModel" | "defaultEffort" | "defaultMaxTurns" | "defaultMaxBudgetUsd" | "defaultMaxRetries" | "defaultAllowedTools" | "defaultPluginPaths" | "createdAt" | "updatedAt", ExtArgs["result"]["board"]>
 export type BoardInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   jobs?: boolean | Prisma.Board$jobsArgs<ExtArgs>
   events?: boolean | Prisma.Board$eventsArgs<ExtArgs>
@@ -1179,6 +1211,12 @@ export type $BoardPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs 
      * `dailyBudgetUsd`/`maxConcurrent` in `src/limits.ts`; this is `src/spec.ts` territory.
      */
     defaultAllowedTools: runtime.JsonValue | null
+    /**
+     * The board's plugin grants, filling a null on the Job the way every other default does
+     * (`src/spec.ts`). Board-wide is the common case — "every Job on this repository may see its
+     * own skills" — and the per-Job column is for narrowing, not widening.
+     */
+    defaultPluginPaths: runtime.JsonValue | null
     createdAt: Date
     updatedAt: Date
   }, ExtArgs["result"]["board"]>
@@ -1620,6 +1658,7 @@ export interface BoardFieldRefs {
   readonly defaultMaxBudgetUsd: Prisma.FieldRef<"Board", 'Float'>
   readonly defaultMaxRetries: Prisma.FieldRef<"Board", 'Int'>
   readonly defaultAllowedTools: Prisma.FieldRef<"Board", 'Json'>
+  readonly defaultPluginPaths: Prisma.FieldRef<"Board", 'Json'>
   readonly createdAt: Prisma.FieldRef<"Board", 'DateTime'>
   readonly updatedAt: Prisma.FieldRef<"Board", 'DateTime'>
 }

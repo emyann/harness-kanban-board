@@ -7,13 +7,15 @@ audience: [dev]
 read_when: "changing how a worker is launched, deciding what to persist about a run, or adding a second runtime"
 covers:
   - path: src/runtime/index.ts
-    sha: 767c2f6c45fd95a7d30430b029ff6dfe48a82b49
+    sha: 55007f26fe6b9e4ec107997eef5aba74ec4643e6
+  - path: src/plugins.ts
+    sha: 8057664cf308d860315bd9abe7b941a00fcf4519
   - path: src/runtime/claude.ts
-    sha: d39e329417d327e2e6ec2ae169018aaf4fcde3e5
+    sha: e53fc9819d5fc7bb4b43d17b3f1a681cfe415618
   - path: src/runtime/fake.ts
     sha: 94f9f21ab7c9702506ae625dff37ac15ecfdbcce
-generated_at_commit: 54ad569
-last_refreshed: 2026-09-05
+generated_at_commit: 2045af5
+last_refreshed: 2026-09-06
 related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, concepts/worker-identity]
 ---
 
@@ -81,6 +83,15 @@ in the code: compaction summarises older history, so on a long run the acceptanc
 criteria in the opening prompt can be summarised away, whereas `CLAUDE.md` is
 re-injected on every request. If runs start going long, that is the line to
 revisit.
+
+It is **not** the line that decides skills, and that was believed for a while
+(*decisions/adr-012-skills-by-grant-not-by-settings*). A repository's own skills
+arrive through `plugins: [{ type: 'local', path }]` instead, built from the
+resolved `WorkerSpec.plugins` — measured to reach the same skills with
+`settingSources` still empty. The two were separable, so the runtime takes the
+skills and leaves the settings, where a hook would be a shell command the
+repository author wrote. What `settingSources: []` still costs is `CLAUDE.md`,
+which genuinely does require `'project'`.
 
 `maxBudgetUsd` is the runaway-cost stop and it covers subagent spend.
 

@@ -33,6 +33,13 @@ export type WorkerSpec = {
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   allowedTools?: string[];
   /**
+   * Absolute directories whose skills, commands and agents this worker may see (ADR-012).
+   *
+   * Already resolved and containment-checked by the caller (`src/plugins.ts`) — a driver receives
+   * paths, never a policy, which is the same division `allowedTools` follows.
+   */
+  plugins?: string[];
+  /**
    * Is `cwd` a worktree cut for this attempt, or the operator's own checkout?
    *
    * The runtime needs this for the subagent isolation policy and for nothing else: forcing

@@ -9,9 +9,9 @@ covers:
   - path: src/admission.ts
     sha: aab84ccd1178b085cea79d2c4566149145027b9e
   - path: src/runtime/claude.ts
-    sha: d39e329417d327e2e6ec2ae169018aaf4fcde3e5
-generated_at_commit: 54ad569
-last_refreshed: 2026-09-05
+    sha: e53fc9819d5fc7bb4b43d17b3f1a681cfe415618
+generated_at_commit: 2045af5
+last_refreshed: 2026-09-06
 related: [architecture/runtime-layer, architecture/job-kind, decisions/adr-007-workload-scheduler, gotchas/prompt-is-not-a-guarantee]
 ---
 
@@ -123,5 +123,10 @@ harness where it belongs.
   of the `Agent` *tool call*, which is why injection at admission is the mechanism
   rather than configuration. A file-defined agent (`.claude/agents/<name>.md` with
   `isolation: worktree` frontmatter) can pin it declaratively, but requires
-  `settingSources: ['project']`, which also pulls in `CLAUDE.md` — a trade the
-  runtime currently declines (`architecture/runtime-layer`).
+  `settingSources: ['project']`, which also pulls in `CLAUDE.md` **and
+  `.claude/settings.json`** — a trade the runtime declines permanently, because a
+  hook in a settings file is a shell command the repository author wrote
+  (*decisions/adr-012-skills-by-grant-not-by-settings*). A granted plugin
+  directory reaches a repository's skills without it, and changes nothing here:
+  a granted skill is prose a worker may read, and every tool it might suggest is
+  still refused unless `allowedTools` admits it.
