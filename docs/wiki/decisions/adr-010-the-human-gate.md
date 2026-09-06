@@ -11,13 +11,15 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: prisma/schema.prisma
-    sha: f4b3adeb799b04102e4ee64b961b9490c955fbd9
+    sha: 9b372c388a24d6aba33562716b4f12bd95c72d1c
   - path: src/controller.ts
-    sha: e4db1f7d58cc0a761998f1d2a3bb0d78aadea5a8
+    sha: c90722f6a5d32796e996f23269eeb44dd883fc6f
   - path: src/runtime/index.ts
-    sha: 767c2f6c45fd95a7d30430b029ff6dfe48a82b49
+    sha: 55007f26fe6b9e4ec107997eef5aba74ec4643e6
   - path: src/hkb.ts
-    sha: c152f69d60b9294c937b6b56c36490c1799c7d83
+    sha: b6ad528b8c47362f074744a1ada085a10ad12e07
+  - path: src/inputs.ts
+    sha: 5fa957ea2723d26e0a37cd67725d756bb6838469
 related:
   [
     decisions/adr-007-workload-scheduler,
@@ -26,8 +28,8 @@ related:
     architecture/job-kind,
     architecture/overview,
   ]
-generated_at_commit: e9f4335
-last_refreshed: 2026-09-05
+generated_at_commit: 1286319
+last_refreshed: 2026-09-06
 ---
 
 # ADR-010: The human gate is a field, not a kind — and groom is a brief
@@ -173,6 +175,19 @@ accident. The two are the same axis at different latencies (*wait for input at a
 the seat real, gives the delegated approver and the auto-approve policy somewhere to write, and
 produces the operational evidence — how often does anyone want to intervene, and at what point — that
 the streaming question needs and does not currently have.
+
+**What has moved since, without changing the decision.** Decision 5 said groom needs no
+new machinery, only a brief plus board arithmetic. Half of that is now a mechanism rather
+than a thing to remember: `--input state=board` renders one board read — id, phase,
+attempt count, last outcome, and whether the Job produced nothing — into the prompt with
+no model in the loop (`renderBoard`, `src/inputs.ts:267`), capped at 50 rows and saying so
+when it truncates. It stays arithmetic; what it removes is the step where somebody pastes
+it in.
+
+ADR-011 then took the *other* half — what groom does with the answer — and settled it the
+way this record settled the gate: the apply is the controller's, and what a worker
+produces is a declared proposal rather than a board write. So the two halves of groom sit
+in two records, and neither of them is a groom kind.
 
 <!-- Dual mutability: once status: accepted, NEVER rewrite this record.
 When the decision changes, write a new ADR, set its `supersedes`, and set

@@ -10,18 +10,10 @@ date: 2026-09-02
 supersedes: ~
 superseded_by: decisions/adr-007-workload-scheduler
 covers:
-  - path: src/store/index.js
-    sha: fed32f2f24ff0ecb5bbec064c26fcaa3f63fd7dc
-  - path: src/bridge/github-issues.js
-    sha: e056157db3df620b291733ee9be4f9dd2d453b27
-  - path: src/forge.js
-    sha: 1d9e17cd8fad3500b512ef10843d541cda2c65a4
-  - path: src/board.js
-    sha: 0337a17cf70442cac66fb457c880e4b27a52672e
   - path: package.json
-    sha: fdb07ef571e5af4a0540eb8215d2e3bb699c5c12
-generated_at_commit: fc5452a
-last_refreshed: 2026-09-05
+    sha: 02ee69e9b3b3113a1826ffc0798b80a91a2c02ba
+generated_at_commit: 1286319
+last_refreshed: 2026-09-06
 related: [decisions/adr-005-control-plane, decisions/adr-004-roles-and-adoption, architecture/overview, features/web-board, features/up-and-down]
 ---
 

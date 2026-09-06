@@ -223,14 +223,24 @@ model Job {
   /// `results` is for small structured values the board keeps and a later reader consumes — a
   /// finding, a decision, a URL. Capped at 4 KB each (`src/results.ts`), because a handoff that can
   /// hold a megabyte is a worse artifact store than the one `exports` already is.
-  /// What this Job is GIVEN: a JSON array of `{ name, source }`, resolved by the controller before
-  /// the run and rendered into the prompt (`src/inputs.ts`). ADR-008 declared what a Job produces
-  /// and left what it consumes as `brief` — one static string.
+  /// What this Job is GIVEN, resolved by the controller before the run and rendered into the prompt
+  /// (`src/inputs.ts`). ADR-008 declared what a Job produces and left what it consumes as `brief` —
+  /// one static string.
   ///
-  /// Two sources, and neither of them waits: `file:<repo-relative-path>` reads the repository, and
-  /// `board` is the LLM-free board arithmetic ADR-010 decision 5 described. An input that read
-  /// another Job's output would be `Job.after` with a payload, and that was rejected rather than
-  /// deferred (`docs/workflow-study.md` §2) — ordering between workloads belongs to a kind.
+  /// Stored the way Kubernetes stores a container's `env`: a JSON array of `{ name }` plus either a
+  /// literal `value` or a `valueFrom` object naming where to fetch one. A scheme prefix inside a
+  /// string would grow a query language the first time a source needs a second field, and `board`
+  /// wanting a filter is not far off.
+  ///
+  /// Four sources, and none of them waits. `value` is the one that PUSHES — a caller hands the
+  /// payload over at file time, and it is the only source allowed to interpolate into the brief,
+  /// because the brief is instruction and everything fetched is data. The three that pull are
+  /// `valueFrom.file` (a repo-relative path, read from `Board.repoPath` and never the worktree),
+  /// `valueFrom.board` (the LLM-free board arithmetic ADR-010 decision 5 described) and
+  /// `valueFrom.jobRef` (the downward API: this Job's own `id`, `slot`, `attempt`, `branch` and the
+  /// rest — how a run learns which of the concurrent workers it is). An input that read another
+  /// Job's output would be `Job.after` with a payload, and that was rejected rather than deferred
+  /// (`docs/workflow-study.md` §2) — ordering between workloads belongs to a kind.
   ///
   /// The point is **context restriction**, not convenience: paired with an `allowedTools` that
   /// excludes `Read`/`Glob`/`Grep`, a Job sees what it was given and cannot reach further, because
