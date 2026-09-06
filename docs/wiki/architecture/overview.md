@@ -11,7 +11,7 @@ covers:
   - path: src/hkb.ts
     sha: bccac3a895b8b84cb27a1e15a6684153e7edf681
   - path: src/controller.ts
-    sha: 9f80e70897db4a7ff157064bb3899a296ddd6a8f
+    sha: ae2034b01315707358b26348380e117653caf510
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/db.ts
@@ -23,7 +23,7 @@ covers:
   - path: src/pulls.ts
     sha: a27f00a986f576c2d3ed035902c0a1c9f9a9300c
   - path: prisma/schema.prisma
-    sha: a0a2b99ccf124d5abb3ff998ed4d4b530f713988
+    sha: fd5d599273f0f0340a79043f6796b3f7f99cd73f
 related:
   [
     architecture/job-kind,
@@ -33,7 +33,7 @@ related:
     decisions/adr-007-workload-scheduler,
     decisions/adr-009-retiring-the-first-system,
   ]
-generated_at_commit: 6efab3c
+generated_at_commit: 0903659
 last_refreshed: 2026-09-05
 ---
 
@@ -131,6 +131,12 @@ board keeps on the Attempt — a finding, a decision, a URL, capped at 4 KB each
 rule covers both: **a declared output the run did not produce fails the attempt**, which is what makes
 `succeeded` mean more than "a session ended". Everything else left in the checkout is litter and goes
 with it.
+
+A run may also **volunteer** a result: anything it writes beside the declared ones is kept and never
+required. The difference between the two layers is what is *enforced*, not what is stored — a
+declaration is the filer saying "this must exist", and a volunteered value is the Job saying "you did
+not ask, but you should know". Hermes' structured handoff is the second layer alone, which is richer
+and guarantees nothing, because a downstream reader cannot rely on a key existing.
 
 That pair is what a Job with nothing to commit produces. `hkb ls` marks a succeeded Job that opened no
 pull request and declared neither as **produced nothing** (`producedNothing`, `src/hkb.ts`); with a

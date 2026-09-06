@@ -86,9 +86,14 @@ export function resultPaths(jobId: number, k: number, names: string[]): Record<s
 }
 
 export type Collected = {
+  /** Everything the run wrote: the declared values, plus whatever it volunteered. */
   produced: Record<string, string>;
+  /** Declared and not written. These fail the attempt. */
   missing: string[];
+  /** Over the cap. Declared or not, an oversized value is dropped rather than truncated. */
   oversize: { name: string; bytes: number }[];
+  /** Written but never declared — kept, never required. See `collectResults`. */
+  volunteered: string[];
 };
 
 /**
@@ -98,23 +103,49 @@ export type Collected = {
  * no second model. What this deliberately does NOT do is decide whether the value is any *good* —
  * `succeeded` remains a fact about the process, and whether the work is right stays a judgement that
  * belongs to whoever reads it.
+ *
+ * **Two layers, and the difference is who chose the field.** A *declared* name is the filer's
+ * requirement and its absence fails the attempt. Anything else the run left in the directory is
+ * **volunteered**: kept, reported, and never required. Hermes' handoff is the second layer alone —
+ * freeform metadata the worker defines — which is richer than a declaration and guarantees nothing,
+ * since a downstream reader cannot rely on a key existing. Requiring everything is the opposite
+ * failure: a Job cannot then say it noticed something nobody thought to ask about.
+ *
+ * So the directory is read whole, and only the declared half is enforced. The cap applies to both,
+ * because a 40 MB volunteered value is a file, and files are what `exports` is for.
  */
 export function collectResults(jobId: number, k: number, names: string[]): Collected {
-  const out: Collected = { produced: {}, missing: [], oversize: [] };
-  const paths = resultPaths(jobId, k, names);
-  for (const name of names) {
-    const file = paths[name];
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(file);
-    } catch {
-      out.missing.push(name);
-      continue;
-    }
-    if (!stat.isFile()) { out.missing.push(name); continue; }
-    if (stat.size > RESULT_MAX_BYTES) { out.oversize.push({ name, bytes: stat.size }); continue; }
-    out.produced[name] = fs.readFileSync(file, 'utf8').trim();
+  const out: Collected = { produced: {}, missing: [], oversize: [], volunteered: [] };
+  const dir = resultsDir(jobId, k);
+  const declared = new Set(names);
+
+  // Everything on disk, not just what was asked for. `withFileTypes` so a directory named like a
+  // result is not read as one, and a missing directory is a run that wrote nothing rather than an
+  // error — the declared names below still report as missing, which is the accurate account.
+  let entries: fs.Dirent[] = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch { /* nothing written */ }
+
+  for (const e of entries) {
+    if (!e.isFile()) continue;
+    // A volunteered name still has to be usable as a JSON key and a filename. The declaration path
+    // is checked at file time (`checkResultName`); this is the same fence for the half nobody
+    // declared, and a name that fails it is ignored rather than failing someone else's attempt.
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(e.name)) continue;
+    const file = path.join(dir, e.name);
+    const size = fs.statSync(file).size;
+    if (size > RESULT_MAX_BYTES) { out.oversize.push({ name: e.name, bytes: size }); continue; }
+    out.produced[e.name] = fs.readFileSync(file, 'utf8').trim();
+    if (!declared.has(e.name)) out.volunteered.push(e.name);
   }
+
+  // Declared and not produced. Computed from what came back rather than by stat-ing again, so the
+  // two halves cannot disagree: an oversized declared value is a shortfall too, and is reported as
+  // its own cause rather than silently as a missing one.
+  const over = new Set(out.oversize.map((o) => o.name));
+  out.missing = names.filter((n) => !(n in out.produced) && !over.has(n));
+  out.volunteered.sort();
   return out;
 }
 

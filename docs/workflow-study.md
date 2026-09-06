@@ -1,10 +1,10 @@
 # How a multi-step workflow should be represented in hkb — a design study
 
-> **Status: study, with §9 answered.** Written 2026-09-05 against `main` at `5cc611e`, SDK `0.3.261`;
-> §9 answered by the operator the same day and the answers folded back in — they changed §3 and §4.
+> **Status: study, with §10 answered.** Written 2026-09-05 against `main` at `5cc611e`, SDK `0.3.261`;
+> §10 answered by the operator the same day and the answers folded back in — they changed §3 and §4.
 > It follows the shape `docs/local-first.md` had before ADR-005 and ADR-006: the reasoning lives here,
 > the decisions go in ADRs once they are made. Sections are numbered so a card can say "§4" and mean
-> one thing. The open questions in §9 are the point — nothing here is settled that §9 does not say is
+> one thing. The questions in §10 are the point — nothing here is settled that §10 does not say is
 > settled.
 >
 > Produced by a twelve-agent research run over seven lenses (Artic and artifact-driven compilation;
@@ -241,7 +241,97 @@ The honest caveat on all of it: hkb's entire verification vocabulary is **presen
 `gh pr list --head`, a result present or missing. Presence is cheap, which is ADR-008's selling point,
 and it is exactly the wrong instrument for the outputs that make a multi-step workflow worth having.
 
-## 8. Delegating orchestration to the harness
+## 8. Hermes, the ancestor — what it solved and where hkb must differ
+
+hkb was originally described as a portable, frugal Hermes-style kanban, so Hermes is the one prior art
+that was aiming at the same thing. It has shipped answers to two questions this study treats as open,
+and they are worth taking seriously rather than re-deriving.
+
+### The structured handoff
+
+Hermes' worker calls `kanban_complete(summary=..., metadata=...)`. `summary` is prose; `metadata` is a
+**freeform key-value object the worker defines** — `{"changed_files": [...], "decisions": [...]}`,
+`{"duration_seconds": 720, "tokens_used": 2100}`. Downstream workers read it back through
+`kanban_show()` as `worker_context`, which carries prior attempts and parent task results. The stated
+rationale is the right one: it *"replaces the 'dig through comments and the work output' dance that
+plagues flat kanban systems."*
+
+Neither system types the values, and that agreement is worth noting: ADR-008 rejected a per-Job schema
+because it is *"a type system in the board that a model can satisfy by assertion"*, and Hermes reached
+freeform metadata independently. **The divergence is not the type; it is who chooses the fields.**
+
+| | Hermes | hkb |
+|---|---|---|
+| who chooses | the **worker**, per run | the **filer**, at declaration |
+| absent field | nothing happens — metadata is whatever the worker included | **the attempt fails** |
+
+Hermes is richer and guarantees nothing: a downstream reader cannot rely on a key existing. hkb is
+stricter and blind to whatever the filer did not anticipate: a Job cannot volunteer that it noticed
+something.
+
+**The resolution is that these are two layers, not two options.** Read as layers, hkb already has three
+and is missing one:
+
+1. **Required** — `results`. The filer declares, the board enforces, a shortfall fails the attempt.
+   Hermes has no equivalent, and this is what makes `succeeded` mean more than "a session ended".
+2. **Measured** — `costUsd`, `turns`, `denials`, `startedAt`/`endedAt`. Real columns. Hermes puts these
+   *inside* freeform metadata, where they cannot be queried: "which Jobs ran over ten minutes" is not a
+   question you can ask reliably of a JSON blob whose keys each worker invents.
+3. **Volunteered** — the gap. `Attempt.summary` exists but is auto-filled from the runtime's last text
+   (`outcome.text.slice(0, 2000)`), not authored by the worker as a handoff.
+
+So: **add the volunteered layer; do not replace the required one.** The mechanism already exists —
+`collectResults` reads only the declared names out of the collection directory, and reading the whole
+directory yields both, with the guarantee preserved on the half that has one.
+
+### Auto vs manual orchestration
+
+Hermes' dispatcher runs a **decomposer** on each tick: an auxiliary LLM that reads the installed
+profiles and emits a JSON task graph — which tasks to spawn, their assignments, their dependencies —
+capped at three per tick, with the triage task becoming the **parent of every leaf** so it stays alive
+until they finish. Manual mode holds the item until a human presses Decompose. The toggle is a config
+key and a pill in the dashboard.
+
+Three things follow, and the third is the one that changes this study.
+
+**Auto versus manual is ADR-010's approver seat, arrived at independently.** Manual is a human gate on
+decomposition; auto is an auto-approve policy. Two projects reaching the same shape from different
+directions is the strongest evidence available that the seat is real.
+
+**hkb cannot copy the mechanism, and the constraint is productive.** Hermes puts the model *in the
+dispatcher*; hkb's values forbid an LLM there. So a decomposer in hkb must be a **workload**, which is
+the more auditable arrangement anyway: the proposed graph becomes a `results` value with a named
+approver on it, on the event stream, rather than a decision taken inside a tick.
+
+**And that dissolves the risk ADR-010 recorded and could not resolve.** That record worried that if an
+apply half creates or modifies other Jobs, it is *"workload-creating behaviour and a controller's job"*
+— which would make groom a kind after all. The answer is that **a controller IS a workload**: in
+Kubernetes the API server is dumb and controllers are ordinary pods that watch, reconcile and create
+objects through the API. A decomposer that reacts to items arriving in triage is a controller for a
+different concern, running as a Job, while the Job kind's own controller stays arithmetic and SQL.
+
+Three consequences hkb has to accept for that to work, and all three are already parked:
+
+- it must **observe** the board — §"Parked" A, *watch*. `Event.id` is already the cursor.
+- it must **act** on the board with an identity and a scope — §"Parked" B, *least privilege*. This is
+  the first thing that genuinely needs the ServiceAccount/Role shape that section describes.
+- it must **wait for a decision** — ADR-010's gate.
+
+Three parked items that looked independent are the three legs of one design.
+
+**The hard part, stated plainly.** A workload reading and writing the board reverses a deliberate
+isolation decision: `src/worktree.ts` gitignores the board so a worker cannot see it, because *"the
+controller owns every store write; a worker with a copy would read state that stops being true the
+moment the controller moves."* And a worker can already do it today, unmodelled — `DEFAULT_TOOLS`
+includes `Bash`, nothing passes `env`, so it inherits the operator's PATH and can shell out to
+`hkb new` with no lineage, no scope and no refusal. The choice is not whether a workload can touch the
+board; it is whether that happens through a grant or through a side door.
+
+**One gap this names.** hkb has no *triage* state. `pending` means "wants to run"; a triage item means
+"wants to be decided about". That may be a gated Job that has not been approved yet, or it may want its
+own phase, and this study does not decide which.
+
+## 9. Delegating orchestration to the harness
 
 The proposal: when a workflow Job lands on a Claude harness, hand the orchestration to *that harness's*
 native capability; when it lands on one without, hkb's own machinery does it. This is hkb's runtime seam
@@ -261,7 +351,7 @@ locates it. Delegation applies to regions hkb was never going to model anyway �
 step body*, not a substitute for the board. What hkb would lose by delegating a region it *did* want to
 schedule is precisely the list that makes it a scheduler: per-step leases, ceilings, gates, audit.
 
-## 9. The questions, and what they were answered
+## 10. The questions, and what they were answered
 
 Asked of the operator on 2026-09-05 and answered the same day. Four of the six changed this document;
 where they did, the change is folded into the section named rather than left here.
@@ -296,7 +386,7 @@ Nothing else here depends on it. Recorded so it is not rediscovered: it is the o
 promotes a script's guarantee from layer 5 to layer 1, and without it a declared output is satisfied by
 one `echo`.
 
-## 10. What the answers made next
+## 11. What the answers made next
 
 Not the graph, and not the gate. **A Job's record of what it did, decoupled from git.**
 

@@ -110,3 +110,80 @@ test('the collection directory is outside every checkout', () => {
   assert.match(dir, /results[/\\]7-2$/);
   assert.doesNotMatch(dir, /worktrees/, 'never inside a worker checkout');
 });
+
+/**
+ * The volunteered layer — who chooses the fields.
+ *
+ * hkb's declaration is the filer's requirement: absent, the attempt fails. Hermes' handoff is the
+ * other layer alone — freeform metadata the *worker* defines — which is richer and guarantees
+ * nothing, because a downstream reader cannot rely on a key existing. Requiring everything is the
+ * opposite failure: a Job cannot then say it noticed something nobody thought to ask about.
+ *
+ * So both, and the distinction is what is *enforced* — never what is kept.
+ */
+test('a value the run volunteered is kept, and never required', () => {
+  const jobId = 9101;
+  ensureResultsDir(jobId, 1);
+  const paths = resultPaths(jobId, 1, ['finding']);
+  fs.writeFileSync(paths.finding, 'the declared one');
+  fs.writeFileSync(path.join(path.dirname(paths.finding), 'noticed'), 'a thing nobody asked about');
+
+  const got = collectResults(jobId, 1, ['finding']);
+  assert.deepEqual(got.produced, { finding: 'the declared one', noticed: 'a thing nobody asked about' });
+  assert.deepEqual(got.volunteered, ['noticed'], 'named as volunteered, so a reader can tell them apart');
+  assert.deepEqual(got.missing, [], 'and volunteering nothing required is not a shortfall');
+  clearResults(jobId, 1);
+});
+
+test('a run that declared nothing can still volunteer', () => {
+  const jobId = 9102;
+  const dir = ensureResultsDir(jobId, 1);
+  fs.writeFileSync(path.join(dir, 'summary'), 'what I did');
+
+  const got = collectResults(jobId, 1, []);
+  assert.deepEqual(got.produced, { summary: 'what I did' });
+  assert.deepEqual(got.volunteered, ['summary']);
+  assert.deepEqual(got.missing, []);
+  clearResults(jobId, 1);
+});
+
+test('volunteering does not excuse a declared value that is missing', () => {
+  // The refusal that keeps the two layers apart: a run cannot substitute something it chose to
+  // write for something it was required to write.
+  const jobId = 9103;
+  const dir = ensureResultsDir(jobId, 1);
+  fs.writeFileSync(path.join(dir, 'something-else'), 'not what was asked for');
+
+  const got = collectResults(jobId, 1, ['finding']);
+  assert.deepEqual(got.missing, ['finding'], 'still a shortfall');
+  assert.deepEqual(got.volunteered, ['something-else']);
+  assert.match(missingResults(jobId, got.missing, got.oversize)!, /`finding`/);
+  clearResults(jobId, 1);
+});
+
+test('the cap applies to a volunteered value too — a huge one is a file, not a handoff', () => {
+  const jobId = 9104;
+  const dir = ensureResultsDir(jobId, 1);
+  fs.writeFileSync(path.join(dir, 'dump'), 'z'.repeat(RESULT_MAX_BYTES + 1));
+
+  const got = collectResults(jobId, 1, []);
+  assert.deepEqual(got.produced, {}, 'not kept');
+  assert.equal(got.oversize.length, 1);
+  // But it does not fail an attempt that required nothing: an oversized VOLUNTEERED value is the
+  // run's own mistake to be told about, not a broken promise. The shortfall message still names it.
+  assert.match(missingResults(jobId, got.missing, got.oversize)!, /over the 4096-byte cap/);
+  clearResults(jobId, 1);
+});
+
+test('a name that could not be a filename or a key is ignored, not fatal', () => {
+  const jobId = 9105;
+  const dir = ensureResultsDir(jobId, 1);
+  fs.writeFileSync(path.join(dir, 'ok'), 'kept');
+  fs.writeFileSync(path.join(dir, 'has.dot'), 'ignored');
+  fs.mkdirSync(path.join(dir, 'a-directory'));
+
+  const got = collectResults(jobId, 1, []);
+  assert.deepEqual(got.produced, { ok: 'kept' }, 'the odd ones are skipped, not read and not fatal');
+  assert.deepEqual(got.volunteered, ['ok']);
+  clearResults(jobId, 1);
+});

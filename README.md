@@ -130,6 +130,11 @@ Both are repeatable, and **a declared output the run did not produce fails the a
 makes `succeeded` mean more than "the session ended". An undeclared file left in the checkout is litter and
 is deleted with it.
 
+A run may also **volunteer** a result nobody asked for: anything it writes beside the declared ones is kept
+and shown, and never required. The distinction is what is *enforced*, not what is stored — a declaration is
+the filer saying "this must exist", and a volunteered value is the Job saying "you did not ask, but you
+should know".
+
 `--result` is how a Job **hands something on**, and it is orthogonal to whether the Job commits. Often it
 sits alongside a pull request: `--result prUrl` gives whoever reads this Job next a typed value instead of
 prose to parse. It is also the only output a Job with no commit to make has — *"I looked, and there is
