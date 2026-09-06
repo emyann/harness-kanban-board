@@ -57,6 +57,13 @@ meet one in the git history, that is what it was.
   *creates* Jobs from an approved **proposal**, which is a new row and never another Job's status
   (`prisma/schema.prisma`). The
   Kubernetes Job it is named after (*architecture/job-kind*).
+- **Guide** — the repository's contributor guide, granted as a repo-relative path (`--guide`,
+  `Job.guide`, `Board.defaultGuide`) and read by hkb from `Board.repoPath` before the run
+  (`src/guide.ts`). Prepended to the brief as **instruction**, with the brief winning where the two
+  disagree — the opposite framing to an **input**, which is data. Follows one level of `@import`; a
+  guide that cannot be read ends the attempt at `no_input` before anything is spent. hkb reads it
+  rather than letting the runtime load it, because `settingSources` would bring the repository's
+  shell hooks with it (*decisions/adr-013-the-guide-is-read-not-loaded*).
 - **Input** — content a Job *declares* it will be given (`--input <name>=<source>`), resolved by the
   controller before the run and placed in the prompt ahead of the brief (`src/inputs.ts`). Four sources,
   none of which waits: `file:<repo-relative-path>`, read from `Board.repoPath` and not the worktree;

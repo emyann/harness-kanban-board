@@ -1633,3 +1633,135 @@ test('a suspended PROPOSER does not keep a checkout nothing will resume into', a
 });
 
 const storedProposalOf = (id: number) => db.attempt.findFirst({ where: { jobId: id, k: 1 } });
+
+/**
+ * The contributor guide (ADR-013), end to end. `test/guide.test.ts` covers the reading and every
+ * refusal; these cover the wiring, and the second is the one that matters — a Job told to follow
+ * rules it was never given must not run.
+ */
+test('a granted guide reaches the worker, in front of the brief', async () => {
+  const b = await db.board.upsert({
+    where: { slug: 'guided' },
+    update: { dailyBudgetUsd: null, maxConcurrent: 5, pausedAt: null, defaultGuide: 'GUIDE.md' },
+    create: { slug: 'guided', dailyBudgetUsd: null, maxConcurrent: 5, defaultGuide: 'GUIDE.md' },
+  });
+  fs.writeFileSync(path.join(cwd, 'GUIDE.md'), '# House rules\n\nAlways run the tests.\n');
+  let seen = '';
+  const spy = {
+    name: 'spy',
+    async run(spec: { prompt: string }) {
+      seen = spec.prompt;
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'reads the rules', brief: 'Fix the thing.', isolate: false, maxBudgetUsd: 1 },
+  });
+  await reconcile({ runtime: spy, cwd, only: job.id, board: 'guided', readPr: false });
+
+  assert.match(seen, /Always run the tests/, 'the board granted it, so the Job gets it');
+  assert.ok(seen.indexOf('House rules') < seen.indexOf('Fix the thing.'), 'and it comes first');
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).phase, 'succeeded');
+});
+
+test('a Job told to read a guide that is not there FAILS before it spends anything', async () => {
+  const b = await db.board.findFirstOrThrow({ where: { slug: 'guided' } });
+  let ran = false;
+  const spy = { name: 'spy', async run() { ran = true; throw new Error('must not run'); } } as never;
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'points at nothing', brief: 'Fix the thing.', isolate: false,
+      guide: 'NO-SUCH-GUIDE.md', maxBudgetUsd: 1, maxRetries: 0,
+    },
+  });
+  await reconcile({ runtime: spy, cwd, only: job.id, board: 'guided', readPr: false });
+
+  assert.equal(ran, false, 'the runtime is never called — this costs nothing to find out');
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'failed');
+  assert.equal(after.attempts[0].outcome, 'no_input', 'the same outcome as an input that could not be read');
+  assert.match(after.lastError ?? '', /NO-SUCH-GUIDE\.md/);
+  assert.match(after.lastError ?? '', /worse than not running/);
+});
+
+test('a Job may refuse the board’s guide, and a Job with none is unchanged', async () => {
+  const b = await db.board.findFirstOrThrow({ where: { slug: 'guided' } });
+  let seen = '';
+  const spy = {
+    name: 'spy',
+    async run(spec: { prompt: string }) {
+      seen = spec.prompt;
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+  // `--guide ""` is the empty string, which `str()` reads as unset on the JOB — so the board
+  // answers. Refusing a board grant is `hkb boards set --guide none`, at the board.
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'inherits', brief: 'Do it.', isolate: false, maxBudgetUsd: 1 },
+  });
+  await reconcile({ runtime: spy, cwd, only: job.id, board: 'guided', readPr: false });
+  assert.match(seen, /House rules/, 'the board default reaches a Job that said nothing');
+
+  // A board with no guide gives a Job no guide: the frame is absent entirely, not empty.
+  const plain = await db.board.upsert({
+    where: { slug: 'unguided' }, update: { defaultGuide: null, maxConcurrent: 5, dailyBudgetUsd: null },
+    create: { slug: 'unguided', maxConcurrent: 5, dailyBudgetUsd: null },
+  });
+  const bare = await db.job.create({
+    data: { boardId: plain.id, name: 'no guide', brief: 'Do it.', isolate: false, maxBudgetUsd: 1 },
+  });
+  await reconcile({ runtime: spy, cwd, only: bare.id, board: 'unguided', readPr: false });
+  assert.doesNotMatch(seen, /contributor guide/, 'no grant, no block — not an empty one');
+});
+
+test('EVERY board default reaches a worker, not the ones somebody remembered to select', async () => {
+  // The bug this exists to catch, and it was live: `reconcile` read the Board with a hand-listed
+  // `select`, and `defaultPluginPaths` was never added to it — so ADR-012's board-level skill grant
+  // resolved to `undefined`, fell through to the built-in, and reached no worker at all. Nothing
+  // failed; the grant just silently did not exist.
+  //
+  // So this asserts on the WHOLE resolved spec rather than one field: a test per default is a test
+  // somebody has to remember to add, which is the same failure one layer up.
+  const b = await db.board.upsert({
+    where: { slug: 'defaulted' },
+    update: {
+      maxConcurrent: 5, dailyBudgetUsd: null, pausedAt: null,
+      defaultModel: 'claude-opus-5', defaultEffort: 'high', defaultMaxTurns: 7,
+      defaultMaxBudgetUsd: 3, defaultMaxRetries: 1, defaultAllowedTools: ['Read'],
+      defaultPluginPaths: ['.claude'], defaultGuide: 'GUIDE.md',
+    },
+    create: {
+      slug: 'defaulted', maxConcurrent: 5, dailyBudgetUsd: null,
+      defaultModel: 'claude-opus-5', defaultEffort: 'high', defaultMaxTurns: 7,
+      defaultMaxBudgetUsd: 3, defaultMaxRetries: 1, defaultAllowedTools: ['Read'],
+      defaultPluginPaths: ['.claude'], defaultGuide: 'GUIDE.md',
+    },
+  });
+  fs.writeFileSync(path.join(cwd, 'GUIDE.md'), '# House rules\n\nAlways run the tests.\n');
+  fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true });
+
+  let got: { model?: string; maxTurns?: number; allowedTools?: string[]; plugins?: string[]; prompt: string } | null = null;
+  const spy = {
+    name: 'spy',
+    async run(spec: never) {
+      got = spec;
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+  const job = await db.job.create({
+    data: { boardId: b.id, name: 'inherits everything', brief: 'Do it.', isolate: false },
+  });
+  await reconcile({ runtime: spy, cwd, only: job.id, board: 'defaulted', readPr: false });
+
+  assert.ok(got);
+  assert.equal(got!.model, 'claude-opus-5');
+  assert.equal(got!.maxTurns, 7);
+  assert.deepEqual(got!.allowedTools, ['Read']);
+  assert.deepEqual(got!.plugins, [path.join(cwd, '.claude')], 'the grant ADR-012 shipped, which used to arrive as nothing');
+  assert.match(got!.prompt, /House rules/, 'and the guide ADR-013 added');
+  const attempt = await db.attempt.findFirstOrThrow({ where: { jobId: job.id } });
+  assert.equal(attempt.maxBudgetUsd, 3, 'the cap frozen at claim time came from the board too');
+});

@@ -6,9 +6,11 @@ import {
 } from './worktree.ts';
 import { prForBranch } from './pulls.ts';
 import {
-  approvedPrompt, withArtifacts, withInputs, withProposal, withProtocol, withResults, withWorktree,
+  approvedPrompt, withArtifacts, withGuide, withInputs, withProposal, withProtocol, withResults,
+  withWorktree,
 } from './brief.ts';
 import { resolvePlugins } from './plugins.ts';
+import { readGuide, missingGuide } from './guide.ts';
 import {
   declaredInputs, readFileInput, renderBoard, missingInputs, describeSource,
   type ResolvedInput, type BoardRow,
@@ -472,14 +474,16 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     if (deps.signal?.aborted) break;
     const say = sayFor(job.id);
 
+    // The whole row, deliberately, where this used to name its columns.
+    //
+    // A hand-listed `select` has to be extended for every spec default the board gains, and when it
+    // is not, the default does not fail — it silently stops existing, because `resolveSpec` reads
+    // `undefined` and falls through to the built-in. That is what happened: `defaultPluginPaths`
+    // shipped in ADR-012 and was never selected here, so a board-level skill grant reached no
+    // worker at all, and nothing said so. A Board row is a handful of small scalars; reading it
+    // whole costs nothing and cannot go stale.
     const board = await db.board.findFirst({
       where: deps.board ? { slug: deps.board } : { id: job.boardId },
-      select: {
-        pausedAt: true, pausedBy: true, maxConcurrent: true, dailyBudgetUsd: true, id: true,
-        repoPath: true, slug: true,
-        defaultModel: true, defaultEffort: true, defaultMaxTurns: true, defaultMaxBudgetUsd: true,
-        defaultMaxRetries: true, defaultAllowedTools: true,
-      },
     });
     // The spec this Job actually runs with, resolved once and used for everything below: the gate,
     // the cap frozen onto the Attempt, the runtime call and the retry decision. Once, because the
@@ -863,7 +867,28 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       if ('why' in got) unread.push({ name: want.name, source, why: got.why });
       else readInputs.push({ name: want.name, source, text: got.text });
     }
-    const inputShortfall = missingInputs(job.id, unread);
+    // ---- the contributor guide, if the operator granted one (ADR-013). Read from the board's
+    // repository like an input and for the same reasons — the worktree carries this Job's own edits,
+    // and a worker that could write the guide its next attempt obeys would be steering itself.
+    //
+    // A guide that cannot be read fails the attempt in the same breath as an input that cannot,
+    // because the failure is the same shape: a Job told to follow rules it was never given runs
+    // without them, and that is worse than not running.
+    let guide: { text: string; files: string[] } | null = null;
+    let guideShortfall: string | null = null;
+    if (spec.guide.value) {
+      const got = readGuide(cwd, spec.guide.value);
+      if ('why' in got) guideShortfall = missingGuide(job.id, got.why);
+      else {
+        guide = got;
+        say(`guided by ${got.files.join(' + ')} (${Buffer.byteLength(got.text)} bytes)`);
+      }
+    }
+
+    // One shortfall, and the first cause found is the one reported — the same precedence rule the
+    // declared outputs use, for the same reason: two concatenated reasons read worse than one and
+    // send the operator to the same place.
+    const inputShortfall = missingInputs(job.id, unread) ?? guideShortfall;
     if (inputShortfall) deps.onEvent?.(`  ${inputShortfall}`);
 
     // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
@@ -875,8 +900,12 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // says and all it says.
     const opening = approvalPrompt
       ?? (wt ? (job.proposes ? withWorktree(job.brief, wt.branch) : withProtocol(job.brief, wt.branch)) : job.brief);
+    // The guide goes in FRONT of all of it, including an approval prompt: an approver's instruction
+    // is the most recent word on what to do, and the repository's rules are the standing word on how
+    // anything here is done. Neither replaces the other.
+    const guided = guide ? withGuide(opening, guide.text, spec.guide.value as string) : opening;
     const asked = withInputs(
-      withArtifacts(withResults(opening, wantedResults), wantedArtifacts),
+      withArtifacts(withResults(guided, wantedResults), wantedArtifacts),
       readInputs,
     );
     const prompt = proposalPath && !approvalPrompt

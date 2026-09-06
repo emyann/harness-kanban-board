@@ -107,6 +107,26 @@ It runs, produces its declared outputs, and goes **`suspended`** rather than fin
 The gate is **one-shot**: after an approval the Job finishes like any other. The approver need not be
 you — a delegated agent or an auto-approve policy writes the same record, and `hkb log` shows which.
 
+### The repository's own rules: `--guide`
+
+A worker does not inherit your Claude Code settings — hkb never loads `.claude/settings.json`,
+because a hook in one is a shell command the repository author wrote and hkb would run it on your
+machine. The cost of that refusal used to be that a worker could not read `CLAUDE.md` either. It can
+now, because hkb reads the file itself:
+
+```bash
+hkb boards set my-board --guide CLAUDE.md
+```
+
+It is read from the board's repository (never the worktree, so a worker cannot write the rules its
+own next attempt follows), one level of `@import` is followed, and it goes in **front** of the brief
+as standing instruction — with the brief winning where the two disagree. A Job can name its own with
+`--guide <path>`. A guide that cannot be read fails the attempt before the run, because a Job told to
+follow rules it was never given would run without them.
+
+It is paid for on every request — this repository's guide is ~8.7 KB, about 2,200 input tokens — so
+it is a grant you make rather than something hkb assumes.
+
 ### Proposing work instead of filing it: `--propose`
 
 A Job that decides what *other* Jobs should exist does not get to create them. It writes one JSON file

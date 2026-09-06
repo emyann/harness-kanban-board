@@ -9,9 +9,9 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: 465e61ad1be9105804eddcbe8ef211ce89526277
+    sha: 3267dc3d4472a1c813f4f668ee44428867c2915d
   - path: src/controller.ts
-    sha: 6f97a4884c7d5774bec6e12c2451ecacb260a94a
+    sha: 2f8bd74273a5ba22754954edb3122193729c6ff3
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/db.ts
@@ -21,19 +21,19 @@ covers:
   - path: src/artifacts.ts
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
   - path: src/inputs.ts
-    sha: 5fa957ea2723d26e0a37cd67725d756bb6838469
+    sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
   - path: src/proposals.ts
     sha: fd5e1eee8b847c9b4024d1bf5f635a85907baae4
   - path: src/watch.ts
     sha: 992b53f9dc3ef4284c2a1bf0201794490afee393
   - path: src/brief.ts
-    sha: a5f34b144962692f6cbaad42350961b507fced12
+    sha: be4293816f4cc5f51a96199d87f2b689df846ab2
   - path: src/worktree.ts
     sha: e4094d7fae517cca708273ddff3007bfc508d10b
   - path: src/pulls.ts
     sha: a27f00a986f576c2d3ed035902c0a1c9f9a9300c
   - path: prisma/schema.prisma
-    sha: e4bac2046bd232c6656a59f4503e6a2ca32578f1
+    sha: af2155d3e5cfd330f259ae1e5b5cde91f732d109
 related:
   [
     architecture/job-kind,
@@ -44,7 +44,7 @@ related:
     decisions/adr-009-retiring-the-first-system,
     decisions/adr-011-proposals-not-board-access,
   ]
-generated_at_commit: 76d1a94
+generated_at_commit: 1542483
 last_refreshed: 2026-09-06
 ---
 
@@ -71,6 +71,7 @@ seam or 36 CLI verbs is describing code that is gone.
 | `src/results.ts` | the named values a Job hands on, when its output is not a diff |
 | `src/artifacts.ts` | the files a Job hands on that the board keeps and the repository does not |
 | `src/inputs.ts` | what a Job is given: the read side, resolved before the run |
+| `src/guide.ts` | the repository's own rules, read by hkb and put in front of the brief |
 | `src/proposals.ts` | what a Job may ask the board to create, and every field it may not set |
 | `src/watch.ts` | the event stream, followed — what the outside world reacts to |
 | `src/pulls.ts` | the only thing that shells out to `gh` |

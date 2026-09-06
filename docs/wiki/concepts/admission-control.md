@@ -9,8 +9,8 @@ covers:
   - path: src/admission.ts
     sha: aab84ccd1178b085cea79d2c4566149145027b9e
   - path: src/runtime/claude.ts
-    sha: e53fc9819d5fc7bb4b43d17b3f1a681cfe415618
-generated_at_commit: 464bacd
+    sha: 5ae775633cae411b71443add232b79f1325c4075
+generated_at_commit: 1542483
 last_refreshed: 2026-09-06
 related: [architecture/runtime-layer, architecture/job-kind, decisions/adr-007-workload-scheduler, gotchas/prompt-is-not-a-guarantee]
 ---
@@ -127,6 +127,8 @@ harness where it belongs.
   `.claude/settings.json`** — a trade the runtime declines permanently, because a
   hook in a settings file is a shell command the repository author wrote
   (*decisions/adr-012-skills-by-grant-not-by-settings*). A granted plugin
-  directory reaches a repository's skills without it, and changes nothing here:
-  a granted skill is prose a worker may read, and every tool it might suggest is
+  directory reaches a repository's skills without it, and a granted **guide**
+  reaches its `CLAUDE.md` without it
+  (*decisions/adr-013-the-guide-is-read-not-loaded*). Neither changes anything
+  here: both are prose a worker may read, and every tool either might suggest is
   still refused unless `allowedTools` admits it.

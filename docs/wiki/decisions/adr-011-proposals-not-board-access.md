@@ -15,17 +15,17 @@ covers:
   - path: src/results.ts
     sha: 0fc3dc145a1c515267534909aee79f034effa61b
   - path: src/controller.ts
-    sha: 6f97a4884c7d5774bec6e12c2451ecacb260a94a
+    sha: 2f8bd74273a5ba22754954edb3122193729c6ff3
   - path: src/runtime/claude.ts
-    sha: e53fc9819d5fc7bb4b43d17b3f1a681cfe415618
+    sha: 5ae775633cae411b71443add232b79f1325c4075
   - path: src/brief.ts
-    sha: a5f34b144962692f6cbaad42350961b507fced12
+    sha: be4293816f4cc5f51a96199d87f2b689df846ab2
   - path: prisma/schema.prisma
-    sha: e4bac2046bd232c6656a59f4503e6a2ca32578f1
+    sha: af2155d3e5cfd330f259ae1e5b5cde91f732d109
   - path: src/artifacts.ts
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
   - path: src/inputs.ts
-    sha: 5fa957ea2723d26e0a37cd67725d756bb6838469
+    sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
 related:
   [
     decisions/adr-007-workload-scheduler,
@@ -35,7 +35,7 @@ related:
     architecture/job-kind,
     architecture/the-loop,
   ]
-generated_at_commit: 76d1a94
+generated_at_commit: 1542483
 last_refreshed: 2026-09-06
 ---
 

@@ -286,6 +286,22 @@ export function renderBoard(rows: BoardRow[]): string {
  * passes every string test above.
  */
 export function readFileInput(repoPath: string, rel: string): { text: string } | { why: string } {
+  const found = resolveInRepo(repoPath, rel);
+  if ('why' in found) return found;
+  if (found.bytes > INPUT_MAX_BYTES) {
+    return { why: `${rel} is ${found.bytes} bytes, over the ${INPUT_MAX_BYTES}-byte input cap — an input is paid for on every request of the run, so this one belongs in the worktree the run can read` };
+  }
+  return { text: fs.readFileSync(found.path, 'utf8') };
+}
+
+/**
+ * Find a file inside the board's repository, or say why not. **The containment check, without a
+ * size rule** — because the rule differs by what the file is for, and so does the advice that comes
+ * with breaking it: an oversized input belongs in the worktree, an oversized guide belongs shorter.
+ * Sharing the cap along with the fence made a guide inherit both the input's number and its counsel
+ * (`src/guide.ts`).
+ */
+export function resolveInRepo(repoPath: string, rel: string): { path: string; bytes: number } | { why: string } {
   let root: string;
   try {
     root = fs.realpathSync(repoPath);
@@ -302,10 +318,7 @@ export function readFileInput(repoPath: string, rel: string): { text: string } |
   if (!real.startsWith(root + path.sep)) return { why: `${rel} resolves outside the repository` };
   const st = fs.statSync(real);
   if (!st.isFile()) return { why: `${rel} is not a file` };
-  if (st.size > INPUT_MAX_BYTES) {
-    return { why: `${rel} is ${st.size} bytes, over the ${INPUT_MAX_BYTES}-byte input cap — an input is paid for on every request of the run, so this one belongs in the worktree the run can read` };
-  }
-  return { text: fs.readFileSync(real, 'utf8') };
+  return { path: real, bytes: st.size };
 }
 
 /**

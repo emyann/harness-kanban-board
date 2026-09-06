@@ -11,10 +11,10 @@ covers:
   - path: src/plugins.ts
     sha: 8057664cf308d860315bd9abe7b941a00fcf4519
   - path: src/runtime/claude.ts
-    sha: e53fc9819d5fc7bb4b43d17b3f1a681cfe415618
+    sha: 5ae775633cae411b71443add232b79f1325c4075
   - path: src/runtime/fake.ts
     sha: 94f9f21ab7c9702506ae625dff37ac15ecfdbcce
-generated_at_commit: 464bacd
+generated_at_commit: 1542483
 last_refreshed: 2026-09-06
 related: [decisions/adr-007-workload-scheduler, architecture/job-kind, concepts/admission-control, concepts/worker-identity]
 ---
@@ -90,8 +90,23 @@ arrive through `plugins: [{ type: 'local', path }]` instead, built from the
 resolved `WorkerSpec.plugins` — measured to reach the same skills with
 `settingSources` still empty. The two were separable, so the runtime takes the
 skills and leaves the settings, where a hook would be a shell command the
-repository author wrote. What `settingSources: []` still costs is `CLAUDE.md`,
-which genuinely does require `'project'`.
+repository author wrote.
+
+It is also no longer the line that decides `CLAUDE.md`, and that took a second
+measurement to see (*decisions/adr-013-the-guide-is-read-not-loaded*). The flag
+really is the SDK's only route to the file — probed both ways, `UNKNOWN` with
+`[]` and `>=22.18.0` with `['project']` — but hkb does not have to go through the
+SDK to read a markdown file. A granted guide is read from `Board.repoPath` and
+prepended to the prompt (`src/guide.ts`), which also makes it portable: a guide
+in the prompt reaches any runtime, one the SDK loads reaches only this one.
+
+**`strictMcpConfig: true`, and it closes something that was open.** Reading the
+session's own `init` message with `settingSources: []`, a worker was offered four
+**claude.ai MCP connectors** — the operator's Gmail, Drive and Calendar among
+them. They ride the login rather than the filesystem, so no setting source
+excludes them and `mcpServers: {}` does not either. The allowlist and the
+admission gate would have refused the calls, so this was never an open door; it
+was a set of tool definitions in every worker's context that nobody chose.
 
 `maxBudgetUsd` is the runaway-cost stop and it covers subagent spend.
 

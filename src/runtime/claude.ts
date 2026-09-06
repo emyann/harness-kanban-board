@@ -163,6 +163,21 @@ export const claudeRuntime: Runtime = {
         // `'project'` for it — so this repository's contributor guide reaches a worker only
         // insofar as `src/brief.ts` restates it. That cost is named in ADR-012 and unsolved.
         settingSources: [],
+        // **Nothing reaches a worker that the operator did not grant it**, which is the whole of
+        // ADR-012 — and `settingSources: []` above turns out not to be enough to say it.
+        //
+        // Measured 2026-09-06 by reading the session's own `init` message: with `settingSources: []`
+        // a worker was offered four **claude.ai MCP connectors** — the operator's Gmail, Drive and
+        // Calendar among them. They ride the login rather than the filesystem, so no setting source
+        // excludes them, and the SDK's own documentation says `mcpServers: {}` does not suppress
+        // them either. A repository's `.mcp.json` IS gated by `settingSources` and was absent; the
+        // operator's own connectors were not.
+        //
+        // The allowlist and the admission gate would have refused the calls — an `mcp__…` tool is
+        // not in `DEFAULT_TOOLS` — so this was never an open door. It was a set of tool definitions
+        // in every worker's context that nobody chose, on a Job that could widen `--allow-tool` and
+        // reach them. With this flag the init message lists no servers at all.
+        strictMcpConfig: true,
       },
     });
 

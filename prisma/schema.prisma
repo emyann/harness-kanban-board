@@ -135,6 +135,10 @@ model Board {
   /// own skills" — and the per-Job column is for narrowing, not widening.
   defaultPluginPaths  Json?
 
+  /// The guide every Job on this board reads unless it says otherwise (`Job.guide` wins). One
+  /// `hkb boards set <slug> --guide CLAUDE.md` is how a repository's own rules reach its workers.
+  defaultGuide        String?
+
   events Event[]
 
   controller Controller?
@@ -208,6 +212,23 @@ model Job {
   /// Named for what it grants rather than what it is wanted for. A plugin directory loads commands
   /// and agents too, so a column called `skills` would say less than it does.
   pluginPaths  Json?
+
+  /// The repository's contributor guide, as a repo-relative path — usually `CLAUDE.md`.
+  ///
+  /// Read from `Board.repoPath` before the run and put in front of the brief (`src/guide.ts`). It is
+  /// a **grant**, in the same sense and for the same reason `pluginPaths` is: a document the
+  /// repository wrote, steering a worker, with the operator's authority. So it is a path somebody
+  /// named rather than a file hkb goes looking for.
+  ///
+  /// ADR-012 refused `settingSources: ['project']` because that flag is how a repository hands hkb
+  /// a shell command to run. This is the half of it that was only ever a document — measured
+  /// unreachable through the SDK on those terms, and reachable with `readFileSync` on any terms.
+  /// Resolved against the repository and never the worktree, so a worker cannot write the guide its
+  /// own next attempt obeys.
+  ///
+  /// A guide that cannot be read fails the attempt BEFORE the run: a Job told to follow rules it was
+  /// never given would run without them, which is worse than not running.
+  guide        String?
   maxRetries   Int?
   /// What this Job must produce on disk: a JSON array of repository-relative paths, copied out of
   /// the worktree into `Board.repoPath` before the checkout is released (ADR-008). Directories
