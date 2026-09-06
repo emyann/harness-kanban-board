@@ -9,13 +9,7 @@ status: superseded
 date: 2026-09-02
 supersedes: ~
 superseded_by: decisions/adr-009-retiring-the-first-system
-covers:
-  - path: src/dispatch.js
-    sha: 492b6362444d3589e4fc0989cf89cd58aad93ccb
-  - path: src/jobs.js
-    sha: a5b255731602cb2363ff33745fa1039e211ffdd1
-  - path: src/cli.js
-    sha: 565b5ca72ec257acd2a350d8b465d302061199c3
+covers: []
 generated_at_commit: e16f166
 last_refreshed: 2026-09-03
 related: [decisions/adr-004-roles-and-adoption, decisions/adr-006-local-store, architecture/overview, features/up-and-down, features/tracks]

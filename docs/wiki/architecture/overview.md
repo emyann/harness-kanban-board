@@ -29,7 +29,7 @@ covers:
   - path: src/pulls.ts
     sha: a27f00a986f576c2d3ed035902c0a1c9f9a9300c
   - path: prisma/schema.prisma
-    sha: f80d0cf3a5de454978a06efbdf2be0bcc36ef6ee
+    sha: 9b372c388a24d6aba33562716b4f12bd95c72d1c
 related:
   [
     architecture/job-kind,
@@ -40,7 +40,7 @@ related:
     decisions/adr-009-retiring-the-first-system,
     decisions/adr-011-proposals-not-board-access,
   ]
-generated_at_commit: 464bacd
+generated_at_commit: 1286319
 last_refreshed: 2026-09-06
 ---
 

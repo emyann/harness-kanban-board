@@ -15,13 +15,17 @@ covers:
   - path: src/results.ts
     sha: 0fc3dc145a1c515267534909aee79f034effa61b
   - path: src/controller.ts
-    sha: afc37030ee87b55e0f834a8ce689a68a47d8007f
+    sha: c90722f6a5d32796e996f23269eeb44dd883fc6f
   - path: src/runtime/claude.ts
-    sha: d39e329417d327e2e6ec2ae169018aaf4fcde3e5
+    sha: e53fc9819d5fc7bb4b43d17b3f1a681cfe415618
   - path: src/brief.ts
-    sha: 147ea32fd8fb1fab3de11936b9900bd8fa49a35d
+    sha: e1326185ad6379bbb34cd6e4e02f0f89db393162
   - path: prisma/schema.prisma
-    sha: 4eb9facdca09dab37cb69e7b9017e4451f298df2
+    sha: 9b372c388a24d6aba33562716b4f12bd95c72d1c
+  - path: src/artifacts.ts
+    sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
+  - path: src/inputs.ts
+    sha: 5fa957ea2723d26e0a37cd67725d756bb6838469
 related:
   [
     decisions/adr-007-workload-scheduler,
@@ -31,7 +35,7 @@ related:
     architecture/job-kind,
     architecture/the-loop,
   ]
-generated_at_commit: 393f747
+generated_at_commit: 1286319
 last_refreshed: 2026-09-06
 ---
 
@@ -187,6 +191,27 @@ ran that experiment and the unshipped half sat inert for long enough to be redis
 is approved, so created *is* admitted. Triage remains open for the **inbound** direction — an external
 call arriving with something nobody has judged — which is the trigger half of
 `docs/rebuild-plan.md` § "Parked" A, and a different problem with a different authz model.
+
+**What has moved since, without changing the decision.** Both preconditions this record
+withheld itself on now exist, and the channel question it left open was answered the third
+way rather than either of the two cheaper ones.
+
+- **The channel is a third declared-output kind.** `--artifact`: named files a Job must
+  produce, collected into `~/.hkb/artifacts/<jobId>-<attempt>` — beside the board, outside
+  every checkout, uncapped, catalogued rather than read (`src/artifacts.ts`). Raising the
+  `results` cap was declined as the workaround its own comment warns against, and giving
+  `exports` a second destination was declined because `src/results.ts:63-71` already argues
+  that an output which must not be committed does not belong in the tree at all.
+- **Declared inputs exist** (`src/inputs.ts`). A decomposer's input is board state at run
+  time, and `--input state=board` now puts it there without a model or a board handle. The
+  read side also refuses, by name, the source that would make it `Job.after`: reading
+  another Job's output.
+
+What remains of this record is the part it is actually about — **the validator**: turning
+a proposal artifact into rows, refusing unknown fields, clamping what may not be raised,
+keying by `(jobId, attempt, index)` so a retry cannot double-file, and applying nothing
+without an approval on the Event stream. The lineage column named in the consequences
+above still does not exist.
 
 <!-- Dual mutability: once status: accepted, NEVER rewrite this record.
 When the decision changes, write a new ADR, set its `supersedes`, and set

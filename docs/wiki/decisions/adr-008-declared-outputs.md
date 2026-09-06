@@ -11,16 +11,22 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/brief.ts
-    sha: 10c09714167ec093450e1052ae059a40f2736a7f
+    sha: e1326185ad6379bbb34cd6e4e02f0f89db393162
   - path: src/controller.ts
-    sha: 93c474a5c943b40f6e985f388c9d0ae378e552a2
+    sha: c90722f6a5d32796e996f23269eeb44dd883fc6f
   - path: src/worktree.ts
-    sha: 977a6c51879e48dcedebecaac79f42dc0d0872f0
+    sha: e4094d7fae517cca708273ddff3007bfc508d10b
   - path: prisma/schema.prisma
-    sha: 7ddf7cc64bdec434ada83af9301a0d835f9d5af1
+    sha: 9b372c388a24d6aba33562716b4f12bd95c72d1c
+  - path: src/results.ts
+    sha: 0fc3dc145a1c515267534909aee79f034effa61b
+  - path: src/artifacts.ts
+    sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
+  - path: src/inputs.ts
+    sha: 5fa957ea2723d26e0a37cd67725d756bb6838469
 related: [decisions/adr-007-workload-scheduler, architecture/job-kind, architecture/the-loop]
-generated_at_commit: 489c778
-last_refreshed: 2026-09-05
+generated_at_commit: 1286319
+last_refreshed: 2026-09-06
 ---
 
 # ADR-008: A Job declares its outputs, and the board gets them out of the sandbox
@@ -142,3 +148,26 @@ crossing *into* a worktree) and needs its own record. The size cap for `results`
 to implementation. And nothing here changes that `succeeded` is a fact about the process:
 whether the work is any *good* remains a judgement, and judgements still belong to a kind
 that has a reviewer in it.
+
+**What has moved since, without changing the decision.** Both of the things left open
+above have since been settled, and the rule this record states — *a declared output that
+is not produced fails the attempt* — carried across both unchanged.
+
+- The size cap for `results` is 4096 bytes per value (`src/results.ts:32`), Tekton's
+  number, per result rather than across all of them.
+- The output that belongs outside the repository is a **third declared kind**:
+  `--artifact`, files collected into `~/.hkb/artifacts/<jobId>-<attempt>` beside the
+  board, uncapped, catalogued onto the Attempt as `[{name, kind, bytes}]` rather than
+  read (`src/artifacts.ts`). ADR-011 is the record that needed it and names why the
+  other two could not be stretched to fit. The mirror this record predicted —
+  `.worktreeinclude` for files crossing *in* — is still the shape it turned out to be,
+  except that a proposal must not be committed, which is what ruled `exports` out.
+- Declared *inputs* arrived too (`src/inputs.ts`): the read side this record did not
+  have, and the reason it did not need one. It changes nothing above; a Job still
+  declares what it produces, and now also what it is given.
+
+Two things this record did not anticipate: a run can now fail for producing nothing
+(`Outcome.no_output`) *or* for being unable to read what it was given
+(`Outcome.no_input`, before any money is spent), and `results` grew a second layer —
+values the run wrote without declaring are kept and reported, never required
+(`collectResults`, `src/results.ts`).

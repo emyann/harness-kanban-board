@@ -11,19 +11,19 @@ supersedes: decisions/adr-006-local-store
 superseded_by: ~
 covers:
   - path: prisma/schema.prisma
-    sha: 5c28188e805303dd55ada9c009656afd29bbe246
+    sha: 9b372c388a24d6aba33562716b4f12bd95c72d1c
   - path: src/db.ts
-    sha: bf646fb9e9310a7550ad610aba36fdc0d00fb787
+    sha: c759afb94b34e93ecefdb0384e06924bd772e836
   - path: src/controller.ts
-    sha: c80cd9b51e5f2c18d0c9e409b1c81207355c0453
+    sha: c90722f6a5d32796e996f23269eeb44dd883fc6f
   - path: src/admission.ts
-    sha: 964084be7460a43be49db9819665a6269f6a252f
+    sha: aab84ccd1178b085cea79d2c4566149145027b9e
   - path: src/runtime/index.ts
-    sha: 7bfb2d64a13533a6ca760c7c2ee8e8fbb92a22dd
+    sha: 55007f26fe6b9e4ec107997eef5aba74ec4643e6
   - path: package.json
-    sha: fdb07ef571e5af4a0540eb8215d2e3bb699c5c12
-generated_at_commit: c6e6f2e
-last_refreshed: 2026-09-05
+    sha: 02ee69e9b3b3113a1826ffc0798b80a91a2c02ba
+generated_at_commit: 1286319
+last_refreshed: 2026-09-06
 related: [decisions/adr-006-local-store, architecture/job-kind, architecture/runtime-layer, concepts/admission-control, architecture/store-seam]
 ---
 
@@ -125,6 +125,21 @@ stays on GitHub, because that is live and a copy could only go stale. The
 admission gate moved from `canUseTool` to a `PreToolUse` hook, which is an
 implementation of decision 6 rather than a change to it
 (`concepts/admission-control`).
+
+The board file moved out of the repository: it is `~/.hkb/board.db`, one board per
+machine with a `Board` row per repository, and `HKB_DATABASE_URL` points at another
+(`src/db-url.ts`). Decision 1 was that *one SQLite file is the board*; where that file
+sits was ADR-009's call, and the per-repo `.kanban/board.db` this record names is gone.
+The last consequence listed above closed with it — there is one system in this repo,
+because ADR-009 deleted the other.
+
+Decision 3 is the one that has carried weight since. Everything added after this record
+arrived as columns and enum values on the same two tables rather than as a table of its
+own: `gate`, `suspendedFor` and `results` (ADR-010), `artifacts` (ADR-011), `pluginPaths`
+(ADR-012), `inputs` and `Lease.slot`, two more terminal `Phase` values an operator writes
+by hand, and three more `Outcome` values — `no_output`, `no_input`, `stopped`
+(`prisma/schema.prisma`). No `Workload` table
+appeared, and no per-Job schema; the closed sets stayed closed sets the database checks.
 
 **What we deliberately did not decide.** No generic `Workload` table. The second
 kind — most cheaply `/kanban:groom`, because it is a one-shot with a human gate and
