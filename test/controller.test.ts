@@ -843,6 +843,104 @@ test('a declared result the run did NOT write fails the attempt', async () => {
 });
 
 /**
+ * `inputs` end to end: the read side, resolved before anything is spent.
+ *
+ * `test/inputs.test.ts` covers the contract. The two here are the wiring, and the second is the one
+ * that pays for the feature — a declaration the board cannot satisfy must stop the attempt BEFORE
+ * the runtime is called, because finding out afterwards costs a session.
+ */
+test('a declared input is read from the repository and reaches the prompt before the brief', async () => {
+  const b = await db.board.upsert({
+    where: { slug: 'inputs' },
+    update: { repoPath: REPO, dailyBudgetUsd: null, maxConcurrent: 5, pausedAt: null },
+    create: { slug: 'inputs', repoPath: REPO, dailyBudgetUsd: null, maxConcurrent: 5 },
+  });
+  const seen: string[] = [];
+  const spy = {
+    name: 'spy',
+    async run(spec: { prompt: string }) {
+      seen.push(spec.prompt);
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'reads the licence', brief: 'Summarise it.', isolate: false,
+      inputs: [{ name: 'licence', source: 'file:LICENSE' }],
+    },
+  });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'succeeded');
+  assert.match(seen[0], /### `licence`  \(file:LICENSE\)/, 'the input is labelled by name and source');
+  assert.ok(seen[0].indexOf('MIT') < seen[0].indexOf('Summarise it.'),
+    'and it arrives BEFORE the brief that is about it');
+
+  const fed = after.attempts[0].inputs as { name: string; source: string; bytes: number }[];
+  assert.equal(fed.length, 1);
+  assert.equal(fed[0].name, 'licence');
+  assert.ok(fed[0].bytes > 0, 'the catalogue records what the run was fed, never the content');
+});
+
+test('a declared input the board cannot read fails the attempt WITHOUT calling the runtime', async () => {
+  const b = await db.board.findUniqueOrThrow({ where: { slug: 'inputs' } });
+  let called = 0;
+  const spy = {
+    name: 'spy',
+    async run() {
+      called += 1;
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'reads a ghost', brief: 'x', isolate: false, maxRetries: 0,
+      inputs: [{ name: 'gone', source: 'file:no-such-file.md' }],
+    },
+  });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+
+  assert.equal(called, 0, 'the whole point: an unreadable input costs no session');
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts[0].outcome, 'no_input');
+  assert.equal(after.phase, 'failed', 'terminal — the same read fails identically next time');
+  assert.match(after.lastError ?? '', /`gone`/, 'and it names which input');
+});
+
+test('the board input is the arithmetic hkb already computes, and never includes the reading Job', async () => {
+  const b = await db.board.findUniqueOrThrow({ where: { slug: 'inputs' } });
+  const seen: string[] = [];
+  const spy = {
+    name: 'spy',
+    async run(spec: { prompt: string }) {
+      seen.push(spec.prompt);
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'grooms', brief: 'Look at the board.', isolate: false,
+      inputs: [{ name: 'board', source: 'board' }],
+    },
+  });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+
+  assert.match(seen[0], /### `board`  \(board\)/);
+  assert.match(seen[0], /#\d+\s+failed\s+.*reads a ghost/, 'the other Jobs on this board are there');
+  assert.doesNotMatch(seen[0], /grooms/,
+    'and the reading Job is not — a Job reasoning about the board should not find itself listed as running');
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(after.phase, 'succeeded');
+});
+
+/**
  * `artifacts` end to end (ADR-011): the output that is too big to be a result and must not be
  * committed. `test/artifacts.test.ts` covers the contract; these two cover the wiring, and the
  * second is the refusal — same rule as `exports` and `results`, third medium.

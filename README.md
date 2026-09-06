@@ -171,6 +171,23 @@ prose to parse. It is also the only output a Job with no commit to make has — 
 nothing to change"* is a real outcome, and without somewhere to put it such a Job succeeds and leaves only
 a session id.
 
+### What a Job is given
+
+The other direction. **`--input <name>=<source>`** is content the board resolves *before* the run and puts
+in the prompt, ahead of the brief that is about it. Two sources, and neither of them waits:
+
+- **`file:<path>`** — a file in the repository, read from the board's repo rather than the worktree.
+- **`board`** — this board's other Jobs, their phases, attempt counts and outcomes. LLM-free, one read.
+
+An input the board cannot read ends the attempt at `no_input` **without calling the model** — the cheap
+mirror of a missing declared output. A source that names another Job's output is refused: that is an
+ordering edge, and ordering between workloads belongs to a kind whose controller creates them.
+
+The point is not convenience, it is **restriction**. Content in a prompt restrains nothing by itself — a
+worker with `Read` finds whatever it likes. Pair `--input` with an `--allow-tool` list that leaves out
+`Read`, `Glob` and `Grep` and the Job sees exactly what it was given, because the admission gate refuses
+the rest. Neither half is the feature; the pair is.
+
 `--no-isolate` runs the Job in the current checkout rather than a worktree of its own, for work that has no
 business on a branch.
 

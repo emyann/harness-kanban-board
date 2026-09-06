@@ -30,6 +30,7 @@ export const Outcome = {
   refused: 'refused',
   crashed: 'crashed',
   no_output: 'no_output',
+  no_input: 'no_input',
   lost: 'lost',
   stopped: 'stopped'
 } as const

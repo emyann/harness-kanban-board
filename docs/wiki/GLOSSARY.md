@@ -55,6 +55,13 @@ meet one in the git history, that is what it was.
 - **Job** — the primitive kind: one agent, one brief, run to completion, with a retry budget. Spec
   and status in one table; the controller writes only status (`prisma/schema.prisma`). The
   Kubernetes Job it is named after (*architecture/job-kind*).
+- **Input** — content a Job *declares* it will be given (`--input <name>=<source>`), resolved by the
+  controller before the run and placed in the prompt ahead of the brief (`src/inputs.ts`). Two sources,
+  neither of which waits: `file:<repo-relative-path>`, read from `Board.repoPath` and not the worktree,
+  and `board`, the LLM-free board arithmetic. An input that cannot be read ends the attempt at
+  `no_input` before the runtime is called. A source naming another Job's output is refused — that is an
+  ordering edge (*decisions/adr-007-workload-scheduler*). Restriction comes from pairing it with a
+  narrowed **tool surface**, not from the injection itself.
 - **Kind** — a workload's schema plus the controller that advances it. `Job` is the first and only
   one (`prisma/schema.prisma`, `src/controller.ts`); a new kind means a new controller, not just new
   data (*architecture/job-kind*).

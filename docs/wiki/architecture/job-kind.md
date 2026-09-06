@@ -136,9 +136,21 @@ Everything interesting is there:
 
 `maxRetries: 2` means two retries *after* the first go — three attempts in total.
 
-Two outcomes are decided *outside* `nextPhase`, because neither is a fact about how
-the work went: `lost` (the reclaim path above) and `stopped` (the operator stopped
-the daemon mid-run). **`stopped` does not spend a retry** — the attempt number `k`
+Four outcomes are decided *outside* `nextPhase`, because none of them is a fact about
+how the work went — the count was two when this page was written, and the declared
+inputs and outputs added the other pair:
+
+- `lost` — the reclaim path above; nobody ever reported this attempt.
+- `stopped` — the operator stopped the daemon mid-run.
+- `no_output` — the session ended and something the Job **declared** is not there
+  (ADR-008). The runtime thinks it succeeded; the board disagrees.
+- `no_input` — the run never started, because something the Job declared as an
+  **input** could not be read (`src/inputs.ts`). The mirror of `no_output` and the
+  cheap side of it: no session, no tokens. Terminal and not retried, because the same
+  read fails identically next time.
+
+`no_output` and `no_input` are the two that make `succeeded` mean more than "a session
+ended". **`stopped` does not spend a retry** — the attempt number `k`
 still advances, being half the Attempt's primary key, so `reconcile` counts the
 retry budget separately from the attempt count (`src/controller.ts`). Without that
 split a Job with `maxRetries: 0` could be made permanently unrunnable by nothing

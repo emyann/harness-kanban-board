@@ -68,6 +68,10 @@ enum Outcome {
   no_output   // the session ended, but a path the Job DECLARED is not there. Not a crash and not a
               // refusal: the process did what it was asked and the contract still was not met, which
               // is the outcome ADR-008 exists to make expressible.
+  no_input    // the run never started: an input the Job DECLARED could not be read. The mirror of
+              // `no_output` on the read side, and a separate value because the two send an operator
+              // to different places — `no_output` is a fault in the work, `no_input` is a fault in
+              // the spec or in the repository, and it cost nothing to find out.
   lost        // the lease expired with nobody reporting — the attempt was never heard from again
   stopped     // the operator stopped the daemon mid-run. Resumable, and it does NOT spend a retry:
               // `kb down` is not a failure of the work, and charging one would mean a Job could be
@@ -219,6 +223,21 @@ model Job {
   /// `results` is for small structured values the board keeps and a later reader consumes — a
   /// finding, a decision, a URL. Capped at 4 KB each (`src/results.ts`), because a handoff that can
   /// hold a megabyte is a worse artifact store than the one `exports` already is.
+  /// What this Job is GIVEN: a JSON array of `{ name, source }`, resolved by the controller before
+  /// the run and rendered into the prompt (`src/inputs.ts`). ADR-008 declared what a Job produces
+  /// and left what it consumes as `brief` — one static string.
+  ///
+  /// Two sources, and neither of them waits: `file:<repo-relative-path>` reads the repository, and
+  /// `board` is the LLM-free board arithmetic ADR-010 decision 5 described. An input that read
+  /// another Job's output would be `Job.after` with a payload, and that was rejected rather than
+  /// deferred (`docs/workflow-study.md` §2) — ordering between workloads belongs to a kind.
+  ///
+  /// The point is **context restriction**, not convenience: paired with an `allowedTools` that
+  /// excludes `Read`/`Glob`/`Grep`, a Job sees what it was given and cannot reach further, because
+  /// the admission gate refuses the rest. Injection alone restricts nothing.
+  ///
+  /// An input that cannot be read fails the attempt BEFORE the run — `Outcome.no_input`, no money.
+  inputs       Json?
   results      Json?
   /// The files this Job must produce: a JSON array of names, each one path segment. The third
   /// declared output, and the gap between the other two (ADR-011).
@@ -373,6 +392,15 @@ model Attempt {
   /// which is richer and guarantees nothing; requiring everything is the opposite failure, where a
   /// Job cannot say it noticed something nobody thought to ask about.
   results Json?
+
+  /// The catalogue of what this attempt was GIVEN, as `[{ name, source, bytes }]` — never the
+  /// content, which is in the prompt and in the transcript the session id points at. Null for an
+  /// attempt that declared none.
+  ///
+  /// Recorded because it is the measurement Artic's claim needs and hkb cannot otherwise make: what
+  /// a run was fed, beside what it cost (`costUsd`, `turns`). Without it, "declared inputs reduce
+  /// input tokens" stays a thing read in a paper.
+  inputs Json?
 
   /// The catalogue of what this attempt left in its artifact directory, as
   /// `[{ name, kind, bytes }]` (ADR-011, `src/artifacts.ts`). Null, not `[]`, for an attempt that

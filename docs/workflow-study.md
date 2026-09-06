@@ -241,6 +241,18 @@ The honest caveat on all of it: hkb's entire verification vocabulary is **presen
 `gh pr list --head`, a result present or missing. Presence is cheap, which is ADR-008's selling point,
 and it is exactly the wrong instrument for the outputs that make a multi-step workflow worth having.
 
+**The read side shipped, 2026-09-06, and building it settled one thing the paper leaves open: where the
+restriction is enforced.** Injecting declared content restricts nothing on its own — a worker with
+`Read` goes and finds whatever it likes, and this document's own layer table puts prompt text at layer
+6. What makes hkb's version a restriction is that it **composes with a layer that can refuse**: a Job
+declared with `--input` and an `--allow-tool` list that excludes `Read`, `Glob` and `Grep` sees exactly
+what it was given, because `src/admission.ts` denies the rest at layer 2. Neither half is the feature;
+the pair is. That is §4's rule applied to the read side rather than the write side.
+
+Two sources ship, and **neither waits**: `file:<repo-relative-path>` and `board` — the LLM-free board
+arithmetic ADR-010 decision 5 described. The source everybody reaches for first, another Job's output,
+is refused *by name* with a message pointing at §2, because it is `Job.after` with a payload.
+
 ## 8. Hermes, the ancestor — what it solved and where hkb must differ
 
 hkb was originally described as a portable, frugal Hermes-style kanban, so Hermes is the one prior art
@@ -428,3 +440,13 @@ That dissolves the risk ADR-010 recorded against itself — *if groom's apply ha
 closer to the DAG than to a field* — because the apply half turns out to be the controller's either way.
 It also picks up §7's read side (see Q4 above) and leaves §6's contradiction exactly where it was:
 creation *without* ordering is `CronJob`-shaped and settles nothing about the DAG.
+
+**ADR-012 — a worker gets a repository's skills by grant, never its settings.** Not a question this
+study asked, and it belongs here because the answer came the same way the rest of §7 did: by measuring
+instead of reasoning. `plugins: [{type:'local', path}]` reaches a repository's own skills with
+`settingSources` still empty, so the coupling the rebuild plan recorded was never real.
+
+**And the read side itself, shipped rather than recorded.** `Job.inputs` — see §7 above. It needed no
+ADR: the study asked for it, Q4 answered it, and ADR-011 named it as its own missing half. The one
+boundary it draws was already drawn here in §2, and the code now enforces it with a refusal that cites
+this document.

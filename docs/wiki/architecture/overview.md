@@ -20,6 +20,10 @@ covers:
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/artifacts.ts
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
+  - path: src/inputs.ts
+    sha: 651021115ccfa46b6eef97e4b7b1c0e0619c291c
+  - path: src/brief.ts
+    sha: e1326185ad6379bbb34cd6e4e02f0f89db393162
   - path: src/worktree.ts
     sha: e4094d7fae517cca708273ddff3007bfc508d10b
   - path: src/pulls.ts
@@ -62,6 +66,7 @@ seam or 36 CLI verbs is describing code that is gone.
 | `src/admission.ts` | the `PreToolUse` gate that makes worktree isolation and the tool surface invariants rather than instructions |
 | `src/results.ts` | the named values a Job hands on, when its output is not a diff |
 | `src/artifacts.ts` | the files a Job hands on that the board keeps and the repository does not |
+| `src/inputs.ts` | what a Job is given: the read side, resolved before the run |
 | `src/pulls.ts` | the only thing that shells out to `gh` |
 
 ## State lives in the board, and only there
@@ -148,6 +153,24 @@ written and for the same stated reason — so an output that must not be committ
 be committed by accident, and there is no copy step to get wrong. What lands on the Attempt is only the
 *catalogue* (name, kind, size); the file stays where the worker put it and **is never removed**, because
 nothing else holds it. That is why `hkb show` prints a size and a directory rather than a name alone.
+
+### What a Job is given
+
+The other direction, and the half ADR-008 never had: `inputs` (`--input <name>=<source>`) are content
+the controller resolves **before the run** and puts in the prompt, ahead of the brief that is about
+them (`src/inputs.ts`, `src/brief.ts`). Two sources, and neither of them waits — `file:<repo-relative>`
+reads the board's repository, and `board` is the LLM-free board arithmetic. An input the board cannot
+read ends the attempt at `no_input` **without calling the runtime**, which is the cheap mirror of
+`no_output`.
+
+The reason it is not just convenience is that it composes with a guard. Content in a prompt restricts
+nothing by itself — a worker with `Read` finds whatever it likes. A Job declared with its inputs *and*
+an `allowedTools` list without `Read`, `Glob` or `Grep` sees what it was given and cannot reach
+further, because `src/admission.ts` refuses the rest. That pairing is what
+`docs/workflow-study.md` §7 calls the read side.
+
+A source that reads another Job's output is **refused by name**: that is an ordering edge, and ordering
+between workloads belongs to a kind whose controller creates them, not to a field.
 
 A run may also **volunteer** a result or an artifact: anything it writes beside the declared ones is kept
 and never required. The difference between the two layers is what is *enforced*, not what is stored — a

@@ -122,6 +122,7 @@ export const JobScalarFieldEnum = {
   pluginPaths: 'pluginPaths',
   maxRetries: 'maxRetries',
   exports: 'exports',
+  inputs: 'inputs',
   results: 'results',
   artifacts: 'artifacts',
   gate: 'gate',
@@ -157,6 +158,7 @@ export const AttemptScalarFieldEnum = {
   exported: 'exported',
   costUsd: 'costUsd',
   results: 'results',
+  inputs: 'inputs',
   artifacts: 'artifacts',
   turns: 'turns',
   denials: 'denials'

@@ -5,8 +5,11 @@ import {
   type Worktree,
 } from './worktree.ts';
 import { prForBranch } from './pulls.ts';
-import { approvedPrompt, withArtifacts, withProtocol, withResults } from './brief.ts';
+import { approvedPrompt, withArtifacts, withInputs, withProtocol, withResults } from './brief.ts';
 import { resolvePlugins } from './plugins.ts';
+import {
+  declaredInputs, readFileInput, renderBoard, missingInputs, type ResolvedInput, type BoardRow,
+} from './inputs.ts';
 import {
   declaredResults, resultPaths, ensureResultsDir, collectResults, clearResults, missingResults,
 } from './results.ts';
@@ -143,7 +146,7 @@ const LEASE_GRACE_MS = 5 * 60_000;
  */
 export type Decision = {
   phase: 'succeeded' | 'failed' | 'pending' | 'suspended';
-  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output';
+  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output' | 'no_input';
   resumable: boolean;
   /**
    * What to write on the Job's `lastError`, when the reason it stopped is something a *human* has
@@ -622,10 +625,56 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     const granted = resolvePlugins(cwd, spec.pluginPaths.value);
     const grantedPlugins = granted.paths.length ? granted.paths : undefined;
     if (granted.dropped.length) say(`granted plugin path${granted.dropped.length === 1 ? '' : 's'} not found: ${granted.dropped.join(', ')}`);
+    // ---- the declared INPUTS, resolved before anything is spent. ADR-008 said what a Job produces
+    // and left what it consumes as one static string; this is the other half
+    // (`src/inputs.ts`, `docs/workflow-study.md` §7).
+    //
+    // Against `cwd` — the board's repository — and never the worktree, for the same reason a plugin
+    // grant is: the worktree carries this Job's own edits on a resumed attempt, and a Job that fed
+    // itself its own output would be reading a different document each time it woke up.
+    const wantedInputs = declaredInputs(job.inputs);
+    const readInputs: ResolvedInput[] = [];
+    const unread: { name: string; source: string; why: string }[] = [];
+    for (const want of wantedInputs) {
+      if (want.source === 'board') {
+        // One board read, no model, and the projection `hkb ls` already computes — ADR-010 decision
+        // 5's "board arithmetic". Every OTHER Job on this board, so a Job reasoning about the board
+        // is not confused by finding itself listed as `running`.
+        const others = await db.job.findMany({
+          where: { boardId: job.boardId, id: { not: job.id } },
+          orderBy: { id: 'asc' },
+          select: {
+            id: true, name: true, phase: true, exports: true, results: true, artifacts: true,
+            _count: { select: { attempts: true } },
+            attempts: { select: { prUrl: true, outcome: true }, orderBy: { k: 'desc' }, take: 1 },
+          },
+        });
+        const rows: BoardRow[] = others.map((o) => ({
+          id: o.id,
+          name: o.name,
+          phase: o.phase,
+          attempts: o._count.attempts,
+          lastOutcome: o.attempts[0]?.outcome ?? null,
+          producedNothing: o.phase === 'succeeded' && !o.attempts[0]?.prUrl
+            && !declaredExports(o.exports).length && !declaredExports(o.results).length
+            && !declaredExports(o.artifacts).length,
+        }));
+        readInputs.push({ name: want.name, source: want.source, text: renderBoard(rows) });
+        continue;
+      }
+      const got = readFileInput(cwd, want.source.slice(5));
+      if ('why' in got) unread.push({ ...want, why: got.why });
+      else readInputs.push({ name: want.name, source: want.source, text: got.text });
+    }
+    // A declaration the board cannot satisfy stops the attempt HERE, before the runtime is called:
+    // the run would be given less than the Job was filed with, and finding that out afterwards costs
+    // a session. This is `no_output`'s mirror, and the cheap side of it.
+    const inputShortfall = missingInputs(job.id, unread);
+    if (inputShortfall) deps.onEvent?.(`  ${inputShortfall}`);
 
     // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
     // starting cold, which is the whole reason that column exists.
-    const outcome = await deps.runtime
+    const outcome = inputShortfall ? null : await deps.runtime
       .run({
         taskId: job.id,
         attempt: k,
@@ -640,9 +689,12 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // What this attempt is asked to do. Normally the brief; after an approval, the approver's
         // own instruction — which is the whole of ADR-010 decision 4. A resumed attempt otherwise
         // re-sends the same brief, so an approved Job would propose again instead of applying.
-        prompt: withArtifacts(
-          withResults(approvalPrompt ?? (wt ? withProtocol(job.brief, wt.branch) : job.brief), wantedResults),
-          wantedArtifacts,
+        prompt: withInputs(
+          withArtifacts(
+            withResults(approvalPrompt ?? (wt ? withProtocol(job.brief, wt.branch) : job.brief), wantedResults),
+            wantedArtifacts,
+          ),
+          readInputs,
         ),
         // All four from the resolved spec: a Job that named none of them still has to run on
         // something, and the board is now allowed to be the one that says what.
@@ -678,7 +730,12 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // The operator's intent outranks whatever the runtime made of being cut off. A stopped run
     // reports `timeout` or `error` depending on where the abort landed, and recording either would
     // be a lie about why it ended AND would spend a retry on it.
-    const ran: Decision = deps.signal?.aborted
+    const ran: Decision = inputShortfall
+      // Terminal, and not retried, for the reason a missing declared OUTPUT is not: the same read
+      // fails identically next time. `hkb retry` is the deliberate second go, once a human has read
+      // which input is missing and decided whose mistake it was.
+      ? { phase: 'failed', outcome: 'no_input', resumable: false, lastError: inputShortfall }
+      : deps.signal?.aborted
       ? { phase: 'pending', outcome: 'stopped', resumable: true, lastError: null }
       // Both from the resolved spec, so the budget advice names the cap this attempt actually ran
       // under — which may be the board's. Quoting the raw column would print `$0.00` and send the
@@ -822,6 +879,12 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         ...(exported ? { exported } : {}),
         ...(produced ? { results: produced } : {}),
         ...(artifacts ? { artifacts } : {}),
+        // The catalogue, never the content — that is in the prompt and in the transcript the
+        // session id points at. It is what makes "declared inputs reduce input tokens" a thing this
+        // board can check rather than a thing read in a paper.
+        ...(readInputs.length
+          ? { inputs: readInputs.map((i) => ({ name: i.name, source: i.source, bytes: Buffer.byteLength(i.text) })) }
+          : {}),
       },
     });
 
