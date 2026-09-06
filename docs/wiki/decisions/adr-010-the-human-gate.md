@@ -1,6 +1,6 @@
 ---
 title: 'ADR-010: The human gate is a field, not a kind — and groom is a brief'
-summary: "propose → approve → apply does not need a second workload kind: a Job declares `results`, a `gate` on its spec suspends it once those results exist, and `hkb approve` resumes the session with the operator's instruction as the prompt. Groom becomes a brief plus board arithmetic. ADR-008's unshipped `results` half ships as the precondition it was always named as."
+summary: "propose → approve → apply does not need a second workload kind: a Job declares `results`, a `gate` on its spec suspends it once those results exist, and approve resumes the session with the approver's instruction as the prompt. The approver may be a human, a delegated agent, or an auto-approve policy. Groom becomes a brief plus board arithmetic; ADR-008's unshipped `results` half ships as the precondition it was always named as; and whether a *running* Job can be steered stays open, because that is a streaming-input decision the gate does not need."
 category: decisions
 kind: decision
 audience: [dev]
@@ -86,6 +86,13 @@ which is why it genuinely is a kind. Groom does none of them.
    `endedBy`/`endedFor` pair `hkb cancel` already writes — a decision a person made, which nothing
    can recompute. Approve re-queues the Job.
 
+   **The approver is a seat, not necessarily a person.** Three fillers, one mechanism: a human at a
+   terminal; an *agent the human delegated to*, which is what the retired `/kanban:operate` command
+   was and the reason that seat is worth rebuilding rather than mourning; and an **auto-approve
+   policy**, for a workflow whose gate exists to wait on something external rather than on a
+   judgement. All three write the same row and resume the same session, so the gate does not have to
+   know which one answered — and `endedBy` already carries who did.
+
 4. **Approval is a resumed session carrying an authoritative instruction.** This is the part that
    makes the gate work rather than merely pause. Today a resumed attempt re-sends
    `withProtocol(job.brief, branch)` — the *same brief* — so an approved Job would propose again
@@ -108,13 +115,31 @@ groom kind would make it unavailable to every Job that already exists. As a spec
 radius earns a second pair of eyes. That is the plan's own test — "what generalises between them is
 real" — answered by finding that the generalisable part was never groom-shaped.
 
-**It resolves an open tension rather than dodging it.** "Decided: single-message input stays" concluded
-that streaming's unique contribution is *authority* — an `SDKUserMessage` carries `role:"user"` where
-hook-delivered text was refused as untrusted — and that **"a Job has no human present to author an
-authoritative instruction, so the one thing streaming adds is the one thing this kind cannot use."**
-A gated Job *does* have such a human. But the instruction arrives **between sessions, as the prompt of
-a resumed one**, not mid-session. So single-message input still stands, and the gate turns out to be
-the shape that gets human authority into a Job without needing streaming at all.
+**It answers half of an open tension, and the other half stays open — deliberately.** "Decided:
+single-message input stays" concluded that streaming's unique contribution is *authority*, and that
+**"a Job has no human present to author an authoritative instruction, so the one thing streaming adds
+is the one thing this kind cannot use."** A gated Job *does* have such a human, so that premise no
+longer holds. But it would be too neat to say the gate settles the input question, so here is what
+the SDK's own types say, checked at `0.3.261` rather than remembered:
+
+| | single-message (`prompt: string`) | streaming (`prompt: AsyncIterable<SDKUserMessage>`) |
+|---|---|---|
+| a second message into a live session | **only at a stop boundary**, via a `Stop` hook's `additionalContext` — "non-error feedback delivered to the model; the conversation continues so the model can act on it" | any time |
+| delivered *mid-turn*, between tool rounds | no | **yes** — a queued message is folded into the running turn |
+| `role: "user"` authority | no. Hook-authored, and a worker has already refused such text as untrusted | **yes** |
+| `priority: now / next / later`, `shouldQuery: false` | no | yes |
+
+There is **no `send()` on the `Query` handle** — the exported surface is `query()` plus session
+utilities, and every control request (`interrupt`, `setModel`, `setPermissionMode`) changes *settings*,
+never content. The prompt iterable is the only inbound path for a message.
+
+So the gate covers the **asynchronous** case completely and needs no streaming: the Job stops, someone
+or something decides, and the instruction arrives as the prompt of a resumed session — with full
+authority, because it *is* the prompt. What the gate does not give is **steering a run that is still
+going**. That remains streaming-only for mid-turn delivery, with the `Stop`-hook path as a real
+intermediate: steering at a stop boundary, using a hook layer `src/admission.ts` already establishes.
+For a batch Job, a stop boundary may well be the right granularity — but that is a measurement nobody
+has taken, and this record does not pretend to have taken it.
 
 **The plan's "After the gate" item 3 is answered, not deleted.** Groom still happens; it stops being a
 kind. The list becomes: the gate (this record), then the DAG, then integration. The DAG remains a real
@@ -138,6 +163,15 @@ that is workload-creating behaviour and a controller's job — and groom would b
 than to a field. The mitigation is that we will find out by writing the brief, which costs a brief; and
 that nothing here forecloses a kind later, because `results` and the gate are what such a kind would
 have needed anyway.
+
+**What this record deliberately leaves for its own decision.** Whether hkb adopts streaming input, and
+therefore whether a running Job can be steered mid-turn, is not settled here — the gate needs none of
+it, and deciding it as a side effect of building the gate is how a structural choice gets made by
+accident. The two are the same axis at different latencies (*wait for input at a defined point* versus
+*accept input at any point*), so the gate is the cheap end of it and should be built first: it makes
+the seat real, gives the delegated approver and the auto-approve policy somewhere to write, and
+produces the operational evidence — how often does anyone want to intervene, and at what point — that
+the streaming question needs and does not currently have.
 
 <!-- Dual mutability: once status: accepted, NEVER rewrite this record.
 When the decision changes, write a new ADR, set its `supersedes`, and set
