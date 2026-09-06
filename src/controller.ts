@@ -678,6 +678,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // it did, and the runtime has no error of its own to report — it thinks it succeeded.
         reason: (shortfall ?? outcome?.error)?.slice(0, 300) ?? null,
         costUsd: outcome?.costUsd ?? null,
+        // Measured by the runtime, not reported by the agent. An attempt that never reached the
+        // runtime has no measurement rather than a measurement of zero, hence `?? null`.
+        turns: outcome?.turns ?? null,
+        denials: outcome?.denials ?? null,
         branch: wt?.branch ?? null,
         prNumber: pr?.number ?? null,
         prUrl: pr?.url ?? null,
