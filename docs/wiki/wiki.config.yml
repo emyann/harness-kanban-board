@@ -73,7 +73,7 @@ pages:
     status: seeded
   - slug: concepts/ceilings
     summary: "The three claim-time refusals (stopped, concurrency, budget), why none of them may stop a running worker, and why committed-but-unspent budget has to be counted."
-    status: planned
+    status: seeded
   - slug: decisions/adr-013-the-guide-is-read-not-loaded
     summary: "ADR-012 refused settingSources and named the cost; this reads the guide itself instead — a grant, from Board.repoPath, prepended as instruction — and stops workers inheriting the operator's MCP connectors."
     status: seeded
