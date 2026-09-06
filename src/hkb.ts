@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import { openBoard, closeBoard } from './db.ts';
 import { reconcile } from './controller.ts';
 import { checkExportPath } from './worktree.ts';
+import { checkResultName, RESULT_MAX_BYTES } from './results.ts';
 import { fakeRuntime } from './runtime/fake.ts';
 import * as daemon from './daemon.ts';
 import { EFFORTS, boardDefaults, hasDefaults, resolveSpec, type SpecSource } from './spec.ts';
@@ -47,6 +48,9 @@ const HELP = `hkb — run one agent against one brief
        --export <path>  a file or directory the Job must produce, repo-relative. It is
                         copied into the repository before the worktree is torn down, and
                         a declared path the run did not write fails the attempt. Repeatable.
+       --result <name>  a named value the Job must produce — a finding, a decision, a URL.
+                        The board keeps it on the attempt and \`hkb show\` prints it, so a Job
+                        that makes no commit still leaves something behind. Repeatable.
        --board <slug>   default: default
 
   hkb ls                    what is on the board        [--phase p] [--board s]
@@ -116,17 +120,20 @@ function packageVersion(): string {
  * runs in the operator's own checkout. But the absence has to be legible, or a board of fifty
  * succeeded Jobs where five produced nothing reads as uniform.
  *
- * Two things count, and they are the two ADR-008 names. A **pull request** on any attempt. And a
- * **declared export** — which counts without being re-checked here, because a declared path the run
- * did not write already fails the attempt (`checkExportPath`/`copyIncluded`, `src/worktree.ts`), so
- * a Job that reached `succeeded` with exports declared produced them by construction.
+ * Three things count, and they are ADR-008's own list. A **pull request** on any attempt. A
+ * **declared export**, and a **declared result** — both of which count without being re-checked
+ * here, because a declared output the run did not produce already fails the attempt
+ * (`src/worktree.ts`, `src/results.ts`), so a Job that reached `succeeded` having declared either
+ * produced it by construction.
  *
  * Pure, and asked only of a Job that succeeded. A failed, cancelled or `done` Job producing nothing
  * is not news — marking those would be noise, which is how a signal stops being read.
  */
-export function producedNothing(job: { phase: string; pr: string | null; exports: string[] }): boolean {
+export function producedNothing(
+  job: { phase: string; pr: string | null; exports: string[]; results?: string[] },
+): boolean {
   if (job.phase !== 'succeeded') return false;
-  return !job.pr && job.exports.length === 0;
+  return !job.pr && job.exports.length === 0 && (job.results?.length ?? 0) === 0;
 }
 
 /** A Job's declared exports, from the `Json?` column, defensively. */
@@ -327,6 +334,8 @@ export async function main(argv: string[]): Promise<number> {
       // Repeatable: a Job with two deliverables declares two paths, and the alternative — one
       // comma-separated string — makes a filename containing a comma undeclarable.
       export: { type: 'string', multiple: true },
+      // Repeatable for the same reason `--export` is: a Job with two named values declares two.
+      result: { type: 'string', multiple: true },
       // Repeatable, for the same reason `--export` is: a tool name is a token, and one
       // comma-separated string makes the empty list ("this Job may call nothing") unsayable.
       'allow-tool': { type: 'string', multiple: true },
@@ -401,6 +410,10 @@ export async function main(argv: string[]): Promise<number> {
       // worktree is an illegal request, and an illegal request should never become state. The same
       // check runs again at copy time, because a row can arrive by other routes than this one.
       const exports = ((values.export as string[] | undefined) ?? []).map(checkExportPath);
+      // Checked at file time, before a worktree exists — a name that cannot be a filename or a JSON
+      // key is a fault in the spec, and finding it here costs nothing while finding it later costs
+      // a run.
+      const results = ((values.result as string[] | undefined) ?? []).map(checkResultName);
       // Null when the flag was absent, so the board's default can answer. An EMPTY list is only
       // reachable through `--allow-tools ""`, and it means what it says: no tools at all.
       const allowedTools = values['allow-tool'] !== undefined
@@ -414,6 +427,7 @@ export async function main(argv: string[]): Promise<number> {
           // Null rather than `[]` for a Job that declares nothing: "produces no file" and "produced
           // none of the files it promised" are different facts, and only the second is a failure.
           ...(exports.length ? { exports } : {}),
+          ...(results.length ? { results } : {}),
           model: (values.model as string) ?? null,
           effort: effort ?? null,
           isolate: !values['no-isolate'],
@@ -429,9 +443,10 @@ export async function main(argv: string[]): Promise<number> {
       await db.event.create({
         data: { kind: 'created', jobId: job.id, boardId: board.id, actor: whoami(), payload: { name } },
       });
-      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports }, () =>
+      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results }, () =>
         console.log(`#${job.id} ${job.name}  [${job.phase}]  on ${slug}`
-          + (exports.length ? `\n  must produce  ${exports.join(', ')}` : '')));
+          + (exports.length ? `\n  must produce  ${exports.join(', ')}` : '')
+          + (results.length ? `\n  must report   ${results.join(', ')}` : '')));
       return 0;
     }
 
@@ -462,6 +477,7 @@ export async function main(argv: string[]): Promise<number> {
       });
       const rows = jobs.map((j) => {
         const exports = declaredExports(j.exports);
+        const results = declaredExports(j.results);
         const pr = j.attempts.find((a) => a.prUrl)?.prUrl ?? null;
         return {
           id: j.id, board: j.board.slug, name: j.name, phase: j.phase, attempts: j._count.attempts,
@@ -469,7 +485,8 @@ export async function main(argv: string[]): Promise<number> {
           // Carried on every row, whatever the phase, for the reason `hkb boards` carries its
           // defaults either way: a consumer inferring absence from a missing key reads a shape,
           // not a record.
-          pr, exports, producedNothing: producedNothing({ phase: j.phase, pr, exports }),
+          pr, exports, results,
+          producedNothing: producedNothing({ phase: j.phase, pr, exports, results }),
         };
       });
       emit(out, rows, () => {
@@ -485,7 +502,7 @@ export async function main(argv: string[]): Promise<number> {
         const empty = rows.filter((r) => r.producedNothing).length;
         if (empty) {
           console.log(`\n${empty} of ${rows.filter((r) => r.phase === 'succeeded').length} succeeded `
-            + `${empty === 1 ? 'Job' : 'Jobs'} produced no pull request and declared no exports.`);
+            + `${empty === 1 ? 'Job' : 'Jobs'} produced no pull request and declared no outputs.`);
         }
       });
       return 0;
@@ -549,6 +566,7 @@ export async function main(argv: string[]): Promise<number> {
         // What it must produce, beside how it runs — the half of the spec ADR-008 added, and the
         // one that decides whether a completed session counts as a success.
         if (Array.isArray(job.exports) && job.exports.length) console.log(`  exports  ${job.exports.join(', ')}`);
+        if (Array.isArray(job.results) && job.results.length) console.log(`  results  ${job.results.join(', ')}`);
         if (job.lastError) console.log(`  error    ${job.lastError}`);
         if (job.lastSessionId) console.log(`  resume   ${job.lastSessionId}`);
         console.log(`  brief    ${job.brief.split('\n')[0].slice(0, 88)}${job.brief.length > 88 ? ' …' : ''}`);
@@ -573,6 +591,15 @@ export async function main(argv: string[]): Promise<number> {
           // the runtime measured it — an attempt refused at the gate has no turn count, and `0 turns`
           // would be a claim about a run that never happened. Denials are shown only when non-zero:
           // a refusal is news, and "0 refusals" on every line is not.
+          // What the run reported, which for a Job with no commit is the whole of its output. One
+          // line per value, indented under its attempt, truncated where a value is long — the full
+          // text is on the row for `--json`, and a screen is for orientation.
+          if (a.results && typeof a.results === 'object') {
+            for (const [name, value] of Object.entries(a.results as Record<string, string>)) {
+              const flat = String(value).replace(/\s+/g, ' ').trim();
+              console.log(`           ${name}: ${flat.length > 96 ? `${flat.slice(0, 96)}…` : flat}`);
+            }
+          }
           if (a.turns != null) {
             const denied = a.denials ? `, ${a.denials} tool refusal${a.denials === 1 ? '' : 's'}` : '';
             console.log(`           ${a.turns} turn${a.turns === 1 ? '' : 's'}${denied}`);

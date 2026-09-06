@@ -196,6 +196,15 @@ model Job {
   /// reason the declaration is worth writing down, and without it this is a copy loop rather than a
   /// contract. Null, not `[]`, for a Job that produces nothing outside git.
   exports      Json?
+  /// The named values this Job must produce: a JSON array of plain identifiers (ADR-008's other
+  /// half). The controller gives the worker a path per name, reads each back onto the Attempt when
+  /// the run ends, and fails the attempt for one that is missing — the same rule `exports` follows.
+  ///
+  /// This is what a Job produces when it is NOT coupled to a commit. `exports` is for files;
+  /// `results` is for small structured values the board keeps and a later reader consumes — a
+  /// finding, a decision, a URL. Capped at 4 KB each (`src/results.ts`), because a handoff that can
+  /// hold a megabyte is a worse artifact store than the one `exports` already is.
+  results      Json?
 
   // ---- status: what is happening. Written only by the controller.
   phase         Phase   @default(pending)
@@ -312,6 +321,11 @@ model Attempt {
   ///
   /// Nullable because an attempt that never reached the runtime — refused at the gate, crashed
   /// before the call — has no measurement rather than a measurement of zero.
+  /// What this attempt produced, as `{ name: value }` — the values the Job declared in `results`,
+  /// read out of the collection directory before it is removed. Null, not `{}`, for an attempt that
+  /// declared nothing: the two are different facts and only one of them is a promise kept.
+  results Json?
+
   turns   Int?
   /// How often the admission gate refused this run a tool. A non-zero count on a succeeding attempt
   /// is the signal that a Job's `allowedTools` is narrower than its brief needs.

@@ -1109,6 +1109,8 @@ test('producedNothing refuses every Job that left something behind', () => {
   assert.equal(producedNothing({ ...bare, pr: 'https://github.com/x/y/pull/1' }), false, 'a pull request is an artifact');
   assert.equal(producedNothing({ ...bare, exports: ['docs/report.md'] }), false,
     'a declared export counts without re-checking: a path the run did not write already failed the attempt');
+  assert.equal(producedNothing({ ...bare, results: ['finding'] }), false,
+    'and so does a declared result — the output of a Job that makes no commit at all');
 
   // Only `succeeded` is news. A failed Job with nothing to show is not a finding, and marking it
   // would be the noise that stops a signal being read.
@@ -1147,7 +1149,7 @@ test('hkb ls says so when a succeeded Job produced nothing, and stays quiet when
   const line = (id: number) => out.split('\n').find((l) => l.includes(`#${id}`)) ?? '';
   assert.match(line(empty.id), /produced nothing/, 'the absence is on the row, not only in `hkb show`');
   assert.doesNotMatch(line(shipped.id), /produced nothing/, 'and a Job that shipped is not accused of it');
-  assert.match(out, /1 of 2 succeeded Jobs? produced no pull request and declared no exports\./,
+  assert.match(out, /1 of 2 succeeded Jobs? produced no pull request and declared no outputs\./,
     'and the count is the aggregate the finding asked for');
 
   const rows = json((await hkb('ls', '--board', 'produced-nothing', '--json')).out) as

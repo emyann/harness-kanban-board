@@ -35,3 +35,34 @@ export function withProtocol(brief: string, branch: string): string {
     '    plainly what is unfinished. Work that is not pushed is work that is lost.',
   ].join('\n');
 }
+
+/**
+ * The results contract, appended to whatever brief the Job already has.
+ *
+ * Separate from `withProtocol` on purpose: that one is the *pull request* protocol and is applied
+ * only to an isolated Job, because only an isolated Job has a branch. Results are the opposite case
+ * — they matter most to a Job that produces no commit at all — so this is applied to both.
+ *
+ * The paths are absolute and outside every checkout (`src/results.ts`), so writing one cannot land
+ * in the worker's diff. Stated as a hard requirement rather than a suggestion, because the
+ * controller enforces it: a declared result that is not written fails the attempt.
+ */
+export function withResults(brief: string, paths: Record<string, string>): string {
+  const names = Object.keys(paths);
+  if (!names.length) return brief;
+  return [
+    brief.trimEnd(),
+    '',
+    '---',
+    '',
+    `This Job must produce ${names.length === 1 ? 'one result' : `${names.length} results`}. Write each one to the`,
+    'exact path given, as plain text, before you finish:',
+    '',
+    ...names.map((n) => `  - \`${n}\` → \`${paths[n]}\``),
+    '',
+    'These are small values the board keeps and hands to whoever reads this Job next — a finding, a',
+    'decision, a URL. Keep each under 4 KB; anything larger belongs in the repository as a file.',
+    'A declared result you do not write fails the attempt, so if the honest answer is "nothing",',
+    'write that.',
+  ].join('\n');
+}
