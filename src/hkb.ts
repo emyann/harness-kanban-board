@@ -9,7 +9,7 @@ import { checkExportPath } from './worktree.ts';
 import { checkResultName, RESULT_MAX_BYTES } from './results.ts';
 import { checkArtifactName, artifactsDir, bytes } from './artifacts.ts';
 import { checkPluginPath, pluginList } from './plugins.ts';
-import { checkInputSpec, declaredInputs } from './inputs.ts';
+import { checkInputSpec, declaredInputs, renderBrief } from './inputs.ts';
 import { fakeRuntime } from './runtime/fake.ts';
 import * as daemon from './daemon.ts';
 import { EFFORTS, boardDefaults, hasDefaults, resolveSpec, type SpecSource } from './spec.ts';
@@ -58,11 +58,15 @@ const HELP = `hkb — run one agent against one brief
                         \`.claude\`. Resolved against the board's REPOSITORY, never the worktree,
                         so only a merge changes what it loads. Repeatable; it grants what a
                         worker may READ, and nothing about what it may do.
-       --input <n=src>  what the Job is GIVEN, repeatable. Source is \`file:<repo-path>\` or
-                        \`board\` (this board's Jobs, phases and outcomes). Read before the run and
-                        put in the prompt; an input the board cannot read fails the attempt
+       --input <n=src>  what the Job is GIVEN, repeatable. Three sources: \`file:<repo-path>\`,
+                        \`board\` (this board's Jobs, phases and outcomes), and \`value:<literal>\`
+                        for a caller that has a payload rather than a path. Read before the run
+                        and put in the prompt; an input the board cannot read fails the attempt
                         without spending one. Narrow --allow-tool alongside it and the Job sees
                         what it was given and no more.
+                        A \`value:\` input may also be interpolated into the brief as {{name}} or
+                        {{name.field}} — whichever way the brief arrived. Only \`value:\`, because
+                        the brief is instruction and a fetched source is data.
        --result <name>  a named value the Job must produce — a finding, a decision, a URL.
                         The board keeps it on the attempt and \`hkb show\` prints it, so a Job
                         that makes no commit still leaves something behind. Repeatable.
@@ -462,7 +466,18 @@ export async function main(argv: string[]): Promise<number> {
       // Checked at file time like every other declaration, and for the sharpest version of the same
       // reason: this one names a file the BOARD will read with the operator's authority and put in
       // front of a model. A source that was never legal must not become state.
-      const inputs = ((values.input as string[] | undefined) ?? []).map(checkInputSpec);
+      let inputs = ((values.input as string[] | undefined) ?? []).map(checkInputSpec);
+      // The brief is rendered HERE, against the `value:` inputs only, so what the board stores is
+      // what the run is given — `hkb show` and the prompt cannot disagree. It applies to whichever
+      // way the brief arrived: `--brief`, `--brief-file` or stdin all land in one string above.
+      const supplied = new Map(
+        inputs.filter((i) => i.source.startsWith('value:')).map((i) => [i.name, i.source.slice(6)]),
+      );
+      const rendered = renderBrief(brief, supplied, new Set(inputs.map((i) => i.name)));
+      // A value that went into the brief does not also arrive as a data block. Dropping it here
+      // rather than remembering it keeps the run path with one rule: everything in `inputs` is
+      // rendered, and nothing is rendered twice.
+      inputs = inputs.filter((i) => !rendered.used.has(i.name));
       const gate = typeof values.gate === 'string' ? values.gate.trim() : undefined;
       if (values.gate !== undefined && !gate) throw usage('--gate needs the question a human is being asked, as in --gate "does this migration look right?"');
       // Null when the flag was absent, so the board's default can answer. An EMPTY list is only
@@ -474,7 +489,7 @@ export async function main(argv: string[]): Promise<number> {
           : null;
       const job = await db.job.create({
         data: {
-          boardId: board.id, name, brief,
+          boardId: board.id, name, brief: rendered.text,
           // Null rather than `[]` for a Job that declares nothing: "produces no file" and "produced
           // none of the files it promised" are different facts, and only the second is a failure.
           ...(exports.length ? { exports } : {}),

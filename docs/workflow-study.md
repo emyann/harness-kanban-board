@@ -249,9 +249,25 @@ declared with `--input` and an `--allow-tool` list that excludes `Read`, `Glob` 
 what it was given, because `src/admission.ts` denies the rest at layer 2. Neither half is the feature;
 the pair is. That is §4's rule applied to the read side rather than the write side.
 
-Two sources ship, and **neither waits**: `file:<repo-relative-path>` and `board` — the LLM-free board
-arithmetic ADR-010 decision 5 described. The source everybody reaches for first, another Job's output,
-is refused *by name* with a message pointing at §2, because it is `Job.after` with a payload.
+Three sources ship, and **none waits**: `file:<repo-relative-path>`, `board` — the LLM-free board
+arithmetic ADR-010 decision 5 described — and `value:<literal>`. The source everybody reaches for first,
+another Job's output, is refused *by name* with a message pointing at §2, because it is `Job.after` with
+a payload.
+
+`value:` is the **push** half, and leaving it out was an omission this study's framing invited: Artic is
+about restricting what a step *reads*, so both of the first two sources are things hkb goes and fetches.
+But the trigger direction — a button, an API call, a controller filing work from a proposal — has a
+*payload*, and without `value:` it had nowhere to put one but string-formatted into the brief. A
+`value:` may also be interpolated into the brief (`{{name}}`, `{{name.field}}`), rendered at file time
+so the stored brief is the one that runs.
+
+**Only `value:` interpolates**, and that is where §4's rule lands on this feature. The brief is the one
+field carrying *authority* — ADR-010 decision 4 turns on an approver's instruction becoming the prompt —
+while `withInputs` tells the worker to treat inputs as data. If a `file:` source could interpolate, a
+file in the repository would decide what the agent is instructed to do, which is what ADR-011 and
+ADR-012 both refuse. Kubernetes draws the same line letting `envFrom` fill `env` and never `command`.
+A `value:` is admitted because the filer supplied it *and* wrote the placeholder: the risk is per
+placeholder and visible in the brief, rather than ambient.
 
 ## 8. Hermes, the ancestor — what it solved and where hkb must differ
 

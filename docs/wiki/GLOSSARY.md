@@ -56,9 +56,11 @@ meet one in the git history, that is what it was.
   and status in one table; the controller writes only status (`prisma/schema.prisma`). The
   Kubernetes Job it is named after (*architecture/job-kind*).
 - **Input** — content a Job *declares* it will be given (`--input <name>=<source>`), resolved by the
-  controller before the run and placed in the prompt ahead of the brief (`src/inputs.ts`). Two sources,
-  neither of which waits: `file:<repo-relative-path>`, read from `Board.repoPath` and not the worktree,
-  and `board`, the LLM-free board arithmetic. An input that cannot be read ends the attempt at
+  controller before the run and placed in the prompt ahead of the brief (`src/inputs.ts`). Three sources,
+  none of which waits: `file:<repo-relative-path>`, read from `Board.repoPath` and not the worktree;
+  `board`, the LLM-free board arithmetic; and `value:<literal>`, the one a caller *pushes* rather than
+  one hkb fetches. A `value:` may be interpolated into the brief and no other source may
+  (`renderBrief`). An input that cannot be read ends the attempt at
   `no_input` before the runtime is called. A source naming another Job's output is refused — that is an
   ordering edge (*decisions/adr-007-workload-scheduler*). Restriction comes from pairing it with a
   narrowed **tool surface**, not from the injection itself.

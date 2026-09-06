@@ -91,6 +91,18 @@ export function checkInputSpec(raw: string): InputSpec {
   if (!source) refuse(`the input \`${name}\` names no source.`);
 
   if (source === 'board') return { name, source };
+  // A literal, supplied by whoever filed the Job rather than fetched by the board. This is the
+  // **push** half, and without it the two sources above only cover what hkb can go and find: a
+  // caller with a payload — a webhook, a button, a controller applying a proposal — had nowhere to
+  // put it but string-formatted into the brief.
+  if (source.startsWith('value:')) {
+    const body = source.slice(6);
+    if (!body.trim()) refuse(`the input \`${name}\` is \`value:\` with nothing after it.`);
+    if (Buffer.byteLength(body) > INPUT_MAX_BYTES) {
+      refuse(`the input \`${name}\` is ${Buffer.byteLength(body)} bytes, over the ${INPUT_MAX_BYTES}-byte input cap.`);
+    }
+    return { name, source };
+  }
   if (source.startsWith('file:')) {
     checkInputPath(source.slice(5), refuse);
     return { name, source: `file:${normalizeInputPath(source.slice(5))}` };
@@ -205,6 +217,84 @@ export function readFileInput(repoPath: string, rel: string): { text: string } |
     return { why: `${rel} is ${st.size} bytes, over the ${INPUT_MAX_BYTES}-byte input cap — an input is paid for on every request of the run, so this one belongs in the worktree the run can read` };
   }
   return { text: fs.readFileSync(real, 'utf8') };
+}
+
+/**
+ * Render `{{name}}` and `{{name.path}}` in a brief from the Job's `value:` inputs.
+ *
+ * **Only `value:` inputs, and that is the whole of the trust design.** A brief is the one thing in a
+ * Job that carries *authority* — ADR-010 decision 4 turns on an approver's instruction BECOMING the
+ * prompt — while `withInputs` tells the worker in as many words to treat inputs as data. If a
+ * `file:` source could interpolate, a file in the repository would decide what the agent is
+ * instructed to do, which is the concern ADR-011 and ADR-012 are both about. Kubernetes draws the
+ * same line for the same reason: `envFrom: configMapRef` deliberately cannot set `command`.
+ *
+ * A `value:` is different because **the filer supplied it and the filer wrote the placeholder**.
+ * The residual risk is real and bounded — a caller's payload reaching the instruction position — and
+ * it is per-placeholder and visible in the brief, rather than ambient.
+ *
+ * Rendered at FILE time, not run time, so the brief stored on the Job is the brief that runs and
+ * `hkb show` cannot disagree with the prompt. An unknown placeholder is refused here, where the
+ * operator is standing, rather than discovered by a worker.
+ */
+export function renderBrief(
+  brief: string,
+  values: Map<string, string>,
+  declared: Set<string> = new Set(values.keys()),
+): { text: string; used: Set<string> } {
+  const used = new Set<string>();
+  // Untouched unless the Job declares inputs AT ALL. Every brief written before this existed, and
+  // every brief that legitimately talks about `{{ }}`, is unaffected — an opt-in that costs the
+  // author nothing to not use.
+  //
+  // Gated on `declared` rather than on `values`, and that distinction is a bug this had: a Job whose
+  // only inputs are `file:` would have skipped rendering entirely, so `{{schema}}` meant as an
+  // interpolation would have reached the worker as the literal text `{{schema}}`. Silence is the one
+  // answer that is always wrong here — the author has to be told which sources may interpolate.
+  if (!declared.size) return { text: brief, used };
+
+  const text = brief.replace(/\{\{\s*([A-Za-z0-9_-]+)((?:\.[A-Za-z0-9_-]+)*)\s*\}\}/g, (whole, name: string, dotted: string) => {
+    if (!values.has(name)) {
+      // Two different mistakes, and an operator can only fix the one they made. `{{schema}}` where
+      // `schema` is a `file:` input is a misunderstanding of the trust rule; `{{shcema}}` is a typo.
+      const why = declared.has(name)
+        ? `the input \`${name}\` is not a \`value:\` — only \`value:\` inputs interpolate, because the brief is`
+          + ' instruction and a fetched source reaches the run as data.'
+        : `this Job declares no \`value:\` input called \`${name}\`.`
+          + ` Values declared: ${[...values.keys()].map((k) => `\`${k}\``).join(', ') || '(none)'}.`
+          + ' Only `value:` inputs interpolate — a `file:` or `board:` input reaches the run as data, never as instruction.';
+      const e = new Error(`the brief refers to \`${whole}\` and ${why}`) as Error & { exitCode: number };
+      e.exitCode = 2;
+      throw e;
+    }
+    used.add(name);
+    const raw = values.get(name) as string;
+    if (!dotted) return raw;
+    // A dotted path only means something over JSON. A plain string with `{{a.b}}` asked for a field
+    // of something that has no fields, and saying so beats rendering `undefined` into an instruction.
+    let cur: unknown;
+    try {
+      cur = JSON.parse(raw);
+    } catch {
+      const e = new Error(
+        `the brief refers to \`${whole}\`, but the input \`${name}\` is not JSON, so it has no field to read.`,
+      ) as Error & { exitCode: number };
+      e.exitCode = 2;
+      throw e;
+    }
+    for (const key of dotted.slice(1).split('.')) {
+      if (cur === null || typeof cur !== 'object' || !(key in (cur as Record<string, unknown>))) {
+        const e = new Error(
+          `the brief refers to \`${whole}\`, and the input \`${name}\` has no \`${key}\`.`,
+        ) as Error & { exitCode: number };
+        e.exitCode = 2;
+        throw e;
+      }
+      cur = (cur as Record<string, unknown>)[key];
+    }
+    return typeof cur === 'string' ? cur : JSON.stringify(cur);
+  });
+  return { text, used };
 }
 
 /** What a Job that declared an input the board could not resolve owes the operator. */

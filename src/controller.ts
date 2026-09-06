@@ -662,6 +662,13 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         readInputs.push({ name: want.name, source: want.source, text: renderBoard(rows) });
         continue;
       }
+      if (want.source.startsWith('value:')) {
+        // Supplied at file time, so there is nothing to fetch and nothing that can fail. One that
+        // was interpolated into the brief is not here at all — `hkb new` drops it once it is
+        // consumed, so no value arrives twice.
+        readInputs.push({ name: want.name, source: 'value', text: want.source.slice(6) });
+        continue;
+      }
       const got = readFileInput(cwd, want.source.slice(5));
       if ('why' in got) unread.push({ ...want, why: got.why });
       else readInputs.push({ name: want.name, source: want.source, text: got.text });

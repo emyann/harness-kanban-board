@@ -21,7 +21,7 @@ covers:
   - path: src/artifacts.ts
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
   - path: src/inputs.ts
-    sha: 651021115ccfa46b6eef97e4b7b1c0e0619c291c
+    sha: 9c657b130617161a66aa67aa7c5d0a9e80be9c25
   - path: src/brief.ts
     sha: e1326185ad6379bbb34cd6e4e02f0f89db393162
   - path: src/worktree.ts
@@ -158,10 +158,17 @@ nothing else holds it. That is why `hkb show` prints a size and a directory rath
 
 The other direction, and the half ADR-008 never had: `inputs` (`--input <name>=<source>`) are content
 the controller resolves **before the run** and puts in the prompt, ahead of the brief that is about
-them (`src/inputs.ts`, `src/brief.ts`). Two sources, and neither of them waits — `file:<repo-relative>`
-reads the board's repository, and `board` is the LLM-free board arithmetic. An input the board cannot
-read ends the attempt at `no_input` **without calling the runtime**, which is the cheap mirror of
-`no_output`.
+them (`src/inputs.ts`, `src/brief.ts`). Three sources, and none of them waits — `file:<repo-relative>`
+reads the board's repository, `board` is the LLM-free board arithmetic, and `value:<literal>` is a
+payload the caller supplied. The first two are **pull**; `value:` is the **push** half, and it is what a
+webhook, a button or a Job-filing controller needs. An input the board cannot read ends the attempt at
+`no_input` **without calling the runtime**, which is the cheap mirror of `no_output`.
+
+A `value:` may also be interpolated into the brief (`{{name}}`, `{{name.field}}`), rendered at file time
+so the stored brief is the one that runs (`renderBrief`, `src/inputs.ts`). **Only `value:`** — a fetched
+source reaches the run as data and never as instruction, because the brief is the one field carrying
+authority (ADR-010 decision 4) while `withInputs` labels everything else as data. Kubernetes draws the
+same line letting `envFrom` fill `env` and never `command`.
 
 The reason it is not just convenience is that it composes with a guard. Content in a prompt restricts
 nothing by itself — a worker with `Read` finds whatever it likes. A Job declared with its inputs *and*

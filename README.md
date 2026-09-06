@@ -174,10 +174,30 @@ a session id.
 ### What a Job is given
 
 The other direction. **`--input <name>=<source>`** is content the board resolves *before* the run and puts
-in the prompt, ahead of the brief that is about it. Two sources, and neither of them waits:
+in the prompt, ahead of the brief that is about it. Three sources, and none of them waits:
 
 - **`file:<path>`** — a file in the repository, read from the board's repo rather than the worktree.
 - **`board`** — this board's other Jobs, their phases, attempt counts and outcomes. LLM-free, one read.
+- **`value:<literal>`** — a payload the caller supplies. The other two are things hkb goes and *fetches*;
+  this is the one a webhook, a button or a controller filing work can *push*.
+
+A `value:` input may also be **interpolated into the brief**, as `{{name}}` or `{{name.field}}`, whichever
+way the brief arrived — `--brief`, `--brief-file` or stdin:
+
+```sh
+hkb new "review a PR" \
+  --brief 'Review PR {{pr.number}} in {{pr.repo}} with a {{style}} eye.' \
+  --input 'pr=value:{"number":42,"repo":"example"}' \
+  --input style=value:strict
+```
+
+The brief is rendered **when the Job is filed**, so what `hkb show` prints is what the run is given, and
+a placeholder naming nothing is refused where the operator is standing rather than discovered by a
+worker. A value that went into the brief is not also handed over as a data block.
+
+Only `value:` interpolates. A `file:` or `board:` source reaches the run as *data* and never as
+*instruction* — otherwise a file in the repository would decide what the agent is told to do. It is the
+line Kubernetes draws when it lets `envFrom` fill `env` and never `command`.
 
 An input the board cannot read ends the attempt at `no_input` **without calling the model** — the cheap
 mirror of a missing declared output. A source that names another Job's output is refused: that is an

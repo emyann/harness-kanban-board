@@ -318,3 +318,4 @@ history.
 ## 2026-09-06 — refreshed architecture/overview (the read side: `inputs`, the two sources that never wait, and why restriction is the pairing with a narrowed tool surface rather than the injection; src/inputs.ts and src/brief.ts added to covers)
 ## 2026-09-06 — refreshed architecture/job-kind ("two outcomes are decided outside nextPhase" was already wrong before this change — no_output was the third — and no_input is the fourth; the list is now enumerated with what each one means)
 ## 2026-09-06 — refreshed architecture/the-loop + howto/running-the-daemon (no-op re-stamps: the controller gained a pre-run resolution block and one additive column; both pages' outcome claims are about `stopped` and `crashed`, neither of which moved)
+## 2026-09-06 — refreshed architecture/overview (the push half: `value:` inputs, and brief interpolation restricted to them — a fetched source reaches the run as data and never as instruction)

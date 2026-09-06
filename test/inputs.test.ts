@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const {
-  checkInputSpec, declaredInputs, readFileInput, renderBoard, missingInputs,
+  checkInputSpec, declaredInputs, readFileInput, renderBoard, missingInputs, renderBrief,
   INPUT_MAX_BYTES, BOARD_INPUT_ROWS,
 } = await import('../src/inputs.ts');
 const { withInputs } = await import('../src/brief.ts');
@@ -129,4 +129,69 @@ test('an input that contains the fence cannot break out of it', () => {
   const out = withInputs('x', [{ name: 'a', source: 'board', text: '`````\nescaped?' }]);
   // Two opening fences would end the block early and the rest would read as instructions.
   assert.equal(out.split('\n').filter((l) => l === '`````').length, 2);
+});
+
+/**
+ * `value:` and brief interpolation — the PUSH half.
+ *
+ * `file:` and `board:` are both things hkb goes and fetches; a caller with a payload (a webhook, a
+ * button, a controller applying a proposal) had nowhere to put it but string-formatted into the
+ * brief. The interpolation rule carries the whole trust design, so most of these are refusals.
+ */
+test('a value input is a literal the filer supplied, capped like any other', () => {
+  assert.deepEqual(checkInputSpec('pr=value:{"number":42}'), { name: 'pr', source: 'value:{"number":42}' });
+  assert.deepEqual(checkInputSpec('style=value:strict'), { name: 'style', source: 'value:strict' });
+  assert.throws(() => checkInputSpec('a=value:'), (e: Error & { exitCode?: number }) => e.exitCode === 2);
+  assert.throws(
+    () => checkInputSpec(`a=value:${'x'.repeat(INPUT_MAX_BYTES + 1)}`),
+    /over the \d+-byte input cap/,
+  );
+});
+
+test('ONLY a value input interpolates — a fetched source reaches the run as data, never as instruction', () => {
+  // The line this whole feature is built around. If `file:` could interpolate, a file in the
+  // repository would decide what the agent is instructed to do.
+  assert.throws(
+    () => renderBrief('Review {{schema}}.', new Map([['pr', '{"n":1}']]), new Set(['pr', 'schema'])),
+    (e: Error & { exitCode?: number }) =>
+      e.exitCode === 2 && /is not a `value:`/.test(e.message) && /reaches the run as data/.test(e.message),
+    'a placeholder naming a file input is refused, and the refusal says which sources may interpolate',
+  );
+
+  // The bug the CLI test caught: gating on `values` rather than on `declared` meant a Job whose only
+  // inputs were fetched skipped rendering, and `{{schema}}` reached the worker as literal text.
+  assert.throws(
+    () => renderBrief('Review {{schema}}.', new Map(), new Set(['schema'])),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2,
+    'and it is refused even when the Job declares NO value inputs — silence is the one wrong answer',
+  );
+});
+
+test('a brief with no value inputs is passed through untouched', () => {
+  const talksAboutBraces = 'Explain how {{ mustache }} templating works.';
+  assert.equal(renderBrief(talksAboutBraces, new Map()).text, talksAboutBraces,
+    'every brief written before this existed must be unaffected — the feature is opt-in by declaring a value');
+});
+
+test('interpolation reaches whole values and JSON fields, and refuses what is not there', () => {
+  const vals = new Map([['pr', '{"number":42,"repo":"x","author":{"login":"someone"}}'], ['style', 'strict']]);
+
+  assert.equal(renderBrief('PR {{pr.number}} in {{pr.repo}}, {{style}} review.', vals).text,
+    'PR 42 in x, strict review.');
+  assert.equal(renderBrief('{{ pr.author.login }}', vals).text, 'someone', 'nested, and whitespace is allowed');
+  assert.equal(renderBrief('{{pr}}', vals).text, '{"number":42,"repo":"x","author":{"login":"someone"}}',
+    'a whole value renders as it was supplied');
+
+  assert.throws(() => renderBrief('{{pr.missing}}', vals), /has no `missing`/);
+  assert.throws(() => renderBrief('{{style.length}}', vals), /is not JSON, so it has no field to read/,
+    'saying so beats rendering `undefined` into an instruction');
+  assert.throws(() => renderBrief('{{nope}}', vals), /declares no `value:` input called `nope`/);
+});
+
+test('renderBrief reports what it consumed, so a value is never given twice', () => {
+  const vals = new Map([['used', 'a'], ['spare', 'b']]);
+  const got = renderBrief('one {{used}}', vals);
+  assert.deepEqual([...got.used], ['used']);
+  // `spare` stays on the Job and arrives as a data block; `used` is already in the brief.
+  assert.ok(!got.used.has('spare'));
 });

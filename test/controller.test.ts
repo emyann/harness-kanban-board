@@ -912,6 +912,36 @@ test('a declared input the board cannot read fails the attempt WITHOUT calling t
   assert.match(after.lastError ?? '', /`gone`/, 'and it names which input');
 });
 
+test('a value input the brief did not consume still reaches the run, as data', async () => {
+  const b = await db.board.findUniqueOrThrow({ where: { slug: 'inputs' } });
+  const seen: string[] = [];
+  const spy = {
+    name: 'spy',
+    async run(spec: { prompt: string }) {
+      seen.push(spec.prompt);
+      return { status: 'completed', ok: true, sessionId: 's', text: '', costUsd: 0, turns: 1,
+               durationMs: 0, stopReason: 'end_turn', denials: 0, error: null };
+    },
+  } as never;
+
+  // `hkb new` drops a value it interpolated, so anything still on the Job was never consumed and
+  // has to arrive as a block — otherwise a caller's payload would silently vanish.
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'given a payload', brief: 'Handle it.', isolate: false,
+      inputs: [{ name: 'pr', source: 'value:{"number":42}' }],
+    },
+  });
+  await reconcile({ runtime: spy, cwd: REPO, board: 'inputs', readPr: false });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'succeeded', 'a literal cannot fail to resolve — there is nothing to fetch');
+  assert.match(seen[0], /### `pr`  \(value\)/, 'labelled by name, and by the source it came from');
+  assert.match(seen[0], /\{"number":42\}/);
+  const fed = after.attempts[0].inputs as { name: string; source: string }[];
+  assert.deepEqual(fed.map((i) => i.source), ['value'], 'the catalogue records it too');
+});
+
 test('the board input is the arithmetic hkb already computes, and never includes the reading Job', async () => {
   const b = await db.board.findUniqueOrThrow({ where: { slug: 'inputs' } });
   const seen: string[] = [];
