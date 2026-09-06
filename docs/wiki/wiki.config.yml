@@ -88,7 +88,7 @@ pages:
     status: seeded
   - slug: features/declared-outputs
     summary: "The three declared outputs and the one rule over them: --export to the repository, --result onto the board as a value, --artifact beside the board as a file; why an undeclared output is litter, and the syntax each refuses before a checkout is ever made."
-    status: planned
+    status: seeded
   - slug: decisions/adr-004-roles-and-adoption
     summary: "The canonical seat taxonomy (operator/supervisor/dispatcher/worker) and the adoption ladder. SUPERSEDED by ADR-009: the dispatcher seat is gone."
     status: seeded

@@ -19,7 +19,8 @@ meet one in the git history, that is what it was.
   an absolute path outside every checkout (`--artifact <name>`, `src/artifacts.ts`). The gap between the
   other two — too large to be a **result**, and no business in a commit the way an **export** is. A name
   may come back as a directory. Only the catalogue (name, kind, size) lands on the Attempt, and nothing
-  removes the file, because nothing else holds it (*decisions/adr-011-proposals-not-board-access*).
+  removes the file, because nothing else holds it (*features/declared-outputs*,
+  *decisions/adr-011-proposals-not-board-access*).
 - **Attempt** — one execution of a Job — the Pod, the thing that dies (`prisma/schema.prisma`).
   Carries `sessionId`, the pointer that recovers everything the SDK already stores, and
   `maxBudgetUsd`, the cap it was *claimed* under, frozen so a past attempt stays legible against the
@@ -53,11 +54,16 @@ meet one in the git history, that is what it was.
   worktree into the repository before the checkout is torn down — the one of the three declared outputs
   whose destination is the repository rather than the board; a declared path the run did not
   produce fails the attempt, and everything undeclared is litter that goes with the checkout
+<<<<<<< HEAD
   (`checkExportPath`/`copyIncluded`, `src/worktree.ts`; *decisions/adr-008-declared-outputs*).
 - **Fence** — a value carried in a write's `where` clause so the write is a no-op when the world moved
   under it: `Lease.token` at renewal and at release, and the expiry re-read on the reclaim delete
   (`src/controller.ts`). It is how a holder learns it lost its lease, and why a stale holder finishing
   late cannot delete the new holder's claim (*concepts/leases-and-liveness*).
+=======
+  (`checkExportPath`/`copyIncluded`, `src/worktree.ts`; *features/declared-outputs*,
+  *decisions/adr-008-declared-outputs*).
+>>>>>>> 9636c6b (Add features/declared-outputs to the wiki)
 - **Forge** — where pull requests live, deliberately not where the board lives. GitHub, read through
   one `gh` shell-out (`src/pulls.ts`) and joined to a Job by branch name. It holds no Job, no lease
   and no state hkb depends on.
@@ -134,9 +140,20 @@ meet one in the git history, that is what it was.
   `proposedByK`, `proposalIndex` (`prisma/schema.prisma`). An observation the controller made about
   what it did, never a claim a worker made about itself — and, being unique together, the reason
   applying a proposal twice creates nothing twice (*features/proposals*).
+- **Litter** — anything a run leaves behind that it did not declare. Bazel's rule, which ADR-008
+  adopts: the known outputs move out of the sandbox and the rest goes with it, which is what makes a
+  worktree safe to delete (*features/declared-outputs*).
+- **Result** — a small named value a Job declares and the board keeps on the Attempt row
+  (`--result <name>`, `src/results.ts`). The worker writes it to an absolute path outside every
+  checkout and the controller reads it back; capped at `RESULT_MAX_BYTES` per value, deliberately,
+  so nobody mistakes it for file storage — an **artifact** is the uncapped one
+  (*features/declared-outputs*).
 - **Resumable outcome** — a run that stopped on its turn or budget cap rather than breaking: it left
   a session worth continuing, so the next attempt resumes it instead of starting cold (`nextPhase`,
   `src/controller.ts`) (*architecture/runtime-layer*).
+- **Volunteered output** — a result or artifact a run left without declaring: kept and reported,
+  never required, and never able to fail an attempt (`collectResults`/`collectArtifacts`,
+  `src/results.ts`, `src/artifacts.ts`) (*features/declared-outputs*).
 - **Watch** — following the board's `Event` stream as it is written (`hkb watch`, `src/watch.ts`). Every
   line leads with its event id, and that id is the resume token: `--after <id>` picks up exactly where a
   previous watch stopped, and it never expires because events are append-only. Woken by `fs.watch` on the
