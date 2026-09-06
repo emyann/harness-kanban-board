@@ -653,6 +653,99 @@ In this order, and each one only when the previous is boring:
 
 ---
 
+---
+
+## Parked, with the design done
+
+Neither of these is next, and neither is debt. Both were designed in conversation on 2026-09-05, both
+have their findings **verified in code**, and both are written down here so that picking one up is
+reading rather than re-deriving. They are independent of each other and of the "After the gate" order.
+
+### A. Watch — let the outside world observe hkb
+
+**hkb emits nothing.** There is no subscribe, webhook, SSE or stream anywhere in `src/`. The only way
+to observe a board from outside is to poll its SQLite file behind hkb's back. So hkb can be extended
+only from *inside its own process*: a board UI, a notifier, a metrics exporter, an external trigger —
+all impossible today without forking it.
+
+**The data model is already there; the transport is not.** `Event` (`prisma/schema.prisma:319-332`)
+carries `kind`, `jobId`, `boardId`, `actor` and `payload`, with `@@index([boardId, id])` and
+`@@index([jobId, id])`. A monotonic autoincrement id indexed per board **is a `resourceVersion`**:
+"everything after id N on board X" is already one indexed query.
+
+**Why this is not the eventing the plan rejected.** Phase 4 declined triggers + `fs.watch` on the WAL
+and said "revisit when latency is a complaint". That reasoning is sound and it answers a *different
+question*. This is not a faster loop — it is an **integration surface**, and that argument has never
+been evaluated. In Kubernetes, etcd's watch is what makes controllers composable: every controller is
+a separate process that watches and reconciles, and the API server does not know its consumers. hkb
+has the reconcile half and not the emit half.
+
+**The one constraint to fix before anyone builds it.** Emit **cursors, not state** — "something changed
+on board X, past event N" — and let the consumer re-read. The plan's own Phase 4 note contains the
+rule: a watch event enqueues a *key*, after which the worker re-reads state and discards the event. A
+consumer that rebuilds state from the event stream will drift, and a log that disagrees with the board
+is a bug generator. Level-triggered on the outside too, for the same reason `reconcile()` is inside.
+
+**Keep it separate from the inbound direction.** `watch` is hkb → world (the board UI, notifiers). A
+**trigger** is world → hkb (an external service starting a workload), and it needs an inbound
+interface, an identity and an authz model that a read-only stream does not. Argo splits these exactly
+this way: `Workflow` is the primitive, Argo Events is a separate project.
+
+### B. Least privilege — tools, MCP servers and skills, granted rather than assumed
+
+The operator's shape: list what a repository actually offers — skills, agents, MCP servers — the way an
+editor does, then enable some for a whole board and grant others to a single Job. The motivating case
+is real: work on another repository needed one specific MCP server, and there is no way to give a
+worker one.
+
+**The enforcement is already right, and that is the load-bearing fact.** Workers run
+`permissionMode: 'dontAsk'` — deliberately **not** `bypassPermissions`, because `allowedTools` does not
+constrain bypass and "the allowlist would be decoration" (`src/runtime/claude.ts:135-149`). The list is
+passed to `admissionHooks({ allow: tools })`, and **hooks run first in the evaluation order**, before
+deny rules, ask rules, the mode and allow rules. So an allowlist genuinely refuses here.
+
+**What is missing, precisely:**
+
+- **`allowedTools` is wired and never set.** It exists on `WorkerSpec` (`src/runtime/index.ts:34`) and
+  is honoured (`src/runtime/claude.ts:68`), but nothing in `src/controller.ts` ever sets it, so every
+  Job runs `DEFAULT_TOOLS` — `Write`, `Edit`, `Bash`, unconditional. This is why ADR-010's own
+  motivating case, *propose the migration, let me look, then run it*, cannot be enforced: the propose
+  half can simply apply. **This is the fourth declaration this project has shipped with no enforcement
+  behind it**, after the admission gate, the worktree base and the lease.
+- **MCP has no path at all.** Nothing passes `mcpServers` to `query()`. This is a missing capability
+  before it is a permissions question.
+- **Skills are coupled to a guard.** `settingSources: []` (`src/runtime/claude.ts:155`) keeps the
+  operator's settings out of a worker on purpose — "the card is the brief". Enabling project skills
+  means flipping it, which **re-admits project-level hooks into a worker whose isolation rests entirely
+  on SDK-supplied hooks**. That is a guard change wearing a feature's clothes and needs its own record.
+
+**The Kubernetes mapping is three objects, not one — and keeping them separate is the point.**
+
+| concern | k8s | why |
+|---|---|---|
+| what an MCP server *is* — command, args, url, token | **ConfigMap** + **Secret** | config injected into a workload; the credential is why Secret exists apart |
+| whether this Job may use it | **ServiceAccount + Role + RoleBinding** | Board is already Namespace, so board-wide enablement is a Role in it |
+| the ceiling — the board grants, a Job may narrow, only a human widens | **LimitRange** / Pod Security Admission, **not RBAC** | RBAC is purely additive: it has no deny and no narrowing |
+
+That last row is why the retired system needed four wiki pages (`tool-grant-ceiling`,
+`capability-portability`, `capability-map`, `worker-tool-posture`, all deleted by ADR-009) — it fused
+*grant* and *ceiling* into one concept. k8s keeps them apart deliberately. One confirmation worth
+keeping: k8s enforces all of this at **admission**, not in the kubelet and not in the workload, which
+is where `src/admission.ts` already sits. Same answer arrived at twice.
+
+**Order, and do not design the map up front.**
+
+1. **Wire `allowedTools`** — one nullable column, one line, and a test that a narrowed Job is *denied*
+   the tool it did not get. This alone turns ADR-010's gate from a hope into a boundary.
+2. **MCP as config + grant.** The definition is ConfigMap-shaped, the credential Secret-shaped, the
+   enable per board and the grant per Job. This is the one that unblocks real work.
+3. **Skills, with their own ADR**, because of the `settingSources` coupling above.
+4. **Discovery last.** "List what this repo offers" is `kubectl api-resources`, not an object — a verb
+   that reads the repository, worth having only once there is something to grant.
+
+The retired system built the whole capability map first. The plan's verdict on that system is that the
+machinery outgrew the evidence, and this is the same road.
+
 ## Decided: single-message input stays
 
 **Settled 2026-09-05 by a 22-agent investigation, and the premise turned out to be false.**
