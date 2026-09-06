@@ -302,6 +302,21 @@ model Attempt {
   /// Reported for the operator's benefit only — the SDK can always recompute it from the session.
   costUsd   Float?
 
+  /// What the run actually did, as the runtime measured it — not as the agent reported it.
+  ///
+  /// Both are returned by every driver (`WorkerOutcome`, `src/runtime/index.ts`) and were being
+  /// dropped on the floor, which is why a Job that produced no pull request had nothing to show for
+  /// itself at all. They are the record for work whose value is not a diff: an investigation that
+  /// concluded there was nothing to change is a real outcome, and "18 turns, 0 refusals, $1.40" is
+  /// the difference between that and a session that stalled.
+  ///
+  /// Nullable because an attempt that never reached the runtime — refused at the gate, crashed
+  /// before the call — has no measurement rather than a measurement of zero.
+  turns   Int?
+  /// How often the admission gate refused this run a tool. A non-zero count on a succeeding attempt
+  /// is the signal that a Job's `allowedTools` is narrower than its brief needs.
+  denials Int?
+
   @@id([jobId, k])
   @@index([endedAt])
 }

@@ -150,7 +150,9 @@ export const AttemptScalarFieldEnum = {
   prNumber: 'prNumber',
   prUrl: 'prUrl',
   exported: 'exported',
-  costUsd: 'costUsd'
+  costUsd: 'costUsd',
+  turns: 'turns',
+  denials: 'denials'
 } as const
 
 export type AttemptScalarFieldEnum = (typeof AttemptScalarFieldEnum)[keyof typeof AttemptScalarFieldEnum]

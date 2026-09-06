@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import type { Runtime } from '../src/runtime/index.ts';
 
 // A scratch database per run, migrated the same way production is.
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-ctl-'));
@@ -642,4 +643,78 @@ test('the allowlist branch of the gate refuses, which nothing tested before', ()
     gate(pre('Bash', {})).then((r) => assert.equal(spec(r).permissionDecision, 'deny')),
     gate(pre('Read', {})).then((r) => assert.equal(spec(r).permissionDecision, 'allow')),
   ]);
+});
+
+/**
+ * What the run did, for the Job whose value is not a diff.
+ *
+ * `turns` and `denials` are returned by every runtime driver and were being dropped, so a Job that
+ * opened no pull request had nothing to show for itself at all — `producedNothing` could say only
+ * that it produced nothing, which reads as failure and is often not. The distinction these two
+ * columns buy is between an investigation that concluded there was nothing to change and a session
+ * that stalled, and nothing else in the record can tell those apart.
+ *
+ * Written as a refusal at the other end too: an attempt that never reached the runtime must record
+ * **null**, not zero. `0 turns` is a claim about a run that happened and did nothing; no measurement
+ * is the truth about a run that never started.
+ *
+ * On its own board, and `isolate: false`, for the same reason the frozen-cap tests above are: by
+ * this point in the file the shared board carries whatever earlier tests left on it, and a claim
+ * refused by an inherited ceiling writes no attempt to assert on.
+ */
+const measuring = (turns: number, denials: number): Runtime => ({
+  name: 'measuring',
+  async run() {
+    return {
+      status: 'completed', ok: true, sessionId: 'sess-measured', text: 'done',
+      costUsd: 0.25, turns, durationMs: 1000, stopReason: 'end_turn', denials, error: null,
+    };
+  },
+});
+
+async function measuredBoard(name: string) {
+  const b = await db.board.upsert({
+    where: { slug: 'measured' },
+    update: { dailyBudgetUsd: null, maxConcurrent: 5, pausedAt: null },
+    create: { slug: 'measured', dailyBudgetUsd: null, maxConcurrent: 5 },
+  });
+  return db.job.create({ data: { boardId: b.id, name, brief: `do ${name}`, isolate: false } });
+}
+
+const attemptOf = (jobId: number) =>
+  db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId, k: 1 } } });
+
+test('the runtime\'s measurement of the work reaches the attempt row', async () => {
+  const job = await measuredBoard('measured-run');
+  await reconcile({ runtime: measuring(18, 3), cwd, board: 'measured', readPr: false });
+
+  const a = await attemptOf(job.id);
+  assert.equal(a.turns, 18, 'the runtime counted the turns and the board kept them');
+  assert.equal(a.denials, 3, 'and how often the gate refused it a tool');
+  assert.equal(a.costUsd, 0.25, 'beside the cost, which was already kept');
+});
+
+test('an attempt that never reached the runtime records no measurement, not a zero', async () => {
+  const job = await measuredBoard('never-ran');
+  const throwing: Runtime = {
+    name: 'throwing',
+    async run(): Promise<never> { throw new Error('the runtime never started'); },
+  };
+  await reconcile({ runtime: throwing, cwd, board: 'measured', readPr: false });
+
+  const a = await attemptOf(job.id);
+  assert.equal(a.turns, null, 'null, not 0 — there is no measurement of a run that did not happen');
+  assert.equal(a.denials, null);
+  assert.equal(a.costUsd, null, 'the rule the cost column already followed');
+});
+
+test('zero turns is recorded as zero, so null keeps meaning "not measured"', async () => {
+  // The pair that makes the distinction above load-bearing rather than decorative: a runtime that
+  // genuinely reported 0 must not be stored the same way as one that reported nothing.
+  const job = await measuredBoard('zero-turns');
+  await reconcile({ runtime: measuring(0, 0), cwd, board: 'measured', readPr: false });
+
+  const a = await attemptOf(job.id);
+  assert.equal(a.turns, 0, 'a measured zero survives as a zero');
+  assert.equal(a.denials, 0);
 });

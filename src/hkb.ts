@@ -569,6 +569,14 @@ export async function main(argv: string[]): Promise<number> {
           const took = formatDuration((a.endedAt ?? new Date()).getTime() - a.startedAt.getTime())
             + (a.endedAt ? '' : '+');
           console.log(`  k=${a.k}      ${(a.outcome ?? 'running').padEnd(11)}${took.padStart(7)}${cost}  ${a.sessionId ?? '—'}`);
+          // What the run actually did, for the attempt whose value is not a diff. Printed only when
+          // the runtime measured it — an attempt refused at the gate has no turn count, and `0 turns`
+          // would be a claim about a run that never happened. Denials are shown only when non-zero:
+          // a refusal is news, and "0 refusals" on every line is not.
+          if (a.turns != null) {
+            const denied = a.denials ? `, ${a.denials} tool refusal${a.denials === 1 ? '' : 's'}` : '';
+            console.log(`           ${a.turns} turn${a.turns === 1 ? '' : 's'}${denied}`);
+          }
           // The reviewable artifact. It is the point of the run, so it gets its own line rather
           // than being something you go and look for.
           if (a.prUrl) console.log(`           PR #${a.prNumber}  ${a.prUrl}`);
