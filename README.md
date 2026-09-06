@@ -138,21 +138,30 @@ would strand its worktree, while one that declines to start another is only a de
 
 ### What a Job produces
 
-A pull request, by default — and a Job does not have to be coupled to one. Two declarations, one rule
-([ADR-008](docs/wiki/decisions/adr-008-declared-outputs.md)):
+A pull request, by default — and a Job does not have to be coupled to one. Three declarations, one rule
+([ADR-008](docs/wiki/decisions/adr-008-declared-outputs.md),
+[ADR-011](docs/wiki/decisions/adr-011-proposals-not-board-access.md)):
 
 - **`--export <path>`** — a file or directory the Job must write. The board copies it out of the worktree
   into the repository *before* the checkout is torn down.
 - **`--result <name>`** — a named value the Job must report: a finding, a decision, a URL. The worker writes
   it to a path the board gives it, the board keeps it on the attempt, and `hkb show` prints it. Capped at
-  4 KB each; anything larger is a file, which is what `--export` is for.
+  4 KB each.
+- **`--artifact <name>`** — a file the Job must produce that the **board** keeps rather than the repository.
+  Same contract, no size limit, and the path the worker is given is outside every checkout — so an output
+  that should not be committed is never in the tree to be committed by accident. A name may come back as a
+  directory. `hkb show` lists what was kept, how big it is, and where.
 
-Both are repeatable, and **a declared output the run did not produce fails the attempt** — which is what
-makes `succeeded` mean more than "the session ended". An undeclared file left in the checkout is litter and
-is deleted with it.
+The three differ only in *where the output goes*: `--export` to the repository, `--result` onto the board
+as a value, `--artifact` beside the board as a file. All are repeatable, and **a declared output the run
+did not produce fails the attempt** — which is what makes `succeeded` mean more than "the session ended".
+An undeclared file left in the checkout is litter and is deleted with it.
 
-A run may also **volunteer** a result nobody asked for: anything it writes beside the declared ones is kept
-and shown, and never required. The distinction is what is *enforced*, not what is stored — a declaration is
+Artifacts are **never removed**, because the file is the value — there is no row holding a copy. `hkb show`
+prints the size of each for that reason.
+
+A run may also **volunteer** a result or an artifact nobody asked for: anything it writes beside the
+declared ones is kept and shown, and never required. The distinction is what is *enforced*, not what is stored — a declaration is
 the filer saying "this must exist", and a volunteered value is the Job saying "you did not ask, but you
 should know".
 

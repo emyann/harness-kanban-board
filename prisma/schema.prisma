@@ -205,6 +205,19 @@ model Job {
   /// finding, a decision, a URL. Capped at 4 KB each (`src/results.ts`), because a handoff that can
   /// hold a megabyte is a worse artifact store than the one `exports` already is.
   results      Json?
+  /// The files this Job must produce: a JSON array of names, each one path segment. The third
+  /// declared output, and the gap between the other two (ADR-011).
+  ///
+  /// `exports` are files the REPOSITORY keeps; `results` are small values the BOARD keeps, capped
+  /// at 4 KB. An artifact is the middle: a file the board keeps, uncapped. The worker writes it to
+  /// an absolute path outside every checkout — the same place a result goes and for the same reason
+  /// — so an output that must not be committed is never in the tree to be committed by accident.
+  /// A name may be produced as a directory, which is how an artifact holds more than one file.
+  ///
+  /// Unlike a result, nothing is copied onto the Attempt but the catalogue: name, kind and size.
+  /// The file IS the value, so the file is what is durable, and `src/artifacts.ts` never removes
+  /// one. That is a deliberate cost — see the size in `hkb show`.
+  artifacts    Json?
   /// What a human must decide before this Job goes on (ADR-010). Non-null makes the Job **gated**:
   /// an attempt that succeeds AND produced everything it declared does not go terminal — it goes
   /// `suspended`, carrying this text as `suspendedFor`, and waits.
@@ -345,6 +358,15 @@ model Attempt {
   /// which is richer and guarantees nothing; requiring everything is the opposite failure, where a
   /// Job cannot say it noticed something nobody thought to ask about.
   results Json?
+
+  /// The catalogue of what this attempt left in its artifact directory, as
+  /// `[{ name, kind, bytes }]` (ADR-011, `src/artifacts.ts`). Null, not `[]`, for an attempt that
+  /// wrote none — the same distinction `results` and `exported` already draw.
+  ///
+  /// A catalogue rather than the content, because an artifact is unbounded by design and reading
+  /// one in to record that it exists would give back the cap by another route. The same two layers
+  /// as `results`: declared names are required, volunteered ones are kept and never required.
+  artifacts Json?
 
   turns   Int?
   /// How often the admission gate refused this run a tool. A non-zero count on a succeeding attempt

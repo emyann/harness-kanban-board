@@ -7,6 +7,7 @@ import { openBoard, closeBoard } from './db.ts';
 import { reconcile } from './controller.ts';
 import { checkExportPath } from './worktree.ts';
 import { checkResultName, RESULT_MAX_BYTES } from './results.ts';
+import { checkArtifactName, artifactsDir, bytes } from './artifacts.ts';
 import { fakeRuntime } from './runtime/fake.ts';
 import * as daemon from './daemon.ts';
 import { EFFORTS, boardDefaults, hasDefaults, resolveSpec, type SpecSource } from './spec.ts';
@@ -54,6 +55,9 @@ const HELP = `hkb — run one agent against one brief
        --result <name>  a named value the Job must produce — a finding, a decision, a URL.
                         The board keeps it on the attempt and \`hkb show\` prints it, so a Job
                         that makes no commit still leaves something behind. Repeatable.
+       --artifact <name> a FILE the Job must produce, kept beside the board rather than
+                        committed. Same contract as --result with no size limit: for a report,
+                        a dataset, a proposal. A name may come back as a directory. Repeatable.
        --board <slug>   default: default
 
   hkb ls                    what is on the board        [--phase p] [--board s]
@@ -128,17 +132,20 @@ function packageVersion(): string {
  * Three things count, and they are ADR-008's own list. A **pull request** on any attempt. A
  * **declared export**, and a **declared result** — both of which count without being re-checked
  * here, because a declared output the run did not produce already fails the attempt
- * (`src/worktree.ts`, `src/results.ts`), so a Job that reached `succeeded` having declared either
- * produced it by construction.
+ * (`src/worktree.ts`, `src/results.ts`, `src/artifacts.ts`), so a Job that reached `succeeded`
+ * having declared any of the three produced it by construction.
  *
  * Pure, and asked only of a Job that succeeded. A failed, cancelled or `done` Job producing nothing
  * is not news — marking those would be noise, which is how a signal stops being read.
  */
 export function producedNothing(
-  job: { phase: string; pr: string | null; exports: string[]; results?: string[] },
+  job: { phase: string; pr: string | null; exports: string[]; results?: string[]; artifacts?: string[] },
 ): boolean {
   if (job.phase !== 'succeeded') return false;
-  return !job.pr && job.exports.length === 0 && (job.results?.length ?? 0) === 0;
+  return !job.pr
+    && job.exports.length === 0
+    && (job.results?.length ?? 0) === 0
+    && (job.artifacts?.length ?? 0) === 0;
 }
 
 /** A Job's declared exports, from the `Json?` column, defensively. */
@@ -341,6 +348,7 @@ export async function main(argv: string[]): Promise<number> {
       export: { type: 'string', multiple: true },
       // Repeatable for the same reason `--export` is: a Job with two named values declares two.
       result: { type: 'string', multiple: true },
+      artifact: { type: 'string', multiple: true },
       gate: { type: 'string' },
       // Repeatable, for the same reason `--export` is: a tool name is a token, and one
       // comma-separated string makes the empty list ("this Job may call nothing") unsayable.
@@ -420,6 +428,9 @@ export async function main(argv: string[]): Promise<number> {
       // key is a fault in the spec, and finding it here costs nothing while finding it later costs
       // a run.
       const results = ((values.result as string[] | undefined) ?? []).map(checkResultName);
+      // Same reasoning one medium over: a name that cannot be a single path segment is a fault in
+      // the spec, and finding it here costs nothing while finding it after a run costs the run.
+      const artifacts = ((values.artifact as string[] | undefined) ?? []).map(checkArtifactName);
       const gate = typeof values.gate === 'string' ? values.gate.trim() : undefined;
       if (values.gate !== undefined && !gate) throw usage('--gate needs the question a human is being asked, as in --gate "does this migration look right?"');
       // Null when the flag was absent, so the board's default can answer. An EMPTY list is only
@@ -436,6 +447,7 @@ export async function main(argv: string[]): Promise<number> {
           // none of the files it promised" are different facts, and only the second is a failure.
           ...(exports.length ? { exports } : {}),
           ...(results.length ? { results } : {}),
+          ...(artifacts.length ? { artifacts } : {}),
           ...(gate ? { gate } : {}),
           model: (values.model as string) ?? null,
           effort: effort ?? null,
@@ -452,10 +464,11 @@ export async function main(argv: string[]): Promise<number> {
       await db.event.create({
         data: { kind: 'created', jobId: job.id, boardId: board.id, actor: whoami(), payload: { name } },
       });
-      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results }, () =>
+      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results, artifacts }, () =>
         console.log(`#${job.id} ${job.name}  [${job.phase}]  on ${slug}`
           + (exports.length ? `\n  must produce  ${exports.join(', ')}` : '')
-          + (results.length ? `\n  must report   ${results.join(', ')}` : '')));
+          + (results.length ? `\n  must report   ${results.join(', ')}` : '')
+          + (artifacts.length ? `\n  must hand over ${artifacts.join(', ')}` : '')));
       return 0;
     }
 
@@ -487,6 +500,7 @@ export async function main(argv: string[]): Promise<number> {
       const rows = jobs.map((j) => {
         const exports = declaredExports(j.exports);
         const results = declaredExports(j.results);
+        const artifacts = declaredExports(j.artifacts);
         const pr = j.attempts.find((a) => a.prUrl)?.prUrl ?? null;
         return {
           id: j.id, board: j.board.slug, name: j.name, phase: j.phase, attempts: j._count.attempts,
@@ -494,8 +508,8 @@ export async function main(argv: string[]): Promise<number> {
           // Carried on every row, whatever the phase, for the reason `hkb boards` carries its
           // defaults either way: a consumer inferring absence from a missing key reads a shape,
           // not a record.
-          pr, exports, results,
-          producedNothing: producedNothing({ phase: j.phase, pr, exports, results }),
+          pr, exports, results, artifacts,
+          producedNothing: producedNothing({ phase: j.phase, pr, exports, results, artifacts }),
         };
       });
       emit(out, rows, () => {
@@ -576,6 +590,7 @@ export async function main(argv: string[]): Promise<number> {
         // one that decides whether a completed session counts as a success.
         if (Array.isArray(job.exports) && job.exports.length) console.log(`  exports  ${job.exports.join(', ')}`);
         if (Array.isArray(job.results) && job.results.length) console.log(`  results  ${job.results.join(', ')}`);
+        if (Array.isArray(job.artifacts) && job.artifacts.length) console.log(`  files    ${job.artifacts.join(', ')}`);
         if (job.gate) console.log(`  gate     ${job.gate}`);
         if (job.suspendedFor) console.log(`  waiting  ${job.suspendedFor} — \`hkb approve ${job.id}\` or \`hkb reject ${job.id} "…"\``);
         if (job.lastError) console.log(`  error    ${job.lastError}`);
@@ -622,6 +637,15 @@ export async function main(argv: string[]): Promise<number> {
           // The other reviewable artifact, and the one that is not on a forge: what this attempt
           // took out of its checkout and left in the repository.
           if (Array.isArray(a.exported) && a.exported.length) console.log(`           exported ${a.exported.join(', ')}`);
+          // The third one, and the only output whose location a human has to be told: an artifact
+          // is deliberately not in the repository and not on a forge, so a line that named the
+          // files without naming the directory would describe something unfindable. Sizes because
+          // nothing removes these — see `src/artifacts.ts`.
+          if (Array.isArray(a.artifacts) && a.artifacts.length) {
+            const kept = a.artifacts as { name: string; kind: string; bytes: number }[];
+            console.log(`           kept ${kept.map((f) => `${f.name}${f.kind === 'dir' ? '/' : ''} ${bytes(f.bytes)}`).join(', ')}`);
+            console.log(`           in ${artifactsDir(job.id, a.k)}`);
+          }
           if (a.reason) console.log(`           ${a.reason.slice(0, 100)}`);
         }
       });

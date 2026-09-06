@@ -18,6 +18,7 @@ const { openBoard, closeBoard } = await import('../src/db.ts');
 const { reconcile, reconcileToRest, nextPhase } = await import('../src/controller.ts');
 const { fakeRuntime } = await import('../src/runtime/fake.ts');
 const { admissionCallback } = await import('../src/admission.ts');
+const { artifactsDir } = await import('../src/artifacts.ts');
 
 const db = openBoard();
 const board = await db.board.upsert({ where: { slug: 'test' }, update: {}, create: { slug: 'test' } });
@@ -779,6 +780,58 @@ test('a declared result the run did NOT write fails the attempt', async () => {
   assert.equal(after.attempts[0].outcome, 'no_output', 'the runtime said completed; the board disagreed');
   assert.equal(after.phase, 'failed');
   assert.match(after.lastError ?? '', /`finding`/, 'and it names what is missing');
+});
+
+/**
+ * `artifacts` end to end (ADR-011): the output that is too big to be a result and must not be
+ * committed. `test/artifacts.test.ts` covers the contract; these two cover the wiring, and the
+ * second is the refusal — same rule as `exports` and `results`, third medium.
+ */
+test('a declared artifact the run wrote is kept beside the board, not in the repository', async () => {
+  const b = await db.board.upsert({
+    where: { slug: 'artifacts' },
+    update: { dailyBudgetUsd: null, maxConcurrent: 5, pausedAt: null },
+    create: { slug: 'artifacts', dailyBudgetUsd: null, maxConcurrent: 5 },
+  });
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'writes a report', brief: 'look into it', isolate: false,
+      artifacts: ['report.md'], maxBudgetUsd: 1,
+    },
+  });
+  // Deliberately past RESULT_MAX_BYTES: a value this size is refused as a result, and that refusal
+  // is the reason this channel exists.
+  const big = '#'.repeat(9000);
+  await reconcile({ runtime: writing({ 'report.md': big }), cwd, board: 'artifacts', readPr: false });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'succeeded');
+  assert.deepEqual(after.attempts[0].artifacts, [{ name: 'report.md', kind: 'file', bytes: 9000 }],
+    'the catalogue is on the row — name, kind and size, never the contents');
+
+  // The two properties that distinguish an artifact from the other two outputs.
+  const kept = path.join(artifactsDir(job.id, 1), 'report.md');
+  assert.equal(fs.readFileSync(kept, 'utf8').length, 9000, 'the file survives the attempt: it IS the value');
+  assert.equal(fs.existsSync(path.join(cwd, 'report.md')), false,
+    'and it never entered the checkout, so it cannot land in a diff');
+});
+
+test('a declared artifact the run did NOT write fails the attempt', async () => {
+  const b = await db.board.findUniqueOrThrow({ where: { slug: 'artifacts' } });
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'forgets the file', brief: 'look into it', isolate: false,
+      artifacts: ['plan.json'], maxBudgetUsd: 1, maxRetries: 0,
+    },
+  });
+  await reconcile({ runtime: writing({}), cwd, board: 'artifacts', readPr: false });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.attempts[0].outcome, 'no_output', 'the runtime said completed; the board disagreed');
+  assert.equal(after.phase, 'failed');
+  assert.match(after.lastError ?? '', /`plan\.json`/, 'and it names what is missing');
+  assert.equal(fs.existsSync(artifactsDir(job.id, 1)), false,
+    'a run that wrote nothing leaves no directory behind — one per attempt for ever is litter');
 });
 
 /**

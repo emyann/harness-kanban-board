@@ -308,3 +308,6 @@ history.
 ## 2026-09-06 — refreshed howto/running-the-daemon (no-op re-stamp: nine src/hkb.ts anchors re-read at +69 after the approve/reject verbs — `up` moved 878 → 947)
 ## 2026-09-06 — added decisions/adr-011-proposals-not-board-access (a workload proposes and the controller writes: board mutation travels as a declared output, resolving the apply-half risk ADR-010 recorded)
 ## 2026-09-06 — linked decisions/adr-010-the-human-gate -> decisions/adr-011-proposals-not-board-access (frontmatter `related` only, so a reader who finds the apply-half risk finds its answer; NOT re-stamped — ADR-010 is genuinely stale and blessing it would be refresh-by-rote)
+## 2026-09-06 — refreshed architecture/overview (the third declared output: --artifact, the board-kept file that fills the gap between a 4 KB result and a committed export; ADR-011 has its channel, and src/artifacts.ts added to covers)
+## 2026-09-06 — refreshed architecture/job-kind + architecture/the-loop (no-op re-stamps: Job and Attempt each gained one additive nullable `artifacts` column and the controller gained a collection block beside the results one; neither page makes a claim about what a Job declares or produces)
+## 2026-09-06 — refreshed howto/running-the-daemon (no-op re-stamp: src/hkb.ts anchors re-read at +24 after the --artifact flag and its help lines — `up` moved 947 → 971)
