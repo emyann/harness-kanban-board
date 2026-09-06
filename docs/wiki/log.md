@@ -293,3 +293,4 @@ history.
 ## 2026-09-05 — refreshed architecture/overview (finding 11: `succeeded` no longer implies an artifact — `hkb ls` marks a Job that opened no PR and declared no exports, and the page says so where it explains the forge)
 ## 2026-09-05 — refreshed howto/running-the-daemon (no-op re-stamp: the nine src/hkb.ts anchors all sit below the new producedNothing helpers and the ls rewrite, and every one was re-read at +53 — `up` moved 770 → 823. No claim on the page is about the listing)
 ## 2026-09-05 — refreshed concepts/node-floor-and-type-check (no-op re-stamp: test.yml changed only from `npm install` to `npm ci`, which no claim on the page is about; `related` pruned of architecture/store-seam, deleted by adr-009)
+## 2026-09-05 — added decisions/adr-010-the-human-gate (groom is not a kind: the human gate becomes a spec field, results ships as ADR-008's named precondition, and approval is a resumed session carrying the operator's instruction)

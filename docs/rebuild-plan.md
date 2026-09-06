@@ -633,9 +633,16 @@ In this order, and each one only when the previous is boring:
    as an archive, and the `kb-<jobId>-<k>` branch prefix is unchanged so existing
    branches and worktrees still resolve. The record is
    [ADR-009](wiki/decisions/adr-009-retiring-the-first-system.md).
-3. **The second kind: groom.** A one-shot with a human gate (propose → approve →
-   apply). It is the *most different* from a Job, which is why it is next: what
-   generalises between them is real. `Phase.suspended` already exists for it.
+3. **The human gate** — and groom turned out not to be a kind. Reading the code to
+   start this found that a groom run is a Job in every respect except *lifecycle*:
+   propose, wait for a person, apply. What generalises is therefore the gate, not
+   groom-ness, and a gate is worth more as a spec field every Job can set than as a
+   capability locked inside one kind. So: ADR-008's unshipped `results` half ships,
+   a `gate` on the spec suspends a Job once its declared outputs exist, and
+   `hkb approve` resumes the session with the operator's instruction as the prompt.
+   Groom is then a brief plus board arithmetic. The record is
+   [ADR-010](wiki/decisions/adr-010-the-human-gate.md), which also notes what would
+   make groom a kind after all: an apply half that creates or modifies other Jobs.
 4. **The third kind: the DAG.** Only now. Its controller creates Jobs, the way a
    CronJob creates Jobs, and its dependency rule lives in the admission gate —
    `admitSpawn` already takes the policy — so ordering is structural rather than

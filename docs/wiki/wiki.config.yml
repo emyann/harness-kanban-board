@@ -98,6 +98,9 @@ pages:
   - slug: decisions/adr-009-retiring-the-first-system
     summary: "The pre-ADR-007 GitHub-Issues kanban is deleted rather than migrated; kb is renamed hkb, the per-repo directory becomes .hkb/, and the tarball ships only the transpile."
     status: seeded
+  - slug: decisions/adr-010-the-human-gate
+    summary: "propose -> approve -> apply needs no second kind: a Job declares results, a gate suspends it once they exist, and approve resumes the session with the operator's instruction as the prompt."
+    status: seeded
   - slug: howto/running-the-daemon
     summary: "Keep `hkb up` alive across reboots — a systemd user unit or a launchd agent around `hkb up --foreground`, where the log goes, and the restart-after-upgrade rule."
     status: seeded
