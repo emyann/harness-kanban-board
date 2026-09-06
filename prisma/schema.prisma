@@ -26,9 +26,17 @@ datasource db {
   provider = "sqlite"
 }
 
-/// Where a Job is in its lifecycle. Observed state, never asked for directly — except for the last
-/// three, which are the states only a human can put a Job in.
+/// Where a Job is in its lifecycle. Observed state, never asked for directly — except for `triage`
+/// and the last three, which are the states only a human can put a Job in.
+///
+/// `triage` is the only one of those that is an ENTRY rather than an exit, and it exists because
+/// `pending` means *wants to run*: a daemon claims it. There was nowhere to put "I noticed this, do
+/// not run it yet", so the choice was to file work you had not decided on or to lose it — and the
+/// workarounds (stop the board, drain it to zero concurrency) are board-wide answers to a
+/// per-Job question. A Job in `triage` is never claimed, and that costs no guard: the claim query
+/// asks for `pending` (ADR-011 named this gap and left it open).
 enum Phase {
+  triage     // filed, and not yet work: somebody noticed it, nobody has decided
   pending    // wants to run, nothing holds it
   running    // a lease is held and an attempt is live
   succeeded  // terminal: the session completed

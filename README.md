@@ -64,6 +64,7 @@ hkb show 1                                 # phase, spec, and every attempt: out
 | `hkb run [<id>]` | reconcile once, in the foreground |
 | `hkb retry <id>` | re-queue a Job that stopped, resuming its session |
 | `hkb done <id> "<why>"` · `hkb cancel <id> "<why>"` | the two ends only a human can call |
+| `hkb queue <id> ["…"]` · `hkb triage <id>` | move a Job across the line between "noticed" and "wants to run" |
 | `hkb rm <id>` | delete a Job and its attempts |
 | `hkb stop` · `hkb start` | the board's kill switch, and clearing it |
 | `hkb up` · `hkb down` | the same reconcile pass on a timer, detached |
@@ -107,6 +108,23 @@ It runs, produces its declared outputs, and goes **`suspended`** rather than fin
 
 The gate is **one-shot**: after an approval the Job finishes like any other. The approver need not be
 you — a delegated agent or an auto-approve policy writes the same record, and `hkb log` shows which.
+
+### Noticing something without starting it: `--triage`
+
+`pending` means *wants to run* — a daemon claims it. So there was nowhere to put something you
+noticed and have not decided on, and the answers were all board-wide: stop the board, or drain it.
+
+```bash
+hkb new "the --status budget accounting is wrong" --triage
+```
+
+That files it and nothing claims it. The brief is optional here, because a note that demanded a brief
+would not get written down — the name is the brief until **`hkb queue <id> ["<brief>"]`** decides it
+is work, which is the one moment the brief may be rewritten: the note said what you saw, and the brief
+has to say what to do about it. **`hkb triage <id>`** is the way back for one filed in haste, because
+the alternative is `hkb cancel`, which is terminal and throws the note away with the decision.
+
+`hkb ls --phase triage` is the inbox.
 
 ### A checkout may create a board and may not rewrite one
 

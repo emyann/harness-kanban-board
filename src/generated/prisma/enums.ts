@@ -10,6 +10,7 @@
 */
 
 export const Phase = {
+  triage: 'triage',
   pending: 'pending',
   running: 'running',
   succeeded: 'succeeded',

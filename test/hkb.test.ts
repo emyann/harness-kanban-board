@@ -1345,3 +1345,53 @@ test('the board defaults line names every grant, including the ones nobody can o
     /allowTools=\(none\) plugins=\(none\)/,
   );
 });
+
+// ---------------------------------------------------------------- triage
+
+test('--triage files a note without a brief, and it is not queued', async () => {
+  // The capture path, and it has to be one line: a note that demanded a brief would not get
+  // written down, which is the whole failure this state exists to prevent.
+  const j = json((await hkb('new', 'the --status budget accounting is wrong', '--board', 'suite-repo', '--triage', '--json')).out);
+  const row = await db.job.findUniqueOrThrow({ where: { id: j.id } });
+  assert.equal(row.phase, 'triage');
+  assert.equal(row.brief, 'the --status budget accounting is wrong', 'the name IS the brief until somebody decides');
+
+  // And filing normally is unchanged: no phase, and a brief is still required.
+  await assert.rejects(() => hkb('new', 'no brief', '--board', 'suite-repo'), /--brief|--brief-file/);
+  const plain = json((await hkb('new', 'ordinary', '--brief', 'b', '--board', 'suite-repo', '--json')).out);
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: plain.id } })).phase, 'pending');
+});
+
+test('queue turns a note into work, optionally re-briefed, and refuses anything else', async () => {
+  const j = json((await hkb('new', 'a thing I noticed', '--board', 'suite-repo', '--triage', '--json')).out);
+  await hkb('queue', String(j.id), 'Fix it properly: read src/limits.ts first.', '--board', 'suite-repo');
+  const row = await db.job.findUniqueOrThrow({ where: { id: j.id } });
+  assert.equal(row.phase, 'pending');
+  assert.equal(row.brief, 'Fix it properly: read src/limits.ts first.',
+    'the moment it stops being a note is the moment the brief has to say what to DO');
+
+  // Queueing what is already queued is a mistake worth naming rather than a no-op.
+  await assert.rejects(() => hkb('queue', String(j.id), '--board', 'suite-repo'), /already queued/);
+  // And the event stream says a person decided.
+  const ev = await db.event.findFirstOrThrow({ where: { jobId: j.id, kind: 'queued' } });
+  assert.deepEqual(ev.payload, { rebriefed: true });
+});
+
+test('triage is the way back, and it refuses a Job that has started', async () => {
+  const j = json((await hkb('new', 'filed in haste', '--brief', 'b', '--board', 'suite-repo', '--json')).out);
+  await hkb('triage', String(j.id), '--board', 'suite-repo');
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: j.id } })).phase, 'triage',
+    'a pending Job can be deferred without being cancelled, which would throw the note away');
+  await assert.rejects(() => hkb('triage', String(j.id), '--board', 'suite-repo'), /already in triage/);
+
+  // Not a way to unwind work that happened: those have their own verbs, and the message says so.
+  const done = json((await hkb('new', 'already ran', '--brief', 'b', '--board', 'suite-repo', '--json')).out);
+  await db.job.update({ where: { id: done.id }, data: { phase: 'succeeded' } });
+  await assert.rejects(() => hkb('triage', String(done.id), '--board', 'suite-repo'), /hkb retry|hkb cancel/);
+});
+
+test('--phase triage is the inbox', async () => {
+  const rows = json((await hkb('ls', '--phase', 'triage', '--board', 'suite-repo', '--json')).out) as { phase: string }[];
+  assert.ok(rows.length > 0);
+  assert.ok(rows.every((r) => r.phase === 'triage'), 'and it lists nothing else');
+});

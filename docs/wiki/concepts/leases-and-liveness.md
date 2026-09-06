@@ -17,8 +17,8 @@ covers:
   - path: src/limits.ts
     sha: 61b65c43e2fd7c28f952c403e02d073ca9907561
   - path: prisma/schema.prisma
-    sha: af2155d3e5cfd330f259ae1e5b5cde91f732d109
-generated_at_commit: 679487b
+    sha: 608f30399206342bbc1374203b47674c6a719657
+generated_at_commit: 47d5907
 last_refreshed: 2026-09-06
 related: [architecture/the-loop, architecture/the-board, architecture/job-kind, concepts/ceilings]
 ---
