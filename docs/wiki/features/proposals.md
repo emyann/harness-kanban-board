@@ -9,14 +9,14 @@ covers:
   - path: src/proposals.ts
     sha: fd5e1eee8b847c9b4024d1bf5f635a85907baae4
   - path: src/controller.ts
-    sha: ececdee4149ee0f7800ec56b4cd5cff4fbef555f
+    sha: bcdf1066a8cf0ea76fdce24e24ec8e43700108fd
   - path: src/brief.ts
     sha: a6f76aecf0487fc43076a4f582c022756d52357e
   - path: prisma/schema.prisma
     sha: e4bac2046bd232c6656a59f4503e6a2ca32578f1
   - path: src/hkb.ts
-    sha: 158ef020ba52943c181ef95138ba16bc5a2d33f6
-generated_at_commit: b05de11
+    sha: 6ace2d945593b5e8338e7a96e622310b6340114c
+generated_at_commit: 5c28806
 last_refreshed: 2026-09-06
 related:
   [
@@ -127,6 +127,12 @@ $ hkb show 42
 $ hkb approve 42 "yes, but keep them serial"
 #42 approved by ada — the controller files what it proposed on the next pass
 ```
+
+One consequence of the apply being the controller's: **`hkb retry` refuses a proposer whose proposal
+has been filed.** The next pass would find the same approval, re-file rows the unique key already
+refuses, and finish the Job again without ever running the worker — a retry that quietly does
+nothing. Retrying it before the approval, or after a refused proposal, works normally
+(`src/hkb.ts`).
 
 `--propose` implies a gate, and not by convention: nothing is applied without an approval, so a
 proposing Job with no approver would propose into a board where nobody is ever asked. The operator's
