@@ -1,6 +1,7 @@
 # How a multi-step workflow should be represented in hkb — a design study
 
-> **Status: study, not decision.** Written 2026-09-05 against `main` at `5cc611e`, SDK `0.3.261`.
+> **Status: study, with §9 answered.** Written 2026-09-05 against `main` at `5cc611e`, SDK `0.3.261`;
+> §9 answered by the operator the same day and the answers folded back in — they changed §3 and §4.
 > It follows the shape `docs/local-first.md` had before ADR-005 and ADR-006: the reasoning lives here,
 > the decisions go in ADRs once they are made. Sections are numbered so a card can say "§4" and mean
 > one thing. The open questions in §9 are the point — nothing here is settled that §9 does not say is
@@ -68,8 +69,23 @@ a real waiting state, an authoritative handoff, and no new kind. Iterated, it is
 columns beyond the ones the gate already needs.
 
 `Job.after` is **rejected, not deferred**. Ordering between *workloads* stays where ADR-007 decision 5
-and `prisma/schema.prisma:13-15` put it in writing: a second kind whose controller creates Jobs, which
-does not ship before integration.
+and `prisma/schema.prisma:13-15` put it in writing: a second kind whose controller creates Jobs.
+
+**The gate is a placeable primitive, not the feature.** The original framing of this section — "the gate
+*is* the multi-step feature" — was corrected by the operator, and the correction matters. What is
+required is that **where the human boundary goes is authorable**, because different workflows want it in
+different places. Two topologies, both named as requirements:
+
+- **fan-in to one assembled pull request, reviewed once at the end** — the gate on the integration node;
+- **a review after every node**, rather than one pull request carrying the assembled result — the gate on
+  each node.
+
+Those are the same mechanism placed differently. So the gate answers *how a boundary waits*; it does not
+answer *where boundaries go*, and the second question belongs to whatever authors a workflow.
+
+**This pulls integration forward.** The first topology cannot be expressed without somewhere for parallel
+work to accumulate, which is §4.1 below — and `docs/rebuild-plan.md` already orders integration *after*
+the DAG. On this evidence it is before it, and possibly before anything else here.
 
 ## 4. Where determinism lives
 
@@ -104,6 +120,15 @@ default branch fresh on every attempt, so every Job in a batch works from a tree
 from what will actually be merged. Determinism about *what a step can see* is a git fact — not a prompt
 fact and not a graph fact — and it is **unowned today**.
 
+**A workflow being "dynamic" does not make its processing nondeterministic.** The actor set can be
+elected at runtime — how many agents, which ones, from what a previous step returned — while everything
+around it stays deterministic machinery: ordering, gating, budgeting, artifact handoff. The
+nondeterminism is confined to the leaf. That is the same conclusion as the rule above arriving from the
+other direction, and it is why Claude Code's Workflow tool is an existence proof rather than merely a
+comparison: deterministic control flow, nondeterministic leaves, with the determinism living in the
+*script*. The reason hkb cannot simply copy it is the one that makes hkb a scheduler — a script is not
+durable across a process restart, and a board row is.
+
 The layers, ordered by what can refuse:
 
 | | layer | defeasible? |
@@ -114,6 +139,33 @@ The layers, ordered by what can refuse:
 | 4 | the declared-output check, after teardown | no, but post-mortem |
 | 5 | a script the agent invokes | deterministic in body, wholly defeasible in *placement* |
 | 6 | prompt text, including a skill's prose | guarantees nothing; measured guaranteeing nothing twice |
+
+### 4.1 The base of the checkout becomes a spec field
+
+Layer 3 above was listed as *unowned*. It has an owner now, and the answer came from the operator rather
+than from the research, which had only identified the hole.
+
+**The base a Job's checkout is cut from varies per Job.** Today `baseRef()` (`src/worktree.ts:113-125`)
+resolves origin's default branch fresh on every attempt — a constant nobody chose, and the reason every
+Job in a batch works from a tree that diverges further from what will actually be merged. Instead:
+
+> Take a graph where **A** is blocked by **B** and **C**. A's branch is cut from origin. B and C run
+> concurrently and are **cut from A's branch**, collecting their results back into it. A runs last, on a
+> branch that now carries both, and opens the pull request.
+
+That is an **integration branch**, and it is the shape the retired system had as `kb/track-<root>`.
+`docs/rebuild-plan.md` item 5 already says it is *"the shape that does"* fix integration and *"do not
+start the DAG kind without it"* — so this is a re-derivation of a conclusion the plan reached and never
+implemented, which is the strongest kind of agreement available.
+
+Two consequences worth stating:
+
+- **It closes the layer-3 hole.** The #350/#354 collision lived in the base, and no ordering edge could
+  have caught it because the colliding fact did not exist at filing time. A base a Job *declares* is a
+  fact that does exist at filing time.
+- **It is what §3's first topology needs.** Fan-in to one reviewed pull request requires somewhere for
+  parallel work to accumulate. The integration branch is that somewhere; the gate on the integration node
+  is the review. The two requirements are one mechanism seen from both ends.
 
 ## 5. The representation, in three tiers
 
@@ -151,9 +203,21 @@ noticed:
 - **ADR-007 decision 5** and `prisma/schema.prisma:13-15` say the DAG is a *kind* whose controller
   creates Jobs — so multi-step is **many Jobs**.
 
-Both are accepted records. §3 resolves it by scope — *sequence is a field, concurrency is a kind* — but
-that resolution is currently only in this study. It belongs in an ADR, because the next person to read
-the two records will find them disagreeing.
+Both are accepted records. §3 resolves it by scope — *sequence is a field, concurrency is a kind* — and
+**it gets its own short ADR.**
+
+The practice question was asked and is worth writing down, because it will recur. This repository's own
+rule is that once a record is `accepted` it is never rewritten, so editing either is out however tempting
+it is for ADR-010, which is a day old. That leaves two framings, and the difference is not cosmetic:
+
+- **Supersede** — for when one record *replaces* another. Wrong here: neither ADR-007 decision 5 nor
+  ADR-010 is withdrawn, and both stay true inside their scope.
+- **Clarify** — a new record whose entire decision is the scope rule, citing both, marking neither
+  superseded, with a `related` link added from each.
+
+The second. And it should be **short** — its whole job is to state the rule, say where each prior record
+applies, and be findable by whoever next reads them disagreeing. A long record here would re-argue
+decisions already made.
 
 ## 7. Artic, and the thing it has that we do not
 
@@ -197,25 +261,61 @@ locates it. Delegation applies to regions hkb was never going to model anyway �
 step body*, not a substitute for the board. What hkb would lose by delegating a region it *did* want to
 schedule is precisely the list that makes it a scheduler: per-step leases, ceilings, gates, audit.
 
-## 9. Open questions — these need the operator
+## 9. The questions, and what they were answered
 
-Nothing above is a decision. These are the forks where the answer changes what gets built.
+Asked of the operator on 2026-09-05 and answered the same day. Four of the six changed this document;
+where they did, the change is folded into the section named rather than left here.
 
-1. **Is `propose → approve → apply` really the whole multi-step feature for now?** §3 says yes and both
-   alternatives died. The cost of accepting it: no fan-out, no fan-in, and no ordering between workloads
-   until the DAG kind ships behind integration.
-2. **Does the ADR-007/ADR-010 contradiction in §6 get its own ADR**, or a paragraph in an existing one?
-   It is currently unrecorded outside this file.
-3. **Who owns the base of the checkout (§4, layer 3)?** It is an unowned determinism layer, it is where
-   the only measured composition failure lives, and `baseRef()` resolving fresh per attempt is a
-   decision nobody made deliberately.
-4. **Do we adopt Artic's read side (§7)** — declared *inputs*, used to restrict what a step can see?
-   The reported gains are large, it is the natural companion to `results`, and it is the first thing in
-   this study that would change what a brief looks like.
-5. **Is "a dynamic workflow elects its actor non-deterministically" the definition we want?** It holds
-   for the Workflow tool, where a `parallel(...)` has a cardinality nobody declared. There may be a
-   sharper axis underneath — whether the graph is *data or code*.
-6. **How much verification beyond presence (§7) are we willing to pay for?** `Job.check` — a command the
-   *controller* runs, whose non-zero exit fails the attempt — was the one genuinely new mechanism the
-   research recommended, and it is the only thing that promotes a script's guarantee from layer 5 to
-   layer 1.
+**Q1 — Is `propose → approve → apply` the whole multi-step feature? — NO, and the question was wrong.**
+The gate is a *mechanism*; what is required is that **where the human boundary goes is authorable**, per
+workflow. Two topologies named as requirements: fan-in to one assembled pull request reviewed once, and
+a review after every node. Folded into §3, which also notes the consequence — this pulls **integration**
+ahead of the DAG in the plan's ordering.
+
+**Q2 — Does the ADR-007/ADR-010 contradiction get its own ADR? — YES, a short clarifying one.** Not a
+supersession: neither record is withdrawn. Reasoning in §5.
+
+**Q3 — Who owns the base of the checkout? — the Job does.** The base becomes a spec field, defaulting to
+origin's default branch, with a graph's nodes cut from their parent's branch and collecting back into it.
+This is the integration branch the plan already called for. New §4.1, and it closes the layer-3 hole in
+§4.
+
+**Q4 — Do we adopt Artic's read side? — conditional.** Depends on the design, on whether declared inputs
+sharpen what the hkb primitive is, and on how handoff works. Not decided; it belongs with §4.1, since
+declared inputs and the integration branch are both answers to *what can this step see* — one at the
+context level, one at the git level.
+
+**Q5 — is "a dynamic workflow elects its actor non-deterministically" the definition? — dissolved.** It
+was an illustration, not a proposed taxonomy: the point was that an agentic workflow can be *processed*
+deterministically even when the actor set is not known up front. Folded into §4 as a clarification. There
+is no definition to settle.
+
+**Q6 — how much verification beyond presence? — PARKED.** `Job.check` — a command the controller runs,
+whose non-zero exit fails the attempt — is understood and deliberately deferred as too advanced for now.
+Nothing else here depends on it. Recorded so it is not rediscovered: it is the only mechanism that
+promotes a script's guarantee from layer 5 to layer 1, and without it a declared output is satisfied by
+one `echo`.
+
+## 10. What the answers made next
+
+Not the graph, and not the gate. **A Job's record of what it did, decoupled from git.**
+
+The requirement behind Q6's parking: a Job should not have to be coupled to commits or a pull request,
+and a Job that did work and has nothing to hand over should still be able to say what it did. `Attempt`
+today ends in `branch`, `prNumber`, `prUrl` — the coupling made concrete.
+
+Three parts, two of them nearly free:
+
+1. **`results`** — ADR-008's unshipped half, and the handoff contract object. The place a Job puts
+   something to share that is not a diff. It is also what ADR-010's gate needs in order to carry a
+   proposal, so it serves both.
+2. **`Attempt.turns` and `Attempt.denials`** — the runtime already computes both (`WorkerOutcome`,
+   `src/runtime/index.ts`) and the controller drops them. `durationMs` is already derivable from
+   `startedAt`/`endedAt`.
+3. **Tool usage by name** — not captured today; the runtime already consumes the message stream that
+   would carry it.
+
+Together these make `producedNothing` (`src/hkb.ts`) honest. Today it can only say *this Job produced
+nothing*, which reads as failure. With a handoff object and telemetry it can say *no pull request, and
+here is what it found and what it cost* — which is the difference between a Job that investigated and a
+Job that stalled.
