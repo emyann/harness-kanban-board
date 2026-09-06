@@ -13,11 +13,11 @@ covers:
   - path: src/limits.ts
     sha: 61b65c43e2fd7c28f952c403e02d073ca9907561
   - path: src/hkb.ts
-    sha: 3267dc3d4472a1c813f4f668ee44428867c2915d
+    sha: 09651f4bc46add81ff65798edf1104283170bf86
   - path: prisma/schema.prisma
     sha: af2155d3e5cfd330f259ae1e5b5cde91f732d109
 related: [architecture/job-kind, architecture/the-loop, concepts/ceilings, decisions/adr-007-workload-scheduler, decisions/adr-008-declared-outputs]
-generated_at_commit: 679487b
+generated_at_commit: 39498a0
 last_refreshed: 2026-09-06
 ---
 

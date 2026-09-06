@@ -4,6 +4,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { openBoard, closeBoard } from './db.ts';
+import { ensureSchema } from './schema.ts';
+import { databaseUrl } from './db-url.ts';
 import { reconcile } from './controller.ts';
 import { checkExportPath } from './worktree.ts';
 import { checkResultName, RESULT_MAX_BYTES } from './results.ts';
@@ -138,6 +140,7 @@ const HELP = `hkb — run one agent against one brief
        --guide <path>|none  the contributor guide every Job on this board reads, repo-relative
                         — \`CLAUDE.md\` is the usual one
 
+  hkb migrate               apply this build's pending migrations to the board, deliberately
   hkb version               what this build is
 
 A board's defaults fill in what a Job did not say: the Job's own value wins, the board's
@@ -456,6 +459,18 @@ export async function main(argv: string[]): Promise<number> {
   if (verb === 'version' || values.version) {
     const version = packageVersion();
     emit(out, { version }, () => process.stdout.write(`hkb ${version}\n`));
+    return 0;
+  }
+
+  // Also before `openBoard()`, and it has to be: opening the board is the thing that would apply
+  // the migrations, so a verb whose whole job is to apply them deliberately cannot go through it.
+  if (verb === 'migrate') {
+    const file = databaseUrl().replace(/^file:/, '');
+    const got = ensureSchema(file, undefined, { asked: true });
+    emit(out, { board: file, ...got }, () => {
+      if (!got.applied.length) console.log(`${file} is already up to date (${got.alreadyApplied} migrations)`);
+      else console.log(`${file} — applied ${got.applied.length}:\n${got.applied.map((m) => `  ${m}`).join('\n')}`);
+    });
     return 0;
   }
 
@@ -1557,7 +1572,7 @@ export async function main(argv: string[]): Promise<number> {
     }
 
     default:
-      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, retry, done, cancel, rm, stop, start, up, down, log, watch, boards`);
+      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, retry, done, cancel, rm, stop, start, up, down, log, watch, boards, migrate`);
   }
 }
 

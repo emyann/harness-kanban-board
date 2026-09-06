@@ -70,6 +70,7 @@ hkb show 1                                 # phase, spec, and every attempt: out
 | `hkb log [<id>]` | what happened, in order |
 | `hkb watch [<id>]` | the same stream, as it happens |
 | `hkb boards` | every board on this machine, and what each one may spend |
+| `hkb migrate` | apply this build's pending migrations to the board, deliberately |
 | `hkb version` | what this build is |
 
 `hkb run` is the foreground tool — one reconcile, in this process, streaming what the worker does — and it is
@@ -106,6 +107,24 @@ It runs, produces its declared outputs, and goes **`suspended`** rather than fin
 
 The gate is **one-shot**: after an approval the Job finishes like any other. The approver need not be
 you — a delegated agent or an auto-approve policy writes the same record, and `hkb log` shows which.
+
+### A checkout may create a board and may not rewrite one
+
+The board is created and migrated on first touch, because the first command on a fresh machine has to
+work. But a **checkout** meeting a board that already exists refuses instead:
+
+```
+$ node bin/hkb.ts ls
+hkb: ~/.hkb/board.db would gain 1 migration this checkout has and it does not
+     (20260906230000_guide) — and then every hkb without it would refuse to open it.
+     A checkout does not migrate a board you use. Run `hkb migrate` to apply it
+     deliberately, or point HKB_DATABASE_URL at a board you do not mind rewriting.
+```
+
+An installed `hkb` still migrates on upgrade, as any CLI does. The refusal is for the workflow this
+project is built around — developing hkb from a checkout while using hkb — where running one command
+on a feature branch used to rewrite the machine's board and leave every other checkout unable to open
+it. `npm link` counts as a checkout, because the bin's realpath is the working copy.
 
 ### What every worker is told
 

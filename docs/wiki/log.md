@@ -354,3 +354,5 @@ history.
 ## 2026-09-06 — triage inbox: the [bug] about workers running on the SDK's minimal system prompt left by being decided — ADR-014 carries the measurement and the reasoning
 ## 2026-09-06 — refreshed architecture/runtime-layer (systemPrompt is unset on purpose now, with the number beside it)
 ## 2026-09-06 — triage inbox: merged two independently-filed copies of the same finding (the pull-request protocol implied by a worktree) that a keep-both-sides merge resolution left side by side — one was mine, one was the worker that wrote features/declared-outputs
+## 2026-09-06 — refreshed architecture/the-board (a checkout may create a board and may not rewrite one — the migration foot-gun the page carried as an open finding is fixed, and the page now describes the guard) + GLOSSARY (Migration guard)
+## 2026-09-06 — triage inbox: the [bug] about a dev checkout migrating the operator's live board left by being FIXED (`mayMigrate`, `hkb migrate`)

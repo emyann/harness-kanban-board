@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { ensureSchema, assertNotFromTheFuture, knownMigrations } from '../src/schema.ts';
+import { ensureSchema, assertNotFromTheFuture, knownMigrations, mayMigrate } from '../src/schema.ts';
 
 /**
  * Making the board exist, and refusing one from the future.
@@ -90,7 +90,9 @@ test('a partly-migrated board is brought the rest of the way, not started over',
     .run('seed', 'x', all[0]);
   db.close();
 
-  const r = ensureSchema(p);
+  // `asked`, because the board already exists: bringing an existing board the rest of the way is
+  // what `hkb migrate` does, and nothing else may do it from a checkout.
+  const r = ensureSchema(p, undefined, { asked: true });
   assert.deepEqual(r.applied, all.slice(1), 'only what was missing');
 });
 
@@ -159,7 +161,7 @@ test('migrating a populated board keeps its attempts, leases and events', () => 
   seed.exec(`INSERT INTO "Event" ("kind", "jobId") VALUES ('claimed', 1)`);
   seed.close();
 
-  const r = ensureSchema(p);
+  const r = ensureSchema(p, undefined, { asked: true });
   assert.deepEqual(r.applied, all.slice(1), 'the rest of the history ran');
 
   const db = open(p);
@@ -200,7 +202,7 @@ test('a migration that would leave a dangling reference is rolled back, not comm
   );
 
   assert.throws(
-    () => ensureSchema(p, bad),
+    () => ensureSchema(p, bad, { asked: true }),
     /referring to a parent that is not there/,
     'and the message says the board was left alone',
   );
@@ -210,4 +212,70 @@ test('a migration that would leave a dangling reference is rolled back, not comm
   } finally {
     db.close();
   }
+});
+
+/**
+ * Whose migration is this? (`mayMigrate`)
+ *
+ * The bug: `ensureSchema` applied every pending migration on every open, so running any command from
+ * a feature checkout wrote that branch's migrations into the operator's live board, after which
+ * every other checkout refused to open it. The refusal was guarded; the cause was not.
+ *
+ * The decision is pure and the failing case is silent, so it gets the exhaustive table.
+ */
+test('a checkout may create a board and may not rewrite one', () => {
+  const cases: [{ isNew: boolean; isCheckout: boolean; asked: boolean }, boolean, string][] = [
+    [{ isNew: true, isCheckout: true, asked: false }, true, 'a fresh machine: the first command has to work'],
+    [{ isNew: true, isCheckout: false, asked: false }, true, 'and the same from an install'],
+    [{ isNew: false, isCheckout: false, asked: false }, true, 'an installed hkb upgrading a board is ordinary'],
+    [{ isNew: false, isCheckout: true, asked: false }, false, 'THE ONE: a checkout, a board in use, nobody asked'],
+    [{ isNew: false, isCheckout: true, asked: true }, true, '`hkb migrate` is the way through'],
+    [{ isNew: true, isCheckout: true, asked: true }, true, 'asking for what would have happened anyway is fine'],
+  ];
+  for (const [input, want, why] of cases) {
+    assert.equal(mayMigrate(input), want, `${JSON.stringify(input)} — ${why}`);
+  }
+});
+
+test('a checkout REFUSES to migrate a board that already exists, at the shipped defaults', () => {
+  // No options: this is what a `node bin/hkb.ts ls` does, from a checkout, against a board somebody
+  // is using — which is the exact command that cost an operator their board on 2026-09-06. The
+  // suite itself runs from a checkout, so the shipped default is the one under test here.
+  const p = scratch();
+  const all = knownMigrations();
+  const staged = fs.mkdtempSync(path.join(os.tmpdir(), 'hkb-part-'));
+  dirs.push(staged);
+  const migrations = path.resolve(import.meta.dirname, '..', 'prisma', 'migrations');
+  fs.cpSync(path.join(migrations, all[0]), path.join(staged, all[0]), { recursive: true });
+  ensureSchema(p, staged);
+
+  assert.throws(
+    () => ensureSchema(p),
+    (e: Error & { exitCode?: number }) => e.exitCode === 2
+      && /A checkout does not migrate a board you use/.test(e.message)
+      && /hkb migrate/.test(e.message)
+      && new RegExp(all[1]).test(e.message),
+    'and the refusal names the migrations, the reason, and the way through',
+  );
+
+  // Nothing was written: a refusal that half-applied would be worse than the bug.
+  const db = open(p);
+  const applied = (db.prepare('SELECT migration_name FROM _prisma_migrations').all() as { migration_name: string }[])
+    .map((r) => r.migration_name);
+  db.close();
+  assert.deepEqual(applied, [all[0]], 'the board is exactly where it was');
+
+  // And the way through works.
+  const got = ensureSchema(p, undefined, { asked: true });
+  assert.deepEqual(got.applied, all.slice(1));
+});
+
+test('a board that does not exist yet is still created and migrated with no ceremony', () => {
+  // The property the refusal must not cost: a machine-level default is only frictionless if the
+  // first command on a fresh machine works, and telling somebody to run a migration first is the
+  // "yes, by hand" answer this project treats as a bug report.
+  const p = scratch();
+  const r = ensureSchema(p);
+  assert.deepEqual(r.applied, knownMigrations(), 'the whole history, unasked');
+  assert.equal(r.alreadyApplied, 0);
 });

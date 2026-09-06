@@ -9,14 +9,14 @@ covers:
   - path: prisma/schema.prisma
     sha: af2155d3e5cfd330f259ae1e5b5cde91f732d109
   - path: src/schema.ts
-    sha: 36a37ef8d4d26ee1226e44c664f25ba57d78387e
+    sha: ee1920b789eb96be121c8bba20cc92e452ddf818
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/spec.ts
     sha: df1e8d90a8b3070313b06dd4d47af39ec3f48ca7
-generated_at_commit: 1542483
+generated_at_commit: 39498a0
 last_refreshed: 2026-09-06
 related:
   [
@@ -173,11 +173,15 @@ The backward direction cannot be handled the same way, so it is refused: a board
 this build does not know about produces a message naming the migration and the two ways out, rather
 than a Prisma error naming a column (`assertNotFromTheFuture`, `src/schema.ts`).
 
-> The refusal is guarded; the *cause* is not. Running any `hkb` command from a feature branch
-> migrates `~/.hkb/board.db` to that branch, after which every other checkout refuses it — which is
-> exactly the workflow this project is built around (developing hkb from a checkout while using hkb).
-> Filed in `FINDINGS.md`, not fixed; the fix is a product choice about whether a dev checkout should
-> ever touch the machine board.
+**Which is why a checkout may create a board and may not rewrite one.** The forward direction used to
+be unguarded in the other sense: running any command from a feature branch applied that branch's
+migrations to `~/.hkb/board.db`, after which every other checkout refused it — the exact workflow this
+project is built around, developing hkb from a checkout while using hkb. `mayMigrate` now takes three
+facts (`src/schema.ts`): a **new** board is created and migrated with no ceremony, because the first
+command on a fresh machine has to work; an **installed** build migrating on upgrade is ordinary; and a
+**checkout** meeting a board that already exists refuses, naming the pending migrations and
+`hkb migrate`. An `npm link` install counts as a checkout, and should — the bin's realpath is the
+working copy (`IS_CHECKOUT`, `src/paths.ts`).
 
 ## What the board deliberately does not hold
 

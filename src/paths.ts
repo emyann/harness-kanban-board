@@ -42,3 +42,17 @@ export function cliEntry(): string {
   const built = path.join(beside, 'hkb.js');
   return fs.existsSync(built) ? built : path.join(beside, 'hkb.ts');
 }
+
+/**
+ * Whether this build is a **checkout** rather than an installed package.
+ *
+ * The test is `node_modules`, because that is the property that actually differs: a published
+ * install lives under one (`<prefix>/lib/node_modules/hkb-cli/`) and a working copy does not. It is
+ * the same discriminator the no-build-step rule already turns on — Node refuses to strip types under
+ * `node_modules`, which is why a published `hkb` must be JavaScript.
+ *
+ * An `npm link` install counts as a checkout, and should: the bin's realpath IS the working copy, so
+ * a linked `hkb` runs whatever is on the branch you happen to have checked out. That is exactly the
+ * case this predicate exists to catch (`src/schema.ts`).
+ */
+export const IS_CHECKOUT = !PACKAGE_ROOT.split(path.sep).includes('node_modules');

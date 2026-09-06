@@ -17,8 +17,8 @@ covers:
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/schema.ts
-    sha: 36a37ef8d4d26ee1226e44c664f25ba57d78387e
-generated_at_commit: 679487b
+    sha: ee1920b789eb96be121c8bba20cc92e452ddf818
+generated_at_commit: 39498a0
 last_refreshed: 2026-09-06
 related: [architecture/job-kind, architecture/runtime-layer, decisions/adr-007-workload-scheduler, concepts/worker-identity]
 ---
