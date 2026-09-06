@@ -1,3 +1,5 @@
+import { PROPOSAL_MAX_BYTES, PROPOSAL_MAX_JOBS } from './proposals.ts';
+
 /**
  * What every isolated Job is told, on top of its own brief.
  *
@@ -156,5 +158,50 @@ export function approvedPrompt(actor: string | null, note?: string | null): stri
     'You are continuing the same session, so you still have everything you worked out. Apply the',
     'proposal as approved. If the instruction above changes it, follow the instruction — it is the',
     'more recent decision and it came from a person.',
+  ].join('\n');
+}
+
+/**
+ * The proposal contract, appended to a proposing Job's brief.
+ *
+ * ADR-011 in one paragraph a worker can act on: **you do not write to the board.** What a run wants
+ * filed goes into one JSON file, a person reads it, and the controller creates the rows — so the
+ * agent needs no board handle, no credentials and no verb, and a retried attempt cannot double-file
+ * anything because nothing was filed by the attempt at all.
+ *
+ * The schema is stated in full rather than referenced, and the refusals are stated with it. A model
+ * that has to guess which fields are allowed will guess `isolate`, and finding out by having the
+ * attempt fail costs a whole run (`src/proposals.ts` is what refuses).
+ */
+export function withProposal(brief: string, path: string, ceiling: number | null): string {
+  return [
+    brief.trimEnd(),
+    '',
+    '---',
+    '',
+    'This Job PROPOSES work. It does not file it: you have no access to the board, and you must not',
+    'try to get any — no CLI, no database, no API. Write what you want filed to this exact path:',
+    '',
+    `  \`${path}\``,
+    '',
+    'as JSON in this shape, and nothing else:',
+    '',
+    '```json',
+    '{',
+    '  "jobs": [',
+    '    { "name": "one line naming the work", "brief": "the whole instruction for that Job" }',
+    '  ]',
+    '}',
+    '```',
+    '',
+    `At most ${PROPOSAL_MAX_JOBS} jobs, and the file must stay under ${PROPOSAL_MAX_BYTES / 1024} KB — a person reads this`,
+    'before anything is created, and a proposal nobody can read is one nobody can approve.',
+    '',
+    'A job may also carry `"maxBudgetUsd"`: a number of dollars'
+      + (ceiling === null ? '.' : `, which is clamped to $${ceiling.toFixed(2)} if you ask for more.`),
+    'Those three keys are the whole surface. Any other key — `isolate`, `allowedTools`, `gate`,',
+    '`exports` — is refused and fails the attempt; a proposed Job inherits the rest from its board.',
+    '',
+    'Write the file and stop. A human approves or rejects, and the controller creates the Jobs.',
   ].join('\n');
 }

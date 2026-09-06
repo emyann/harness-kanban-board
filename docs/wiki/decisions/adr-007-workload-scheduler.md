@@ -11,18 +11,18 @@ supersedes: decisions/adr-006-local-store
 superseded_by: ~
 covers:
   - path: prisma/schema.prisma
-    sha: 9b372c388a24d6aba33562716b4f12bd95c72d1c
+    sha: e4bac2046bd232c6656a59f4503e6a2ca32578f1
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
   - path: src/controller.ts
-    sha: c90722f6a5d32796e996f23269eeb44dd883fc6f
+    sha: ececdee4149ee0f7800ec56b4cd5cff4fbef555f
   - path: src/admission.ts
     sha: aab84ccd1178b085cea79d2c4566149145027b9e
   - path: src/runtime/index.ts
     sha: 55007f26fe6b9e4ec107997eef5aba74ec4643e6
   - path: package.json
     sha: 02ee69e9b3b3113a1826ffc0798b80a91a2c02ba
-generated_at_commit: 1286319
+generated_at_commit: b05de11
 last_refreshed: 2026-09-06
 related: [decisions/adr-006-local-store, architecture/job-kind, architecture/runtime-layer, concepts/admission-control, architecture/store-seam]
 ---
@@ -135,8 +135,9 @@ because ADR-009 deleted the other.
 
 Decision 3 is the one that has carried weight since. Everything added after this record
 arrived as columns and enum values on the same two tables rather than as a table of its
-own: `gate`, `suspendedFor` and `results` (ADR-010), `artifacts` (ADR-011), `pluginPaths`
-(ADR-012), `inputs` and `Lease.slot`, two more terminal `Phase` values an operator writes
+own: `gate`, `suspendedFor` and `results` (ADR-010), `artifacts`, `proposes` and three
+lineage columns (ADR-011), `pluginPaths` (ADR-012), `inputs` and `Lease.slot`, two more
+terminal `Phase` values an operator writes
 by hand, and three more `Outcome` values — `no_output`, `no_input`, `stopped`
 (`prisma/schema.prisma`). No `Workload` table
 appeared, and no per-Job schema; the closed sets stayed closed sets the database checks.

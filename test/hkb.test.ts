@@ -121,6 +121,26 @@ test('new names a missing brief file rather than failing obscurely', async () =>
   await assert.rejects(() => hkb('new', 'x', '--brief-file', '/nope/nothing.md'), /no such file/);
 });
 
+test('--propose files a proposing Job, and a proposing Job is a GATED Job', async () => {
+  const j = json((await hkb('new', 'decomposer', '--brief', 'break it down', '--propose', '--json')).out);
+  const row = await db.job.findUniqueOrThrow({ where: { id: j.id } });
+  assert.equal(row.proposes, 'jobs');
+  // The one that matters. ADR-011 applies nothing without an approval, so a proposing Job with no
+  // gate would propose into a board where nobody is ever asked — which is not a smaller version of
+  // the feature, it is the feature missing.
+  assert.ok(row.gate, 'a proposal with no approver is a proposal nothing reads');
+
+  const own = json((await hkb('new', 'decomposer with a question', '--brief', 'b', '--propose',
+    '--gate', 'is this the right split?', '--json')).out);
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: own.id } })).gate, 'is this the right split?',
+    'and the operator’s own question wins over the default');
+
+  const plain = json((await hkb('new', 'not a proposer', '--brief', 'b', '--json')).out);
+  const plainRow = await db.job.findUniqueOrThrow({ where: { id: plain.id } });
+  assert.equal(plainRow.proposes, null, 'proposing is opt-in');
+  assert.equal(plainRow.gate, null, 'and it is the only thing that turns the gate on by itself');
+});
+
 test('new validates effort against the closed set', async () => {
   await assert.rejects(() => hkb('new', 'x', '--brief', 'b', '--effort', 'turbo'), /low\|medium\|high/);
 });
