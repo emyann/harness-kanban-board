@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "adding a workload kind, changing retry or lease behaviour, or wondering why the DAG is not in the core"
 covers:
   - path: prisma/schema.prisma
-    sha: 9b372c388a24d6aba33562716b4f12bd95c72d1c
+    sha: e4bac2046bd232c6656a59f4503e6a2ca32578f1
   - path: src/controller.ts
-    sha: c90722f6a5d32796e996f23269eeb44dd883fc6f
+    sha: bcdf1066a8cf0ea76fdce24e24ec8e43700108fd
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
-generated_at_commit: 1286319
+generated_at_commit: 5c28806
 last_refreshed: 2026-09-06
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control]
 ---
@@ -29,7 +29,7 @@ deliberately, because it is what stops the second kind being invented twice:
 
 | hkb | Kubernetes | Why the analogy holds |
 |---|---|---|
-| `Job` | Job | spec and status; the controller writes only status |
+| `Job` | Job | spec and status; the controller writes only status — and creates rows, but only from an approved proposal (`features/proposals`) |
 | `Attempt` | Pod | one execution — the thing that actually dies |
 | `Lease` | Lease (`coordination.k8s.io`) | holder identity plus a renew deadline |
 | `Board` | Namespace | a name to group jobs under |
@@ -155,7 +155,9 @@ inputs and outputs added the other pair:
 - `lost` — the reclaim path above; nobody ever reported this attempt.
 - `stopped` — the operator stopped the daemon mid-run.
 - `no_output` — the session ended and something the Job **declared** is not there
-  (ADR-008). The runtime thinks it succeeded; the board disagrees.
+  (ADR-008). The runtime thinks it succeeded; the board disagrees. It is also the outcome
+  for a **proposal** the validator refused: the file arrived and was not what was promised
+  (`features/proposals`).
 - `no_input` — the run never started, because something the Job declared as an
   **input** could not be read (`src/inputs.ts`). The mirror of `no_output` and the
   cheap side of it: no session, no tokens. Terminal and not retried, because the same
@@ -180,6 +182,12 @@ should be extracted from two or three working controllers, not guessed from one.
 `Phase.suspended` is already in the schema for that reason: groom and decompose
 both stop for a human, and "waiting for an answer, resumable, with a proposal
 pending" is a state no runtime can report and no session can hold.
+
+Since then, **half of that second kind has arrived without being one.** A `--propose` Job
+creates Jobs — the controller does, from an approved proposal — and it does so with no
+ordering between them, which ADR-011 decision 6 reads as CronJob-shaped rather than
+DAG-shaped (`features/proposals`). What is still missing is the edge: the graph is not
+"creation by a controller", it is *ordering*, and nothing here has any.
 
 ## The two phases a human writes
 

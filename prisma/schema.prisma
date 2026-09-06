@@ -277,6 +277,23 @@ model Job {
   /// level-triggered.
   gate         String?
 
+  /// What this Job PROPOSES: work it wants filed on the board and may not file itself (ADR-011).
+  ///
+  /// A string rather than a boolean because it names the closed set of things that may be proposed,
+  /// and the only member today is `"jobs"`. Nullable, so "does not propose" stays the absence of a
+  /// value rather than a `false` every row has to carry — and so the column is an `ADD COLUMN`
+  /// against a live board rather than a table rebuild.
+  ///
+  /// The transport is the artifact channel: the run writes `proposal.json` into its artifact
+  /// directory, the controller parses and refuses (`src/proposals.ts`), and what survives is stored
+  /// on the Attempt. Nothing is created until an `approved` event exists — so the write is
+  /// retry-safe, which is the argument that outranks the others: a worker that dies mid-session
+  /// leaves nothing applied, where an in-session board API would leave half of it.
+  ///
+  /// Filing with `--propose` sets a `gate` too, because a proposal with no approver is a workload
+  /// writing to the board through one more layer of indirection.
+  proposes     String?
+
   // ---- status: what is happening. Written only by the controller.
   phase         Phase   @default(pending)
   /// The session to resume, when the last attempt left one. The one SDK fact worth a column.
@@ -294,6 +311,21 @@ model Job {
   endedBy       String?
   endedFor      String?
 
+  /// Where this Job came from, when it came from a proposal: the attempt that proposed it
+  /// (`proposedByJobId` + `proposedByK`) and its position in that proposal's list.
+  ///
+  /// **An observation the controller made, never a claim a worker made about itself.** The three
+  /// columns together are ADR-011's natural key, and the unique constraint below is what makes
+  /// applying a proposal idempotent: a second pass over the same approval re-creates the same
+  /// `(job, attempt, index)` and the database refuses it. The controller does not have to remember
+  /// what it already did, which is the same reason `Lease.slot` is `@unique` — a constraint that
+  /// refuses beats logic that has to be right.
+  ///
+  /// All three null for a Job somebody filed by hand, which is nearly all of them.
+  proposedByJobId Int?
+  proposedByK     Int?
+  proposalIndex   Int?
+
   attempts Attempt[]
   lease    Lease?
   events   Event[]
@@ -302,6 +334,7 @@ model Job {
   updatedAt   DateTime  @updatedAt
   finishedAt  DateTime?
 
+  @@unique([proposedByJobId, proposedByK, proposalIndex])
   @@index([boardId, phase])
   @@index([phase])
 }
@@ -415,6 +448,15 @@ model Attempt {
   /// a run was fed, beside what it cost (`costUsd`, `turns`). Without it, "declared inputs reduce
   /// input tokens" stays a thing read in a paper.
   inputs Json?
+
+  /// What this attempt PROPOSED, validated: `{ jobs: [{ name, brief, maxBudgetUsd? }], clamped }`
+  /// (`src/proposals.ts`). Null for an attempt that proposed nothing, and null for one whose
+  /// proposal was refused — a refusal fails the attempt with the reason on `lastError` instead.
+  ///
+  /// Stored beside what it produced rather than in place of it: the raw `proposal.json` stays in the
+  /// artifact directory, so what was proposed, what was accepted and what was created are three
+  /// facts a reader can line up. A tool call leaves no such record.
+  proposal Json?
 
   /// The catalogue of what this attempt left in its artifact directory, as
   /// `[{ name, kind, bytes }]` (ADR-011, `src/artifacts.ts`). Null, not `[]`, for an attempt that

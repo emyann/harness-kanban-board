@@ -5,7 +5,7 @@ import {
   type Worktree,
 } from './worktree.ts';
 import { prForBranch } from './pulls.ts';
-import { approvedPrompt, withArtifacts, withInputs, withProtocol, withResults } from './brief.ts';
+import { approvedPrompt, withArtifacts, withInputs, withProposal, withProtocol, withResults } from './brief.ts';
 import { resolvePlugins } from './plugins.ts';
 import {
   declaredInputs, readFileInput, renderBoard, missingInputs, describeSource,
@@ -18,6 +18,9 @@ import {
   declaredArtifacts, artifactPaths, ensureArtifactsDir, collectArtifacts, clearEmptyArtifacts,
   missingArtifacts, bytes,
 } from './artifacts.ts';
+import {
+  PROPOSAL_ARTIFACT, proposalGate, readProposal, storedProposal, type Proposal,
+} from './proposals.ts';
 import { gateClaim, windowStart, type ClaimGate } from './limits.ts';
 import { resolveSpec } from './spec.ts';
 import { holderId, holderLiveness } from './liveness.ts';
@@ -131,6 +134,8 @@ export type ReconcileReport = {
   skipped: number[];
   /** Attempts ended by the operator, not by the work. They are pending again and cost no retry. */
   stopped: number[];
+  /** Jobs CREATED this pass from an approved proposal — the controller's write, never a worker's. */
+  filed: number[];
 };
 
 const nowDefault = () => new Date();
@@ -290,6 +295,119 @@ async function reclaimExpired(db: ReturnType<typeof openBoard>, at: Date, report
   }
 }
 
+/**
+ * Apply the proposals that have been approved, and finish the Jobs that made them.
+ *
+ * ADR-011 decision 5 in code: **the controller writes, and only against an approval.** A worker
+ * proposed rows; a person said yes on the Event stream; this is the only place the rows appear, and
+ * it runs before anything is claimed so an approved proposer is finished rather than re-run.
+ *
+ * Level-triggered like the rest of the pass. It reads what is desired (an approval, and a validated
+ * proposal on the attempt that earned it) against what is observed (which of those rows already
+ * exist), and takes the step. Safe to interrupt: every created Job carries the natural key
+ * `(proposedByJobId, proposedByK, proposalIndex)` under a unique constraint, so a pass that dies
+ * half way leaves the rest to the next one and a pass that runs twice creates nothing twice. The
+ * duplicate is detected by the DATABASE refusing it, not by this function remembering.
+ */
+async function applyProposals(
+  db: ReturnType<typeof openBoard>,
+  now: Date,
+  report: ReconcileReport,
+  opts: { board?: string; only?: number; log?: (s: string) => void },
+): Promise<void> {
+  const waiting = await db.job.findMany({
+    where: {
+      phase: 'pending',
+      proposes: { not: null },
+      ...(opts.only ? { id: opts.only } : {}),
+      ...(opts.board ? { board: { slug: opts.board } } : {}),
+    },
+    orderBy: { id: 'asc' },
+  });
+
+  for (const job of waiting) {
+    // The approval, and who gave it. `hkb approve` refuses a Job that is not suspended, so an
+    // approval here means this Job proposed something and a person read it — but the check is a
+    // read of the stream rather than a flag, because a flag consumed on a transition is wrong after
+    // a restart in a controller that is level-triggered.
+    const approval = await db.event.findFirst({
+      where: { jobId: job.id, kind: 'approved' }, orderBy: { id: 'desc' }, select: { actor: true },
+    });
+    if (!approval) continue;
+
+    // The most recent attempt that actually produced a proposal. Not simply the last attempt: a
+    // retried Job may have proposed on attempt 2 and crashed on attempt 3, and the thing a person
+    // approved is the one they were shown.
+    // Filtered here rather than in the query: a `Json?` column needs Prisma's null sentinels to be
+    // filtered on, and a Job has a handful of attempts, so reading them and picking is both cheaper
+    // to be right about and cheaper to read.
+    const attempts = await db.attempt.findMany({
+      where: { jobId: job.id }, orderBy: { k: 'desc' }, select: { k: true, proposal: true },
+    });
+    const attempt = attempts.find((a) => storedProposal(a.proposal) !== null);
+    const proposal = attempt ? storedProposal(attempt.proposal) : null;
+    // Approved, but nothing validated to apply. Left alone rather than failed: it is an ordinary
+    // pending Job with a gate, and the claim loop below is entitled to run it.
+    if (!attempt || !proposal) continue;
+
+    const filed: number[] = [];
+    let already = 0;
+    for (const [index, want] of proposal.jobs.entries()) {
+      try {
+        const created = await db.job.create({
+          data: {
+            boardId: job.boardId,
+            name: want.name,
+            brief: want.brief,
+            // The only spec field a proposal may set, and only downward — `src/proposals.ts` has
+            // already clamped it to what the proposer itself was allowed to spend.
+            ...(want.maxBudgetUsd === undefined ? {} : { maxBudgetUsd: want.maxBudgetUsd }),
+            proposedByJobId: job.id,
+            proposedByK: attempt.k,
+            proposalIndex: index,
+          },
+        });
+        filed.push(created.id);
+        await db.event.create({
+          data: {
+            kind: 'created',
+            jobId: created.id,
+            boardId: job.boardId,
+            // The approver, not the worker and not this host: the row exists because a person said
+            // so, and that is the fact worth keeping.
+            actor: approval.actor,
+            payload: { name: want.name, proposedBy: job.id, attempt: attempt.k, index },
+          },
+        });
+      } catch (e) {
+        // The unique key doing its job — this row was filed by an earlier pass. Anything else is a
+        // real failure and is not swallowed: a board that silently drops half a proposal is worse
+        // than one that stops and says so.
+        if ((e as { code?: string }).code !== 'P2002') throw e;
+        already += 1;
+      }
+    }
+
+    await db.job.update({
+      where: { id: job.id },
+      data: { phase: 'succeeded', suspendedFor: null, lastError: null, finishedAt: now },
+    });
+    await db.event.create({
+      data: {
+        kind: 'applied',
+        jobId: job.id,
+        boardId: job.boardId,
+        actor: approval.actor,
+        payload: { filed, already, attempt: attempt.k },
+      },
+    });
+    report.filed.push(...filed);
+    report.succeeded.push(job.id);
+    opts.log?.(`#${job.id} approved by ${approval.actor ?? 'someone'} — filed ${filed.length === 0 ? 'nothing new' : filed.map((n) => `#${n}`).join(', ')}`
+      + (already ? ` (${already} already filed by an earlier pass)` : ''));
+  }
+}
+
 /** One pass. Returns what it did, so a caller can loop until nothing changes. */
 export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> {
   const db = openBoard();
@@ -303,9 +421,15 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
   // shipped defaults. The invariant is "the lease outlives the run", so it is computed from the
   // run's own hard bound plus enough grace for teardown and the record writes.
   const leaseFor = (timeoutMs: number) => deps.leaseMs ?? timeoutMs + LEASE_GRACE_MS;
-  const report: ReconcileReport = { refused: null, claimed: [], succeeded: [], failed: [], retrying: [], reclaimed: [], skipped: [], stopped: [] };
+  const report: ReconcileReport = { refused: null, claimed: [], succeeded: [], failed: [], retrying: [], reclaimed: [], skipped: [], stopped: [], filed: [] };
 
   if (deps.reclaim !== false) await reclaimExpired(db, now(), report, deps.board, deps.onEvent);
+
+  // Before anything is claimed, on purpose. An approved proposing Job is `pending` again — that is
+  // how `hkb approve` re-queues it — and what it needs is for its proposal to be applied, not for
+  // the worker to be run a second time. Applying first takes it terminal, so the claim loop below
+  // never sees it.
+  await applyProposals(db, now(), report, { board: deps.board, only: deps.only, log: deps.onEvent });
 
   const wanted = await db.job.findMany({
     where: {
@@ -562,7 +686,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
   // Completion order is not id order once runs overlap, and a report whose contents depend on which
   // worker finished first is a report nothing can assert on.
   for (const list of [report.claimed, report.succeeded, report.failed, report.retrying,
-    report.reclaimed, report.skipped, report.stopped]) list.sort((a, b) => a - b);
+    report.reclaimed, report.skipped, report.stopped, report.filed]) list.sort((a, b) => a - b);
 
   return report;
 
@@ -637,8 +761,14 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // a path in the prompt, and the directory is made either way so a run may volunteer — and one
     // difference that is the point of the channel: nothing here is capped, and nothing here is
     // removed (ADR-011, `src/artifacts.ts`).
+    //
+    // A PROPOSING Job rides the same channel under a name the controller fixes rather than the Job
+    // (`proposal.json`), and it is deliberately NOT added to the declared list: `withProposal` names
+    // that path itself with the schema beside it, and the validator's own refusal covers the missing
+    // file, so declaring it too would mean two code paths saying the same no.
     const wantedArtifactNames = declaredArtifacts(job.artifacts);
     const wantedArtifacts = wantedArtifactNames.length ? artifactPaths(job.id, k, wantedArtifactNames) : {};
+    const proposalPath = job.proposes ? artifactPaths(job.id, k, [PROPOSAL_ARTIFACT])[PROPOSAL_ARTIFACT] : null;
     ensureArtifactsDir(job.id, k);
 
     // ---- the plugin grants: the directories whose skills this worker may see. A directory that
@@ -728,6 +858,17 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
     // starting cold, which is the whole reason that column exists.
+    const asked = withInputs(
+      withArtifacts(
+        withResults(approvalPrompt ?? (wt ? withProtocol(job.brief, wt.branch) : job.brief), wantedResults),
+        wantedArtifacts,
+      ),
+      readInputs,
+    );
+    const prompt = proposalPath && !approvalPrompt
+      ? withProposal(asked, proposalPath, spec.maxBudgetUsd.value ?? null)
+      : asked;
+
     const outcome = inputShortfall ? null : await deps.runtime
       .run({
         taskId: job.id,
@@ -743,13 +884,12 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // What this attempt is asked to do. Normally the brief; after an approval, the approver's
         // own instruction — which is the whole of ADR-010 decision 4. A resumed attempt otherwise
         // re-sends the same brief, so an approved Job would propose again instead of applying.
-        prompt: withInputs(
-          withArtifacts(
-            withResults(approvalPrompt ?? (wt ? withProtocol(job.brief, wt.branch) : job.brief), wantedResults),
-            wantedArtifacts,
-          ),
-          readInputs,
-        ),
+        //
+        // A PROPOSING Job gets the proposal contract on top, last, so it is the final thing the
+        // worker reads — and never over an approval prompt: an approved proposal is applied by the
+        // controller, so a worker asked to propose again would be proposing on top of rows that
+        // already exist.
+        prompt,
         // All four from the resolved spec: a Job that named none of them still has to run on
         // something, and the board is now allowed to be the one that says what.
         model: spec.model.value ?? undefined,
@@ -873,6 +1013,29 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
     // leave one behind per attempt for ever.
     clearEmptyArtifacts(job.id, k);
 
+    // ---- the PROPOSAL, if this Job makes one. Read and refused here, applied nowhere near here:
+    // what the controller does now is decide whether the file is something a person could approve,
+    // and store it if it is (ADR-011, `src/proposals.ts`).
+    //
+    // A refusal fails the attempt the same way a missing declared output does, and for the same
+    // reason — the Job promised something and what arrived was not it. The message is the parser's
+    // own, naming the offending path, because the next reader is either a human deciding whose
+    // mistake it was or a retried run that can act on it.
+    let proposal: Proposal | null = null;
+    if (job.proposes && ran.phase === 'succeeded' && heldToTheEnd && !shortfall) {
+      const checked = readProposal(job.id, k, spec.maxBudgetUsd.value ?? null);
+      if ('why' in checked) {
+        shortfall = `#${job.id} proposed something the board refused: ${checked.why}`;
+        deps.onEvent?.(`  ${shortfall}`);
+      } else {
+        proposal = checked;
+        say(`proposes ${checked.jobs.length} Job${checked.jobs.length === 1 ? '' : 's'}`);
+        // Said out loud rather than recorded quietly: a number that was quietly reduced is a number
+        // the approver would otherwise read as the one that was asked for.
+        for (const c2 of checked.clamped) say(`  ${c2}`);
+      }
+    }
+
     // A declared output that is not there fails the attempt, and that rule is what makes the
     // declaration worth writing down: without it `succeeded` still means only that a session ended.
     // Not retried — the session's own account is that it finished, so a resumed attempt wakes up
@@ -939,6 +1102,11 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         ...(readInputs.length
           ? { inputs: readInputs.map((i) => ({ name: i.name, source: i.source, bytes: Buffer.byteLength(i.text) })) }
           : {}),
+        // What was proposed, as the validator accepted it — beside what was produced, not instead of
+        // it. The raw `proposal.json` stays in the artifact directory, so a reader can line up what
+        // was asked for, what was accepted and (once applied) what was created. A tool call leaves
+        // no such record, which is ADR-011's audit argument in one column.
+        ...(proposal ? { proposal } : {}),
       },
     });
 
@@ -961,7 +1129,10 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // Why it is waiting, in the operator's own words — not derivable from any runtime, which is
         // why the column exists. Cleared on any other transition so a resumed Job does not keep
         // claiming to be waiting for something that already happened.
-        suspendedFor: decision.phase === 'suspended' ? job.gate : null,
+        // A proposing Job says how much it is asking for, because that is the question. The
+        // operator's own `--gate` text stays the fallback, and is all there is until a proposal
+        // has actually been validated.
+        suspendedFor: decision.phase === 'suspended' ? (proposal ? proposalGate(proposal.jobs.length) : job.gate) : null,
         // Keep the session only while continuing it would help; a cold retry must start clean.
         // A gate fires on SUCCESS, and `nextPhase` calls a completed run not-resumable — so the
         // suspended decision sets `resumable: true` itself, which is what keeps the session the

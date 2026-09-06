@@ -15,13 +15,13 @@ covers:
   - path: src/results.ts
     sha: 0fc3dc145a1c515267534909aee79f034effa61b
   - path: src/controller.ts
-    sha: c90722f6a5d32796e996f23269eeb44dd883fc6f
+    sha: bcdf1066a8cf0ea76fdce24e24ec8e43700108fd
   - path: src/runtime/claude.ts
     sha: e53fc9819d5fc7bb4b43d17b3f1a681cfe415618
   - path: src/brief.ts
-    sha: e1326185ad6379bbb34cd6e4e02f0f89db393162
+    sha: a6f76aecf0487fc43076a4f582c022756d52357e
   - path: prisma/schema.prisma
-    sha: 9b372c388a24d6aba33562716b4f12bd95c72d1c
+    sha: e4bac2046bd232c6656a59f4503e6a2ca32578f1
   - path: src/artifacts.ts
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
   - path: src/inputs.ts
@@ -35,7 +35,7 @@ related:
     architecture/job-kind,
     architecture/the-loop,
   ]
-generated_at_commit: 1286319
+generated_at_commit: 5c28806
 last_refreshed: 2026-09-06
 ---
 
@@ -207,11 +207,18 @@ way rather than either of the two cheaper ones.
   read side also refuses, by name, the source that would make it `Job.after`: reading
   another Job's output.
 
-What remains of this record is the part it is actually about — **the validator**: turning
-a proposal artifact into rows, refusing unknown fields, clamping what may not be raised,
-keying by `(jobId, attempt, index)` so a retry cannot double-file, and applying nothing
-without an approval on the Event stream. The lineage column named in the consequences
-above still does not exist.
+- **The validator ships**, which is the part this record is actually about
+  (`src/proposals.ts`, `features/proposals`). `--propose` makes a Job write `proposal.json`;
+  the controller refuses unknown fields by name, clamps `maxBudgetUsd` downward only, and
+  applies nothing without an `approved` event. A proposed Job may set `name`, `brief` and
+  that budget — `isolate`, `allowedTools` and `pluginPaths` are refused, so a worker cannot
+  widen its successor's permissions.
+- **The lineage column exists**, as three: `proposedByJobId`, `proposedByK` and
+  `proposalIndex`, unique together. That is decision 4's natural key, and it is what makes
+  the apply idempotent — the database refuses the second write, so nothing has to remember.
+
+The consequence above that has not been paid is the tool surface: denying `Bash` to a
+proposing Job is now *arguable* and is still not done.
 
 <!-- Dual mutability: once status: accepted, NEVER rewrite this record.
 When the decision changes, write a new ADR, set its `supersedes`, and set

@@ -8,6 +8,7 @@ import { reconcile } from './controller.ts';
 import { checkExportPath } from './worktree.ts';
 import { checkResultName, RESULT_MAX_BYTES } from './results.ts';
 import { checkArtifactName, artifactsDir, bytes } from './artifacts.ts';
+import { PROPOSAL_ARTIFACT, describeProposal, storedProposal } from './proposals.ts';
 import { checkPluginPath, pluginList } from './plugins.ts';
 import { checkInputSpec, declaredInputs, renderBrief, describeSource } from './inputs.ts';
 import { fakeRuntime } from './runtime/fake.ts';
@@ -78,6 +79,10 @@ const HELP = `hkb — run one agent against one brief
        --artifact <name> a FILE the Job must produce, kept beside the board rather than
                         committed. Same contract as --result with no size limit: for a report,
                         a dataset, a proposal. A name may come back as a directory. Repeatable.
+       --propose        this Job PROPOSES Jobs instead of filing them. It writes one JSON
+                        file, you read it, and the controller creates the rows on approval —
+                        so a worker that decomposes work needs no board access at all, and a
+                        retried attempt cannot double-file anything. Implies a gate.
        --board <slug>   default: default
 
   hkb ls                    what is on the board        [--phase p] [--board s]
@@ -89,6 +94,7 @@ const HELP = `hkb — run one agent against one brief
                            would stop it in the same place
        --max-turns <n>  --max-retries <n>
   hkb approve <id> ["…"]    let a gated Job go on, in the same session, with your words
+                            — or, for a --propose Job, file what it proposed
   hkb reject <id> "<why>"   end a gated Job: what it proposed is not wanted
   hkb done <id> "<why>"     end it: the aim was achieved by other means
   hkb cancel <id> "<why>"   end it: stop, this is not wanted
@@ -380,6 +386,9 @@ export async function main(argv: string[]): Promise<number> {
       'default-plugin-dirs': { type: 'string' },
       input: { type: 'string', multiple: true },
       gate: { type: 'string' },
+      // A boolean, because the only thing that may be proposed is Jobs (ADR-011 decision 6). It
+      // becomes the string the column holds, so the closed set can grow without a flag change.
+      propose: { type: 'boolean' },
       // Repeatable, for the same reason `--export` is: a tool name is a token, and one
       // comma-separated string makes the empty list ("this Job may call nothing") unsayable.
       'allow-tool': { type: 'string', multiple: true },
@@ -483,8 +492,14 @@ export async function main(argv: string[]): Promise<number> {
       // rather than remembering it keeps the run path with one rule: everything in `inputs` is
       // rendered, and nothing is rendered twice.
       inputs = inputs.filter((i) => !rendered.used.has(i.name));
-      const gate = typeof values.gate === 'string' ? values.gate.trim() : undefined;
+      let gate = typeof values.gate === 'string' ? values.gate.trim() : undefined;
       if (values.gate !== undefined && !gate) throw usage('--gate needs the question a human is being asked, as in --gate "does this migration look right?"');
+      // A proposing Job is a gated Job, and not by convention: ADR-011 applies nothing without an
+      // approval, so a proposal with no approver would be a proposal nothing ever reads. The
+      // operator's own question wins if they asked one; this is only the default, and the controller
+      // replaces it with the count once a proposal has actually been validated.
+      const proposes = values.propose ? 'jobs' : null;
+      if (proposes && !gate) gate = 'a proposal to review';
       // Null when the flag was absent, so the board's default can answer. An EMPTY list is only
       // reachable through `--allow-tools ""`, and it means what it says: no tools at all.
       const allowedTools = values['allow-tool'] !== undefined
@@ -502,6 +517,7 @@ export async function main(argv: string[]): Promise<number> {
           ...(artifacts.length ? { artifacts } : {}),
           ...(inputs.length ? { inputs } : {}),
           ...(gate ? { gate } : {}),
+          proposes,
           model: (values.model as string) ?? null,
           effort: effort ?? null,
           isolate: !values['no-isolate'],
@@ -518,12 +534,13 @@ export async function main(argv: string[]): Promise<number> {
       await db.event.create({
         data: { kind: 'created', jobId: job.id, boardId: board.id, actor: whoami(), payload: { name } },
       });
-      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results, artifacts, inputs }, () =>
+      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results, artifacts, inputs, proposes }, () =>
         console.log(`#${job.id} ${job.name}  [${job.phase}]  on ${slug}`
           + (exports.length ? `\n  must produce  ${exports.join(', ')}` : '')
           + (results.length ? `\n  must report   ${results.join(', ')}` : '')
           + (artifacts.length ? `\n  must hand over ${artifacts.join(', ')}` : '')
-          + (inputs.length ? `\n  is given      ${inputs.map((i) => `${i.name}=${describeSource(i)}`).join(', ')}` : '')));
+          + (inputs.length ? `\n  is given      ${inputs.map((i) => `${i.name}=${describeSource(i)}`).join(', ')}` : '')
+          + (proposes ? `\n  proposes      Jobs — it writes \`${PROPOSAL_ARTIFACT}\` and waits for you to approve` : '')));
       return 0;
     }
 
@@ -654,7 +671,13 @@ export async function main(argv: string[]): Promise<number> {
         if (Array.isArray(job.exports) && job.exports.length) console.log(`  exports  ${job.exports.join(', ')}`);
         if (Array.isArray(job.results) && job.results.length) console.log(`  results  ${job.results.join(', ')}`);
         if (Array.isArray(job.artifacts) && job.artifacts.length) console.log(`  files    ${job.artifacts.join(', ')}`);
+        if (job.proposes) console.log(`  proposes ${job.proposes} — written to \`${PROPOSAL_ARTIFACT}\`, applied by the controller once approved`);
         if (job.gate) console.log(`  gate     ${job.gate}`);
+        // Where it came from, when it came from a proposal. An observation the controller made, so
+        // it is worth more than a line in a brief claiming the same thing.
+        if (job.proposedByJobId != null) {
+          console.log(`  proposed by #${job.proposedByJobId} attempt ${job.proposedByK}, item ${job.proposalIndex}`);
+        }
         if (job.suspendedFor) console.log(`  waiting  ${job.suspendedFor} — \`hkb approve ${job.id}\` or \`hkb reject ${job.id} "…"\``);
         if (job.lastError) console.log(`  error    ${job.lastError}`);
         if (job.lastSessionId) console.log(`  resume   ${job.lastSessionId}`);
@@ -688,6 +711,15 @@ export async function main(argv: string[]): Promise<number> {
               const flat = String(value).replace(/\s+/g, ' ').trim();
               console.log(`           ${name}: ${flat.length > 96 ? `${flat.slice(0, 96)}…` : flat}`);
             }
+          }
+          // What this attempt PROPOSED — the thing the approver actually reads before saying yes,
+          // so it is printed in full rather than summarised away. `hkb show --json` carries the
+          // whole brief of each; this is the list a person decides on.
+          const proposed = storedProposal(a.proposal);
+          if (proposed) {
+            console.log(`           proposes ${proposed.jobs.length} Job${proposed.jobs.length === 1 ? '' : 's'}:`);
+            for (const line of describeProposal(proposed)) console.log(`           ${line}`);
+            for (const c of proposed.clamped) console.log(`           ! ${c}`);
           }
           if (a.turns != null) {
             const denied = a.denials ? `, ${a.denials} tool refusal${a.denials === 1 ? '' : 's'}` : '';
@@ -741,11 +773,17 @@ export async function main(argv: string[]): Promise<number> {
           if (e.kind === 'text') console.log(`#${e.taskId}    : ${e.text}`);
         },
       });
-      const moved = report.claimed.length + report.reclaimed.length;
+      // `filed` counts, because applying an approved proposal is work this pass did without
+      // claiming anything: a run that created three Jobs and reported "nothing pending" would be
+      // saying the opposite of what it just did.
+      const moved = report.claimed.length + report.reclaimed.length + report.filed.length;
       emit(out, report, () => {
         if (report.refused) console.log(`refused: ${report.refused}`);
         else if (!moved) console.log(only ? `#${only} is not pending — nothing to do` : 'nothing pending');
-        else console.log(`${report.succeeded.length} succeeded, ${report.failed.length} failed, ${report.retrying.length} to retry`);
+        else {
+          console.log(`${report.succeeded.length} succeeded, ${report.failed.length} failed, ${report.retrying.length} to retry`
+            + (report.filed.length ? `, ${report.filed.length} filed from a proposal` : ''));
+        }
       });
       return 0;
     }
@@ -790,6 +828,17 @@ export async function main(argv: string[]): Promise<number> {
       if (job.phase === 'pending') throw usage(`#${id} is already pending — \`hkb run ${id}\` works it now`);
       if (job.phase === 'running') {
         throw usage(`#${id} says running with no lease — \`hkb run\` reclaims it, and re-queueing it by hand would race that`);
+      }
+      // A proposing Job whose proposal has been applied has nothing left to do: the next pass would
+      // see the same approval, re-file rows the unique key already refuses, and finish it again
+      // without ever running the worker. Refused here rather than absorbed there, because a retry
+      // that quietly does nothing is the failure mode this project has shipped before.
+      if (job.proposes && await db.event.count({ where: { jobId: id, kind: 'applied' } })) {
+        throw usage(
+          `#${id} proposed work that has already been filed — retrying it would re-run nothing, `
+          + `because the approval it would find is the one that was already applied. `
+          + `\`hkb log ${id}\` shows what it filed; file a new Job to propose again.`,
+        );
       }
 
       const budget = num(values['max-budget'], '--max-budget');
@@ -928,8 +977,14 @@ export async function main(argv: string[]): Promise<number> {
         }),
         db.job.update({ where: { id }, data: { phase: 'pending', suspendedFor: null } }),
       ]);
-      emit(out, { id, phase: 'pending', by: actor, note: note || null }, () =>
-        console.log(`#${id} approved by ${actor} — it resumes on the next pass`
+      // Two different things happen next, and saying the wrong one sends a reader looking for a
+      // run that will never start. A proposing Job is not resumed: the controller applies what it
+      // proposed and the Job is finished (ADR-011). Every other gated Job continues its session
+      // with the approver's words as the prompt (ADR-010 decision 4).
+      emit(out, { id, phase: 'pending', by: actor, note: note || null, proposes: job.proposes }, () =>
+        console.log(`#${id} approved by ${actor} — ${job.proposes
+          ? 'the controller files what it proposed on the next pass'
+          : 'it resumes on the next pass'}`
           + (note ? `, told: ${note}` : '')));
       return 0;
     }

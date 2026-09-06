@@ -74,6 +74,9 @@ pages:
   - slug: concepts/ceilings
     summary: "The three claim-time refusals (stopped, concurrency, budget), why none of them may stop a running worker, and why committed-but-unspent budget has to be counted."
     status: planned
+  - slug: features/proposals
+    summary: "A proposing Job writes one JSON file, a person reads it, and the controller creates the rows — the transport, the refusals, the approval, and why applying it twice creates nothing twice."
+    status: seeded
   - slug: features/worktree-includes
     summary: "A worktree is a fresh checkout, so the .env the tests need is not in it — .worktreeinclude declares what to carry across, git answers both halves of the match rule (matched AND gitignored), and no pattern may reach the board."
     status: seeded

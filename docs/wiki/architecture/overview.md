@@ -9,9 +9,9 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: b6ad528b8c47362f074744a1ada085a10ad12e07
+    sha: 6ace2d945593b5e8338e7a96e622310b6340114c
   - path: src/controller.ts
-    sha: c90722f6a5d32796e996f23269eeb44dd883fc6f
+    sha: bcdf1066a8cf0ea76fdce24e24ec8e43700108fd
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/db.ts
@@ -22,14 +22,16 @@ covers:
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
   - path: src/inputs.ts
     sha: 5fa957ea2723d26e0a37cd67725d756bb6838469
+  - path: src/proposals.ts
+    sha: fd5e1eee8b847c9b4024d1bf5f635a85907baae4
   - path: src/brief.ts
-    sha: e1326185ad6379bbb34cd6e4e02f0f89db393162
+    sha: a6f76aecf0487fc43076a4f582c022756d52357e
   - path: src/worktree.ts
     sha: e4094d7fae517cca708273ddff3007bfc508d10b
   - path: src/pulls.ts
     sha: a27f00a986f576c2d3ed035902c0a1c9f9a9300c
   - path: prisma/schema.prisma
-    sha: 9b372c388a24d6aba33562716b4f12bd95c72d1c
+    sha: e4bac2046bd232c6656a59f4503e6a2ca32578f1
 related:
   [
     architecture/job-kind,
@@ -40,7 +42,7 @@ related:
     decisions/adr-009-retiring-the-first-system,
     decisions/adr-011-proposals-not-board-access,
   ]
-generated_at_commit: 1286319
+generated_at_commit: 5c28806
 last_refreshed: 2026-09-06
 ---
 
@@ -67,6 +69,7 @@ seam or 36 CLI verbs is describing code that is gone.
 | `src/results.ts` | the named values a Job hands on, when its output is not a diff |
 | `src/artifacts.ts` | the files a Job hands on that the board keeps and the repository does not |
 | `src/inputs.ts` | what a Job is given: the read side, resolved before the run |
+| `src/proposals.ts` | what a Job may ask the board to create, and every field it may not set |
 | `src/pulls.ts` | the only thing that shells out to `gh` |
 
 ## State lives in the board, and only there
@@ -146,6 +149,13 @@ in **where the output goes**:
 One rule covers all three: **a declared output the run did not produce fails the attempt**, which is
 what makes `succeeded` mean more than "a session ended". Everything else left in the checkout is litter
 and goes with it.
+
+A fourth thing a Job can declare is not an output but a **proposal**: `--propose` makes it write one
+JSON file asking for Jobs it may not create itself, which a person approves and the *controller* then
+files (`src/proposals.ts`, `features/proposals`). It rides the artifact channel because that is the
+only one that is uncapped and outside the repository, and it is the one modelled way a workload
+affects the board — there is no board handle in a sandbox, by decision
+([ADR-011](../decisions/adr-011-proposals-not-board-access.md)).
 
 An **artifact** fills the gap the first two left: too large to be a result, and no business in a commit.
 Its path is handed to the worker absolute and outside every checkout — the same place a result is

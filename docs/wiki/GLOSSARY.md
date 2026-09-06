@@ -53,10 +53,12 @@ meet one in the git history, that is what it was.
   one `gh` shell-out (`src/pulls.ts`) and joined to a Job by branch name. It holds no Job, no lease
   and no state hkb depends on.
 - **Job** — the primitive kind: one agent, one brief, run to completion, with a retry budget. Spec
-  and status in one table; the controller writes only status (`prisma/schema.prisma`). The
+  and status in one table; the controller writes only status — the one exception being that it
+  *creates* Jobs from an approved **proposal**, which is a new row and never another Job's status
+  (`prisma/schema.prisma`). The
   Kubernetes Job it is named after (*architecture/job-kind*).
 - **Input** — content a Job *declares* it will be given (`--input <name>=<source>`), resolved by the
-  controller before the run and placed in the prompt ahead of the brief (`src/inputs.ts`). Three sources,
+  controller before the run and placed in the prompt ahead of the brief (`src/inputs.ts`). Four sources,
   none of which waits: `file:<repo-relative-path>`, read from `Board.repoPath` and not the worktree;
   `board`, the LLM-free board arithmetic; `value:<literal>`, the one a caller *pushes* rather than one
   hkb fetches; and `self:<field>`, the **downward API** — this Job's own `id`, `name`, `board`,
@@ -100,11 +102,16 @@ meet one in the git history, that is what it was.
   `done`, `cancelled` (`prisma/schema.prisma`). Observed, except for the last three, which only a
   human can write. `suspended` exists for the workloads that block on a human — a state no runtime
   can report.
-- **Proposal** — a board change a workload asks for rather than performs: declared as an output, written
-  by the run to a path the controller gave it, and applied by the controller only after an approval is
-  on the Event stream. A workload has no board handle, so this is the only modelled way one affects the
-  board — and the controller validates a proposal by refusing it, because a value it acts on is an API
-  request rather than a handoff (*decisions/adr-011-proposals-not-board-access*).
+- **Proposal** — a board change a workload asks for rather than performs: `proposal.json` in the run's
+  artifact directory, validated by refusing (`src/proposals.ts`), and applied by the controller only
+  after an approval is on the Event stream. A workload has no board handle, so this is the only
+  modelled way one affects the board, and a proposed Job may set `name`, `brief` and a downward-clamped
+  `maxBudgetUsd` — nothing else (*features/proposals*,
+  *decisions/adr-011-proposals-not-board-access*).
+- **Lineage** — the three columns a proposed Job carries naming where it came from: `proposedByJobId`,
+  `proposedByK`, `proposalIndex` (`prisma/schema.prisma`). An observation the controller made about
+  what it did, never a claim a worker made about itself — and, being unique together, the reason
+  applying a proposal twice creates nothing twice (*features/proposals*).
 - **Resumable outcome** — a run that stopped on its turn or budget cap rather than breaking: it left
   a session worth continuing, so the next attempt resumes it instead of starting cold (`nextPhase`,
   `src/controller.ts`) (*architecture/runtime-layer*).

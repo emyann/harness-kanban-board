@@ -11,13 +11,13 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: prisma/schema.prisma
-    sha: 9b372c388a24d6aba33562716b4f12bd95c72d1c
+    sha: e4bac2046bd232c6656a59f4503e6a2ca32578f1
   - path: src/controller.ts
-    sha: c90722f6a5d32796e996f23269eeb44dd883fc6f
+    sha: bcdf1066a8cf0ea76fdce24e24ec8e43700108fd
   - path: src/runtime/index.ts
     sha: 55007f26fe6b9e4ec107997eef5aba74ec4643e6
   - path: src/hkb.ts
-    sha: b6ad528b8c47362f074744a1ada085a10ad12e07
+    sha: 6ace2d945593b5e8338e7a96e622310b6340114c
   - path: src/inputs.ts
     sha: 5fa957ea2723d26e0a37cd67725d756bb6838469
 related:
@@ -28,7 +28,7 @@ related:
     architecture/job-kind,
     architecture/overview,
   ]
-generated_at_commit: 1286319
+generated_at_commit: 5c28806
 last_refreshed: 2026-09-06
 ---
 
@@ -188,6 +188,14 @@ ADR-011 then took the *other* half — what groom does with the answer — and s
 way this record settled the gate: the apply is the controller's, and what a worker
 produces is a declared proposal rather than a board write. So the two halves of groom sit
 in two records, and neither of them is a groom kind.
+
+**Decision 4 has one exception now, and it is worth naming.** "Approval is a resumed
+session carrying an authoritative instruction" holds for every gated Job except a
+`--propose` one: there, approving does not resume anything. The controller files what was
+proposed and the Job goes terminal, because a worker asked to propose again would be
+proposing on top of rows that already exist (`applyProposals`, `src/controller.ts`;
+`features/proposals`). `hkb approve` says which of the two happened rather than making the
+reader guess.
 
 <!-- Dual mutability: once status: accepted, NEVER rewrite this record.
 When the decision changes, write a new ADR, set its `supersedes`, and set

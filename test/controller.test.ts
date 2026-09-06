@@ -1314,3 +1314,233 @@ test('the retry budget survives the propose half, so an approved run that FAILS 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
   assert.equal(after.phase, 'pending', 'it may try again — the successful propose half spent nothing');
 });
+
+/**
+ * `proposals` end to end (ADR-011): a workload proposes, the controller writes.
+ *
+ * `test/proposals.test.ts` covers the validator's refusals. These cover the wiring, and what they
+ * are really testing is that **nothing is created before a person says so** — the guard, not the
+ * feature. A proposal that got applied on its own would be board access with extra steps.
+ */
+const proposing = (body: string): Runtime => ({
+  name: 'proposing',
+  async run(spec) {
+    // The worker's side: the contract names one absolute path, and this writes to it. Taken from
+    // the prompt rather than recomputed, so a brief that stopped naming the path fails this test.
+    const m = spec.prompt.match(/`(\S+proposal\.json)`/);
+    if (m) fs.writeFileSync(m[1], body);
+    return {
+      status: 'completed', ok: true, sessionId: 'sess-p', text: 'proposed',
+      costUsd: 0.1, turns: 2, durationMs: 10, stopReason: 'end_turn', denials: 0, error: null,
+    };
+  },
+});
+
+const proposalBoard = async () => db.board.upsert({
+  where: { slug: 'proposals' },
+  update: { dailyBudgetUsd: null, maxConcurrent: 5, pausedAt: null },
+  create: { slug: 'proposals', dailyBudgetUsd: null, maxConcurrent: 5 },
+});
+
+test('a proposing Job suspends holding its proposal, and creates NOTHING', async () => {
+  const b = await proposalBoard();
+  const before = await db.job.count();
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'decomposes', brief: 'break the work down', isolate: false,
+      proposes: 'jobs', gate: 'a proposal to review', maxBudgetUsd: 2,
+    },
+  });
+  await reconcile({
+    runtime: proposing(JSON.stringify({
+      jobs: [{ name: 'part one', brief: 'do the first half' }, { name: 'part two', brief: 'do the second half', maxBudgetUsd: 99 }],
+    })),
+    cwd, board: 'proposals', readPr: false,
+  });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'suspended', 'a proposal waits for a person, always');
+  assert.equal(after.suspendedFor, '2 Jobs proposed — approve to file them',
+    'and the gate text says how much is being asked for, not the operator’s placeholder');
+  assert.deepEqual(after.attempts[0].proposal, {
+    jobs: [
+      { name: 'part one', brief: 'do the first half' },
+      { name: 'part two', brief: 'do the second half', maxBudgetUsd: 2 },
+    ],
+    clamped: ['jobs[1].maxBudgetUsd asked for $99.00 and was clamped to $2.00'],
+  }, 'stored as the validator accepted it, clamp and all');
+
+  // THE guard. Everything else here is plumbing; this is the decision ADR-011 records.
+  assert.equal(await db.job.count(), before + 1, 'one Job filed by this test, and not one row more');
+
+  // And the raw file survives beside the board, which is what makes the proposal auditable.
+  assert.ok(fs.existsSync(path.join(artifactsDir(job.id, 1), 'proposal.json')));
+});
+
+test('an approved proposal is applied by the CONTROLLER, once, with lineage', async () => {
+  const b = await proposalBoard();
+  const proposer = await db.job.findFirstOrThrow({ where: { boardId: b.id, name: 'decomposes' } });
+  await db.event.create({ data: { kind: 'approved', jobId: proposer.id, boardId: b.id, actor: 'ada', payload: {} } });
+  await db.job.update({ where: { id: proposer.id }, data: { phase: 'pending', suspendedFor: null } });
+
+  const report = await reconcile({ runtime: proposing('{}'), cwd, board: 'proposals', readPr: false });
+
+  const filed = await db.job.findMany({ where: { proposedByJobId: proposer.id }, orderBy: { proposalIndex: 'asc' } });
+  assert.equal(filed.length, 2);
+  assert.deepEqual(filed.map((j) => j.name), ['part one', 'part two']);
+  assert.deepEqual(filed.map((j) => j.proposalIndex), [0, 1]);
+  assert.deepEqual(filed.map((j) => j.proposedByK), [1, 1], 'the attempt that proposed them, not the Job alone');
+  assert.equal(filed[1].maxBudgetUsd, 2, 'the clamped number, not the one that was asked for');
+  assert.equal(filed[0].isolate, true, 'and everything a proposal may not set is the board’s answer');
+  assert.deepEqual(report.filed, filed.map((j) => j.id).sort((x, y) => x - y));
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: proposer.id } });
+  assert.equal(after.phase, 'succeeded', 'the proposer is finished, not re-run');
+  assert.ok(after.finishedAt);
+
+  // Who filed them is the approver, because the rows exist because a person said so.
+  const created = await db.event.findFirstOrThrow({ where: { jobId: filed[0].id, kind: 'created' } });
+  assert.equal(created.actor, 'ada');
+  assert.deepEqual(created.payload, { name: 'part one', proposedBy: proposer.id, attempt: 1, index: 0 });
+});
+
+test('re-applying the same approval creates nothing — the unique key refuses it', async () => {
+  const b = await proposalBoard();
+  const proposer = await db.job.findFirstOrThrow({ where: { boardId: b.id, name: 'decomposes' } });
+  // The crash this models: a pass that created the rows and died before it could finish the Job.
+  await db.job.update({ where: { id: proposer.id }, data: { phase: 'pending', finishedAt: null } });
+  const before = await db.job.count();
+
+  const report = await reconcile({ runtime: proposing('{}'), cwd, board: 'proposals', readPr: false });
+
+  assert.equal(await db.job.count(), before, 'not one duplicate — the database refused, nothing had to remember');
+  assert.deepEqual(report.filed, []);
+  const applied = await db.event.findMany({ where: { jobId: proposer.id, kind: 'applied' }, orderBy: { id: 'desc' } });
+  assert.deepEqual(applied[0].payload, { filed: [], already: 2, attempt: 1 });
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: proposer.id } })).phase, 'succeeded');
+});
+
+test('a proposal is NOT applied without an approval, however long it waits', async () => {
+  const b = await proposalBoard();
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'unapproved', brief: 'break it down', isolate: false,
+      proposes: 'jobs', gate: 'a proposal to review', maxBudgetUsd: 2,
+    },
+  });
+  await reconcile({
+    runtime: proposing(JSON.stringify({ jobs: [{ name: 'never filed', brief: 'x' }] })),
+    cwd, board: 'proposals', readPr: false,
+  });
+  const before = await db.job.count();
+
+  // Not suspended any more, but still not approved: the phase alone must not be what applies it.
+  await db.job.update({ where: { id: job.id }, data: { phase: 'pending', suspendedFor: null } });
+  await reconcile({ runtime: proposing('{}'), cwd, board: 'proposals', readPr: false });
+
+  assert.equal(await db.job.findFirst({ where: { proposedByJobId: job.id } }), null,
+    'no approval event, no rows — this is the whole of ADR-011 decision 5');
+  assert.equal(await db.job.count(), before, 'and the pass created nothing else either');
+});
+
+test('a proposal the validator refuses fails the attempt and names why', async () => {
+  const b = await proposalBoard();
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'over-reaches', brief: 'break it down', isolate: false,
+      proposes: 'jobs', gate: 'a proposal to review', maxBudgetUsd: 1, maxRetries: 0,
+    },
+  });
+  await reconcile({
+    runtime: proposing(JSON.stringify({ jobs: [{ name: 'sneaky', brief: 'x', isolate: false }] })),
+    cwd, board: 'proposals', readPr: false,
+  });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'failed', 'not suspended: there is nothing here a person could approve');
+  assert.equal(after.attempts[0].outcome, 'no_output');
+  assert.match(after.lastError ?? '', /`isolate`/, 'and the refusal names the key');
+  assert.equal(after.attempts[0].proposal, null, 'nothing refused is ever stored');
+});
+
+test('a proposing Job that writes no proposal fails like any other declared output', async () => {
+  const b = await proposalBoard();
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'writes nothing', brief: 'break it down', isolate: false,
+      proposes: 'jobs', gate: 'a proposal to review', maxBudgetUsd: 1, maxRetries: 0,
+    },
+  });
+  // A runtime that succeeds and writes nothing at all.
+  await reconcile({ runtime: fakeRuntime(), cwd, board: 'proposals', readPr: false });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'failed');
+  assert.equal(after.attempts[0].outcome, 'no_output');
+  assert.match(after.lastError ?? '', /there is no `proposal\.json`/,
+    'and the reason is the validator’s, because the validator is the only thing that looks');
+});
+
+test('a pass that only applied a proposal still reports that it did something', async () => {
+  // The report is what `hkb run` prints from, and `claimed + reclaimed` was the whole of "did this
+  // pass do anything". A pass that created three Jobs and said "nothing pending" would be telling
+  // the operator the opposite of what it had just done.
+  const b = await proposalBoard();
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'files two', brief: 'break it down', isolate: false,
+      proposes: 'jobs', gate: 'a proposal to review', maxBudgetUsd: 2,
+    },
+  });
+  await reconcile({
+    runtime: proposing(JSON.stringify({ jobs: [{ name: 'x', brief: 'x' }, { name: 'y', brief: 'y' }] })),
+    cwd, board: 'proposals', readPr: false,
+  });
+  await db.event.create({ data: { kind: 'approved', jobId: job.id, boardId: b.id, actor: 'ada', payload: {} } });
+  await db.job.update({ where: { id: job.id }, data: { phase: 'pending', suspendedFor: null } });
+
+  const report = await reconcile({ runtime: proposing('{}'), cwd, only: job.id, board: 'proposals', readPr: false });
+  assert.equal(report.claimed.length, 0, 'nothing was claimed — the proposer was applied, not run');
+  assert.equal(report.filed.length, 2, 'and the two rows it filed are in the report');
+});
+
+test('a create failure that is NOT a duplicate stops the pass rather than being swallowed', async () => {
+  // The other half of the P2002 catch. A board that silently drops half a proposal because one row
+  // hit an error nobody looked at is worse than one that stops and says so — and the difference is
+  // one equality test, which is exactly the kind that rots unnoticed.
+  const b = await db.board.create({ data: { slug: 'orphaned', maxConcurrent: 5 } });
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'proposes into nowhere', brief: 'break it down', isolate: false,
+      proposes: 'jobs', gate: 'a proposal to review', maxBudgetUsd: 1,
+    },
+  });
+  await reconcile({
+    runtime: proposing(JSON.stringify({ jobs: [{ name: 'never lands', brief: 'x' }] })),
+    cwd, board: 'orphaned', readPr: false,
+  });
+  await db.event.create({ data: { kind: 'approved', jobId: job.id, boardId: b.id, actor: 'ada', payload: {} } });
+  await db.job.update({ where: { id: job.id }, data: { phase: 'pending', suspendedFor: null } });
+
+  // Pull the board out from under it without cascading the Job away, so the create fails on the
+  // foreign key (P2003) rather than on the unique one.
+  await db.$executeRawUnsafe('PRAGMA foreign_keys=OFF');
+  await db.$executeRawUnsafe(`DELETE FROM "Board" WHERE id = ${b.id}`);
+  await db.$executeRawUnsafe('PRAGMA foreign_keys=ON');
+
+  await assert.rejects(
+    () => reconcile({ runtime: proposing('{}'), cwd, only: job.id, readPr: false }),
+    (e: { code?: string }) => e.code === 'P2003',
+    'the pass fails loudly; it does not count a broken row as one that was already filed',
+  );
+  // Where it failed, not just that it failed. A swallowed error would have gone on to finish the
+  // Job — so a proposer still `pending` is the proof that the create is what stopped the pass.
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).phase, 'pending',
+    'and the Job is not marked done for work that was never filed');
+
+  await db.$executeRawUnsafe('PRAGMA foreign_keys=OFF');
+  await db.$executeRawUnsafe(`DELETE FROM "Attempt" WHERE jobId = ${job.id}`);
+  await db.$executeRawUnsafe(`DELETE FROM "Event" WHERE jobId = ${job.id}`);
+  await db.$executeRawUnsafe(`DELETE FROM "Job" WHERE id = ${job.id}`);
+  await db.$executeRawUnsafe('PRAGMA foreign_keys=ON');
+});

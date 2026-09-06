@@ -11,14 +11,14 @@ covers:
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: c90722f6a5d32796e996f23269eeb44dd883fc6f
+    sha: bcdf1066a8cf0ea76fdce24e24ec8e43700108fd
   - path: src/worktree.ts
     sha: e4094d7fae517cca708273ddff3007bfc508d10b
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/schema.ts
     sha: 36a37ef8d4d26ee1226e44c664f25ba57d78387e
-generated_at_commit: 464bacd
+generated_at_commit: 5c28806
 last_refreshed: 2026-09-06
 related: [architecture/job-kind, architecture/runtime-layer, decisions/adr-007-workload-scheduler, concepts/worker-identity]
 ---
@@ -65,6 +65,18 @@ what is unusual in this file:
 1. A "tick" can last thirty minutes, where a Kubernetes sync is sub-millisecond.
 2. The lease has to outlive the run it covers, not the pass.
 3. `hkb down` has to reach in and interrupt a worker. A controller would just exit.
+
+## One step that is pure controller
+
+`applyProposals` is the exception to the fusion above, and worth knowing about because it is the only
+part of the pass that **creates rows**. It runs after the reclaim and before anything is claimed: a
+Job approved with `hkb approve` is `pending` again, and if it reached the claim loop it would be *run
+a second time* rather than have what it proposed filed (`src/controller.ts`, `features/proposals`).
+
+It is level-triggered like everything else here — an approval on the Event stream and a validated
+proposal on the attempt that earned it, against the rows that already exist — and its idempotency is
+a unique constraint rather than a memory, so a pass that dies half way leaves the rest to the next
+one.
 
 ## Why the interval is slow
 
