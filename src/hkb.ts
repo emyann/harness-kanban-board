@@ -1041,10 +1041,10 @@ export async function main(argv: string[]): Promise<number> {
       // consumer doing arithmetic on it broke exactly when something interesting happened.
       emit(out, {
         id: r.id, phase: r.phase, maxBudgetUsd: r.maxBudgetUsd, resume: r.resume,
-        ...(r.maxBudgetUsd_raise ? { raised: r.maxBudgetUsd_raise } : {}),
+        ...(r.raised ? { raised: r.raised } : {}),
       }, () => {
-        const cap = r.maxBudgetUsd_raise
-          ? `  maxBudget $${(r.ranUnder ?? 0).toFixed(2)} → $${r.maxBudgetUsd_raise.to.toFixed(2)}` : '';
+        const cap = r.raised
+          ? `  maxBudget $${r.raised.from.toFixed(2)} → $${r.raised.to.toFixed(2)}` : '';
         // A resumed Job does not start over, and an operator about to watch it needs to know that
         // before they wonder why the branch already has commits on it.
         const from = r.resume ? `  (resumes ${r.resume})` : '  (starts cold)';

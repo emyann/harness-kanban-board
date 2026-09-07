@@ -1,3 +1,4 @@
+import type { Prisma } from './generated/prisma/client.ts';
 import type { openBoard } from './db.ts';
 import { resolveSpec } from './spec.ts';
 
@@ -66,18 +67,25 @@ async function find(db: Db, id: number, missing: string) {
 }
 
 /**
- * A lease is a worker running *right now*, and every transition here refuses one.
+ * A lease is a worker running *right now*, and no transition here proceeds past one.
  *
- * Not a race to win but a race to decline: the daemon is a thing the operator can stop, so the
- * message says so and names when the lease lapses on its own.
+ * This is the plain form, and after the destructive pair moved their check inside a transaction it
+ * has exactly one caller — `triageJob`, where a stale read is harmless because the worst case is a
+ * phase the next reconcile corrects. `approveJob`/`rejectJob` refuse through `requireSuspended`,
+ * `retryJob` inline, and `concludeJob`/`removeJob` in `inOneTransaction`. Four spellings of one
+ * rule is more than it deserves, and consolidating them is a job for whoever next touches two of
+ * them — noted here rather than done now, because a refactor that rewrites five messages while
+ * claiming to change nothing is how a message quietly stops naming the fix.
  */
 function refuseIfLeased(job: { id: number; lease: { holder: string; expiresAt: Date } | null }, what: string): void {
   if (!job.lease) return;
   refuse(`#${job.id} is leased by ${job.lease.holder} — ${what}`);
 }
 
+type Tx = Prisma.TransactionClient;
+
 /**
- * The two transitions that DESTROY something, with the lease read **inside** the write.
+ * The two transitions that DESTROY something, with the lease guard **inside the first write**.
  *
  * Everywhere else the lease is read first and written after, and between those two statements a
  * daemon can claim the Job. For a transition that only moves a phase that is a stale read the next
@@ -86,25 +94,41 @@ function refuseIfLeased(job: { id: number; lease: { holder: string; expiresAt: D
  * exists to prevent — and concluding one leaves that worker reporting to a record which says the
  * question was already settled.
  *
- * An interactive transaction closes it: the lease is read and the writes are made inside one, so a
- * claim landing in the middle loses the whole thing rather than half of it. SQLite has one writer
- * at a time, which is what makes that true here rather than merely likely.
+ * ## Why the guard is a WHERE clause and not a read
  *
- * **One read, not two.** The first version kept the earlier `refuseIfLeased` as well, for its
- * better message — and that made this check unreachable: no mutation of it failed a test, because
- * nothing ever got here with a lease. An inert guard that reads like the load-bearing one is how
- * this project has shipped three checks that did nothing, so the message moved in here instead.
+ * The obvious shape is `SELECT` the lease, refuse, then write, all inside one transaction. It is
+ * correct and it stalls the daemon. Prisma's better-sqlite3 adapter opens an interactive
+ * transaction with a plain deferred `BEGIN`, and this board runs in `journal_mode=delete`, so a
+ * *read* as the first statement takes a SHARED lock held for the whole transaction: any other
+ * process writing the board in that window waits out `busy_timeout` and then fails
+ * `SQLITE_BUSY: database is locked`. `hkb up` is running, an operator types `hkb done 12`, and the
+ * reconcile pass dies. Before any of this those verbs were autocommit writes with no read window.
+ *
+ * So the first statement is the *conditional write* — `where: { id, lease: { is: null } }`, which
+ * is the guard — and SQLite escalates to RESERVED immediately, where `busy_timeout` does its job.
+ * A count of zero is the refusal, and only then is the lease read, to say whose it is.
+ *
+ * **One guard, not two.** The first version kept an earlier `refuseIfLeased` as well, for its
+ * better message, and that made this check unreachable: no mutation of it failed a test, because
+ * nothing ever got here holding a lease. An inert guard that reads like the load-bearing one is how
+ * this project has shipped three checks that did nothing.
  */
-async function inOneTransaction(
+async function whileUnleased(
   db: Db,
   id: number,
   leased: (holder: string, expiresAt: Date) => string,
-  writes: ((tx: Parameters<Parameters<Db['$transaction']>[0]>[0]) => Promise<unknown>)[],
+  claim: (tx: Tx) => Promise<{ count: number }>,
+  rest: ((tx: Tx) => Promise<unknown>)[],
 ): Promise<void> {
   await db.$transaction(async (tx) => {
-    const held = await tx.lease.findUnique({ where: { jobId: id } });
-    if (held) refuse(leased(held.holder, held.expiresAt));
-    for (const write of writes) await write(tx);
+    const { count } = await claim(tx);
+    if (count === 0) {
+      const held = await tx.lease.findUnique({ where: { jobId: id } });
+      refuse(held
+        ? leased(held.holder, held.expiresAt)
+        : `#${id} is no longer on the board — nothing was changed.`);
+    }
+    for (const write of rest) await write(tx);
   });
 }
 
@@ -243,11 +267,13 @@ function requireSuspended(
 
 export type Requeued = {
   id: number; phase: 'pending'; maxBudgetUsd: number | null; resume: string | null;
-  maxBudgetUsd_raise?: { from: number | null; to: number };
+  /** The raise, when there was one. Its own field rather than a second type for
+   * `maxBudgetUsd`, which is what the CLI used to emit and what broke arithmetic on it. */
+  raised?: { from: number; to: number };
   /** What the Job was before, for the caller's own message. */
   was: string;
   /** The cap the LAST attempt actually ran under — what a raise is measured from. */
-  ranUnder: number | null;
+  ranUnder: number;
 };
 
 /**
@@ -338,7 +364,12 @@ export async function retryJob(
         kind: 'requeued', jobId: id, boardId: job.boardId, actor: opts.by,
         payload: {
           was: job.phase,
-          ...(raised ? { maxBudgetUsd: { from: ranUnder, to: budget } } : {}),
+          // `raised`, the same spelling `hkb retry --json` uses. It was `maxBudgetUsd` here while
+          // the command emitted the raise under that name too — and once the command stopped
+          // (because the field's TYPE changed on the raise path), `hkb log --json` and `hkb retry
+          // --json` disagreed about the name of one fact. Rows written before today spell it the
+          // old way; the log is append-only and that is what append-only costs.
+          ...(raised ? { raised: { from: ranUnder, to: budget } } : {}),
           resume: job.lastSessionId,
         },
       },
@@ -351,7 +382,7 @@ export async function retryJob(
     resume: job.lastSessionId,
     was: job.phase,
     ranUnder,
-    ...(raised ? { maxBudgetUsd_raise: { from: ranUnder, to: budget as number } } : {}),
+    ...(raised ? { raised: { from: ranUnder, to: budget as number } } : {}),
   };
 }
 
@@ -402,10 +433,17 @@ export async function concludeJob(
   // statements in order rather than pretending the first never happened.
 
   const at = new Date();
-  await inOneTransaction(db, id, (holder, expiresAt) =>
-    `#${id} is leased by ${holder} — it is running. \`hkb down\` stops the daemon, or wait for the `
-    + `run to finish (the lease lapses by ${expiresAt.toISOString()}), then \`hkb ${verb} ${id}\` again.`, [
-    (tx) => tx.job.update({ where: { id }, data: { phase, endedBy: by, endedFor: reason, finishedAt: at } }),
+  await whileUnleased(
+    db,
+    id,
+    (holder, expiresAt) =>
+      `#${id} is leased by ${holder} — it is running. \`hkb down\` stops the daemon, or wait for the `
+      + `run to finish (the lease lapses by ${expiresAt.toISOString()}), then \`hkb ${verb} ${id}\` again.`,
+    (tx) => tx.job.updateMany({
+      where: { id, lease: { is: null } },
+      data: { phase, endedBy: by, endedFor: reason, finishedAt: at },
+    }),
+    [
     // An attempt still open on a Job with no lease was never heard from again — `lost` is the
     // Outcome that already means exactly that. Closing it is not cosmetic: `hkb show` renders an
     // open attempt as elapsed-so-far, so a terminal Job would print a duration that climbs for
@@ -438,14 +476,18 @@ export type Removed = { removed: number };
  */
 export async function removeJob(db: Db, id: number, opts: { by: Actor }): Promise<Removed> {
   const job = await find(db, id, `no Job #${id} — nothing to remove`);
-  await inOneTransaction(db, id, (holder) =>
-    `#${id} is leased by ${holder} — it is running. Wait for it, or let the lease expire.`, [
-    (tx) => tx.job.delete({ where: { id } }),
-    // `jobId` would cascade away with the Job it names, taking the record of the deletion with it.
-    // The board keeps this one.
-    (tx) => tx.event.create({
-      data: { kind: 'removed', boardId: job.boardId, actor: opts.by, payload: { id, name: job.name } },
-    }),
-  ]);
+  await whileUnleased(
+    db,
+    id,
+    (holder) => `#${id} is leased by ${holder} — it is running. Wait for it, or let the lease expire.`,
+    (tx) => tx.job.deleteMany({ where: { id, lease: { is: null } } }),
+    [
+      // `jobId` would cascade away with the Job it names, taking the record of the deletion with
+      // it. The board keeps this one.
+      (tx) => tx.event.create({
+        data: { kind: 'removed', boardId: job.boardId, actor: opts.by, payload: { id, name: job.name } },
+      }),
+    ],
+  );
   return { removed: id };
 }

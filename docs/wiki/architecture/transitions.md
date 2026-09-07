@@ -90,14 +90,26 @@ instruction (ADR-010 decision 4). All of them are transactions now.
 Everywhere else the lease is read first and written after, so a daemon claiming the Job in between
 is a stale read the next reconcile sorts out. For `concludeJob` and `removeJob` it is not: `Lease.job`
 is `onDelete: Cascade`, so removing a Job silently deletes a lease a worker took a millisecond ago —
-the exact outcome the guard exists to prevent. Those two read the lease **inside** an interactive
-transaction, so a claim landing mid-transition loses the whole thing rather than half of it. SQLite
-having one writer at a time is what makes that true rather than merely likely.
+the exact outcome the guard exists to prevent.
 
-One read, not two. The first version of that kept the outer check as well, for its better message,
-and thereby made the inner one unreachable — no mutation of it failed a test, because nothing ever
-arrived there holding a lease. The message moved inside instead. An inert guard that reads like the
-load-bearing one is how this project has shipped three checks that did nothing.
+Those two run inside an interactive transaction whose **first statement is a conditional write** —
+`where: { id, lease: { is: null } }` — and a count of zero is the refusal. That shape was arrived at
+twice over, and both wrong versions are worth recording because each looks right:
+
+1. **Keeping the old outer check as well**, for its better message, made the inner one unreachable.
+   No mutation of it failed a test, because nothing ever arrived there holding a lease — the same
+   silently-inert shape this project has shipped three times.
+2. **Reading the lease as the first statement inside the transaction** is correct and stalls the
+   daemon. Prisma's better-sqlite3 adapter opens an interactive transaction with a deferred `BEGIN`,
+   and this board runs in `journal_mode=delete`, so a *read* first takes a SHARED lock held for the
+   whole transaction. Any other process writing the board in that window waits out `busy_timeout`
+   and then fails `SQLITE_BUSY: database is locked` — `hkb up` running, an operator types
+   `hkb done 12`, and the reconcile pass dies. Before any of this those verbs were autocommit writes
+   with no read window at all.
+
+A write first escalates SQLite to RESERVED immediately, where `busy_timeout` does its job, and the
+guard becomes the write's own `WHERE` rather than a separate question. The lease is read only on the
+refusal path, to say whose it is.
 
 ## What this does not move, and it matters
 

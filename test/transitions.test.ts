@@ -163,9 +163,10 @@ test('retry refuses a spent budget under the same cap — same run, same wall, s
   // A bigger cap buys something, so it is allowed, and the raise is on the record.
   const r = await retryJob(db, j.id, { maxBudgetUsd: 5, by: 'a' });
   assert.equal(r.phase, 'pending');
-  assert.deepEqual(r.maxBudgetUsd_raise, { from: 2, to: 5 });
+  assert.deepEqual(r.raised, { from: 2, to: 5 });
   const ev = (await events(j.id)).at(-1);
-  assert.deepEqual(ev?.payload, { was: 'failed', maxBudgetUsd: { from: 2, to: 5 }, resume: null });
+  assert.deepEqual(ev?.payload, { was: 'failed', raised: { from: 2, to: 5 }, resume: null },
+    'the event spells the raise the way `hkb retry --json` does — one fact, one name');
 });
 
 test('retry refuses a Job that is already pending, running, or held', async () => {
