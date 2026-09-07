@@ -57,11 +57,6 @@ meet one in the git history, that is what it was.
   replays onto the base it will be merged into (`rebaseOntoBase`, `src/rebase.ts`). Its own value
   rather than `no_output` because the fault is in neither the work nor the spec, and the fix is a
   hand rebase rather than another run (*features/rebase-and-verify*).
-- **Transition** — a Job moving between phases because a *person* decided (`src/transitions.ts`:
-  queue, triage, approve, reject, retry, done/cancel, remove), as opposed to the moves the
-  controller makes by observing. Each is a lookup, a set of refusals and a group of writes that
-  belong together; the refusals are why it is a module rather than a phase write
-  (*architecture/transitions*).
 - **Control plane** — hkb read as Kubernetes reads itself: a Board is a namespace, a Job is a Job, an
   Attempt is a Pod, a Lease is a Lease, and the daemon is a controller-manager. The one departure is
   that hkb also *executes* — there is no node to schedule onto (*architecture/overview*,
@@ -143,6 +138,10 @@ meet one in the git history, that is what it was.
   and `hkb migrate`. It exists because the forward direction was silent: a command run from a feature
   branch used to migrate the machine's board, after which every other checkout refused it
   (*architecture/the-board*).
+- **Off the map** — a place where hkb's Kubernetes mapping stops being evidence and hkb has to
+  answer for itself. Two are named in ADR-016: ports on a shared host (Kubernetes has a Service to
+  hide behind and hkb has one machine, so `self:slot` is ours) and the completion signal (a
+  container exits with a code; an agent session always finishes talking).
 - **Operator** — the human seat: files Jobs, sets the ceilings, reviews and merges, and makes the two
   statements the machinery cannot (`hkb done`, `hkb cancel`, `src/hkb.ts`). "you", in a worker's
   brief.
@@ -181,6 +180,11 @@ meet one in the git history, that is what it was.
 - **Volunteered output** — a result or artifact a run left without declaring: kept and reported,
   never required, and never able to fail an attempt (`collectResults`/`collectArtifacts`,
   `src/results.ts`, `src/artifacts.ts`) (*features/declared-outputs*).
+- **Transition** — a Job moving between phases because a *person* decided (`src/transitions.ts`:
+  queue, triage, approve, reject, retry, done/cancel, remove), as opposed to the moves the
+  controller makes by observing. Each is a lookup, a set of refusals and a group of writes that
+  belong together; the refusals are why it is a module rather than a phase write
+  (*architecture/transitions*).
 - **Triage** — the phase before the queue: a Job that has been noticed and not decided on
   (`Phase.triage`, `hkb new --triage`). Never claimed, because the claim query asks for `pending` and
   always did. `hkb queue <id> ["<brief>"]` makes it work — and is the one moment the brief may be
