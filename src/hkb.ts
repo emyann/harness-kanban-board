@@ -14,6 +14,7 @@ import { PROPOSAL_ARTIFACT, describeProposal, storedProposal } from './proposals
 import { eventLine, watchEvents, watchWhere, WATCH_FALLBACK_MS } from './watch.ts';
 import { checkPluginPath, pluginList } from './plugins.ts';
 import { checkInputSpec, declaredInputs, renderBrief, describeSource } from './inputs.ts';
+import { readTemplate, placeholders, WORKFLOW_DIR } from './templates.ts';
 import { fakeRuntime } from './runtime/fake.ts';
 import * as daemon from './daemon.ts';
 import { EFFORTS, boardDefaults, hasDefaults, resolveSpec, type SpecSource } from './spec.ts';
@@ -45,6 +46,14 @@ const HELP = `hkb — run one agent against one brief
 
   hkb new <name>            file a Job
        --brief <text> | --brief-file <path> | --brief - (stdin)
+       --from <workflow>  file it from \`${WORKFLOW_DIR}/<workflow>.md\` in this board's
+                        REPOSITORY: the frontmatter is the spec, the body is the brief. The keys
+                        ARE the flags below, without the dashes — \`max-budget: 2\`,
+                        \`allow-tool: [Read, Write]\` — so this help is the format's reference too,
+                        and a key that is not a flag is refused by name. Anything you also pass
+                        on the line WINS over the file, and the workflow's own \`name:\` is the
+                        Job's name if you give none. It is expanded once, here: the Job holds
+                        the values and editing the file later changes nothing already filed.
        --model <m>  --effort low|medium|high|xhigh|max
        --max-turns <n>  --max-budget <usd>  --max-retries <n>
        --no-isolate     run in the current checkout instead of its own worktree
@@ -434,6 +443,10 @@ export async function main(argv: string[]): Promise<number> {
       'allow-tools': { type: 'string' },
       brief: { type: 'string' },
       'brief-file': { type: 'string' },
+      // One workflow, expanded into this Job at file time. Not repeatable: two templates would need
+      // a rule for which one wins per key, and "the flag you typed wins over the file" is the only
+      // precedence anyone should have to hold.
+      from: { type: 'string' },
       model: { type: 'string' },
       effort: { type: 'string' },
       board: { type: 'string' },
@@ -499,13 +512,33 @@ export async function main(argv: string[]): Promise<number> {
   switch (verb) {
     // ---------------------------------------------------------------- new
     case 'new': {
-      const name = rest.join(' ').trim();
+      // A workflow is read BEFORE anything else happens — before the board is upserted, before a
+      // name is settled — because a `--from` that is not there must fail naming the path it looked
+      // for, with nothing created. It resolves against the board's REPOSITORY, never the cwd and
+      // never a worktree: the same fence as a guide and a plugin grant (`src/templates.ts`).
+      const tpl = values.from !== undefined ? readTemplate(scope.repoPath, String(values.from)) : null;
+      if (tpl) {
+        // The whole precedence rule, and it is `src/spec.ts`'s grain: **the more specific value
+        // wins**, so a flag the operator typed outranks the file. Written as "fill what is absent"
+        // rather than as a merge, so a list flag REPLACES the workflow's list instead of appending
+        // to it — a `--allow-tool` that could only widen a workflow's surface would be a grant
+        // nobody could narrow.
+        for (const [k, v] of Object.entries(tpl.spec)) {
+          if ((values as Record<string, unknown>)[k] === undefined) (values as Record<string, unknown>)[k] = v;
+        }
+      }
+      // A workflow names itself, so `hkb new --from draft-wiki-page` is a whole command. A name
+      // typed on the line still wins — it is the more specific value, exactly as a flag is.
+      const name = rest.join(' ').trim() || tpl?.name || '';
       if (!name) throw usage('hkb new <name> — a Job needs a name');
       // A triage item is a note, and a note that demanded a brief would not get written down. The
       // name IS the brief until somebody decides what the work is, which is what `hkb queue` is for.
       const triage = !!values.triage;
-      const brief = triage && values.brief === undefined && values['brief-file'] === undefined
-        ? name
+      const wroteBrief = values.brief !== undefined || values['brief-file'] !== undefined;
+      // The workflow's body is the brief; `--brief` still overrides it, on the same rule as every
+      // other key. Ordered before the triage fallback so `--from` on a triage item is still briefed.
+      const brief = tpl && !wroteBrief ? tpl.brief
+        : triage && !wroteBrief ? name
         : await readBrief(values);
       const board = await db.board.upsert({
         where: { slug },
@@ -540,6 +573,21 @@ export async function main(argv: string[]): Promise<number> {
       // reason: this one names a file the BOARD will read with the operator's authority and put in
       // front of a model. A source that was never legal must not become state.
       let inputs = ((values.input as string[] | undefined) ?? []).map(checkInputSpec);
+      // A workflow's placeholders, asked about here because `renderBrief` deliberately will not.
+      // Interpolation is opt-in — a Job that declares no input is left alone, so that a brief written
+      // before the feature existed still means what it says — and that opt-in is exactly wrong for a
+      // workflow, whose author opted in by writing `{{page}}`. Without this the Job would be filed
+      // with the literal text in its instructions and nothing would ever say so.
+      if (tpl && !inputs.length) {
+        const want = placeholders(brief);
+        if (want.length) {
+          throw usage(
+            `the workflow \`${tpl.name}\` needs ${want.map((n) => `\`{{${n}}}\``).join(', ')}, and this Job declares no inputs`
+            + ` — pass ${want.map((n) => `--input ${n}=value:…`).join(' ')}. Only \`value:\` inputs interpolate, because the`
+            + ' brief is instruction and a fetched source reaches the run as data.',
+          );
+        }
+      }
       // The brief is rendered HERE, against the `value:` inputs only, so what the board stores is
       // what the run is given — `hkb show` and the prompt cannot disagree. It applies to whichever
       // way the brief arrived: `--brief`, `--brief-file` or stdin all land in one string above.
@@ -601,9 +649,12 @@ export async function main(argv: string[]): Promise<number> {
       await db.event.create({
         data: { kind: 'created', jobId: job.id, boardId: board.id, actor: whoami(), payload: { name, ...(triage ? { phase: 'triage' } : {}) } },
       });
-      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results, artifacts, inputs, proposes }, () =>
+      emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results, artifacts, inputs, proposes, from: tpl?.name ?? null }, () =>
         console.log(`#${job.id} ${job.name}  [${job.phase}]  on ${slug}`
           + (triage ? `  — noted, not queued. \`hkb queue ${job.id}\` when it is work` : '')
+          // Named because the Job no longer remembers: a workflow is expanded at file time and gone,
+          // so this line is the only place the two are ever seen together.
+          + (tpl ? `\n  from workflow ${tpl.name}${tpl.description ? ` — ${tpl.description}` : ''}` : '')
           + (exports.length ? `\n  must produce  ${exports.join(', ')}` : '')
           + (results.length ? `\n  must report   ${results.join(', ')}` : '')
           + (artifacts.length ? `\n  must hand over ${artifacts.join(', ')}` : '')
