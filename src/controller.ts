@@ -1,9 +1,10 @@
 import { openBoard } from './db.ts';
 import {
-  createWorktree, exportOutputs, existingWorktree, newestWorktree, lockWorktree, removeWorktree,
-  unlockWorktree,
+  createWorktree, exportOutputs, existingWorktree, fetchBase, newestWorktree, lockWorktree,
+  pushedRef, removeWorktree, unlockWorktree,
   type Worktree,
 } from './worktree.ts';
+import { rebaseNote, rebaseOntoBase, rebaseShortfall } from './rebase.ts';
 import { prForBranch } from './pulls.ts';
 import {
   approvedPrompt, withArtifacts, withGuide, withInputs, withProposal, withProtocol, withResults,
@@ -164,7 +165,7 @@ const LEASE_GRACE_MS = 5 * 60_000;
  */
 export type Decision = {
   phase: 'succeeded' | 'failed' | 'pending' | 'suspended';
-  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output' | 'no_input';
+  outcome: 'completed' | 'max_turns' | 'max_budget' | 'timed_out' | 'refused' | 'crashed' | 'stopped' | 'no_output' | 'no_input' | 'conflicted';
   resumable: boolean;
   /**
    * What to write on the Job's `lastError`, when the reason it stopped is something a *human* has
@@ -462,6 +463,14 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
    */
   const inFlight = new Set<Promise<void>>();
   let failure: unknown = null;
+  /**
+   * Repositories whose base branch this pass has already fetched.
+   *
+   * A pass claims up to `maxConcurrent` Jobs, and on one board they all share a repository — so
+   * the fetch is a board-wide call and belongs here rather than in the per-Job block, which is the
+   * rule CLAUDE.md states as "no per-Job calls when a board-wide one exists".
+   */
+  const fetchedRepos = new Set<string>();
   /** Wait for the next run to end. Every iteration shrinks `inFlight`, so a caller cannot spin. */
   const settleOne = () => Promise.race([...inFlight]);
 
@@ -656,6 +665,22 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // `kb-N-2`, found nothing, and cut a fresh worktree from base with the session resumed on
         // top of it — the exact failure `existingWorktree` exists to prevent, reachable the moment a
         // Job has three attempts.
+        // The base is a remote-tracking ref, and nothing here had ever updated one — so a Job filed
+        // a minute after a pull request landed was cut from a base without it, on a daemon host
+        // nobody is pulling on. One fetch of the base branch, before the base is read.
+        //
+        // **Once per repository per pass, not once per Job.** This is the serial pre-dispatch
+        // section, whose own comment justifies its placement with "cutting a worktree is fast" — a
+        // network round trip is not, and five Jobs claimed together would have made five identical
+        // fetches one after another, each able to burn the full timeout before any worker started.
+        // Boards are keyed by their repository because that is what a fetch is about.
+        if (!fetchedRepos.has(cwd)) {
+          fetchedRepos.add(cwd);
+          const fetched = fetchBase(cwd);
+          if (!fetched.fetched && fetched.why && !/no remote/.test(fetched.why)) {
+            say(`could not fetch the base — ${fetched.why.slice(0, 120)}; using the ref as it stands`);
+          }
+        }
         const resuming = job.lastSessionId ? newestWorktree(cwd, job.id, k - 1) : null;
         wt = resuming ?? createWorktree(cwd, job.id, k);
         // Held for the length of the run. The daemon's sweep is a second remover, in a second
@@ -893,13 +918,19 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
     // starting cold, which is the whole reason that column exists.
+    // Where the worker is asked to rebase to, or nothing. A RESUMED attempt lands in a checkout
+    // whose branch is already on the remote: rebasing there makes its next push non-fast-forward,
+    // and the protocol's own next rule forbids the force that would fix it — so the step would have
+    // no legal ending and the worker would report a failed push and often skip the pull request.
+    // The controller rebases that case itself after the run instead.
+    const rebaseOnto = wt && !pushedRef(cwd, wt.branch) ? wt.baseLabel : undefined;
     // The pull-request protocol, or the sandbox note, or neither. A PROPOSING Job produces no
     // commit, so telling it to open a draft pull request contradicts the contract appended below —
     // one prompt saying both "push what you have" and "write the file and stop" is not an
     // instruction. It still needs to know it is standing in a worktree, which is what `withWorktree`
     // says and all it says.
     const opening = approvalPrompt
-      ?? (wt ? (job.proposes ? withWorktree(job.brief, wt.branch) : withProtocol(job.brief, wt.branch)) : job.brief);
+      ?? (wt ? (job.proposes ? withWorktree(job.brief, wt.branch) : withProtocol(job.brief, wt.branch, rebaseOnto)) : job.brief);
     // The guide goes in FRONT of all of it, including an approval prompt: an approver's instruction
     // is the most recent word on what to do, and the repository's rules are the standing word on how
     // anything here is done. Neither replaces the other.
@@ -1083,6 +1114,57 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       }
     }
 
+    // ---- what landed on the forge. One read, by head branch: the board and the forge are two
+    // systems and this is the only thing that joins them.
+    // Fenced on the JOB, not on this attempt. A pull request that existed before the Job did
+    // cannot be its output — that is the stale-branch case, where a name this database invented
+    // was already taken on the remote. But one opened by an EARLIER ATTEMPT of this Job is very
+    // much its output: a resumed attempt continues onto the same branch, which is the whole point
+    // of resuming, and dating the fence from the attempt made a Job lose the pull request it had
+    // already opened. Measured: #12 opened PR 366 at 12:41 on attempt 1 and recorded null at 13:39
+    // on attempt 2.
+    const pr = wt && deps.readPr !== false ? prForBranch(cwd, wt.branch, job.createdAt) : null;
+    if (pr) say(`${pr.isDraft ? 'draft ' : ''}PR #${pr.number} ${pr.url}`);
+    // Said out loud. A run that committed and pushed but opened no pull request has produced
+    // something a human still has to find, and silence here is what let job #4 look finished.
+    else if (wt && deps.readPr !== false) say(`no pull request on ${wt.branch}`);
+
+    // ---- the base moved under it. The cheap half of `docs/rebuild-plan.md` item 10: replay the
+    // attempt's branch onto the base as it is NOW, and push if the worker already pushed
+    // (`src/rebase.ts`). In the common case the brief has already had the worker do it and this is
+    // one `merge-base` that reports `current`.
+    //
+    // Placed AFTER the collection blocks on purpose. A conflict is a fact about the branch, not
+    // about the work: the results and artifacts an attempt produced are a durable record of what
+    // happened and are worth keeping whether or not its diff still applies. It is placed BEFORE the
+    // gate for the opposite reason — nobody should be asked to approve a diff that no longer sits
+    // on what they would merge it into — and after the forge read, which is what says whether a
+    // person is already looking at this branch.
+    //
+    // Gated on `heldToTheEnd` like every other write outside our own attempt row: the branch and
+    // the remote are contended state too, and a holder that lost its lease mid-run must not rewrite
+    // history the new holder's worker is committing onto.
+    let conflicted: string | null = null;
+    if (wt && ran.phase === 'succeeded' && heldToTheEnd && !shortfall) {
+      // A pull request somebody has taken out of draft is a diff a person is reading, and the
+      // whole safety argument for rewriting an attempt branch was that nobody was. It is checked
+      // rather than asserted now: ADR-010's gate suspends an attempt *precisely* so a human
+      // reviews, and the approved attempt would otherwise have force-pushed out from under their
+      // comments. No pull request read (`--json` tests, no forge) means nothing says otherwise.
+      const r = rebaseOntoBase(cwd, wt, { mayRewrite: !pr || pr.isDraft });
+      const owed = rebaseShortfall(job.id, wt, r);
+      const note = rebaseNote(job.id, wt, r);
+      if (note) say(`  ${note}`);
+      if (owed) {
+        conflicted = owed;
+        shortfall = owed;
+        say(`  ${owed}`);
+      } else if (r.kind === 'rebased') {
+        // `wt.base` moved with it, inside `rebaseOntoBase` — the sweep below counts from it.
+        say(`  rebased onto ${r.label} ${r.onto.slice(0, 7)}${r.pushed ? ' and force-pushed (lease held)' : ''}`);
+      }
+    }
+
     // A declared output that is not there fails the attempt, and that rule is what makes the
     // declaration worth writing down: without it `succeeded` still means only that a session ended.
     // Not retried — the session's own account is that it finished, so a resumed attempt wakes up
@@ -1100,25 +1182,15 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       ? await db.event.count({ where: { jobId: job.id, kind: 'approved' } })
       : 0;
     const decision: Decision = shortfall
-      ? { phase: 'failed', outcome: 'no_output', resumable: false, lastError: shortfall }
+      // `conflicted` rather than `no_output` when the branch is the problem, because the two send an
+      // operator to different places: `no_output` is a fault in the work and the answer is another
+      // run, a conflict is the base having moved and the answer is a hand rebase in a checkout that
+      // is still on disk. Not resumable for the same reason a missing output is not — a resumed
+      // worker may not force-push, so it has no move here that a human does not have to make first.
+      ? { phase: 'failed', outcome: conflicted ? 'conflicted' : 'no_output', resumable: false, lastError: shortfall }
       : job.gate && ran.phase === 'succeeded' && approved === 0
         ? { phase: 'suspended', outcome: 'completed', resumable: true, lastError: null }
         : ran;
-
-    // ---- what landed on the forge. One read, by head branch: the board and the forge are two
-    // systems and this is the only thing that joins them.
-    // Fenced on the JOB, not on this attempt. A pull request that existed before the Job did
-    // cannot be its output — that is the stale-branch case, where a name this database invented
-    // was already taken on the remote. But one opened by an EARLIER ATTEMPT of this Job is very
-    // much its output: a resumed attempt continues onto the same branch, which is the whole point
-    // of resuming, and dating the fence from the attempt made a Job lose the pull request it had
-    // already opened. Measured: #12 opened PR 366 at 12:41 on attempt 1 and recorded null at 13:39
-    // on attempt 2.
-    const pr = wt && deps.readPr !== false ? prForBranch(cwd, wt.branch, job.createdAt) : null;
-    if (pr) say(`${pr.isDraft ? 'draft ' : ''}PR #${pr.number} ${pr.url}`);
-    // Said out loud. A run that committed and pushed but opened no pull request has produced
-    // something a human still has to find, and silence here is what let job #4 look finished.
-    else if (wt && deps.readPr !== false) say(`no pull request on ${wt.branch}`);
 
     await db.attempt.update({
       where: { jobId_k: { jobId: job.id, k } },
@@ -1229,6 +1301,13 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
       if (resumesHere) {
         unlockWorktree(cwd, wt);
         say(`kept ${wt.path} — attempt ${k + 1} resumes in it`);
+      } else if (conflicted) {
+        // The checkout IS the fix, and it would otherwise be swept: a branch that conflicts has
+        // normally been pushed, so nothing is unpushed and nothing is dirty, and `removeWorktree`
+        // would take it and the local branch with it. Finding the conflict early is only worth
+        // anything if the tree to resolve it in is still there when the operator reads the message.
+        unlockWorktree(cwd, wt);
+        say(`kept ${wt.path} — rebase it there`);
       } else {
         // Everything this Job said it would produce is now in the repository, so whatever is left
         // in the checkout is undeclared — litter, in ADR-008's sense, and the one case where a

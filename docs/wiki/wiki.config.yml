@@ -98,6 +98,9 @@ pages:
   - slug: features/labels
     summary: "The grouping key the board had none of: a string→string map on a Job, k8s-shaped, filed with `hkb new --label` and selected with `hkb ls --label`. Why a map and not a tag list, why the selector language stops at equality, and why nothing in the controller reads one."
     status: seeded
+  - slug: features/rebase-and-verify
+    summary: "The base a Job is cut from is fetched before the checkout and replayed onto after the run: a branch that no longer sits on what a reviewer will merge is rebased and force-pushed under a lease, or fails the attempt as `conflicted`. Why the controller does the rewriting the worker is forbidden to do, and what this deliberately does not fix."
+    status: seeded
   - slug: features/workflow-templates
     summary: "Work that recurs is a file, not a command you retype: frontmatter is the spec, the body is the brief, and the keys are the CLI flags so one vocabulary documents both. Expanded once at file time, fenced to the board's repository, and hkb's own workflow comes through the same door."
     status: seeded

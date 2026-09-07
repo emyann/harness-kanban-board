@@ -589,6 +589,24 @@ Every item below was found by running the thing, not by reading it.
     Until then the practice that has actually worked is briefing: tell the second attempt
     what the first collided with. #19 and #20 were re-run that way and #19 landed clean.
 
+    **The CHEAP half shipped 2026-09-06** (`src/rebase.ts`, `docs/wiki/features/rebase-and-verify.md`).
+    Two things, and the first was the one nobody had noticed: **nothing fetched**, so `baseRef` read a
+    remote-tracking ref as stale as the operator's last pull and the daemon never pulls at all. The base
+    branch is fetched before the checkout, and after a successful run the branch is replayed onto the
+    base as it is then — clean, `push --force-with-lease` when the worker had already pushed; unable to
+    get there, `Outcome.conflicted` with the checkout kept and the commands named. The controller does
+    the rewriting because the worker may not force-push and a human should not have to, and only while
+    the pull request is still a draft — ADR-010's gate suspends an attempt *precisely* so somebody
+    reviews it. The fetch is of the base branch ALONE, in the brief as well as in `fetchBase`, since a
+    blanket fetch inside a worktree refreshes `origin/kb-<id>-<k>` in the shared ref store and turns
+    the lease into a plain `--force`. Three things learned the hard way and pinned by tests:
+    `rebase --autostash` **exits 0** when the replay works and the stash does not come back; a push
+    that never reached the remote must not fail an attempt whose work is already on it; and a resumed
+    attempt must not be asked to rebase, because its branch is pushed and its next push would then be
+    a non-fast-forward it is forbidden to force.
+    **The honest half is untouched**, and the DECIDED note above still stands: this closes the drift,
+    not the composition failure. Nine of the ten collisions had no merge conflict to answer.
+
 11. **~~`succeeded` does not mean "produced anything".~~ FIXED** — the absence is loud now.
     `hkb ls` marks a succeeded Job that opened no pull request and declared no exports as
     *produced nothing*, and counts them under the listing; `--json` carries `pr`, `exports` and

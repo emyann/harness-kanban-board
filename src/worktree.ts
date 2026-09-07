@@ -40,19 +40,24 @@ const git = (cwd: string, args: string[]) => spawnSync('git', args, { cwd, encod
 const short = (s: string) => (s || '').trim().split('\n').pop() || '';
 
 /** A remote read has to be able to fail rather than hang: a sweep runs inside the daemon's tick. */
-const NET_TIMEOUT_MS = 20_000;
+export const NET_TIMEOUT_MS = 20_000;
 
 /**
- * `ls-remote` over the network, never interactively.
+ * What makes a git subprocess unable to ask a question.
  *
- * A sweep runs unattended in a detached daemon. Without these, a remote that wants credentials
- * blocks on a prompt nobody will ever answer, and the tick with it.
+ * Every remote call hkb makes runs unattended — inside a detached daemon's tick, or between a
+ * worker finishing and its attempt row being written. Without these, a remote that wants
+ * credentials blocks on a prompt nobody will ever answer, and the whole pass with it. Exported
+ * because `src/rebase.ts` talks to the same remote under the same rule.
  */
+export const NET_ENV = { GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo', SSH_ASKPASS: 'echo' };
+
+/** git over the network, never interactively. */
 const gitRemote = (cwd: string, args: string[]) => spawnSync('git', args, {
   cwd,
   encoding: 'utf8',
   timeout: NET_TIMEOUT_MS,
-  env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo', SSH_ASKPASS: 'echo' },
+  env: { ...process.env, ...NET_ENV },
 });
 
 export type Worktree = {
@@ -117,6 +122,33 @@ export function baseRef(root: string): string {
     if (git(root, ['rev-parse', '--verify', '--quiet', `${guess}^{commit}`]).status === 0) return guess;
   }
   return 'HEAD';
+}
+
+/**
+ * Bring the base branch's remote-tracking ref up to date, so the base is what the remote agrees on
+ * rather than what the operator last pulled.
+ *
+ * Nothing in hkb fetched before this, and `baseRef`/`resolveBase` only ever read local refs — so a
+ * Job filed thirty seconds after a pull request landed was cut from a base that did not contain it,
+ * and every line number it cited was already one merge stale. The daemon is the case that matters:
+ * it runs for days on a machine nobody is pulling on.
+ *
+ * **Only the base branch, never `git fetch origin`.** Fetching everything would also update
+ * `refs/remotes/origin/kb-<id>-<k>`, and that ref is exactly what `--force-with-lease` compares
+ * against in `src/rebase.ts` — a blanket fetch would quietly hand back the protection the lease
+ * exists to give.
+ *
+ * Best effort by construction: it returns what happened and no caller treats a failure as fatal. A
+ * repository with no remote, an unreachable one, or one that wants credentials all mean the same
+ * thing here — the local ref is the best answer available, which is the answer we had before.
+ */
+export function fetchBase(root: string): { fetched: boolean; why: string } {
+  const ref = baseRef(root);
+  if (!ref.startsWith('origin/')) return { fetched: false, why: 'no remote to fetch from' };
+  const branch = ref.slice('origin/'.length);
+  const r = gitRemote(root, ['fetch', '--quiet', 'origin', branch]);
+  if (r.status === 0) return { fetched: true, why: '' };
+  return { fetched: false, why: short(r.stderr) || `git fetch origin ${branch} failed` };
 }
 
 /**
@@ -470,7 +502,7 @@ export function existingWorktree(root: string, jobId: number, k: number): Worktr
 }
 
 /** Resolve a ref to a commit **in the root repo**, never in the worktree. See `Worktree.base`. */
-function resolveBase(root: string, ref: string): string {
+export function resolveBase(root: string, ref: string): string {
   const r = git(root, ['rev-parse', '--verify', `${ref}^{commit}`]);
   if (r.status === 0 && r.stdout.trim()) return r.stdout.trim();
   return ref;
@@ -493,7 +525,7 @@ function resolveBase(root: string, ref: string): string {
  * The upstream recorded by `git push -u` is preferred, since that is the ref the worker's own
  * protocol sets, and `origin/<branch>` is the fallback for a push that did not set one.
  */
-function pushedRef(root: string, branch: string): string | null {
+export function pushedRef(root: string, branch: string): string | null {
   const remote = git(root, ['config', '--get', `branch.${branch}.remote`]).stdout.trim();
   const merge = git(root, ['config', '--get', `branch.${branch}.merge`]).stdout.trim();
   const candidates: string[] = [];

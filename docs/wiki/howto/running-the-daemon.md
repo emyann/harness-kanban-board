@@ -11,10 +11,10 @@ covers:
   - path: src/hkb.ts
     sha: 2aae98b33ad6c7909aceff4bcc573fcda399da82
   - path: src/worktree.ts
-    sha: e4094d7fae517cca708273ddff3007bfc508d10b
+    sha: 95c1207c4eaa7318526b9cd4df337802c08a521d
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
-generated_at_commit: 1ff10a0
+generated_at_commit: f2c1da5
 last_refreshed: 2026-09-06
 related: [architecture/the-loop, architecture/job-kind, decisions/adr-007-workload-scheduler]
 ---
@@ -186,10 +186,10 @@ log directory with the board (`src/db-url.ts:26-29`) — and that your shell,
 without that variable, is then looking at a different board entirely.
 
 ⚠️ Two boards over the **same repository** is not currently safe. An attempt's
-checkout is `kb-<jobId>-<k>` (`src/worktree.ts:74-75`) and job ids are unique only
+checkout is `kb-<jobId>-<k>` (`src/worktree.ts:79-80`) and job ids are unique only
 within one database, so the second board cuts a worktree over the first board's
 live one and the attempt is recorded `crashed` with git's "already used by
-worktree" as its reason (`src/worktree.ts:91-105`). One board per repository until
+worktree" as its reason (`src/worktree.ts:96-110`). One board per repository until
 that is fixed.
 
 ## The tick also reclaims worktrees, and that needs the remote
@@ -219,7 +219,7 @@ the obvious "already merged into main" test is not one of them, is
 
 ⚠️ **Under a supervisor, check the remote is actually reachable.** The sweep's
 proof is that the branch is gone from `origin`, which is one `git ls-remote`
-(`src/worktree.ts:632`). A systemd user unit does not inherit the `SSH_AUTH_SOCK`
+(`src/worktree.ts:664`). A systemd user unit does not inherit the `SSH_AUTH_SOCK`
 your interactive shell has — with `enable-linger` there is no session to inherit
 one from — so a daemon that works perfectly in a terminal can be unable to read
 the remote at all under the unit. It fails rather than hangs (the sweep runs with
