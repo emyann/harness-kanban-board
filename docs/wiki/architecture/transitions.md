@@ -7,9 +7,9 @@ audience: [dev]
 read_when: "building a second consumer, adding a verb that changes a Job's phase, or wondering why a guard lives in a module rather than beside the argument parsing"
 covers:
   - path: src/transitions.ts
-    sha: b7eceac893be1523b8bda846a9ed412ba8815df0
+    sha: 91b7343cd0c6493ac9fb6278a8353c5540e55aa9
   - path: src/hkb.ts
-    sha: 37b4de4b924ce76c8003ffec444982eebf3f4031
+    sha: dcee4783fbf061987575b6b28f48df781ed61522
   - path: prisma/schema.prisma
     sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
 related:
@@ -19,7 +19,7 @@ related:
     decisions/adr-010-the-human-gate,
     architecture/the-board,
   ]
-generated_at_commit: 73ac807
+generated_at_commit: 5f66a64
 last_refreshed: 2026-09-07
 ---
 
