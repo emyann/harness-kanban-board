@@ -86,6 +86,9 @@ pages:
   - slug: decisions/adr-015-machinery-and-consumer
     summary: "hkb is Kubernetes with an agent where the container goes; a kanban board is one way to consume it. What belongs to each side, the rule that keeps logic out of the CLI's switch, and the dogfooding rule for the extension point."
     status: seeded
+  - slug: decisions/adr-016-the-pod-spec-is-the-map
+    summary: "hkb's Kubernetes mapping has only ever covered scheduling. Everything a workload needs *around* it — what runs before, what runs alongside, what says it finished, what it may reach — is unmapped, and the temptation is to invent a vocabulary. We take the Pod spec's answers instead, row by row, and say plainly where hkb is off the map."
+    status: seeded
   - slug: features/watch
     summary: "The third question about the board, after \"what is true now\" and \"what happened\": tell me when something happens. Cursors rather than state, woken by the filesystem rather than polled, and resumable because an id never expires."
     status: seeded

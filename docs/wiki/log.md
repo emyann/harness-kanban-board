@@ -364,3 +364,4 @@ history.
 ## 2026-09-06 — added features/rebase-and-verify (rebase-and-verify shipped: the base is fetched before the checkout and replayed onto after the run)
 ## 2026-09-07 — added features/the-checkout-base (Job.base and Board.defaultBase: the checkout base becomes a spec field, so one Job's branch is where the next one starts) + GLOSSARY (Checkout base)
 ## 2026-09-07 — added architecture/transitions (the human half of the Job lifecycle extracted from the CLI switch into src/transitions.ts; ADR-015 decision 5's seam falling out of ordinary work) + GLOSSARY (Transition)
+## 2026-09-07 — added decisions/adr-016-the-pod-spec-is-the-map (the Kubernetes mapping extended from scheduling to the workload's ENVIRONMENT: init and sidecar are one list, check is the missing exit code, the failure semantics are k8s', and two rows are named off-map) + GLOSSARY (Off the map)
