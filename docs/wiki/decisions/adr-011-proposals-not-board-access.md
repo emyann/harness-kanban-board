@@ -21,7 +21,7 @@ covers:
   - path: src/brief.ts
     sha: 8b26e22eef60ceac89d2ececf18a82284a73ddad
   - path: prisma/schema.prisma
-    sha: af2155d3e5cfd330f259ae1e5b5cde91f732d109
+    sha: 608f30399206342bbc1374203b47674c6a719657
   - path: src/artifacts.ts
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
   - path: src/inputs.ts
@@ -35,7 +35,7 @@ related:
     architecture/job-kind,
     architecture/the-loop,
   ]
-generated_at_commit: 679487b
+generated_at_commit: 47d5907
 last_refreshed: 2026-09-06
 ---
 
@@ -219,6 +219,12 @@ way rather than either of the two cheaper ones.
 
 The consequence above that has not been paid is the tool surface: denying `Bash` to a
 proposing Job is now *arguable* and is still not done.
+
+**And the triage gap is half closed.** `Phase.triage` gives an **operator** somewhere to put an
+undecided item — `hkb new --triage`, `hkb queue`, `hkb triage` — which is the half this record
+described as *"`pending` means 'wants to run', not 'wants to be decided about'"*. The **inbound**
+half it also names, an external call arriving with something nobody has judged, is untouched: that
+one needs an authorisation model, not a phase (`architecture/job-kind`).
 
 <!-- Dual mutability: once status: accepted, NEVER rewrite this record.
 When the decision changes, write a new ADR, set its `supersedes`, and set

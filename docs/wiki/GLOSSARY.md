@@ -162,6 +162,12 @@ meet one in the git history, that is what it was.
 - **Volunteered output** — a result or artifact a run left without declaring: kept and reported,
   never required, and never able to fail an attempt (`collectResults`/`collectArtifacts`,
   `src/results.ts`, `src/artifacts.ts`) (*features/declared-outputs*).
+- **Triage** — the phase before the queue: a Job that has been noticed and not decided on
+  (`Phase.triage`, `hkb new --triage`). Never claimed, because the claim query asks for `pending` and
+  always did. `hkb queue <id> ["<brief>"]` makes it work — and is the one moment the brief may be
+  rewritten, because that is when a note becomes an instruction — and `hkb triage <id>` is the way
+  back for one filed in haste. The only human-written phase that is an entry rather than an exit
+  (*architecture/job-kind*).
 - **Watch** — following the board's `Event` stream as it is written (`hkb watch`, `src/watch.ts`). Every
   line leads with its event id, and that id is the resume token: `--after <id>` picks up exactly where a
   previous watch stopped, and it never expires because events are append-only. Woken by `fs.watch` on the

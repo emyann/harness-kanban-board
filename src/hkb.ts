@@ -87,6 +87,10 @@ const HELP = `hkb — run one agent against one brief
                         standing instruction, so a worker follows the rules the repository
                         already writes down instead of the brief restating them. Follows one
                         level of \`@import\`. Defaults to the board's --guide.
+       --triage         file it WITHOUT queueing it: a Job in triage is never claimed, so this
+                        is where something you noticed goes until you have decided it is work.
+                        The brief is optional here — the name is the brief until \`hkb queue\`
+                        gives it a real one.
        --propose        this Job PROPOSES Jobs instead of filing them. It writes one JSON
                         file, you read it, and the controller creates the rows on approval —
                         so a worker that decomposes work needs no board access at all, and a
@@ -101,6 +105,8 @@ const HELP = `hkb — run one agent against one brief
        --max-budget <usd>  required when it stopped on max_budget: the same cap
                            would stop it in the same place
        --max-turns <n>  --max-retries <n>
+  hkb queue <id> ["…"]      a triage item is work after all: queue it, optionally re-briefed
+  hkb triage <id>           the other way — file a pending Job back under "not yet"
   hkb approve <id> ["…"]    let a gated Job go on, in the same session, with your words
                             — or, for a --propose Job, file what it proposed
   hkb reject <id> "<why>"   end a gated Job: what it proposed is not wanted
@@ -302,7 +308,7 @@ export async function resolveBoard(
   return { slug: path.basename(root), repoPath: root, known: false };
 }
 
-const PHASES = ['pending', 'running', 'succeeded', 'failed', 'suspended', 'done', 'cancelled'] as const;
+const PHASES = ['triage', 'pending', 'running', 'succeeded', 'failed', 'suspended', 'done', 'cancelled'] as const;
 type Phase = (typeof PHASES)[number];
 
 /** The two phases an operator writes, and the verb that writes each. */
@@ -420,6 +426,8 @@ export async function main(argv: string[]): Promise<number> {
       // A boolean, because the only thing that may be proposed is Jobs (ADR-011 decision 6). It
       // becomes the string the column holds, so the closed set can grow without a flag change.
       propose: { type: 'boolean' },
+      // File it without queueing it. The capture half of a state `pending` could not hold.
+      triage: { type: 'boolean' },
       // Repeatable, for the same reason `--export` is: a tool name is a token, and one
       // comma-separated string makes the empty list ("this Job may call nothing") unsayable.
       'allow-tool': { type: 'string', multiple: true },
@@ -493,7 +501,12 @@ export async function main(argv: string[]): Promise<number> {
     case 'new': {
       const name = rest.join(' ').trim();
       if (!name) throw usage('hkb new <name> — a Job needs a name');
-      const brief = await readBrief(values);
+      // A triage item is a note, and a note that demanded a brief would not get written down. The
+      // name IS the brief until somebody decides what the work is, which is what `hkb queue` is for.
+      const triage = !!values.triage;
+      const brief = triage && values.brief === undefined && values['brief-file'] === undefined
+        ? name
+        : await readBrief(values);
       const board = await db.board.upsert({
         where: { slug },
         update: {},
@@ -570,6 +583,7 @@ export async function main(argv: string[]): Promise<number> {
           ...(inputs.length ? { inputs } : {}),
           ...(gate ? { gate } : {}),
           ...(guide !== undefined ? { guide } : {}),
+          ...(triage ? { phase: 'triage' as const } : {}),
           proposes,
           model: (values.model as string) ?? null,
           effort: effort ?? null,
@@ -585,10 +599,11 @@ export async function main(argv: string[]): Promise<number> {
         },
       });
       await db.event.create({
-        data: { kind: 'created', jobId: job.id, boardId: board.id, actor: whoami(), payload: { name } },
+        data: { kind: 'created', jobId: job.id, boardId: board.id, actor: whoami(), payload: { name, ...(triage ? { phase: 'triage' } : {}) } },
       });
       emit(out, { id: job.id, name: job.name, phase: job.phase, board: slug, exports, results, artifacts, inputs, proposes }, () =>
         console.log(`#${job.id} ${job.name}  [${job.phase}]  on ${slug}`
+          + (triage ? `  — noted, not queued. \`hkb queue ${job.id}\` when it is work` : '')
           + (exports.length ? `\n  must produce  ${exports.join(', ')}` : '')
           + (results.length ? `\n  must report   ${results.join(', ')}` : '')
           + (artifacts.length ? `\n  must hand over ${artifacts.join(', ')}` : '')
@@ -1496,6 +1511,59 @@ export async function main(argv: string[]): Promise<number> {
       return 0;
     }
 
+    // ---------------------------------------------------------------- queue / triage
+    // The two ends of the line `pending` could not draw. `pending` means *wants to run* — a daemon
+    // claims it — so a Job you have noticed but not decided on had nowhere to be. The board-wide
+    // answers (stop it, drain it to zero concurrency) answer a per-Job question with a per-board
+    // switch, and the alternative was to lose the note.
+    case 'queue':
+    case 'triage': {
+      const id = num(rest[0], `hkb ${verb} <id>`);
+      if (!id) throw usage(`hkb ${verb} <id> — which Job?`);
+      const job = await db.job.findUnique({ where: { id }, include: { lease: true } });
+      if (!job) throw usage(`no Job #${id} — \`hkb ls\` shows what is on the board`);
+
+      if (verb === 'queue') {
+        if (job.phase !== 'triage') {
+          throw usage(`#${id} is ${job.phase}, not triage — \`hkb queue\` is for a Job nobody has decided on yet`
+            + (job.phase === 'pending' ? ', and this one is already queued' : ''));
+        }
+        // The brief is rewritable HERE and nowhere else, because this is the moment it stops being a
+        // note and becomes an instruction — the note said what you saw, and the brief has to say
+        // what to do about it. Optional: a note that was already a good brief needs no second pass.
+        const rest1 = rest.slice(1).join(' ').trim();
+        const brief = rest1 || (values.brief !== undefined || values['brief-file'] !== undefined
+          ? await readBrief(values)
+          : null);
+        await db.$transaction([
+          db.job.update({ where: { id }, data: { phase: 'pending', ...(brief ? { brief } : {}) } }),
+          db.event.create({
+            data: { kind: 'queued', jobId: id, boardId: job.boardId, actor: whoami(), payload: brief ? { rebriefed: true } : {} },
+          }),
+        ]);
+        emit(out, { id, phase: 'pending', rebriefed: !!brief }, () =>
+          console.log(`#${id} queued${brief ? ', with a new brief' : ''} — it runs on the next pass`));
+        return 0;
+      }
+
+      // The way back. Without it a Job filed in haste can only be cancelled, which is terminal and
+      // throws away the note along with the decision not to run it now.
+      if (job.lease) {
+        throw usage(`#${id} is leased by ${job.lease.holder} — it is running now. Wait for it, or let the lease expire.`);
+      }
+      if (job.phase === 'triage') throw usage(`#${id} is already in triage`);
+      if (job.phase !== 'pending') {
+        throw usage(`#${id} is ${job.phase}, and triage is for work that has not started`
+          + ` — \`hkb retry ${id}\` puts a stopped Job back on the board, \`hkb cancel ${id} "<why>"\` ends it`);
+      }
+      await db.$transaction([
+        db.job.update({ where: { id }, data: { phase: 'triage' } }),
+        db.event.create({ data: { kind: 'triaged', jobId: id, boardId: job.boardId, actor: whoami(), payload: {} } }),
+      ]);
+      emit(out, { id, phase: 'triage' }, () => console.log(`#${id} back to triage — nothing will claim it`));
+      return 0;
+    }
+
     // ---------------------------------------------------------------- watch
     // The third question about the board. `ls` answers what is true now and `log` answers what
     // happened up to now; this one answers "tell me when something happens", which everything that
@@ -1572,7 +1640,7 @@ export async function main(argv: string[]): Promise<number> {
     }
 
     default:
-      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, retry, done, cancel, rm, stop, start, up, down, log, watch, boards, migrate`);
+      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, retry, done, cancel, rm, stop, start, up, down, log, watch, queue, triage, boards, migrate`);
   }
 }
 

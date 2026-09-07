@@ -7,12 +7,12 @@ audience: [dev]
 read_when: "adding a workload kind, changing retry or lease behaviour, or wondering why the DAG is not in the core"
 covers:
   - path: prisma/schema.prisma
-    sha: af2155d3e5cfd330f259ae1e5b5cde91f732d109
+    sha: 608f30399206342bbc1374203b47674c6a719657
   - path: src/controller.ts
     sha: eb7a09443efe5cd3e872af7f4560c9d82e1c11f6
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
-generated_at_commit: 679487b
+generated_at_commit: 47d5907
 last_refreshed: 2026-09-06
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control]
 ---
@@ -188,6 +188,31 @@ creates Jobs — the controller does, from an approved proposal — and it does 
 ordering between them, which ADR-011 decision 6 reads as CronJob-shaped rather than
 DAG-shaped (`features/proposals`). What is still missing is the edge: the graph is not
 "creation by a controller", it is *ordering*, and nothing here has any.
+
+## Triage: the phase before the queue
+
+`pending` means **wants to run** — the claim query asks for it by name, so a daemon takes it. That
+left nowhere to put *"I noticed this, do not run it yet"*, and the available answers were all board-wide
+ones to a per-Job question: stop the board, or drain it to zero concurrency. So the choice was to file
+work nobody had decided on, or to lose the note.
+
+`Phase.triage` is that place, and it is the **only human-written phase that is an entry rather than an
+exit**. Three surfaces, one concept:
+
+| | |
+|---|---|
+| `hkb new "<what you saw>" --triage` | capture. The brief is optional here — the name *is* the brief until somebody decides what the work is, because a note that demanded a brief would not get written down |
+| `hkb queue <id> ["<brief>"]` | it is work after all. The brief is rewritable at exactly this moment and no other: the note said what you saw, the brief has to say what to do |
+| `hkb triage <id>` | the way back, for a Job filed in haste. Without it the only exit is `hkb cancel`, which is terminal and throws the note away with the decision |
+
+**The guard costs nothing, which is why it is tested.** A Job in triage is never claimed because
+`reconcile` asks for `phase: 'pending'` and always did — so the feature is free and the test is the
+only thing standing between it and a query that changes. `test/controller.test.ts` runs the board to
+rest and asserts the noted Job has no attempt and no cost.
+
+ADR-011 named this gap and left it open. Half of it is closed: an **operator** now has somewhere to put
+an undecided item. The **inbound** half — something arriving from outside that nobody has judged — is
+still open, and is a different problem with a different authorisation model.
 
 ## The two phases a human writes
 

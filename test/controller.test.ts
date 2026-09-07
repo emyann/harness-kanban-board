@@ -1823,3 +1823,55 @@ test('the standing rules reach every shape of Job, including a resumed approval'
   assert.match(seen, /has reviewed what you proposed/, 'this really is the approval prompt');
   assert.ok(has(), 'and it carries the standing rules too');
 });
+
+/**
+ * `triage` — the state `pending` could not hold (ADR-011 named the gap).
+ *
+ * The guard is the whole feature: `pending` means *wants to run*, so a Job somebody has noticed but
+ * not decided on had nowhere to be. That it is never claimed comes free from the claim query asking
+ * for `pending` — which is exactly why it needs a test that would notice if the query changed.
+ */
+test('a Job in triage is NEVER claimed, however long the board runs', async () => {
+  const b = await proposalBoard();
+  const noted = await db.job.create({
+    data: { boardId: b.id, name: 'something I noticed', brief: 'something I noticed', phase: 'triage', isolate: false },
+  });
+  const real = await db.job.create({
+    data: { boardId: b.id, name: 'actual work', brief: 'do it', isolate: false, maxBudgetUsd: 1 },
+  });
+
+  // To rest, not one pass: a Job that is skipped once and picked up on the third tick would pass a
+  // single-pass test and still be wrong.
+  const passes = await reconcileToRest({ runtime: fakeRuntime(), cwd, board: 'proposals', readPr: false });
+  const claimed = passes.flatMap((p) => p.claimed);
+
+  assert.ok(claimed.includes(real.id), 'the pending one ran');
+  assert.ok(!claimed.includes(noted.id), 'and the noted one was never touched');
+  const after = await db.job.findUniqueOrThrow({ where: { id: noted.id }, include: { attempts: true } });
+  assert.equal(after.phase, 'triage', 'still where it was put');
+  assert.equal(after.attempts.length, 0, 'and it cost nothing — no attempt, no money');
+});
+
+test('an approved proposal cannot be applied to a Job in triage either', async () => {
+  // `applyProposals` runs before the claim loop and asks the same question. A triage item with an
+  // approval on it — reachable by filing one and approving nothing else — must stay put.
+  const b = await proposalBoard();
+  const job = await db.job.create({
+    data: {
+      boardId: b.id, name: 'noted proposer', brief: 'break it down', isolate: false,
+      proposes: 'jobs', phase: 'triage',
+    },
+  });
+  await db.attempt.create({
+    data: {
+      jobId: job.id, k: 1, maxBudgetUsd: 1, outcome: 'completed', endedAt: new Date(),
+      proposal: { jobs: [{ name: 'must not be filed', brief: 'x' }], clamped: [] },
+    },
+  });
+  await db.event.create({ data: { kind: 'approved', jobId: job.id, boardId: b.id, actor: 'ada', payload: {} } });
+
+  const report = await reconcile({ runtime: fakeRuntime(), cwd, board: 'proposals', readPr: false });
+  assert.deepEqual(report.filed, [], 'nothing filed');
+  assert.equal(await db.job.findFirst({ where: { name: 'must not be filed' } }), null);
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).phase, 'triage');
+});
