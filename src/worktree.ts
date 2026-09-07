@@ -175,6 +175,20 @@ export function isAttemptBranch(name: string): boolean {
 }
 
 /**
+ * Does the remote have this branch, whether or not this clone has heard of it?
+ *
+ * Only ever asked on the way to a refusal, and only to make the refusal true. Because `fetchBase`
+ * declines to refresh an attempt branch, `origin/kb-33-1` resolves here only if this working copy
+ * already holds the ref — so a re-cloned `Board.repoPath`, a second checkout of the same remote, or
+ * a pruned ref all produce "wait for the branch it names to be pushed" about a branch that is
+ * pushed and sitting on the forge. One `ls-remote` is what makes the message say the true thing.
+ */
+export function onRemote(root: string, branch: string): boolean {
+  const r = gitRemote(root, ['ls-remote', '--heads', 'origin', branch.replace(/^origin\//, '')]);
+  return r.status === 0 && !!r.stdout.trim();
+}
+
+/**
  * The ref a checkout is actually cut from: what the Job asked for, or the repository's default.
  *
  * One fallback and no search path — and the REMOTE one is tried first, which is the correction that
@@ -246,7 +260,15 @@ export function fetchBase(root: string, want?: string | null): FetchedBase {
   // only the former, so the prefix comes off before it is asked for.
   const asked = typeof want === 'string' && want.trim() ? want.trim() : null;
   if (asked !== null && !validRef(asked)) return { fetched: false, skipped: false, why: `\`${asked}\` is not a ref` };
-  const branch = (asked ?? baseRef(root)).replace(/^origin\//, '');
+  const ref = asked ?? baseRef(root);
+  // An origin exists but names no default branch we can find — no `origin/HEAD`, no `origin/main`,
+  // no `origin/master`, which is what `git remote add origin` on an existing repository leaves.
+  // `baseRef` then answers `HEAD`, the LOCAL one, and `git fetch origin HEAD` would spend up to the
+  // full network timeout every pass to refresh a ref nothing here reads and report success for it.
+  if (ref === 'HEAD') {
+    return { fetched: false, skipped: true, why: 'the base is a local ref — nothing to fetch for it' };
+  }
+  const branch = ref.replace(/^origin\//, '');
 
   // **Never an attempt branch, and this is the lease again.** Fetching `kb-33-1` updates
   // `refs/remotes/origin/kb-33-1`, which is exactly what `--force-with-lease` compares against when

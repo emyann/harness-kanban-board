@@ -565,6 +565,29 @@ test('a base that names nothing FAILS the Job before a session is bought', async
   assert.match(after.lastError ?? '', /origin\/kb-999-1/, 'including the fallback it also tried');
 });
 
+test('a repository whose origin names no default branch does not go to the network for HEAD', () => {
+  // `git remote add origin` on an existing repository leaves no `origin/HEAD`, no `origin/main` and
+  // no `origin/master`, so `baseRef` answers `HEAD` — the LOCAL ref. Testing for a remote instead of
+  // for the shape of the ref made that `git fetch origin HEAD`: up to the full network timeout every
+  // pass, refreshing nothing anything here reads, and reporting success for it.
+  const bare = path.join(dir, 'headless.git');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'trunk', bare]);
+  const repo = path.join(dir, 'headless');
+  fs.mkdirSync(repo);
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+  git(repo, ['config', 'user.email', 'rb@test']);
+  git(repo, ['config', 'user.name', 'rb']);
+  git(repo, ['remote', 'add', 'origin', bare]);
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+  git(repo, ['add', '-A']);
+  git(repo, ['commit', '-qm', 'a']);
+
+  assert.equal(baseRef(repo), 'HEAD', 'there is an origin, but nothing on it we can name');
+  const r = fetchBase(repo);
+  assert.equal(r.skipped, true, 'declined, not attempted');
+  assert.equal(r.fetched, false, 'and certainly not reported as done');
+});
+
 test('declining to fetch is not reported as failing to', () => {
   // Two ways not to fetch and only one is worth a word. Reporting a decision as "could not refresh
   // the base" puts a false warning on every pass of every chain step — and the callers used to tell
@@ -639,6 +662,81 @@ test('a base that has gone does not kill an attempt RESUMING in a checkout it al
   assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).phase, 'succeeded');
 });
 
+test('a chain step is told the right things about its parent branch, by the controller', async () => {
+  // `withProtocol` is tested directly above; this is the half that binds it. The controller decides
+  // whether the worker may fetch and what the pull request opens against, and both were wrong in a
+  // way no unit test of the renderer could see.
+  const { repo } = makeRemote('advice');
+  const db = openBoard();
+  const board = await db.board.upsert({
+    where: { slug: 'advice' }, update: { repoPath: repo }, create: { slug: 'advice', repoPath: repo },
+  });
+  const first = await db.job.create({ data: { boardId: board.id, name: 'one', brief: 'write it' } });
+
+  const prompts: string[] = [];
+  const runtime: Runtime = {
+    name: 'capturing',
+    async run(spec: WorkerSpec, onEvent?: (e: RuntimeEvent) => void): Promise<WorkerOutcome> {
+      prompts.push(spec.prompt);
+      const branch = git(spec.cwd, ['branch', '--show-current']);
+      work(spec.cwd, `f${spec.taskId}.txt`, 'x\n', 'work');
+      git(spec.cwd, ['push', '-q', '-u', 'origin', branch]);
+      onEvent?.({ kind: 'ended', taskId: spec.taskId, status: 'completed' });
+      return {
+        status: 'completed', ok: true, sessionId: `a-${spec.taskId}`, text: 'done', costUsd: 0,
+        turns: 1, durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+      };
+    },
+  };
+
+  await reconcile({ runtime, cwd: repo, board: 'advice', readPr: false });
+  const parent = (await db.job.findUniqueOrThrow({
+    where: { id: first.id }, include: { attempts: true },
+  })).attempts[0].branch ?? '';
+
+  // The trunk Job: fetch its base, open against the default branch.
+  assert.match(prompts[0], new RegExp(`git fetch origin main`), 'a trunk Job refreshes its own base');
+  assert.doesNotMatch(prompts[0], /gh pr create[^\n]*--base/, 'and opens against the default branch');
+
+  await db.job.create({ data: { boardId: board.id, name: 'two', brief: 'add to it', base: parent } });
+  await reconcile({ runtime, cwd: repo, board: 'advice', readPr: false });
+
+  const step = prompts[1];
+  assert.match(step, new RegExp(`git rebase origin/${parent}`), 'the chain step still rebases');
+  assert.doesNotMatch(step, /git fetch/, 'but fetches nothing — that ref is its parent\'s lease');
+  assert.match(step, new RegExp(`gh pr create[^\\n]*--base ${parent}`), 'and opens against its parent');
+});
+
+test('a base that is on the REMOTE but not in this clone says so, instead of "wait for it"', async () => {
+  // `fetchBase` will not refresh an attempt branch, so `origin/kb-*` resolves only if this working
+  // copy already holds the ref. A re-cloned repoPath or a pruned ref then produced "wait for the
+  // branch it names to be pushed" about a branch sitting on the forge — which sends the operator to
+  // look in entirely the wrong place.
+  const { repo, other } = makeRemote('remote-only');
+  const db = openBoard();
+  const board = await db.board.upsert({
+    where: { slug: 'remote-only' }, update: { repoPath: repo }, create: { slug: 'remote-only', repoPath: repo },
+  });
+  // A branch that exists on the remote and that `repo` has never fetched.
+  git(other, ['checkout', '-q', '-b', 'kb-77-1']);
+  fs.writeFileSync(path.join(other, 'theirs.txt'), 'theirs\n');
+  git(other, ['add', '-A']);
+  git(other, ['commit', '-qm', 'elsewhere']);
+  git(other, ['push', '-q', 'origin', 'kb-77-1']);
+
+  const job = await db.job.create({
+    data: { boardId: board.id, name: 'chained', brief: 'do it', base: 'kb-77-1' },
+  });
+  const runtime: Runtime = { name: 'never', async run(): Promise<WorkerOutcome> { throw new Error('unreachable'); } };
+  await reconcile({ runtime, cwd: repo, board: 'remote-only', readPr: false });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(after.phase, 'failed');
+  assert.match(after.lastError ?? '', /IS on the remote/, 'the true thing, not the plausible one');
+  assert.match(after.lastError ?? '', /git -C .* fetch origin kb-77-1/, 'and the command that fixes it');
+  assert.doesNotMatch(after.lastError ?? '', /Wait for the branch/);
+});
+
 test('the refusal names a fallback only when there was one, and clears the session', async () => {
   const { repo } = makeRemote('msg');
   const db = openBoard();
@@ -655,10 +753,17 @@ test('the refusal names a fallback only when there was one, and clears the sessi
     },
   });
   const runtime: Runtime = { name: 'never', async run(): Promise<WorkerOutcome> { throw new Error('unreachable'); } };
-  await reconcile({ runtime, cwd: repo, board: 'msg', readPr: false });
+  const lines: string[] = [];
+  await reconcile({ runtime, cwd: repo, board: 'msg', readPr: false, onEvent: (l) => lines.push(l) });
 
   const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
   assert.equal(after.phase, 'failed');
+  // `say` prefixes `#<id>` already, so the message must not carry one too — the operator was
+  // reading `#40 #40 asks to branch from …`. The JOB ROW is the other way round: nothing prefixes
+  // that, so it must carry the id.
+  assert.ok(lines.some((l) => /asks to branch from/.test(l)), 'it was said');
+  assert.ok(!lines.some((l) => /#\d+ #\d+/.test(l)), 'and said once');
+  assert.match(after.lastError ?? '', /^#\d+ asks to branch from/, 'the row still names the Job');
   assert.doesNotMatch(after.lastError ?? '', /origin\/origin/, 'no doubled prefix');
   assert.equal((after.lastError ?? '').match(/origin\/nope/g)?.length, 1, 'named once, not twice');
   assert.equal(after.lastSessionId, null, 'a terminal failure drops the session, like every other one');
@@ -699,7 +804,7 @@ test('a Job\'s branch is rebased onto ITS base, never the repository\'s default'
 // ---------------------------------------------------------------- the prompt half
 
 test('the protocol asks the worker to rebase BEFORE it pushes, since after it cannot', () => {
-  const p = withProtocol('do the thing', 'kb-1-1', 'origin/main');
+  const p = withProtocol('do the thing', 'kb-1-1', { rebaseOnto: 'origin/main' });
   const rebaseAt = p.indexOf('git rebase origin/main');
   const pushAt = p.indexOf('git push -u origin kb-1-1');
   assert.ok(rebaseAt > 0, 'it is asked for');
@@ -708,17 +813,39 @@ test('the protocol asks the worker to rebase BEFORE it pushes, since after it ca
   assert.match(p, /5\. Reply with one line/);
 });
 
+test('the protocol does not ask a worker to fetch a branch that is somebody\'s lease', () => {
+  // The third direction this hole has been opened from: `fetchBase` refuses to refresh an attempt
+  // branch, and the prompt then asked the worker to do it — inside a worktree, whose ref store is
+  // the parent repo's.
+  const p = withProtocol('do it', 'kb-34-1', { rebaseOnto: 'origin/kb-33-1', fetch: false });
+  assert.match(p, /git rebase origin\/kb-33-1/, 'it still rebases');
+  assert.doesNotMatch(p, /git fetch/, 'and it fetches nothing at all');
+  assert.match(p, /do NOT fetch it first/, 'said out loud, so it does not read as an omission');
+});
+
+test('a pull request for a based Job opens against that base, not the default branch', () => {
+  // Without this the diff carries the parent step's commits and merging it merges the parent's
+  // unreviewed work into the trunk — the rebase keeps the BRANCH right, this keeps the REVIEW right.
+  const p = withProtocol('do it', 'kb-34-1', { rebaseOnto: 'origin/kb-33-1', fetch: false, prBase: 'kb-33-1' });
+  assert.match(p, /gh pr create .*--head kb-34-1 --base kb-33-1/);
+  assert.match(p, /NOT the default branch/);
+
+  const plain = withProtocol('do it', 'kb-1-1', { rebaseOnto: 'origin/main' });
+  assert.doesNotMatch(plain, /gh pr create[^\n]*--base/, 'and a Job with no base still says nothing');
+  assert.match(plain, /against the default branch/);
+});
+
 test('the protocol never asks for a BLANKET fetch, which would undo the lease it is paired with', () => {
   // A worktree shares its parent's ref store, so `git fetch origin` inside one updates
   // `refs/remotes/origin/kb-<id>-<k>` — the exact ref `--force-with-lease` compares against.
   // `fetchBase` narrows itself for this reason; asking the worker to widen it again gives it back.
-  const p = withProtocol('do the thing', 'kb-1-1', 'origin/main');
+  const p = withProtocol('do the thing', 'kb-1-1', { rebaseOnto: 'origin/main' });
   assert.match(p, /git fetch origin main\b/, 'the base branch, by name');
   assert.doesNotMatch(p, /git fetch origin(?!\s+\S)/, 'and never a bare `git fetch origin`');
 });
 
 test('a repository with no remote is not told to fetch one', () => {
-  const p = withProtocol('do the thing', 'kb-1-1', 'HEAD');
+  const p = withProtocol('do the thing', 'kb-1-1', { rebaseOnto: 'HEAD' });
   assert.doesNotMatch(p, /git fetch origin/);
   assert.match(p, /2\. Push it/, 'and the steps close back up');
 });

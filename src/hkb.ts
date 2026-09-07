@@ -643,9 +643,18 @@ export async function main(argv: string[]): Promise<number> {
       // Checked here rather than only where git is called: a ref reaches git as a bare argv token,
       // so one beginning with a dash is an option (`--upload-pack=…` runs a command). See `validRef`.
       const base = rawBase === undefined ? undefined : checkRef(rawBase, '--base');
-      // A Job with no worktree has no checkout to cut, so nothing would ever read this — and a spec
-      // field that is stored, printed by `hkb show`, and never honoured is the silent failure this
-      // project's fifth value forbids. Refused rather than ignored.
+      // Two flags that mean opposite things, typed together: --no-isolate runs in the current
+      // checkout, so there is no branch to cut from a base and nothing would ever read it. Refused
+      // rather than ignored — a spec field that is stored, printed and never honoured is the silent
+      // failure this project's fifth value forbids.
+      //
+      // A base arriving from the BOARD's default is deliberately NOT refused here. It is not a
+      // contradiction the filer wrote, and refusing would make one `--no-isolate` Job unfileable on
+      // such a board — there is no per-Job clear to escape with, and there cannot easily be one:
+      // `pick` in `src/spec.ts` reads a null column as *unset*, so a cleared value falls straight
+      // through to the board default again. That gap is shared by every board-defaulted field. What
+      // is fixed instead is the visible half: `hkb show` does not present a base to a Job that
+      // cannot use one.
       if (base && values['no-isolate']) {
         throw usage('--base and --no-isolate contradict each other: --no-isolate runs in the current checkout, so there is no branch to cut from a base. Drop one.');
       }
@@ -851,7 +860,14 @@ export async function main(argv: string[]): Promise<number> {
           // Where the branch starts. Printed with the traced spec rather than beside the pull
           // request, because it is a thing somebody CHOSE — and "why does this diff contain that
           // other Job's commits" is the question it answers.
-          ['base', spec.base.value ?? "(the repository's default branch)", spec.base.from],
+          //
+          // Omitted entirely for an un-isolated Job, which cuts no branch. A board's `defaultBase`
+          // resolves onto every Job it carries, so this line otherwise told an operator that a Job
+          // running in their own checkout branches from `origin/develop` — a fact about a checkout
+          // that will never be made.
+          ...(job.isolate
+            ? [['base', spec.base.value ?? "(the repository's default branch)", spec.base.from] as [string, string, SpecSource]]
+            : []),
         ];
         const vw = Math.max(...traced.map(([, v]) => v.length));
         for (const [k, v, from] of traced) {

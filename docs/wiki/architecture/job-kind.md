@@ -9,10 +9,10 @@ covers:
   - path: prisma/schema.prisma
     sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
   - path: src/controller.ts
-    sha: 5468263959954699e383b73a2e1d13bb24f79baa
+    sha: 41c7fbd41f65c61a80c6fcfa9ec56236d0811a7f
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
-generated_at_commit: b551911
+generated_at_commit: 9ce6588
 last_refreshed: 2026-09-07
 related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control, features/rebase-and-verify]
 ---

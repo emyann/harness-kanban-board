@@ -1,7 +1,7 @@
 import { openBoard } from './db.ts';
 import {
-  baseFor, createWorktree, exportOutputs, existingWorktree, fetchBase, newestWorktree, lockWorktree,
-  pushedRef, removeWorktree, resolves, unlockWorktree,
+  baseFor, createWorktree, exportOutputs, existingWorktree, fetchBase, isAttemptBranch,
+  newestWorktree, lockWorktree, onRemote, pushedRef, removeWorktree, resolves, unlockWorktree,
   type Worktree,
 } from './worktree.ts';
 import { rebaseNote, rebaseOntoBase, rebaseShortfall } from './rebase.ts';
@@ -704,10 +704,17 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
             // `origin/foo`, `baseFor` tries it as given, and printing "neither `origin/foo` nor
             // `origin/foo`" reads as a bug in the message, which it was.
             const alt = wantBase.startsWith('origin/') ? '' : ` nor \`origin/${wantBase}\``;
+            // One `ls-remote` on the way out, and only here. The two situations need opposite
+            // things from the operator, and telling somebody to "wait for it to be pushed" about a
+            // branch sitting on the forge sends them to look in the wrong place entirely.
+            const there = onRemote(cwd, wantBase);
             const e = new Error(
-              `#${job.id} asks to branch from \`${wantBase}\`, and neither it${alt} names a commit in `
-              + `${cwd}. Wait for the branch it names to be pushed — or, if it has already been merged `
-              + `and deleted, re-file this Job against what it merged into.`,
+              `asks to branch from \`${wantBase}\`, and neither it${alt} names a commit in ${cwd}. `
+              + (there
+                ? `It IS on the remote — this checkout has never fetched it, and hkb does not refresh `
+                  + `attempt branches (that ref is a lease). Fetch it by hand: \`git -C ${cwd} fetch origin ${wantBase.replace(/^origin\//, '')}\`.`
+                : `Wait for the branch it names to be pushed — or, if it has already been merged and `
+                  + `deleted, re-file this Job against what it merged into.`),
             ) as Error & { badSpec?: boolean };
             e.badSpec = true;
             throw e;
@@ -731,11 +738,15 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // same reason a declared input that cannot be read is: the run never started, nothing was
         // spent, and the fault is in the spec or in the repository rather than in the work. `hkb
         // retry <id>` is the deliberate second go, once the ref exists or the spec is fixed.
-        const why = (e as Error).message;
+        // `say` already prefixes `#<id>`; the message must not repeat it, and the sibling branch
+        // below avoids the same collision by leading with `no checkout — `. What goes on the JOB
+        // row carries the id, because nothing prefixes that.
+        const bare = (e as Error).message;
         const badSpec = !!(e as Error & { badSpec?: boolean }).badSpec;
+        const why = badSpec ? `#${job.id} ${bare}` : bare;
         say(badSpec
-          ? `${why.slice(0, 240)}`
-          : `no checkout — ${why.slice(0, 200)}; left pending, the next pass will try again`);
+          ? bare.slice(0, 240)
+          : `no checkout — ${bare.slice(0, 200)}; left pending, the next pass will try again`);
         await db.lease.delete({ where: { jobId: job.id } });
         await db.attempt.update({
           where: { jobId_k: { jobId: job.id, k } },
@@ -974,19 +985,39 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
     // starting cold, which is the whole reason that column exists.
-    // Where the worker is asked to rebase to, or nothing. A RESUMED attempt lands in a checkout
-    // whose branch is already on the remote: rebasing there makes its next push non-fast-forward,
-    // and the protocol's own next rule forbids the force that would fix it — so the step would have
-    // no legal ending and the worker would report a failed push and often skip the pull request.
+    // What the worker is told about its base, and every clause of it is load-bearing.
+    //
+    // `rebaseOnto` — omitted for a RESUMED attempt, which lands in a checkout whose branch is
+    // already on the remote: rebasing there makes its next push non-fast-forward, and the
+    // protocol's own next rule forbids the force that would fix it. The step would have no legal
+    // ending, and a worker in that position reports a failed push and often skips the pull request.
     // The controller rebases that case itself after the run instead.
-    const rebaseOnto = wt && !pushedRef(cwd, wt.branch) ? wt.baseLabel : undefined;
+    //
+    // `fetch` — false when the base is an attempt branch, because a worktree shares its parent's
+    // ref store and `git fetch origin kb-33-1` there updates `refs/remotes/origin/kb-33-1`, which
+    // is the ref `--force-with-lease` compares against for Job 33's own push. `fetchBase` refuses
+    // that fetch; a prompt that asks the worker to make it hands the protection straight back, and
+    // that is the third time this exact hole has been opened from a different direction.
+    //
+    // `prBase` — whenever the Job named a base at all. A pull request opened with no `--base`
+    // targets the repository's default branch, so a chain step's diff would carry its parent's
+    // commits and merging it would merge the parent's unreviewed work into the trunk. The rebase
+    // keeps the branch on the right base; only this keeps the review on it.
+    const baseBranch = wt ? wt.baseLabel.replace(/^origin\//, '') : null;
+    const baseAdvice = wt
+      ? {
+        rebaseOnto: pushedRef(cwd, wt.branch) ? undefined : wt.baseLabel,
+        fetch: !(baseBranch && isAttemptBranch(baseBranch)),
+        prBase: spec.base.value && baseBranch ? baseBranch : undefined,
+      }
+      : undefined;
     // The pull-request protocol, or the sandbox note, or neither. A PROPOSING Job produces no
     // commit, so telling it to open a draft pull request contradicts the contract appended below —
     // one prompt saying both "push what you have" and "write the file and stop" is not an
     // instruction. It still needs to know it is standing in a worktree, which is what `withWorktree`
     // says and all it says.
     const opening = approvalPrompt
-      ?? (wt ? (job.proposes ? withWorktree(job.brief, wt.branch) : withProtocol(job.brief, wt.branch, rebaseOnto)) : job.brief);
+      ?? (wt ? (job.proposes ? withWorktree(job.brief, wt.branch) : withProtocol(job.brief, wt.branch, baseAdvice)) : job.brief);
     // The guide goes in FRONT of all of it, including an approval prompt: an approver's instruction
     // is the most recent word on what to do, and the repository's rules are the standing word on how
     // anything here is done. Neither replaces the other.

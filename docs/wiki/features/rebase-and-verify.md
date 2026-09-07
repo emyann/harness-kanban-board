@@ -9,11 +9,11 @@ covers:
   - path: src/rebase.ts
     sha: 761eed75ccacaf8efa68e9194cd7201056d01ccf
   - path: src/worktree.ts
-    sha: a75b0958c79d7f74a8725c7781e5d8ea4220eef8
+    sha: c0875d3a1d3f1d0cbee2737ab8d5d48bd073f3b0
   - path: src/controller.ts
-    sha: 5468263959954699e383b73a2e1d13bb24f79baa
+    sha: 41c7fbd41f65c61a80c6fcfa9ec56236d0811a7f
   - path: src/brief.ts
-    sha: ee84b2c276df6664b29b7fd8e114617b19308c49
+    sha: 2d3db74f559f4310ccd91b7117395c24ebb398bd
   - path: prisma/schema.prisma
     sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
 related:
@@ -25,7 +25,7 @@ related:
     features/declared-outputs,
     decisions/adr-014-no-preset-three-rules,
   ]
-generated_at_commit: b551911
+generated_at_commit: 9ce6588
 last_refreshed: 2026-09-07
 ---
 

@@ -7,11 +7,11 @@ audience: [dev]
 read_when: "chaining Jobs, filing work against an integration branch, or about to give `base` the ability to name another Job"
 covers:
   - path: src/worktree.ts
-    sha: a75b0958c79d7f74a8725c7781e5d8ea4220eef8
+    sha: c0875d3a1d3f1d0cbee2737ab8d5d48bd073f3b0
   - path: src/spec.ts
     sha: 8924cf095921bd72fd50912552ec348d2b139b3a
   - path: src/controller.ts
-    sha: 5468263959954699e383b73a2e1d13bb24f79baa
+    sha: 41c7fbd41f65c61a80c6fcfa9ec56236d0811a7f
   - path: src/rebase.ts
     sha: 761eed75ccacaf8efa68e9194cd7201056d01ccf
   - path: prisma/schema.prisma
@@ -24,7 +24,7 @@ related:
     architecture/job-kind,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: b551911
+generated_at_commit: 9ce6588
 last_refreshed: 2026-09-07
 ---
 
@@ -160,6 +160,24 @@ The board level is for a repository whose trunk is not what `origin/HEAD` points
 in the board's defaults line, because a board silently building on something other than the default
 branch is a surprise waiting in a diff nobody can explain.
 
+## What the worker is told
+
+The base changes three things in the brief (`withProtocol`, `src/brief.ts`), and the controller
+computes all three because only it knows the facts:
+
+- **whether to rebase at all** — omitted for a resumed attempt, whose branch is already on the
+  remote, where the rebase makes the next push non-fast-forward and the next rule in the same
+  protocol forbids the force that would fix it.
+- **whether the worker may fetch first** — `false` when the base is an attempt branch. A worktree
+  shares its parent's ref store, so `git fetch origin kb-33-1` there updates
+  `refs/remotes/origin/kb-33-1` exactly as `fetchBase` would have. This is the *third* direction
+  that one hole has been opened from: a blanket fetch in the prompt, then an attempt branch as a
+  base, then the prompt again by way of the base. The rebase step stays; only the fetch goes.
+- **what the pull request opens against** — `gh pr create` with no `--base` targets the repository's
+  default branch, so a chain step's diff would carry its parent's commits and merging it would merge
+  the parent's unreviewed work into the trunk. The rebase keeps the *branch* on the right base; only
+  this keeps the *review* on it.
+
 ## What it makes possible, and what it does not
 
 `base` is a key in the workflow template format (*features/workflow-templates*), because the keys
@@ -168,6 +186,13 @@ are the flags — so a chain is authorable in a file with no hkb release, which 
 `--base` with `--no-isolate` is **refused** rather than ignored: a Job with no worktree cuts no
 branch, so the field would be stored, printed by `hkb show`, and never read — the silent failure the
 project's fifth value forbids.
+
+A base arriving from the *board's* default is not refused, and cannot usefully be: there is no
+per-Job clear to escape with, and there cannot easily be one, because `pick` in `src/spec.ts` reads
+a null column as **unset** and a cleared value falls straight through to the board default again.
+That gap belongs to every board-defaulted field, not to this one. What is fixed instead is the
+visible half — `hkb show` omits the base for an un-isolated Job rather than telling its operator
+about a checkout that will never be made.
 
 What it does **not** do, and this is worth being plain about: it does not decompose work, it does
 not order anything, and it does not make per-PR CI compose (*gotchas/merge-composition* — the

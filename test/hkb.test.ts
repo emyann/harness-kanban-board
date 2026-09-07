@@ -1374,6 +1374,21 @@ test('--base refuses what git would read as an option, at the two places it can 
   assert.equal(ok.id > 0, true);
 });
 
+test('an un-isolated Job is not shown a base it can never use', async () => {
+  // A board's `defaultBase` resolves onto every Job it carries, including one running in the
+  // operator's own checkout — where no branch is cut and nothing ever reads it. Printing it said
+  // that Job branches from `origin/main`, which is a fact about a checkout that will not exist.
+  const r = scratchRepo('show-base');
+  await hkb('boards', 'add', 'show-base', '--repo', r);
+  await hkb('boards', 'set', 'show-base', '--base', 'origin/main');
+  const iso = json((await hkb('new', 'a', '--board', 'show-base', '--brief', 'do it', '--json')).out);
+  const bare = json((await hkb('new', 'b', '--board', 'show-base', '--brief', 'do it', '--no-isolate', '--json')).out);
+
+  const shown = (id: number) => hkb('show', String(id), '--board', 'show-base');
+  assert.match((await shown(iso.id)).out, /base\s+origin\/main/, 'a worktree Job is told');
+  assert.doesNotMatch((await shown(bare.id)).out, /base\s+origin\/main/, 'one with no worktree is not');
+});
+
 test('--base and --no-isolate contradict each other, and say so rather than doing nothing', async () => {
   // A Job with no worktree cuts no branch, so the base would be stored, printed by `hkb show`, and
   // never read — the silent failure the fifth value forbids.

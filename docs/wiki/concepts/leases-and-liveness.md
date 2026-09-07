@@ -9,16 +9,16 @@ covers:
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: 5468263959954699e383b73a2e1d13bb24f79baa
+    sha: 41c7fbd41f65c61a80c6fcfa9ec56236d0811a7f
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/worktree.ts
-    sha: a75b0958c79d7f74a8725c7781e5d8ea4220eef8
+    sha: c0875d3a1d3f1d0cbee2737ab8d5d48bd073f3b0
   - path: src/limits.ts
     sha: 61b65c43e2fd7c28f952c403e02d073ca9907561
   - path: prisma/schema.prisma
     sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
-generated_at_commit: b551911
+generated_at_commit: 9ce6588
 last_refreshed: 2026-09-07
 related: [architecture/the-loop, architecture/the-board, architecture/job-kind, concepts/ceilings]
 ---
@@ -86,7 +86,7 @@ Callers are expected to *decide* what to do with `unknown`, and they differ. The
 Job reclaim treats only `alive` as a veto, so `unknown` reclaims on expiry
 (`src/controller.ts:272`). The worktree sweep keeps anything that is not
 provably `dead`, because deleting a checkout another host is working in is
-unrecoverable (`src/worktree.ts:847-856`). `hkb down` refuses outright: a daemon
+unrecoverable (`src/worktree.ts:885-894`). `hkb down` refuses outright: a daemon
 it cannot see is a daemon it cannot signal, and it says "stop it there"
 (`src/daemon.ts:522-527`).
 
@@ -123,7 +123,7 @@ A caller with no acquisition timestamp loses this half of the check and nothing
 else. The worktree lock has none, so it passes `now()`, and says so: a recycled
 pid then reads `alive`, which keeps a checkout that could have gone — an error in
 the safe direction, cleared by the next sweep after that pid exits
-(`src/worktree.ts:850-854`).
+(`src/worktree.ts:888-892`).
 
 ## Why the holder is `<hostname>/<pid>@<runtime>`
 
@@ -163,33 +163,33 @@ The claim writes a `token` alongside the holder (`src/controller.ts:597-621`).
 Deriving the duration already makes expiry-while-alive impossible; **renewal is
 what makes a dead holder cheap to reclaim**, since without it a host that dies a
 minute into a thirty-minute Job holds the claim for the full thirty-five
-(`src/controller.ts:806-808`).
+(`src/controller.ts:817-819`).
 
 The cadence is a third of the lease, floored at one second — two renewals may
 fail before anything expires, and at the real default the floor never binds
-(`src/controller.ts:813-816`). Each renewal is an `updateMany` fenced on the
+(`src/controller.ts:824-827`). Each renewal is an `updateMany` fenced on the
 token, so it writes **nothing** if somebody else now holds the lease; a zero
 count is how a running holder learns it lost one
-(`src/controller.ts:810-830`). A renewal that could not be written at all is
-simply retried on the next tick (`src/controller.ts:829`).
+(`src/controller.ts:821-841`). A renewal that could not be written at all is
+simply retried on the next tick (`src/controller.ts:840`).
 
 Losing the lease mid-run does not stop the work, it changes what the worker is
 allowed to write. The Attempt row is uncontended — keyed `(jobId, k)`, and no
 other holder uses this `k` — so it is still recorded; the **Job** row is the
 contended one, and a holder that did not keep its lease leaves it alone and emits
-`lease_lost` instead (`src/controller.ts:1284-1293`).
+`lease_lost` instead (`src/controller.ts:1315-1324`).
 
 ## The fence at release
 
 Release is `deleteMany` fenced on the token, not `delete` by `jobId`
-(`src/controller.ts:1047-1052`). The unfenced version deleted whoever's lease was
+(`src/controller.ts:1078-1083`). The unfenced version deleted whoever's lease was
 there — so a stale holder finishing late removed the *new* holder's claim and
 then overwrote its outcome. The token was already being written at claim and
 never read; making it the fence is what closed that.
 
 Order matters too: the lease is released **before** the Job row is touched,
 because the delete's count is what decides whether this holder may touch it at
-all (`src/controller.ts:1049-1052`).
+all (`src/controller.ts:1080-1083`).
 
 ## The daemon's belt and braces: skip one reclaim after a wake
 
