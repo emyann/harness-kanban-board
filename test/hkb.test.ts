@@ -1395,3 +1395,85 @@ test('--phase triage is the inbox', async () => {
   assert.ok(rows.length > 0);
   assert.ok(rows.every((r) => r.phase === 'triage'), 'and it lists nothing else');
 });
+
+/**
+ * `hkb new --from` — the template primitive (ADR-015 decision 3).
+ *
+ * `src/templates.ts` owns the format and its refusals; what is asserted here is the CLI's half: that
+ * a workflow's keys really do arrive as the flags they are named after, and that an explicit flag
+ * beats the file. The precedence is the failing case that matters — a workflow quietly outranking a
+ * `--model` the operator typed breaks nothing and runs the wrong thing.
+ */
+const workflow = (name: string, text: string) => {
+  const dir = path.join(HOME_REPO, '.hkb', 'workflows');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${name}.md`), text);
+};
+
+test('a workflow`s frontmatter arrives as the flags it is named after', async () => {
+  workflow('paged', [
+    '---', 'name: paged', 'description: Draft one page', 'model: claude-opus-5', 'max-budget: 2',
+    'max-turns: 40', 'allow-tool: [Read, Grep, Write]', 'plugin-dir: [.claude]', 'guide: README.md',
+    'gate: does this earn its place?', 'result: [verdict]', '---', '', 'Draft the page.', '',
+  ].join('\n'));
+  const r = await hkb('new', 'a page', '--from', 'paged', '--board', 'suite-repo', '--json');
+  const j = json(r.out) as { id: number; from: string };
+  assert.equal(j.from, 'paged');
+  const row = await db.job.findUniqueOrThrow({ where: { id: j.id } });
+  assert.equal(row.brief, 'Draft the page.', 'the body is the brief');
+  assert.equal(row.model, 'claude-opus-5');
+  assert.equal(row.maxBudgetUsd, 2, '`max-budget: 2` is `--max-budget 2`, parsed by the same code');
+  assert.equal(row.maxTurns, 40);
+  assert.deepEqual(row.allowedTools, ['Read', 'Grep', 'Write']);
+  assert.deepEqual(row.pluginPaths, ['.claude']);
+  assert.equal(row.guide, 'README.md');
+  assert.equal(row.gate, 'does this earn its place?');
+  assert.deepEqual(row.results, ['verdict']);
+});
+
+test('a flag on the line WINS over the workflow, and a list replaces rather than appends', async () => {
+  const j = json((await hkb(
+    'new', 'a page', '--from', 'paged', '--model', 'claude-haiku-5', '--max-budget', '0.5',
+    '--allow-tool', 'Read', '--board', 'suite-repo', '--json',
+  )).out) as { id: number };
+  const row = await db.job.findUniqueOrThrow({ where: { id: j.id } });
+  assert.equal(row.model, 'claude-haiku-5', 'the more specific value wins — the same grain as src/spec.ts');
+  assert.equal(row.maxBudgetUsd, 0.5);
+  assert.deepEqual(row.allowedTools, ['Read'],
+    'a narrowed surface has to be narrowable: appending would make a workflow`s grant impossible to reduce');
+  assert.equal(row.guide, 'README.md', 'and what the line did not say still comes from the file');
+});
+
+test('--brief overrides the body, and the workflow names the Job when nothing else does', async () => {
+  const j = json((await hkb('new', '--from', 'paged', '--brief', 'something else', '--board', 'suite-repo', '--json')).out) as { id: number; name: string };
+  assert.equal(j.name, 'paged');
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: j.id } })).brief, 'something else');
+});
+
+test('a workflow that is not there fails before anything is created, naming the path', async () => {
+  const before = await db.job.count();
+  await assert.rejects(
+    () => hkb('new', 'a page', '--from', 'not-a-workflow', '--board', 'suite-repo'),
+    (e: Error & { exitCode?: number }) => {
+      assert.equal(e.exitCode, 2);
+      assert.match(e.message, /\.hkb[/\\]workflows[/\\]not-a-workflow\.md/);
+      return true;
+    },
+  );
+  assert.equal(await db.job.count(), before, 'and no Job was filed');
+});
+
+test('a workflow`s placeholders interpolate from `value:` inputs, and are refused when unsupplied', async () => {
+  workflow('templated', ['---', 'name: templated', '---', '', 'Draft ONE page at {{page}}.', ''].join('\n'));
+  const j = json((await hkb(
+    'new', 'a page', '--from', 'templated', '--input', 'page=value:concepts/ceilings', '--board', 'suite-repo', '--json',
+  )).out) as { id: number };
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: j.id } })).brief, 'Draft ONE page at concepts/ceilings.');
+
+  // The hole this closes: `renderBrief` leaves a brief alone when a Job declares no input at all, so
+  // without a check the Job would be filed with the literal `{{page}}` in its instructions.
+  await assert.rejects(
+    () => hkb('new', 'a page', '--from', 'templated', '--board', 'suite-repo'),
+    /needs `\{\{page\}\}`.*--input page=value:/s,
+  );
+});

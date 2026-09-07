@@ -126,6 +126,60 @@ the alternative is `hkb cancel`, which is terminal and throws the note away with
 
 `hkb ls --phase triage` is the inbox.
 
+### Filing the same shape twice: `--from`
+
+Work that recurs is a file, not a command you retype. A **workflow** lives at
+`.hkb/workflows/<name>.md` in the board's repository: its frontmatter is the spec, its body is the
+brief.
+
+```markdown
+---
+name: draft-wiki-page
+description: Draft one planned page in the code-derived wiki
+model: claude-opus-5
+max-turns: 60
+max-budget: 2
+allow-tool: [Read, Grep, Glob, Write, Edit, Bash]
+guide: CLAUDE.md
+plugin-dir: [.claude]
+gate: does this page earn its place?
+---
+
+Draft ONE new page in this repository's wiki: `docs/wiki/{{page}}.md`…
+```
+
+```bash
+hkb new "Draft the wiki page concepts/ceilings" --from draft-wiki-page \
+  --input page=value:concepts/ceilings --input cover=value:"1. …"
+```
+
+**The keys are the flags.** `max-budget` is `--max-budget`, `allow-tool` is `--allow-tool`, `input`
+is `--input` — one vocabulary, so anything filable by hand is nameable in a file and `hkb --help` is
+the reference for both. A key that is not a flag is refused at file time, by name, with the list of
+ones that are. The grammar is `key: value` and `key: [a, b]`, hand-parsed, and that is all of it:
+small enough that a person and a model can both write one without a schema.
+
+- **An explicit flag wins over the file** — the same precedence grain as a board default, where the
+  more specific value wins. A list flag *replaces* the workflow's list rather than appending to it,
+  so a grant can be narrowed and not only widened.
+- **A workflow is expanded once, at file time, and is then gone.** The Job holds the values; nothing
+  in the controller or the runtime knows a file was involved, so editing the workflow later cannot
+  change a Job already filed, and `hkb show` cannot disagree with the prompt.
+- **It is read from `Board.repoPath`, never the worktree** — the same fence as `--guide` and
+  `--plugin-dir`. A worker cannot author the workflow its own successor is filed from; a human merge
+  is the boundary.
+- `{{name}}` in the body interpolates from a `value:` input, and only from a `value:` input, because
+  the brief is instruction and a fetched source reaches the run as data. A workflow filed without
+  the inputs its brief refers to is refused, naming them.
+- The workflow's own `name:` is the Job's name when you give none, so `hkb new --from <name>` is a
+  whole command.
+
+hkb's own workflows are ordinary workflows ([ADR-015](docs/wiki/decisions/adr-015-machinery-and-consumer.md)
+decision 4): [`.hkb/workflows/draft-wiki-page.md`](.hkb/workflows/draft-wiki-page.md) is in this
+repository, read by the same code that reads yours, and shipped in no tarball. The format is
+machinery; a workflow written in it is content. Full page:
+[docs/wiki/features/workflow-templates.md](docs/wiki/features/workflow-templates.md).
+
 ### A checkout may create a board and may not rewrite one
 
 The board is created and migrated on first touch, because the first command on a fresh machine has to

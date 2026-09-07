@@ -186,6 +186,10 @@ meet one in the git history, that is what it was.
 - **Worker** — the seat that codes: one agent session holding one attempt on one Job, launched by
   the controller into a worktree of its own with the protocol in `src/brief.ts`. It never merges and
   never touches the operator's checkout.
+- **Workflow** — a file at `.hkb/workflows/<name>.md` in the board's repository whose frontmatter is a
+  Job's spec and whose body is its brief. `hkb new --from <name>` expands one into a Job at file time;
+  the keys are `hkb new`'s flags, so one vocabulary documents both (`src/templates.ts`;
+  *features/workflow-templates*). Not a graph: it templates ONE Job, not an ordering between several.
 - **Workload** — a unit of work hkb takes and executes. A workload has a *kind*; the kanban DAG and a
   propose-approve grooming pass are two further shapes, neither of which exists as code
   (*decisions/adr-007-workload-scheduler*).

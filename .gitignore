@@ -6,7 +6,15 @@ node_modules/
 # expensive but reproducible, and a binary SQLite board cannot be merged and would be a
 # diff nobody can read. The default board is ~/.hkb/board.db, machine-level and outside
 # any repository; back it up by copying the file.
-.hkb/
+#
+# `.hkb/workflows/` is the exception, and it is not local at all: a workflow is SOURCE —
+# a file whose frontmatter is a Job's spec and whose body is its brief (`src/templates.ts`).
+# ADR-015 decision 4 requires hkb's own workflows to come through the same door users get,
+# so they live in the repository, get reviewed and merged like anything else, and ship in
+# no tarball. `.hkb/*` rather than `.hkb/` because git will not re-include a path underneath
+# an excluded DIRECTORY — the negation only works if the directory itself was never excluded.
+.hkb/*
+!.hkb/workflows/
 
 .claude/worktrees/
 .claude/settings.local.json
