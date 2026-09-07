@@ -15,9 +15,9 @@ covers:
   - path: src/runtime/claude.ts
     sha: 5ae775633cae411b71443add232b79f1325c4075
   - path: src/controller.ts
-    sha: d961ffadfb3923dbafb051243f3d079b50648664
-generated_at_commit: ee1f4fb
-last_refreshed: 2026-09-06
+    sha: b0c5c54ab9e66da964a704153c3776c89fb00c2d
+generated_at_commit: aa34c9c
+last_refreshed: 2026-09-07
 related:
   [
     decisions/adr-013-the-guide-is-read-not-loaded,

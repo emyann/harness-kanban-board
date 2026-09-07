@@ -9,17 +9,17 @@ covers:
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: d961ffadfb3923dbafb051243f3d079b50648664
+    sha: b0c5c54ab9e66da964a704153c3776c89fb00c2d
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/worktree.ts
-    sha: 95c1207c4eaa7318526b9cd4df337802c08a521d
+    sha: 614ed72ba5eda3e5208eecf5882fda75a198c4a1
   - path: src/limits.ts
     sha: 61b65c43e2fd7c28f952c403e02d073ca9907561
   - path: prisma/schema.prisma
-    sha: 636cb35b527e2f4f3bca8351b6afce0a024b0651
-generated_at_commit: ee1f4fb
-last_refreshed: 2026-09-06
+    sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
+generated_at_commit: aa34c9c
+last_refreshed: 2026-09-07
 related: [architecture/the-loop, architecture/the-board, architecture/job-kind, concepts/ceilings]
 ---
 
@@ -34,7 +34,7 @@ related: [architecture/the-loop, architecture/the-board, architecture/job-kind, 
 
 ## Two clocks, and only one of them sleeps
 
-A lease row carries an `expiresAt` (`prisma/schema.prisma:510-540`). A run carries
+A lease row carries an `expiresAt` (`prisma/schema.prisma:534-564`). A run carries
 a `timeoutMs`, which becomes a `setTimeout` — and Node's timers are monotonic: on
 Linux they do not advance while the machine is suspended
 (`src/liveness.ts:5-16`). The two therefore disagree across a laptop sleep. A
@@ -86,7 +86,7 @@ Callers are expected to *decide* what to do with `unknown`, and they differ. The
 Job reclaim treats only `alive` as a veto, so `unknown` reclaims on expiry
 (`src/controller.ts:272`). The worktree sweep keeps anything that is not
 provably `dead`, because deleting a checkout another host is working in is
-unrecoverable (`src/worktree.ts:742-751`). `hkb down` refuses outright: a daemon
+unrecoverable (`src/worktree.ts:776-785`). `hkb down` refuses outright: a daemon
 it cannot see is a daemon it cannot signal, and it says "stop it there"
 (`src/daemon.ts:522-527`).
 
@@ -123,7 +123,7 @@ A caller with no acquisition timestamp loses this half of the check and nothing
 else. The worktree lock has none, so it passes `now()`, and says so: a recycled
 pid then reads `alive`, which keeps a checkout that could have gone — an error in
 the safe direction, cleared by the next sweep after that pid exits
-(`src/worktree.ts:745-749`).
+(`src/worktree.ts:779-783`).
 
 ## Why the holder is `<hostname>/<pid>@<runtime>`
 
@@ -163,33 +163,33 @@ The claim writes a `token` alongside the holder (`src/controller.ts:597-621`).
 Deriving the duration already makes expiry-while-alive impossible; **renewal is
 what makes a dead holder cheap to reclaim**, since without it a host that dies a
 minute into a thirty-minute Job holds the claim for the full thirty-five
-(`src/controller.ts:750-752`).
+(`src/controller.ts:791-793`).
 
 The cadence is a third of the lease, floored at one second — two renewals may
 fail before anything expires, and at the real default the floor never binds
-(`src/controller.ts:757-760`). Each renewal is an `updateMany` fenced on the
+(`src/controller.ts:798-801`). Each renewal is an `updateMany` fenced on the
 token, so it writes **nothing** if somebody else now holds the lease; a zero
 count is how a running holder learns it lost one
-(`src/controller.ts:754-774`). A renewal that could not be written at all is
-simply retried on the next tick (`src/controller.ts:773`).
+(`src/controller.ts:795-815`). A renewal that could not be written at all is
+simply retried on the next tick (`src/controller.ts:814`).
 
 Losing the lease mid-run does not stop the work, it changes what the worker is
 allowed to write. The Attempt row is uncontended — keyed `(jobId, k)`, and no
 other holder uses this `k` — so it is still recorded; the **Job** row is the
 contended one, and a holder that did not keep its lease leaves it alone and emits
-`lease_lost` instead (`src/controller.ts:1228-1237`).
+`lease_lost` instead (`src/controller.ts:1269-1278`).
 
 ## The fence at release
 
 Release is `deleteMany` fenced on the token, not `delete` by `jobId`
-(`src/controller.ts:991-996`). The unfenced version deleted whoever's lease was
+(`src/controller.ts:1032-1037`). The unfenced version deleted whoever's lease was
 there — so a stale holder finishing late removed the *new* holder's claim and
 then overwrote its outcome. The token was already being written at claim and
 never read; making it the fence is what closed that.
 
 Order matters too: the lease is released **before** the Job row is touched,
 because the delete's count is what decides whether this holder may touch it at
-all (`src/controller.ts:993-996`).
+all (`src/controller.ts:1034-1037`).
 
 ## The daemon's belt and braces: skip one reclaim after a wake
 

@@ -9,17 +9,17 @@ covers:
   - path: src/limits.ts
     sha: 61b65c43e2fd7c28f952c403e02d073ca9907561
   - path: src/controller.ts
-    sha: d961ffadfb3923dbafb051243f3d079b50648664
+    sha: b0c5c54ab9e66da964a704153c3776c89fb00c2d
   - path: prisma/schema.prisma
-    sha: 636cb35b527e2f4f3bca8351b6afce0a024b0651
+    sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
   - path: src/spec.ts
-    sha: df1e8d90a8b3070313b06dd4d47af39ec3f48ca7
+    sha: 8924cf095921bd72fd50912552ec348d2b139b3a
   - path: src/hkb.ts
-    sha: 2aae98b33ad6c7909aceff4bcc573fcda399da82
+    sha: af521898c8b36d5b284ebacb390839864487e76c
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
-generated_at_commit: ee1f4fb
-last_refreshed: 2026-09-06
+generated_at_commit: aa34c9c
+last_refreshed: 2026-09-07
 related: [architecture/the-board, architecture/the-loop, architecture/job-kind, concepts/leases-and-liveness]
 ---
 
@@ -84,7 +84,7 @@ State the price plainly: **a board taken past its ceiling by work already admitt
 back.** Stopping a board leaves the run in flight alone, and `hkb stop` says so in as many words
 (`src/hkb.ts:1128-1129`; `prisma/schema.prisma:105-106`). Lowering `dailyBudgetUsd` mid-flight does not
 reach into a running attempt either — the cap was handed to the runtime at spawn and nothing re-reads
-it (`prisma/schema.prisma:407-410`). The ceiling binds admissions, not executions.
+it (`prisma/schema.prisma:431-434`). The ceiling binds admissions, not executions.
 
 (Shutdown *is* different, and it is not a ceiling: `hkb down` aborts runs through an `AbortSignal`,
 because a stop that took thirty minutes to return would not be a stop — `src/controller.ts:124-128`.)
@@ -121,29 +121,29 @@ a run *could* cost — to the runs already going (`src/limits.ts:37-43`).
 The sum is `_sum(Attempt.maxBudgetUsd)` over attempts with no `endedAt`
 (`src/controller.ts:541-544`) — the cap each live attempt was **claimed under**, written onto the
 Attempt row in the same breath as the claim and from the same resolved spec the gate was just judged
-against (`src/controller.ts:628-634`). It is `Float`, never null (`prisma/schema.prisma:432`), which
-is precisely the difference from `Job.maxBudgetUsd`, which is `Float?` (`prisma/schema.prisma:203`) —
+against (`src/controller.ts:628-634`). It is `Float`, never null (`prisma/schema.prisma:456`), which
+is precisely the difference from `Job.maxBudgetUsd`, which is `Float?` (`prisma/schema.prisma:208`) —
 **do not swap them**: the Job's column is nullable so board defaults can mean something; the
 Attempt's cannot be, because another process reads it about someone else's run.
 
 Re-resolving instead — per open attempt, or by joining the board's defaults into that one query — is
 the tempting shortcut and it is wrong. The full argument, with all three options weighed and the
-Kubernetes parallel, is the doc comment on the column (`prisma/schema.prisma:387-430`); distilled:
+Kubernetes parallel, is the doc comment on the column (`prisma/schema.prisma:411-454`); distilled:
 
 - The two answers **only differ when a board's `defaultMaxBudgetUsd` changes while work is in
   flight** — which is exactly the moment a ceiling is being leaned on.
 - There they are wrong in the **admitting** direction when the default is *lowered*: three live runs
   that may still spend $3.00 total get charged $0.30, and the gate admits work that takes the board
   past its ceiling — reintroducing the exact failure `committedUsd` exists to prevent
-  (`prisma/schema.prisma:408-414`).
+  (`prisma/schema.prisma:432-438`).
 - Raising the default is wrong in the harmless direction (over-charging, so the gate merely stalls) —
   but a ceiling that is only correct when nobody edits the board is not a ceiling.
 - Kubernetes puts it one table over: admission stamps a Pod with the limits a LimitRange supplied,
   the scheduler then reads the Pod and never the namespace, and a LimitRange edited afterwards does
-  not rewrite what is running (`prisma/schema.prisma:415-420`). An Attempt is this system's Pod.
+  not rewrite what is running (`prisma/schema.prisma:439-444`). An Attempt is this system's Pod.
 
 Only the budget is frozen. `maxTurns`, `model` and `effort` are read once by the run itself and
-nothing outside it asks (`prisma/schema.prisma:426-430`).
+nothing outside it asks (`prisma/schema.prisma:450-454`).
 
 The frozen number also pays off away from the gate: `hkb retry` refuses to re-queue a budget-capped
 Job under a cap that is not larger, and it compares against what the failed attempt *actually ran

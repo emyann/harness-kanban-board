@@ -15,9 +15,9 @@ covers:
   - path: src/admission.ts
     sha: aab84ccd1178b085cea79d2c4566149145027b9e
   - path: src/spec.ts
-    sha: df1e8d90a8b3070313b06dd4d47af39ec3f48ca7
+    sha: 8924cf095921bd72fd50912552ec348d2b139b3a
   - path: prisma/schema.prisma
-    sha: 636cb35b527e2f4f3bca8351b6afce0a024b0651
+    sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
 related:
   [
     decisions/adr-007-workload-scheduler,
@@ -25,8 +25,8 @@ related:
     architecture/runtime-layer,
     architecture/overview,
   ]
-generated_at_commit: ee1f4fb
-last_refreshed: 2026-09-06
+generated_at_commit: aa34c9c
+last_refreshed: 2026-09-07
 ---
 
 # ADR-012: A worker gets a repository's skills by grant, and never its settings

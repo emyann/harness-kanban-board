@@ -7,21 +7,22 @@ audience: [dev]
 read_when: "authoring a workflow, adding a flag to `hkb new`, or deciding whether something belongs in the format (machinery) or in a workflow file (content)"
 covers:
   - path: src/templates.ts
-    sha: 6fb0fe7b9d2c02a576798c0d9a94eb443bbc7335
+    sha: 216569e82eb7ef9f240d8a87db1707d775032cbf
   - path: src/hkb.ts
-    sha: 2aae98b33ad6c7909aceff4bcc573fcda399da82
+    sha: af521898c8b36d5b284ebacb390839864487e76c
   - path: src/inputs.ts
     sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
 related:
   [
+    features/the-checkout-base,
     decisions/adr-015-machinery-and-consumer,
     architecture/job-kind,
     features/declared-outputs,
     concepts/ceilings,
     features/proposals,
   ]
-generated_at_commit: 1ff10a0
-last_refreshed: 2026-09-06
+generated_at_commit: aa34c9c
+last_refreshed: 2026-09-07
 ---
 
 # Workflow templates (`.hkb/workflows/`, `hkb new --from`)

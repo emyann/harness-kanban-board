@@ -447,7 +447,21 @@ worktree enters later, when its pull request lands.
 
 ### The base, and keeping the branch on it
 
-A checkout is cut from `origin/<default>`, and the base branch is **fetched first** — so a Job filed a minute
+**`--base <ref>` says where a Job's branch starts.** It defaults to the repository's default branch,
+which is what every Job got when this was a constant. Pointing it at an earlier Job's branch —
+`hkb new "review it" --base kb-33-1` — starts the work from where that one finished, and that is how
+work chains: a coding Job's output *is* a branch, so the branch is the connector. A plain name is
+tried as written and then as `origin/<name>`, so it keeps working after the sweep has taken the
+earlier checkout and its local branch. A ref that names nothing fails the Job as `no_input` before a
+session is bought. `hkb boards set <slug> --base <ref>` says it once for a whole board.
+
+It is a **ref, never a reference to another Job**. `--base job:33` would be an ordering edge between
+workloads with a readiness question attached, and that was rejected rather than deferred
+(`docs/workflow-study.md` §2); ordering belongs to a second kind whose controller creates Jobs. A ref
+is a fact about a checkout and schedules nothing — filing step two before step one has pushed simply
+fails, loudly, and you file it again.
+
+A checkout is cut from that base, and the base branch is **fetched first** — so a Job filed a minute
 after a pull request landed starts from a base that contains it. The base keeps moving while the work runs, so
 after a successful run hkb replays the branch onto the base as it is then and pushes the result with
 `--force-with-lease` if the worker had already pushed. A branch that cannot be put on the base ends the attempt

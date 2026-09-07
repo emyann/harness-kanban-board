@@ -125,6 +125,30 @@ export function baseRef(root: string): string {
 }
 
 /**
+ * The ref a checkout is actually cut from: what the Job asked for, or the repository's default.
+ *
+ * One fallback and no search path. A chain names the previous step's branch — `--base kb-33-1` —
+ * and that branch exists locally right up until the sweep takes its worktree, after which only
+ * `origin/kb-33-1` is left. Trying the plain ref first and the remote one second covers both
+ * without becoming a lookup order nobody can predict. Anything else git understands (a tag, a sha,
+ * `origin/release-2`) resolves on the first try and never reaches the fallback.
+ */
+export function baseFor(root: string, want?: string | null): string {
+  const asked = typeof want === 'string' && want.trim() ? want.trim() : null;
+  if (!asked) return baseRef(root);
+  if (resolves(root, asked)) return asked;
+  const remote = `origin/${asked}`;
+  if (resolves(root, remote)) return remote;
+  // Neither resolves. Returned as written so the caller's refusal names what the operator typed.
+  return asked;
+}
+
+/** Does this ref name a commit in this repository? */
+export function resolves(root: string, ref: string): boolean {
+  return git(root, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).status === 0;
+}
+
+/**
  * Bring the base branch's remote-tracking ref up to date, so the base is what the remote agrees on
  * rather than what the operator last pulled.
  *
@@ -142,10 +166,18 @@ export function baseRef(root: string): string {
  * repository with no remote, an unreachable one, or one that wants credentials all mean the same
  * thing here — the local ref is the best answer available, which is the answer we had before.
  */
-export function fetchBase(root: string): { fetched: boolean; why: string } {
-  const ref = baseRef(root);
-  if (!ref.startsWith('origin/')) return { fetched: false, why: 'no remote to fetch from' };
-  const branch = ref.slice('origin/'.length);
+export function fetchBase(root: string, want?: string | null): { fetched: boolean; why: string } {
+  // Asked of the remote itself rather than inferred from the shape of the ref. The base used to be
+  // `origin/<something>` whenever there was a remote, so "does it start with `origin/`" answered
+  // this by accident; a Job may now name any ref, and a repository with no remote would have gone
+  // to the network to be told so.
+  if (git(root, ['remote', 'get-url', 'origin']).status !== 0) {
+    return { fetched: false, why: 'no remote to fetch from' };
+  }
+  // A Job may write the base either way round — `kb-33-1` or `origin/kb-33-1` — and origin knows
+  // only the former, so the prefix comes off before it is asked for.
+  const asked = typeof want === 'string' && want.trim() ? want.trim() : null;
+  const branch = (asked ?? baseRef(root)).replace(/^origin\//, '');
   const r = gitRemote(root, ['fetch', '--quiet', 'origin', branch]);
   if (r.status === 0) return { fetched: true, why: '' };
   return { fetched: false, why: short(r.stderr) || `git fetch origin ${branch} failed` };
@@ -158,12 +190,12 @@ export function fetchBase(root: string): { fetched: boolean; why: string } {
  * Declared gitignored files are carried in on creation only. A resumed attempt lands in a tree the
  * previous one has been living in; re-copying would overwrite whatever it did to its own `.env`.
  */
-export function createWorktree(root: string, jobId: number, k: number): Worktree {
+export function createWorktree(root: string, jobId: number, k: number, want?: string | null): Worktree {
   // The DIRECTORY keeps the deterministic name so `existingWorktree` can find it without being
   // told; only the BRANCH disambiguates, and the attempt row records which one it got.
   const dir = path.join(root, '.hkb', 'worktrees', branchFor(jobId, k));
   const branch = freeBranch(root, jobId, k);
-  const baseLabel = baseRef(root);
+  const baseLabel = baseFor(root, want);
   const base = resolveBase(root, baseLabel);
   if (fs.existsSync(dir)) return { path: dir, branch, baseLabel, base };
 
@@ -470,9 +502,9 @@ function refuseOutside(root: string, p: string, rel: string): void {
  * base and resumes a session on top of a tree that has none of its work. Counting down is the whole
  * fix, and it is bounded by the attempt number.
  */
-export function newestWorktree(root: string, jobId: number, upTo: number): Worktree | null {
+export function newestWorktree(root: string, jobId: number, upTo: number, want?: string | null): Worktree | null {
   for (let k = upTo; k >= 1; k--) {
-    const found = existingWorktree(root, jobId, k);
+    const found = existingWorktree(root, jobId, k, want);
     if (found) return found;
   }
   return null;
@@ -487,9 +519,11 @@ export function newestWorktree(root: string, jobId: number, upTo: number): Workt
  * and that has to be true of the filesystem as well as of the session.
  *
  * `base` is resolved fresh rather than remembered. If origin has moved since, the worktree may read
- * as "ahead" when it is not — which errs toward keeping it, and keeping is the safe direction.
+ * as "ahead" when it is not — which errs toward keeping it, and keeping is the safe direction. It
+ * is resolved against the Job's own base, because a resumed attempt of a Job that branched from an
+ * integration branch must not be measured against the repository's default one.
  */
-export function existingWorktree(root: string, jobId: number, k: number): Worktree | null {
+export function existingWorktree(root: string, jobId: number, k: number, want?: string | null): Worktree | null {
   const dir = path.join(root, '.hkb', 'worktrees', branchFor(jobId, k));
   if (!fs.existsSync(dir)) return null;
   // Read the branch off the checkout rather than deriving it: a collision on the remote may have
@@ -497,7 +531,7 @@ export function existingWorktree(root: string, jobId: number, k: number): Worktr
   // session on a branch its own commits are not on.
   const on = git(dir, ['branch', '--show-current']);
   const branch = on.status === 0 && on.stdout.trim() ? on.stdout.trim() : branchFor(jobId, k);
-  const baseLabel = baseRef(root);
+  const baseLabel = baseFor(root, want);
   return { path: dir, branch, baseLabel, base: resolveBase(root, baseLabel) };
 }
 

@@ -1,7 +1,7 @@
 import { openBoard } from './db.ts';
 import {
-  createWorktree, exportOutputs, existingWorktree, fetchBase, newestWorktree, lockWorktree,
-  pushedRef, removeWorktree, unlockWorktree,
+  baseFor, createWorktree, exportOutputs, existingWorktree, fetchBase, newestWorktree, lockWorktree,
+  pushedRef, removeWorktree, resolves, unlockWorktree,
   type Worktree,
 } from './worktree.ts';
 import { rebaseNote, rebaseOntoBase, rebaseShortfall } from './rebase.ts';
@@ -674,15 +674,35 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // network round trip is not, and five Jobs claimed together would have made five identical
         // fetches one after another, each able to burn the full timeout before any worker started.
         // Boards are keyed by their repository because that is what a fetch is about.
-        if (!fetchedRepos.has(cwd)) {
-          fetchedRepos.add(cwd);
-          const fetched = fetchBase(cwd);
+        //
+        // Keyed by repository AND base, because a board may now carry Jobs branching from different
+        // refs — a step cut from `origin/kb-33-1` needs that branch fetched, and the default one
+        // having been fetched says nothing about it.
+        const wantBase = spec.base.value;
+        const fetchKey = `${cwd}\u0000${wantBase ?? ''}`;
+        if (!fetchedRepos.has(fetchKey)) {
+          fetchedRepos.add(fetchKey);
+          const fetched = fetchBase(cwd, wantBase);
           if (!fetched.fetched && fetched.why && !/no remote/.test(fetched.why)) {
             say(`could not fetch the base — ${fetched.why.slice(0, 120)}; using the ref as it stands`);
           }
         }
-        const resuming = job.lastSessionId ? newestWorktree(cwd, job.id, k - 1) : null;
-        wt = resuming ?? createWorktree(cwd, job.id, k);
+        // A base that names nothing is a fault in the spec, and it is found for free — so it is
+        // said as one rather than becoming "could not create a worktree", which is our own plumbing
+        // failing and leaves the Job pending to be retried against the same missing ref for ever.
+        // Thrown into the catch below only to reach one place that releases the lease and writes
+        // the attempt; the phase it lands in is decided there.
+        const label = baseFor(cwd, wantBase);
+        if (wantBase && !resolves(cwd, label)) {
+          const e = new Error(
+            `#${job.id} asks to branch from \`${wantBase}\`, and neither it nor \`origin/${wantBase.replace(/^origin\//, '')}\` `
+            + `names a commit in ${cwd}. Check the ref, or wait for the branch it names to be pushed.`,
+          ) as Error & { badSpec?: boolean };
+          e.badSpec = true;
+          throw e;
+        }
+        const resuming = job.lastSessionId ? newestWorktree(cwd, job.id, k - 1, wantBase) : null;
+        wt = resuming ?? createWorktree(cwd, job.id, k, wantBase);
         // Held for the length of the run. The daemon's sweep is a second remover, in a second
         // process, and without this it could take the checkout a worker is standing in.
         lockWorktree(cwd, wt, host);
@@ -690,20 +710,41 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
           ? `resuming in ${wt.branch} (the checkout attempt ${k - 1} left)`
           : `worktree ${wt.branch} from ${wt.baseLabel}`);
       } catch (e) {
-        // A checkout we could not make is a spawn failure, not a worker failure. Say so, release,
-        // and leave the Job pending rather than burning a retry on our own plumbing.
+        // Two different failures land here and they must not end the same way.
+        //
+        // A checkout we could not MAKE is our own plumbing: say so, release, and leave the Job
+        // pending for the next pass without burning a retry on it.
+        //
+        // A base that names nothing is the Job's SPEC, and retrying it for ever against a ref that
+        // does not exist is the pending loop this branch exists to avoid. It is `no_input` for the
+        // same reason a declared input that cannot be read is: the run never started, nothing was
+        // spent, and the fault is in the spec or in the repository rather than in the work. `hkb
+        // retry <id>` is the deliberate second go, once the ref exists or the spec is fixed.
         const why = (e as Error).message;
-        say(`no checkout — ${why.slice(0, 200)}; left pending, the next pass will try again`);
+        const badSpec = !!(e as Error & { badSpec?: boolean }).badSpec;
+        say(badSpec
+          ? `${why.slice(0, 240)}`
+          : `no checkout — ${why.slice(0, 200)}; left pending, the next pass will try again`);
         await db.lease.delete({ where: { jobId: job.id } });
         await db.attempt.update({
           where: { jobId_k: { jobId: job.id, k } },
-          data: { endedAt: now(), outcome: 'crashed', reason: why.slice(0, 300) },
+          data: { endedAt: now(), outcome: badSpec ? 'no_input' : 'crashed', reason: why.slice(0, 300) },
         });
-        await db.job.update({ where: { id: job.id }, data: { phase: 'pending', lastError: why } });
+        await db.job.update({
+          where: { id: job.id },
+          data: {
+            phase: badSpec ? 'failed' : 'pending',
+            lastError: why,
+            ...(badSpec ? { finishedAt: now() } : {}),
+          },
+        });
         await db.event.create({
-          data: { kind: 'spawn_failed', jobId: job.id, boardId: job.boardId, actor: host, payload: { k } },
+          data: {
+            kind: badSpec ? 'no_input' : 'spawn_failed',
+            jobId: job.id, boardId: job.boardId, actor: host, payload: { k },
+          },
         });
-        report.retrying.push(job.id);
+        (badSpec ? report.failed : report.retrying).push(job.id);
         continue;
       }
     }

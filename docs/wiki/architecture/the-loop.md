@@ -11,15 +11,15 @@ covers:
   - path: src/liveness.ts
     sha: d95719ee29dbd91d6b8a0e702faef3fcf3573d29
   - path: src/controller.ts
-    sha: d961ffadfb3923dbafb051243f3d079b50648664
+    sha: b0c5c54ab9e66da964a704153c3776c89fb00c2d
   - path: src/worktree.ts
-    sha: 95c1207c4eaa7318526b9cd4df337802c08a521d
+    sha: 614ed72ba5eda3e5208eecf5882fda75a198c4a1
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/schema.ts
     sha: ee1920b789eb96be121c8bba20cc92e452ddf818
-generated_at_commit: ee1f4fb
-last_refreshed: 2026-09-06
+generated_at_commit: aa34c9c
+last_refreshed: 2026-09-07
 related: [architecture/job-kind, architecture/runtime-layer, decisions/adr-007-workload-scheduler, concepts/worker-identity]
 ---
 

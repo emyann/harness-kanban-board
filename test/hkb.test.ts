@@ -965,11 +965,12 @@ test('hkb boards set carries the spec defaults, and none clears one', async () =
   const set = json((await hkb(
     'boards', 'set', 'defaults', '--model', 'claude-haiku-4-5', '--effort', 'low',
     '--max-turns', '8', '--max-budget', '0.25', '--max-retries', '0',
-    '--allow-tools', 'Read,Grep', '--default-plugin-dirs', '.claude', '--guide', 'CLAUDE.md', '--json',
+    '--allow-tools', 'Read,Grep', '--default-plugin-dirs', '.claude', '--guide', 'CLAUDE.md',
+    '--base', 'origin/develop', '--json',
   )).out);
   assert.deepEqual(set.defaults, {
     model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
-    allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md',
+    allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md', base: 'origin/develop',
   });
 
   const cleared = json((await hkb('boards', 'set', 'defaults', '--model', 'none', '--json')).out);
@@ -1132,7 +1133,7 @@ test('hkb boards prints a defaults line only for the boards that have one', asyn
   const bare = rows.find((r) => r.board !== 'listed-defaults' && !r.hasDefaults);
   assert.ok(bare, 'a board with no defaults exists in this suite');
   assert.deepEqual(bare.defaults,
-    { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null },
+    { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null },
     '--json carries the key either way: a consumer inferring absence from a missing key reads a shape, not a record');
 });
 
@@ -1331,17 +1332,17 @@ test('the board defaults line names every grant, including the ones nobody can o
   assert.equal(
     describeDefaults({
       model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
-      allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md',
+      allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md', base: 'origin/develop',
     }),
-    'model=claude-haiku-4-5 effort=low maxTurns=8 maxBudget=$0.25 maxRetries=0 allowTools=Read|Grep plugins=.claude guide=CLAUDE.md',
+    'model=claude-haiku-4-5 effort=low maxTurns=8 maxBudget=$0.25 maxRetries=0 allowTools=Read|Grep plugins=.claude guide=CLAUDE.md base=origin/develop',
   );
   assert.equal(
-    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null }),
+    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null }),
     '(none)',
   );
   // An empty list is a value and says so; a null is an absence and says nothing.
   assert.match(
-    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: [], pluginPaths: [], guide: null }),
+    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: [], pluginPaths: [], guide: null, base: null }),
     /allowTools=\(none\) plugins=\(none\)/,
   );
 });

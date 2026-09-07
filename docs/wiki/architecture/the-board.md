@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "adding a column, deciding whether something belongs on the Job or the Attempt, writing a migration, or explaining why a board refuses to open"
 covers:
   - path: prisma/schema.prisma
-    sha: 636cb35b527e2f4f3bca8351b6afce0a024b0651
+    sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
   - path: src/schema.ts
     sha: ee1920b789eb96be121c8bba20cc92e452ddf818
   - path: src/db.ts
@@ -15,9 +15,9 @@ covers:
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: src/spec.ts
-    sha: df1e8d90a8b3070313b06dd4d47af39ec3f48ca7
-generated_at_commit: ee1f4fb
-last_refreshed: 2026-09-06
+    sha: 8924cf095921bd72fd50912552ec348d2b139b3a
+generated_at_commit: aa34c9c
+last_refreshed: 2026-09-07
 related:
   [
     architecture/job-kind,

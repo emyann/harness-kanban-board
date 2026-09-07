@@ -7,25 +7,26 @@ audience: [dev]
 read_when: "a Job failed as `conflicted`, a worker branch was rewritten under a draft PR, or you are about to make the checkout base a spec field"
 covers:
   - path: src/rebase.ts
-    sha: 759bf4bb48e576c31eb2ee45b4a1e76c9e3ff782
+    sha: 2adf640c2c4f9e639dee6a1876118a774002d028
   - path: src/worktree.ts
-    sha: 95c1207c4eaa7318526b9cd4df337802c08a521d
+    sha: 614ed72ba5eda3e5208eecf5882fda75a198c4a1
   - path: src/controller.ts
-    sha: d961ffadfb3923dbafb051243f3d079b50648664
+    sha: b0c5c54ab9e66da964a704153c3776c89fb00c2d
   - path: src/brief.ts
     sha: ee84b2c276df6664b29b7fd8e114617b19308c49
   - path: prisma/schema.prisma
-    sha: 636cb35b527e2f4f3bca8351b6afce0a024b0651
+    sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
 related:
   [
+    features/the-checkout-base,
     gotchas/merge-composition,
     architecture/job-kind,
     architecture/the-loop,
     features/declared-outputs,
     decisions/adr-014-no-preset-three-rules,
   ]
-generated_at_commit: 1fa5e43
-last_refreshed: 2026-09-06
+generated_at_commit: aa34c9c
+last_refreshed: 2026-09-07
 ---
 
 # Rebase before the pull request
@@ -50,9 +51,9 @@ This is the cheap half, and the boundary matters because the temptation is to re
   break the same invariant, which is the whole finding of the gotcha page.
 - It **does not** survive the base moving again. It makes the branch current at the moment the
   attempt ends; a pull request merged five minutes later moves the base again and nothing re-runs.
-- It **is not** the base becoming a spec field (`docs/workflow-study.md` §4.1) — a graph's children
-  branching from their parent rather than from origin. That is the real fix, it is the DAG's
-  precondition, and it is deliberately not started here.
+- It **is not** decomposition. The base *has* since become a spec field
+  (*features/the-checkout-base*), which is what lets a graph's children branch from their parent
+  rather than from origin — but drawing the graph is still the DAG kind's job, not this one's.
 
 What it does close is the measured friction: on 2026-09-06 four parallel Jobs cost four hand
 rebases, and 82 line-number citations in this wiki drifted because every branch was cut from a base

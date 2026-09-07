@@ -607,6 +607,13 @@ Every item below was found by running the thing, not by reading it.
     **The honest half is untouched**, and the DECIDED note above still stands: this closes the drift,
     not the composition failure. Nine of the ten collisions had no merge conflict to answer.
 
+    **The base became a spec field on 2026-09-07** — `Job.base`, `Board.defaultBase`,
+    `docs/wiki/features/the-checkout-base.md`. That is item 5's integration branch and study §4.1: a
+    Job branches from the ref it names, so one Job's branch is where the next one starts, and the
+    rebase above keeps it on THAT base rather than on the trunk. A ref that names nothing fails the
+    Job as `no_input` before a session is bought. It is a REF and never `job:<id>` — ordering
+    between workloads is still a kind's job, not a column's.
+
 11. **~~`succeeded` does not mean "produced anything".~~ FIXED** — the absence is loud now.
     `hkb ls` marks a succeeded Job that opened no pull request and declared no exports as
     *produced nothing*, and counts them under the listing; `--json` carries `pr`, `exports` and
@@ -681,9 +688,15 @@ In this order, and each one only when the previous is boring:
    CronJob creates Jobs, and its dependency rule lives in the admission gate —
    `admitSpawn` already takes the policy — so ordering is structural rather than
    prompt-following. This is the piece that failed when we tried it early.
-5. **Integration.** A dependent card cannot see a sibling's unmerged work; no
-   `worktree.baseRef` setting fixes that. The old design's `kb/track-<root>`
-   integration branch is the shape that does. Do not start the DAG kind without it.
+5. **~~Integration.~~ HALF SHIPPED 2026-09-07.** A dependent card cannot see a sibling's unmerged
+   work; no `worktree.baseRef` setting fixes that. The old design's `kb/track-<root>` integration
+   branch is the shape that does. Do not start the DAG kind without it.
+
+   **The mechanism now exists**: the base is a spec field (`Job.base`, `Board.defaultBase`,
+   `docs/wiki/features/the-checkout-base.md`), so a Job branches from whatever ref it names and a
+   step can start on an earlier step's branch. What does NOT exist is anything that *draws* the
+   shape — the integration branch has to be named by hand, by an operator or by a proposing Job.
+   That half is the DAG kind's, and this was its precondition.
 
 ---
 
