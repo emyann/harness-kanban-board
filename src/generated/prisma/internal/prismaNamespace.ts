@@ -957,6 +957,7 @@ export const JobScalarFieldEnum = {
   inputs: 'inputs',
   results: 'results',
   artifacts: 'artifacts',
+  labels: 'labels',
   gate: 'gate',
   proposes: 'proposes',
   phase: 'phase',

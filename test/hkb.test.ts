@@ -1477,3 +1477,53 @@ test('a workflow`s placeholders interpolate from `value:` inputs, and are refuse
     /needs `\{\{page\}\}`.*--input page=value:/s,
   );
 });
+
+// ---------------------------------------------------------------- labels
+
+/**
+ * Labels — the grouping key, and the selector over it (`src/labels.ts`).
+ *
+ * The module's own test covers the refusals exhaustively; what is asserted here is the CLI's half:
+ * that a label filed on `hkb new` is the one `hkb ls --label` finds, that two requirements narrow
+ * rather than widen, and that a Job carrying none says so as `{}` rather than by omitting the key.
+ * `--board` is explicit for the reason every late test in this file passes it: by here the suite has
+ * several boards pointing at the same checkout, and which one is meant stops being inferable.
+ */
+
+test('new labels a Job, ls selects on it, and show prints it', async () => {
+  const a = json((await hkb('new', 'labelled a', '--brief', 'x', '--label', 'workflow=release', '--label', 'step=draft', '--board', 'suite-repo', '--json')).out);
+  const b = json((await hkb('new', 'labelled b', '--brief', 'x', '--label', 'workflow=release', '--board', 'suite-repo', '--json')).out);
+  assert.deepEqual(a.labels, { workflow: 'release', step: 'draft' });
+  const row = await db.job.findUniqueOrThrow({ where: { id: b.id } });
+  assert.deepEqual(row.labels, { workflow: 'release' });
+
+  const both = json((await hkb('ls', '--label', 'workflow=release', '--board', 'suite-repo', '--json')).out).map((r: { id: number }) => r.id);
+  assert.deepEqual(both.sort(), [a.id, b.id].sort());
+  // ANDed: the second requirement narrows it to the one Job that carries both.
+  const one = json((await hkb('ls', '--label', 'workflow=release', '--label', 'step=draft', '--board', 'suite-repo', '--json')).out);
+  assert.deepEqual(one.map((r: { id: number }) => r.id), [a.id]);
+  // Equality only, and the refusal is the case that matters: `rel` is not `release`, and no amount
+  // of prefix-guessing is going to be added to make it one.
+  assert.deepEqual(json((await hkb('ls', '--label', 'workflow=rel', '--board', 'suite-repo', '--json')).out), []);
+  // The empty listing names what was asked for, because "no jobs on suite-repo" would answer a
+  // question nobody put.
+  assert.match((await hkb('ls', '--label', 'workflow=nothing', '--board', 'suite-repo')).out, /no jobs labelled workflow=nothing/);
+  // An unlabelled Job is null on the row and `{}` in --json: a consumer inferring absence from a
+  // missing key reads a shape, not a record.
+  const plain = json((await hkb('new', 'unlabelled', '--brief', 'x', '--board', 'suite-repo', '--json')).out);
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: plain.id } })).labels, null);
+  const listed = json((await hkb('ls', '--board', 'suite-repo', '--json')).out).find((r: { id: number }) => r.id === plain.id);
+  assert.deepEqual(listed.labels, {});
+
+  assert.match((await hkb('show', String(a.id), '--board', 'suite-repo')).out, /labels {3}step=draft, workflow=release/);
+});
+
+test('a label that is not `key=value` is refused before the Job exists', async () => {
+  const before = await db.job.count();
+  await assert.rejects(() => hkb('new', 'bad label', '--brief', 'x', '--label', 'nope', '--board', 'suite-repo'), /no `=`/);
+  await assert.rejects(() => hkb('new', 'bad label', '--brief', 'x', '--label', 'a b=c', '--board', 'suite-repo'), /not a plain token/);
+  // The same fence on the reading side: a selector that cannot be parsed is a usage error, never an
+  // empty listing that reads as "nothing matches".
+  await assert.rejects(() => hkb('ls', '--label', 'workflow', '--board', 'suite-repo'), /no `=`/);
+  assert.equal(await db.job.count(), before, 'a refused label must not leave a Job behind');
+});

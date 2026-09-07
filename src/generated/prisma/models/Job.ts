@@ -127,6 +127,7 @@ export type JobCountAggregateOutputType = {
   inputs: number
   results: number
   artifacts: number
+  labels: number
   gate: number
   proposes: number
   phase: number
@@ -246,6 +247,7 @@ export type JobCountAggregateInputType = {
   inputs?: true
   results?: true
   artifacts?: true
+  labels?: true
   gate?: true
   proposes?: true
   phase?: true
@@ -368,6 +370,7 @@ export type JobGroupByOutputType = {
   inputs: runtime.JsonValue | null
   results: runtime.JsonValue | null
   artifacts: runtime.JsonValue | null
+  labels: runtime.JsonValue | null
   gate: string | null
   proposes: string | null
   phase: $Enums.Phase
@@ -426,6 +429,7 @@ export type JobWhereInput = {
   inputs?: Prisma.JsonNullableFilter<"Job">
   results?: Prisma.JsonNullableFilter<"Job">
   artifacts?: Prisma.JsonNullableFilter<"Job">
+  labels?: Prisma.JsonNullableFilter<"Job">
   gate?: Prisma.StringNullableFilter<"Job"> | string | null
   proposes?: Prisma.StringNullableFilter<"Job"> | string | null
   phase?: Prisma.EnumPhaseFilter<"Job"> | $Enums.Phase
@@ -465,6 +469,7 @@ export type JobOrderByWithRelationInput = {
   inputs?: Prisma.SortOrderInput | Prisma.SortOrder
   results?: Prisma.SortOrderInput | Prisma.SortOrder
   artifacts?: Prisma.SortOrderInput | Prisma.SortOrder
+  labels?: Prisma.SortOrderInput | Prisma.SortOrder
   gate?: Prisma.SortOrderInput | Prisma.SortOrder
   proposes?: Prisma.SortOrderInput | Prisma.SortOrder
   phase?: Prisma.SortOrder
@@ -508,6 +513,7 @@ export type JobWhereUniqueInput = Prisma.AtLeast<{
   inputs?: Prisma.JsonNullableFilter<"Job">
   results?: Prisma.JsonNullableFilter<"Job">
   artifacts?: Prisma.JsonNullableFilter<"Job">
+  labels?: Prisma.JsonNullableFilter<"Job">
   gate?: Prisma.StringNullableFilter<"Job"> | string | null
   proposes?: Prisma.StringNullableFilter<"Job"> | string | null
   phase?: Prisma.EnumPhaseFilter<"Job"> | $Enums.Phase
@@ -547,6 +553,7 @@ export type JobOrderByWithAggregationInput = {
   inputs?: Prisma.SortOrderInput | Prisma.SortOrder
   results?: Prisma.SortOrderInput | Prisma.SortOrder
   artifacts?: Prisma.SortOrderInput | Prisma.SortOrder
+  labels?: Prisma.SortOrderInput | Prisma.SortOrder
   gate?: Prisma.SortOrderInput | Prisma.SortOrder
   proposes?: Prisma.SortOrderInput | Prisma.SortOrder
   phase?: Prisma.SortOrder
@@ -590,6 +597,7 @@ export type JobScalarWhereWithAggregatesInput = {
   inputs?: Prisma.JsonNullableWithAggregatesFilter<"Job">
   results?: Prisma.JsonNullableWithAggregatesFilter<"Job">
   artifacts?: Prisma.JsonNullableWithAggregatesFilter<"Job">
+  labels?: Prisma.JsonNullableWithAggregatesFilter<"Job">
   gate?: Prisma.StringNullableWithAggregatesFilter<"Job"> | string | null
   proposes?: Prisma.StringNullableWithAggregatesFilter<"Job"> | string | null
   phase?: Prisma.EnumPhaseWithAggregatesFilter<"Job"> | $Enums.Phase
@@ -623,6 +631,7 @@ export type JobCreateInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
   proposes?: string | null
   phase?: $Enums.Phase
@@ -662,6 +671,7 @@ export type JobUncheckedCreateInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
   proposes?: string | null
   phase?: $Enums.Phase
@@ -698,6 +708,7 @@ export type JobUpdateInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   proposes?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
@@ -737,6 +748,7 @@ export type JobUncheckedUpdateInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   proposes?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
@@ -775,6 +787,7 @@ export type JobCreateManyInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
   proposes?: string | null
   phase?: $Enums.Phase
@@ -808,6 +821,7 @@ export type JobUpdateManyMutationInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   proposes?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
@@ -843,6 +857,7 @@ export type JobUncheckedUpdateManyInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   proposes?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
@@ -894,6 +909,7 @@ export type JobCountOrderByAggregateInput = {
   inputs?: Prisma.SortOrder
   results?: Prisma.SortOrder
   artifacts?: Prisma.SortOrder
+  labels?: Prisma.SortOrder
   gate?: Prisma.SortOrder
   proposes?: Prisma.SortOrder
   phase?: Prisma.SortOrder
@@ -1113,6 +1129,7 @@ export type JobCreateWithoutBoardInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
   proposes?: string | null
   phase?: $Enums.Phase
@@ -1150,6 +1167,7 @@ export type JobUncheckedCreateWithoutBoardInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
   proposes?: string | null
   phase?: $Enums.Phase
@@ -1216,6 +1234,7 @@ export type JobScalarWhereInput = {
   inputs?: Prisma.JsonNullableFilter<"Job">
   results?: Prisma.JsonNullableFilter<"Job">
   artifacts?: Prisma.JsonNullableFilter<"Job">
+  labels?: Prisma.JsonNullableFilter<"Job">
   gate?: Prisma.StringNullableFilter<"Job"> | string | null
   proposes?: Prisma.StringNullableFilter<"Job"> | string | null
   phase?: Prisma.EnumPhaseFilter<"Job"> | $Enums.Phase
@@ -1249,6 +1268,7 @@ export type JobCreateWithoutAttemptsInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
   proposes?: string | null
   phase?: $Enums.Phase
@@ -1287,6 +1307,7 @@ export type JobUncheckedCreateWithoutAttemptsInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
   proposes?: string | null
   phase?: $Enums.Phase
@@ -1338,6 +1359,7 @@ export type JobUpdateWithoutAttemptsInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   proposes?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
@@ -1376,6 +1398,7 @@ export type JobUncheckedUpdateWithoutAttemptsInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   proposes?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
@@ -1411,6 +1434,7 @@ export type JobCreateWithoutLeaseInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
   proposes?: string | null
   phase?: $Enums.Phase
@@ -1449,6 +1473,7 @@ export type JobUncheckedCreateWithoutLeaseInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
   proposes?: string | null
   phase?: $Enums.Phase
@@ -1500,6 +1525,7 @@ export type JobUpdateWithoutLeaseInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   proposes?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
@@ -1538,6 +1564,7 @@ export type JobUncheckedUpdateWithoutLeaseInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   proposes?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
@@ -1573,6 +1600,7 @@ export type JobCreateWithoutEventsInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
   proposes?: string | null
   phase?: $Enums.Phase
@@ -1611,6 +1639,7 @@ export type JobUncheckedCreateWithoutEventsInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
   proposes?: string | null
   phase?: $Enums.Phase
@@ -1662,6 +1691,7 @@ export type JobUpdateWithoutEventsInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   proposes?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
@@ -1700,6 +1730,7 @@ export type JobUncheckedUpdateWithoutEventsInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   proposes?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
@@ -1736,6 +1767,7 @@ export type JobCreateManyBoardInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: string | null
   proposes?: string | null
   phase?: $Enums.Phase
@@ -1769,6 +1801,7 @@ export type JobUpdateWithoutBoardInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   proposes?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
@@ -1806,6 +1839,7 @@ export type JobUncheckedUpdateWithoutBoardInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   proposes?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
@@ -1843,6 +1877,7 @@ export type JobUncheckedUpdateManyWithoutBoardInput = {
   inputs?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   results?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   artifacts?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  labels?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   gate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   proposes?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   phase?: Prisma.EnumPhaseFieldUpdateOperationsInput | $Enums.Phase
@@ -1918,6 +1953,7 @@ export type JobSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = ru
   inputs?: boolean
   results?: boolean
   artifacts?: boolean
+  labels?: boolean
   gate?: boolean
   proposes?: boolean
   phase?: boolean
@@ -1958,6 +1994,7 @@ export type JobSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extension
   inputs?: boolean
   results?: boolean
   artifacts?: boolean
+  labels?: boolean
   gate?: boolean
   proposes?: boolean
   phase?: boolean
@@ -1994,6 +2031,7 @@ export type JobSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extension
   inputs?: boolean
   results?: boolean
   artifacts?: boolean
+  labels?: boolean
   gate?: boolean
   proposes?: boolean
   phase?: boolean
@@ -2030,6 +2068,7 @@ export type JobSelectScalar = {
   inputs?: boolean
   results?: boolean
   artifacts?: boolean
+  labels?: boolean
   gate?: boolean
   proposes?: boolean
   phase?: boolean
@@ -2046,7 +2085,7 @@ export type JobSelectScalar = {
   finishedAt?: boolean
 }
 
-export type JobOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "boardId" | "name" | "brief" | "model" | "effort" | "maxTurns" | "timeoutMs" | "maxBudgetUsd" | "isolate" | "allowedTools" | "pluginPaths" | "guide" | "maxRetries" | "exports" | "inputs" | "results" | "artifacts" | "gate" | "proposes" | "phase" | "lastSessionId" | "lastError" | "suspendedFor" | "endedBy" | "endedFor" | "proposedByJobId" | "proposedByK" | "proposalIndex" | "createdAt" | "updatedAt" | "finishedAt", ExtArgs["result"]["job"]>
+export type JobOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "boardId" | "name" | "brief" | "model" | "effort" | "maxTurns" | "timeoutMs" | "maxBudgetUsd" | "isolate" | "allowedTools" | "pluginPaths" | "guide" | "maxRetries" | "exports" | "inputs" | "results" | "artifacts" | "labels" | "gate" | "proposes" | "phase" | "lastSessionId" | "lastError" | "suspendedFor" | "endedBy" | "endedFor" | "proposedByJobId" | "proposedByK" | "proposalIndex" | "createdAt" | "updatedAt" | "finishedAt", ExtArgs["result"]["job"]>
 export type JobInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   board?: boolean | Prisma.BoardDefaultArgs<ExtArgs>
   attempts?: boolean | Prisma.Job$attemptsArgs<ExtArgs>
@@ -2193,6 +2232,25 @@ export type $JobPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
      * one. That is a deliberate cost — see the size in `hkb show`.
      */
     artifacts: runtime.JsonValue | null
+    /**
+     * How this Job is GROUPED: a JSON object of string → string, the way Kubernetes labels an
+     * object. `{"workflow":"release","step":"draft"}`.
+     * 
+     * A map rather than a list of tags, because the pair is the thing that gets asked for — "the
+     * draft step of the release workflow" — and a flat list can only say it by inventing a separator
+     * inside the tag, which is a schema nobody wrote down. `hkb ls --label workflow=release` selects
+     * on it, equality only and ANDed across repeats (`src/labels.ts`); the richer k8s selectors
+     * (`!=`, `in`, `notin`) are each a query language and are deliberately absent.
+     * 
+     * **Nothing in the controller reads this.** A label groups Jobs for whoever is looking at the
+     * board; it does not schedule, own or cascade. Ownership between Jobs is
+     * `proposedByJobId`/`proposedByK`/`proposalIndex` above, and a dependency between them is a
+     * second kind that does not exist yet (ADR-007).
+     * 
+     * Nullable, so "unlabelled" is the absence of a value rather than an empty object every row
+     * carries — and so the column is a plain `ADD COLUMN` against a live board.
+     */
+    labels: runtime.JsonValue | null
     /**
      * What a human must decide before this Job goes on (ADR-010). Non-null makes the Job **gated**:
      * an attempt that succeeds AND produced everything it declared does not go terminal — it goes
@@ -2712,6 +2770,7 @@ export interface JobFieldRefs {
   readonly inputs: Prisma.FieldRef<"Job", 'Json'>
   readonly results: Prisma.FieldRef<"Job", 'Json'>
   readonly artifacts: Prisma.FieldRef<"Job", 'Json'>
+  readonly labels: Prisma.FieldRef<"Job", 'Json'>
   readonly gate: Prisma.FieldRef<"Job", 'String'>
   readonly proposes: Prisma.FieldRef<"Job", 'String'>
   readonly phase: Prisma.FieldRef<"Job", 'Phase'>
