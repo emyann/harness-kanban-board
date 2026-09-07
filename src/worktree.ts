@@ -125,6 +125,112 @@ export function baseRef(root: string): string {
 }
 
 /**
+ * Is this something we may hand to git as a ref?
+ *
+ * **A ref reaches `git` as a bare argv token, so a value beginning with `-` is an OPTION.** Measured:
+ * `git fetch --quiet origin '--upload-pack=touch /tmp/x && git-upload-pack'` runs the command. A
+ * base arrives from `hkb new --base`, from `hkb boards set --base`, and from the `base:` key of a
+ * workflow file in the repository — the last of which is written by whoever wrote the repository,
+ * which is not necessarily whoever is running hkb. Every sibling string flag is checked
+ * (`checkExportPath`, `checkPluginPath`); this one was not.
+ *
+ * Conservative rather than exhaustive, and a pure predicate rather than `git check-ref-format`,
+ * because handing the string to a subprocess is the thing being prevented. What is allowed is what
+ * a branch, tag or sha actually looks like; everything else is refused by not being in the set.
+ */
+export function validRef(raw: unknown): boolean {
+  if (typeof raw !== 'string') return false;
+  const s = raw.trim();
+  if (!s || s.length > 255) return false;
+  // **The first character class is the security half**, and it is one expression rather than a
+  // separate `startsWith('-')` line on purpose: the separate line was unreachable, no mutation of
+  // it failed a test, and an inert guard that reads like the load-bearing one is how this project
+  // has shipped three checks that did nothing. A ref must START with a letter or a digit, so
+  // `--upload-pack=<cmd>` is not one.
+  if (!/^[A-Za-z0-9][A-Za-z0-9._+/-]*$/.test(s)) return false;
+  // git's own rules, for the handful a plain character class cannot express.
+  if (s.includes('..') || s.includes('//') || s.endsWith('/') || s.endsWith('.') || s.endsWith('.lock')) return false;
+  return true;
+}
+
+/** The same check, as a refusal that names the fix. For the two write points. */
+export function checkRef(raw: string, flag: string): string {
+  const s = raw.trim();
+  if (validRef(s)) return s;
+  const e = new Error(
+    `${flag} wants a git ref — a branch, tag or commit, like \`origin/main\` or \`kb-33-1\`. `
+    + `\`${raw}\` is not one${s.startsWith('-') ? ', and a value beginning with a dash would reach git as an option' : ''}.`,
+  ) as Error & { exitCode: number };
+  e.exitCode = 2;
+  throw e;
+}
+
+/**
+ * A branch name hkb itself makes, and therefore one hkb may force-push (`branchFor`, `freeBranch`).
+ *
+ * It exists for `fetchBase`, and the reason is the lease. See there.
+ */
+export function isAttemptBranch(name: string): boolean {
+  return /^kb-\d+-\d+(-\d+)?$/.test(name);
+}
+
+/**
+ * Does the remote have this branch, whether or not this clone has heard of it?
+ *
+ * Only ever asked on the way to a refusal, and only to make the refusal true. Because `fetchBase`
+ * declines to refresh an attempt branch, `origin/kb-33-1` resolves here only if this working copy
+ * already holds the ref — so a re-cloned `Board.repoPath`, a second checkout of the same remote, or
+ * a pruned ref all produce "wait for the branch it names to be pushed" about a branch that is
+ * pushed and sitting on the forge. One `ls-remote` is what makes the message say the true thing.
+ */
+export function onRemote(root: string, branch: string): boolean {
+  const r = gitRemote(root, ['ls-remote', '--heads', 'origin', branch.replace(/^origin\//, '')]);
+  return r.status === 0 && !!r.stdout.trim();
+}
+
+/**
+ * The ref a checkout is actually cut from: what the Job asked for, or the repository's default.
+ *
+ * One fallback and no search path — and the REMOTE one is tried first, which is the correction that
+ * matters. Preferring the local ref meant `fetchBase` updating `origin/develop` while the checkout
+ * was cut from a local `develop` nobody had pulled for weeks: the fetch became a no-op for the ref
+ * actually used, which is the exact staleness it was added to remove. `baseRef` already answers
+ * `origin/<default>` for the same reason.
+ *
+ * The plain ref stays as the fallback because it is what a repository with no remote has, and what
+ * a tag or a sha resolves to. A chain is unaffected either way: a parent branch is always pushed
+ * before a child can name it.
+ */
+export function baseFor(root: string, want?: string | null): string {
+  const asked = typeof want === 'string' && want.trim() ? want.trim() : null;
+  if (!asked) return baseRef(root);
+  // Anything we would not hand to git is returned untouched, for the caller to refuse by name.
+  if (!validRef(asked)) return asked;
+  const first = asked.startsWith('origin/') ? asked : `origin/${asked}`;
+  if (resolves(root, first)) return first;
+  if (resolves(root, asked)) return asked;
+  // Neither resolves. Returned as written so the caller's refusal names what the operator typed.
+  return asked;
+}
+
+/** Does this ref name a commit in this repository? */
+export function resolves(root: string, ref: string): boolean {
+  return git(root, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).status === 0;
+}
+
+/**
+ * What happened when we tried to refresh the base.
+ *
+ * `skipped` is the distinction the callers need and could not make: there are two ways not to fetch
+ * and only one of them is worth a word. A repository with no remote and an attempt branch we refuse
+ * to refresh are both **deliberate** — reporting them says "could not fetch the base" about a
+ * decision, which on a chain step is every single pass. A network failure or a bad ref is not
+ * deliberate and must be loud. Both call sites used to tell these apart by matching the message
+ * text, which is a filter that silently stops working the next time a reason is added.
+ */
+export type FetchedBase = { fetched: boolean; skipped: boolean; why: string };
+
+/**
  * Bring the base branch's remote-tracking ref up to date, so the base is what the remote agrees on
  * rather than what the operator last pulled.
  *
@@ -142,13 +248,48 @@ export function baseRef(root: string): string {
  * repository with no remote, an unreachable one, or one that wants credentials all mean the same
  * thing here — the local ref is the best answer available, which is the answer we had before.
  */
-export function fetchBase(root: string): { fetched: boolean; why: string } {
-  const ref = baseRef(root);
-  if (!ref.startsWith('origin/')) return { fetched: false, why: 'no remote to fetch from' };
-  const branch = ref.slice('origin/'.length);
+export function fetchBase(root: string, want?: string | null): FetchedBase {
+  // Asked of the remote itself rather than inferred from the shape of the ref. The base used to be
+  // `origin/<something>` whenever there was a remote, so "does it start with `origin/`" answered
+  // this by accident; a Job may now name any ref, and a repository with no remote would have gone
+  // to the network to be told so.
+  if (git(root, ['remote', 'get-url', 'origin']).status !== 0) {
+    return { fetched: false, skipped: true, why: 'no remote to fetch from' };
+  }
+  // A Job may write the base either way round — `kb-33-1` or `origin/kb-33-1` — and origin knows
+  // only the former, so the prefix comes off before it is asked for.
+  const asked = typeof want === 'string' && want.trim() ? want.trim() : null;
+  if (asked !== null && !validRef(asked)) return { fetched: false, skipped: false, why: `\`${asked}\` is not a ref` };
+  const ref = asked ?? baseRef(root);
+  // An origin exists but names no default branch we can find — no `origin/HEAD`, no `origin/main`,
+  // no `origin/master`, which is what `git remote add origin` on an existing repository leaves.
+  // `baseRef` then answers `HEAD`, the LOCAL one, and `git fetch origin HEAD` would spend up to the
+  // full network timeout every pass to refresh a ref nothing here reads and report success for it.
+  if (ref === 'HEAD') {
+    return { fetched: false, skipped: true, why: 'the base is a local ref — nothing to fetch for it' };
+  }
+  const branch = ref.replace(/^origin\//, '');
+
+  // **Never an attempt branch, and this is the lease again.** Fetching `kb-33-1` updates
+  // `refs/remotes/origin/kb-33-1`, which is exactly what `--force-with-lease` compares against when
+  // Job 33's own attempt ends — so a chain step innocently refreshing its parent's branch would
+  // turn its parent's lease into a plain `--force` and let it destroy a commit somebody pushed by
+  // hand, with no refusal anywhere. `fetchBase` was already narrowed from a blanket fetch for this
+  // reason; naming a `kb-*` branch as a base walked it back in through the front door.
+  //
+  // The cost is that a chain step may branch from a parent tip that is one hand-pushed commit
+  // behind. That is the safe direction: stale work is recoverable and an overwritten commit is not.
+  if (isAttemptBranch(branch)) {
+    return {
+      fetched: false,
+      skipped: true,
+      why: `${branch} is an attempt branch — not refreshed, because that ref is the lease`,
+    };
+  }
+
   const r = gitRemote(root, ['fetch', '--quiet', 'origin', branch]);
-  if (r.status === 0) return { fetched: true, why: '' };
-  return { fetched: false, why: short(r.stderr) || `git fetch origin ${branch} failed` };
+  if (r.status === 0) return { fetched: true, skipped: false, why: '' };
+  return { fetched: false, skipped: false, why: short(r.stderr) || `git fetch origin ${branch} failed` };
 }
 
 /**
@@ -158,12 +299,12 @@ export function fetchBase(root: string): { fetched: boolean; why: string } {
  * Declared gitignored files are carried in on creation only. A resumed attempt lands in a tree the
  * previous one has been living in; re-copying would overwrite whatever it did to its own `.env`.
  */
-export function createWorktree(root: string, jobId: number, k: number): Worktree {
+export function createWorktree(root: string, jobId: number, k: number, want?: string | null): Worktree {
   // The DIRECTORY keeps the deterministic name so `existingWorktree` can find it without being
   // told; only the BRANCH disambiguates, and the attempt row records which one it got.
   const dir = path.join(root, '.hkb', 'worktrees', branchFor(jobId, k));
   const branch = freeBranch(root, jobId, k);
-  const baseLabel = baseRef(root);
+  const baseLabel = baseFor(root, want);
   const base = resolveBase(root, baseLabel);
   if (fs.existsSync(dir)) return { path: dir, branch, baseLabel, base };
 
@@ -470,9 +611,9 @@ function refuseOutside(root: string, p: string, rel: string): void {
  * base and resumes a session on top of a tree that has none of its work. Counting down is the whole
  * fix, and it is bounded by the attempt number.
  */
-export function newestWorktree(root: string, jobId: number, upTo: number): Worktree | null {
+export function newestWorktree(root: string, jobId: number, upTo: number, want?: string | null): Worktree | null {
   for (let k = upTo; k >= 1; k--) {
-    const found = existingWorktree(root, jobId, k);
+    const found = existingWorktree(root, jobId, k, want);
     if (found) return found;
   }
   return null;
@@ -487,9 +628,11 @@ export function newestWorktree(root: string, jobId: number, upTo: number): Workt
  * and that has to be true of the filesystem as well as of the session.
  *
  * `base` is resolved fresh rather than remembered. If origin has moved since, the worktree may read
- * as "ahead" when it is not — which errs toward keeping it, and keeping is the safe direction.
+ * as "ahead" when it is not — which errs toward keeping it, and keeping is the safe direction. It
+ * is resolved against the Job's own base, because a resumed attempt of a Job that branched from an
+ * integration branch must not be measured against the repository's default one.
  */
-export function existingWorktree(root: string, jobId: number, k: number): Worktree | null {
+export function existingWorktree(root: string, jobId: number, k: number, want?: string | null): Worktree | null {
   const dir = path.join(root, '.hkb', 'worktrees', branchFor(jobId, k));
   if (!fs.existsSync(dir)) return null;
   // Read the branch off the checkout rather than deriving it: a collision on the remote may have
@@ -497,7 +640,7 @@ export function existingWorktree(root: string, jobId: number, k: number): Worktr
   // session on a branch its own commits are not on.
   const on = git(dir, ['branch', '--show-current']);
   const branch = on.status === 0 && on.stdout.trim() ? on.stdout.trim() : branchFor(jobId, k);
-  const baseLabel = baseRef(root);
+  const baseLabel = baseFor(root, want);
   return { path: dir, branch, baseLabel, base: resolveBase(root, baseLabel) };
 }
 

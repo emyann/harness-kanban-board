@@ -88,6 +88,7 @@ export const BoardScalarFieldEnum = {
   defaultAllowedTools: 'defaultAllowedTools',
   defaultPluginPaths: 'defaultPluginPaths',
   defaultGuide: 'defaultGuide',
+  defaultBase: 'defaultBase',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 } as const
@@ -119,6 +120,7 @@ export const JobScalarFieldEnum = {
   timeoutMs: 'timeoutMs',
   maxBudgetUsd: 'maxBudgetUsd',
   isolate: 'isolate',
+  base: 'base',
   allowedTools: 'allowedTools',
   pluginPaths: 'pluginPaths',
   guide: 'guide',

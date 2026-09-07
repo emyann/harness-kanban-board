@@ -48,6 +48,11 @@ meet one in the git history, that is what it was.
   is a shared invariant rather than a shared file (*gotchas/merge-composition*). Replaying each
   branch onto the current base at the end of its run (*features/rebase-and-verify*) narrows the
   divergence and does not touch the failure.
+- **Checkout base** — the ref a Job's worktree is cut from and its branch is kept on top of
+  (`Job.base`, `baseFor` in `src/worktree.ts`). Null is the repository's default branch. It is the
+  connector between one Job and the next, because a coding Job's output is a branch — and it is a
+  ref, never a reference to another Job, which would be the ordering edge study §2 rejected
+  (*features/the-checkout-base*).
 - **Conflicted** — an `Outcome`: the session ended and the work is real, but the branch no longer
   replays onto the base it will be merged into (`rebaseOntoBase`, `src/rebase.ts`). Its own value
   rather than `no_output` because the fault is in neither the work nor the spec, and the fix is a

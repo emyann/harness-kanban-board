@@ -7,7 +7,7 @@ import { openBoard, closeBoard } from './db.ts';
 import { ensureSchema } from './schema.ts';
 import { databaseUrl } from './db-url.ts';
 import { reconcile } from './controller.ts';
-import { checkExportPath } from './worktree.ts';
+import { checkExportPath, checkRef } from './worktree.ts';
 import { checkResultName, RESULT_MAX_BYTES } from './results.ts';
 import { checkArtifactName, artifactsDir, bytes } from './artifacts.ts';
 import { parseLabels, jobLabels, selects, describeLabels } from './labels.ts';
@@ -58,6 +58,12 @@ const HELP = `hkb — run one agent against one brief
        --model <m>  --effort low|medium|high|xhigh|max
        --max-turns <n>  --max-budget <usd>  --max-retries <n>
        --no-isolate     run in the current checkout instead of its own worktree
+       --base <ref>     the ref this Job branches from, and is kept on top of. Defaults to the
+                        repository's default branch. A step that starts from an earlier Job's
+                        branch — \`--base kb-33-1\` — starts from where that one finished, which is
+                        how work chains: a coding Job's output IS a branch. A plain name is tried
+                        as written and then as \`origin/<name>\`; a ref that names nothing fails
+                        the Job before a session is bought.
        --allow-tool <t> the tool surface this Job may use, repeatable. Anything absent is
                         DENIED at admission, not merely discouraged. Without it the runtime's
                         own default applies; --allow-tools Read,Grep says the same in one
@@ -163,6 +169,8 @@ const HELP = `hkb — run one agent against one brief
                         on this board may see — \`.claude\` is the usual one
        --guide <path>|none  the contributor guide every Job on this board reads, repo-relative
                         — \`CLAUDE.md\` is the usual one
+       --base <ref>|none  the ref every Job on this board branches from, for a repository whose
+                        trunk is not what \`origin/HEAD\` points at
 
   hkb migrate               apply this build's pending migrations to the board, deliberately
   hkb version               what this build is
@@ -375,6 +383,10 @@ export function describeDefaults(d: ReturnType<typeof boardDefaults>): string {
     // And the third thing a board hands every worker: the document it reads as standing instruction
     // (ADR-013). Same reasoning as the two above — a grant nobody can see becomes a surprise.
     d.guide !== null ? `guide=${d.guide}` : null,
+    // And the ref every Job on this board branches from. Same reasoning again: a board silently
+    // building on something other than the repository's default branch is a surprise waiting in a
+    // diff nobody can explain.
+    d.base !== null ? `base=${d.base}` : null,
   ].filter((p): p is string => p !== null);
   return parts.length ? parts.join(' ') : '(none)';
 }
@@ -444,6 +456,9 @@ export async function main(argv: string[]): Promise<number> {
       guide: { type: 'string' },
       input: { type: 'string', multiple: true },
       gate: { type: 'string' },
+      // The ref the checkout is cut from. One value, never repeatable: a branch has one base, and
+      // a second would be a merge nobody asked for.
+      base: { type: 'string' },
       // A boolean, because the only thing that may be proposed is Jobs (ADR-011 decision 6). It
       // becomes the string the column holds, so the closed set can grow without a flag change.
       propose: { type: 'boolean' },
@@ -623,6 +638,26 @@ export async function main(argv: string[]): Promise<number> {
       if (guide) checkExportPath(guide);
       let gate = typeof values.gate === 'string' ? values.gate.trim() : undefined;
       if (values.gate !== undefined && !gate) throw usage('--gate needs the question a human is being asked, as in --gate "does this migration look right?"');
+      const rawBase = typeof values.base === 'string' ? values.base.trim() : undefined;
+      if (values.base !== undefined && !rawBase) throw usage('--base needs the ref to branch from, as in --base origin/kb-33-1 — leave it out for the repository\'s default branch');
+      // Checked here rather than only where git is called: a ref reaches git as a bare argv token,
+      // so one beginning with a dash is an option (`--upload-pack=…` runs a command). See `validRef`.
+      const base = rawBase === undefined ? undefined : checkRef(rawBase, '--base');
+      // Two flags that mean opposite things, typed together: --no-isolate runs in the current
+      // checkout, so there is no branch to cut from a base and nothing would ever read it. Refused
+      // rather than ignored — a spec field that is stored, printed and never honoured is the silent
+      // failure this project's fifth value forbids.
+      //
+      // A base arriving from the BOARD's default is deliberately NOT refused here. It is not a
+      // contradiction the filer wrote, and refusing would make one `--no-isolate` Job unfileable on
+      // such a board — there is no per-Job clear to escape with, and there cannot easily be one:
+      // `pick` in `src/spec.ts` reads a null column as *unset*, so a cleared value falls straight
+      // through to the board default again. That gap is shared by every board-defaulted field. What
+      // is fixed instead is the visible half: `hkb show` does not present a base to a Job that
+      // cannot use one.
+      if (base && values['no-isolate']) {
+        throw usage('--base and --no-isolate contradict each other: --no-isolate runs in the current checkout, so there is no branch to cut from a base. Drop one.');
+      }
       // A proposing Job is a gated Job, and not by convention: ADR-011 applies nothing without an
       // approval, so a proposal with no approver would be a proposal nothing ever reads. The
       // operator's own question wins if they asked one; this is only the default, and the controller
@@ -650,6 +685,11 @@ export async function main(argv: string[]): Promise<number> {
           ...(Object.keys(labels).length ? { labels } : {}),
           ...(gate ? { gate } : {}),
           ...(guide !== undefined ? { guide } : {}),
+          // The ref this Job branches from, or nothing. NOT resolved here: `hkb new` may be filing
+          // the second step of a chain before the first has pushed the branch it names, and a
+          // check at file time would refuse the one workflow the field exists for. It is checked
+          // when the checkout is made, where a missing ref fails the Job by name (`src/controller.ts`).
+          ...(base ? { base } : {}),
           ...(triage ? { phase: 'triage' as const } : {}),
           proposes,
           model: (values.model as string) ?? null,
@@ -817,6 +857,17 @@ export async function main(argv: string[]): Promise<number> {
           ['maxTurns', String(spec.maxTurns.value), spec.maxTurns.from],
           ['maxBudget', `$${spec.maxBudgetUsd.value}`, spec.maxBudgetUsd.from],
           ['maxRetries', String(spec.maxRetries.value), spec.maxRetries.from],
+          // Where the branch starts. Printed with the traced spec rather than beside the pull
+          // request, because it is a thing somebody CHOSE — and "why does this diff contain that
+          // other Job's commits" is the question it answers.
+          //
+          // Omitted entirely for an un-isolated Job, which cuts no branch. A board's `defaultBase`
+          // resolves onto every Job it carries, so this line otherwise told an operator that a Job
+          // running in their own checkout branches from `origin/develop` — a fact about a checkout
+          // that will never be made.
+          ...(job.isolate
+            ? [['base', spec.base.value ?? "(the repository's default branch)", spec.base.from] as [string, string, SpecSource]]
+            : []),
         ];
         const vw = Math.max(...traced.map(([, v]) => v.length));
         for (const [k, v, from] of traced) {
@@ -1421,6 +1472,15 @@ export async function main(argv: string[]): Promise<number> {
             ? null
             : raw.split(',').map((v) => v.trim()).filter(Boolean).map(checkPluginPath);
         }
+        // Not validated against the repository here, and deliberately. `boards set` may run on a
+        // host that is not the one the daemon runs on, and a ref that does not exist YET is the
+        // normal case for a board whose trunk is created by the work itself. The check is at claim
+        // time, where the answer is about the checkout being made rather than about the string.
+        if (values.base !== undefined) {
+          const raw = String(values.base).trim();
+          if (!raw) throw usage(`--base was given nothing — pass a ref like origin/develop, or "${CLEAR}" to go back to the repository's default branch`);
+          data.defaultBase = raw === CLEAR ? null : checkRef(raw, '--base');
+        }
         // One path, not a list: a repository has one contributor guide, and a second one would be
         // two documents disagreeing about the same rules with no way to say which wins.
         if (values.guide !== undefined) {
@@ -1454,7 +1514,7 @@ export async function main(argv: string[]): Promise<number> {
           throw usage(
             'hkb boards set needs something to set — a ceiling (--max-concurrent <n>, --daily-budget <usd>|none)'
             + ' or a spec default (--model, --effort, --max-turns, --max-budget,'
-            + ' --max-retries, --allow-tools, --default-plugin-dirs, --guide; "none" clears one)',
+            + ' --max-retries, --allow-tools, --default-plugin-dirs, --guide, --base; "none" clears one)',
           );
         }
 

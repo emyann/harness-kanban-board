@@ -11,13 +11,13 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/brief.ts
-    sha: ee84b2c276df6664b29b7fd8e114617b19308c49
+    sha: 2d3db74f559f4310ccd91b7117395c24ebb398bd
   - path: src/runtime/claude.ts
     sha: 5ae775633cae411b71443add232b79f1325c4075
   - path: src/controller.ts
-    sha: d961ffadfb3923dbafb051243f3d079b50648664
-generated_at_commit: ee1f4fb
-last_refreshed: 2026-09-06
+    sha: 41c7fbd41f65c61a80c6fcfa9ec56236d0811a7f
+generated_at_commit: 9ce6588
+last_refreshed: 2026-09-07
 related:
   [
     decisions/adr-013-the-guide-is-read-not-loaded,

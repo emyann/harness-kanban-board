@@ -1,7 +1,7 @@
 import { openBoard } from './db.ts';
 import {
-  createWorktree, exportOutputs, existingWorktree, fetchBase, newestWorktree, lockWorktree,
-  pushedRef, removeWorktree, unlockWorktree,
+  baseFor, createWorktree, exportOutputs, existingWorktree, fetchBase, isAttemptBranch,
+  newestWorktree, lockWorktree, onRemote, pushedRef, removeWorktree, resolves, unlockWorktree,
   type Worktree,
 } from './worktree.ts';
 import { rebaseNote, rebaseOntoBase, rebaseShortfall } from './rebase.ts';
@@ -674,15 +674,53 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         // network round trip is not, and five Jobs claimed together would have made five identical
         // fetches one after another, each able to burn the full timeout before any worker started.
         // Boards are keyed by their repository because that is what a fetch is about.
-        if (!fetchedRepos.has(cwd)) {
-          fetchedRepos.add(cwd);
-          const fetched = fetchBase(cwd);
-          if (!fetched.fetched && fetched.why && !/no remote/.test(fetched.why)) {
+        //
+        // Keyed by repository AND base, because a board may now carry Jobs branching from different
+        // refs — a step cut from `origin/kb-33-1` needs that branch fetched, and the default one
+        // having been fetched says nothing about it.
+        const wantBase = spec.base.value;
+        const fetchKey = `${cwd}\u0000${wantBase ?? ''}`;
+        if (!fetchedRepos.has(fetchKey)) {
+          fetchedRepos.add(fetchKey);
+          const fetched = fetchBase(cwd, wantBase);
+          if (!fetched.fetched && !fetched.skipped && fetched.why) {
             say(`could not fetch the base — ${fetched.why.slice(0, 120)}; using the ref as it stands`);
           }
         }
-        const resuming = job.lastSessionId ? newestWorktree(cwd, job.id, k - 1) : null;
-        wt = resuming ?? createWorktree(cwd, job.id, k);
+        const resuming = job.lastSessionId ? newestWorktree(cwd, job.id, k - 1, wantBase) : null;
+        // A base that names nothing is a fault in the spec, and it is found for free — so it is
+        // said as one rather than becoming "could not create a worktree", which is our own plumbing
+        // failing and leaves the Job pending to be retried against the same missing ref for ever.
+        // Thrown into the catch below only to reach one place that releases the lease and writes
+        // the attempt; the phase it lands in is decided there.
+        //
+        // **Only when a fresh checkout is being cut.** A resumed attempt continues in a tree that
+        // already exists and asks the base for nothing, so failing it because the parent branch has
+        // since been merged and deleted would kill a Job over a question nobody asked.
+        if (wantBase && !resuming) {
+          const label = baseFor(cwd, wantBase);
+          if (!resolves(cwd, label)) {
+            // The fallback is only named when there IS one: for a base already written
+            // `origin/foo`, `baseFor` tries it as given, and printing "neither `origin/foo` nor
+            // `origin/foo`" reads as a bug in the message, which it was.
+            const alt = wantBase.startsWith('origin/') ? '' : ` nor \`origin/${wantBase}\``;
+            // One `ls-remote` on the way out, and only here. The two situations need opposite
+            // things from the operator, and telling somebody to "wait for it to be pushed" about a
+            // branch sitting on the forge sends them to look in the wrong place entirely.
+            const there = onRemote(cwd, wantBase);
+            const e = new Error(
+              `asks to branch from \`${wantBase}\`, and neither it${alt} names a commit in ${cwd}. `
+              + (there
+                ? `It IS on the remote — this checkout has never fetched it, and hkb does not refresh `
+                  + `attempt branches (that ref is a lease). Fetch it by hand: \`git -C ${cwd} fetch origin ${wantBase.replace(/^origin\//, '')}\`.`
+                : `Wait for the branch it names to be pushed — or, if it has already been merged and `
+                  + `deleted, re-file this Job against what it merged into.`),
+            ) as Error & { badSpec?: boolean };
+            e.badSpec = true;
+            throw e;
+          }
+        }
+        wt = resuming ?? createWorktree(cwd, job.id, k, wantBase);
         // Held for the length of the run. The daemon's sweep is a second remover, in a second
         // process, and without this it could take the checkout a worker is standing in.
         lockWorktree(cwd, wt, host);
@@ -690,20 +728,49 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
           ? `resuming in ${wt.branch} (the checkout attempt ${k - 1} left)`
           : `worktree ${wt.branch} from ${wt.baseLabel}`);
       } catch (e) {
-        // A checkout we could not make is a spawn failure, not a worker failure. Say so, release,
-        // and leave the Job pending rather than burning a retry on our own plumbing.
-        const why = (e as Error).message;
-        say(`no checkout — ${why.slice(0, 200)}; left pending, the next pass will try again`);
+        // Two different failures land here and they must not end the same way.
+        //
+        // A checkout we could not MAKE is our own plumbing: say so, release, and leave the Job
+        // pending for the next pass without burning a retry on it.
+        //
+        // A base that names nothing is the Job's SPEC, and retrying it for ever against a ref that
+        // does not exist is the pending loop this branch exists to avoid. It is `no_input` for the
+        // same reason a declared input that cannot be read is: the run never started, nothing was
+        // spent, and the fault is in the spec or in the repository rather than in the work. `hkb
+        // retry <id>` is the deliberate second go, once the ref exists or the spec is fixed.
+        // `say` already prefixes `#<id>`; the message must not repeat it, and the sibling branch
+        // below avoids the same collision by leading with `no checkout — `. What goes on the JOB
+        // row carries the id, because nothing prefixes that.
+        const bare = (e as Error).message;
+        const badSpec = !!(e as Error & { badSpec?: boolean }).badSpec;
+        const why = badSpec ? `#${job.id} ${bare}` : bare;
+        say(badSpec
+          ? bare.slice(0, 240)
+          : `no checkout — ${bare.slice(0, 200)}; left pending, the next pass will try again`);
         await db.lease.delete({ where: { jobId: job.id } });
         await db.attempt.update({
           where: { jobId_k: { jobId: job.id, k } },
-          data: { endedAt: now(), outcome: 'crashed', reason: why.slice(0, 300) },
+          data: { endedAt: now(), outcome: badSpec ? 'no_input' : 'crashed', reason: why.slice(0, 300) },
         });
-        await db.job.update({ where: { id: job.id }, data: { phase: 'pending', lastError: why } });
+        await db.job.update({
+          where: { id: job.id },
+          data: {
+            phase: badSpec ? 'failed' : 'pending',
+            lastError: why,
+            // Terminal, so it clears what every other terminal transition clears. A Job stopped
+            // resumably keeps `lastSessionId`; failing here without dropping it left `hkb retry`
+            // announcing "(resumes …)" and the next attempt waking a transcript that describes a
+            // checkout cut from a different base.
+            ...(badSpec ? { finishedAt: now(), lastSessionId: null, suspendedFor: null } : {}),
+          },
+        });
         await db.event.create({
-          data: { kind: 'spawn_failed', jobId: job.id, boardId: job.boardId, actor: host, payload: { k } },
+          data: {
+            kind: badSpec ? 'no_input' : 'spawn_failed',
+            jobId: job.id, boardId: job.boardId, actor: host, payload: { k },
+          },
         });
-        report.retrying.push(job.id);
+        (badSpec ? report.failed : report.retrying).push(job.id);
         continue;
       }
     }
@@ -918,19 +985,39 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
 
     // ---- run. A resumable stop leaves a session id; the next attempt continues it rather than
     // starting cold, which is the whole reason that column exists.
-    // Where the worker is asked to rebase to, or nothing. A RESUMED attempt lands in a checkout
-    // whose branch is already on the remote: rebasing there makes its next push non-fast-forward,
-    // and the protocol's own next rule forbids the force that would fix it — so the step would have
-    // no legal ending and the worker would report a failed push and often skip the pull request.
+    // What the worker is told about its base, and every clause of it is load-bearing.
+    //
+    // `rebaseOnto` — omitted for a RESUMED attempt, which lands in a checkout whose branch is
+    // already on the remote: rebasing there makes its next push non-fast-forward, and the
+    // protocol's own next rule forbids the force that would fix it. The step would have no legal
+    // ending, and a worker in that position reports a failed push and often skips the pull request.
     // The controller rebases that case itself after the run instead.
-    const rebaseOnto = wt && !pushedRef(cwd, wt.branch) ? wt.baseLabel : undefined;
+    //
+    // `fetch` — false when the base is an attempt branch, because a worktree shares its parent's
+    // ref store and `git fetch origin kb-33-1` there updates `refs/remotes/origin/kb-33-1`, which
+    // is the ref `--force-with-lease` compares against for Job 33's own push. `fetchBase` refuses
+    // that fetch; a prompt that asks the worker to make it hands the protection straight back, and
+    // that is the third time this exact hole has been opened from a different direction.
+    //
+    // `prBase` — whenever the Job named a base at all. A pull request opened with no `--base`
+    // targets the repository's default branch, so a chain step's diff would carry its parent's
+    // commits and merging it would merge the parent's unreviewed work into the trunk. The rebase
+    // keeps the branch on the right base; only this keeps the review on it.
+    const baseBranch = wt ? wt.baseLabel.replace(/^origin\//, '') : null;
+    const baseAdvice = wt
+      ? {
+        rebaseOnto: pushedRef(cwd, wt.branch) ? undefined : wt.baseLabel,
+        fetch: !(baseBranch && isAttemptBranch(baseBranch)),
+        prBase: spec.base.value && baseBranch ? baseBranch : undefined,
+      }
+      : undefined;
     // The pull-request protocol, or the sandbox note, or neither. A PROPOSING Job produces no
     // commit, so telling it to open a draft pull request contradicts the contract appended below —
     // one prompt saying both "push what you have" and "write the file and stop" is not an
     // instruction. It still needs to know it is standing in a worktree, which is what `withWorktree`
     // says and all it says.
     const opening = approvalPrompt
-      ?? (wt ? (job.proposes ? withWorktree(job.brief, wt.branch) : withProtocol(job.brief, wt.branch, rebaseOnto)) : job.brief);
+      ?? (wt ? (job.proposes ? withWorktree(job.brief, wt.branch) : withProtocol(job.brief, wt.branch, baseAdvice)) : job.brief);
     // The guide goes in FRONT of all of it, including an approval prompt: an approver's instruction
     // is the most recent word on what to do, and the repository's rules are the standing word on how
     // anything here is done. Neither replaces the other.

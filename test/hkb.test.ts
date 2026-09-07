@@ -965,11 +965,12 @@ test('hkb boards set carries the spec defaults, and none clears one', async () =
   const set = json((await hkb(
     'boards', 'set', 'defaults', '--model', 'claude-haiku-4-5', '--effort', 'low',
     '--max-turns', '8', '--max-budget', '0.25', '--max-retries', '0',
-    '--allow-tools', 'Read,Grep', '--default-plugin-dirs', '.claude', '--guide', 'CLAUDE.md', '--json',
+    '--allow-tools', 'Read,Grep', '--default-plugin-dirs', '.claude', '--guide', 'CLAUDE.md',
+    '--base', 'origin/develop', '--json',
   )).out);
   assert.deepEqual(set.defaults, {
     model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
-    allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md',
+    allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md', base: 'origin/develop',
   });
 
   const cleared = json((await hkb('boards', 'set', 'defaults', '--model', 'none', '--json')).out);
@@ -1132,7 +1133,7 @@ test('hkb boards prints a defaults line only for the boards that have one', asyn
   const bare = rows.find((r) => r.board !== 'listed-defaults' && !r.hasDefaults);
   assert.ok(bare, 'a board with no defaults exists in this suite');
   assert.deepEqual(bare.defaults,
-    { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null },
+    { model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null },
     '--json carries the key either way: a consumer inferring absence from a missing key reads a shape, not a record');
 });
 
@@ -1331,22 +1332,73 @@ test('the board defaults line names every grant, including the ones nobody can o
   assert.equal(
     describeDefaults({
       model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 0,
-      allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md',
+      allowedTools: ['Read', 'Grep'], pluginPaths: ['.claude'], guide: 'CLAUDE.md', base: 'origin/develop',
     }),
-    'model=claude-haiku-4-5 effort=low maxTurns=8 maxBudget=$0.25 maxRetries=0 allowTools=Read|Grep plugins=.claude guide=CLAUDE.md',
+    'model=claude-haiku-4-5 effort=low maxTurns=8 maxBudget=$0.25 maxRetries=0 allowTools=Read|Grep plugins=.claude guide=CLAUDE.md base=origin/develop',
   );
   assert.equal(
-    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null }),
+    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: null, pluginPaths: null, guide: null, base: null }),
     '(none)',
   );
   // An empty list is a value and says so; a null is an absence and says nothing.
   assert.match(
-    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: [], pluginPaths: [], guide: null }),
+    describeDefaults({ model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null, allowedTools: [], pluginPaths: [], guide: null, base: null }),
     /allowTools=\(none\) plugins=\(none\)/,
   );
 });
 
 // ---------------------------------------------------------------- triage
+
+test('--base refuses what git would read as an option, at the two places it can be written', async () => {
+  // A ref reaches git as a bare argv token: `--upload-pack=<cmd>` is a command, not a branch. The
+  // `base:` key of a workflow file is the same string arriving from the repository rather than from
+  // the operator, which is why it is refused at the boundary and not only where git is called.
+  const r = scratchRepo('base-refusals');
+  await hkb('boards', 'add', 'base-refusals', '--repo', r);
+
+  const evil = '--upload-pack=touch /tmp/hkb-PWNED && git-upload-pack';
+  await assert.rejects(
+    () => hkb('new', 'x', '--board', 'base-refusals', '--brief', 'do it', '--base', evil),
+    /--base wants a git ref.*would reach git as an option/s,
+  );
+  assert.equal(fs.existsSync('/tmp/hkb-PWNED'), false, 'and nothing ran');
+
+  // The board default is the same string arriving from the same kind of source.
+  await assert.rejects(
+    () => hkb('boards', 'set', 'base-refusals', '--base', evil),
+    /--base wants a git ref/,
+  );
+
+  // And a ref that IS one still goes through.
+  const ok = json((await hkb('new', 'y', '--board', 'base-refusals', '--brief', 'do it', '--base', 'origin/main', '--json')).out);
+  assert.equal(ok.id > 0, true);
+});
+
+test('an un-isolated Job is not shown a base it can never use', async () => {
+  // A board's `defaultBase` resolves onto every Job it carries, including one running in the
+  // operator's own checkout — where no branch is cut and nothing ever reads it. Printing it said
+  // that Job branches from `origin/main`, which is a fact about a checkout that will not exist.
+  const r = scratchRepo('show-base');
+  await hkb('boards', 'add', 'show-base', '--repo', r);
+  await hkb('boards', 'set', 'show-base', '--base', 'origin/main');
+  const iso = json((await hkb('new', 'a', '--board', 'show-base', '--brief', 'do it', '--json')).out);
+  const bare = json((await hkb('new', 'b', '--board', 'show-base', '--brief', 'do it', '--no-isolate', '--json')).out);
+
+  const shown = (id: number) => hkb('show', String(id), '--board', 'show-base');
+  assert.match((await shown(iso.id)).out, /base\s+origin\/main/, 'a worktree Job is told');
+  assert.doesNotMatch((await shown(bare.id)).out, /base\s+origin\/main/, 'one with no worktree is not');
+});
+
+test('--base and --no-isolate contradict each other, and say so rather than doing nothing', async () => {
+  // A Job with no worktree cuts no branch, so the base would be stored, printed by `hkb show`, and
+  // never read — the silent failure the fifth value forbids.
+  const r = scratchRepo('base-no-isolate');
+  await hkb('boards', 'add', 'base-no-isolate', '--repo', r);
+  await assert.rejects(
+    () => hkb('new', 'x', '--board', 'base-no-isolate', '--brief', 'do it', '--base', 'origin/main', '--no-isolate'),
+    /contradict each other.*Drop one/s,
+  );
+});
 
 test('--triage files a note without a brief, and it is not queued', async () => {
   // The capture path, and it has to be one line: a note that demanded a brief would not get

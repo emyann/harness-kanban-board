@@ -155,6 +155,11 @@ model Board {
   /// `hkb boards set <slug> --guide CLAUDE.md` is how a repository's own rules reach its workers.
   defaultGuide        String?
 
+  /// The ref this board's Jobs branch from, filling a null on the Job. For a repository whose
+  /// trunk is not what `origin/HEAD` points at — a protected `main` with an integration branch in
+  /// front of it is the case that exists. Null keeps the repository's own default branch.
+  defaultBase         String?
+
   events Event[]
 
   controller Controller?
@@ -211,6 +216,25 @@ model Job {
   maxBudgetUsd Float?
   /// Run in its own git worktree. Enforced at admission, not requested in a prompt.
   isolate      Boolean @default(true)
+  /// The ref this Job's checkout is cut from, and the ref its branch is kept on top of afterwards
+  /// (`src/rebase.ts`). Null means the repository's default branch, which is what every Job got
+  /// when this was a constant nobody chose (`baseRef`, `src/worktree.ts`).
+  ///
+  /// It is what makes one Job's output reachable by the next: a coding Job's deliverable is a
+  /// *branch*, so a step that starts from `origin/kb-33-1` starts from where the previous step
+  /// finished. `docs/workflow-study.md` §4.1 calls this the integration branch, and it is the
+  /// precondition for a graph whose children branch from their parent rather than from origin.
+  ///
+  /// **A ref, never a reference to another Job.** `base: job:33` would be `Job.after` wearing a
+  /// hat — a dependency on a sibling of its own kind, plus a readiness question about when that
+  /// sibling is ready — and that was rejected on four counts rather than deferred
+  /// (`docs/workflow-study.md` §2). Ordering between workloads belongs to a second kind whose
+  /// controller creates Jobs. A ref is a fact about a checkout; it schedules nothing.
+  ///
+  /// A base that does not resolve fails the Job as `no_input` before a session is bought — same
+  /// reasoning as a declared input that cannot be read: a fault in the spec or in the repository,
+  /// found for nothing.
+  base         String?
   /// The tool surface this Job may use: a JSON array of tool names, or null for the runtime's own
   /// default. A **ceiling the board enforces**, not a request — `src/admission.ts` denies anything
   /// absent from it in a `PreToolUse` hook, and hooks run before deny rules, ask rules, the

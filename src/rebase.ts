@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import {
-  NET_ENV, NET_TIMEOUT_MS, baseRef, fetchBase, pushedRef, resolveBase, type Worktree,
+  NET_ENV, NET_TIMEOUT_MS, fetchBase, pushedRef, resolveBase, type Worktree,
 } from './worktree.ts';
 
 /**
@@ -197,12 +197,15 @@ export function rebaseOntoBase(
   wt: Worktree,
   opts: { mayRewrite?: boolean } = {},
 ): RebaseResult {
-  const fetched = fetchBase(root);
-  // A repository with no remote is a normal repository, not a failure to report.
-  const staleBase = !fetched.fetched && fetched.why && !/no remote/.test(fetched.why)
-    ? fetched.why
-    : undefined;
-  const label = baseRef(root);
+  // The worktree remembers what it was cut from, and that is the ref to keep it on top of — the
+  // Job may have asked for one (`Job.base`), and rebasing a step onto the repository's default
+  // branch instead would undo the belt it was filed to sit on.
+  const label = wt.baseLabel;
+  const fetched = fetchBase(root, label);
+  // Only a fetch that FAILED, never one we declined to make: a repository with no remote and an
+  // attempt branch we will not refresh are both decisions, and reporting them as "could not refresh
+  // the base" would put a false warning on every pass of every chain step.
+  const staleBase = !fetched.fetched && !fetched.skipped && fetched.why ? fetched.why : undefined;
   const base = resolveBase(root, label);
 
   const onBase = git(wt.path, ['merge-base', '--is-ancestor', base, 'HEAD']).status === 0;

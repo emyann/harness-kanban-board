@@ -79,6 +79,9 @@ export const TEMPLATE_KEYS: Record<string, Kind> = {
   effort: 'string',
   gate: 'string',
   guide: 'string',
+  // The ref a step branches from — the key that lets a workflow file express a chain at all, since
+  // a coding Job's output is a branch and this is what a later step points at.
+  base: 'string',
   'max-turns': 'string',
   'max-budget': 'string',
   'max-retries': 'string',

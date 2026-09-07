@@ -20,25 +20,47 @@ import { PROPOSAL_MAX_BYTES, PROPOSAL_MAX_JOBS } from './proposals.ts';
  * checks it afterwards, and that is the mechanism. The pairing is the point: the prompt makes it
  * usually true and free, the check makes it true.
  *
- * Two things about `base` that are the caller's to get right, and both were wrong first:
+ * Three things about the base are the caller's to get right, and every one of them was wrong first:
  *
- *   - **it names a branch, and the fetch is narrowed to it.** `git fetch origin` inside a worktree
- *     updates every remote-tracking ref in the shared store, `refs/remotes/origin/kb-<id>-<k>`
- *     included — the exact ref `--force-with-lease` compares against. Telling the worker to run one
- *     would hand back the protection `fetchBase` narrows itself to preserve.
- *   - **it is passed only when a rebase is legal here.** A resumed attempt lands in a checkout
- *     whose branch is already on the remote; rebasing there makes the next push non-fast-forward,
- *     and the rule below forbids the force that would fix it. Asking anyway is asking for a step
- *     with no legal ending, so the caller omits it and the controller does the rebase afterwards.
+ *   - **the fetch is narrowed to one branch, and sometimes refused outright.** `git fetch origin`
+ *     inside a worktree updates every remote-tracking ref in the shared store,
+ *     `refs/remotes/origin/kb-<id>-<k>` included — the exact ref `--force-with-lease` compares
+ *     against. `fetchBase` narrows itself for that reason and refuses an attempt branch entirely;
+ *     a prompt that says otherwise hands the protection straight back, which is what `fetch: false`
+ *     is for.
+ *   - **`rebaseOnto` is passed only when a rebase is legal here.** A resumed attempt lands in a
+ *     checkout whose branch is already on the remote; rebasing there makes the next push
+ *     non-fast-forward, and the rule below forbids the force that would fix it. Asking anyway is
+ *     asking for a step with no legal ending, so the caller omits it and the controller rebases
+ *     after the run instead.
+ *   - **`prBase` is not optional decoration.** A pull request opened with no `--base` targets the
+ *     repository's default branch, so a chain step's diff would carry its parent's commits and
+ *     merging it would merge the parent's unreviewed work into the trunk. The rebase keeps the
+ *     branch on the right base; only this keeps the *review* on it.
  */
-export function withProtocol(brief: string, branch: string, base?: string): string {
+export type BaseAdvice = {
+  /** The ref to rebase onto before pushing, or absent when a rebase here has no legal ending. */
+  rebaseOnto?: string;
+  /** May that ref be fetched first? False when its remote-tracking copy is somebody's lease. */
+  fetch?: boolean;
+  /** The branch the pull request opens against, when it is not the repository's default. */
+  prBase?: string;
+};
+
+export function withProtocol(brief: string, branch: string, base: BaseAdvice = {}): string {
   // Only when there is a remote to rebase against. `baseRef` falls back to `HEAD` in a repository
   // with no origin, and telling a worker to `git fetch origin` there is an instruction to fail.
-  const rebasing = base?.startsWith('origin/')
+  const onto = base.rebaseOnto?.startsWith('origin/') ? base.rebaseOnto : null;
+  const rebasing = onto
     ? [
       `  2. Rebase onto what you will be merged into, BEFORE you push:`,
-      `     \`git fetch origin ${base.slice('origin/'.length)} && git rebase ${base}\``,
-      '     Fetch that ONE branch, not everything — hkb compares the rest against what it last saw.',
+      base.fetch === false
+        // Deliberate, and said out loud so it does not read as an omission somebody should fix.
+        ? `     \`git rebase ${onto}\` — do NOT fetch it first; hkb tracks that branch itself.`
+        : `     \`git fetch origin ${onto.slice('origin/'.length)} && git rebase ${onto}\``,
+      ...(base.fetch === false
+        ? []
+        : ['     Fetch that ONE branch, not everything — hkb compares the rest against what it last saw.']),
       '     Then re-run the checks: the base has probably moved since this worktree was cut, and a',
       '     branch that was green against a stale base is not evidence about the merge.',
     ]
@@ -57,8 +79,14 @@ export function withProtocol(brief: string, branch: string, base?: string): stri
     '     explaining why if the why is not obvious.',
     ...rebasing,
     `  ${n(2)}. Push it: \`git push -u origin ${branch}\``,
-    `  ${n(3)}. Open a DRAFT pull request against the default branch:`,
-    `     \`gh pr create --draft --title "…" --body "…" --head ${branch}\``,
+    base.prBase
+      ? `  ${n(3)}. Open a DRAFT pull request against \`${base.prBase}\` — NOT the default branch, which`
+      : `  ${n(3)}. Open a DRAFT pull request against the default branch:`,
+    ...(base.prBase
+      ? ['     would put the commits you were built on into your own diff:']
+      : []),
+    `     \`gh pr create --draft --title "…" --body "…" --head ${branch}`
+      + `${base.prBase ? ` --base ${base.prBase}` : ''}\``,
     `  ${n(4)}. Reply with one line: what you did, and the PR URL.`,
     '',
     'Rules:',

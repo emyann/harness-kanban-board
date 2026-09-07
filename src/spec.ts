@@ -75,6 +75,12 @@ export const BUILT_IN = {
   /** Nothing granted. A repository's skills reach a worker only when someone said so (ADR-012). */
   pluginPaths: null,
   guide: null,
+  /**
+   * Null, and the null means something: *the repository's default branch*, resolved fresh by
+   * `baseRef` from `origin/HEAD`. Writing a name here would make one branch the built-in answer for
+   * every repository hkb ever runs in, which is exactly the constant `Job.base` exists to remove.
+   */
+  base: null,
 } as const;
 
 /** The nullable half of a Job's spec — the fields a Board can supply a default for. */
@@ -90,6 +96,7 @@ export type JobSpec = {
   /** Raw, off the `Json?` column. `pluginList` normalizes it here, not at each call site. */
   pluginPaths?: unknown;
   guide?: unknown;
+  base?: unknown;
 };
 
 /** The Board's side. Named `default*` so no call site has to guess what `board.model` would mean. */
@@ -102,6 +109,7 @@ export type BoardDefaults = {
   defaultAllowedTools?: unknown;
   defaultPluginPaths?: unknown;
   defaultGuide?: unknown;
+  defaultBase?: unknown;
 };
 
 export type Traced<T> = { value: T; from: SpecSource };
@@ -115,6 +123,7 @@ export type ResolvedSpec = {
   allowedTools: Traced<string[] | null>;
   pluginPaths: Traced<string[] | null>;
   guide: Traced<string | null>;
+  base: Traced<string | null>;
 };
 
 /**
@@ -162,6 +171,9 @@ export function resolveSpec(
     // "no guide" is the absence, so a blank is normalised to it rather than becoming a Job that
     // reads the repository root.
     guide: pick(str(j.guide), str(b.defaultGuide), BUILT_IN.guide as string | null),
+    // Same shape as `guide`: a ref or nothing, with a blank normalised to the absence. There is no
+    // third state to protect here — "branch from no base" is not a thing a checkout can do.
+    base: pick(str(j.base), str(b.defaultBase), BUILT_IN.base as string | null),
   };
 }
 
@@ -169,7 +181,8 @@ export function resolveSpec(
 export function hasDefaults(b: BoardDefaults): boolean {
   return b.defaultModel != null || b.defaultEffort != null || b.defaultMaxTurns != null
     || b.defaultMaxBudgetUsd != null || b.defaultMaxRetries != null || toolList(b.defaultAllowedTools) != null
-    || pluginList(b.defaultPluginPaths) != null || str(b.defaultGuide) != null;
+    || pluginList(b.defaultPluginPaths) != null || str(b.defaultGuide) != null
+    || str(b.defaultBase) != null;
 }
 
 /** A board's defaults, under the names the Job knows them by. What `--json` carries. */
@@ -183,5 +196,6 @@ export function boardDefaults(b: BoardDefaults) {
     allowedTools: toolList(b.defaultAllowedTools),
     pluginPaths: pluginList(b.defaultPluginPaths),
     guide: str(b.defaultGuide),
+    base: str(b.defaultBase),
   };
 }

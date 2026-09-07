@@ -22,6 +22,7 @@ const board = {
   defaultMaxRetries: 5,
   defaultAllowedTools: ['Read', 'Grep'],
   defaultGuide: 'CLAUDE.md',
+  defaultBase: 'origin/develop',
 };
 
 test('a Job that says nothing takes the board default, and says so', () => {
@@ -38,6 +39,7 @@ test('the Job wins over the board on every field — the failure that is otherwi
   const job = {
     model: 'claude-opus-4-6', effort: 'max', maxTurns: 99, maxBudgetUsd: 12, maxRetries: 1,
     allowedTools: ['Read'], pluginPaths: ['.claude'], guide: 'CONTRIBUTING.md',
+    base: 'origin/kb-33-1',
   };
   const r = resolveSpec(job, board);
   assert.equal(r.model.value, 'claude-opus-4-6', 'the board must not override an explicit --model');
@@ -46,6 +48,7 @@ test('the Job wins over the board on every field — the failure that is otherwi
   assert.equal(r.maxBudgetUsd.value, 12);
   assert.equal(r.maxRetries.value, 1);
   assert.deepEqual(r.allowedTools.value, ['Read'], 'a Job that narrowed its own surface keeps it');
+  assert.equal(r.base.value, 'origin/kb-33-1', 'a step branching from another Job keeps its base');
   for (const f of Object.values(r)) assert.equal(f.from, 'job');
 });
 
@@ -95,11 +98,11 @@ test('hasDefaults is false only when the board says nothing at all', () => {
 test('boardDefaults renames the columns to what a Job calls them, and keeps the nulls', () => {
   assert.deepEqual(boardDefaults(board), {
     model: 'claude-haiku-4-5', effort: 'low', maxTurns: 8, maxBudgetUsd: 0.25, maxRetries: 5,
-    allowedTools: ['Read', 'Grep'], pluginPaths: null, guide: 'CLAUDE.md',
+    allowedTools: ['Read', 'Grep'], pluginPaths: null, guide: 'CLAUDE.md', base: 'origin/develop',
   });
   assert.deepEqual(boardDefaults({}), {
     model: null, effort: null, maxTurns: null, maxBudgetUsd: null, maxRetries: null,
-    allowedTools: null, pluginPaths: null, guide: null,
+    allowedTools: null, pluginPaths: null, guide: null, base: null,
   });
 });
 
