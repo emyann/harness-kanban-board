@@ -53,6 +53,9 @@ Read `README.md` for the model before changing behaviour.
 - **Pure logic gets a pure module and an exhaustive test.** `src/limits.ts`, `src/liveness.ts`, `src/spec.ts` and
   `pickPr` in `src/pulls.ts` are the pattern: a decision with no I/O in it can be tested against the refusing case,
   which is the case that matters. Push I/O to the edges rather than mocking it in the middle.
+- **hkb is machinery; the board is a consumer of it** (ADR-015). New logic goes in a module; a CLI
+  verb parses arguments, calls it, and prints. There is no `src/ops/` layer yet and that is
+  deliberate — the seam falls out as verbs are touched, rather than being guessed from one consumer.
 - Every command returns a stable object under `--json`; human output is a one-liner per item.
 - Errors: throw `Error` with `.exitCode` (2 = usage or state) and a message that names the fix.
 - Run `npm run lint && npm test` before finishing. `test/` is deliberately outside the type check — see the note in

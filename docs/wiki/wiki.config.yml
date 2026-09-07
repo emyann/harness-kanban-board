@@ -80,6 +80,9 @@ pages:
   - slug: decisions/adr-014-no-preset-three-rules
     summary: "The claude_code preset was measured and declined — hkb composes its own system prompt in the user message — and the one thing it had that this project did not becomes three standing rules."
     status: seeded
+  - slug: decisions/adr-015-machinery-and-consumer
+    summary: "hkb is Kubernetes with an agent where the container goes; a kanban board is one way to consume it. What belongs to each side, the rule that keeps logic out of the CLI's switch, and the dogfooding rule for the extension point."
+    status: seeded
   - slug: features/watch
     summary: "The third question about the board, after \"what is true now\" and \"what happened\": tell me when something happens. Cursors rather than state, woken by the filesystem rather than polled, and resumable because an id never expires."
     status: seeded
