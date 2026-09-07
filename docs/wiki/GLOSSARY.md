@@ -180,6 +180,11 @@ meet one in the git history, that is what it was.
 - **Volunteered output** — a result or artifact a run left without declaring: kept and reported,
   never required, and never able to fail an attempt (`collectResults`/`collectArtifacts`,
   `src/results.ts`, `src/artifacts.ts`) (*features/declared-outputs*).
+- **Spec edit** — changing what a filed Job will run *as*, rather than where it is in its life
+  (`setJobSpec`, `src/job-spec.ts`; `hkb job set`). A closed list of settable fields, `phase`,
+  `proposes` and `isolate` refused by name, a lease refused outright, and every change on the Event
+  stream — because a spec is what the NEXT attempt gets and the ones behind it ran under something
+  else (*architecture/transitions*).
 - **Transition** — a Job moving between phases because a *person* decided (`src/transitions.ts`:
   queue, triage, approve, reject, retry, done/cancel, remove), as opposed to the moves the
   controller makes by observing. Each is a lookup, a set of refusals and a group of writes that

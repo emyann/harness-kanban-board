@@ -11,6 +11,7 @@ import { checkExportPath, checkRef } from './worktree.ts';
 import {
   approveJob, concludeJob, queueJob, rejectJob, removeJob, retryJob, triageJob,
 } from './transitions.ts';
+import { describeChange, setJobSpec, type Settable } from './job-spec.ts';
 import { checkResultName, RESULT_MAX_BYTES } from './results.ts';
 import { checkArtifactName, artifactsDir, bytes } from './artifacts.ts';
 import { parseLabels, jobLabels, selects, describeLabels } from './labels.ts';
@@ -158,6 +159,11 @@ const HELP = `hkb — run one agent against one brief
        --timeout <s>       stop after this long, for a script that waits for one thing
                         \`--json\` streams one event per line; the header goes to stderr, so
                         \`hkb watch --json | jq\` is exactly the events.
+
+  hkb job set <id>          change a filed Job's spec, without SQL — the same flags \`hkb new\`
+                            takes. Every change goes on the event stream with its before and
+                            after, because a Job's spec is what the NEXT attempt gets and the
+                            ones behind it ran under something else.
 
   hkb boards                every board on this machine
   hkb boards add <slug>     point a board at a repository       [--repo <path>]
@@ -1543,6 +1549,87 @@ export async function main(argv: string[]): Promise<number> {
       return 0;
     }
 
+    // ---------------------------------------------------------------- job set
+    // The Job-side twin of `hkb boards set`, and the third consumer of one flag vocabulary: these
+    // are the names `hkb new` parses and a workflow file's frontmatter uses, so `hkb --help`
+    // documents all three at once and cannot drift from any of them.
+    case 'job': {
+      const sub = rest[0];
+      if (sub !== 'set') {
+        throw usage(`hkb job set <id> — the only subcommand${sub ? `, not "${sub}"` : ''}. \`hkb show <id>\` prints a Job, \`hkb ls\` lists them.`);
+      }
+      const id = num(rest[1], 'hkb job set <id>');
+      if (!id) throw usage('hkb job set <id> — which Job?');
+
+      // Parsed and CHECKED here, by the same functions `hkb new` uses, so a value that could never
+      // have been filed cannot be set either. `none` clears, the way it does on `hkb boards set`.
+      const CLEAR = 'none';
+      const changes: Partial<Record<Settable, unknown>> = {};
+      const str = (flag: string, field: Settable, check?: (v: string) => unknown) => {
+        if (values[flag] === undefined) return;
+        const raw = String(values[flag]).trim();
+        if (!raw) throw usage(`--${flag} was given nothing — pass a value, or "${CLEAR}" to clear it`);
+        changes[field] = raw === CLEAR ? null : (check ? check(raw) : raw);
+      };
+      const number = (flag: string, field: Settable, ok: (n: number) => boolean, wants: string) => {
+        if (values[flag] === undefined) return;
+        if (String(values[flag]).trim() === CLEAR) { changes[field] = null; return; }
+        const n = num(values[flag], `--${flag}`) as number;
+        if (!ok(n)) throw usage(`--${flag} wants ${wants}, got ${n}`);
+        changes[field] = n;
+      };
+      // Repeatable flags REPLACE rather than append, the same choice `hkb boards set` made and for
+      // the same reason: this is one statement about the Job, and a flag that appended would give
+      // no way to remove a value at all.
+      const list = (flag: string, field: Settable, check: (v: string) => unknown) => {
+        if (values[flag] === undefined) return;
+        const given = (values[flag] as unknown as string[]).map((v) => v.trim()).filter(Boolean);
+        changes[field] = given.length === 1 && given[0] === CLEAR ? null : given.map(check);
+      };
+
+      str('name', 'name');
+      str('model', 'model');
+      str('effort', 'effort', (v) => {
+        if (!(EFFORTS as readonly string[]).includes(v)) throw usage(`--effort must be one of ${EFFORTS.join('|')}, or "${CLEAR}"`);
+        return v;
+      });
+      str('gate', 'gate');
+      str('guide', 'guide', checkExportPath);
+      str('base', 'base', (v) => checkRef(v, '--base'));
+      number('max-turns', 'maxTurns', (n) => Number.isInteger(n) && n >= 1, 'a whole number of turns, 1 or more');
+      number('max-budget', 'maxBudgetUsd', (n) => n > 0, 'dollars above zero');
+      number('max-retries', 'maxRetries', (n) => Number.isInteger(n) && n >= 0, 'a whole number of retries, 0 or more');
+      list('allow-tool', 'allowedTools', (v) => v);
+      list('plugin-dir', 'pluginPaths', checkPluginPath);
+      list('export', 'exports', checkExportPath);
+      list('result', 'results', checkResultName);
+      list('artifact', 'artifacts', checkArtifactName);
+      list('input', 'inputs', checkInputSpec);
+      if (values['allow-tools'] !== undefined) {
+        const raw = String(values['allow-tools']).trim();
+        if (!raw) throw usage(`--allow-tools was given nothing — pass a comma-separated list, or "${CLEAR}" to clear it`);
+        changes.allowedTools = raw === CLEAR ? null : raw.split(',').map((t) => t.trim()).filter(Boolean);
+      }
+      if (values.label !== undefined) {
+        const given = (values.label as string[]).map((v) => v.trim()).filter(Boolean);
+        changes.labels = given.length === 1 && given[0] === CLEAR ? null : parseLabels(given);
+      }
+      // The brief, which `hkb queue` calls rewritable nowhere else — true of the note-becomes-an-
+      // instruction moment, and never a reason a typo should cost a Job its id and its history.
+      // Settable here and RECORDED, like every other field (`src/job-spec.ts`).
+      if (values.brief !== undefined || values['brief-file'] !== undefined) {
+        changes.brief = await readBrief(values);
+      }
+
+      const r = await setJobSpec(db, id, changes, { by: operator() });
+      emit(out, r, () => {
+        if (!r.changed.length) return console.log(`#${r.id} unchanged — every value given is the one it already had`);
+        console.log(`#${r.id} ${r.changed.length === 1 ? '1 field' : `${r.changed.length} fields`} set  (${r.phase})`);
+        for (const c of r.changed) console.log(`  ${describeChange(c)}`);
+      });
+      return 0;
+    }
+
     // ---------------------------------------------------------------- watch
     // The third question about the board. `ls` answers what is true now and `log` answers what
     // happened up to now; this one answers "tell me when something happens", which everything that
@@ -1619,7 +1706,7 @@ export async function main(argv: string[]): Promise<number> {
     }
 
     default:
-      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, retry, done, cancel, rm, stop, start, up, down, log, watch, queue, triage, boards, migrate`);
+      throw usage(`unknown verb "${verb}" — try one of: new, ls, show, run, retry, done, cancel, rm, stop, start, up, down, log, watch, queue, triage, job, boards, migrate`);
   }
 }
 

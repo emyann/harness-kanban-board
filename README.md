@@ -434,6 +434,19 @@ reaches the same skills without them. And a grant resolves against the board's *
 worktree, so changing what it loads takes a merge — which matters because the thing writing to the
 repository is the worker.
 
+### Changing a Job after it is filed
+
+`hkb job set <id>` takes the same flags `hkb new` does — `--model`, `--max-budget`, `--allow-tool`,
+`--base`, `--label`, `--gate`, `--guide`, `--export`, `--result`, `--artifact`, `--input`, and the
+brief — so one vocabulary covers filing a Job, editing it, and writing a workflow file. Repeatable
+flags **replace** rather than append, and `none` clears a value back to the board's default.
+
+Every change goes on the event stream with its before and after, because a Job's spec is what the
+**next** attempt gets: editing a Job that has already run makes `hkb show` describe something those
+attempts did not run under, and `hkb log` is what keeps that legible. A running Job is refused —
+its spec is what the live attempt was admitted under. `phase`, `proposes` and `isolate` are refused
+by name, each with its own reason.
+
 ### Isolation, and the file the tests need
 
 A worktree is a fresh checkout of a commit, so two things are true of it and both matter: uncommitted work in

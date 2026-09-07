@@ -8,8 +8,10 @@ read_when: "building a second consumer, adding a verb that changes a Job's phase
 covers:
   - path: src/transitions.ts
     sha: 91b7343cd0c6493ac9fb6278a8353c5540e55aa9
+  - path: src/job-spec.ts
+    sha: 1aad211df4a804d600b9eff4ebb060e7b9ef57c4
   - path: src/hkb.ts
-    sha: dcee4783fbf061987575b6b28f48df781ed61522
+    sha: ad82bb3c7ed6e991781246b941525708d8407a05
   - path: prisma/schema.prisma
     sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
 related:
@@ -19,7 +21,7 @@ related:
     decisions/adr-010-the-human-gate,
     architecture/the-board,
   ]
-generated_at_commit: 5f66a64
+generated_at_commit: 2fcca6f
 last_refreshed: 2026-09-07
 ---
 
@@ -118,12 +120,18 @@ different shape of problem: ~190 lines of it are argument parsing, template expa
 resolution, which is genuinely the CLI's job. What a second consumer needs from it is the small
 part at the end. That extraction is a `fileJob(db, spec)` and it has not been done.
 
+**Editing a Job's spec is a sibling, not a transition.** `hkb job set` changes what a Job will run
+*as* rather than where it is in its life, and it lives in `src/job-spec.ts` for that reason — a
+phase and a spec fail for different reasons and answer to different rules. It shares this module's
+shape: a closed list of what may be written, refusals by name for what may not, a lease refused
+outright, and every change on the Event stream.
+
 **Board operations are not here either** — `board_added`, `ceilings_set`, `board_stopped`,
 `board_removed` remain in the switch. They are a different object's lifecycle, and they should move
 on the same rule when they are next touched.
 
 So the honest status of ADR-015's test: a second consumer can now *drive* a Job through its whole
-life without touching `src/hkb.ts`. It cannot yet *create* one.
+life and *edit* its spec without touching `src/hkb.ts`. It cannot yet *create* one.
 
 ## How the tests changed, and what that shows
 

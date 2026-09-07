@@ -1384,6 +1384,42 @@ test('--base refuses what git would read as an option, at the two places it can 
   assert.equal(ok.id > 0, true);
 });
 
+test('hkb job set edits a filed Job, with the same flags `hkb new` takes', async () => {
+  const r = scratchRepo('jobset');
+  await hkb('boards', 'add', 'jobset', '--repo', r);
+  const id = json((await hkb('new', 'adjust me', '--brief', 'do it', '--board', 'jobset', '--json')).out).id;
+
+  const out = (await hkb(
+    'job', 'set', String(id), '--board', 'jobset',
+    '--model', 'claude-opus-5', '--max-budget', '5', '--label', 'area=parser', '--allow-tool', 'Read',
+  )).out;
+  assert.match(out, /2 field|4 field/, 'it says how many moved');
+  assert.match(out, /model\s+\(none\) → claude-opus-5/);
+  assert.match(out, /maxBudgetUsd\s+\(none\) → 5/);
+
+  const shown = (await hkb('show', String(id), '--board', 'jobset')).out;
+  assert.match(shown, /claude-opus-5/);
+  assert.match(shown, /area=parser/);
+
+  // `none` clears, the way it does on `hkb boards set`.
+  await hkb('job', 'set', String(id), '--board', 'jobset', '--model', 'none');
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id } })).model, null);
+});
+
+test('hkb job set refuses the subcommand that is not there, and the flag that sets nothing', async () => {
+  const r = scratchRepo('jobset-refuse');
+  await hkb('boards', 'add', 'jobset-refuse', '--repo', r);
+  const id = json((await hkb('new', 'x', '--brief', 'do it', '--board', 'jobset-refuse', '--json')).out).id;
+
+  await assert.rejects(() => hkb('job', 'show', String(id), '--board', 'jobset-refuse'), /the only subcommand/);
+  await assert.rejects(() => hkb('job', 'set', String(id), '--board', 'jobset-refuse'), /nothing to set/);
+  // The checkers are the ones `hkb new` runs, so a value that could never be filed cannot be set.
+  await assert.rejects(
+    () => hkb('job', 'set', String(id), '--board', 'jobset-refuse', '--base', '--upload-pack=sh'),
+    /--base wants a git ref/,
+  );
+});
+
 test('an un-isolated Job is not shown a base it can never use', async () => {
   // A board's `defaultBase` resolves onto every Job it carries, including one running in the
   // operator's own checkout — where no branch is cut and nothing ever reads it. Printing it said
