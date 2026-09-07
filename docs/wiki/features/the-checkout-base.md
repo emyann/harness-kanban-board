@@ -7,13 +7,13 @@ audience: [dev]
 read_when: "chaining Jobs, filing work against an integration branch, or about to give `base` the ability to name another Job"
 covers:
   - path: src/worktree.ts
-    sha: 8c97dd6e6b4c62e52fdde713fc322caf29dd738c
+    sha: a75b0958c79d7f74a8725c7781e5d8ea4220eef8
   - path: src/spec.ts
     sha: 8924cf095921bd72fd50912552ec348d2b139b3a
   - path: src/controller.ts
-    sha: 5f4a8a79265af3b129aa7f4f75b242e98db58d98
+    sha: 5468263959954699e383b73a2e1d13bb24f79baa
   - path: src/rebase.ts
-    sha: 2adf640c2c4f9e639dee6a1876118a774002d028
+    sha: 761eed75ccacaf8efa68e9194cd7201056d01ccf
   - path: prisma/schema.prisma
     sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
 related:
@@ -24,7 +24,7 @@ related:
     architecture/job-kind,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: bfea9e2
+generated_at_commit: b551911
 last_refreshed: 2026-09-07
 ---
 
@@ -132,6 +132,13 @@ baked in before:
   reason (*features/rebase-and-verify*); naming a `kb-*` branch as a base walked it back in through
   the front door. The cost is that a chain step may branch from a parent tip one hand-pushed commit
   behind, which is the safe direction: stale work is recoverable and an overwritten commit is not.
+
+  That skip is **silent**, and `FetchedBase.skipped` is what makes it so. There are two ways not to
+  fetch and only one is worth a word: a repository with no remote and an attempt branch we refuse to
+  refresh are decisions, while a network failure or a bad ref is not. Reporting the first pair would
+  print "could not fetch the base" on every pass of every chain step — and the callers used to tell
+  them apart by matching the message text, which is a filter that stops working the next time a
+  reason is added.
 - `rebaseOntoBase` keeps the branch on top of it (*features/rebase-and-verify*). This is the one
   that would break the feature quietly if it were missed: a step rebased onto `origin/main` at the
   end of its run arrives back at the trunk carrying the previous step's commits as its own diff,

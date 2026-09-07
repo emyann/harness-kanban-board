@@ -683,7 +683,7 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
         if (!fetchedRepos.has(fetchKey)) {
           fetchedRepos.add(fetchKey);
           const fetched = fetchBase(cwd, wantBase);
-          if (!fetched.fetched && fetched.why && !/no remote/.test(fetched.why)) {
+          if (!fetched.fetched && !fetched.skipped && fetched.why) {
             say(`could not fetch the base — ${fetched.why.slice(0, 120)}; using the ref as it stands`);
           }
         }

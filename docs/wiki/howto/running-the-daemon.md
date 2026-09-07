@@ -11,10 +11,10 @@ covers:
   - path: src/hkb.ts
     sha: 9ae0722700c1021793485ec03dddfe9aab80c286
   - path: src/worktree.ts
-    sha: 8c97dd6e6b4c62e52fdde713fc322caf29dd738c
+    sha: a75b0958c79d7f74a8725c7781e5d8ea4220eef8
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
-generated_at_commit: da9f75a
+generated_at_commit: b551911
 last_refreshed: 2026-09-07
 related: [architecture/the-loop, architecture/job-kind, decisions/adr-007-workload-scheduler]
 ---

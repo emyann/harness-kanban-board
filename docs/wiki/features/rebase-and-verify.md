@@ -7,11 +7,11 @@ audience: [dev]
 read_when: "a Job failed as `conflicted`, a worker branch was rewritten under a draft PR, or you are about to make the checkout base a spec field"
 covers:
   - path: src/rebase.ts
-    sha: 2adf640c2c4f9e639dee6a1876118a774002d028
+    sha: 761eed75ccacaf8efa68e9194cd7201056d01ccf
   - path: src/worktree.ts
-    sha: 8c97dd6e6b4c62e52fdde713fc322caf29dd738c
+    sha: a75b0958c79d7f74a8725c7781e5d8ea4220eef8
   - path: src/controller.ts
-    sha: 5f4a8a79265af3b129aa7f4f75b242e98db58d98
+    sha: 5468263959954699e383b73a2e1d13bb24f79baa
   - path: src/brief.ts
     sha: ee84b2c276df6664b29b7fd8e114617b19308c49
   - path: prisma/schema.prisma
@@ -25,7 +25,7 @@ related:
     features/declared-outputs,
     decisions/adr-014-no-preset-three-rules,
   ]
-generated_at_commit: da9f75a
+generated_at_commit: b551911
 last_refreshed: 2026-09-07
 ---
 

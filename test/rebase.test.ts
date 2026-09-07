@@ -28,7 +28,7 @@ execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate',
 const { openBoard, closeBoard } = await import('../src/db.ts');
 const { reconcile } = await import('../src/controller.ts');
 const {
-  rebaseOntoBase, rebasePlan, conflictReason, conflictedPaths, pushRefused,
+  rebaseOntoBase, rebasePlan, rebaseNote, conflictReason, conflictedPaths, pushRefused,
 } = await import('../src/rebase.ts');
 const {
   createWorktree, baseFor, baseRef, checkRef, fetchBase, heldWork, isAttemptBranch, validRef,
@@ -483,6 +483,7 @@ test('fetchBase NEVER refreshes an attempt branch — that ref is somebody else\
   // A chain step claims, naming that branch as its base.
   const r = fetchBase(repo, wt.branch);
   assert.equal(r.fetched, false);
+  assert.equal(r.skipped, true, 'a decision, not a failure — it must not read as one in the log');
   assert.match(r.why, /attempt branch/);
   assert.equal(at(repo, `refs/remotes/origin/${wt.branch}`), ours, 'the lease still sees what it pushed');
 
@@ -562,6 +563,33 @@ test('a base that names nothing FAILS the Job before a session is bought', async
   assert.equal(after.attempts[0].outcome, 'no_input', 'the same value a declared input that cannot be read gets');
   assert.match(after.lastError ?? '', /kb-999-1/, 'and it names the ref that was asked for');
   assert.match(after.lastError ?? '', /origin\/kb-999-1/, 'including the fallback it also tried');
+});
+
+test('declining to fetch is not reported as failing to', () => {
+  // Two ways not to fetch and only one is worth a word. Reporting a decision as "could not refresh
+  // the base" puts a false warning on every pass of every chain step — and the callers used to tell
+  // these apart by matching the message text, a filter that stops working the next time a reason is
+  // added.
+  const { repo } = makeRemote('quiet-skip');
+  const wt = createWorktree(repo, 51, 1);
+  work(wt.path, 'mine.txt', 'mine\n', 'my work');
+  git(wt.path, ['push', '-q', '-u', 'origin', wt.branch]);
+
+  const step = createWorktree(repo, 52, 1, wt.branch);
+  const r = rebaseOntoBase(repo, step);
+  assert.equal(r.staleBase, undefined, 'the attempt-branch skip is silent');
+  assert.equal(rebaseNote(52, step, r), null, 'so there is nothing to say about it');
+
+  // And a repository with no remote is the other deliberate one.
+  const solo = path.join(dir, 'solo-skip');
+  fs.mkdirSync(solo);
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: solo });
+  git(solo, ['config', 'user.email', 'rb@test']);
+  git(solo, ['config', 'user.name', 'rb']);
+  fs.writeFileSync(path.join(solo, 'a.txt'), 'a\n');
+  git(solo, ['add', '-A']);
+  git(solo, ['commit', '-qm', 'a']);
+  assert.equal(fetchBase(solo).skipped, true);
 });
 
 test('a base that has gone does not kill an attempt RESUMING in a checkout it already has', async () => {

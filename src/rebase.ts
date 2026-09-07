@@ -202,10 +202,10 @@ export function rebaseOntoBase(
   // branch instead would undo the belt it was filed to sit on.
   const label = wt.baseLabel;
   const fetched = fetchBase(root, label);
-  // A repository with no remote is a normal repository, not a failure to report.
-  const staleBase = !fetched.fetched && fetched.why && !/no remote/.test(fetched.why)
-    ? fetched.why
-    : undefined;
+  // Only a fetch that FAILED, never one we declined to make: a repository with no remote and an
+  // attempt branch we will not refresh are both decisions, and reporting them as "could not refresh
+  // the base" would put a false warning on every pass of every chain step.
+  const staleBase = !fetched.fetched && !fetched.skipped && fetched.why ? fetched.why : undefined;
   const base = resolveBase(root, label);
 
   const onBase = git(wt.path, ['merge-base', '--is-ancestor', base, 'HEAD']).status === 0;

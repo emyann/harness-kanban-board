@@ -205,6 +205,18 @@ export function resolves(root: string, ref: string): boolean {
 }
 
 /**
+ * What happened when we tried to refresh the base.
+ *
+ * `skipped` is the distinction the callers need and could not make: there are two ways not to fetch
+ * and only one of them is worth a word. A repository with no remote and an attempt branch we refuse
+ * to refresh are both **deliberate** — reporting them says "could not fetch the base" about a
+ * decision, which on a chain step is every single pass. A network failure or a bad ref is not
+ * deliberate and must be loud. Both call sites used to tell these apart by matching the message
+ * text, which is a filter that silently stops working the next time a reason is added.
+ */
+export type FetchedBase = { fetched: boolean; skipped: boolean; why: string };
+
+/**
  * Bring the base branch's remote-tracking ref up to date, so the base is what the remote agrees on
  * rather than what the operator last pulled.
  *
@@ -222,18 +234,18 @@ export function resolves(root: string, ref: string): boolean {
  * repository with no remote, an unreachable one, or one that wants credentials all mean the same
  * thing here — the local ref is the best answer available, which is the answer we had before.
  */
-export function fetchBase(root: string, want?: string | null): { fetched: boolean; why: string } {
+export function fetchBase(root: string, want?: string | null): FetchedBase {
   // Asked of the remote itself rather than inferred from the shape of the ref. The base used to be
   // `origin/<something>` whenever there was a remote, so "does it start with `origin/`" answered
   // this by accident; a Job may now name any ref, and a repository with no remote would have gone
   // to the network to be told so.
   if (git(root, ['remote', 'get-url', 'origin']).status !== 0) {
-    return { fetched: false, why: 'no remote to fetch from' };
+    return { fetched: false, skipped: true, why: 'no remote to fetch from' };
   }
   // A Job may write the base either way round — `kb-33-1` or `origin/kb-33-1` — and origin knows
   // only the former, so the prefix comes off before it is asked for.
   const asked = typeof want === 'string' && want.trim() ? want.trim() : null;
-  if (asked !== null && !validRef(asked)) return { fetched: false, why: `\`${asked}\` is not a ref` };
+  if (asked !== null && !validRef(asked)) return { fetched: false, skipped: false, why: `\`${asked}\` is not a ref` };
   const branch = (asked ?? baseRef(root)).replace(/^origin\//, '');
 
   // **Never an attempt branch, and this is the lease again.** Fetching `kb-33-1` updates
@@ -246,12 +258,16 @@ export function fetchBase(root: string, want?: string | null): { fetched: boolea
   // The cost is that a chain step may branch from a parent tip that is one hand-pushed commit
   // behind. That is the safe direction: stale work is recoverable and an overwritten commit is not.
   if (isAttemptBranch(branch)) {
-    return { fetched: false, why: `${branch} is an attempt branch — not refreshed, because that ref is the lease` };
+    return {
+      fetched: false,
+      skipped: true,
+      why: `${branch} is an attempt branch — not refreshed, because that ref is the lease`,
+    };
   }
 
   const r = gitRemote(root, ['fetch', '--quiet', 'origin', branch]);
-  if (r.status === 0) return { fetched: true, why: '' };
-  return { fetched: false, why: short(r.stderr) || `git fetch origin ${branch} failed` };
+  if (r.status === 0) return { fetched: true, skipped: false, why: '' };
+  return { fetched: false, skipped: false, why: short(r.stderr) || `git fetch origin ${branch} failed` };
 }
 
 /**

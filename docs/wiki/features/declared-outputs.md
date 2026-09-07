@@ -11,9 +11,9 @@ covers:
   - path: src/artifacts.ts
     sha: b1c001d916ec6cdd8198d978bbae1d09a2d2813d
   - path: src/worktree.ts
-    sha: 8c97dd6e6b4c62e52fdde713fc322caf29dd738c
+    sha: a75b0958c79d7f74a8725c7781e5d8ea4220eef8
   - path: src/controller.ts
-    sha: 5f4a8a79265af3b129aa7f4f75b242e98db58d98
+    sha: 5468263959954699e383b73a2e1d13bb24f79baa
   - path: src/brief.ts
     sha: ee84b2c276df6664b29b7fd8e114617b19308c49
   - path: src/hkb.ts
@@ -22,7 +22,7 @@ covers:
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: prisma/schema.prisma
     sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
-generated_at_commit: da9f75a
+generated_at_commit: b551911
 last_refreshed: 2026-09-07
 related: [decisions/adr-008-declared-outputs, decisions/adr-011-proposals-not-board-access, features/proposals, features/worktree-includes, architecture/job-kind, architecture/the-board]
 ---
