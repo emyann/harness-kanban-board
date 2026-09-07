@@ -118,17 +118,28 @@ export function conflictReason(out: string): string {
   return err ?? lines[lines.length - 1] ?? 'git gave no reason';
 }
 
+/** git's unmerged status codes, and the whole set of them. */
+const UNMERGED = /^(DD|AU|UD|UA|DU|AA|UU) /;
+
 /**
- * Did the rebase succeed and the autostash fail to come back?
+ * Paths left conflicted in the checkout, read out of `git status --porcelain`.
  *
- * **git exits 0 for this**, which is the whole reason the check exists: `rebase --autostash` that
+ * This is the check for a rebase that **exits 0 and did not finish the job**: `--autostash` that
  * replays every commit and then cannot reapply the stash reports success, leaves an unmerged index
  * with conflict markers in the tree, and keeps the worker's uncommitted work in an unnamed stash
  * entry. Believing the exit code there means reporting `rebased`, force-pushing, recording the
  * attempt as succeeded, and handing the operator a mess with no line in the log about it.
+ *
+ * **The state, never the message.** The first version of this matched git's own
+ * "Applying autostash resulted in conflicts" and passed on git 2.43 and failed on 2.55, because
+ * that is prose and prose is not an interface. An unmerged index is the condition actually being
+ * asked about, and its porcelain codes are documented and stable.
  */
-export function autostashFailed(out: string): boolean {
-  return /autostash resulted in conflicts/i.test(out || '');
+export function conflictedPaths(porcelain: string): string[] {
+  return (porcelain || '').split('\n')
+    .filter((l) => UNMERGED.test(l))
+    .map((l) => l.slice(3).trim())
+    .filter(Boolean);
 }
 
 /**
@@ -174,7 +185,7 @@ export type RebaseResult = (
  * tree — `exports` and `results` are both channels for handing back files nobody committed, and
  * exporting *copies* rather than moves, so a Job with declared outputs has a dirty tree every time.
  * Refusing to rebase on that would switch the feature off for exactly the Jobs that use it. The
- * cost is `autostashFailed`, which is the case git reports as success.
+ * cost is `conflictedPaths`, which catches the case git reports as success.
  *
  * Every failure path leaves the branch where it was, except the autostash one where the replay
  * genuinely happened. That is the property this function is allowed to be trusted for: a checkout
@@ -214,11 +225,13 @@ export function rebaseOntoBase(
   // Nothing is pushed on this path. The commits are replayed and correct, but the tree they sit in
   // has conflict markers in it and a stash entry to reconcile — one place for a person to stand
   // and fix it is worth more than a remote that agrees with half of it.
-  if (autostashFailed(said)) {
+  const stuck = conflictedPaths(git(wt.path, ['status', '--porcelain']).stdout);
+  if (stuck.length) {
+    const named = stuck.slice(0, 3).join(', ') + (stuck.length > 3 ? ` (+${stuck.length - 3} more)` : '');
     return {
       kind: 'autostash',
       label,
-      why: 'the commits replayed but the uncommitted work did not come back',
+      why: `the commits replayed and the uncommitted work did not come back: ${named}`,
       staleBase,
     };
   }
@@ -265,7 +278,7 @@ export function rebaseShortfall(jobId: number, wt: Worktree, r: RebaseResult): s
       + `Somebody else moved \`${wt.branch}\` — read it before you overwrite it, then ${fix}.`;
   }
   if (r.kind === 'autostash') {
-    return `#${jobId} was rebased onto ${r.label} but ${r.why}: the checkout has conflict markers `
+    return `#${jobId} was rebased onto ${r.label} but ${r.why}. The checkout has conflict markers `
       + `in it and the files are in \`git -C ${wt.path} stash list\`. Nothing was pushed. `
       + `Resolve the tree, then ${fix}.`;
   }

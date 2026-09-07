@@ -28,7 +28,7 @@ execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate',
 const { openBoard, closeBoard } = await import('../src/db.ts');
 const { reconcile } = await import('../src/controller.ts');
 const {
-  rebaseOntoBase, rebasePlan, conflictReason, autostashFailed, pushRefused,
+  rebaseOntoBase, rebasePlan, conflictReason, conflictedPaths, pushRefused,
 } = await import('../src/rebase.ts');
 const { createWorktree, baseRef, fetchBase, heldWork } = await import('../src/worktree.ts');
 const { withProtocol } = await import('../src/brief.ts');
@@ -126,11 +126,13 @@ test('rebasePlan: an unpushed branch needs nobody\'s permission, there being no 
   assert.equal(p.act, 'rebase');
 });
 
-test('autostashFailed: git exits 0 for this, which is the whole reason it is checked', () => {
-  assert.equal(autostashFailed('Successfully rebased and updated refs/heads/kb-1-1.'), false);
-  assert.equal(
-    autostashFailed('Applying autostash resulted in conflicts.\nYour changes are safe in the stash.'),
-    true,
+test('conflictedPaths reads the STATE, because git\'s wording for it moved between 2.43 and 2.55', () => {
+  assert.deepEqual(conflictedPaths(' M README.md\n?? new.txt\n'), [], 'dirty is not conflicted');
+  assert.deepEqual(conflictedPaths('UU README.md\n M other.txt\n'), ['README.md']);
+  // Every unmerged code, not just the one that is easy to remember.
+  assert.deepEqual(
+    conflictedPaths('DD a\nAU b\nUD c\nUA d\nDU e\nAA f\nUU g\n'),
+    ['a', 'b', 'c', 'd', 'e', 'f', 'g'],
   );
 });
 
@@ -343,7 +345,9 @@ test('a replay whose autostash does not come back BLOCKS, and pushes nothing —
   moveMain(other, 'README.md', 'one\nTHEIRS\nthree\n', 'their line');
 
   const r = rebaseOntoBase(repo, wt);
-  assert.equal(r.kind, 'autostash', 'not `rebased` — git said 0 and it is not what happened');
+  const state = `git ${git(repo, ['--version'])}; status:\n${git(wt.path, ['status', '--porcelain'])}\n`
+    + `stash: ${git(wt.path, ['stash', 'list'])}`;
+  assert.equal(r.kind, 'autostash', `not \`rebased\` — git said 0 and it is not what happened. ${state}`);
   assert.equal(at(origin, wt.branch), remoteBefore, 'and nothing was pushed over it');
   assert.match(
     git(wt.path, ['stash', 'list']),

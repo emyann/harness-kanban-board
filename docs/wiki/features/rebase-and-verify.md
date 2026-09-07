@@ -7,7 +7,7 @@ audience: [dev]
 read_when: "a Job failed as `conflicted`, a worker branch was rewritten under a draft PR, or you are about to make the checkout base a spec field"
 covers:
   - path: src/rebase.ts
-    sha: 6e78dce436e7b1a7dbc2bbf4bafbd1b6074f6009
+    sha: 759bf4bb48e576c31eb2ee45b4a1e76c9e3ff782
   - path: src/worktree.ts
     sha: 95c1207c4eaa7318526b9cd4df337802c08a521d
   - path: src/controller.ts
@@ -24,7 +24,7 @@ related:
     features/declared-outputs,
     decisions/adr-014-no-preset-three-rules,
   ]
-generated_at_commit: ee1f4fb
+generated_at_commit: 1fa5e43
 last_refreshed: 2026-09-06
 ---
 
@@ -145,12 +145,17 @@ Three other pure pieces sit beside it, and two of them exist because git's exit 
 - `conflictReason` — git says a great deal on a failed rebase, and the `CONFLICT` lines are the part
   that names whose change collided. Capped at three, because the result lands in `Attempt.reason`,
   which is 300 characters.
-- **`autostashFailed`** — a `rebase --autostash` that replays every commit and then cannot reapply
+- **`conflictedPaths`** — a `rebase --autostash` that replays every commit and then cannot reapply
   the stash **exits 0**. Believing that means reporting `rebased`, force-pushing, recording the
   attempt as succeeded, and leaving the operator an unmerged index full of conflict markers with the
   worker's uncommitted output in an unnamed stash entry. It is the reachable case, not a theoretical
   one: a Job with declared `exports` ends with a dirty tree every time, because exporting copies
   rather than moves. Detected, nothing is pushed, and the attempt blocks with the stash named.
+
+  It reads the **state** — the unmerged codes in `git status --porcelain` — and not git's own
+  message. The first version matched the string *"Applying autostash resulted in conflicts"*, passed
+  on git 2.43 and failed on 2.55: prose is not an interface, and a check that reads one expires
+  quietly on somebody else's machine.
 - **`pushRefused`** — the difference between the remote *refusing* us and our failing to *reach* it,
   which is the difference between blocking an attempt and not.
 
