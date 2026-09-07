@@ -445,6 +445,16 @@ Worktrees are expensive (a worker installs the target repository's dependency tr
 are reclaimed by a sweep on the daemon's tick rather than at the end of a run: "safe to delete" is a state a
 worktree enters later, when its pull request lands.
 
+### The base, and keeping the branch on it
+
+A checkout is cut from `origin/<default>`, and the base branch is **fetched first** — so a Job filed a minute
+after a pull request landed starts from a base that contains it. The base keeps moving while the work runs, so
+after a successful run hkb replays the branch onto the base as it is then, and pushes the result with
+`--force-with-lease` if the worker had already pushed. A branch that will not replay ends the attempt as
+`conflicted` and keeps its checkout, with the two commands that finish it by hand. The worker is asked to
+rebase before it pushes, which makes all of that a no-op in the common case —
+[docs/wiki/features/rebase-and-verify.md](docs/wiki/features/rebase-and-verify.md).
+
 ### How it maps
 
 If you know Kubernetes, the shape is deliberate:

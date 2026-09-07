@@ -7,14 +7,14 @@ audience: [dev]
 read_when: "adding a workload kind, changing retry or lease behaviour, or wondering why the DAG is not in the core"
 covers:
   - path: prisma/schema.prisma
-    sha: 888751eac2c7ae7c2bea8f57dd0dce7a1e084b05
+    sha: b6d31a7e665c57a075972e88e98e2501da2c45d7
   - path: src/controller.ts
-    sha: eb7a09443efe5cd3e872af7f4560c9d82e1c11f6
+    sha: e346f83af40789b9fb4292972c6014f30cde34e1
   - path: src/db.ts
     sha: c759afb94b34e93ecefdb0384e06924bd772e836
-generated_at_commit: 1ff10a0
+generated_at_commit: f2c1da5
 last_refreshed: 2026-09-06
-related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control]
+related: [decisions/adr-007-workload-scheduler, architecture/runtime-layer, concepts/admission-control, features/rebase-and-verify]
 ---
 
 # The Job kind and its controller
@@ -148,9 +148,9 @@ Everything interesting is there:
 
 `maxRetries: 2` means two retries *after* the first go — three attempts in total.
 
-Four outcomes are decided *outside* `nextPhase`, because none of them is a fact about
-how the work went — the count was two when this page was written, and the declared
-inputs and outputs added the other pair:
+Five outcomes are decided *outside* `nextPhase`, because none of them is a fact about
+how the work went — the count was two when this page was written, the declared inputs
+and outputs added a pair, and rebase-and-verify added the fifth:
 
 - `lost` — the reclaim path above; nobody ever reported this attempt.
 - `stopped` — the operator stopped the daemon mid-run.
@@ -162,6 +162,11 @@ inputs and outputs added the other pair:
   **input** could not be read (`src/inputs.ts`). The mirror of `no_output` and the
   cheap side of it: no session, no tokens. Terminal and not retried, because the same
   read fails identically next time.
+- `conflicted` — the session ended, the work is real, and the branch no longer replays
+  onto the base it will be merged into (`src/rebase.ts`, *features/rebase-and-verify*).
+  Separate from `no_output` because the fault is in neither the work nor the spec: the
+  base moved. Not retried either, and for a sharper reason — a resumed worker may not
+  force-push, so it has no move a human does not have to make first.
 
 `no_output` and `no_input` are the two that make `succeeded` mean more than "a session
 ended". **`stopped` does not spend a retry** — the attempt number `k`

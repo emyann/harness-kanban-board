@@ -44,10 +44,14 @@ meet one in the git history, that is what it was.
   be judged against a spend none of them had contributed to yet (*concepts/ceilings*).
 - **Composition failure** — two changes that are each correct, each green on their own branch, and
   broken once both are on the mainline. Not a merge conflict (git reports none) and not a
-  concurrency bug: every branch is cut from the mainline at claim time and never rebased
-  (`createWorktree`, `src/worktree.ts`), so what parallel workers share is a **base**, not a clock.
-  What they collide on is a shared invariant rather than a shared file
-  (*gotchas/merge-composition*).
+  concurrency bug: what parallel workers share is a **base**, not a clock, and what they collide on
+  is a shared invariant rather than a shared file (*gotchas/merge-composition*). Replaying each
+  branch onto the current base at the end of its run (*features/rebase-and-verify*) narrows the
+  divergence and does not touch the failure.
+- **Conflicted** — an `Outcome`: the session ended and the work is real, but the branch no longer
+  replays onto the base it will be merged into (`rebaseOntoBase`, `src/rebase.ts`). Its own value
+  rather than `no_output` because the fault is in neither the work nor the spec, and the fix is a
+  hand rebase rather than another run (*features/rebase-and-verify*).
 - **Control plane** — hkb read as Kubernetes reads itself: a Board is a namespace, a Job is a Job, an
   Attempt is a Pod, a Lease is a Lease, and the daemon is a controller-manager. The one departure is
   that hkb also *executes* — there is no node to schedule onto (*architecture/overview*,

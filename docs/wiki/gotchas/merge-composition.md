@@ -7,17 +7,17 @@ audience: [dev]
 read_when: "filing a batch of Jobs against one repository, reviewing several agent PRs cut from the same base, or designing how a graph kind would decompose work"
 covers:
   - path: src/controller.ts
-    sha: eb7a09443efe5cd3e872af7f4560c9d82e1c11f6
+    sha: e346f83af40789b9fb4292972c6014f30cde34e1
   - path: src/worktree.ts
-    sha: e4094d7fae517cca708273ddff3007bfc508d10b
+    sha: 95c1207c4eaa7318526b9cd4df337802c08a521d
   - path: src/limits.ts
     sha: 61b65c43e2fd7c28f952c403e02d073ca9907561
   - path: src/hkb.ts
     sha: 2aae98b33ad6c7909aceff4bcc573fcda399da82
   - path: prisma/schema.prisma
-    sha: 888751eac2c7ae7c2bea8f57dd0dce7a1e084b05
-related: [architecture/job-kind, architecture/the-loop, concepts/ceilings, decisions/adr-007-workload-scheduler, decisions/adr-008-declared-outputs]
-generated_at_commit: 1ff10a0
+    sha: b6d31a7e665c57a075972e88e98e2501da2c45d7
+related: [architecture/job-kind, architecture/the-loop, concepts/ceilings, features/rebase-and-verify, decisions/adr-007-workload-scheduler, decisions/adr-008-declared-outputs]
+generated_at_commit: f2c1da5
 last_refreshed: 2026-09-06
 ---
 
@@ -70,12 +70,19 @@ find (#362)"*, 2026-09-05:
 
 - Every branch is cut from the mainline at claim time and never rebased. The
   controller cuts the checkout on the serial side of the reconcile pass, at the
-  moment of the claim (`src/controller.ts:647-660`), from `origin/<default>` when
-  there is one (`baseRef`, `src/worktree.ts:106-120`; `createWorktree`,
-  `src/worktree.ts:129-153`). Nothing in `bin/`, `src/`, `scripts/` or `prisma/`
+  moment of the claim (`src/controller.ts:648-669`), from `origin/<default>` when
+  there is one (`baseRef`, `src/worktree.ts:111-125`; `createWorktree`,
+  `src/worktree.ts:161-185`). Nothing in `bin/`, `src/`, `scripts/` or `prisma/`
   contains the string `rebase`.
 - CI runs per branch.
 - No step compares one Job's diff against another's.
+
+> **The first of those is no longer true, and the argument survives it.** The base
+> is fetched before the checkout and the branch is replayed onto it after the run
+> (`src/rebase.ts`, *features/rebase-and-verify*) — that is item 10's *cheap* half,
+> and it closes the drift, not the composition failure. The two misreadings below
+> are exactly why: a rebase answers the merge-conflict question, and nine of the ten
+> collisions had no merge conflict to answer.
 
 So the further a batch runs, the more each Job's base diverges from what will
 actually be merged (`docs/rebuild-plan.md:572-577`).
@@ -107,9 +114,9 @@ where it had been 6.1 GB (`docs/rebuild-plan.md:450`). Exports and removal are t
 same question asked from two directions: what is left in a checkout after a run,
 and who is allowed to delete it. Today the two live in one function, where a Job's
 declared exports waive the *dirty* half of the keep-test and explicitly not the
-*unpushed* half (`removeWorktree`, `src/worktree.ts:770-809`), with the later
+*unpushed* half (`removeWorktree`, `src/worktree.ts:802-841`), with the later
 sweep asking the same question at the time it can be answered (`sweepWorktrees`,
-`src/worktree.ts:679`; the file's own argument for why removal is a sweep is at
+`src/worktree.ts:711`; the file's own argument for why removal is a sweep is at
 `src/worktree.ts:25-36`). That joint design is what the second attempt had to
 write; the first attempt had been written against a mainline where the sweep did
 not exist.
@@ -141,7 +148,7 @@ attempt chose to freeze the resolved cap onto the Attempt rather than re-derive
 it, and argued the cost into a feature (`docs/rebuild-plan.md:456`, `:469-470`);
 the doc-comment on `Attempt.maxBudgetUsd` sets out the three options and why the
 freeze is the only one that stays correct when an operator edits a board's default
-mid-flight (`prisma/schema.prisma:379-423`).
+mid-flight (`prisma/schema.prisma:383-427`).
 
 The recorded consequence: **what collides is not shared files but shared
 invariants**, and a decomposer that splits work by area reproduces this exactly

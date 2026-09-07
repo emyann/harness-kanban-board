@@ -589,6 +589,19 @@ Every item below was found by running the thing, not by reading it.
     Until then the practice that has actually worked is briefing: tell the second attempt
     what the first collided with. #19 and #20 were re-run that way and #19 landed clean.
 
+    **The CHEAP half shipped 2026-09-06** (`src/rebase.ts`, `docs/wiki/features/rebase-and-verify.md`).
+    Two things, and the first was the one nobody had noticed: **nothing fetched**, so `baseRef` read a
+    remote-tracking ref as stale as the operator's last pull and the daemon never pulls at all. The base
+    branch is fetched before the checkout, and after a successful run the branch is replayed onto the
+    base as it is then — clean, `push --force-with-lease` when the worker had already pushed; conflict,
+    `Outcome.conflicted` with the checkout kept and the two commands named. The controller does the
+    rewriting because the worker may not force-push and a human should not have to; the fetch is
+    deliberately of the base branch ALONE, since a blanket fetch would refresh `origin/kb-<id>-<k>` and
+    turn the lease into a plain `--force`. The brief asks the worker to rebase before it pushes, so the
+    controller's pass is usually a no-op — ADR-014's layering, applied.
+    **The honest half is untouched**, and the DECIDED note above still stands: this closes the drift,
+    not the composition failure. Nine of the ten collisions had no merge conflict to answer.
+
 11. **~~`succeeded` does not mean "produced anything".~~ FIXED** — the absence is loud now.
     `hkb ls` marks a succeeded Job that opened no pull request and declared no exports as
     *produced nothing*, and counts them under the listing; `--json` carries `pr`, `exports` and

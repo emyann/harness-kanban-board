@@ -11,8 +11,27 @@ import { PROPOSAL_MAX_BYTES, PROPOSAL_MAX_JOBS } from './proposals.ts';
  * Stated as a protocol rather than a hope. The two rules a worker could plausibly break — pushing
  * to the default branch, and merging its own work — are named explicitly, because "do not" is
  * cheaper here than discovering it afterwards.
+ *
+ * **Rebase before the push, and only before it.** The worktree was cut from `base` when the attempt
+ * was claimed, and the base moves while the work runs — that is `docs/rebuild-plan.md` item 10.
+ * Asking for it here is free, and here is where it is cheapest: after the push a branch can only be
+ * rebased by rewriting the remote, which the worker is forbidden to do and the controller then has
+ * to (`src/rebase.ts`). This is prose, and prose guarantees nothing (ADR-014) — the controller
+ * checks it afterwards, and that is the mechanism. The pairing is the point: the prompt makes it
+ * usually true and free, the check makes it true.
  */
-export function withProtocol(brief: string, branch: string): string {
+export function withProtocol(brief: string, branch: string, base?: string): string {
+  // Only when there is a remote to rebase against. `baseRef` falls back to `HEAD` in a repository
+  // with no origin, and telling a worker to `git fetch origin` there is an instruction to fail.
+  const rebasing = base?.startsWith('origin/')
+    ? [
+      `  2. Rebase onto what you will be merged into, BEFORE you push: \`git fetch origin && git rebase ${base}\`.`,
+      '     Then re-run the checks — the base has probably moved since this worktree was cut, and a',
+      '     branch that was green against a stale base is not evidence about the merge.',
+    ]
+    : [];
+  /** Steps after the rebase shift by one when there is one. */
+  const n = (i: number) => i + (rebasing.length ? 1 : 0);
   return [
     brief.trim(),
     '',
@@ -23,10 +42,11 @@ export function withProtocol(brief: string, branch: string): string {
     '',
     `  1. Commit it on \`${branch}\`. Write a plain message: a short imperative subject, and a body`,
     '     explaining why if the why is not obvious.',
-    `  2. Push it: \`git push -u origin ${branch}\``,
-    '  3. Open a DRAFT pull request against the default branch:',
+    ...rebasing,
+    `  ${n(2)}. Push it: \`git push -u origin ${branch}\``,
+    `  ${n(3)}. Open a DRAFT pull request against the default branch:`,
     `     \`gh pr create --draft --title "…" --body "…" --head ${branch}\``,
-    '  4. Reply with one line: what you did, and the PR URL.',
+    `  ${n(4)}. Reply with one line: what you did, and the PR URL.`,
     '',
     'Rules:',
     '  - Never push to the default branch, and never merge. A human reviews and merges.',

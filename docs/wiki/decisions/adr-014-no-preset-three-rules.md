@@ -11,12 +11,12 @@ supersedes: ~
 superseded_by: ~
 covers:
   - path: src/brief.ts
-    sha: 8b26e22eef60ceac89d2ececf18a82284a73ddad
+    sha: 11efbf53da940f7e23f1ddc0335bea2e748783af
   - path: src/runtime/claude.ts
     sha: 5ae775633cae411b71443add232b79f1325c4075
   - path: src/controller.ts
-    sha: eb7a09443efe5cd3e872af7f4560c9d82e1c11f6
-generated_at_commit: 679487b
+    sha: e346f83af40789b9fb4292972c6014f30cde34e1
+generated_at_commit: f2c1da5
 last_refreshed: 2026-09-06
 related:
   [

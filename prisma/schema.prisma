@@ -80,6 +80,10 @@ enum Outcome {
               // `no_output` on the read side, and a separate value because the two send an operator
               // to different places — `no_output` is a fault in the work, `no_input` is a fault in
               // the spec or in the repository, and it cost nothing to find out.
+  conflicted  // the session ended and the work is real, but the branch no longer sits on the base it
+              // will be merged into and the rebase would not replay. Its own value rather than
+              // `no_output` because the fault is in neither the work nor the spec: the base moved,
+              // and the fix is a hand rebase rather than another run.
   lost        // the lease expired with nobody reporting — the attempt was never heard from again
   stopped     // the operator stopped the daemon mid-run. Resumable, and it does NOT spend a retry:
               // `kb down` is not a failure of the work, and charging one would mean a Job could be
