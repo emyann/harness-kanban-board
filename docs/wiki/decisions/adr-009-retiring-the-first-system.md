@@ -15,10 +15,10 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: af521898c8b36d5b284ebacb390839864487e76c
+    sha: 9ae0722700c1021793485ec03dddfe9aab80c286
   - path: scripts/smoke-pack.mjs
     sha: abccc0340f0034e8f40aa9a30796fac84655f603
-generated_at_commit: aa34c9c
+generated_at_commit: da9f75a
 last_refreshed: 2026-09-07
 related: [decisions/adr-007-workload-scheduler, architecture/overview, architecture/job-kind]
 ---

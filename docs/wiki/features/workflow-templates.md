@@ -9,7 +9,7 @@ covers:
   - path: src/templates.ts
     sha: 216569e82eb7ef9f240d8a87db1707d775032cbf
   - path: src/hkb.ts
-    sha: af521898c8b36d5b284ebacb390839864487e76c
+    sha: 9ae0722700c1021793485ec03dddfe9aab80c286
   - path: src/inputs.ts
     sha: ffd76fce7689fe1c9a1dc0db3756cdf343d2b623
 related:
@@ -21,7 +21,7 @@ related:
     concepts/ceilings,
     features/proposals,
   ]
-generated_at_commit: aa34c9c
+generated_at_commit: da9f75a
 last_refreshed: 2026-09-07
 ---
 

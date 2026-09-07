@@ -9,12 +9,12 @@ covers:
   - path: src/daemon.ts
     sha: 114665116363d28f7aeecf23e293f0fff050eadc
   - path: src/hkb.ts
-    sha: af521898c8b36d5b284ebacb390839864487e76c
+    sha: 9ae0722700c1021793485ec03dddfe9aab80c286
   - path: src/worktree.ts
-    sha: 614ed72ba5eda3e5208eecf5882fda75a198c4a1
+    sha: 8c97dd6e6b4c62e52fdde713fc322caf29dd738c
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
-generated_at_commit: aa34c9c
+generated_at_commit: da9f75a
 last_refreshed: 2026-09-07
 related: [architecture/the-loop, architecture/job-kind, decisions/adr-007-workload-scheduler]
 ---
@@ -219,7 +219,7 @@ the obvious "already merged into main" test is not one of them, is
 
 ⚠️ **Under a supervisor, check the remote is actually reachable.** The sweep's
 proof is that the branch is gone from `origin`, which is one `git ls-remote`
-(`src/worktree.ts:698`). A systemd user unit does not inherit the `SSH_AUTH_SOCK`
+(`src/worktree.ts:769`). A systemd user unit does not inherit the `SSH_AUTH_SOCK`
 your interactive shell has — with `enable-linger` there is no session to inherit
 one from — so a daemon that works perfectly in a terminal can be unable to read
 the remote at all under the unit. It fails rather than hangs (the sweep runs with

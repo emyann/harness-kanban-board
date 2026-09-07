@@ -17,12 +17,12 @@ covers:
   - path: src/runtime/claude.ts
     sha: 5ae775633cae411b71443add232b79f1325c4075
   - path: src/controller.ts
-    sha: b0c5c54ab9e66da964a704153c3776c89fb00c2d
+    sha: 5f4a8a79265af3b129aa7f4f75b242e98db58d98
   - path: src/spec.ts
     sha: 8924cf095921bd72fd50912552ec348d2b139b3a
   - path: prisma/schema.prisma
     sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
-generated_at_commit: aa34c9c
+generated_at_commit: da9f75a
 last_refreshed: 2026-09-07
 related:
   [

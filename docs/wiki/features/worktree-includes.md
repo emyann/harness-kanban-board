@@ -7,9 +7,9 @@ audience: [dev, ops]
 read_when: "a worker fails on a repository whose tests pass locally, or you are touching the copy step or the board guard in src/worktree.ts"
 covers:
   - path: src/worktree.ts
-    sha: 614ed72ba5eda3e5208eecf5882fda75a198c4a1
+    sha: 8c97dd6e6b4c62e52fdde713fc322caf29dd738c
 related: [architecture/job-kind, concepts/admission-control]
-generated_at_commit: aa34c9c
+generated_at_commit: da9f75a
 last_refreshed: 2026-09-07
 ---
 

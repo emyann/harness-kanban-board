@@ -7,17 +7,17 @@ audience: [dev]
 read_when: "filing a batch of Jobs against one repository, reviewing several agent PRs cut from the same base, or designing how a graph kind would decompose work"
 covers:
   - path: src/controller.ts
-    sha: b0c5c54ab9e66da964a704153c3776c89fb00c2d
+    sha: 5f4a8a79265af3b129aa7f4f75b242e98db58d98
   - path: src/worktree.ts
-    sha: 614ed72ba5eda3e5208eecf5882fda75a198c4a1
+    sha: 8c97dd6e6b4c62e52fdde713fc322caf29dd738c
   - path: src/limits.ts
     sha: 61b65c43e2fd7c28f952c403e02d073ca9907561
   - path: src/hkb.ts
-    sha: af521898c8b36d5b284ebacb390839864487e76c
+    sha: 9ae0722700c1021793485ec03dddfe9aab80c286
   - path: prisma/schema.prisma
     sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
 related: [architecture/job-kind, architecture/the-loop, concepts/ceilings, features/rebase-and-verify, decisions/adr-007-workload-scheduler, decisions/adr-008-declared-outputs]
-generated_at_commit: aa34c9c
+generated_at_commit: da9f75a
 last_refreshed: 2026-09-07
 ---
 
@@ -70,9 +70,9 @@ find (#362)"*, 2026-09-05:
 
 - Every branch is cut from the mainline at claim time and never rebased. The
   controller cuts the checkout on the serial side of the reconcile pass, at the
-  moment of the claim (`src/controller.ts:658-712`), from `origin/<default>` when
+  moment of the claim (`src/controller.ts:658-723`), from `origin/<default>` when
   there is one (`baseRef`, `src/worktree.ts:118-132`; `createWorktree`,
-  `src/worktree.ts:193-217`). Nothing in `bin/`, `src/`, `scripts/` or `prisma/`
+  `src/worktree.ts:264-288`). Nothing in `bin/`, `src/`, `scripts/` or `prisma/`
   contains the string `rebase`.
 - CI runs per branch.
 - No step compares one Job's diff against another's.
@@ -116,9 +116,9 @@ where it had been 6.1 GB (`docs/rebuild-plan.md:450`). Exports and removal are t
 same question asked from two directions: what is left in a checkout after a run,
 and who is allowed to delete it. Today the two live in one function, where a Job's
 declared exports waive the *dirty* half of the keep-test and explicitly not the
-*unpushed* half (`removeWorktree`, `src/worktree.ts:836-875`), with the later
+*unpushed* half (`removeWorktree`, `src/worktree.ts:907-946`), with the later
 sweep asking the same question at the time it can be answered (`sweepWorktrees`,
-`src/worktree.ts:745`; the file's own argument for why removal is a sweep is at
+`src/worktree.ts:816`; the file's own argument for why removal is a sweep is at
 `src/worktree.ts:25-36`). That joint design is what the second attempt had to
 write; the first attempt had been written against a mainline where the sweep did
 not exist.
