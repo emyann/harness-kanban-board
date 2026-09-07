@@ -1028,15 +1028,20 @@ export async function main(argv: string[]): Promise<number> {
       const id = num(rest[0], 'hkb retry <id>');
       if (!id) throw usage('hkb retry <id> — which Job? `hkb ls --phase failed` shows the candidates');
       const budget = num(values['max-budget'], '--max-budget');
+      const turns = num(values['max-turns'], '--max-turns');
+      const retries = num(values['max-retries'], '--max-retries');
       const r = await retryJob(db, id, {
         by: whoami(),
         ...(budget !== undefined ? { maxBudgetUsd: budget } : {}),
-        ...(num(values['max-turns'], '--max-turns') !== undefined ? { maxTurns: num(values['max-turns'], '--max-turns') } : {}),
-        ...(num(values['max-retries'], '--max-retries') !== undefined ? { maxRetries: num(values['max-retries'], '--max-retries') } : {}),
+        ...(turns !== undefined ? { maxTurns: turns } : {}),
+        ...(retries !== undefined ? { maxRetries: retries } : {}),
       });
-      const raise = r.maxBudgetUsd_raise ? { maxBudgetUsd: r.maxBudgetUsd_raise } : {};
+      // `raised` under its own key, because the old line spread `{ maxBudgetUsd: {from,to} }` over
+      // a `maxBudgetUsd: <number>` — so the field's TYPE changed on the raise path only, and a
+      // consumer doing arithmetic on it broke exactly when something interesting happened.
       emit(out, {
-        id: r.id, phase: r.phase, maxBudgetUsd: r.maxBudgetUsd, resume: r.resume, ...raise,
+        id: r.id, phase: r.phase, maxBudgetUsd: r.maxBudgetUsd, resume: r.resume,
+        ...(r.maxBudgetUsd_raise ? { raised: r.maxBudgetUsd_raise } : {}),
       }, () => {
         const cap = r.maxBudgetUsd_raise
           ? `  maxBudget $${(r.ranUnder ?? 0).toFixed(2)} → $${r.maxBudgetUsd_raise.to.toFixed(2)}` : '';
@@ -1520,10 +1525,13 @@ export async function main(argv: string[]): Promise<number> {
 
       if (verb === 'queue') {
         // The brief may be rewritten HERE and nowhere else, so this is the one verb that reads one.
+        // Passed as a PRODUCER: `--brief -` blocks until EOF on stdin, and reading it before the
+        // guards turned `hkb queue 999 --brief -` from an instant refusal into a hang.
         const inline = rest.slice(1).join(' ').trim();
-        const brief = inline || (values.brief !== undefined || values['brief-file'] !== undefined
-          ? await readBrief(values)
-          : null);
+        const brief = inline
+          || (values.brief !== undefined || values['brief-file'] !== undefined
+            ? () => readBrief(values)
+            : null);
         const r = await queueJob(db, id, { brief, by: whoami() });
         emit(out, r, () =>
           console.log(`#${r.id} queued${r.rebriefed ? ', with a new brief' : ''} — it runs on the next pass`));

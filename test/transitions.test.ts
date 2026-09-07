@@ -66,6 +66,26 @@ test('the actor is a parameter, so a caller that is not a terminal can say who a
   assert.equal(e.actor, 'alice@web');
 });
 
+test('the guards run BEFORE the brief is read, so a missing Job does not hang on stdin', async () => {
+  // `--brief -` blocks until EOF. Reading it before the lookup turned `hkb queue 999 --brief -`
+  // from an instant `no Job #999` into a process that never returns.
+  let read = false;
+  const producer = async () => { read = true; return 'a new brief'; };
+
+  await refusal(() => queueJob(db, 999999, { brief: producer, by: 'a' }), /no Job #999999/);
+  assert.equal(read, false, 'nothing was read for a Job that does not exist');
+
+  const pending = await mkJob('not in triage');
+  await refusal(() => queueJob(db, pending.id, { brief: producer, by: 'a' }), /already queued/);
+  assert.equal(read, false, 'nor for one the guard refuses');
+
+  const j = await mkJob('a note', { phase: 'triage' });
+  const r = await queueJob(db, j.id, { brief: producer, by: 'a' });
+  assert.equal(read, true, 'and it IS read once the guards pass');
+  assert.equal(r.rebriefed, true);
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: j.id } })).brief, 'a new brief');
+});
+
 // ---------------------------------------------------------------- triage ⇄ pending
 
 test('queue refuses anything that is not in triage, and says whether it is already queued', async () => {
@@ -229,6 +249,19 @@ test('concluding a Job closes an attempt nobody ever heard from again', async ()
   const untouched = await db.attempt.findUniqueOrThrow({ where: { jobId_k: { jobId: j.id, k: 2 } } });
   assert.equal(untouched.outcome, 'crashed', 'a finished attempt is never rewritten');
   assert.equal(untouched.endedAt?.getTime(), finished.endedAt?.getTime());
+});
+
+test('a claim landing mid-transition loses the whole thing, not half of it', async () => {
+  // `refuseIfLeased` reads and then writes, and a daemon can claim in between. For a phase move
+  // that is a stale read the next reconcile sorts out; for these two it is not — `Lease.job` is
+  // onDelete: Cascade, so removing a Job silently deletes a lease a worker took a millisecond ago.
+  const j = await mkJob('contended');
+  // The lease appears after the guard would have read it: the re-check inside the transaction is
+  // the only thing standing between here and a deleted lease.
+  await lease(j.id, 'host/racer');
+  await refusal(() => removeJob(db, j.id, { by: 'a' }), /leased by host\/racer/);
+  assert.notEqual(await db.job.findUnique({ where: { id: j.id } }), null, 'the Job is still there');
+  assert.notEqual(await db.lease.findUnique({ where: { jobId: j.id } }), null, 'and so is the lease');
 });
 
 // ---------------------------------------------------------------- gone

@@ -7,9 +7,9 @@ audience: [dev]
 read_when: "building a second consumer, adding a verb that changes a Job's phase, or wondering why a guard lives in a module rather than beside the argument parsing"
 covers:
   - path: src/transitions.ts
-    sha: 910cd5d9d71484032e40e1ca0472b3030b19c79e
+    sha: b7eceac893be1523b8bda846a9ed412ba8815df0
   - path: src/hkb.ts
-    sha: 345bd3d2973f06fc242feae5c9e2d9bb9ce5a966
+    sha: 37b4de4b924ce76c8003ffec444982eebf3f4031
   - path: prisma/schema.prisma
     sha: deb0743051f8edc773e9c2abb60960b1bcb84b25
 related:
@@ -19,7 +19,7 @@ related:
     decisions/adr-010-the-human-gate,
     architecture/the-board,
   ]
-generated_at_commit: 17a4128
+generated_at_commit: 73ac807
 last_refreshed: 2026-09-07
 ---
 
@@ -84,8 +84,20 @@ It is a small change and it is the one that actually opens the seam: a module th
 separate awaits, because they were written on different days. A phase moved without the Event that
 explains it is a Job the log cannot account for — and for `approve` specifically it is worse, since
 the Event *is* the approval and the next attempt would be handed the brief again instead of the
-instruction (ADR-010 decision 4). All of them are transactions now. Nothing changes on the success
-path; the failure path stops being able to leave half a transition behind.
+instruction (ADR-010 decision 4). All of them are transactions now.
+
+**Two of them get a stronger guarantee than the rest, and the difference is worth knowing.**
+Everywhere else the lease is read first and written after, so a daemon claiming the Job in between
+is a stale read the next reconcile sorts out. For `concludeJob` and `removeJob` it is not: `Lease.job`
+is `onDelete: Cascade`, so removing a Job silently deletes a lease a worker took a millisecond ago —
+the exact outcome the guard exists to prevent. Those two read the lease **inside** an interactive
+transaction, so a claim landing mid-transition loses the whole thing rather than half of it. SQLite
+having one writer at a time is what makes that true rather than merely likely.
+
+One read, not two. The first version of that kept the outer check as well, for its better message,
+and thereby made the inner one unreachable — no mutation of it failed a test, because nothing ever
+arrived there holding a lease. The message moved inside instead. An inert guard that reads like the
+load-bearing one is how this project has shipped three checks that did nothing.
 
 ## What this does not move, and it matters
 
@@ -108,3 +120,8 @@ That is worth noticing as evidence rather than as convenience: a transition is a
 board state, and its needing none of those is exactly what makes it callable by something that is
 not a terminal. The existing CLI tests were not changed at all, which is the no-behaviour-change
 claim checked against a suite that already exercised every one of these end to end.
+
+One ordering detail the extraction had to learn: `queue` takes its brief as a **producer**, not a
+string. `--brief -` blocks until EOF on stdin, so reading it before the guards turned
+`hkb queue 999 --brief -` from an instant `no Job #999` into a process that never returned. The
+guards run first and the read happens in the one place that knows they passed.

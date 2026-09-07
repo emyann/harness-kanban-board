@@ -9,7 +9,7 @@ covers:
   - path: bin/hkb.ts
     sha: 698dd0e673a442929b7314d6bb409f87f89b8251
   - path: src/hkb.ts
-    sha: 345bd3d2973f06fc242feae5c9e2d9bb9ce5a966
+    sha: 37b4de4b924ce76c8003ffec444982eebf3f4031
   - path: src/controller.ts
     sha: 41c7fbd41f65c61a80c6fcfa9ec56236d0811a7f
   - path: src/daemon.ts
@@ -48,7 +48,7 @@ related:
     decisions/adr-009-retiring-the-first-system,
     decisions/adr-011-proposals-not-board-access,
   ]
-generated_at_commit: 17a4128
+generated_at_commit: 73ac807
 last_refreshed: 2026-09-07
 ---
 

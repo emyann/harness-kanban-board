@@ -33,7 +33,7 @@ import { resolveSpec } from './spec.ts';
  * function takes `by`, and no function in this module has an opinion about who is calling it. That
  * is the smallest thing that makes these callable by something that is not a terminal.
  *
- * ## Writes are atomic here, which two of them were not
+ * ## Writes are atomic here, which three of them were not
  *
  * `queue` and `approve` already wrapped their writes in `$transaction`; `done`, `retry` and `rm`
  * did the same work as separate awaits, because they were written on different days. A phase moved
@@ -73,7 +73,39 @@ async function find(db: Db, id: number, missing: string) {
  */
 function refuseIfLeased(job: { id: number; lease: { holder: string; expiresAt: Date } | null }, what: string): void {
   if (!job.lease) return;
-  refuse(`#${job.id} is leased by ${job.lease.holder} — it is running. ${what}`);
+  refuse(`#${job.id} is leased by ${job.lease.holder} — ${what}`);
+}
+
+/**
+ * The two transitions that DESTROY something, with the lease read **inside** the write.
+ *
+ * Everywhere else the lease is read first and written after, and between those two statements a
+ * daemon can claim the Job. For a transition that only moves a phase that is a stale read the next
+ * reconcile sorts out. For these two it is not: `Lease.job` is `onDelete: Cascade`, so removing a
+ * Job silently deletes a lease a worker acquired one millisecond ago — the exact outcome the guard
+ * exists to prevent — and concluding one leaves that worker reporting to a record which says the
+ * question was already settled.
+ *
+ * An interactive transaction closes it: the lease is read and the writes are made inside one, so a
+ * claim landing in the middle loses the whole thing rather than half of it. SQLite has one writer
+ * at a time, which is what makes that true here rather than merely likely.
+ *
+ * **One read, not two.** The first version kept the earlier `refuseIfLeased` as well, for its
+ * better message — and that made this check unreachable: no mutation of it failed a test, because
+ * nothing ever got here with a lease. An inert guard that reads like the load-bearing one is how
+ * this project has shipped three checks that did nothing, so the message moved in here instead.
+ */
+async function inOneTransaction(
+  db: Db,
+  id: number,
+  leased: (holder: string, expiresAt: Date) => string,
+  writes: ((tx: Parameters<Parameters<Db['$transaction']>[0]>[0]) => Promise<unknown>)[],
+): Promise<void> {
+  await db.$transaction(async (tx) => {
+    const held = await tx.lease.findUnique({ where: { jobId: id } });
+    if (held) refuse(leased(held.holder, held.expiresAt));
+    for (const write of writes) await write(tx);
+  });
 }
 
 // ---------------------------------------------------------------- triage ⇄ pending
@@ -90,14 +122,19 @@ export type Queued = { id: number; phase: 'pending'; rebriefed: boolean };
 export async function queueJob(
   db: Db,
   id: number,
-  opts: { brief?: string | null; by: Actor },
+  opts: { brief?: string | null | (() => Promise<string>); by: Actor },
 ): Promise<Queued> {
   const job = await find(db, id, `no Job #${id} — \`hkb ls\` shows what is on the board`);
   if (job.phase !== 'triage') {
     refuse(`#${id} is ${job.phase}, not triage — \`hkb queue\` is for a Job nobody has decided on yet`
       + (job.phase === 'pending' ? ', and this one is already queued' : ''));
   }
-  const brief = opts.brief?.trim() || null;
+  // A PRODUCER, not just a string, and the ordering is the reason. Reading a brief can block —
+  // `--brief -` waits for EOF on stdin — so a caller that reads it before calling turns
+  // `hkb queue 999 --brief -` from an instant `no Job #999` into a hang. The guards run first and
+  // the read happens here, which is the one place that knows they passed.
+  const given = typeof opts.brief === 'function' ? await opts.brief() : opts.brief;
+  const brief = given?.trim() || null;
   await db.$transaction([
     db.job.update({ where: { id }, data: { phase: 'pending', ...(brief ? { brief } : {}) } }),
     db.event.create({
@@ -117,7 +154,7 @@ export type Triaged = { id: number; phase: 'triage' };
  */
 export async function triageJob(db: Db, id: number, opts: { by: Actor }): Promise<Triaged> {
   const job = await find(db, id, `no Job #${id} — \`hkb ls\` shows what is on the board`);
-  refuseIfLeased(job, 'Wait for it, or let the lease expire.');
+  refuseIfLeased(job, 'it is running now. Wait for it, or let the lease expire.');
   if (job.phase === 'triage') refuse(`#${id} is already in triage`);
   if (job.phase !== 'pending') {
     refuse(`#${id} is ${job.phase}, and triage is for work that has not started`
@@ -344,20 +381,17 @@ export async function concludeJob(
   opts: { phase: 'done' | 'cancelled'; reason: string; by: Actor },
 ): Promise<Concluded> {
   const { phase, reason, by } = opts;
+  // The verb an operator would retype, derived rather than passed: this module has no CLI in it,
+  // but "every error says what to do next" is not a CLI rule, and degrading these messages to
+  // "try again" is exactly the drift an extraction is supposed to avoid.
+  const verb = phase === 'done' ? 'done' : 'cancel';
   if (!reason.trim()) refuse(`#${id} needs a reason — a terminal phase nobody explained is a record that answers nothing`);
   const job = await find(db, id, `no Job #${id} — \`hkb ls\` shows what is on the board`);
-  // The same rule as removing one, for the same reason: a lease is a worker running right now, and
-  // concluding its Job out from under it would leave it reporting to a record that says the
-  // question was already settled. The daemon is a thing the operator can stop, so say so.
-  if (job.lease) {
-    refuse(
-      `#${id} is leased by ${job.lease.holder} — it is running. `
-      + `\`hkb down\` stops the daemon, or wait for the run to finish (the lease lapses by `
-      + `${job.lease.expiresAt.toISOString()}), then try again.`,
-    );
-  }
+  // A lease is a worker running right now, and concluding its Job out from under it would leave it
+  // reporting to a record that says the question was already settled. The daemon is a thing the
+  // operator can stop, so the message says so — and the check itself is below, inside the write.
   if (job.phase === 'succeeded') {
-    refuse(`#${id} already succeeded — the runtime concluded it, and this is for the Jobs it cannot. \`hkb show ${id}\` has the attempts.`);
+    refuse(`#${id} already succeeded — the runtime concluded it, and \`hkb ${verb}\` is for the Jobs it cannot. \`hkb show ${id}\` has the attempts.`);
   }
   if (job.phase === phase) {
     refuse(`#${id} is already ${phase}${job.endedBy ? ` — ${job.endedBy} said so: ${job.endedFor}` : ''}`);
@@ -368,22 +402,24 @@ export async function concludeJob(
   // statements in order rather than pretending the first never happened.
 
   const at = new Date();
-  const [updated] = await db.$transaction([
-    db.job.update({ where: { id }, data: { phase, endedBy: by, endedFor: reason, finishedAt: at } }),
+  await inOneTransaction(db, id, (holder, expiresAt) =>
+    `#${id} is leased by ${holder} — it is running. \`hkb down\` stops the daemon, or wait for the `
+    + `run to finish (the lease lapses by ${expiresAt.toISOString()}), then \`hkb ${verb} ${id}\` again.`, [
+    (tx) => tx.job.update({ where: { id }, data: { phase, endedBy: by, endedFor: reason, finishedAt: at } }),
     // An attempt still open on a Job with no lease was never heard from again — `lost` is the
     // Outcome that already means exactly that. Closing it is not cosmetic: `hkb show` renders an
     // open attempt as elapsed-so-far, so a terminal Job would print a duration that climbs for
     // ever. Scoped to `endedAt: null`, so a finished attempt is never rewritten.
-    db.attempt.updateMany({
+    (tx) => tx.attempt.updateMany({
       where: { jobId: id, endedAt: null },
       data: { endedAt: at, outcome: 'lost', reason: `#${id} was ${phase} by ${by} while this attempt was open` },
     }),
-    db.event.create({
+    (tx) => tx.event.create({
       data: { kind: phase, jobId: id, boardId: job.boardId, actor: by, payload: { from: job.phase, reason } },
     }),
   ]);
   return {
-    id, name: job.name, phase: updated.phase as 'done' | 'cancelled', from: job.phase,
+    id, name: job.name, phase, from: job.phase,
     endedBy: by, endedFor: reason, finishedAt: at,
   };
 }
@@ -402,12 +438,12 @@ export type Removed = { removed: number };
  */
 export async function removeJob(db: Db, id: number, opts: { by: Actor }): Promise<Removed> {
   const job = await find(db, id, `no Job #${id} — nothing to remove`);
-  refuseIfLeased(job, 'Wait for it, or let the lease expire.');
-  await db.$transaction([
-    db.job.delete({ where: { id } }),
+  await inOneTransaction(db, id, (holder) =>
+    `#${id} is leased by ${holder} — it is running. Wait for it, or let the lease expire.`, [
+    (tx) => tx.job.delete({ where: { id } }),
     // `jobId` would cascade away with the Job it names, taking the record of the deletion with it.
     // The board keeps this one.
-    db.event.create({
+    (tx) => tx.event.create({
       data: { kind: 'removed', boardId: job.boardId, actor: opts.by, payload: { id, name: job.name } },
     }),
   ]);
