@@ -125,20 +125,76 @@ export function baseRef(root: string): string {
 }
 
 /**
+ * Is this something we may hand to git as a ref?
+ *
+ * **A ref reaches `git` as a bare argv token, so a value beginning with `-` is an OPTION.** Measured:
+ * `git fetch --quiet origin '--upload-pack=touch /tmp/x && git-upload-pack'` runs the command. A
+ * base arrives from `hkb new --base`, from `hkb boards set --base`, and from the `base:` key of a
+ * workflow file in the repository — the last of which is written by whoever wrote the repository,
+ * which is not necessarily whoever is running hkb. Every sibling string flag is checked
+ * (`checkExportPath`, `checkPluginPath`); this one was not.
+ *
+ * Conservative rather than exhaustive, and a pure predicate rather than `git check-ref-format`,
+ * because handing the string to a subprocess is the thing being prevented. What is allowed is what
+ * a branch, tag or sha actually looks like; everything else is refused by not being in the set.
+ */
+export function validRef(raw: unknown): boolean {
+  if (typeof raw !== 'string') return false;
+  const s = raw.trim();
+  if (!s || s.length > 255) return false;
+  // **The first character class is the security half**, and it is one expression rather than a
+  // separate `startsWith('-')` line on purpose: the separate line was unreachable, no mutation of
+  // it failed a test, and an inert guard that reads like the load-bearing one is how this project
+  // has shipped three checks that did nothing. A ref must START with a letter or a digit, so
+  // `--upload-pack=<cmd>` is not one.
+  if (!/^[A-Za-z0-9][A-Za-z0-9._+/-]*$/.test(s)) return false;
+  // git's own rules, for the handful a plain character class cannot express.
+  if (s.includes('..') || s.includes('//') || s.endsWith('/') || s.endsWith('.') || s.endsWith('.lock')) return false;
+  return true;
+}
+
+/** The same check, as a refusal that names the fix. For the two write points. */
+export function checkRef(raw: string, flag: string): string {
+  const s = raw.trim();
+  if (validRef(s)) return s;
+  const e = new Error(
+    `${flag} wants a git ref — a branch, tag or commit, like \`origin/main\` or \`kb-33-1\`. `
+    + `\`${raw}\` is not one${s.startsWith('-') ? ', and a value beginning with a dash would reach git as an option' : ''}.`,
+  ) as Error & { exitCode: number };
+  e.exitCode = 2;
+  throw e;
+}
+
+/**
+ * A branch name hkb itself makes, and therefore one hkb may force-push (`branchFor`, `freeBranch`).
+ *
+ * It exists for `fetchBase`, and the reason is the lease. See there.
+ */
+export function isAttemptBranch(name: string): boolean {
+  return /^kb-\d+-\d+(-\d+)?$/.test(name);
+}
+
+/**
  * The ref a checkout is actually cut from: what the Job asked for, or the repository's default.
  *
- * One fallback and no search path. A chain names the previous step's branch — `--base kb-33-1` —
- * and that branch exists locally right up until the sweep takes its worktree, after which only
- * `origin/kb-33-1` is left. Trying the plain ref first and the remote one second covers both
- * without becoming a lookup order nobody can predict. Anything else git understands (a tag, a sha,
- * `origin/release-2`) resolves on the first try and never reaches the fallback.
+ * One fallback and no search path — and the REMOTE one is tried first, which is the correction that
+ * matters. Preferring the local ref meant `fetchBase` updating `origin/develop` while the checkout
+ * was cut from a local `develop` nobody had pulled for weeks: the fetch became a no-op for the ref
+ * actually used, which is the exact staleness it was added to remove. `baseRef` already answers
+ * `origin/<default>` for the same reason.
+ *
+ * The plain ref stays as the fallback because it is what a repository with no remote has, and what
+ * a tag or a sha resolves to. A chain is unaffected either way: a parent branch is always pushed
+ * before a child can name it.
  */
 export function baseFor(root: string, want?: string | null): string {
   const asked = typeof want === 'string' && want.trim() ? want.trim() : null;
   if (!asked) return baseRef(root);
+  // Anything we would not hand to git is returned untouched, for the caller to refuse by name.
+  if (!validRef(asked)) return asked;
+  const first = asked.startsWith('origin/') ? asked : `origin/${asked}`;
+  if (resolves(root, first)) return first;
   if (resolves(root, asked)) return asked;
-  const remote = `origin/${asked}`;
-  if (resolves(root, remote)) return remote;
   // Neither resolves. Returned as written so the caller's refusal names what the operator typed.
   return asked;
 }
@@ -177,7 +233,22 @@ export function fetchBase(root: string, want?: string | null): { fetched: boolea
   // A Job may write the base either way round — `kb-33-1` or `origin/kb-33-1` — and origin knows
   // only the former, so the prefix comes off before it is asked for.
   const asked = typeof want === 'string' && want.trim() ? want.trim() : null;
+  if (asked !== null && !validRef(asked)) return { fetched: false, why: `\`${asked}\` is not a ref` };
   const branch = (asked ?? baseRef(root)).replace(/^origin\//, '');
+
+  // **Never an attempt branch, and this is the lease again.** Fetching `kb-33-1` updates
+  // `refs/remotes/origin/kb-33-1`, which is exactly what `--force-with-lease` compares against when
+  // Job 33's own attempt ends — so a chain step innocently refreshing its parent's branch would
+  // turn its parent's lease into a plain `--force` and let it destroy a commit somebody pushed by
+  // hand, with no refusal anywhere. `fetchBase` was already narrowed from a blanket fetch for this
+  // reason; naming a `kb-*` branch as a base walked it back in through the front door.
+  //
+  // The cost is that a chain step may branch from a parent tip that is one hand-pushed commit
+  // behind. That is the safe direction: stale work is recoverable and an overwritten commit is not.
+  if (isAttemptBranch(branch)) {
+    return { fetched: false, why: `${branch} is an attempt branch — not refreshed, because that ref is the lease` };
+  }
+
   const r = gitRemote(root, ['fetch', '--quiet', 'origin', branch]);
   if (r.status === 0) return { fetched: true, why: '' };
   return { fetched: false, why: short(r.stderr) || `git fetch origin ${branch} failed` };

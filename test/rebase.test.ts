@@ -30,7 +30,9 @@ const { reconcile } = await import('../src/controller.ts');
 const {
   rebaseOntoBase, rebasePlan, conflictReason, conflictedPaths, pushRefused,
 } = await import('../src/rebase.ts');
-const { createWorktree, baseFor, baseRef, fetchBase, heldWork } = await import('../src/worktree.ts');
+const {
+  createWorktree, baseFor, baseRef, checkRef, fetchBase, heldWork, isAttemptBranch, validRef,
+} = await import('../src/worktree.ts');
 const { withProtocol } = await import('../src/brief.ts');
 
 const git = (cwd: string, args: string[]) => {
@@ -409,18 +411,85 @@ test('baseFor: nothing asked for is the repository\'s default branch', () => {
   assert.equal(baseFor(repo, '  '), 'origin/main', 'a blank is an absence, not a ref named " "');
 });
 
-test('baseFor: a branch is found locally, or on the remote once the sweep has taken it', () => {
-  const { repo } = makeRemote('base-ladder');
+test('baseFor: a plain name means the REMOTE branch, so the fetch is not a no-op for it', () => {
+  // Preferring the local ref made `fetchBase` pointless for a plain-name base: it refreshed
+  // `origin/develop` while the checkout was cut from a local `develop` nobody had pulled. On a
+  // daemon host nobody pulls on, that is a Job built on a weeks-old tree reported as current.
+  const { repo, other } = makeRemote('base-ladder');
   const wt = createWorktree(repo, 1, 1);
   work(wt.path, 'mine.txt', 'mine\n', 'my work');
   git(wt.path, ['push', '-q', '-u', 'origin', wt.branch]);
 
-  assert.equal(baseFor(repo, wt.branch), wt.branch, 'the local branch, while it is still here');
+  assert.equal(baseFor(repo, wt.branch), `origin/${wt.branch}`, 'the pushed branch, which is what merges');
 
-  // The sweep takes a merged checkout and its local branch with it; only the remote one is left.
+  // A ref with no remote counterpart still resolves — a tag, a sha, a local-only branch.
+  git(repo, ['tag', 'v1']);
+  assert.equal(baseFor(repo, 'v1'), 'v1');
+  assert.equal(baseFor(repo, 'origin/main'), 'origin/main', 'an origin/ ref is tried as written');
+
+  // And once the sweep takes the checkout and its local branch, the remote one still answers.
+  moveMain(other, 'unrelated.txt', 'x\n', 'unrelated');
   git(repo, ['worktree', 'remove', '--force', wt.path]);
   git(repo, ['branch', '-D', wt.branch]);
-  assert.equal(baseFor(repo, wt.branch), `origin/${wt.branch}`, 'and the remote one after that');
+  assert.equal(baseFor(repo, wt.branch), `origin/${wt.branch}`);
+});
+
+test('validRef refuses what git would read as an OPTION rather than a ref', () => {
+  // Measured: `git fetch --quiet origin '--upload-pack=touch /tmp/x && git-upload-pack'` runs the
+  // command. A base arrives from a flag, from `boards set`, and from the `base:` key of a workflow
+  // file in the repository — written by whoever wrote the repository.
+  assert.equal(validRef('--upload-pack=touch /tmp/PWNED && git-upload-pack'), false);
+  assert.equal(validRef('-foo'), false, 'any leading dash at all');
+  assert.equal(validRef('--exec=sh'), false);
+  // Other things that are not refs.
+  for (const bad of ['', '   ', 'a b', 'a..b', 'a//b', 'a/', 'a.', 'x.lock', 'a;rm -rf /', '$(id)', 'a\nb', 42, null]) {
+    assert.equal(validRef(bad as string), false, `refused: ${String(bad)}`);
+  }
+  // And what a ref actually looks like.
+  for (const ok of ['main', 'origin/main', 'kb-33-1', 'origin/kb-33-1-2', 'release/2.1', 'v1.0.0', 'a1b2c3d']) {
+    assert.equal(validRef(ok), true, `allowed: ${ok}`);
+  }
+});
+
+test('checkRef refuses at the boundary, and says why a dash is not a typo', () => {
+  assert.throws(() => checkRef('--upload-pack=sh', '--base'), (e: Error & { exitCode?: number }) => {
+    assert.equal(e.exitCode, 2);
+    assert.match(e.message, /--base wants a git ref/);
+    assert.match(e.message, /would reach git as an option/);
+    return true;
+  });
+  assert.equal(checkRef('  origin/main  ', '--base'), 'origin/main', 'and it trims what it accepts');
+});
+
+test('fetchBase NEVER refreshes an attempt branch — that ref is somebody else\'s lease', () => {
+  // The trap this closes, and it is the round-one blanket-fetch bug walking back in through the
+  // front door: a chain step whose base is `kb-33-1` fetching that branch updates
+  // `refs/remotes/origin/kb-33-1`, which is exactly what `--force-with-lease` compares against when
+  // Job 33's own attempt ends. Its lease would then pass over a commit somebody pushed by hand.
+  const { repo, other } = makeRemote('lease-via-base');
+  const wt = createWorktree(repo, 33, 1);
+  work(wt.path, 'mine.txt', 'mine\n', 'my work');
+  git(wt.path, ['push', '-q', '-u', 'origin', wt.branch]);
+  const ours = at(repo, `refs/remotes/origin/${wt.branch}`);
+
+  // A human pushes a fixup onto Job 33's branch while it is still running.
+  git(other, ['fetch', '-q', 'origin', wt.branch]);
+  git(other, ['checkout', '-q', '-B', wt.branch, `origin/${wt.branch}`]);
+  fs.writeFileSync(path.join(other, 'fixup.txt'), 'by hand\n');
+  git(other, ['add', '-A']);
+  git(other, ['commit', '-qm', 'a human fixed something']);
+  git(other, ['push', '-q', 'origin', wt.branch]);
+
+  // A chain step claims, naming that branch as its base.
+  const r = fetchBase(repo, wt.branch);
+  assert.equal(r.fetched, false);
+  assert.match(r.why, /attempt branch/);
+  assert.equal(at(repo, `refs/remotes/origin/${wt.branch}`), ours, 'the lease still sees what it pushed');
+
+  assert.equal(isAttemptBranch('kb-33-1'), true);
+  assert.equal(isAttemptBranch('kb-33-1-2'), true, 'including a suffixed one from a name collision');
+  assert.equal(isAttemptBranch('main'), false);
+  assert.equal(isAttemptBranch('kb-feature'), false, 'a human branch that merely starts kb- is not ours');
 });
 
 test('a Job branching from another Job\'s branch starts from its commits — the belt', async () => {
@@ -495,6 +564,79 @@ test('a base that names nothing FAILS the Job before a session is bought', async
   assert.match(after.lastError ?? '', /origin\/kb-999-1/, 'including the fallback it also tried');
 });
 
+test('a base that has gone does not kill an attempt RESUMING in a checkout it already has', async () => {
+  // A chain step's parent branch is deleted the moment its pull request merges. A fresh checkout
+  // genuinely cannot be cut then — but a resumed attempt continues in a tree that already exists
+  // and asks the base for nothing, so failing it is killing a Job over a question nobody asked.
+  const { repo } = makeRemote('gone-base');
+  const db = openBoard();
+  const board = await db.board.upsert({
+    where: { slug: 'gone-base' }, update: { repoPath: repo }, create: { slug: 'gone-base', repoPath: repo },
+  });
+  // A parent branch that exists for exactly as long as it takes attempt 1 to start.
+  git(repo, ['branch', 'parent-branch', 'main']);
+  git(repo, ['push', '-q', 'origin', 'parent-branch']);
+  const job = await db.job.create({
+    data: { boardId: board.id, name: 'two goes', brief: 'do it', base: 'parent-branch' },
+  });
+
+  const attempts: number[] = [];
+  const runtime: Runtime = {
+    name: 'two-goes',
+    async run(spec: WorkerSpec, onEvent?: (e: RuntimeEvent) => void): Promise<WorkerOutcome> {
+      attempts.push(spec.attempt);
+      if (spec.attempt === 1) {
+        work(spec.cwd, 'partway.txt', 'partway\n', 'partway');
+        onEvent?.({ kind: 'ended', taskId: spec.taskId, status: 'max_turns' });
+        return {
+          status: 'max_turns', ok: false, sessionId: 'g-1', text: 'partway', costUsd: 0, turns: 1,
+          durationMs: 0, stopReason: 'max_turns', denials: 0, error: null,
+        };
+      }
+      onEvent?.({ kind: 'ended', taskId: spec.taskId, status: 'completed' });
+      return {
+        status: 'completed', ok: true, sessionId: 'g-2', text: 'done', costUsd: 0, turns: 1,
+        durationMs: 0, stopReason: 'end_turn', denials: 0, error: null,
+      };
+    },
+  };
+
+  await reconcile({ runtime, cwd: repo, board: 'gone-base', readPr: false });
+  // The parent lands and its branch is deleted, both sides, exactly as a merged PR does.
+  git(repo, ['push', '-q', 'origin', '--delete', 'parent-branch']);
+  git(repo, ['branch', '-D', 'parent-branch']);
+  await reconcile({ runtime, cwd: repo, board: 'gone-base', readPr: false });
+
+  assert.deepEqual(attempts, [1, 2], 'the second attempt ran');
+  assert.equal((await db.job.findUniqueOrThrow({ where: { id: job.id } })).phase, 'succeeded');
+});
+
+test('the refusal names a fallback only when there was one, and clears the session', async () => {
+  const { repo } = makeRemote('msg');
+  const db = openBoard();
+  const board = await db.board.upsert({
+    where: { slug: 'msg' }, update: { repoPath: repo }, create: { slug: 'msg', repoPath: repo },
+  });
+  // A base already written `origin/…` is tried as given, so there is no second form to name — the
+  // message used to read "neither `origin/foo` nor `origin/foo`".
+  const job = await db.job.create({
+    data: {
+      boardId: board.id, name: 'nowhere', brief: 'do it', base: 'origin/nope',
+      // A session left over from a resumable stop. A terminal failure must not keep it.
+      lastSessionId: 'stale-session', suspendedFor: 'something',
+    },
+  });
+  const runtime: Runtime = { name: 'never', async run(): Promise<WorkerOutcome> { throw new Error('unreachable'); } };
+  await reconcile({ runtime, cwd: repo, board: 'msg', readPr: false });
+
+  const after = await db.job.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(after.phase, 'failed');
+  assert.doesNotMatch(after.lastError ?? '', /origin\/origin/, 'no doubled prefix');
+  assert.equal((after.lastError ?? '').match(/origin\/nope/g)?.length, 1, 'named once, not twice');
+  assert.equal(after.lastSessionId, null, 'a terminal failure drops the session, like every other one');
+  assert.equal(after.suspendedFor, null);
+});
+
 test('a Job\'s branch is rebased onto ITS base, never the repository\'s default', async () => {
   // The belt would come apart here: a step cut from the previous step's branch, rebased onto
   // origin/main at the end of its run, arrives back at the trunk carrying the other step's commits
@@ -506,15 +648,16 @@ test('a Job\'s branch is rebased onto ITS base, never the repository\'s default'
 
   // A second step, branched from the first.
   const step2 = createWorktree(repo, 2, 1, wt.branch);
-  assert.equal(step2.baseLabel, wt.branch);
+  assert.equal(step2.baseLabel, `origin/${wt.branch}`, 'a plain name means the pushed branch');
   work(step2.path, 'two.txt', 'two\n', 'step two');
   // Meanwhile the trunk moves, and step one's branch gains a commit of its own.
   moveMain(other, 'trunk-only.txt', 'trunk moved\n', 'someone landed');
   work(wt.path, 'one-more.txt', 'more\n', 'step one, again');
+  git(wt.path, ['push', '-q', 'origin', wt.branch]);
 
   const r = rebaseOntoBase(repo, step2);
   assert.equal(r.kind, 'rebased');
-  assert.equal(r.kind === 'rebased' && r.label, wt.branch, 'onto step one, not onto origin/main');
+  assert.equal(r.kind === 'rebased' && r.label, `origin/${wt.branch}`, 'onto step one, not onto origin/main');
   assert.equal(
     fs.existsSync(path.join(step2.path, 'one-more.txt')), true,
     'so it picked up step one\'s newer commit',

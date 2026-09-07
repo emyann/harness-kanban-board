@@ -7,11 +7,11 @@ audience: [dev]
 read_when: "chaining Jobs, filing work against an integration branch, or about to give `base` the ability to name another Job"
 covers:
   - path: src/worktree.ts
-    sha: 614ed72ba5eda3e5208eecf5882fda75a198c4a1
+    sha: 8c97dd6e6b4c62e52fdde713fc322caf29dd738c
   - path: src/spec.ts
     sha: 8924cf095921bd72fd50912552ec348d2b139b3a
   - path: src/controller.ts
-    sha: b0c5c54ab9e66da964a704153c3776c89fb00c2d
+    sha: 5f4a8a79265af3b129aa7f4f75b242e98db58d98
   - path: src/rebase.ts
     sha: 2adf640c2c4f9e639dee6a1876118a774002d028
   - path: prisma/schema.prisma
@@ -24,7 +24,7 @@ related:
     architecture/job-kind,
     decisions/adr-015-machinery-and-consumer,
   ]
-generated_at_commit: aa34c9c
+generated_at_commit: bfea9e2
 last_refreshed: 2026-09-07
 ---
 
@@ -63,14 +63,32 @@ a second kind whose controller creates Jobs.
 This is the line to hold when somebody asks for `base` to wait. Making it wait is not a small
 extension of this feature; it is the rejected feature.
 
+## What may be written there at all
+
+**A ref reaches `git` as a bare argv token, so a value beginning with `-` is an option.** Measured:
+`git fetch --quiet origin '--upload-pack=touch /tmp/x && git-upload-pack'` runs the command. A base
+arrives from `hkb new --base`, from `hkb boards set --base`, and from the `base:` key of a workflow
+file — the last written by whoever wrote the *repository*, who is not necessarily whoever is running
+hkb.
+
+`validRef` is a pure predicate over what a branch, tag or sha actually looks like, and `checkRef`
+is the refusal at the two write points. The character class is deliberately one expression rather
+than a regex plus a separate `startsWith('-')` line: the separate line was unreachable, no mutation
+of it failed a test, and an inert guard that reads like the load-bearing one is how this project has
+shipped three checks that did nothing.
+
 ## Resolution, and its one fallback
 
-`baseFor` (`src/worktree.ts`) tries the ref as written, then `origin/<name>`. Two tries, not a
-search path — and the second one is not politeness, it is the case that actually happens: the local
-`kb-33-1` branch exists right up until the sweep removes that Job's checkout, which deletes the
-branch with it, after which only the remote-tracking ref is left. A chain filed a day later would
-otherwise break for a reason nobody could see. Anything else git understands — a tag, a sha,
-`origin/release-2` — resolves on the first try and never reaches the fallback.
+`baseFor` (`src/worktree.ts`) tries `origin/<name>` first and the ref as written second. Two tries,
+not a search path, and the **remote-first order is the load-bearing half**: preferring the local ref
+meant `fetchBase` refreshing `origin/develop` while the checkout was cut from a local `develop`
+nobody had pulled for weeks — the fetch became a no-op for the ref actually used, which is the exact
+staleness it exists to remove, on the daemon host where nobody pulls. `baseRef` answers
+`origin/<default>` for the same reason.
+
+The plain ref stays as the fallback because it is what a repository with no remote has, and what a
+tag or a sha resolves to. A chain is unaffected by the order: a parent branch is always pushed
+before a child can name it.
 
 **A base that resolves to nothing fails the Job as `no_input`, at claim time, before a session is
 bought** (`src/controller.ts`). Three things about that are deliberate:
@@ -80,12 +98,20 @@ bought** (`src/controller.ts`). Three things about that are deliberate:
 - **not `pending`.** The checkout-failure path leaves a Job pending for the next pass, which is
   right for our own plumbing and wrong here: a ref that does not exist does not start existing
   because a controller asked again, and the Job would loop for ever.
+- **only when a fresh checkout is being cut.** A resumed attempt continues in a tree that already
+  exists and asks the base for nothing — and a chain step's parent branch is deleted the moment its
+  pull request merges, so checking unconditionally would kill a Job over a question nobody asked.
 - **`no_input` rather than a value of its own.** It is the same fact as a declared input that
   cannot be read — the run never started, nothing was spent, and the fault is in the spec or in the
   repository.
 
-The message names both the ref asked for and the `origin/` form that was also tried, because "it is
-not there" is not actionable and "neither `kb-999-1` nor `origin/kb-999-1` names a commit" is.
+The message names both the ref asked for and the `origin/` form that was also tried — and only when
+there *was* a second form, since a base already written `origin/foo` is tried as given and "neither
+`origin/foo` nor `origin/foo`" reads as a bug in the message, which it was.
+
+There is no verb that edits `Job.base` yet (`hkb job set` is still unfiled), so the exit from a
+permanently missing base is `hkb rm` and re-file. The message says so rather than implying a repair
+that does not exist.
 
 ## What it changes downstream
 
@@ -94,9 +120,18 @@ Job's answer rather than the repository's. Three things read it, and all three h
 baked in before:
 
 - `createWorktree` cuts from it.
-- `fetchBase` fetches *that branch* — a step branching from `origin/kb-33-1` needs that ref current,
+- `fetchBase` fetches *that branch* — a step branching from `origin/develop` needs that ref current,
   and the default branch having been fetched says nothing about it. The controller's per-pass fetch
   memo is therefore keyed by repository **and** base.
+
+  **Except an attempt branch, and this is the lease again.** Fetching `kb-33-1` updates
+  `refs/remotes/origin/kb-33-1`, which is exactly what `--force-with-lease` compares against when
+  Job 33's own attempt ends — so a chain step innocently refreshing its parent's branch would turn
+  its parent's lease into a plain `--force` and let it destroy a commit somebody pushed by hand,
+  with no refusal anywhere. `fetchBase` had already been narrowed from a blanket fetch for this
+  reason (*features/rebase-and-verify*); naming a `kb-*` branch as a base walked it back in through
+  the front door. The cost is that a chain step may branch from a parent tip one hand-pushed commit
+  behind, which is the safe direction: stale work is recoverable and an overwritten commit is not.
 - `rebaseOntoBase` keeps the branch on top of it (*features/rebase-and-verify*). This is the one
   that would break the feature quietly if it were missed: a step rebased onto `origin/main` at the
   end of its run arrives back at the trunk carrying the previous step's commits as its own diff,
@@ -122,6 +157,10 @@ branch is a surprise waiting in a diff nobody can explain.
 
 `base` is a key in the workflow template format (*features/workflow-templates*), because the keys
 are the flags — so a chain is authorable in a file with no hkb release, which is ADR-015 decision 3.
+
+`--base` with `--no-isolate` is **refused** rather than ignored: a Job with no worktree cuts no
+branch, so the field would be stored, printed by `hkb show`, and never read — the silent failure the
+project's fifth value forbids.
 
 What it does **not** do, and this is worth being plain about: it does not decompose work, it does
 not order anything, and it does not make per-PR CI compose (*gotchas/merge-composition* — the

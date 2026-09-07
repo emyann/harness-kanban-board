@@ -7,7 +7,7 @@ import { openBoard, closeBoard } from './db.ts';
 import { ensureSchema } from './schema.ts';
 import { databaseUrl } from './db-url.ts';
 import { reconcile } from './controller.ts';
-import { checkExportPath } from './worktree.ts';
+import { checkExportPath, checkRef } from './worktree.ts';
 import { checkResultName, RESULT_MAX_BYTES } from './results.ts';
 import { checkArtifactName, artifactsDir, bytes } from './artifacts.ts';
 import { parseLabels, jobLabels, selects, describeLabels } from './labels.ts';
@@ -638,8 +638,17 @@ export async function main(argv: string[]): Promise<number> {
       if (guide) checkExportPath(guide);
       let gate = typeof values.gate === 'string' ? values.gate.trim() : undefined;
       if (values.gate !== undefined && !gate) throw usage('--gate needs the question a human is being asked, as in --gate "does this migration look right?"');
-      const base = typeof values.base === 'string' ? values.base.trim() : undefined;
-      if (values.base !== undefined && !base) throw usage('--base needs the ref to branch from, as in --base origin/kb-33-1 — leave it out for the repository\'s default branch');
+      const rawBase = typeof values.base === 'string' ? values.base.trim() : undefined;
+      if (values.base !== undefined && !rawBase) throw usage('--base needs the ref to branch from, as in --base origin/kb-33-1 — leave it out for the repository\'s default branch');
+      // Checked here rather than only where git is called: a ref reaches git as a bare argv token,
+      // so one beginning with a dash is an option (`--upload-pack=…` runs a command). See `validRef`.
+      const base = rawBase === undefined ? undefined : checkRef(rawBase, '--base');
+      // A Job with no worktree has no checkout to cut, so nothing would ever read this — and a spec
+      // field that is stored, printed by `hkb show`, and never honoured is the silent failure this
+      // project's fifth value forbids. Refused rather than ignored.
+      if (base && values['no-isolate']) {
+        throw usage('--base and --no-isolate contradict each other: --no-isolate runs in the current checkout, so there is no branch to cut from a base. Drop one.');
+      }
       // A proposing Job is a gated Job, and not by convention: ADR-011 applies nothing without an
       // approval, so a proposal with no approver would be a proposal nothing ever reads. The
       // operator's own question wins if they asked one; this is only the default, and the controller
@@ -1454,7 +1463,7 @@ export async function main(argv: string[]): Promise<number> {
         if (values.base !== undefined) {
           const raw = String(values.base).trim();
           if (!raw) throw usage(`--base was given nothing — pass a ref like origin/develop, or "${CLEAR}" to go back to the repository's default branch`);
-          data.defaultBase = raw === CLEAR ? null : raw;
+          data.defaultBase = raw === CLEAR ? null : checkRef(raw, '--base');
         }
         // One path, not a list: a repository has one contributor guide, and a second one would be
         // two documents disagreeing about the same rules with no way to say which wins.
@@ -1489,7 +1498,7 @@ export async function main(argv: string[]): Promise<number> {
           throw usage(
             'hkb boards set needs something to set — a ceiling (--max-concurrent <n>, --daily-budget <usd>|none)'
             + ' or a spec default (--model, --effort, --max-turns, --max-budget,'
-            + ' --max-retries, --allow-tools, --default-plugin-dirs, --guide; "none" clears one)',
+            + ' --max-retries, --allow-tools, --default-plugin-dirs, --guide, --base; "none" clears one)',
           );
         }
 

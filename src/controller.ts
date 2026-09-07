@@ -687,21 +687,32 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
             say(`could not fetch the base — ${fetched.why.slice(0, 120)}; using the ref as it stands`);
           }
         }
+        const resuming = job.lastSessionId ? newestWorktree(cwd, job.id, k - 1, wantBase) : null;
         // A base that names nothing is a fault in the spec, and it is found for free — so it is
         // said as one rather than becoming "could not create a worktree", which is our own plumbing
         // failing and leaves the Job pending to be retried against the same missing ref for ever.
         // Thrown into the catch below only to reach one place that releases the lease and writes
         // the attempt; the phase it lands in is decided there.
-        const label = baseFor(cwd, wantBase);
-        if (wantBase && !resolves(cwd, label)) {
-          const e = new Error(
-            `#${job.id} asks to branch from \`${wantBase}\`, and neither it nor \`origin/${wantBase.replace(/^origin\//, '')}\` `
-            + `names a commit in ${cwd}. Check the ref, or wait for the branch it names to be pushed.`,
-          ) as Error & { badSpec?: boolean };
-          e.badSpec = true;
-          throw e;
+        //
+        // **Only when a fresh checkout is being cut.** A resumed attempt continues in a tree that
+        // already exists and asks the base for nothing, so failing it because the parent branch has
+        // since been merged and deleted would kill a Job over a question nobody asked.
+        if (wantBase && !resuming) {
+          const label = baseFor(cwd, wantBase);
+          if (!resolves(cwd, label)) {
+            // The fallback is only named when there IS one: for a base already written
+            // `origin/foo`, `baseFor` tries it as given, and printing "neither `origin/foo` nor
+            // `origin/foo`" reads as a bug in the message, which it was.
+            const alt = wantBase.startsWith('origin/') ? '' : ` nor \`origin/${wantBase}\``;
+            const e = new Error(
+              `#${job.id} asks to branch from \`${wantBase}\`, and neither it${alt} names a commit in `
+              + `${cwd}. Wait for the branch it names to be pushed — or, if it has already been merged `
+              + `and deleted, re-file this Job against what it merged into.`,
+            ) as Error & { badSpec?: boolean };
+            e.badSpec = true;
+            throw e;
+          }
         }
-        const resuming = job.lastSessionId ? newestWorktree(cwd, job.id, k - 1, wantBase) : null;
         wt = resuming ?? createWorktree(cwd, job.id, k, wantBase);
         // Held for the length of the run. The daemon's sweep is a second remover, in a second
         // process, and without this it could take the checkout a worker is standing in.
@@ -735,7 +746,11 @@ export async function reconcile(deps: ControllerDeps): Promise<ReconcileReport> 
           data: {
             phase: badSpec ? 'failed' : 'pending',
             lastError: why,
-            ...(badSpec ? { finishedAt: now() } : {}),
+            // Terminal, so it clears what every other terminal transition clears. A Job stopped
+            // resumably keeps `lastSessionId`; failing here without dropping it left `hkb retry`
+            // announcing "(resumes …)" and the next attempt waking a transcript that describes a
+            // checkout cut from a different base.
+            ...(badSpec ? { finishedAt: now(), lastSessionId: null, suspendedFor: null } : {}),
           },
         });
         await db.event.create({

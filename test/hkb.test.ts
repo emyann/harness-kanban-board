@@ -1349,6 +1349,42 @@ test('the board defaults line names every grant, including the ones nobody can o
 
 // ---------------------------------------------------------------- triage
 
+test('--base refuses what git would read as an option, at the two places it can be written', async () => {
+  // A ref reaches git as a bare argv token: `--upload-pack=<cmd>` is a command, not a branch. The
+  // `base:` key of a workflow file is the same string arriving from the repository rather than from
+  // the operator, which is why it is refused at the boundary and not only where git is called.
+  const r = scratchRepo('base-refusals');
+  await hkb('boards', 'add', 'base-refusals', '--repo', r);
+
+  const evil = '--upload-pack=touch /tmp/hkb-PWNED && git-upload-pack';
+  await assert.rejects(
+    () => hkb('new', 'x', '--board', 'base-refusals', '--brief', 'do it', '--base', evil),
+    /--base wants a git ref.*would reach git as an option/s,
+  );
+  assert.equal(fs.existsSync('/tmp/hkb-PWNED'), false, 'and nothing ran');
+
+  // The board default is the same string arriving from the same kind of source.
+  await assert.rejects(
+    () => hkb('boards', 'set', 'base-refusals', '--base', evil),
+    /--base wants a git ref/,
+  );
+
+  // And a ref that IS one still goes through.
+  const ok = json((await hkb('new', 'y', '--board', 'base-refusals', '--brief', 'do it', '--base', 'origin/main', '--json')).out);
+  assert.equal(ok.id > 0, true);
+});
+
+test('--base and --no-isolate contradict each other, and say so rather than doing nothing', async () => {
+  // A Job with no worktree cuts no branch, so the base would be stored, printed by `hkb show`, and
+  // never read — the silent failure the fifth value forbids.
+  const r = scratchRepo('base-no-isolate');
+  await hkb('boards', 'add', 'base-no-isolate', '--repo', r);
+  await assert.rejects(
+    () => hkb('new', 'x', '--board', 'base-no-isolate', '--brief', 'do it', '--base', 'origin/main', '--no-isolate'),
+    /contradict each other.*Drop one/s,
+  );
+});
+
 test('--triage files a note without a brief, and it is not queued', async () => {
   // The capture path, and it has to be one line: a note that demanded a brief would not get
   // written down, which is the whole failure this state exists to prevent.
