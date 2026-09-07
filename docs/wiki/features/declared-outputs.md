@@ -17,12 +17,12 @@ covers:
   - path: src/brief.ts
     sha: 8b26e22eef60ceac89d2ececf18a82284a73ddad
   - path: src/hkb.ts
-    sha: 40d5a07a8bde52758d60e994d6ec0aabbe4e8053
+    sha: 2aae98b33ad6c7909aceff4bcc573fcda399da82
   - path: src/db-url.ts
     sha: 075e55c592c972b3505f106ac670a277996f0615
   - path: prisma/schema.prisma
-    sha: 608f30399206342bbc1374203b47674c6a719657
-generated_at_commit: 47d5907
+    sha: 888751eac2c7ae7c2bea8f57dd0dce7a1e084b05
+generated_at_commit: 1ff10a0
 last_refreshed: 2026-09-06
 related: [decisions/adr-008-declared-outputs, decisions/adr-011-proposals-not-board-access, features/proposals, features/worktree-includes, architecture/job-kind, architecture/the-board]
 ---
